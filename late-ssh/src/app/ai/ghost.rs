@@ -176,6 +176,11 @@ const ROUND_EMPTY_HOUSE_LINE: &str =
 /// Everyone present was already holding an uncashed drink. Uncharged.
 const ROUND_ALL_HOLDING_LINE: &str =
     "they're all still holding the last one you bought. let them drink it first.";
+/// The credit the prompt promised was gone by the time the pour landed:
+/// drunk from another session, or expired in between. Uncharged, nothing
+/// poured; the patron orders again on their own tab if they still want one.
+const ROUND_CREDIT_GONE_LINE: &str =
+    "that one's already been drunk, or the round went cold on you. say the word and the next is on your tab.";
 const BARTENDER_PERSONA: &str = "You are @bartender, the keeper of The Late Lounge — the tavern inside late.sh, a cozy terminal clubhouse. \
     You are warm, unhurried, and quietly funny: classic late-night bartender energy. \
     You pour imaginary drinks with terminal-flavored names (a double SIGTERM neat, a Bash Old Fashioned, \
@@ -774,21 +779,24 @@ impl GhostService {
             .chip_service
             .open_round_credit(trigger_message.user_id)
             .await?;
-        let credit_note = match open_credit {
+        let spendable = (balance - CHIP_FLOOR).max(0);
+        let (tab, credit_note) = match open_credit {
             Some(credit) => {
                 let buyer = match credit.buyer_user_id {
                     Some(buyer_id) => self.username_for(buyer_id).await,
                     None => "someone who has since left".to_string(),
                 };
-                format!(
+                let note = format!(
                     "- THEIR NEXT DRINK IS ALREADY BOUGHT: @{buyer} bought the house a round and \
-                     this patron has not cashed theirs yet. Pouring costs them nothing. If you \
-                     pour, hand it over warmly, say it is on @{buyer}, and do not quote a price.\n"
-                )
+                     this patron has not cashed theirs yet. Pouring costs them nothing, so the \
+                     spendable figure does not apply to this pour and \"offer\" is never the \
+                     right action. If they order, use \"pour\": hand it over warmly, say it is \
+                     on @{buyer}, and do not quote a price.\n"
+                );
+                (BartenderTab::Comped, note)
             }
-            None => String::new(),
+            None => (BartenderTab::Paying { spendable }, String::new()),
         };
-        let spendable = (balance - CHIP_FLOOR).max(0);
         let drunk_word = drunk_level_word(drunk_level);
         // Cut off only at the very top: below it, pour whatever they order so a
         // patron can actually drink their way up to wasted.
@@ -863,7 +871,7 @@ impl GhostService {
             }
         };
 
-        let decision = parse_bartender_order(&reply, spendable, &bartender.username);
+        let decision = parse_bartender_order(&reply, tab, &bartender.username);
 
         let mut rng = TinyRng::seeded();
         let delay = rng.next_between_inclusive(2, 6) as u64;
@@ -871,56 +879,59 @@ impl GhostService {
         let body = match decision {
             BartenderDecision::Skip => return Ok(()),
             BartenderDecision::Say { line } => line,
-            BartenderDecision::Pour { drink, price, line } => {
-                // A round's credit is spent before the tab is ever touched, and
-                // spending it is one guarded UPDATE, so two orders landing
-                // together cannot drink the same free drink twice. `None` here
-                // means there was nothing open (or it went between the read
-                // above and now) and the patron pays for their own.
-                if let Some(comped) = self
+            // The prompt promised this drink was paid for, and spending the
+            // credit is one guarded UPDATE, so two orders landing together
+            // cannot drink the same free drink twice. `None` means it went
+            // between the read above and now: nothing is poured and nothing
+            // is charged, because the line in hand still says it was free.
+            BartenderDecision::PourComped { drink, line } => {
+                match self
                     .chip_service
                     .cash_round_drink(trigger_message.user_id)
                     .await?
                 {
-                    self.clubhouse_lobby.record_drink(
-                        trigger_message.user_id,
-                        comped.drunk_points,
-                        comped.last_drink_at,
-                    );
-                    metrics::record_round_drink_cashed();
-                    tracing::info!(
-                        user_id = %trigger_message.user_id,
-                        round_id = %comped.round_id,
-                        drink = %drink,
-                        "bartender poured a drink on someone else's round"
-                    );
-                    line
-                } else {
-                    match self
-                        .chip_service
-                        .buy_drink(trigger_message.user_id, price, &drink)
-                        .await?
-                    {
-                        Some(purchase) => {
-                            self.clubhouse_lobby.record_drink(
-                                trigger_message.user_id,
-                                purchase.drunk_points,
-                                purchase.last_drink_at,
-                            );
-                            tracing::info!(
-                                user_id = %trigger_message.user_id,
-                                price,
-                                drink = %drink,
-                                new_balance = purchase.balance,
-                                "bartender poured a drink"
-                            );
-                            line
-                        }
-                        // The balance moved between the prompt and the debit;
-                        // the floor guard refused the pour. Never retry, never
-                        // charge.
-                        None => format!("{patron} {BARTENDER_TAB_BOUNCED_LINE}"),
+                    Some(comped) => {
+                        self.clubhouse_lobby.record_drink(
+                            trigger_message.user_id,
+                            comped.drunk_points,
+                            comped.last_drink_at,
+                        );
+                        metrics::record_round_drink_cashed();
+                        tracing::info!(
+                            user_id = %trigger_message.user_id,
+                            round_id = %comped.round_id,
+                            drink = %drink,
+                            "bartender poured a drink on someone else's round"
+                        );
+                        line
                     }
+                    None => format!("{patron} {ROUND_CREDIT_GONE_LINE}"),
+                }
+            }
+            BartenderDecision::Pour { drink, price, line } => {
+                match self
+                    .chip_service
+                    .buy_drink(trigger_message.user_id, price, &drink)
+                    .await?
+                {
+                    Some(purchase) => {
+                        self.clubhouse_lobby.record_drink(
+                            trigger_message.user_id,
+                            purchase.drunk_points,
+                            purchase.last_drink_at,
+                        );
+                        tracing::info!(
+                            user_id = %trigger_message.user_id,
+                            price,
+                            drink = %drink,
+                            new_balance = purchase.balance,
+                            "bartender poured a drink"
+                        );
+                        line
+                    }
+                    // The balance moved between the prompt and the debit; the
+                    // floor guard refused the pour. Never retry, never charge.
+                    None => format!("{patron} {BARTENDER_TAB_BOUNCED_LINE}"),
                 }
             }
         };
@@ -942,10 +953,16 @@ impl GhostService {
     ///
     /// Every outcome is one arm of the match below, including the refusals,
     /// which cost nothing and still get an answer: a patron who typed the
-    /// phrase deliberately is owed a reason, not silence. Nobody is poured
-    /// into here. What the round hands over is a credit each patron cashes by
-    /// walking up and ordering, because a drink makes someone type drunk in
-    /// public and that is not a thing to do to a person who did not ask.
+    /// phrase deliberately is owed a reason, not silence. A settled round is
+    /// never throttled, since the chips have moved and the room has to hear
+    /// it. A refusal is free, so it steps the mention ladder like any other
+    /// answer: repeating the phrase into an empty house costs the room one
+    /// @bartender line per ladder window, not one per message.
+    ///
+    /// The buyer is poured into on the spot; nobody else is. What the round
+    /// hands the others is a credit each patron cashes by walking up and
+    /// ordering, because a drink makes someone type drunk in public and that
+    /// is not a thing to do to a person who did not ask. The buyer asked.
     async fn bartender_round(
         &self,
         bartender: &BotUser,
@@ -961,6 +978,11 @@ impl GhostService {
         {
             Ok(purchase) => {
                 let buyer = self.username_for(buyer_id).await;
+                self.clubhouse_lobby.record_drink(
+                    buyer_id,
+                    purchase.drunk_points,
+                    purchase.last_drink_at,
+                );
                 metrics::record_round_bought(purchase.patrons, purchase.total_chips);
                 tracing::info!(
                     user_id = %buyer_id,
@@ -985,6 +1007,14 @@ impl GhostService {
             }
             Err(RoundError::Refused(refusal)) => {
                 metrics::record_round_refused(refusal);
+                match self.mention_ladders.check_and_step(
+                    LadderBot::Bartender,
+                    buyer_id,
+                    trigger_message.room_id,
+                ) {
+                    Decision::Answer => {}
+                    Decision::Throttled { .. } => return Ok(()),
+                }
                 match refusal {
                     RoundRefusal::EmptyHouse => ROUND_EMPTY_HOUSE_LINE.to_string(),
                     RoundRefusal::AllHolding => ROUND_ALL_HOLDING_LINE.to_string(),
@@ -1180,6 +1210,9 @@ enum BartenderDecision {
         price: i64,
         line: String,
     },
+    /// Spend the patron's round credit and post `line`. No price: the drink
+    /// was paid for by whoever bought the round.
+    PourComped { drink: String, line: String },
     /// Post `line`, charge nothing (chat, counter-offer, or a downgraded
     /// pour the server refused to price).
     Say { line: String },
@@ -1291,7 +1324,24 @@ fn recover_bartender_order(raw: &str) -> Option<BartenderOrderRaw> {
 /// so the amount charged always equals the amount the line quoted. Whether the
 /// patron actually ordered is the model's call — the prompt coaches it to pour
 /// only on a clear order and to chat/offer on anything ambiguous.
-fn parse_bartender_order(raw: &str, spendable: i64, bot_username: &str) -> BartenderDecision {
+/// Whose chips a pour comes out of. Decided before the model runs, from the
+/// patron's open round credit, and it changes what a "pour" means: on a comped
+/// tab the price gates below do not apply, because nothing is debited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BartenderTab {
+    /// Somebody else's round is paying. Any drink the model pours (or offers,
+    /// since an offer is only a pour it thought they could not afford) is
+    /// the comped one, whatever price it did or did not name.
+    Comped,
+    /// The patron's own chips, of which `spendable` sit above the floor.
+    Paying { spendable: i64 },
+}
+
+fn parse_bartender_order(
+    raw: &str,
+    tab: BartenderTab,
+    bot_username: &str,
+) -> BartenderDecision {
     let cleaned = strip_code_fence(raw);
     let order = match serde_json::from_str::<BartenderOrderRaw>(cleaned) {
         Ok(order) => order,
@@ -1321,29 +1371,37 @@ fn parse_bartender_order(raw: &str, spendable: i64, bot_username: &str) -> Barte
     };
 
     let action = order.action.as_deref();
-    if action != Some("pour") {
-        return BartenderDecision::Say { line };
-    }
-
-    // The line quotes a price, so we never silently clamp a different number
-    // underneath the receipt. A missing or out-of-range price is a model slip:
-    // serve the line uncharged rather than debit an amount the patron never saw.
-    let Some(price) = order
-        .price
-        .filter(|p| (DRINK_PRICE_MIN..=DRINK_PRICE_MAX).contains(p))
-    else {
-        return BartenderDecision::Say { line };
-    };
-    if price > spendable {
-        return BartenderDecision::Say { line };
-    }
     let drink = order
         .drink
         .map(|drink| drink.trim().to_string())
         .filter(|drink| !drink.is_empty())
         .unwrap_or_else(|| "house pour".to_string());
 
-    BartenderDecision::Pour { drink, price, line }
+    match tab {
+        BartenderTab::Comped => match action {
+            Some("pour") | Some("offer") => BartenderDecision::PourComped { drink, line },
+            Some(_) | None => BartenderDecision::Say { line },
+        },
+        BartenderTab::Paying { spendable } => {
+            if action != Some("pour") {
+                return BartenderDecision::Say { line };
+            }
+            // The line quotes a price, so we never silently clamp a different
+            // number underneath the receipt. A missing or out-of-range price
+            // is a model slip: serve the line uncharged rather than debit an
+            // amount the patron never saw.
+            let Some(price) = order
+                .price
+                .filter(|p| (DRINK_PRICE_MIN..=DRINK_PRICE_MAX).contains(p))
+            else {
+                return BartenderDecision::Say { line };
+            };
+            if price > spendable {
+                return BartenderDecision::Say { line };
+            }
+            BartenderDecision::Pour { drink, price, line }
+        }
+    }
 }
 
 fn merge_ghost_settings(existing: &serde_json::Value) -> serde_json::Value {

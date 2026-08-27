@@ -8,11 +8,13 @@
 -- patron type drunk in public; the credit is consent deferred until they walk
 -- up and order from @bartender themselves.
 --
--- There is no stored total on the round. The credits are the only witness of
--- how many it bought, the way pot tickets are the only witness of a pot's
--- size, and the `chip_ledger` row keyed on the round id is the record of what
--- was paid. That is what lets the round row be written before the grant is
--- counted, with nothing to keep in step afterwards.
+-- There is no stored total on the round. The `chip_ledger` row keyed on the
+-- round id is the record of what was paid and, by the price, of how many it
+-- bought. The credit rows are not that record: a later round takes over a
+-- patron's expired credit in place (see the unique index below), so an old
+-- round's roster shrinks after the fact. That is what lets the round row be
+-- written before the grant is counted, with nothing to keep in step
+-- afterwards.
 CREATE TABLE drink_rounds (
     id UUID PRIMARY KEY DEFAULT uuidv7(),
     -- The round survives its buyer leaving; the credits it granted are still

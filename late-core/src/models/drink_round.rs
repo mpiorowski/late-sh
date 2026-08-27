@@ -23,7 +23,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use deadpool_postgres::GenericClient;
-use tokio_postgres::{Client, Row, Transaction};
+use tokio_postgres::{Row, Transaction};
 use uuid::Uuid;
 
 /// What the buyer pays per patron the round reaches. Matches
@@ -86,8 +86,34 @@ pub fn round_phrase_spans(text: &str) -> Vec<(usize, usize)> {
 }
 
 /// Whether the patron asked for a round. The bartender's gate.
+///
+/// Stricter than [`round_phrase_spans`], which is the slur guard's view and
+/// protects the phrase wherever it turns up. An order is a statement, so the
+/// sentence the phrase sits in must not run on to a `?`: "how much is a round
+/// for everyone?" gets an answer, not a bill. Text inside backticks is never
+/// an order either, since a code span is how a patron quotes the words
+/// without saying them. Segments alternate outside/inside starting outside,
+/// so an unbalanced backtick makes the rest of the message not an order,
+/// which is the safe way to be wrong about money.
 pub fn contains_round_request(text: &str) -> bool {
-    !round_phrase_spans(text).is_empty()
+    text.split('`').step_by(2).any(|segment| {
+        round_phrase_spans(segment)
+            .into_iter()
+            .any(|(_, end)| !sentence_ends_in_question(segment, end))
+    })
+}
+
+/// Whether the sentence a phrase ending at `end` belongs to closes with a
+/// question mark. The first terminator after the phrase decides; a line break
+/// or the end of the text counts as a full stop.
+fn sentence_ends_in_question(text: &str, end: usize) -> bool {
+    match text[end..]
+        .chars()
+        .find(|ch| matches!(ch, '.' | '!' | '?' | '\n'))
+    {
+        Some('?') => true,
+        Some(_) | None => false,
+    }
 }
 
 /// Whether `[start, end)` sits on word boundaries rather than inside a longer
@@ -104,9 +130,11 @@ fn is_bounded(text: &str, start: usize, end: usize) -> bool {
     before_ok && after_ok
 }
 
-/// A round that was bought. The row carries no total: the credits are the
-/// witness of how many it reached, and the `chip_ledger` row keyed on this id
-/// is the record of what it cost.
+/// A round that was bought. The row carries no total: the `chip_ledger` row
+/// keyed on this id is the record of what it cost and, by the price, of how
+/// many it reached. The credit rows are not that record: a later round takes
+/// over a patron's expired credit in place (see [`DrinkRound::open`]), so an
+/// old round's roster shrinks after the fact.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DrinkRound {
     pub id: Uuid,
@@ -265,18 +293,5 @@ impl DrinkCredit {
             )
             .await?;
         Ok(row.map(OpenCredit::from))
-    }
-
-    /// How many of a round's credits have been drunk. The buyer's receipt.
-    pub async fn cashed_count(client: &Client, round_id: Uuid) -> Result<i64> {
-        let row = client
-            .query_one(
-                "SELECT count(*) AS cashed
-                 FROM drink_credits
-                 WHERE round_id = $1 AND cashed_at IS NOT NULL",
-                &[&round_id],
-            )
-            .await?;
-        Ok(row.get("cashed"))
     }
 }

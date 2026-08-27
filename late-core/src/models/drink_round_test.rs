@@ -36,6 +36,38 @@ fn only_a_deliberate_phrase_orders_a_round() {
     assert!(!contains_round_request("@bartender what's on tap"));
 }
 
+/// The guide teaches the exact words, so asking what they cost is the next
+/// thing a patron types. A question about the phrase is not the phrase: it
+/// has to get an answer, not a bill.
+#[test]
+fn asking_about_a_round_is_not_ordering_one() {
+    assert!(!contains_round_request(
+        "@bartender how much is a round for everyone?"
+    ));
+    assert!(!contains_round_request(
+        "@bartender is there a round for the house tonight?"
+    ));
+    assert!(!contains_round_request("@bartender round on me?"));
+    // Quoting the words in a code span is talking about them, not saying them.
+    assert!(!contains_round_request(
+        "@bartender what happens if I say `round for everyone`"
+    ));
+    // The question has to be the phrase's own sentence. An order followed by
+    // a question is still an order, and so is one on its own line.
+    assert!(contains_round_request(
+        "@bartender round for everyone. what do I owe you?"
+    ));
+    assert!(contains_round_request(
+        "@bartender round for everyone\nwhat do I owe you?"
+    ));
+    // The slur guard keeps protecting the words either way: a drunk question
+    // must not scramble into a drunk order.
+    assert_eq!(
+        round_phrase_spans("how much is a round for everyone?").len(),
+        1
+    );
+}
+
 /// The spans are what `chat/slur.rs` protects, so they have to land on the
 /// phrase itself and nothing around it, in the original text's byte offsets
 /// rather than the lowercased copy's.
@@ -158,13 +190,6 @@ async fn a_credit_is_drunk_once_and_expires_on_its_own() {
             .expect("cash")
             .is_none(),
         "an expired credit cannot be drunk"
-    );
-
-    assert_eq!(
-        DrinkCredit::cashed_count(&client, grant.round.id)
-            .await
-            .expect("count"),
-        1
     );
 }
 

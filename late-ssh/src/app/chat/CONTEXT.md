@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-08-27 (the round: telling @bartender "round for everyone" buys a drink for everyone online but you, 100 chips a head, burned whole. The trigger is a literal phrase from `ROUND_PHRASES` (`late-core/src/models/drink_round.rs`), never a model decision, and `slur.rs` is the other half of it: drunk text is stored rather than rendered, so the phrase is passed through unscrambled (and the `*hic*` kept out of it) or the feature would break for exactly the patrons most likely to use it. Nobody is poured into: the round grants a `drink_credits` row cashed by ordering, one open per patron, 24h, worth a flat 300 points. §9d The Round.) Previously 2026-08-26 (burn milestones: a permanent Shop glyph that renders after the rented badge and flag in the author label and can never be hidden by either, resolved off `ResolvedName.milestone` like the crown; see `hub/CONTEXT.md` for the catalog side.) Previously 2026-08-26 (the crown: one slot, one holder, one 👑 after their name in every chat author header and on the Clubhouse floor. `/crown` prints who wears it and what taking it costs; `/crown take` buys it at `max(500, ceil(paid x 1.5))`, burned whole, with no hold or cooldown and no self-take. It empties at the UTC month rollover, and the month's last holder keeps the `CRWN` profile award. The glyph rides the `name_flair` map (resolved on the same once-a-second edge as titles and effects) off a process-shared holder that the `crown_changed` Postgres notify keeps in step; the domain is `late-ssh/src/app/crown/`. §9c The Crown.)
+- Last updated: 2026-08-27 (the round: telling @bartender "round for everyone" buys a drink for everyone online but you, 100 chips a head, burned whole. The trigger is a literal phrase from `ROUND_PHRASES` (`late-core/src/models/drink_round.rs`), never a model decision, and `slur.rs` is the other half of it: drunk text is stored rather than rendered, so the phrase is passed through unscrambled (and the `*hic*` kept out of it) or the feature would break for exactly the patrons most likely to use it. Only the buyer is poured into; everyone else gets a `drink_credits` row cashed by ordering, one open per patron, 24h, worth a flat 300 points. §9d The Round.) Previously 2026-08-26 (burn milestones: a permanent Shop glyph that renders after the rented badge and flag in the author label and can never be hidden by either, resolved off `ResolvedName.milestone` like the crown; see `hub/CONTEXT.md` for the catalog side.) Previously 2026-08-26 (the crown: one slot, one holder, one 👑 after their name in every chat author header and on the Clubhouse floor. `/crown` prints who wears it and what taking it costs; `/crown take` buys it at `max(500, ceil(paid x 1.5))`, burned whole, with no hold or cooldown and no self-take. It empties at the UTC month rollover, and the month's last holder keeps the `CRWN` profile award. The glyph rides the `name_flair` map (resolved on the same once-a-second edge as titles and effects) off a process-shared holder that the `crown_changed` Postgres notify keeps in step; the domain is `late-ssh/src/app/crown/`. §9c The Crown.)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -617,11 +617,16 @@ reads a chat message, and `chat/slur.rs` has to leave that phrase alone.
   word boundaries, so "turn around for all of us" is not an order. No model
   decides this: it is the only bartender action that spends more than one
   drink's worth, the price is the size of the room, so the phrase is the
-  confirmation. It also means a round costs no model call.
-- **It answers ahead of the mention ladder**, in both the event loop's
-  pre-filter and the reply, because throttling a paid action would swallow a
-  purchase in silence. Repeating it is not a spam risk: the second round
-  reaches nobody who is already holding a drink, and refuses.
+  confirmation. An order is a statement: `contains_round_request` rejects a
+  phrase whose sentence runs on to a `?` and never looks inside backticks, so
+  "how much is a round for everyone?" is a question the model answers, not a
+  bill. (`round_phrase_spans`, the slur guard's view, still protects the
+  words wherever they appear.) It also means a round costs no model call.
+- **A settled round answers ahead of the mention ladder**, in both the event
+  loop's pre-filter and the reply, because throttling a paid action would
+  swallow a purchase in silence. A refusal is free, so it steps the ladder
+  like any other answer and is dropped when throttled: repeating the phrase
+  into an empty house costs the room one @bartender line per ladder window.
 - **`slur.rs` never scrambles it.** Drunk text is stored, not rendered
   (§14 Drunk Text), so a wasted patron's order would otherwise reach the
   matcher as "ronud for eevryone" and the feature would break for exactly the
@@ -640,8 +645,10 @@ reads a chat message, and `chat/slur.rs` has to leave that phrase alone.
   choice (SHOP.md Phase 8 status); the credits it grants are DB rows and cash
   from anywhere. Excluding the buyer is what makes "nobody to buy for" a real
   refusal rather than a round bought for one.
-- **Nobody is poured into.** The round grants a `drink_credits` row, not a
-  drink, because a pour makes someone type drunk in public. It is cashed only
+- **Only the buyer is poured into**, on the spot, `ROUND_DRINK_POINTS` in the
+  purchase transaction: they typed the order. Everyone else gets a
+  `drink_credits` row, not a drink, because a pour makes someone type drunk in
+  public and they did not ask. It is cashed only
   by ordering from @bartender, at most one open credit per patron across
   every round (a partial unique index; an expired one is re-used rather than
   blocking the slot forever), 24h to claim, and cashing is one guarded
@@ -649,8 +656,14 @@ reads a chat message, and `chat/slur.rs` has to leave that phrase alone.
 - **A cashed drink pours a flat 300 points** whatever the bartender named it:
   three times what the buyer paid, exactly the buzzed threshold, so the room
   visibly moves a level for about an hour. `lifetime_spent` does not move.
-  The pour path tries the credit before the tab, always, so a round that
-  landed after the prompt was built still comps the drink.
+  The open credit is read before the prompt is built and becomes the
+  `BartenderTab` handed to `parse_bartender_order`: on a comped tab a "pour"
+  (or an "offer", the model deciding they could not afford it) becomes
+  `PourComped` and skips both price gates, since nothing is debited; that is
+  what lets a patron sitting on the chip floor, or a model that obeyed "do
+  not quote a price", still drink what was bought for them. If the credit is
+  gone by the time the pour lands, nothing is poured or charged and a
+  scripted line says so.
 - **Scripted lines, not generated ones.** The announcement and all three
   refusals are consts in `ghost.rs`. This is the one line that has to quote
   the number the patron was charged, and it has to land the moment the chips

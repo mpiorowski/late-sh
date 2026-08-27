@@ -52,7 +52,7 @@ pub struct DrinkPurchase {
     pub last_drink_at: DateTime<Utc>,
 }
 
-/// A round that was bought and paid for.
+/// A round that was bought and paid for, and the buyer's own drink from it.
 #[derive(Debug, Clone, Copy)]
 pub struct RoundPurchase {
     pub round_id: Uuid,
@@ -60,6 +60,9 @@ pub struct RoundPurchase {
     pub patrons: i64,
     pub total_chips: i64,
     pub balance: i64,
+    /// The buyer's buzz after their own pour: "round on me" includes me.
+    pub drunk_points: i64,
+    pub last_drink_at: DateTime<Utc>,
 }
 
 /// Why a round did not happen. Every arm is uncharged: a refused round leaves
@@ -196,9 +199,15 @@ impl ChipService {
     }
 
     /// Buy the house a round: grant one credit to every patron at the bar who
-    /// is not already holding one, then charge the buyer for exactly the
-    /// credits that landed. One transaction, so a crash can neither charge for
-    /// drinks nobody was promised nor promise drinks nobody paid for.
+    /// is not already holding one, charge the buyer for exactly the credits
+    /// that landed, and pour the buyer their own drink on the spot. One
+    /// transaction, so a crash can neither charge for drinks nobody was
+    /// promised nor promise drinks nobody paid for.
+    ///
+    /// The buyer is the one person a round can pour into without asking: they
+    /// typed the order. Their drink is the same flat
+    /// [`ROUND_DRINK_POINTS`] every patron's credit cashes for, and it rides
+    /// on the round's price rather than adding a head to it.
     ///
     /// `candidates` is the buyer's own presence read, minus the buyer: this
     /// takes the roster it is given and never asks who is online, so the
@@ -250,6 +259,7 @@ impl ChipService {
                 total,
             }));
         };
+        let drinks = UserDrinks::record_comped_pour(&tx, buyer_id, ROUND_DRINK_POINTS).await?;
         tx.commit().await.context("committing the round")?;
 
         Ok(RoundPurchase {
@@ -257,6 +267,8 @@ impl ChipService {
             patrons,
             total_chips: total,
             balance: chips.balance,
+            drunk_points: drinks.drunk_points,
+            last_drink_at: drinks.last_drink_at,
         })
     }
 

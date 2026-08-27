@@ -489,7 +489,18 @@ async fn a_round_charges_for_the_drinks_it_actually_pours() {
     assert_eq!(purchase.balance, 1_000 - 2 * ROUND_PRICE_PER_PATRON);
     assert_eq!(balance(&test_db.db, buyer.id).await, 800);
 
+    // "Round on me" includes me: the buyer drinks theirs on the spot, at the
+    // same flat buzz a cashed credit pours, with no extra head on the bill and
+    // nothing on their own tab.
+    assert_eq!(purchase.drunk_points, ROUND_DRINK_POINTS);
     let client = test_db.db.get().await.expect("db client");
+    let buyer_drinks = UserDrinks::find(&client, buyer.id)
+        .await
+        .expect("drinks row")
+        .expect("the buyer was poured");
+    assert_eq!(buyer_drinks.drunk_points, ROUND_DRINK_POINTS);
+    assert_eq!(buyer_drinks.lifetime_spent, 0);
+
     let rows = client
         .query(
             "SELECT delta, reason, source_ref FROM chip_ledger WHERE user_id = $1",
@@ -538,6 +549,13 @@ async fn an_unaffordable_round_leaves_no_credits_and_no_charge() {
 
     assert_eq!(balance(&test_db.db, buyer.id).await, 1_000);
     let client = test_db.db.get().await.expect("db client");
+    assert!(
+        UserDrinks::find(&client, buyer.id)
+            .await
+            .expect("drinks read")
+            .is_none(),
+        "a refused round pours nothing, the buyer included"
+    );
     let credits: i64 = client
         .query_one("SELECT count(*) AS granted FROM drink_credits", &[])
         .await

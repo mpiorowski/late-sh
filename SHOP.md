@@ -1027,8 +1027,11 @@ Behavior:
   everyone", "round for all", "round for the house", ...), matched
   case-insensitively on word boundaries. This is the only bartender action
   that spends more than one drink's worth, and the price is the size of the
-  room, so the phrase itself is the confirmation. @bartender never decides
-  to buy one; the prompt tells him to hand out the words instead.
+  room, so the phrase itself is the confirmation. An order is a statement:
+  a phrase whose sentence ends in `?` ("how much is a round for everyone?")
+  or sits inside backticks is a question about the words, not the words,
+  and goes to the model to be answered. @bartender never decides to buy
+  one; the prompt tells him to hand out the words instead.
 - **`chat/slur.rs` never scrambles the phrase.** Drunk text is stored, not
   rendered, so a wasted patron's "round for everyone" would otherwise reach
   the matcher as "ronud for eevryone", breaking the feature for exactly the
@@ -1040,9 +1043,12 @@ Behavior:
   every other vanity burn. Presence is the in-process `active_users` roster
   minus the buyer and the bots: single-replica, and deliberately so (see the
   status block).
-- **Nobody is poured into.** A drink makes a patron type drunk in public, so
-  the round hands out a credit, not a drink; it is cashed only when they walk
-  up and order from @bartender themselves. One open credit per patron
+- **Only the buyer is poured into.** "Round on me" includes me: the buyer
+  drinks theirs on the spot, `ROUND_DRINK_POINTS` in the same transaction as
+  the charge, riding on the round's price rather than adding a head to it. A
+  drink makes a patron type drunk in public, so everyone else gets a credit,
+  not a drink; it is cashed only when they walk up and order from @bartender
+  themselves. One open credit per patron
   (across every round, so a second round moments later reaches nobody and is
   refused uncharged), `ROUND_CREDIT_TTL_HOURS` (24) to claim it, and cashing
   is one guarded UPDATE so it can only ever be drunk once.
@@ -1053,7 +1059,8 @@ Behavior:
   the buyer's ledger row.
 - Refusals (`RoundRefusal`, all uncharged): nobody else at the bar, everyone
   already holding one, and the chip floor. Each gets a scripted line from
-  @bartender, as does the purchase itself: this is the one line that has to
+  @bartender, behind the mention ladder since they are free (a settled round
+  never is), as does the purchase itself: this is the one line that has to
   quote the number the patron was actually charged, and it must land the
   moment the chips move rather than after a model round trip.
 
