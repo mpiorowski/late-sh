@@ -356,7 +356,7 @@ impl ArticleService {
         //    and an RSS entry shared with `s`) land here, so this is the one
         //    place a share is rewarded.
         tracing::info!(%url, "saving article to database");
-        {
+        let reward = {
             let db_client = self.db.get().await?;
             let (_, reward) = Article::create_shared(
                 &db_client,
@@ -371,7 +371,8 @@ impl ArticleService {
             )
             .await?;
             metrics::record_news_shared(reward);
-        }
+            reward
+        };
 
         // Post the announcement into #lounge via the same send path as any
         // other message, preserving the normal composer success/failure event.
@@ -410,6 +411,7 @@ impl ArticleService {
         self.publish_event(ArticleEvent::Created {
             user_id,
             url: url.to_string(),
+            reward,
         });
 
         Ok(())

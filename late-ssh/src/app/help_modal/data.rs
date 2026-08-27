@@ -3,7 +3,7 @@ use crate::app::common::primitives::thousands;
 use crate::app::common::qr::{Barcode, HalfBlock};
 use crate::app::common::username_effect::CROWN_GLYPH;
 use late_core::models::{
-    article::NEWS_SHARE_REWARD_CHIPS,
+    article::{NEWS_SHARE_MAX_PAID_PER_DAY, NEWS_SHARE_REWARD_CHIPS},
     asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
     chat_message_gild::GildTier,
     chips::{CHIP_FLOOR, Difficulty, INITIAL_CHIP_BALANCE},
@@ -478,6 +478,7 @@ fn chips_help_lines() -> Vec<String> {
         "  It pays the same either way: pasting a URL with i in News, or pressing s on an entry in your RSS inbox.".to_string(),
         "  A link that is already in News cannot be shared again, so a story only ever pays its first sharer.".to_string(),
         "  You are paid once per link. Deleting your own story and re-sharing it pays nothing the second time.".to_string(),
+        format!("  At most {NEWS_SHARE_MAX_PAID_PER_DAY} shares a day (UTC) are paid. Shares past that still publish, for nothing."),
         "".to_string(),
         "8. The crown".to_string(),
         format!("  One slot, one holder, one {CROWN_GLYPH} after their name in every message they send."),
@@ -1258,6 +1259,7 @@ fn news_help_lines() -> Vec<String> {
         ),
         "  A link already in News cannot be shared again, so only the first sharer is paid.".to_string(),
         "  You are paid once per link: deleting your own story and re-sharing it pays nothing.".to_string(),
+        format!("  At most {NEWS_SHARE_MAX_PAID_PER_DAY} shares a day (UTC) are paid; the rest still publish, for nothing."),
         "  Full chip rules live in the Chips tab.".to_string(),
         "".to_string(),
     ];

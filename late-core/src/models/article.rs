@@ -9,6 +9,35 @@ use crate::models::chips::{ChipMove, UserChips};
 /// shared with `s` pay exactly this, and neither can pay a different amount.
 pub const NEWS_SHARE_REWARD_CHIPS: i64 = 500;
 
+/// How many shares are paid per person per UTC day. `s` on an RSS entry is
+/// one keypress, so without a cap an inbox is a chip printer; three a day is
+/// "share the good ones", and 1,500 chips sits under a completionist arcade
+/// day. Shares past the cap still publish, they just mint nothing.
+pub const NEWS_SHARE_MAX_PAID_PER_DAY: i64 = 3;
+
+/// What one share actually minted, decided by [`Article::create_shared`].
+/// The banner and the metric read this, never the constant, so an unpaid
+/// share can never be reported as paid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NewsShareReward {
+    /// [`NEWS_SHARE_REWARD_CHIPS`] were credited.
+    Paid,
+    /// This person was already paid for this URL once; nothing minted.
+    RepeatUrl,
+    /// This person has already been paid [`NEWS_SHARE_MAX_PAID_PER_DAY`]
+    /// times today (UTC); nothing minted.
+    DailyCapReached,
+}
+
+impl NewsShareReward {
+    pub fn chips(self) -> i64 {
+        match self {
+            Self::Paid => NEWS_SHARE_REWARD_CHIPS,
+            Self::RepeatUrl | Self::DailyCapReached => 0,
+        }
+    }
+}
+
 crate::user_scoped_model! {
     table = "articles";
     user_field = user_id;
@@ -36,8 +65,9 @@ impl Article {
     }
 
     /// Publish an article and pay its author [`NEWS_SHARE_REWARD_CHIPS`],
-    /// once per URL per user for all time. Returns the article and what the
-    /// share actually paid, which is zero on a repeat.
+    /// once per URL per user for all time and at most
+    /// [`NEWS_SHARE_MAX_PAID_PER_DAY`] times per UTC day. Returns the article
+    /// and what the share actually minted.
     ///
     /// The `articles` row cannot be the record of payment: a delete frees the
     /// URL to be shared again, so paying on insert alone would let one player
@@ -45,7 +75,8 @@ impl Article {
     /// row is the record, keyed on `(user_id, url)`, which is why
     /// `source_ref` here is the URL rather than the article id. A second
     /// player sharing the same link later is still paid: the cap is per
-    /// person, not per link.
+    /// person, not per link. The daily cap counts the same rows by their
+    /// UTC date, the way pot tickets are capped.
     ///
     /// The plain `create_by_user_id` still exists for fixtures and backfills;
     /// this is the only path a user-facing share may take, so the reward
@@ -54,20 +85,29 @@ impl Article {
         client: &Client,
         user_id: Uuid,
         params: ArticleParams,
-    ) -> Result<(Self, i64)> {
+    ) -> Result<(Self, NewsShareReward)> {
         let url = params.url.clone();
         let article = Self::create_by_user_id(client, user_id, params).await?;
-        let paid_before = client
-            .query_opt(
-                "SELECT 1 FROM chip_ledger
-                 WHERE user_id = $1 AND reason = $2 AND source_ref = $3
-                 LIMIT 1",
+        let row = client
+            .query_one(
+                "SELECT
+                     COALESCE(bool_or(source_ref = $3), false) AS paid_url,
+                     COUNT(*) FILTER (
+                         WHERE (created_at AT TIME ZONE 'UTC')::date
+                             = (current_timestamp AT TIME ZONE 'UTC')::date
+                     )::BIGINT AS paid_today
+                 FROM chip_ledger
+                 WHERE user_id = $1 AND reason = $2",
                 &[&user_id, &ChipMove::NewsShared.reason(), &url],
             )
-            .await?
-            .is_some();
-        if paid_before {
-            return Ok((article, 0));
+            .await?;
+        let paid_url: bool = row.get("paid_url");
+        let paid_today: i64 = row.get("paid_today");
+        if paid_url {
+            return Ok((article, NewsShareReward::RepeatUrl));
+        }
+        if paid_today >= NEWS_SHARE_MAX_PAID_PER_DAY {
+            return Ok((article, NewsShareReward::DailyCapReached));
         }
 
         UserChips::apply(
@@ -78,7 +118,7 @@ impl Article {
             Some(&url),
         )
         .await?;
-        Ok((article, NEWS_SHARE_REWARD_CHIPS))
+        Ok((article, NewsShareReward::Paid))
     }
 
     pub async fn find_by_url(client: &Client, url: &str) -> Result<Option<Self>> {
@@ -108,6 +148,7 @@ pub enum ArticleEvent {
     Created {
         user_id: Uuid,
         url: String,
+        reward: NewsShareReward,
     },
     Failed {
         user_id: Uuid,

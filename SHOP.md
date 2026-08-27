@@ -104,6 +104,7 @@ North-star check, borrowed from GAME.md: **does it ship a story into
 | Pot per-user cap | 10 tickets per UTC day, 70 a week (was 50 per pot while the pot was daily; decided 2026-08-27) |
 | Pot payout | 80% of ticket sum to one ticket-weighted winner; 20% never re-minted |
 | Pot draw | Monday 21:00 UTC, two constants (weekly since 2026-08-27; the hour is the EU evening / US afternoon overlap) |
+| News share | 500 per link, once per URL per person, at most 3 paid per UTC day (PR #565; the only chip reward outside the Shop and the games, and `s` on an RSS entry is one keypress, so the day cap is what keeps an inbox from being a printer) |
 | Pot threshold lines | none (removed 2026-08-27, migration 162: the size rides the status HUD on every screen all week, so a mid-week #lounge nudge repeated the border) |
 
 ## Process
