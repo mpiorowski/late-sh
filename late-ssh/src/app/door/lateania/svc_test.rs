@@ -779,6 +779,22 @@ fn a_stunned_foe_cannot_strike_at_a_fleeing_back() {
 }
 
 #[test]
+fn a_shorter_stun_does_not_cut_a_longer_one_short() {
+    let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
+    s.mob_stuns.insert(mob_id, 4);
+    let p = s.players.get_mut(&uid(1)).unwrap();
+    p.level = 12; // unlocks Shield Bash (slot 4), a 1-tick stun
+    p.resource = 999;
+    s.use_ability(uid(1), 4);
+    assert!(s.mobs[&mob_id].alive, "the bash only dazes the sentinel");
+    assert_eq!(
+        s.mob_stuns.get(&mob_id).copied(),
+        Some(4),
+        "a fresh 1-tick daze must not shorten the 4 ticks already on the foe"
+    );
+}
+
+#[test]
 fn a_wounded_foe_nobody_fights_recovers_after_a_few_ticks() {
     let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
     // The attacker is simply gone mid-fight (death, disconnect): no flee, the
@@ -3589,28 +3605,41 @@ fn a_stray_bond_resets_if_a_day_is_missed_and_wont_double_feed_same_day() {
 }
 
 #[test]
-fn zone_boss_bounty_stays_pinned_to_the_legacy_level_cap() {
-    let mut s = world();
-    s.join(uid(1));
-    s.choose_class(uid(1), Class::Warrior);
-    let xp_before = s.players[&uid(1)].xp;
-    let gold_before = s.players[&uid(1)].gold;
-    // Wildbound widened DISPLAY levels to 100, promising "no xp or drop
-    // changes". A boss now reading level 100 must still pay the bounty the
-    // old 60-cap paid, or the display change silently inflates 20 one-time
-    // payouts.
-    s.complete_quest(uid(1), 0, 100);
-    let p = &s.players[&uid(1)];
-    assert_eq!(
-        p.xp - xp_before,
-        80 + 60 * 24,
-        "bounty xp pinned to the knee"
-    );
-    assert_eq!(
-        p.gold - gold_before,
-        35 + 60 * 6,
-        "bounty gold pinned to the knee"
-    );
+fn a_zone_boss_bounty_pays_by_the_zones_target_level_not_the_number_over_its_head() {
+    // The level over a boss's head reads by its bite and moves whenever the
+    // ladder is retuned. The bounty is a one-time payout; it must key off the
+    // level the zone is pitched at (a straight line from the living dark's
+    // exit at L40 to the King at L55), so a display retune never repriced it.
+    for (zone, target) in [(0usize, 40), (19usize, 55)] {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let (_, boss) = super::super::world::frontier_zone_info(zone).expect("zone exists");
+        let boss_id = *s
+            .mobs
+            .iter()
+            .find(|(_, m)| m.spawn.name == boss)
+            .map(|(id, _)| id)
+            .expect("the zone boss is fielded");
+        let xp_before = s.players[&uid(1)].xp;
+        let gold_before = s.players[&uid(1)].gold;
+        s.kill_mob(uid(1), boss_id);
+        let p = &s.players[&uid(1)];
+        // The kill itself pays the boss's own xp and purse; the bounty is what
+        // lands on top of that.
+        let boss_xp = s.mobs[&boss_id].spawn.xp;
+        let boss_gold = gold_for_kill(boss_xp, true) as i64;
+        assert_eq!(
+            p.xp - xp_before - boss_xp as i64,
+            80 + target * 24,
+            "zone {zone} bounty xp keys off L{target}"
+        );
+        assert_eq!(
+            p.gold - gold_before - boss_gold,
+            35 + target * 6,
+            "zone {zone} bounty gold keys off L{target}"
+        );
+    }
 }
 
 #[test]

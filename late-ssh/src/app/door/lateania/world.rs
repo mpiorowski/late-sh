@@ -140,12 +140,6 @@ pub struct Room {
     pub pvp: bool,
 }
 
-/// The pre-Wildbound level ceiling, and the knee of the two-slope display
-/// curve in `MobSpawn::level`. Reward math (the zone-boss bounty) stays
-/// pinned to it: display levels run past it to 100, but a payout derived
-/// from a level must never grow because the number over a foe's head did.
-pub const LEVEL_KNEE: i32 = 60;
-
 /// A mob template that spawns at a home room.
 #[derive(Clone, Debug)]
 pub struct MobSpawn {
@@ -7277,6 +7271,16 @@ pub const CROWNS: &[Crown] = &[
     Crown { name: "Kaethyr Ascendant, Who Sang the God Awake", level: 80, max_hp: 24542, damage: 397 },
 ];
 
+/// The level a named crown is tuned to fall at. A name that is not a crown is
+/// a programming error, not a runtime case.
+pub fn crown_level(name: &str) -> i32 {
+    CROWNS
+        .iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("{name} is not a crown"))
+        .level
+}
+
 /// Field every crown at its `CROWNS` numbers. Panics if a crown's spawn is
 /// missing: a renamed boss must be renamed here too, loudly.
 fn tune_crowns(spawns: &mut [MobSpawn]) {
@@ -11911,6 +11915,19 @@ pub fn frontier_zone_count() -> usize {
 /// The display name and boss name of Frontier zone `z`.
 pub fn frontier_zone_info(z: usize) -> Option<(&'static str, &'static str)> {
     FRONTIER_ZONES_DATA.get(z).map(|d| (d.0, d.6))
+}
+
+/// The level Frontier zone `z` is pitched at: a straight line from the living
+/// dark's exit (the three seals' crown level) to the deep target (the King's),
+/// the two ends the generator is sloped between. Reward math (the zone-boss
+/// bounty, the champion title) keys off this, never the level displayed over
+/// the boss's head: that one reads by bite and moves with every retune of the
+/// ladder, and a one-time payout must not.
+pub fn frontier_zone_level(z: usize) -> i32 {
+    let entry = crown_level("the Elder Dryad");
+    let deep = crown_level("the King Who Was Promised Nothing");
+    let last = (frontier_zone_count() - 1) as i32;
+    entry + ((deep - entry) * z as i32) / last
 }
 
 /// The Frontier zone whose boss bears this name, if any, used to credit a

@@ -6255,7 +6255,11 @@ impl WorldState {
                 if let Some(mob_id) = target
                     && self.mobs.get(&mob_id).is_some_and(|m| m.alive)
                 {
-                    self.mob_stuns.insert(mob_id, ability.duration);
+                    // A fresh daze never cuts a longer one short.
+                    self.mob_stuns
+                        .entry(mob_id)
+                        .and_modify(|t| *t = (*t).max(ability.duration))
+                        .or_insert(ability.duration);
                     self.mark_world_dirty();
                     self.log_to(
                         user_id,
@@ -6265,7 +6269,10 @@ impl WorldState {
                 } else if let Some(victim_id) = pvp_target
                     && self.players.get(&victim_id).is_some_and(|v| !v.dead)
                 {
-                    self.pvp_stuns.insert(victim_id, ability.duration);
+                    self.pvp_stuns
+                        .entry(victim_id)
+                        .and_modify(|t| *t = (*t).max(ability.duration))
+                        .or_insert(ability.duration);
                     self.log_to(
                         user_id,
                         LogKind::Combat,
@@ -6707,7 +6714,7 @@ impl WorldState {
             self.bump_starter_kill(user_id, &mob_name, here_zone);
         }
         if boss && let Some(zone) = super::world::frontier_zone_of_boss(&mob_name) {
-            self.complete_quest(user_id, zone, mob_level);
+            self.complete_quest(user_id, zone);
         }
         let achievement = boss_achievement_for(&mob_name);
         if let Some(achievement) = achievement {
@@ -6781,8 +6788,9 @@ impl WorldState {
     }
 
     /// Complete the Frontier quest for `zone` (slaying its boss) the first time:
-    /// award the "Champion of the ..." title plus an xp/gold bounty.
-    fn complete_quest(&mut self, user_id: Uuid, zone: usize, boss_level: i32) {
+    /// award the "Champion of the ..." title plus an xp/gold bounty, both
+    /// keyed to the level the zone is pitched at (`frontier_zone_level`).
+    fn complete_quest(&mut self, user_id: Uuid, zone: usize) {
         let already = self
             .players
             .get(&user_id)
@@ -6794,9 +6802,9 @@ impl WorldState {
         let Some((zname, _boss)) = super::world::frontier_zone_info(zone) else {
             return;
         };
-        // Wildbound only widened the level DISPLAYED over a foe's head; the
-        // bounty stays pinned to the old ceiling so that change pays nothing.
-        let reward_level = boss_level.min(super::world::LEVEL_KNEE);
+        // Never the level over the boss's head: that reads by bite and moves
+        // with every retune of the ladder, and a one-time payout must not.
+        let reward_level = super::world::frontier_zone_level(zone);
         let bonus_xp = (80 + reward_level * 24) as i64;
         let bonus_gold = (35 + reward_level * 6) as i64;
         if let Some(p) = self.players.get_mut(&user_id) {
@@ -6811,7 +6819,7 @@ impl WorldState {
                 "Quest complete - the {zname} is cleared! (+{bonus_xp} xp, +{bonus_gold} gold)"
             ),
         );
-        self.award_title(user_id, format!("Champion of the {zname}"), boss_level);
+        self.award_title(user_id, format!("Champion of the {zname}"), reward_level);
         self.dirty = true;
     }
 

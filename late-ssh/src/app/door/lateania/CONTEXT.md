@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
-- Last updated: 2026-08-28 (the companion bites for its species growth plus 20% of the owner's attack rating, `PET_COEF_PCT`, a share of the build rather than the build; the crown ladder: `world::CROWNS` re-fields the fourteen road bosses at derived numbers so the game is won prepared at L80 and the Treant is a real fight at L12; per-land `Band` rows in `tune_spawn_balance` and a re-sloped Frontier; the displayed level now reads by bite off the crown ladder. Earlier the same day: the damage formula: a per-calling `DamageWeights` split of the attack rating into a swing and spell power, every ability scaling with spell power by effect, regen growing with level, one shared potion cooldown; flee now costs a parting blow and the fled foe recovers; abandoned foes recover after `MOB_RESET_TICKS`; the test battle arena `arena.rs` landed, see §10. Earlier: 2026-08-25 added the §7 section "Balance: where a character's damage actually comes from": an audit of the 30-60 band finding that ability magnitude never scales with `attack()`, that gear + a maxed pet + a weapon coat supply three class-agnostic damage terms worth more than the class term itself, and that `AUTO_SHARE` and the world-pass grind budget both model a petless character. Findings only, nothing test-enforced yet; a defect list and a set of open questions close the section)
+- Last updated: 2026-08-28 (a stun never shortens one already on the foe; the Frontier zone bounty keys off `frontier_zone_level`, not the displayed level, and `LEVEL_KNEE` is gone; the §7 land tables, ladder chart, and level-scale notes re-read from the engine. Same day, earlier: the companion bites for its species growth plus 20% of the owner's attack rating, `PET_COEF_PCT`, a share of the build rather than the build; the crown ladder: `world::CROWNS` re-fields the fourteen road bosses at derived numbers so the game is won prepared at L80 and the Treant is a real fight at L12; per-land `Band` rows in `tune_spawn_balance` and a re-sloped Frontier; the displayed level now reads by bite off the crown ladder. Earlier the same day: the damage formula: a per-calling `DamageWeights` split of the attack rating into a swing and spell power, every ability scaling with spell power by effect, regen growing with level, one shared potion cooldown; flee now costs a parting blow and the fled foe recovers; abandoned foes recover after `MOB_RESET_TICKS`; the test battle arena `arena.rs` landed, see §10. Earlier: 2026-08-25 added the §7 section "Balance: where a character's damage actually comes from": an audit of the 30-60 band finding that ability magnitude never scales with `attack()`, that gear + a maxed pet + a weapon coat supply three class-agnostic damage terms worth more than the class term itself, and that `AUTO_SHARE` and the world-pass grind budget both model a petless character. Findings only, nothing test-enforced yet; a defect list and a set of open questions close the section)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
@@ -420,7 +420,7 @@ Load-bearing decisions, all of them deliberate:
 
 ### The shape of the game [VOLATILE]
 
-One place to look for "where does this land sit, what lives in it, and how do you get there". **The level over a foe's head means "come at this level" (2026-08-28).** A crown reads the target it is tuned to fall at (`world::CROWNS`); everything else reads by its *bite* off the crown ladder (`MobSpawn::level` → `level_for_bite`: the level of the prepared character whose crown hits like this, discounted by `TRASH_BITE_PCT` 70 for a regular and `BOSS_BITE_PCT` 85 for a zone boss). Health never enters it: a sponge is a longer fight, not a deadlier one. The old `max_hp + damage * 4` power estimate is gone; the tables below that quote levels predate the change and are being re-derived from the arena report (`Every boss as the engine fields it`), so re-derive rather than trust; nothing here is a source of truth, `world.rs` is.
+One place to look for "where does this land sit, what lives in it, and how do you get there". **The level over a foe's head means "come at this level" (2026-08-28).** A crown reads the target it is tuned to fall at (`world::CROWNS`); everything else reads by its *bite* off the crown ladder (`MobSpawn::level` → `level_for_bite`: the level of the prepared character whose crown hits like this, discounted by `TRASH_BITE_PCT` 70 for a regular and `BOSS_BITE_PCT` 85 for a zone boss). Health never enters it: a sponge is a longer fight, not a deadlier one. The old `max_hp + damage * 4` power estimate is gone. The tables below were re-read from the engine on 2026-08-28 (`region_progress` bands and the `arena_report_extra` roster, `Every boss as the engine fields it`); nothing here is a source of truth, `world.rs` is, so re-derive after a retune rather than trust.
 
 #### The crowns and the story they encode [STABLE]
 
@@ -439,62 +439,64 @@ The grind to 100 is long by design (75% of the xp curve is 50→100), so **the l
 
 **Every row is derived, not authored by feel**: `max_hp` = the median prepared dps at that kit × `CROWN_KILL_TICKS` (14); `damage` = the median prepared health pool / `CROWN_SURVIVE_TICKS` (11) + what the kit's armor blunts (half for a Physical striker, a quarter otherwise). The inputs come from `arena_crown_yardstick`; the outcome is the contract `every_crown_falls_to_a_prepared_character_and_not_to_a_walk_in` (every calling wins prepared, the median kill is 8-40 ticks, a walk-in six levels lower in the previous tier with no prep loses). Re-derive a row when the player curve moves; the contract says when.
 
-**Lands agree with their crowns through `tune_spawn_balance`'s band rows** (`Band`: Overworld / LivingDark / Frontier / Reaches / Kaelmyr / Archipelago × boss-or-regular, one row each, matched exhaustively). The three crowned endgame lands are calibrated at their deepest zone against the crown that stands there: a regular dies in ~3 prepared ticks and needs 15+ to kill you (casters included, armor blunts a school by a quarter), a zone boss ~8 and ~14. The Frontier's generator was re-sloped for that (`extend_frontier`: entry = a prepared L40 out of the living dark, deep = the King's L55) and its row is 1:1; the Reaches and Kaelmyr keep their generator slopes and scale by row. The Archipelago keeps the old endgame multipliers on purpose (ungated, portal-reachable, deadly by design; its bosses still read Lv90-100). Contract: `the_trash_on_a_crowns_doorstep_is_in_band`; yardstick: `arena_doorstep_yardstick`. An out-of-band land is fixed in its row, never mob by mob.
+**Lands agree with their crowns through `tune_spawn_balance`'s band rows** (`Band`: Overworld / LivingDark / Frontier / Reaches / Kaelmyr / Archipelago × boss-or-regular, one row each, matched exhaustively). The three crowned endgame lands are calibrated at their deepest zone against the crown that stands there: a regular dies in ~3 prepared ticks and needs 15+ to kill you (casters included, armor blunts a school by a quarter), a zone boss ~8 and ~14. The Frontier's generator was re-sloped for that (`extend_frontier`: entry = a prepared L40 out of the living dark, deep = the King's L55) and its row is 1:1; the Reaches and Kaelmyr keep their generator slopes and scale by row. The Archipelago keeps the old endgame multipliers on purpose (ungated, portal-reachable, deadly by design: the prestige farm past the last crown; its bosses read Lv75-100). Contract: `the_trash_on_a_crowns_doorstep_is_in_band`; yardstick: `arena_doorstep_yardstick`. An out-of-band land is fixed in its row, never mob by mob.
 
 #### The lands
 
-All eighteen `REGIONS`, in the order the ladder below plots them. "Level" is mobs; bosses are listed separately because in several lands they sit far above the trash around them.
+All eighteen `REGIONS`, in the order the ladder below plots them. "Level" is the displayed level of the mobs homed there (`region_progress`); bosses are listed separately because in several lands they sit well above the trash around them.
 
 | Land | Rooms | Mobs | Bosses |
 | --- | --- | --- | --- |
-| Wayfarer's Hollow | `TUTORIAL_BASE`+5 | none | none (tutorial) |
-| Embergate & the King's Road | 1-600 (spawns to 110) | Lv2-24 | 7, Lv12 to 61 (below) |
-| The Overworld & Capitals | 600-2000 | Lv3-9 | none |
+| Wayfarer's Hollow | `TUTORIAL_BASE`+5 | one Lv1 practice foe | none (tutorial) |
+| Embergate & the King's Road | 1-600 (spawns to 110) | Lv3-35 | 15: the seven crowns Lv12-35 (below) and eight side bosses Lv12-35 |
+| The Overworld & Capitals | 600-2000 | Lv6-14 | 7, Lv19-24 |
 | City Districts | 3000-3100 | none | none (safe) |
 | Hearthward Close (housing) | 9000+ | none | none (safe) |
-| The Sunken Catacombs | 5000-5200 | Lv6-20 | The Bonewright Lich Lv32 |
-| Thornwood Hollows | 5200-5400 | Lv6-20 | the Elder Dryad Lv32 |
-| The Drowned Caverns | 5400-5600 | Lv6-22 | the Abyss-Thing Lv34 |
-| The Frontier · 20 zones | 2000-3000 | Lv48-70 | 20, Lv61-88; deepest the King Lv88 |
-| The Sundered Reaches · 20 zones | 10000-11000 | Lv67-77 | 20, Lv85-100; deepest Yssgar Lv100 |
-| Kaelmyr, the Ashen Reach · 20 zones | 12000+ | Lv88-99 | 20, **all Lv100**; Kaethyr Ascendant Lv100 |
-| The Sunderlakes · 14 zones | 16000-18000 | peaceful (fishing) | none |
-| Broceliande · 20 zones | 22000-24000 | Lv24-65 | 20, Lv51-75 |
-| Aelunor, the Faewood · 12 zones | 25000+ | Lv17-42 | 12, Lv53-69 |
+| The Sunken Catacombs | 5000-5200 | Lv26-35 | The Bonewright Lich Lv40 |
+| Thornwood Hollows | 5200-5400 | Lv26-35 | the Elder Dryad Lv40 |
+| The Drowned Caverns | 5400-5600 | Lv29-37 | the Abyss-Thing Lv40 |
+| The Frontier · 20 zones | 2000-3000 | Lv37-53 | 20, Lv38-55; deepest the King Lv55 |
+| The Sundered Reaches · 20 zones | 10000-11000 | Lv50-65 | 20, Lv55-65; deepest Yssgar Lv65 |
+| Kaelmyr, the Ashen Reach · 20 zones | 12000+ | Lv63-78 | 20, Lv69-80; Kaethyr the Unquenched Lv75, Kaethyr Ascendant Lv80 |
+| The Sunderlakes · 14 zones | 16000-18000 | Lv12-41 (plus the fishing) | 14, Lv20-43 |
+| Broceliande · 20 zones | 22000-24000 | Lv18-51 | 20, Lv26-56 |
+| Aelunor, the Faewood · 12 zones | 25000+ | Lv14-43 | 12, Lv29-48 |
 | Silvael (Aelunor's city) | 26000+ | none | none (safe) |
 | Portal Villages · 4 | 8000+ | none | none (safe) |
-| The Shattered Archipelago · 20 islands | 20000+ | Lv68-78 | 20, Lv90-100 |
-| The Wildbound Waste · 3 biomes (pvp) | 30000+ | Lv11-79 | 3 apex, Lv62 / 70 / 85 |
+| The Shattered Archipelago · 20 islands | 20000+ | Lv70-100 | 20, Lv75-100 |
+| The Wildbound Waste · 3 biomes (pvp) | 30000+ | Lv10-57 | 3 apex, Lv36-58 |
 
-The authored core's seven-boss ladder, each boss tuned at ~3x the trash around it and ~1.6x its damage:
+The authored core's seven-boss ladder. Every one is a crown, fielded at its `CROWNS` row (the level is the target it falls at, not a reading):
 
 | Boss | Lv | Room | Grants |
 | --- | --- | --- | --- |
 | the Elder Treant | 12 | 28 | `FIRST_DUNGEON_GATE_TITLE` |
-| the Bone Tyrant | 17 | 44 | |
-| the Lich Vael | 22 | 62 | |
-| the Magma Colossus | 30 | 77 | |
-| the Wyrm of Frostspire | 39 | 92 | |
-| the Fallen Paladin | 48 | 103 | |
-| the Archdemon Mal'gareth | 61 | 110 | `FRONTIER_GATE_TITLE` |
+| the Bone Tyrant | 16 | 44 | |
+| the Lich Vael | 20 | 62 | |
+| the Magma Colossus | 24 | 77 | |
+| the Wyrm of Frostspire | 27 | 92 | |
+| the Fallen Paladin | 30 | 103 | |
+| the Archdemon Mal'gareth | 35 | 110 | `FRONTIER_GATE_TITLE` |
 
-**The ladder**, weakest to strongest by mob level. Bars are ordinary mobs.
+**The ladder**, weakest to strongest by mob level. Bars are ordinary mobs; two levels per column.
 
 ```
                           1        20        40        60        80        100
                           +---------+---------+---------+---------+---------+-
-the authored core         ############                                          7 bosses, Lv12 > 61
-the Overworld & capitals   ####                                                 no bosses
-the living dark x3          #########                                           3 seals, Lv32/32/34
-the Wildbound Waste (pvp)      ###################################              3 apex, Lv62/70/85
-Aelunor                           #############                                 12 bosses, Lv53-69
-Broceliande                          ######################                     20 bosses, Lv51-75
-the Frontier                                     ############                   20 bosses, Lv61-88
-the Sundered Reaches                                       ######               20 bosses, Lv85-100
-the Archipelago (portal)                                   ######               20 bosses, Lv90-100
-Kaelmyr                                                              #######    20 bosses, all Lv100
-                                                       ^ the knee at 60
+the authored core          ################                                     7 crowns Lv12-35, 8 side bosses Lv12-35
+the Overworld & capitals    ####                                                7 bosses, Lv19-24
+the Sunderlakes                ###############                                  14 bosses, Lv20-43
+Aelunor                         ###############                                 12 bosses, Lv29-48
+the living dark x3                    ######                                    3 seals, all Lv40
+Broceliande                       #################                             20 bosses, Lv26-56
+the Wildbound Waste (pvp)     ########################                          3 apex, Lv36-58
+the Frontier                                ########                            20 bosses, Lv38-55; the King Lv55
+the Sundered Reaches                              ########                      20 bosses, Lv55-65; Yssgar Lv65
+Kaelmyr                                                  ########               20 bosses, Lv69-80; Kaethyr Ascendant Lv80
+the Archipelago (portal)                                    ###############     20 bosses, Lv75-100
 ```
+
+The road is the right-hand half: the seven crowns to L35, the seals at L40, the Frontier to the King at L55, the Reaches to Yssgar at L65, Kaelmyr to the two Kaethyrs at L75 and L80. Everything to the left of the Frontier is ungated side country where a character levels between crowns; the Archipelago is the prestige farm past the last one.
 
 #### The gate spine [VOLATILE]
 
@@ -559,11 +561,11 @@ Three link kinds and no others: a **plain walk**, a **title gate** (see the gate
     +--walk--> THE WILDBOUND WASTE ... the Sand-Wyrm's Maw, Sahra Wastes (room 751)
 
   == [all four Banes] ==> THE FRONTIER ...... the sealed stair, Embergate's Town Square
-       deepest zone: the King Who Was Promised Nothing Lv88
+       deepest zone: the King Who Was Promised Nothing Lv55
   == [the King's Bane] ==> THE SUNDERED REACHES ... the Matlatesh sea-gate
-       deepest chamber: Yssgar, the Sundering Deep Lv100
+       deepest chamber: Yssgar, the Sundering Deep Lv65
   == [Yssgar's Bane] ==> KAELMYR ............ the ash-gate below Yssgar's chamber
-       KAETHYR ASCENDANT Lv100  <-- the last crown. Nothing is gated behind him.
+       KAETHYR ASCENDANT Lv80  <-- the last crown. Nothing is gated behind him.
 ```
 
 The Ways (`portal_destinations()`) run in parallel to all of the above and are the **only** way into the Archipelago:
@@ -586,18 +588,19 @@ Embergate's square needs no special case despite the visited seed being `tutoria
 Two things fall out of that table and are easy to miss:
 
 - **Aelunor is not on the network, and it sits behind Silvael.** Every other far country has a waystone; Aelunor and Silvael are reachable only by walking from the Amber Savanna. `extend_silvael` splices the city into that road rather than hanging it off the end, so the walk is savanna -> **Silvael** -> Aelunor and nothing steps from the overworld straight into the Faewood. Pinned by `silvael_stands_between_the_overworld_and_aelunor`.
-- **The Archipelago is ungated endgame, and that is intended.** Its islands hold Lv68-78 mobs and Lv90-100 bosses, and every landing is portal-reachable with no title at all, so a low-level character can step directly into content above the Frontier. Nothing in progression routes through it (no island grants a gate title or a Long Road crown), so it stays open on purpose while every mainland gate is visited-gated. The Wildbound Waste has the same property in milder form, running to Lv79 in its third biome behind nothing but a walk.
+- **The Archipelago is ungated endgame, and that is intended.** Its islands hold Lv70-100 mobs and Lv75-100 bosses (it kept the old deadly band rows on purpose: it is the farm past the last crown, above Kaelmyr, not on the road), and every landing is portal-reachable with no title at all, so a low-level character can step directly into content above the Frontier. Nothing in progression routes through it (no island grants a gate title or a Long Road crown), so it stays open on purpose while every mainland gate is visited-gated. The Wildbound Waste has the same property in milder form, running to Lv57 in its third biome behind nothing but a walk.
 
-**Two traps in the level scale.** Both come from `Spawn::level()` and both bite the UI, not the engine:
+**How the level scale reads, and where it stops resolving.** Everything comes from `MobSpawn::level` and bites the UI, not the engine:
 
-- **The knee at 60.** Below 840 power it is one level per 14 power; above, one level per 150. A level is worth roughly ten times more past 60, and a boss sitting just over the knee gets catapulted: the Archdemon is only 1.5x the Fallen Paladin in power but reads 13 levels higher. Useful in practice, since it means a boss's damage can be retuned inside a wide band without moving its displayed level at all.
-- **Saturation at 100.** Level 100 starts at 6,840 power. Thirty-one bosses sit above that line (11 of 20 in the Reaches, all 20 in Kaelmyr) spanning 6,840 to 18,196 power, so they all read `Lv100`. Kaethyr Ascendant (18,196) looks identical to Kaelmyr's first boss (12,800) while being 1.4x its power. The ordering is never wrong, since the function is monotonic, but it stops resolving exactly where the stakes are highest, and that is also where `World::zone_band` stops being useful guidance in the room panel.
+- **A crown reads its target, everything else reads by bite.** `level_for_bite` walks the `CROWNS` ladder: linear between neighbouring crowns, extrapolated past either end, clamped to 1..100. A regular's damage is read at `TRASH_BITE_PCT` (70) of a crown's, a zone boss's at `BOSS_BITE_PCT` (85), so a land's trash reads a few levels under its crown by construction. Retuning a foe's damage therefore always moves its level; retuning its health never does. There is no knee any more: the scale is only as uneven as the crown ladder itself (five levels per crown through the core, then 15, 10, 10, 5 across the endgame).
+- **Saturation at 100.** Anything biting past the Ascendant's 397 extrapolates on the last segment (five levels per 29 damage) and clamps at 100. Only the Archipelago gets there: its deepest islands all read `Lv100` while spanning a real range of bites, so the ordering stops resolving exactly where that land is deadliest. Deliberate, since that land is off the road, but `World::zone_band` is no guidance there.
+- **A doorstep can read past its crown.** A land's band row is calibrated at its deepest zone against the crown standing there, so the last zone bosses before it read close to it: Kaelmyr's zones 17-18 read Lv77-80 with the Unquenched at Lv75 next door. The crown is still the harder fight (twice the health); the level over the head only says how hard it hits.
 
 **Where the time goes.** `xp_for_level` is cubic to `XP_KNEE_LEVEL` (50) and then a flat `XP_PER_SUMMIT_LEVEL` (75,000) per level to 100. Total climb is 4,967,282 xp: **1,217,282 to reach 50 (24%), then 3,750,000 for 50 to 100 (75%) at a rate that never changes.**
 
 **Known gaps in the shape** (see also §11):
 
-- The authored core holds 6,276 xp in total, which is about Lv11 of progress, while its own last boss wants roughly Lv40 on bare class stats. Players are therefore pushed out into the ungated side countries to level and come back over-levelled, which is why the approach to the Throne plays as trivial even though its trash is correctly placed at ~1/3 of its boss.
+- The authored core holds 6,276 xp in total, which is about Lv11 of progress, while its own last boss falls at L35 with the tier's kit (L32 bare kit, L20 with a maxed tame; the arena's Long Road table). Players are therefore pushed out into the ungated side countries to level and come back over-levelled, which is why the approach to the Throne plays as trivial even though its trash reads a few levels under its crown by construction.
 - Quest content clusters hard: 5 starter steps at Lv1-10, then **2 bounties across Lv10-30**, then 32 quests unlocking at once at Lv30-35, then **nothing authored across Lv35-52**, 8 bounties to Lv78, and **nothing past Lv78** but the last two crowns. The five side countries carry no quests at all despite being the de facto bridge from the core to the Archdemon.
 
 ### Classes and scores
@@ -636,6 +639,7 @@ Progression:
 - **The damage formula (2026-08-28).** One shared **attack rating** (`PlayerState::attack_rating`: class curve + gear + active empower + primary score; `attack()` is that with the archetype's `attack_pct`, the number the sheet calls "attack"). What the rating feeds is decided per calling by `Class::damage_weights()` (`classes.rs`, `DamageWeights { auto_pct, spell_pct }`, three closed shapes: **casters** Mage/Runemaster/Necromancer/Warlock/Spiritmaster/Cleric at 50/60, **hybrids** Druid/Paladin/Bard/Skald/Beastlord at 95/45, **martials** Warrior/Rogue/Ranger/Monk/Berserker/Valewalker at 100/35):
   - the Physical auto lands for the **swing** = `attack() * auto_pct / 100` (`PlayerState::swing`; a Mage swings at half, a Warrior in full);
   - every ability lands for `magnitude + spell_power * ability_coef_pct(effect) / 100` (`ability_power`), where **spell power** = `attack_rating() * spell_pct / 100` (`PlayerState::spell_power`) and the coefficient is per effect (`svc::ability_coef_pct`: Strike 100, Finisher 150, Stun 50, DoT 30 per tick, Heal 50, HoT 20 per tick, Ward 60, Empower 25). Class traits (+20% Mage/Runemaster, +25% Ranger vs wounded) and then the archetype apply once to the whole hit in `ability_damage`; an Empower is fed the rating *without* the running empower so a buff never compounds itself. The table magnitude is the flat floor an ability keeps at level 1.
+  - a `Stun` never shortens one already on the foe: `mob_stuns`/`pvp_stuns` keep the longer of the two (`a_shorter_stun_does_not_cut_a_longer_one_short`).
   - Consequences, measured in the arena: gear and level now lift abilities as well as the swing, so a caster's output rides its schools (and the resist/weak board) instead of the same Physical swing everyone had; on the neutral dummy martials sit at 55-67% auto, casters at 67-75% abilities, and the best-to-worst calling spread in the same gear is under 1.6 at every ladder step (was 2.0). Contracts: `casters_lean_on_abilities_and_martials_on_the_auto`, `classes_kill_at_a_similar_pace_in_the_same_gear` (`arena_test.rs`), `abilities_scale_with_spell_power_and_the_auto_swings_by_calling` (`svc_test.rs`). The sheet shows attack, swing, and spell (`PlayerView.swing`/`spell_power`).
   - **Resource regen grows with level**: `stats_at` adds `l / REGEN_LEVELS_PER_POINT` (one point per four levels) on top of every class's base. The bases were tuned for level-1 costs and the roster's costs climb to ~49 by level 100; without this a summit caster cast once every five ticks and fell back on its swing.
 - Every generated zone carries a themed resist/weak profile on its regulars: see the dedicated section below, **The world resist/weak pass**.
@@ -785,7 +789,7 @@ knowledge is reserved as the future Thundersmith Ledger's territory.
 - Bosses always drop one item from their loot table. Regular mobs have a modest chance if their table is non-empty.
 - Mob kills grant XP, reduced gold, possible loot, and titles. Boss XP and Frontier quest XP/gold bounties are intentionally damped so boss chains do not skip too much of the level curve.
 - Boss title format is `Bane of ...`; lesser foes grant a derived `...bane` title.
-- Frontier boss kills complete their zone quest, award XP/gold, and grant `Champion of the <zone>`.
+- Frontier boss kills complete their zone quest, award XP/gold, and grant `Champion of the <zone>`. The payout and the title's level key off `world::frontier_zone_level(zone)` (a straight line from the seals' L40 to the King's L55, the ends the generator is sloped between), never the level displayed over the boss's head: that reads by bite and moves with every retune, and a one-time payout must not (`a_zone_boss_bounty_pays_by_the_zones_target_level_not_the_number_over_its_head`).
 - Defeating the authored final boss, the Archdemon Mal'gareth, pays 10,000 chips and grants the `LMG` profile-award badge. **The badge is once per account; the chips repeat** (SHOP.md Phase 6, migration 158) behind two gates at once: once per `mud_characters.id`, and at most one crown of that kind every 7 days per account. Both gates or neither: a refusal writes nothing and pays nothing.
 - Defeating the final Frontier boss, the King Who Was Promised Nothing, pays 10,000 chips on the same two gates and grants the `LKN` profile-award badge. (It paid 20,000 until migration 144 flattened the four crowns to 10,000 each; claims already banked at the old rate were left alone.)
 - Defeating the final Reaches boss, Yssgar, the Sundering Deep, pays 20,000 chips on the same two gates and grants the `LYS` profile-award badge. Defeating Kaelmyr's last boss, Kaethyr Ascendant, Who Sang the God Awake, does the same for `LKA` (the Unquenched Throne's Kaethyr the Unquenched carries no achievement; only the Ascendant form at the Sundering Wound does). Migration 144 flattened all four crowns to 10,000; migration 158 lifted the two deepest to 20,000, because the reroll farm the lockout exists to stop is the easy pair and the hard pair needs a leveled character every time. `BossAchievement.payout` is still an `Option` so a future badge-only crown stays expressible. Badge codes are named after the boss (Mal'Gareth, King/Nothing, YSsgar, KAethyr Ascendant), and chat author labels collapse to the highest crown (`LKA` > `LYS` > `LKN` > `LMG`).
@@ -1165,5 +1169,5 @@ Put DB/service orchestration tests that cannot stay pure in adjacent `_test.rs` 
 - Hunted game cooldowns are not persisted across process restart.
 - **Four of the six ability scores are dead weight.** Nothing outside `stats.rs` reads STR/DEX/INT/WIS/CHA unless that score happens to be the class's `primary_score`: a Berserker's INT, a Mage's CHA, a Monk's STR all decide nothing. Only CON (`hp_bonus`, level-scaled, the one score that matters to everyone) and the primary score (`attack_bonus`, a flat modifier of at most +-4, which is a rounding error against a late-game attack curve plus gear) touch a number a player feels. Class selection still rolls all six and offers `r` to reroll, so the screen promises a build decision the game does not honour. Fixing it means either giving the other four real hooks (DEX to dodge/crit, INT/WIS to resource pool or regen, CHA to prices or taming, STR to carry weight or melee riders) or cutting the roll down to the scores that are real.
 - World content is authored as Rust data. A future data-file loader should preserve the existing `World`, `Room`, `MobSpawn`, `Feature`, and `CritterSpawn` shapes.
-- **The authored core cannot level a player through itself.** Its 31 spawns hold 6,276 xp in total (about Lv11) while the Archdemon at its end wants roughly Lv40 on bare class stats, so players are pushed into the ungated side countries to level and return over-levelled. The consequence is that the run up to the Obsidian Throne plays as trivial even though its trash is correctly tuned at ~1/3 of its boss, matching every other boss on that ladder. Fixing this means raising the core's xp budget (or its late trash), not re-tuning the boss: the Archdemon's damage was already lifted 48 -> 58 to match the ladder's own ~1.6x boss-to-trash damage ratio, which he alone was missing at 1.33x. See §7 for the whole shape.
+- **The authored core cannot level a player through itself.** Its 31 spawns hold 6,276 xp in total (about Lv11) while the Archdemon at its end is pitched at a prepared L35 (`CROWNS`), so players are pushed into the ungated side countries to level and return over-levelled. The consequence is that the run up to the Obsidian Throne plays as trivial even though its trash reads by bite a few levels under its crown, same as every other land. Fixing this means raising the core's xp budget (or its late trash), not re-tuning the boss: a crown's row is derived from the prepared median, never authored by feel. See §7 for the whole shape.
 - **No quest content bridges Lv15-30, Lv35-52, or anything past Lv78**, and none of the five side countries has a single quest, despite Aelunor and Broceliande being the de facto route from the authored core to the Archdemon. Boards exist only in the three capitals and at the Kaelmyr ash-cairn. This is the emptiest part of the game for a new player and the most likely place to lose them.
