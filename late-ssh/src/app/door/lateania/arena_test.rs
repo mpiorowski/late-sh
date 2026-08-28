@@ -1,7 +1,7 @@
 use std::fmt::Write as _;
 use std::time::Instant;
 
-use super::super::super::classes::{ARCHETYPE_LEVEL, Class};
+use super::super::super::classes::{ARCHETYPE_LEVEL, ArchetypeDef, Class, archetypes_for};
 use super::super::{LONG_ROAD, TimeOfDay, Weather};
 use super::*;
 
@@ -11,8 +11,48 @@ const ASCENDANT: &str = "Kaethyr Ascendant, Who Sang the God Awake";
 const KING: &str = "the King Who Was Promised Nothing";
 const DUMMY: &str = "a straw training dummy";
 
-/// A character built the way the report builds them: the DPS path once it is
-/// offered, three level-appropriate draughts in the bag.
+/// Every archetype path a character of this level can be on: none below
+/// `ARCHETYPE_LEVEL`, else both of the class's paths.
+fn paths(class: Class, level: i32) -> Vec<Option<&'static ArchetypeDef>> {
+    if level < ARCHETYPE_LEVEL {
+        vec![None]
+    } else {
+        archetypes_for(class).into_iter().map(Some).collect()
+    }
+}
+
+fn path_label(arch: Option<&'static ArchetypeDef>) -> &'static str {
+    match arch {
+        Some(a) => a.name,
+        None => "no path",
+    }
+}
+
+/// A character on a named path, three level-appropriate draughts in the bag.
+fn recipe_on(
+    class: Class,
+    archetype: Option<&'static ArchetypeDef>,
+    level: i32,
+    gear: Gear,
+    companion: Companion,
+    coat: Coat,
+    policy: Policy,
+) -> Recipe {
+    Recipe {
+        class,
+        level,
+        archetype,
+        gear,
+        companion,
+        coat,
+        potions: 3,
+        policy,
+    }
+}
+
+/// A character on the damage path (the DPS archetype once it is offered, else
+/// the class's first): the yardsticks and the crown derivation measure this
+/// one; the crown contract and the report tables run every path.
 fn recipe(
     class: Class,
     level: i32,
@@ -158,6 +198,8 @@ fn dps_ladder() -> [(i32, Gear); 5] {
 
 #[test]
 fn classes_kill_at_a_similar_pace_in_the_same_gear() {
+    // Damage paths only: a Tank or Healer path trades pace for its role by
+    // design, so the class comparison is made on the path built to deal it.
     let mut arena = Arena::new();
     for (level, gear) in dps_ladder() {
         let rows: Vec<(Class, i32)> = Class::ALL
@@ -195,16 +237,18 @@ fn arena_dps_table() {
     }
     let _ = writeln!(out);
     for class in Class::ALL {
-        let _ = write!(out, "| {class:?} |");
-        for (level, gear) in ladder {
-            let r = recipe(class, level, gear, Companion::None, Coat::None, Policy::Honest);
-            let d = arena.measure(r, DPS_TICKS);
-            let _ = write!(out, " {} {} |", d.total() / DPS_TICKS as i32, d.shares());
+        for arch in archetypes_for(class) {
+            let _ = write!(out, "| {class:?} · {} |", arch.name);
+            for (level, gear) in ladder {
+                let r = recipe_on(class, Some(arch), level, gear, Companion::None, Coat::None, Policy::Honest);
+                let d = arena.measure(r, DPS_TICKS);
+                let _ = write!(out, " {} {} |", d.total() / DPS_TICKS as i32, d.shares());
+            }
+            let _ = writeln!(out);
         }
-        let _ = writeln!(out);
     }
     eprintln!(
-        "[arena] dps over {DPS_TICKS} ticks on the neutral dummy, bare (dps auto/ability/dot/coat/pet):\n{out}"
+        "[arena] dps over {DPS_TICKS} ticks on the neutral dummy, bare, both paths (dps auto/ability/dot/coat/pet):\n{out}"
     );
 }
 
@@ -271,28 +315,46 @@ fn prepared(t: &CrownTarget, class: Class) -> Recipe {
     )
 }
 
-fn walk_in(t: &CrownTarget, class: Class) -> Recipe {
-    let mut r = recipe(class, t.below.0, t.below.1, Companion::None, Coat::None, Policy::Honest);
+fn prepared_on(t: &CrownTarget, class: Class, arch: Option<&'static ArchetypeDef>) -> Recipe {
+    recipe_on(
+        class,
+        arch,
+        t.level,
+        t.gear,
+        t.companion,
+        Coat::BestOil(oil_tier_for(t.level)),
+        Policy::Honest,
+    )
+}
+
+fn walk_in_on(t: &CrownTarget, class: Class, arch: Option<&'static ArchetypeDef>) -> Recipe {
+    let mut r = recipe_on(class, arch, t.below.0, t.below.1, Companion::None, Coat::None, Policy::Honest);
     r.potions = 0;
     r
 }
 
 /// A crown fight is a fight: the median prepared kill sits in this many ticks.
 const CROWN_TICKS: std::ops::RangeInclusive<u32> = 8..=40;
-/// At most this many of the 17 callings may take a crown as a walk-in.
+/// At most this many of the 17 callings may take a crown as a walk-in (per
+/// path; the contract runs both paths, so twice this across them).
 const WALK_IN_WINS_MAX: usize = 4;
 
 #[test]
+#[ignore = "a minute of real fights; part of `make arena`, not of the suite"]
 fn every_crown_falls_to_a_prepared_character_and_not_to_a_walk_in() {
+    // Every calling on every path: a crown must fall whatever a player chose
+    // at L10, and a walk-in must lose whatever they chose.
     let mut arena = Arena::new();
     for t in CROWN_TARGETS.iter() {
         let mut ticks: Vec<u32> = Vec::new();
-        let mut losers: Vec<(Class, Outcome, u32)> = Vec::new();
+        let mut losers: Vec<(Class, &'static str, Outcome, u32)> = Vec::new();
         for class in Class::ALL {
-            let r = arena.fight(prepared(t, class), t.boss);
-            ticks.push(r.ticks);
-            if r.outcome != Outcome::Won {
-                losers.push((class, r.outcome, r.ticks));
+            for arch in paths(class, t.level) {
+                let r = arena.fight(prepared_on(t, class, arch), t.boss);
+                ticks.push(r.ticks);
+                if r.outcome != Outcome::Won {
+                    losers.push((class, path_label(arch), r.outcome, r.ticks));
+                }
             }
         }
         assert!(
@@ -311,13 +373,16 @@ fn every_crown_falls_to_a_prepared_character_and_not_to_a_walk_in() {
             t.level,
             t.gear.label()
         );
-        let walk_in_wins: Vec<Class> = Class::ALL
-            .iter()
-            .copied()
-            .filter(|&class| arena.fight(walk_in(t, class), t.boss).outcome == Outcome::Won)
-            .collect();
+        let mut walk_in_wins: Vec<(Class, &'static str)> = Vec::new();
+        for class in Class::ALL {
+            for arch in paths(class, t.below.0) {
+                if arena.fight(walk_in_on(t, class, arch), t.boss).outcome == Outcome::Won {
+                    walk_in_wins.push((class, path_label(arch)));
+                }
+            }
+        }
         assert!(
-            walk_in_wins.len() <= WALK_IN_WINS_MAX,
+            walk_in_wins.len() <= WALK_IN_WINS_MAX * 2,
             "{} falls to a walk-in at L{} {}: {walk_in_wins:?}",
             t.boss,
             t.below.0,
@@ -409,6 +474,7 @@ fn blunt_for(attack_type: super::super::super::damage::DamageType, armor: i32) -
 }
 
 #[test]
+#[ignore = "half a minute of real fights; part of `make arena`, not of the suite"]
 fn the_trash_on_a_crowns_doorstep_is_in_band() {
     // The land must agree with its crown: at the crown's target, a regular on
     // its doorstep dies in a few prepared ticks and needs many to kill you.
@@ -508,13 +574,14 @@ fn hit_and_run_cannot_take_the_king_at_l32() {
 
 // ---- The report ------------------------------------------------------------
 
-/// Level and gear a character would plausibly bring at each step of the road.
-const LADDER: [(i32, Gear); 9] = [
-    (10, Gear::ShopBest),
-    (20, Gear::ShopBest),
-    (32, Gear::ShopBest),
-    (32, Gear::Crafted(3)),
-    (40, Gear::Crafted(3)),
+/// Level and gear a character would plausibly bring at each step of the road:
+/// the rarity-capped kits of the crafting tiers (`Gear::Kit`), then the
+/// generated sets of each endgame land.
+const LADDER: [(i32, Gear); 8] = [
+    (10, Gear::Kit(0)),
+    (20, Gear::Kit(1)),
+    (32, Gear::Kit(3)),
+    (40, Gear::Kit(4)),
     (50, Gear::Frontier(9)),
     (60, Gear::Frontier(19)),
     (75, Gear::Reaches(19)),
@@ -539,18 +606,30 @@ fn ladder_table(
     }
     let _ = writeln!(out);
     for class in Class::ALL {
-        let _ = write!(out, "| {class:?} |");
-        for (level, gear) in LADDER {
-            let coat = if level < 26 && coat != Coat::None {
-                // Tier-5 oils sit behind Alchemy gates no L10-20 character has.
-                Coat::BestOil(0)
-            } else {
-                coat
-            };
-            let r = arena.fight(recipe(class, level, gear, companion, coat, Policy::Honest), foe);
-            let _ = write!(out, " {} |", r.cell());
+        // One row per path; below ARCHETYPE_LEVEL both rows are the same
+        // pathless character, so the second path's cell reads "-".
+        for (pi, arch) in archetypes_for(class).into_iter().enumerate() {
+            let _ = write!(out, "| {class:?} · {} |", arch.name);
+            for (level, gear) in LADDER {
+                if level < ARCHETYPE_LEVEL && pi > 0 {
+                    let _ = write!(out, " - |");
+                    continue;
+                }
+                let coat = if level < 26 && coat != Coat::None {
+                    // Tier-5 oils sit behind Alchemy gates no L10-20 character has.
+                    Coat::BestOil(0)
+                } else {
+                    coat
+                };
+                let path = (level >= ARCHETYPE_LEVEL).then_some(arch);
+                let r = arena.fight(
+                    recipe_on(class, path, level, gear, companion, coat, Policy::Honest),
+                    foe,
+                );
+                let _ = write!(out, " {} |", r.cell());
+            }
+            let _ = writeln!(out);
         }
-        let _ = writeln!(out);
     }
 }
 
@@ -600,7 +679,9 @@ fn arena_report() {
          with shares in percent of damage dealt. W won, D died, S stalemate after {HONEST_MAX_TICKS} ticks, E foe fled."
     );
     let _ = writeln!(out);
-    let _ = writeln!(out, "Gear presets: shop = best authored piece per slot; craftN = smithed weapon + plate of tier N; frontN/reachN/kaelN = the full 8-piece generated set of that zone tier.");
+    let _ = writeln!(out, "One row per class and archetype path (the L10 column is pathless, so its second row reads `-`).");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Gear presets: kitN = the smithed weapon and plate of crafting tier N plus the best authored piece per other slot under the tier's rarity cap; frontN/reachN/kaelN = the full 8-piece generated set of that zone tier.");
 
     let road: Vec<&'static str> = LONG_ROAD.iter().map(|m| m.boss).collect();
 
@@ -665,21 +746,23 @@ fn arena_report_extra() {
     let _ = writeln!(out);
     let _ = writeln!(out, "|---|---|---|---|---|---|---|---|---|---|---|");
     for class in Class::ALL {
-        let mut row = String::new();
-        let mut sheet = (0, 0, 0, 0);
-        for (companion, coat) in kits {
-            let r = arena.fight(
-                recipe(class, 55, Gear::Frontier(9), companion, coat, Policy::Honest),
-                ARCHDEMON,
+        for arch in archetypes_for(class) {
+            let mut row = String::new();
+            let mut sheet = (0, 0, 0, 0);
+            for (companion, coat) in kits {
+                let r = arena.fight(
+                    recipe_on(class, Some(arch), 55, Gear::Frontier(9), companion, coat, Policy::Honest),
+                    ARCHDEMON,
+                );
+                sheet = (r.attack, r.swing, r.spell_power, r.max_hp);
+                let _ = write!(row, " {} |", r.cell());
+            }
+            let _ = writeln!(
+                out,
+                "| {class:?} · {} | {} | {} | {} | {} |{row}",
+                arch.name, sheet.0, sheet.1, sheet.2, sheet.3
             );
-            sheet = (r.attack, r.swing, r.spell_power, r.max_hp);
-            let _ = write!(row, " {} |", r.cell());
         }
-        let _ = writeln!(
-            out,
-            "| {class:?} | {} | {} | {} | {} |{row}",
-            sheet.0, sheet.1, sheet.2, sheet.3
-        );
     }
 
     let _ = writeln!(out);
@@ -692,12 +775,15 @@ fn arena_report_extra() {
     let _ = writeln!(out);
     let _ = writeln!(out, "|---|---|---|---|---|---|");
     for class in Class::ALL {
-        let _ = write!(out, "| {class:?} |");
-        for (level, gear) in dps_ladder() {
-            let r = recipe(class, level, gear, Companion::None, Coat::None, Policy::Honest);
-            let _ = write!(out, " {} |", arena.measure_dps(r, DPS_TICKS));
+        for arch in archetypes_for(class) {
+            let _ = write!(out, "| {class:?} · {} |", arch.name);
+            for (level, gear) in dps_ladder() {
+                let r = recipe_on(class, Some(arch), level, gear, Companion::None, Coat::None, Policy::Honest);
+                let d = arena.measure(r, DPS_TICKS);
+                let _ = write!(out, " {} {} |", d.total() / DPS_TICKS as i32, d.shares());
+            }
+            let _ = writeln!(out);
         }
-        let _ = writeln!(out);
     }
 
     let _ = writeln!(out);
