@@ -290,6 +290,11 @@ pub(super) enum Policy {
     /// (heal/ward/empower under thresholds, then the best ready offensive),
     /// drink under `DRINK_UNDER_PCT`, re-coat when the coat runs dry.
     Honest,
+    /// Honest, plus reading the foe: every offensive pick is weighed by the
+    /// foe's resist/weak multiplier for that ability's school, so a Mage
+    /// throws Frost at the Ashen and Holy at the Undead. The same player,
+    /// looking at the traits line. The ceiling of the school game.
+    Routed,
     /// Engage, trade one exchange, flee, step straight back in. Retreat to a
     /// free fountain heal under `RETREAT_UNDER_PCT`. The foe never heals.
     HitAndRun,
@@ -303,6 +308,7 @@ impl Policy {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Honest => "honest",
+            Self::Routed => "routed",
             Self::HitAndRun => "hit-and-run",
             Self::StunAndFlee => "stun-and-flee",
         }
@@ -310,7 +316,7 @@ impl Policy {
 
     fn max_ticks(self) -> u32 {
         match self {
-            Self::Honest => HONEST_MAX_TICKS,
+            Self::Honest | Self::Routed => HONEST_MAX_TICKS,
             Self::HitAndRun | Self::StunAndFlee => EXPLOIT_MAX_TICKS,
         }
     }
@@ -602,7 +608,7 @@ impl Arena {
         };
         let mut acc = Accum::default();
         let outcome = match recipe.policy {
-            Policy::Honest => self.run_honest(uid, mob_id, home, &recipe, &mut acc),
+            Policy::Honest | Policy::Routed => self.run_honest(uid, mob_id, home, &recipe, &mut acc),
             Policy::HitAndRun => self.run_hit_and_run(uid, mob_id, home, &recipe, &mut acc),
             Policy::StunAndFlee => self.run_stun_and_flee(uid, mob_id, home, &recipe, &mut acc),
         };
@@ -654,7 +660,10 @@ impl Arena {
     /// The damage behind `measure_dps`, by source, over the whole window.
     pub(super) fn measure(&mut self, recipe: Recipe, ticks: u32) -> Damage {
         const DUMMY: &str = "a straw training dummy";
-        assert_eq!(recipe.policy, Policy::Honest, "dps is an honest number");
+        assert!(
+            matches!(recipe.policy, Policy::Honest | Policy::Routed),
+            "dps is an honest number"
+        );
         let mob_id = self.spawn_id(DUMMY);
         let home = self.s.mobs[&mob_id].spawn.home;
         let real_pool = self.s.mobs[&mob_id].spawn.max_hp;
@@ -930,8 +939,9 @@ impl Arena {
         let before = self.s.mobs[&mob_id].hp;
         let foe_damage = self.s.mobs[&mob_id].spawn.damage;
         let prefer_stun = recipe.policy == Policy::StunAndFlee;
+        let routed = recipe.policy == Policy::Routed;
         for _ in 0..CASTS_PER_TICK {
-            match self.choose_cast(uid, mob_id, known, foe_damage, prefer_stun) {
+            match self.choose_cast(uid, mob_id, known, foe_damage, prefer_stun, routed) {
                 Some(slot) => self.s.use_ability(uid, slot),
                 None => break,
             }
@@ -988,7 +998,9 @@ impl Arena {
     }
 
     /// The honest rotation. Defensive needs first, then the best ready
-    /// offensive by expected damage. Returns a 1-based hotbar slot.
+    /// offensive by expected damage; `routed` weighs that by the foe's
+    /// resist/weak multiplier for the ability's school. Returns a 1-based
+    /// hotbar slot.
     fn choose_cast(
         &self,
         uid: Uuid,
@@ -996,8 +1008,17 @@ impl Arena {
         known: &[&'static Ability],
         foe_damage: i32,
         prefer_stun: bool,
+        routed: bool,
     ) -> Option<u8> {
         let p = &self.s.players[&uid];
+        let profile = self.s.mobs[&mob_id].spawn.profile;
+        let school = |a: &Ability| -> i32 {
+            if routed {
+                profile.defense_against(a.damage_type).multiplier_pct()
+            } else {
+                100
+            }
+        };
         let hp_pct = p.hp * 100 / p.max_hp().max(1);
         let has_hot = p
             .self_effects
@@ -1060,11 +1081,10 @@ impl Arena {
             return Some(slot);
         }
         best(&|a: &Ability| match a.effect {
-            AbilityEffect::Strike | AbilityEffect::Finisher => Some(a.magnitude),
-            AbilityEffect::Stun => Some(a.magnitude + foe_damage),
-            AbilityEffect::DamageOverTime => {
-                (live_dots < dot_abilities).then_some(a.magnitude * a.duration as i32)
-            }
+            AbilityEffect::Strike | AbilityEffect::Finisher => Some(a.magnitude * school(a) / 100),
+            AbilityEffect::Stun => Some(a.magnitude * school(a) / 100 + foe_damage),
+            AbilityEffect::DamageOverTime => (live_dots < dot_abilities)
+                .then_some(a.magnitude * a.duration as i32 * school(a) / 100),
             AbilityEffect::Heal
             | AbilityEffect::HealOverTime
             | AbilityEffect::Empower

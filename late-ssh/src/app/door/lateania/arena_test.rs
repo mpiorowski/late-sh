@@ -594,6 +594,7 @@ fn ladder_table(
     foe: &str,
     companion: Companion,
     coat: Coat,
+    policy: Policy,
 ) {
     let _ = write!(out, "| class |");
     for (level, gear) in LADDER {
@@ -623,7 +624,7 @@ fn ladder_table(
                 };
                 let path = (level >= ARCHETYPE_LEVEL).then_some(arch);
                 let r = arena.fight(
-                    recipe_on(class, path, level, gear, companion, coat, Policy::Honest),
+                    recipe_on(class, path, level, gear, companion, coat, policy),
                     foe,
                 );
                 let _ = write!(out, " {} |", r.cell());
@@ -691,7 +692,7 @@ fn arena_report() {
         let _ = writeln!(out);
         let _ = writeln!(out, "### {}", arena.foe(foe).label());
         let _ = writeln!(out);
-        ladder_table(&mut arena, &mut out, foe, Companion::None, Coat::None);
+        ladder_table(&mut arena, &mut out, foe, Companion::None, Coat::None, Policy::Honest);
         eprintln!("[arena] {foe}: bare table done at {:?}", started.elapsed());
     }
 
@@ -701,8 +702,20 @@ fn arena_report() {
         let _ = writeln!(out);
         let _ = writeln!(out, "### {}", arena.foe(foe).label());
         let _ = writeln!(out);
-        ladder_table(&mut arena, &mut out, foe, Companion::TameBest, Coat::BestOil(4));
+        ladder_table(&mut arena, &mut out, foe, Companion::TameBest, Coat::BestOil(4), Policy::Honest);
         eprintln!("[arena] {foe}: geared table done at {:?}", started.elapsed());
+    }
+
+    let _ = writeln!(out);
+    let _ = writeln!(out, "## The ceiling: routed, maxed tame + best oil");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "The geared character above, but reading the foe: every offensive pick is weighed by the crown's resist/weak multiplier for its school. What a player who looks at the traits line gets.");
+    for foe in &road {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "### {}", arena.foe(foe).label());
+        let _ = writeln!(out);
+        ladder_table(&mut arena, &mut out, foe, Companion::TameBest, Coat::BestOil(4), Policy::Routed);
+        eprintln!("[arena] {foe}: routed table done at {:?}", started.elapsed());
     }
 
     let _ = writeln!(out);
@@ -761,6 +774,36 @@ fn arena_report_extra() {
                 out,
                 "| {class:?} · {} | {} | {} | {} | {} |{row}",
                 arch.name, sheet.0, sheet.1, sheet.2, sheet.3
+            );
+        }
+    }
+
+    let _ = writeln!(out);
+    let _ = writeln!(out, "## Honest vs routed: L55 Frontier-10, bare, vs {KING} (weak to shadow)");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Damage per tick over the fight, and the outcome. The routed column is the school-game ceiling; the gap is what reading the foe is worth to that path.");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "| path | honest dps | routed dps | gain | honest | routed |");
+    let _ = writeln!(out, "|---|---|---|---|---|---|");
+    for class in Class::ALL {
+        for arch in archetypes_for(class) {
+            let h = arena.fight(
+                recipe_on(class, Some(arch), 55, Gear::Frontier(9), Companion::None, Coat::None, Policy::Honest),
+                KING,
+            );
+            let r = arena.fight(
+                recipe_on(class, Some(arch), 55, Gear::Frontier(9), Companion::None, Coat::None, Policy::Routed),
+                KING,
+            );
+            let dps = |f: &FightResult| f.dealt.total() / f.ticks.max(1) as i32;
+            let (hd, rd) = (dps(&h), dps(&r));
+            let _ = writeln!(
+                out,
+                "| {class:?} · {} | {hd} | {rd} | {:+}% | {} | {} |",
+                arch.name,
+                (rd - hd) * 100 / hd.max(1),
+                h.cell(),
+                r.cell()
             );
         }
     }
