@@ -47,6 +47,7 @@ fn recipe_on(
         coat,
         potions: 3,
         policy,
+        build: Build::Neutral,
     }
 }
 
@@ -70,7 +71,15 @@ fn recipe(
         coat,
         potions: 3,
         policy,
+        build: Build::Neutral,
     }
+}
+
+/// A bare character on the damage path with a given ability-score build.
+fn built(class: Class, level: i32, gear: Gear, build: Build) -> Recipe {
+    let mut r = recipe(class, level, gear, Companion::None, Coat::None, Policy::Honest);
+    r.build = build;
+    r
 }
 
 #[test]
@@ -777,7 +786,7 @@ fn arena_report_extra() {
     let mut out = String::new();
     let _ = writeln!(out, "# Lateania arena report, part 2");
     let _ = writeln!(out);
-    let _ = writeln!(out, "Same rules as part 1 (real engine, fresh character per fight, flat scores, clear day; cell = `outcome ticks hp-left% potions-drunk auto/ability/dot/coat/pet`).");
+    let _ = writeln!(out, "Same rules as part 1 (real engine, fresh character per fight, neutral scores unless the table says otherwise, clear day; cell = `outcome ticks hp-left% potions-drunk auto/ability/dot/coat/pet`).");
     let road: Vec<&'static str> = LONG_ROAD.iter().map(|m| m.boss).collect();
     let _ = writeln!(out);
     let _ = writeln!(out, "## Where the damage comes from: L55, Frontier tier 10, vs {ARCHDEMON}");
@@ -876,6 +885,13 @@ fn arena_report_extra() {
     }
 
     let _ = writeln!(out);
+    let _ = writeln!(out, "## The builds: {BUILD_TICKS} ticks on the neutral dummy, bare, damage path (dps vs neutral, max hp vs neutral)");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Peak = 18 in that score, 10 elsewhere. Focused = 20 in the class primary and 20 CON. Blessed = all 18, cursed = all 3. Glass cannon = STR/DEX/INT 20 and the rest 3; tortoise = CON/WIS 20 and the rest 3; merchant = CHA 20 and the rest 3.");
+    let _ = writeln!(out);
+    let _ = write!(out, "{}", build_table(&mut arena));
+
+    let _ = writeln!(out);
     let _ = writeln!(out, "## The exploits: L32, shop gear, no potions, vs {ARCHDEMON}");
     let _ = writeln!(out);
     let _ = writeln!(out, "Stun-and-flee needs a stun in the roster; hit-and-run needs nothing. `taken` is net health lost over the whole fight.");
@@ -949,4 +965,219 @@ fn arena_report_extra() {
     let _ = writeln!(out);
     let _ = writeln!(out, "Generated in {:?}.", started.elapsed());
     write_report(&report_path(true), &out);
+}
+
+// ---- The builds --------------------------------------------------------------
+//
+// Every yardstick above runs the neutral build. These measure what the scores
+// do to the same character: one peak per score, the way players will really
+// spend (`Focused`), and the strange shapes, on a long window so a crit
+// build's dice average out.
+
+/// Crits are dice; 200 swings put a 10% crit chance within a point or two.
+const BUILD_TICKS: u32 = 200;
+
+/// The callings the build yardstick reads: one martial, one crit-leaning
+/// martial, one caster, one resource-bound healer, at the Frontier's kit.
+const BUILD_STEPS: [(Class, i32, Gear); 4] = [
+    (Class::Warrior, 55, Gear::Frontier(9)),
+    (Class::Rogue, 55, Gear::Frontier(9)),
+    (Class::Mage, 55, Gear::Frontier(9)),
+    (Class::Cleric, 55, Gear::Frontier(9)),
+];
+
+const BUILDS: [Build; 13] = [
+    Build::Neutral,
+    Build::Peak(Score::Strength),
+    Build::Peak(Score::Dexterity),
+    Build::Peak(Score::Constitution),
+    Build::Peak(Score::Intelligence),
+    Build::Peak(Score::Wisdom),
+    Build::Peak(Score::Charisma),
+    Build::Focused,
+    Build::Blessed,
+    Build::Cursed,
+    Build::GlassCannon,
+    Build::Tortoise,
+    Build::Merchant,
+];
+
+/// The build table: dps per build as a percent of the neutral build, the
+/// sheet's max hp beside it. Shared by the yardstick and the report.
+fn build_table(arena: &mut Arena) -> String {
+    let mut out = String::new();
+    let _ = write!(out, "| build |");
+    for (class, level, gear) in BUILD_STEPS {
+        let _ = write!(out, " {class:?} L{level} {} |", gear.label());
+    }
+    let _ = writeln!(out);
+    let neutral: Vec<(i32, i32)> = BUILD_STEPS
+        .iter()
+        .map(|&(class, level, gear)| {
+            let r = built(class, level, gear, Build::Neutral);
+            let hp = arena.sheet(r).3;
+            (arena.measure_dps(r, BUILD_TICKS), hp)
+        })
+        .collect();
+    for build in BUILDS {
+        let _ = write!(out, "| {} |", build.label());
+        for (i, &(class, level, gear)) in BUILD_STEPS.iter().enumerate() {
+            let r = built(class, level, gear, build);
+            let dps = arena.measure_dps(r, BUILD_TICKS);
+            let hp = arena.sheet(r).3;
+            let (n_dps, n_hp) = neutral[i];
+            let _ = write!(
+                out,
+                " {dps} ({:+}%) hp {hp} ({:+}%) |",
+                dps * 100 / n_dps.max(1) - 100,
+                hp * 100 / n_hp.max(1) - 100
+            );
+        }
+        let _ = writeln!(out);
+    }
+    out
+}
+
+#[test]
+#[ignore = "a yardstick print for the tuning loop"]
+fn arena_build_table() {
+    let mut arena = Arena::new();
+    eprintln!(
+        "[arena] builds, {BUILD_TICKS}-tick dps on the neutral dummy, bare, damage path (dps vs neutral, max hp vs neutral):\n{}",
+        build_table(&mut arena)
+    );
+}
+
+/// Percent change of `dps` against `neutral`.
+fn pct_vs(dps: i32, neutral: i32) -> i32 {
+    dps * 100 / neutral.max(1) - 100
+}
+
+#[test]
+fn a_peak_score_moves_its_own_axis_and_nothing_else() {
+    // Deterministic hooks only (a crit build is dice, see the next contract):
+    // CHA changes no fight at all, CON changes the pool and not the pace,
+    // and the damage scores land in the band a lucky 18 was designed to be
+    // worth, a share of the fight and never the fight.
+    let mut arena = Arena::new();
+    let mut wrong: Vec<String> = Vec::new();
+    for (class, level, gear) in BUILD_STEPS {
+        let n = built(class, level, gear, Build::Neutral);
+        let n_dps = arena.measure_dps(n, DPS_TICKS);
+        let n_hp = arena.sheet(n).3;
+        let cha = built(class, level, gear, Build::Peak(Score::Charisma));
+        if arena.measure_dps(cha, DPS_TICKS) != n_dps || arena.sheet(cha).3 != n_hp {
+            wrong.push(format!("{class:?}: CHA changed the fight"));
+        }
+        let con = built(class, level, gear, Build::Peak(Score::Constitution));
+        let con_hp = pct_vs(arena.sheet(con).3, n_hp);
+        let con_dps = pct_vs(arena.measure_dps(con, DPS_TICKS), n_dps);
+        if !(8..=14).contains(&con_hp) || con_dps.abs() > 2 {
+            wrong.push(format!("{class:?}: CON hp {con_hp:+}% dps {con_dps:+}%"));
+        }
+    }
+    // Regen only tells once the pool has drained, so the Wisdom axis reads
+    // on a window long enough to run a Cleric dry (`REGEN_TICKS`).
+    let axes = [
+        (Class::Warrior, Score::Strength, DPS_TICKS, 3..=10),
+        (Class::Rogue, Score::Strength, DPS_TICKS, 3..=10),
+        (Class::Mage, Score::Intelligence, DPS_TICKS, 2..=8),
+        (Class::Mage, Score::Wisdom, REGEN_TICKS, 5..=20),
+        (Class::Cleric, Score::Wisdom, REGEN_TICKS, 3..=16),
+    ];
+    for (class, score, ticks, band) in axes {
+        let n = arena.measure_dps(built(class, 55, Gear::Frontier(9), Build::Neutral), ticks);
+        let peak = arena.measure_dps(built(class, 55, Gear::Frontier(9), Build::Peak(score)), ticks);
+        let gain = pct_vs(peak, n);
+        if !band.contains(&gain) {
+            wrong.push(format!("{class:?} peak {}: {gain:+}% (want {band:?})", score.label()));
+        }
+    }
+    assert!(wrong.is_empty(), "a peak score is out of its band: {wrong:?}");
+}
+
+/// Long enough to run a Cleric's pool dry, so Wisdom's regen is in the number.
+const REGEN_TICKS: u32 = 100;
+
+/// Crits are dice: this many swings put an 8% crit chance's gain within a
+/// few points of its expectation, and make a zero-crit window impossible.
+const CRIT_TICKS: u32 = 150;
+
+#[test]
+fn a_crit_build_lands_its_share_over_a_long_window() {
+    let mut arena = Arena::new();
+    let n = arena.measure_dps(built(Class::Rogue, 55, Gear::Frontier(9), Build::Neutral), CRIT_TICKS);
+    let dex = arena.measure_dps(
+        built(Class::Rogue, 55, Gear::Frontier(9), Build::Peak(Score::Dexterity)),
+        CRIT_TICKS,
+    );
+    let gain = pct_vs(dex, n);
+    assert!(
+        (1..=12).contains(&gain),
+        "an 18 DEX Rogue should out-damage a neutral one by a few percent, not {gain:+}%"
+    );
+}
+
+/// What the whole roll may be worth, every score going one way: less than a
+/// kit tier, more than a rounding error. Blessed reads +17..+24% on the
+/// 200-tick yardstick and Cursed -13..-17%; the bands leave room for the
+/// crit and glance dice of a short window.
+const BLESSED_GAIN: std::ops::RangeInclusive<i32> = 5..=40;
+const CURSED_LOSS: std::ops::RangeInclusive<i32> = -30..=-3;
+
+#[test]
+fn the_whole_roll_is_a_share_of_the_fight_not_the_fight() {
+    let mut arena = Arena::new();
+    let mut wrong: Vec<String> = Vec::new();
+    for (class, level, gear) in BUILD_STEPS {
+        let n = built(class, level, gear, Build::Neutral);
+        let n_dps = arena.measure_dps(n, DPS_TICKS);
+        let n_hp = arena.sheet(n).3;
+        let blessed = built(class, level, gear, Build::Blessed);
+        let b_gain = pct_vs(arena.measure_dps(blessed, DPS_TICKS), n_dps);
+        if !BLESSED_GAIN.contains(&b_gain) || arena.sheet(blessed).3 <= n_hp {
+            wrong.push(format!("{class:?} blessed: {b_gain:+}%"));
+        }
+        let cursed = built(class, level, gear, Build::Cursed);
+        let c_gain = pct_vs(arena.measure_dps(cursed, DPS_TICKS), n_dps);
+        if !CURSED_LOSS.contains(&c_gain) || arena.sheet(cursed).3 >= n_hp {
+            wrong.push(format!("{class:?} cursed: {c_gain:+}%"));
+        }
+    }
+    assert!(wrong.is_empty(), "the roll is worth the wrong amount: {wrong:?}");
+}
+
+#[test]
+fn the_strange_builds_trade_what_they_say_they_trade() {
+    // Glass cannon: more damage, less body. Tortoise: more body, no more
+    // damage on a martial (a caster's Wisdom does buy casts, so it may edge
+    // up). Merchant: a worse fighter on every axis, richer at the counter
+    // (the counter is pinned in svc_test, the arena has no shop).
+    let mut arena = Arena::new();
+    let mut wrong: Vec<String> = Vec::new();
+    for (class, level, gear) in BUILD_STEPS {
+        let n = built(class, level, gear, Build::Neutral);
+        let n_dps = arena.measure_dps(n, DPS_TICKS);
+        let n_hp = arena.sheet(n).3;
+        let glass = built(class, level, gear, Build::GlassCannon);
+        let g_hp = arena.sheet(glass).3;
+        if g_hp >= n_hp {
+            wrong.push(format!("{class:?} glass cannon kept its body"));
+        }
+        if matches!(class, Class::Warrior | Class::Rogue)
+            && arena.measure_dps(glass, DPS_TICKS) <= n_dps
+        {
+            wrong.push(format!("{class:?} glass cannon lost its edge"));
+        }
+        let tortoise = built(class, level, gear, Build::Tortoise);
+        let t_dps = pct_vs(arena.measure_dps(tortoise, DPS_TICKS), n_dps);
+        if arena.sheet(tortoise).3 <= n_hp || t_dps > 10 {
+            wrong.push(format!("{class:?} tortoise: dps {t_dps:+}%"));
+        }
+        let merchant = built(class, level, gear, Build::Merchant);
+        if arena.measure_dps(merchant, DPS_TICKS) >= n_dps || arena.sheet(merchant).3 >= n_hp {
+            wrong.push(format!("{class:?} merchant fights as well as anyone"));
+        }
+    }
+    assert!(wrong.is_empty(), "a strange build is not the trade it claims: {wrong:?}");
 }

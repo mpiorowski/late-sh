@@ -8,9 +8,12 @@
 //! Why it exists: every balance number in CONTEXT.md §7 that was "modelled"
 //! rather than measured has drifted from the engine at least once. The arena
 //! measures. A [`Recipe`] is explicit about everything that moves a fight
-//! (class, level, archetype, gear, companion, coat, potions, policy) and the
-//! arena pins what must not move: ability scores at flat 10s, the world clock
-//! at a clear day, one fresh character per fight, the foe at full health.
+//! (class, level, archetype, gear, companion, coat, potions, policy, and the
+//! ability-score [`Build`]) and the arena pins what must not move: the world
+//! clock at a clear day, one fresh character per fight, the foe at full
+//! health. Every yardstick and crown contract runs the `Neutral` build (flat
+//! 10s, every score hook at zero); the other builds measure what a roll and
+//! the placed points do to the same character.
 //!
 //! Lives as a child module of `svc` (declared there beside `svc_test`) so it
 //! can reach the private combat entry points without widening them.
@@ -29,7 +32,7 @@ use super::super::items::{
     OIL_SCHOOLS, Rarity, Slot, item, oil_id, poison_id, smith_armor_id, smith_weapon_id,
 };
 use super::super::pets::{LOYALTY_PER_LEVEL, PET_MAX_LEVEL, PET_SPECIES, Pet, PetSpecies};
-use super::super::stats::AbilityScores;
+use super::super::stats::{AbilityScores, Score};
 use super::super::taming::{AELUNOR_TAMEABLE, TAMEABLE};
 use super::super::world::{RoomId, seed_world};
 use super::{DotSource, SUMMON_ID_START, WorldState};
@@ -283,6 +286,88 @@ impl Coat {
     }
 }
 
+/// The six ability scores. `Neutral` is the reference every other number in
+/// the arena is measured on; the rest are the shapes a roll and 25 placed
+/// points can take, including the ones nobody sensible would choose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Build {
+    /// Flat 10s: every score hook at zero.
+    Neutral,
+    /// 18 in one score, 10 in the rest: a lucky roll and a few points on one axis.
+    Peak(Score),
+    /// 20 in the class's primary score and 20 CON, 10 elsewhere: the way most
+    /// players will actually spend.
+    Focused,
+    /// Every score at 18: the whole roll going the character's way.
+    Blessed,
+    /// Every score at 3: the worst 4d6 can do, six times over.
+    Cursed,
+    /// STR, DEX, and INT at 20, the rest at 3: all edge and no body.
+    GlassCannon,
+    /// CON and WIS at 20, STR, DEX, and INT at 3: outlasts everything, kills nothing.
+    Tortoise,
+    /// CHA at 20, the rest at 3: the merchant who wandered into a fight.
+    Merchant,
+}
+
+impl Build {
+    pub(super) fn label(self) -> String {
+        match self {
+            Self::Neutral => "neutral".to_string(),
+            Self::Peak(score) => format!("peak {}", score.label()),
+            Self::Focused => "focused".to_string(),
+            Self::Blessed => "blessed".to_string(),
+            Self::Cursed => "cursed".to_string(),
+            Self::GlassCannon => "glass cannon".to_string(),
+            Self::Tortoise => "tortoise".to_string(),
+            Self::Merchant => "merchant".to_string(),
+        }
+    }
+
+    pub(super) fn scores(self, class: Class) -> AbilityScores {
+        let flat = |v: i32| AbilityScores {
+            strength: v,
+            dexterity: v,
+            constitution: v,
+            intelligence: v,
+            wisdom: v,
+            charisma: v,
+        };
+        let mut scores = match self {
+            Self::Neutral | Self::Peak(_) | Self::Focused => flat(10),
+            Self::Blessed => flat(18),
+            Self::Cursed | Self::GlassCannon | Self::Tortoise | Self::Merchant => flat(3),
+        };
+        let mut set = |which: Score, v: i32| match which {
+            Score::Strength => scores.strength = v,
+            Score::Dexterity => scores.dexterity = v,
+            Score::Constitution => scores.constitution = v,
+            Score::Intelligence => scores.intelligence = v,
+            Score::Wisdom => scores.wisdom = v,
+            Score::Charisma => scores.charisma = v,
+        };
+        match self {
+            Self::Neutral | Self::Blessed | Self::Cursed => {}
+            Self::Peak(which) => set(which, 18),
+            Self::Focused => {
+                set(class.primary_score(), 20);
+                set(Score::Constitution, 20);
+            }
+            Self::GlassCannon => {
+                set(Score::Strength, 20);
+                set(Score::Dexterity, 20);
+                set(Score::Intelligence, 20);
+            }
+            Self::Tortoise => {
+                set(Score::Constitution, 20);
+                set(Score::Wisdom, 20);
+            }
+            Self::Merchant => set(Score::Charisma, 20),
+        }
+        scores
+    }
+}
+
 /// How the character fights.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Policy {
@@ -336,6 +421,7 @@ pub(super) struct Recipe {
     /// Level-appropriate healing draughts in the bag (`potion_for_level`).
     pub potions: u32,
     pub policy: Policy,
+    pub build: Build,
 }
 
 impl Recipe {
@@ -345,7 +431,7 @@ impl Recipe {
             None => "no path",
         };
         format!(
-            "{:?} L{} {} {} {} {} {}x{} {}",
+            "{:?} L{} {} {} {} {} {}x{} {} {}",
             self.class,
             self.level,
             arch,
@@ -354,7 +440,8 @@ impl Recipe {
             self.coat.label(),
             self.potions,
             item(potion_for_level(self.level)).map(|i| i.name).unwrap_or("?"),
-            self.policy.label()
+            self.policy.label(),
+            self.build.label()
         )
     }
 }
@@ -727,7 +814,7 @@ impl Arena {
         p.max_resource = stats.max_resource;
         p.resource_regen = stats.resource_regen;
         p.base_attack = stats.attack;
-        p.scores = AbilityScores::default();
+        p.scores = recipe.build.scores(recipe.class);
         p.archetype = recipe.archetype;
         p.inventory.clear();
         p.equipped.clear();
