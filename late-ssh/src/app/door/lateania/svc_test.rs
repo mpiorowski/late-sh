@@ -634,6 +634,150 @@ fn skirmisher_flees_when_wounded_and_breaks_the_lock() {
 }
 
 #[test]
+fn abilities_scale_with_spell_power_and_the_auto_swings_by_calling() {
+    // A level-1 Mage holding a Mythril Arming Sword (+34 attack): attack
+    // rating 5 + 34 = 39. Mage weights are auto 50 / spell 60, so the sword
+    // swings for 19, spell power is 23, and Firebolt (magnitude 16, a Strike
+    // at 100% of spell power) lands for 16 + 23 = 39, +20% Arcane Mastery = 46.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Mage);
+    let mob_id = *s.mobs.keys().next().expect("world has mobs");
+    {
+        let m = s.mobs.get_mut(&mob_id).unwrap();
+        m.alive = true;
+        m.revealed = true;
+        m.current_room = 2001;
+        m.leash_home = 2001;
+        m.hp = 100_000;
+        m.spawn.max_hp = 100_000;
+        m.spawn.damage = 1;
+        m.spawn.profile = DamageProfile::physical();
+    }
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = 2001;
+        p.scores = super::super::stats::AbilityScores::default();
+        p.equipped.insert(Slot::Weapon, 1010);
+    }
+    s.engage_mob(uid(1), mob_id);
+    s.use_ability(uid(1), 1);
+    assert_eq!(s.mobs[&mob_id].hp, 100_000 - 46, "Firebolt = (16 + 23) * 1.2");
+    s.tick();
+    assert_eq!(
+        s.mobs[&mob_id].hp,
+        100_000 - 46 - 19,
+        "the auto swings for half the rating"
+    );
+}
+
+#[test]
+fn a_draught_needs_a_breath_between_gulps() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.hp = 1;
+        p.inventory = vec![1300, 1300, 1300]; // three Minor Healing Draughts (40)
+    }
+    s.use_item(uid(1), 1300);
+    assert_eq!(s.players[&uid(1)].hp, 41);
+    s.use_item(uid(1), 1300);
+    assert_eq!(s.players[&uid(1)].hp, 41, "the second gulp is refused");
+    assert_eq!(s.players[&uid(1)].inventory.len(), 2, "and nothing is spent");
+    for _ in 0..QUAFF_COOLDOWN_TICKS {
+        s.tick();
+    }
+    s.use_item(uid(1), 1300);
+    assert_eq!(s.players[&uid(1)].inventory.len(), 1, "a breath later it goes down");
+    assert!(s.players[&uid(1)].hp > 41);
+}
+
+#[test]
+fn fleeing_costs_a_parting_blow_and_the_foe_recovers() {
+    let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
+    s.mobs.get_mut(&mob_id).unwrap().spawn.damage = 10;
+    let hp_before = s.players[&uid(1)].hp;
+    s.flee(uid(1));
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.target, None, "the lock is dropped");
+    assert_eq!(
+        p.hp,
+        hp_before - 10,
+        "the foe strikes at a fleeing back (naked Warrior, no armor)"
+    );
+    let m = &s.mobs[&mob_id];
+    assert_eq!(
+        m.hp, m.spawn.max_hp,
+        "a foe left with nobody fighting it recovers on the spot"
+    );
+}
+
+#[test]
+fn a_stunned_foe_cannot_strike_at_a_fleeing_back() {
+    let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
+    s.mobs.get_mut(&mob_id).unwrap().spawn.damage = 10;
+    s.mob_stuns.insert(mob_id, 2);
+    s.mob_dots.insert(
+        mob_id,
+        vec![MobDot {
+            owner: uid(1),
+            per_tick: 5,
+            remaining: 3,
+            source: DotSource::Ability,
+        }],
+    );
+    let hp_before = s.players[&uid(1)].hp;
+    s.flee(uid(1));
+    assert_eq!(s.players[&uid(1)].hp, hp_before, "a reeling foe gets no blow");
+    let m = &s.mobs[&mob_id];
+    assert_eq!(m.hp, m.spawn.max_hp);
+    assert!(
+        !s.mob_stuns.contains_key(&mob_id),
+        "the stun does not outlive the fight it was cast in"
+    );
+    assert!(!s.mob_dots.contains_key(&mob_id), "nor do the wounds");
+}
+
+#[test]
+fn a_wounded_foe_nobody_fights_recovers_after_a_few_ticks() {
+    let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
+    // The attacker is simply gone mid-fight (death, disconnect): no flee, the
+    // lock just vanishes.
+    s.players.get_mut(&uid(1)).unwrap().target = None;
+    s.mob_stuns.insert(mob_id, 5);
+    for _ in 1..MOB_RESET_TICKS {
+        s.tick();
+    }
+    assert_eq!(s.mobs[&mob_id].hp, 200, "a short grace keeps the wounds");
+    s.tick();
+    let m = &s.mobs[&mob_id];
+    assert_eq!(m.hp, m.spawn.max_hp, "then the foe recovers in full");
+    assert!(!s.mob_stuns.contains_key(&mob_id));
+}
+
+#[test]
+fn a_foe_someone_else_still_fights_keeps_its_wounds_when_you_flee() {
+    let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
+    let room = s.players[&uid(1)].room;
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Rogue);
+    s.players.get_mut(&uid(2)).unwrap().room = room;
+    s.engage_mob(uid(2), mob_id);
+    assert_eq!(s.players[&uid(2)].target, Some(mob_id));
+    s.flee(uid(1));
+    assert_eq!(s.mobs[&mob_id].hp, 200, "still in a fight with someone");
+    for _ in 0..MOB_RESET_TICKS + 1 {
+        s.tick();
+    }
+    assert!(
+        s.mobs[&mob_id].hp < 200,
+        "the second fighter keeps grinding it down, no recovery"
+    );
+}
+
+#[test]
 fn summoner_calls_an_add_into_the_fight() {
     let (mut s, _mob_id) = engaged_with(MobBehavior::Summoner);
     let before = s.mobs.len();

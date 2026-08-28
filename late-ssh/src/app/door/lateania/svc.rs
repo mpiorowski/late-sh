@@ -78,6 +78,16 @@ const TICK_SECS: u64 = 2;
 const SUMMON_ID_START: u32 = 990_000_000;
 /// A roamer takes a step at most this often (in ticks); at 2s/tick that is ~8s.
 const MOB_MOVE_COOLDOWN: u8 = 4;
+/// Ticks a wounded, stunned, or festering mob may go with nobody targeting it
+/// before it recovers in full (health, stuns, DoTs). The grace absorbs a lost
+/// connection or a death-and-return; it is far shorter than any ability
+/// cooldown, so a foe can never be whittled down across engagements. Fleeing
+/// skips the grace: the foe you turn your back on recovers on the spot.
+const MOB_RESET_TICKS: u8 = 3;
+/// Ticks between two gulps of any heal/restore consumable. Draughts used to
+/// be spammable inside a fight, bounded by gold alone; a breath between them
+/// makes a potion a decision instead of a second health bar.
+const QUAFF_COOLDOWN_TICKS: u8 = 5;
 /// Ticks per time-of-day phase. Four phases => a ~16-minute day at 2s/tick.
 const PHASE_TICKS: u64 = 120;
 /// Ticks the weather holds before it rolls over (~3 minutes).
@@ -932,6 +942,11 @@ pub struct PlayerView {
     pub hp: i32,
     pub max_hp: i32,
     pub attack: i32,
+    /// What the Physical auto-attack lands for (the attack by the calling's
+    /// `auto_pct`).
+    pub swing: i32,
+    /// Spell power: what every ability adds to its base (by effect).
+    pub spell_power: i32,
     pub armor: i32,
     pub xp: i64,
     pub xp_into_level: i64,
@@ -1094,6 +1109,8 @@ impl PlayerView {
             hp: 0,
             max_hp: 0,
             attack: 0,
+            swing: 0,
+            spell_power: 0,
             armor: 0,
             xp: 0,
             xp_into_level: 0,
@@ -2337,6 +2354,9 @@ struct PlayerState {
     shield_ticks: u8,
     /// Ticks the player is stunned (skips their action).
     stunned: u8,
+    /// Ticks until the next heal/restore consumable may be used
+    /// (`QUAFF_COOLDOWN_TICKS`). Transient.
+    quaff_cd: u8,
     /// Healing-over-time on self.
     self_effects: Vec<ActiveEffect>,
     /// Per-ability cooldowns: ability id -> ticks remaining.
@@ -2480,12 +2500,48 @@ impl PlayerState {
         (base + base * hp_pct / 100).max(1)
     }
 
-    fn attack(&self) -> i32 {
+    /// The attack rating before the archetype: class curve, gear, an active
+    /// empower, and the primary score. Both the swing and spell power derive
+    /// from it; the archetype's `attack_pct` is applied once, downstream.
+    fn attack_rating(&self) -> i32 {
         let (atk, _, _) = self.equipment_mods();
         let stat = self.class.map(|c| self.scores.attack_bonus(c)).unwrap_or(0);
-        let base = self.base_attack + atk + self.empower + stat;
+        (self.base_attack + atk + self.empower + stat).max(1)
+    }
+
+    /// The sheet's attack: the rating with the archetype applied.
+    fn attack(&self) -> i32 {
+        let base = self.attack_rating();
         let (atk_pct, _, _, _) = self.archetype_mods();
         (base + base * atk_pct / 100).max(1)
+    }
+
+    /// What the Physical auto-attack lands for: the attack scaled by the
+    /// calling's `auto_pct` (a Mage swings at half, a Warrior in full). An
+    /// unclassed character cannot engage, so its swing is never read.
+    fn swing(&self) -> i32 {
+        let auto_pct = match self.class {
+            Some(c) => c.damage_weights().auto_pct,
+            None => 100,
+        };
+        (self.attack() * auto_pct / 100).max(1)
+    }
+
+    /// Spell power: the share of the attack rating an ability adds on top of
+    /// its table magnitude (times `ability_coef_pct`). The archetype is left
+    /// out here and applied once to the whole hit in `ability_damage`.
+    fn spell_power(&self) -> i32 {
+        self.spell_power_of(self.attack_rating())
+    }
+
+    /// Spell power for an arbitrary rating (the Empower arm feeds the rating
+    /// *without* the running empower, so a buff never compounds itself).
+    fn spell_power_of(&self, rating: i32) -> i32 {
+        let spell_pct = match self.class {
+            Some(c) => c.damage_weights().spell_pct,
+            None => 0,
+        };
+        rating * spell_pct / 100
     }
 
     fn armor(&self) -> i32 {
@@ -3235,6 +3291,10 @@ struct MobInstance {
     revealed: bool,
     /// Ticks until a Summoner may call another add.
     summon_cooldown: u8,
+    /// Consecutive ticks this mob has been wounded, stunned, or festering with
+    /// nobody targeting it. At `MOB_RESET_TICKS` it recovers in full. Reset
+    /// to zero whenever a player holds it as a target.
+    untargeted: u8,
 }
 
 /// Where a damage-over-time stack came from. The two behave differently on
@@ -3378,6 +3438,26 @@ pub(super) const AUTO_SHARE: f64 = 0.75;
 /// Ticks a cooked meal's well-fed regen lasts.
 const WELL_FED_TICKS: u8 = 8;
 
+/// Percent of the caster's spell power an ability adds to its table
+/// magnitude, by effect. Instant hits get the most, a finisher more still,
+/// control less, and the over-time effects a slice per tick (a 5-tick DoT at
+/// 30% lands 150% over its life, rationed by its cooldown). Heals, wards and
+/// empowers scale the same way, so a level-55 Mend is not a level-3 Mend
+/// with better gear. The table magnitude stays the flat floor every ability
+/// keeps at level 1.
+const fn ability_coef_pct(effect: AbilityEffect) -> i32 {
+    match effect {
+        AbilityEffect::Strike => 100,
+        AbilityEffect::Finisher => 150,
+        AbilityEffect::Stun => 50,
+        AbilityEffect::DamageOverTime => 30,
+        AbilityEffect::Heal => 50,
+        AbilityEffect::HealOverTime => 20,
+        AbilityEffect::Ward => 60,
+        AbilityEffect::Empower => 25,
+    }
+}
+
 impl WorldState {
     // ---- Construction, the world clock, and broadcast -------------------
 
@@ -3399,6 +3479,7 @@ impl WorldState {
                         move_cooldown: 0,
                         revealed: !matches!(behavior, MobBehavior::Ambusher),
                         summon_cooldown: 0,
+                        untargeted: 0,
                         spawn: spawn.clone(),
                     },
                 )
@@ -3496,6 +3577,7 @@ impl WorldState {
             shield: 0,
             shield_ticks: 0,
             stunned: 0,
+            quaff_cd: 0,
             self_effects: Vec::new(),
             cooldowns: HashMap::new(),
             inventory: vec![1000, 1300, 1300], // a rusty sword and two minor draughts
@@ -6063,7 +6145,8 @@ impl WorldState {
     fn apply_ability(&mut self, user_id: Uuid, class: Class, ability: &Ability) {
         match ability.effect {
             AbilityEffect::Heal => {
-                let amount = self.amplified_heal(class, ability.magnitude);
+                let power = self.ability_power(ability, user_id);
+                let amount = self.amplified_heal(class, power);
                 self.heal_player(user_id, amount);
                 self.log_to(
                     user_id,
@@ -6072,10 +6155,11 @@ impl WorldState {
                 );
             }
             AbilityEffect::HealOverTime => {
+                let power = self.ability_power(ability, user_id);
                 if let Some(p) = self.players.get_mut(&user_id) {
                     p.self_effects.push(ActiveEffect {
                         kind: AbilityEffect::HealOverTime,
-                        magnitude: ability.magnitude,
+                        magnitude: power,
                         remaining: ability.duration,
                     });
                 }
@@ -6086,47 +6170,52 @@ impl WorldState {
                 );
             }
             AbilityEffect::Empower => {
+                // Fed the rating without the running empower, so recasting
+                // never stacks a buff on top of itself.
+                let power = self
+                    .players
+                    .get(&user_id)
+                    .map(|p| {
+                        let sp = p.spell_power_of(p.attack_rating() - p.empower);
+                        ability.magnitude + sp * ability_coef_pct(ability.effect) / 100
+                    })
+                    .unwrap_or(ability.magnitude);
                 if let Some(p) = self.players.get_mut(&user_id) {
-                    p.empower = ability.magnitude;
+                    p.empower = power;
                     p.empower_ticks = ability.duration;
                 }
                 self.log_to(
                     user_id,
                     LogKind::Combat,
-                    format!(
-                        "{} surges through you (+{} damage).",
-                        ability.name, ability.magnitude
-                    ),
+                    format!("{} surges through you (+{} damage).", ability.name, power),
                 );
             }
             AbilityEffect::Ward => {
+                let power = self.ability_power(ability, user_id);
                 if let Some(p) = self.players.get_mut(&user_id) {
-                    p.shield = ability.magnitude;
+                    p.shield = power;
                     p.shield_ticks = ability.duration;
                 }
                 self.log_to(
                     user_id,
                     LogKind::Combat,
-                    format!(
-                        "{} shields you ({} absorb).",
-                        ability.name, ability.magnitude
-                    ),
+                    format!("{} shields you ({} absorb).", ability.name, power),
                 );
             }
             AbilityEffect::Strike => {
-                let dmg = self.spell_damage(class, ability.magnitude, user_id);
+                let dmg = self.ability_damage(class, ability, user_id);
                 self.damage_target(user_id, dmg, ability.damage_type, ability.name);
             }
             AbilityEffect::Finisher => {
-                let dmg = self.spell_damage(class, ability.magnitude, user_id);
+                let dmg = self.ability_damage(class, ability, user_id);
                 if let Some(p) = self.players.get_mut(&user_id) {
-                    p.empower = p.empower.max(ability.magnitude / 8);
+                    p.empower = p.empower.max(dmg / 8);
                     p.empower_ticks = p.empower_ticks.max(ability.duration);
                 }
                 self.damage_target(user_id, dmg, ability.damage_type, ability.name);
             }
             AbilityEffect::DamageOverTime => {
-                let tick = self.spell_damage(class, ability.magnitude, user_id);
+                let tick = self.ability_damage(class, ability, user_id);
                 if self
                     .players
                     .get(&user_id)
@@ -6154,7 +6243,7 @@ impl WorldState {
             AbilityEffect::Stun => {
                 let target = self.players.get(&user_id).and_then(|p| p.target);
                 let pvp_target = self.players.get(&user_id).and_then(|p| p.pvp_target);
-                let dmg = self.spell_damage(class, ability.magnitude, user_id);
+                let dmg = self.ability_damage(class, ability, user_id);
                 self.damage_target(user_id, dmg, ability.damage_type, ability.name);
                 // Only stun if the target survived the hit.
                 if let Some(mob_id) = target
@@ -6181,6 +6270,14 @@ impl WorldState {
         }
     }
 
+    /// An ability's power: its table magnitude plus the caster's spell power
+    /// weighted by the effect (see `ability_coef_pct`). No class traits, no
+    /// archetype: the raw number every effect arm starts from.
+    fn ability_power(&self, ability: &Ability, user_id: Uuid) -> i32 {
+        let sp = self.players.get(&user_id).map(|p| p.spell_power()).unwrap_or(0);
+        ability.magnitude + sp * ability_coef_pct(ability.effect) / 100
+    }
+
     fn amplified_heal(&self, class: Class, base: i32) -> i32 {
         if class == Class::Cleric {
             base + base / 4 // Light of the Dawn
@@ -6189,8 +6286,8 @@ impl WorldState {
         }
     }
 
-    fn spell_damage(&self, class: Class, base: i32, user_id: Uuid) -> i32 {
-        let mut dmg = base;
+    fn ability_damage(&self, class: Class, ability: &Ability, user_id: Uuid) -> i32 {
+        let mut dmg = self.ability_power(ability, user_id);
         if class == Class::Mage || class == Class::Runemaster {
             dmg += dmg / 5; // Arcane Mastery / Runic Overflow
         }
@@ -6833,6 +6930,78 @@ impl WorldState {
 
     // ---- Fleeing, and world-local chat ----------------------------------
 
+    /// Restore a living mob to full: health, stuns, and every festering wound.
+    /// Returns whether there was anything to shed, so callers can announce it
+    /// only when it happened.
+    fn recover_mob(&mut self, mob_id: u32) -> bool {
+        let Some(m) = self.mobs.get_mut(&mob_id) else {
+            return false;
+        };
+        if !m.alive {
+            return false;
+        }
+        let wounded = m.hp < m.spawn.max_hp;
+        m.hp = m.spawn.max_hp;
+        m.untargeted = 0;
+        let stunned = self.mob_stuns.remove(&mob_id).is_some_and(|t| t > 0);
+        let festering = self.mob_dots.remove(&mob_id).is_some();
+        let shed = wounded || stunned || festering;
+        if shed {
+            self.dirty = true;
+            self.mark_world_dirty();
+        }
+        shed
+    }
+
+    /// The recovery sweep, once per tick after every round has resolved: a
+    /// mob that has gone `MOB_RESET_TICKS` with nobody holding it as a target
+    /// while wounded, stunned, or festering recovers in full, and everyone in
+    /// its room is told. Covers the attacker dying, disconnecting, or walking
+    /// off in any way `flee` does not see.
+    fn recover_abandoned_mobs(&mut self) {
+        let targeted: HashSet<u32> = self.players.values().filter_map(|p| p.target).collect();
+        let mut due: Vec<u32> = Vec::new();
+        for (id, m) in self.mobs.iter_mut() {
+            if !m.alive || targeted.contains(id) {
+                m.untargeted = 0;
+                continue;
+            }
+            let afflicted = m.hp < m.spawn.max_hp
+                || self.mob_stuns.get(id).is_some_and(|t| *t > 0)
+                || self.mob_dots.contains_key(id);
+            if !afflicted {
+                m.untargeted = 0;
+                continue;
+            }
+            m.untargeted = m.untargeted.saturating_add(1);
+            if m.untargeted >= MOB_RESET_TICKS {
+                due.push(*id);
+            }
+        }
+        for mob_id in due {
+            if !self.recover_mob(mob_id) {
+                continue;
+            }
+            let (room, name) = match self.mobs.get(&mob_id) {
+                Some(m) => (m.current_room, m.spawn.name.to_string()),
+                None => continue,
+            };
+            let watchers: Vec<Uuid> = self
+                .players
+                .iter()
+                .filter(|(_, p)| p.room == room)
+                .map(|(id, _)| *id)
+                .collect();
+            for uid in watchers {
+                self.log_to(
+                    uid,
+                    LogKind::Combat,
+                    format!("{name} shakes off its wounds."),
+                );
+            }
+        }
+    }
+
     fn flee(&mut self, user_id: Uuid) {
         let Some(player) = self.players.get(&user_id) else {
             return;
@@ -6846,6 +7015,35 @@ impl WorldState {
             return;
         }
         let room_id = player.room;
+        let fled_mob = player.target;
+        // Turning your back on a foe is not free: it strikes once more as you
+        // run, unless it is reeling from a stun. A blow that fells you ends
+        // the flight where you stand (a death-save or veteran rising still
+        // gets away).
+        let parting = fled_mob.and_then(|mob_id| {
+            let m = self.mobs.get(&mob_id)?;
+            let reeling = self.mob_stuns.get(&mob_id).copied().unwrap_or(0) > 0;
+            if !m.alive || m.current_room != room_id || reeling {
+                return None;
+            }
+            Some((
+                mob_id,
+                m.spawn.damage,
+                m.spawn.profile.attack_type,
+                m.spawn.name.to_string(),
+            ))
+        });
+        if let Some((_, dmg, dtype, name)) = parting {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                format!("{name} strikes at your back as you run!"),
+            );
+            self.strike_player(user_id, dmg, dtype, &name);
+            if self.players.get(&user_id).is_some_and(|p| p.dead) {
+                return;
+            }
+        }
         let exit = self
             .world
             .room(room_id)
@@ -6853,6 +7051,24 @@ impl WorldState {
         if let Some(player) = self.players.get_mut(&user_id) {
             player.target = None;
             player.pvp_target = None;
+        }
+        // The foe you leave recovers on the spot, unless someone else is still
+        // fighting it: whittling a boss down across engagements is not a
+        // strategy, it is the hole this closes.
+        if let Some(mob_id) = fled_mob {
+            let still_fought = self.players.values().any(|p| p.target == Some(mob_id));
+            if !still_fought && self.recover_mob(mob_id) {
+                let name = self
+                    .mobs
+                    .get(&mob_id)
+                    .map(|m| m.spawn.name.to_string())
+                    .unwrap_or_default();
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    format!("{name} shakes off its wounds as you run."),
+                );
+            }
         }
         match exit {
             Some((dir, dest)) => {
@@ -7120,6 +7336,18 @@ impl WorldState {
         if !has {
             return;
         }
+        let queasy = self.players.get(&user_id).map(|p| p.quaff_cd).unwrap_or(0);
+        if queasy > 0 {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!(
+                    "You are still queasy from the last draught ({}s).",
+                    u64::from(queasy) * TICK_SECS
+                ),
+            );
+            return;
+        }
         // Cooked food grants a well-fed regen on top of its immediate heal, and
         // so do the rarest Sunderlakes fish (their "special" - see fish_well_fed).
         let well_fed = super::items::food_tier(item_id)
@@ -7132,6 +7360,7 @@ impl WorldState {
             let max = p.max_hp();
             p.hp = (p.hp + heal).min(max);
             p.resource = (p.resource + restore).min(p.max_resource);
+            p.quaff_cd = QUAFF_COOLDOWN_TICKS;
             if let Some(regen) = well_fed {
                 p.self_effects.push(ActiveEffect {
                     kind: AbilityEffect::HealOverTime,
@@ -7469,6 +7698,9 @@ impl WorldState {
                 if p.stunned > 0 {
                     p.stunned -= 1;
                 }
+                if p.quaff_cd > 0 {
+                    p.quaff_cd -= 1;
+                }
                 for e in p.self_effects.iter_mut() {
                     if e.kind == AbilityEffect::HealOverTime && e.remaining > 0 {
                         hot_heal += e.magnitude;
@@ -7507,7 +7739,7 @@ impl WorldState {
                     } else {
                         0
                     };
-                    (p.target, p.attack(), p.opening_strike, frenzy, p.class)
+                    (p.target, p.swing(), p.opening_strike, frenzy, p.class)
                 }
                 None => continue,
             };
@@ -7740,7 +7972,7 @@ impl WorldState {
                         a.opening_strike,
                         a.hp,
                         a.max_hp(),
-                        a.attack(),
+                        a.swing(),
                     )
                 })
             else {
@@ -7909,6 +8141,9 @@ impl WorldState {
             }
         }
 
+        // Foes nobody is fighting any more shed their wounds (see MOB_RESET_TICKS).
+        self.recover_abandoned_mobs();
+
         // No idle timeout: a player stays put in Lateania for as long as their
         // session is actually open, however long they go without touching a
         // key. Real disconnects/leaving the door are already handled by
@@ -7983,6 +8218,7 @@ impl WorldState {
                 move_cooldown: 0,
                 revealed: true,
                 summon_cooldown: 0,
+                untargeted: 0,
                 spawn,
             },
         );
@@ -8239,6 +8475,7 @@ impl WorldState {
                 move_cooldown: 0,
                 revealed: true,
                 summon_cooldown: 0,
+                untargeted: 0,
                 spawn,
             },
         );
@@ -9864,6 +10101,8 @@ impl WorldState {
                     hp: player.hp,
                     max_hp: player.max_hp(),
                     attack: player.attack(),
+                    swing: player.swing(),
+                    spell_power: player.spell_power(),
                     armor: player.armor(),
                     xp: player.xp,
                     xp_into_level: xp_into.max(0),

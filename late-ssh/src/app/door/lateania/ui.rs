@@ -3962,6 +3962,16 @@ fn sheet_derived(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
         theme::SUCCESS(),
     ));
     lines.push(stat_colored(
+        "swing",
+        format!("+{}", view.swing),
+        theme::SUCCESS(),
+    ));
+    lines.push(stat_colored(
+        "spell",
+        format!("+{}", view.spell_power),
+        theme::SUCCESS(),
+    ));
+    lines.push(stat_colored(
         "armor",
         view.armor.to_string(),
         theme::MENTION(),
@@ -4379,6 +4389,8 @@ fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
     lines.push(Line::raw(""));
     lines.push(section("Combat"));
     lines.push(stat("attack", view.attack.to_string()));
+    lines.push(stat("swing", view.swing.to_string()));
+    lines.push(stat("spell", view.spell_power.to_string()));
     lines.push(stat("armor", view.armor.to_string()));
     lines.push(Line::raw(""));
     lines.extend(attribute_lines(

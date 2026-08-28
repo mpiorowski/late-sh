@@ -1,0 +1,777 @@
+use std::fmt::Write as _;
+use std::time::Instant;
+
+use super::super::super::classes::{ARCHETYPE_LEVEL, Class};
+use super::super::{LONG_ROAD, TimeOfDay, Weather};
+use super::*;
+
+const ARCHDEMON: &str = "the Archdemon Mal'gareth";
+const YSSGAR: &str = "Yssgar, the Sundering Deep";
+const ASCENDANT: &str = "Kaethyr Ascendant, Who Sang the God Awake";
+const KING: &str = "the King Who Was Promised Nothing";
+const DUMMY: &str = "a straw training dummy";
+
+/// A character built the way the report builds them: the DPS path once it is
+/// offered, three level-appropriate draughts in the bag.
+fn recipe(
+    class: Class,
+    level: i32,
+    gear: Gear,
+    companion: Companion,
+    coat: Coat,
+    policy: Policy,
+) -> Recipe {
+    Recipe {
+        class,
+        level,
+        archetype: (level >= ARCHETYPE_LEVEL).then(|| dps_or_first(class)),
+        gear,
+        companion,
+        coat,
+        potions: 3,
+        policy,
+    }
+}
+
+#[test]
+fn the_arena_clock_is_a_clear_day() {
+    // The whole honest window must be flat: no dark (+25% mob damage), no fog
+    // (ambush boost), no storm (caster-bolt boost). Pins ARENA_CLOCK against
+    // the real day/weather tables so a change there moves this, not the data.
+    for t in ARENA_CLOCK + 1..=ARENA_CLOCK + HONEST_MAX_TICKS as u64 {
+        assert!(!TimeOfDay::from_ticks(t).is_dark(), "tick {t} is dark");
+        assert!(
+            !matches!(Weather::from_ticks(t), Weather::Fog | Weather::Storm),
+            "tick {t} has boosting weather"
+        );
+    }
+}
+
+#[test]
+fn every_point_of_damage_is_accounted_for() {
+    // A naked level-1 Warrior has exactly two sources, the auto and Cleave, so
+    // the dummy's whole health must land in those two buckets and nowhere else.
+    let mut arena = Arena::new();
+    let r = arena.fight(
+        recipe(Class::Warrior, 1, Gear::Naked, Companion::None, Coat::None, Policy::Honest),
+        DUMMY,
+    );
+    assert_eq!(r.outcome, Outcome::Won, "{r:?}");
+    assert_eq!(r.dealt.total(), r.foe.max_hp, "{r:?}");
+    assert!(r.dealt.auto > 0 && r.dealt.ability > 0, "{r:?}");
+    assert_eq!((r.dealt.dot, r.dealt.coat, r.dealt.pet), (0, 0, 0), "{r:?}");
+}
+
+#[test]
+fn a_companion_and_a_coat_land_in_their_own_buckets() {
+    // Against a foe that lasts: the same character drops the Archdemon in two
+    // ticks, before a coat wound ever festers.
+    let mut arena = Arena::new();
+    let r = arena.fight(
+        recipe(
+            Class::Rogue,
+            75,
+            Gear::Reaches(19),
+            Companion::TameBest,
+            Coat::BestOil(4),
+            Policy::Honest,
+        ),
+        YSSGAR,
+    );
+    // Whether the fight is won is the report's business; this only checks
+    // that every source lands in its own bucket.
+    assert!(r.ticks > 5, "{r:?}");
+    assert!(r.dealt.pet > 0, "{r:?}");
+    assert!(r.dealt.coat > 0, "{r:?}");
+    assert!(r.dealt.dot > 0, "the Rogue's Envenom should have ticked: {r:?}");
+}
+
+// ---- Where the damage comes from ------------------------------------------
+
+#[test]
+fn casters_lean_on_abilities_and_martials_on_the_auto() {
+    // L55 in Frontier tier 10, bare, against the King: a fight long enough
+    // for a rotation to matter, not an opening burst. Casters get most of
+    // their output from the school-carrying abilities (a healer spends some
+    // of its casts on mending, so its floor is lower); martials from the
+    // Physical swing. Hybrids sit between and are not pinned.
+    let mut arena = Arena::new();
+    let casters = [
+        Class::Mage,
+        Class::Runemaster,
+        Class::Necromancer,
+        Class::Warlock,
+        Class::Spiritmaster,
+        Class::Cleric,
+    ];
+    let martials = [
+        Class::Warrior,
+        Class::Rogue,
+        Class::Ranger,
+        Class::Monk,
+        Class::Berserker,
+        Class::Valewalker,
+    ];
+    let fight = |arena: &mut Arena, class: Class| {
+        arena.fight(
+            recipe(class, 55, Gear::Frontier(9), Companion::None, Coat::None, Policy::Honest),
+            KING,
+        )
+    };
+    for class in casters {
+        let r = fight(&mut arena, class);
+        let total = r.dealt.total().max(1);
+        let abilities = (r.dealt.ability + r.dealt.dot) * 100 / total;
+        let floor = if class == Class::Cleric { 50 } else { 55 };
+        assert!(
+            abilities >= floor,
+            "{class:?}: abilities are {abilities}% of output: {r:?}"
+        );
+    }
+    for class in martials {
+        let r = fight(&mut arena, class);
+        let total = r.dealt.total().max(1);
+        let auto = r.dealt.auto * 100 / total;
+        assert!(auto >= 55, "{class:?}: the auto is {auto}% of output: {r:?}");
+    }
+}
+
+/// Ticks the dps yardstick runs: long enough for every cooldown and the
+/// resource pool to matter, short enough to stay inside the clear day.
+const DPS_TICKS: u32 = 20;
+/// The widest spread the yardstick tolerates between the best and the worst
+/// calling at one ladder step (bare: no pet, no coat). The old world sat at
+/// 2.0 (a Cleric at half a Rogue). The floor is always a healer or the Druid:
+/// a C-tier attack curve and a roster that spends its casts on mending is
+/// sustain bought with damage, and the yardstick counts only the damage.
+const DPS_SPREAD_MAX: f64 = 1.6;
+
+fn dps_ladder() -> [(i32, Gear); 5] {
+    [
+        (10, Gear::ShopBest),
+        (32, Gear::ShopBest),
+        (55, Gear::Frontier(9)),
+        (75, Gear::Reaches(19)),
+        (100, Gear::Kaelmyr(19)),
+    ]
+}
+
+#[test]
+fn classes_kill_at_a_similar_pace_in_the_same_gear() {
+    let mut arena = Arena::new();
+    for (level, gear) in dps_ladder() {
+        let rows: Vec<(Class, i32)> = Class::ALL
+            .iter()
+            .map(|&class| {
+                let r = recipe(class, level, gear, Companion::None, Coat::None, Policy::Honest);
+                (class, arena.measure_dps(r, DPS_TICKS))
+            })
+            .collect();
+        let (best, worst) = rows.iter().fold((rows[0], rows[0]), |(b, w), &r| {
+            (if r.1 > b.1 { r } else { b }, if r.1 < w.1 { r } else { w })
+        });
+        let spread = best.1 as f64 / worst.1.max(1) as f64;
+        assert!(
+            spread <= DPS_SPREAD_MAX,
+            "L{level} {}: {:?} {} dps vs {:?} {} dps is a {spread:.2}x spread; all: {rows:?}",
+            gear.label(),
+            best.0,
+            best.1,
+            worst.0,
+            worst.1
+        );
+    }
+}
+
+#[test]
+#[ignore = "prints the dps yardstick per class and ladder step; the fast tuning loop"]
+fn arena_dps_table() {
+    let mut arena = Arena::new();
+    let ladder = dps_ladder();
+    let mut out = String::new();
+    let _ = write!(out, "| class |");
+    for (level, gear) in ladder {
+        let _ = write!(out, " L{level} {} |", gear.label());
+    }
+    let _ = writeln!(out);
+    for class in Class::ALL {
+        let _ = write!(out, "| {class:?} |");
+        for (level, gear) in ladder {
+            let r = recipe(class, level, gear, Companion::None, Coat::None, Policy::Honest);
+            let d = arena.measure(r, DPS_TICKS);
+            let _ = write!(out, " {} {} |", d.total() / DPS_TICKS as i32, d.shares());
+        }
+        let _ = writeln!(out);
+    }
+    eprintln!(
+        "[arena] dps over {DPS_TICKS} ticks on the neutral dummy, bare (dps auto/ability/dot/coat/pet):\n{out}"
+    );
+}
+
+// ---- The crowns --------------------------------------------------------------
+//
+// The story of the game: the grind to 100 is long by design (75% of the xp
+// curve is 50->100), so the last crown falls to a *prepared* character at
+// L80 and 80-100 is prestige; the first crown is a real fight at L12 with
+// the right prep (the Treant teaches the oil), not a one-shot. "Prepared"
+// means the tier's kit, the oil the foe is weak to, three draughts, and
+// from the Reaches on a maxed companion. "A walk-in" is a few levels lower
+// in the previous tier's kit with none of that. The table is the contract;
+// the crowns' numbers in `world.rs` (`CROWNS`) are derived from what the
+// arena measures at each kit and pinned by
+// `every_crown_falls_to_a_prepared_character_and_not_to_a_walk_in`.
+
+struct CrownTarget {
+    boss: &'static str,
+    level: i32,
+    gear: Gear,
+    companion: Companion,
+    /// Level and gear of the unprepared character that must still lose.
+    below: (i32, Gear),
+}
+
+const CROWN_TARGETS: [CrownTarget; 14] = [
+    CrownTarget { boss: "the Elder Treant", level: 12, gear: Gear::Kit(0), companion: Companion::None, below: (6, Gear::Naked) },
+    CrownTarget { boss: "the Bone Tyrant", level: 16, gear: Gear::Kit(1), companion: Companion::None, below: (10, Gear::Kit(0)) },
+    CrownTarget { boss: "the Lich Vael", level: 20, gear: Gear::Kit(2), companion: Companion::None, below: (14, Gear::Kit(1)) },
+    CrownTarget { boss: "the Magma Colossus", level: 24, gear: Gear::Kit(2), companion: Companion::None, below: (18, Gear::Kit(1)) },
+    CrownTarget { boss: "the Wyrm of Frostspire", level: 27, gear: Gear::Kit(3), companion: Companion::None, below: (21, Gear::Kit(2)) },
+    CrownTarget { boss: "the Fallen Paladin", level: 30, gear: Gear::Kit(3), companion: Companion::None, below: (24, Gear::Kit(2)) },
+    CrownTarget { boss: "the Archdemon Mal'gareth", level: 35, gear: Gear::Kit(4), companion: Companion::None, below: (29, Gear::Kit(3)) },
+    CrownTarget { boss: "The Bonewright Lich", level: 40, gear: Gear::Kit(4), companion: Companion::None, below: (34, Gear::Kit(3)) },
+    CrownTarget { boss: "the Elder Dryad", level: 40, gear: Gear::Kit(4), companion: Companion::None, below: (34, Gear::Kit(3)) },
+    CrownTarget { boss: "the Abyss-Thing", level: 40, gear: Gear::Kit(4), companion: Companion::None, below: (34, Gear::Kit(3)) },
+    CrownTarget { boss: "the King Who Was Promised Nothing", level: 55, gear: Gear::Frontier(9), companion: Companion::ShopBest, below: (49, Gear::Frontier(4)) },
+    CrownTarget { boss: "Yssgar, the Sundering Deep", level: 65, gear: Gear::Reaches(9), companion: Companion::TameBest, below: (59, Gear::Frontier(19)) },
+    CrownTarget { boss: "Kaethyr the Unquenched, Ashen King of Kaelmyr", level: 75, gear: Gear::Kaelmyr(9), companion: Companion::TameBest, below: (69, Gear::Reaches(19)) },
+    CrownTarget { boss: "Kaethyr Ascendant, Who Sang the God Awake", level: 80, gear: Gear::Kaelmyr(14), companion: Companion::TameBest, below: (74, Gear::Kaelmyr(9)) },
+];
+
+/// The alchemy tier a character of this level can brew or buy (the crafting
+/// gates: tier 0 at L1, then 8/16/26/38/55).
+fn oil_tier_for(level: i32) -> usize {
+    match level {
+        ..=7 => 0,
+        8..=15 => 1,
+        16..=25 => 2,
+        26..=37 => 3,
+        38..=54 => 4,
+        _ => 5,
+    }
+}
+
+fn prepared(t: &CrownTarget, class: Class) -> Recipe {
+    recipe(
+        class,
+        t.level,
+        t.gear,
+        t.companion,
+        Coat::BestOil(oil_tier_for(t.level)),
+        Policy::Honest,
+    )
+}
+
+fn walk_in(t: &CrownTarget, class: Class) -> Recipe {
+    let mut r = recipe(class, t.below.0, t.below.1, Companion::None, Coat::None, Policy::Honest);
+    r.potions = 0;
+    r
+}
+
+/// A crown fight is a fight: the median prepared kill sits in this many ticks.
+const CROWN_TICKS: std::ops::RangeInclusive<u32> = 8..=40;
+/// At most this many of the 17 callings may take a crown as a walk-in.
+const WALK_IN_WINS_MAX: usize = 4;
+
+#[test]
+fn every_crown_falls_to_a_prepared_character_and_not_to_a_walk_in() {
+    let mut arena = Arena::new();
+    for t in CROWN_TARGETS.iter() {
+        let mut ticks: Vec<u32> = Vec::new();
+        let mut losers: Vec<(Class, Outcome, u32)> = Vec::new();
+        for class in Class::ALL {
+            let r = arena.fight(prepared(t, class), t.boss);
+            ticks.push(r.ticks);
+            if r.outcome != Outcome::Won {
+                losers.push((class, r.outcome, r.ticks));
+            }
+        }
+        assert!(
+            losers.is_empty(),
+            "{} at L{} {}: prepared characters lost: {losers:?}",
+            t.boss,
+            t.level,
+            t.gear.label()
+        );
+        ticks.sort_unstable();
+        let median = ticks[ticks.len() / 2];
+        assert!(
+            CROWN_TICKS.contains(&median),
+            "{} at L{} {}: a median kill of {median} ticks is not a fight ({ticks:?})",
+            t.boss,
+            t.level,
+            t.gear.label()
+        );
+        let walk_in_wins: Vec<Class> = Class::ALL
+            .iter()
+            .copied()
+            .filter(|&class| arena.fight(walk_in(t, class), t.boss).outcome == Outcome::Won)
+            .collect();
+        assert!(
+            walk_in_wins.len() <= WALK_IN_WINS_MAX,
+            "{} falls to a walk-in at L{} {}: {walk_in_wins:?}",
+            t.boss,
+            t.below.0,
+            t.below.1.label()
+        );
+    }
+}
+
+#[test]
+#[ignore = "prints, per crown, what a prepared character brings; the input to the CROWNS table"]
+fn arena_crown_yardstick() {
+    let mut arena = Arena::new();
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "| crown | today | target | median dps | median pool | median armor | dps range |"
+    );
+    for t in CROWN_TARGETS.iter() {
+        let mut dps: Vec<i32> = Vec::new();
+        let mut pool: Vec<i32> = Vec::new();
+        let mut armor: Vec<i32> = Vec::new();
+        for class in Class::ALL {
+            let r = prepared(t, class);
+            dps.push(arena.measure_dps(r, DPS_TICKS));
+            let (_, _, _, hp, arm) = arena.sheet(r);
+            pool.push(hp);
+            armor.push(arm);
+        }
+        dps.sort_unstable();
+        pool.sort_unstable();
+        armor.sort_unstable();
+        let f = arena.foe(t.boss);
+        let _ = writeln!(
+            out,
+            "| {} | {}hp {}dmg | L{} {} {} | {} | {} | {} | {}..{} |",
+            t.boss,
+            f.max_hp,
+            f.damage,
+            t.level,
+            t.gear.label(),
+            t.companion.label(),
+            dps[dps.len() / 2],
+            pool[pool.len() / 2],
+            armor[armor.len() / 2],
+            dps[0],
+            dps[dps.len() - 1]
+        );
+    }
+    eprintln!("[arena] crown yardstick ({DPS_TICKS}-tick dps on the neutral dummy, prepared kit):\n{out}");
+}
+
+/// The band a crown's doorstep trash must sit in for the prepared character
+/// at the crown's target: dead inside this many ticks, and needing at least
+/// that many to kill the character with no draught drunk.
+const DOORSTEP_KILL_TICKS_MAX: f64 = 4.0;
+const DOORSTEP_SURVIVE_TICKS_MIN: f64 = 15.0;
+
+/// Median hp/dmg of the regulars in the crown's zone, and the prepared
+/// character's median dps, pool and armor at the crown's target.
+fn doorstep_numbers(arena: &mut Arena, t: &CrownTarget) -> Option<(FoeCard, i32, i32, i32)> {
+    let mut dps: Vec<i32> = Vec::new();
+    let mut pool: Vec<i32> = Vec::new();
+    let mut armor: Vec<i32> = Vec::new();
+    for class in Class::ALL {
+        let r = prepared(t, class);
+        dps.push(arena.measure_dps(r, DPS_TICKS));
+        let (_, _, _, hp, arm) = arena.sheet(r);
+        pool.push(hp);
+        armor.push(arm);
+    }
+    dps.sort_unstable();
+    pool.sort_unstable();
+    armor.sort_unstable();
+    let mut trash = arena.doorstep(t.boss);
+    if trash.is_empty() {
+        return None;
+    }
+    trash.sort_by_key(|f| f.max_hp + f.damage * 4);
+    let mid = trash[trash.len() / 2];
+    Some((mid, dps[dps.len() / 2], pool[pool.len() / 2], armor[armor.len() / 2]))
+}
+
+fn blunt_for(attack_type: super::super::super::damage::DamageType, armor: i32) -> i32 {
+    if attack_type == super::super::super::damage::DamageType::Physical {
+        armor / 2
+    } else {
+        armor / 4
+    }
+}
+
+#[test]
+fn the_trash_on_a_crowns_doorstep_is_in_band() {
+    // The land must agree with its crown: at the crown's target, a regular on
+    // its doorstep dies in a few prepared ticks and needs many to kill you.
+    // Lands ride `tune_spawn_balance`'s rows, so an out-of-band land is one
+    // row there, never a mob.
+    let mut arena = Arena::new();
+    for t in CROWN_TARGETS.iter() {
+        let Some((mid, dps, pool, armor)) = doorstep_numbers(&mut arena, t) else {
+            continue;
+        };
+        let to_kill = mid.max_hp as f64 / dps.max(1) as f64;
+        let to_die = pool as f64 / (mid.damage - blunt_for(mid.attack_type, armor)).max(1) as f64;
+        assert!(
+            to_kill <= DOORSTEP_KILL_TICKS_MAX,
+            "{}'s doorstep: a regular ({} hp) takes {to_kill:.1} prepared ticks to kill",
+            t.boss,
+            mid.max_hp
+        );
+        assert!(
+            to_die >= DOORSTEP_SURVIVE_TICKS_MIN,
+            "{}'s doorstep: a regular ({} dmg) kills the prepared character in {to_die:.1} ticks",
+            t.boss,
+            mid.damage
+        );
+    }
+}
+
+#[test]
+#[ignore = "prints, per crown, the trash on its doorstep against the prepared character"]
+fn arena_doorstep_yardstick() {
+    let mut arena = Arena::new();
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "| crown | median doorstep hp/dmg | ticks to kill one | ticks one needs to kill you |"
+    );
+    for t in CROWN_TARGETS.iter() {
+        let Some((mid, dps, pool, armor)) = doorstep_numbers(&mut arena, t) else {
+            let _ = writeln!(out, "| {} | none | - | - |", t.boss);
+            continue;
+        };
+        let _ = writeln!(
+            out,
+            "| {} | {}/{} | {:.1} | {:.1} |",
+            t.boss,
+            mid.max_hp,
+            mid.damage,
+            mid.max_hp as f64 / dps.max(1) as f64,
+            pool as f64 / (mid.damage - blunt_for(mid.attack_type, armor)).max(1) as f64
+        );
+    }
+    eprintln!("[arena] doorstep yardstick (prepared character at the crown's target):\n{out}");
+}
+
+// ---- The exploits --------------------------------------------------------
+//
+// The hole players found: a boss kept its wounds between engagements, `flee`
+// always worked and cost nothing, mobs never healed, and a stun outlived the
+// fight it was cast in. So engage, stun, land the free exchange, flee, wait
+// out the cooldown, repeat, took the strongest crown in the game at level 32
+// without ever being hit. These pin the fix: a fled foe recovers in full, and
+// the loop stalls on a boss that is always at full health.
+
+#[test]
+fn stun_and_flee_cannot_take_the_last_crown_at_l32() {
+    let mut arena = Arena::new();
+    let mut r = recipe(
+        Class::Rogue,
+        32,
+        Gear::ShopBest,
+        Companion::None,
+        Coat::None,
+        Policy::StunAndFlee,
+    );
+    r.potions = 0;
+    let r = arena.fight(r, ASCENDANT);
+    assert_ne!(r.outcome, Outcome::Won, "{r:?}");
+}
+
+#[test]
+fn hit_and_run_cannot_take_the_king_at_l32() {
+    // Hit, flee, heal for free at a fountain, walk back: with the foe's
+    // wounds gone the moment you run, the trip buys nothing.
+    let mut arena = Arena::new();
+    let mut r = recipe(
+        Class::Cleric,
+        32,
+        Gear::ShopBest,
+        Companion::None,
+        Coat::None,
+        Policy::HitAndRun,
+    );
+    r.potions = 0;
+    let r = arena.fight(r, KING);
+    assert_ne!(r.outcome, Outcome::Won, "{r:?}");
+}
+
+// ---- The report ------------------------------------------------------------
+
+/// Level and gear a character would plausibly bring at each step of the road.
+const LADDER: [(i32, Gear); 9] = [
+    (10, Gear::ShopBest),
+    (20, Gear::ShopBest),
+    (32, Gear::ShopBest),
+    (32, Gear::Crafted(3)),
+    (40, Gear::Crafted(3)),
+    (50, Gear::Frontier(9)),
+    (60, Gear::Frontier(19)),
+    (75, Gear::Reaches(19)),
+    (100, Gear::Kaelmyr(19)),
+];
+
+fn ladder_table(
+    arena: &mut Arena,
+    out: &mut String,
+    foe: &str,
+    companion: Companion,
+    coat: Coat,
+) {
+    let _ = write!(out, "| class |");
+    for (level, gear) in LADDER {
+        let _ = write!(out, " L{level} {} |", gear.label());
+    }
+    let _ = writeln!(out);
+    let _ = write!(out, "|---|");
+    for _ in LADDER {
+        let _ = write!(out, "---|");
+    }
+    let _ = writeln!(out);
+    for class in Class::ALL {
+        let _ = write!(out, "| {class:?} |");
+        for (level, gear) in LADDER {
+            let coat = if level < 26 && coat != Coat::None {
+                // Tier-5 oils sit behind Alchemy gates no L10-20 character has.
+                Coat::BestOil(0)
+            } else {
+                coat
+            };
+            let r = arena.fight(recipe(class, level, gear, companion, coat, Policy::Honest), foe);
+            let _ = write!(out, " {} |", r.cell());
+        }
+        let _ = writeln!(out);
+    }
+}
+
+/// Where a report lands: `LATEANIA_ARENA_REPORT` names the main file and the
+/// extra file sits beside it; by default both go under the crate's `target/`.
+fn report_path(extra: bool) -> std::path::PathBuf {
+    let main = match std::env::var("LATEANIA_ARENA_REPORT") {
+        Ok(p) => std::path::PathBuf::from(p),
+        Err(_) => std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("lateania-arena.md"),
+    };
+    if !extra {
+        return main;
+    }
+    let stem = main
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("lateania-arena");
+    main.with_file_name(format!("{stem}-extra.md"))
+}
+
+fn write_report(path: &std::path::Path, out: &str) {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).expect("report dir");
+    }
+    std::fs::write(path, out).expect("write report");
+    eprintln!("[arena] report written to {}", path.display());
+}
+
+/// The Long Road tables alone fill most of nextest's per-test budget, so the
+/// report is two tests: this one (the road) and `arena_report_extra` (the
+/// composition, the dps yardstick, the exploits, the boss roster).
+#[test]
+#[ignore = "writes the balance report, part 1: the Long Road (LATEANIA_ARENA_REPORT overrides the path)"]
+fn arena_report() {
+    let started = Instant::now();
+    let mut arena = Arena::new();
+    let mut out = String::new();
+    let _ = writeln!(out, "# Lateania arena report");
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "Real engine, one fresh character per fight, scores at flat 10s, clock pinned to a clear day. \
+         Honest policy: auto-attack, rotate the roster by value, drink a level-appropriate draught \
+         (3 in the bag) under {DRINK_UNDER_PCT}% health. Cell: `outcome ticks hp-left% potions-drunk auto/ability/dot/coat/pet` \
+         with shares in percent of damage dealt. W won, D died, S stalemate after {HONEST_MAX_TICKS} ticks, E foe fled."
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Gear presets: shop = best authored piece per slot; craftN = smithed weapon + plate of tier N; frontN/reachN/kaelN = the full 8-piece generated set of that zone tier.");
+
+    let road: Vec<&'static str> = LONG_ROAD.iter().map(|m| m.boss).collect();
+
+    let _ = writeln!(out);
+    let _ = writeln!(out, "## The Long Road, honest, no companion, no coat");
+    for foe in &road {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "### {}", arena.foe(foe).label());
+        let _ = writeln!(out);
+        ladder_table(&mut arena, &mut out, foe, Companion::None, Coat::None);
+        eprintln!("[arena] {foe}: bare table done at {:?}", started.elapsed());
+    }
+
+    let _ = writeln!(out);
+    let _ = writeln!(out, "## The Long Road, honest, maxed tame + best oil (tier 5, tier 1 under L26)");
+    for foe in &road {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "### {}", arena.foe(foe).label());
+        let _ = writeln!(out);
+        ladder_table(&mut arena, &mut out, foe, Companion::TameBest, Coat::BestOil(4));
+        eprintln!("[arena] {foe}: geared table done at {:?}", started.elapsed());
+    }
+
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Generated in {:?}. Part 2 (composition, dps yardstick, exploits, roster) is the `-extra` file beside this one.", started.elapsed());
+    write_report(&report_path(false), &out);
+}
+
+#[test]
+#[ignore = "writes the balance report, part 2: composition, dps yardstick, exploits, roster"]
+fn arena_report_extra() {
+    let started = Instant::now();
+    let mut arena = Arena::new();
+    let mut out = String::new();
+    let _ = writeln!(out, "# Lateania arena report, part 2");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Same rules as part 1 (real engine, fresh character per fight, flat scores, clear day; cell = `outcome ticks hp-left% potions-drunk auto/ability/dot/coat/pet`).");
+    let road: Vec<&'static str> = LONG_ROAD.iter().map(|m| m.boss).collect();
+    let _ = writeln!(out);
+    let _ = writeln!(out, "## Where the damage comes from: L55, Frontier tier 10, vs {ARCHDEMON}");
+    let _ = writeln!(out);
+    let kits = [
+        (Companion::None, Coat::None),
+        (Companion::None, Coat::BestOil(4)),
+        (Companion::None, Coat::Poison(4)),
+        (Companion::ShopBest, Coat::None),
+        (Companion::TameBest, Coat::None),
+        (Companion::TameBest, Coat::BestOil(4)),
+    ];
+    for (companion, coat) in kits {
+        let _ = writeln!(
+            out,
+            "- {}",
+            recipe(Class::Rogue, 55, Gear::Frontier(9), companion, coat, Policy::Honest).label()
+        );
+    }
+    let _ = writeln!(out);
+    let _ = write!(out, "| class | attack | swing | spell | max hp |");
+    for (companion, coat) in kits {
+        let _ = write!(out, " {} {} |", companion.label(), coat.label());
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(out, "|---|---|---|---|---|---|---|---|---|---|---|");
+    for class in Class::ALL {
+        let mut row = String::new();
+        let mut sheet = (0, 0, 0, 0);
+        for (companion, coat) in kits {
+            let r = arena.fight(
+                recipe(class, 55, Gear::Frontier(9), companion, coat, Policy::Honest),
+                ARCHDEMON,
+            );
+            sheet = (r.attack, r.swing, r.spell_power, r.max_hp);
+            let _ = write!(row, " {} |", r.cell());
+        }
+        let _ = writeln!(
+            out,
+            "| {class:?} | {} | {} | {} | {} |{row}",
+            sheet.0, sheet.1, sheet.2, sheet.3
+        );
+    }
+
+    let _ = writeln!(out);
+    let _ = writeln!(out, "## Damage per tick, {DPS_TICKS} ticks on the neutral training dummy, bare");
+    let _ = writeln!(out);
+    let _ = write!(out, "| class |");
+    for (level, gear) in dps_ladder() {
+        let _ = write!(out, " L{level} {} |", gear.label());
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(out, "|---|---|---|---|---|---|");
+    for class in Class::ALL {
+        let _ = write!(out, "| {class:?} |");
+        for (level, gear) in dps_ladder() {
+            let r = recipe(class, level, gear, Companion::None, Coat::None, Policy::Honest);
+            let _ = write!(out, " {} |", arena.measure_dps(r, DPS_TICKS));
+        }
+        let _ = writeln!(out);
+    }
+
+    let _ = writeln!(out);
+    let _ = writeln!(out, "## The exploits: L32, shop gear, no potions, vs {ARCHDEMON}");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Stun-and-flee needs a stun in the roster; hit-and-run needs nothing. `taken` is net health lost over the whole fight.");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "| class | stun-and-flee | taken | hit-and-run | taken |");
+    let _ = writeln!(out, "|---|---|---|---|---|");
+    for class in Class::ALL {
+        let stun = if has_stun(class, 32) {
+            let mut r = recipe(class, 32, Gear::ShopBest, Companion::None, Coat::None, Policy::StunAndFlee);
+            r.potions = 0;
+            let r = arena.fight(r, ARCHDEMON);
+            format!("{} {}t | {}", r.outcome.glyph(), r.ticks, r.taken)
+        } else {
+            "no stun | -".to_string()
+        };
+        let mut run = recipe(class, 32, Gear::ShopBest, Companion::None, Coat::None, Policy::HitAndRun);
+        run.potions = 0;
+        let run = arena.fight(run, ARCHDEMON);
+        let _ = writeln!(
+            out,
+            "| {class:?} | {stun} | {} {}t | {} |",
+            run.outcome.glyph(),
+            run.ticks,
+            run.taken
+        );
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(out, "### The L32 Rogue against every crown");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "| foe | stun-and-flee | taken | hit-and-run | taken |");
+    let _ = writeln!(out, "|---|---|---|---|---|");
+    for foe in &road {
+        let mut stun = recipe(Class::Rogue, 32, Gear::ShopBest, Companion::None, Coat::None, Policy::StunAndFlee);
+        stun.potions = 0;
+        let mut run = recipe(Class::Rogue, 32, Gear::ShopBest, Companion::None, Coat::None, Policy::HitAndRun);
+        run.potions = 0;
+        let a = arena.fight(stun, foe);
+        let b = arena.fight(run, foe);
+        let _ = writeln!(
+            out,
+            "| {foe} | {} {}t | {} | {} {}t | {} |",
+            a.outcome.glyph(),
+            a.ticks,
+            a.taken,
+            b.outcome.glyph(),
+            b.ticks,
+            b.taken
+        );
+    }
+
+    let _ = writeln!(out);
+    let _ = writeln!(out, "## Every boss as the engine fields it");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "| boss | level | hp | dmg | strikes | weak | resists |");
+    let _ = writeln!(out, "|---|---|---|---|---|---|---|");
+    for name in arena.bosses() {
+        let f = arena.foe(name);
+        let school = |s: Option<_>| s.map(|d: super::super::super::damage::DamageType| d.label()).unwrap_or("-");
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} | {} | {} | {} |",
+            f.name,
+            f.level,
+            f.max_hp,
+            f.damage,
+            f.attack_type.label(),
+            school(f.weak),
+            school(f.resist)
+        );
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Generated in {:?}.", started.elapsed());
+    write_report(&report_path(true), &out);
+}
