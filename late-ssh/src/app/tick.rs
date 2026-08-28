@@ -249,6 +249,10 @@ impl App {
             .set_viewer_tz(crate::app::profile::svc::parse_account_tz(
                 self.profile_state.profile().timezone.as_deref(),
             ));
+        // The AFK line: how long this terminal's keyboard has been quiet is
+        // an `App` fact, mirrored into chat the same way the timezone is,
+        // because chat is what knows which room is on screen to hang it on.
+        changed |= self.chat.sync_afk_line(self.last_input_at.elapsed());
         let translate_to = self.profile_state.profile().translate_to;
         let auto_translate = self.profile_state.profile().auto_translate;
         changed |= self

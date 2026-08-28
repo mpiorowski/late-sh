@@ -946,7 +946,7 @@ fn chat_view<'a>(
     static ACTIVE_ROOM_EFFECTS: OnceLock<HashMap<Uuid, Vec<ActiveChatRoomEffect>>> =
         OnceLock::new();
     static ROOM_LAST_MESSAGE_AT: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> = OnceLock::new();
-    static ROOM_UNREAD_MARKERS: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> = OnceLock::new();
+    static AFK_LINES: OnceLock<HashMap<Uuid, DateTime<Utc>>> = OnceLock::new();
     static DRUNK_LEVELS: OnceLock<HashMap<Uuid, u8>> = OnceLock::new();
     static NAME_STYLES: OnceLock<HashMap<Uuid, crate::app::common::username_effect::ResolvedName>> =
         OnceLock::new();
@@ -1007,7 +1007,7 @@ fn chat_view<'a>(
         message_reactions,
         message_gilds: MESSAGE_GILDS.get_or_init(HashMap::new),
         inline_images: INLINE_IMAGES.get_or_init(HashMap::new),
-        room_unread_markers: ROOM_UNREAD_MARKERS.get_or_init(HashMap::new),
+        afk_lines: AFK_LINES.get_or_init(HashMap::new),
         unread_counts,
         room_last_message_at: ROOM_LAST_MESSAGE_AT.get_or_init(HashMap::new),
         favorite_room_ids: &[],

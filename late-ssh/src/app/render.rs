@@ -555,8 +555,7 @@ impl App {
             message_reactions,
             message_gilds,
             unread_marker: shell_active_room
-                .and_then(|room_id| self.chat.room_unread_markers.get(&room_id).copied())
-                .flatten(),
+                .and_then(|room_id| self.chat.afk_lines.get(&room_id).copied()),
             current_user_id: self.user_id,
             voice_channel_id: dashboard_voice_channel_id,
             voice_snapshot,
@@ -704,7 +703,7 @@ impl App {
             message_reactions,
             message_gilds,
             inline_images: &self.chat.inline_image_cache,
-            room_unread_markers: &self.chat.room_unread_markers,
+            afk_lines: &self.chat.afk_lines,
             unread_counts: &self.chat.unread_counts,
             room_last_message_at: &self.chat.room_last_message_at,
             favorite_room_ids: &self.profile_state.profile().favorite_room_ids,
@@ -787,12 +786,7 @@ impl App {
                     message_reactions,
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
-                    unread_marker: self
-                        .chat
-                        .room_unread_markers
-                        .get(&chat_room_id)
-                        .copied()
-                        .flatten(),
+                    unread_marker: self.chat.afk_lines.get(&chat_room_id).copied(),
                     current_user_id: self.user_id,
                     voice_channel_id: self
                         .chat
@@ -852,12 +846,7 @@ impl App {
                     message_reactions,
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
-                    unread_marker: self
-                        .chat
-                        .room_unread_markers
-                        .get(&chat_room_id)
-                        .copied()
-                        .flatten(),
+                    unread_marker: self.chat.afk_lines.get(&chat_room_id).copied(),
                     current_user_id: self.user_id,
                     voice_channel_id: self
                         .chat

@@ -1486,6 +1486,10 @@ fn push_new_messages_divider(
     row_kind.push(RowKindLite::Blank);
 }
 
+/// Whether the `new messages` divider goes above `message`: the first
+/// message from someone else since this session's human went quiet. Your own
+/// messages never trip it, and posting one clears the line outright, so the
+/// divider can only ever sit above somebody else's words.
 fn is_unread_boundary_message(
     marker: Option<DateTime<Utc>>,
     message: &ChatMessage,
@@ -2751,7 +2755,9 @@ pub struct ChatRenderInput<'a> {
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
-    pub room_unread_markers: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
+    /// This session's AFK line per room; the `new messages` divider
+    /// draws before the first message from someone else past it.
+    pub afk_lines: &'a HashMap<Uuid, DateTime<Utc>>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub favorite_room_ids: &'a [Uuid],
@@ -4875,7 +4881,7 @@ fn draw_selected_content(
                     message_reactions: view.message_reactions,
                     message_gilds: view.message_gilds,
                     inline_images: view.inline_images,
-                    unread_marker: view.room_unread_markers.get(&room.id).copied().flatten(),
+                    unread_marker: view.afk_lines.get(&room.id).copied(),
                     drunk_levels: view.drunk_levels,
                     name_flair: view.name_flair,
                     peer_pomodoros: view.peer_pomodoros,

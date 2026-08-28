@@ -3531,27 +3531,6 @@ fn parse_golive_clamps_titles_at_the_boundary() {
 }
 
 #[test]
-fn summary_since_reports_the_marker_and_leaves_the_bounds_to_the_service() {
-    use chrono::TimeZone;
-    let now = chrono::Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, 0).unwrap();
-
-    // The pre-mark unread marker is passed through as asked for, inside the
-    // minimum window or not; `window_start` owns both bounds.
-    let recent = now - chrono::Duration::hours(3);
-    assert_eq!(summary_since(Some(&Some(recent)), now), recent);
-    let stale = now - chrono::Duration::hours(30);
-    assert_eq!(summary_since(Some(&Some(stale)), now), stale);
-    // A never-read room with unread waiting asks for the max window.
-    assert_eq!(
-        summary_since(Some(&None), now),
-        now - chrono::Duration::hours(crate::app::ai::summary::SUMMARY_MAX_WINDOW_HOURS)
-    );
-    // Caught up (no marker entry) asks for nothing extra; the service still
-    // reads the minimum window back.
-    assert_eq!(summary_since(None, now), now);
-}
-
-#[test]
 fn parse_summary_arg_names_every_outcome() {
     use crate::app::ai::summary::SUMMARY_MAX_WINDOW_HOURS;
 
@@ -3627,6 +3606,122 @@ fn summary_room(visibility: &str) -> ChatRoom {
         rules: None,
         created_by: None,
     }
+}
+
+/// The AFK line marks a discontinuity in attention, so what it must get
+/// right is *where* the silence started, and that it stays put once placed.
+#[tokio::test]
+async fn the_afk_line_lands_where_the_silence_started_and_stays_there() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "afk_place").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+    let room = summary_room("public");
+    let room_id = room.id;
+    state.visible_room_id = Some(room_id);
+    state.rooms.push((room, Vec::new()));
+
+    // Under the threshold nothing happens: a pause is not an absence.
+    assert!(!state.sync_afk_line(super::AFK_LINE_IDLE - Duration::from_secs(1)));
+    assert_eq!(state.afk_lines.get(&room_id), None);
+
+    // Over it, the line goes where the keyboard went quiet, not where the
+    // session noticed. Those are the same instant only by accident.
+    let before = Utc::now();
+    assert!(state.sync_afk_line(super::AFK_LINE_IDLE));
+    let placed = *state.afk_lines.get(&room_id).expect("line placed");
+    let expected = before - chrono::Duration::from_std(super::AFK_LINE_IDLE).unwrap();
+    assert!(
+        (placed - expected).num_seconds().abs() <= 1,
+        "line at {placed}, expected about {expected}"
+    );
+
+    // Staying away longer does not drag the line forward: it says when you
+    // left, and four hours later you still left when you left.
+    assert!(!state.sync_afk_line(Duration::from_secs(4 * 60 * 60)));
+    assert_eq!(*state.afk_lines.get(&room_id).expect("line kept"), placed);
+}
+
+/// The rule in one sentence: from when you went quiet until you speak again.
+/// Speaking is the clear, and only your own voice counts.
+#[tokio::test]
+async fn speaking_in_the_room_clears_its_line_but_being_spoken_to_does_not() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "afk_speak").await;
+    let other = late_core::test_utils::create_test_user(&test_db.db, "afk_other").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+    let room = summary_room("public");
+    let room_id = room.id;
+    state.visible_room_id = Some(room_id);
+    state.rooms.push((room, Vec::new()));
+    assert!(state.sync_afk_line(super::AFK_LINE_IDLE));
+
+    let message = |author: Uuid, body: &str| late_core::models::chat_message::ChatMessage {
+        id: Uuid::now_v7(),
+        created: Utc::now(),
+        updated: Utc::now(),
+        reply_to_message_id: None,
+        reply_to_user_id: None,
+        room_id,
+        user_id: author,
+        body: body.to_string(),
+    };
+
+    // The backlog piling up under the line is the line doing its job.
+    state.push_message(message(other.id, "while you were out"));
+    assert!(state.afk_lines.contains_key(&room_id));
+
+    // Your own message ends the silence the line was marking.
+    state.push_message(message(user.id, "back"));
+    assert_eq!(state.afk_lines.get(&room_id), None);
+}
+
+/// A room you are not looking at was never being attended, so it collects
+/// nothing; its rail badge already says what is waiting there.
+#[tokio::test]
+async fn only_the_room_on_screen_collects_a_line() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "afk_scope").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+    let watched = summary_room("public");
+    let watched_id = watched.id;
+    let background = summary_room("public");
+    let background_id = background.id;
+    state.visible_room_id = Some(watched_id);
+    state.rooms.push((watched, Vec::new()));
+    state.rooms.push((background, Vec::new()));
+
+    assert!(state.sync_afk_line(super::AFK_LINE_IDLE));
+
+    assert!(state.afk_lines.contains_key(&watched_id));
+    assert_eq!(state.afk_lines.get(&background_id), None);
+}
+
+/// `/summary` is the other way to catch up, so it resolves the line the same
+/// way speaking does. `/history` deliberately does not: it is how you go and
+/// look, and the anchor has to survive the looking.
+#[tokio::test]
+async fn asking_for_a_summary_clears_the_line_and_opening_history_keeps_it() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "afk_catchup").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+    let room = summary_room("public");
+    let room_id = room.id;
+    state.visible_room_id = Some(room_id);
+    state.selected_room_id = Some(room_id);
+    state.rooms.push((room, Vec::new()));
+    assert!(state.sync_afk_line(super::AFK_LINE_IDLE));
+
+    state.composer.insert_str("/history");
+    state.submit_composer(false, false);
+    assert!(
+        state.afk_lines.contains_key(&room_id),
+        "/history reads the line, it does not spend it"
+    );
+
+    state.composer.insert_str("/summary");
+    let banner = state.submit_composer(false, false).expect("banner");
+    assert_eq!(banner.message, "Summarizing…");
+    assert_eq!(state.afk_lines.get(&room_id), None);
 }
 
 #[tokio::test]
@@ -3708,6 +3803,7 @@ async fn a_ready_summary_waits_for_an_open_overlay_instead_of_clobbering_it() {
             text: "- alice shipped the thing".to_string(),
             message_count: 3,
             since: Utc::now() - chrono::Duration::hours(2),
+            basis: SummaryBasis::Explicit,
             truncated: false,
         },
     });
@@ -3757,6 +3853,7 @@ async fn a_ready_summary_dates_its_window_in_the_viewers_timezone() {
                 text: "- alice shipped the thing".to_string(),
                 message_count: 3,
                 since,
+                basis: SummaryBasis::Explicit,
                 truncated: false,
             },
         });

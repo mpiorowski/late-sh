@@ -755,7 +755,6 @@ pub enum ChatEvent {
     RoomTailLoaded {
         user_id: Uuid,
         room_id: Uuid,
-        last_read_at: Option<DateTime<Utc>>,
         messages: Vec<ChatMessage>,
         message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
         /// Gild markers for this page. Absent means ungilded, which is
@@ -1870,8 +1869,13 @@ impl ChatService {
         if !is_member {
             anyhow::bail!("user is not a member of room");
         }
-        let last_read_at = ChatRoomMember::last_read_at(&client, room_id, user_id).await?;
-
+        // The tail deliberately carries no read cursor. It used to, and the
+        // session drew its `new messages` divider from it, which made a room
+        // being *opened* on any one of the account's sessions rewrite the
+        // divider on all of them (`send_user_event` fans out per user), from a
+        // cursor read before that session's own mark had committed. The
+        // divider is now this session's AFK line and nothing over the wire
+        // can move it.
         let messages = ChatMessage::list_recent(&client, room_id, HISTORY_LIMIT).await?;
         let message_ids: Vec<Uuid> = messages.iter().map(|message| message.id).collect();
         let author_ids: Vec<Uuid> = messages.iter().map(|message| message.user_id).collect();
@@ -1886,7 +1890,6 @@ impl ChatService {
             ChatEvent::RoomTailLoaded {
                 user_id,
                 room_id,
-                last_read_at,
                 messages,
                 message_reactions,
                 message_gilds,

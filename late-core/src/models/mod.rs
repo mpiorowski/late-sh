@@ -38,6 +38,9 @@ mod chat_room_member_test;
 #[cfg(test)]
 mod chat_room_test;
 pub mod chat_slow_mode;
+pub mod chat_summary_read;
+#[cfg(test)]
+mod chat_summary_read_test;
 pub mod chips;
 #[cfg(test)]
 mod chips_test;
