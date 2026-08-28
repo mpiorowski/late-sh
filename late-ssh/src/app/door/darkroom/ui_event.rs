@@ -18,7 +18,10 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State) {
         return;
     };
     let width = area.width.saturating_sub(8).clamp(20, 64);
-    let height = area.height.saturating_sub(4).clamp(10, 20);
+    // Only the width stays capped, so the modal reads as a fixed-size card.
+    // Height follows the terminal: a fight with a full pack of weapons and
+    // items needs every row it can get.
+    let height = area.height.saturating_sub(4).max(10);
     let modal = Rect {
         x: area.x + (area.width.saturating_sub(width)) / 2,
         y: area.y + (area.height.saturating_sub(height)) / 2,
@@ -39,18 +42,37 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State) {
     let inner = block.inner(modal);
     frame.render_widget(block, modal);
 
+    let body = body_lines(state);
+    let actions = action_lines(state);
+    // The body (scene text, or the two fighters) is usually a handful of
+    // lines; give it only what it needs, up to half the panel, so a long
+    // action list (many weapons and items) gets the rest.
+    let body_height = (body.len() as u16).clamp(3, inner.height.saturating_sub(4).max(3) / 2 + 3);
+
     let rows = Layout::vertical([
-        Constraint::Fill(1),
+        Constraint::Length(body_height),
         Constraint::Length(1),
-        Constraint::Fill(1),
+        Constraint::Min(3),
     ])
     .split(inner);
 
-    frame.render_widget(
-        Paragraph::new(body_lines(state)).wrap(Wrap { trim: true }),
-        rows[0],
-    );
-    frame.render_widget(Paragraph::new(action_lines(state)), rows[2]);
+    frame.render_widget(Paragraph::new(body).wrap(Wrap { trim: true }), rows[0]);
+
+    let visible = rows[2].height as usize;
+    let offset = scroll_offset(state.cursor, actions.len(), visible);
+    frame.render_widget(Paragraph::new(actions).scroll((offset, 0)), rows[2]);
+}
+
+/// How many action rows to scroll past so the cursor stays on screen. Follows
+/// the cursor rather than paging, so moving one row at a time never jumps the
+/// list further than necessary.
+pub fn scroll_offset(cursor: usize, total: usize, visible: usize) -> u16 {
+    if visible == 0 || total <= visible {
+        return 0;
+    }
+    let cursor = cursor.min(total - 1);
+    let max_offset = total - visible;
+    cursor.saturating_sub(visible - 1).min(max_offset) as u16
 }
 
 /// The scene text, or the two fighters and their health.

@@ -84,4 +84,7 @@ mod sim_test;
 mod state_test;
 
 #[cfg(test)]
+mod ui_event_test;
+
+#[cfg(test)]
 mod ui_test;
