@@ -695,6 +695,44 @@ fn a_draught_needs_a_breath_between_gulps() {
 }
 
 #[test]
+fn a_companion_bites_off_its_owners_rating() {
+    // A level-1 Warrior holding a Mythril Arming Sword (attack rating 6 + 34 =
+    // 40, a full swing for a martial) with a fresh Emberdrake (base bite 20,
+    // loyalty 0): the companion bites for its own 20 plus PET_COEF_PCT (20%)
+    // of the owner's rating, 28, so the tick takes 40 + 28 off the foe.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let mob_id = *s.mobs.keys().next().expect("world has mobs");
+    {
+        let m = s.mobs.get_mut(&mob_id).unwrap();
+        m.alive = true;
+        m.revealed = true;
+        m.current_room = 2001;
+        m.leash_home = 2001;
+        m.hp = 100_000;
+        m.spawn.max_hp = 100_000;
+        m.spawn.damage = 1;
+        m.spawn.profile = DamageProfile::physical();
+    }
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = 2001;
+        p.scores = super::super::stats::AbilityScores::default();
+        p.equipped.insert(Slot::Weapon, 1010);
+        let drake = super::super::pets::pet_species_by_key("emberdrake").expect("stable species");
+        p.pet = Some(super::super::pets::Pet::new(drake, 0));
+    }
+    s.engage_mob(uid(1), mob_id);
+    s.tick();
+    assert_eq!(
+        s.mobs[&mob_id].hp,
+        100_000 - 40 - 28,
+        "the swing (40) and the companion's bite (20 + 20% of 40)"
+    );
+}
+
+#[test]
 fn fleeing_costs_a_parting_blow_and_the_foe_recovers() {
     let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
     s.mobs.get_mut(&mob_id).unwrap().spawn.damage = 10;

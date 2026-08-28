@@ -252,6 +252,52 @@ fn arena_dps_table() {
     );
 }
 
+// ---- The companion --------------------------------------------------------
+
+/// The share of a character's output its companion may carry, on a pet the
+/// band can actually have (a Stable beast to L40, a maxed tame past it).
+/// Below the floor the pet is a pet in name; above the ceiling it is the
+/// build, and the class stops mattering. Beastlord's Pack Bond may push it
+/// higher, the one class built around the beast.
+const PET_SHARE: std::ops::RangeInclusive<i32> = 12..=33;
+const BEASTLORD_PET_SHARE_MAX: i32 = 40;
+
+#[test]
+fn a_companion_is_a_share_of_the_fight_not_the_fight() {
+    let mut arena = Arena::new();
+    let bands = [
+        (32, Gear::Kit(3), Companion::ShopBest),
+        (55, Gear::Frontier(9), Companion::TameBest),
+        (100, Gear::Kaelmyr(19), Companion::TameBest),
+    ];
+    let mut out_of_band: Vec<String> = Vec::new();
+    for (level, gear, companion) in bands {
+        for class in Class::ALL {
+            let d = arena.measure(
+                recipe(class, level, gear, companion, Coat::None, Policy::Honest),
+                DPS_TICKS,
+            );
+            let share = d.pet * 100 / d.total().max(1);
+            let ceiling = if class == Class::Beastlord {
+                BEASTLORD_PET_SHARE_MAX
+            } else {
+                *PET_SHARE.end()
+            };
+            if !(*PET_SHARE.start()..=ceiling).contains(&share) {
+                out_of_band.push(format!(
+                    "{class:?} L{level} {} {}: {share}%",
+                    gear.label(),
+                    companion.label()
+                ));
+            }
+        }
+    }
+    assert!(
+        out_of_band.is_empty(),
+        "the companion is not a share of the fight: {out_of_band:?}"
+    );
+}
+
 // ---- The crowns --------------------------------------------------------------
 //
 // The story of the game: the grind to 100 is long by design (75% of the xp

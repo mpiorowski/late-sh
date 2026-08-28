@@ -525,10 +525,12 @@ impl Class {
                 resource_regen: 6,
             },
             // Reckless glass cannon: a heavy swing and the game's hardest-hitting
-            // Frenzy, paid for by a frame thinner than the Warrior's - the closer
-            // to death, the more dangerous, because death is genuinely close.
+            // Frenzy (ramping from full health to +50% at death's door), paid
+            // for by a frame thinner than the Warrior's and the slowest Rage.
+            // The frame was 42 + 10l: with no sustain and no shield, the one
+            // martial that died to a crown it was prepared for (Yssgar, L65).
             Self::Berserker => ClassStats {
-                max_hp: 42 + l * 10,
+                max_hp: 44 + l * 11,
                 max_resource: 100,
                 attack: 7 + l * 2,
                 resource_regen: 7,

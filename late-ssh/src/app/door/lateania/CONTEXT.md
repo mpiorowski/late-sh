@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
-- Last updated: 2026-08-28 (the crown ladder: `world::CROWNS` re-fields the fourteen road bosses at derived numbers so the game is won prepared at L80 and the Treant is a real fight at L12; per-land `Band` rows in `tune_spawn_balance` and a re-sloped Frontier; the displayed level now reads by bite off the crown ladder. Earlier the same day: the damage formula: a per-calling `DamageWeights` split of the attack rating into a swing and spell power, every ability scaling with spell power by effect, regen growing with level, one shared potion cooldown; flee now costs a parting blow and the fled foe recovers; abandoned foes recover after `MOB_RESET_TICKS`; the test battle arena `arena.rs` landed, see §10. Earlier: 2026-08-25 added the §7 section "Balance: where a character's damage actually comes from": an audit of the 30-60 band finding that ability magnitude never scales with `attack()`, that gear + a maxed pet + a weapon coat supply three class-agnostic damage terms worth more than the class term itself, and that `AUTO_SHARE` and the world-pass grind budget both model a petless character. Findings only, nothing test-enforced yet; a defect list and a set of open questions close the section)
+- Last updated: 2026-08-28 (the companion bites for its species growth plus 20% of the owner's attack rating, `PET_COEF_PCT`, a share of the build rather than the build; the crown ladder: `world::CROWNS` re-fields the fourteen road bosses at derived numbers so the game is won prepared at L80 and the Treant is a real fight at L12; per-land `Band` rows in `tune_spawn_balance` and a re-sloped Frontier; the displayed level now reads by bite off the crown ladder. Earlier the same day: the damage formula: a per-calling `DamageWeights` split of the attack rating into a swing and spell power, every ability scaling with spell power by effect, regen growing with level, one shared potion cooldown; flee now costs a parting blow and the fled foe recovers; abandoned foes recover after `MOB_RESET_TICKS`; the test battle arena `arena.rs` landed, see §10. Earlier: 2026-08-25 added the §7 section "Balance: where a character's damage actually comes from": an audit of the 30-60 band finding that ability magnitude never scales with `attack()`, that gear + a maxed pet + a weapon coat supply three class-agnostic damage terms worth more than the class term itself, and that `AUTO_SHARE` and the world-pass grind budget both model a petless character. Findings only, nothing test-enforced yet; a defect list and a set of open questions close the section)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
@@ -766,7 +766,7 @@ knowledge is reserved as the future Thundersmith Ledger's territory.
 - Ranger damage is boosted against wounded targets below half health.
 - Warrior survives the first lethal blow of each life at 1 HP.
 - Veteran accounts, checked on join by account age, can resurrect in place while charges remain; fountains refresh charges.
-- **Combat companions.** A pet bought from a capital Stable (`buy_pet`, one at a time; a new purchase releases the old) rides on `PlayerState` and so is always in its owner's room. In the combat round it **bites the owner's target** after the owner's strike (crediting the kill to the owner); when the owner is struck, `wound_pet` splashes `PET_WOUND_PCT` of the blow onto it (alongside `wound_escort`), **but only on survivable hits**, since the death branch takes no `wound_*` (combat is over once you fall). A pet at 0 HP is **downed** and stops fighting until **fed** (`feed_pet` at a Stable: revive + heal to full + `FEED_LOYALTY`, costing `PET_FEED_COST`). Loyalty raises the pet's level (more HP/attack). Persisted by species key + loyalty.
+- **Combat companions.** A pet bought from a capital Stable (`buy_pet`, one at a time; a new purchase releases the old) rides on `PlayerState` and so is always in its owner's room. In the combat round it **bites the owner's target** after the owner's strike (crediting the kill to the owner) for `Pet::attack()` (species base + an eighth per loyalty level, at least 1) **plus `PET_COEF_PCT` (20%) of the owner's attack rating**, the same flat-floor-plus-share shape abilities have, so the companion multiplies the build instead of replacing it (it used to be a flat lump worth 35-50% of any character's output; now 12-33% on a band-appropriate beast, pinned by `a_companion_is_a_share_of_the_fight_not_the_fight` and the exact number by `a_companion_bites_off_its_owners_rating`); when the owner is struck, `wound_pet` splashes `PET_WOUND_PCT` of the blow onto it (alongside `wound_escort`), **but only on survivable hits**, since the death branch takes no `wound_*` (combat is over once you fall). A pet at 0 HP is **downed** and stops fighting until **fed** (`feed_pet` at a Stable: revive + heal to full + `FEED_LOYALTY`, costing `PET_FEED_COST`). Loyalty raises the pet's level (more HP/attack). Persisted by species key + loyalty.
 - **Death & resurrection.** A lethal blow with no Warrior death-save and no veteran charge leaves the player a **corpse where they fell** (`dead = true`, hp 0, target/shield/empower cleared, 20% carried gold lost, escort lost; banked gold protected). The corpse lingers (`respawn_at = now + CORPSE_LINGER_SECS`). The player chooses: **wait** for a resurrection, or **release** to the temple now (`release_to_temple`, `r`/Enter while dead). If neither happens by the deadline the tick auto-releases them. **Resurrection** is a rite of the holy/nature callings (`Class::can_resurrect` → Cleric/Paladin/Druid): a living caster in the same room spends `RESURRECT_COST` to raise the nearest corpse **in place** at `RESURRECT_HP_PCT` of max (`resurrect_nearest`, `g` key). The snapshot exposes `dead`, `can_resurrect`, `corpse_here`, and per-occupant `alive` so the UI shows the fallen overlay, a `(fallen)` roster tag, and the rez hint. The dead state is **transient** (not persisted; a reload returns the character alive at a safe room).
 - `seed_world()` applies a balance scaler after every spawn is generated: `tune_spawn_balance` scales each spawn by its `Band` row (see "The crowns and the story they encode" in the shape section), then `tune_crowns` re-fields the fourteen crowns at their `CROWNS` numbers. The old single endgame row (Frontier/Reaches/Kaelmyr all ×2 hp ×1.9 dmg) is gone; each land has its own pair of rows calibrated against its crown.
 
@@ -836,10 +836,11 @@ martial mechanic (see below).
 
 C tier is a flat ~25% deficit on the term that carries most of the damage.
 
-**A pet is class-agnostic and enormous.** `Pet::attack()` is
-`base + base * (level - 1) / 4`, so a level-10 companion hits at 3.25x its
-species base: 65 for the shop Emberdrake, ~107 for a tame-49 beast, 182 for the
-Wildbound Worldserpent. Reaching `PET_MAX_LEVEL` costs 900 loyalty at
+**A pet was class-agnostic and enormous (fixed 2026-08-28: the bite is now
+the species growth plus 20% of the owner's attack rating, see the combat
+companions bullet).** `Pet::attack()` was `base + base * (level - 1) / 4`, so
+a level-10 companion hit at 3.25x its species base: 65 for the shop
+Emberdrake, ~107 for a tame-49 beast, 182 for the Wildbound Worldserpent. Reaching `PET_MAX_LEVEL` costs 900 loyalty at
 `FEED_LOYALTY` 25 and `PET_FEED_COST` 20, so **720 gold total**, trivially
 affordable in this band. The pet does not scale with your class, your level, or
 your gear: it scales with Animal Taming and 720 gold.
@@ -929,11 +930,12 @@ amount that the shared terms outgrow:
   cannot attack. The on-kill restores (Necromancer, Spiritmaster, Warlock) pay
   nothing inside a fight and nothing at all on a boss. `Unbreakable` is one
   saved death per life, not throughput.
-- **Gated past the point of use.** `Frenzy` is
+- **Gated past the point of use (fixed 2026-08-28).** `Frenzy` was
   `(missing_pct - 50).clamp(0, 50)`: nothing above half health, full value only
-  at death's door. It is multiplicative, which is the right shape, but the state
-  it wants is one bad tick from dying, so a Berserker collects roughly none of
-  it. Its real edge is the +1 base attack.
+  at death's door, so a Berserker who drinks under 40% collected roughly none
+  of it. It now ramps from full health, `missing_pct / 2`, to the same +50% at
+  death's door (PvE and PvP), and the frame went from `42 + 10l` to `44 + 11l`:
+  it was the one prepared path that died to a crown (Yssgar, L65).
 
 #### Where the world pass's own model diverges
 

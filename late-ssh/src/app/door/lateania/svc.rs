@@ -223,6 +223,12 @@ const IRON_BODY_PCT: i32 = 15;
 /// same fraction, its effective toughness against wounds) plus a share knocked
 /// off its auto-skill cooldowns.
 const BEASTLORD_PET_PCT: i32 = 30;
+/// Percent of the owner's attack rating a companion adds to its own bite
+/// (`Pet::attack`). The same shape as an ability (a flat floor plus a share
+/// of the rating), so the pet multiplies the build instead of replacing it:
+/// tuned in the arena to keep a band-appropriate companion at 12-30% of a
+/// character's output (`a_companion_is_a_share_of_the_fight_not_the_fight`).
+const PET_COEF_PCT: i32 = 20;
 /// Gold every new adventurer starts with.
 const STARTING_GOLD: i64 = 120;
 /// Normal death removes this share of carried gold; banked gold is protected.
@@ -7730,12 +7736,16 @@ impl WorldState {
         for user_id in fighters {
             let (mob_id, base_atk, opening, frenzy_pct, class) = match self.players.get(&user_id) {
                 Some(p) => {
-                    // Berserker "Frenzy": no bonus above half health, then up to
-                    // +50% damage as it falls from half toward death.
+                    // Berserker "Frenzy": the more it bleeds the harder it
+                    // swings, half a percent of damage per percent of health
+                    // missing, up to +50% at death's door. It used to start
+                    // only below half health, which a fighter who drinks under
+                    // 40% almost never sees: a trait gated past the point of
+                    // use, and the Berserker read as a Warrior with less HP.
                     let frenzy = if p.class == Some(Class::Berserker) {
                         let max = p.max_hp().max(1);
                         let missing = ((max - p.hp).max(0) * 100) / max;
-                        (missing.saturating_sub(50)).clamp(0, 50)
+                        (missing / 2).clamp(0, 50)
                     } else {
                         0
                     };
@@ -7869,13 +7879,14 @@ impl WorldState {
             if let Some((pet_glyph, pet_name, pet_atk, pet_level, pet_skills)) = self
                 .players
                 .get(&user_id)
-                .and_then(|p| p.pet.as_ref())
-                .filter(|pet| !pet.downed)
-                .map(|pet| {
+                .and_then(|p| p.pet.as_ref().map(|pet| (pet, p.attack_rating())))
+                .filter(|(pet, _)| !pet.downed)
+                .map(|(pet, rating)| {
+                    let bite = pet.attack() + rating * PET_COEF_PCT / 100;
                     (
                         pet.species.glyph,
                         pet.species.name,
-                        pet.attack() + pet.attack() * pet_bonus / 100,
+                        bite + bite * pet_bonus / 100,
                         pet.level(),
                         pet.species.skills,
                     )
@@ -8014,7 +8025,7 @@ impl WorldState {
                     .is_some_and(|v| v.hp * 2 < v.max_hp());
             let frenzy_pct = if atk_class == Some(Class::Berserker) {
                 let missing = ((atk_max_hp - atk_hp).max(0) * 100) / atk_max_hp.max(1);
-                (missing.saturating_sub(50)).clamp(0, 50)
+                (missing / 2).clamp(0, 50)
             } else {
                 0
             };
@@ -8071,13 +8082,14 @@ impl WorldState {
             if let Some((pet_glyph, pet_name, pet_atk, pet_level, pet_skills)) = self
                 .players
                 .get(&attacker_id)
-                .and_then(|p| p.pet.as_ref())
-                .filter(|pet| !pet.downed)
-                .map(|pet| {
+                .and_then(|p| p.pet.as_ref().map(|pet| (pet, p.attack_rating())))
+                .filter(|(pet, _)| !pet.downed)
+                .map(|(pet, rating)| {
+                    let bite = pet.attack() + rating * PET_COEF_PCT / 100;
                     (
                         pet.species.glyph,
                         pet.species.name,
-                        pet.attack() + pet.attack() * pet_bonus / 100,
+                        bite + bite * pet_bonus / 100,
                         pet.level(),
                         pet.species.skills,
                     )
@@ -9842,13 +9854,14 @@ impl WorldState {
                     .collect(),
             });
 
+            let owner_rating = player.attack_rating();
             let pet = player.pet.as_ref().map(|pet| PetView {
                 name: pet.species.name.to_string(),
                 glyph: pet.species.glyph.to_string(),
                 level: pet.level(),
                 hp: pet.hp,
                 max_hp: pet.max_hp(),
-                attack: pet.attack(),
+                attack: pet.attack() + owner_rating * PET_COEF_PCT / 100,
                 downed: pet.downed,
                 loyalty_pct: pet.loyalty_pct(),
                 skills: pet

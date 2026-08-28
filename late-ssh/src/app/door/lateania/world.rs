@@ -7271,10 +7271,10 @@ pub const CROWNS: &[Crown] = &[
     Crown { name: "The Bonewright Lich", level: 40, max_hp: 4508, damage: 75 },
     Crown { name: "the Elder Dryad", level: 40, max_hp: 4508, damage: 75 },
     Crown { name: "the Abyss-Thing", level: 40, max_hp: 4508, damage: 75 },
-    Crown { name: "the King Who Was Promised Nothing", level: 55, max_hp: 9380, damage: 138 },
-    Crown { name: "Yssgar, the Sundering Deep", level: 65, max_hp: 16954, damage: 253 },
-    Crown { name: "Kaethyr the Unquenched, Ashen King of Kaelmyr", level: 75, max_hp: 21448, damage: 368 },
-    Crown { name: "Kaethyr Ascendant, Who Sang the God Awake", level: 80, max_hp: 23044, damage: 397 },
+    Crown { name: "the King Who Was Promised Nothing", level: 55, max_hp: 9926, damage: 138 },
+    Crown { name: "Yssgar, the Sundering Deep", level: 65, max_hp: 17528, damage: 253 },
+    Crown { name: "Kaethyr the Unquenched, Ashen King of Kaelmyr", level: 75, max_hp: 22722, damage: 368 },
+    Crown { name: "Kaethyr Ascendant, Who Sang the God Awake", level: 80, max_hp: 24542, damage: 397 },
 ];
 
 /// Field every crown at its `CROWNS` numbers. Panics if a crown's spawn is
