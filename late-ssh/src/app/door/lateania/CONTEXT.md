@@ -159,7 +159,7 @@ Before class choice:
 - Other ordinary game keys are ignored.
 
 While an attribute point waits to be placed (`PlayerView::score_offer` non-empty, which the view keeps empty while the level-10 archetype crossroads is open):
-- `1-6`: place the point on STR/DEX/CON/INT/WIS/CHA (`Score::ALL` order). Every other ordinary key is ignored until the points are placed, like the archetype gate.
+- `1-6`: place the point on STR/DEX/CON/INT/WIS/CHA (`Score::ALL` order). Every other ordinary key is ignored until the points are placed, like the archetype gate; the action-bar chips are inert behind both gates too. Unplaced points are bounded by `AbilityScores::headroom` (a point with no score below `SCORE_CAP` to go in is not owed, so the gate can always be satisfied), the offer is empty while dead (the corpse view and `r` win), and the screen collapses to one line a score when the area is too short for the full five-row layout.
 
 ### Active game keys
 

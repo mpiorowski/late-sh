@@ -3227,6 +3227,82 @@ fn a_point_every_fourth_level_is_placed_from_the_point_screen() {
     assert!(p.log.iter().any(|l| l.text.contains("already at its peak of 20")));
 }
 
+/// A point can only be placed on a score below the cap, and the point screen
+/// takes every key until it is placed. A character whose six scores are all
+/// at the cap (a farmed roll, deep into the levels: 25 points are earned by
+/// 100 and a 96+ roll leaves fewer slots than that) used to be held on that
+/// screen for good, since no key could place the point and rejoining showed
+/// it again. Points past what the scores can hold are simply not there.
+#[test]
+fn a_character_with_every_score_at_the_cap_is_never_held_at_the_point_screen() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().scores = AbilityScores {
+        strength: 20,
+        dexterity: 20,
+        constitution: 20,
+        intelligence: 20,
+        wisdom: 20,
+        charisma: 19,
+    };
+    s.players.get_mut(&uid(1)).unwrap().xp = xp_for_level(100);
+    s.check_level_up(uid(1));
+    assert_eq!(s.players[&uid(1)].level, 100);
+    // The level-10 crossroads comes first and keeps the point screen closed.
+    s.choose_archetype(uid(1), 0);
+    assert_eq!(
+        s.players[&uid(1)].score_points(),
+        1,
+        "25 earned, but only one slot left to put a point in"
+    );
+    let snap = s.snapshot();
+    assert_eq!(snap.players[&uid(1)].score_offer.len(), 6, "the screen offers that one");
+
+    s.spend_score_point(uid(1), 5);
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.scores.charisma, 20);
+    assert_eq!(p.score_points(), 0, "nothing left that could be placed");
+    let snap = s.snapshot();
+    assert!(
+        snap.players[&uid(1)].score_offer.is_empty(),
+        "the screen closes and the character can play"
+    );
+    assert_eq!(snap.players[&uid(1)].score_points, 0);
+
+    // Leaving and coming back re-derives the same answer from the save.
+    let saved = s.export_saved(uid(1)).expect("character saves");
+    s.leave(uid(1));
+    s.join(uid(1));
+    s.hydrate(uid(1), &saved);
+    assert_eq!(s.players[&uid(1)].score_points(), 0);
+    assert!(s.snapshot().players[&uid(1)].score_offer.is_empty());
+}
+
+/// The point screen takes the keys, but a corpse's only key is release. The
+/// view used to draw the point screen over the corpse with the release hint
+/// hidden behind it; a corpse sees the corpse, and places the point once up.
+#[test]
+fn a_corpse_with_a_point_pending_sees_the_corpse_not_the_point_screen() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Mage); // no Warrior death-save
+    s.players.get_mut(&uid(1)).unwrap().scores = AbilityScores::default();
+    s.players.get_mut(&uid(1)).unwrap().xp = xp_for_level(4);
+    s.check_level_up(uid(1));
+    assert_eq!(s.snapshot().players[&uid(1)].score_offer.len(), 6);
+
+    s.strike_player(uid(1), 9999, DamageType::Physical, "a test foe");
+    assert!(s.players[&uid(1)].dead);
+    let snap = s.snapshot();
+    assert!(snap.players[&uid(1)].score_offer.is_empty(), "the corpse view wins");
+    assert_eq!(snap.players[&uid(1)].score_points, 1, "the point is still owed");
+
+    s.release_to_temple(uid(1));
+    assert!(!s.players[&uid(1)].dead);
+    assert_eq!(s.snapshot().players[&uid(1)].score_offer.len(), 6, "and offered once risen");
+}
+
 #[test]
 fn a_character_saved_before_points_existed_has_them_all_to_place() {
     let mut s = world();

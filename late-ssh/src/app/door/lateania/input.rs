@@ -75,6 +75,13 @@ pub fn handle_mouse(state: &mut State, mouse: crate::app::input::MouseEvent) -> 
     if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
         return false;
     }
+    // The archetype and attribute-point gates hold every key until a choice
+    // is made (see `handle_key`); the chips drawn behind them are no way
+    // round that.
+    let view = state.view();
+    if !view.archetype_choices.is_empty() || !view.score_offer.is_empty() {
+        return false;
+    }
     state.click_combat(mouse.x, mouse.y)
 }
 

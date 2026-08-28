@@ -419,8 +419,6 @@ impl Class {
         }
     }
 
-    /// Full stat block at a given level. Linear-plus-curve growth keeps every
-    /// class climbing meaningfully all the way to the Wildbound cap of 100.
     /// Which of the three damage shapes this calling has (see `DamageWeights`).
     pub fn damage_weights(self) -> DamageWeights {
         match self {
@@ -444,6 +442,8 @@ impl Class {
         }
     }
 
+    /// Full stat block at a given level. Linear-plus-curve growth keeps every
+    /// class climbing meaningfully all the way to the Wildbound cap of 100.
     pub fn stats_at(self, level: i32) -> ClassStats {
         let lvl = level.clamp(1, Self::MAX_LEVEL);
         let l = lvl - 1; // levels gained past 1

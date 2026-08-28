@@ -228,6 +228,16 @@ impl AbilityScores {
         true
     }
 
+    /// Points the six scores can still take between them before every one
+    /// is at `SCORE_CAP`. Bounds a character's unplaced points, so a point is
+    /// never owed to a slot that does not exist.
+    pub fn headroom(&self) -> i32 {
+        Score::ALL
+            .iter()
+            .map(|&which| (SCORE_CAP - self.score(which)).max(0))
+            .sum()
+    }
+
     /// Strength: percent added to (or taken from) the auto-attack swing.
     pub fn swing_pct(&self) -> i32 {
         2 * modifier(self.strength)

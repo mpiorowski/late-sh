@@ -74,7 +74,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
 
     if !view.score_offer.is_empty() {
         frame.render_widget(
-            Paragraph::new(score_point_lines(&view)).wrap(Wrap { trim: false }),
+            Paragraph::new(score_point_lines(&view, area.height)).wrap(Wrap { trim: false }),
             area,
         );
         return;
@@ -2042,8 +2042,17 @@ fn attribute_rule_lines(view: &PlayerView) -> Vec<Line<'static>> {
 /// The attribute point screen: every score with what it does now, what one
 /// more point would do, and the rule behind it, placed with 1-6. A +1 on an
 /// even score leaves the modifier where it is, and the row says so rather
-/// than let the player wonder why nothing moved.
-fn score_point_lines(view: &PlayerView) -> Vec<Line<'static>> {
+/// than let the player wonder why nothing moved. The screen holds every key
+/// until the point is placed, so all six choices must be in view: the full
+/// layout is five rows a score, and when `rows` (the area's height) cannot
+/// hold it every score collapses to one line.
+fn score_point_lines(view: &PlayerView, rows: u16) -> Vec<Line<'static>> {
+    const HEADER_ROWS: usize = 4;
+    const ROWS_PER_SCORE: usize = 5;
+    let full = HEADER_ROWS + ROWS_PER_SCORE * view.score_offer.len();
+    if full > usize::from(rows) {
+        return score_point_lines_compact(view);
+    }
     let mut lines = vec![
         Line::from(Span::styled(
             "~ YOU GROW ~",
@@ -2101,6 +2110,54 @@ fn score_point_lines(view: &PlayerView) -> Vec<Line<'static>> {
             Style::default().fg(theme::TEXT_DIM()),
         )));
         lines.push(Line::raw(""));
+    }
+    lines
+}
+
+/// The point screen for a short terminal: one line a score, now -> after.
+fn score_point_lines_compact(view: &PlayerView) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                "~ YOU GROW ~ ",
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    "Level {} - {} attribute point(s) to place. Press 1-6 to place a point (scores cap at {SCORE_CAP}).",
+                    view.level, view.score_points
+                ),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]),
+        Line::raw(""),
+    ];
+    for (i, row) in view.score_offer.iter().enumerate() {
+        let sign = if row.modifier >= 0 { "+" } else { "" };
+        let after = match &row.after {
+            Some(after) if after == &row.now => format!("-> the same until {}", row.value + 2),
+            Some(after) => format!("-> {after}"),
+            None => format!("at the cap of {SCORE_CAP}"),
+        };
+        let mut spans = vec![
+            Span::styled(format!("  {} ", i + 1), Style::default().fg(theme::AMBER())),
+            Span::styled(
+                format!("{} {} ({sign}{}) ", row.label, row.value, row.modifier),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ];
+        if row.after.is_some() {
+            spans.push(Span::styled(
+                format!("{} ", row.now),
+                Style::default().fg(theme::TEXT()),
+            ));
+        }
+        spans.push(Span::styled(after, Style::default().fg(theme::SUCCESS())));
+        lines.push(Line::from(spans));
     }
     lines
 }

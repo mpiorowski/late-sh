@@ -95,3 +95,25 @@ fn a_point_every_fourth_level_and_a_score_stops_at_twenty() {
     assert!(s.raise(Score::Wisdom));
     assert_eq!(s.wisdom, 11);
 }
+
+/// How many points the six scores can still take between them: the number
+/// `svc` bounds a character's unplaced points by, so a point never waits on
+/// a slot that does not exist.
+#[test]
+fn headroom_is_the_points_the_scores_can_still_take() {
+    assert_eq!(AbilityScores::default().headroom(), 60);
+    let nearly = AbilityScores {
+        strength: 20,
+        dexterity: 20,
+        constitution: 20,
+        intelligence: 20,
+        wisdom: 20,
+        charisma: 18,
+    };
+    assert_eq!(nearly.headroom(), 2);
+    let full = AbilityScores {
+        charisma: 20,
+        ..nearly
+    };
+    assert_eq!(full.headroom(), 0);
+}

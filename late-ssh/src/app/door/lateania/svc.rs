@@ -82,10 +82,12 @@ const SUMMON_ID_START: u32 = 990_000_000;
 /// A roamer takes a step at most this often (in ticks); at 2s/tick that is ~8s.
 const MOB_MOVE_COOLDOWN: u8 = 4;
 /// Ticks a wounded, stunned, or festering mob may go with nobody targeting it
-/// before it recovers in full (health, stuns, DoTs). The grace absorbs a lost
-/// connection or a death-and-return; it is far shorter than any ability
-/// cooldown, so a foe can never be whittled down across engagements. Fleeing
-/// skips the grace: the foe you turn your back on recovers on the spot.
+/// before it recovers in full (health, stuns, DoTs). The grace (~6s) absorbs
+/// a dropped connection that comes straight back and a target switched for a
+/// moment, not a death and the walk back from the temple; it is far shorter
+/// than any ability cooldown, so a foe can never be whittled down across
+/// engagements. Fleeing skips the grace: the foe you turn your back on
+/// recovers on the spot.
 const MOB_RESET_TICKS: u8 = 3;
 /// Ticks between two gulps of any heal/restore consumable. Draughts used to
 /// be spammable inside a fight, bounded by gold alone; a breath between them
@@ -2595,18 +2597,25 @@ impl PlayerState {
         (base + base * pct / 100).max(1)
     }
 
-    /// Attribute points earned by level and not yet placed.
+    /// Attribute points earned by level and not yet placed, never more than
+    /// the scores can still take (`AbilityScores::headroom`): a point with no
+    /// slot to go in is not owed, so the point screen, which holds every key
+    /// until the point is placed, can always be satisfied.
     fn score_points(&self) -> i32 {
-        (points_earned(self.level) - self.score_points_spent).max(0)
+        (points_earned(self.level) - self.score_points_spent)
+            .max(0)
+            .min(self.scores.headroom())
     }
 
     /// The point screen's rows while a point waits to be placed: every score
     /// with what it does now and what it would do after the point. Empty when
-    /// there is nothing to place, and while the archetype crossroads is open,
-    /// so the two screens never fight for the keys.
+    /// there is nothing to place, while the archetype crossroads is open (so
+    /// the two screens never fight for the keys), and while dead (a corpse
+    /// sees the corpse view and its release key, and places the point once
+    /// it rises).
     fn score_offer(&self) -> Vec<ScoreOfferView> {
         let crossroads = self.archetype.is_none() && self.level >= ARCHETYPE_LEVEL;
-        if self.class.is_none() || crossroads || self.score_points() <= 0 {
+        if self.class.is_none() || crossroads || self.dead || self.score_points() <= 0 {
             return Vec::new();
         }
         Score::ALL

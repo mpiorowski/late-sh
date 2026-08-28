@@ -1148,17 +1148,9 @@ fn first_frontier_regulars_are_endgame_mobs_but_not_bosses() {
         .iter()
         .find(|spawn| spawn.id >= FRONTIER_SPAWN_ID_START && spawn.boss)
         .expect("frontier boss exists");
-    let strongest_living_boss_damage = world
-        .spawns
-        .iter()
-        .filter(|spawn| is_living_dark_spawn(spawn.id) && spawn.boss)
-        .map(|spawn| spawn.damage)
-        .max()
-        .expect("living-dark bosses exist");
 
     // The Frontier assumes the living-dark arc is cleared: its first regulars
     // read at or past the Archdemon, the crown that opens that arc.
-    let _ = strongest_living_boss_damage;
     let archdemon = CROWNS
         .iter()
         .find(|c| c.name == "the Archdemon Mal'gareth")

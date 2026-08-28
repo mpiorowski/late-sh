@@ -6,6 +6,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::common::theme;
 
@@ -44,10 +45,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State) {
 
     let body = body_lines(state);
     let actions = action_lines(state);
-    // The body (scene text, or the two fighters) is usually a handful of
-    // lines; give it only what it needs, up to half the panel, so a long
-    // action list (many weapons and items) gets the rest.
-    let body_height = (body.len() as u16).clamp(3, inner.height.saturating_sub(4).max(3) / 2 + 3);
+    let body_height = body_height(&body, inner.width, inner.height);
 
     let rows = Layout::vertical([
         Constraint::Length(body_height),
@@ -61,6 +59,59 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State) {
     let visible = rows[2].height as usize;
     let offset = scroll_offset(state.cursor, actions.len(), visible);
     frame.render_widget(Paragraph::new(actions).scroll((offset, 0)), rows[2]);
+}
+
+/// Rows the body (scene text, or the two fighters) gets: what it needs once
+/// wrapped at `width`, up to half the panel, so a long action list (many
+/// weapons and items) gets the rest.
+pub fn body_height(body: &[Line<'_>], width: u16, height: u16) -> u16 {
+    let needed: usize = body
+        .iter()
+        .map(|line| wrapped_rows(&line.to_string(), usize::from(width)))
+        .sum();
+    let cap = height.saturating_sub(4).max(3) / 2 + 3;
+    (needed.min(usize::from(u16::MAX)) as u16).clamp(3, cap)
+}
+
+/// Rows `text` takes word-wrapped at `width`, the way the body's `Wrap`
+/// breaks it: on spaces, with a word longer than the width split across
+/// rows. Always at least 1.
+fn wrapped_rows(text: &str, width: usize) -> usize {
+    if width == 0 {
+        return 1;
+    }
+    let mut rows = 1usize;
+    let mut col = 0usize;
+    for (i, token) in text.split(' ').enumerate() {
+        if i > 0 {
+            if col + 1 > width {
+                rows += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        let tw = UnicodeWidthStr::width(token);
+        if tw == 0 {
+            continue;
+        }
+        if col + tw <= width {
+            col += tw;
+        } else {
+            if col > 0 {
+                rows += 1;
+            }
+            if tw > width {
+                // a single word longer than the card breaks across rows
+                let extra = (tw - 1) / width;
+                rows += extra;
+                col = tw - extra * width;
+            } else {
+                col = tw;
+            }
+        }
+    }
+    rows
 }
 
 /// How many action rows to scroll past so the cursor stays on screen. Follows
