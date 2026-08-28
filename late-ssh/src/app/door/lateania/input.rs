@@ -170,6 +170,18 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         return InputAction::Handled;
     }
 
+    // Attribute point gate: an earned point is placed before anything else,
+    // 1-6 on the six scores in sheet order. Sits behind the archetype gate,
+    // which the view keeps exclusive (`score_offer` is empty while a
+    // crossroads is open).
+    if !view.score_offer.is_empty() {
+        match byte {
+            b'1'..=b'6' => state.spend_score_point((byte - b'1') as usize),
+            _ => return InputAction::Ignored,
+        }
+        return InputAction::Handled;
+    }
+
     let panel = state.panel();
     let in_list = matches!(
         panel,

@@ -60,7 +60,10 @@ use super::persist::{
 };
 use super::pets::{Pet, pet_species_by_key};
 use super::skills::{CraftSkill, GatherSkill, TamingSkill, skill_level_for_xp, skill_progress};
-use super::stats::AbilityScores;
+use super::stats::{
+    AbilityScores, CritOutcome, SCORE_CAP, Score, ScoreOfferView, crit_outcome, modifier,
+    points_earned,
+};
 use super::taming::{PetSkillEffect, beast_species, beasts_at, tame_chance, tame_xp};
 use super::world::{
     CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, RegionProgress,
@@ -1095,6 +1098,11 @@ pub struct PlayerView {
     /// When eligible to pick an archetype but not yet chosen, the offered paths
     /// as (name, role label, description); empty otherwise. Drives the select UI.
     pub archetype_choices: Vec<(String, String, String)>,
+    /// Attribute points earned and not yet placed.
+    pub score_points: i32,
+    /// While a point waits to be placed (and no archetype crossroads is open),
+    /// one row per score for the point screen; empty otherwise.
+    pub score_offer: Vec<ScoreOfferView>,
 }
 
 impl PlayerView {
@@ -1187,6 +1195,8 @@ impl PlayerView {
             escort: None,
             archetype: None,
             archetype_choices: Vec::new(),
+            score_points: 0,
+            score_offer: Vec::new(),
         }
     }
 }
@@ -1853,6 +1863,12 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.choose_archetype(user_id, choice));
     }
 
+    /// Place one earned attribute point on the `choice`-th score (the point
+    /// screen's 1-6, in `Score::ALL` order).
+    pub fn spend_score_point_task(&self, user_id: Uuid, choice: usize) {
+        self.mutate(user_id, move |s| s.spend_score_point(user_id, choice));
+    }
+
     /// Release a lingering spirit to the temple (only when dead).
     pub fn release_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.release_to_temple(user_id));
@@ -2371,8 +2387,12 @@ struct PlayerState {
     equipped: HashMap<Slot, u32>,
     /// True once the class trait's death-save has been spent this life (Warrior).
     death_save_used: bool,
-    /// Rolled D&D ability scores; feed bonus HP (CON) and attack (class key).
+    /// Rolled D&D ability scores, grown by placed points; every score feeds
+    /// one mechanic, see `stats::Score::rule`.
     scores: AbilityScores,
+    /// Attribute points placed so far; what is left to place is
+    /// `points_earned(level)` less this, so a save can never drift.
+    score_points_spent: i32,
     /// Titles earned by slaying notable foes.
     titles: Vec<String>,
     /// Level for each title, parallel to `titles`.
@@ -2506,13 +2526,14 @@ impl PlayerState {
         (base + base * hp_pct / 100).max(1)
     }
 
-    /// The attack rating before the archetype: class curve, gear, an active
-    /// empower, and the primary score. Both the swing and spell power derive
-    /// from it; the archetype's `attack_pct` is applied once, downstream.
+    /// The attack rating before the archetype: class curve, gear, and an
+    /// active empower. Both the swing and spell power derive from it; the
+    /// archetype's `attack_pct` is applied once, downstream, and the scores
+    /// act on the two branches (Strength on the swing, Intelligence on spell
+    /// power), never on the rating itself.
     fn attack_rating(&self) -> i32 {
         let (atk, _, _) = self.equipment_mods();
-        let stat = self.class.map(|c| self.scores.attack_bonus(c)).unwrap_or(0);
-        (self.base_attack + atk + self.empower + stat).max(1)
+        (self.base_attack + atk + self.empower).max(1)
     }
 
     /// The sheet's attack: the rating with the archetype applied.
@@ -2523,14 +2544,16 @@ impl PlayerState {
     }
 
     /// What the Physical auto-attack lands for: the attack scaled by the
-    /// calling's `auto_pct` (a Mage swings at half, a Warrior in full). An
-    /// unclassed character cannot engage, so its swing is never read.
+    /// calling's `auto_pct` (a Mage swings at half, a Warrior in full), then
+    /// by Strength. An unclassed character cannot engage, so its swing is
+    /// never read.
     fn swing(&self) -> i32 {
         let auto_pct = match self.class {
             Some(c) => c.damage_weights().auto_pct,
             None => 100,
         };
-        (self.attack() * auto_pct / 100).max(1)
+        let base = self.attack() * auto_pct / 100;
+        (base + base * self.scores.swing_pct() / 100).max(1)
     }
 
     /// Spell power: the share of the attack rating an ability adds on top of
@@ -2541,13 +2564,70 @@ impl PlayerState {
     }
 
     /// Spell power for an arbitrary rating (the Empower arm feeds the rating
-    /// *without* the running empower, so a buff never compounds itself).
+    /// *without* the running empower, so a buff never compounds itself),
+    /// then Intelligence on top.
     fn spell_power_of(&self, rating: i32) -> i32 {
         let spell_pct = match self.class {
             Some(c) => c.damage_weights().spell_pct,
             None => 0,
         };
-        rating * spell_pct / 100
+        let power = rating * spell_pct / 100;
+        power + power * self.scores.spell_power_pct() / 100
+    }
+
+    /// Resource regained per tick: the class regen plus Wisdom, never below 1.
+    fn regen(&self) -> i32 {
+        (self.resource_regen + self.scores.regen_bonus()).max(1)
+    }
+
+    /// What a shop charges this character for `it`: the list price less the
+    /// Charisma discount (or plus its markup), never below 1 gold.
+    fn buy_price(&self, it: &Item) -> i64 {
+        let pct = self.scores.price_pct() as i64;
+        (it.price - it.price * pct / 100).max(1)
+    }
+
+    /// What a merchant pays this character for `it`: half the list price plus
+    /// the Charisma premium (or less its penalty), never below 1 gold.
+    fn sell_price(&self, it: &Item) -> i64 {
+        let base = it.sell_price();
+        let pct = self.scores.price_pct() as i64;
+        (base + base * pct / 100).max(1)
+    }
+
+    /// Attribute points earned by level and not yet placed.
+    fn score_points(&self) -> i32 {
+        (points_earned(self.level) - self.score_points_spent).max(0)
+    }
+
+    /// The point screen's rows while a point waits to be placed: every score
+    /// with what it does now and what it would do after the point. Empty when
+    /// there is nothing to place, and while the archetype crossroads is open,
+    /// so the two screens never fight for the keys.
+    fn score_offer(&self) -> Vec<ScoreOfferView> {
+        let crossroads = self.archetype.is_none() && self.level >= ARCHETYPE_LEVEL;
+        if self.class.is_none() || crossroads || self.score_points() <= 0 {
+            return Vec::new();
+        }
+        Score::ALL
+            .iter()
+            .map(|&which| {
+                let value = self.scores.score(which);
+                let mut raised = self.scores;
+                let after = raised
+                    .raise(which)
+                    .then(|| raised.effect(which, self.level));
+                ScoreOfferView {
+                    label: which.label().to_string(),
+                    name: which.name().to_string(),
+                    value,
+                    modifier: modifier(value),
+                    now: self.scores.effect(which, self.level),
+                    after,
+                    rule: which.rule().to_string(),
+                }
+            })
+            .collect()
     }
 
     fn armor(&self) -> i32 {
@@ -3590,6 +3670,7 @@ impl WorldState {
             equipped: HashMap::new(),
             death_save_used: false,
             scores: AbilityScores::roll(),
+            score_points_spent: 0,
             titles: Vec::new(),
             title_levels: Vec::new(),
             active_title: None,
@@ -3706,6 +3787,53 @@ impl WorldState {
         self.describe_room(user_id);
     }
 
+    /// Place one earned attribute point on `Score::ALL[choice]`. Nothing
+    /// happens with no point to place, and a score at `SCORE_CAP` says so and
+    /// keeps the point.
+    fn spend_score_point(&mut self, user_id: Uuid, choice: usize) {
+        let Some(which) = Score::ALL.get(choice).copied() else {
+            return;
+        };
+        let placed = match self.players.get_mut(&user_id) {
+            Some(p) if p.class.is_some() && p.score_points() > 0 => {
+                if p.scores.raise(which) {
+                    p.score_points_spent += 1;
+                    Some((
+                        p.scores.score(which),
+                        p.scores.effect(which, p.level),
+                        p.score_points(),
+                    ))
+                } else {
+                    None
+                }
+            }
+            _ => return,
+        };
+        match placed {
+            Some((value, effect, left)) => {
+                self.log_to(
+                    user_id,
+                    LogKind::Loot,
+                    format!("{} rises to {value}: {effect}.", which.name()),
+                );
+                if left > 0 {
+                    self.log_to(
+                        user_id,
+                        LogKind::System,
+                        format!("{left} attribute point(s) still to place."),
+                    );
+                }
+            }
+            None => {
+                self.log_to(
+                    user_id,
+                    LogKind::System,
+                    format!("{} is already at its peak of {SCORE_CAP}.", which.name()),
+                );
+            }
+        }
+    }
+
     /// Grant (or clear) the veteran resurrection allowance for this adventure.
     /// Called once on join from the account-age check; a fresh adventure starts
     /// with a full set of charges.
@@ -3817,8 +3945,12 @@ impl WorldState {
                     p.equipped.insert(slot, *id);
                 }
             }
-            // Rolled scores and earned titles persist across sessions.
+            // Rolled scores, placed points, and earned titles persist across
+            // sessions. Points are bounded by what the level has earned, so a
+            // character saved before the points existed simply has them all
+            // still to place.
             p.scores = saved.scores;
+            p.score_points_spent = saved.score_points_spent.clamp(0, points_earned(level));
             p.titles = saved.titles.clone();
             p.title_levels = saved.title_levels.clone();
             p.title_levels.resize(p.titles.len(), 1);
@@ -3950,6 +4082,7 @@ impl WorldState {
             inventory: p.inventory.clone(),
             equipped,
             scores: p.scores,
+            score_points_spent: p.score_points_spent,
             titles: p.titles.clone(),
             title_levels: p.title_levels.clone(),
             active_title: p.active_title,
@@ -6928,6 +7061,13 @@ impl WorldState {
                     "A hero rises: an adventurer has reached the rank of {name}."
                 ));
             }
+            if lvl % super::stats::POINT_EVERY_LEVELS == 0 {
+                self.log_to(
+                    user_id,
+                    LogKind::Loot,
+                    "  ✦ An attribute point is yours to place.".to_string(),
+                );
+            }
             if lvl == Class::MAX_LEVEL {
                 self.log_to(
                     user_id,
@@ -7439,23 +7579,26 @@ impl WorldState {
             return;
         }
         let Some(it) = item(item_id) else { return };
-        let gold = self.players.get(&user_id).map(|p| p.gold).unwrap_or(0);
-        if gold < it.price {
+        let (gold, price) = match self.players.get(&user_id) {
+            Some(p) => (p.gold, p.buy_price(it)),
+            None => return,
+        };
+        if gold < price {
             self.log_to(
                 user_id,
                 LogKind::System,
-                format!("You can't afford {} ({}g).", it.name, it.price),
+                format!("You can't afford {} ({price}g).", it.name),
             );
             return;
         }
         if let Some(p) = self.players.get_mut(&user_id) {
-            p.gold -= it.price;
+            p.gold -= price;
             p.inventory.push(item_id);
         }
         self.log_to(
             user_id,
             LogKind::Loot,
-            format!("You buy {} for {}g.", it.name, it.price),
+            format!("You buy {} for {price}g.", it.name),
         );
     }
 
@@ -7469,7 +7612,10 @@ impl WorldState {
             return;
         }
         let Some(it) = item(item_id) else { return };
-        let price = it.sell_price();
+        let price = match self.players.get(&user_id) {
+            Some(p) => p.sell_price(it),
+            None => return,
+        };
         // Worn gear is listed in the inventory panel but lives in `equipped`,
         // so say why rather than doing nothing. A loose duplicate in the pack
         // is still fair game even while the other copy is worn.
@@ -7551,7 +7697,7 @@ impl WorldState {
             for id in &doomed {
                 if let Some(pos) = p.inventory.iter().position(|i| i == id) {
                     p.inventory.remove(pos);
-                    let price = item(*id).map(|it| it.sell_price()).unwrap_or(1);
+                    let price = item(*id).map(|it| p.sell_price(it)).unwrap_or(1);
                     p.gold += price;
                     total += price;
                     count += 1;
@@ -7679,7 +7825,7 @@ impl WorldState {
             let mut hot_heal = 0;
             if let Some(p) = self.players.get_mut(uid) {
                 if p.class.is_some() && p.respawn_at.is_none() {
-                    p.resource = (p.resource + p.resource_regen).min(p.max_resource);
+                    p.resource = (p.resource + p.regen()).min(p.max_resource);
                     // Bard "Battle Hymn" and Skald "War-Chant": Tempo keeps perfect
                     // time and returns faster than other resources.
                     if matches!(p.class, Some(Class::Bard) | Some(Class::Skald)) {
@@ -7742,7 +7888,7 @@ impl WorldState {
             .collect();
 
         for user_id in fighters {
-            let (mob_id, base_atk, opening, frenzy_pct, class) = match self.players.get(&user_id) {
+            let (mob_id, base_atk, opening, frenzy_pct, class, crit_pct) = match self.players.get(&user_id) {
                 Some(p) => {
                     // Berserker "Frenzy": the more it bleeds the harder it
                     // swings, half a percent of damage per percent of health
@@ -7757,7 +7903,7 @@ impl WorldState {
                     } else {
                         0
                     };
-                    (p.target, p.swing(), p.opening_strike, frenzy, p.class)
+                    (p.target, p.swing(), p.opening_strike, frenzy, p.class, p.scores.crit_pct())
                 }
                 None => continue,
             };
@@ -7786,6 +7932,23 @@ impl WorldState {
             } else {
                 player_atk
             };
+            // Dexterity: the swing may crit for double, or, below 10, glance
+            // for half.
+            let roll = rand::thread_rng().gen_range(0..100);
+            let (player_atk, dex_line) = match crit_outcome(crit_pct, roll) {
+                CritOutcome::Plain => (player_atk, None),
+                CritOutcome::Critical => (
+                    player_atk * 2,
+                    Some("Critical hit! Your swing lands for double."),
+                ),
+                CritOutcome::Glancing => (
+                    player_atk / 2,
+                    Some("A glancing blow. Your swing lands for half."),
+                ),
+            };
+            if let Some(line) = dex_line {
+                self.log_to(user_id, LogKind::Combat, line.to_string());
+            }
             if opening {
                 if let Some(p) = self.players.get_mut(&user_id) {
                     p.opening_strike = false;
@@ -7983,7 +8146,7 @@ impl WorldState {
         for (attacker_id, victim_id) in pvp_fighters {
             // Snapshot everything needed from the attacker up front so no
             // live immutable borrow survives into the `get_mut` calls below.
-            let Some((room_id, atk_class, opening, atk_hp, atk_max_hp, base_atk)) =
+            let Some((room_id, atk_class, opening, atk_hp, atk_max_hp, base_atk, crit_pct)) =
                 self.players.get(&attacker_id).map(|a| {
                     (
                         a.room,
@@ -7992,6 +8155,7 @@ impl WorldState {
                         a.hp,
                         a.max_hp(),
                         a.swing(),
+                        a.scores.crit_pct(),
                     )
                 })
             else {
@@ -8040,6 +8204,15 @@ impl WorldState {
             let atk = if opening { base_atk * 2 } else { base_atk };
             let atk = atk * (100 + frenzy_pct) / 100;
             let atk = if ranger_wounded { atk + atk / 4 } else { atk };
+            let roll = rand::thread_rng().gen_range(0..100);
+            let (atk, dex_line) = match crit_outcome(crit_pct, roll) {
+                CritOutcome::Plain => (atk, None),
+                CritOutcome::Critical => (atk * 2, Some("Critical hit! Your swing lands for double.")),
+                CritOutcome::Glancing => (atk / 2, Some("A glancing blow. Your swing lands for half.")),
+            };
+            if let Some(line) = dex_line {
+                self.log_to(attacker_id, LogKind::Combat, line.to_string());
+            }
             if opening && let Some(a) = self.players.get_mut(&attacker_id) {
                 a.opening_strike = false;
             }
@@ -9196,6 +9369,7 @@ impl WorldState {
             return;
         }
         let taming_xp = player.taming_xp;
+        let cha_pct = player.scores.tame_pct();
         let level = skill_level_for_xp(taming_xp);
         // Under-level: refused outright, with a clear reason.
         if level < species.tame_level {
@@ -9211,7 +9385,7 @@ impl WorldState {
             );
             return;
         }
-        let chance = tame_chance(taming_xp, species);
+        let chance = tame_chance(taming_xp, species, cha_pct);
         // The approach: a beat of warily-earned trust before the roll.
         self.log_to(
             user_id,
@@ -9811,7 +9985,7 @@ impl WorldState {
                     rarity: it.rarity.label().to_string(),
                     slot: it.slot().map(|s| s.label().to_string()),
                     equipped: false,
-                    sell_price: it.sell_price(),
+                    sell_price: player.sell_price(it),
                     stats: it.stat_summary(),
                     compare: compare_to_worn(&player.equipped, it),
                     compare_pct: player.compare_gear(it),
@@ -9829,7 +10003,7 @@ impl WorldState {
                             rarity: it.rarity.label().to_string(),
                             slot: it.slot().map(|s| s.label().to_string()),
                             equipped: true,
-                            sell_price: it.sell_price(),
+                            sell_price: player.sell_price(it),
                             stats: it.stat_summary(),
                             compare: String::new(),
                             compare_pct: None,
@@ -9851,8 +10025,8 @@ impl WorldState {
                         item_id: it.id,
                         name: it.name.to_string(),
                         rarity: it.rarity.label().to_string(),
-                        price: it.price,
-                        affordable: player.gold >= it.price,
+                        price: player.buy_price(it),
+                        affordable: player.gold >= player.buy_price(it),
                         stats: it.stat_summary(),
                         compare: compare_to_worn(&player.equipped, it),
                         compare_pct: player.compare_gear(it),
@@ -9922,7 +10096,7 @@ impl WorldState {
                             let odds = if spooked {
                                 0
                             } else {
-                                tame_chance(player.taming_xp, sp)
+                                tame_chance(player.taming_xp, sp, player.scores.tame_pct())
                             };
                             let reason = if taming_level < sp.tame_level {
                                 format!("needs Taming {}", sp.tame_level)
@@ -10236,6 +10410,8 @@ impl WorldState {
                     } else {
                         Vec::new()
                     },
+                    score_points: player.score_points(),
+                    score_offer: player.score_offer(),
                 },
             );
         }

@@ -158,16 +158,16 @@ impl Class {
             Self::Ranger => Score::Dexterity,
             Self::Druid => Score::Wisdom,
             Self::Necromancer => Score::Intelligence,
-            Self::Bard => Score::Charisma,
+            Self::Bard => Score::Strength,
             Self::Monk => Score::Dexterity,
             Self::Paladin => Score::Strength,
-            Self::Warlock => Score::Charisma,
+            Self::Warlock => Score::Intelligence,
             Self::Berserker => Score::Strength,
-            Self::Beastlord => Score::Wisdom,
-            Self::Skald => Score::Charisma,
+            Self::Beastlord => Score::Strength,
+            Self::Skald => Score::Strength,
             Self::Runemaster => Score::Intelligence,
             Self::Valewalker => Score::Strength,
-            Self::Spiritmaster => Score::Charisma,
+            Self::Spiritmaster => Score::Intelligence,
         }
     }
 

@@ -33,6 +33,7 @@ pub struct SavedCharacterInit {
     pub inventory: Vec<u32>,
     pub equipped: Vec<(String, u32)>,
     pub scores: AbilityScores,
+    pub score_points_spent: i32,
     pub titles: Vec<String>,
     pub title_levels: Vec<i32>,
     pub active_title: Option<usize>,
@@ -102,6 +103,10 @@ pub struct SavedCharacter {
     /// Rolled D&D ability scores; default (all 10s) for pre-v2 saves.
     #[serde(default)]
     pub scores: AbilityScores,
+    /// Attribute points placed on the scores; 0 for saves from before points
+    /// existed, which then have every earned point still to place.
+    #[serde(default)]
+    pub score_points_spent: i32,
     /// Titles earned by slaying notable foes (most recent last).
     #[serde(default)]
     pub titles: Vec<String>,
@@ -257,6 +262,7 @@ impl SavedCharacter {
             inventory: init.inventory,
             equipped: init.equipped,
             scores: init.scores,
+            score_points_spent: init.score_points_spent,
             titles: init.titles,
             title_levels: init.title_levels,
             active_title: init.active_title,

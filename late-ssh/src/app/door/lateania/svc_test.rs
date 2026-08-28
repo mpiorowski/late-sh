@@ -1802,6 +1802,7 @@ fn buying_costs_gold_and_adds_item() {
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
     s.players.get_mut(&uid(1)).unwrap().room = 1;
+    s.players.get_mut(&uid(1)).unwrap().scores = AbilityScores::default();
     // Walk to the smith (room 3, east of square).
     s.move_player(uid(1), Dir::East);
     assert_eq!(s.players[&uid(1)].room, 3);
@@ -2563,6 +2564,7 @@ fn a_loose_duplicate_of_worn_gear_can_still_be_sold() {
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
     s.players.get_mut(&uid(1)).unwrap().room = 3;
+    s.players.get_mut(&uid(1)).unwrap().scores = AbilityScores::default();
     s.players.get_mut(&uid(1)).unwrap().inventory.push(1006);
     s.equip(uid(1), 1006);
     // A second copy, still loose in the pack.
@@ -3118,25 +3120,130 @@ fn talking_to_a_villager_speaks_their_line_and_the_room_announces_them() {
 }
 
 #[test]
-fn ability_scores_change_derived_stats() {
+fn every_ability_score_moves_the_number_it_promises() {
     let mut s = world();
     s.join(uid(1));
-    s.choose_class(uid(1), Class::Warrior); // STR is the warrior's key score
-    if let Some(p) = s.players.get_mut(&uid(1)) {
-        p.scores.strength = 10;
-        p.scores.constitution = 10;
-    }
-    let base_attack = s.players[&uid(1)].attack();
-    let base_hp = s.players[&uid(1)].max_hp();
-    if let Some(p) = s.players.get_mut(&uid(1)) {
-        p.scores.strength = 18; // +4
-        p.scores.constitution = 18; // +4
-    }
-    assert!(
-        s.players[&uid(1)].attack() > base_attack,
-        "STR raises attack"
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 3; // the smith
+    s.players.get_mut(&uid(1)).unwrap().scores = AbilityScores::default();
+    let p = &s.players[&uid(1)];
+    let (attack, swing, spell, hp, regen) =
+        (p.attack(), p.swing(), p.spell_power(), p.max_hp(), p.regen());
+    let sword = item(1001).unwrap(); // Iron Longsword, 80g
+    let (buy, sell) = (p.buy_price(sword), p.sell_price(sword));
+    s.players.get_mut(&uid(1)).unwrap().scores = AbilityScores {
+        strength: 18,
+        dexterity: 18,
+        constitution: 18,
+        intelligence: 18,
+        wisdom: 18,
+        charisma: 18,
+    };
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.attack(), attack, "no score touches the attack rating itself");
+    assert_eq!(p.swing(), swing + swing * 8 / 100, "STR: +8% on the swing");
+    assert_eq!(p.spell_power(), spell + spell * 8 / 100, "INT: +8% spell power");
+    assert_eq!(p.max_hp(), hp + 4 * (4 + 1 / 2), "CON: +4 per modifier point at level 1");
+    assert_eq!(p.regen(), regen + 4, "WIS: +4 resource a tick");
+    assert_eq!(p.buy_price(sword), buy - buy * 12 / 100, "CHA: 12% off");
+    assert_eq!(p.sell_price(sword), sell + sell * 12 / 100, "CHA: 12% on top of a sale");
+    assert_eq!(p.scores.crit_pct(), 8, "DEX: 8% of swings crit");
+    let before = p.gold;
+    s.buy(uid(1), 1001);
+    assert_eq!(
+        s.players[&uid(1)].gold,
+        before - (80 - 80 * 12 / 100),
+        "the discount is what the shop actually charges"
     );
-    assert!(s.players[&uid(1)].max_hp() > base_hp, "CON raises max HP");
+}
+
+#[test]
+fn a_point_every_fourth_level_is_placed_from_the_point_screen() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().scores = AbilityScores::default();
+    assert_eq!(s.players[&uid(1)].score_points(), 0);
+    s.players.get_mut(&uid(1)).unwrap().xp = xp_for_level(8);
+    s.check_level_up(uid(1));
+    assert_eq!(s.players[&uid(1)].score_points(), 2, "levels 4 and 8 each earn one");
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("attribute point is yours to place")),
+        "the level-up feed says a point was earned"
+    );
+
+    let snap = s.snapshot();
+    let view = snap.players.get(&uid(1)).expect("player view");
+    assert_eq!(view.score_points, 2);
+    let offer: Vec<(&str, &str, Option<&str>)> = view
+        .score_offer
+        .iter()
+        .map(|r| (r.label.as_str(), r.now.as_str(), r.after.as_deref()))
+        .collect();
+    assert_eq!(
+        offer,
+        vec![
+            ("STR", "swings hit for +0%", Some("swings hit for +0%")),
+            ("DEX", "no crits, no glances", Some("no crits, no glances")),
+            ("CON", "+0 max HP at level 8", Some("+0 max HP at level 8")),
+            ("INT", "spell power +0%", Some("spell power +0%")),
+            ("WIS", "+0 resource every tick", Some("+0 resource every tick")),
+            ("CHA", "shops 0% cheaper, sells 0% dearer, taming +0%", Some("shops 0% cheaper, sells 0% dearer, taming +0%")),
+        ],
+        "the screen shows every score with its reading now and after the point"
+    );
+
+    s.spend_score_point(uid(1), 0);
+    s.spend_score_point(uid(1), 0);
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.scores.strength, 12);
+    assert_eq!(p.score_points(), 0);
+    assert_eq!(p.swing(), p.attack() + p.attack() * 2 / 100, "and the swing moved with it");
+    let snap = s.snapshot();
+    assert!(
+        snap.players[&uid(1)].score_offer.is_empty(),
+        "nothing left to place, the screen closes"
+    );
+
+    // A third point cannot go past the cap: it is kept, and the row says so.
+    s.players.get_mut(&uid(1)).unwrap().xp = xp_for_level(12);
+    s.check_level_up(uid(1));
+    s.players.get_mut(&uid(1)).unwrap().scores.strength = 20;
+    let snap = s.snapshot();
+    assert!(
+        snap.players[&uid(1)].score_offer.is_empty(),
+        "the archetype crossroads at level 10 comes first"
+    );
+    s.choose_archetype(uid(1), 0);
+    let snap = s.snapshot();
+    assert_eq!(snap.players[&uid(1)].score_offer[0].after, None, "STR at the cap");
+    s.spend_score_point(uid(1), 0);
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.scores.strength, 20);
+    assert_eq!(p.score_points(), 1, "the point is still there to place elsewhere");
+    assert!(p.log.iter().any(|l| l.text.contains("already at its peak of 20")));
+}
+
+#[test]
+fn a_character_saved_before_points_existed_has_them_all_to_place() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Mage);
+    let mut saved = s.export_saved(uid(1)).expect("character saves");
+    saved.xp = xp_for_level(40);
+    saved.level = 40;
+    assert_eq!(saved.score_points_spent, 0);
+    s.hydrate(uid(1), &saved);
+    assert_eq!(s.players[&uid(1)].score_points(), 10, "ten points back-paid at level 40");
+
+    // A save claiming more spent than the level ever earned is clamped, never negative.
+    saved.score_points_spent = 30;
+    s.hydrate(uid(1), &saved);
+    assert_eq!(s.players[&uid(1)].score_points(), 0);
+    assert_eq!(s.players[&uid(1)].score_points_spent, 10);
 }
 
 #[test]

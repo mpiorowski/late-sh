@@ -633,6 +633,13 @@ impl State {
         }
     }
 
+    /// Place an earned attribute point on the `choice`-th score (point screen 1-6).
+    pub fn spend_score_point(&mut self, choice: usize) {
+        if self.ensure_player_present() {
+            self.svc.spend_score_point_task(self.user_id, choice);
+        }
+    }
+
     pub fn go(&mut self, dir: Dir) {
         if self.ensure_player_present() {
             self.svc.move_task(self.user_id, dir);
