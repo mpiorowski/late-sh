@@ -2299,6 +2299,7 @@ fn chat_state_with_cyberspace(
             user_id,
             username: "internal-test-user".to_string(),
             permissions: crate::authz::Permissions::new(false, false),
+            device_left_at: None,
         },
         None,
         notifier,
@@ -3106,6 +3107,7 @@ async fn auto_mode_requests_fire_without_a_pending_placeholder() {
             user_id: viewer.id,
             username: viewer.username.clone(),
             permissions: crate::authz::Permissions::new(false, false),
+            device_left_at: None,
         },
         None,
         notifier,
@@ -3270,6 +3272,7 @@ async fn author_shared_translations_show_without_auto_mode_or_t() {
             user_id: viewer.id,
             username: viewer.username.clone(),
             permissions: crate::authz::Permissions::new(false, false),
+            device_left_at: None,
         },
         None,
         notifier,
@@ -3696,11 +3699,12 @@ async fn only_the_room_on_screen_collects_a_line() {
     assert_eq!(state.afk_lines.get(&background_id), None);
 }
 
-/// `/summary` is the other way to catch up, so it resolves the line the same
-/// way speaking does. `/history` deliberately does not: it is how you go and
-/// look, and the anchor has to survive the looking.
+/// Both catch-up surfaces read the line and neither spends it. `/history`
+/// is how you go and look, and the anchor has to survive the looking;
+/// `/summary` tells you what is below the line, it does not move where the
+/// line is. Only speaking does that.
 #[tokio::test]
-async fn asking_for_a_summary_clears_the_line_and_opening_history_keeps_it() {
+async fn neither_a_summary_nor_history_spends_the_line() {
     let test_db = crate::test_helpers::new_test_db().await;
     let user = late_core::test_utils::create_test_user(&test_db.db, "afk_catchup").await;
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
@@ -3710,18 +3714,69 @@ async fn asking_for_a_summary_clears_the_line_and_opening_history_keeps_it() {
     state.selected_room_id = Some(room_id);
     state.rooms.push((room, Vec::new()));
     assert!(state.sync_afk_line(super::AFK_LINE_IDLE));
+    let placed = *state.afk_lines.get(&room_id).expect("line placed");
 
     state.composer.insert_str("/history");
     state.submit_composer(false, false);
-    assert!(
-        state.afk_lines.contains_key(&room_id),
-        "/history reads the line, it does not spend it"
-    );
+    assert_eq!(state.afk_lines.get(&room_id), Some(&placed));
 
     state.composer.insert_str("/summary");
     let banner = state.submit_composer(false, false).expect("banner");
     assert_eq!(banner.message, "Summarizing…");
-    assert_eq!(state.afk_lines.get(&room_id), None);
+    assert_eq!(state.afk_lines.get(&room_id), Some(&placed));
+}
+
+/// Leaving the app leaves every room at once, so the device mark from the
+/// last session on this terminal seeds a line in each room the first room
+/// list carries, exactly once: a room joined later was not one you left.
+#[tokio::test]
+async fn the_device_mark_seeds_every_room_once_when_the_room_list_lands() {
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, "afk_seed").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let other = ChatRoom::get_or_create_public_room(&client, "afk-seed-other")
+        .await
+        .expect("other room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge");
+    ChatRoomMember::join(&client, other.id, user.id)
+        .await
+        .expect("join other");
+
+    let left_at = Utc::now() - chrono::Duration::hours(9);
+    let mut state = counter_test_state(&test_db, user.id);
+    state.device_left_at = Some(left_at);
+    assert!(state.afk_lines.is_empty(), "nothing to hang a line on yet");
+
+    wait_for_snapshot(&mut state).await;
+    assert!(state.drain_snapshot());
+    assert_eq!(state.afk_lines.get(&lounge.id), Some(&left_at));
+    assert_eq!(state.afk_lines.get(&other.id), Some(&left_at));
+    assert_eq!(state.device_left_at, None, "the seed is spent");
+
+    // A room that shows up in a later snapshot gets nothing from the mark.
+    let joined_later = ChatRoom::get_or_create_public_room(&client, "afk-seed-later")
+        .await
+        .expect("later room");
+    ChatRoomMember::join(&client, joined_later.id, user.id)
+        .await
+        .expect("join later");
+    state.refresh_tx.send(()).expect("force refresh");
+    wait_for_snapshot(&mut state).await;
+    state.drain_snapshot();
+    assert!(
+        state
+            .rooms
+            .iter()
+            .any(|(room, _)| room.id == joined_later.id)
+    );
+    assert_eq!(state.afk_lines.get(&joined_later.id), None);
+    assert_eq!(state.afk_lines.get(&lounge.id), Some(&left_at));
 }
 
 #[tokio::test]

@@ -628,6 +628,7 @@ fn make_app_with_chat_service_and_permissions(
         // per-device layout, which is also what ghost bot sessions do.
         key_fingerprint: None,
         key_layout: None,
+        key_left_at: None,
         afk_users: crate::state::new_afk_users(),
         username_directory: None,
         flair_directory: None,
@@ -848,6 +849,7 @@ pub fn make_app_with_paired_client(
         // per-device layout, which is also what ghost bot sessions do.
         key_fingerprint: None,
         key_layout: None,
+        key_left_at: None,
         afk_users: crate::state::new_afk_users(),
         username_directory: None,
         flair_directory: None,

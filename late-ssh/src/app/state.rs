@@ -362,6 +362,10 @@ pub struct SessionConfig {
     /// This device's stored home rail layout, or `None` when the key has never
     /// been configured and should follow the account default.
     pub key_layout: Option<late_core::models::user_ssh_key::KeyLayout>,
+    /// When the last session on this device went quiet before it ended, or
+    /// `None` for a keyless session or a device that has never ended one.
+    /// Seeds the chat AFK lines; see `ChatState::afk_lines`.
+    pub key_left_at: Option<chrono::DateTime<chrono::Utc>>,
     pub afk_users: crate::state::AfkUsers,
     pub username_directory: Option<crate::usernames::UsernameDirectory>,
     /// Live 24h username effects, shared process-wide (snapshot-swap; see
@@ -1425,6 +1429,7 @@ impl App {
                     user_id: config.user_id,
                     username: config.username.clone(),
                     permissions: config.permissions,
+                    device_left_at: config.key_left_at,
                 },
                 active_users.clone(),
                 notifier.clone(),
@@ -3465,6 +3470,16 @@ impl App {
 
 impl Drop for App {
     fn drop(&mut self) {
+        // The device mark: when this terminal's keyboard went quiet, not when
+        // the connection closed. A terminal parked open overnight and shut in
+        // the morning left last night. Keyless sessions (ghost bots, tests)
+        // have no device to remember it on.
+        if let Some(fingerprint) = self.key_fingerprint.clone()
+            && let Ok(idle) = chrono::Duration::from_std(self.last_input_at.elapsed())
+        {
+            self.profile_state
+                .set_device_left_at(fingerprint, chrono::Utc::now() - idle);
+        }
         if self.session_token.is_empty() {
             return;
         }

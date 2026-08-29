@@ -33,11 +33,15 @@ crate::user_scoped_model! {
 
         // `label` is a human name for the device, `None` until the user sets
         // one; `settings` holds this device's overrides (empty = inherit).
+        // `left_at` is when a session on this device last ended, stamped at
+        // the moment its keyboard went quiet (see migration 166); `None` until
+        // the first one does.
         @data
         pub user_id: Uuid,
         pub fingerprint: String,
         pub label: Option<String>,
         pub settings: Value,
+        pub left_at: Option<DateTime<Utc>>,
     }
 }
 
@@ -232,6 +236,43 @@ impl UserSshKey {
                      updated = current_timestamp
                  WHERE fingerprint = $2 AND user_id = $3",
                 &[&audio.to_value(), &fingerprint, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("ssh key not found");
+        }
+        Ok(())
+    }
+
+    /// When a session on this device last left the app, or `None` when the
+    /// key has never ended one (or has no row yet). Seeds the next session's
+    /// AFK line on this device.
+    pub async fn left_at_for(
+        client: &Client,
+        user_id: Uuid,
+        fingerprint: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
+        let key = Self::find_by_fingerprint(client, user_id, fingerprint).await?;
+        Ok(key.and_then(|key| key.left_at))
+    }
+
+    /// Record that a session on this device ended, with `left_at` the moment
+    /// its keyboard went quiet rather than the moment it disconnected.
+    /// Scoped by owner as well as fingerprint so a stale fingerprint can
+    /// never write onto another account's key. Last write wins: two live
+    /// sessions on one key are one device as far as late.sh can tell.
+    pub async fn set_left_at(
+        client: &Client,
+        user_id: Uuid,
+        fingerprint: &str,
+        left_at: DateTime<Utc>,
+    ) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE user_ssh_keys
+                 SET left_at = $1, updated = current_timestamp
+                 WHERE fingerprint = $2 AND user_id = $3",
+                &[&left_at, &fingerprint, &user_id],
             )
             .await?;
         if updated == 0 {

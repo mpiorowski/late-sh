@@ -268,3 +268,63 @@ async fn linking_accounts_moves_keys_and_keeps_their_layouts() {
         "the phone's layout survives the link"
     );
 }
+
+#[tokio::test]
+async fn left_at_is_per_device_and_scoped_to_its_owner() {
+    use chrono::{Duration, SubsecRound, Utc};
+
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let owner = create_test_user(&test_db.db, "leftowner").await;
+    let stranger = create_test_user(&test_db.db, "leftstranger").await;
+
+    UserSshKey::ensure(&client, owner.id, "SHA256:laptop")
+        .await
+        .expect("laptop key");
+    UserSshKey::ensure(&client, owner.id, "SHA256:desktop")
+        .await
+        .expect("desktop key");
+
+    // A key that has never ended a session has no mark: the next session
+    // starts with no line rather than one at some made-up instant.
+    assert_eq!(
+        UserSshKey::left_at_for(&client, owner.id, "SHA256:laptop")
+            .await
+            .expect("laptop left_at"),
+        None
+    );
+
+    // Postgres keeps microseconds; the stamp is minted here, so truncate it.
+    let last_night = (Utc::now() - Duration::hours(9)).trunc_subsecs(6);
+    UserSshKey::set_left_at(&client, owner.id, "SHA256:laptop", last_night)
+        .await
+        .expect("stamp laptop");
+
+    assert_eq!(
+        UserSshKey::left_at_for(&client, owner.id, "SHA256:laptop")
+            .await
+            .expect("laptop left_at"),
+        Some(last_night)
+    );
+    // The desktop did not leave because the laptop did.
+    assert_eq!(
+        UserSshKey::left_at_for(&client, owner.id, "SHA256:desktop")
+            .await
+            .expect("desktop left_at"),
+        None
+    );
+
+    // A stale fingerprint under another account can neither read nor write
+    // this device's mark.
+    assert!(
+        UserSshKey::set_left_at(&client, stranger.id, "SHA256:laptop", Utc::now())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        UserSshKey::left_at_for(&client, stranger.id, "SHA256:laptop")
+            .await
+            .expect("stranger read"),
+        None
+    );
+}

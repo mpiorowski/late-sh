@@ -361,6 +361,28 @@ impl ProfileService {
         );
     }
 
+    /// Fire-and-forget: persist when this device's session went quiet before
+    /// it ended, so the next session on it can seed its AFK lines. A failure
+    /// is only logged: the next session starts with no line and `/summary`
+    /// falls back to its default window, which is the pre-existing behavior
+    /// rather than a wrong one.
+    pub fn set_key_left_at(&self, user_id: Uuid, fingerprint: String, left_at: DateTime<Utc>) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    UserSshKey::set_left_at(&client, user_id, &fingerprint, left_at).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist device left_at");
+                }
+            }
+            .instrument(info_span!("profile.device_left_at_task", user_id = %user_id)),
+        );
+    }
+
     /// Fire-and-forget: persist whether the aquarium tray is open so the
     /// next session starts in the same state. No event on success; a failure
     /// is only logged (the tray would simply start closed next session).

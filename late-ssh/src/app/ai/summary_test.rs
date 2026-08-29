@@ -7,7 +7,7 @@ use late_core::models::chat_message::ChatMessage;
 use uuid::Uuid;
 
 use super::{
-    Reservation, SUMMARY_FIRST_RUN_WINDOW_HOURS, SUMMARY_MAX_WINDOW_HOURS,
+    Reservation, SUMMARY_DEFAULT_WINDOW_HOURS, SUMMARY_MAX_WINDOW_HOURS,
     SUMMARY_PROMPT_CHAR_BUDGET, SummaryBasis, SummaryOutcome, SummaryService, SummaryWindow,
     build_transcript, window_start,
 };
@@ -42,41 +42,38 @@ fn message(index: u64, author: Uuid, body: &str) -> ChatMessage {
 }
 
 #[test]
-fn a_bare_catch_up_starts_where_the_last_one_stopped() {
+fn a_bare_catch_up_starts_where_the_reader_went_quiet() {
     let now = chrono::Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, 0).unwrap();
-    let bare = |watermark| window_start(SummaryWindow::SinceLastSummary, watermark, now);
+    let bare = |away_since| window_start(SummaryWindow::CatchUp { away_since }, now);
 
-    // The whole point of the watermark: a recent one means a short catch-up.
+    // The whole point of the AFK line: a recent one means a short catch-up.
     // Nothing widens it, because it is not a guess about what was read, it
-    // is where the last summary this reader was handed stopped.
+    // is when the keyboard went quiet.
     let ten_minutes_ago = now - chrono::Duration::minutes(10);
     assert_eq!(
         bare(Some(ten_minutes_ago)),
-        (ten_minutes_ago, SummaryBasis::SinceLastSummary)
+        (ten_minutes_ago, SummaryBasis::AwaySince)
     );
     let yesterday = now - chrono::Duration::hours(30);
-    assert_eq!(
-        bare(Some(yesterday)),
-        (yesterday, SummaryBasis::SinceLastSummary)
-    );
+    assert_eq!(bare(Some(yesterday)), (yesterday, SummaryBasis::AwaySince));
 
-    // Past the max, cost policy wins, and the reader is still told they are
-    // continuing rather than starting fresh.
+    // Past the max, cost policy wins, and the reader is still told the
+    // window is about their absence rather than a default.
     assert_eq!(
         bare(Some(now - chrono::Duration::days(9))),
         (
             now - chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS),
-            SummaryBasis::SinceLastSummary
+            SummaryBasis::AwaySince
         )
     );
 
-    // Never summarized this room: the one window that is handed out rather
-    // than continued, and it says so.
+    // No line: the one window that is handed out rather than derived, and
+    // it says so.
     assert_eq!(
         bare(None),
         (
-            now - chrono::Duration::hours(SUMMARY_FIRST_RUN_WINDOW_HOURS),
-            SummaryBasis::FirstCatchUp
+            now - chrono::Duration::hours(SUMMARY_DEFAULT_WINDOW_HOURS),
+            SummaryBasis::NoAwayMark
         )
     );
 }
@@ -84,15 +81,8 @@ fn a_bare_catch_up_starts_where_the_last_one_stopped() {
 #[test]
 fn an_explicit_window_is_taken_at_face_value_up_to_the_max() {
     let now = chrono::Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, 0).unwrap();
-    // A stored watermark is ignored outright by the explicit arm: the
-    // window the reader typed is the window they get.
-    let explicit = |back| {
-        window_start(
-            SummaryWindow::Explicit(back),
-            Some(now - chrono::Duration::minutes(5)),
-            now,
-        )
-    };
+    // The window the reader typed is the window they get.
+    let explicit = |back| window_start(SummaryWindow::Explicit(back), now);
 
     assert_eq!(
         explicit(chrono::Duration::hours(6)),
@@ -170,7 +160,7 @@ async fn ai_disabled_answers_unavailable_without_touching_the_db() {
         Uuid::from_u128(1),
         Uuid::from_u128(2),
         "#lounge".to_string(),
-        SummaryWindow::SinceLastSummary,
+        SummaryWindow::CatchUp { away_since: None },
         Vec::new(),
     );
 
@@ -194,7 +184,7 @@ async fn an_armed_cooldown_refuses_before_any_work() {
         user,
         room,
         "#lounge".to_string(),
-        SummaryWindow::SinceLastSummary,
+        SummaryWindow::CatchUp { away_since: None },
         Vec::new(),
     );
 
@@ -232,7 +222,7 @@ async fn an_in_flight_request_collapses_duplicates_without_spending() {
         user,
         room,
         "#lounge".to_string(),
-        SummaryWindow::SinceLastSummary,
+        SummaryWindow::CatchUp { away_since: None },
         Vec::new(),
     );
 

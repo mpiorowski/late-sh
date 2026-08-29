@@ -835,7 +835,7 @@ impl russh::server::Handler for ClientHandler {
             }
         };
         let key_fingerprint = self.auth_fingerprint.clone();
-        let key_layout = crate::session_bootstrap::load_device_rails(
+        let device = crate::session_bootstrap::load_device_state(
             &self.state,
             user_id,
             key_fingerprint.as_deref(),
@@ -1001,7 +1001,8 @@ impl russh::server::Handler for ClientHandler {
             ),
             show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
             key_fingerprint,
-            key_layout,
+            key_layout: device.layout,
+            key_left_at: device.left_at,
             afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
             flair_directory: Some(self.state.flair_directory.clone()),

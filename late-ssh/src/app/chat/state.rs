@@ -740,22 +740,30 @@ pub struct ChatState {
     image_modal_capacity: Option<(u16, u16)>,
     pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
-    /// The AFK line per room: the instant this session's human went quiet
-    /// while that room was on screen. The `new messages` divider draws
-    /// against it, and `/history` opens there.
+    /// The AFK line per room: the instant this terminal's human went quiet
+    /// on that room. The `new messages` divider draws against it, `/history`
+    /// opens there, and a bare `/summary` reads from it.
     ///
-    /// Deliberately session-local and never written to the DB. "Did the
-    /// person at this terminal step away" is a fact about this terminal;
-    /// your phone being idle says nothing about your desktop. The account
-    /// scoped fact, what you have been told about a room, is the summary
-    /// watermark in `chat_summary_reads`, and it is a different line.
+    /// A fact about this terminal, never about the account: your phone
+    /// being idle says nothing about your desktop. Within a session it lives
+    /// here; across sessions it lives on the SSH key (`user_ssh_keys.left_at`,
+    /// the moment the keyboard went quiet before the last session on this
+    /// device ended), which seeds every room's line when the first room
+    /// snapshot lands. Nothing else ever writes it, so nothing over the wire
+    /// can move it.
     ///
-    /// Placed by [`ChatState::sync_afk_line`], removed when a message you
-    /// wrote lands in the room, or by `/summary` catching you up. It is not
-    /// removed merely because you came back and touched a key: the line
-    /// exists to show you where to start reading, and clearing it on the
-    /// keystroke that returns you destroys it exactly when it is wanted.
+    /// Placed by [`ChatState::sync_afk_line`] or the device seed, removed
+    /// only when a message you wrote lands in the room. Not by coming back
+    /// and touching a key (the line exists to show you where to start
+    /// reading, and clearing it on the keystroke that returns you destroys
+    /// it exactly when it is wanted), and not by `/summary` either: the
+    /// summary tells you what is below the line, it does not move where
+    /// the line is, so asking twice reads the same stretch twice.
     pub(crate) afk_lines: HashMap<Uuid, DateTime<Utc>>,
+    /// When the last session on this device went quiet, waiting to seed
+    /// `afk_lines` once the room list is known. Consumed by the first
+    /// snapshot: a room joined later in this session is not one you left.
+    device_left_at: Option<DateTime<Utc>>,
     pending_read_rooms: HashSet<Uuid>,
     pending_read_flush: PendingReadCursorFlush,
     /// Message ids whose mentions of this user were already reported as
@@ -1049,6 +1057,10 @@ pub(crate) struct ChatSession {
     pub user_id: Uuid,
     pub username: String,
     pub permissions: Permissions,
+    /// When the last session on this device went quiet before it ended
+    /// (`user_ssh_keys.left_at`); `None` for a keyless session or a device
+    /// that has never ended one. See [`ChatState::afk_lines`].
+    pub device_left_at: Option<DateTime<Utc>>,
 }
 
 pub(crate) struct ChatServices {
@@ -1082,6 +1094,7 @@ impl ChatState {
             user_id,
             username,
             permissions,
+            device_left_at,
         } = session;
         let ChatServices {
             chat: service,
@@ -1140,6 +1153,7 @@ impl ChatState {
             pending_reaction_owners_message_id: None,
             unread_counts: HashMap::new(),
             afk_lines: HashMap::new(),
+            device_left_at,
             pending_read_rooms: HashSet::new(),
             pending_read_flush: PendingReadCursorFlush::default(),
             mention_reads_sent: HashSet::new(),
@@ -1402,12 +1416,32 @@ impl ChatState {
         true
     }
 
-    /// Drop the room's AFK line: this reader has caught up on it.
+    /// Seed every room's AFK line from the device mark, once, when the room
+    /// list first arrives. Leaving the app leaves every room at once, so the
+    /// one instant applies to all of them; a room that already holds a line
+    /// (the session idled before the snapshot landed) keeps the one it has.
+    /// Reports whether anything changed, since that is render-visible.
+    fn seed_afk_lines_from_device(&mut self) -> bool {
+        let Some(left_at) = self.device_left_at.take() else {
+            return false;
+        };
+        let mut changed = false;
+        let room_ids: Vec<Uuid> = self.rooms.iter().map(|(room, _)| room.id).collect();
+        for room_id in room_ids {
+            if self.afk_lines.contains_key(&room_id) {
+                continue;
+            }
+            self.afk_lines.insert(room_id, left_at);
+            self.bump_room_version(room_id);
+            changed = true;
+        }
+        changed
+    }
+
+    /// Drop the room's AFK line: this reader is in the conversation again.
     ///
-    /// Two things call this, and both are acts the reader performed rather
-    /// than states we inferred: a message of theirs landing in the room
-    /// (they are in the conversation now) and `/summary` (they asked for the
-    /// backlog and were handed it).
+    /// One caller, and it is an act the reader performed rather than a state
+    /// we inferred: a message of theirs landing in the room.
     fn clear_afk_line(&mut self, room_id: Uuid) {
         if self.afk_lines.remove(&room_id).is_some() {
             self.bump_room_version(room_id);
@@ -1694,17 +1728,16 @@ impl ChatState {
                     let plural = if message_count == 1 { "" } else { "s" };
                     let stamp = crate::app::common::time::instant_for_viewer(since, self.viewer_tz);
                     // Every arm names where the window came from, because
-                    // "since your last catch-up" and "since 24h ago because
-                    // this is your first" are different claims and the
-                    // reader has to be able to tell which one they got.
+                    // "since you stepped away" and "the last 24h because
+                    // you never did" are different claims and the reader
+                    // has to be able to tell which one they got.
                     let mut head = match basis {
-                        SummaryBasis::SinceLastSummary => {
-                            format!(
-                                "{message_count} message{plural} since your last catch-up · {stamp}"
-                            )
-                        }
-                        SummaryBasis::FirstCatchUp => format!(
-                            "{message_count} message{plural} since {stamp} · first catch-up here"
+                        SummaryBasis::AwaySince => format!(
+                            "{message_count} message{plural} since you stepped away · {stamp}"
+                        ),
+                        SummaryBasis::NoAwayMark => format!(
+                            "{message_count} message{plural} since {stamp} · the last {}h, you never stepped away here",
+                            crate::app::ai::summary::SUMMARY_DEFAULT_WINDOW_HOURS
                         ),
                         SummaryBasis::Explicit => {
                             format!("{message_count} message{plural} since {stamp}")
@@ -1727,10 +1760,13 @@ impl ChatState {
                         None => self.overlay = Some(overlay),
                     }
                 }
-                SummaryOutcome::Empty => {
-                    // True now that the window rests on the watermark: nothing
-                    // has been said since this reader was last caught up.
-                    banner = Some(Banner::info("Nothing new since your last catch-up"));
+                SummaryOutcome::Empty { basis } => {
+                    banner = Some(Banner::info(match basis {
+                        SummaryBasis::AwaySince => "Nothing new since you stepped away",
+                        SummaryBasis::NoAwayMark | SummaryBasis::Explicit => {
+                            "Nothing said in that window"
+                        }
+                    }));
                 }
                 SummaryOutcome::InFlight => {
                     banner = Some(Banner::info("Summary already running"));
@@ -3442,7 +3478,11 @@ impl ChatState {
                 return Some(Banner::error("Summaries cover public rooms only"));
             }
             let window = match parse_summary_arg(rest) {
-                SummaryArg::CatchUp => SummaryWindow::SinceLastSummary,
+                // The room's AFK line is the session's fact to hand over;
+                // the service only clamps it.
+                SummaryArg::CatchUp => SummaryWindow::CatchUp {
+                    away_since: self.afk_lines.get(&room_id).copied(),
+                },
                 SummaryArg::Window(back) => SummaryWindow::Explicit(back),
                 SummaryArg::Unparseable => {
                     return Some(Banner::error("Use /summary, or a window like /summary 6h"));
@@ -3465,11 +3505,8 @@ impl ChatState {
                 window,
                 exclude_user_ids,
             );
-            // Asking for the backlog is the catch-up, so the line that
-            // marked it goes now rather than when the model answers: the
-            // request is the reader's act, and a summary that fails is
-            // still a room they came back to.
-            self.clear_afk_line(room_id);
+            // The line stays: the summary says what is below it, it does
+            // not move where it is. Only speaking in the room does that.
             return Some(Banner::info("Summarizing…"));
         }
 
@@ -5439,6 +5476,7 @@ impl ChatState {
         let previous_rooms_meta: Vec<ChatRoom> =
             self.rooms.iter().map(|(room, _)| room.clone()).collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
+        changed |= self.seed_afk_lines_from_device();
         changed |= self.rooms.len() != previous_rooms_meta.len()
             || self
                 .rooms
@@ -8079,7 +8117,7 @@ fn short_user_id(user_id: Uuid) -> String {
 /// silently become the default window.
 #[derive(Debug, PartialEq, Eq)]
 enum SummaryArg {
-    /// Bare `/summary`: catch up from the end of the last one.
+    /// Bare `/summary`: catch up from the room's AFK line.
     CatchUp,
     Window(chrono::Duration),
     /// Not a `<count><unit>` duration at all.

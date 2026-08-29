@@ -6,8 +6,9 @@
 //! then a cooldown armed on success; results are per viewer, so unlike
 //! translation there is no shared cache to absorb repeats), a global daily
 //! call cap as the runaway backstop, and a small concurrency gate. A bare
-//! `/summary` reads from the end of this reader's last delivered summary of
-//! the room ([`ChatSummaryRead`]); an explicit `/summary <n>h` spans exactly
+//! `/summary` reads from the room's AFK line, the instant this terminal's
+//! reader went quiet (`ChatState::afk_lines`, seeded from the device's
+//! `left_at` across sessions); an explicit `/summary <n>h` spans exactly
 //! what it asked for ([`SummaryWindow`]). Either way the window is bounded
 //! two ways before the model sees anything: wall clock (at most
 //! [`SUMMARY_MAX_WINDOW_HOURS`] back) and transcript size
@@ -17,12 +18,11 @@
 //! handed to the summarizer. Results fan out on a broadcast channel tagged
 //! with the requesting user; sessions drain it in `ChatState::tick`.
 //!
-//! A delivered summary carries the watermark forward to the newest message
-//! it actually contained, so the next bare `/summary` starts exactly where
-//! this one stopped. That is the whole reason the old
-//! `SUMMARY_DEFAULT_WINDOW_HOURS` floor is gone: the window no longer rests
-//! on `chat_room_members.last_read_at`, which records presence rather than
-//! reading and so had to be widened to be safe.
+//! The service keeps no cursor of its own. Where a catch-up starts is the
+//! session's fact (when did the person at this terminal stop attending),
+//! and the session hands it over. Nothing widens it: the line is not a
+//! guess about what was read, it is when the keyboard went quiet, so a line
+//! ten minutes old means a ten-minute catch-up.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -31,7 +31,6 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::chat_message::ChatMessage;
-use late_core::models::chat_summary_read::ChatSummaryRead;
 use late_core::models::user::User;
 use tokio::sync::{Semaphore, broadcast};
 use tracing::Instrument;
@@ -52,46 +51,44 @@ pub const SUMMARY_DAILY_CAP: u32 = 2_000;
 /// own retry, like `t` for translation.
 pub const SUMMARY_COOLDOWN: Duration = Duration::from_secs(10 * 60);
 
-/// Furthest back a summary window reaches, whatever the watermark says.
+/// Furthest back a summary window reaches, whatever the AFK line says.
 pub const SUMMARY_MAX_WINDOW_HOURS: i64 = 48;
 
-/// The window a bare `/summary` opens with when this reader has never been
-/// handed a summary of this room. It applies exactly once per reader per
-/// room, and the overlay says so, which is what separates it from the
+/// The window a bare `/summary` opens with when the room has no AFK line:
+/// this terminal never stepped away from it and has no device mark to
+/// inherit. The overlay names it, which is what separates it from the
 /// blanket floor it replaced: that one silently widened *every* catch-up
 /// because the cursor underneath it could not be trusted.
-pub const SUMMARY_FIRST_RUN_WINDOW_HOURS: i64 = 24;
+pub const SUMMARY_DEFAULT_WINDOW_HOURS: i64 = 24;
 
 const _: () = assert!(
-    SUMMARY_FIRST_RUN_WINDOW_HOURS < SUMMARY_MAX_WINDOW_HOURS,
-    "the first-catch-up window must fit inside the maximum"
+    SUMMARY_DEFAULT_WINDOW_HOURS < SUMMARY_MAX_WINDOW_HOURS,
+    "the default window must fit inside the maximum"
 );
 
 /// What a `/summary` asks to read back over.
-///
-/// The bare arm carries no instant: where the last catch-up stopped is a
-/// per-account fact in `chat_summary_reads`, and the service reads it. A
-/// session cannot supply it, and giving it the chance to is how the window
-/// used to end up resting on a presence cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SummaryWindow {
-    /// Bare `/summary`: from the end of this reader's last delivered summary
-    /// of this room, or [`SUMMARY_FIRST_RUN_WINDOW_HOURS`] on the first one.
-    SinceLastSummary,
+    /// Bare `/summary`: from the room's AFK line, the instant this
+    /// terminal's reader went quiet, or [`SUMMARY_DEFAULT_WINDOW_HOURS`]
+    /// when the room has none. The session owns the line (it is a fact
+    /// about this terminal, never persisted per account), so the session
+    /// is what supplies it.
+    CatchUp { away_since: Option<DateTime<Utc>> },
     /// `/summary <n>h`: exactly this far back.
     Explicit(chrono::Duration),
 }
 
 /// Which arm produced a delivered window, so the overlay head can say what
-/// it is looking at. Closed rather than a bool: "since your last catch-up",
-/// "your first catch-up here", and "the window you typed" are three
-/// different sentences and a new arm must break the render.
+/// it is looking at. Closed rather than a bool: "since you stepped away",
+/// "the default because you never did", and "the window you typed" are
+/// three different sentences and a new arm must break the render.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SummaryBasis {
-    /// Continuing from the stored watermark.
-    SinceLastSummary,
-    /// No watermark yet: the first-catch-up window opened it.
-    FirstCatchUp,
+    /// From the room's AFK line.
+    AwaySince,
+    /// No AFK line: the default window.
+    NoAwayMark,
     /// The reader typed the window.
     Explicit,
 }
@@ -140,11 +137,12 @@ pub enum SummaryOutcome {
         /// messages exist that the summary never saw.
         truncated: bool,
     },
-    /// Nothing in the window to summarize; no call spent. With the watermark
-    /// behind it this is a true statement rather than the artifact of a
-    /// presence cursor it used to be: nothing has been said since the reader
-    /// was last caught up.
-    Empty,
+    /// Nothing in the window to summarize; no call spent. Carries the basis
+    /// because "nothing since you stepped away" and "nothing in the last
+    /// 24h" are different claims.
+    Empty {
+        basis: SummaryBasis,
+    },
     /// A request for this room is already running; the duplicate collapses
     /// into it and spends nothing.
     InFlight,
@@ -188,10 +186,10 @@ impl SummaryService {
         self.event_tx.subscribe()
     }
 
-    /// Summarize `room_id` for `user_id` over `window` (a bare catch-up, or
-    /// the duration the user typed; the service resolves both to a start,
-    /// reading the stored watermark itself, and clamps to
-    /// [`SUMMARY_MAX_WINDOW_HOURS`] as cost policy).
+    /// Summarize `room_id` for `user_id` over `window` (a bare catch-up from
+    /// the session's AFK line, or the duration the user typed; the service
+    /// resolves both to a start and clamps to [`SUMMARY_MAX_WINDOW_HOURS`]
+    /// as cost policy).
     /// Fire-and-forget: the result arrives as a [`SummaryEvent`].
     pub fn request(
         &self,
@@ -250,9 +248,9 @@ impl SummaryService {
                     truncated,
                 }
             }
-            Ok(Resolution::Empty) => {
+            Ok(Resolution::Empty { basis }) => {
                 metrics::record_chat_summary(SummaryResult::Empty);
-                SummaryOutcome::Empty
+                SummaryOutcome::Empty { basis }
             }
             Ok(Resolution::InFlight) => {
                 metrics::record_chat_summary(SummaryResult::InFlight);
@@ -333,18 +331,12 @@ impl SummaryService {
         // Client scoped to the fetch: the request queues on the API gate
         // below, and a queued request holding a pooled connection would
         // starve the rest of the app (same pattern as translation).
-        let (floor, basis, messages, usernames) = {
+        // Clamping is service policy, not caller trust: whatever instant the
+        // session hands over, a summary never reads further back than the
+        // max window.
+        let (floor, basis) = window_start(window, Utc::now());
+        let (messages, usernames) = {
             let client = self.db.get().await?;
-            // Resolving the window is service policy, not caller trust: the
-            // watermark is read here rather than passed in, and a summary
-            // never reads further back than the max window whatever it says.
-            let watermark = match window {
-                SummaryWindow::SinceLastSummary => {
-                    ChatSummaryRead::summarized_through(&client, user_id, room_id).await?
-                }
-                SummaryWindow::Explicit(_) => None,
-            };
-            let (floor, basis) = window_start(window, watermark, Utc::now());
             let messages = ChatMessage::list_public_room_since(
                 &client,
                 room_id,
@@ -356,10 +348,10 @@ impl SummaryService {
             .await?;
             let author_ids: Vec<Uuid> = messages.iter().map(|m| m.user_id).collect();
             let usernames = User::list_usernames_by_ids(&client, &author_ids).await?;
-            (floor, basis, messages, usernames)
+            (messages, usernames)
         };
         if messages.is_empty() {
-            return Ok(Resolution::Empty);
+            return Ok(Resolution::Empty { basis });
         }
 
         let hit_fetch_limit = messages.len() == SUMMARY_FETCH_LIMIT as usize;
@@ -367,7 +359,7 @@ impl SummaryService {
         if message_count == 0 {
             // A budget smaller than the single newest message; practically
             // unreachable (bodies cap at 2,000 chars) but not a model call.
-            return Ok(Resolution::Empty);
+            return Ok(Resolution::Empty { basis });
         }
 
         if !self.spend_from_daily_cap() {
@@ -385,17 +377,6 @@ impl SummaryService {
         if text.is_empty() {
             return Ok(Resolution::NoText);
         }
-        // Stamped from the newest message the transcript held, never
-        // `now()`: a message that landed while the call above was in flight
-        // is newer than this and belongs to the next window, not to a hole
-        // between the two. The budget only ever drops the oldest end, so
-        // this message is in the summary the reader is about to read.
-        let summarized_through = messages
-            .last()
-            .expect("non-empty transcript has a newest message")
-            .created;
-        self.record_watermark(user_id, room_id, summarized_through)
-            .await;
         Ok(Resolution::Ready {
             text,
             message_count,
@@ -403,30 +384,6 @@ impl SummaryService {
             basis,
             truncated: hit_fetch_limit || cut_by_budget,
         })
-    }
-
-    /// Carry this reader's watermark for the room to the end of the summary
-    /// they are about to be handed.
-    ///
-    /// Handled here rather than passed up because the summary is good either
-    /// way: a failure costs the reader an overlapping next window, not the
-    /// catch-up they asked for, and refusing to deliver a paid-for summary
-    /// over a bookkeeping write would be the worse trade. Nobody upstream
-    /// will log it, so this does.
-    async fn record_watermark(&self, user_id: Uuid, room_id: Uuid, through: DateTime<Utc>) {
-        let advanced = match self.db.get().await {
-            Ok(client) => ChatSummaryRead::advance(&client, user_id, room_id, through).await,
-            Err(error) => Err(error.into()),
-        };
-        if let Err(error) = advanced {
-            metrics::record_chat_summary_watermark_failed();
-            tracing::error!(
-                error = ?error,
-                user_id = %user_id,
-                room_id = %room_id,
-                "failed to advance summary watermark; the next catch-up will overlap this one"
-            );
-        }
     }
 
     /// Atomically claim the `(user, room)` slot for a new request. A live
@@ -502,29 +459,25 @@ const SUMMARY_SYSTEM_PROMPT: &str = "You summarize missed chat messages for a me
 /// The instant a window starts reading from, and which arm decided it.
 ///
 /// Both arms stop at [`SUMMARY_MAX_WINDOW_HOURS`] and nothing widens either:
-/// a watermark ten minutes old means a ten-minute catch-up, which is the
-/// point of resting on what the reader was told instead of on where a
-/// terminal happened to be sitting. Only a reader with no watermark at all
-/// gets a window handed to them.
+/// an AFK line ten minutes old means a ten-minute catch-up, which is the
+/// point of resting on when the keyboard went quiet instead of on where a
+/// terminal happened to be sitting. Only a room with no line at all gets a
+/// window handed to it.
 ///
 /// The explicit arm caps the duration rather than the resulting instant, so
 /// an absurd `back` can never overflow the subtraction.
-fn window_start(
-    window: SummaryWindow,
-    watermark: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-) -> (DateTime<Utc>, SummaryBasis) {
+fn window_start(window: SummaryWindow, now: DateTime<Utc>) -> (DateTime<Utc>, SummaryBasis) {
     let max_back = chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS);
     let oldest = now - max_back;
-    match (window, watermark) {
-        (SummaryWindow::SinceLastSummary, Some(through)) => {
-            (through.max(oldest), SummaryBasis::SinceLastSummary)
-        }
-        (SummaryWindow::SinceLastSummary, None) => (
-            now - chrono::Duration::hours(SUMMARY_FIRST_RUN_WINDOW_HOURS),
-            SummaryBasis::FirstCatchUp,
+    match window {
+        SummaryWindow::CatchUp {
+            away_since: Some(away_since),
+        } => (away_since.max(oldest), SummaryBasis::AwaySince),
+        SummaryWindow::CatchUp { away_since: None } => (
+            now - chrono::Duration::hours(SUMMARY_DEFAULT_WINDOW_HOURS),
+            SummaryBasis::NoAwayMark,
         ),
-        (SummaryWindow::Explicit(back), _) => (now - back.min(max_back), SummaryBasis::Explicit),
+        SummaryWindow::Explicit(back) => (now - back.min(max_back), SummaryBasis::Explicit),
     }
 }
 
@@ -567,7 +520,9 @@ enum Resolution {
         basis: SummaryBasis,
         truncated: bool,
     },
-    Empty,
+    Empty {
+        basis: SummaryBasis,
+    },
     InFlight,
     Cooldown(Duration),
     CapExhausted,

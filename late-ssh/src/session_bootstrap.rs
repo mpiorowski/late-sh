@@ -1,4 +1,5 @@
-use late_core::models::user_ssh_key::{KeyLayout, UserSshKey};
+use chrono::{DateTime, Utc};
+use late_core::models::user_ssh_key::{KeyLayout, UserSshKey, extract_key_layout};
 use late_core::models::{artboard_ban::ArtboardBan, user::User};
 use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
@@ -229,28 +230,43 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
     }
 }
 
-/// This device's stored home rail layout, keyed by the SSH key the session
-/// authenticated with. `None` for a keyless session, a key with nothing stored,
-/// or a failed read: all three follow the account default, which is why a
-/// failure here is logged and swallowed rather than failing the connection.
-pub async fn load_device_rails(
+/// What the SSH key a session authenticated with remembers about its device.
+/// Every field is `None` for a keyless session, a key with nothing stored, or
+/// a failed read, and every consumer treats `None` as "no device fact":
+/// the rails follow the account default and the chat starts with no AFK
+/// line. That is why a failure here is logged and swallowed rather than
+/// failing the connection.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DeviceState {
+    pub layout: Option<KeyLayout>,
+    /// When the last session on this device went quiet before it ended.
+    pub left_at: Option<DateTime<Utc>>,
+}
+
+pub async fn load_device_state(
     state: &State,
     user_id: Uuid,
     key_fingerprint: Option<&str>,
-) -> Option<KeyLayout> {
-    let fingerprint = key_fingerprint?;
+) -> DeviceState {
+    let Some(fingerprint) = key_fingerprint else {
+        return DeviceState::default();
+    };
     let client = match state.db.get().await {
         Ok(client) => client,
         Err(e) => {
-            tracing::warn!(error = ?e, "failed to get db client for device rail layout");
-            return None;
+            tracing::warn!(error = ?e, "failed to get db client for device state");
+            return DeviceState::default();
         }
     };
-    match UserSshKey::layout_for(&client, user_id, fingerprint).await {
-        Ok(layout) => layout,
+    match UserSshKey::find_by_fingerprint(&client, user_id, fingerprint).await {
+        Ok(Some(key)) => DeviceState {
+            layout: extract_key_layout(&key.settings),
+            left_at: key.left_at,
+        },
+        Ok(None) => DeviceState::default(),
         Err(e) => {
-            tracing::warn!(error = ?e, "failed to load device rail layout");
-            None
+            tracing::warn!(error = ?e, "failed to load device state");
+            DeviceState::default()
         }
     }
 }
@@ -384,14 +400,15 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         }
     };
 
-    let key_layout = load_device_rails(state, user_id, key_fingerprint.as_deref()).await;
+    let device = load_device_state(state, user_id, key_fingerprint.as_deref()).await;
 
     SessionConfig {
         cols,
         rows,
         term,
         key_fingerprint,
-        key_layout,
+        key_layout: device.layout,
+        key_left_at: device.left_at,
         audio_service: state.audio_service.clone(),
         voice_service: state.voice_service.clone(),
         stream_service: state.stream_service.clone(),
