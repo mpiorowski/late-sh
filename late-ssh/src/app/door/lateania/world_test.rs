@@ -1148,17 +1148,17 @@ fn first_frontier_regulars_are_endgame_mobs_but_not_bosses() {
         .iter()
         .find(|spawn| spawn.id >= FRONTIER_SPAWN_ID_START && spawn.boss)
         .expect("frontier boss exists");
-    let strongest_living_boss_damage = world
-        .spawns
-        .iter()
-        .filter(|spawn| is_living_dark_spawn(spawn.id) && spawn.boss)
-        .map(|spawn| spawn.damage)
-        .max()
-        .expect("living-dark bosses exist");
 
+    // The Frontier assumes the living-dark arc is cleared: its first regulars
+    // read at or past the Archdemon, the crown that opens that arc.
+    let archdemon = CROWNS
+        .iter()
+        .find(|c| c.name == "the Archdemon Mal'gareth")
+        .expect("the Archdemon is a crown");
     assert!(
-        first_frontier_regular.damage > strongest_living_boss_damage,
-        "first Frontier regulars should assume the living-dark arc is cleared"
+        first_frontier_regular.level() >= archdemon.level,
+        "first Frontier regulars should assume the living-dark arc is cleared (L{})",
+        first_frontier_regular.level()
     );
     assert!(
         first_frontier_regular.damage < first_frontier_boss.damage
@@ -1491,70 +1491,100 @@ fn sunderlakes_mobs_are_peaceful_not_endgame_scaled() {
     );
 }
 
-// Wildbound doubled the player cap to 100, so the endgame must present a real
-// difficulty gradient across the new band instead of pinning every foe to the
-// clamp (the old single-slope `level()` made the whole Frontier->Kaelmyr arc
-// read as identically max-level). Verify: the displayed level tracks raw power
-// monotonically, the endgame spans a wide band rather than a flat wall, entry
-// endgame sits comfortably below the cap, and the world's toughest foe reaches
-// it - all while the early/mid roster keeps its familiar sub-60 levels.
+// The displayed level is "come at this level": a crown reads its target, and
+// everything else reads by its bite off the crown ladder (`MobSpawn::level`).
+// Verify the ladder holds together: crowns read their targets, a harder bite
+// never reads lower, the first road reads as a starting zone, the Frontier
+// opens past the Archdemon, Kaelmyr's deepest zone reads at the last crown,
+// and nothing reads past the cap.
 #[test]
-fn the_endgame_levels_span_a_gradient_up_to_the_new_cap() {
+fn displayed_levels_read_by_bite_along_the_crown_ladder() {
     let world = seed_world();
-    let is_endgame = |id: u32| (FRONTIER_SPAWN_ID_START..LAKES_SPAWN_ID_START).contains(&id);
-    let endgame: Vec<&MobSpawn> = world.spawns.iter().filter(|s| is_endgame(s.id)).collect();
-    assert!(
-        endgame.len() > 20,
-        "the endgame regions field a full roster"
-    );
-
-    // Monotonic in raw power: a tougher foe never reads as a lower level.
-    let mut ranked = endgame.clone();
-    ranked.sort_by_key(|s| s.max_hp + s.damage * 4);
-    for w in ranked.windows(2) {
-        assert!(
-            w[1].level() >= w[0].level(),
-            "level must not fall as raw power rises ({} L{} vs {} L{})",
-            w[0].name,
-            w[0].level(),
-            w[1].name,
-            w[1].level()
+    let crown_of = |name: &str| CROWNS.iter().find(|c| c.name == name).expect("a crown");
+    for crown in CROWNS {
+        let spawn = world
+            .spawns
+            .iter()
+            .find(|s| s.name == crown.name)
+            .expect("every crown spawns");
+        assert_eq!(
+            spawn.level(),
+            crown.level,
+            "{} reads its target",
+            crown.name
         );
     }
-
-    // A real spread, not a flat clamp: entry endgame well below the cap, the
-    // deepest content at it, and a wide gap between the two.
-    let min_lvl = endgame.iter().map(|s| s.level()).min().unwrap();
-    let max_lvl = endgame.iter().map(|s| s.level()).max().unwrap();
-    assert!(
-        (55..=78).contains(&min_lvl),
-        "entry endgame should read in the 55-78 band, not the cap (got L{min_lvl})"
-    );
-    assert_eq!(
-        max_lvl,
-        super::super::classes::Class::MAX_LEVEL,
-        "the world's toughest foe should read at the level cap"
-    );
-    assert!(
-        max_lvl - min_lvl >= 20,
-        "the endgame should span a wide gradient, got L{min_lvl}..L{max_lvl}"
-    );
-
-    // The early/mid world is untouched: below the knee, the displayed level is
-    // exactly the old single-slope formula, so every foe a sub-60 player meets
-    // keeps its familiar level to the number. Only power past the knee bends
-    // onto the gentler endgame slope.
-    for s in &world.spawns {
-        let power = s.max_hp + s.damage * 4;
-        if power <= 60 * 14 {
-            assert_eq!(
-                s.level(),
-                (power / 14).clamp(1, 60),
-                "{} (power {power}) should keep its pre-Wildbound level",
-                s.name
+    let is_crown = |s: &MobSpawn| CROWNS.iter().any(|c| c.name == s.name);
+    for boss in [false, true] {
+        let mut ranked: Vec<&MobSpawn> = world
+            .spawns
+            .iter()
+            .filter(|s| s.boss == boss && !is_crown(s))
+            .collect();
+        ranked.sort_by_key(|s| s.damage);
+        for w in ranked.windows(2) {
+            assert!(
+                w[1].level() >= w[0].level(),
+                "level must not fall as the bite rises ({} L{} vs {} L{})",
+                w[0].name,
+                w[0].level(),
+                w[1].name,
+                w[1].level()
             );
         }
     }
+    for s in &world.spawns {
+        assert!(
+            s.level() <= super::super::classes::Class::MAX_LEVEL,
+            "{} reads past the cap",
+            s.name
+        );
+    }
+    let zone_of = |s: &MobSpawn| world.room(s.home).expect("mob home exists").zone;
+    let treant_zone = zone_of(
+        world
+            .spawns
+            .iter()
+            .find(|s| s.name == "the Elder Treant")
+            .expect("the Treant"),
+    );
+    let treant = crown_of("the Elder Treant");
+    for s in world
+        .spawns
+        .iter()
+        .filter(|s| !s.boss && zone_of(s) == treant_zone)
+    {
+        assert!(
+            s.level() < treant.level,
+            "{} on the Treant's doorstep reads L{}, at or past the crown",
+            s.name,
+            s.level()
+        );
+    }
+    let first_frontier = world
+        .spawns
+        .iter()
+        .find(|s| s.id >= FRONTIER_SPAWN_ID_START && !s.boss)
+        .expect("frontier regular mob exists");
+    let archdemon = crown_of("the Archdemon Mal'gareth");
+    assert!(
+        first_frontier.level() >= archdemon.level,
+        "the Frontier opens past the Archdemon, got L{}",
+        first_frontier.level()
+    );
+    let ascendant = crown_of("Kaethyr Ascendant, Who Sang the God Awake");
+    let deepest = world
+        .spawns
+        .iter()
+        .filter(|s| band_of(s.id) == Band::Kaelmyr && !is_crown(s))
+        .map(|s| s.level())
+        .max()
+        .expect("kaelmyr spawns");
+    assert!(
+        (ascendant.level - 5..=ascendant.level).contains(&deepest),
+        "Kaelmyr's deepest reads L{deepest}, not at the last crown (L{})",
+        ascendant.level
+    );
 }
 
 // The iron rule of the minimap: a drawn line means you can walk it. The old
@@ -1918,9 +1948,11 @@ fn wildbound_template_pool_is_three_hundred_mobs_plus_three_apex_bosses() {
         );
     }
     let levels: Vec<i32> = wildbound.iter().map(|s| s.level()).collect();
+    // Ungated and walked into off the Sahra: it spans from early levels up to
+    // the crowned endgame's doorstep, never the last crown itself.
     assert!(
-        levels.iter().any(|&l| l < 30) && levels.iter().any(|&l| l > 90),
-        "the Waste should span from early levels to near the cap, got {levels:?}"
+        levels.iter().any(|&l| l < 30) && levels.iter().any(|&l| l > 50),
+        "the Waste should span from early levels to the endgame's doorstep, got {levels:?}"
     );
 }
 

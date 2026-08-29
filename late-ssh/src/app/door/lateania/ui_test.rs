@@ -1028,7 +1028,7 @@ fn the_land_map_only_offers_the_scroll_key_when_it_overflows() {
 #[test]
 fn every_class_glows_the_ability_that_drives_its_attack() {
     // The character sheet marks one attribute row as the class's key ability -
-    // the score that feeds `attack_bonus`. The mapping used to be a hand-kept
+    // the score its damage leans on (`primary_score`). The mapping used to be a hand-kept
     // list of the first five classes, so a Berserker (STR) or a Bard (CHA) read
     // as if no attribute mattered to them at all.
     use crate::app::door::lateania::classes::Class;
@@ -1093,4 +1093,188 @@ fn every_class_wears_its_own_emblem_under_the_portrait() {
         );
         seen.push(glyph.to_string());
     }
+}
+
+#[test]
+fn the_creation_screen_states_what_every_score_does_in_numbers() {
+    use crate::app::door::lateania::stats::AbilityScores;
+    let mut view = crate::app::door::lateania::svc::empty_player_view();
+    view.level = 1;
+    view.scores = AbilityScores {
+        strength: 16,
+        dexterity: 8,
+        constitution: 14,
+        intelligence: 10,
+        wisdom: 12,
+        charisma: 6,
+    };
+    let text: Vec<String> = super::attribute_rule_lines(&view)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert!(text[0].contains("a point to place every 4 levels, scores cap at 20"));
+    let rows: Vec<&str> = text[1..].iter().map(|s| s.trim_end()).collect();
+    assert_eq!(rows.len(), 6);
+    assert!(
+        rows[0].starts_with("  STR swings hit for +6%"),
+        "{}",
+        rows[0]
+    );
+    assert!(rows[0].ends_with("each +1 modifier: +2% swing damage"));
+    assert!(
+        rows[1].starts_with("  DEX 2% of swings glance for half"),
+        "{}",
+        rows[1]
+    );
+    assert!(
+        rows[2].starts_with("  CON +8 max HP at level 1"),
+        "{}",
+        rows[2]
+    );
+    assert!(rows[3].starts_with("  INT spell power +0%"), "{}", rows[3]);
+    assert!(
+        rows[4].starts_with("  WIS +1 resource every tick"),
+        "{}",
+        rows[4]
+    );
+    assert!(
+        rows[5].starts_with("  CHA shops 6% dearer, sells 6% cheaper, taming -6%"),
+        "{}",
+        rows[5]
+    );
+}
+
+#[test]
+fn the_point_screen_shows_now_and_after_for_every_score() {
+    use crate::app::door::lateania::stats::ScoreOfferView;
+    let mut view = crate::app::door::lateania::svc::empty_player_view();
+    view.level = 8;
+    view.score_points = 2;
+    view.score_offer = vec![
+        ScoreOfferView {
+            label: "STR".to_string(),
+            name: "Strength".to_string(),
+            value: 13,
+            modifier: 1,
+            now: "swings hit for +2%".to_string(),
+            after: Some("swings hit for +4%".to_string()),
+            rule: "each +1 modifier: +2% swing damage".to_string(),
+        },
+        ScoreOfferView {
+            label: "DEX".to_string(),
+            name: "Dexterity".to_string(),
+            value: 12,
+            modifier: 1,
+            now: "2% of swings crit for double".to_string(),
+            after: Some("2% of swings crit for double".to_string()),
+            rule: "rule".to_string(),
+        },
+        ScoreOfferView {
+            label: "CON".to_string(),
+            name: "Constitution".to_string(),
+            value: 20,
+            modifier: 5,
+            now: "+40 max HP at level 8".to_string(),
+            after: None,
+            rule: "rule".to_string(),
+        },
+    ];
+    let text: Vec<String> = super::score_point_lines(&view, 40)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert!(
+        text[1].contains("Level 8 - 2 attribute point(s) to place"),
+        "{}",
+        text[1]
+    );
+    assert_eq!(text[4], "  1 STR 13 (+1) · Strength");
+    assert_eq!(text[5], "      now: swings hit for +2%");
+    assert_eq!(text[6], "      +1 -> 14: swings hit for +4%");
+    assert_eq!(text[7], "      each +1 modifier: +2% swing damage");
+    assert_eq!(text[9], "  2 DEX 12 (+1) · Dexterity");
+    assert_eq!(
+        text[11],
+        "      +1 -> 13: 2% of swings crit for double (the modifier moves at 14)"
+    );
+    assert_eq!(text[14], "  3 CON 20 (+5) · Constitution");
+    assert_eq!(text[16], "      at the cap of 20");
+}
+
+/// The point screen blocks every key until the point is placed, so all six
+/// choices must be on screen. The full layout is five rows a score, 34 in
+/// all; on a standard 80x24 the game area has about 21, which used to leave
+/// Wisdom and Charisma (keys 5 and 6) below the fold with no way to scroll.
+/// When the rows run short every score collapses to one line.
+#[test]
+fn the_point_screen_fits_the_rows_it_has() {
+    use crate::app::door::lateania::stats::{AbilityScores, Score, ScoreOfferView};
+    let mut view = crate::app::door::lateania::svc::empty_player_view();
+    view.level = 8;
+    view.score_points = 1;
+    let scores = AbilityScores {
+        strength: 13,
+        dexterity: 12,
+        constitution: 20,
+        intelligence: 10,
+        wisdom: 9,
+        charisma: 7,
+    };
+    view.score_offer = Score::ALL
+        .iter()
+        .map(|&which| {
+            let value = scores.score(which);
+            let mut raised = scores;
+            let after = raised.raise(which).then(|| raised.effect(which, 8));
+            ScoreOfferView {
+                label: which.label().to_string(),
+                name: which.name().to_string(),
+                value,
+                modifier: crate::app::door::lateania::stats::modifier(value),
+                now: scores.effect(which, 8),
+                after,
+                rule: which.rule().to_string(),
+            }
+        })
+        .collect();
+
+    let tall: Vec<String> = super::score_point_lines(&view, 40)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert_eq!(tall.len(), 34, "the full layout when there is room");
+
+    let short: Vec<String> = super::score_point_lines(&view, 21)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert!(
+        short.len() <= 21,
+        "{} lines cannot fit 21 rows:\n{}",
+        short.len(),
+        short.join("\n")
+    );
+    let rows: Vec<&String> = short
+        .iter()
+        .filter(|l| l.trim_start().starts_with(char::is_numeric))
+        .collect();
+    assert_eq!(rows.len(), 6, "one line a score:\n{}", short.join("\n"));
+    assert!(rows[0].starts_with("  1 STR 13 (+1)"), "{}", rows[0]);
+    assert!(
+        rows[0].contains("swings hit for +2% -> swings hit for +4%"),
+        "{}",
+        rows[0]
+    );
+    assert!(
+        rows[1].contains("2% of swings crit for double -> the same until 14"),
+        "{}",
+        rows[1]
+    );
+    assert!(rows[2].contains("at the cap of 20"), "{}", rows[2]);
+    assert!(rows[4].starts_with("  5 WIS 9 (-1)"), "{}", rows[4]);
+    assert!(rows[5].starts_with("  6 CHA 7 (-2)"), "{}", rows[5]);
+    assert!(
+        short.iter().any(|l| l.contains("1-6")),
+        "the keys are still explained"
+    );
 }

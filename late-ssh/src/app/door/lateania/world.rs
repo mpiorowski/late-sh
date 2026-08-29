@@ -140,12 +140,6 @@ pub struct Room {
     pub pvp: bool,
 }
 
-/// The pre-Wildbound level ceiling, and the knee of the two-slope display
-/// curve in `MobSpawn::level`. Reward math (the zone-boss bounty) stays
-/// pinned to it: display levels run past it to 100, but a payout derived
-/// from a level must never grow because the number over a foe's head did.
-pub const LEVEL_KNEE: i32 = 60;
-
 /// A mob template that spawns at a home room.
 #[derive(Clone, Debug)]
 pub struct MobSpawn {
@@ -167,32 +161,23 @@ pub struct MobSpawn {
 }
 
 impl MobSpawn {
-    /// A displayed level, derived from the mob's vitality and bite so it scales
-    /// naturally across the whole roster without authoring a level per spawn.
-    ///
-    /// The curve is deliberately two-slope. The `/14` slope was calibrated for a
-    /// level-50 world, and it still governs everything up to the old ceiling so
-    /// the entire early/mid roster keeps its familiar levels untouched. But the
-    /// endgame regions (Frontier -> Reaches -> Kaelmyr) carry raw power far past
-    /// that ceiling - so on the old single slope every endgame foe pinned to the
-    /// clamp and the whole 60..=100 band looked identically max-level. Wildbound
-    /// doubled the player cap to 100, so past the knee we switch to a gentler
-    /// slope that spreads the endgame's real toughness across the new levels:
-    /// entry-Frontier foes read in the mid-60s and climb, tier by tier and deep
-    /// by deep, to the true hundreds of Yssgar and the Ashen Reach. No raw stat
-    /// changes - only what number the player sees over the foe's head.
+    /// The displayed level: "come at this level". A crown reads the target
+    /// it is tuned to fall at (`CROWNS`). Everything else reads by its bite:
+    /// the level of the prepared character whose crown hits like this,
+    /// discounted because a crown is tuned to out-hit its land (a regular's
+    /// damage is derived for a 20-tick kill, a zone boss's for 14, the crown's
+    /// for 11: `TRASH_BITE_PCT` / `BOSS_BITE_PCT`). Health does not enter it:
+    /// a sponge is a longer fight, not a deadlier one. See `level_for_bite`.
     pub fn level(&self) -> i32 {
-        let power = self.max_hp + self.damage * 4;
-        // The knee: the power at which the old slope reached the old ceiling.
-        const KNEE_POWER: i32 = LEVEL_KNEE * 14; // 840
-        let level = if power <= KNEE_POWER {
-            power / 14
+        if let Some(crown) = CROWNS.iter().find(|c| c.name == self.name) {
+            return crown.level;
+        }
+        let share = if self.boss {
+            BOSS_BITE_PCT
         } else {
-            // Spread the endgame's remaining power over the 60..=100 band. The
-            // toughest boss in the world (~6800 power) lands right at the cap.
-            LEVEL_KNEE + (power - KNEE_POWER) / 150
+            TRASH_BITE_PCT
         };
-        level.clamp(1, super::classes::Class::MAX_LEVEL)
+        level_for_bite(self.damage * 100 / share)
     }
 
     /// A rarity rank (matching the item palette: common/uncommon/rare/epic/
@@ -5833,6 +5818,7 @@ pub fn seed_world() -> World {
     extend_archipelago(&mut rooms, &mut spawns, &mut behaviors);
 
     tune_spawn_balance(&mut spawns);
+    tune_crowns(&mut spawns);
 
     // Per-zone level bands, read off the tuned spawns so the numbers players
     // see ("King's Road · Lv 2-5") always reflect what actually prowls there.
@@ -7205,38 +7191,250 @@ fn is_living_dark_spawn(id: u32) -> bool {
         || (CAVERNS_SPAWN_ID_START..CAVERNS_SPAWN_ID_START + 10_000).contains(&id)
 }
 
+/// A regular bites at about this share of its land's crown, a zone boss at
+/// about this share (see `MobSpawn::level`).
+const TRASH_BITE_PCT: i32 = 70;
+const BOSS_BITE_PCT: i32 = 85;
+
+/// The level of the prepared character whose crown hits for `bite`, read off
+/// the `CROWNS` ladder: linear between neighbouring crowns, extrapolated
+/// past either end, clamped to the level range.
+fn level_for_bite(bite: i32) -> i32 {
+    let first = CROWNS[0];
+    if bite <= first.damage {
+        return (first.level * bite / first.damage).clamp(1, first.level);
+    }
+    for w in CROWNS.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if bite <= b.damage {
+            if b.damage == a.damage {
+                return b.level;
+            }
+            return a.level + (b.level - a.level) * (bite - a.damage) / (b.damage - a.damage);
+        }
+    }
+    let (a, b) = (CROWNS[CROWNS.len() - 2], CROWNS[CROWNS.len() - 1]);
+    let past = (bite - b.damage) * (b.level - a.level) / (b.damage - a.damage).max(1);
+    (b.level + past).clamp(1, super::classes::Class::MAX_LEVEL)
+}
+
+/// One of the fourteen bosses on the road players actually walk, with the
+/// numbers it is fielded at. See [`CROWNS`].
+#[derive(Clone, Copy, Debug)]
+pub struct Crown {
+    pub name: &'static str,
+    /// The level a prepared character takes it at; also its displayed level.
+    pub level: i32,
+    pub max_hp: i32,
+    pub damage: i32,
+}
+
+/// Ticks a median prepared character needs to kill a crown.
+pub const CROWN_KILL_TICKS: i32 = 14;
+/// Ticks a crown needs to kill that character with no draught drunk. Shorter
+/// than the kill, so every crown is a race the prepared character wins on
+/// potions, self-heals, wards and the companion, and an unprepared one loses.
+pub const CROWN_SURVIVE_TICKS: i32 = 11;
+
+/// The crowns: the authored core's seven bosses, the three living-dark seals,
+/// the Frontier King, Yssgar, and the two Kaethyrs. Applied over
+/// `tune_spawn_balance` by `tune_crowns`, so nothing upstream (authored
+/// literals, land multipliers) decides what a crown is.
+///
+/// **Derived, not authored by feel.** Each row is `(name, level, max_hp,
+/// damage)` where `level` is the target the crown is tuned to fall at: a
+/// *prepared* character of that level (the tier's kit, the oil the crown is
+/// weak to, three draughts, and from the Reaches on a maxed companion).
+/// `max_hp` is the median prepared dps at that kit times `CROWN_KILL_TICKS`;
+/// `damage` is the median prepared health pool over `CROWN_SURVIVE_TICKS`
+/// plus what that kit's armor blunts (half of it for a Physical striker, a
+/// quarter otherwise). The inputs are printed by the arena's `arena_crown_yardstick`
+/// and the outcome is pinned by
+/// `every_crown_falls_to_a_prepared_character_and_not_to_a_walk_in`
+/// (`arena_test.rs`): every calling wins prepared, the median kill is a real
+/// fight, and a walk-in a few levels lower in the previous tier loses.
+/// Re-derive a row when the player curve moves; the contract says when.
+///
+/// The story this encodes: the grind to 100 is long by design, so the last
+/// crown falls to a prepared L80 and 80-100 is prestige; the first crown is
+/// a real fight at L12 with the right prep (the Treant teaches the oil).
+pub const CROWNS: &[Crown] = &[
+    Crown {
+        name: "the Elder Treant",
+        level: 12,
+        max_hp: 1160,
+        damage: 19,
+    },
+    Crown {
+        name: "the Bone Tyrant",
+        level: 16,
+        max_hp: 1806,
+        damage: 28,
+    },
+    Crown {
+        name: "the Lich Vael",
+        level: 20,
+        max_hp: 2100,
+        damage: 32,
+    },
+    Crown {
+        name: "the Magma Colossus",
+        level: 24,
+        max_hp: 2324,
+        damage: 35,
+    },
+    Crown {
+        name: "the Wyrm of Frostspire",
+        level: 27,
+        max_hp: 2982,
+        damage: 45,
+    },
+    Crown {
+        name: "the Fallen Paladin",
+        level: 30,
+        max_hp: 3248,
+        damage: 48,
+    },
+    Crown {
+        name: "the Archdemon Mal'gareth",
+        level: 35,
+        max_hp: 4088,
+        damage: 62,
+    },
+    Crown {
+        name: "The Bonewright Lich",
+        level: 40,
+        max_hp: 4508,
+        damage: 75,
+    },
+    Crown {
+        name: "the Elder Dryad",
+        level: 40,
+        max_hp: 4508,
+        damage: 75,
+    },
+    Crown {
+        name: "the Abyss-Thing",
+        level: 40,
+        max_hp: 4508,
+        damage: 75,
+    },
+    Crown {
+        name: "the King Who Was Promised Nothing",
+        level: 55,
+        max_hp: 9926,
+        damage: 138,
+    },
+    Crown {
+        name: "Yssgar, the Sundering Deep",
+        level: 65,
+        max_hp: 17528,
+        damage: 253,
+    },
+    Crown {
+        name: "Kaethyr the Unquenched, Ashen King of Kaelmyr",
+        level: 75,
+        max_hp: 22722,
+        damage: 368,
+    },
+    Crown {
+        name: "Kaethyr Ascendant, Who Sang the God Awake",
+        level: 80,
+        max_hp: 24542,
+        damage: 397,
+    },
+];
+
+/// The level a named crown is tuned to fall at. A name that is not a crown is
+/// a programming error, not a runtime case.
+pub fn crown_level(name: &str) -> i32 {
+    CROWNS
+        .iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("{name} is not a crown"))
+        .level
+}
+
+/// Field every crown at its `CROWNS` numbers. Panics if a crown's spawn is
+/// missing: a renamed boss must be renamed here too, loudly.
+fn tune_crowns(spawns: &mut [MobSpawn]) {
+    for crown in CROWNS {
+        let spawn = match spawns.iter_mut().find(|s| s.name == crown.name) {
+            Some(s) => s,
+            None => panic!("crown {:?} has no spawn", crown.name),
+        };
+        spawn.max_hp = crown.max_hp;
+        spawn.damage = crown.damage;
+    }
+}
+
+/// The tuning band a spawn belongs to, by id range (the per-land
+/// `*_SPAWN_ID_START` consts). Everything not named is the gentle overworld
+/// bucket: the authored core, the Sunderlakes, Broceliande, Aelunor, and the
+/// Wildbound Waste.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Band {
+    Overworld,
+    LivingDark,
+    Frontier,
+    Reaches,
+    Kaelmyr,
+    Archipelago,
+}
+
+fn band_of(id: u32) -> Band {
+    if is_living_dark_spawn(id) {
+        Band::LivingDark
+    } else if (FRONTIER_SPAWN_ID_START..REACHES_SPAWN_ID_START).contains(&id) {
+        Band::Frontier
+    } else if (REACHES_SPAWN_ID_START..KAELMYR_SPAWN_ID_START).contains(&id) {
+        Band::Reaches
+    } else if (KAELMYR_SPAWN_ID_START..ARCH_SPAWN_ID_START).contains(&id) {
+        Band::Kaelmyr
+    } else if (ARCH_SPAWN_ID_START..LAKES_SPAWN_ID_START).contains(&id) {
+        Band::Archipelago
+    } else {
+        Band::Overworld
+    }
+}
+
+/// Scale every authored spawn into the band its land plays at. One row per
+/// (band, boss-or-regular); a land that reads out of band against its crown
+/// (`the_trash_on_a_crowns_doorstep_is_in_band`, `arena_test.rs`) is fixed
+/// here, in its row, never mob by mob. The three crowned endgame lands are
+/// calibrated at their deepest zone against the crown that stands there
+/// (a regular dies in ~3 prepared ticks and needs 15+ to kill you, casters
+/// included since armor blunts a school only by a quarter; a zone boss ~8
+/// and ~14), so what their generators author is what is fielded;
+/// the Frontier's generator was re-sloped for that and its row is 1:1. The
+/// Archipelago keeps the old endgame multipliers on purpose: it is ungated,
+/// portal-reachable, and deadly by design. Crowns are re-fielded afterwards
+/// by `tune_crowns`, so nothing here decides what a crown is.
 fn tune_spawn_balance(spawns: &mut [MobSpawn]) {
     for spawn in spawns {
-        let frontier = (FRONTIER_SPAWN_ID_START..REACHES_SPAWN_ID_START).contains(&spawn.id);
-        // The Reaches deliberately ride the Frontier multipliers: their authored
-        // base stats sit on the same pre-scale curve, entering just under the
-        // King Who Was Promised Nothing and climbing well past him by Yssgar.
-        // Kaelmyr (mob ids 960000+) rides the same endgame multipliers; its
-        // authored base stats simply sit a full continent higher on the curve.
-        let reaches = (REACHES_SPAWN_ID_START..KAELMYR_SPAWN_ID_START).contains(&spawn.id);
-        // Kaelmyr owns 960000+ and the deadly archipelago (970000+) rides the same
-        // endgame band. The later continents sit above them but are NOT endgame:
-        // the Sunderlakes (980000+) are a peaceful fishing country and Broceliande
-        // (990000+) a moderate green continent, so both are excluded here and keep
-        // the gentle overworld multipliers instead of the endgame ones. (The lakes
-        // used to ride the endgame band, which made a "peaceful" region hit like
-        // Kaelmyr - the bug this range fixes.)
-        let kaelmyr = (KAELMYR_SPAWN_ID_START..LAKES_SPAWN_ID_START).contains(&spawn.id);
-        let endgame = frontier || reaches || kaelmyr;
-        let living_dark = is_living_dark_spawn(spawn.id);
-        let (hp_num, hp_den, dmg_num, dmg_den, xp_num, xp_den) =
-            match (endgame, living_dark, spawn.boss) {
-                (true, _, true) => (12, 5, 21, 10, 4, 3),
-                (true, _, false) => (2, 1, 19, 10, 3, 2),
-                (false, true, true) => (6, 1, 7, 2, 2, 1),
-                (false, true, false) => (13, 4, 5, 2, 3, 2),
-                (false, false, true) => (3, 2, 5, 4, 4, 5),
-                (false, false, false) => (6, 5, 6, 5, 9, 8),
-            };
+        let band = band_of(spawn.id);
+        let (hp_num, hp_den, dmg_num, dmg_den, xp_num, xp_den) = match (band, spawn.boss) {
+            (Band::Overworld, true) => (3, 2, 5, 4, 4, 5),
+            (Band::Overworld, false) => (6, 5, 6, 5, 9, 8),
+            (Band::LivingDark, true) => (6, 1, 7, 2, 2, 1),
+            (Band::LivingDark, false) => (13, 4, 5, 2, 3, 2),
+            (Band::Frontier, true) => (1, 1, 1, 1, 4, 3),
+            (Band::Frontier, false) => (1, 1, 1, 1, 3, 2),
+            (Band::Reaches, true) => (7, 6, 7, 8, 4, 3),
+            (Band::Reaches, false) => (4, 3, 4, 5, 3, 2),
+            (Band::Kaelmyr, true) => (5, 6, 4, 5, 4, 3),
+            (Band::Kaelmyr, false) => (4, 5, 2, 3, 3, 2),
+            (Band::Archipelago, true) => (12, 5, 21, 10, 4, 3),
+            (Band::Archipelago, false) => (2, 1, 19, 10, 3, 2),
+        };
         spawn.max_hp = scale_i32(spawn.max_hp, hp_num, hp_den);
         spawn.damage = scale_i32(spawn.damage, dmg_num, dmg_den);
         spawn.xp = scale_i32(spawn.xp, xp_num, xp_den);
         if !spawn.boss {
+            let endgame = matches!(
+                band,
+                Band::Frontier | Band::Reaches | Band::Kaelmyr | Band::Archipelago
+            );
             spawn.respawn_secs = if endgame {
                 scale_u64(spawn.respawn_secs, 3, 4).max(60)
             } else {
@@ -11793,6 +11991,19 @@ pub fn frontier_zone_info(z: usize) -> Option<(&'static str, &'static str)> {
     FRONTIER_ZONES_DATA.get(z).map(|d| (d.0, d.6))
 }
 
+/// The level Frontier zone `z` is pitched at: a straight line from the living
+/// dark's exit (the three seals' crown level) to the deep target (the King's),
+/// the two ends the generator is sloped between. Reward math (the zone-boss
+/// bounty, the champion title) keys off this, never the level displayed over
+/// the boss's head: that one reads by bite and moves with every retune of the
+/// ladder, and a one-time payout must not.
+pub fn frontier_zone_level(z: usize) -> i32 {
+    let entry = crown_level("the Elder Dryad");
+    let deep = crown_level("the King Who Was Promised Nothing");
+    let last = (frontier_zone_count() - 1) as i32;
+    entry + ((deep - entry) * z as i32) / last
+}
+
 /// The Frontier zone whose boss bears this name, if any, used to credit a
 /// zone quest when its boss is slain.
 pub fn frontier_zone_of_boss(name: &str) -> Option<usize> {
@@ -11908,8 +12119,12 @@ fn extend_frontier(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>
                         id: spawn_id,
                         name: boss,
                         home: id,
-                        max_hp: 900 + ti * 190,
-                        damage: 42 + ti * 5,
+                        // Fielded as authored (the Frontier's band row is
+                        // 1:1): a straight line from the entry target (a
+                        // prepared L40 out of the living dark) to the deep
+                        // target (the King's prepared L55), see `CROWNS`.
+                        max_hp: 2280 + ti * 147,
+                        damage: 56 + (ti * 57) / 20,
                         xp: 420 + ti * 95,
                         respawn_secs: 600,
                         loot: super::items::frontier_loot(z),
@@ -11924,8 +12139,8 @@ fn extend_frontier(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>
                         id: spawn_id,
                         name: mob_names[(idx as usize) % 3],
                         home: id,
-                        max_hp: 520 + ti * 70,
-                        damage: 38 + ti * 5,
+                        max_hp: 850 + ti * 55,
+                        damage: 44 + (ti * 9) / 4,
                         xp: 95 + ti * 25,
                         respawn_secs: 90,
                         loot: super::items::frontier_loot(z),

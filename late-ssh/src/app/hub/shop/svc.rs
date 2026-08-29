@@ -67,16 +67,10 @@ pub struct ShopSnapshot {
     pub active_title: Option<ActiveRental>,
     /// What this user's chat label actually shows, straight from the one
     /// query that decides it for every viewer
-    /// (`User::list_chat_author_metadata`): a live rental, else the legacy
-    /// permanent equip. The buyer's own session paints exactly what everyone
-    /// else will, with no second copy of the precedence rule.
+    /// (`User::list_chat_author_metadata`). The buyer's own session paints
+    /// exactly what everyone else will, with no second copy of the rule.
     pub chat_label_badge: Option<String>,
     pub chat_label_flag: Option<String>,
-    /// Whether a legacy permanent badge/flag is still equipped. The retired
-    /// permanent SKUs no longer appear in the catalog, so this is the only
-    /// thing that can offer their owner a way to clear the slot.
-    pub legacy_badge_equipped: bool,
-    pub legacy_flag_equipped: bool,
     /// Whether the Shop can sell a title the buyer writes themselves. Custom
     /// text is screened before the purchase transaction opens, so with no AI
     /// configured the custom SKUs render as unavailable rather than shipping
@@ -140,10 +134,9 @@ pub struct ShopCatalogItem {
     /// transaction reads it, so the shop never quotes a window the activation
     /// would not honour.
     pub rental_duration_secs: Option<i64>,
-    /// Which chat-label slot this item fills: the legacy `slot` column for a
-    /// permanent badge, the payload slot for a rental. The Badges and Flags
-    /// tabs read this, so a rental lands in the same tab its permanent twin
-    /// used to.
+    /// Which chat-label slot this item fills, read from the rental payload.
+    /// Only a rental fills one: the Badges and Flags tabs are rentals top to
+    /// bottom, and a rental never touches `equipped_slot`.
     pub badge_slot: Option<String>,
     /// Whether this title rental sells a text the buyer writes rather than one
     /// the catalog carries.
@@ -1131,9 +1124,8 @@ impl ShopService {
         }
 
         // What this user's chat label shows, from the one query that decides
-        // it for everyone: a live rental wins, a legacy permanent equip is the
-        // fallback. Read here rather than derived from the catalog so the
-        // buyer's own session never disagrees with what other people see.
+        // it for everyone. Read here rather than derived from the catalog so
+        // the buyer's own session never disagrees with what other people see.
         let (chat_label_badge, chat_label_flag) =
             match User::list_chat_author_metadata(&client, &[user_id])
                 .await?
@@ -1146,16 +1138,6 @@ impl ShopService {
 
         let active_bonsai_decay_protection =
             BonsaiDecayProtection::for_user(&client, user_id).await?;
-
-        // The retired permanent badge SKUs are gone from the catalog, so the
-        // purchase rows are the only witness that a slot is still filled by
-        // one; without this an owner would have no way to clear it.
-        let legacy_badge_equipped = purchases
-            .iter()
-            .any(|purchase| purchase.equipped_slot.as_deref() == Some(CHAT_BADGE_SLOT));
-        let legacy_flag_equipped = purchases
-            .iter()
-            .any(|purchase| purchase.equipped_slot.as_deref() == Some(CHAT_FLAG_SLOT));
 
         let mut purchases_by_item = HashMap::with_capacity(purchases.len());
         for purchase in purchases {
@@ -1231,9 +1213,9 @@ impl ShopService {
                     USERNAME_EFFECT_ITEM_KIND | BADGE_RENTAL_ITEM_KIND | TITLE_RENTAL_ITEM_KIND
                 );
                 let rental_duration_secs = is_rental.then(|| rental_duration_secs(&item));
-                // A permanent badge names its slot in the column it equips; a
-                // rental names it in the payload, since it never equips
-                // anything.
+                // A rental names the slot it fills in its payload, since it
+                // never equips anything. Nothing else on sale fills one: the
+                // Badges and Flags tabs are rentals top to bottom.
                 let badge_slot = match item_kind.as_str() {
                     BADGE_RENTAL_ITEM_KIND => item
                         .payload
@@ -1241,11 +1223,7 @@ impl ShopService {
                         .and_then(|value| value.as_str())
                         .filter(|slot| matches!(*slot, CHAT_BADGE_SLOT | CHAT_FLAG_SLOT))
                         .map(ToOwned::to_owned),
-                    _ => item
-                        .slot
-                        .as_deref()
-                        .filter(|slot| matches!(*slot, CHAT_BADGE_SLOT | CHAT_FLAG_SLOT))
-                        .map(ToOwned::to_owned),
+                    _ => None,
                 };
                 let custom_title =
                     item_kind == TITLE_RENTAL_ITEM_KIND && is_custom_title(&item.payload);
@@ -1293,8 +1271,6 @@ impl ShopService {
             active_title,
             chat_label_badge,
             chat_label_flag,
-            legacy_badge_equipped,
-            legacy_flag_equipped,
             custom_titles_available: self.custom_titles_enabled(),
         })
     }

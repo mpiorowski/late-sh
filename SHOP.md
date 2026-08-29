@@ -150,9 +150,10 @@ Behavior:
   `ends_at = now + duration_secs`, deactivating any live row of the same
   `effect_kind` for that user (one active badge, one active flag; a rebuy
   across tiers replaces). Mirror `activate_username_effect_in_tx`.
-- The chat label query prefers a live rental row over the legacy permanent
-  purchase, so existing owners keep what they bought until they rent
-  something over it. Legacy permanent badge/flag SKUs go `active = false`.
+- Legacy permanent badge/flag SKUs go `active = false`. The chat label
+  query preferred a live rental over the legacy permanent purchase so
+  existing owners kept what they bought; migration 165 closed that out (see
+  the follow-up below) and the query now reads the rental alone.
 - Shop copy quotes the duration through one reader the way
   `username_effect_duration_secs` does; the detail pane shows the active
   row and remaining time; `ShopState::tick` prunes at `ends_at`.
@@ -171,7 +172,7 @@ Acceptance:
 - [x] One active badge and one active flag per user, rebuy replaces, month
       over day replaces, clock resets.
 - [x] Legacy owners still render their permanent badge when no rental is
-      live.
+      live. Superseded by the follow-up below.
 - [x] Rental expiry removes the badge from chat labels with no background
       task (decay-at-read or the existing `ends_at` prune path).
 - [x] Two SSH replicas agree within one refresh (notify path documented).
@@ -183,6 +184,19 @@ Acceptance:
 
 Out of scope: any new badge art, pricing changes beyond the table above,
 titles.
+
+Follow-up done (migration 165): the permanent equips are gone. Keeping them
+readable left two things broken. An owner could never be shown as active in
+the Shop, because the retired SKU is not in the catalog and no listed row
+could carry the marker. And a rented flag only masked the permanent one,
+which came back at expiry, so a permanent owner could never end up wearing
+nothing. 165 clears every `chat_badge`/`chat_flag` equip and grants each
+owner 30 days of the same emoji through the month SKU, which is a real
+rental: the Shop shows it active with its remaining time and it lapses on
+its own. Someone already renting over their permanent badge keeps their own
+clock and is granted nothing, since one live row per (user, effect kind) is
+the invariant. `bonsai_variant` is now the only slot anything equips, so the
+Shop's clear-badge key and the permanent-badge branches went with it.
 
 ## Phase 1: title rental
 

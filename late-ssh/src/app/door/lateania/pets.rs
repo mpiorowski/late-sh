@@ -156,10 +156,16 @@ impl Pet {
         (base + base * (self.level() - 1) / 4).max(1)
     }
 
-    /// Per-round attack: the base bite plus a quarter of it per level gained.
+    /// The companion's own bite: the species base plus an eighth of it (at
+    /// least 1) per loyalty level gained. What actually lands is this plus a share of the
+    /// owner's attack rating (`svc::PET_COEF_PCT`), so a pet scales with the
+    /// build it fights beside instead of being a fixed lump that dwarfs a
+    /// level-30 character and fades by 100. Loyalty used to add a quarter per
+    /// level (3.25x at cap); that flat growth was the lump.
     pub fn attack(&self) -> i32 {
         let base = self.species.base_attack;
-        (base + base * (self.level() - 1) / 4).max(1)
+        let step = (base / 8).max(1);
+        (base + step * (self.level() - 1)).max(1)
     }
 
     /// Loyalty progress toward the next level, as a 0-100 percentage (100 at cap).

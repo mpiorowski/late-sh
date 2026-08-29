@@ -113,19 +113,25 @@ fn every_beast_has_a_roaming_spot_in_broceliande() {
 fn tame_chance_rises_with_surplus_and_refuses_under_level() {
     let beast = &TAMEABLE[TAMEABLE_COUNT - 1]; // needs level 50
     // A novice cannot tame the greatest beast.
-    assert_eq!(tame_chance(0, beast), 0);
+    assert_eq!(tame_chance(0, beast, 0), 0);
     // The first beast (level 1) is a coin-toss for a rank beginner and a near
     // sure thing for a trained tamer.
     let easy = &TAMEABLE[0];
-    assert_eq!(tame_chance(0, easy), 40, "at exactly the required level");
+    assert_eq!(tame_chance(0, easy, 0), 40, "at exactly the required level");
+    assert_eq!(
+        tame_chance(0, easy, 6),
+        46,
+        "charisma adds its percent points"
+    );
+    assert_eq!(tame_chance(0, easy, -6), 34, "and takes them away");
     let trained = super::super::skills::xp_for_skill_level(10);
     assert!(
-        tame_chance(trained, easy) > tame_chance(0, easy),
+        tame_chance(trained, easy, 0) > tame_chance(0, easy, 0),
         "surplus level raises the odds"
     );
     // The chance is capped below certainty.
     let master = super::super::skills::xp_for_skill_level(50);
-    assert!(tame_chance(master, easy) <= 95, "never a sure thing");
+    assert!(tame_chance(master, easy, 12) <= 95, "never a sure thing");
 }
 
 #[test]

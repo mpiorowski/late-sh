@@ -75,6 +75,13 @@ pub fn handle_mouse(state: &mut State, mouse: crate::app::input::MouseEvent) -> 
     if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
         return false;
     }
+    // The archetype and attribute-point gates hold every key until a choice
+    // is made (see `handle_key`); the chips drawn behind them are no way
+    // round that.
+    let view = state.view();
+    if !view.archetype_choices.is_empty() || !view.score_offer.is_empty() {
+        return false;
+    }
     state.click_combat(mouse.x, mouse.y)
 }
 
@@ -165,6 +172,18 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
                     return InputAction::Ignored;
                 }
             }
+            _ => return InputAction::Ignored,
+        }
+        return InputAction::Handled;
+    }
+
+    // Attribute point gate: an earned point is placed before anything else,
+    // 1-6 on the six scores in sheet order. Sits behind the archetype gate,
+    // which the view keeps exclusive (`score_offer` is empty while a
+    // crossroads is open).
+    if !view.score_offer.is_empty() {
+        match byte {
+            b'1'..=b'6' => state.spend_score_point((byte - b'1') as usize),
             _ => return InputAction::Ignored,
         }
         return InputAction::Handled;

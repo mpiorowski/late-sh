@@ -728,15 +728,18 @@ pub fn beasts_at(room: RoomId) -> Vec<&'static WildBeast> {
 /// Animal Taming xp. Driven by how far the tamer's level exceeds the beast's
 /// required level: at the exact required level it is a coin-toss-minus; each
 /// level of surplus adds a solid margin; being under-level is refused entirely
-/// (returns 0). Capped below certainty so even a master can be thrown.
-pub fn tame_chance(taming_xp: i64, beast: &PetSpecies) -> u32 {
+/// (returns 0). `cha_pct` is the tamer's Charisma (`AbilityScores::tame_pct`),
+/// percent points on top. Capped below certainty so even a master can be
+/// thrown.
+pub fn tame_chance(taming_xp: i64, beast: &PetSpecies, cha_pct: i32) -> u32 {
     let level = skill_level_for_xp(taming_xp);
     if level < beast.tame_level {
         return 0;
     }
     let surplus = level - beast.tame_level;
-    // 40% at exactly the required level, +9% per level of surplus, capped at 95.
-    (40 + surplus * 9).clamp(0, 95) as u32
+    // 40% at exactly the required level, +9% per level of surplus, plus
+    // Charisma, capped at 95.
+    (40 + surplus * 9 + cha_pct).clamp(0, 95) as u32
 }
 
 /// Xp awarded for a *successful* tame: scales with the beast's difficulty, so

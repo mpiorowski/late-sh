@@ -634,6 +634,220 @@ fn skirmisher_flees_when_wounded_and_breaks_the_lock() {
 }
 
 #[test]
+fn abilities_scale_with_spell_power_and_the_auto_swings_by_calling() {
+    // A level-1 Mage holding a Mythril Arming Sword (+34 attack): attack
+    // rating 5 + 34 = 39. Mage weights are auto 50 / spell 60, so the sword
+    // swings for 19, spell power is 23, and Firebolt (magnitude 16, a Strike
+    // at 100% of spell power) lands for 16 + 23 = 39, +20% Arcane Mastery = 46.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Mage);
+    let mob_id = *s.mobs.keys().next().expect("world has mobs");
+    {
+        let m = s.mobs.get_mut(&mob_id).unwrap();
+        m.alive = true;
+        m.revealed = true;
+        m.current_room = 2001;
+        m.leash_home = 2001;
+        m.hp = 100_000;
+        m.spawn.max_hp = 100_000;
+        m.spawn.damage = 1;
+        m.spawn.profile = DamageProfile::physical();
+    }
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = 2001;
+        p.scores = super::super::stats::AbilityScores::default();
+        p.equipped.insert(Slot::Weapon, 1010);
+    }
+    s.engage_mob(uid(1), mob_id);
+    s.use_ability(uid(1), 1);
+    assert_eq!(
+        s.mobs[&mob_id].hp,
+        100_000 - 46,
+        "Firebolt = (16 + 23) * 1.2"
+    );
+    s.tick();
+    assert_eq!(
+        s.mobs[&mob_id].hp,
+        100_000 - 46 - 19,
+        "the auto swings for half the rating"
+    );
+}
+
+#[test]
+fn a_draught_needs_a_breath_between_gulps() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.hp = 1;
+        p.inventory = vec![1300, 1300, 1300]; // three Minor Healing Draughts (40)
+    }
+    s.use_item(uid(1), 1300);
+    assert_eq!(s.players[&uid(1)].hp, 41);
+    s.use_item(uid(1), 1300);
+    assert_eq!(s.players[&uid(1)].hp, 41, "the second gulp is refused");
+    assert_eq!(
+        s.players[&uid(1)].inventory.len(),
+        2,
+        "and nothing is spent"
+    );
+    for _ in 0..QUAFF_COOLDOWN_TICKS {
+        s.tick();
+    }
+    s.use_item(uid(1), 1300);
+    assert_eq!(
+        s.players[&uid(1)].inventory.len(),
+        1,
+        "a breath later it goes down"
+    );
+    assert!(s.players[&uid(1)].hp > 41);
+}
+
+#[test]
+fn a_companion_bites_off_its_owners_rating() {
+    // A level-1 Warrior holding a Mythril Arming Sword (attack rating 6 + 34 =
+    // 40, a full swing for a martial) with a fresh Emberdrake (base bite 20,
+    // loyalty 0): the companion bites for its own 20 plus PET_COEF_PCT (20%)
+    // of the owner's rating, 28, so the tick takes 40 + 28 off the foe.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let mob_id = *s.mobs.keys().next().expect("world has mobs");
+    {
+        let m = s.mobs.get_mut(&mob_id).unwrap();
+        m.alive = true;
+        m.revealed = true;
+        m.current_room = 2001;
+        m.leash_home = 2001;
+        m.hp = 100_000;
+        m.spawn.max_hp = 100_000;
+        m.spawn.damage = 1;
+        m.spawn.profile = DamageProfile::physical();
+    }
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = 2001;
+        p.scores = super::super::stats::AbilityScores::default();
+        p.equipped.insert(Slot::Weapon, 1010);
+        let drake = super::super::pets::pet_species_by_key("emberdrake").expect("stable species");
+        p.pet = Some(super::super::pets::Pet::new(drake, 0));
+    }
+    s.engage_mob(uid(1), mob_id);
+    s.tick();
+    assert_eq!(
+        s.mobs[&mob_id].hp,
+        100_000 - 40 - 28,
+        "the swing (40) and the companion's bite (20 + 20% of 40)"
+    );
+}
+
+#[test]
+fn fleeing_costs_a_parting_blow_and_the_foe_recovers() {
+    let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
+    s.mobs.get_mut(&mob_id).unwrap().spawn.damage = 10;
+    let hp_before = s.players[&uid(1)].hp;
+    s.flee(uid(1));
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.target, None, "the lock is dropped");
+    assert_eq!(
+        p.hp,
+        hp_before - 10,
+        "the foe strikes at a fleeing back (naked Warrior, no armor)"
+    );
+    let m = &s.mobs[&mob_id];
+    assert_eq!(
+        m.hp, m.spawn.max_hp,
+        "a foe left with nobody fighting it recovers on the spot"
+    );
+}
+
+#[test]
+fn a_stunned_foe_cannot_strike_at_a_fleeing_back() {
+    let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
+    s.mobs.get_mut(&mob_id).unwrap().spawn.damage = 10;
+    s.mob_stuns.insert(mob_id, 2);
+    s.mob_dots.insert(
+        mob_id,
+        vec![MobDot {
+            owner: uid(1),
+            per_tick: 5,
+            remaining: 3,
+            source: DotSource::Ability,
+        }],
+    );
+    let hp_before = s.players[&uid(1)].hp;
+    s.flee(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].hp,
+        hp_before,
+        "a reeling foe gets no blow"
+    );
+    let m = &s.mobs[&mob_id];
+    assert_eq!(m.hp, m.spawn.max_hp);
+    assert!(
+        !s.mob_stuns.contains_key(&mob_id),
+        "the stun does not outlive the fight it was cast in"
+    );
+    assert!(!s.mob_dots.contains_key(&mob_id), "nor do the wounds");
+}
+
+#[test]
+fn a_shorter_stun_does_not_cut_a_longer_one_short() {
+    let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
+    s.mob_stuns.insert(mob_id, 4);
+    let p = s.players.get_mut(&uid(1)).unwrap();
+    p.level = 12; // unlocks Shield Bash (slot 4), a 1-tick stun
+    p.resource = 999;
+    s.use_ability(uid(1), 4);
+    assert!(s.mobs[&mob_id].alive, "the bash only dazes the sentinel");
+    assert_eq!(
+        s.mob_stuns.get(&mob_id).copied(),
+        Some(4),
+        "a fresh 1-tick daze must not shorten the 4 ticks already on the foe"
+    );
+}
+
+#[test]
+fn a_wounded_foe_nobody_fights_recovers_after_a_few_ticks() {
+    let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
+    // The attacker is simply gone mid-fight (death, disconnect): no flee, the
+    // lock just vanishes.
+    s.players.get_mut(&uid(1)).unwrap().target = None;
+    s.mob_stuns.insert(mob_id, 5);
+    for _ in 1..MOB_RESET_TICKS {
+        s.tick();
+    }
+    assert_eq!(s.mobs[&mob_id].hp, 200, "a short grace keeps the wounds");
+    s.tick();
+    let m = &s.mobs[&mob_id];
+    assert_eq!(m.hp, m.spawn.max_hp, "then the foe recovers in full");
+    assert!(!s.mob_stuns.contains_key(&mob_id));
+}
+
+#[test]
+fn a_foe_someone_else_still_fights_keeps_its_wounds_when_you_flee() {
+    let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
+    let room = s.players[&uid(1)].room;
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Rogue);
+    s.players.get_mut(&uid(2)).unwrap().room = room;
+    s.engage_mob(uid(2), mob_id);
+    assert_eq!(s.players[&uid(2)].target, Some(mob_id));
+    s.flee(uid(1));
+    assert_eq!(s.mobs[&mob_id].hp, 200, "still in a fight with someone");
+    for _ in 0..MOB_RESET_TICKS + 1 {
+        s.tick();
+    }
+    assert!(
+        s.mobs[&mob_id].hp < 200,
+        "the second fighter keeps grinding it down, no recovery"
+    );
+}
+
+#[test]
 fn summoner_calls_an_add_into_the_fight() {
     let (mut s, _mob_id) = engaged_with(MobBehavior::Summoner);
     let before = s.mobs.len();
@@ -1604,6 +1818,7 @@ fn buying_costs_gold_and_adds_item() {
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
     s.players.get_mut(&uid(1)).unwrap().room = 1;
+    s.players.get_mut(&uid(1)).unwrap().scores = AbilityScores::default();
     // Walk to the smith (room 3, east of square).
     s.move_player(uid(1), Dir::East);
     assert_eq!(s.players[&uid(1)].room, 3);
@@ -2365,6 +2580,7 @@ fn a_loose_duplicate_of_worn_gear_can_still_be_sold() {
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
     s.players.get_mut(&uid(1)).unwrap().room = 3;
+    s.players.get_mut(&uid(1)).unwrap().scores = AbilityScores::default();
     s.players.get_mut(&uid(1)).unwrap().inventory.push(1006);
     s.equip(uid(1), 1006);
     // A second copy, still loose in the pack.
@@ -2920,25 +3136,275 @@ fn talking_to_a_villager_speaks_their_line_and_the_room_announces_them() {
 }
 
 #[test]
-fn ability_scores_change_derived_stats() {
+fn every_ability_score_moves_the_number_it_promises() {
     let mut s = world();
     s.join(uid(1));
-    s.choose_class(uid(1), Class::Warrior); // STR is the warrior's key score
-    if let Some(p) = s.players.get_mut(&uid(1)) {
-        p.scores.strength = 10;
-        p.scores.constitution = 10;
-    }
-    let base_attack = s.players[&uid(1)].attack();
-    let base_hp = s.players[&uid(1)].max_hp();
-    if let Some(p) = s.players.get_mut(&uid(1)) {
-        p.scores.strength = 18; // +4
-        p.scores.constitution = 18; // +4
-    }
-    assert!(
-        s.players[&uid(1)].attack() > base_attack,
-        "STR raises attack"
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 3; // the smith
+    s.players.get_mut(&uid(1)).unwrap().scores = AbilityScores::default();
+    let p = &s.players[&uid(1)];
+    let (attack, swing, spell, hp, regen) = (
+        p.attack(),
+        p.swing(),
+        p.spell_power(),
+        p.max_hp(),
+        p.regen(),
     );
-    assert!(s.players[&uid(1)].max_hp() > base_hp, "CON raises max HP");
+    let sword = item(1001).unwrap(); // Iron Longsword, 80g
+    let (buy, sell) = (p.buy_price(sword), p.sell_price(sword));
+    s.players.get_mut(&uid(1)).unwrap().scores = AbilityScores {
+        strength: 18,
+        dexterity: 18,
+        constitution: 18,
+        intelligence: 18,
+        wisdom: 18,
+        charisma: 18,
+    };
+    let p = &s.players[&uid(1)];
+    let level = p.level;
+    assert_eq!(
+        p.attack(),
+        attack,
+        "no score touches the attack rating itself"
+    );
+    assert_eq!(p.swing(), swing + swing * 8 / 100, "STR: +8% on the swing");
+    assert_eq!(
+        p.spell_power(),
+        spell + spell * 8 / 100,
+        "INT: +8% spell power"
+    );
+    assert_eq!(
+        p.max_hp(),
+        hp + 4 * (4 + level / 2),
+        "CON: +4 per modifier point at level 1"
+    );
+    assert_eq!(p.regen(), regen + 4, "WIS: +4 resource a tick");
+    assert_eq!(p.buy_price(sword), buy - buy * 12 / 100, "CHA: 12% off");
+    assert_eq!(
+        p.sell_price(sword),
+        sell + sell * 12 / 100,
+        "CHA: 12% on top of a sale"
+    );
+    assert_eq!(p.scores.crit_pct(), 8, "DEX: 8% of swings crit");
+    let before = p.gold;
+    s.buy(uid(1), 1001);
+    assert_eq!(
+        s.players[&uid(1)].gold,
+        before - (80 - 80 * 12 / 100),
+        "the discount is what the shop actually charges"
+    );
+}
+
+#[test]
+fn a_point_every_fourth_level_is_placed_from_the_point_screen() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().scores = AbilityScores::default();
+    assert_eq!(s.players[&uid(1)].score_points(), 0);
+    s.players.get_mut(&uid(1)).unwrap().xp = xp_for_level(8);
+    s.check_level_up(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].score_points(),
+        2,
+        "levels 4 and 8 each earn one"
+    );
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("attribute point is yours to place")),
+        "the level-up feed says a point was earned"
+    );
+
+    let snap = s.snapshot();
+    let view = snap.players.get(&uid(1)).expect("player view");
+    assert_eq!(view.score_points, 2);
+    let offer: Vec<(&str, &str, Option<&str>)> = view
+        .score_offer
+        .iter()
+        .map(|r| (r.label.as_str(), r.now.as_str(), r.after.as_deref()))
+        .collect();
+    assert_eq!(
+        offer,
+        vec![
+            ("STR", "swings hit for +0%", Some("swings hit for +0%")),
+            ("DEX", "no crits, no glances", Some("no crits, no glances")),
+            ("CON", "+0 max HP at level 8", Some("+0 max HP at level 8")),
+            ("INT", "spell power +0%", Some("spell power +0%")),
+            (
+                "WIS",
+                "+0 resource every tick",
+                Some("+0 resource every tick")
+            ),
+            (
+                "CHA",
+                "shops 0% cheaper, sells 0% dearer, taming +0%",
+                Some("shops 0% cheaper, sells 0% dearer, taming +0%")
+            ),
+        ],
+        "the screen shows every score with its reading now and after the point"
+    );
+
+    s.spend_score_point(uid(1), 0);
+    s.spend_score_point(uid(1), 0);
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.scores.strength, 12);
+    assert_eq!(p.score_points(), 0);
+    assert_eq!(
+        p.swing(),
+        p.attack() + p.attack() * 2 / 100,
+        "and the swing moved with it"
+    );
+    let snap = s.snapshot();
+    assert!(
+        snap.players[&uid(1)].score_offer.is_empty(),
+        "nothing left to place, the screen closes"
+    );
+
+    // A third point cannot go past the cap: it is kept, and the row says so.
+    s.players.get_mut(&uid(1)).unwrap().xp = xp_for_level(12);
+    s.check_level_up(uid(1));
+    s.players.get_mut(&uid(1)).unwrap().scores.strength = 20;
+    let snap = s.snapshot();
+    assert!(
+        snap.players[&uid(1)].score_offer.is_empty(),
+        "the archetype crossroads at level 10 comes first"
+    );
+    s.choose_archetype(uid(1), 0);
+    let snap = s.snapshot();
+    assert_eq!(
+        snap.players[&uid(1)].score_offer[0].after,
+        None,
+        "STR at the cap"
+    );
+    s.spend_score_point(uid(1), 0);
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.scores.strength, 20);
+    assert_eq!(
+        p.score_points(),
+        1,
+        "the point is still there to place elsewhere"
+    );
+    assert!(
+        p.log
+            .iter()
+            .any(|l| l.text.contains("already at its peak of 20"))
+    );
+}
+
+/// A point can only be placed on a score below the cap, and the point screen
+/// takes every key until it is placed. A character whose six scores are all
+/// at the cap (a farmed roll, deep into the levels: 25 points are earned by
+/// 100 and a 96+ roll leaves fewer slots than that) used to be held on that
+/// screen for good, since no key could place the point and rejoining showed
+/// it again. Points past what the scores can hold are simply not there.
+#[test]
+fn a_character_with_every_score_at_the_cap_is_never_held_at_the_point_screen() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().scores = AbilityScores {
+        strength: 20,
+        dexterity: 20,
+        constitution: 20,
+        intelligence: 20,
+        wisdom: 20,
+        charisma: 19,
+    };
+    s.players.get_mut(&uid(1)).unwrap().xp = xp_for_level(100);
+    s.check_level_up(uid(1));
+    assert_eq!(s.players[&uid(1)].level, 100);
+    // The level-10 crossroads comes first and keeps the point screen closed.
+    s.choose_archetype(uid(1), 0);
+    assert_eq!(
+        s.players[&uid(1)].score_points(),
+        1,
+        "25 earned, but only one slot left to put a point in"
+    );
+    let snap = s.snapshot();
+    assert_eq!(
+        snap.players[&uid(1)].score_offer.len(),
+        6,
+        "the screen offers that one"
+    );
+
+    s.spend_score_point(uid(1), 5);
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.scores.charisma, 20);
+    assert_eq!(p.score_points(), 0, "nothing left that could be placed");
+    let snap = s.snapshot();
+    assert!(
+        snap.players[&uid(1)].score_offer.is_empty(),
+        "the screen closes and the character can play"
+    );
+    assert_eq!(snap.players[&uid(1)].score_points, 0);
+
+    // Leaving and coming back re-derives the same answer from the save.
+    let saved = s.export_saved(uid(1)).expect("character saves");
+    s.leave(uid(1));
+    s.join(uid(1));
+    s.hydrate(uid(1), &saved);
+    assert_eq!(s.players[&uid(1)].score_points(), 0);
+    assert!(s.snapshot().players[&uid(1)].score_offer.is_empty());
+}
+
+/// The point screen takes the keys, but a corpse's only key is release. The
+/// view used to draw the point screen over the corpse with the release hint
+/// hidden behind it; a corpse sees the corpse, and places the point once up.
+#[test]
+fn a_corpse_with_a_point_pending_sees_the_corpse_not_the_point_screen() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Mage); // no Warrior death-save
+    s.players.get_mut(&uid(1)).unwrap().scores = AbilityScores::default();
+    s.players.get_mut(&uid(1)).unwrap().xp = xp_for_level(4);
+    s.check_level_up(uid(1));
+    assert_eq!(s.snapshot().players[&uid(1)].score_offer.len(), 6);
+
+    s.strike_player(uid(1), 9999, DamageType::Physical, "a test foe");
+    assert!(s.players[&uid(1)].dead);
+    let snap = s.snapshot();
+    assert!(
+        snap.players[&uid(1)].score_offer.is_empty(),
+        "the corpse view wins"
+    );
+    assert_eq!(
+        snap.players[&uid(1)].score_points,
+        1,
+        "the point is still owed"
+    );
+
+    s.release_to_temple(uid(1));
+    assert!(!s.players[&uid(1)].dead);
+    assert_eq!(
+        s.snapshot().players[&uid(1)].score_offer.len(),
+        6,
+        "and offered once risen"
+    );
+}
+
+#[test]
+fn a_character_saved_before_points_existed_has_them_all_to_place() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Mage);
+    let mut saved = s.export_saved(uid(1)).expect("character saves");
+    saved.xp = xp_for_level(40);
+    saved.level = 40;
+    assert_eq!(saved.score_points_spent, 0);
+    s.hydrate(uid(1), &saved);
+    assert_eq!(
+        s.players[&uid(1)].score_points(),
+        10,
+        "ten points back-paid at level 40"
+    );
+
+    // A save claiming more spent than the level ever earned is clamped, never negative.
+    saved.score_points_spent = 30;
+    s.hydrate(uid(1), &saved);
+    assert_eq!(s.players[&uid(1)].score_points(), 0);
+    assert_eq!(s.players[&uid(1)].score_points_spent, 10);
 }
 
 #[test]
@@ -3407,28 +3873,41 @@ fn a_stray_bond_resets_if_a_day_is_missed_and_wont_double_feed_same_day() {
 }
 
 #[test]
-fn zone_boss_bounty_stays_pinned_to_the_legacy_level_cap() {
-    let mut s = world();
-    s.join(uid(1));
-    s.choose_class(uid(1), Class::Warrior);
-    let xp_before = s.players[&uid(1)].xp;
-    let gold_before = s.players[&uid(1)].gold;
-    // Wildbound widened DISPLAY levels to 100, promising "no xp or drop
-    // changes". A boss now reading level 100 must still pay the bounty the
-    // old 60-cap paid, or the display change silently inflates 20 one-time
-    // payouts.
-    s.complete_quest(uid(1), 0, 100);
-    let p = &s.players[&uid(1)];
-    assert_eq!(
-        p.xp - xp_before,
-        80 + 60 * 24,
-        "bounty xp pinned to the knee"
-    );
-    assert_eq!(
-        p.gold - gold_before,
-        35 + 60 * 6,
-        "bounty gold pinned to the knee"
-    );
+fn a_zone_boss_bounty_pays_by_the_zones_target_level_not_the_number_over_its_head() {
+    // The level over a boss's head reads by its bite and moves whenever the
+    // ladder is retuned. The bounty is a one-time payout; it must key off the
+    // level the zone is pitched at (a straight line from the living dark's
+    // exit at L40 to the King at L55), so a display retune never repriced it.
+    for (zone, target) in [(0usize, 40), (19usize, 55)] {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let (_, boss) = super::super::world::frontier_zone_info(zone).expect("zone exists");
+        let boss_id = *s
+            .mobs
+            .iter()
+            .find(|(_, m)| m.spawn.name == boss)
+            .map(|(id, _)| id)
+            .expect("the zone boss is fielded");
+        let xp_before = s.players[&uid(1)].xp;
+        let gold_before = s.players[&uid(1)].gold;
+        s.kill_mob(uid(1), boss_id);
+        let p = &s.players[&uid(1)];
+        // The kill itself pays the boss's own xp and purse; the bounty is what
+        // lands on top of that.
+        let boss_xp = s.mobs[&boss_id].spawn.xp;
+        let boss_gold = gold_for_kill(boss_xp, true) as i64;
+        assert_eq!(
+            p.xp - xp_before - boss_xp as i64,
+            80 + target * 24,
+            "zone {zone} bounty xp keys off L{target}"
+        );
+        assert_eq!(
+            p.gold - gold_before - boss_gold,
+            35 + target * 6,
+            "zone {zone} bounty gold keys off L{target}"
+        );
+    }
 }
 
 #[test]

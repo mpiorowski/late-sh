@@ -1168,7 +1168,6 @@ fn overview_lines() -> Vec<String> {
         "                    and screened before you are charged",
         "  burn milestones   Ultimates tab: permanent glyphs at 50,000 / 150,000 / 500,000,",
         "                    worn on top of a rented badge and flag, dearest one showing",
-        "  x                 clear a permanent badge bought before rentals",
         "  Economy tab       chips, payouts, leaderboards, Arcade, table games",
         "",
         "Jump search",
