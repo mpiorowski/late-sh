@@ -3161,6 +3161,7 @@ fn every_ability_score_moves_the_number_it_promises() {
         charisma: 18,
     };
     let p = &s.players[&uid(1)];
+    let level = p.level;
     assert_eq!(
         p.attack(),
         attack,
@@ -3174,7 +3175,7 @@ fn every_ability_score_moves_the_number_it_promises() {
     );
     assert_eq!(
         p.max_hp(),
-        hp + 4 * (4 + 1 / 2),
+        hp + 4 * (4 + level / 2),
         "CON: +4 per modifier point at level 1"
     );
     assert_eq!(p.regen(), regen + 4, "WIS: +4 resource a tick");

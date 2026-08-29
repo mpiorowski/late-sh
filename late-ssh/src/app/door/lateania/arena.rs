@@ -96,8 +96,6 @@ pub(super) enum Gear {
     /// `1000..1300`). Nothing is class-gated at `equip`, so this is what any
     /// class can wear before the Frontier.
     ShopBest,
-    /// A smithed weapon and plate chest of this crafting tier (`0..6`).
-    Crafted(usize),
     /// What a prepared character of a crafting tier actually wears: the
     /// smithed weapon and plate of tier `t` plus, in every other slot, the
     /// best authored piece at or under the tier's rarity cap (Common at tier
@@ -117,7 +115,6 @@ impl Gear {
         match self {
             Self::Naked => "naked".to_string(),
             Self::ShopBest => "shop".to_string(),
-            Self::Crafted(t) => format!("craft{}", t + 1),
             Self::Kit(t) => format!("kit{}", t + 1),
             Self::Frontier(t) => format!("front{}", t + 1),
             Self::Reaches(t) => format!("reach{}", t + 1),
@@ -142,7 +139,6 @@ impl Gear {
                 }
                 best.into_iter().map(|(_, id, _)| id).collect()
             }
-            Self::Crafted(t) => vec![smith_weapon_id(t as u32), smith_armor_id(t as u32)],
             Self::Kit(t) => {
                 let cap = match t {
                     0 => Rarity::Common,
@@ -815,7 +811,7 @@ impl Arena {
     }
 
     fn spawn_character(&mut self, recipe: &Recipe, room: RoomId, foe: &DamageProfile) -> Uuid {
-        let uid = Uuid::from_u128(0xA1E7A_0000_0000 + self.seq);
+        let uid = Uuid::from_u128(0x000A_1E7A_0000_0000 + self.seq);
         self.seq += 1;
         assert!(self.s.join(uid), "arena: character uuid collided");
         self.s.choose_class(uid, recipe.class);
