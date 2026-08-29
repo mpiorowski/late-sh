@@ -42,43 +42,40 @@ fn message(index: u64, author: Uuid, body: &str) -> ChatMessage {
 }
 
 #[test]
-fn a_bare_catch_up_starts_at_the_line_and_says_which_line() {
+fn a_bare_catch_up_starts_where_the_reader_last_left() {
     let now = chrono::Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, 0).unwrap();
     let max = now - chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS);
 
-    // The whole point of the AFK line: a recent one means a short catch-up.
-    // Nothing widens it, because it is not a guess about what was read, it
-    // is when the keyboard went quiet.
+    // The whole point of the device mark: a recent one means a short
+    // catch-up. Nothing widens it, because it is not a guess about what was
+    // read, it is when the reader left.
     let ten_minutes_ago = now - chrono::Duration::minutes(10);
     assert_eq!(
-        window_start(SummaryWindow::SinceWentQuiet(ten_minutes_ago), now),
-        (ten_minutes_ago, SummaryBasis::WentQuiet, false)
+        window_start(SummaryWindow::SinceLeftApp(ten_minutes_ago), now),
+        (ten_minutes_ago, SummaryBasis::LeftApp, false)
     );
-    // A line inherited from the device is the same window with a different
-    // name on it: the head must not say "you went quiet" about a session
-    // that never happened here.
     let yesterday = now - chrono::Duration::hours(30);
     assert_eq!(
-        window_start(SummaryWindow::SinceLeftDevice(yesterday), now),
-        (yesterday, SummaryBasis::LeftDevice, false)
+        window_start(SummaryWindow::SinceLeftApp(yesterday), now),
+        (yesterday, SummaryBasis::LeftApp, false)
     );
 
     // Past the max, cost policy wins, and the cap is reported so the head
     // does not present the capped stamp as the moment the reader left.
     assert_eq!(
         window_start(
-            SummaryWindow::SinceLeftDevice(now - chrono::Duration::days(9)),
+            SummaryWindow::SinceLeftApp(now - chrono::Duration::days(9)),
             now
         ),
-        (max, SummaryBasis::LeftDevice, true)
+        (max, SummaryBasis::LeftApp, true)
     );
     assert_eq!(
-        window_start(SummaryWindow::SinceWentQuiet(max), now),
-        (max, SummaryBasis::WentQuiet, false),
+        window_start(SummaryWindow::SinceLeftApp(max), now),
+        (max, SummaryBasis::LeftApp, false),
         "exactly at the cap is not capped"
     );
 
-    // No line: the one window that is handed out rather than derived, and
+    // No mark: the one window that is handed out rather than derived, and
     // it says so.
     assert_eq!(
         window_start(SummaryWindow::Default, now),

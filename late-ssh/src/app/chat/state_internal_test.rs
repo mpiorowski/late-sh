@@ -3632,12 +3632,10 @@ async fn the_afk_line_lands_where_the_silence_started_and_stays_there() {
     let before = Utc::now();
     assert!(state.sync_afk_line(super::AFK_LINE_IDLE));
     let placed = *state.afk_lines.get(&room_id).expect("line placed");
-    assert_eq!(placed.source, super::AfkLineSource::Idle);
     let expected = before - chrono::Duration::from_std(super::AFK_LINE_IDLE).unwrap();
     assert!(
-        (placed.at - expected).num_seconds().abs() <= 1,
-        "line at {}, expected about {expected}",
-        placed.at
+        (placed - expected).num_seconds().abs() <= 1,
+        "line at {placed}, expected about {expected}"
     );
 
     // Staying away longer does not drag the line forward: it says when you
@@ -3728,60 +3726,18 @@ async fn neither_a_summary_nor_history_spends_the_line() {
     assert_eq!(state.afk_lines.get(&room_id), Some(&placed));
 }
 
-/// Leaving the app leaves every room at once, so the device mark from the
-/// last session on this terminal seeds a line in each room the first room
-/// list carries, exactly once: a room joined later was not one you left.
-#[tokio::test]
-async fn the_device_mark_seeds_every_room_once_when_the_room_list_lands() {
-    use late_core::models::chat_room::ChatRoom;
-    use late_core::models::chat_room_member::ChatRoomMember;
-
-    let test_db = crate::test_helpers::new_test_db().await;
-    let client = test_db.db.get().await.expect("db client");
-    let user = late_core::test_utils::create_test_user(&test_db.db, "afk_seed").await;
-    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
-    let other = ChatRoom::get_or_create_public_room(&client, "afk-seed-other")
-        .await
-        .expect("other room");
-    ChatRoomMember::join(&client, lounge.id, user.id)
-        .await
-        .expect("join lounge");
-    ChatRoomMember::join(&client, other.id, user.id)
-        .await
-        .expect("join other");
-
+/// The two marks answer different questions and never feed each other: a
+/// bare `/summary` reads from when you last left the app on this device,
+/// whatever the room's AFK line says, and a device with no mark gets the
+/// default rather than the line.
+#[test]
+fn a_bare_summary_reads_the_device_mark_and_never_the_afk_line() {
     let left_at = Utc::now() - chrono::Duration::hours(9);
-    let mut state = counter_test_state(&test_db, user.id);
-    state.device_left_at = Some(left_at);
-    assert!(state.afk_lines.is_empty(), "nothing to hang a line on yet");
-
-    wait_for_snapshot(&mut state).await;
-    assert!(state.drain_snapshot());
-    let seeded = super::AfkLine {
-        at: left_at,
-        source: super::AfkLineSource::DeviceLeave,
-    };
-    assert_eq!(state.afk_lines.get(&lounge.id), Some(&seeded));
-    assert_eq!(state.afk_lines.get(&other.id), Some(&seeded));
-
-    // A room that shows up in a later snapshot gets nothing from the mark.
-    let joined_later = ChatRoom::get_or_create_public_room(&client, "afk-seed-later")
-        .await
-        .expect("later room");
-    ChatRoomMember::join(&client, joined_later.id, user.id)
-        .await
-        .expect("join later");
-    state.refresh_tx.send(()).expect("force refresh");
-    wait_for_snapshot(&mut state).await;
-    state.drain_snapshot();
-    assert!(
-        state
-            .rooms
-            .iter()
-            .any(|(room, _)| room.id == joined_later.id)
+    assert_eq!(
+        super::catch_up_window(Some(left_at)),
+        SummaryWindow::SinceLeftApp(left_at)
     );
-    assert_eq!(state.afk_lines.get(&joined_later.id), None);
-    assert_eq!(state.afk_lines.get(&lounge.id), Some(&seeded));
+    assert_eq!(super::catch_up_window(None), SummaryWindow::Default);
 }
 
 #[tokio::test]

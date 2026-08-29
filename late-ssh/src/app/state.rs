@@ -362,9 +362,10 @@ pub struct SessionConfig {
     /// This device's stored home rail layout, or `None` when the key has never
     /// been configured and should follow the account default.
     pub key_layout: Option<late_core::models::user_ssh_key::KeyLayout>,
-    /// When the last session on this device went quiet before it ended, or
-    /// `None` for a keyless session or a device that has never ended one.
-    /// Seeds the chat AFK lines; see `ChatState::afk_lines`.
+    /// When you last left the app on this device (the moment the keyboard
+    /// went quiet before the previous session on this key ended), or `None`
+    /// for a keyless session or a device with no mark yet. The bare
+    /// `/summary` window; see `ChatState::device_left_at`.
     pub key_left_at: Option<chrono::DateTime<chrono::Utc>>,
     pub afk_users: crate::state::AfkUsers,
     pub username_directory: Option<crate::usernames::UsernameDirectory>,

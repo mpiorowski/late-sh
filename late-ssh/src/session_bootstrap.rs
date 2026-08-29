@@ -233,9 +233,9 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
 /// What the SSH key a session authenticated with remembers about its device.
 /// Every field is `None` for a keyless session, a key with nothing stored, or
 /// a failed read, and every consumer treats `None` as "no device fact":
-/// the rails follow the account default and the chat starts with no AFK
-/// line. That is why a failure here is logged and swallowed rather than
-/// failing the connection.
+/// the rails follow the account default and a bare `/summary` opens its
+/// default window. That is why a failure here is logged and swallowed rather
+/// than failing the connection.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DeviceState {
     pub layout: Option<KeyLayout>,

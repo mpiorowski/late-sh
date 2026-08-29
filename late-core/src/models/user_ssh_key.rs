@@ -237,9 +237,9 @@ impl UserSshKey {
     /// `None` when the key has never ended one (or has no row yet). The read
     /// clears the column, so a mark is served to exactly one session. That
     /// is what makes a lost [`set_left_at`](Self::set_left_at) safe: the
-    /// next session starts with no line rather than inheriting a leave from
-    /// before the session that failed to write, which would draw a divider
-    /// and a `/summary` window over messages already read.
+    /// next session falls back to the default `/summary` window rather than
+    /// inheriting a leave from before the session that failed to write,
+    /// which would summarize messages already read.
     pub async fn take_left_at(
         client: &Client,
         user_id: Uuid,

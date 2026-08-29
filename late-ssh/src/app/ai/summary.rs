@@ -6,10 +6,10 @@
 //! then a cooldown armed on success; results are per viewer, so unlike
 //! translation there is no shared cache to absorb repeats), a global daily
 //! call cap as the runaway backstop, and a small concurrency gate. A bare
-//! `/summary` reads from the room's AFK line, the instant this terminal's
-//! reader went quiet (`ChatState::afk_lines`, seeded from the device's
-//! `left_at` across sessions); an explicit `/summary <n>h` spans exactly
-//! what it asked for ([`SummaryWindow`]). Either way the window is bounded
+//! `/summary` reads from when the reader last left the app on this device
+//! (`ChatState::device_left_at`, from `user_ssh_keys.left_at`); an explicit
+//! `/summary <n>h` spans exactly what it asked for ([`SummaryWindow`]).
+//! Either way the window is bounded
 //! two ways before the model sees anything: wall clock (at most
 //! [`SUMMARY_MAX_WINDOW_HOURS`] back) and transcript size
 //! ([`SUMMARY_PROMPT_CHAR_BUDGET`]); whichever bites first drops the oldest
@@ -19,10 +19,11 @@
 //! with the requesting user; sessions drain it in `ChatState::tick`.
 //!
 //! The service keeps no cursor of its own. Where a catch-up starts is the
-//! session's fact (when did the person at this terminal stop attending),
-//! and the session hands it over. Nothing widens it: the line is not a
-//! guess about what was read, it is when the keyboard went quiet, so a line
-//! ten minutes old means a ten-minute catch-up.
+//! session's fact (when did the person at this device last leave), and the
+//! session hands it over. Nothing widens it: the mark is not a guess about
+//! what was read, it is when the keyboard went quiet before the last
+//! session here ended, so a mark ten minutes old means a ten-minute
+//! catch-up.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -51,14 +52,14 @@ pub const SUMMARY_DAILY_CAP: u32 = 2_000;
 /// own retry, like `t` for translation.
 pub const SUMMARY_COOLDOWN: Duration = Duration::from_secs(10 * 60);
 
-/// Furthest back a summary window reaches, whatever the AFK line says.
+/// Furthest back a summary window reaches, whatever the device mark says.
 pub const SUMMARY_MAX_WINDOW_HOURS: i64 = 48;
 
-/// The window a bare `/summary` opens with when the room has no AFK line:
-/// this terminal never stepped away from it and has no device mark to
-/// inherit. The overlay names it, which is what separates it from the
-/// blanket floor it replaced: that one silently widened *every* catch-up
-/// because the cursor underneath it could not be trusted.
+/// The window a bare `/summary` opens with when this device has no mark:
+/// it has never ended a session, the session is keyless, or the mark was
+/// lost. The overlay names it, which is what separates it from the blanket
+/// floor it replaced: that one silently widened *every* catch-up because
+/// the cursor underneath it could not be trusted.
 pub const SUMMARY_DEFAULT_WINDOW_HOURS: i64 = 24;
 
 const _: () = assert!(
@@ -68,23 +69,17 @@ const _: () = assert!(
 
 /// What a `/summary` asks to read back over.
 ///
-/// The three bare arms are the three things the room's AFK line can be
-/// (`ChatState::afk_lines`), resolved by the session because the line is a
+/// The bare arms are resolved by the session, because the device mark is a
 /// fact about this terminal that lives nowhere the service could read it.
 /// They are separate arms rather than an `Option<DateTime>` because the
-/// overlay head names which one it got, and a line placed by ten minutes
-/// of silence and a line inherited from the last session on this device
-/// are different sentences.
+/// overlay head names which one it got.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SummaryWindow {
-    /// Bare `/summary` in a room whose line was placed by this session's
-    /// keyboard going quiet.
-    SinceWentQuiet(DateTime<Utc>),
-    /// Bare `/summary` in a room whose line was seeded from the device
-    /// mark: when the last session on this device went quiet before ending.
-    SinceLeftDevice(DateTime<Utc>),
-    /// Bare `/summary` in a room with no line: this terminal never went
-    /// quiet on it, or spoke since. [`SUMMARY_DEFAULT_WINDOW_HOURS`].
+    /// Bare `/summary` on a device with a mark: from when the reader last
+    /// left the app here.
+    SinceLeftApp(DateTime<Utc>),
+    /// Bare `/summary` on a device with no mark.
+    /// [`SUMMARY_DEFAULT_WINDOW_HOURS`].
     Default,
     /// `/summary <n>h`: exactly this far back.
     Explicit(chrono::Duration),
@@ -95,8 +90,7 @@ pub enum SummaryWindow {
 /// break the render.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SummaryBasis {
-    WentQuiet,
-    LeftDevice,
+    LeftApp,
     Default,
     Explicit,
 }
@@ -142,16 +136,16 @@ pub enum SummaryOutcome {
         /// Which arm opened the window, for the overlay head.
         basis: SummaryBasis,
         /// `since` is [`SUMMARY_MAX_WINDOW_HOURS`] back rather than where
-        /// the line sat: the head must not claim the stamp is when the
-        /// reader went quiet.
+        /// the mark sat: the head must not claim the stamp is when the
+        /// reader left.
         capped: bool,
         /// The window was cut by the message cap or the char budget: older
         /// messages exist that the summary never saw.
         truncated: bool,
     },
     /// Nothing in the window to summarize; no call spent. Carries the basis
-    /// because "nothing since you went quiet" and "nothing in the last 24h"
-    /// are different claims.
+    /// because "nothing since you left" and "nothing in the last 24h" are
+    /// different claims.
     Empty {
         basis: SummaryBasis,
     },
@@ -472,24 +466,22 @@ const SUMMARY_SYSTEM_PROMPT: &str = "You summarize missed chat messages for a me
     only report them.";
 
 /// The instant a window starts reading from, which arm decided it, and
-/// whether the [`SUMMARY_MAX_WINDOW_HOURS`] cap moved it off the line.
+/// whether the [`SUMMARY_MAX_WINDOW_HOURS`] cap moved it off the mark.
 ///
-/// Every arm stops at the cap and nothing widens any of them: an AFK line
-/// ten minutes old means a ten-minute catch-up, which is the point of
-/// resting on when the keyboard went quiet instead of on where a terminal
-/// happened to be sitting. Only a room with no line at all gets a window
-/// handed to it. The cap is reported rather than hidden because the head
-/// names the line's instant, and a capped stamp is not that instant.
+/// Every arm stops at the cap and nothing widens any of them: a mark ten
+/// minutes old means a ten-minute catch-up, which is the point of resting
+/// on when the reader left instead of on where a terminal happened to be
+/// sitting. Only a device with no mark at all gets a window handed to it.
+/// The cap is reported rather than hidden because the head names the
+/// mark's instant, and a capped stamp is not that instant.
 ///
 /// The explicit arm caps the duration rather than the resulting instant, so
 /// an absurd `back` can never overflow the subtraction.
 fn window_start(window: SummaryWindow, now: DateTime<Utc>) -> (DateTime<Utc>, SummaryBasis, bool) {
     let max_back = chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS);
     let oldest = now - max_back;
-    let from_line = |at: DateTime<Utc>, basis| (at.max(oldest), basis, at < oldest);
     match window {
-        SummaryWindow::SinceWentQuiet(at) => from_line(at, SummaryBasis::WentQuiet),
-        SummaryWindow::SinceLeftDevice(at) => from_line(at, SummaryBasis::LeftDevice),
+        SummaryWindow::SinceLeftApp(at) => (at.max(oldest), SummaryBasis::LeftApp, at < oldest),
         SummaryWindow::Default => (
             now - chrono::Duration::hours(SUMMARY_DEFAULT_WINDOW_HOURS),
             SummaryBasis::Default,

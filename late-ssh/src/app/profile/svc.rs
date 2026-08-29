@@ -362,10 +362,9 @@ impl ProfileService {
     }
 
     /// Fire-and-forget: persist when this device's session went quiet before
-    /// it ended, so the next session on it can seed its AFK lines. A failure
-    /// is only logged: the next session starts with no line and `/summary`
-    /// falls back to its default window, which is the pre-existing behavior
-    /// rather than a wrong one.
+    /// it ended, the mark the next session's bare `/summary` reads from. A
+    /// failure is only logged: the next session falls back to the default
+    /// window, which is the pre-existing behavior rather than a wrong one.
     pub fn set_key_left_at(&self, user_id: Uuid, fingerprint: String, left_at: DateTime<Utc>) {
         let service = self.clone();
         tokio::spawn(
