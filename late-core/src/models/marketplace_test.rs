@@ -766,80 +766,6 @@ async fn ultimate_cast_cooldown_is_tracked_per_spell() {
 }
 
 #[tokio::test]
-async fn badge_purchase_equips_one_chat_badge_per_user() {
-    let test_db = test_db().await;
-    let user = create_test_user(&test_db.db, "badge-equip").await;
-    let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        BASIC_BADGE_PRICE * 2,
-        None,
-    )
-    .await
-    .expect("fund chips");
-
-    let first = buy_retired_permanent_badge(&mut client, user.id, "badge_cat").await;
-    let second = buy_retired_permanent_badge(&mut client, user.id, "badge_dog").await;
-
-    assert_eq!(first.status, PurchaseStatus::Purchased);
-    assert_eq!(second.status, PurchaseStatus::Purchased);
-
-    let equipped = client
-        .query(
-            "SELECT i.sku
-             FROM user_purchases p
-             JOIN marketplace_items i ON i.id = p.item_id
-             WHERE p.user_id = $1 AND p.equipped_slot = $2
-             ORDER BY i.sku",
-            &[&user.id, &CHAT_BADGE_SLOT],
-        )
-        .await
-        .expect("equipped rows");
-    assert_eq!(equipped.len(), 1);
-    assert_eq!(equipped[0].get::<_, String>("sku"), "badge_dog");
-
-    let equip_first = equip_owned_item_by_sku(&mut client, user.id, "badge_cat")
-        .await
-        .expect("equip first")
-        .expect("badge cat exists");
-    assert_eq!(
-        equip_first.status,
-        crate::models::marketplace::EquipStatus::Equipped
-    );
-
-    let equipped = client
-        .query_one(
-            "SELECT i.sku
-             FROM user_purchases p
-             JOIN marketplace_items i ON i.id = p.item_id
-             WHERE p.user_id = $1 AND p.equipped_slot = $2",
-            &[&user.id, &CHAT_BADGE_SLOT],
-        )
-        .await
-        .expect("equipped row");
-    assert_eq!(equipped.get::<_, String>("sku"), "badge_cat");
-
-    let changed = unequip_slot(&mut client, user.id, CHAT_BADGE_SLOT)
-        .await
-        .expect("unequip badge");
-    assert!(changed);
-
-    let equipped_count = client
-        .query_one(
-            "SELECT count(*)::bigint AS count
-             FROM user_purchases
-             WHERE user_id = $1 AND equipped_slot = $2",
-            &[&user.id, &CHAT_BADGE_SLOT],
-        )
-        .await
-        .expect("equipped count")
-        .get::<_, i64>("count");
-    assert_eq!(equipped_count, 0);
-}
-
-#[tokio::test]
 async fn dynamic_bonsai_purchase_equips_bonsai_variant_slot() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "dynamic-bonsai-equip").await;
@@ -876,6 +802,29 @@ async fn dynamic_bonsai_purchase_equips_bonsai_variant_slot() {
         .await
         .expect("unequip dynamic bonsai");
     assert!(changed);
+
+    // Going back to dynamic re-equips what is already owned, without buying
+    // again. `bonsai_variant` is the only slot anything still equips, so this
+    // is the only coverage `equip_owned_item_by_sku` has.
+    let requipped = equip_owned_item_by_sku(&mut client, user.id, DYNAMIC_BONSAI_SKU)
+        .await
+        .expect("re-equip dynamic bonsai")
+        .expect("dynamic bonsai exists");
+    assert_eq!(
+        requipped.status,
+        crate::models::marketplace::EquipStatus::Equipped
+    );
+    let equipped = client
+        .query_one(
+            "SELECT i.sku
+             FROM user_purchases p
+             JOIN marketplace_items i ON i.id = p.item_id
+             WHERE p.user_id = $1 AND p.equipped_slot = $2",
+            &[&user.id, &BONSAI_VARIANT_SLOT],
+        )
+        .await
+        .expect("equipped bonsai row");
+    assert_eq!(equipped.get::<_, String>("sku"), DYNAMIC_BONSAI_SKU);
 }
 
 #[tokio::test]
@@ -1148,7 +1097,7 @@ async fn badge_rental_activates_one_row_per_slot_and_a_rebuy_replaces_it() {
 }
 
 #[tokio::test]
-async fn chat_label_prefers_a_live_rental_over_the_legacy_permanent_badge() {
+async fn a_permanent_badge_equip_never_reaches_the_chat_label() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "badge-rental-legacy").await;
     let mut client = test_db.db.get().await.expect("db client");
@@ -1162,14 +1111,13 @@ async fn chat_label_prefers_a_live_rental_over_the_legacy_permanent_badge() {
     .await
     .expect("fund chips");
 
-    // Bought before rentals existed, and still equipped.
+    // The state migration 165 cleared: a permanent badge, bought before
+    // rentals existed, still sitting in `equipped_slot`. Nothing can create
+    // this any more, and the label query no longer reads it, so the only way
+    // to wear a badge is to rent one.
     buy_retired_permanent_badge(&mut client, user.id, "badge_cat").await;
-    assert_eq!(
-        chat_label(&client, user.id).await,
-        (Some("🐱".into()), None)
-    );
+    assert_eq!(chat_label(&client, user.id).await, (None, None));
 
-    // A live rental wins over it...
     purchase_item_by_sku_with_chat_effect(&mut client, user.id, "badge_dog_day", None)
         .await
         .expect("rent dog badge");
@@ -1178,12 +1126,44 @@ async fn chat_label_prefers_a_live_rental_over_the_legacy_permanent_badge() {
         (Some("🐶".into()), None)
     );
 
-    // ...and the permanent badge comes back when the rental lapses.
+    // The rental lapsing leaves the label bare. Before 165 the permanent
+    // badge came back here, which is what made a rented badge a mask rather
+    // than the whole thing.
     expire_effect_rows(&client, user.id, CHAT_BADGE_SLOT).await;
-    assert_eq!(
-        chat_label(&client, user.id).await,
-        (Some("🐱".into()), None)
-    );
+    assert_eq!(chat_label(&client, user.id).await, (None, None));
+}
+
+/// Migration 165's end state, asserted against the migrated database rather
+/// than the migration text: nothing anywhere still equips a chat badge or a
+/// flag, and no catalog row could put one there again.
+#[tokio::test]
+async fn no_purchase_equips_a_chat_badge_or_flag_slot() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let equipped = client
+        .query_one(
+            "SELECT count(*)::bigint AS count
+             FROM user_purchases
+             WHERE equipped_slot IN ($1, $2)",
+            &[&CHAT_BADGE_SLOT, &CHAT_FLAG_SLOT],
+        )
+        .await
+        .expect("equipped count")
+        .get::<_, i64>("count");
+    assert_eq!(equipped, 0);
+
+    let sellable = client
+        .query_one(
+            "SELECT count(*)::bigint AS count
+             FROM marketplace_items
+             WHERE active = true AND slot IN ($1, $2)",
+            &[&CHAT_BADGE_SLOT, &CHAT_FLAG_SLOT],
+        )
+        .await
+        .expect("sellable count")
+        .get::<_, i64>("count");
+    assert_eq!(sellable, 0);
 }
 
 #[tokio::test]

@@ -1115,12 +1115,28 @@ fn the_creation_screen_states_what_every_score_does_in_numbers() {
     assert!(text[0].contains("a point to place every 4 levels, scores cap at 20"));
     let rows: Vec<&str> = text[1..].iter().map(|s| s.trim_end()).collect();
     assert_eq!(rows.len(), 6);
-    assert!(rows[0].starts_with("  STR swings hit for +6%"), "{}", rows[0]);
+    assert!(
+        rows[0].starts_with("  STR swings hit for +6%"),
+        "{}",
+        rows[0]
+    );
     assert!(rows[0].ends_with("each +1 modifier: +2% swing damage"));
-    assert!(rows[1].starts_with("  DEX 2% of swings glance for half"), "{}", rows[1]);
-    assert!(rows[2].starts_with("  CON +8 max HP at level 1"), "{}", rows[2]);
+    assert!(
+        rows[1].starts_with("  DEX 2% of swings glance for half"),
+        "{}",
+        rows[1]
+    );
+    assert!(
+        rows[2].starts_with("  CON +8 max HP at level 1"),
+        "{}",
+        rows[2]
+    );
     assert!(rows[3].starts_with("  INT spell power +0%"), "{}", rows[3]);
-    assert!(rows[4].starts_with("  WIS +1 resource every tick"), "{}", rows[4]);
+    assert!(
+        rows[4].starts_with("  WIS +1 resource every tick"),
+        "{}",
+        rows[4]
+    );
     assert!(
         rows[5].starts_with("  CHA shops 6% dearer, sells 6% cheaper, taming -6%"),
         "{}",
@@ -1163,8 +1179,15 @@ fn the_point_screen_shows_now_and_after_for_every_score() {
             rule: "rule".to_string(),
         },
     ];
-    let text: Vec<String> = super::score_point_lines(&view, 40).iter().map(line_text).collect();
-    assert!(text[1].contains("Level 8 - 2 attribute point(s) to place"), "{}", text[1]);
+    let text: Vec<String> = super::score_point_lines(&view, 40)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert!(
+        text[1].contains("Level 8 - 2 attribute point(s) to place"),
+        "{}",
+        text[1]
+    );
     assert_eq!(text[4], "  1 STR 13 (+1) · Strength");
     assert_eq!(text[5], "      now: swings hit for +2%");
     assert_eq!(text[6], "      +1 -> 14: swings hit for +4%");
@@ -1215,18 +1238,43 @@ fn the_point_screen_fits_the_rows_it_has() {
         })
         .collect();
 
-    let tall: Vec<String> = super::score_point_lines(&view, 40).iter().map(line_text).collect();
+    let tall: Vec<String> = super::score_point_lines(&view, 40)
+        .iter()
+        .map(line_text)
+        .collect();
     assert_eq!(tall.len(), 34, "the full layout when there is room");
 
-    let short: Vec<String> = super::score_point_lines(&view, 21).iter().map(line_text).collect();
-    assert!(short.len() <= 21, "{} lines cannot fit 21 rows:\n{}", short.len(), short.join("\n"));
-    let rows: Vec<&String> = short.iter().filter(|l| l.trim_start().starts_with(char::is_numeric)).collect();
+    let short: Vec<String> = super::score_point_lines(&view, 21)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert!(
+        short.len() <= 21,
+        "{} lines cannot fit 21 rows:\n{}",
+        short.len(),
+        short.join("\n")
+    );
+    let rows: Vec<&String> = short
+        .iter()
+        .filter(|l| l.trim_start().starts_with(char::is_numeric))
+        .collect();
     assert_eq!(rows.len(), 6, "one line a score:\n{}", short.join("\n"));
     assert!(rows[0].starts_with("  1 STR 13 (+1)"), "{}", rows[0]);
-    assert!(rows[0].contains("swings hit for +2% -> swings hit for +4%"), "{}", rows[0]);
-    assert!(rows[1].contains("2% of swings crit for double -> the same until 14"), "{}", rows[1]);
+    assert!(
+        rows[0].contains("swings hit for +2% -> swings hit for +4%"),
+        "{}",
+        rows[0]
+    );
+    assert!(
+        rows[1].contains("2% of swings crit for double -> the same until 14"),
+        "{}",
+        rows[1]
+    );
     assert!(rows[2].contains("at the cap of 20"), "{}", rows[2]);
     assert!(rows[4].starts_with("  5 WIS 9 (-1)"), "{}", rows[4]);
     assert!(rows[5].starts_with("  6 CHA 7 (-2)"), "{}", rows[5]);
-    assert!(short.iter().any(|l| l.contains("1-6")), "the keys are still explained");
+    assert!(
+        short.iter().any(|l| l.contains("1-6")),
+        "the keys are still explained"
+    );
 }

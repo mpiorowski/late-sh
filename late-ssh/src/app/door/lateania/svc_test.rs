@@ -662,7 +662,11 @@ fn abilities_scale_with_spell_power_and_the_auto_swings_by_calling() {
     }
     s.engage_mob(uid(1), mob_id);
     s.use_ability(uid(1), 1);
-    assert_eq!(s.mobs[&mob_id].hp, 100_000 - 46, "Firebolt = (16 + 23) * 1.2");
+    assert_eq!(
+        s.mobs[&mob_id].hp,
+        100_000 - 46,
+        "Firebolt = (16 + 23) * 1.2"
+    );
     s.tick();
     assert_eq!(
         s.mobs[&mob_id].hp,
@@ -685,12 +689,20 @@ fn a_draught_needs_a_breath_between_gulps() {
     assert_eq!(s.players[&uid(1)].hp, 41);
     s.use_item(uid(1), 1300);
     assert_eq!(s.players[&uid(1)].hp, 41, "the second gulp is refused");
-    assert_eq!(s.players[&uid(1)].inventory.len(), 2, "and nothing is spent");
+    assert_eq!(
+        s.players[&uid(1)].inventory.len(),
+        2,
+        "and nothing is spent"
+    );
     for _ in 0..QUAFF_COOLDOWN_TICKS {
         s.tick();
     }
     s.use_item(uid(1), 1300);
-    assert_eq!(s.players[&uid(1)].inventory.len(), 1, "a breath later it goes down");
+    assert_eq!(
+        s.players[&uid(1)].inventory.len(),
+        1,
+        "a breath later it goes down"
+    );
     assert!(s.players[&uid(1)].hp > 41);
 }
 
@@ -768,7 +780,11 @@ fn a_stunned_foe_cannot_strike_at_a_fleeing_back() {
     );
     let hp_before = s.players[&uid(1)].hp;
     s.flee(uid(1));
-    assert_eq!(s.players[&uid(1)].hp, hp_before, "a reeling foe gets no blow");
+    assert_eq!(
+        s.players[&uid(1)].hp,
+        hp_before,
+        "a reeling foe gets no blow"
+    );
     let m = &s.mobs[&mob_id];
     assert_eq!(m.hp, m.spawn.max_hp);
     assert!(
@@ -3127,8 +3143,13 @@ fn every_ability_score_moves_the_number_it_promises() {
     s.players.get_mut(&uid(1)).unwrap().room = 3; // the smith
     s.players.get_mut(&uid(1)).unwrap().scores = AbilityScores::default();
     let p = &s.players[&uid(1)];
-    let (attack, swing, spell, hp, regen) =
-        (p.attack(), p.swing(), p.spell_power(), p.max_hp(), p.regen());
+    let (attack, swing, spell, hp, regen) = (
+        p.attack(),
+        p.swing(),
+        p.spell_power(),
+        p.max_hp(),
+        p.regen(),
+    );
     let sword = item(1001).unwrap(); // Iron Longsword, 80g
     let (buy, sell) = (p.buy_price(sword), p.sell_price(sword));
     s.players.get_mut(&uid(1)).unwrap().scores = AbilityScores {
@@ -3140,13 +3161,29 @@ fn every_ability_score_moves_the_number_it_promises() {
         charisma: 18,
     };
     let p = &s.players[&uid(1)];
-    assert_eq!(p.attack(), attack, "no score touches the attack rating itself");
+    assert_eq!(
+        p.attack(),
+        attack,
+        "no score touches the attack rating itself"
+    );
     assert_eq!(p.swing(), swing + swing * 8 / 100, "STR: +8% on the swing");
-    assert_eq!(p.spell_power(), spell + spell * 8 / 100, "INT: +8% spell power");
-    assert_eq!(p.max_hp(), hp + 4 * (4 + 1 / 2), "CON: +4 per modifier point at level 1");
+    assert_eq!(
+        p.spell_power(),
+        spell + spell * 8 / 100,
+        "INT: +8% spell power"
+    );
+    assert_eq!(
+        p.max_hp(),
+        hp + 4 * (4 + 1 / 2),
+        "CON: +4 per modifier point at level 1"
+    );
     assert_eq!(p.regen(), regen + 4, "WIS: +4 resource a tick");
     assert_eq!(p.buy_price(sword), buy - buy * 12 / 100, "CHA: 12% off");
-    assert_eq!(p.sell_price(sword), sell + sell * 12 / 100, "CHA: 12% on top of a sale");
+    assert_eq!(
+        p.sell_price(sword),
+        sell + sell * 12 / 100,
+        "CHA: 12% on top of a sale"
+    );
     assert_eq!(p.scores.crit_pct(), 8, "DEX: 8% of swings crit");
     let before = p.gold;
     s.buy(uid(1), 1001);
@@ -3166,7 +3203,11 @@ fn a_point_every_fourth_level_is_placed_from_the_point_screen() {
     assert_eq!(s.players[&uid(1)].score_points(), 0);
     s.players.get_mut(&uid(1)).unwrap().xp = xp_for_level(8);
     s.check_level_up(uid(1));
-    assert_eq!(s.players[&uid(1)].score_points(), 2, "levels 4 and 8 each earn one");
+    assert_eq!(
+        s.players[&uid(1)].score_points(),
+        2,
+        "levels 4 and 8 each earn one"
+    );
     assert!(
         s.players[&uid(1)]
             .log
@@ -3190,8 +3231,16 @@ fn a_point_every_fourth_level_is_placed_from_the_point_screen() {
             ("DEX", "no crits, no glances", Some("no crits, no glances")),
             ("CON", "+0 max HP at level 8", Some("+0 max HP at level 8")),
             ("INT", "spell power +0%", Some("spell power +0%")),
-            ("WIS", "+0 resource every tick", Some("+0 resource every tick")),
-            ("CHA", "shops 0% cheaper, sells 0% dearer, taming +0%", Some("shops 0% cheaper, sells 0% dearer, taming +0%")),
+            (
+                "WIS",
+                "+0 resource every tick",
+                Some("+0 resource every tick")
+            ),
+            (
+                "CHA",
+                "shops 0% cheaper, sells 0% dearer, taming +0%",
+                Some("shops 0% cheaper, sells 0% dearer, taming +0%")
+            ),
         ],
         "the screen shows every score with its reading now and after the point"
     );
@@ -3201,7 +3250,11 @@ fn a_point_every_fourth_level_is_placed_from_the_point_screen() {
     let p = &s.players[&uid(1)];
     assert_eq!(p.scores.strength, 12);
     assert_eq!(p.score_points(), 0);
-    assert_eq!(p.swing(), p.attack() + p.attack() * 2 / 100, "and the swing moved with it");
+    assert_eq!(
+        p.swing(),
+        p.attack() + p.attack() * 2 / 100,
+        "and the swing moved with it"
+    );
     let snap = s.snapshot();
     assert!(
         snap.players[&uid(1)].score_offer.is_empty(),
@@ -3219,12 +3272,24 @@ fn a_point_every_fourth_level_is_placed_from_the_point_screen() {
     );
     s.choose_archetype(uid(1), 0);
     let snap = s.snapshot();
-    assert_eq!(snap.players[&uid(1)].score_offer[0].after, None, "STR at the cap");
+    assert_eq!(
+        snap.players[&uid(1)].score_offer[0].after,
+        None,
+        "STR at the cap"
+    );
     s.spend_score_point(uid(1), 0);
     let p = &s.players[&uid(1)];
     assert_eq!(p.scores.strength, 20);
-    assert_eq!(p.score_points(), 1, "the point is still there to place elsewhere");
-    assert!(p.log.iter().any(|l| l.text.contains("already at its peak of 20")));
+    assert_eq!(
+        p.score_points(),
+        1,
+        "the point is still there to place elsewhere"
+    );
+    assert!(
+        p.log
+            .iter()
+            .any(|l| l.text.contains("already at its peak of 20"))
+    );
 }
 
 /// A point can only be placed on a score below the cap, and the point screen
@@ -3257,7 +3322,11 @@ fn a_character_with_every_score_at_the_cap_is_never_held_at_the_point_screen() {
         "25 earned, but only one slot left to put a point in"
     );
     let snap = s.snapshot();
-    assert_eq!(snap.players[&uid(1)].score_offer.len(), 6, "the screen offers that one");
+    assert_eq!(
+        snap.players[&uid(1)].score_offer.len(),
+        6,
+        "the screen offers that one"
+    );
 
     s.spend_score_point(uid(1), 5);
     let p = &s.players[&uid(1)];
@@ -3295,12 +3364,23 @@ fn a_corpse_with_a_point_pending_sees_the_corpse_not_the_point_screen() {
     s.strike_player(uid(1), 9999, DamageType::Physical, "a test foe");
     assert!(s.players[&uid(1)].dead);
     let snap = s.snapshot();
-    assert!(snap.players[&uid(1)].score_offer.is_empty(), "the corpse view wins");
-    assert_eq!(snap.players[&uid(1)].score_points, 1, "the point is still owed");
+    assert!(
+        snap.players[&uid(1)].score_offer.is_empty(),
+        "the corpse view wins"
+    );
+    assert_eq!(
+        snap.players[&uid(1)].score_points,
+        1,
+        "the point is still owed"
+    );
 
     s.release_to_temple(uid(1));
     assert!(!s.players[&uid(1)].dead);
-    assert_eq!(s.snapshot().players[&uid(1)].score_offer.len(), 6, "and offered once risen");
+    assert_eq!(
+        s.snapshot().players[&uid(1)].score_offer.len(),
+        6,
+        "and offered once risen"
+    );
 }
 
 #[test]
@@ -3313,7 +3393,11 @@ fn a_character_saved_before_points_existed_has_them_all_to_place() {
     saved.level = 40;
     assert_eq!(saved.score_points_spent, 0);
     s.hydrate(uid(1), &saved);
-    assert_eq!(s.players[&uid(1)].score_points(), 10, "ten points back-paid at level 40");
+    assert_eq!(
+        s.players[&uid(1)].score_points(),
+        10,
+        "ten points back-paid at level 40"
+    );
 
     // A save claiming more spent than the level ever earned is clamped, never negative.
     saved.score_points_spent = 30;

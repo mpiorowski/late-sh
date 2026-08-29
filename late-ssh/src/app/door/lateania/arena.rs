@@ -439,7 +439,9 @@ impl Recipe {
             self.companion.label(),
             self.coat.label(),
             self.potions,
-            item(potion_for_level(self.level)).map(|i| i.name).unwrap_or("?"),
+            item(potion_for_level(self.level))
+                .map(|i| i.name)
+                .unwrap_or("?"),
             self.policy.label(),
             self.build.label()
         )
@@ -463,7 +465,7 @@ pub(super) fn dps_or_first(class: Class) -> &'static ArchetypeDef {
 /// stock, `items.rs` ids `1300..1306`).
 pub(super) fn potion_for_level(level: i32) -> u32 {
     match level {
-        ..=9 => 1300,   // Minor Healing Draught, 40
+        ..=9 => 1300,    // Minor Healing Draught, 40
         10..=24 => 1301, // Healing Potion, 90
         25..=39 => 1302, // Greater Healing Elixir, 210
         40..=59 => 1304, // Elixir of Renewal, 180 + 120 resource
@@ -695,13 +697,19 @@ impl Arena {
         };
         let mut acc = Accum::default();
         let outcome = match recipe.policy {
-            Policy::Honest | Policy::Routed => self.run_honest(uid, mob_id, home, &recipe, &mut acc),
+            Policy::Honest | Policy::Routed => {
+                self.run_honest(uid, mob_id, home, &recipe, &mut acc)
+            }
             Policy::HitAndRun => self.run_hit_and_run(uid, mob_id, home, &recipe, &mut acc),
             Policy::StunAndFlee => self.run_stun_and_flee(uid, mob_id, home, &recipe, &mut acc),
         };
         let hp_left_pct = {
             let p = &self.s.players[&uid];
-            if p.dead { 0 } else { p.hp * 100 / p.max_hp().max(1) }
+            if p.dead {
+                0
+            } else {
+                p.hp * 100 / p.max_hp().max(1)
+            }
         };
         self.s.players.remove(&uid);
         self.s.mob_dots.remove(&mob_id);
@@ -730,7 +738,13 @@ impl Arena {
         let profile = self.s.mobs[&dummy].spawn.profile;
         let uid = self.spawn_character(&recipe, home, &profile);
         let p = &self.s.players[&uid];
-        let out = (p.attack(), p.swing(), p.spell_power(), p.max_hp(), p.armor());
+        let out = (
+            p.attack(),
+            p.swing(),
+            p.spell_power(),
+            p.max_hp(),
+            p.armor(),
+        );
         self.s.players.remove(&uid);
         out
     }
@@ -826,7 +840,8 @@ impl Arena {
             .species()
             .map(|sp| Pet::new(sp, (PET_MAX_LEVEL as i64 - 1) * LOYALTY_PER_LEVEL));
         let potion = potion_for_level(recipe.level);
-        p.inventory.extend(std::iter::repeat_n(potion, recipe.potions as usize));
+        p.inventory
+            .extend(std::iter::repeat_n(potion, recipe.potions as usize));
         if let Some(vial) = recipe.coat.vial_for(foe) {
             p.inventory
                 .extend(std::iter::repeat_n(vial, COAT_SUPPLY as usize));
@@ -1068,7 +1083,11 @@ impl Arena {
         let delta = (before - after).max(0);
         let due = dot_due + coat_due;
         let dots_applied = due.min(delta);
-        let coat_applied = if due > 0 { dots_applied * coat_due / due } else { 0 };
+        let coat_applied = if due > 0 {
+            dots_applied * coat_due / due
+        } else {
+            0
+        };
         let rest = delta - dots_applied;
         let auto = self.s.players[&uid]
             .log
@@ -1125,9 +1144,8 @@ impl Arena {
             .iter()
             .filter(|a| a.effect == AbilityEffect::DamageOverTime)
             .count();
-        let ready = |a: &Ability| {
-            p.cooldowns.get(&a.id).copied().unwrap_or(0) == 0 && p.resource >= a.cost
-        };
+        let ready =
+            |a: &Ability| p.cooldowns.get(&a.id).copied().unwrap_or(0) == 0 && p.resource >= a.cost;
         let best = |value: &dyn Fn(&Ability) -> Option<i32>| -> Option<u8> {
             known
                 .iter()
@@ -1137,11 +1155,11 @@ impl Arena {
                 .max_by_key(|(v, _)| *v)
                 .map(|(_, slot)| slot)
         };
-        let of = |effect: AbilityEffect| {
-            move |a: &Ability| (a.effect == effect).then_some(a.magnitude)
-        };
+        let of =
+            |effect: AbilityEffect| move |a: &Ability| (a.effect == effect).then_some(a.magnitude);
         if prefer_stun
-            && let Some(slot) = best(&|a| (a.effect == AbilityEffect::Stun).then_some(a.duration as i32))
+            && let Some(slot) =
+                best(&|a| (a.effect == AbilityEffect::Stun).then_some(a.duration as i32))
         {
             return Some(slot);
         }

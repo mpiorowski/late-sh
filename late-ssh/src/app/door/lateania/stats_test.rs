@@ -50,7 +50,10 @@ fn every_score_moves_one_number_and_says_so() {
     assert_eq!(s.price_pct(), -6);
     assert_eq!(s.tame_pct(), -6);
     assert_eq!(s.effect(Score::Strength, 1), "swings hit for +8%");
-    assert_eq!(s.effect(Score::Dexterity, 1), "4% of swings crit for double");
+    assert_eq!(
+        s.effect(Score::Dexterity, 1),
+        "4% of swings crit for double"
+    );
     assert_eq!(s.effect(Score::Constitution, 50), "+87 max HP at level 50");
     assert_eq!(s.effect(Score::Intelligence, 1), "spell power -2%");
     assert_eq!(s.effect(Score::Wisdom, 1), "+1 resource every tick");
@@ -62,7 +65,10 @@ fn every_score_moves_one_number_and_says_so() {
         dexterity: 7,
         ..Default::default()
     };
-    assert_eq!(frail.effect(Score::Dexterity, 1), "4% of swings glance for half");
+    assert_eq!(
+        frail.effect(Score::Dexterity, 1),
+        "4% of swings glance for half"
+    );
     assert_eq!(
         AbilityScores::default().effect(Score::Dexterity, 1),
         "no crits, no glances"

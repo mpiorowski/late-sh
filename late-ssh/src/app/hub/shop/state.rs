@@ -17,9 +17,7 @@ use super::{
 };
 use late_core::models::{
     bonsai_decay_protection::BonsaiDecayProtection,
-    marketplace::{
-        AQUARIUM_FOOD_SKU, CHAT_CONSUMABLE_ITEM_KIND, PET_FOOD_SKU,
-    },
+    marketplace::{AQUARIUM_FOOD_SKU, CHAT_CONSUMABLE_ITEM_KIND, PET_FOOD_SKU},
     rental::TITLE_MAX_LEN,
     username_effect::{GlowColor, GradientPair, UsernameEffect},
 };
@@ -663,9 +661,8 @@ impl ShopState {
         }
         // The rentals lapse in the detail pane on their own clock, with no
         // refresh to wait for. `chat_label_*` is deliberately left alone: what
-        // the label falls back to once a rental lapses (a legacy permanent
-        // badge, or nothing) is the label query's call, and it arrives with
-        // the next snapshot.
+        // the label carries is the label query's call, and it arrives with the
+        // next snapshot.
         for rental in [
             &mut self.snapshot.active_badge_rental,
             &mut self.snapshot.active_flag_rental,

@@ -19,8 +19,8 @@ use crate::usernames::UsernameLookup;
 use super::{
     appearance,
     classes::Class,
-    stats::{POINT_EVERY_LEVELS, SCORE_CAP, Score},
     state::{ClickAction, Heading, MapMode, Panel, State},
+    stats::{POINT_EVERY_LEVELS, SCORE_CAP, Score},
     svc::{LeaderboardEntry, LogKind, MobView, PlayerView, QuestKind, QuestView, SectionRow},
     world::{Dir, MapCell, MiniMap, RoomId},
 };

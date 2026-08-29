@@ -118,7 +118,11 @@ fn tame_chance_rises_with_surplus_and_refuses_under_level() {
     // sure thing for a trained tamer.
     let easy = &TAMEABLE[0];
     assert_eq!(tame_chance(0, easy, 0), 40, "at exactly the required level");
-    assert_eq!(tame_chance(0, easy, 6), 46, "charisma adds its percent points");
+    assert_eq!(
+        tame_chance(0, easy, 6),
+        46,
+        "charisma adds its percent points"
+    );
     assert_eq!(tame_chance(0, easy, -6), 34, "and takes them away");
     let trained = super::super::skills::xp_for_skill_level(10);
     assert!(

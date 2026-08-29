@@ -172,7 +172,11 @@ impl MobSpawn {
         if let Some(crown) = CROWNS.iter().find(|c| c.name == self.name) {
             return crown.level;
         }
-        let share = if self.boss { BOSS_BITE_PCT } else { TRASH_BITE_PCT };
+        let share = if self.boss {
+            BOSS_BITE_PCT
+        } else {
+            TRASH_BITE_PCT
+        };
         level_for_bite(self.damage * 100 / share)
     }
 
@@ -7255,20 +7259,90 @@ pub const CROWN_SURVIVE_TICKS: i32 = 11;
 /// crown falls to a prepared L80 and 80-100 is prestige; the first crown is
 /// a real fight at L12 with the right prep (the Treant teaches the oil).
 pub const CROWNS: &[Crown] = &[
-    Crown { name: "the Elder Treant", level: 12, max_hp: 1160, damage: 19 },
-    Crown { name: "the Bone Tyrant", level: 16, max_hp: 1806, damage: 28 },
-    Crown { name: "the Lich Vael", level: 20, max_hp: 2100, damage: 32 },
-    Crown { name: "the Magma Colossus", level: 24, max_hp: 2324, damage: 35 },
-    Crown { name: "the Wyrm of Frostspire", level: 27, max_hp: 2982, damage: 45 },
-    Crown { name: "the Fallen Paladin", level: 30, max_hp: 3248, damage: 48 },
-    Crown { name: "the Archdemon Mal'gareth", level: 35, max_hp: 4088, damage: 62 },
-    Crown { name: "The Bonewright Lich", level: 40, max_hp: 4508, damage: 75 },
-    Crown { name: "the Elder Dryad", level: 40, max_hp: 4508, damage: 75 },
-    Crown { name: "the Abyss-Thing", level: 40, max_hp: 4508, damage: 75 },
-    Crown { name: "the King Who Was Promised Nothing", level: 55, max_hp: 9926, damage: 138 },
-    Crown { name: "Yssgar, the Sundering Deep", level: 65, max_hp: 17528, damage: 253 },
-    Crown { name: "Kaethyr the Unquenched, Ashen King of Kaelmyr", level: 75, max_hp: 22722, damage: 368 },
-    Crown { name: "Kaethyr Ascendant, Who Sang the God Awake", level: 80, max_hp: 24542, damage: 397 },
+    Crown {
+        name: "the Elder Treant",
+        level: 12,
+        max_hp: 1160,
+        damage: 19,
+    },
+    Crown {
+        name: "the Bone Tyrant",
+        level: 16,
+        max_hp: 1806,
+        damage: 28,
+    },
+    Crown {
+        name: "the Lich Vael",
+        level: 20,
+        max_hp: 2100,
+        damage: 32,
+    },
+    Crown {
+        name: "the Magma Colossus",
+        level: 24,
+        max_hp: 2324,
+        damage: 35,
+    },
+    Crown {
+        name: "the Wyrm of Frostspire",
+        level: 27,
+        max_hp: 2982,
+        damage: 45,
+    },
+    Crown {
+        name: "the Fallen Paladin",
+        level: 30,
+        max_hp: 3248,
+        damage: 48,
+    },
+    Crown {
+        name: "the Archdemon Mal'gareth",
+        level: 35,
+        max_hp: 4088,
+        damage: 62,
+    },
+    Crown {
+        name: "The Bonewright Lich",
+        level: 40,
+        max_hp: 4508,
+        damage: 75,
+    },
+    Crown {
+        name: "the Elder Dryad",
+        level: 40,
+        max_hp: 4508,
+        damage: 75,
+    },
+    Crown {
+        name: "the Abyss-Thing",
+        level: 40,
+        max_hp: 4508,
+        damage: 75,
+    },
+    Crown {
+        name: "the King Who Was Promised Nothing",
+        level: 55,
+        max_hp: 9926,
+        damage: 138,
+    },
+    Crown {
+        name: "Yssgar, the Sundering Deep",
+        level: 65,
+        max_hp: 17528,
+        damage: 253,
+    },
+    Crown {
+        name: "Kaethyr the Unquenched, Ashen King of Kaelmyr",
+        level: 75,
+        max_hp: 22722,
+        damage: 368,
+    },
+    Crown {
+        name: "Kaethyr Ascendant, Who Sang the God Awake",
+        level: 80,
+        max_hp: 24542,
+        damage: 397,
+    },
 ];
 
 /// The level a named crown is tuned to fall at. A name that is not a crown is

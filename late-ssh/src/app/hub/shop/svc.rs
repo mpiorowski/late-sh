@@ -134,10 +134,9 @@ pub struct ShopCatalogItem {
     /// transaction reads it, so the shop never quotes a window the activation
     /// would not honour.
     pub rental_duration_secs: Option<i64>,
-    /// Which chat-label slot this item fills: the legacy `slot` column for a
-    /// permanent badge, the payload slot for a rental. The Badges and Flags
-    /// tabs read this, so a rental lands in the same tab its permanent twin
-    /// used to.
+    /// Which chat-label slot this item fills, read from the rental payload.
+    /// Only a rental fills one: the Badges and Flags tabs are rentals top to
+    /// bottom, and a rental never touches `equipped_slot`.
     pub badge_slot: Option<String>,
     /// Whether this title rental sells a text the buyer writes rather than one
     /// the catalog carries.

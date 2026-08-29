@@ -97,8 +97,6 @@ fn make_state_with_bonsai_protection(protection: Option<BonsaiDecayProtection>) 
         active_title: None,
         chat_label_badge: None,
         chat_label_flag: None,
-        legacy_badge_equipped: false,
-        legacy_flag_equipped: false,
         custom_titles_available: true,
     };
     ShopState::for_test_snapshot(snapshot)

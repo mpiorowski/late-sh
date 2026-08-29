@@ -65,7 +65,7 @@ pub fn duration_secs(payload: &Value, fallback: i64) -> i64 {
 }
 
 /// Which of the two chat-label slots a badge rental fills. The strings are the
-/// legacy `marketplace_items.slot` values, reused verbatim as effect kinds so
+/// retired `marketplace_items.slot` values, reused verbatim as effect kinds so
 /// the chat label query reads one name per slot whichever path filled it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BadgeSlot {

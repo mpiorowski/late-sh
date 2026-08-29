@@ -45,9 +45,21 @@ fn the_body_gets_the_rows_its_wrapped_text_needs() {
     let start = intro.scene("start").expect("the start scene");
     let body: Vec<Line<'_>> = start.text.iter().map(|t| Line::from(*t)).collect();
     assert_eq!(body.len(), 3);
-    assert_eq!(body_height(&body, 62, 18), 6, "three lines wrap to two rows each at 62 columns");
-    assert_eq!(body_height(&body, 200, 18), 3, "and fit one to a row when the card is wide");
+    assert_eq!(
+        body_height(&body, 62, 18),
+        6,
+        "three lines wrap to two rows each at 62 columns"
+    );
+    assert_eq!(
+        body_height(&body, 200, 18),
+        3,
+        "and fit one to a row when the card is wide"
+    );
     // Short bodies keep their floor, and a long one never starves the actions.
     assert_eq!(body_height(&[Line::from("a")], 62, 18), 3);
-    assert_eq!(body_height(&body, 20, 18), 10, "capped at half the panel plus the floor");
+    assert_eq!(
+        body_height(&body, 20, 18),
+        10,
+        "capped at half the panel plus the floor"
+    );
 }

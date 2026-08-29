@@ -6429,7 +6429,11 @@ impl WorldState {
     /// weighted by the effect (see `ability_coef_pct`). No class traits, no
     /// archetype: the raw number every effect arm starts from.
     fn ability_power(&self, ability: &Ability, user_id: Uuid) -> i32 {
-        let sp = self.players.get(&user_id).map(|p| p.spell_power()).unwrap_or(0);
+        let sp = self
+            .players
+            .get(&user_id)
+            .map(|p| p.spell_power())
+            .unwrap_or(0);
         ability.magnitude + sp * ability_coef_pct(ability.effect) / 100
     }
 
@@ -7897,25 +7901,33 @@ impl WorldState {
             .collect();
 
         for user_id in fighters {
-            let (mob_id, base_atk, opening, frenzy_pct, class, crit_pct) = match self.players.get(&user_id) {
-                Some(p) => {
-                    // Berserker "Frenzy": the more it bleeds the harder it
-                    // swings, half a percent of damage per percent of health
-                    // missing, up to +50% at death's door. It used to start
-                    // only below half health, which a fighter who drinks under
-                    // 40% almost never sees: a trait gated past the point of
-                    // use, and the Berserker read as a Warrior with less HP.
-                    let frenzy = if p.class == Some(Class::Berserker) {
-                        let max = p.max_hp().max(1);
-                        let missing = ((max - p.hp).max(0) * 100) / max;
-                        (missing / 2).clamp(0, 50)
-                    } else {
-                        0
-                    };
-                    (p.target, p.swing(), p.opening_strike, frenzy, p.class, p.scores.crit_pct())
-                }
-                None => continue,
-            };
+            let (mob_id, base_atk, opening, frenzy_pct, class, crit_pct) =
+                match self.players.get(&user_id) {
+                    Some(p) => {
+                        // Berserker "Frenzy": the more it bleeds the harder it
+                        // swings, half a percent of damage per percent of health
+                        // missing, up to +50% at death's door. It used to start
+                        // only below half health, which a fighter who drinks under
+                        // 40% almost never sees: a trait gated past the point of
+                        // use, and the Berserker read as a Warrior with less HP.
+                        let frenzy = if p.class == Some(Class::Berserker) {
+                            let max = p.max_hp().max(1);
+                            let missing = ((max - p.hp).max(0) * 100) / max;
+                            (missing / 2).clamp(0, 50)
+                        } else {
+                            0
+                        };
+                        (
+                            p.target,
+                            p.swing(),
+                            p.opening_strike,
+                            frenzy,
+                            p.class,
+                            p.scores.crit_pct(),
+                        )
+                    }
+                    None => continue,
+                };
             let Some(mob_id) = mob_id else { continue };
             let alive = self.mobs.get(&mob_id).map(|m| m.alive).unwrap_or(false);
             if !alive {
@@ -8216,8 +8228,12 @@ impl WorldState {
             let roll = rand::thread_rng().gen_range(0..100);
             let (atk, dex_line) = match crit_outcome(crit_pct, roll) {
                 CritOutcome::Plain => (atk, None),
-                CritOutcome::Critical => (atk * 2, Some("Critical hit! Your swing lands for double.")),
-                CritOutcome::Glancing => (atk / 2, Some("A glancing blow. Your swing lands for half.")),
+                CritOutcome::Critical => {
+                    (atk * 2, Some("Critical hit! Your swing lands for double."))
+                }
+                CritOutcome::Glancing => {
+                    (atk / 2, Some("A glancing blow. Your swing lands for half."))
+                }
             };
             if let Some(line) = dex_line {
                 self.log_to(attacker_id, LogKind::Combat, line.to_string());

@@ -1507,7 +1507,12 @@ fn displayed_levels_read_by_bite_along_the_crown_ladder() {
             .iter()
             .find(|s| s.name == crown.name)
             .expect("every crown spawns");
-        assert_eq!(spawn.level(), crown.level, "{} reads its target", crown.name);
+        assert_eq!(
+            spawn.level(),
+            crown.level,
+            "{} reads its target",
+            crown.name
+        );
     }
     let is_crown = |s: &MobSpawn| CROWNS.iter().any(|c| c.name == s.name);
     for boss in [false, true] {
@@ -1544,7 +1549,11 @@ fn displayed_levels_read_by_bite_along_the_crown_ladder() {
             .expect("the Treant"),
     );
     let treant = crown_of("the Elder Treant");
-    for s in world.spawns.iter().filter(|s| !s.boss && zone_of(s) == treant_zone) {
+    for s in world
+        .spawns
+        .iter()
+        .filter(|s| !s.boss && zone_of(s) == treant_zone)
+    {
         assert!(
             s.level() < treant.level,
             "{} on the Treant's doorstep reads L{}, at or past the crown",
