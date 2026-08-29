@@ -8,7 +8,7 @@ use crate::test_helpers::{
 };
 use late_core::models::cyberspace_account::CyberspaceAccount;
 use late_core::models::user::{RightSidebarMode, RoomListMode};
-use late_core::models::user_ssh_key::{KeyLayout, UserSshKey};
+use late_core::models::user_ssh_key::{KeyLayout, UserSshKey, extract_key_layout};
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
     chat_message_gild::{ChatMessageGild, GildPlacement, GildTier},
@@ -1693,7 +1693,7 @@ async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelate
             let db = db.clone();
             async move {
                 let client = db.get().await.expect("db client");
-                UserSshKey::layout_for(&client, user.id, "SHA256:phone")
+                stored_layout(&client, user.id, "SHA256:phone")
                     .await
                     .expect("phone layout")
                     == Some(KeyLayout {
@@ -1706,7 +1706,7 @@ async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelate
     )
     .await;
     assert_eq!(
-        UserSshKey::layout_for(&client, user.id, "SHA256:desktop")
+        stored_layout(&client, user.id, "SHA256:desktop")
             .await
             .expect("desktop layout"),
         None,
@@ -1757,7 +1757,7 @@ async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelate
         "the legacy mirror must stay in step with the account default"
     );
     assert_eq!(
-        UserSshKey::layout_for(&client, user.id, "SHA256:phone")
+        stored_layout(&client, user.id, "SHA256:phone")
             .await
             .expect("phone layout after settings save"),
         Some(KeyLayout {
@@ -1767,7 +1767,7 @@ async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelate
         "the unrelated account save must preserve this device's layout"
     );
     assert_eq!(
-        UserSshKey::layout_for(&client, user.id, "SHA256:desktop")
+        stored_layout(&client, user.id, "SHA256:desktop")
             .await
             .expect("desktop layout after settings save"),
         None,
@@ -2161,4 +2161,14 @@ async fn mention_rendered_in_its_room_clears_the_rail_badge() {
     // The count republished after the stamp committed reaches the rail: the
     // badge is dark for good, with the mention read where it was said.
     wait_for_render_not_contains(&mut app, "mentions (").await;
+}
+
+/// The stored rail layout, read the way bootstrap reads it.
+async fn stored_layout(
+    client: &tokio_postgres::Client,
+    user_id: Uuid,
+    fingerprint: &str,
+) -> anyhow::Result<Option<KeyLayout>> {
+    let key = UserSshKey::find_by_fingerprint(client, user_id, fingerprint).await?;
+    Ok(key.and_then(|key| extract_key_layout(&key.settings)))
 }

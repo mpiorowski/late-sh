@@ -42,38 +42,50 @@ fn message(index: u64, author: Uuid, body: &str) -> ChatMessage {
 }
 
 #[test]
-fn a_bare_catch_up_starts_where_the_reader_went_quiet() {
+fn a_bare_catch_up_starts_at_the_line_and_says_which_line() {
     let now = chrono::Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, 0).unwrap();
-    let bare = |away_since| window_start(SummaryWindow::CatchUp { away_since }, now);
+    let max = now - chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS);
 
     // The whole point of the AFK line: a recent one means a short catch-up.
     // Nothing widens it, because it is not a guess about what was read, it
     // is when the keyboard went quiet.
     let ten_minutes_ago = now - chrono::Duration::minutes(10);
     assert_eq!(
-        bare(Some(ten_minutes_ago)),
-        (ten_minutes_ago, SummaryBasis::AwaySince)
+        window_start(SummaryWindow::SinceWentQuiet(ten_minutes_ago), now),
+        (ten_minutes_ago, SummaryBasis::WentQuiet, false)
     );
+    // A line inherited from the device is the same window with a different
+    // name on it: the head must not say "you went quiet" about a session
+    // that never happened here.
     let yesterday = now - chrono::Duration::hours(30);
-    assert_eq!(bare(Some(yesterday)), (yesterday, SummaryBasis::AwaySince));
-
-    // Past the max, cost policy wins, and the reader is still told the
-    // window is about their absence rather than a default.
     assert_eq!(
-        bare(Some(now - chrono::Duration::days(9))),
-        (
-            now - chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS),
-            SummaryBasis::AwaySince
-        )
+        window_start(SummaryWindow::SinceLeftDevice(yesterday), now),
+        (yesterday, SummaryBasis::LeftDevice, false)
+    );
+
+    // Past the max, cost policy wins, and the cap is reported so the head
+    // does not present the capped stamp as the moment the reader left.
+    assert_eq!(
+        window_start(
+            SummaryWindow::SinceLeftDevice(now - chrono::Duration::days(9)),
+            now
+        ),
+        (max, SummaryBasis::LeftDevice, true)
+    );
+    assert_eq!(
+        window_start(SummaryWindow::SinceWentQuiet(max), now),
+        (max, SummaryBasis::WentQuiet, false),
+        "exactly at the cap is not capped"
     );
 
     // No line: the one window that is handed out rather than derived, and
     // it says so.
     assert_eq!(
-        bare(None),
+        window_start(SummaryWindow::Default, now),
         (
             now - chrono::Duration::hours(SUMMARY_DEFAULT_WINDOW_HOURS),
-            SummaryBasis::NoAwayMark
+            SummaryBasis::Default,
+            false
         )
     );
 }
@@ -86,26 +98,37 @@ fn an_explicit_window_is_taken_at_face_value_up_to_the_max() {
 
     assert_eq!(
         explicit(chrono::Duration::hours(6)),
-        (now - chrono::Duration::hours(6), SummaryBasis::Explicit)
+        (
+            now - chrono::Duration::hours(6),
+            SummaryBasis::Explicit,
+            false
+        )
     );
     assert_eq!(
         explicit(chrono::Duration::minutes(90)),
-        (now - chrono::Duration::minutes(90), SummaryBasis::Explicit)
+        (
+            now - chrono::Duration::minutes(90),
+            SummaryBasis::Explicit,
+            false
+        )
     );
     // The max is still the max, and an absurd ask clamps to it rather than
-    // overflowing the subtraction.
+    // overflowing the subtraction. The command layer refuses anything past
+    // the max before it gets here, so this is not reported as a cap.
     assert_eq!(
         explicit(chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS + 1)),
         (
             now - chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS),
-            SummaryBasis::Explicit
+            SummaryBasis::Explicit,
+            false
         )
     );
     assert_eq!(
         explicit(chrono::Duration::MAX),
         (
             now - chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS),
-            SummaryBasis::Explicit
+            SummaryBasis::Explicit,
+            false
         )
     );
 }
@@ -160,7 +183,7 @@ async fn ai_disabled_answers_unavailable_without_touching_the_db() {
         Uuid::from_u128(1),
         Uuid::from_u128(2),
         "#lounge".to_string(),
-        SummaryWindow::CatchUp { away_since: None },
+        SummaryWindow::Default,
         Vec::new(),
     );
 
@@ -184,7 +207,7 @@ async fn an_armed_cooldown_refuses_before_any_work() {
         user,
         room,
         "#lounge".to_string(),
-        SummaryWindow::CatchUp { away_since: None },
+        SummaryWindow::Default,
         Vec::new(),
     );
 
@@ -222,7 +245,7 @@ async fn an_in_flight_request_collapses_duplicates_without_spending() {
         user,
         room,
         "#lounge".to_string(),
-        SummaryWindow::CatchUp { away_since: None },
+        SummaryWindow::Default,
         Vec::new(),
     );
 

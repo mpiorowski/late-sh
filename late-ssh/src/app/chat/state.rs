@@ -96,6 +96,28 @@ const READ_CURSOR_FLUSH_DELAY: Duration = Duration::from_secs(2);
 /// that a real absence is caught before the conversation moves on.
 const AFK_LINE_IDLE: Duration = Duration::from_secs(10 * 60);
 
+/// One room's AFK line: when this terminal's human stopped attending it,
+/// and how the session knows. See [`ChatState::afk_lines`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AfkLine {
+    pub at: DateTime<Utc>,
+    pub source: AfkLineSource,
+}
+
+/// Where an [`AfkLine`] came from. Carried so the `/summary` head can say
+/// which sentence it is telling: "since you went quiet" is a claim about
+/// this session, "since your last session on this device" is a claim about
+/// the previous one, and the room cannot tell them apart from the instant
+/// alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AfkLineSource {
+    /// This session's keyboard went quiet for [`AFK_LINE_IDLE`].
+    Idle,
+    /// Seeded from `user_ssh_keys.left_at`: the last session on this device
+    /// went quiet, then ended.
+    DeviceLeave,
+}
+
 pub(crate) type InlineImagePreview = crate::app::files::inline_image::InlineImagePreview;
 pub(crate) type InlineImageRenderSettings =
     crate::app::files::inline_image::InlineImageRenderSettings;
@@ -759,7 +781,7 @@ pub struct ChatState {
     /// it exactly when it is wanted), and not by `/summary` either: the
     /// summary tells you what is below the line, it does not move where
     /// the line is, so asking twice reads the same stretch twice.
-    pub(crate) afk_lines: HashMap<Uuid, DateTime<Utc>>,
+    pub(crate) afk_lines: HashMap<Uuid, AfkLine>,
     /// When the last session on this device went quiet, waiting to seed
     /// `afk_lines` once the room list is known. Consumed by the first
     /// snapshot: a room joined later in this session is not one you left.
@@ -1411,7 +1433,13 @@ impl ChatState {
         let Ok(idle) = chrono::Duration::from_std(idle) else {
             return false;
         };
-        self.afk_lines.insert(room_id, Utc::now() - idle);
+        self.afk_lines.insert(
+            room_id,
+            AfkLine {
+                at: Utc::now() - idle,
+                source: AfkLineSource::Idle,
+            },
+        );
         self.bump_room_version(room_id);
         true
     }
@@ -1431,7 +1459,13 @@ impl ChatState {
             if self.afk_lines.contains_key(&room_id) {
                 continue;
             }
-            self.afk_lines.insert(room_id, left_at);
+            self.afk_lines.insert(
+                room_id,
+                AfkLine {
+                    at: left_at,
+                    source: AfkLineSource::DeviceLeave,
+                },
+            );
             self.bump_room_version(room_id);
             changed = true;
         }
@@ -1723,26 +1757,38 @@ impl ChatState {
                     message_count,
                     since,
                     basis,
+                    capped,
                     truncated,
                 } => {
                     let plural = if message_count == 1 { "" } else { "s" };
                     let stamp = crate::app::common::time::instant_for_viewer(since, self.viewer_tz);
                     // Every arm names where the window came from, because
-                    // "since you stepped away" and "the last 24h because
-                    // you never did" are different claims and the reader
-                    // has to be able to tell which one they got.
+                    // "since you went quiet", "since your last session on
+                    // this device", and "the last 24h" are different claims
+                    // and the reader has to be able to tell which one they
+                    // got. A capped window says so rather than presenting
+                    // the cap as the moment they left.
                     let mut head = match basis {
-                        SummaryBasis::AwaySince => format!(
-                            "{message_count} message{plural} since you stepped away · {stamp}"
+                        SummaryBasis::WentQuiet => format!(
+                            "{message_count} message{plural} since you went quiet · {stamp}"
                         ),
-                        SummaryBasis::NoAwayMark => format!(
-                            "{message_count} message{plural} since {stamp} · the last {}h, you never stepped away here",
+                        SummaryBasis::LeftDevice => format!(
+                            "{message_count} message{plural} since your last session on this device · {stamp}"
+                        ),
+                        SummaryBasis::Default => format!(
+                            "{message_count} message{plural} since {stamp} · the last {}h",
                             crate::app::ai::summary::SUMMARY_DEFAULT_WINDOW_HOURS
                         ),
                         SummaryBasis::Explicit => {
                             format!("{message_count} message{plural} since {stamp}")
                         }
                     };
+                    if capped {
+                        head.push_str(&format!(
+                            " · capped at {}h",
+                            crate::app::ai::summary::SUMMARY_MAX_WINDOW_HOURS
+                        ));
+                    }
                     if truncated {
                         head.push_str(" · older messages past the cap left out");
                     }
@@ -1762,10 +1808,12 @@ impl ChatState {
                 }
                 SummaryOutcome::Empty { basis } => {
                     banner = Some(Banner::info(match basis {
-                        SummaryBasis::AwaySince => "Nothing new since you stepped away",
-                        SummaryBasis::NoAwayMark | SummaryBasis::Explicit => {
-                            "Nothing said in that window"
+                        SummaryBasis::WentQuiet => "Nothing new since you went quiet",
+                        SummaryBasis::LeftDevice => {
+                            "Nothing new since your last session on this device"
                         }
+                        SummaryBasis::Default => "Nothing said in the last 24h",
+                        SummaryBasis::Explicit => "Nothing said in that window",
                     }));
                 }
                 SummaryOutcome::InFlight => {
@@ -2537,7 +2585,7 @@ impl ChatState {
     /// is how you go and look at the backlog, not proof you got through it,
     /// and the anchor should still be there when you close the modal.
     fn history_unread_cutoff(&self, room_id: Uuid) -> Option<DateTime<Utc>> {
-        self.afk_lines.get(&room_id).copied()
+        self.afk_lines.get(&room_id).map(|line| line.at)
     }
 
     /// Title for the history modal. A public-room mention can point at a room
@@ -3478,10 +3526,18 @@ impl ChatState {
                 return Some(Banner::error("Summaries cover public rooms only"));
             }
             let window = match parse_summary_arg(rest) {
-                // The room's AFK line is the session's fact to hand over;
-                // the service only clamps it.
-                SummaryArg::CatchUp => SummaryWindow::CatchUp {
-                    away_since: self.afk_lines.get(&room_id).copied(),
+                // The room's AFK line is the session's fact to hand over,
+                // source and all; the service only clamps it.
+                SummaryArg::CatchUp => match self.afk_lines.get(&room_id) {
+                    Some(AfkLine {
+                        at,
+                        source: AfkLineSource::Idle,
+                    }) => SummaryWindow::SinceWentQuiet(*at),
+                    Some(AfkLine {
+                        at,
+                        source: AfkLineSource::DeviceLeave,
+                    }) => SummaryWindow::SinceLeftDevice(*at),
+                    None => SummaryWindow::Default,
                 },
                 SummaryArg::Window(back) => SummaryWindow::Explicit(back),
                 SummaryArg::Unparseable => {

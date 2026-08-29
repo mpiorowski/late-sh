@@ -176,17 +176,6 @@ impl UserSshKey {
         Ok(row.map(Self::from))
     }
 
-    /// Load just this device's rail layout, or `None` when the key has no
-    /// stored layout (or no row yet) and should follow the account default.
-    pub async fn layout_for(
-        client: &Client,
-        user_id: Uuid,
-        fingerprint: &str,
-    ) -> Result<Option<KeyLayout>> {
-        let key = Self::find_by_fingerprint(client, user_id, fingerprint).await?;
-        Ok(key.and_then(|key| extract_key_layout(&key.settings)))
-    }
-
     /// Store this device's rail layout. Scoped by owner as well as fingerprint
     /// so a stale fingerprint can never write onto another account's key.
     pub async fn set_layout(
@@ -244,16 +233,29 @@ impl UserSshKey {
         Ok(())
     }
 
-    /// When a session on this device last left the app, or `None` when the
-    /// key has never ended one (or has no row yet). Seeds the next session's
-    /// AFK line on this device.
-    pub async fn left_at_for(
+    /// Take this device's mark: when a session on it last left the app, or
+    /// `None` when the key has never ended one (or has no row yet). The read
+    /// clears the column, so a mark is served to exactly one session. That
+    /// is what makes a lost [`set_left_at`](Self::set_left_at) safe: the
+    /// next session starts with no line rather than inheriting a leave from
+    /// before the session that failed to write, which would draw a divider
+    /// and a `/summary` window over messages already read.
+    pub async fn take_left_at(
         client: &Client,
         user_id: Uuid,
         fingerprint: &str,
     ) -> Result<Option<DateTime<Utc>>> {
-        let key = Self::find_by_fingerprint(client, user_id, fingerprint).await?;
-        Ok(key.and_then(|key| key.left_at))
+        let row = client
+            .query_opt(
+                "UPDATE user_ssh_keys
+                 SET left_at = NULL, updated = current_timestamp
+                 WHERE fingerprint = $1 AND user_id = $2
+                 RETURNING (SELECT left_at FROM user_ssh_keys
+                            WHERE fingerprint = $1 AND user_id = $2) AS left_at",
+                &[&fingerprint, &user_id],
+            )
+            .await?;
+        Ok(row.and_then(|row| row.get("left_at")))
     }
 
     /// Record that a session on this device ended, with `left_at` the moment

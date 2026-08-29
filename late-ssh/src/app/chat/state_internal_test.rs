@@ -3632,10 +3632,12 @@ async fn the_afk_line_lands_where_the_silence_started_and_stays_there() {
     let before = Utc::now();
     assert!(state.sync_afk_line(super::AFK_LINE_IDLE));
     let placed = *state.afk_lines.get(&room_id).expect("line placed");
+    assert_eq!(placed.source, super::AfkLineSource::Idle);
     let expected = before - chrono::Duration::from_std(super::AFK_LINE_IDLE).unwrap();
     assert!(
-        (placed - expected).num_seconds().abs() <= 1,
-        "line at {placed}, expected about {expected}"
+        (placed.at - expected).num_seconds().abs() <= 1,
+        "line at {}, expected about {expected}",
+        placed.at
     );
 
     // Staying away longer does not drag the line forward: it says when you
@@ -3755,9 +3757,12 @@ async fn the_device_mark_seeds_every_room_once_when_the_room_list_lands() {
 
     wait_for_snapshot(&mut state).await;
     assert!(state.drain_snapshot());
-    assert_eq!(state.afk_lines.get(&lounge.id), Some(&left_at));
-    assert_eq!(state.afk_lines.get(&other.id), Some(&left_at));
-    assert_eq!(state.device_left_at, None, "the seed is spent");
+    let seeded = super::AfkLine {
+        at: left_at,
+        source: super::AfkLineSource::DeviceLeave,
+    };
+    assert_eq!(state.afk_lines.get(&lounge.id), Some(&seeded));
+    assert_eq!(state.afk_lines.get(&other.id), Some(&seeded));
 
     // A room that shows up in a later snapshot gets nothing from the mark.
     let joined_later = ChatRoom::get_or_create_public_room(&client, "afk-seed-later")
@@ -3776,7 +3781,7 @@ async fn the_device_mark_seeds_every_room_once_when_the_room_list_lands() {
             .any(|(room, _)| room.id == joined_later.id)
     );
     assert_eq!(state.afk_lines.get(&joined_later.id), None);
-    assert_eq!(state.afk_lines.get(&lounge.id), Some(&left_at));
+    assert_eq!(state.afk_lines.get(&lounge.id), Some(&seeded));
 }
 
 #[tokio::test]
@@ -3859,6 +3864,7 @@ async fn a_ready_summary_waits_for_an_open_overlay_instead_of_clobbering_it() {
             message_count: 3,
             since: Utc::now() - chrono::Duration::hours(2),
             basis: SummaryBasis::Explicit,
+            capped: false,
             truncated: false,
         },
     });
@@ -3909,6 +3915,7 @@ async fn a_ready_summary_dates_its_window_in_the_viewers_timezone() {
                 message_count: 3,
                 since,
                 basis: SummaryBasis::Explicit,
+                capped: false,
                 truncated: false,
             },
         });

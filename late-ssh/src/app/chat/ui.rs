@@ -2757,7 +2757,7 @@ pub struct ChatRenderInput<'a> {
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     /// This session's AFK line per room; the `new messages` divider
     /// draws before the first message from someone else past it.
-    pub afk_lines: &'a HashMap<Uuid, DateTime<Utc>>,
+    pub afk_lines: &'a HashMap<Uuid, super::state::AfkLine>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub favorite_room_ids: &'a [Uuid],
@@ -4881,7 +4881,7 @@ fn draw_selected_content(
                     message_reactions: view.message_reactions,
                     message_gilds: view.message_gilds,
                     inline_images: view.inline_images,
-                    unread_marker: view.afk_lines.get(&room.id).copied(),
+                    unread_marker: view.afk_lines.get(&room.id).map(|line| line.at),
                     drunk_levels: view.drunk_levels,
                     name_flair: view.name_flair,
                     peer_pomodoros: view.peer_pomodoros,

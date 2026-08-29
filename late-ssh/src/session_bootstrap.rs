@@ -240,6 +240,8 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
 pub struct DeviceState {
     pub layout: Option<KeyLayout>,
     /// When the last session on this device went quiet before it ended.
+    /// Taken, not read: the row is cleared by the read, so this session is
+    /// the only one that will ever be handed this particular leave.
     pub left_at: Option<DateTime<Utc>>,
 }
 
@@ -258,17 +260,21 @@ pub async fn load_device_state(
             return DeviceState::default();
         }
     };
-    match UserSshKey::find_by_fingerprint(&client, user_id, fingerprint).await {
-        Ok(Some(key)) => DeviceState {
-            layout: extract_key_layout(&key.settings),
-            left_at: key.left_at,
-        },
-        Ok(None) => DeviceState::default(),
+    let layout = match UserSshKey::find_by_fingerprint(&client, user_id, fingerprint).await {
+        Ok(key) => key.and_then(|key| extract_key_layout(&key.settings)),
         Err(e) => {
-            tracing::warn!(error = ?e, "failed to load device state");
-            DeviceState::default()
+            tracing::warn!(error = ?e, "failed to load device rail layout");
+            None
         }
-    }
+    };
+    let left_at = match UserSshKey::take_left_at(&client, user_id, fingerprint).await {
+        Ok(left_at) => left_at,
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to take device left_at");
+            None
+        }
+    };
+    DeviceState { layout, left_at }
 }
 
 pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs) -> SessionConfig {
