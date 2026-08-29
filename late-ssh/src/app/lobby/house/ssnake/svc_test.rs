@@ -528,9 +528,81 @@ fn steer_rejects_reversal_against_last_move() {
     assert_eq!(state.players[0].motion, Motion::Moving(Direction::Right));
     state.steer(a, Direction::Up);
     assert_eq!(state.players[0].motion, Motion::Moving(Direction::Up));
-    // Double-turn reversal within one tick is also blocked (OldDir guard).
-    state.steer(a, Direction::Left);
+    // Direct reversal against the queued direction is also blocked.
+    state.steer(a, Direction::Down);
     assert_eq!(state.players[0].motion, Motion::Moving(Direction::Up));
+    assert_eq!(
+        state.players[0].input_queue,
+        VecDeque::from([Direction::Up])
+    );
+}
+
+#[test]
+fn queued_steers_execute_in_order_across_ticks() {
+    let (mut state, a, _, generation) = arena_state();
+    state.steer(a, Direction::Right);
+    state.tick(generation);
+    assert_eq!(state.players[0].last_moved, Some(Direction::Right));
+
+    // Enqueue two rapid turns (U-turn)
+    state.steer(a, Direction::Up);
+    state.steer(a, Direction::Left);
+    assert_eq!(
+        state.players[0].input_queue,
+        VecDeque::from([Direction::Up, Direction::Left])
+    );
+    assert_eq!(state.players[0].motion, Motion::Moving(Direction::Left));
+
+    // Tick 1: snake steps Up
+    state.tick(generation);
+    assert_eq!(state.players[0].last_moved, Some(Direction::Up));
+    assert_eq!(state.players[0].motion, Motion::Moving(Direction::Up));
+
+    // Tick 2: snake steps Left
+    state.tick(generation);
+    assert_eq!(state.players[0].last_moved, Some(Direction::Left));
+    assert!(state.players[0].input_queue.is_empty());
+    assert_eq!(state.players[0].motion, Motion::Moving(Direction::Left));
+
+    // Tick 3: snake continues Left
+    state.tick(generation);
+    assert_eq!(state.players[0].last_moved, Some(Direction::Left));
+    assert!(state.players[0].input_queue.is_empty());
+}
+
+#[test]
+fn input_queue_caps_at_max_size() {
+    let (mut state, a, _, generation) = arena_state();
+    state.steer(a, Direction::Right);
+    state.tick(generation);
+
+    state.steer(a, Direction::Up);
+    state.steer(a, Direction::Left);
+    state.steer(a, Direction::Down); // Exceeds cap
+    assert_eq!(state.players[0].input_queue.len(), 2);
+    assert_eq!(
+        state.players[0].input_queue,
+        VecDeque::from([Direction::Up, Direction::Left])
+    );
+}
+
+#[test]
+fn input_queue_clears_on_crash() {
+    let (mut state, a, _, generation) = arena_state();
+    // Place player a facing right at (1, 1), walls at (2, 1) and (1, 0)
+    state.players[0].body = VecDeque::from([Pos { x: 1, y: 1 }]);
+    state.players[0].motion = Motion::Moving(Direction::Right);
+    state.players[0].last_moved = Some(Direction::Right);
+
+    // Queue move Up (into the wall at 1,0) then Left.
+    state.steer(a, Direction::Up);
+    state.steer(a, Direction::Left);
+    assert_eq!(state.players[0].input_queue.len(), 2);
+
+    // Next tick: moves Up, crashes into wall, clears queue.
+    state.tick(generation);
+    assert_eq!(state.players[0].motion, Motion::Dying);
+    assert!(state.players[0].input_queue.is_empty());
 }
 
 #[test]
