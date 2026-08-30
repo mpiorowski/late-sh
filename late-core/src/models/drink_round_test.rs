@@ -1,7 +1,7 @@
 use crate::{
     models::drink_round::{
-        DrinkCredit, DrinkRound, ROUND_CREDIT_TTL_HOURS, ROUND_PHRASES, ROUND_PRICE_PER_PATRON,
-        contains_round_request, round_phrase_spans,
+        DrinkCredit, DrinkRound, MAX_OPEN_CREDITS, ROUND_CREDIT_TTL_HOURS, ROUND_PHRASES,
+        ROUND_PRICE_PER_PATRON, contains_round_request, round_phrase_spans,
     },
     test_utils::{create_test_user, test_db},
 };
@@ -80,49 +80,131 @@ fn spans_cover_the_phrase_and_nothing_else() {
     assert_eq!(&text[start..end], "ROUND FOR ALL");
 }
 
-/// The rule the partial unique index exists for: a patron holds at most one
-/// open credit, so a second round moments after the first reaches nobody and
-/// therefore costs its buyer nothing.
+/// What replaced the one-open-credit rule (migration 168): a patron banks
+/// every round they were not around to drink, up to `MAX_OPEN_CREDITS`, and
+/// the round after that reaches them not at all and so costs its buyer
+/// nothing. The cap is the mechanic's whole throttle, so it is asserted from
+/// both sides.
 #[tokio::test]
-async fn a_patron_holds_one_open_credit_at_a_time() {
+async fn credits_stack_to_the_cap_and_no_further() {
     let test_db = test_db().await;
     let mut client = test_db.db.get().await.expect("db client");
-    let first_buyer = create_test_user(&test_db.db, "round-first-buyer").await;
-    let second_buyer = create_test_user(&test_db.db, "round-second-buyer").await;
-    let patron = create_test_user(&test_db.db, "round-patron").await;
+    let buyer = create_test_user(&test_db.db, "round-stacking-buyer").await;
+    let patron = create_test_user(&test_db.db, "round-stacking-patron").await;
 
+    // Every round up to the cap reaches them, and every buyer pays for it.
     let tx = client.transaction().await.expect("tx");
-    let first = DrinkRound::open(
-        &tx,
-        first_buyer.id,
-        ROUND_PRICE_PER_PATRON,
-        &[patron.id],
-        ROUND_CREDIT_TTL_HOURS,
-    )
-    .await
-    .expect("first round");
-    assert_eq!(first.patron_ids, vec![patron.id]);
-    assert_eq!(first.total_chips(), ROUND_PRICE_PER_PATRON);
+    for round in 1..=MAX_OPEN_CREDITS {
+        let grant = DrinkRound::open(
+            &tx,
+            buyer.id,
+            ROUND_PRICE_PER_PATRON,
+            &[patron.id],
+            ROUND_CREDIT_TTL_HOURS,
+            MAX_OPEN_CREDITS,
+        )
+        .await
+        .expect("a round");
+        assert_eq!(
+            grant.patron_ids,
+            vec![patron.id],
+            "round {round} is one the patron was owed"
+        );
+        assert_eq!(grant.total_chips(), ROUND_PRICE_PER_PATRON);
+    }
 
-    let second = DrinkRound::open(
+    // The one past the cap reaches nobody and bills for nobody.
+    let past_the_cap = DrinkRound::open(
         &tx,
-        second_buyer.id,
+        buyer.id,
         ROUND_PRICE_PER_PATRON,
         &[patron.id],
         ROUND_CREDIT_TTL_HOURS,
+        MAX_OPEN_CREDITS,
     )
     .await
-    .expect("second round");
+    .expect("the round past the cap");
     assert!(
-        second.patron_ids.is_empty(),
-        "a patron already holding a drink cannot be bought another"
+        past_the_cap.patron_ids.is_empty(),
+        "a patron carrying the cap cannot be bought another"
     );
     assert_eq!(
-        second.total_chips(),
+        past_the_cap.total_chips(),
         0,
-        "and the second buyer is charged nothing for them"
+        "and nobody is charged for a drink that was not poured"
     );
     tx.commit().await.expect("commit");
+
+    let open: i64 = client
+        .query_one(
+            "SELECT count(*) AS open FROM drink_credits
+             WHERE user_id = $1 AND cashed_at IS NULL",
+            &[&patron.id],
+        )
+        .await
+        .expect("count")
+        .get("open");
+    assert_eq!(open, MAX_OPEN_CREDITS);
+}
+
+/// The tab is drunk one drink at a time, oldest first, and the patron is told
+/// what is left behind each one. `remaining` is what @bartender says out loud,
+/// so it has to be the count after the pour, never including the drink just
+/// handed over.
+#[tokio::test]
+async fn a_banked_tab_is_drunk_one_at_a_time() {
+    let test_db = test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let buyer = create_test_user(&test_db.db, "round-tab-buyer").await;
+    let patron = create_test_user(&test_db.db, "round-tab-patron").await;
+
+    let mut round_ids = Vec::new();
+    for _ in 0..MAX_OPEN_CREDITS {
+        let tx = client.transaction().await.expect("tx");
+        let grant = DrinkRound::open(
+            &tx,
+            buyer.id,
+            ROUND_PRICE_PER_PATRON,
+            &[patron.id],
+            ROUND_CREDIT_TTL_HOURS,
+            MAX_OPEN_CREDITS,
+        )
+        .await
+        .expect("a round");
+        tx.commit().await.expect("commit");
+        round_ids.push(grant.round.id);
+    }
+
+    for (drunk, round_id) in round_ids.iter().enumerate() {
+        let expected_left = MAX_OPEN_CREDITS - drunk as i64 - 1;
+        let next = DrinkCredit::find_open(&client, patron.id)
+            .await
+            .expect("read")
+            .expect("a credit is still open");
+        assert_eq!(
+            next.round_id, *round_id,
+            "the oldest credit is the next one poured"
+        );
+
+        let cashed = DrinkCredit::cash(&client, patron.id)
+            .await
+            .expect("cash")
+            .expect("a drink");
+        assert_eq!(cashed.round_id, *round_id);
+        assert_eq!(cashed.buyer_user_id, Some(buyer.id));
+        assert_eq!(
+            cashed.remaining, expected_left,
+            "the drink just poured is never counted as still waiting"
+        );
+    }
+
+    assert!(
+        DrinkCredit::cash(&client, patron.id)
+            .await
+            .expect("cash")
+            .is_none(),
+        "the tab is empty once every banked drink is drunk"
+    );
 }
 
 /// Cashing is the moment a free drink stops existing. Two orders landing
@@ -143,6 +225,7 @@ async fn a_credit_is_drunk_once_and_expires_on_its_own() {
         ROUND_PRICE_PER_PATRON,
         &[patron.id, latecomer.id],
         ROUND_CREDIT_TTL_HOURS,
+        MAX_OPEN_CREDITS,
     )
     .await
     .expect("round");
@@ -193,9 +276,10 @@ async fn a_credit_is_drunk_once_and_expires_on_its_own() {
     );
 }
 
-/// The trap the partial unique index sets: an expired credit is still an
-/// uncashed row, so it keeps occupying the patron's one slot. A later round
-/// has to re-use it, or that patron can never be bought a drink again.
+/// An expired credit is still an uncashed row, and under the old
+/// one-per-patron index it went on occupying the patron's only slot. The cap
+/// counts what a patron can actually drink, so a round the patron slept
+/// through does not spend their allowance forever.
 #[tokio::test]
 async fn an_expired_credit_does_not_block_the_next_round() {
     let test_db = test_db().await;
@@ -210,6 +294,7 @@ async fn an_expired_credit_does_not_block_the_next_round() {
         ROUND_PRICE_PER_PATRON,
         &[patron.id],
         ROUND_CREDIT_TTL_HOURS,
+        MAX_OPEN_CREDITS,
     )
     .await
     .expect("first round");
@@ -231,6 +316,7 @@ async fn an_expired_credit_does_not_block_the_next_round() {
         ROUND_PRICE_PER_PATRON,
         &[patron.id],
         ROUND_CREDIT_TTL_HOURS,
+        MAX_OPEN_CREDITS,
     )
     .await
     .expect("second round");
@@ -239,7 +325,7 @@ async fn an_expired_credit_does_not_block_the_next_round() {
     assert_eq!(
         second.patron_ids,
         vec![patron.id],
-        "a stale credit is replaced, not treated as a drink in hand"
+        "a stale credit is not a drink in hand"
     );
     let open = DrinkCredit::find_open(&client, patron.id)
         .await

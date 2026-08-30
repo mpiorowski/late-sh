@@ -173,13 +173,24 @@ const ROUND_ANNOUNCEMENTS: &[&str] = &[
 /// Nobody else was at the bar. Uncharged.
 const ROUND_EMPTY_HOUSE_LINE: &str =
     "just you and me in here tonight. buy them one when there's someone to buy it for.";
-/// Everyone present was already holding an uncashed drink. Uncharged.
+/// Everyone present was already holding as many uncashed drinks as the bar
+/// lets a patron carry. Uncharged.
 const ROUND_ALL_HOLDING_LINE: &str =
-    "they're all still holding the last one you bought. let them drink it first.";
+    "they're carrying all the drinks I'll let them carry. let them get through those first.";
 /// The credit the prompt promised was gone by the time the pour landed:
 /// drunk from another session, or expired in between. Uncharged, nothing
 /// poured; the patron orders again on their own tab if they still want one.
 const ROUND_CREDIT_GONE_LINE: &str = "that one's already been drunk, or the round went cold on you. say the word and the next is on your tab.";
+/// Appended to a comped pour when the patron still has drinks banked behind
+/// it. Scripted and appended in code, never handed to the model, for the same
+/// reason [`ROUND_ANNOUNCEMENTS`] is: a model asked to quote a number will
+/// eventually quote the wrong one, and this one is a promise the bar has to
+/// keep. Every line reads right at one as well as two.
+const ROUND_CREDIT_REMAINING_LINES: &[&str] = &[
+    "you've still got {remaining} more on the tab.",
+    "that leaves {remaining} waiting on you.",
+    "{remaining} more bought and paid for, whenever you're ready.",
+];
 const BARTENDER_PERSONA: &str = "You are @bartender, the keeper of The Late Lounge — the tavern inside late.sh, a cozy terminal clubhouse. \
     You are warm, unhurried, and quietly funny: classic late-night bartender energy. \
     You pour imaginary drinks with terminal-flavored names (a double SIGTERM neat, a Bash Old Fashioned, \
@@ -790,7 +801,8 @@ impl GhostService {
                      this patron has not cashed theirs yet. Pouring costs them nothing, so the \
                      spendable figure does not apply to this pour and \"offer\" is never the \
                      right action. If they order, use \"pour\": hand it over warmly, say it is \
-                     on @{buyer}, and do not quote a price.\n"
+                     on @{buyer}, and do not quote a price. Never say how many \
+                     they have waiting; the bar adds that itself.\n"
                 );
                 (BartenderTab::Comped, note)
             }
@@ -900,9 +912,20 @@ impl GhostService {
                             user_id = %trigger_message.user_id,
                             round_id = %comped.round_id,
                             drink = %drink,
+                            remaining = comped.remaining,
                             "bartender poured a drink on someone else's round"
                         );
-                        line
+                        // What is left is the bar's own count, appended to the
+                        // model's line rather than promised inside it.
+                        match comped.remaining {
+                            0 => line,
+                            remaining => {
+                                let tail = ROUND_CREDIT_REMAINING_LINES
+                                    [rng.next_usize(ROUND_CREDIT_REMAINING_LINES.len())]
+                                .replace("{remaining}", &remaining.to_string());
+                                format!("{line} {tail}")
+                            }
+                        }
                     }
                     None => format!("{patron} {ROUND_CREDIT_GONE_LINE}"),
                 }
