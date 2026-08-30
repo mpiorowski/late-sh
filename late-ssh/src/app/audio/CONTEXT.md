@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, procedural browser-pair visualizer fallback, and now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the music/audio touchpoints it owns in `late-cli` and `late-web/src/pages/listen`
-- Last updated: 2026-08-26 (The CLI no longer unmutes itself when the pair socket dies: only a session the server never saw may release its boot mute, and the retry loop slows to 60s instead of abandoning pairing. See the end of "Mute and volume: one source of truth, stored per device". Previous entry: device-audio write path hardened: only CLI reports persist (never the webview helper's), alignment echoes are not treated as intent, a failed connect-time read disables alignment and persistence for that connection instead of imposing fresh-boot defaults, and writes land in report order. See "Mute and volume: one source of truth, stored per device")
+- Last updated: 2026-08-30 (Bringing a track pays: `MediaQueueItem::insert_youtube` is now the paying path, `SONG_QUEUE_REWARD_CHIPS` (200) for the first `SONG_QUEUE_MAX_PAID_PER_DAY` (5) tracks a person queues each UTC day, credited in the same transaction as the insert. Every track pays, repeats and History re-queues included; the day's count is the only gate. Every submit path funnels through it, so booth, `/audio`, and a history re-queue all pay the same, and `SubmitQueueResponse.reward_chips` carries what was actually minted into the banner. See "Submission reward" under §4. Previous entry: The CLI no longer unmutes itself when the pair socket dies: only a session the server never saw may release its boot mute, and the retry loop slows to 60s instead of abandoning pairing. See the end of "Mute and volume: one source of truth, stored per device". Previous entry: device-audio write path hardened: only CLI reports persist (never the webview helper's), alignment echoes are not treated as intent, a failed connect-time read disables alignment and persistence for that connection instead of imposing fresh-boot defaults, and writes land in report order. See "Mute and volume: one source of truth, stored per device")
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -121,6 +121,38 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 - `requeue_history_item` — inserts a fresh `media_queue_items` row from stored validated history metadata. Live queue votes always start at 0.
 - `delete_history_item` — requires centralized `Caps::DELETE_AUDIO_TRACK` via `Permissions::can_delete_audio_track(false)`.
 - `toggle_unskippable` / `toggle_unskippable_task` — staff-only path that flips `media_queue_items.unskippable` only while the item is still `queued`; `u` in Booth Queue mode triggers it.
+
+### Submission reward
+Queueing a track pays the person who brought it `SONG_QUEUE_REWARD_CHIPS`
+(200), minted through `ChipMove::SongQueued`. The gate lives in
+`MediaQueueItem::insert_youtube` (`late-core/src/models/media_queue_item.rs`),
+which is the only path a submission may take, so booth, `/audio`, trusted
+submits, and a history re-queue cannot pay different amounts or forget to pay.
+
+- **The track is never a gate.** The same song twice, a re-queue from History,
+  one somebody else put on an hour ago: all paid. Nothing looks at what was
+  queued or whether the room has heard it. The one question asked is how many
+  this person has already been paid for today, which is what keeps "why did
+  that one not pay?" a single number the guide can state.
+- `SONG_QUEUE_MAX_PAID_PER_DAY` (5) per UTC day is therefore the whole of the
+  gating, and what stands between the jukebox and a chip printer:
+  `MAX_SUBMISSIONS_PER_WINDOW` (10 per 5 minutes) is a rate limit for the
+  room's sake, not an economic one.
+- Insert, count, and credit are one transaction under a per-user advisory
+  lock, the same shape as `Article::create_shared`: a credit that fails leaves
+  no orphan row in the queue, and two submissions landing together cannot both
+  read the same count and pay a sixth. Migration 169 indexes
+  `(user_id, created_at) WHERE reason = 'song_queued'` so the count is not a
+  scan over a ledger that only grows.
+- `source_ref` is the video id as provenance, so a ledger row says which track
+  it paid for. Nothing reads it back; it is not a key.
+- `SongQueueReward` (`Paid` / `DailyCapReached`) is what the banner and
+  `metrics::record_song_queued` read, never the constant, so a track that came
+  in past the cap can never be reported as paid.
+  `SubmitQueueResponse.reward_chips` carries it to
+  `AudioEvent::BoothSubmitQueued` and `BoothHistoryRequeued`, and
+  `state.rs::submitted_line` drops the chips clause entirely when nothing was
+  minted.
 
 ### Startup lifecycle
 1. `sweep_orphan_playing` (`svc.rs:425-438`) marks any `status='playing'` row older than `now - 1h` as `failed` with `error = "orphan playing row swept at startup"`.

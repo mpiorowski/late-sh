@@ -86,6 +86,8 @@ pub mod media_history_item;
 #[cfg(test)]
 mod media_history_item_test;
 pub mod media_queue_item;
+#[cfg(test)]
+mod media_queue_item_test;
 pub mod media_queue_vote;
 pub mod media_source;
 pub mod mention_feed_read;

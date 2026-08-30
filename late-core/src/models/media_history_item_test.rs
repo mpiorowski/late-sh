@@ -27,8 +27,8 @@ async fn submitter(client: &Client, name: &str) -> User {
 /// gets promoted, recorded in history, then retired when the track ends.
 /// Retiring matters: only one row per track may be queued or playing at a
 /// time, so a play that never ends would block the next play of that track.
-async fn play(client: &Client, submitter_id: Uuid, video_id: &str, limit: i64) {
-    let item = MediaQueueItem::insert_youtube(
+async fn play(client: &mut Client, submitter_id: Uuid, video_id: &str, limit: i64) {
+    let (item, _reward) = MediaQueueItem::insert_youtube(
         client,
         submitter_id,
         video_id,
@@ -75,18 +75,18 @@ async fn video_ids(client: &Client, limit: i64) -> Vec<String> {
 #[tokio::test]
 async fn replaying_a_track_moves_it_to_the_front_without_duplicating_it() {
     let test_db = test_db().await;
-    let client = test_db.db.get().await.expect("db client");
+    let mut client = test_db.db.get().await.expect("db client");
     let user = submitter(&client, "history-replay-user").await;
     let now = Utc::now();
 
-    play(&client, user.id, "aaa", 200).await;
+    play(&mut client, user.id, "aaa", 200).await;
     set_played_at(&client, "aaa", now - Duration::minutes(10)).await;
-    play(&client, user.id, "bbb", 200).await;
+    play(&mut client, user.id, "bbb", 200).await;
     set_played_at(&client, "bbb", now - Duration::minutes(5)).await;
 
     assert_eq!(video_ids(&client, 200).await, vec!["bbb", "aaa"]);
 
-    play(&client, user.id, "aaa", 200).await;
+    play(&mut client, user.id, "aaa", 200).await;
 
     assert_eq!(video_ids(&client, 200).await, vec!["aaa", "bbb"]);
     let replayed = MediaHistoryItem::list_recent(&client, 200)
@@ -101,12 +101,12 @@ async fn replaying_a_track_moves_it_to_the_front_without_duplicating_it() {
 #[tokio::test]
 async fn prune_keeps_exactly_the_most_recently_played_rows() {
     let test_db = test_db().await;
-    let client = test_db.db.get().await.expect("db client");
+    let mut client = test_db.db.get().await.expect("db client");
     let user = submitter(&client, "history-prune-user").await;
     let now = Utc::now();
 
     for (index, video_id) in ["oldest", "older", "newer", "newest"].iter().enumerate() {
-        play(&client, user.id, video_id, 200).await;
+        play(&mut client, user.id, video_id, 200).await;
         set_played_at(
             &client,
             video_id,
@@ -126,20 +126,20 @@ async fn prune_keeps_exactly_the_most_recently_played_rows() {
 #[tokio::test]
 async fn recording_a_new_track_at_the_limit_evicts_the_oldest_but_a_replay_evicts_nothing() {
     let test_db = test_db().await;
-    let client = test_db.db.get().await.expect("db client");
+    let mut client = test_db.db.get().await.expect("db client");
     let user = submitter(&client, "history-limit-user").await;
     let now = Utc::now();
 
-    play(&client, user.id, "first", 2).await;
+    play(&mut client, user.id, "first", 2).await;
     set_played_at(&client, "first", now - Duration::minutes(10)).await;
-    play(&client, user.id, "second", 2).await;
+    play(&mut client, user.id, "second", 2).await;
     set_played_at(&client, "second", now - Duration::minutes(5)).await;
 
     // A brand new track lands on top and pushes the oldest row off the bottom.
-    play(&client, user.id, "third", 2).await;
+    play(&mut client, user.id, "third", 2).await;
     assert_eq!(video_ids(&client, 200).await, vec!["third", "second"]);
 
     // A replay of a row already in history evicts nothing: it updates in place.
-    play(&client, user.id, "second", 2).await;
+    play(&mut client, user.id, "second", 2).await;
     assert_eq!(video_ids(&client, 200).await, vec!["second", "third"]);
 }

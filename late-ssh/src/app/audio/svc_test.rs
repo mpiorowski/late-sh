@@ -13,9 +13,9 @@ async fn submit_adopts_existing_db_current_instead_of_hitting_singleton() {
     let user = create_test_user(&test.db, "audio_submit_reconcile").await;
 
     let existing_id = {
-        let client = test.db.get().await.expect("db client");
-        let existing = MediaQueueItem::insert_youtube(
-            &client,
+        let mut client = test.db.get().await.expect("db client");
+        let (existing, _reward) = MediaQueueItem::insert_youtube(
+            &mut client,
             user.id,
             "aaaaaaaaaaa",
             Some("already playing"),
@@ -79,12 +79,12 @@ async fn force_skip_stale_memory_does_not_mutate_already_played_row() {
         .expect("queue first");
 
     let second_id = {
-        let client = test.db.get().await.expect("db client");
+        let mut client = test.db.get().await.expect("db client");
         MediaQueueItem::mark_played(&client, first.id, chrono::Utc::now())
             .await
             .expect("mark first played");
-        let second = MediaQueueItem::insert_youtube(
-            &client,
+        let (second, _reward) = MediaQueueItem::insert_youtube(
+            &mut client,
             user.id,
             "ddddddddddd",
             Some("db current"),
