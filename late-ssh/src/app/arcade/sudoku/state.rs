@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::mpsc::{self, Receiver, Sender},
 };
 
@@ -23,6 +23,7 @@ pub type Notes = [[u16; 9]; 9];
 const NOTE_MASK: u16 = 0x01ff;
 
 pub const DIFFICULTIES: [&str; 3] = ["easy", "medium", "hard"];
+const MAX_UNDO: usize = 50;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -92,6 +93,7 @@ pub struct State {
     pub cursor: (usize, usize),
     pub is_game_over: bool,
     pub reset_pending: Option<ResetKind>,
+    undo_stack: VecDeque<BoardSnapshot>,
     daily_snapshots: HashMap<String, BoardSnapshot>,
     /// The UTC date `daily_snapshots` was built for. A session that never
     /// disconnects has to notice midnight itself; see `ensure_current_daily`.
@@ -146,6 +148,7 @@ impl State {
             cursor: (0, 0),
             is_game_over: false,
             reset_pending: None,
+            undo_stack: VecDeque::new(),
             daily_snapshots,
             daily_date: today,
             personal_snapshots,
@@ -312,6 +315,9 @@ impl State {
     }
 
     fn save_async(&self) {
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
         self.svc.save_game_task(self.save_params());
     }
 
@@ -335,11 +341,31 @@ impl State {
 
     // --- Interaction ---
 
+    pub fn undo(&mut self) -> bool {
+        if self.is_game_over || self.is_loading() {
+            return false;
+        }
+        self.clear_reset_pending();
+        if let Some(snapshot) = self.undo_stack.pop_back() {
+            self.seed = snapshot.seed;
+            self.grid = snapshot.grid;
+            self.fixed_mask = snapshot.fixed_mask;
+            self.notes = snapshot.notes;
+            self.is_game_over = snapshot.is_game_over;
+            self.store_active_snapshot();
+            self.save_async();
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn reset_board(&mut self) {
         if self.is_game_over || self.is_loading() {
             return;
         }
         self.clear_reset_pending();
+        self.push_undo();
         for r in 0..9 {
             for c in 0..9 {
                 if !self.fixed_mask[r][c] {
@@ -371,6 +397,7 @@ impl State {
         if self.fixed_mask[r][c] || self.grid[r][c] != 0 {
             return;
         }
+        self.push_undo();
         self.notes[r][c] ^= 1 << (val - 1);
         self.store_active_snapshot();
         self.save_async();
@@ -384,6 +411,7 @@ impl State {
         self.clear_reset_pending();
         let (r, c) = self.cursor;
         if self.notes[r][c] != 0 {
+            self.push_undo();
             self.notes[r][c] = 0;
             self.store_active_snapshot();
             self.save_async();
@@ -409,6 +437,8 @@ impl State {
         if self.fixed_mask[r][c] {
             return;
         }
+
+        self.push_undo();
 
         self.grid[r][c] = val;
 
@@ -465,6 +495,19 @@ impl State {
         }
     }
 
+    fn push_undo(&mut self) {
+        if self.undo_stack.len() >= MAX_UNDO {
+            self.undo_stack.pop_front();
+        }
+        self.undo_stack.push_back(BoardSnapshot {
+            seed: self.seed,
+            grid: self.grid,
+            fixed_mask: self.fixed_mask,
+            notes: self.notes,
+            is_game_over: self.is_game_over,
+        });
+    }
+
     fn apply_snapshot(&mut self, snapshot: BoardSnapshot) {
         self.seed = snapshot.seed;
         self.grid = snapshot.grid;
@@ -472,6 +515,7 @@ impl State {
         self.notes = snapshot.notes;
         self.is_game_over = snapshot.is_game_over;
         self.cursor = (0, 0);
+        self.undo_stack.clear();
     }
 
     fn clear_board(&mut self) {
@@ -481,6 +525,7 @@ impl State {
         self.notes = [[0; 9]; 9];
         self.is_game_over = false;
         self.cursor = (0, 0);
+        self.undo_stack.clear();
     }
 
     fn store_active_snapshot(&mut self) {

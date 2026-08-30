@@ -3,6 +3,7 @@
 ## Metadata
 - Scope: `late-ssh/src/app/arcade`
 - Last updated: 2026-08-30 (Sliding Puzzle has persisted, unrewarded personal boards; it is the seventh `ArcadeStop` and rolls with the rest in `refresh_daily_games`. Previous: Lateris gained a hold slot: `c` parks the current piece, one hold per piece, persisted in `tetris_games.hold_kind`/`hold_used` by migration 146. Nonograms joined the press-again reset confirmation every other Arcade game already had, covering both `r` and `n`. Every daily puzzle now rolls over at UTC midnight inside a live session via `workspace::refresh_daily_games`, instead of only on reconnect.)
+- Last updated: 2026-08-30 (Sudoku added a 50-move undo queue via `u`/`U` to revert previous moves and candidate mark edits.)
 - Purpose: local working context for The Arcade screen and single-player terminal games.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -152,7 +153,7 @@ Current per-game basics:
 - 2048: `h/j/k/l` or arrows move, `r` restarts after game over.
 - Lateris: left/right move, down soft-drops, up rotates, `Space` hard-drops, `c` holds the current piece, `p` pauses, `r` restarts.
 - Snake: arrows or `h/j/k/l` steer, `p` pauses, `r` restarts.
-- Sudoku: arrows or `h/j/k/l` move, `1-9` fill, `0`/Backspace clear, `d/p/n` daily/personal/new, `[`/`]` difficulty.
+- Sudoku: arrows or `h/j/k/l` move, `1-9` fill, `m` pencil mode, `u` undo, `0`/Backspace clear, `d/p/n` daily/personal/new, `[`/`]` difficulty.
 - Nonograms: arrows or `h/j/k/l` move, `Space`/`x` toggle, `0`/Backspace/`c` clear, `d/p` daily/personal, `n` new board, `r` reset, `[`/`]` difficulty.
 - Minesweeper: arrows or `h/j/k/l` move, reveal/flag/chord controls live in the game info panel.
 - Solitaire: card/tableau/foundation controls live in the game info panel; mouse support maps left-click to select/place/draw stock, right-click to auto-move the clicked card, and wheel events over the board to tableau scroll.

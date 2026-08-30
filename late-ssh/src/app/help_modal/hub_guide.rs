@@ -299,6 +299,8 @@ fn arcade_sections() -> Vec<GuideSection> {
             title: "Sudoku",
             body: vec![
                 "1-9 fills a digit.".to_string(),
+                "m toggles pencil (candidate mark) mode.".to_string(),
+                "u undoes the previous move.".to_string(),
                 "0 or Backspace clears a cell.".to_string(),
             ],
         },

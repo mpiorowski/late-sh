@@ -47,6 +47,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("h/j/k/l", "move"),
             ("1-9", "place"),
             ("m", "pencil"),
+            ("u", "undo"),
             ("0", "clear"),
             ("d/p/n", "daily/pers/new"),
             ("[ ]", "diff"),

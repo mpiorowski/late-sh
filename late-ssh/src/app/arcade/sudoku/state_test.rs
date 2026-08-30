@@ -3,11 +3,13 @@ use chrono::NaiveDate;
 
 fn test_state() -> State {
     let db = late_core::db::Db::new(&late_core::db::DbConfig::default()).expect("lazy db");
-    State::new(
+    let mut state = State::new(
         Uuid::nil(),
         SudokuService::new(db, tokio::sync::broadcast::channel(4).0),
         Vec::new(),
-    )
+    );
+    state.show_personal();
+    state
 }
 
 fn saved_game(grid: Grid, fixed_mask: Mask, notes: serde_json::Value) -> Game {
@@ -211,4 +213,101 @@ fn difficulty_key_maps_correctly() {
     assert_eq!(difficulty_from_key("medium"), Difficulty::Medium);
     assert_eq!(difficulty_from_key("hard"), Difficulty::Hard);
     assert_eq!(difficulty_from_key("unknown"), Difficulty::Medium);
+}
+
+#[test]
+fn undo_reverts_digit_placements_and_notes() {
+    let mut state = test_state();
+    state.fixed_mask[0][0] = false;
+    state.grid[0][0] = 0;
+    state.notes[0][0] = 0;
+
+    // Place a digit
+    state.cursor = (0, 0);
+    state.set_digit(5);
+    assert_eq!(state.grid[0][0], 5);
+
+    // Place another digit
+    state.set_digit(6);
+    assert_eq!(state.grid[0][0], 6);
+
+    // Undo once reverts to 5
+    assert!(state.undo());
+    assert_eq!(state.grid[0][0], 5);
+
+    // Undo twice reverts to 0
+    assert!(state.undo());
+    assert_eq!(state.grid[0][0], 0);
+
+    // Undo with empty stack returns false
+    assert!(!state.undo());
+}
+
+#[test]
+fn undo_queue_caps_at_fifty_moves() {
+    let mut state = test_state();
+    state.fixed_mask[0][0] = false;
+
+    for i in 1..=60 {
+        let val = (i % 9 + 1) as u8;
+        state.set_digit(val);
+    }
+
+    // Only 50 undos should succeed
+    let mut undo_count = 0;
+    while state.undo() {
+        undo_count += 1;
+    }
+    assert_eq!(undo_count, 50);
+}
+
+#[test]
+fn undo_reverts_reset_board() {
+    let mut state = test_state();
+    state.fixed_mask[0][0] = false;
+    state.grid[0][0] = 7;
+
+    state.reset_board();
+    assert_eq!(state.grid[0][0], 0);
+
+    assert!(state.undo());
+    assert_eq!(state.grid[0][0], 7);
+}
+
+#[test]
+fn undo_reverts_pencil_mark_toggles() {
+    let mut state = test_state();
+    state.fixed_mask[0][0] = false;
+    state.grid[0][0] = 0;
+
+    state.toggle_note(3);
+    assert_eq!(state.notes[0][0], 1 << 2);
+
+    state.toggle_note(4);
+    assert_eq!(state.notes[0][0], (1 << 2) | (1 << 3));
+
+    assert!(state.undo());
+    assert_eq!(state.notes[0][0], 1 << 2);
+
+    assert!(state.undo());
+    assert_eq!(state.notes[0][0], 0);
+}
+
+#[test]
+fn handle_key_undo_triggers_undo() {
+    let mut state = test_state();
+    state.fixed_mask[0][0] = false;
+    state.grid[0][0] = 0;
+
+    crate::app::arcade::sudoku::input::handle_key(&mut state, b'4');
+    assert_eq!(state.grid[0][0], 4);
+
+    crate::app::arcade::sudoku::input::handle_key(&mut state, b'u');
+    assert_eq!(state.grid[0][0], 0);
+
+    crate::app::arcade::sudoku::input::handle_key(&mut state, b'9');
+    assert_eq!(state.grid[0][0], 9);
+
+    crate::app::arcade::sudoku::input::handle_key(&mut state, b'U');
+    assert_eq!(state.grid[0][0], 0);
 }
