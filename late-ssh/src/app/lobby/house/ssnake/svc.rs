@@ -691,11 +691,16 @@ impl SharedState {
         }
         let player = &mut self.players[index];
         match player.motion {
+            // A standing start queues like any other turn, so a rapid
+            // double-turn out of a spawn keeps both presses.
             Motion::Idle => {
                 player.motion = Motion::Moving(direction);
-                player.input_queue.clear();
+                player.input_queue.push_back(direction);
             }
             Motion::Moving(current) => {
+                // Turns are committed once queued and `motion` stays the
+                // direction being travelled (only `step_player` moves it), so
+                // each press is validated against the turn it will follow.
                 let base_dir = player.input_queue.back().copied().unwrap_or(current);
                 let is_reversal = direction == base_dir.opposite()
                     || (player.input_queue.is_empty()
@@ -704,7 +709,6 @@ impl SharedState {
 
                 if !is_reversal && !is_duplicate && player.input_queue.len() < MAX_INPUT_QUEUE {
                     player.input_queue.push_back(direction);
-                    player.motion = Motion::Moving(direction);
                 }
             }
             Motion::Dying => {}
@@ -790,7 +794,6 @@ impl SharedState {
         let respawn_length = self.players[seat_index].respawn_length;
         self.spawn_snake(seat_index);
         self.players[seat_index].pending_growth = respawn_length.min(MAX_SNAKE_LEN - 1);
-        self.players[seat_index].input_queue.clear();
     }
 
     fn step_move(&mut self, seat_index: usize, direction: Direction) -> bool {
@@ -835,6 +838,7 @@ impl SharedState {
             self.players[seat_index].motion = Motion::Dying;
             self.players[seat_index].input_queue.clear();
             self.charge(seat_index, SSNAKE_CRASH_CHIPS, SsnakeChipKind::Crash);
+            return false;
         }
 
         if self.point == Some(new_head) {

@@ -527,14 +527,18 @@ fn steer_rejects_reversal_against_last_move() {
     state.steer(a, Direction::Left);
     assert_eq!(state.players[0].motion, Motion::Moving(Direction::Right));
     state.steer(a, Direction::Up);
-    assert_eq!(state.players[0].motion, Motion::Moving(Direction::Up));
-    // Direct reversal against the queued direction is also blocked.
-    state.steer(a, Direction::Down);
-    assert_eq!(state.players[0].motion, Motion::Moving(Direction::Up));
     assert_eq!(
         state.players[0].input_queue,
         VecDeque::from([Direction::Up])
     );
+    // Direct reversal against the queued direction is also blocked.
+    state.steer(a, Direction::Down);
+    assert_eq!(
+        state.players[0].input_queue,
+        VecDeque::from([Direction::Up])
+    );
+    // The heading only moves when a tick pops the queue.
+    assert_eq!(state.players[0].motion, Motion::Moving(Direction::Right));
 }
 
 #[test]
@@ -551,7 +555,8 @@ fn queued_steers_execute_in_order_across_ticks() {
         state.players[0].input_queue,
         VecDeque::from([Direction::Up, Direction::Left])
     );
-    assert_eq!(state.players[0].motion, Motion::Moving(Direction::Left));
+    // Queued, not yet travelled: the heading moves when a tick pops it.
+    assert_eq!(state.players[0].motion, Motion::Moving(Direction::Right));
 
     // Tick 1: snake steps Up
     state.tick(generation);
@@ -603,6 +608,49 @@ fn input_queue_clears_on_crash() {
     state.tick(generation);
     assert_eq!(state.players[0].motion, Motion::Dying);
     assert!(state.players[0].input_queue.is_empty());
+}
+
+/// The first press out of a standing start queues like any other turn, so a
+/// rapid double-turn from a spawn, respawn, or arena shuffle keeps both
+/// presses instead of the second overwriting the first.
+#[test]
+fn a_double_turn_from_a_standing_start_keeps_both_presses() {
+    let (mut state, a, _, generation) = arena_state();
+    state.steer(a, Direction::Up);
+    state.steer(a, Direction::Left);
+    assert_eq!(
+        state.players[0].input_queue,
+        VecDeque::from([Direction::Up, Direction::Left])
+    );
+    state.tick(generation);
+    assert_eq!(state.players[0].last_moved, Some(Direction::Up));
+    state.tick(generation);
+    assert_eq!(state.players[0].last_moved, Some(Direction::Left));
+}
+
+/// Food never spawns on a wall or a body (`is_free`), so a crash cell cannot
+/// hold food today; this pins the guard that keeps a crash terminal even if
+/// that placement rule ever loosens: a dying snake is paid nothing.
+#[test]
+fn a_crash_onto_the_food_cell_pays_no_food() {
+    let (mut state, _, _, generation) = arena_state();
+    state.players[0].body = VecDeque::from([Pos { x: 1, y: 1 }]);
+    state.players[0].motion = Motion::Moving(Direction::Up);
+    state.players[0].last_moved = Some(Direction::Up);
+    // The border wall above the head, with the food forced onto it.
+    state.point = Some(Pos { x: 1, y: 0 });
+    state.points_left = 5;
+
+    state.tick(generation);
+
+    assert_eq!(state.players[0].motion, Motion::Dying);
+    assert_eq!(
+        state.players[0].chips, -SSNAKE_CRASH_CHIPS,
+        "the crash charge lands and nothing else"
+    );
+    assert_eq!(state.players[0].pending_growth, 0);
+    assert_eq!(state.points_left, 5, "a dying snake eats nothing");
+    assert_eq!(state.point, Some(Pos { x: 1, y: 0 }));
 }
 
 #[test]

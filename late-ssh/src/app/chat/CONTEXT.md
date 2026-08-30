@@ -114,7 +114,7 @@ Normal display flow:
 5. `load_room_tail_task` fetches the newest 500 messages, reaction summaries, author usernames, and author bonsai glyphs. Render-time display names prefer the app-wide username directory over this per-session chat cache when both know the same UUID.
 6. Broadcast `MessageCreated`/`MessageEdited`/`MessageDeleted`/reaction events patch local state; tail/search/discover results arrive on the per-session targeted channel. Broadcast lag triggers a tail reload for the visible room (the targeted mpsc is unbounded and cannot lag).
 
-Room tails deliberately carry **no** read cursor. Render inserts one synthetic `new messages` divider before the first message from someone else past this session's **AFK line** (`ChatState::afk_lines`), never past `chat_room_members.last_read_at`; see `The Two Marks` below for why. The divider is render-only state in the chat row cache; do not persist it or count it as a chat message.
+Room tails deliberately carry **no** read cursor. Render inserts one synthetic `new messages` divider before the first message from someone else past this session's **AFK line** (`ChatState::afk_lines`), and one dim `you left` divider before the first past the **left-app mark** (`ChatState::device_left_at`), never past `chat_room_members.last_read_at`; see `The Two Marks` below for why. The divider is render-only state in the chat row cache; do not persist it or count it as a chat message.
 
 ### The Two Marks
 
@@ -123,7 +123,7 @@ Two marks, two questions, and they never feed each other. Keeping them apart is 
 | | AFK line | left-app mark |
 |---|---|---|
 | Question | where did I stop reading this room, this session | when was I last here, on this device |
-| Drives | the `new messages` divider, `/history`'s open position | the bare `/summary` window |
+| Drives | the `new messages` divider, `/history`'s open position | the bare `/summary` window, the `you left` divider |
 | Scope | one SSH session, one room, in memory | one SSH key, in `user_ssh_keys.left_at` |
 | Set by | `AFK_LINE_IDLE` (10 min) of keyboard silence on the room on screen | session end, stamped at the moment the keyboard went quiet |
 | Cleared by | your own message landing in the room | taken (nulled) by the next session on that key |
@@ -145,7 +145,7 @@ Two marks, two questions, and they never feed each other. Keeping them apart is 
 - **It is the only input to a bare `/summary`.** "What happened since I was last here" is a question about this device, not about which room happened to be on screen or whether the keyboard went quiet ten minutes ago. The room's AFK line is never consulted (`catch_up_window`), and asking twice in one session reads the same stretch twice, plus whatever landed since; the cooldown bounds that.
 - **Per device, never per account.** The cost is that a room you read on the phone all evening is summarized again on the desktop next morning. That is what "since I was last here" means, and it is accepted over an account-wide cursor that could not tell reading from presence. One key on two machines reads as one device; last write wins.
 - **Taken, not read.** The drop write is fire-and-forget, and a session whose write never landed (process killed mid-drain, DB blip, key re-pointed by account linking) must not hand the next session a leave from *before* itself, which would summarize messages already read. A lost write degrades to the default window, never to a wrong one.
-- **Never seeds a divider.** Reconnecting draws no `new messages` line; the divider is about this session, and this session has not stepped away yet. Keyless sessions (ghost bots, tests) have no device to remember anything on.
+- **Draws its own rule, never the AFK one.** Every room's live tail gets a thin dim `you left 9 hrs ago` rule above the first message from someone else past the mark (`ui.rs::left_app_divider_line`, fed through `ChatDividers`): every room, because the mark is about the device, and a room never opened here still honestly shows what landed since you were last on this machine. It is fixed for the session like the mark itself; posting does not clear it, it only scrolls away. When both marks land above the same message only `new messages` draws (`ensure_chat_rows_cache`). Reconnecting still seeds no `new messages` line: that divider is about this session, and this session has not stepped away yet. `/history` draws only the AFK rule. Keyless sessions (ghost bots, tests) have no device to remember anything on.
 
 **What this replaced, and why not to put it back.** `ChatState::room_unread_markers` used to hold the `last_read_at` that came back on each `RoomTailLoaded`, and the divider drew against it. Three defects came from that one arrangement, and all three are gone with it:
 

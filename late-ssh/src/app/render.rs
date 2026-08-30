@@ -556,8 +556,11 @@ impl App {
             live_user_ids: &self.chat.live_user_ids,
             message_reactions,
             message_gilds,
-            unread_marker: shell_active_room
-                .and_then(|room_id| self.chat.afk_lines.get(&room_id).copied()),
+            dividers: crate::app::chat::ui::ChatDividers {
+                afk_line: shell_active_room
+                    .and_then(|room_id| self.chat.afk_lines.get(&room_id).copied()),
+                left_app: self.chat.device_left_at(),
+            },
             current_user_id: self.user_id,
             voice_channel_id: dashboard_voice_channel_id,
             voice_snapshot,
@@ -706,6 +709,7 @@ impl App {
             message_gilds,
             inline_images: &self.chat.inline_image_cache,
             afk_lines: &self.chat.afk_lines,
+            device_left_at: self.chat.device_left_at(),
             unread_counts: &self.chat.unread_counts,
             room_last_message_at: &self.chat.room_last_message_at,
             favorite_room_ids: &self.profile_state.profile().favorite_room_ids,
@@ -788,7 +792,10 @@ impl App {
                     message_reactions,
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
-                    unread_marker: self.chat.afk_lines.get(&chat_room_id).copied(),
+                    dividers: crate::app::chat::ui::ChatDividers {
+                        afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
+                        left_app: self.chat.device_left_at(),
+                    },
                     current_user_id: self.user_id,
                     voice_channel_id: self
                         .chat
@@ -848,7 +855,10 @@ impl App {
                     message_reactions,
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
-                    unread_marker: self.chat.afk_lines.get(&chat_room_id).copied(),
+                    dividers: crate::app::chat::ui::ChatDividers {
+                        afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
+                        left_app: self.chat.device_left_at(),
+                    },
                     current_user_id: self.user_id,
                     voice_channel_id: self
                         .chat

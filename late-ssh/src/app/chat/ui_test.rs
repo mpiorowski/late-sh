@@ -258,7 +258,7 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
         message_reactions: &message_reactions,
         message_gilds: &message_gilds,
         inline_images: &inline_images,
-        unread_marker: None,
+        dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
@@ -354,7 +354,7 @@ fn the_crown_glyph_renders_between_the_author_name_and_their_title() {
         message_reactions: &message_reactions,
         message_gilds: &message_gilds,
         inline_images: &inline_images,
-        unread_marker: None,
+        dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
@@ -420,7 +420,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
         message_reactions: &message_reactions,
         message_gilds: &message_gilds,
         inline_images: &inline_images,
-        unread_marker: None,
+        dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
@@ -481,7 +481,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         message_reactions: &message_reactions,
         message_gilds: &message_gilds,
         inline_images: &inline_images,
-        unread_marker: None,
+        dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
@@ -574,7 +574,7 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
         message_reactions: &message_reactions,
         message_gilds: &message_gilds,
         inline_images: &inline_images,
-        unread_marker: None,
+        dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
@@ -785,7 +785,7 @@ fn mentions_and_replies_paint_a_background_wash() {
         message_reactions: &message_reactions,
         message_gilds: &message_gilds,
         inline_images: &inline_images,
-        unread_marker: None,
+        dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
@@ -868,7 +868,7 @@ fn background_wash_fills_the_whole_row_width() {
         message_reactions: &message_reactions,
         message_gilds: &message_gilds,
         inline_images: &inline_images,
-        unread_marker: None,
+        dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
@@ -1008,6 +1008,7 @@ fn chat_view<'a>(
         message_gilds: MESSAGE_GILDS.get_or_init(HashMap::new),
         inline_images: INLINE_IMAGES.get_or_init(HashMap::new),
         afk_lines: AFK_LINES.get_or_init(HashMap::new),
+        device_left_at: None,
         unread_counts,
         room_last_message_at: ROOM_LAST_MESSAGE_AT.get_or_init(HashMap::new),
         favorite_room_ids: &[],
@@ -2836,5 +2837,170 @@ fn unread_badge_collapses_at_the_cap() {
     assert_eq!(
         format_unread_badge(ChatRoomMember::UNREAD_COUNT_CAP + 500),
         "99+"
+    );
+}
+
+/// The two marks draw as two rules. The `you left` rule sits above the first
+/// message from someone else past the left-app mark, your own post after the
+/// mark does not trip it, and when the AFK line lands on the same message the
+/// `new messages` rule draws alone.
+#[test]
+fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
+    theme::set_current_by_id("late");
+
+    let room_id = Uuid::from_u128(1);
+    let current_user_id = Uuid::from_u128(2);
+    let other_id = Uuid::from_u128(3);
+    let now = Utc::now();
+    let message = |id: u128, user_id: Uuid, hours_ago: i64, body: &str| {
+        let created = now - chrono::Duration::hours(hours_ago);
+        ChatMessage {
+            id: Uuid::from_u128(id),
+            created,
+            updated: created,
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            room_id,
+            user_id,
+            body: body.to_string(),
+        }
+    };
+    // Newest first, the order the tail hands the cache.
+    let messages = vec![
+        message(14, other_id, 1, "and another"),
+        message(13, other_id, 2, "first thing you missed"),
+        message(12, current_user_id, 3, "posting from the phone"),
+        message(11, other_id, 10, "before you left"),
+    ];
+    let left_at = now - chrono::Duration::hours(9);
+
+    let usernames = HashMap::from([
+        (current_user_id, "alice".to_string()),
+        (other_id, "bob".to_string()),
+    ]);
+    let countries = HashMap::new();
+    let bonsai_glyphs = HashMap::new();
+    let chat_badges = HashMap::new();
+    let friend_user_ids = HashSet::new();
+    let afk_user_ids = HashSet::new();
+    let live_user_ids = HashSet::new();
+    let message_reactions = HashMap::new();
+    let message_gilds = HashMap::new();
+    let inline_images = HashMap::new();
+    let profile_award_badges = HashMap::new();
+    let drunk_levels = HashMap::new();
+    let name_flair = HashMap::new();
+    let peer_pomodoros = HashMap::new();
+    let translations = HashMap::new();
+    let translation_hidden = HashSet::new();
+    let username_lookup = UsernameLookup::new(&usernames, None);
+
+    // One entry per painted row (a message is a header row plus a body
+    // row): the rule's label, the message it belongs to, or a blank
+    // separator.
+    let rows_for = |dividers: ChatDividers| -> Vec<String> {
+        let ctx = ChatRowsContext {
+            versions: ChatRowsVersions::default(),
+            current_user_id,
+            afk_user_ids: &afk_user_ids,
+            live_user_ids: &live_user_ids,
+            show_flag_fallback: false,
+            usernames: &username_lookup,
+            countries: &countries,
+            friend_user_ids: &friend_user_ids,
+            bonsai_glyphs: &bonsai_glyphs,
+            chat_badges: &chat_badges,
+            profile_award_badges: &profile_award_badges,
+            message_reactions: &message_reactions,
+            message_gilds: &message_gilds,
+            inline_images: &inline_images,
+            dividers,
+            drunk_levels: &drunk_levels,
+            name_flair: &name_flair,
+            peer_pomodoros: &peer_pomodoros,
+            translations: &translations,
+            translation_hidden: &translation_hidden,
+        };
+        let mut cache = ChatRowsCache::default();
+        ensure_chat_rows_cache(&mut cache, messages.iter().collect(), 60, ctx);
+        cache
+            .all_rows
+            .iter()
+            .zip(&cache.row_message)
+            .map(|(line, owner)| {
+                let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                match owner {
+                    Some(id) => format!("msg {}", id.as_u128()),
+                    None if text.contains("you left 9 hrs ago") => "you left".to_string(),
+                    None if text.contains("new messages") => "new messages".to_string(),
+                    None => "blank".to_string(),
+                }
+            })
+            .collect()
+    };
+
+    // Only the left-app mark: the rule skips your own post and lands above
+    // bob's first message after it.
+    assert_eq!(
+        rows_for(ChatDividers {
+            afk_line: None,
+            left_app: Some(left_at),
+        }),
+        [
+            "msg 11", "msg 11", "blank", "msg 12", "msg 12", "blank", "you left", "msg 13",
+            "msg 13", "blank", "msg 14", "msg 14",
+        ]
+    );
+
+    // Both marks above the same message: one rule, the heavy one.
+    assert_eq!(
+        rows_for(ChatDividers {
+            afk_line: Some(now - chrono::Duration::minutes(150)),
+            left_app: Some(left_at),
+        }),
+        [
+            "msg 11",
+            "msg 11",
+            "blank",
+            "msg 12",
+            "msg 12",
+            "blank",
+            "new messages",
+            "msg 13",
+            "msg 13",
+            "blank",
+            "msg 14",
+            "msg 14",
+        ]
+    );
+
+    // Marks on different messages: both rules, each above its own.
+    assert_eq!(
+        rows_for(ChatDividers {
+            afk_line: Some(now - chrono::Duration::minutes(90)),
+            left_app: Some(left_at),
+        }),
+        [
+            "msg 11",
+            "msg 11",
+            "blank",
+            "msg 12",
+            "msg 12",
+            "blank",
+            "you left",
+            "msg 13",
+            "msg 13",
+            "blank",
+            "new messages",
+            "msg 14",
+            "msg 14",
+        ]
+    );
+
+    // No mark, no rule.
+    assert!(
+        !rows_for(ChatDividers::default())
+            .iter()
+            .any(|row| row == "you left" || row == "new messages")
     );
 }

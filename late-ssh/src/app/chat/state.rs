@@ -2528,6 +2528,12 @@ impl ChatState {
         self.afk_lines.get(&room_id).copied()
     }
 
+    /// The left-app mark for the `you left` divider. Read-only here, like
+    /// `/summary`: nothing in the session moves it.
+    pub(crate) fn device_left_at(&self) -> Option<DateTime<Utc>> {
+        self.device_left_at
+    }
+
     /// Title for the history modal. A public-room mention can point at a room
     /// the rail has never listed, so an unknown room gets a neutral label
     /// rather than blocking the open.

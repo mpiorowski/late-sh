@@ -74,6 +74,18 @@ fn is_system_author(username: &str) -> bool {
     crate::app::activity::lounge::is_system_username(username)
 }
 
+/// The two marks a room's rows draw against, resolved for one room by the
+/// caller. See `chat/CONTEXT.md` §The Two Marks: they never feed each other,
+/// so they arrive as two fields rather than one cursor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ChatDividers {
+    /// This session's AFK line for the room: the `new messages` rule.
+    pub afk_line: Option<DateTime<Utc>>,
+    /// When you last left the app on this device: the `you left` rule.
+    /// Per device, not per room, so every room draws it.
+    pub left_app: Option<DateTime<Utc>>,
+}
+
 // ── Dashboard chat card ─────────────────────────────────────
 
 pub struct DashboardChatView<'a> {
@@ -102,7 +114,7 @@ pub struct DashboardChatView<'a> {
     pub live_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
-    pub unread_marker: Option<DateTime<Utc>>,
+    pub dividers: ChatDividers,
     pub current_user_id: Uuid,
     pub voice_channel_id: Option<Uuid>,
     pub voice_snapshot: &'a crate::app::voice::svc::VoiceSnapshot,
@@ -1198,7 +1210,7 @@ pub fn draw_dashboard_chat_card(
                 message_reactions: view.message_reactions,
                 message_gilds: view.message_gilds,
                 inline_images: view.inline_images,
-                unread_marker: view.unread_marker,
+                dividers: view.dividers,
                 drunk_levels: view.drunk_levels,
                 name_flair: view.name_flair,
                 peer_pomodoros: view.peer_pomodoros,
@@ -1288,7 +1300,7 @@ struct ChatRowsContext<'a> {
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
     inline_images: &'a HashMap<Uuid, InlineImagePreview>,
-    unread_marker: Option<DateTime<Utc>>,
+    dividers: ChatDividers,
     /// Per-author drunk levels (1-4) for the tavern glow under usernames.
     drunk_levels: &'a HashMap<Uuid, u8>,
     /// Resolved 24h username-effect styles per author.
@@ -1419,7 +1431,7 @@ struct ChatRowsCacheKey {
     width: usize,
     theme: theme::ThemeKind,
     minute: i64,
-    unread_marker: Option<DateTime<Utc>>,
+    dividers: ChatDividers,
     current_user_id: Uuid,
     show_flag_fallback: bool,
 }
@@ -1451,7 +1463,7 @@ fn chat_rows_cache_key(ctx: &ChatRowsContext<'_>, width: usize) -> ChatRowsCache
         theme: theme::current_kind(),
         // Current minute so relative timestamps ("5 mins ago") stay fresh.
         minute: chrono::Utc::now().timestamp() / 60,
-        unread_marker: ctx.unread_marker,
+        dividers: ctx.dividers,
         current_user_id: ctx.current_user_id,
         show_flag_fallback: ctx.show_flag_fallback,
     }
@@ -1486,10 +1498,45 @@ fn push_new_messages_divider(
     row_kind.push(RowKindLite::Blank);
 }
 
-/// Whether the `new messages` divider goes above `message`: the first
-/// message from someone else since this session's human went quiet. Your own
-/// messages never trip it, and posting one clears the line outright, so the
-/// divider can only ever sit above somebody else's words.
+/// The `you left` rule: where the left-app mark falls in this room, the
+/// same mark a bare `/summary` reads from. Thin and dim where the AFK rule
+/// is heavy and amber: it is context ("this is what landed since you were
+/// last on this machine"), not the row people scan for. The stamp is
+/// relative, and the rows cache keys on the minute, so it stays fresh.
+pub(crate) fn left_app_divider_line(width: usize, left_at: DateTime<Utc>) -> Line<'static> {
+    let label = format!(
+        " you left {} ",
+        crate::app::common::primitives::format_relative_time(left_at)
+    );
+    let rule_width = width.saturating_sub(label.len()).max(2);
+    let left = rule_width / 2;
+    let right = rule_width.saturating_sub(left);
+    let style = Style::default().fg(theme::BORDER_DIM());
+    Line::from(vec![
+        Span::styled("─".repeat(left), style),
+        Span::styled(label, style),
+        Span::styled("─".repeat(right), style),
+    ])
+}
+
+fn push_left_app_divider(
+    rows: &mut Vec<Line<'static>>,
+    row_message: &mut Vec<Option<Uuid>>,
+    row_kind: &mut Vec<RowKindLite>,
+    width: usize,
+    left_at: DateTime<Utc>,
+) {
+    rows.push(left_app_divider_line(width, left_at));
+    row_message.push(None);
+    row_kind.push(RowKindLite::Blank);
+}
+
+/// Whether a divider goes above `message`: the first message from someone
+/// else past `marker`. Both marks use it. For the AFK line, your own
+/// messages never trip it and posting one clears the line outright, so the
+/// `new messages` divider can only ever sit above somebody else's words. For
+/// the left-app mark nothing clears it, and your own message after it is
+/// still not something you missed.
 fn is_unread_boundary_message(
     marker: Option<DateTime<Utc>>,
     message: &ChatMessage,
@@ -1549,6 +1596,7 @@ fn ensure_chat_rows_cache(
     let mut prev_created: Option<chrono::DateTime<chrono::Utc>> = None;
     let mut prev_was_system = false;
     let mut unread_divider_inserted = false;
+    let mut left_app_divider_inserted = false;
 
     for msg in messages.into_iter().rev() {
         let is_own = msg.user_id == ctx.current_user_id;
@@ -1708,12 +1756,31 @@ fn ensure_chat_rows_cache(
         }
         first = false;
 
-        if !unread_divider_inserted
-            && is_unread_boundary_message(ctx.unread_marker, msg, ctx.current_user_id)
-        {
-            push_new_messages_divider(&mut all_rows, &mut row_message, &mut row_kind, width);
-            unread_divider_inserted = true;
+        let left_app_here = ctx.dividers.left_app.filter(|_| {
+            !left_app_divider_inserted
+                && is_unread_boundary_message(ctx.dividers.left_app, msg, ctx.current_user_id)
+        });
+        let afk_here = !unread_divider_inserted
+            && is_unread_boundary_message(ctx.dividers.afk_line, msg, ctx.current_user_id);
+        match (left_app_here, afk_here) {
+            (Some(left_at), false) => {
+                push_left_app_divider(
+                    &mut all_rows,
+                    &mut row_message,
+                    &mut row_kind,
+                    width,
+                    left_at,
+                );
+            }
+            // Both marks land above the same message: the AFK line says
+            // everything the left-app one would, so it draws alone.
+            (Some(_), true) | (None, true) => {
+                push_new_messages_divider(&mut all_rows, &mut row_message, &mut row_kind, width);
+            }
+            (None, false) => {}
         }
+        left_app_divider_inserted |= left_app_here.is_some();
+        unread_divider_inserted |= afk_here;
 
         let row_start = all_rows.len();
         let image_lines = ctx.inline_images.get(&msg.id).map(Vec::as_slice);
@@ -2758,6 +2825,10 @@ pub struct ChatRenderInput<'a> {
     /// This session's AFK line per room; the `new messages` divider
     /// draws before the first message from someone else past it.
     pub afk_lines: &'a HashMap<Uuid, DateTime<Utc>>,
+    /// When you last left the app on this device; the `you left` divider
+    /// draws before the first message from someone else past it, in every
+    /// room, since the mark is about the device rather than a room.
+    pub device_left_at: Option<DateTime<Utc>>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub favorite_room_ids: &'a [Uuid],
@@ -2928,7 +2999,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
-    pub unread_marker: Option<DateTime<Utc>>,
+    pub dividers: ChatDividers,
     pub current_user_id: Uuid,
     /// Voice channel for this view, drawn as a strip at the top when present.
     pub voice_channel_id: Option<Uuid>,
@@ -3050,7 +3121,7 @@ pub fn draw_embedded_room_chat(
             message_reactions: view.message_reactions,
             message_gilds: view.message_gilds,
             inline_images: view.inline_images,
-            unread_marker: view.unread_marker,
+            dividers: view.dividers,
             drunk_levels: view.drunk_levels,
             name_flair: view.name_flair,
             peer_pomodoros: view.peer_pomodoros,
@@ -4881,7 +4952,10 @@ fn draw_selected_content(
                     message_reactions: view.message_reactions,
                     message_gilds: view.message_gilds,
                     inline_images: view.inline_images,
-                    unread_marker: view.afk_lines.get(&room.id).copied(),
+                    dividers: ChatDividers {
+                        afk_line: view.afk_lines.get(&room.id).copied(),
+                        left_app: view.device_left_at,
+                    },
                     drunk_levels: view.drunk_levels,
                     name_flair: view.name_flair,
                     peer_pomodoros: view.peer_pomodoros,
