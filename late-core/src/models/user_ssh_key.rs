@@ -33,11 +33,15 @@ crate::user_scoped_model! {
 
         // `label` is a human name for the device, `None` until the user sets
         // one; `settings` holds this device's overrides (empty = inherit).
+        // `left_at` is when a session on this device last ended, stamped at
+        // the moment its keyboard went quiet (see migration 166); `None` until
+        // the first one does.
         @data
         pub user_id: Uuid,
         pub fingerprint: String,
         pub label: Option<String>,
         pub settings: Value,
+        pub left_at: Option<DateTime<Utc>>,
     }
 }
 
@@ -172,17 +176,6 @@ impl UserSshKey {
         Ok(row.map(Self::from))
     }
 
-    /// Load just this device's rail layout, or `None` when the key has no
-    /// stored layout (or no row yet) and should follow the account default.
-    pub async fn layout_for(
-        client: &Client,
-        user_id: Uuid,
-        fingerprint: &str,
-    ) -> Result<Option<KeyLayout>> {
-        let key = Self::find_by_fingerprint(client, user_id, fingerprint).await?;
-        Ok(key.and_then(|key| extract_key_layout(&key.settings)))
-    }
-
     /// Store this device's rail layout. Scoped by owner as well as fingerprint
     /// so a stale fingerprint can never write onto another account's key.
     pub async fn set_layout(
@@ -232,6 +225,56 @@ impl UserSshKey {
                      updated = current_timestamp
                  WHERE fingerprint = $2 AND user_id = $3",
                 &[&audio.to_value(), &fingerprint, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("ssh key not found");
+        }
+        Ok(())
+    }
+
+    /// Take this device's mark: when a session on it last left the app, or
+    /// `None` when the key has never ended one (or has no row yet). The read
+    /// clears the column, so a mark is served to exactly one session. That
+    /// is what makes a lost [`set_left_at`](Self::set_left_at) safe: the
+    /// next session falls back to the default `/summary` window rather than
+    /// inheriting a leave from before the session that failed to write,
+    /// which would summarize messages already read.
+    pub async fn take_left_at(
+        client: &Client,
+        user_id: Uuid,
+        fingerprint: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
+        let row = client
+            .query_opt(
+                "UPDATE user_ssh_keys
+                 SET left_at = NULL, updated = current_timestamp
+                 WHERE fingerprint = $1 AND user_id = $2
+                 RETURNING (SELECT left_at FROM user_ssh_keys
+                            WHERE fingerprint = $1 AND user_id = $2) AS left_at",
+                &[&fingerprint, &user_id],
+            )
+            .await?;
+        Ok(row.and_then(|row| row.get("left_at")))
+    }
+
+    /// Record that a session on this device ended, with `left_at` the moment
+    /// its keyboard went quiet rather than the moment it disconnected.
+    /// Scoped by owner as well as fingerprint so a stale fingerprint can
+    /// never write onto another account's key. Last write wins: two live
+    /// sessions on one key are one device as far as late.sh can tell.
+    pub async fn set_left_at(
+        client: &Client,
+        user_id: Uuid,
+        fingerprint: &str,
+        left_at: DateTime<Utc>,
+    ) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE user_ssh_keys
+                 SET left_at = $1, updated = current_timestamp
+                 WHERE fingerprint = $2 AND user_id = $3",
+                &[&left_at, &fingerprint, &user_id],
             )
             .await?;
         if updated == 0 {

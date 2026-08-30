@@ -8,7 +8,8 @@ use crate::app::lobby::daily::battleship::DailyBattleshipState;
 use crate::app::lobby::daily::connect4::DailyConnect4State;
 use crate::app::lobby::daily::games::DailyGame;
 use crate::app::lobby::daily::svc::{
-    DAILY_MAX_ACTIVE_ENTRIES, DailyChessState, DailyOutcome, DailyService,
+    DAILY_MAX_ACTIVE_ENTRIES, DAILY_WIN_MIN_MOVES, DailyChessState, DailyOutcome, DailyService,
+    DailyWinPayout,
 };
 use late_core::{
     models::{
@@ -55,6 +56,91 @@ fn white_black(row: &DailyMatch) -> (Uuid, Uuid) {
 /// a1 = 0 .. h8 = 63, file + 8 * rank.
 const fn sq(file: usize, rank: usize) -> usize {
     file + 8 * rank
+}
+
+/// `DAILY_WIN_MIN_MOVES` pawn pushes off the second ranks. Legal from any
+/// opening position, chess960 included, so a match clears the played gate
+/// without a scripted mate.
+async fn play_min_moves(svc: &DailyService, row: &DailyMatch) {
+    let (white, black) = white_black(row);
+    let plies = [
+        (white, sq(0, 1), sq(0, 2)),
+        (black, sq(0, 6), sq(0, 5)),
+        (white, sq(1, 1), sq(1, 2)),
+        (black, sq(1, 6), sq(1, 5)),
+        (white, sq(2, 1), sq(2, 2)),
+    ];
+    assert_eq!(plies.len() as u64, DAILY_WIN_MIN_MOVES);
+    for (mover, from, to) in plies {
+        svc.play_move(mover, row.id, from, to)
+            .await
+            .expect("pawn push");
+    }
+}
+
+/// Post, claim, and resign one chess match between the pair, played to the
+/// gate first when `played`. The challenger posts, the opponent claims and
+/// resigns, so the challenger is the winner.
+async fn resigned_chess_match(
+    svc: &DailyService,
+    challenger: Uuid,
+    opponent: Uuid,
+    played: bool,
+) -> DailyMatch {
+    resigned_match(svc, DailyGame::Chess, challenger, opponent, played).await
+}
+
+/// The same, in any game `play_min_moves` can drive (chess or chess960).
+async fn resigned_match(
+    svc: &DailyService,
+    game: DailyGame,
+    challenger: Uuid,
+    opponent: Uuid,
+    played: bool,
+) -> DailyMatch {
+    let challenge = svc
+        .post_challenge(challenger, game, None)
+        .await
+        .expect("post challenge");
+    let claimed = svc
+        .claim_challenge(opponent, challenge.id)
+        .await
+        .expect("claim challenge");
+    if played {
+        play_min_moves(svc, &claimed).await;
+    }
+    svc.resign(opponent, claimed.id)
+        .await
+        .expect("opponent resigns");
+    claimed
+}
+
+/// The stored payout outcome of one finished match, as the lingering result
+/// row will read it.
+fn stored_win_payout(svc: &DailyService, match_id: Uuid) -> Option<DailyWinPayout> {
+    let snapshot = svc.subscribe_snapshot().borrow().clone();
+    snapshot
+        .finished_matches
+        .iter()
+        .find(|item| item.id == match_id)
+        .expect("finished match is in the snapshot")
+        .win_payout
+}
+
+/// Every win credit the user holds under one ledger reason. The credit is
+/// awaited inside the finish, so this is final the moment the finishing call
+/// returns.
+async fn win_deltas(client: &tokio_postgres::Client, user_id: Uuid, reason: &str) -> Vec<i64> {
+    client
+        .query(
+            "SELECT delta FROM chip_ledger WHERE user_id = $1 AND reason = $2 ORDER BY created_at",
+            &[&user_id, &reason],
+        )
+        .await
+        .expect("ledger rows")
+        .iter()
+        .map(|row| row.get::<_, i64>("delta"))
+        .collect()
 }
 
 #[tokio::test]
@@ -192,19 +278,21 @@ async fn checkmate_finishes_match_and_pays_the_winner() {
         .expect("claim challenge");
     let (white, black) = white_black(&claimed);
 
-    // Fool's mate: 1. f3 e5 2. g4 Qh4#
-    svc.play_move(white, claimed.id, sq(5, 1), sq(5, 2))
-        .await
-        .expect("f3");
-    svc.play_move(black, claimed.id, sq(4, 6), sq(4, 4))
-        .await
-        .expect("e5");
-    svc.play_move(white, claimed.id, sq(6, 1), sq(6, 3))
-        .await
-        .expect("g4");
-    svc.play_move(black, claimed.id, sq(3, 7), sq(7, 3))
-        .await
-        .expect("Qh4#");
+    // Scholar's mate: 1. e4 e5 2. Bc4 Nc6 3. Qh5 Nf6 4. Qxf7#. Seven plies,
+    // so the mate clears the played gate; fool's mate at four would not.
+    for (mover, from, to, label) in [
+        (white, sq(4, 1), sq(4, 3), "e4"),
+        (black, sq(4, 6), sq(4, 4), "e5"),
+        (white, sq(5, 0), sq(2, 3), "Bc4"),
+        (black, sq(1, 7), sq(2, 5), "Nc6"),
+        (white, sq(3, 0), sq(7, 4), "Qh5"),
+        (black, sq(6, 7), sq(5, 5), "Nf6"),
+        (white, sq(7, 4), sq(5, 6), "Qxf7#"),
+    ] {
+        svc.play_move(mover, claimed.id, from, to)
+            .await
+            .expect(label);
+    }
 
     let client = test_db.db.get().await.expect("db client");
     let row = DailyMatch::get(&client, claimed.id)
@@ -213,32 +301,202 @@ async fn checkmate_finishes_match_and_pays_the_winner() {
         .expect("match exists");
     assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
     assert_eq!(row.result, DailyMatch::RESULT_CHECKMATE);
-    assert_eq!(row.winner_user_id, Some(black));
+    assert_eq!(row.winner_user_id, Some(white));
     assert_eq!(row.turn_user_id, None);
     assert_eq!(row.turn_deadline_at, None);
 
     // No further moves once finished.
-    let after = svc.play_move(white, claimed.id, sq(4, 1), sq(4, 3)).await;
+    let after = svc.play_move(black, claimed.id, sq(3, 6), sq(3, 4)).await;
     assert!(after.is_err(), "moved in a finished match");
 
     // The win payout lands through the seeded daily_chess_win_payout
-    // template; the credit is spawned, so poll briefly.
-    let mut credited = None;
-    for _ in 0..100 {
-        let rows = client
-            .query(
-                "SELECT delta FROM chip_ledger WHERE user_id = $1 AND reason = 'daily_chess_win'",
-                &[&black],
-            )
+    // template before the finishing move returns.
+    assert_eq!(
+        win_deltas(&client, white, "daily_chess_win").await,
+        vec![500],
+        "winner never received the win payout"
+    );
+    assert_eq!(
+        stored_win_payout(&svc, claimed.id),
+        Some(DailyWinPayout::Paid)
+    );
+}
+
+#[tokio::test]
+async fn win_under_the_move_floor_pays_nothing() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-floor-challenger").await;
+    let opponent = create_test_user(&test_db.db, "daily-floor-opponent").await;
+    let svc = daily_service(&test_db);
+
+    // Post, claim, four plies, resign: the shape of the two-account loop the
+    // gate exists for. The match finishes as a real win, the chips never move.
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::Chess, None)
+        .await
+        .expect("post challenge");
+    let claimed = svc
+        .claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("claim challenge");
+    let (white, black) = white_black(&claimed);
+    for (mover, from, to) in [
+        (white, sq(0, 1), sq(0, 2)),
+        (black, sq(0, 6), sq(0, 5)),
+        (white, sq(1, 1), sq(1, 2)),
+        (black, sq(1, 6), sq(1, 5)),
+    ] {
+        svc.play_move(mover, claimed.id, from, to)
             .await
-            .expect("ledger rows");
-        if let Some(row) = rows.first() {
-            credited = Some(row.get::<_, i64>("delta"));
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            .expect("pawn push");
     }
-    assert_eq!(credited, Some(500), "winner never received the win payout");
+    svc.resign(opponent.id, claimed.id)
+        .await
+        .expect("opponent resigns");
+
+    let client = test_db.db.get().await.expect("db client");
+    let row = DailyMatch::get(&client, claimed.id)
+        .await
+        .expect("load match")
+        .expect("match exists");
+    assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
+    assert_eq!(row.winner_user_id, Some(challenger.id));
+    assert_eq!(
+        win_deltas(&client, challenger.id, "daily_chess_win").await,
+        Vec::<i64>::new(),
+        "a four-ply match paid its winner"
+    );
+    // The reason survives on the row for a winner who was not connected.
+    assert_eq!(
+        stored_win_payout(&svc, claimed.id),
+        Some(DailyWinPayout::Unplayed)
+    );
+}
+
+#[tokio::test]
+async fn pair_day_cap_pays_one_win_per_opponent_per_posting_day() {
+    let test_db = new_test_db().await;
+    let a = create_test_user(&test_db.db, "daily-pair-a").await;
+    let b = create_test_user(&test_db.db, "daily-pair-b").await;
+    let c = create_test_user(&test_db.db, "daily-pair-c").await;
+    let svc = daily_service(&test_db);
+    let client = test_db.db.get().await.expect("db client");
+
+    // Two played matches against the same opponent, posted the same day: the
+    // first pays, the second is the resign loop and pays nothing.
+    let first = resigned_chess_match(&svc, a.id, b.id, true).await;
+    let second = resigned_chess_match(&svc, a.id, b.id, true).await;
+    assert_eq!(
+        win_deltas(&client, a.id, "daily_chess_win").await,
+        vec![500],
+        "the second win against the same opponent paid"
+    );
+    assert_eq!(
+        stored_win_payout(&svc, first.id),
+        Some(DailyWinPayout::Paid)
+    );
+    assert_eq!(
+        stored_win_payout(&svc, second.id),
+        Some(DailyWinPayout::PairDayCapped)
+    );
+
+    // The cap is per winner: the other direction has its own key, so a day
+    // where each beats the other pays both.
+    resigned_chess_match(&svc, b.id, a.id, true).await;
+    assert_eq!(
+        win_deltas(&client, b.id, "daily_chess_win").await,
+        vec![500]
+    );
+
+    // A different opponent the same day is a different key.
+    resigned_chess_match(&svc, a.id, c.id, true).await;
+    assert_eq!(
+        win_deltas(&client, a.id, "daily_chess_win").await,
+        vec![500, 500]
+    );
+}
+
+/// The cap is scoped to the roster game (SHOP.md Phase 7, decided
+/// 2026-08-27): a chess win and a chess960 win against the same opponent on
+/// the same posting day are two keys, so both pay. Friends who play several
+/// games together are never touched; a colluding pair runs out of games. If
+/// this goes red because the key became roster-wide, that is a decision
+/// reversal, not a fix.
+#[tokio::test]
+async fn pair_day_cap_is_scoped_to_the_game() {
+    let test_db = new_test_db().await;
+    let a = create_test_user(&test_db.db, "daily-pergame-a").await;
+    let b = create_test_user(&test_db.db, "daily-pergame-b").await;
+    let svc = daily_service(&test_db);
+    let client = test_db.db.get().await.expect("db client");
+
+    let chess = resigned_match(&svc, DailyGame::Chess, a.id, b.id, true).await;
+    let chess960 = resigned_match(&svc, DailyGame::Chess960, a.id, b.id, true).await;
+    assert_eq!(
+        win_deltas(&client, a.id, "daily_chess_win").await,
+        vec![500]
+    );
+    assert_eq!(
+        win_deltas(&client, a.id, "daily_chess960_win").await,
+        vec![500],
+        "a second game against the same opponent is its own cap"
+    );
+    assert_eq!(
+        stored_win_payout(&svc, chess.id),
+        Some(DailyWinPayout::Paid)
+    );
+    assert_eq!(
+        stored_win_payout(&svc, chess960.id),
+        Some(DailyWinPayout::Paid)
+    );
+
+    // The same game again is where the cap lives.
+    let again = resigned_match(&svc, DailyGame::Chess960, a.id, b.id, true).await;
+    assert_eq!(
+        stored_win_payout(&svc, again.id),
+        Some(DailyWinPayout::PairDayCapped)
+    );
+    assert_eq!(
+        win_deltas(&client, a.id, "daily_chess960_win").await,
+        vec![500]
+    );
+}
+
+#[tokio::test]
+async fn pair_day_cap_keys_on_the_day_the_match_was_posted() {
+    let test_db = new_test_db().await;
+    let a = create_test_user(&test_db.db, "daily-postday-a").await;
+    let b = create_test_user(&test_db.db, "daily-postday-b").await;
+    let svc = daily_service(&test_db);
+    let client = test_db.db.get().await.expect("db client");
+
+    resigned_chess_match(&svc, a.id, b.id, true).await;
+
+    // Two long games against the same person finishing on the same day is
+    // ordinary; they were posted on different days, so both pay.
+    let challenge = svc
+        .post_challenge(a.id, DailyGame::Chess, None)
+        .await
+        .expect("post challenge");
+    let claimed = svc
+        .claim_challenge(b.id, challenge.id)
+        .await
+        .expect("claim challenge");
+    client
+        .execute(
+            "UPDATE daily_matches SET created = created - interval '1 day' WHERE id = $1",
+            &[&claimed.id],
+        )
+        .await
+        .expect("age the posting");
+    play_min_moves(&svc, &claimed).await;
+    svc.resign(b.id, claimed.id).await.expect("b resigns");
+
+    assert_eq!(
+        win_deltas(&client, a.id, "daily_chess_win").await,
+        vec![500, 500],
+        "a win from an older posting day was capped by today's"
+    );
 }
 
 #[tokio::test]
@@ -280,8 +538,10 @@ async fn chess960_claim_shuffles_the_start_and_a_win_pays_the_chess960_reward() 
     );
 
     // A resignation is the decisive finish that needs no scripted mate from a
-    // position nobody knows in advance.
+    // position nobody knows in advance; the pawn pushes before it clear the
+    // played gate from any back rank.
     let finished_id = claimed[0].id;
+    play_min_moves(&svc, &claimed[0]).await;
     svc.resign(challenger.id, finished_id)
         .await
         .expect("challenger resigns");
@@ -297,24 +557,9 @@ async fn chess960_claim_shuffles_the_start_and_a_win_pays_the_chess960_reward() 
 
     // The payout rides the chess960 reward key and chip move, not chess's:
     // key, ledger reason and the seeded template have to agree three ways.
-    let mut credited = None;
-    for _ in 0..100 {
-        let rows = client
-            .query(
-                "SELECT delta FROM chip_ledger WHERE user_id = $1 AND reason = 'daily_chess960_win'",
-                &[&opponent.id],
-            )
-            .await
-            .expect("ledger rows");
-        if let Some(row) = rows.first() {
-            credited = Some(row.get::<_, i64>("delta"));
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
     assert_eq!(
-        credited,
-        Some(500),
+        win_deltas(&client, opponent.id, "daily_chess960_win").await,
+        vec![500],
         "chess960 winner never received the win payout"
     );
 }
@@ -551,6 +796,11 @@ async fn sweeper_forfeits_matches_past_their_deadline() {
     // White was on the clock, so black wins on time.
     assert_eq!(row.winner_user_id, Some(black));
     assert_ne!(row.winner_user_id, Some(white));
+    // Nobody moved, so the win on time is a win over an empty board: no chips.
+    assert_eq!(
+        win_deltas(&client, black, "daily_chess_win").await,
+        Vec::<i64>::new()
+    );
 
     let snapshot = svc.subscribe_snapshot().borrow().clone();
     assert!(snapshot.active_matches.is_empty());

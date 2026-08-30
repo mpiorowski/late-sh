@@ -4,13 +4,14 @@ use uuid::Uuid;
 
 use crate::{
     models::{
+        chips::Difficulty,
         le_word,
         leaderboard::{
             DailyPuzzle, OnlineTimeIncrement, RankedEntry, apply_online_time_batch,
             fetch_leaderboard_data,
         },
         mud_character::MudCharacter,
-        rubiks_cube, sudoku,
+        rubiks_cube, sliding_puzzle, sudoku,
     },
     test_utils::{create_test_user, test_db},
 };
@@ -171,6 +172,9 @@ async fn daily_boards_and_arcade_points_follow_the_roster() {
     rubiks_cube::DailyWin::record_win(&client, rival.id, today)
         .await
         .expect("record rival rubiks win");
+    sliding_puzzle::DailyWin::record_win(&client, rival.id, Difficulty::Hard, today, 50)
+        .await
+        .expect("record rival sliding puzzle win");
 
     let data = fetch_leaderboard_data(&client)
         .await
@@ -204,17 +208,24 @@ async fn daily_boards_and_arcade_points_follow_the_roster() {
     assert_eq!(solver_points.value, 10, "5 le word + 1 hard sudoku");
     assert_eq!(solver_points.rank, 1);
     let rival_points = entry_for(&data.arcade_champions, rival.id);
-    assert_eq!(rival_points.value, 5, "2 le word + rubiks at medium weight");
-    assert_eq!(rival_points.rank, 2);
+    assert_eq!(
+        rival_points.value, 10,
+        "2 le word + rubiks at medium weight + hard sliding puzzle"
+    );
+    assert_eq!(rival_points.rank, 1);
 
-    // The rubiks win is today's, so the status projection must report it
-    // under the fixed 'daily' difficulty.
+    let sliding_board = data
+        .daily_board(DailyPuzzle::SlidingPuzzle)
+        .expect("sliding puzzle board present");
+    assert_eq!(entry_for(&sliding_board.monthly, rival.id).value, 1);
     let rival_status = data
         .user_daily_statuses
         .get(&rival.id)
         .expect("rival has a daily status");
     assert!(rival_status.completed(DailyPuzzle::RubiksCube));
     assert!(rival_status.completed_difficulty(DailyPuzzle::RubiksCube, "daily"));
+    assert!(rival_status.completed(DailyPuzzle::SlidingPuzzle));
+    assert!(rival_status.completed_difficulty(DailyPuzzle::SlidingPuzzle, "hard"));
 }
 
 /// Same-day replays upsert the win row (keep-best-score), so they must not

@@ -11,6 +11,7 @@ pub(crate) mod bonsai_v2;
 pub mod chat;
 pub mod clubhouse;
 pub mod common;
+pub mod crown;
 pub mod dashboard;
 #[cfg(test)]
 mod dashboard_flow_test;
@@ -29,6 +30,7 @@ pub mod lobby;
 pub(crate) mod mod_modal;
 pub(crate) mod notify;
 pub mod pet;
+pub mod pot;
 pub mod profile;
 pub(crate) mod profile_modal;
 pub(crate) mod quit_confirm;

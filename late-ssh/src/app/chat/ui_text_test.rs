@@ -61,6 +61,7 @@ fn wrap_chat_entry_to_lines_renders_report_card() {
         None,
         &[],
         None,
+        None,
     );
     let lines = lines_to_strings(&wrapped.lines);
     assert_eq!(lines[0], " mat filed a bug [now]");
@@ -86,6 +87,7 @@ fn wrap_chat_entry_to_lines_renders_action_message() {
         None,
         None,
         &[],
+        None,
         None,
     );
     assert_eq!(lines_to_strings(&wrapped.lines), vec![" * mat waves"]);
@@ -217,10 +219,84 @@ fn wrap_chat_entry_to_lines_appends_reaction_footer() {
             },
         ],
         None,
+        None,
     );
     let rendered = lines_to_strings(&wrapped.lines).join("\n");
     assert!(rendered.contains("[🧡 3]"));
     assert!(rendered.contains("[🔥 1]"));
+}
+
+/// The gild marker leads the footer, ahead of the reactions, and only shows
+/// a count once more than one person has paid.
+#[test]
+fn wrap_chat_entry_to_lines_marks_a_gilded_message() {
+    use late_core::models::chat_message_gild::{ChatMessageGildSummary, GildTier};
+
+    let single = wrap_chat_entry_to_lines(
+        "hello world",
+        "[1m]",
+        "alice",
+        80,
+        Style::default(),
+        None,
+        Style::default(),
+        false,
+        false,
+        None,
+        None,
+        &[],
+        Some(ChatMessageGildSummary {
+            top_tier: GildTier::Silver,
+            count: 1,
+        }),
+        None,
+    );
+    let rendered = lines_to_strings(&single.lines);
+    assert!(
+        rendered.iter().all(|line| line.starts_with('┃')),
+        "the tier bar runs the full height of the message: {rendered:?}"
+    );
+    assert_eq!(
+        single.lines[0].spans[0].style.fg,
+        Some(theme::BADGE_SILVER()),
+        "the bar is painted in the tier color"
+    );
+    let rendered = rendered.join("\n");
+    assert!(rendered.contains("◆◆"), "{rendered:?}");
+    assert!(!rendered.contains("◆◆◆"), "{rendered:?}");
+    assert!(!rendered.contains("×1"), "{rendered:?}");
+
+    let stacked = wrap_chat_entry_to_lines(
+        "hello world",
+        "[1m]",
+        "alice",
+        80,
+        Style::default(),
+        None,
+        Style::default(),
+        false,
+        false,
+        None,
+        None,
+        &[ChatMessageReactionSummary {
+            icon: "🔥".to_string(),
+            count: 1,
+        }],
+        Some(ChatMessageGildSummary {
+            top_tier: GildTier::Gold,
+            count: 3,
+        }),
+        None,
+    );
+    let footer = lines_to_strings(&stacked.lines)
+        .pop()
+        .expect("a footer row");
+    assert!(footer.contains("◆◆◆ ×3"), "{footer:?}");
+    assert!(footer.contains("[🔥 1]"), "{footer:?}");
+    assert!(
+        footer.find("◆◆◆").unwrap() < footer.find("[🔥").unwrap(),
+        "the gild marker leads the footer: {footer:?}"
+    );
 }
 
 #[test]
@@ -239,6 +315,7 @@ fn wrap_chat_entry_to_lines_renders_ready_translation_under_the_body() {
         None,
         None,
         &[],
+        None,
         Some(&translation),
     );
     let rendered = lines_to_strings(&wrapped.lines).join("\n");
@@ -267,6 +344,7 @@ fn wrap_chat_entry_to_lines_renders_no_translation_line_when_hidden() {
         None,
         &[],
         None,
+        None,
     );
     let rendered = lines_to_strings(&wrapped.lines).join("\n");
     assert!(rendered.contains("你好，我刚发现这个地方"), "{rendered}");
@@ -283,7 +361,7 @@ fn wrap_message_has_left_padding() {
         Style::default(),
         None,
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     let strings = lines_to_strings(&lines);
@@ -301,7 +379,7 @@ fn wrap_message_respects_newlines() {
         Style::default(),
         None,
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     let strings = lines_to_strings(&lines);
@@ -321,7 +399,7 @@ fn wrap_message_empty_body() {
         Style::default(),
         None,
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     assert_eq!(lines.len(), 1);
@@ -330,6 +408,7 @@ fn wrap_message_empty_body() {
 #[test]
 fn wrap_message_author_tint_splits_only_the_username() {
     let tint = AuthorTint {
+        crown_range: None,
         range: (4, 9), // "alice" inside "★ alice 🌱" ("★" is 3 bytes)
         title_range: None,
         word: None,
@@ -343,7 +422,7 @@ fn wrap_message_author_tint_splits_only_the_username() {
         Style::default(),
         Some(tint),
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     // pad + prefix-before + tinted-username + prefix-after + stamp
@@ -359,7 +438,7 @@ fn wrap_message_author_tint_splits_only_the_username() {
         Style::default(),
         None,
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     assert_eq!(lines_to_strings(&lines), lines_to_strings(&untinted));
@@ -368,6 +447,7 @@ fn wrap_message_author_tint_splits_only_the_username() {
 #[test]
 fn wrap_message_author_tint_ignores_bad_ranges() {
     let tint = AuthorTint {
+        crown_range: None,
         range: (0, 99),
         title_range: None,
         word: None,
@@ -381,7 +461,7 @@ fn wrap_message_author_tint_ignores_bad_ranges() {
         Style::default(),
         Some(tint),
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     assert_eq!(lines[0].spans.len(), 3);
@@ -390,6 +470,7 @@ fn wrap_message_author_tint_ignores_bad_ranges() {
 #[test]
 fn wrap_message_name_style_paints_per_char_over_author_style() {
     let tint = AuthorTint {
+        crown_range: None,
         range: (0, 5),
         title_range: None,
         word: None,
@@ -406,7 +487,7 @@ fn wrap_message_name_style_paints_per_char_over_author_style() {
         author_style,
         Some(tint),
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     // pad + 5 per-char spans + stamp
@@ -427,6 +508,7 @@ fn wrap_message_name_style_paints_per_char_over_author_style() {
 #[test]
 fn wrap_message_prints_drunk_word_between_name_and_stamp() {
     let tint = AuthorTint {
+        crown_range: None,
         range: (0, 5),
         title_range: None,
         word: Some(("wasted", Color::Rgb(120, 40, 35))),
@@ -440,7 +522,7 @@ fn wrap_message_prints_drunk_word_between_name_and_stamp() {
         Style::default(),
         Some(tint),
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     // pad + tinted-username + " (wasted)" + " 12:04"
@@ -462,6 +544,7 @@ fn wrap_message_prints_drunk_word_between_name_and_stamp() {
 fn wrap_message_omits_drunk_word_when_absent() {
     // A name_style-only tint with no drunk word: header stays lean.
     let tint = AuthorTint {
+        crown_range: None,
         range: (0, 5),
         title_range: None,
         word: None,
@@ -475,7 +558,7 @@ fn wrap_message_omits_drunk_word_when_absent() {
         Style::default(),
         Some(tint),
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     // pad + tinted-username + " 12:04" — no aside.

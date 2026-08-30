@@ -26,8 +26,9 @@ use super::{
     games::DailyGame,
     reversi::DailyReversiState,
     svc::{
-        DAILY_MAX_ACTIVE_ENTRIES, DailyChallengeItem, DailyChessState, DailyEvent,
-        DailyFinishedItem, DailyMatchItem, DailyService, DailySnapshot,
+        DAILY_MAX_ACTIVE_ENTRIES, DAILY_WIN_MIN_MOVES, DailyChallengeItem, DailyChessState,
+        DailyEvent, DailyFinishOutcome, DailyFinishedItem, DailyMatchItem, DailyService,
+        DailySnapshot, DailyWinPayout,
     },
 };
 
@@ -425,34 +426,52 @@ impl DailyState {
                 game,
                 challenger_id,
                 opponent_id,
-                winner_user_id,
+                outcome,
                 result,
             } => {
                 if self.board.as_ref().is_some_and(|b| b.match_id == match_id) {
                     self.request_board_reload();
                 }
                 let playing = challenger_id == self.user_id || opponent_id == Some(self.user_id);
-                if winner_user_id == Some(self.user_id) {
-                    Some(Banner::success(&format!(
-                        "Daily {}: you won the match (+{} chips)",
-                        game.label(),
-                        game.win_payout()
-                    )))
-                } else if playing && winner_user_id.is_some() {
-                    // Losers get told too; the lingering result row in the
-                    // lobby is the durable copy of this news.
-                    Some(Banner::info(&format!(
-                        "Daily {}: you lost the match ({})",
-                        game.label(),
-                        result_phrase(&result)
-                    )))
-                } else if playing {
-                    Some(Banner::info(&format!(
+                match outcome {
+                    DailyFinishOutcome::Won { user_id, payout } if user_id == self.user_id => {
+                        // The payout was settled before this event was sent,
+                        // so the banner reports what the chips did.
+                        Some(match payout {
+                            DailyWinPayout::Paid => Banner::success(&format!(
+                                "Daily {}: you won the match (+{} chips)",
+                                game.label(),
+                                game.win_payout()
+                            )),
+                            DailyWinPayout::Unplayed => Banner::success(&format!(
+                                "Daily {}: you won the match (no chips: under {} moves)",
+                                game.label(),
+                                DAILY_WIN_MIN_MOVES
+                            )),
+                            DailyWinPayout::PairDayCapped => Banner::success(&format!(
+                                "Daily {}: you won the match (no chips: one paid win per opponent per game per posting day)",
+                                game.label()
+                            )),
+                            DailyWinPayout::Failed => Banner::success(&format!(
+                                "Daily {}: you won the match (the chip payout failed)",
+                                game.label()
+                            )),
+                        })
+                    }
+                    DailyFinishOutcome::Won { .. } if playing => {
+                        // Losers get told too; the lingering result row in the
+                        // lobby is the durable copy of this news.
+                        Some(Banner::info(&format!(
+                            "Daily {}: you lost the match ({})",
+                            game.label(),
+                            result_phrase(&result)
+                        )))
+                    }
+                    DailyFinishOutcome::Draw if playing => Some(Banner::info(&format!(
                         "Daily {}: match ended in a draw",
                         game.label()
-                    )))
-                } else {
-                    None
+                    ))),
+                    DailyFinishOutcome::Won { .. } | DailyFinishOutcome::Draw => None,
                 }
             }
             DailyEvent::MovePlayed { match_id, .. }

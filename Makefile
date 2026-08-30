@@ -75,6 +75,14 @@ test-llm: .env
 	$(CHECK_DB_START); \
 	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) systemd-run --user --scope -q -p MemoryHigh=$(TEST_LLM_MEM_HIGH) -p MemoryMax=$(TEST_LLM_MEM_MAX) cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) --no-fail-fast --failure-output final $(ARGS)
 
+# The Lateania battle arena: every balance contract and both report parts
+# (late-ssh/target/lateania-arena*.md). Thousands of real engine fights, so
+# it is not part of the suite; run it when combat, classes, gear, or bosses
+# change. Serial (-j1): the report tests each need most of a CPU-minute budget.
+.PHONY: arena
+arena:
+	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all -j1 -E 'test(lateania::svc::arena)'"
+
 # Full pre-merge sweep, and the only place the otel feature is exercised:
 # clippy + tests run the whole workspace WITH --features otel, so the real
 # telemetry/metrics code (the config prod ships) is compiled and linted here.

@@ -121,6 +121,17 @@ impl Escape {
         }
     }
 
+    /// What this ending pays, in the shape the landing and the ending text
+    /// both print. The amounts are the reward templates' (migration 158);
+    /// they are written out here because the door has no reason to read the
+    /// table just to print one line.
+    pub fn reward_line(self) -> &'static str {
+        match self {
+            Escape::Plain => "15,000 chips, every run that gets out",
+            Escape::WithBeacon => "20,000 chips, every run that gets out",
+        }
+    }
+
     /// What the `#lounge` feed line adds after "flew out of A Dark Room".
     /// The plain ending needs nothing: flying out is the whole of it.
     pub fn feed_detail(self) -> Option<&'static str> {
@@ -139,8 +150,9 @@ pub enum EndingBeat {
     Prose(&'static str),
     /// A figure the run finished on: what it counts, and how much.
     Stat { label: &'static str, value: String },
-    /// The badge and chips the account keeps, once per account. Which badge
-    /// depends on how the ship left.
+    /// The badge and chips the account keeps. The chips land for every run
+    /// that gets out; the badge is once per account. Which of each depends on
+    /// how the ship left.
     Award(Escape),
     /// The save is gone, and the only key left is the one out.
     Prompt,
@@ -446,7 +458,8 @@ impl State {
             }
             // The one ending. The account keeps the badge and the chips; the
             // save does not survive, so the room is dark again next time and
-            // the whole arc is there to walk a second time.
+            // the whole arc is there to walk a second time, and paid for
+            // again, keyed on this run's id.
             Some(Flight::Won) => {
                 self.flight = None;
                 self.view = View::Ship;
@@ -460,10 +473,11 @@ impl State {
                     true => Escape::WithBeacon,
                     false => Escape::Plain,
                 };
+                let run_id = game.run_id;
                 self.ending = Some(Ending::for_run(game, escape));
                 // Both fire the moment the ship is through, not on dismissal,
                 // so a dropped connection loses the words and never the run.
-                self.svc.reward_escape(self.user_id, escape);
+                self.svc.reward_escape(self.user_id, escape, run_id);
                 self.svc.delete_game(self.user_id);
                 true
             }

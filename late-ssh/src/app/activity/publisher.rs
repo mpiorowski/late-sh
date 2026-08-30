@@ -155,6 +155,16 @@ impl ActivityPublisher {
         });
     }
 
+    pub fn burn_milestone_task(&self, user_id: Uuid, name: String, emoji: String, price: i64) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(user_id).await;
+            let _ = publisher.tx.send(ActivityEvent::burn_milestone(
+                user_id, username, name, emoji, price,
+            ));
+        });
+    }
+
     pub fn title_applied_task(&self, user_id: Uuid, title: String, duration_secs: i64) {
         let publisher = self.clone();
         tokio::spawn(async move {
@@ -164,6 +174,72 @@ impl ActivityPublisher {
                 username,
                 title,
                 duration_secs,
+            ));
+        });
+    }
+
+    /// `author_user_id` is whose message was gilded; the line is attributed
+    /// to them, and nobody who paid is resolved at all.
+    pub fn message_gilded_task(
+        &self,
+        author_user_id: Uuid,
+        message_id: Uuid,
+        count: i64,
+        room_slug: Option<String>,
+    ) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(author_user_id).await;
+            let _ = publisher.tx.send(ActivityEvent::message_gilded(
+                author_user_id,
+                username,
+                message_id,
+                count,
+                room_slug,
+            ));
+        });
+    }
+
+    /// `from` is the deposed holder's username, already resolved by the
+    /// crown service: it reads the previous reign inside the take
+    /// transaction, so there is nothing left here to look up.
+    pub fn crown_taken_task(
+        &self,
+        taker_id: Uuid,
+        reign_id: Uuid,
+        price: i64,
+        next_price: i64,
+        from: Option<String>,
+    ) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(taker_id).await;
+            let _ = publisher.tx.send(ActivityEvent::crown_taken(
+                taker_id, username, reign_id, price, next_price, from,
+            ));
+        });
+    }
+
+    /// The pot drew. `winner_id` is resolved to a username here like every
+    /// other line; the odds come from the draw, which already counted them.
+    pub fn pot_drawn_task(
+        &self,
+        winner_id: Uuid,
+        pot_id: Uuid,
+        payout: i64,
+        winner_tickets: i64,
+        total_tickets: i64,
+    ) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(winner_id).await;
+            let _ = publisher.tx.send(ActivityEvent::pot_drawn(
+                winner_id,
+                username,
+                pot_id,
+                payout,
+                winner_tickets,
+                total_tickets,
             ));
         });
     }

@@ -65,6 +65,41 @@ pub struct ClassStats {
     pub resource_regen: i32,
 }
 
+/// Levels per extra point of resource regen, on top of the class's base. The
+/// base regens were tuned for level-1 costs (8-12 a cast) and never moved,
+/// while the roster's costs climb to ~49 by level 100; without this a caster
+/// at the summit cast once every five ticks and fell back on its swing.
+pub const REGEN_LEVELS_PER_POINT: i32 = 4;
+
+/// How a calling turns its attack rating into damage. The rating itself
+/// (class curve + gear + score) is shared; these decide what it feeds.
+/// `auto_pct` scales the Physical auto-attack, `spell_pct` sets the spell
+/// power every ability adds on top of its table magnitude (see
+/// `svc::ability_coef_pct`). Casters swing at half, martials in full; the
+/// spell share is tuned in the arena so every calling kills at a similar
+/// pace in the same gear (`classes_kill_at_a_similar_pace_in_the_same_gear`)
+/// while the *shape* differs (`casters_lean_on_abilities_and_martials_on_the_auto`). This is the
+/// single lever that makes a caster's output ride its schools (and so the
+/// world's resist/weak board) instead of the same Physical swing everyone has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DamageWeights {
+    pub auto_pct: i32,
+    pub spell_pct: i32,
+}
+
+const CASTER: DamageWeights = DamageWeights {
+    auto_pct: 50,
+    spell_pct: 60,
+};
+const HYBRID: DamageWeights = DamageWeights {
+    auto_pct: 95,
+    spell_pct: 45,
+};
+const MARTIAL: DamageWeights = DamageWeights {
+    auto_pct: 100,
+    spell_pct: 35,
+};
+
 impl Class {
     pub const ALL: [Class; 17] = [
         Class::Warrior,
@@ -123,16 +158,16 @@ impl Class {
             Self::Ranger => Score::Dexterity,
             Self::Druid => Score::Wisdom,
             Self::Necromancer => Score::Intelligence,
-            Self::Bard => Score::Charisma,
+            Self::Bard => Score::Strength,
             Self::Monk => Score::Dexterity,
             Self::Paladin => Score::Strength,
-            Self::Warlock => Score::Charisma,
+            Self::Warlock => Score::Intelligence,
             Self::Berserker => Score::Strength,
-            Self::Beastlord => Score::Wisdom,
-            Self::Skald => Score::Charisma,
+            Self::Beastlord => Score::Strength,
+            Self::Skald => Score::Strength,
             Self::Runemaster => Score::Intelligence,
             Self::Valewalker => Score::Strength,
-            Self::Spiritmaster => Score::Charisma,
+            Self::Spiritmaster => Score::Intelligence,
         }
     }
 
@@ -384,12 +419,35 @@ impl Class {
         }
     }
 
+    /// Which of the three damage shapes this calling has (see `DamageWeights`).
+    pub fn damage_weights(self) -> DamageWeights {
+        match self {
+            Self::Warrior => MARTIAL,
+            Self::Mage => CASTER,
+            Self::Cleric => CASTER,
+            Self::Rogue => MARTIAL,
+            Self::Ranger => MARTIAL,
+            Self::Druid => HYBRID,
+            Self::Necromancer => CASTER,
+            Self::Bard => HYBRID,
+            Self::Monk => MARTIAL,
+            Self::Paladin => HYBRID,
+            Self::Warlock => CASTER,
+            Self::Berserker => MARTIAL,
+            Self::Beastlord => HYBRID,
+            Self::Skald => HYBRID,
+            Self::Runemaster => CASTER,
+            Self::Valewalker => MARTIAL,
+            Self::Spiritmaster => CASTER,
+        }
+    }
+
     /// Full stat block at a given level. Linear-plus-curve growth keeps every
     /// class climbing meaningfully all the way to the Wildbound cap of 100.
     pub fn stats_at(self, level: i32) -> ClassStats {
         let lvl = level.clamp(1, Self::MAX_LEVEL);
         let l = lvl - 1; // levels gained past 1
-        match self {
+        let base = match self {
             // Rage keeps pace with the fight. At regen 6 the Warrior could only
             // afford its own rotation ~44% of the time (a 13.5 Rage/tick cost
             // against the worst regen in the game), so the best-armored class
@@ -467,10 +525,12 @@ impl Class {
                 resource_regen: 6,
             },
             // Reckless glass cannon: a heavy swing and the game's hardest-hitting
-            // Frenzy, paid for by a frame thinner than the Warrior's - the closer
-            // to death, the more dangerous, because death is genuinely close.
+            // Frenzy (ramping from full health to +50% at death's door), paid
+            // for by a frame thinner than the Warrior's and the slowest Rage.
+            // The frame was 42 + 10l: with no sustain and no shield, the one
+            // martial that died to a crown it was prepared for (Yssgar, L65).
             Self::Berserker => ClassStats {
-                max_hp: 42 + l * 10,
+                max_hp: 44 + l * 11,
                 max_resource: 100,
                 attack: 7 + l * 2,
                 resource_regen: 7,
@@ -511,6 +571,10 @@ impl Class {
                 attack: 5 + l * 2,
                 resource_regen: 6,
             },
+        };
+        ClassStats {
+            resource_regen: base.resource_regen + l / REGEN_LEVELS_PER_POINT,
+            ..base
         }
     }
 

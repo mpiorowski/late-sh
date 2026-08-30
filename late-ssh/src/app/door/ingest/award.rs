@@ -2,14 +2,24 @@
 //! log pipe. The shared door-award sink for all three external roguelike
 //! doors (devdocs/PLAN-ROGUELIKE-BOARDS.md): DCSS, NetHack, Brogue.
 //!
-//! Same dedup story as NetHack's: once per account for life, enforced twice
-//! over — the lifetime reward template claim and the `NOT EXISTS` profile
-//! award insert — so replays (cursor resets, backfill, re-wins) are no-ops.
-//! The two guards are independent: each grant half runs on every sighting, so
-//! a crash or DB error after one half committed heals on the next sighting of
-//! the same line instead of losing the other half forever.
+//! Chips repeat, badges do not (SHOP.md Phase 6). A win is the same 20+ hours
+//! the second time, so it pays the full amount again, gated two ways at once
+//! by `credit_run_cooldown_reward_template`: once per ingested log line, and
+//! at most once per the template's 7-day window per account. The line key is
+//! what makes a replay safe (the ingest grants on every sighting, fresh or
+//! replayed, precisely so a crash between insert and grant heals), and the
+//! window is what stops a lucky week paying four times.
+//! The profile badge stays once per account for life: the `NOT EXISTS` insert
+//! runs on every sighting, credited or not, so a badge lost to a crash heals
+//! on the next one.
 //! Backfilled historical wins DO grant (owner decision): it is the same
-//! achievement, and the idempotence makes it safe.
+//! achievement, and the two gates make it safe.
+//!
+//! One line, one milestone. A win line grants the win and nothing else: it
+//! never back-grants the Orb or Amulet pickup "in case the milestone stream
+//! missed it". A pickup that never landed is an ingest bug and shows up as a
+//! missing badge; paying it off the win line would hide the bug and, once the
+//! pickup's 7-day window had passed, pay the pickup a second time.
 //!
 //! This sink only moves chips and badges. Feed events stay with the ingest
 //! service, which gates them on insert freshness and recency instead.
@@ -29,21 +39,38 @@ use uuid::Uuid;
 
 use crate::app::games::chips::svc::ChipService;
 
+/// Which ingested log line a grant is paying for: the natural key of the
+/// `door_runs` / `door_milestones` row it landed as, minus the game (the
+/// payout is already scoped to one). This is the run identity the repeat
+/// payout is keyed on, so re-reading a log from offset 0 pays nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DoorLineKey {
+    pub source_file: String,
+    pub source_offset: i64,
+}
+
+impl DoorLineKey {
+    /// The `game_payout_claims` event key. One line, one claim.
+    fn event_key(&self) -> String {
+        format!("{}:{}", self.source_file, self.source_offset)
+    }
+}
+
 /// The badge-paying door milestones, one variant per lifetime badge pair
 /// member.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DoorBadge {
-    /// DCSS: picked up the Orb of Zot (10k, `DCO`).
+    /// DCSS: picked up the Orb of Zot (20k, `DCO`).
     DcssOrb,
-    /// DCSS: escaped with the Orb (20k, `DCW`).
+    /// DCSS: escaped with the Orb (50k, `DCW`).
     DcssWin,
-    /// NetHack: acquired the Amulet of Yendor (10k, `NHA`).
+    /// NetHack: acquired the Amulet of Yendor (20k, `NHA`).
     NethackAmulet,
-    /// NetHack: ascended (20k, `NHY`).
+    /// NetHack: ascended (50k, `NHY`).
     NethackAscension,
-    /// Brogue: escaped the Dungeons of Doom (10k, `BRE`).
+    /// Brogue: escaped the Dungeons of Doom (20k, `BRE`).
     BrogueEscape,
-    /// Brogue: mastered the Dungeons of Doom, the super-victory (20k, `BRM`).
+    /// Brogue: mastered the Dungeons of Doom, the super-victory (50k, `BRM`).
     BrogueMastery,
 }
 
@@ -94,35 +121,22 @@ impl DoorAwards {
         Self { chip_svc, db }
     }
 
-    /// Grant the chips + badge for a milestone. A DCSS or NetHack win
-    /// implies the lesser artifact pickup (neither game lets you win without
-    /// it), so it back-grants the pair's lesser badge in case the milestone
-    /// stream missed it; the dedup guards make the redundant grant a no-op.
-    /// Brogue's endings are alternatives, not stages — a Mastery run never
-    /// passes through an Escape — so its badges grant only themselves.
-    pub fn grant(&self, user_id: Uuid, badge: DoorBadge) {
-        match badge {
-            DoorBadge::DcssOrb => self.spawn_grant(user_id, DoorBadge::DcssOrb),
-            DoorBadge::DcssWin => {
-                self.spawn_grant(user_id, DoorBadge::DcssOrb);
-                self.spawn_grant(user_id, DoorBadge::DcssWin);
-            }
-            DoorBadge::NethackAmulet => self.spawn_grant(user_id, DoorBadge::NethackAmulet),
-            DoorBadge::NethackAscension => {
-                self.spawn_grant(user_id, DoorBadge::NethackAmulet);
-                self.spawn_grant(user_id, DoorBadge::NethackAscension);
-            }
-            DoorBadge::BrogueEscape => self.spawn_grant(user_id, DoorBadge::BrogueEscape),
-            DoorBadge::BrogueMastery => self.spawn_grant(user_id, DoorBadge::BrogueMastery),
-        }
-    }
-
-    fn spawn_grant(&self, user_id: Uuid, badge: DoorBadge) {
+    /// Grant the chips + badge for the one milestone `line` landed as. Every
+    /// badge grants only itself (see the module doc): a DCSS or NetHack win
+    /// does not pay the pickup it implies, and a Brogue Mastery does not pay
+    /// the Escape it never passed through.
+    pub fn grant(&self, user_id: Uuid, badge: DoorBadge, line: &DoorLineKey) {
         let chip_svc = self.chip_svc.clone();
         let db = self.db.clone();
+        let event_key = line.event_key();
         tokio::spawn(async move {
             let grant = match chip_svc
-                .credit_lifetime_reward_template(user_id, badge.reward_key(), badge.chip_move())
+                .credit_run_cooldown_reward_template(
+                    user_id,
+                    badge.reward_key(),
+                    &event_key,
+                    badge.chip_move(),
+                )
                 .await
             {
                 Ok(grant) => grant,
@@ -138,9 +152,8 @@ impl DoorAwards {
             };
             // The badge insert runs on every sighting, credited or not: it is
             // NOT EXISTS-idempotent on its own, and gating it on the chip
-            // claim being fresh would lose the badge forever if the process
-            // died between the claim commit and this insert (`credited` never
-            // comes back true for the same account).
+            // claim being fresh would lose the badge forever when the 7-day
+            // window (or a replayed line) suppresses the chips.
             let code = award_badge(badge.award_category(), 1);
             match db.get().await {
                 Ok(client) => {

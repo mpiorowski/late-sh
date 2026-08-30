@@ -156,6 +156,26 @@ fn open_poll_modal(app: &mut App, room_id: Uuid) {
     app.show_poll_modal = true;
 }
 
+/// Open the tier picker on a message someone else wrote.
+fn open_gild_modal(app: &mut App, target: crate::app::chat::gild::state::GildTarget) {
+    app.show_help = false;
+    app.show_settings = false;
+    app.show_mod_modal = false;
+    app.show_hub_modal = false;
+    app.show_profile_modal = false;
+    app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
+    app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
+    app.show_quit_confirm = false;
+    crate::app::input::close_icon_picker(app);
+    app.chat.close_overlay();
+    app.chat.close_news_modal();
+    app.gild_modal_state.open(target);
+    app.show_gild_modal = true;
+}
+
 pub(crate) fn open_requested_poll_modal(app: &mut App, room_id: Uuid, allow_poll_modal: bool) {
     if allow_poll_modal {
         open_poll_modal(app, room_id);
@@ -541,6 +561,21 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
                 return true;
             }
         }
+        // `g` opens the gild picker on the selected message. Its own key
+        // rather than a leader, because the modal is where the money is
+        // confirmed and a mistyped leader must not cost chips. With a
+        // message selected the key is always consumed: a message the picker
+        // could only refuse (your own, or one outside a public room) banners
+        // the refusal instead of opening.
+        b'g' if app.chat.selected_message_id_in_room(room_id).is_some() => {
+            match app.chat.gild_target_in_room(room_id) {
+                Ok(target) => open_gild_modal(app, target),
+                Err(refusal) => {
+                    app.banner = Some(Banner::error(refusal.message()));
+                }
+            }
+            return true;
+        }
         b'c' => {
             if let Some(body) = app.chat.selected_message_body_in_room(room_id) {
                 app.pending_clipboard = Some(body);
@@ -558,10 +593,11 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             }
             return true;
         }
-        // `g` always jumps to a reply's referenced message. Enter is overloaded
+        // `G` always jumps to a reply's referenced message. Enter is overloaded
         // (image/News modals take precedence), so a reply that contains an image
-        // can't be followed with Enter alone; `g` reaches the parent regardless.
-        b'g' | b'G' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
+        // can't be followed with Enter alone; `G` reaches the parent regardless.
+        // Lowercase `g` is the gild key above.
+        b'G' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
             return true;
         }
         b'\r' | b'\n' if app.chat.open_selected_image_modal_in_room(room_id) => {

@@ -1,4 +1,5 @@
-use late_core::models::user_ssh_key::{KeyLayout, UserSshKey};
+use chrono::{DateTime, Utc};
+use late_core::models::user_ssh_key::{KeyLayout, UserSshKey, extract_key_layout};
 use late_core::models::{artboard_ban::ArtboardBan, user::User};
 use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
@@ -37,6 +38,7 @@ pub struct ArcadeSessionPreloads {
     pub initial_le_word_daily_word: Option<late_core::models::le_word::DailyWord>,
     pub initial_le_word_game: Option<late_core::models::le_word::Game>,
     pub initial_rubiks_cube_game: Option<late_core::models::rubiks_cube::Game>,
+    pub initial_sliding_puzzle_games: Vec<late_core::models::sliding_puzzle::Game>,
     pub initial_sudoku_games: Vec<late_core::models::sudoku::Game>,
     pub initial_nonogram_games: Vec<late_core::models::nonogram::Game>,
     pub initial_solitaire_games: Vec<late_core::models::solitaire::Game>,
@@ -50,6 +52,7 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
     let traffic_service = state.traffic_service.clone();
     let le_word_service = state.le_word_service.clone();
     let rubiks_cube_service = state.rubiks_cube_service.clone();
+    let sliding_puzzle_service = state.sliding_puzzle_service.clone();
     let sudoku_service = state.sudoku_service.clone();
     let nonogram_service = state.nonogram_service.clone();
     let solitaire_service = state.solitaire_service.clone();
@@ -67,6 +70,7 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
         initial_le_word_daily_word,
         initial_le_word_game,
         initial_rubiks_cube_game,
+        initial_sliding_puzzle_games,
         initial_sudoku_games,
         initial_nonogram_games,
         initial_solitaire_games,
@@ -173,6 +177,15 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
             }
         },
         async {
+            match sliding_puzzle_service.load_games(user_id).await {
+                Ok(games) => games,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load Sliding Puzzle game states");
+                    Vec::new()
+                }
+            }
+        },
+        async {
             match sudoku_service.load_games(user_id).await {
                 Ok(games) => games,
                 Err(e) => {
@@ -222,6 +235,7 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
         initial_le_word_daily_word,
         initial_le_word_game,
         initial_rubiks_cube_game,
+        initial_sliding_puzzle_games,
         initial_sudoku_games,
         initial_nonogram_games,
         initial_solitaire_games,
@@ -229,30 +243,51 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
     }
 }
 
-/// This device's stored home rail layout, keyed by the SSH key the session
-/// authenticated with. `None` for a keyless session, a key with nothing stored,
-/// or a failed read: all three follow the account default, which is why a
-/// failure here is logged and swallowed rather than failing the connection.
-pub async fn load_device_rails(
+/// What the SSH key a session authenticated with remembers about its device.
+/// Every field is `None` for a keyless session, a key with nothing stored, or
+/// a failed read, and every consumer treats `None` as "no device fact":
+/// the rails follow the account default and a bare `/summary` opens its
+/// default window. That is why a failure here is logged and swallowed rather
+/// than failing the connection.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DeviceState {
+    pub layout: Option<KeyLayout>,
+    /// When the last session on this device went quiet before it ended.
+    /// Taken, not read: the row is cleared by the read, so this session is
+    /// the only one that will ever be handed this particular leave.
+    pub left_at: Option<DateTime<Utc>>,
+}
+
+pub async fn load_device_state(
     state: &State,
     user_id: Uuid,
     key_fingerprint: Option<&str>,
-) -> Option<KeyLayout> {
-    let fingerprint = key_fingerprint?;
+) -> DeviceState {
+    let Some(fingerprint) = key_fingerprint else {
+        return DeviceState::default();
+    };
     let client = match state.db.get().await {
         Ok(client) => client,
         Err(e) => {
-            tracing::warn!(error = ?e, "failed to get db client for device rail layout");
-            return None;
+            tracing::warn!(error = ?e, "failed to get db client for device state");
+            return DeviceState::default();
         }
     };
-    match UserSshKey::layout_for(&client, user_id, fingerprint).await {
-        Ok(layout) => layout,
+    let layout = match UserSshKey::find_by_fingerprint(&client, user_id, fingerprint).await {
+        Ok(key) => key.and_then(|key| extract_key_layout(&key.settings)),
         Err(e) => {
             tracing::warn!(error = ?e, "failed to load device rail layout");
             None
         }
-    }
+    };
+    let left_at = match UserSshKey::take_left_at(&client, user_id, fingerprint).await {
+        Ok(left_at) => left_at,
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to take device left_at");
+            None
+        }
+    };
+    DeviceState { layout, left_at }
 }
 
 pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs) -> SessionConfig {
@@ -283,6 +318,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_le_word_daily_word,
         initial_le_word_game,
         initial_rubiks_cube_game,
+        initial_sliding_puzzle_games,
         initial_sudoku_games,
         initial_nonogram_games,
         initial_solitaire_games,
@@ -384,14 +420,15 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         }
     };
 
-    let key_layout = load_device_rails(state, user_id, key_fingerprint.as_deref()).await;
+    let device = load_device_state(state, user_id, key_fingerprint.as_deref()).await;
 
     SessionConfig {
         cols,
         rows,
         term,
         key_fingerprint,
-        key_layout,
+        key_layout: device.layout,
+        key_left_at: device.left_at,
         audio_service: state.audio_service.clone(),
         voice_service: state.voice_service.clone(),
         stream_service: state.stream_service.clone(),
@@ -413,6 +450,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         traffic_service: state.traffic_service.clone(),
         rubiks_cube_service: state.rubiks_cube_service.clone(),
         initial_rubiks_cube_game,
+        sliding_puzzle_service: state.sliding_puzzle_service.clone(),
+        initial_sliding_puzzle_games,
         initial_tetris_game,
         initial_snake_game,
         initial_tetris_high_score,
@@ -520,6 +559,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         username_directory: Some(state.username_directory.clone()),
         flair_directory: Some(state.flair_directory.clone()),
         pomodoro_directory: Some(state.pomodoro_directory.clone()),
+        crown_service: Some(state.crown_service.clone()),
+        pot_service: Some(state.pot_service.clone()),
         activity_feed_rx,
         initial_announcements,
         user_id,

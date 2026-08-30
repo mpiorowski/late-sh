@@ -10,6 +10,16 @@
 //! what keeps a wasted patron funny instead of unintelligible. The trailing
 //! `ing` contraction is the one deliberate exception, and it reads as speech
 //! rather than as damage.
+//!
+//! One thing a patron says is never touched at any level: the phrases in
+//! [`round_phrase_spans`] that buy the house a round. Everything else here is
+//! cosmetic, but that sentence is a spending authorization the bartender
+//! matches literally, and the patrons most likely to buy a round are exactly
+//! the ones drunk enough to have it scrambled out from under them. The list
+//! lives in `late_core::models::drink_round` so the matcher and the guard can
+//! never read different phrases.
+
+use late_core::models::drink_round::round_phrase_spans;
 
 /// Shortest word that can take a typo. Below this there is no interior left
 /// once the first and last characters are off limits.
@@ -129,11 +139,21 @@ fn slur_line(line: &str, intensity: &Intensity, rng: &mut SlurRng) -> String {
 }
 
 fn slur_segment(segment: &str, intensity: &Intensity, rng: &mut SlurRng) -> String {
+    let protected = round_phrase_spans(segment);
     let mut out = String::with_capacity(segment.len());
+    let mut offset = 0;
     // Inclusive split keeps each token's trailing whitespace attached, so
     // spacing survives exactly as typed.
     for token in segment.split_inclusive(char::is_whitespace) {
-        out.push_str(&slur_token(token, intensity, rng));
+        let end = offset + token.len();
+        let inside_phrase = protected
+            .iter()
+            .any(|(start, stop)| offset < *stop && *start < end);
+        match inside_phrase {
+            true => out.push_str(token),
+            false => out.push_str(&slur_token(token, intensity, rng)),
+        }
+        offset = end;
     }
     out
 }
@@ -248,15 +268,24 @@ fn slurred(chars: &[char], rng: &mut SlurRng) -> Option<String> {
 
 /// Drop a single `*hic*` between two words. It only ever widens a gap, so no
 /// token is split, but the gap itself still has to be fair game: gaps inside a
-/// code span or in the quoted line before `from` are off limits. With nothing
-/// eligible the hiccup goes on the end.
+/// code span, inside a round phrase (a hiccup mid-order would break the match
+/// the same way a scramble would), or in the quoted line before `from` are off
+/// limits. With nothing eligible the hiccup goes on the end.
 fn with_hiccup(text: &str, from: usize, rng: &mut SlurRng) -> String {
+    let protected = round_phrase_spans(text);
     let mut gaps = Vec::new();
     let mut in_code = false;
     for (index, c) in text.char_indices() {
         match c {
             '`' => in_code = !in_code,
-            ' ' if !in_code && index >= from => gaps.push(index),
+            ' ' if !in_code
+                && index >= from
+                && !protected
+                    .iter()
+                    .any(|(start, stop)| (*start..*stop).contains(&index)) =>
+            {
+                gaps.push(index)
+            }
             _ => {}
         }
     }

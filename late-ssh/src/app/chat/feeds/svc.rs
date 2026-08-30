@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use late_core::{
     db::Db,
     models::{
+        article::NewsShareReward,
         rss_entry::{RssEntry, RssEntryParams, RssEntryView},
         rss_feed::RssFeed,
         rss_feed_read::RssFeedRead,
@@ -57,6 +58,9 @@ pub enum FeedEvent {
     },
     EntryShared {
         user_id: Uuid,
+        /// What the share minted, or `None` when the entry was marked shared
+        /// because its link was already in News and nothing was published.
+        reward: Option<NewsShareReward>,
     },
 }
 
@@ -244,10 +248,10 @@ impl FeedService {
         Ok(())
     }
 
-    pub fn mark_shared_task(&self, user_id: Uuid, entry_id: Uuid) {
+    pub fn mark_shared_task(&self, user_id: Uuid, entry_id: Uuid, reward: Option<NewsShareReward>) {
         let service = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = service.do_mark_shared(user_id, entry_id).await {
+            if let Err(e) = service.do_mark_shared(user_id, entry_id, reward).await {
                 late_core::error_span!(
                     "feed_entry_shared_failed",
                     error = ?e,
@@ -259,13 +263,18 @@ impl FeedService {
         });
     }
 
-    async fn do_mark_shared(&self, user_id: Uuid, entry_id: Uuid) -> Result<()> {
+    async fn do_mark_shared(
+        &self,
+        user_id: Uuid,
+        entry_id: Uuid,
+        reward: Option<NewsShareReward>,
+    ) -> Result<()> {
         let client = self.db.get().await?;
         RssEntry::mark_shared(&client, user_id, entry_id).await?;
         drop(client);
         self.do_list(user_id).await?;
         self.publish_unread_count(user_id).await?;
-        self.publish_event(FeedEvent::EntryShared { user_id });
+        self.publish_event(FeedEvent::EntryShared { user_id, reward });
         Ok(())
     }
 

@@ -266,8 +266,8 @@ impl RightSidebarComponent {
     /// Default order, top to bottom. Used when a user has no stored list and
     /// to backfill any panels missing from a stored list. Space cuts by
     /// shrink priority; Bonsai is the one flexible panel and absorbs leftover
-    /// rows. Stale stored keys (e.g. the retired "activity" and "visualizer"
-    /// panels) are dropped on read by `from_key`.
+    /// rows. Stale stored keys (e.g. the retired "activity", "visualizer" and
+    /// "pot" panels) are dropped on read by `from_key`.
     pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] =
         [Self::Daily, Self::Music, Self::Bonsai];
 
@@ -390,6 +390,17 @@ const OS_KEY: &str = "os";
 const LANGS_KEY: &str = "langs";
 
 impl User {
+    /// Whether this account is one of the app's own actors (the ghost bots,
+    /// the `system` feed author). Set in `settings.bot` when the row is
+    /// ensured. Callers use it to keep player-to-player mechanics between
+    /// players: nobody tips the house.
+    pub fn is_bot(&self) -> bool {
+        self.settings
+            .get("bot")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    }
+
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
         let row = client
             .query_opt(
@@ -575,33 +586,18 @@ impl User {
                               AND dynamic_up.equipped_slot = $3
                               AND dynamic_bonsai.sku = $4
                         ) AS dynamic_bonsai_selected,
-                        COALESCE(
-                            flag_rental.payload->>'emoji',
-                            flag.payload->>'emoji'
-                        ) AS chat_flag,
-                        COALESCE(
-                            badge_rental.payload->>'emoji',
-                            badge.payload->>'emoji'
-                        ) AS chat_badge,
+                        flag_rental.payload->>'emoji' AS chat_flag,
+                        badge_rental.payload->>'emoji' AS chat_badge,
                         award.badges AS profile_award_badges
                  FROM users u
                  LEFT JOIN bonsai_trees t ON t.user_id = u.id
                  LEFT JOIN bonsai_v2_trees v2 ON v2.user_id = u.id
-                 LEFT JOIN user_purchases up
-                   ON up.user_id = u.id
-                  AND up.equipped_slot = $2
-                 LEFT JOIN marketplace_items badge
-                   ON badge.id = up.item_id
-                 LEFT JOIN user_purchases flag_up
-                   ON flag_up.user_id = u.id
-                  AND flag_up.equipped_slot = $5
-                 LEFT JOIN marketplace_items flag
-                   ON flag.id = flag_up.item_id
-                 -- A live rental wins over the legacy permanent equip above,
-                 -- and expiry is read-time: once `ends_at` passes, the
-                 -- COALESCE falls back to whatever the user owns outright,
-                 -- with no background job to run. The effect kinds are the
-                 -- same two strings as the legacy slots ($2 / $5).
+                 -- A rental is the only thing that fills these two slots.
+                 -- Expiry is read-time: once `ends_at` passes the label goes
+                 -- bare, with no background job to run. Migration 165 cleared
+                 -- the last permanent equips, so `equipped_slot` no longer
+                 -- carries a badge or a flag; $2 and $5 are effect kinds here,
+                 -- and `bonsai_variant` above is the only equip slot left.
                  LEFT JOIN LATERAL (
                     SELECT e.payload
                     FROM shop_consumable_effects e
@@ -640,6 +636,10 @@ impl User {
                           WHEN 'greendragon_dragon' THEN 'GDS'
                           WHEN 'darkroom_escape' THEN 'ADE'
                           WHEN 'darkroom_beacon' THEN 'ADB'
+                          -- Monthly like the boards below, rankless like the
+                          -- milestones above: one holder, so no rank digit
+                          -- (`profile_award::is_rankless_award`).
+                          WHEN 'crown' THEN 'CRWN'
                           ELSE (
                             CASE category
                               WHEN 'top_chips' THEN 'CHIP'
@@ -656,6 +656,7 @@ impl User {
                                  CASE category
                                    WHEN 'arcade_wins' THEN 0
                                    WHEN 'top_chips' THEN 1
+                                   WHEN 'crown' THEN 5
                                    WHEN 'tetris' THEN 2
                                    WHEN 'twenty_forty_eight' THEN 3
                                    WHEN 'snake' THEN 4

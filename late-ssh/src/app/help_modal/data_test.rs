@@ -79,6 +79,7 @@ fn chips_guide_lists_every_earning_surface() {
         "Solitaire draw-3",
         "Le Word daily",
         "Rubik's Cube daily",
+        "Sliding Puzzle",
         "Quests",
         "daily streak",
         "Bonsai",
@@ -94,10 +95,22 @@ fn chips_guide_lists_every_earning_surface() {
         "King Who Was Promised Nothing",
         "Amulet of Yendor",
         "Green Dragon",
+        "Sharing news",
         "/gift @user",
     ] {
         assert!(chips.contains(expected), "chips guide missing {expected}");
     }
+    // News moved from the pay-nothing list to a paying surface; the amount
+    // has to read the constant the service actually credits.
+    assert!(chips.contains(&format!("News pays {NEWS_SHARE_REWARD_CHIPS} chips")));
+    assert!(chips.contains(&format!(
+        "At most {NEWS_SHARE_MAX_PAID_PER_DAY} shares a day"
+    )));
+    let news = lines_for(HelpTopic::News, false, "").join("\n");
+    assert!(news.contains(&format!("pays you {NEWS_SHARE_REWARD_CHIPS} chips")));
+    assert!(news.contains(&format!(
+        "At most {NEWS_SHARE_MAX_PAID_PER_DAY} shares a day"
+    )));
     // Losing at a non-betting surface must never read as a chip risk, and the
     // pay-nothing surfaces have to be called out or the bot invents payouts.
     assert!(chips.contains("the losers lose nothing"));

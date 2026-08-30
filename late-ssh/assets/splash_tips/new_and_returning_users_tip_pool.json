@@ -40,5 +40,7 @@
   "Defend the Gate in CodeKeep: open Games (3), select CodeKeep, and press Enter",
   "On cyberspace.online too? Link your account and post from here: /cs link",
   "Their chat rooms work from here as well: /cs chat, then Enter to add one to your rail",
-  "Chat in another language? Press t on a message to translate it, or set a language in ctrl+o settings"
+  "Chat in another language? Press t on a message to translate it, or set a language in ctrl+o settings",
+  "Press g on someone else's message to gild it: three tiers, chips to the author, a permanent marker on the message",
+  "/crown shows who wears the crown; /crown take buys it off them and burns every chip"
 ]

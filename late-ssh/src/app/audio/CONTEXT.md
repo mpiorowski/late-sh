@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, procedural browser-pair visualizer fallback, and now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the music/audio touchpoints it owns in `late-cli` and `late-web/src/pages/listen`
-- Last updated: 2026-08-16 (Device-audio write path hardened: only CLI reports persist (never the webview helper's), alignment echoes are not treated as intent, a failed connect-time read disables alignment and persistence for that connection instead of imposing fresh-boot defaults, and writes land in report order. See "Mute and volume: one source of truth, stored per device")
+- Last updated: 2026-08-26 (The CLI no longer unmutes itself when the pair socket dies: only a session the server never saw may release its boot mute, and the retry loop slows to 60s instead of abandoning pairing. See the end of "Mute and volume: one source of truth, stored per device". Previous entry: device-audio write path hardened: only CLI reports persist (never the webview helper's), alignment echoes are not treated as intent, a failed connect-time read disables alignment and persistence for that connection instead of imposing fresh-boot defaults, and writes land in report order. See "Mute and volume: one source of truth, stored per device")
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -646,6 +646,8 @@ The connect-time read (`api::read_device_audio`) distinguishes a failed read fro
 `api::align_paired_audio` is the pure decision and returns both halves of the push. **Order matters and is load-bearing: volume goes first, because a non-zero `SetVolume` also clears mute on the CLI and on the helper**, so the mute half is decided against the state *after* the volume write. Without that, restoring a stored (muted, 60%) would come back audible. A webview helper additionally prefers the live CLI entry's mute (`cli_muted`), since the CLI takes the same controls and is the session's surface of record while YouTube plays.
 
 Two consequences worth knowing. A session whose SSH key is unknown (`fingerprint_for` returns `None`) has no device identity, so its audio is memory-only for that session and nothing is stored. And two `late` processes on one machine share a fingerprint, so the last one to change mute or volume wins the row.
+
+The CLI holds up its end of this when the socket dies. Its pair-WS retry loop (`late-cli`'s `PairRetryPolicy`, §6 of `late-cli/CONTEXT.md`) may release its boot mute only when the server never registered the session at all; once the server has sent the session a frame (which it does right after `register`, before reading the buffered `client_state`), the running mute is the user's and a reconnect outage leaves it alone. A socket this handler accepts and then drops unread (the per-IP pair limit and the per-token capacity are both checked after the upgrade) never sends a frame, so the CLI still counts it as not established. Silence is the safe failure mode: unmuting because the socket dropped is how a muted session used to start playing music mid-SSH. The loop also never abandons pairing, it slows to a 60s retry, so a redeploy cannot strand a live session unpaired and uncontrollable, and a session that did release its boot mute still receives the stored value on the reconnect, since the once-per-token alignment was never claimed.
 
 ### Runtime support / troubleshooting
 

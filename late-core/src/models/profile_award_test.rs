@@ -1,10 +1,19 @@
+use chrono::{Datelike, Duration, Months, Utc};
+
+use crate::models::chips::Difficulty;
+use crate::models::crown::CrownReign;
 use crate::models::profile_award::{
-    DARKROOM_BEACON_AWARD_CATEGORY, LATEANIA_ARCHDEMON_AWARD_CATEGORY,
+    CROWN_AWARD_CATEGORY, DARKROOM_BEACON_AWARD_CATEGORY, LATEANIA_ARCHDEMON_AWARD_CATEGORY,
     LATEANIA_FRONTIER_KING_AWARD_CATEGORY, LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY,
     LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, NETHACK_AMULET_AWARD_CATEGORY,
     NETHACK_ASCENSION_AWARD_CATEGORY, award_badge, award_category_label, format_score_value,
-    top_badge_per_game,
+    is_milestone_award, is_rankless_award, list_profile_awards_for_user,
+    snapshot_previous_month_profile_awards, top_badge_per_game,
 };
+use crate::models::rubiks_cube::DailyWin as RubiksCubeDailyWin;
+use crate::models::sliding_puzzle::DailyWin as SlidingPuzzleDailyWin;
+use crate::models::sudoku::DailyWin as SudokuDailyWin;
+use crate::test_utils::{create_test_user, roll_crown_reigns_back_a_month, test_db};
 
 #[test]
 fn lateania_boss_awards_have_profile_badge_codes() {
@@ -95,4 +104,129 @@ fn chat_labels_keep_only_the_top_badge_of_each_game() {
         top_badge_per_game(["AW1", "GDS", "LMG", "LKA"]),
         vec!["AW1", "GDS", "LKA"]
     );
+}
+
+/// The crown's badge is the one monthly award without a rank digit: it has
+/// exactly one holder, so `CRWN1` would be noise. It is also not a
+/// milestone, which is what keeps it from showing forever.
+#[test]
+fn the_crown_badge_carries_no_rank_digit_and_is_not_a_milestone() {
+    assert_eq!(award_badge(CROWN_AWARD_CATEGORY, 1), "CRWN");
+    assert_eq!(award_category_label(CROWN_AWARD_CATEGORY), "The Crown");
+    assert_eq!(
+        format_score_value(CROWN_AWARD_CATEGORY, 57_000),
+        "57000 chips"
+    );
+    assert!(is_rankless_award(CROWN_AWARD_CATEGORY));
+    assert!(!is_milestone_award(CROWN_AWARD_CATEGORY));
+}
+
+/// The month's badge goes to whoever held the crown last, not to whoever
+/// held it longest or paid most, and the snapshot loop runs daily so it must
+/// grant exactly once however many times it runs.
+#[tokio::test]
+async fn the_months_last_crown_holder_gets_the_badge_once() {
+    let test_db = test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let first = create_test_user(&test_db.db, "crown-award-first").await;
+    let last = create_test_user(&test_db.db, "crown-award-last").await;
+
+    let tx = client.transaction().await.expect("tx");
+    let opened = CrownReign::open_in_tx(&tx, first.id, 5_000)
+        .await
+        .expect("open");
+    CrownReign::close_in_tx(&tx, opened.id)
+        .await
+        .expect("close");
+    CrownReign::open_in_tx(&tx, last.id, 7_500)
+        .await
+        .expect("open");
+    tx.commit().await.expect("commit");
+    // The snapshot only ever looks at last month, so stand on the far side
+    // of the rollover the way a real month end does.
+    roll_crown_reigns_back_a_month(&client).await;
+
+    snapshot_previous_month_profile_awards(&client)
+        .await
+        .expect("snapshot");
+    snapshot_previous_month_profile_awards(&client)
+        .await
+        .expect("snapshot again");
+
+    let awards = list_profile_awards_for_user(&client, last.id)
+        .await
+        .expect("awards");
+    let crowns: Vec<_> = awards
+        .iter()
+        .filter(|award| award.category == CROWN_AWARD_CATEGORY)
+        .collect();
+    assert_eq!(crowns.len(), 1, "the daily snapshot must grant once");
+    assert_eq!(crowns[0].rank, 1);
+    assert_eq!(crowns[0].score_value, 7_500);
+    assert_eq!(crowns[0].badge(), "CRWN");
+
+    let earlier = list_profile_awards_for_user(&client, first.id)
+        .await
+        .expect("awards");
+    assert!(
+        !earlier
+            .iter()
+            .any(|award| award.category == CROWN_AWARD_CATEGORY),
+        "only the month's last holder is crowned"
+    );
+}
+
+/// The persisted Arcade Wins award must score the same roster as the live
+/// board: every `DailyPuzzle`, at `Difficulty::points` weights. A player
+/// whose month came from Sliding Puzzle and Rubik's Cube outranks one easy
+/// Sudoku, exactly as the leaderboard page shows it.
+#[tokio::test]
+async fn arcade_wins_snapshot_scores_every_daily_puzzle_in_the_roster() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let roster = create_test_user(&test_db.db, "arcade-award-roster").await;
+    let classic = create_test_user(&test_db.db, "arcade-award-classic").await;
+
+    let this_month = Utc::now().date_naive().with_day(1).expect("first of month");
+    let last_month = this_month
+        .checked_sub_months(Months::new(1))
+        .expect("previous month");
+    let played_on = last_month + Duration::days(3);
+
+    SlidingPuzzleDailyWin::record_win(&client, roster.id, Difficulty::Hard, played_on, 90)
+        .await
+        .expect("sliding puzzle win");
+    RubiksCubeDailyWin::record_win(&client, roster.id, played_on)
+        .await
+        .expect("rubik's cube win");
+    SudokuDailyWin::record_win(&client, classic.id, "easy".to_string(), played_on, 1)
+        .await
+        .expect("sudoku win");
+
+    snapshot_previous_month_profile_awards(&client)
+        .await
+        .expect("snapshot");
+
+    let arcade_award = |awards: Vec<crate::models::profile_award::ProfileAward>| {
+        awards
+            .into_iter()
+            .find(|award| award.category == "arcade_wins")
+            .map(|award| (award.rank, award.score_value))
+    };
+    let roster_award = arcade_award(
+        list_profile_awards_for_user(&client, roster.id)
+            .await
+            .expect("roster awards"),
+    );
+    let classic_award = arcade_award(
+        list_profile_awards_for_user(&client, classic.id)
+            .await
+            .expect("classic awards"),
+    );
+    assert_eq!(
+        roster_award,
+        Some((1, Difficulty::Hard.points() + Difficulty::Medium.points())),
+        "hard Sliding Puzzle plus Rubik's Cube leads the month"
+    );
+    assert_eq!(classic_award, Some((2, Difficulty::Easy.points())));
 }

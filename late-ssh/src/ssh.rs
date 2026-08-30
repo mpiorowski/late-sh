@@ -749,6 +749,7 @@ impl russh::server::Handler for ClientHandler {
             initial_le_word_daily_word,
             initial_le_word_game,
             initial_rubiks_cube_game,
+            initial_sliding_puzzle_games,
             initial_sudoku_games,
             initial_nonogram_games,
             initial_solitaire_games,
@@ -835,7 +836,7 @@ impl russh::server::Handler for ClientHandler {
             }
         };
         let key_fingerprint = self.auth_fingerprint.clone();
-        let key_layout = crate::session_bootstrap::load_device_rails(
+        let device = crate::session_bootstrap::load_device_state(
             &self.state,
             user_id,
             key_fingerprint.as_deref(),
@@ -892,6 +893,8 @@ impl russh::server::Handler for ClientHandler {
             traffic_service: self.state.traffic_service.clone(),
             rubiks_cube_service: self.state.rubiks_cube_service.clone(),
             initial_rubiks_cube_game,
+            sliding_puzzle_service: self.state.sliding_puzzle_service.clone(),
+            initial_sliding_puzzle_games,
             initial_tetris_game,
             initial_snake_game,
             initial_tetris_high_score,
@@ -1001,11 +1004,14 @@ impl russh::server::Handler for ClientHandler {
             ),
             show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
             key_fingerprint,
-            key_layout,
+            key_layout: device.layout,
+            key_left_at: device.left_at,
             afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
             flair_directory: Some(self.state.flair_directory.clone()),
             pomodoro_directory: Some(self.state.pomodoro_directory.clone()),
+            crown_service: Some(self.state.crown_service.clone()),
+            pot_service: Some(self.state.pot_service.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
             initial_announcements,
             user_id,

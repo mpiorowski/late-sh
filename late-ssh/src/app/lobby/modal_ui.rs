@@ -17,7 +17,10 @@ use crate::app::{
     lobby::daily::{
         games::DailyGame,
         state::{ChallengeDraft, DailyState, format_deadline, result_phrase},
-        svc::{DailyChallengeItem, DailyFinishedItem, DailyMatchItem, DailyOutcome},
+        svc::{
+            DAILY_WIN_MIN_MOVES, DailyChallengeItem, DailyFinishedItem, DailyMatchItem,
+            DailyOutcome, DailyWinPayout,
+        },
     },
     lobby::house::{state::HouseState, tables::HouseTable},
     lobby::state::{LobbyEntry, LobbyState},
@@ -323,7 +326,11 @@ fn finished_line(daily: &DailyState, item: &DailyFinishedItem, selected: bool) -
     let opponent = opponent.unwrap_or_else(|| "player".to_string());
     let (outcome, style) = match item.outcome_for(daily.user_id()) {
         DailyOutcome::Won => (
-            format!("you won · {}", result_phrase(&item.result)),
+            format!(
+                "you won · {}{}",
+                result_phrase(&item.result),
+                win_payout_phrase(item)
+            ),
             Style::default()
                 .fg(theme::SUCCESS())
                 .add_modifier(Modifier::BOLD),
@@ -359,6 +366,23 @@ fn finished_line(daily: &DailyState, item: &DailyFinishedItem, selected: bool) -
             .add_modifier(Modifier::ITALIC),
     ));
     Line::from(spans)
+}
+
+/// What the win paid, for the lingering result row: the one place an offline
+/// winner learns why the chips did or did not come. Rows finished before the
+/// payout gates existed carry nothing and say nothing.
+fn win_payout_phrase(item: &DailyFinishedItem) -> String {
+    match item.win_payout {
+        Some(DailyWinPayout::Paid) => format!(" · +{}", item.game.win_payout()),
+        Some(DailyWinPayout::Unplayed) => {
+            format!(" · no chips, under {DAILY_WIN_MIN_MOVES} moves")
+        }
+        Some(DailyWinPayout::PairDayCapped) => {
+            " · no chips, one paid win per opponent per game per day".to_string()
+        }
+        Some(DailyWinPayout::Failed) => " · payout failed".to_string(),
+        None => String::new(),
+    }
 }
 
 fn challenge_line(

@@ -36,9 +36,6 @@ use late_core::models::door_run::DoorRunResult;
 /// (src/insight.c, ACH_AMUL). Re-verify on any NetHack version bump.
 const AMULET_MESSAGE: &str = "acquired The Amulet of Yendor";
 
-/// `achieve` bit for ACH_AMUL (= 6; `encodeachieve` sets bit value-1).
-const ACHIEVE_AMULET: u64 = 1 << 5;
-
 /// `flags` bits for wizard (debug) and explore (discover) games. Both modes
 /// still write an xlogfile line; neither may reach boards or badges.
 const FLAG_WIZARD: u64 = 1 << 0;
@@ -61,9 +58,6 @@ pub struct NethackRun {
     pub death: String,
     /// The dungeon level the game ended on (`deathlev`).
     pub death_level: Option<i32>,
-    /// Whether the run acquired the Amulet (`achieve` & ACH_AMUL); backstop
-    /// for a missed livelog pickup line.
-    pub amulet: bool,
     /// Wizard- or explore-mode game (`flags`). The caller must not attribute
     /// these: no fact row, no badge, no feed event.
     pub cheat_mode: bool,
@@ -148,7 +142,6 @@ pub fn parse_xlogfile_line(line: &str) -> Option<NethackRun> {
     }
     let ended_at = parse_epoch(field(&fields, "endtime")?)?;
     let death = field(&fields, "death")?.to_string();
-    let achieve = field(&fields, "achieve").and_then(parse_hex).unwrap_or(0);
     let flags = field(&fields, "flags").and_then(parse_hex).unwrap_or(0);
     Some(NethackRun {
         ended_at,
@@ -157,7 +150,6 @@ pub fn parse_xlogfile_line(line: &str) -> Option<NethackRun> {
         depth: field(&fields, "maxlvl").and_then(|v| v.parse().ok()),
         turns: field(&fields, "turns").and_then(|v| v.parse().ok()),
         death_level: field(&fields, "deathlev").and_then(|v| v.parse().ok()),
-        amulet: achieve & ACHIEVE_AMULET != 0,
         cheat_mode: flags & (FLAG_WIZARD | FLAG_EXPLORE) != 0,
         raw: raw_json(&fields),
         death,

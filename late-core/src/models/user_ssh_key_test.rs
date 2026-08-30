@@ -5,6 +5,16 @@ use crate::models::user_ssh_key::{
 use crate::test_utils::{create_test_user, test_db};
 use serde_json::json;
 
+/// The stored rail layout, read the way bootstrap reads it.
+async fn stored_layout(
+    client: &tokio_postgres::Client,
+    user_id: uuid::Uuid,
+    fingerprint: &str,
+) -> anyhow::Result<Option<KeyLayout>> {
+    let key = UserSshKey::find_by_fingerprint(client, user_id, fingerprint).await?;
+    Ok(key.and_then(|key| extract_key_layout(&key.settings)))
+}
+
 fn phone_layout() -> KeyLayout {
     KeyLayout {
         room_list_mode: RoomListMode::Off,
@@ -83,7 +93,7 @@ async fn stored_audio_is_per_device_and_leaves_the_rail_layout_alone() {
     // Audio and layout share one settings blob, so writing either must merge
     // rather than replace.
     assert_eq!(
-        UserSshKey::layout_for(&client, owner.id, "SHA256:laptop")
+        stored_layout(&client, owner.id, "SHA256:laptop")
             .await
             .expect("laptop layout"),
         Some(phone_layout())
@@ -180,7 +190,7 @@ async fn layout_is_per_key_and_scoped_to_its_owner() {
 
     // A key with nothing stored inherits the account default.
     assert_eq!(
-        UserSshKey::layout_for(&client, user.id, "SHA256:desktop")
+        stored_layout(&client, user.id, "SHA256:desktop")
             .await
             .expect("desktop layout"),
         None
@@ -190,14 +200,14 @@ async fn layout_is_per_key_and_scoped_to_its_owner() {
         .await
         .expect("store phone layout");
     assert_eq!(
-        UserSshKey::layout_for(&client, user.id, "SHA256:phone")
+        stored_layout(&client, user.id, "SHA256:phone")
             .await
             .expect("phone layout"),
         Some(phone_layout()),
         "the phone keeps its own layout"
     );
     assert_eq!(
-        UserSshKey::layout_for(&client, user.id, "SHA256:desktop")
+        stored_layout(&client, user.id, "SHA256:desktop")
             .await
             .expect("desktop layout"),
         None,
@@ -217,7 +227,7 @@ async fn layout_is_per_key_and_scoped_to_its_owner() {
     .await;
     assert!(denied.is_err(), "cross-account write is refused");
     assert_eq!(
-        UserSshKey::layout_for(&client, user.id, "SHA256:phone")
+        stored_layout(&client, user.id, "SHA256:phone")
             .await
             .expect("phone layout"),
         Some(phone_layout()),
@@ -261,10 +271,88 @@ async fn linking_accounts_moves_keys_and_keeps_their_layouts() {
         "both devices now belong to the kept account"
     );
     assert_eq!(
-        UserSshKey::layout_for(&client, kept.id, "SHA256:phone")
+        stored_layout(&client, kept.id, "SHA256:phone")
             .await
             .expect("phone layout"),
         Some(phone_layout()),
         "the phone's layout survives the link"
+    );
+}
+
+#[tokio::test]
+async fn left_at_is_per_device_served_once_and_scoped_to_its_owner() {
+    use chrono::{Duration, SubsecRound, Utc};
+
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let owner = create_test_user(&test_db.db, "leftowner").await;
+    let stranger = create_test_user(&test_db.db, "leftstranger").await;
+
+    UserSshKey::ensure(&client, owner.id, "SHA256:laptop")
+        .await
+        .expect("laptop key");
+    UserSshKey::ensure(&client, owner.id, "SHA256:desktop")
+        .await
+        .expect("desktop key");
+
+    // A key that has never ended a session has no mark: the next session
+    // starts with no line rather than one at some made-up instant.
+    assert_eq!(
+        UserSshKey::take_left_at(&client, owner.id, "SHA256:laptop")
+            .await
+            .expect("laptop left_at"),
+        None
+    );
+
+    // Postgres keeps microseconds; the stamp is minted here, so truncate it.
+    let last_night = (Utc::now() - Duration::hours(9)).trunc_subsecs(6);
+    UserSshKey::set_left_at(&client, owner.id, "SHA256:laptop", last_night)
+        .await
+        .expect("stamp laptop");
+
+    // The desktop did not leave because the laptop did.
+    assert_eq!(
+        UserSshKey::take_left_at(&client, owner.id, "SHA256:desktop")
+            .await
+            .expect("desktop left_at"),
+        None
+    );
+    assert_eq!(
+        UserSshKey::take_left_at(&client, owner.id, "SHA256:laptop")
+            .await
+            .expect("laptop left_at"),
+        Some(last_night)
+    );
+    // Taking it spends it: the session that follows a lost write must not
+    // inherit this leave as if it were the latest one.
+    assert_eq!(
+        UserSshKey::take_left_at(&client, owner.id, "SHA256:laptop")
+            .await
+            .expect("laptop left_at again"),
+        None
+    );
+
+    // A stale fingerprint under another account can neither read nor write
+    // this device's mark.
+    assert!(
+        UserSshKey::set_left_at(&client, stranger.id, "SHA256:laptop", Utc::now())
+            .await
+            .is_err()
+    );
+    UserSshKey::set_left_at(&client, owner.id, "SHA256:laptop", last_night)
+        .await
+        .expect("stamp laptop again");
+    assert_eq!(
+        UserSshKey::take_left_at(&client, stranger.id, "SHA256:laptop")
+            .await
+            .expect("stranger read"),
+        None
+    );
+    assert_eq!(
+        UserSshKey::take_left_at(&client, owner.id, "SHA256:laptop")
+            .await
+            .expect("owner still holds the mark"),
+        Some(last_night),
+        "a stranger's read must not spend the owner's mark"
     );
 }

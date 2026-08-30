@@ -153,17 +153,18 @@ impl DarkroomService {
 
     /// Everything the account keeps from a finished run, fire-and-forget (the
     /// Green Dragon dragon-kill shape): a feed line every time, the veteran
-    /// row that unlocks the ravaged battleship on later maps, and — first
-    /// escape of this kind only, deduped by the lifetime reward template and
-    /// the `NOT EXISTS` award insert — a chip payout plus a rankless profile
-    /// badge.
+    /// row that unlocks the ravaged battleship on later maps, the chip payout,
+    /// and — first escape of this kind only, on the `NOT EXISTS` award insert
+    /// — a rankless profile badge.
     ///
-    /// The two endings are separate claims: an account that has already flown
-    /// out plainly still gets paid the first time it flies out holding the
-    /// fleet beacon. Neither ever pays twice, and the save is wiped on the way
-    /// out, so every later run of the same kind reaches the same ending for
-    /// nothing.
-    pub fn reward_escape(&self, user_id: Uuid, escape: Escape) {
+    /// The chips land for every run that gets out (SHOP.md Phase 6): the
+    /// ending wipes the save, so a repeat is the whole arc walked again, and
+    /// the run is the whole gate. `run_id` is that gate, keyed per ending, so
+    /// a retry of this task pays once.
+    ///
+    /// The two endings are separate claims: an account that flies out plainly
+    /// and later flies out holding the fleet beacon is paid for both.
+    pub fn reward_escape(&self, user_id: Uuid, escape: Escape, run_id: Uuid) {
         let inner = self.inner.clone();
         tokio::spawn(async move {
             // Both endings post to the feed, and they say different things:
@@ -203,9 +204,10 @@ impl DarkroomService {
                 Escape::WithBeacon => (DARKROOM_BEACON_REWARD_KEY, ChipMove::DarkroomBeaconEscape),
             };
             let category = escape.award_category();
+            let event_key = run_id.to_string();
             let grant = match inner
                 .chips
-                .credit_lifetime_reward_template(user_id, reward_key, chip_move)
+                .credit_per_event_reward_template(user_id, reward_key, &event_key, chip_move)
                 .await
             {
                 Ok(grant) => grant,
@@ -218,14 +220,16 @@ impl DarkroomService {
                     return;
                 }
             };
-            // Already claimed on an earlier run: the chips stay suppressed,
-            // but the badge insert below still runs (it is `NOT EXISTS`
-            // idempotent), so a badge insert that failed on the crediting run
-            // heals on a later escape instead of being lost for good.
+            // This run already paid (a retry of the same fire-and-forget
+            // task): the chips stay suppressed, but the badge insert below
+            // still runs (it is `NOT EXISTS` idempotent), so a badge insert
+            // that failed on the crediting run heals on a later escape
+            // instead of being lost for good.
             if !grant.credited {
                 tracing::info!(
                     user_id = %user_id,
-                    "suppressed darkroom escape chips because lifetime payout was already claimed"
+                    run_id = %run_id,
+                    "suppressed darkroom escape chips because this run already paid"
                 );
             }
 

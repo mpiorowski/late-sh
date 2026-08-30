@@ -17,6 +17,7 @@ crate::user_scoped_model! {
         pub puzzle_seed: i64,
         pub grid: Value,
         pub fixed_mask: Value,
+        pub notes: Value,
         pub is_game_over: bool,
         pub score: i32,
     }
@@ -39,9 +40,9 @@ impl Game {
     pub async fn upsert(client: &Client, params: GameParams) -> Result<Self> {
         let row = client
             .query_one(
-                "INSERT INTO sudoku_games (user_id, mode, difficulty_key, puzzle_date, puzzle_seed, grid, fixed_mask, is_game_over, score)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                 ON CONFLICT (user_id, difficulty_key, mode) DO UPDATE SET puzzle_date = $4, puzzle_seed = $5, grid = $6, fixed_mask = $7, is_game_over = $8, score = $9, updated = current_timestamp
+                "INSERT INTO sudoku_games (user_id, mode, difficulty_key, puzzle_date, puzzle_seed, grid, fixed_mask, notes, is_game_over, score)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                 ON CONFLICT (user_id, difficulty_key, mode) DO UPDATE SET puzzle_date = $4, puzzle_seed = $5, grid = $6, fixed_mask = $7, notes = $8, is_game_over = $9, score = $10, updated = current_timestamp
                  RETURNING *",
                 &[
                     &params.user_id,
@@ -51,6 +52,7 @@ impl Game {
                     &params.puzzle_seed,
                     &params.grid,
                     &params.fixed_mask,
+                    &params.notes,
                     &params.is_game_over,
                     &params.score,
                 ],

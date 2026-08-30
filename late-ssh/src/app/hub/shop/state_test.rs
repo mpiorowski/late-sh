@@ -18,8 +18,6 @@ fn make_state() -> ShopState {
         active_title: None,
         chat_label_badge: None,
         chat_label_flag: None,
-        legacy_badge_equipped: false,
-        legacy_flag_equipped: false,
         custom_titles_available: true,
     };
     ShopState::for_test_snapshot(snapshot)
@@ -144,8 +142,6 @@ fn make_state_with_glow_item() -> ShopState {
         active_title: None,
         chat_label_badge: None,
         chat_label_flag: None,
-        legacy_badge_equipped: false,
-        legacy_flag_equipped: false,
         custom_titles_available: true,
     };
     ShopState::for_test_snapshot(snapshot)
@@ -208,8 +204,6 @@ fn visible_items_lead_with_username_effects() {
         active_title: None,
         chat_label_badge: None,
         chat_label_flag: None,
-        legacy_badge_equipped: false,
-        legacy_flag_equipped: false,
         custom_titles_available: true,
     };
     let state = ShopState::for_test_snapshot(snapshot);
@@ -253,8 +247,6 @@ fn snapshot_with(items: Vec<ShopCatalogItem>) -> ShopSnapshot {
         active_title: None,
         chat_label_badge: None,
         chat_label_flag: None,
-        legacy_badge_equipped: false,
-        legacy_flag_equipped: false,
         custom_titles_available: true,
     }
 }
@@ -357,8 +349,6 @@ fn username_effect_picker_carries_the_bought_tier_duration() {
         active_title: None,
         chat_label_badge: None,
         chat_label_flag: None,
-        legacy_badge_equipped: false,
-        legacy_flag_equipped: false,
         custom_titles_available: true,
     };
     let mut state = ShopState::for_test_snapshot(snapshot);

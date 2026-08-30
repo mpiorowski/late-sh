@@ -96,6 +96,35 @@ chip_moves!(
     FloorRestore,
     GiftSent,
     GiftReceived,
+    /// Chips paid to gild someone else's chat message. Floor-guarded like a
+    /// gift; `source_ref` is the gilded message id.
+    GildSent,
+    /// Two thirds of a gild reaching the message's author. The other third
+    /// has no ledger row at all: that gap is the burn.
+    GildReceived,
+    /// Chips paid to take the crown. Floor-guarded, and burned whole: there
+    /// is no matching credit anywhere, so every take shrinks the supply by
+    /// the full price. `source_ref` is the reign id.
+    CrownTaken,
+    /// Chips paid for pot tickets. Floor-guarded like a gift; `source_ref` is
+    /// the pot id, and one row per buy rather than per ticket.
+    PotTicket,
+    /// The pot's payout to the one ticket that was drawn: 80% of what the
+    /// tickets paid in. The other fifth has no ledger row at all, the way a
+    /// gild's third has none: that gap is the burn.
+    PotWon,
+    /// Publishing a News article, from the News composer or from an RSS
+    /// entry shared with `s`. One flat credit, minted rather than moved.
+    /// `source_ref` is the shared URL, not an article id: the ledger row is
+    /// what caps the reward at one per URL per user, and it has to outlive
+    /// the article being deleted (see [`crate::models::article::Article::create_shared`]).
+    NewsShared,
+    /// Chips paid to buy the house a round: one price per credit the round
+    /// actually granted, floor-guarded, and burned whole like the crown.
+    /// Nothing is credited to the patrons, who get a
+    /// [`crate::models::drink_round::DrinkCredit`] rather than chips.
+    /// `source_ref` is the round id.
+    RoundPurchase,
     DrinkPurchase,
     ShopPurchase,
     QuestReward,
@@ -153,6 +182,13 @@ impl ChipMove {
             Self::FloorRestore => "floor_restore",
             Self::GiftSent => "chip_gift_sent",
             Self::GiftReceived => "chip_gift_received",
+            Self::GildSent => "chip_gild_sent",
+            Self::GildReceived => "chip_gild_received",
+            Self::CrownTaken => "chip_crown_taken",
+            Self::PotTicket => "pot_ticket",
+            Self::PotWon => "pot_won",
+            Self::NewsShared => "news_shared",
+            Self::RoundPurchase => "round_purchase",
             Self::DrinkPurchase => "drink_purchase",
             Self::ShopPurchase => "shop_purchase",
             Self::QuestReward => "quest_reward",
@@ -196,6 +232,11 @@ impl ChipMove {
             | Self::GiftReceived
             | Self::SsnakeArenaEarned
             | Self::SsnakeArenaLost => "user_chips",
+            Self::GildSent | Self::GildReceived => "chat_messages",
+            Self::CrownTaken => "crown_reigns",
+            Self::PotTicket | Self::PotWon => "pots",
+            Self::NewsShared => "articles",
+            Self::RoundPurchase => "drink_rounds",
             Self::DrinkPurchase => "bartender",
             Self::ShopPurchase => "marketplace_item",
             Self::QuestReward => "quest_assignment",
@@ -231,6 +272,9 @@ impl ChipMove {
         match self {
             Self::Credit
             | Self::GiftReceived
+            | Self::GildReceived
+            | Self::PotWon
+            | Self::NewsShared
             | Self::QuestReward
             | Self::DailyQuestStreakReward
             | Self::DailyPuzzleWin
@@ -261,7 +305,12 @@ impl ChipMove {
             Self::Bet | Self::ShopPurchase | Self::SsnakeArenaLost => {
                 ChipDirection::Debit { floor: 0 }
             }
-            Self::GiftSent | Self::DrinkPurchase => ChipDirection::Debit { floor: CHIP_FLOOR },
+            Self::GiftSent
+            | Self::GildSent
+            | Self::CrownTaken
+            | Self::PotTicket
+            | Self::RoundPurchase
+            | Self::DrinkPurchase => ChipDirection::Debit { floor: CHIP_FLOOR },
             Self::FloorRestore => ChipDirection::Restore,
         }
     }
@@ -270,12 +319,32 @@ impl ChipMove {
     /// and the permanent monthly award snapshot.
     pub const fn counts_as_earnings(self) -> bool {
         match self {
-            Self::FloorRestore | Self::ShopPurchase => false,
+            // A gild's credit is a tip, not a standing: Top Chips ranks what
+            // a player earned, and buying an author to the top of the board
+            // would make the board about who has generous friends. The crown
+            // is Shop-like vanity spending: a burn that bought a glyph must
+            // not knock the buyer off the earners board.
+            // The pot is excluded on both sides on purpose: a lottery win
+            // must not top the earners board, and if the win is out then the
+            // ticket has to be out too, or buying in would be a pure
+            // negative on a board the winner cannot climb.
+            // A round is the same vanity burn as the crown, one rung more
+            // generous: buying the bar a drink must not cost the buyer their
+            // place on the earners board.
+            Self::FloorRestore
+            | Self::ShopPurchase
+            | Self::GildReceived
+            | Self::CrownTaken
+            | Self::PotTicket
+            | Self::PotWon
+            | Self::RoundPurchase => false,
             Self::Credit
             | Self::Bet
             | Self::GiftSent
+            | Self::GildSent
             | Self::GiftReceived
             | Self::DrinkPurchase
+            | Self::NewsShared
             | Self::QuestReward
             | Self::DailyQuestStreakReward
             | Self::DailyPuzzleWin
@@ -523,6 +592,58 @@ impl UserChips {
             bail!("gift credit returned no row");
         };
         Ok(Some((sender, recipient)))
+    }
+
+    /// A gild's chip movement: the buyer pays `price` under the floor guard,
+    /// the message's author is credited `author_share`, and the difference is
+    /// simply never minted. Same shape as [`Self::transfer_gift`] (both
+    /// statements, so the caller owns the transaction), with the split.
+    /// `message_id` is the `source_ref` on both ledger rows, so the pair is
+    /// auditable from either side. `None` when the buyer cannot pay and keep
+    /// the floor.
+    pub async fn transfer_gild(
+        tx: &Transaction<'_>,
+        sender_id: Uuid,
+        author_id: Uuid,
+        price: i64,
+        author_share: i64,
+        message_id: Uuid,
+    ) -> Result<Option<(Self, Self)>> {
+        ensure!(price > 0, "gild price must be positive");
+        ensure!(
+            author_share > 0 && author_share < price,
+            "gild author share must burn something and pay something"
+        );
+        ensure!(sender_id != author_id, "cannot gild yourself");
+
+        // Both chip rows must exist first, for the same reason gifting needs
+        // it: an author with no row yet would otherwise fail the credit.
+        tx.execute(
+            "INSERT INTO user_chips (user_id, balance)
+             VALUES ($1, $3), ($2, $3)
+             ON CONFLICT (user_id) DO NOTHING",
+            &[&sender_id, &author_id, &INITIAL_CHIP_BALANCE],
+        )
+        .await?;
+
+        let source_ref = message_id.to_string();
+        let Some(sender) =
+            Self::apply(tx, sender_id, ChipMove::GildSent, price, Some(&source_ref)).await?
+        else {
+            return Ok(None);
+        };
+        let Some(author) = Self::apply(
+            tx,
+            author_id,
+            ChipMove::GildReceived,
+            author_share,
+            Some(&source_ref),
+        )
+        .await?
+        else {
+            bail!("gild credit returned no row");
+        };
+        Ok(Some((sender, author)))
     }
 
     /// All user chip balances (for per-user lookup in leaderboard refresh).

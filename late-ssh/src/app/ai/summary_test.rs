@@ -8,8 +8,8 @@ use uuid::Uuid;
 
 use super::{
     Reservation, SUMMARY_DEFAULT_WINDOW_HOURS, SUMMARY_MAX_WINDOW_HOURS,
-    SUMMARY_PROMPT_CHAR_BUDGET, SummaryOutcome, SummaryService, SummaryWindow, build_transcript,
-    window_start,
+    SUMMARY_PROMPT_CHAR_BUDGET, SummaryBasis, SummaryOutcome, SummaryService, SummaryWindow,
+    build_transcript, window_start,
 };
 use crate::app::ai::svc::AiService;
 
@@ -42,50 +42,91 @@ fn message(index: u64, author: Uuid, body: &str) -> ChatMessage {
 }
 
 #[test]
-fn a_read_marker_reaches_back_at_least_the_default_and_at_most_the_max() {
+fn a_bare_catch_up_starts_where_the_reader_last_left() {
     let now = chrono::Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, 0).unwrap();
-    let minimum = now - chrono::Duration::hours(SUMMARY_DEFAULT_WINDOW_HOURS);
-    let since_read = |marker| window_start(SummaryWindow::SinceRead(marker), now);
+    let max = now - chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS);
 
-    // A start inside the minimum window widens to it: the read cursor of
-    // someone who left the room open overnight must not shrink the catch-up
-    // to nothing.
-    assert_eq!(since_read(now - chrono::Duration::hours(3)), minimum);
-    assert_eq!(since_read(now), minimum);
-    // Between the bounds, the asked-for start stands.
-    let stale = now - chrono::Duration::hours(30);
-    assert_eq!(since_read(stale), stale);
-    // Past the max, cost policy wins.
+    // The whole point of the device mark: a recent one means a short
+    // catch-up. Nothing widens it, because it is not a guess about what was
+    // read, it is when the reader left.
+    let ten_minutes_ago = now - chrono::Duration::minutes(10);
     assert_eq!(
-        since_read(now - chrono::Duration::days(9)),
-        now - chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS)
+        window_start(SummaryWindow::SinceLeftApp(ten_minutes_ago), now),
+        (ten_minutes_ago, SummaryBasis::LeftApp, false)
+    );
+    let yesterday = now - chrono::Duration::hours(30);
+    assert_eq!(
+        window_start(SummaryWindow::SinceLeftApp(yesterday), now),
+        (yesterday, SummaryBasis::LeftApp, false)
+    );
+
+    // Past the max, cost policy wins, and the cap is reported so the head
+    // does not present the capped stamp as the moment the reader left.
+    assert_eq!(
+        window_start(
+            SummaryWindow::SinceLeftApp(now - chrono::Duration::days(9)),
+            now
+        ),
+        (max, SummaryBasis::LeftApp, true)
+    );
+    assert_eq!(
+        window_start(SummaryWindow::SinceLeftApp(max), now),
+        (max, SummaryBasis::LeftApp, false),
+        "exactly at the cap is not capped"
+    );
+
+    // No mark: the one window that is handed out rather than derived, and
+    // it says so.
+    assert_eq!(
+        window_start(SummaryWindow::Default, now),
+        (
+            now - chrono::Duration::hours(SUMMARY_DEFAULT_WINDOW_HOURS),
+            SummaryBasis::Default,
+            false
+        )
     );
 }
 
 #[test]
 fn an_explicit_window_is_taken_at_face_value_up_to_the_max() {
     let now = chrono::Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, 0).unwrap();
+    // The window the reader typed is the window they get.
     let explicit = |back| window_start(SummaryWindow::Explicit(back), now);
 
-    // The whole point of typing a window: the default floor does not widen
-    // it, so `/summary 6h` covers six hours and not a day.
     assert_eq!(
         explicit(chrono::Duration::hours(6)),
-        now - chrono::Duration::hours(6)
+        (
+            now - chrono::Duration::hours(6),
+            SummaryBasis::Explicit,
+            false
+        )
     );
     assert_eq!(
         explicit(chrono::Duration::minutes(90)),
-        now - chrono::Duration::minutes(90)
+        (
+            now - chrono::Duration::minutes(90),
+            SummaryBasis::Explicit,
+            false
+        )
     );
     // The max is still the max, and an absurd ask clamps to it rather than
-    // overflowing the subtraction.
+    // overflowing the subtraction. The command layer refuses anything past
+    // the max before it gets here, so this is not reported as a cap.
     assert_eq!(
         explicit(chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS + 1)),
-        now - chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS)
+        (
+            now - chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS),
+            SummaryBasis::Explicit,
+            false
+        )
     );
     assert_eq!(
         explicit(chrono::Duration::MAX),
-        now - chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS)
+        (
+            now - chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS),
+            SummaryBasis::Explicit,
+            false
+        )
     );
 }
 
@@ -139,7 +180,7 @@ async fn ai_disabled_answers_unavailable_without_touching_the_db() {
         Uuid::from_u128(1),
         Uuid::from_u128(2),
         "#lounge".to_string(),
-        SummaryWindow::SinceRead(Utc::now()),
+        SummaryWindow::Default,
         Vec::new(),
     );
 
@@ -163,7 +204,7 @@ async fn an_armed_cooldown_refuses_before_any_work() {
         user,
         room,
         "#lounge".to_string(),
-        SummaryWindow::SinceRead(Utc::now()),
+        SummaryWindow::Default,
         Vec::new(),
     );
 
@@ -201,7 +242,7 @@ async fn an_in_flight_request_collapses_duplicates_without_spending() {
         user,
         room,
         "#lounge".to_string(),
-        SummaryWindow::SinceRead(Utc::now()),
+        SummaryWindow::Default,
         Vec::new(),
     );
 

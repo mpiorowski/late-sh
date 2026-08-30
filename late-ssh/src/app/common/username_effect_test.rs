@@ -64,6 +64,7 @@ fn directory_set_expire_replace() {
                 ends_at: now + Duration::hours(24),
             }),
             title: None,
+            milestone: None,
         },
     );
     set_user(
@@ -75,10 +76,11 @@ fn directory_set_expire_replace() {
                 ends_at: now - Duration::seconds(1),
             }),
             title: None,
+            milestone: None,
         },
     );
 
-    let resolved = resolve_all(&snapshot(&directory), 0, now);
+    let resolved = resolve_all(&snapshot(&directory), None, 0, now);
     assert!(resolved[&user].style.is_some());
     assert!(
         !resolved.contains_key(&other),
@@ -98,6 +100,7 @@ fn directory_set_expire_replace() {
                     ends_at: now + Duration::hours(1),
                 }),
                 title: None,
+                milestone: None,
             },
         )],
     );
@@ -124,10 +127,11 @@ fn title_and_color_resolve_and_expire_independently() {
                 text: "the insufferable".to_string(),
                 ends_at: now + Duration::hours(2),
             }),
+            milestone: None,
         },
     );
 
-    let resolved = resolve_all(&snapshot(&directory), 0, now);
+    let resolved = resolve_all(&snapshot(&directory), None, 0, now);
     assert_eq!(
         resolved[&user].style,
         Some(NameStyle::Solid(Color::Rgb(120, 180, 255)))
@@ -136,13 +140,54 @@ fn title_and_color_resolve_and_expire_independently() {
 
     // The color lapses first: the title outlives it, and the entry stays.
     let later = now + Duration::minutes(90);
-    let resolved = resolve_all(&snapshot(&directory), 0, later);
+    let resolved = resolve_all(&snapshot(&directory), None, 0, later);
     assert_eq!(resolved[&user].style, None);
     assert_eq!(resolved[&user].title.as_deref(), Some("the insufferable"));
 
     // Both lapsed: the user drops out of the resolved map entirely.
     let much_later = now + Duration::hours(3);
-    assert!(!resolve_all(&snapshot(&directory), 0, much_later).contains_key(&user));
+    assert!(!resolve_all(&snapshot(&directory), None, 0, much_later).contains_key(&user));
+}
+
+/// The crown is not a rental, so it has no directory entry of its own: a
+/// holder who has never bought anything still has to reach the renderers,
+/// and losing the crown must not take a live effect down with it.
+#[test]
+fn the_crown_resolves_for_a_holder_with_nothing_else_bought() {
+    let directory = new_directory();
+    let bare_holder = Uuid::now_v7();
+    let decorated = Uuid::now_v7();
+    let now = Utc::now();
+
+    set_user(
+        &directory,
+        decorated,
+        NameFlair {
+            effect: Some(FlairEffect {
+                effect: UsernameEffect::Glow(GlowColor::Gold),
+                ends_at: now + Duration::hours(1),
+            }),
+            title: None,
+            milestone: None,
+        },
+    );
+
+    // A holder with an empty wallet's worth of flair still gets an entry.
+    let resolved = resolve_all(&snapshot(&directory), Some(bare_holder), 0, now);
+    assert!(resolved[&bare_holder].crown);
+    assert_eq!(resolved[&bare_holder].style, None);
+    assert!(!resolved[&decorated].crown);
+
+    // The crown is additive: taking it never disturbs a live effect.
+    let resolved = resolve_all(&snapshot(&directory), Some(decorated), 0, now);
+    assert!(resolved[&decorated].crown);
+    assert!(resolved[&decorated].style.is_some());
+    assert!(!resolved.contains_key(&bare_holder));
+
+    // A vacant crown leaves nobody wearing it, and nobody else changed.
+    let resolved = resolve_all(&snapshot(&directory), None, 0, now);
+    assert!(!resolved[&decorated].crown);
+    assert!(resolved[&decorated].style.is_some());
 }
 
 #[test]
@@ -158,4 +203,42 @@ fn styled_name_spans_keeps_base_bg_and_modifiers() {
         assert!(span.style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(span.style.fg, Some(Color::Rgb(255, 200, 80)));
     }
+}
+
+/// A milestone is permanent, so it survives a resolve that drops every
+/// expired rental, and an owner who has bought nothing else still gets an
+/// entry: without one the dearest purchase in the shop would render nothing.
+#[test]
+fn a_burn_milestone_outlives_the_rentals_beside_it() {
+    let directory = new_directory();
+    let lapsed = Uuid::now_v7();
+    let bare = Uuid::now_v7();
+    let now = Utc::now();
+
+    set_user(
+        &directory,
+        lapsed,
+        NameFlair {
+            effect: Some(FlairEffect {
+                effect: UsernameEffect::Shimmer,
+                ends_at: now - Duration::seconds(1),
+            }),
+            title: None,
+            milestone: Some("\u{1F30B}".to_string()),
+        },
+    );
+    set_user(
+        &directory,
+        bare,
+        NameFlair {
+            effect: None,
+            title: None,
+            milestone: Some("\u{1F9E8}".to_string()),
+        },
+    );
+
+    let resolved = resolve_all(&snapshot(&directory), None, 0, now);
+    assert_eq!(resolved[&lapsed].style, None);
+    assert_eq!(resolved[&lapsed].milestone.as_deref(), Some("\u{1F30B}"));
+    assert_eq!(resolved[&bare].milestone.as_deref(), Some("\u{1F9E8}"));
 }

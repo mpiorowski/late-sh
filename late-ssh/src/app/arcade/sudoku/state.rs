@@ -14,10 +14,13 @@ use late_core::models::sudoku::{Game, GameParams};
 pub type Grid = [[u8; 9]; 9];
 pub type Mask = [[bool; 9]; 9];
 /// Pencil marks: one bitmask per cell, bit `n-1` set means candidate `n` is
-/// noted. Player solving aid, kept alongside the board but not (yet) persisted
-/// to the DB, so notes survive mode/difficulty switches within a session but
-/// reset on reconnect.
+/// noted. Player solving aid, saved to the DB alongside the board, so notes
+/// survive mode/difficulty switches and reconnects alike.
 pub type Notes = [[u16; 9]; 9];
+
+/// The nine legal candidate bits. Anything above them is noise from a hand-
+/// edited or future-shaped row and is dropped on restore.
+const NOTE_MASK: u16 = 0x01ff;
 
 pub const DIFFICULTIES: [&str; 3] = ["easy", "medium", "hard"];
 
@@ -309,7 +312,11 @@ impl State {
     }
 
     fn save_async(&self) {
-        self.svc.save_game_task(GameParams {
+        self.svc.save_game_task(self.save_params());
+    }
+
+    fn save_params(&self) -> GameParams {
+        GameParams {
             user_id: self.user_id,
             mode: self.mode.as_str().to_string(),
             difficulty_key: self.difficulty_key().to_string(),
@@ -320,9 +327,10 @@ impl State {
             puzzle_seed: self.seed as i64,
             grid: serde_json::to_value(self.grid).unwrap_or_default(),
             fixed_mask: serde_json::to_value(self.fixed_mask).unwrap_or_default(),
+            notes: serde_json::to_value(self.notes).unwrap_or_default(),
             is_game_over: self.is_game_over,
             score: 0,
-        });
+        }
     }
 
     // --- Interaction ---
@@ -365,6 +373,7 @@ impl State {
         }
         self.notes[r][c] ^= 1 << (val - 1);
         self.store_active_snapshot();
+        self.save_async();
     }
 
     /// Wipe every pencil mark from the cursor cell.
@@ -377,6 +386,7 @@ impl State {
         if self.notes[r][c] != 0 {
             self.notes[r][c] = 0;
             self.store_active_snapshot();
+            self.save_async();
         }
     }
 
@@ -689,13 +699,52 @@ fn snapshot_from_game(game: &Game) -> BoardSnapshot {
         }
     }
 
+    let mut notes = notes_from_value(&game.notes);
+    for r in 0..9 {
+        for c in 0..9 {
+            // A given clue or a filled cell has nothing left to guess at, and
+            // the live board enforces that in `toggle_note`/`set_digit`. Hold
+            // the same line on restore so a stale row cannot smuggle marks
+            // into a settled cell.
+            if fixed_mask[r][c] || grid[r][c] != 0 {
+                notes[r][c] = 0;
+            }
+        }
+    }
+
     BoardSnapshot {
         seed: game.puzzle_seed as u64,
         grid,
         fixed_mask,
-        notes: [[0; 9]; 9],
+        notes,
         is_game_over: game.is_game_over,
     }
+}
+
+/// Pencil marks out of a persisted board. Only an exact 9x9 matrix of
+/// non-negative numbers is accepted; anything else restores as "no notes"
+/// rather than as a half-understood mark set, since a bad row must never take
+/// a session's bootstrap down with it.
+fn notes_from_value(value: &serde_json::Value) -> Notes {
+    let mut notes: Notes = [[0; 9]; 9];
+
+    let Some(rows) = value.as_array().filter(|rows| rows.len() == 9) else {
+        return notes;
+    };
+
+    for (r, row_val) in rows.iter().enumerate() {
+        let Some(cells) = row_val.as_array().filter(|cells| cells.len() == 9) else {
+            return [[0; 9]; 9];
+        };
+        for (c, cell) in cells.iter().enumerate() {
+            let Some(bits) = cell.as_u64() else {
+                return [[0; 9]; 9];
+            };
+            notes[r][c] = (bits & NOTE_MASK as u64) as u16;
+        }
+    }
+
+    notes
 }
 
 fn board_has_player_marks(grid: &Grid, fixed_mask: &Mask, notes: &Notes) -> bool {

@@ -20,6 +20,7 @@ use super::{
     appearance,
     classes::Class,
     state::{ClickAction, Heading, MapMode, Panel, State},
+    stats::{POINT_EVERY_LEVELS, SCORE_CAP, Score},
     svc::{LeaderboardEntry, LogKind, MobView, PlayerView, QuestKind, QuestView, SectionRow},
     world::{Dir, MapCell, MiniMap, RoomId},
 };
@@ -68,6 +69,14 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
 
     if !view.archetype_choices.is_empty() {
         draw_archetype_select(frame, area, &view);
+        return;
+    }
+
+    if !view.score_offer.is_empty() {
+        frame.render_widget(
+            Paragraph::new(score_point_lines(&view, area.height)).wrap(Wrap { trim: false }),
+            area,
+        );
         return;
     }
 
@@ -1926,6 +1935,7 @@ fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: u
     // The rolled scores in the same rated rows as the character sheet, with the
     // highlighted class's primary score glowing in its accent.
     lines.extend(attribute_lines(view, primary_label(Some(chosen)), accent));
+    lines.extend(attribute_rule_lines(view));
     lines.push(Line::raw(""));
     // One compact row per class; the highlighted one is expanded directly below
     // its row so cursor-following scroll keeps the choice and its details together.
@@ -1997,6 +2007,159 @@ fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: u
     );
     let shown: Vec<Line<'static>> = lines.into_iter().skip(off).collect();
     frame.render_widget(Paragraph::new(shown).wrap(Wrap { trim: false }), area);
+}
+
+/// What the six scores do, in numbers, for this character: each score's
+/// current reading and the rule behind it. Under the rolled rows on the
+/// creation screen, so the roll is a decision made with the arithmetic in
+/// view rather than a promise.
+fn attribute_rule_lines(view: &PlayerView) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(Span::styled(
+        format!(
+            "What they do (modifier = (score-10)/2; a point to place every {POINT_EVERY_LEVELS} levels, scores cap at {SCORE_CAP}):"
+        ),
+        Style::default().fg(theme::TEXT_DIM()),
+    ))];
+    for which in Score::ALL {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {} ", which.label()),
+                Style::default().fg(theme::AMBER()),
+            ),
+            Span::styled(
+                format!("{:<44}", view.scores.effect(which, view.level)),
+                Style::default().fg(theme::TEXT()),
+            ),
+            Span::styled(
+                which.rule().to_string(),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+    }
+    lines
+}
+
+/// The attribute point screen: every score with what it does now, what one
+/// more point would do, and the rule behind it, placed with 1-6. A +1 on an
+/// even score leaves the modifier where it is, and the row says so rather
+/// than let the player wonder why nothing moved. The screen holds every key
+/// until the point is placed, so all six choices must be in view: the full
+/// layout is five rows a score, and when `rows` (the area's height) cannot
+/// hold it every score collapses to one line.
+fn score_point_lines(view: &PlayerView, rows: u16) -> Vec<Line<'static>> {
+    const HEADER_ROWS: usize = 4;
+    const ROWS_PER_SCORE: usize = 5;
+    let full = HEADER_ROWS + ROWS_PER_SCORE * view.score_offer.len();
+    if full > usize::from(rows) {
+        return score_point_lines_compact(view);
+    }
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "~ YOU GROW ~",
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!(
+                "Level {} - {} attribute point(s) to place. Modifier = (score-10)/2; scores cap at {SCORE_CAP}.",
+                view.level, view.score_points
+            ),
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::from(Span::styled(
+            "Press 1-6 to place a point.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::raw(""),
+    ];
+    for (i, row) in view.score_offer.iter().enumerate() {
+        let sign = if row.modifier >= 0 { "+" } else { "" };
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {} ", i + 1), Style::default().fg(theme::AMBER())),
+            Span::styled(
+                format!("{} {} ({sign}{}) ", row.label, row.value, row.modifier),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("· {}", row.name),
+                Style::default().fg(theme::AMBER_DIM()),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("      now: {}", row.now),
+            Style::default().fg(theme::TEXT()),
+        )));
+        let after = match &row.after {
+            Some(after) if after == &row.now => format!(
+                "      +1 -> {}: {after} (the modifier moves at {})",
+                row.value + 1,
+                row.value + 2
+            ),
+            Some(after) => format!("      +1 -> {}: {after}", row.value + 1),
+            None => format!("      at the cap of {SCORE_CAP}"),
+        };
+        lines.push(Line::from(Span::styled(
+            after,
+            Style::default().fg(theme::SUCCESS()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("      {}", row.rule),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+        lines.push(Line::raw(""));
+    }
+    lines
+}
+
+/// The point screen for a short terminal: one line a score, now -> after.
+fn score_point_lines_compact(view: &PlayerView) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                "~ YOU GROW ~ ",
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    "Level {} - {} attribute point(s) to place. Press 1-6 to place a point (scores cap at {SCORE_CAP}).",
+                    view.level, view.score_points
+                ),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]),
+        Line::raw(""),
+    ];
+    for (i, row) in view.score_offer.iter().enumerate() {
+        let sign = if row.modifier >= 0 { "+" } else { "" };
+        let after = match &row.after {
+            Some(after) if after == &row.now => format!("-> the same until {}", row.value + 2),
+            Some(after) => format!("-> {after}"),
+            None => format!("at the cap of {SCORE_CAP}"),
+        };
+        let mut spans = vec![
+            Span::styled(format!("  {} ", i + 1), Style::default().fg(theme::AMBER())),
+            Span::styled(
+                format!("{} {} ({sign}{}) ", row.label, row.value, row.modifier),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ];
+        if row.after.is_some() {
+            spans.push(Span::styled(
+                format!("{} ", row.now),
+                Style::default().fg(theme::TEXT()),
+            ));
+        }
+        spans.push(Span::styled(after, Style::default().fg(theme::SUCCESS())));
+        lines.push(Line::from(spans));
+    }
+    lines
 }
 
 /// The level-10 archetype crossroads: two permanent paths, picked with 1/2.
@@ -3962,6 +4125,16 @@ fn sheet_derived(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
         theme::SUCCESS(),
     ));
     lines.push(stat_colored(
+        "swing",
+        format!("+{}", view.swing),
+        theme::SUCCESS(),
+    ));
+    lines.push(stat_colored(
+        "spell",
+        format!("+{}", view.spell_power),
+        theme::SUCCESS(),
+    ));
+    lines.push(stat_colored(
         "armor",
         view.armor.to_string(),
         theme::MENTION(),
@@ -4379,6 +4552,8 @@ fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
     lines.push(Line::raw(""));
     lines.push(section("Combat"));
     lines.push(stat("attack", view.attack.to_string()));
+    lines.push(stat("swing", view.swing.to_string()));
+    lines.push(stat("spell", view.spell_power.to_string()));
     lines.push(stat("armor", view.armor.to_string()));
     lines.push(Line::raw(""));
     lines.extend(attribute_lines(

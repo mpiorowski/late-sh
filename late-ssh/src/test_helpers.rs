@@ -8,6 +8,7 @@ use crate::app::arcade::minesweeper::svc::MinesweeperService;
 use crate::app::arcade::nonogram::state::Library as NonogramLibrary;
 use crate::app::arcade::nonogram::svc::NonogramService;
 use crate::app::arcade::rubiks_cube::svc::RubiksCubeService;
+use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleService;
 use crate::app::arcade::snake::svc::SnakeService;
 use crate::app::arcade::solitaire::svc::SolitaireService;
 use crate::app::arcade::sudoku::svc::SudokuService;
@@ -95,6 +96,7 @@ fn test_sudoku_games(user_id: Uuid) -> Vec<late_core::models::sudoku::Game> {
             puzzle_seed: idx as i64,
             grid: serde_json::to_value(grid).expect("sudoku grid json"),
             fixed_mask: serde_json::to_value(fixed_mask).expect("sudoku fixed mask json"),
+            notes: serde_json::to_value([[0u16; 9]; 9]).expect("sudoku notes json"),
             is_game_over: false,
             score: 0,
         }
@@ -263,6 +265,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let traffic_service = TrafficService::new(db.clone());
     let le_word_service = LeWordService::new(db.clone(), activity_tx.clone());
     let rubiks_cube_service = RubiksCubeService::new(db.clone(), activity_tx.clone());
+    let sliding_puzzle_service = SlidingPuzzleService::new(db.clone(), activity_tx.clone());
     let chip_service = ChipService::new(db.clone());
     let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx.clone());
     let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone());
@@ -295,6 +298,8 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         username_directory,
         flair_directory: crate::app::common::username_effect::new_directory(),
         pomodoro_directory: crate::app::common::pomodoro::new_directory(),
+        crown_service: crate::app::crown::svc::CrownService::new(db.clone()),
+        pot_service: crate::app::pot::svc::PotService::new(db.clone()),
         config,
         db: db.clone(),
         audio_service: crate::app::audio::svc::AudioService::new(
@@ -325,6 +330,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         traffic_service,
         le_word_service,
         rubiks_cube_service,
+        sliding_puzzle_service,
         sudoku_service,
         nonogram_service,
         solitaire_service,
@@ -504,6 +510,8 @@ fn make_app_with_chat_service_and_permissions(
         le_word_service: LeWordService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         rubiks_cube_service: RubiksCubeService::new(db.clone(), activity_tx.clone()),
         initial_rubiks_cube_game: None,
+        sliding_puzzle_service: SlidingPuzzleService::new(db.clone(), activity_tx.clone()),
+        initial_sliding_puzzle_games: Vec::new(),
         initial_le_word_daily_word: None,
         initial_le_word_game: None,
         sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
@@ -626,10 +634,13 @@ fn make_app_with_chat_service_and_permissions(
         // per-device layout, which is also what ghost bot sessions do.
         key_fingerprint: None,
         key_layout: None,
+        key_left_at: None,
         afk_users: crate::state::new_afk_users(),
         username_directory: None,
         flair_directory: None,
         pomodoro_directory: None,
+        crown_service: None,
+        pot_service: None,
         activity_feed_rx: None,
         initial_announcements: None,
         is_new_user: false,
@@ -722,6 +733,8 @@ pub fn make_app_with_paired_client(
         le_word_service: LeWordService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         rubiks_cube_service: RubiksCubeService::new(db.clone(), activity_tx.clone()),
         initial_rubiks_cube_game: None,
+        sliding_puzzle_service: SlidingPuzzleService::new(db.clone(), activity_tx.clone()),
+        initial_sliding_puzzle_games: Vec::new(),
         initial_le_word_daily_word: None,
         initial_le_word_game: None,
         sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
@@ -844,10 +857,13 @@ pub fn make_app_with_paired_client(
         // per-device layout, which is also what ghost bot sessions do.
         key_fingerprint: None,
         key_layout: None,
+        key_left_at: None,
         afk_users: crate::state::new_afk_users(),
         username_directory: None,
         flair_directory: None,
         pomodoro_directory: None,
+        crown_service: None,
+        pot_service: None,
         activity_feed_rx: None,
         initial_announcements: None,
         is_new_user: false,

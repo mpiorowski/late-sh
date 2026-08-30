@@ -140,3 +140,55 @@ fn bubble_boxes_stay_inside_the_map() {
     draw_bubble_box(&mut cells, 90, 20, &["hello".to_string()]);
     assert_eq!(cells[18][86].0, '╭');
 }
+
+/// The crown on the floor is painted the same amber it wears in chat. It
+/// sits at index `name_len`, exactly where the name's color effect stops,
+/// so without its own rule it would fall into the dim label color.
+#[test]
+fn the_crown_glyph_on_the_floor_is_painted_amber_not_dim() {
+    theme::set_current_by_id("late");
+    let mut cells: Cells =
+        vec![vec![(' ', Style::default()); usize::from(map::MAP_W)]; usize::from(map::MAP_H)];
+    let flair = ResolvedName {
+        style: None,
+        title: Some("the night clerk".to_string()),
+        crown: true,
+        milestone: None,
+    };
+    let dim = Style::default().fg(ratatui::style::Color::DarkGray);
+    draw_presence(
+        &mut cells,
+        Placement::Walking(30, 12),
+        'o',
+        Style::default(),
+        "bob",
+        dim,
+        Some(&flair),
+        0,
+    );
+
+    let row = &cells[9];
+    let text: String = row.iter().map(|(ch, _)| *ch).collect();
+    let crown_at = text
+        .chars()
+        .position(|ch| ch == '\u{1F451}')
+        .unwrap_or_else(|| panic!("no crown on the floor label: {text:?}"));
+    assert_eq!(row[crown_at - 2].0, 'b');
+    assert_eq!(
+        row[crown_at - 2].1,
+        dim,
+        "a name without an effect stays dim"
+    );
+    assert_eq!(row[crown_at - 1].0, ' ', "one space between name and crown");
+    assert_eq!(
+        row[crown_at].1.fg,
+        Some(theme::AMBER_GLOW()),
+        "the crown must be amber, as in chat"
+    );
+    // The emoji is two columns wide: it owns the next cell too, so the
+    // title starts one cell later than a char count would put it and the
+    // rest of the row stays aligned to the walls.
+    assert_eq!(row[crown_at + 1].0, WIDE_TAIL);
+    assert_eq!(row[crown_at + 2].0, ',');
+    assert_eq!(row[crown_at + 2].1, dim, "the title after it stays dim");
+}

@@ -45,6 +45,7 @@ pub enum DailyPuzzleRewardGame {
     Minesweeper,
     Nonogram,
     RubiksCube,
+    SlidingPuzzle,
     Solitaire,
     Sudoku,
 }
@@ -56,6 +57,7 @@ impl DailyPuzzleRewardGame {
             Self::Minesweeper => "minesweeper",
             Self::Nonogram => "nonogram",
             Self::RubiksCube => "rubiks_cube",
+            Self::SlidingPuzzle => "sliding_puzzle",
             Self::Solitaire => "solitaire",
             Self::Sudoku => "sudoku",
         }

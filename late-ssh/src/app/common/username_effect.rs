@@ -46,15 +46,21 @@ pub struct FlairTitle {
 
 /// Everything name-adjacent one user has bought; stale halves are skipped at
 /// read.
+///
+/// The milestone is the odd member: a permanent `user_purchases` row rather
+/// than a rental, so it carries no expiry and only ever changes when its
+/// owner buys a dearer one. It lives here anyway because this is the map
+/// every name surface already reads, which is the same reason the crown does.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NameFlair {
     pub effect: Option<FlairEffect>,
     pub title: Option<FlairTitle>,
+    pub milestone: Option<String>,
 }
 
 impl NameFlair {
     pub fn is_empty(&self) -> bool {
-        self.effect.is_none() && self.title.is_none()
+        self.effect.is_none() && self.title.is_none() && self.milestone.is_none()
     }
 }
 
@@ -153,29 +159,53 @@ pub fn resolve(effect: UsernameEffect, phase: usize) -> NameStyle {
     }
 }
 
-/// What the renderers paint for one name: the color style, the title, or
-/// both. Cloned per frame into render contexts, so the title is owned text.
+/// The crown holder's glyph, painted immediately after their name. An
+/// emoji, so two cells wide (the chess-piece `\u{2654}` was too small to
+/// read as a prize); every surface that draws it measures it with
+/// `unicode_width` rather than counting chars. Additive: it never takes the
+/// name's color and never displaces a title.
+pub const CROWN_GLYPH: &str = "\u{1F451}";
+
+/// What the renderers paint for one name: the color style, the title, the
+/// crown, or any combination. Cloned per frame into render contexts, so the
+/// title is owned text.
+///
+/// The crown rides this map rather than a second lookup because every
+/// surface that draws a name already reads it, and it resolves on the same
+/// once-a-second edge: one comparison decides whether the frame changed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResolvedName {
     pub style: Option<NameStyle>,
     pub title: Option<String>,
+    pub crown: bool,
+    /// The dearest burn milestone this user owns, painted in the badge stack
+    /// rather than beside the name: it is a badge, it just cannot be rented
+    /// over. Never expires, so it has no staleness check here.
+    pub milestone: Option<String>,
 }
 
 impl ResolvedName {
     pub fn is_empty(&self) -> bool {
-        self.style.is_none() && self.title.is_none()
+        self.style.is_none() && self.title.is_none() && !self.crown && self.milestone.is_none()
     }
 }
 
 /// Resolve every live entry in a directory snapshot into what renderers
 /// paint, dropping expired halves and entries left with nothing. Runs once
 /// per second per session in the tick loop.
+///
+/// `crown_holder` is the one user wearing the crown right now, resolved by
+/// the caller (the crown is a reign, not a rental, and it lapses on the UTC
+/// month rather than on an `ends_at`). A holder who has bought nothing else
+/// gets an entry of their own here, which is why this cannot simply map over
+/// the directory.
 pub fn resolve_all(
     entries: &HashMap<Uuid, NameFlair>,
+    crown_holder: Option<Uuid>,
     phase: usize,
     now: DateTime<Utc>,
 ) -> HashMap<Uuid, ResolvedName> {
-    entries
+    let mut resolved: HashMap<Uuid, ResolvedName> = entries
         .iter()
         .filter_map(|(user_id, flair)| {
             let resolved = ResolvedName {
@@ -188,10 +218,16 @@ pub fn resolve_all(
                     .as_ref()
                     .filter(|title| title.ends_at > now)
                     .map(|title| title.text.clone()),
+                crown: false,
+                milestone: flair.milestone.clone(),
             };
             (!resolved.is_empty()).then_some((*user_id, resolved))
         })
-        .collect()
+        .collect();
+    if let Some(crown_holder) = crown_holder {
+        resolved.entry(crown_holder).or_default().crown = true;
+    }
+    resolved
 }
 
 /// The fg color for character `index` of a `len`-character name.

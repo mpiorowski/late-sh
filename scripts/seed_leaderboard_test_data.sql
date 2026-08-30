@@ -124,6 +124,7 @@ DELETE FROM solitaire_daily_wins w USING seed_players p WHERE w.user_id = p.user
 DELETE FROM minesweeper_daily_wins w USING seed_players p WHERE w.user_id = p.user_id;
 DELETE FROM rubiks_cube_daily_wins w USING seed_players p WHERE w.user_id = p.user_id;
 DELETE FROM le_word_daily_wins w USING seed_players p WHERE w.user_id = p.user_id;
+DELETE FROM sliding_puzzle_daily_wins w USING seed_players p WHERE w.user_id = p.user_id;
 DELETE FROM daily_win_totals t USING seed_players p WHERE t.user_id = p.user_id;
 DELETE FROM mud_characters c USING seed_players p WHERE c.user_id = p.user_id;
 DELETE FROM door_runs r USING seed_players p WHERE r.user_id = p.user_id;
@@ -400,6 +401,28 @@ FROM seed_players p
 CROSS JOIN LATERAL generate_series(1, 20 + (49 - p.idx) * 4) AS g(n)
 ON CONFLICT (user_id, puzzle_date) DO NOTHING;
 
+-- Sliding Puzzle is the one daily puzzle whose result metric counts down: the
+-- fact is a move count, so the strongest players (lowest idx) get the smallest
+-- numbers, and the per-difficulty offsets scale with the 3x3/4x4/5x5 boards.
+WITH month_days AS (
+    SELECT day::date AS puzzle_date
+    FROM generate_series(date_trunc('month', current_date)::date, current_date, interval '1 day') AS day
+), difficulties(difficulty_key, day_offset, move_offset) AS (
+    VALUES ('easy'::text, 3, 0), ('medium'::text, 7, 140), ('hard'::text, 12, 380)
+)
+INSERT INTO sliding_puzzle_daily_wins (user_id, difficulty_key, puzzle_date, moves, created, updated)
+SELECT
+    p.user_id,
+    d.difficulty_key,
+    m.puzzle_date,
+    28 + p.idx * 2 + EXTRACT(day FROM m.puzzle_date)::int + d.move_offset,
+    m.puzzle_date::timestamptz + interval '18 hours',
+    m.puzzle_date::timestamptz + interval '18 hours'
+FROM seed_players p
+CROSS JOIN month_days m
+CROSS JOIN difficulties d
+WHERE EXTRACT(day FROM m.puzzle_date)::int <= 26 - CEIL(p.idx / 2.0)::int - d.day_offset;
+
 -- Lateania characters for the Games boards: paired levels so the experience
 -- tiebreak is visible, classes cycling the full roster, and the top half of
 -- the field carrying Frontier rooms (2000..=2999, 50 per zone) at spread
@@ -653,6 +676,10 @@ FROM seed_current_player c
 CROSS JOIN generate_series(0, 6) AS g(n)
 ON CONFLICT (user_id, puzzle_date) DO NOTHING;
 
+INSERT INTO sliding_puzzle_daily_wins (user_id, difficulty_key, puzzle_date, moves)
+SELECT user_id, 'medium', current_date, 84 FROM seed_current_player
+ON CONFLICT (user_id, difficulty_key, puzzle_date) DO NOTHING;
+
 -- A mid-rank Lateania character, only when the player has none: a real save
 -- must never be overwritten, so this is insert-or-nothing, not upsert.
 INSERT INTO mud_characters (user_id, data)
@@ -713,6 +740,8 @@ FROM (
     SELECT 'le_word', user_id FROM le_word_daily_wins
     UNION ALL
     SELECT 'rubiks_cube', user_id FROM rubiks_cube_daily_wins
+    UNION ALL
+    SELECT 'sliding_puzzle', user_id FROM sliding_puzzle_daily_wins
 ) w
 JOIN (
     SELECT user_id FROM seed_players
@@ -742,4 +771,5 @@ SELECT 'seed other daily wins',
      + (SELECT COUNT(*) FROM nonogram_daily_wins w JOIN users u ON u.id = w.user_id WHERE u.fingerprint LIKE 'seed:leaderboard:v2:%')
      + (SELECT COUNT(*) FROM solitaire_daily_wins w JOIN users u ON u.id = w.user_id WHERE u.fingerprint LIKE 'seed:leaderboard:v2:%')
      + (SELECT COUNT(*) FROM minesweeper_daily_wins w JOIN users u ON u.id = w.user_id WHERE u.fingerprint LIKE 'seed:leaderboard:v2:%')
-     + (SELECT COUNT(*) FROM rubiks_cube_daily_wins w JOIN users u ON u.id = w.user_id WHERE u.fingerprint LIKE 'seed:leaderboard:v2:%');
+     + (SELECT COUNT(*) FROM rubiks_cube_daily_wins w JOIN users u ON u.id = w.user_id WHERE u.fingerprint LIKE 'seed:leaderboard:v2:%')
+     + (SELECT COUNT(*) FROM sliding_puzzle_daily_wins w JOIN users u ON u.id = w.user_id WHERE u.fingerprint LIKE 'seed:leaderboard:v2:%');

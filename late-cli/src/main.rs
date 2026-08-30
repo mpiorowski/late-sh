@@ -2,10 +2,10 @@ use anyhow::{Context, Result};
 use std::{
     env,
     sync::{Arc, atomic::Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::oneshot;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 mod audio;
 mod clipboard;
@@ -26,8 +26,9 @@ use identity::ensure_client_identity_at;
 use raw_mode::{RawModeGuard, enable_ansi_output_if_tty};
 use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_ssh};
 use ws::{
-    PairClientInfo, PairRuntime, PlaybackState, WebviewPlaybackController, client_platform_label,
-    run_pair_ws,
+    MAX_CONSECUTIVE_FAILURES, PAIR_RECONNECT_DELAY, PAIR_SLOW_RECONNECT_DELAY, PairAttempt,
+    PairClientInfo, PairRetryPolicy, PairRuntime, PlaybackState, ReconnectPlan,
+    WebviewPlaybackController, client_platform_label, establish_pair_session, run_pair_session,
 };
 
 #[tokio::main]
@@ -312,38 +313,64 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
         stream_flushed_generation: &stream_flushed_generation,
         icecast_stream_url: &icecast_stream_url,
     };
-    let mut retries = 0;
-    const MAX_RETRIES: usize = 10;
+    let mut policy = PairRetryPolicy::new();
     loop {
-        if let Err(err) = run_pair_ws(
-            &api_base_url,
-            &token,
-            &client,
-            &playback,
-            PairRuntime {
-                webview: &mut webview,
-                voice: &mut voice,
-                desktop_media: &mut desktop_media,
-                desktop_commands: &mut desktop_commands,
-            },
-        )
-        .await
+        let attempt = match establish_pair_session(&api_base_url, &token, &client, &playback).await
         {
-            retries += 1;
-            if retries > MAX_RETRIES {
-                error!(error = ?err, "visualizer websocket task failed {MAX_RETRIES} times consecutively; giving up");
-                // Pairing is the only way to learn the user's initial
-                // mute preference. If it never arrives, restore the
-                // historical default instead of staying silently muted.
-                muted.store(false, Ordering::Relaxed);
-                info!("pair websocket unavailable; released startup audio mute");
-                std::future::pending::<()>().await;
+            Err(err) => {
+                error!(error = ?err, "pair websocket could not be established");
+                PairAttempt::NotEstablished
             }
-            error!(error = ?err, attempt = retries, "visualizer websocket task failed; reconnecting in 2s...");
-        } else {
-            retries = 0;
-            info!("visualizer websocket closed cleanly; reconnecting in 2s...");
-        }
-        tokio::time::sleep(Duration::from_secs(2)).await;
+            Ok(ws) => {
+                let established = Instant::now();
+                let session = run_pair_session(
+                    ws,
+                    &client,
+                    &playback,
+                    PairRuntime {
+                        webview: &mut webview,
+                        voice: &mut voice,
+                        desktop_media: &mut desktop_media,
+                        desktop_commands: &mut desktop_commands,
+                    },
+                )
+                .await;
+                match &session.result {
+                    Err(err) => error!(error = ?err, "pair websocket session failed"),
+                    Ok(()) => info!("pair websocket closed by the server"),
+                }
+                let attempt = session.attempt(established.elapsed());
+                if attempt == PairAttempt::NotEstablished {
+                    warn!(
+                        "pair websocket accepted but dropped before the server registered this session"
+                    );
+                }
+                attempt
+            }
+        };
+
+        // One place to look for what a dead pair socket costs this session.
+        let delay = match policy.note_attempt(attempt) {
+            ReconnectPlan::Soon => PAIR_RECONNECT_DELAY,
+            ReconnectPlan::Slow => {
+                warn!(
+                    "pair websocket unavailable after {MAX_CONSECUTIVE_FAILURES} consecutive failures; retrying slowly"
+                );
+                PAIR_SLOW_RECONNECT_DELAY
+            }
+            ReconnectPlan::ReleaseStartupMuteThenSlow => {
+                // Pairing is the only way to learn the stored device mute, and
+                // this session never reached the server, so it is still sitting
+                // on the boot mute with no answer coming. Release it rather
+                // than leave the user silently muted with no explanation. A
+                // session that did pair keeps its mute; see PairRetryPolicy.
+                muted.store(false, Ordering::Relaxed);
+                warn!(
+                    "pair websocket never established in {MAX_CONSECUTIVE_FAILURES} attempts; released startup audio mute and retrying slowly"
+                );
+                PAIR_SLOW_RECONNECT_DELAY
+            }
+        };
+        tokio::time::sleep(delay).await;
     }
 }

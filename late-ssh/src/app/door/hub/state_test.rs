@@ -13,6 +13,8 @@ fn selection_clamps_at_both_ends() {
     s.select_next();
     assert_eq!(s.selected_game(), HubGame::Brogue);
     s.select_next();
+    assert_eq!(s.selected_game(), HubGame::Darkroom);
+    s.select_next();
     assert_eq!(s.selected_game(), HubGame::GreenDragon);
     s.select_next();
     assert_eq!(s.selected_game(), HubGame::Usurper);
@@ -20,8 +22,6 @@ fn selection_clamps_at_both_ends() {
     assert_eq!(s.selected_game(), HubGame::Dopewars);
     s.select_next();
     assert_eq!(s.selected_game(), HubGame::Bashquest);
-    s.select_next();
-    assert_eq!(s.selected_game(), HubGame::Darkroom);
     s.select_next();
     assert_eq!(s.selected_game(), HubGame::Rebels);
     s.select_next();
@@ -33,7 +33,7 @@ fn selection_clamps_at_both_ends() {
 #[test]
 fn select_jumps_directly() {
     let mut s = State::default();
-    s.select(4);
+    s.select(5);
     assert_eq!(s.selected_game(), HubGame::GreenDragon);
     s.select(99);
     assert_eq!(s.selected_game(), HubGame::GreenDragon);
@@ -48,11 +48,11 @@ fn all_games_are_listed_in_order() {
             "DCSS",
             "NetHack",
             "Brogue",
+            "A Dark Room",
             "Green Dragon",
             "Usurper",
             "dopewars",
             "BashQuest",
-            "A Dark Room",
             "Rebels",
             "CodeKeep"
         ],

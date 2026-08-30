@@ -4,7 +4,27 @@ use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::common::{composer, primitives::Banner};
-use late_core::models::article::{ArticleEvent, ArticleFeedItem, ArticleSnapshot};
+use late_core::models::article::{
+    ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_SHARE_MAX_PAID_PER_DAY,
+    NEWS_SHARE_REWARD_CHIPS, NewsShareReward,
+};
+
+/// The success banner for a share, from what it actually minted. Both share
+/// surfaces (the News composer and an RSS `s`) read this, so neither can
+/// claim chips the ledger never wrote.
+pub fn news_share_banner(lead: &str, reward: NewsShareReward) -> Banner {
+    match reward {
+        NewsShareReward::Paid => {
+            Banner::success(&format!("{lead} +{NEWS_SHARE_REWARD_CHIPS} chips"))
+        }
+        NewsShareReward::RepeatUrl => Banner::success(&format!(
+            "{lead} Already paid for this link, no chips this time."
+        )),
+        NewsShareReward::DailyCapReached => Banner::success(&format!(
+            "{lead} Today's {NEWS_SHARE_MAX_PAID_PER_DAY} paid shares are used up, no chips this time."
+        )),
+    }
+}
 
 use super::svc::ArticleService;
 
@@ -352,12 +372,14 @@ impl State {
         loop {
             match self.event_rx.try_recv() {
                 Ok(event) => match event {
-                    ArticleEvent::Created { user_id, .. } if self.user_id == user_id => {
+                    ArticleEvent::Created {
+                        user_id, reward, ..
+                    } if self.user_id == user_id => {
                         self.current_task = None;
                         self.composing = false;
                         self.processing = false;
                         self.composer = new_news_textarea();
-                        banner = Some(Banner::success("Article shared!"));
+                        banner = Some(news_share_banner("Article shared!", reward));
                     }
                     ArticleEvent::Failed { user_id, error, .. } if self.user_id == user_id => {
                         self.current_task = None;

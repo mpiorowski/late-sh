@@ -134,8 +134,8 @@ async fn winning_the_ascent_wipes_the_save_and_pays_the_badge() {
     .await;
     assert_eq!(
         payout_total(&test_db.db, user.id).await,
-        10_000,
-        "the escape pays once per account"
+        15_000,
+        "the escape pays for the run that got out"
     );
 
     // Stepping out of the door must not write the finished run back over the
@@ -164,7 +164,7 @@ fn the_ending_reveals_a_beat_at_a_time_until_a_key_skips_it() {
 
 /// Flying out holding the fleet beacon is a different ending, with different
 /// words and a different badge. The two must never be confused: they are
-/// separate lifetime payouts, and an account can hold both.
+/// separate payouts at separate prices, and an account can hold both.
 #[test]
 fn the_beacon_ending_says_something_else_and_pays_its_own_badge() {
     let plain = Ending::for_run(&Game::new(false), Escape::Plain);
@@ -194,6 +194,40 @@ fn the_beacon_ending_says_something_else_and_pays_its_own_badge() {
         Escape::WithBeacon.feed_detail(),
         Some("followed the fleet beacon home")
     );
+
+    // And they say different prices, because they pay different ones.
+    assert_eq!(
+        Escape::Plain.reward_line(),
+        "15,000 chips, every run that gets out"
+    );
+    assert_eq!(
+        Escape::WithBeacon.reward_line(),
+        "20,000 chips, every run that gets out"
+    );
+}
+
+/// The run id is what makes the ending's payout repeatable: it has to survive
+/// a save/load, differ between runs, and appear on a blob written before the
+/// field existed rather than reading as a nil id shared by every old save.
+#[test]
+fn a_run_carries_an_id_that_survives_a_save_and_never_repeats() {
+    let first = Game::new(false);
+    let second = Game::new(false);
+    assert_ne!(first.run_id, second.run_id, "two runs, two ids");
+
+    let round_tripped = super::persist::from_json(&super::persist::to_json(&first));
+    assert_eq!(round_tripped.run_id, first.run_id, "a save keeps its run");
+
+    // A blob written before the field existed: it comes back with an id of
+    // its own, not a nil one.
+    let mut blob = super::persist::to_json(&first);
+    blob["game"]
+        .as_object_mut()
+        .expect("the game object")
+        .remove("run_id");
+    let upgraded = super::persist::from_json(&blob);
+    assert_ne!(upgraded.run_id, uuid::Uuid::nil());
+    assert_ne!(upgraded.run_id, first.run_id);
 }
 
 /// Swinging a weapon has to leave the cursor on that weapon.

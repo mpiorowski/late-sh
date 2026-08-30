@@ -8,3 +8,9 @@ late-ssh-db = { max-threads = 8 }
 [[profile.default.overrides]]
 filter = 'package(late-ssh)'
 test-group = 'late-ssh-db'
+
+# The arena's report tests fight every crown against every calling on both
+# archetype paths (thousands of real engine fights); give them room.
+[[profile.default.overrides]]
+filter = 'test(arena_report)'
+slow-timeout = { period = "60s", terminate-after = 15 }

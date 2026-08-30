@@ -3,6 +3,7 @@ use late_core::models::{article::ArticleEvent, rss_entry::RssEntryView, rss_feed
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
+use crate::app::chat::news::state::news_share_banner;
 use crate::app::{chat::news::svc::ArticleService, common::primitives::Banner};
 
 use super::svc::{FeedEvent, FeedService, FeedSnapshot};
@@ -203,9 +204,19 @@ impl State {
                 Ok(FeedEvent::EntryDismissed { user_id }) if user_id == self.user_id => {
                     banner = Some(Banner::success("RSS entry dismissed."));
                 }
-                Ok(FeedEvent::EntryShared { user_id }) if user_id == self.user_id => {
-                    banner = Some(Banner::success("RSS entry shared."));
+                Ok(FeedEvent::EntryShared {
+                    user_id,
+                    reward: Some(reward),
+                }) if user_id == self.user_id => {
+                    banner = Some(news_share_banner("RSS entry shared to news.", reward));
                 }
+                // The entry was marked shared because its link was already in
+                // News; the "Already shared." banner has said so and no chips
+                // moved, so there is nothing to add.
+                Ok(FeedEvent::EntryShared {
+                    user_id,
+                    reward: None,
+                }) if user_id == self.user_id => {}
                 Ok(_) => {}
                 Err(broadcast::error::TryRecvError::Empty) => break,
                 Err(e) => {
@@ -221,17 +232,21 @@ impl State {
         let mut banner = None;
         loop {
             match self.article_event_rx.try_recv() {
-                Ok(ArticleEvent::Created { user_id, url })
-                    if user_id == self.user_id
-                        && self
-                            .pending_share
-                            .as_ref()
-                            .is_some_and(|(_, pending_url)| pending_url == &url) =>
+                Ok(ArticleEvent::Created {
+                    user_id,
+                    url,
+                    reward,
+                }) if user_id == self.user_id
+                    && self
+                        .pending_share
+                        .as_ref()
+                        .is_some_and(|(_, pending_url)| pending_url == &url) =>
                 {
                     self.current_task = None;
                     self.processing = false;
                     if let Some((entry_id, _)) = self.pending_share.take() {
-                        self.service.mark_shared_task(self.user_id, entry_id);
+                        self.service
+                            .mark_shared_task(self.user_id, entry_id, Some(reward));
                     }
                 }
                 Ok(ArticleEvent::Failed {
@@ -249,7 +264,7 @@ impl State {
                     self.current_task = None;
                     self.processing = false;
                     if let Some((entry_id, _)) = self.pending_share.take() {
-                        self.service.mark_shared_task(self.user_id, entry_id);
+                        self.service.mark_shared_task(self.user_id, entry_id, None);
                         banner = Some(Banner::success("Already shared."));
                     }
                 }

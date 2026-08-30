@@ -161,10 +161,8 @@ fn item_list_rows<'a>(
     let section_label: fn(&ShopCatalogItem) -> &'static str = match category {
         ShopCategory::Chat => chat_section_label,
         ShopCategory::Badges => badge_section_label,
-        ShopCategory::Flags
-        | ShopCategory::Companions
-        | ShopCategory::Aquarium
-        | ShopCategory::Ultimates => {
+        ShopCategory::Ultimates => ultimates_section_label,
+        ShopCategory::Flags | ShopCategory::Companions | ShopCategory::Aquarium => {
             return items
                 .iter()
                 .enumerate()
@@ -195,6 +193,17 @@ fn chat_section_label(item: &ShopCatalogItem) -> &'static str {
         "Title"
     } else {
         "Consumables"
+    }
+}
+
+/// The top tab sells two unrelated things at the top two price bands: a
+/// permanent glyph that does nothing, and a spell that repaints the server.
+/// Nobody should have to read the price to tell them apart.
+fn ultimates_section_label(item: &ShopCatalogItem) -> &'static str {
+    if item.is_milestone_badge() {
+        "Burn milestones"
+    } else {
+        "Ultimate spells"
     }
 }
 
@@ -236,8 +245,6 @@ fn draw_item_detail(
         "dynamic"
     } else if item.is_dynamic_bonsai() && item.owned {
         "classic"
-    } else if item.equipped {
-        "displaying"
     } else if item.is_username_effect() {
         if effect_active {
             "active"
@@ -264,16 +271,14 @@ fn draw_item_detail(
         "needs aquarium"
     } else if item.is_aquarium_fish() {
         "buy fish"
-    } else if item.owned && item.slot.is_some() {
-        "owned"
     } else if item.owned {
         "unlocked"
     } else if item.is_pet_companion() {
         "unlock pet"
-    } else if item.is_chat_badge() {
-        "buy badge"
     } else if item.is_ultimate_spell() {
         "buy spell"
+    } else if item.is_milestone_badge() {
+        "burn chips"
     } else {
         "buy"
     };
@@ -541,15 +546,6 @@ fn draw_item_detail(
             Span::styled(slot.clone(), Style::default().fg(theme::TEXT_DIM())),
         ]));
     }
-    if item.equipped && item.is_chat_badge() {
-        lines.push(Line::from(vec![
-            Span::raw("  chat   "),
-            Span::styled(
-                "shown next to your name",
-                Style::default().fg(theme::SUCCESS()),
-            ),
-        ]));
-    }
     if item.equipped && item.is_dynamic_bonsai() {
         lines.push(Line::from(vec![
             Span::raw("  bonsai "),
@@ -636,8 +632,6 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
         "classic"
     } else if selected.is_some_and(|item| item.is_dynamic_bonsai() && item.owned) {
         "dynamic"
-    } else if selected.is_some_and(|item| item.equipped) {
-        "clear"
     } else if selected.is_some_and(|item| item.is_aquarium_fish() && !has_aquarium) {
         "needs aquarium"
     } else if selected.is_some_and(|item| item.is_aquarium_fish()) {
@@ -650,8 +644,6 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
         "rent"
     } else if let Some(item) = selected.filter(|item| item.is_consumable()) {
         consumable_footer_label(item)
-    } else if selected.is_some_and(|item| item.owned && item.slot.is_some()) {
-        "display"
     } else if selected.is_some_and(|item| item.owned) {
         "unlocked"
     } else {
@@ -675,14 +667,6 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
         spans.extend([
             Span::styled("  t", key),
             Span::styled(" toggle cat/dog", text),
-        ]);
-    }
-    // The permanent badge SKUs are retired, so their owners would otherwise
-    // have nowhere left to take one off.
-    if state.legacy_badge_equipped_for_category(state.selected_category()) {
-        spans.extend([
-            Span::styled("  x", key),
-            Span::styled(" clear permanent badge", text),
         ]);
     }
     if state.selected_category() == ShopCategory::Aquarium {
@@ -1020,8 +1004,6 @@ fn item_row(
         "dynamic"
     } else if item.is_dynamic_bonsai() && item.owned {
         "classic"
-    } else if item.equipped {
-        "displaying"
     } else if item.is_rental() {
         if rental_active(item, state) {
             "active"

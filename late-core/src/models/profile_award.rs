@@ -2,6 +2,7 @@ use anyhow::Result;
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 
 use super::chips::ChipMove;
+use super::leaderboard::DailyPuzzle;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -19,6 +20,12 @@ pub const BROGUE_MASTERY_AWARD_CATEGORY: &str = "brogue_mastery";
 pub const GREENDRAGON_DRAGON_AWARD_CATEGORY: &str = "greendragon_dragon";
 pub const DARKROOM_ESCAPE_AWARD_CATEGORY: &str = "darkroom_escape";
 pub const DARKROOM_BEACON_AWARD_CATEGORY: &str = "darkroom_beacon";
+/// The month's last crown holder. Monthly like the ranked boards (it is
+/// earned again every month and shows only for the month after), but
+/// rankless like a milestone: the crown has one holder, so a `#1` on the
+/// badge would be noise. That split is why it is in
+/// [`is_rankless_award`] and not in [`MILESTONE_AWARD_CATEGORIES`].
+pub const CROWN_AWARD_CATEGORY: &str = "crown";
 
 /// Every rankless milestone award: the one-off badges a game grants outright
 /// rather than the monthly ranked boards. They differ from the ranked awards
@@ -47,9 +54,18 @@ pub static MILESTONE_AWARD_CATEGORIES: [&str; 13] = [
     DARKROOM_BEACON_AWARD_CATEGORY,
 ];
 
-/// Whether an award is one of those: granted outright, badge carries no rank.
+/// Whether an award is one of those: granted outright, kept forever, shown
+/// in chat labels whatever month it was earned.
 pub fn is_milestone_award(category: &str) -> bool {
     MILESTONE_AWARD_CATEGORIES.contains(&category)
+}
+
+/// Whether an award's badge is printed without a rank digit. Every milestone
+/// qualifies, and so does the crown, which is monthly but has exactly one
+/// holder. The chat-label SQL in `user.rs` spells the same split: this list
+/// is the arm that skips `|| rank::text`.
+pub fn is_rankless_award(category: &str) -> bool {
+    is_milestone_award(category) || category == CROWN_AWARD_CATEGORY
 }
 
 /// The milestone ladders, one per game, weakest first. Chat author labels show
@@ -168,9 +184,26 @@ pub async fn list_profile_awards_for_user(
 pub async fn snapshot_previous_month_profile_awards(client: &Client) -> Result<u64> {
     let rank_limit = i64::from(PROFILE_AWARD_RANK_LIMIT);
     let excluded_reasons = ChipMove::excluded_earning_reasons();
+    // One arm per daily puzzle, generated from the roster with the same
+    // points expression the live Arcade Wins board uses, so the persisted
+    // award cannot score a different set of games than the page did.
+    let arcade_arms: String = DailyPuzzle::ALL
+        .iter()
+        .map(|puzzle| {
+            format!(
+                "SELECT user_id, {points} AS points
+                 FROM {table}, bounds
+                 WHERE puzzle_date >= bounds.period_month
+                   AND puzzle_date < (bounds.period_month + INTERVAL '1 month')::date",
+                points = puzzle.points_sql(),
+                table = puzzle.wins_table(),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\nUNION ALL\n");
     let inserted = client
         .execute(
-            "INSERT INTO profile_awards (user_id, category, period_month, rank, score_value)
+            &format!("INSERT INTO profile_awards (user_id, category, period_month, rank, score_value)
              WITH bounds AS (
                 SELECT
                     (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date AS period_month,
@@ -187,36 +220,10 @@ pub async fn snapshot_previous_month_profile_awards(client: &Client) -> Result<u
                 HAVING SUM(delta) > 0
              ),
              arcade_wins AS (
-                SELECT user_id, difficulty_key
-                FROM sudoku_daily_wins, bounds
-                WHERE puzzle_date >= bounds.period_month
-                  AND puzzle_date < (bounds.period_month + INTERVAL '1 month')::date
-                UNION ALL
-                SELECT user_id, difficulty_key
-                FROM nonogram_daily_wins, bounds
-                WHERE puzzle_date >= bounds.period_month
-                  AND puzzle_date < (bounds.period_month + INTERVAL '1 month')::date
-                UNION ALL
-                SELECT user_id, difficulty_key
-                FROM solitaire_daily_wins, bounds
-                WHERE puzzle_date >= bounds.period_month
-                  AND puzzle_date < (bounds.period_month + INTERVAL '1 month')::date
-                UNION ALL
-                SELECT user_id, difficulty_key
-                FROM minesweeper_daily_wins, bounds
-                WHERE puzzle_date >= bounds.period_month
-                  AND puzzle_date < (bounds.period_month + INTERVAL '1 month')::date
+                {arcade_arms}
              ),
              arcade_totals AS (
-                SELECT user_id,
-                       SUM(CASE difficulty_key
-                         WHEN 'easy' THEN 1
-                         WHEN 'draw-1' THEN 1
-                         WHEN 'medium' THEN 3
-                         WHEN 'hard' THEN 5
-                         WHEN 'draw-3' THEN 5
-                         ELSE 1
-                       END)::bigint AS value
+                SELECT user_id, SUM(points)::bigint AS value
                 FROM arcade_wins
                 GROUP BY user_id
              ),
@@ -253,6 +260,18 @@ pub async fn snapshot_previous_month_profile_awards(client: &Client) -> Result<u
                 FROM score_events
                 GROUP BY user_id, game
              ),
+             -- The crown's month-end holder: the last reign taken inside
+             -- the month, whether or not it is still open. The rollover
+             -- itself needs no sweeper (a reign is current only while its
+             -- month is), so this reads the row rather than a closed flag.
+             crown_holder AS (
+                SELECT crown_reigns.holder_user_id AS user_id,
+                       crown_reigns.paid_chips AS value
+                FROM crown_reigns, bounds
+                WHERE crown_reigns.month = bounds.period_month
+                ORDER BY crown_reigns.taken_at DESC, crown_reigns.id DESC
+                LIMIT 1
+             ),
              ranked AS (
                 SELECT user_id,
                        'top_chips'::text AS category,
@@ -271,13 +290,22 @@ pub async fn snapshot_previous_month_profile_awards(client: &Client) -> Result<u
                        value,
                        RANK() OVER (PARTITION BY category ORDER BY value DESC) AS rank
                 FROM score_totals
+                UNION ALL
+                -- One holder, so the rank is a constant rather than a
+                -- window; `award_badge` prints this category without the
+                -- digit (`is_rankless_award`).
+                SELECT user_id,
+                       'crown'::text AS category,
+                       value,
+                       1::bigint AS rank
+                FROM crown_holder
              )
              SELECT ranked.user_id, ranked.category, bounds.period_month, ranked.rank::int, ranked.value
              FROM ranked
              CROSS JOIN bounds
              WHERE ranked.rank <= $1
              ON CONFLICT (user_id, category, period_month)
-             DO NOTHING",
+             DO NOTHING"),
             &[&rank_limit, &excluded_reasons],
         )
         .await?;
@@ -316,7 +344,7 @@ pub async fn grant_unique_milestone_award(
 }
 
 pub fn award_badge(category: &str, rank: i32) -> String {
-    if is_milestone_award(category) {
+    if is_rankless_award(category) {
         return award_category_code(category).to_string();
     }
     let prefix = award_category_code(category);
@@ -345,6 +373,7 @@ pub fn award_category_code(category: &str) -> &'static str {
         GREENDRAGON_DRAGON_AWARD_CATEGORY => "GDS",
         DARKROOM_ESCAPE_AWARD_CATEGORY => "ADE",
         DARKROOM_BEACON_AWARD_CATEGORY => "ADB",
+        CROWN_AWARD_CATEGORY => "CRWN",
         _ => "LB",
     }
 }
@@ -369,6 +398,7 @@ pub fn award_category_label(category: &str) -> &'static str {
         GREENDRAGON_DRAGON_AWARD_CATEGORY => "Green Dragon Slayer",
         DARKROOM_ESCAPE_AWARD_CATEGORY => "A Dark Room Escape",
         DARKROOM_BEACON_AWARD_CATEGORY => "A Dark Room Homefleet",
+        CROWN_AWARD_CATEGORY => "The Crown",
         _ => "Leaderboard",
     }
 }
@@ -377,6 +407,7 @@ pub fn award_category_priority(category: &str) -> i32 {
     match category {
         "arcade_wins" => 0,
         "top_chips" => 1,
+        CROWN_AWARD_CATEGORY => 5,
         "tetris" => 2,
         "twenty_forty_eight" => 3,
         "snake" => 4,
@@ -427,6 +458,8 @@ pub fn format_score_value(category: &str, value: i64) -> String {
         | DARKROOM_BEACON_AWARD_CATEGORY => {
             format!("{value} chips")
         }
+        // The crown's score is what the final holder burned to take it.
+        CROWN_AWARD_CATEGORY => format!("{value} chips"),
         _ => format!("{value} score"),
     }
 }

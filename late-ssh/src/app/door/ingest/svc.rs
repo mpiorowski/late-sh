@@ -29,7 +29,7 @@ use late_core::shutdown::CancellationToken;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use super::award::{DoorAwards, DoorBadge};
+use super::award::{DoorAwards, DoorBadge, DoorLineKey};
 use super::brogue::{BrogueLine, BrogueRun, parse_run_history_line, playname_from_file};
 use super::dcss::{DcssMilestone, DcssRun, parse_logfile_line, parse_milestone_line};
 use super::nethack::{NethackMilestone, NethackRun, parse_livelog_line, parse_xlogfile_line};
@@ -247,10 +247,12 @@ impl DoorIngestService {
         DoorLogCursor::upsert(&tx, game, &frame.file, frame.next_offset).await?;
         tx.commit().await?;
 
-        // Awards are lifetime-idempotent, so they fire on every sighting
-        // (fresh or replayed) — that heals a crash between insert and grant.
+        // Awards fire on every sighting, fresh or replayed: that heals a
+        // crash between insert and grant, and the line key they carry is what
+        // makes the replay pay nothing (see award.rs).
         if run.result == DoorRunResult::Win {
-            self.awards.grant(user_id, DoorBadge::DcssWin);
+            self.awards
+                .grant(user_id, DoorBadge::DcssWin, &line_key(frame));
         }
 
         let recent = Utc::now().signed_duration_since(run.ended_at) < FEED_RECENCY;
@@ -307,7 +309,8 @@ impl DoorIngestService {
         tx.commit().await?;
 
         if kind == DoorMilestoneKind::Orb {
-            self.awards.grant(user_id, DoorBadge::DcssOrb);
+            self.awards
+                .grant(user_id, DoorBadge::DcssOrb, &line_key(frame));
             let recent = Utc::now().signed_duration_since(milestone.occurred_at) < FEED_RECENCY;
             if fresh && recent {
                 self.activity.game_event_task(
@@ -376,14 +379,15 @@ impl DoorIngestService {
         DoorLogCursor::upsert(&tx, game, &frame.file, frame.next_offset).await?;
         tx.commit().await?;
 
-        // Awards are lifetime-idempotent, so they fire on every sighting
-        // (fresh or replayed) — that heals a crash between insert and grant.
-        // The end-of-run achieve bit also back-fills an Amulet pickup the
-        // livelog stream missed.
+        // Awards fire on every sighting, fresh or replayed: that heals a
+        // crash between insert and grant, and the line key they carry is what
+        // makes the replay pay nothing (see award.rs).
+        // The Amulet pays from the livelog pickup line only; the xlogfile
+        // `achieve` bit is not read for it (award.rs, "one line, one
+        // milestone").
         if run.result == DoorRunResult::Win {
-            self.awards.grant(user_id, DoorBadge::NethackAscension);
-        } else if run.amulet {
-            self.awards.grant(user_id, DoorBadge::NethackAmulet);
+            self.awards
+                .grant(user_id, DoorBadge::NethackAscension, &line_key(frame));
         }
 
         let recent = Utc::now().signed_duration_since(run.ended_at) < FEED_RECENCY;
@@ -443,7 +447,8 @@ impl DoorIngestService {
         tx.commit().await?;
 
         if kind == DoorMilestoneKind::Amulet {
-            self.awards.grant(user_id, DoorBadge::NethackAmulet);
+            self.awards
+                .grant(user_id, DoorBadge::NethackAmulet, &line_key(frame));
             let recent = Utc::now().signed_duration_since(milestone.occurred_at) < FEED_RECENCY;
             if fresh && recent {
                 self.activity.game_event_task(
@@ -504,13 +509,20 @@ impl DoorIngestService {
         DoorLogCursor::upsert(&tx, game, &frame.file, frame.next_offset).await?;
         tx.commit().await?;
 
-        // Awards are lifetime-idempotent, so they fire on every sighting
-        // (fresh or replayed) — that heals a crash between insert and grant.
+        // Awards fire on every sighting, fresh or replayed: that heals a
+        // crash between insert and grant, and the line key they carry is what
+        // makes the replay pay nothing (see award.rs).
         // Brogue's endings are alternatives (see award.rs), so each grants
         // only its own badge.
         match run.result {
-            DoorRunResult::Win => self.awards.grant(user_id, DoorBadge::BrogueEscape),
-            DoorRunResult::Mastery => self.awards.grant(user_id, DoorBadge::BrogueMastery),
+            DoorRunResult::Win => {
+                self.awards
+                    .grant(user_id, DoorBadge::BrogueEscape, &line_key(frame))
+            }
+            DoorRunResult::Mastery => {
+                self.awards
+                    .grant(user_id, DoorBadge::BrogueMastery, &line_key(frame))
+            }
             DoorRunResult::Death | DoorRunResult::Quit | DoorRunResult::Leaving => {}
         }
 
@@ -561,6 +573,16 @@ impl DoorIngestService {
     async fn advance_cursor(&self, game: &'static str, frame: &StatsFrame) -> Result<()> {
         let client = self.db.get().await.context("db client for cursor")?;
         DoorLogCursor::upsert(&client, game, &frame.file, frame.next_offset).await
+    }
+}
+
+/// The run identity a payout is keyed on: the same `(source_file,
+/// source_offset)` pair the `door_runs` / `door_milestones` row landed under,
+/// so a cursor reset that re-reads the log pays nothing.
+fn line_key(frame: &StatsFrame) -> DoorLineKey {
+    DoorLineKey {
+        source_file: frame.file.clone(),
+        source_offset: frame.next_offset,
     }
 }
 

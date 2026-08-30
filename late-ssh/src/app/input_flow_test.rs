@@ -8,9 +8,10 @@ use crate::test_helpers::{
 };
 use late_core::models::cyberspace_account::CyberspaceAccount;
 use late_core::models::user::{RightSidebarMode, RoomListMode};
-use late_core::models::user_ssh_key::{KeyLayout, UserSshKey};
+use late_core::models::user_ssh_key::{KeyLayout, UserSshKey, extract_key_layout};
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
+    chat_message_gild::{ChatMessageGild, GildPlacement, GildTier},
     chat_message_reaction::ChatMessageReaction,
     chat_room::ChatRoom,
     chat_room_member::ChatRoomMember,
@@ -183,6 +184,7 @@ async fn backtick_hops_out_of_lateania_and_back_in_while_the_window_is_live() {
 #[tokio::test]
 async fn games_hub_config_modal_saves_and_clears_the_door_rc() {
     use crate::app::common::primitives::Screen;
+    use crate::app::door::hub::state::HubGame;
     use late_core::models::door_rc::{DoorRc, DoorRcGame};
 
     let test_db = new_test_db().await;
@@ -190,10 +192,15 @@ async fn games_hub_config_modal_saves_and_clears_the_door_rc() {
     let client = test_db.db.get().await.expect("db client");
     let mut app = make_app(test_db.db.clone(), user.id, "door-rc-flow-it");
 
-    // Walk the hub sidebar to NetHack (Lateania, DCSS, NetHack) and open the
-    // config box.
+    // Walk the hub sidebar down to NetHack and open the config box. The step
+    // count comes from the selector order itself, so a game inserted above
+    // NetHack moves the cursor here instead of opening another game's config.
+    let steps = HubGame::ALL
+        .iter()
+        .position(|game| *game == HubGame::Nethack)
+        .expect("nethack is in the selector");
     app.set_screen(Screen::Games);
-    app.handle_input(b"jj");
+    app.handle_input(&b"j".repeat(steps));
     app.handle_input(b"c");
     let frame = render_plain(&mut app);
     assert!(
@@ -1017,6 +1024,19 @@ async fn chat_reaction_leader_second_f_shows_reaction_owners_modal() {
     ChatMessageReaction::toggle(&client, message.id, thinking.id, "🤔")
         .await
         .expect("thinking reaction");
+    // Two gilds at different tiers: the overlay lists them above the
+    // reactions, best tier first, with the buyer under each.
+    {
+        let mut gild_client = test_db.db.get().await.expect("db client");
+        let tx = gild_client.transaction().await.expect("tx");
+        for (buyer, tier) in [(&thinking, GildTier::Bronze), (&thumbs_1, GildTier::Gold)] {
+            let placed = ChatMessageGild::place_in_tx(&tx, message.id, author.id, buyer.id, tier)
+                .await
+                .expect("place gild");
+            assert!(matches!(placed, GildPlacement::Placed(_)), "{placed:?}");
+        }
+        tx.commit().await.expect("commit gilds");
+    }
 
     let mut app = make_app(test_db.db.clone(), viewer.id, "f-owners-flow-it");
     wait_for_render_contains(&mut app, "owner reaction target").await;
@@ -1029,7 +1049,20 @@ async fn chat_reaction_leader_second_f_shows_reaction_owners_modal() {
     wait_for_render_contains(&mut app, "👍 6 reactions").await;
     wait_for_render_contains(&mut app, "[+2 more]").await;
     wait_for_render_contains(&mut app, "@f-owners-thinking").await;
+    wait_for_render_contains(&mut app, "◆◆◆ 1 Gold gild").await;
+    wait_for_render_contains(&mut app, "◆ 1 Bronze gild").await;
     let plain = render_plain(&mut app);
+    let gold_at = plain.find("◆◆◆ 1 Gold gild").expect("gold block");
+    let bronze_at = plain.find("◆ 1 Bronze gild").expect("bronze block");
+    let thumbs_at = plain.find("👍 6 reactions").expect("reaction block");
+    assert!(
+        gold_at < bronze_at && bronze_at < thumbs_at,
+        "gilds lead, best tier first, then reactions: {plain:?}"
+    );
+    assert!(
+        plain[gold_at..bronze_at].contains("@f-owners-thumbs-1"),
+        "the gold buyer sits under the gold block: {plain:?}"
+    );
     assert!(
         !plain.contains("1 👍"),
         "reaction picker should be dismissed under owner modal: {plain:?}"
@@ -1660,7 +1693,7 @@ async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelate
             let db = db.clone();
             async move {
                 let client = db.get().await.expect("db client");
-                UserSshKey::layout_for(&client, user.id, "SHA256:phone")
+                stored_layout(&client, user.id, "SHA256:phone")
                     .await
                     .expect("phone layout")
                     == Some(KeyLayout {
@@ -1673,7 +1706,7 @@ async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelate
     )
     .await;
     assert_eq!(
-        UserSshKey::layout_for(&client, user.id, "SHA256:desktop")
+        stored_layout(&client, user.id, "SHA256:desktop")
             .await
             .expect("desktop layout"),
         None,
@@ -1724,7 +1757,7 @@ async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelate
         "the legacy mirror must stay in step with the account default"
     );
     assert_eq!(
-        UserSshKey::layout_for(&client, user.id, "SHA256:phone")
+        stored_layout(&client, user.id, "SHA256:phone")
             .await
             .expect("phone layout after settings save"),
         Some(KeyLayout {
@@ -1734,7 +1767,7 @@ async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelate
         "the unrelated account save must preserve this device's layout"
     );
     assert_eq!(
-        UserSshKey::layout_for(&client, user.id, "SHA256:desktop")
+        stored_layout(&client, user.id, "SHA256:desktop")
             .await
             .expect("desktop layout after settings save"),
         None,
@@ -2128,4 +2161,14 @@ async fn mention_rendered_in_its_room_clears_the_rail_badge() {
     // The count republished after the stamp committed reaches the rail: the
     // badge is dark for good, with the mention read where it was said.
     wait_for_render_not_contains(&mut app, "mentions (").await;
+}
+
+/// The stored rail layout, read the way bootstrap reads it.
+async fn stored_layout(
+    client: &tokio_postgres::Client,
+    user_id: Uuid,
+    fingerprint: &str,
+) -> anyhow::Result<Option<KeyLayout>> {
+    let key = UserSshKey::find_by_fingerprint(client, user_id, fingerprint).await?;
+    Ok(key.and_then(|key| extract_key_layout(&key.settings)))
 }

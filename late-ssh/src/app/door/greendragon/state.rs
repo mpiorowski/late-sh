@@ -3913,8 +3913,9 @@ impl State {
                 // Any price on the slayer's head dies with the old life:
                 // open bounties close to the house (`dag`'s dragonkill hook).
                 self.svc.close_bounties_on(self.user_id);
-                // The dashboard feed line (every kill) and the first kill's
-                // once-per-account chip payout + GDS profile badge.
+                // The dashboard feed line and the chip payout, both on every
+                // kill (keyed on the character row and the kill number), plus
+                // the GDS profile badge once per account.
                 self.svc.reward_dragon_kill(self.user_id, kills);
                 self.encounter = None;
                 // The kill banks a dragon point; the spend gate opens at once.

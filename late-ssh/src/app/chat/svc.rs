@@ -12,10 +12,15 @@ use uuid::Uuid;
 
 use late_core::{
     MutexRecover,
-    db::Db,
+    db::{Db, DbConfig},
     models::{
         character_sheet::{CharacterSheet, CharacterSheetParams},
         chat_message::{ChatMessage, ChatMessageParams, HistoryDirection},
+        chat_message_gild::{
+            CHAT_MESSAGE_GILDED_CHANNEL, ChatMessageGild, ChatMessageGildSummary,
+            GILD_FEED_THRESHOLD, GildPlacement, GildTier, listen_for_gild_changes,
+            parse_gilded_payload,
+        },
         chat_message_reaction::{
             ChatMessageReaction, ChatMessageReactionAction, ChatMessageReactionOwners,
             ChatMessageReactionSummary,
@@ -24,6 +29,7 @@ use late_core::{
         chat_room::{ChatRoom, UserRoomState},
         chat_room_member::ChatRoomMember,
         chat_slow_mode::ChatSlowMode,
+        chips::UserChips,
         drinks::UserDrinks,
         message_translation::{TranslateLang, needs_translation},
         moderation_audit_log::ModerationAuditLog,
@@ -76,6 +82,9 @@ const POLL_FINALIZER_RECOVERY_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const POLL_FINALIZER_BATCH_LIMIT: i64 = 25;
 pub(crate) const GIFT_MAX_AMOUNT: i64 = 1_000_000;
 const GIFT_COOLDOWN: Duration = Duration::from_secs(30);
+/// Same window as a gift, for the same reason: one buyer cannot machine-gun
+/// a room with paid markers.
+const GILD_COOLDOWN: Duration = Duration::from_secs(30);
 const SEARCH_RESULTS_LIMIT: i64 = 50;
 /// Minimum query length before a message search fires; also the trigram
 /// index floor, so shorter queries would seq-scan anyway.
@@ -150,6 +159,110 @@ impl ReportKind {
     }
 }
 
+/// Why a gild did not happen. Every arm is a rule the buyer can act on, and
+/// every arm costs nothing: a refused gild never touches the ledger. Kept
+/// closed so a new guard has to write its own line rather than fall into a
+/// generic "could not gild".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GildRefusal {
+    /// The message was deleted while the tier picker was open.
+    MessageNotFound,
+    /// The buyer cannot read the room the message is in.
+    NotAMember,
+    /// DMs and private rooms. A gild is a public mark; paying for one where
+    /// two people can see it is not the product.
+    NotPublic,
+    /// Arcade tables, daily matches and `#user-live` stream chats. They are
+    /// `kind = 'game'` and mostly `visibility = 'public'`, so a visibility
+    /// check alone would let them through; gilds are for the rooms on the
+    /// Home rail, where the #lounge line can point somewhere people can go.
+    GameRoom,
+    /// Your own message. Also a table constraint (migration 154).
+    SelfGild,
+    /// A ghost bot or the #lounge system author. Chips move between players.
+    BotAuthor,
+    /// Inside [`GILD_COOLDOWN`] of this buyer's last gild.
+    OnCooldown,
+    /// This buyer already holds exactly this tier on this message. A gild
+    /// only goes up, so the one move left is a higher tier.
+    AlreadyGilded,
+    /// This buyer holds a higher tier on this message. A gild never goes
+    /// down, and nobody pays to lower their own marker.
+    HeldHigher,
+    /// The tier would take the buyer below the chip floor.
+    InsufficientChips,
+}
+
+impl GildRefusal {
+    /// Sentence-case banner copy, the one place a refusal is worded.
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::MessageNotFound => "That message is gone",
+            Self::NotAMember => "You are not a member of this room",
+            Self::NotPublic => "Gilds only work in public rooms",
+            Self::GameRoom => "Gilds do not work in game or stream chats",
+            Self::SelfGild => "You cannot gild your own message",
+            Self::BotAuthor => "Bots do not take chips",
+            Self::OnCooldown => "Gilding is on cooldown",
+            Self::AlreadyGilded => "You already gilded this message at that tier",
+            Self::HeldHigher => "Your gild on this message is already higher",
+            Self::InsufficientChips => "Not enough chips for that tier",
+        }
+    }
+}
+
+/// A gild attempt that did not pay: a rule said no, or the database did.
+/// The two are separated because only one of them is the buyer's business.
+#[derive(Debug)]
+pub enum GildError {
+    Refused(GildRefusal),
+    Failed(anyhow::Error),
+}
+
+impl From<anyhow::Error> for GildError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+/// What `settle_gild` hands back from inside the transaction.
+struct SettledGild {
+    buyer_balance: i64,
+    author_balance: i64,
+    total_gilds: i64,
+    upgraded_from: Option<GildTier>,
+}
+
+/// A settled gild: what the room must repaint, what the buyer is told, and
+/// what the author is told.
+#[derive(Clone, Debug)]
+pub struct GildOutcome {
+    pub message_id: Uuid,
+    pub tier: GildTier,
+    pub buyer_username: String,
+    pub buyer_balance: i64,
+    pub author_user_id: Uuid,
+    pub author_balance: i64,
+    /// Buyers this message now holds (one gild each), counted under the
+    /// message row lock.
+    pub total_gilds: i64,
+    /// The tier this buyer held before, when the buy raised an existing
+    /// gild instead of adding one.
+    pub upgraded_from: Option<GildTier>,
+    /// `#slug` of the room, for the #lounge line. Public rooms always have
+    /// one; the option is the schema being honest, not a real case.
+    pub room_slug: Option<String>,
+}
+
+impl GildOutcome {
+    /// The #lounge line fires on the buy that made this the threshold buyer,
+    /// and only there. A raise adds no buyer, so it never fires it, however
+    /// many buyers the message already holds.
+    pub fn fires_feed_line(&self) -> bool {
+        self.upgraded_from.is_none() && self.total_gilds == GILD_FEED_THRESHOLD
+    }
+}
+
 #[derive(Clone)]
 pub struct ChatService {
     db: Db,
@@ -169,6 +282,14 @@ pub struct ChatService {
     /// in tests that never exercise sending.
     translation_svc: Option<crate::app::ai::translate::TranslationService>,
     gift_cooldowns: Arc<Mutex<HashMap<Uuid, std::time::Instant>>>,
+    /// Per-buyer gild throttle. Deliberately its own map rather than sharing
+    /// `gift_cooldowns`: gifting and gilding are two separate sinks, and one
+    /// silently locking the other out would read as a bug.
+    gild_cooldowns: Arc<Mutex<HashMap<Uuid, std::time::Instant>>>,
+    /// The #lounge feed publisher. `None` in tests and in any process that
+    /// runs chat without the activity broadcast; the gild still lands, it
+    /// just tells nobody.
+    activity: Option<crate::app::activity::publisher::ActivityPublisher>,
     /// Last time each user posted a message containing a link. Drives the
     /// account-age link cooldown (blunts fresh-account spam-and-leave). Keyed by
     /// user, so it survives reconnects; holds at most one entry per link-poster.
@@ -634,9 +755,11 @@ pub enum ChatEvent {
     RoomTailLoaded {
         user_id: Uuid,
         room_id: Uuid,
-        last_read_at: Option<DateTime<Utc>>,
         messages: Vec<ChatMessage>,
         message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+        /// Gild markers for this page. Absent means ungilded, which is
+        /// almost every message.
+        message_gilds: HashMap<Uuid, ChatMessageGildSummary>,
         usernames: HashMap<Uuid, String>,
         bonsai_glyphs: HashMap<Uuid, String>,
         chat_badges: HashMap<Uuid, String>,
@@ -717,6 +840,31 @@ pub enum ChatEvent {
         target_user_ids: Option<Vec<Uuid>>,
     },
     MessageReactionDelta(ChatReactionDelta),
+    /// A message's gild marker changed. Carries no `target_user_ids`: gilds
+    /// only exist in public rooms, so there is no audience to narrow to.
+    /// `summary` is `None` only if the last gild vanished with its message.
+    MessageGildsUpdated {
+        room_id: Uuid,
+        message_id: Uuid,
+        summary: Option<ChatMessageGildSummary>,
+    },
+    /// A gild landed. Read by the buyer (what it cost, what is left) and by
+    /// the author (who paid, what arrived); everyone else repaints off
+    /// `MessageGildsUpdated`.
+    GildSucceeded {
+        user_id: Uuid,
+        message_id: Uuid,
+        tier: GildTier,
+        buyer_username: String,
+        buyer_balance: i64,
+        author_user_id: Uuid,
+        author_balance: i64,
+    },
+    /// A gild was refused or failed. Nothing was charged either way.
+    GildFailed {
+        user_id: Uuid,
+        message: String,
+    },
     SendSucceeded {
         user_id: Uuid,
         request_id: Uuid,
@@ -887,6 +1035,8 @@ pub enum ChatEvent {
     ReactionOwnersListed {
         user_id: Uuid,
         message_id: Uuid,
+        /// Who gilded the message, best tier first; shown above the reactions.
+        gilds: Vec<ChatMessageGild>,
         owners: Vec<ChatMessageReactionOwners>,
         usernames: HashMap<Uuid, String>,
     },
@@ -971,6 +1121,8 @@ impl ChatService {
             chip_service: None,
             translation_svc: None,
             gift_cooldowns: Arc::new(Mutex::new(HashMap::new())),
+            gild_cooldowns: Arc::new(Mutex::new(HashMap::new())),
+            activity: None,
             link_last_sent: Arc::new(Mutex::new(HashMap::new())),
             username_refresh_started: Arc::new(AtomicBool::new(false)),
             refresh_sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -1024,6 +1176,14 @@ impl ChatService {
 
     pub fn with_moderation_infra(mut self, moderation_infra: ModerationInfra) -> Self {
         self.moderation_infra = moderation_infra;
+        self
+    }
+
+    pub fn with_activity(
+        mut self,
+        activity: crate::app::activity::publisher::ActivityPublisher,
+    ) -> Self {
+        self.activity = Some(activity);
         self
     }
 
@@ -1709,13 +1869,20 @@ impl ChatService {
         if !is_member {
             anyhow::bail!("user is not a member of room");
         }
-        let last_read_at = ChatRoomMember::last_read_at(&client, room_id, user_id).await?;
-
+        // The tail deliberately carries no read cursor. It used to, and the
+        // session drew its `new messages` divider from it, which made a room
+        // being *opened* on any one of the account's sessions rewrite the
+        // divider on all of them (`send_user_event` fans out per user), from a
+        // cursor read before that session's own mark had committed. The
+        // divider is now this session's AFK line and nothing over the wire
+        // can move it.
         let messages = ChatMessage::list_recent(&client, room_id, HISTORY_LIMIT).await?;
         let message_ids: Vec<Uuid> = messages.iter().map(|message| message.id).collect();
         let author_ids: Vec<Uuid> = messages.iter().map(|message| message.user_id).collect();
         let message_reactions =
             ChatMessageReaction::list_summaries_for_messages(&client, &message_ids).await?;
+        let message_gilds =
+            ChatMessageGild::list_summaries_for_messages(&client, &message_ids).await?;
         let author_metadata = Self::load_chat_author_metadata(&client, &author_ids).await?;
 
         self.send_user_event(
@@ -1723,9 +1890,9 @@ impl ChatService {
             ChatEvent::RoomTailLoaded {
                 user_id,
                 room_id,
-                last_read_at,
                 messages,
                 message_reactions,
+                message_gilds,
                 usernames: author_metadata.usernames,
                 bonsai_glyphs: author_metadata.bonsai_glyphs,
                 chat_badges: author_metadata.chat_badges,
@@ -3648,6 +3815,316 @@ impl ChatService {
         }
     }
 
+    /// Keep every replica's gild markers in step. One long-lived Postgres
+    /// connection LISTENs on [`CHAT_MESSAGE_GILDED_CHANNEL`] and rebroadcasts
+    /// each gild locally; a dropped connection reconnects after five
+    /// seconds, and until it does markers only lag until the next room tail
+    /// load. Same shape as `ShopService::start_listener_task`.
+    pub fn start_gild_listener_task(&self, db_config: DbConfig) -> tokio::task::JoinHandle<()> {
+        let service = self.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Err(error) = service.listen_for_gilds_once(&db_config).await {
+                    tracing::warn!(error = ?error, "chat gild postgres listener stopped");
+                }
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        })
+    }
+
+    async fn listen_for_gilds_once(&self, db_config: &DbConfig) -> Result<()> {
+        let mut config = tokio_postgres::Config::new();
+        config.host(&db_config.host);
+        config.port(db_config.port);
+        config.user(&db_config.user);
+        config.password(&db_config.password);
+        config.dbname(&db_config.dbname);
+
+        let (client, mut connection) = config.connect(tokio_postgres::NoTls).await?;
+        let listen = listen_for_gild_changes(&client);
+        tokio::pin!(listen);
+        loop {
+            tokio::select! {
+                result = &mut listen => {
+                    result?;
+                    break;
+                }
+                message = std::future::poll_fn(|cx| connection.poll_message(cx)) => {
+                    let Some(message) = message else {
+                        return Ok(());
+                    };
+                    self.handle_gild_notification(message?).await?;
+                }
+            }
+        }
+
+        loop {
+            let Some(message) = std::future::poll_fn(|cx| connection.poll_message(cx)).await else {
+                return Ok(());
+            };
+            self.handle_gild_notification(message?).await?;
+        }
+    }
+
+    async fn handle_gild_notification(&self, message: tokio_postgres::AsyncMessage) -> Result<()> {
+        let tokio_postgres::AsyncMessage::Notification(notification) = message else {
+            return Ok(());
+        };
+        if notification.channel() != CHAT_MESSAGE_GILDED_CHANNEL {
+            return Ok(());
+        }
+        let Some((message_id, room_id)) = parse_gilded_payload(notification.payload()) else {
+            tracing::warn!(
+                payload = notification.payload(),
+                "unparseable gild notification payload"
+            );
+            return Ok(());
+        };
+        // A failed lookup is this one marker lagging until the next tail
+        // load, not a reason to drop the LISTEN connection: propagating it
+        // would lose every gild committed during the reconnect window.
+        let summary = match self.load_gild_summary(message_id).await {
+            Ok(summary) => summary,
+            Err(error) => {
+                tracing::warn!(
+                    error = ?error,
+                    message_id = %message_id,
+                    "failed to load gild summary for notification"
+                );
+                return Ok(());
+            }
+        };
+        let _ = self.evt_tx.send(ChatEvent::MessageGildsUpdated {
+            room_id,
+            message_id,
+            summary,
+        });
+        Ok(())
+    }
+
+    async fn load_gild_summary(&self, message_id: Uuid) -> Result<Option<ChatMessageGildSummary>> {
+        let client = self.db.get().await?;
+        ChatMessageGild::summary_for_message(&client, message_id).await
+    }
+
+    /// Buy a gild on someone else's message. The whole thing is one
+    /// fire-and-forget task because the buyer is in a modal, not in a
+    /// request/response: the picker closes on the keypress and the banner
+    /// arrives with the answer.
+    ///
+    /// This is the orchestration layer for gilding: every refusal, every
+    /// failure, the ledger span, and the #lounge line are decided here, and
+    /// `settle_gild` below does nothing but the transaction.
+    pub fn gild_message_task(&self, user_id: Uuid, message_id: Uuid, tier: GildTier) {
+        let service = self.clone();
+        let span = info_span!(
+            "chat.gild_message_task",
+            user_id = %user_id,
+            message_id = %message_id,
+            tier = tier.label(),
+            price = tier.price()
+        );
+        tokio::spawn(
+            async move {
+                match service.gild_message(user_id, message_id, tier).await {
+                    Ok(outcome) => service.announce_gild(user_id, tier, outcome),
+                    Err(GildError::Refused(refusal)) => {
+                        metrics::record_gild_refused(refusal);
+                        let _ = service.evt_tx.send(ChatEvent::GildFailed {
+                            user_id,
+                            message: refusal.message().to_string(),
+                        });
+                    }
+                    Err(GildError::Failed(error)) => {
+                        late_core::error_span!(
+                            "chat_gild_failed",
+                            error = ?error,
+                            "failed to gild chat message"
+                        );
+                        let _ = service.evt_tx.send(ChatEvent::GildFailed {
+                            user_id,
+                            message: "Gilding failed, nothing was charged".to_string(),
+                        });
+                    }
+                }
+            }
+            .instrument(span),
+        );
+    }
+
+    /// Everything a settled gild has to tell: the buyer, the author, every
+    /// viewer of the room, and (on the threshold gild only) #lounge.
+    fn announce_gild(&self, user_id: Uuid, tier: GildTier, outcome: GildOutcome) {
+        metrics::record_gild_bought(tier);
+        let fires_feed_line = outcome.fires_feed_line();
+        // The marker itself repaints off the Postgres notify (see
+        // `settle_gild`), including in this process; what is sent here is
+        // only what the two people involved are told.
+        let _ = self.evt_tx.send(ChatEvent::GildSucceeded {
+            user_id,
+            message_id: outcome.message_id,
+            tier,
+            buyer_username: outcome.buyer_username,
+            buyer_balance: outcome.buyer_balance,
+            author_user_id: outcome.author_user_id,
+            author_balance: outcome.author_balance,
+        });
+        // The feed line fires on the threshold gild and only there, so the
+        // room hears "this message is being paid for" once instead of once
+        // per buyer.
+        if fires_feed_line && let Some(activity) = &self.activity {
+            activity.message_gilded_task(
+                outcome.author_user_id,
+                outcome.message_id,
+                outcome.total_gilds,
+                outcome.room_slug,
+            );
+        }
+    }
+
+    /// Read every guard, then settle. Guards run on a pooled read before the
+    /// transaction opens, so a refusal costs one connection and no lock.
+    pub(super) async fn gild_message(
+        &self,
+        user_id: Uuid,
+        message_id: Uuid,
+        tier: GildTier,
+    ) -> Result<GildOutcome, GildError> {
+        let client = self.db.get().await?;
+        let Some(message) = ChatMessage::get(&client, message_id).await? else {
+            return Err(GildError::Refused(GildRefusal::MessageNotFound));
+        };
+        if !ChatRoomMember::is_member(&client, message.room_id, user_id).await? {
+            return Err(GildError::Refused(GildRefusal::NotAMember));
+        }
+        let Some(room) = ChatRoom::get(&client, message.room_id).await? else {
+            return Err(GildError::Refused(GildRefusal::MessageNotFound));
+        };
+        if room.visibility != "public" {
+            return Err(GildError::Refused(GildRefusal::NotPublic));
+        }
+        if room.kind == "game" {
+            return Err(GildError::Refused(GildRefusal::GameRoom));
+        }
+        if message.user_id == user_id {
+            return Err(GildError::Refused(GildRefusal::SelfGild));
+        }
+        let Some(author) = User::get(&client, message.user_id).await? else {
+            return Err(GildError::Refused(GildRefusal::MessageNotFound));
+        };
+        if author.is_bot() {
+            return Err(GildError::Refused(GildRefusal::BotAuthor));
+        }
+        // The buyer is the session that pressed the key, so a missing row
+        // here is not a rule saying no, it is the database contradicting
+        // itself. Nothing to tell the buyer, everything to tell the log.
+        let Some(buyer) = User::get(&client, user_id).await? else {
+            return Err(GildError::Failed(anyhow::anyhow!(
+                "gild buyer {user_id} has no user row"
+            )));
+        };
+        drop(client);
+
+        let now = std::time::Instant::now();
+        {
+            let mut cooldowns = self.gild_cooldowns.lock_recover();
+            if let Some(last) = cooldowns.get(&user_id)
+                && now.duration_since(*last) < GILD_COOLDOWN
+            {
+                return Err(GildError::Refused(GildRefusal::OnCooldown));
+            }
+            cooldowns.insert(user_id, now);
+        }
+
+        // A gild that never landed must not spend the buyer's window.
+        match self.settle_gild(user_id, &message, author.id, tier).await {
+            Ok(settled) => Ok(GildOutcome {
+                message_id,
+                tier,
+                buyer_username: buyer.username,
+                buyer_balance: settled.buyer_balance,
+                author_user_id: author.id,
+                author_balance: settled.author_balance,
+                total_gilds: settled.total_gilds,
+                upgraded_from: settled.upgraded_from,
+                room_slug: room.slug,
+            }),
+            Err(error) => {
+                self.gild_cooldowns.lock_recover().remove(&user_id);
+                Err(error)
+            }
+        }
+    }
+
+    /// Test seam: forget this buyer's cooldown stamp, so a test can walk one
+    /// buyer through several buys without waiting out [`GILD_COOLDOWN`].
+    #[cfg(test)]
+    pub(super) fn lift_gild_cooldown(&self, user_id: Uuid) {
+        self.gild_cooldowns.lock_recover().remove(&user_id);
+    }
+
+    /// The one transaction: lock the message, place the gild, move the
+    /// chips, count what the message now holds. Every early return drops the
+    /// transaction, which rolls it back, so a refusal here is uncharged too.
+    async fn settle_gild(
+        &self,
+        user_id: Uuid,
+        message: &ChatMessage,
+        author_id: Uuid,
+        tier: GildTier,
+    ) -> Result<SettledGild, GildError> {
+        let mut client = self.db.get().await?;
+        let tx = client.transaction().await.map_err(anyhow::Error::from)?;
+        // Serializes every gild on this message, which is what makes both the
+        // placement's read-then-write and the threshold count exact.
+        let Some(locked_author) = ChatMessageGild::lock_message_author(&tx, message.id).await?
+        else {
+            return Err(GildError::Refused(GildRefusal::MessageNotFound));
+        };
+        if locked_author != author_id {
+            return Err(GildError::Failed(anyhow::anyhow!(
+                "message author changed under the gild lock"
+            )));
+        }
+        let upgraded_from =
+            match ChatMessageGild::place_in_tx(&tx, message.id, author_id, user_id, tier).await? {
+                GildPlacement::Placed(_) => None,
+                GildPlacement::Upgraded { from, .. } => Some(from),
+                GildPlacement::SameTier => {
+                    return Err(GildError::Refused(GildRefusal::AlreadyGilded));
+                }
+                GildPlacement::HeldHigher(_) => {
+                    return Err(GildError::Refused(GildRefusal::HeldHigher));
+                }
+            };
+        let Some((buyer_chips, author_chips)) = UserChips::transfer_gild(
+            &tx,
+            user_id,
+            author_id,
+            tier.price(),
+            tier.author_share(),
+            message.id,
+        )
+        .await?
+        else {
+            return Err(GildError::Refused(GildRefusal::InsufficientChips));
+        };
+        let total_gilds = ChatMessageGild::count_for_message(&tx, message.id).await?;
+        // The repaint rides Postgres, not this process's broadcast, so both
+        // replicas learn about the marker the same way and there is exactly
+        // one code path that draws it.
+        ChatMessageGild::notify_gilded(&tx, message.id, message.room_id).await?;
+        tx.commit().await.map_err(anyhow::Error::from)?;
+        drop(client);
+
+        Ok(SettledGild {
+            buyer_balance: buyer_chips.balance,
+            author_balance: author_chips.balance,
+            total_gilds,
+            upgraded_from,
+        })
+    }
+
     pub fn list_reaction_owners_task(&self, user_id: Uuid, message_id: Uuid) {
         let service = self.clone();
         let span = info_span!(
@@ -3658,9 +4135,10 @@ impl ChatService {
         tokio::spawn(
             async move {
                 let event = match service.list_reaction_owners(user_id, message_id).await {
-                    Ok((owners, usernames)) => ChatEvent::ReactionOwnersListed {
+                    Ok((gilds, owners, usernames)) => ChatEvent::ReactionOwnersListed {
                         user_id,
                         message_id,
+                        gilds,
                         owners,
                         usernames,
                     },
@@ -3675,11 +4153,18 @@ impl ChatService {
         );
     }
 
+    /// The `ff` overlay: who gilded the message and who reacted, with the
+    /// usernames for both. Room membership is the auth boundary, as for the
+    /// reactions alone.
     async fn list_reaction_owners(
         &self,
         user_id: Uuid,
         message_id: Uuid,
-    ) -> Result<(Vec<ChatMessageReactionOwners>, HashMap<Uuid, String>)> {
+    ) -> Result<(
+        Vec<ChatMessageGild>,
+        Vec<ChatMessageReactionOwners>,
+        HashMap<Uuid, String>,
+    )> {
         let client = self.db.get().await?;
         let message = ChatMessage::get(&client, message_id)
             .await?
@@ -3688,15 +4173,17 @@ impl ChatService {
         if !is_member {
             anyhow::bail!("You are not a member of this room");
         }
+        let gilds = ChatMessageGild::list_for_message(&client, message_id).await?;
         let owners = ChatMessageReaction::list_owners_for_message(&client, message_id).await?;
         let mut owner_ids: Vec<Uuid> = owners
             .iter()
             .flat_map(|reaction| reaction.user_ids.iter().copied())
+            .chain(gilds.iter().map(|gild| gild.user_id))
             .collect();
         owner_ids.sort();
         owner_ids.dedup();
         let usernames = User::list_usernames_by_ids(&client, &owner_ids).await?;
-        Ok((owners, usernames))
+        Ok((gilds, owners, usernames))
     }
 
     pub fn list_public_rooms_task(&self, user_id: Uuid) {

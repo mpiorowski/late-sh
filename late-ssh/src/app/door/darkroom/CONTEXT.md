@@ -122,7 +122,7 @@ between sessions contribute nothing without any bookkeeping.
 | `model.rs` | **MPL.** The persistent `Game` (stores, carry, buildings, workers, population, the latched `seen_buildings`/`seen_jobs`, the room, every countdown) and the rules on it: `light_fire`/`stoke_fire` (whole-refusal on short wood, the first fire is free), `build` (whole-refusal, and refused outright while the room is Cold or worse: upstream's "builder just shivers"), `gather_wood`, trap collection, worker assignment, `refresh_build_options` (upstream's half-the-wood-and-seen-the-rest unlock rule, latched), plus the display helpers (`outside_title` hut ladder, `trap_rows` bare/baited split, `income_per_tick`). `Builder` is upstream's -1..4 level as a closed enum. |
 | `sim.rs` | **MPL.** `settle()` and the per-second steps: fire cooling (with the builder's auto-stoke *before* the cool, so a tended fire holds its level), temperature drift, the builder arc, the need-wood forest unlock, income payout, arrivals. Plus `roll_traps`. |
 | `persist.rs` | JSON save envelope (`schema_version` + `game`), tolerant of a missing/corrupt blob (falls back to a fresh dark room). |
-| `svc.rs` | `DarkroomService` (cheap `Clone`, `Arc`-backed): async load via a `watch` channel, fire-and-forget save/delete over `darkroom_saves`, per-user write gate so a burst of saves cannot land out of order, and `reward_escape` (the ending's feed line, chips and badge, the Green Dragon `reward_dragon_kill` shape). No shared world, no tick loop, no published snapshot. |
+| `svc.rs` | `DarkroomService` (cheap `Clone`, `Arc`-backed): async load via a `watch` channel, fire-and-forget save/delete over `darkroom_saves`, per-user write gate so a burst of saves cannot land out of order, and `reward_escape` (the ending's feed line, the per-run chip payout keyed on `Game.run_id`, and the first-time badge; the Green Dragon `reward_dragon_kill` shape). No shared world, no tick loop, no published snapshot. |
 | `event.rs` | **MPL.** The scene machine and the fight, including the battleship's status layer (`Status`/`Affliction`: shield, enraged, meditation, venomous, energised, and the player's stim boost), its `Special` timers, `at_health` triggers and the death blast (`Phase::Exploding`). Upstream's per-scene closures become a closed `Effect` enum and its `isAvailable` predicates a closed `Condition` enum; its `setInterval` fight timers become second countdowns stepped from `State::tick`. `Ctx` writes, `Look` reads (the renderer never clones a save to list rows). |
 | `scenes_village.rs`, `scenes_encounters.rs`, `scenes_setpieces.rs` | **MPL.** The three event pools, transcribed scene for scene. |
 | `scenes_executioner.rs` | **MPL.** The ravaged battleship: the intro, the antechamber's elevators, the three decks and the command deck, from `events/executioner.js`. The one landmark with more than one way in (`world::battleship_scene`), and the only one that is never marked visited. |
@@ -221,20 +221,25 @@ immortal wanderer (`state::Escape`, `Plain` or `WithBeacon`).
   the next key leaves the door. There is nothing behind the ending to go back
   to, so that is the screen's only exit (`screen::ending_took_key`, which owns
   Esc and the arrows too).
-- **The account keeps the run: chips and a badge, one set per ending.**
+- **The account keeps the run: chips every time, a badge the first time.**
   `svc::reward_escape` is the Green Dragon `reward_dragon_kill` shape: a
   `#lounge` feed line every time (the beacon run's says so:
-  `Escape::feed_detail` appends "followed the fleet beacon home"), and — first
-  escape *of that kind* only,
-  deduped by the lifetime reward template and the `NOT EXISTS` award insert —
-  the payout plus a rankless profile badge. Plain: `darkroom_escape`,
-  migration 143, `ADE`. Beacon: `darkroom_beacon_escape`, migration 145,
-  `ADB`. Both pay 10,000, both are separate claims, and an account can earn
-  both. A replay of either pays nothing more, and the ending's copy says "once
-  per account" so that never reads as a broken payout. Badge codes are
-  registered in `late-core/src/models/profile_award.rs` and `user.rs`'s
-  chat-label SQL; chat shows only the higher of the two (`BADGE_LADDERS`), the
-  profile page still lists both. See `app/leaderboard/CONTEXT.md`.
+  `Escape::feed_detail` appends "followed the fleet beacon home"), the chip
+  payout, and — first escape *of that kind* only, on the `NOT EXISTS` award
+  insert — a rankless profile badge. Plain: `darkroom_escape`, migration 143,
+  `ADE`, 15,000. Beacon: `darkroom_beacon_escape`, migration 145, `ADB`,
+  20,000. Separate claims, so an account can earn both.
+  **The chips repeat** (SHOP.md Phase 6, migration 158): the ending wipes the
+  save, so a second escape is the whole arc walked again and it pays again.
+  The gate is `Game.run_id`, a uuidv7 stamped on a fresh game and carried in
+  the save blob (a pre-Phase-6 blob deserializes with one of its own rather
+  than a nil id shared by every old save), passed to `reward_escape` and used
+  as the `per_event` key, so a retried grant task pays once and a new run is a
+  new event. `Escape::reward_line` is the one place the amounts are written
+  out for the UI. Badge codes are registered in
+  `late-core/src/models/profile_award.rs` and `user.rs`'s chat-label SQL; chat
+  shows only the higher of the two (`BADGE_LADDERS`), the profile page still
+  lists both. See `app/leaderboard/CONTEXT.md`.
 - **The account also remembers that it happened.** The same task writes the
   `darkroom_veterans` row, first and on its own, because it is the one thing
   here that changes what the game *is* next time and must not be lost to a

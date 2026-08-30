@@ -17,9 +17,7 @@ use super::{
 };
 use late_core::models::{
     bonsai_decay_protection::BonsaiDecayProtection,
-    marketplace::{
-        AQUARIUM_FOOD_SKU, CHAT_BADGE_SLOT, CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT, PET_FOOD_SKU,
-    },
+    marketplace::{AQUARIUM_FOOD_SKU, CHAT_CONSUMABLE_ITEM_KIND, PET_FOOD_SKU},
     rental::TITLE_MAX_LEN,
     username_effect::{GlowColor, GradientPair, UsernameEffect},
 };
@@ -302,24 +300,10 @@ impl ShopState {
         self.snapshot.active_title.as_ref()
     }
 
-    /// Whether a legacy permanent badge still fills `category`'s slot. Its
-    /// SKU is retired, so the tab footer is the only place its owner can
-    /// clear it.
-    pub(crate) fn legacy_badge_equipped_for_category(&self, category: ShopCategory) -> bool {
-        match category {
-            ShopCategory::Badges => self.snapshot.legacy_badge_equipped,
-            ShopCategory::Flags => self.snapshot.legacy_flag_equipped,
-            ShopCategory::Chat
-            | ShopCategory::Companions
-            | ShopCategory::Aquarium
-            | ShopCategory::Ultimates => false,
-        }
-    }
-
     /// The badge string this user's chat label carries, flag first then badge,
     /// exactly as `chat_author_badge` joins them for every other viewer. Comes
     /// straight off the snapshot, which read it from the one query that
-    /// decides rentals over legacy equips.
+    /// resolves the live rentals.
     pub(crate) fn equipped_chat_badge(&self) -> Option<String> {
         let badge = [
             self.snapshot.chat_label_flag.as_deref(),
@@ -331,25 +315,6 @@ impl ShopState {
         .collect::<Vec<_>>()
         .join(" ");
         (!badge.is_empty()).then_some(badge)
-    }
-
-    /// Clear the legacy permanent badge or flag still filling this tab's slot.
-    pub(crate) fn clear_legacy_badge(&mut self) -> Option<Banner> {
-        let category = self.selected_category();
-        let slot = match category {
-            ShopCategory::Badges => CHAT_BADGE_SLOT,
-            ShopCategory::Flags => CHAT_FLAG_SLOT,
-            ShopCategory::Chat
-            | ShopCategory::Companions
-            | ShopCategory::Aquarium
-            | ShopCategory::Ultimates => return None,
-        };
-        if !self.legacy_badge_equipped_for_category(category) {
-            return None;
-        }
-        self.service
-            .unequip_slot_task(self.user_id, slot.to_string());
-        Some(Banner::success("Clearing permanent badge"))
     }
 
     pub(crate) fn dynamic_bonsai_enabled(&self) -> bool {
@@ -466,7 +431,6 @@ impl ShopState {
         current_room: Option<RoomEffectTarget>,
     ) -> Option<Banner> {
         let item = self.selected_item()?.clone();
-        let is_dynamic_bonsai = item.is_dynamic_bonsai();
         let current_room_id = current_room.as_ref().map(|room| room.room_id);
         if item.is_username_effect() {
             let options = username_effect_options(item.username_effect_variant.as_deref());
@@ -544,22 +508,16 @@ impl ShopState {
             return Some(Banner::success(&format!("{action} {}", item.name)));
         }
         if item.owned {
-            if item.equipped {
-                if let Some(slot) = item.slot {
+            // Dynamic Bonsai is the only thing on sale that still equips a
+            // slot. Badges and flags went all-rental in migration 148, and a
+            // rental fills its slot through an effect row, never an equip.
+            if let Some(slot) = item.slot {
+                if item.equipped {
                     self.service.unequip_slot_task(self.user_id, slot);
-                    if is_dynamic_bonsai {
-                        return Some(Banner::success("Using classic Bonsai"));
-                    }
-                    return Some(Banner::success("Clearing displayed badge"));
+                    return Some(Banner::success("Using classic Bonsai"));
                 }
-                return Some(Banner::success(&format!("{} already unlocked", item.name)));
-            }
-            if item.slot.is_some() {
                 self.service.equip_item_task(self.user_id, item.sku);
-                if is_dynamic_bonsai {
-                    return Some(Banner::success("Using Dynamic Bonsai"));
-                }
-                return Some(Banner::success(&format!("Displaying {}", item.name)));
+                return Some(Banner::success("Using Dynamic Bonsai"));
             }
             return Some(Banner::success(&format!("{} already unlocked", item.name)));
         }
@@ -703,9 +661,8 @@ impl ShopState {
         }
         // The rentals lapse in the detail pane on their own clock, with no
         // refresh to wait for. `chat_label_*` is deliberately left alone: what
-        // the label falls back to once a rental lapses (a legacy permanent
-        // badge, or nothing) is the label query's call, and it arrives with
-        // the next snapshot.
+        // the label carries is the label query's call, and it arrives with the
+        // next snapshot.
         for rental in [
             &mut self.snapshot.active_badge_rental,
             &mut self.snapshot.active_flag_rental,

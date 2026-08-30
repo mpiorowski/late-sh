@@ -14,4 +14,8 @@ fn daily_puzzle_reward_key_uses_typed_game_and_normalized_difficulty() {
         daily_puzzle_reward_key(DailyPuzzleRewardGame::RubiksCube, "daily"),
         "rubiks_cube_daily_daily_win"
     );
+    assert_eq!(
+        daily_puzzle_reward_key(DailyPuzzleRewardGame::SlidingPuzzle, "hard"),
+        "sliding_puzzle_daily_hard_win"
+    );
 }

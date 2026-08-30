@@ -27,6 +27,7 @@ use late_core::{
             purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_custom_title,
             purchase_item_by_sku_with_username_effect, rental_duration_secs, unequip_slot,
         },
+        milestone::{MILESTONE_BADGE_ITEM_KIND, MilestoneBadge},
         rental::{
             BADGE_RENTAL_ITEM_KIND, BadgeRental, CustomTitle, RENTAL_DAY_SECS, TITLE_EFFECT_KIND,
             TITLE_RENTAL_ITEM_KIND, duration_tag, is_custom_title, title_from_payload,
@@ -66,16 +67,10 @@ pub struct ShopSnapshot {
     pub active_title: Option<ActiveRental>,
     /// What this user's chat label actually shows, straight from the one
     /// query that decides it for every viewer
-    /// (`User::list_chat_author_metadata`): a live rental, else the legacy
-    /// permanent equip. The buyer's own session paints exactly what everyone
-    /// else will, with no second copy of the precedence rule.
+    /// (`User::list_chat_author_metadata`). The buyer's own session paints
+    /// exactly what everyone else will, with no second copy of the rule.
     pub chat_label_badge: Option<String>,
     pub chat_label_flag: Option<String>,
-    /// Whether a legacy permanent badge/flag is still equipped. The retired
-    /// permanent SKUs no longer appear in the catalog, so this is the only
-    /// thing that can offer their owner a way to clear the slot.
-    pub legacy_badge_equipped: bool,
-    pub legacy_flag_equipped: bool,
     /// Whether the Shop can sell a title the buyer writes themselves. Custom
     /// text is screened before the purchase transaction opens, so with no AI
     /// configured the custom SKUs render as unavailable rather than shipping
@@ -139,10 +134,9 @@ pub struct ShopCatalogItem {
     /// transaction reads it, so the shop never quotes a window the activation
     /// would not honour.
     pub rental_duration_secs: Option<i64>,
-    /// Which chat-label slot this item fills: the legacy `slot` column for a
-    /// permanent badge, the payload slot for a rental. The Badges and Flags
-    /// tabs read this, so a rental lands in the same tab its permanent twin
-    /// used to.
+    /// Which chat-label slot this item fills, read from the rental payload.
+    /// Only a rental fills one: the Badges and Flags tabs are rentals top to
+    /// bottom, and a rental never touches `equipped_slot`.
     pub badge_slot: Option<String>,
     /// Whether this title rental sells a text the buyer writes rather than one
     /// the catalog carries.
@@ -210,6 +204,13 @@ impl ShopCatalogItem {
         self.item_kind == ULTIMATE_SPELL_KIND
     }
 
+    /// A burn milestone: permanent, never equipped, and the dearest one owned
+    /// is the one that shows. Shares the Ultimates tab with the spells, so
+    /// the tab has to tell them apart before offering to cast anything.
+    pub fn is_milestone_badge(&self) -> bool {
+        self.item_kind == MILESTONE_BADGE_ITEM_KIND
+    }
+
     pub fn is_username_effect(&self) -> bool {
         self.item_kind == USERNAME_EFFECT_ITEM_KIND
     }
@@ -238,6 +239,13 @@ enum PurchaseStory {
     TitleApplied {
         title: String,
         duration: i64,
+    },
+    /// A burn milestone was unlocked. The line names the price, because the
+    /// price is the whole product: the badge is the receipt.
+    BurnMilestone {
+        name: String,
+        emoji: String,
+        price: i64,
     },
 }
 
@@ -270,6 +278,18 @@ fn purchase_story(
             let row = purchase.title_rental.as_ref()?;
             title_from_payload(&row.payload)
                 .map(|title| PurchaseStory::TitleApplied { title, duration })
+        }
+        MILESTONE_BADGE_ITEM_KIND => {
+            // Read off the item that actually charged, not off a payload the
+            // transaction wrote: a milestone activates nothing, the purchase
+            // row is the whole event.
+            late_core::models::milestone::emoji_from_payload(&result.item.payload).map(|emoji| {
+                PurchaseStory::BurnMilestone {
+                    name: result.item.name.clone(),
+                    emoji,
+                    price: result.item.price_chips,
+                }
+            })
         }
         _ => None,
     }
@@ -425,7 +445,12 @@ impl ShopService {
         let title_rows =
             ShopConsumableEffect::active_user_effects(&client, TITLE_EFFECT_KIND).await?;
 
+        let milestone_rows = MilestoneBadge::highest_for_all(&client).await?;
+
         let mut entries: HashMap<Uuid, NameFlair> = HashMap::new();
+        for (user_id, emoji) in milestone_rows {
+            entries.entry(user_id).or_default().milestone = Some(emoji);
+        }
         for row in effect_rows {
             match UsernameEffect::from_payload(&row.payload) {
                 Some(effect) => {
@@ -470,7 +495,14 @@ impl ShopService {
             &[USERNAME_EFFECT_KIND, TITLE_EFFECT_KIND],
         )
         .await?;
-        let mut flair = NameFlair::default();
+        // The milestone is a purchase, not an effect row, so it is read on
+        // its own here. It has to be read on this path at all because the
+        // whole entry is replaced below: leaving it out would drop a
+        // 500,000-chip glyph the moment its owner rented a badge.
+        let mut flair = NameFlair {
+            milestone: MilestoneBadge::highest_for_user(&client, user_id).await?,
+            ..NameFlair::default()
+        };
         for row in rows {
             // The query orders `ends_at DESC` inside each kind, so the first
             // row of a kind is the live one; a stray older row never wins.
@@ -798,7 +830,12 @@ impl ShopService {
         // through, so a title purchase never drops a live color effect (and
         // vice versa). Other replicas catch up from the purchase's
         // shop_user_changed notify, which lands on the same code path.
-        let flair_changed = purchase.username_effect.is_some() || purchase.title_rental.is_some();
+        let flair_changed = purchase.username_effect.is_some()
+            || purchase.title_rental.is_some()
+            || purchase.purchase.as_ref().is_some_and(|result| {
+                matches!(result.status, PurchaseStatus::Purchased)
+                    && result.item.item_kind == MILESTONE_BADGE_ITEM_KIND
+            });
 
         // The stories that ship to the #lounge ticker. Each names what other
         // people will now see next to this player's name.
@@ -812,6 +849,9 @@ impl ShopService {
                 }
                 (Some(activity), Some(PurchaseStory::TitleApplied { title, duration })) => {
                     activity.title_applied_task(user_id, title, duration);
+                }
+                (Some(activity), Some(PurchaseStory::BurnMilestone { name, emoji, price })) => {
+                    activity.burn_milestone_task(user_id, name, emoji, price);
                 }
                 (None, _) | (_, None) => {}
             }
@@ -1084,9 +1124,8 @@ impl ShopService {
         }
 
         // What this user's chat label shows, from the one query that decides
-        // it for everyone: a live rental wins, a legacy permanent equip is the
-        // fallback. Read here rather than derived from the catalog so the
-        // buyer's own session never disagrees with what other people see.
+        // it for everyone. Read here rather than derived from the catalog so
+        // the buyer's own session never disagrees with what other people see.
         let (chat_label_badge, chat_label_flag) =
             match User::list_chat_author_metadata(&client, &[user_id])
                 .await?
@@ -1099,16 +1138,6 @@ impl ShopService {
 
         let active_bonsai_decay_protection =
             BonsaiDecayProtection::for_user(&client, user_id).await?;
-
-        // The retired permanent badge SKUs are gone from the catalog, so the
-        // purchase rows are the only witness that a slot is still filled by
-        // one; without this an owner would have no way to clear it.
-        let legacy_badge_equipped = purchases
-            .iter()
-            .any(|purchase| purchase.equipped_slot.as_deref() == Some(CHAT_BADGE_SLOT));
-        let legacy_flag_equipped = purchases
-            .iter()
-            .any(|purchase| purchase.equipped_slot.as_deref() == Some(CHAT_FLAG_SLOT));
 
         let mut purchases_by_item = HashMap::with_capacity(purchases.len());
         for purchase in purchases {
@@ -1184,9 +1213,9 @@ impl ShopService {
                     USERNAME_EFFECT_ITEM_KIND | BADGE_RENTAL_ITEM_KIND | TITLE_RENTAL_ITEM_KIND
                 );
                 let rental_duration_secs = is_rental.then(|| rental_duration_secs(&item));
-                // A permanent badge names its slot in the column it equips; a
-                // rental names it in the payload, since it never equips
-                // anything.
+                // A rental names the slot it fills in its payload, since it
+                // never equips anything. Nothing else on sale fills one: the
+                // Badges and Flags tabs are rentals top to bottom.
                 let badge_slot = match item_kind.as_str() {
                     BADGE_RENTAL_ITEM_KIND => item
                         .payload
@@ -1194,11 +1223,7 @@ impl ShopService {
                         .and_then(|value| value.as_str())
                         .filter(|slot| matches!(*slot, CHAT_BADGE_SLOT | CHAT_FLAG_SLOT))
                         .map(ToOwned::to_owned),
-                    _ => item
-                        .slot
-                        .as_deref()
-                        .filter(|slot| matches!(*slot, CHAT_BADGE_SLOT | CHAT_FLAG_SLOT))
-                        .map(ToOwned::to_owned),
+                    _ => None,
                 };
                 let custom_title =
                     item_kind == TITLE_RENTAL_ITEM_KIND && is_custom_title(&item.payload);
@@ -1246,8 +1271,6 @@ impl ShopService {
             active_title,
             chat_label_badge,
             chat_label_flag,
-            legacy_badge_equipped,
-            legacy_flag_equipped,
             custom_titles_available: self.custom_titles_enabled(),
         })
     }

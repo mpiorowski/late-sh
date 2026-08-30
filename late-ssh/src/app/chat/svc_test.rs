@@ -4530,3 +4530,460 @@ async fn is_member(db: &late_core::db::Db, room_id: Uuid, user_id: Uuid) -> bool
         .await
         .expect("membership check")
 }
+
+// ── Gilds ───────────────────────────────────────────────────
+//
+// Every refusal below must leave the ledger untouched: a gild that does not
+// land is free. `gild_ledger_total` is the witness for that, and the happy
+// path asserts the split the same way.
+
+mod gild {
+    use super::*;
+    use late_core::models::chat_message_gild::{ChatMessageGild, GildTier};
+    use late_core::models::chips::{ChipMove, UserChips};
+
+    /// A public room, a message in it by `author`, and `buyer` in the room
+    /// with enough chips for any tier.
+    struct GildFixture {
+        service: ChatService,
+        db: late_core::db::Db,
+        buyer: Uuid,
+        author: Uuid,
+        message_id: Uuid,
+    }
+
+    async fn public_room(db: &late_core::db::Db, slug: &str) -> ChatRoom {
+        let client = db.get().await.expect("db client");
+        ChatRoom::create(
+            &client,
+            ChatRoomParams {
+                kind: "topic".to_string(),
+                visibility: "public".to_string(),
+                auto_join: false,
+                permanent: false,
+                slug: Some(slug.to_string()),
+                language_code: None,
+                dm_user_a: None,
+                dm_user_b: None,
+                topic: None,
+                rules: None,
+                created_by: None,
+            },
+        )
+        .await
+        .expect("create room")
+    }
+
+    async fn message_in(db: &late_core::db::Db, room_id: Uuid, user_id: Uuid) -> ChatMessage {
+        let client = db.get().await.expect("db client");
+        ChatMessage::create(
+            &client,
+            ChatMessageParams {
+                room_id,
+                user_id,
+                body: "worth paying for".to_string(),
+            },
+        )
+        .await
+        .expect("create message")
+    }
+
+    async fn join(db: &late_core::db::Db, room_id: Uuid, user_id: Uuid) {
+        let client = db.get().await.expect("db client");
+        ChatRoomMember::join(&client, room_id, user_id)
+            .await
+            .expect("join room");
+    }
+
+    /// Stake a user so every tier is affordable; a refusal test must fail on
+    /// its own rule, never on the balance.
+    async fn stake(db: &late_core::db::Db, user_id: Uuid) {
+        let client = db.get().await.expect("db client");
+        UserChips::ensure(&client, user_id)
+            .await
+            .expect("chips row");
+        UserChips::apply(&**client, user_id, ChipMove::Credit, 100_000, None)
+            .await
+            .expect("stake")
+            .expect("credit lands");
+    }
+
+    /// Every ledger row written against this message, summed. Zero means
+    /// nothing was charged and nothing was paid.
+    async fn gild_ledger_total(db: &late_core::db::Db, message_id: Uuid) -> i64 {
+        let client = db.get().await.expect("db client");
+        let row = client
+            .query_one(
+                "SELECT COUNT(*)::bigint AS rows
+                 FROM chip_ledger
+                 WHERE source_ref = $1",
+                &[&message_id.to_string()],
+            )
+            .await
+            .expect("ledger count");
+        row.get("rows")
+    }
+
+    async fn fixture(slug: &str) -> (late_core::test_utils::TestDb, GildFixture) {
+        let test_db = new_test_db().await;
+        let service = ChatService::new(
+            test_db.db.clone(),
+            NotificationService::new(test_db.db.clone()),
+        );
+        let author = create_test_user(&test_db.db, &format!("{slug}-author")).await;
+        let buyer = create_test_user(&test_db.db, &format!("{slug}-buyer")).await;
+        let room = public_room(&test_db.db, slug).await;
+        join(&test_db.db, room.id, author.id).await;
+        join(&test_db.db, room.id, buyer.id).await;
+        stake(&test_db.db, buyer.id).await;
+        let message = message_in(&test_db.db, room.id, author.id).await;
+        let fixture = GildFixture {
+            service,
+            db: test_db.db.clone(),
+            buyer: buyer.id,
+            author: author.id,
+            message_id: message.id,
+        };
+        (test_db, fixture)
+    }
+
+    /// Drive one gild and wait for its verdict.
+    async fn gild(fixture: &GildFixture, buyer: Uuid, tier: GildTier) -> ChatEvent {
+        let mut events = fixture.service.subscribe_events();
+        fixture
+            .service
+            .gild_message_task(buyer, fixture.message_id, tier);
+        loop {
+            let event = timeout(Duration::from_secs(5), events.recv())
+                .await
+                .expect("gild event timeout")
+                .expect("gild event");
+            if matches!(
+                event,
+                ChatEvent::GildSucceeded { .. } | ChatEvent::GildFailed { .. }
+            ) {
+                return event;
+            }
+        }
+    }
+
+    fn refusal_message(event: ChatEvent) -> String {
+        match event {
+            ChatEvent::GildFailed { message, .. } => message,
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn pays_the_author_two_thirds_and_burns_the_rest() {
+        let (_test_db, fixture) = fixture("gild-happy").await;
+        let event = gild(&fixture, fixture.buyer, GildTier::Silver).await;
+        match event {
+            ChatEvent::GildSucceeded {
+                user_id,
+                tier,
+                author_user_id,
+                ..
+            } => {
+                assert_eq!(user_id, fixture.buyer);
+                assert_eq!(author_user_id, fixture.author);
+                assert_eq!(tier, GildTier::Silver);
+            }
+            other => panic!("expected the gild to land, got {other:?}"),
+        }
+
+        let client = fixture.db.get().await.expect("db client");
+        let counts = ChatMessageGild::counts_for_author(&client, fixture.author)
+            .await
+            .expect("counts");
+        assert_eq!(counts.silver, 1);
+        assert_eq!(counts.total(), 1);
+        // One debit and one credit, and their sum is minus the burn.
+        assert_eq!(gild_ledger_total(&fixture.db, fixture.message_id).await, 2);
+    }
+
+    /// The per-buyer cooldown is a rate limit, not a rule under test here;
+    /// lift it so one test can walk a buyer through several buys.
+    fn lift_cooldown(fixture: &GildFixture, buyer: Uuid) {
+        fixture.service.lift_gild_cooldown(buyer);
+    }
+
+    /// A buyer has one slot on a message and it only goes up: a higher tier
+    /// raises it at the new tier's full price, the same tier and a lower
+    /// tier are refused uncharged, and a raise adds no buyer so it never
+    /// fires the #lounge line.
+    #[tokio::test]
+    async fn raises_a_held_gild_at_full_price_and_never_lowers_it() {
+        let (_test_db, fixture) = fixture("gild-up").await;
+        let after_bronze = match gild(&fixture, fixture.buyer, GildTier::Bronze).await {
+            ChatEvent::GildSucceeded { buyer_balance, .. } => buyer_balance,
+            other => panic!("expected the first gild to land, got {other:?}"),
+        };
+
+        lift_cooldown(&fixture, fixture.buyer);
+        let raised = fixture
+            .service
+            .gild_message(fixture.buyer, fixture.message_id, GildTier::Gold)
+            .await
+            .expect("the raise lands");
+        assert_eq!(raised.tier, GildTier::Gold);
+        assert_eq!(raised.upgraded_from, Some(GildTier::Bronze));
+        assert_eq!(raised.total_gilds, 1, "a raise adds no buyer");
+        assert!(!raised.fires_feed_line());
+        assert_eq!(
+            after_bronze - raised.buyer_balance,
+            GildTier::Gold.price(),
+            "a raise pays the new tier in full, not the difference"
+        );
+
+        let client = fixture.db.get().await.expect("db client");
+        let counts = ChatMessageGild::counts_for_author(&client, fixture.author)
+            .await
+            .expect("counts");
+        assert_eq!((counts.bronze, counts.gold), (0, 1));
+        // Two buys, each a debit and a credit.
+        assert_eq!(gild_ledger_total(&fixture.db, fixture.message_id).await, 4);
+
+        lift_cooldown(&fixture, fixture.buyer);
+        let lower = gild(&fixture, fixture.buyer, GildTier::Silver).await;
+        assert_eq!(
+            refusal_message(lower),
+            "Your gild on this message is already higher"
+        );
+        lift_cooldown(&fixture, fixture.buyer);
+        let same = gild(&fixture, fixture.buyer, GildTier::Gold).await;
+        assert_eq!(
+            refusal_message(same),
+            "You already gilded this message at that tier"
+        );
+        assert_eq!(gild_ledger_total(&fixture.db, fixture.message_id).await, 4);
+    }
+
+    #[tokio::test]
+    async fn refuses_a_self_gild_uncharged() {
+        let (_test_db, fixture) = fixture("gild-self").await;
+        stake(&fixture.db, fixture.author).await;
+        let event = gild(&fixture, fixture.author, GildTier::Bronze).await;
+        assert_eq!(refusal_message(event), "You cannot gild your own message");
+        assert_eq!(gild_ledger_total(&fixture.db, fixture.message_id).await, 0);
+    }
+
+    #[tokio::test]
+    async fn refuses_a_dm_uncharged() {
+        let test_db = new_test_db().await;
+        let service = ChatService::new(
+            test_db.db.clone(),
+            NotificationService::new(test_db.db.clone()),
+        );
+        let author = create_test_user(&test_db.db, "gild-dm-author").await;
+        let buyer = create_test_user(&test_db.db, "gild-dm-buyer").await;
+        let room = {
+            let client = test_db.db.get().await.expect("db client");
+            ChatRoom::get_or_create_dm(&client, author.id, buyer.id)
+                .await
+                .expect("dm room")
+        };
+        join(&test_db.db, room.id, author.id).await;
+        join(&test_db.db, room.id, buyer.id).await;
+        stake(&test_db.db, buyer.id).await;
+        let message = message_in(&test_db.db, room.id, author.id).await;
+        let fixture = GildFixture {
+            service,
+            db: test_db.db.clone(),
+            buyer: buyer.id,
+            author: author.id,
+            message_id: message.id,
+        };
+
+        let event = gild(&fixture, fixture.buyer, GildTier::Bronze).await;
+        assert_eq!(refusal_message(event), "Gilds only work in public rooms");
+        assert_eq!(gild_ledger_total(&fixture.db, fixture.message_id).await, 0);
+    }
+
+    #[tokio::test]
+    async fn refuses_a_private_room_uncharged() {
+        let test_db = new_test_db().await;
+        let service = ChatService::new(
+            test_db.db.clone(),
+            NotificationService::new(test_db.db.clone()),
+        );
+        let author = create_test_user(&test_db.db, "gild-private-author").await;
+        let buyer = create_test_user(&test_db.db, "gild-private-buyer").await;
+        let room = {
+            let client = test_db.db.get().await.expect("db client");
+            ChatRoom::create(
+                &client,
+                ChatRoomParams {
+                    kind: "topic".to_string(),
+                    visibility: "private".to_string(),
+                    auto_join: false,
+                    permanent: false,
+                    slug: Some("gild-private".to_string()),
+                    language_code: None,
+                    dm_user_a: None,
+                    dm_user_b: None,
+                    topic: None,
+                    rules: None,
+                    created_by: None,
+                },
+            )
+            .await
+            .expect("create room")
+        };
+        join(&test_db.db, room.id, author.id).await;
+        join(&test_db.db, room.id, buyer.id).await;
+        stake(&test_db.db, buyer.id).await;
+        let message = message_in(&test_db.db, room.id, author.id).await;
+        let fixture = GildFixture {
+            service,
+            db: test_db.db.clone(),
+            buyer: buyer.id,
+            author: author.id,
+            message_id: message.id,
+        };
+
+        let event = gild(&fixture, fixture.buyer, GildTier::Bronze).await;
+        assert_eq!(refusal_message(event), "Gilds only work in public rooms");
+        assert_eq!(gild_ledger_total(&fixture.db, fixture.message_id).await, 0);
+    }
+
+    /// Game and stream chats are `kind = 'game'` with `visibility = 'public'`,
+    /// so a visibility check alone would let them through. Gilds are for the
+    /// rooms on the Home rail, and the refusal says so in its own words.
+    #[tokio::test]
+    async fn refuses_a_game_room_uncharged() {
+        let test_db = new_test_db().await;
+        let service = ChatService::new(
+            test_db.db.clone(),
+            NotificationService::new(test_db.db.clone()),
+        );
+        let author = create_test_user(&test_db.db, "gild-game-author").await;
+        let buyer = create_test_user(&test_db.db, "gild-game-buyer").await;
+        let room = {
+            let client = test_db.db.get().await.expect("db client");
+            ChatRoom::get_or_create_game_room(
+                &client,
+                late_core::models::game_room::GameKind::Poker,
+                "gild-game-table",
+            )
+            .await
+            .expect("game room")
+        };
+        assert_eq!(
+            room.visibility, "public",
+            "the fixture must be the public game room shape"
+        );
+        join(&test_db.db, room.id, author.id).await;
+        join(&test_db.db, room.id, buyer.id).await;
+        stake(&test_db.db, buyer.id).await;
+        let message = message_in(&test_db.db, room.id, author.id).await;
+        let fixture = GildFixture {
+            service,
+            db: test_db.db.clone(),
+            buyer: buyer.id,
+            author: author.id,
+            message_id: message.id,
+        };
+
+        let event = gild(&fixture, fixture.buyer, GildTier::Bronze).await;
+        assert_eq!(
+            refusal_message(event),
+            "Gilds do not work in game or stream chats"
+        );
+        assert_eq!(gild_ledger_total(&fixture.db, fixture.message_id).await, 0);
+    }
+
+    #[tokio::test]
+    async fn refuses_a_bot_author_uncharged() {
+        let test_db = new_test_db().await;
+        let service = ChatService::new(
+            test_db.db.clone(),
+            NotificationService::new(test_db.db.clone()),
+        );
+        let bot = create_test_user(&test_db.db, "gild-bot").await;
+        {
+            let client = test_db.db.get().await.expect("db client");
+            User::update_settings(&client, bot.id, &serde_json::json!({ "bot": true }))
+                .await
+                .expect("mark bot");
+        }
+        let buyer = create_test_user(&test_db.db, "gild-bot-buyer").await;
+        let room = public_room(&test_db.db, "gild-bot-room").await;
+        join(&test_db.db, room.id, bot.id).await;
+        join(&test_db.db, room.id, buyer.id).await;
+        stake(&test_db.db, buyer.id).await;
+        let message = message_in(&test_db.db, room.id, bot.id).await;
+        let fixture = GildFixture {
+            service,
+            db: test_db.db.clone(),
+            buyer: buyer.id,
+            author: bot.id,
+            message_id: message.id,
+        };
+
+        let event = gild(&fixture, fixture.buyer, GildTier::Bronze).await;
+        assert_eq!(refusal_message(event), "Bots do not take chips");
+        assert_eq!(gild_ledger_total(&fixture.db, fixture.message_id).await, 0);
+    }
+
+    #[tokio::test]
+    async fn refuses_a_non_member_uncharged() {
+        let (test_db, fixture) = fixture("gild-outsider").await;
+        let outsider = create_test_user(&test_db.db, "gild-outsider-stranger").await;
+        stake(&fixture.db, outsider.id).await;
+        let event = gild(&fixture, outsider.id, GildTier::Bronze).await;
+        assert_eq!(refusal_message(event), "You are not a member of this room");
+        assert_eq!(gild_ledger_total(&fixture.db, fixture.message_id).await, 0);
+    }
+
+    /// The second gild inside the window is refused, and the first one's
+    /// two ledger rows are still the only ones on the message.
+    #[tokio::test]
+    async fn refuses_a_second_gild_inside_the_cooldown() {
+        let (_test_db, fixture) = fixture("gild-cooldown").await;
+        gild(&fixture, fixture.buyer, GildTier::Bronze).await;
+        let event = gild(&fixture, fixture.buyer, GildTier::Silver).await;
+        assert_eq!(refusal_message(event), "Gilding is on cooldown");
+        assert_eq!(gild_ledger_total(&fixture.db, fixture.message_id).await, 2);
+    }
+
+    /// A buyer who cannot cover the tier keeps every chip they had.
+    #[tokio::test]
+    async fn refuses_a_tier_the_balance_cannot_cover() {
+        let (test_db, fixture) = fixture("gild-broke").await;
+        let broke = create_test_user(&test_db.db, "gild-broke-buyer").await;
+        {
+            let client = test_db.db.get().await.expect("db client");
+            UserChips::ensure(&client, broke.id).await.expect("chips");
+            ChatRoomMember::join(
+                &client,
+                message_room(&test_db.db, fixture.message_id).await,
+                broke.id,
+            )
+            .await
+            .expect("join");
+        }
+        let event = gild(&fixture, broke.id, GildTier::Gold).await;
+        assert_eq!(refusal_message(event), "Not enough chips for that tier");
+        assert_eq!(gild_ledger_total(&fixture.db, fixture.message_id).await, 0);
+
+        let client = fixture.db.get().await.expect("db client");
+        let chips = UserChips::find(&client, broke.id)
+            .await
+            .expect("chips")
+            .expect("row");
+        assert_eq!(
+            chips.balance,
+            late_core::models::chips::INITIAL_CHIP_BALANCE
+        );
+    }
+
+    async fn message_room(db: &late_core::db::Db, message_id: Uuid) -> Uuid {
+        let client = db.get().await.expect("db client");
+        ChatMessage::get(&client, message_id)
+            .await
+            .expect("message")
+            .expect("exists")
+            .room_id
+    }
+}

@@ -320,26 +320,26 @@ fn draw_launch_copy(
     lines.push(landing::heading("Boss Achievements"));
     lines.push(landing::stat(
         "Archdemon Mal'gareth",
-        "10,000 chips + LMG badge, once per account",
+        "10,000 chips, and the LMG badge the first time",
         24,
     ));
     lines.push(landing::stat(
         "Frontier King",
-        "20,000 chips + LKN badge, once per account",
+        "10,000 chips, and the LKN badge the first time",
         24,
     ));
     lines.push(landing::stat(
         "Yssgar, Sundering Deep",
-        "LYS badge, once per account; no chips, only glory",
+        "20,000 chips, and the LYS badge the first time",
         24,
     ));
     lines.push(landing::stat(
         "Kaethyr Ascendant",
-        "LKA badge, once per account; no chips, only glory",
+        "20,000 chips, and the LKA badge the first time",
         24,
     ));
     lines.push(Line::from(Span::styled(
-        "  Repeat clears keep titles and loot, but these chip payouts are lifetime claims.",
+        "  Each crown pays once per character, and at most once every 7 days per account.",
         Style::default().fg(theme::TEXT_FAINT()),
     )));
     lines.push(Line::raw(""));

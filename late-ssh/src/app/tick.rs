@@ -234,6 +234,8 @@ impl App {
         changed |= self.voice.tick();
         changed |= self.drain_voice_join_results();
         changed |= self.tick_stream();
+        changed |= self.tick_crown();
+        changed |= self.tick_pot();
         // News state is ticked inside chat.tick()
         let profile_tick = self.profile_state.tick();
         changed |= profile_tick.changed;
@@ -243,6 +245,14 @@ impl App {
         }
         self.chat
             .set_favorite_room_ids(self.profile_state.profile().favorite_room_ids.clone());
+        self.chat
+            .set_viewer_tz(crate::app::profile::svc::parse_account_tz(
+                self.profile_state.profile().timezone.as_deref(),
+            ));
+        // The AFK line: how long this terminal's keyboard has been quiet is
+        // an `App` fact, mirrored into chat the same way the timezone is,
+        // because chat is what knows which room is on screen to hang it on.
+        changed |= self.chat.sync_afk_line(self.last_input_at.elapsed());
         let translate_to = self.profile_state.profile().translate_to;
         let auto_translate = self.profile_state.profile().auto_translate;
         changed |= self
@@ -613,15 +623,41 @@ impl App {
                 self.chat_ctx_epoch += 1;
             }
             if let Some(directory) = &self.flair_directory {
+                let now = chrono::Utc::now();
                 let phase = crate::app::common::username_effect::shimmer_phase(self.marquee_tick);
+                // The crown rides the same map, and lapses the same way: an
+                // entry from a finished UTC month resolves to nobody, which
+                // is what empties the slot at the rollover with no sweeper.
+                let crown_holder = self
+                    .crown_holder_rx
+                    .as_mut()
+                    .and_then(|rx| *rx.borrow_and_update())
+                    .and_then(|holder| holder.if_current(now));
                 let name_flair = crate::app::common::username_effect::resolve_all(
                     &crate::app::common::username_effect::snapshot(directory),
+                    crown_holder,
                     phase,
-                    chrono::Utc::now(),
+                    now,
                 );
                 if self.name_flair != name_flair {
                     self.name_flair = name_flair;
                     self.chat_ctx_epoch += 1;
+                }
+            }
+            // The pot resolves on the same edge, and for the same reason:
+            // the panel reads owned values, and only a change the viewer can
+            // actually see (a new size, a minute off the countdown) marks the
+            // frame dirty.
+            if let Some(rx) = &mut self.pot_snapshot_rx {
+                let snapshot = rx.borrow_and_update().clone();
+                let pot_view = crate::app::pot::state::PotView::resolve(
+                    &snapshot,
+                    self.user_id,
+                    chrono::Utc::now(),
+                );
+                if self.pot_view != pot_view {
+                    self.pot_view = pot_view;
+                    changed = true;
                 }
             }
             // Peer countdowns resolve on the same edge, and only the minute
@@ -807,9 +843,28 @@ impl App {
                         self.chat
                             .note_friend_went_live(user_id, &event.username, title.as_deref())
                     }
+                    // The session's own daily win: paint the Arcade card now
+                    // rather than on the next leaderboard pass. Score games
+                    // and other players' wins fall through.
+                    ActivityKind::GameWon {
+                        game,
+                        detail: Some(difficulty),
+                        ..
+                    } if user_id == self.user_id => {
+                        if let Some(puzzle) =
+                            late_core::models::leaderboard::DailyPuzzle::from_key(game.key())
+                        {
+                            changed |= self.session_daily_wins.note_win(
+                                event.occurred_at.date_naive(),
+                                puzzle,
+                                difficulty.clone(),
+                            );
+                        }
+                        None
+                    }
                     // Everything else on the global feed is somebody else's
-                    // business: this subscription only exists for the two
-                    // friend edges above.
+                    // business: this subscription only exists for the friend
+                    // edges above and the session's own daily wins.
                     _ => None,
                 };
                 if let Some(b) = banner {

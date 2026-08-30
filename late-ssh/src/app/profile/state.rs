@@ -115,6 +115,14 @@ impl ProfileState {
             .set_key_layout(self.user_id, fingerprint, layout);
     }
 
+    /// Persist when this device's session went quiet before ending, fire and
+    /// forget like every other profile write. Per device for the same reason
+    /// the rails are: it is a fact about this terminal.
+    pub fn set_device_left_at(&self, fingerprint: String, left_at: chrono::DateTime<chrono::Utc>) {
+        self.profile_service
+            .set_key_left_at(self.user_id, fingerprint, left_at);
+    }
+
     fn save_profile(&self) {
         self.profile_service
             .edit_profile(self.user_id, profile_params_from_profile(&self.profile));

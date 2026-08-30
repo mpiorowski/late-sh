@@ -22,6 +22,7 @@ fn round_trips_through_json() {
         inventory: vec![1300, 1301],
         equipped: vec![("weapon".to_string(), 1004)],
         scores,
+        score_points_spent: 3,
         titles: vec!["Wyrmbane".to_string()],
         title_levels: vec![12],
         active_title: Some(0),
@@ -58,6 +59,7 @@ fn round_trips_through_json() {
     assert_eq!(back.inventory, vec![1300, 1301]);
     assert_eq!(back.equipped, vec![("weapon".to_string(), 1004)]);
     assert_eq!(back.scores.dexterity, 16);
+    assert_eq!(back.score_points_spent, 3);
     assert_eq!(back.titles, vec!["Wyrmbane".to_string()]);
     assert_eq!(back.board_progress, vec![(4, 2)]);
     assert_eq!(back.board_done, vec![1]);

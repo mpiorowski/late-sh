@@ -1,4 +1,5 @@
 use chrono::Utc;
+use late_core::models::chat_message_gild::{GildCounts, GildTier};
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Margin, Rect},
@@ -342,6 +343,13 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
         ));
     }
 
+    let gild_lines = gild_lines(state.gild_counts());
+    if !gild_lines.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(section_heading("Gilds received"));
+        lines.extend(gild_lines);
+    }
+
     let badge_lines = badges::preview_lines(state.profile_awards());
     if !badge_lines.is_empty() {
         lines.push(Line::from(""));
@@ -364,6 +372,37 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
     }
 
     lines
+}
+
+/// Gilds received, one row per tier that has any, in the tier's own color.
+/// A profile with no gilds shows no section at all: an empty "Gilds received"
+/// heading reads as a scoreboard nobody asked to be on.
+fn gild_lines(counts: GildCounts) -> Vec<Line<'static>> {
+    GildTier::ALL
+        .iter()
+        .filter(|tier| counts.get(**tier) > 0)
+        .map(|tier| {
+            let color = match tier {
+                GildTier::Bronze => theme::BADGE_BRONZE(),
+                GildTier::Silver => theme::BADGE_SILVER(),
+                GildTier::Gold => theme::BADGE_GOLD(),
+            };
+            Line::from(vec![
+                Span::styled(
+                    format!("{:<4}", tier.marker()),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{:<8}", tier.label()),
+                    Style::default().fg(theme::TEXT()),
+                ),
+                Span::styled(
+                    format!("x{}", counts.get(*tier)),
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+            ])
+        })
+        .collect()
 }
 
 fn late_fetch_lines(
