@@ -123,3 +123,24 @@ fn headroom_is_the_points_the_scores_can_still_take() {
     };
     assert_eq!(full.headroom(), 0);
 }
+
+#[test]
+fn the_damage_scores_say_when_they_tell() {
+    // INT is burst and WIS is stamina; DEX is STR's average with variance.
+    // The rule is where a player learns that, so the words stay on it.
+    assert!(
+        Score::Intelligence
+            .rule()
+            .ends_with("burst, tells from the first tick")
+    );
+    assert!(
+        Score::Wisdom
+            .rule()
+            .ends_with("stamina, tells once the pool runs dry")
+    );
+    assert!(
+        Score::Dexterity
+            .rule()
+            .ends_with("spiky, same average as STR")
+    );
+}

@@ -1096,6 +1096,28 @@ fn every_class_wears_its_own_emblem_under_the_portrait() {
 }
 
 #[test]
+fn every_attribute_rule_row_keeps_a_gap_before_the_rule() {
+    use crate::app::door::lateania::stats::AbilityScores;
+    let mut view = crate::app::door::lateania::svc::empty_player_view();
+    view.level = 1;
+    view.scores = AbilityScores {
+        strength: 12,
+        dexterity: 15,
+        constitution: 10,
+        intelligence: 7,
+        wisdom: 17,
+        charisma: 15,
+    };
+    let text: Vec<String> = super::attribute_rule_lines(&view)
+        .iter()
+        .map(line_text)
+        .collect();
+    for row in &text[1..] {
+        assert!(row.contains("  each +1 modifier:"), "{row}");
+    }
+}
+
+#[test]
 fn the_creation_screen_states_what_every_score_does_in_numbers() {
     use crate::app::door::lateania::stats::AbilityScores;
     let mut view = crate::app::door::lateania::svc::empty_player_view();
@@ -1159,6 +1181,7 @@ fn the_point_screen_shows_now_and_after_for_every_score() {
             now: "swings hit for +2%".to_string(),
             after: Some("swings hit for +4%".to_string()),
             rule: "each +1 modifier: +2% swing damage".to_string(),
+            hint: "hint".to_string(),
         },
         ScoreOfferView {
             label: "DEX".to_string(),
@@ -1168,6 +1191,7 @@ fn the_point_screen_shows_now_and_after_for_every_score() {
             now: "2% of swings crit for double".to_string(),
             after: Some("2% of swings crit for double".to_string()),
             rule: "rule".to_string(),
+            hint: "hint".to_string(),
         },
         ScoreOfferView {
             label: "CON".to_string(),
@@ -1177,6 +1201,7 @@ fn the_point_screen_shows_now_and_after_for_every_score() {
             now: "+40 max HP at level 8".to_string(),
             after: None,
             rule: "rule".to_string(),
+            hint: "hint".to_string(),
         },
     ];
     let text: Vec<String> = super::score_point_lines(&view, 40)
@@ -1234,6 +1259,7 @@ fn the_point_screen_fits_the_rows_it_has() {
                 now: scores.effect(which, 8),
                 after,
                 rule: which.rule().to_string(),
+                hint: which.hint().to_string(),
             }
         })
         .collect();
@@ -1271,7 +1297,17 @@ fn the_point_screen_fits_the_rows_it_has() {
         rows[1]
     );
     assert!(rows[2].contains("at the cap of 20"), "{}", rows[2]);
+    assert!(
+        rows[3].ends_with("· +2% spell power a mod, burst"),
+        "the compact row still carries the rule in short: {}",
+        rows[3]
+    );
     assert!(rows[4].starts_with("  5 WIS 9 (-1)"), "{}", rows[4]);
+    assert!(
+        rows[4].ends_with("· +1 regen a mod, stamina"),
+        "{}",
+        rows[4]
+    );
     assert!(rows[5].starts_with("  6 CHA 7 (-2)"), "{}", rows[5]);
     assert!(
         short.iter().any(|l| l.contains("1-6")),

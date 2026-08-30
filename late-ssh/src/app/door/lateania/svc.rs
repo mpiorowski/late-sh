@@ -2634,6 +2634,7 @@ impl PlayerState {
                     now: self.scores.effect(which, self.level),
                     after,
                     rule: which.rule().to_string(),
+                    hint: which.hint().to_string(),
                 }
             })
             .collect()

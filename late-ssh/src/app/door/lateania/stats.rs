@@ -117,12 +117,30 @@ impl Score {
         match self {
             Self::Strength => "each +1 modifier: +2% swing damage",
             Self::Dexterity => {
-                "each +1 modifier: +2% chance a swing crits for double (below 10: glancing blows for half)"
+                "each +1 modifier: +2% chance a swing crits for double (below 10: glancing blows for half); spiky, same average as STR"
             }
             Self::Constitution => "each +1 modifier: +4 max HP, and +1 more every 2 levels",
-            Self::Intelligence => "each +1 modifier: +2% spell power, on every ability",
-            Self::Wisdom => "each +1 modifier: +1 resource regained every tick",
+            Self::Intelligence => {
+                "each +1 modifier: +2% spell power, on every ability; burst, tells from the first tick"
+            }
+            Self::Wisdom => {
+                "each +1 modifier: +1 resource regained every tick; stamina, tells once the pool runs dry"
+            }
             Self::Charisma => "each +1 modifier: shops 3% cheaper, sells 3% dearer, taming +3%",
+        }
+    }
+
+    /// The rule in a few words, for the compact point screen where a whole
+    /// score has one line: the number a modifier is worth and, for the
+    /// damage scores, when it tells.
+    pub fn hint(self) -> &'static str {
+        match self {
+            Self::Strength => "+2% swing a mod, steady",
+            Self::Dexterity => "+2% crit a mod, spiky",
+            Self::Constitution => "+4 HP a mod, more with level",
+            Self::Intelligence => "+2% spell power a mod, burst",
+            Self::Wisdom => "+1 regen a mod, stamina",
+            Self::Charisma => "3% prices a mod",
         }
     }
 }
@@ -141,6 +159,8 @@ pub struct ScoreOfferView {
     pub after: Option<String>,
     /// The rule behind the score, from `Score::rule`.
     pub rule: String,
+    /// The rule in a few words, from `Score::hint`.
+    pub hint: String,
 }
 
 /// What a swing's Dexterity roll came up as. `crit_outcome` decides it; the

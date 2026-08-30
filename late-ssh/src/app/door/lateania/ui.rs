@@ -2020,14 +2020,22 @@ fn attribute_rule_lines(view: &PlayerView) -> Vec<Line<'static>> {
         ),
         Style::default().fg(theme::TEXT_DIM()),
     ))];
-    for which in Score::ALL {
+    // The effect column is as wide as the longest reading on screen plus a
+    // fixed gap, so no row ever runs into its rule.
+    const GAP: usize = 2;
+    let effects: Vec<String> = Score::ALL
+        .iter()
+        .map(|which| view.scores.effect(*which, view.level))
+        .collect();
+    let width = effects.iter().map(|e| e.chars().count()).max().unwrap_or(0) + GAP;
+    for (which, effect) in Score::ALL.iter().zip(effects) {
         lines.push(Line::from(vec![
             Span::styled(
                 format!("  {} ", which.label()),
                 Style::default().fg(theme::AMBER()),
             ),
             Span::styled(
-                format!("{:<44}", view.scores.effect(which, view.level)),
+                format!("{effect:<width$}"),
                 Style::default().fg(theme::TEXT()),
             ),
             Span::styled(
@@ -2157,6 +2165,10 @@ fn score_point_lines_compact(view: &PlayerView) -> Vec<Line<'static>> {
             ));
         }
         spans.push(Span::styled(after, Style::default().fg(theme::SUCCESS())));
+        spans.push(Span::styled(
+            format!(" · {}", row.hint),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
         lines.push(Line::from(spans));
     }
     lines

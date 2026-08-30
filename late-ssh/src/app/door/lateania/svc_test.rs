@@ -3385,6 +3385,38 @@ fn a_corpse_with_a_point_pending_sees_the_corpse_not_the_point_screen() {
 }
 
 #[test]
+fn a_pre_points_save_blob_is_offered_every_earned_point_on_join() {
+    use super::super::persist::SavedCharacter;
+    // A save written before scores or points existed: neither field present.
+    let blob = serde_json::json!({
+        "version": 12,
+        "class": "warrior",
+        "xp": xp_for_level(30),
+        "level": 30,
+        "gold": 5,
+        "hp": 40,
+        "room": 1,
+        "archetype": "juggernaut",
+    });
+    let saved = SavedCharacter::from_json(&blob).expect("old blob still parses");
+    assert_eq!(saved.score_points_spent, 0);
+    let mut s = world();
+    s.join(uid(1));
+    s.hydrate(uid(1), &saved);
+    let view = &s.snapshot().players[&uid(1)];
+    assert!(
+        view.archetype_choices.is_empty(),
+        "the archetype is restored"
+    );
+    assert_eq!(view.score_points, 7, "seven points back-paid at level 30");
+    assert_eq!(
+        view.score_offer.len(),
+        6,
+        "and the point screen is open on join"
+    );
+}
+
+#[test]
 fn a_character_saved_before_points_existed_has_them_all_to_place() {
     let mut s = world();
     s.join(uid(1));
