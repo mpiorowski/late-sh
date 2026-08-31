@@ -7,6 +7,8 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use late_core::models::media_queue_item::{SONG_QUEUE_MAX_PAID_PER_DAY, SONG_QUEUE_REWARD_CHIPS};
+
 use crate::app::{
     audio::svc::{AudioMode, HistoryItemView, QueueItemView, QueueSnapshot, SkipProgress},
     common::theme,
@@ -69,7 +71,9 @@ pub(crate) fn draw(
     let width = inner.width as usize;
 
     frame.render_widget(
-        Paragraph::new(section_heading("Submit (limit 10 songs / 5 min)")),
+        Paragraph::new(section_heading(&format!(
+            "Submit (limit 10 songs / 5 min · +{SONG_QUEUE_REWARD_CHIPS} chips, first {SONG_QUEUE_MAX_PAID_PER_DAY}/day)"
+        ))),
         layout[1],
     );
     draw_submit(frame, layout[3], state, submit_enabled, width);

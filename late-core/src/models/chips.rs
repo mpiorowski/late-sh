@@ -119,6 +119,14 @@ chip_moves!(
     /// what caps the reward at one per URL per user, and it has to outlive
     /// the article being deleted (see [`crate::models::article::Article::create_shared`]).
     NewsShared,
+    /// Queueing a YouTube track, from the booth, a pasted URL, or the history
+    /// list. One flat credit, minted rather than moved, for the first few
+    /// tracks a person queues each UTC day and nothing after that. The track
+    /// itself is never a gate: a repeat pays like anything else.
+    /// `source_ref` is the video id as provenance, so a ledger row says what
+    /// it paid for; nothing reads it back
+    /// (see [`crate::models::media_queue_item::MediaQueueItem::insert_youtube`]).
+    SongQueued,
     /// Chips paid to buy the house a round: one price per credit the round
     /// actually granted, floor-guarded, and burned whole like the crown.
     /// Nothing is credited to the patrons, who get a
@@ -188,6 +196,7 @@ impl ChipMove {
             Self::PotTicket => "pot_ticket",
             Self::PotWon => "pot_won",
             Self::NewsShared => "news_shared",
+            Self::SongQueued => "song_queued",
             Self::RoundPurchase => "round_purchase",
             Self::DrinkPurchase => "drink_purchase",
             Self::ShopPurchase => "shop_purchase",
@@ -236,6 +245,7 @@ impl ChipMove {
             Self::CrownTaken => "crown_reigns",
             Self::PotTicket | Self::PotWon => "pots",
             Self::NewsShared => "articles",
+            Self::SongQueued => "media_queue_items",
             Self::RoundPurchase => "drink_rounds",
             Self::DrinkPurchase => "bartender",
             Self::ShopPurchase => "marketplace_item",
@@ -275,6 +285,7 @@ impl ChipMove {
             | Self::GildReceived
             | Self::PotWon
             | Self::NewsShared
+            | Self::SongQueued
             | Self::QuestReward
             | Self::DailyQuestStreakReward
             | Self::DailyPuzzleWin
@@ -345,6 +356,7 @@ impl ChipMove {
             | Self::GiftReceived
             | Self::DrinkPurchase
             | Self::NewsShared
+            | Self::SongQueued
             | Self::QuestReward
             | Self::DailyQuestStreakReward
             | Self::DailyPuzzleWin

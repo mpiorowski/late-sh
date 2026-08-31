@@ -18,7 +18,10 @@
 //! **What it hands over.** Not a drink: a [`DrinkCredit`], cashed only when the
 //! patron walks up and orders one themselves. A pour makes someone type drunk
 //! in public (`chat/slur.rs`), and that is not a thing to do to a person who
-//! did not ask.
+//! did not ask. Credits stack up to [`MAX_OPEN_CREDITS`], so a patron who was
+//! heads-down through three rounds is owed three drinks rather than one, and
+//! the cap rather than the schema is what stops a room being bought for
+//! forever.
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -32,18 +35,35 @@ use uuid::Uuid;
 pub const ROUND_PRICE_PER_PATRON: i64 = 100;
 
 /// The buzz a cashed round drink records, regardless of what the bartender
-/// named or priced the pour at. Three times what the buyer paid for it, and
-/// sized against `drinks::DRUNK_LEVEL_THRESHOLDS`: 300 is exactly the buzzed
-/// line, so a sober room that drinks the round moves a visible level rather
-/// than shuffling within tipsy. It decays like any other drink, which puts the
-/// whole party at about an hour.
-pub const ROUND_DRINK_POINTS: i64 = 300;
+/// named or priced the pour at. Four times what the buyer paid for it, and
+/// sized against `drinks::DRUNK_LEVEL_THRESHOLDS`: buzzed starts at 300, so a
+/// flat 300 landed exactly on the line and the first decay tick (334 an hour)
+/// dropped the drinker back to tipsy within seconds of the pour. 400 buys
+/// about eighteen minutes of the level the round is meant to hand out, and is
+/// still gone in a bit over an hour like any other drink.
+pub const ROUND_DRINK_POINTS: i64 = 400;
+
+/// How many unclaimed drinks one patron may have waiting at once.
+///
+/// Credits stack (migration 168) so the buyer of the round nobody was around
+/// for is not buying air, but not without a ceiling: at
+/// [`ROUND_DRINK_POINTS`] a head this banks 1,200 points against the 4,000
+/// cap, a real night's drinking and not enough for one buyer to park somebody
+/// at wasted. It is also the mechanic's only throttle now that the schema no
+/// longer provides one, since a patron at the cap costs the next buyer
+/// nothing: a room that will not drink stops being worth buying for.
+pub const MAX_OPEN_CREDITS: i64 = 3;
 
 /// How long an uncashed credit stays good. Long enough to cover a patron who
 /// was mid-game when it landed and a night shift that logs in later, short
 /// enough that the bar is not indefinitely on the hook for a round bought last
 /// week.
 pub const ROUND_CREDIT_TTL_HOURS: i64 = 24;
+
+/// What every grant serializes on. The cap is counted from rows a concurrent
+/// round may be inserting and cannot see, so rounds take this lock before
+/// granting and hold it to commit; see [`DrinkRound::open`].
+const ROUND_GRANT_LOCK: &str = "drink_round_grant";
 
 /// Everything a patron can say to buy the house a round, lowercase.
 ///
@@ -132,9 +152,11 @@ fn is_bounded(text: &str, start: usize, end: usize) -> bool {
 
 /// A round that was bought. The row carries no total: the `chip_ledger` row
 /// keyed on this id is the record of what it cost and, by the price, of how
-/// many it reached. The credit rows are not that record: a later round takes
-/// over a patron's expired credit in place (see [`DrinkRound::open`]), so an
-/// old round's roster shrinks after the fact.
+/// many it reached. The credit rows are the round's roster and nothing more,
+/// though since migration 168 they are at least a stable one: a credit belongs
+/// to the round that bought it for as long as it exists, where the old
+/// one-per-patron scheme let a later round take an expired credit over in
+/// place and shrink an old round's roster after the fact.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DrinkRound {
     pub id: Uuid,
@@ -193,16 +215,49 @@ impl From<Row> for OpenCredit {
     }
 }
 
+/// A credit that was just spent, and what the patron still has behind it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CashedCredit {
+    pub round_id: Uuid,
+    pub buyer_user_id: Option<Uuid>,
+    /// Open credits still on the patron's tab after this pour. The bartender
+    /// says this number out loud, so it is counted by the same statement that
+    /// spends the credit rather than read back after it.
+    pub remaining: i64,
+}
+
+impl From<Row> for CashedCredit {
+    fn from(row: Row) -> Self {
+        Self {
+            round_id: row.get("round_id"),
+            buyer_user_id: row.get("buyer_user_id"),
+            remaining: row.get("remaining"),
+        }
+    }
+}
+
 impl DrinkRound {
     /// Open a round and grant its credits, returning the patrons it reached.
     ///
     /// `candidates` is who was at the bar; the grant skips anyone already
-    /// holding an open credit, so a second round on the heels of the first
-    /// costs the buyer almost nothing. An expired credit is re-used in place,
-    /// since the partial unique index keeps the slot occupied until it is
-    /// cashed. `patron_ids` comes from the insert's own `RETURNING`, not from
-    /// a count taken beforehand, so what the caller charges for and what the
-    /// bar actually poured cannot disagree even when two rounds race.
+    /// holding `max_open` unexpired credits, so a round bought into a room
+    /// that has not been drinking costs the buyer almost nothing. Expired
+    /// credits are neither counted nor re-used: they are rows nobody can
+    /// drink, and the only thing that ever mattered about them was that they
+    /// used to block the patron's one slot. `patron_ids` comes from the
+    /// insert's own `RETURNING`, not from a count taken beforehand, so what
+    /// the caller charges for and what the bar actually poured cannot
+    /// disagree even when two rounds race.
+    ///
+    /// Every round takes [`ROUND_GRANT_LOCK`] before granting. The cap is a
+    /// read-then-write over rows a concurrent round is inserting and cannot
+    /// see, so without it two rounds landing together would both read a
+    /// patron at two open credits and both grant a third. Rounds are rare and
+    /// the lock covers two statements, so serializing every round against
+    /// every other is the cheapest way to make the cap mean the number it
+    /// says. It also fixes the order the patrons' rows are locked in, which
+    /// two overlapping rounds working from differently ordered presence reads
+    /// could otherwise deadlock on.
     ///
     /// The chips move in `chips.rs`; the caller owns the transaction that
     /// makes the grant and the charge atomic.
@@ -212,7 +267,14 @@ impl DrinkRound {
         price_per_patron: i64,
         candidates: &[Uuid],
         ttl_hours: i64,
+        max_open: i64,
     ) -> Result<RoundGrant> {
+        tx.query_one(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+            &[&ROUND_GRANT_LOCK],
+        )
+        .await?;
+
         let row = tx
             .query_one(
                 "INSERT INTO drink_rounds (buyer_user_id, price_per_patron)
@@ -229,13 +291,16 @@ impl DrinkRound {
                 "INSERT INTO drink_credits (round_id, user_id, expires_at)
                  SELECT $1, patron, current_timestamp + make_interval(hours => $3::int)
                  FROM unnest($2::uuid[]) AS patron
-                 ON CONFLICT (user_id) WHERE cashed_at IS NULL DO UPDATE SET
-                     round_id = EXCLUDED.round_id,
-                     expires_at = EXCLUDED.expires_at,
-                     created = current_timestamp
-                 WHERE drink_credits.expires_at <= current_timestamp
+                 WHERE (
+                     SELECT count(*)
+                     FROM drink_credits held
+                     WHERE held.user_id = patron
+                       AND held.cashed_at IS NULL
+                       AND held.expires_at > current_timestamp
+                 ) < $4::bigint
+                 ON CONFLICT (round_id, user_id) DO NOTHING
                  RETURNING user_id",
-                &[&round.id, &candidates, &(ttl_hours as i32)],
+                &[&round.id, &candidates, &(ttl_hours as i32), &max_open],
             )
             .await?;
 
@@ -249,8 +314,10 @@ impl DrinkRound {
 pub struct DrinkCredit;
 
 impl DrinkCredit {
-    /// The patron's open credit, if the bar owes them a drink right now.
-    /// Read before pouring so the bartender's line can name who bought it.
+    /// The credit the patron would drink next: the one closest to going cold,
+    /// out of however many they are holding. Read before pouring so the bar
+    /// knows the pour is comped; who bought it comes from [`DrinkCredit::cash`],
+    /// which may spend a different credit than was open here.
     pub async fn find_open(
         client: &impl GenericClient,
         user_id: Uuid,
@@ -262,36 +329,64 @@ impl DrinkCredit {
                  JOIN drink_rounds r ON r.id = c.round_id
                  WHERE c.user_id = $1
                    AND c.cashed_at IS NULL
-                   AND c.expires_at > current_timestamp",
+                   AND c.expires_at > current_timestamp
+                 ORDER BY c.expires_at, c.created
+                 LIMIT 1",
                 &[&user_id],
             )
             .await?;
         Ok(row.map(OpenCredit::from))
     }
 
-    /// Spend the patron's open credit on the drink in front of them.
+    /// Spend one of the patron's open credits on the drink in front of them:
+    /// the one closest to expiring, so a banked drink is never lost to the
+    /// clock while a fresher one sits behind it.
     ///
-    /// One guarded UPDATE, so two orders landing together cash it once and the
-    /// loser pays for their own drink. `None` means there was nothing to
-    /// spend: never granted, already cashed, or expired between the read and
-    /// the pour.
-    pub async fn cash(client: &impl GenericClient, user_id: Uuid) -> Result<Option<OpenCredit>> {
+    /// The row is picked `FOR UPDATE SKIP LOCKED`, so two orders landing
+    /// together take two different credits (two orders are two drinks) and
+    /// neither waits on the other; with only one credit open the loser takes
+    /// nothing and pays for their own drink. `None` means there was nothing to
+    /// spend: never granted, all drunk, or expired between the read and the
+    /// pour.
+    ///
+    /// `remaining` excludes the cashed row by id rather than being counted
+    /// afterwards, because a data-modifying CTE's write is not visible to the
+    /// rest of its own statement. It can still over-count by one in the
+    /// two-simultaneous-orders race: the other pour's credit is locked but
+    /// not yet committed, so both snapshots still count it. One optimistic
+    /// scripted line, self-correcting on the next order; accepted.
+    pub async fn cash(client: &impl GenericClient, user_id: Uuid) -> Result<Option<CashedCredit>> {
         let row = client
             .query_opt(
                 "WITH cashed AS (
                     UPDATE drink_credits
                     SET cashed_at = current_timestamp
-                    WHERE user_id = $1
-                      AND cashed_at IS NULL
-                      AND expires_at > current_timestamp
-                    RETURNING round_id, expires_at
+                    WHERE id = (
+                        SELECT id
+                        FROM drink_credits
+                        WHERE user_id = $1
+                          AND cashed_at IS NULL
+                          AND expires_at > current_timestamp
+                        ORDER BY expires_at, created
+                        LIMIT 1
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    RETURNING id, round_id
                  )
-                 SELECT cashed.round_id, cashed.expires_at, r.buyer_user_id
+                 SELECT
+                     cashed.round_id,
+                     r.buyer_user_id,
+                     (SELECT count(*)
+                      FROM drink_credits held
+                      WHERE held.user_id = $1
+                        AND held.cashed_at IS NULL
+                        AND held.expires_at > current_timestamp
+                        AND held.id <> cashed.id) AS remaining
                  FROM cashed
                  JOIN drink_rounds r ON r.id = cashed.round_id",
                 &[&user_id],
             )
             .await?;
-        Ok(row.map(OpenCredit::from))
+        Ok(row.map(CashedCredit::from))
     }
 }

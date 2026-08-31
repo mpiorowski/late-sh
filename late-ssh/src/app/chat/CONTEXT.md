@@ -3,7 +3,14 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-08-27 (the round: telling @bartender "round for everyone" buys a drink for everyone online but you, 100 chips a head, burned whole. The trigger is a literal phrase from `ROUND_PHRASES` (`late-core/src/models/drink_round.rs`), never a model decision, and `slur.rs` is the other half of it: drunk text is stored rather than rendered, so the phrase is passed through unscrambled (and the `*hic*` kept out of it) or the feature would break for exactly the patrons most likely to use it. Only the buyer is poured into; everyone else gets a `drink_credits` row cashed by ordering, one open per patron, 24h, worth a flat 300 points. §9d The Round.) Previously 2026-08-26 (burn milestones: a permanent Shop glyph that renders after the rented badge and flag in the author label and can never be hidden by either, resolved off `ResolvedName.milestone` like the crown; see `hub/CONTEXT.md` for the catalog side.) Previously 2026-08-26 (the crown: one slot, one holder, one 👑 after their name in every chat author header and on the Clubhouse floor. `/crown` prints who wears it and what taking it costs; `/crown take` buys it at `max(500, ceil(paid x 1.5))`, burned whole, with no hold or cooldown and no self-take. It empties at the UTC month rollover, and the month's last holder keeps the `CRWN` profile award. The glyph rides the `name_flair` map (resolved on the same once-a-second edge as titles and effects) off a process-shared holder that the `crown_changed` Postgres notify keeps in step; the domain is `late-ssh/src/app/crown/`. §9c The Crown.)
+- Last updated: 2026-08-30 (round drinks stack: the one-open-credit index is
+  gone (migration 168), replaced by a `MAX_OPEN_CREDITS` (3) cap counted in
+  the grant under an advisory lock, so a patron away for three rounds is owed
+  three drinks and each buyer pays for the one they bought. A pour spends the
+  credit closest to expiring and @bartender appends how many are left in a
+  scripted tail. `ROUND_DRINK_POINTS` 300 -> 400, since 300 sat exactly on the
+  buzzed line and decayed off it in seconds. §9d The Round.) Previously
+  2026-08-27 (the round: telling @bartender "round for everyone" buys a drink for everyone online but you, 100 chips a head, burned whole. The trigger is a literal phrase from `ROUND_PHRASES` (`late-core/src/models/drink_round.rs`), never a model decision, and `slur.rs` is the other half of it: drunk text is stored rather than rendered, so the phrase is passed through unscrambled (and the `*hic*` kept out of it) or the feature would break for exactly the patrons most likely to use it. Only the buyer is poured into; everyone else gets a `drink_credits` row cashed by ordering, one open per patron, 24h, worth a flat 300 points. §9d The Round.) Previously 2026-08-26 (burn milestones: a permanent Shop glyph that renders after the rented badge and flag in the author label and can never be hidden by either, resolved off `ResolvedName.milestone` like the crown; see `hub/CONTEXT.md` for the catalog side.) Previously 2026-08-26 (the crown: one slot, one holder, one 👑 after their name in every chat author header and on the Clubhouse floor. `/crown` prints who wears it and what taking it costs; `/crown take` buys it at `max(500, ceil(paid x 1.5))`, burned whole, with no hold or cooldown and no self-take. It empties at the UTC month rollover, and the month's last holder keeps the `CRWN` profile award. The glyph rides the `name_flair` map (resolved on the same once-a-second edge as titles and effects) off a process-shared holder that the `crown_changed` Postgres notify keeps in step; the domain is `late-ssh/src/app/crown/`. §9c The Crown.)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -646,8 +653,8 @@ its own domain; only the command and the glyph are chat's.
 
 One patron buys everyone at the bar a drink. The chips are burned like the
 crown's; what the room gets is a #lounge line and a free drink each.
-`late-core/src/models/drink_round.rs` owns both tables (migration 164), the
-price, and the phrase list; `GhostService::bartender_round`
+`late-core/src/models/drink_round.rs` owns both tables (migrations 164 and
+168), the price, the cap, and the phrase list; `GhostService::bartender_round`
 (`app/ai/ghost.rs`) owns the transaction's caller, the refusals, the
 telemetry, and what @bartender says; `ChipService::buy_round` owns the money.
 It touches chat twice, which is why it is documented here: the phrase gate
@@ -689,14 +696,37 @@ reads a chat message, and `chat/slur.rs` has to leave that phrase alone.
 - **Only the buyer is poured into**, on the spot, `ROUND_DRINK_POINTS` in the
   purchase transaction: they typed the order. Everyone else gets a
   `drink_credits` row, not a drink, because a pour makes someone type drunk in
-  public and they did not ask. It is cashed only
-  by ordering from @bartender, at most one open credit per patron across
-  every round (a partial unique index; an expired one is re-used rather than
-  blocking the slot forever), 24h to claim, and cashing is one guarded
-  UPDATE so two orders cannot drink it twice.
-- **A cashed drink pours a flat 300 points** whatever the bartender named it:
-  three times what the buyer paid, exactly the buzzed threshold, so the room
-  visibly moves a level for about an hour. `lifetime_spent` does not move.
+  public and they did not ask. It is cashed only by ordering from @bartender,
+  24h to claim.
+- **Credits stack, up to `MAX_OPEN_CREDITS` (3).** Migration 164 allowed one
+  open credit per patron and that index was doing two jobs: keeping a patron
+  from holding two drinks, which was never the point, and throttling the
+  mechanic. The cost was that a patron heads-down through three rounds ended
+  the night owed one drink and the two other buyers bought nothing. The cap
+  replaced the index (migration 168) and lives in the grant, which counts a
+  patron's open, unexpired credits and skips anyone at it: a round into a room
+  that will not drink still reaches nobody and is still free, so the throttle
+  survives as a number that can be tuned rather than a schema fact. Expired
+  credits are neither counted nor re-used now, just rows nobody can drink.
+- **Every grant takes an advisory lock** (`ROUND_GRANT_LOCK`) and holds it to
+  commit. The cap is a read-then-write over rows a concurrent round is
+  inserting and cannot see, so without it two rounds landing together would
+  both read a patron at two credits and both grant a third. Rounds are rare,
+  so serializing them against each other is the cheap fix, and it also pins
+  the order the patrons' rows are locked in, which two overlapping rounds
+  working off differently ordered presence reads could otherwise deadlock on.
+- **A pour spends the credit closest to expiring**, picked `FOR UPDATE SKIP
+  LOCKED`, so a banked drink is never lost to the clock while a fresher one
+  sits behind it and two orders landing together take two different credits
+  rather than fighting over one (two orders are two drinks). The same
+  statement counts what is left, excluding the row it just cashed by id,
+  because a data-modifying CTE's write is not visible to the rest of its own
+  statement.
+- **A cashed drink pours a flat 400 points** whatever the bartender named it:
+  four times what the buyer paid. It was 300, which was exactly the buzzed
+  threshold, so the first decay tick (334 an hour) dropped the drinker back to
+  tipsy seconds after the pour; 400 buys about eighteen minutes of the level
+  the round is meant to hand out. `lifetime_spent` does not move.
   The open credit is read before the prompt is built and becomes the
   `BartenderTab` handed to `parse_bartender_order`: on a comped tab a "pour"
   (or an "offer", the model deciding they could not afford it) becomes
@@ -710,7 +740,14 @@ reads a chat message, and `chat/slur.rs` has to leave that phrase alone.
   the number the patron was charged, and it has to land the moment the chips
   move rather than after a model round trip that could time out or invent a
   different figure. The prompt hands out the phrase when asked but never
-  claims a round happened.
+  claims a round happened. The same rule covers who bought the drink and what
+  a patron has left: the pour picks the credit closest to expiring at pour
+  time, which with a stacked tab is not always the one that was open when the
+  prompt was built, so `ROUND_CREDIT_ON_LINES` names the buyer of the credit
+  actually spent and, when the pour leaves credits behind it,
+  `ROUND_CREDIT_REMAINING_LINES` follows with the count, both appended to the
+  model's line in code. The prompt is told to guess at neither, because a
+  name or a number in that line is a promise the bar has to keep.
 - **Feed.** `ActivityKind::RoundBought` posts a ticker line and no headline:
   @bartender already says it in the room, and everyone it reached is online
   by definition, so a #lounge row would be the third telling of one drink.

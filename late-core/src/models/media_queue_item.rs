@@ -3,6 +3,48 @@ use chrono::{DateTime, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use crate::models::chips::{ChipMove, UserChips};
+
+/// What queueing one track pays the person who brought it. Every submission
+/// path funnels through [`MediaQueueItem::insert_youtube`], so a pasted URL,
+/// a booth submit, and a re-queue from history all pay exactly this, and none
+/// of them can pay a different amount.
+///
+/// What the track is does not enter into it. A song somebody played last
+/// night is still worth putting on now, and a jukebox that only pays for
+/// music nobody has heard is a jukebox that argues with the person filling
+/// it. The day's cap is the only gate.
+pub const SONG_QUEUE_REWARD_CHIPS: i64 = 200;
+
+/// How many tracks are paid per person per UTC day, and the whole of the
+/// reward's gating: nothing else looks at what was queued or by whom. The
+/// queue already limits submissions to ten every five minutes, which is a
+/// rate limit for the room's sake and would be a chip printer if it were also
+/// the reward's only gate. Five a day is "bring the good ones"; tracks past
+/// the cap still queue, they just mint nothing.
+pub const SONG_QUEUE_MAX_PAID_PER_DAY: i64 = 5;
+
+/// What one submission actually minted, decided by
+/// [`MediaQueueItem::insert_youtube`]. The banner and the metric read this,
+/// never the constant, so an unpaid submission can never be reported as paid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SongQueueReward {
+    /// [`SONG_QUEUE_REWARD_CHIPS`] were credited.
+    Paid,
+    /// This person has already been paid [`SONG_QUEUE_MAX_PAID_PER_DAY`]
+    /// times today (UTC); nothing minted.
+    DailyCapReached,
+}
+
+impl SongQueueReward {
+    pub fn chips(self) -> i64 {
+        match self {
+            Self::Paid => SONG_QUEUE_REWARD_CHIPS,
+            Self::DailyCapReached => 0,
+        }
+    }
+}
+
 crate::model! {
     table = "media_queue_items";
     params = MediaQueueItemParams;
@@ -31,16 +73,42 @@ impl MediaQueueItem {
     pub const STATUS_FAILED: &'static str = "failed";
     pub const KIND_YOUTUBE: &'static str = "youtube";
 
+    /// Queue a track and pay the person who brought it
+    /// [`SONG_QUEUE_REWARD_CHIPS`], for the first
+    /// [`SONG_QUEUE_MAX_PAID_PER_DAY`] tracks they queue in a UTC day.
+    /// Returns the queue item and what the submission actually minted.
+    ///
+    /// Every submission pays: the same track twice, a re-queue from history,
+    /// one somebody else brought an hour ago. The day's count is the only
+    /// question asked, which is what keeps the answer to "why did that one not
+    /// pay?" a single number the guide can state. `source_ref` is the video id
+    /// as provenance, so a ledger row says which track it paid for; nothing
+    /// reads it back.
+    ///
+    /// Insert, lookup, and credit are one transaction under a per-user
+    /// advisory lock, like every other claim-plus-credit path: a credit that
+    /// fails leaves no orphan row in the queue, and two submissions by one
+    /// person landing together cannot both read the same count and pay a
+    /// sixth. This is the only path a submission may take, so the reward
+    /// cannot be forgotten at one call site and applied at another.
     pub async fn insert_youtube(
-        client: &Client,
+        client: &mut Client,
         submitter_id: Uuid,
         external_id: &str,
         title: Option<&str>,
         channel: Option<&str>,
         duration_ms: Option<i32>,
         is_stream: bool,
-    ) -> Result<Self> {
-        let row = client
+    ) -> Result<(Self, SongQueueReward)> {
+        let tx = client.transaction().await?;
+        tx.query_one(
+            "SELECT pg_advisory_xact_lock(
+               hashtextextended(concat_ws(':', 'song_queued', ($1::uuid)::text), 0)
+             )",
+            &[&submitter_id],
+        )
+        .await?;
+        let row = tx
             .query_one(
                 "INSERT INTO media_queue_items
                     (submitter_id, media_kind, external_id, title, channel,
@@ -57,7 +125,34 @@ impl MediaQueueItem {
                 ],
             )
             .await?;
-        Ok(Self::from(row))
+        let item = Self::from(row);
+        let row = tx
+            .query_one(
+                "SELECT COUNT(*)::BIGINT AS paid_today
+                 FROM chip_ledger
+                 WHERE user_id = $1
+                   AND reason = $2
+                   AND (created_at AT TIME ZONE 'UTC')::date
+                     = (current_timestamp AT TIME ZONE 'UTC')::date",
+                &[&submitter_id, &ChipMove::SongQueued.reason()],
+            )
+            .await?;
+        let paid_today: i64 = row.get("paid_today");
+        let reward = if paid_today >= SONG_QUEUE_MAX_PAID_PER_DAY {
+            SongQueueReward::DailyCapReached
+        } else {
+            UserChips::apply(
+                &tx,
+                submitter_id,
+                ChipMove::SongQueued,
+                SONG_QUEUE_REWARD_CHIPS,
+                Some(external_id),
+            )
+            .await?;
+            SongQueueReward::Paid
+        };
+        tx.commit().await?;
+        Ok((item, reward))
     }
 
     pub async fn find_by_id(client: &Client, id: Uuid) -> Result<Option<Self>> {

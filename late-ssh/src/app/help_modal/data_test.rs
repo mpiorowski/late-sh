@@ -96,6 +96,7 @@ fn chips_guide_lists_every_earning_surface() {
         "Amulet of Yendor",
         "Green Dragon",
         "Sharing news",
+        "Bringing music",
         "/gift @user",
     ] {
         assert!(chips.contains(expected), "chips guide missing {expected}");
@@ -106,6 +107,16 @@ fn chips_guide_lists_every_earning_surface() {
     assert!(chips.contains(&format!(
         "At most {NEWS_SHARE_MAX_PAID_PER_DAY} shares a day"
     )));
+    // Same rule for the jukebox: the chips tab and the booth's own guide both
+    // have to read the constants the queue actually credits.
+    assert!(chips.contains(&format!("pays {SONG_QUEUE_REWARD_CHIPS} chips")));
+    assert!(chips.contains(&format!(
+        "At most {SONG_QUEUE_MAX_PAID_PER_DAY} tracks a day"
+    )));
+    assert!(MUSIC_PAIR_TEXT.contains(&format!(
+        "Bringing a track pays you {SONG_QUEUE_REWARD_CHIPS} chips"
+    )));
+    assert!(MUSIC_PAIR_TEXT.contains(&format!("at most {SONG_QUEUE_MAX_PAID_PER_DAY} a day")));
     let news = lines_for(HelpTopic::News, false, "").join("\n");
     assert!(news.contains(&format!("pays you {NEWS_SHARE_REWARD_CHIPS} chips")));
     assert!(news.contains(&format!(

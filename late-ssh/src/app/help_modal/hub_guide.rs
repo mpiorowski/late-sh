@@ -12,7 +12,7 @@ use crate::app::lobby::house::{
 use late_core::models::{
     asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
     chat_message_gild::GildTier,
-    drink_round::{ROUND_CREDIT_TTL_HOURS, ROUND_PRICE_PER_PATRON},
+    drink_round::{MAX_OPEN_CREDITS, ROUND_CREDIT_TTL_HOURS, ROUND_PRICE_PER_PATRON},
     drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, DRUNK_DECAY_PER_HOUR},
     quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
 };
@@ -108,7 +108,7 @@ fn bar_sections() -> Vec<GuideSection> {
                 format!(
                     "at the bar, good for {ROUND_CREDIT_TTL_HOURS}h, claimed by ordering from him."
                 ),
-                "One waiting drink each: a second round buys nobody a spare.".to_string(),
+                format!("They can bank {MAX_OPEN_CREDITS}; past that a round passes them by."),
             ],
         },
         GuideSection {

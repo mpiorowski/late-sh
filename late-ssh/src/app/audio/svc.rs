@@ -23,7 +23,9 @@ use tokio::sync::{Mutex, broadcast, oneshot, watch};
 use uuid::Uuid;
 
 use super::youtube::YoutubeClient;
-use crate::{authz::Permissions, paired_clients::PairedClientRegistry, state::ActiveUsers};
+use crate::{
+    authz::Permissions, metrics, paired_clients::PairedClientRegistry, state::ActiveUsers,
+};
 
 const QUEUE_SNAPSHOT_LIMIT: i64 = 50;
 const MAX_SUBMISSIONS_PER_WINDOW: i64 = 10;
@@ -127,6 +129,7 @@ pub enum AudioEvent {
     TrustedSubmitQueued {
         user_id: Uuid,
         position: i64,
+        reward_chips: i64,
     },
     TrustedSubmitFailed {
         user_id: Uuid,
@@ -149,6 +152,7 @@ pub enum AudioEvent {
     BoothSubmitQueued {
         user_id: Uuid,
         position: i64,
+        reward_chips: i64,
     },
     BoothSubmitFailed {
         user_id: Uuid,
@@ -189,6 +193,7 @@ pub enum AudioEvent {
     BoothHistoryRequeued {
         user_id: Uuid,
         position: i64,
+        reward_chips: i64,
     },
     BoothHistoryRequeueFailed {
         user_id: Uuid,
@@ -268,6 +273,11 @@ pub struct SubmitQueueResponse {
     pub title: Option<String>,
     pub duration_ms: Option<i32>,
     pub position_in_queue: i64,
+    /// What bringing this track actually minted: zero when the submitter has
+    /// already been paid `SONG_QUEUE_MAX_PAID_PER_DAY` times today (UTC),
+    /// the only gate there is. Read from the grant, never from the constant,
+    /// so a banner can never promise chips that were not credited.
+    pub reward_chips: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -498,8 +508,8 @@ impl AudioService {
 
         let mut state = self.state.lock().await;
 
-        let item = {
-            let client = self.db.get().await?;
+        let (item, reward) = {
+            let mut client = self.db.get().await?;
             if AudioBan::is_active_for_user(&client, user_id).await? {
                 anyhow::bail!("audio ban: submitting blocked");
             }
@@ -516,7 +526,7 @@ impl AudioService {
             }
 
             MediaQueueItem::insert_youtube(
-                &client,
+                &mut client,
                 user_id,
                 &video.video_id,
                 video.title.as_deref(),
@@ -526,6 +536,14 @@ impl AudioService {
             )
             .await?
         };
+        metrics::record_song_queued(reward);
+        tracing::info!(
+            user_id = %user_id,
+            item_id = %item.id,
+            external_id = %video.video_id,
+            reward_chips = reward.chips(),
+            "queued a youtube track"
+        );
 
         self.cancel_fallback(&mut state);
         if state.current_item_id.is_none() {
@@ -546,6 +564,7 @@ impl AudioService {
             title: item.title,
             duration_ms: item.duration_ms,
             position_in_queue,
+            reward_chips: reward.chips(),
         })
     }
 
@@ -581,6 +600,7 @@ impl AudioService {
                     service.publish_event(AudioEvent::BoothSubmitQueued {
                         user_id,
                         position: response.position_in_queue,
+                        reward_chips: response.reward_chips,
                     });
                 }
                 Err(err) => {
@@ -612,6 +632,7 @@ impl AudioService {
                     service.publish_event(AudioEvent::TrustedSubmitQueued {
                         user_id,
                         position: response.position_in_queue,
+                        reward_chips: response.reward_chips,
                     });
                 }
                 Err(err) => {
@@ -832,8 +853,8 @@ impl AudioService {
         history_item_id: Uuid,
     ) -> Result<SubmitQueueResponse> {
         let mut state = self.state.lock().await;
-        let item = {
-            let client = self.db.get().await?;
+        let (item, reward) = {
+            let mut client = self.db.get().await?;
             if AudioBan::is_active_for_user(&client, user_id).await? {
                 anyhow::bail!("audio ban: submitting blocked");
             }
@@ -849,7 +870,7 @@ impl AudioService {
                 anyhow::bail!("track is already in the queue");
             }
             MediaQueueItem::insert_youtube(
-                &client,
+                &mut client,
                 user_id,
                 &history.external_id,
                 history.title.as_deref(),
@@ -859,6 +880,14 @@ impl AudioService {
             )
             .await?
         };
+        metrics::record_song_queued(reward);
+        tracing::info!(
+            user_id = %user_id,
+            item_id = %item.id,
+            external_id = %item.external_id,
+            reward_chips = reward.chips(),
+            "re-queued a youtube track from history"
+        );
 
         self.cancel_fallback(&mut state);
         if state.current_item_id.is_none() {
@@ -879,6 +908,7 @@ impl AudioService {
             title: item.title,
             duration_ms: item.duration_ms,
             position_in_queue,
+            reward_chips: reward.chips(),
         })
     }
 
@@ -1061,6 +1091,7 @@ impl AudioService {
                     service.publish_event(AudioEvent::BoothHistoryRequeued {
                         user_id,
                         position: response.position_in_queue,
+                        reward_chips: response.reward_chips,
                     });
                 }
                 Err(err) => {

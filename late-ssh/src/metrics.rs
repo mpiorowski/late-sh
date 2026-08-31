@@ -1,6 +1,7 @@
 use late_core::models::article::NewsShareReward;
 use late_core::models::chat_message_gild::GildTier;
 use late_core::models::leaderboard::DoorGame;
+use late_core::models::media_queue_item::SongQueueReward;
 
 use crate::app::activity::event::ActivityGame;
 use crate::app::chat::svc::GildRefusal;
@@ -72,7 +73,7 @@ mod inner {
     use super::{
         ActivityGame, CrownRefusal, DailyWinPayout, DoorGame, GildRefusal, GildTier,
         NewsShareReward, OnlineTimeFlushResult, PotRefusal, RenderReason, RoundRefusal,
-        SummaryResult, TranslationResult,
+        SongQueueReward, SummaryResult, TranslationResult,
     };
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -496,6 +497,26 @@ mod inner {
         })
     }
 
+    fn songs_queued_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_songs_queued_total")
+                .with_description("YouTube tracks queued, from the booth, a URL, or history")
+                .build()
+        })
+    }
+
+    fn song_queue_chips_paid_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_song_queue_chips_paid_total")
+                .with_description("Chips minted as jukebox submission rewards")
+                .build()
+        })
+    }
+
     fn game_wins_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -607,6 +628,24 @@ mod inner {
             &[KeyValue::new("reward", news_share_reward_label(reward))],
         );
         news_share_chips_paid_total().add(reward.chips() as u64, &[]);
+    }
+
+    /// Same shape as the News share: one counter for the submissions and one
+    /// for the chips they minted, so the tracks that came in past the day's
+    /// cap are visible beside the paid ones.
+    fn song_queue_reward_label(reward: SongQueueReward) -> &'static str {
+        match reward {
+            SongQueueReward::Paid => "paid",
+            SongQueueReward::DailyCapReached => "daily_cap",
+        }
+    }
+
+    pub fn record_song_queued(reward: SongQueueReward) {
+        songs_queued_total().add(
+            1,
+            &[KeyValue::new("reward", song_queue_reward_label(reward))],
+        );
+        song_queue_chips_paid_total().add(reward.chips() as u64, &[]);
     }
 
     pub fn record_gild_bought(tier: GildTier) {
@@ -789,7 +828,7 @@ mod inner {
     use super::{
         ActivityGame, CrownRefusal, DailyWinPayout, DoorGame, GildRefusal, GildTier,
         NewsShareReward, OnlineTimeFlushResult, PotRefusal, RenderReason, RoundRefusal,
-        SummaryResult, TranslationResult,
+        SongQueueReward, SummaryResult, TranslationResult,
     };
 
     pub fn record_ssh_connection() {}
@@ -808,6 +847,7 @@ mod inner {
     pub fn record_game_win(_game: ActivityGame) {}
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
+    pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_gild_bought(_tier: GildTier) {}
     pub fn record_gild_refused(_refusal: GildRefusal) {}
     pub fn record_crown_taken(_price: i64) {}

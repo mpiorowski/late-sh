@@ -6,7 +6,7 @@ use chrono::NaiveDate;
 use late_core::{
     models::{
         chips::{ChipMove, Difficulty, INITIAL_CHIP_BALANCE, UserChips},
-        drink_round::{ROUND_DRINK_POINTS, ROUND_PRICE_PER_PATRON},
+        drink_round::{MAX_OPEN_CREDITS, ROUND_DRINK_POINTS, ROUND_PRICE_PER_PATRON},
         drinks::{UserDrinks, drunk_level},
         reward::{
             DARKROOM_ESCAPE_REWARD_KEY, DailyPuzzleRewardGame, GREENDRAGON_DRAGON_REWARD_KEY,
@@ -549,8 +549,8 @@ async fn balance(db: &late_core::db::Db, user_id: Uuid) -> i64 {
 }
 
 /// The buyer pays for the drinks that were actually poured, never for the
-/// heads that were counted. A patron already holding one is skipped, and the
-/// price follows.
+/// heads that were counted. A patron already carrying the cap is skipped, and
+/// the price follows.
 #[tokio::test]
 async fn a_round_charges_for_the_drinks_it_actually_pours() {
     let test_db = new_test_db().await;
@@ -561,13 +561,16 @@ async fn a_round_charges_for_the_drinks_it_actually_pours() {
     let chips = ChipService::new(test_db.db.clone());
     chips.ensure_chips(buyer.id).await.expect("buyer chips");
 
-    // Somebody else got to `holding` first, so this round cannot reach them.
+    // Earlier buyers filled `holding` up to the cap, so this round cannot
+    // reach them however many more it is bought for.
     let earlier = create_test_user(&test_db.db, "round-earlier-buyer").await;
     chips.ensure_chips(earlier.id).await.expect("earlier chips");
-    chips
-        .buy_round(earlier.id, ROUND_PRICE_PER_PATRON, &[holding.id])
-        .await
-        .expect("the earlier round");
+    for _ in 0..MAX_OPEN_CREDITS {
+        chips
+            .buy_round(earlier.id, ROUND_PRICE_PER_PATRON, &[holding.id])
+            .await
+            .expect("an earlier round");
+    }
 
     let purchase = chips
         .buy_round(
@@ -578,7 +581,7 @@ async fn a_round_charges_for_the_drinks_it_actually_pours() {
         .await
         .expect("the round settles");
 
-    assert_eq!(purchase.patrons, 2, "the third was already holding one");
+    assert_eq!(purchase.patrons, 2, "the third was already at the cap");
     assert_eq!(purchase.total_chips, 2 * ROUND_PRICE_PER_PATRON);
     assert_eq!(purchase.balance, 1_000 - 2 * ROUND_PRICE_PER_PATRON);
     assert_eq!(balance(&test_db.db, buyer.id).await, 800);
@@ -705,5 +708,62 @@ async fn a_cashed_round_drink_costs_the_drinker_nothing() {
             .await
             .expect("second cash")
             .is_none()
+    );
+}
+
+/// A patron who was away for two rounds is owed both, and the bartender is
+/// told what is left after each pour so his line can say so. The count is the
+/// only part of that line the bar computes rather than the model.
+#[tokio::test]
+async fn a_banked_round_is_drunk_one_at_a_time_with_the_rest_reported() {
+    let test_db = new_test_db().await;
+    let first_buyer = create_test_user(&test_db.db, "banked-first-buyer").await;
+    let second_buyer = create_test_user(&test_db.db, "banked-second-buyer").await;
+    let patron = create_test_user(&test_db.db, "banked-patron").await;
+    let chips = ChipService::new(test_db.db.clone());
+    chips.ensure_chips(first_buyer.id).await.expect("chips");
+    chips.ensure_chips(second_buyer.id).await.expect("chips");
+
+    // Two buyers, two rounds, one patron who drank neither at the time. Both
+    // pay: the second round is not swallowed by the first.
+    for buyer in [first_buyer.id, second_buyer.id] {
+        let purchase = chips
+            .buy_round(buyer, ROUND_PRICE_PER_PATRON, &[patron.id])
+            .await
+            .expect("the round settles");
+        assert_eq!(purchase.patrons, 1);
+        assert_eq!(purchase.total_chips, ROUND_PRICE_PER_PATRON);
+    }
+
+    let first = chips
+        .cash_round_drink(patron.id)
+        .await
+        .expect("cashing works")
+        .expect("a drink was waiting");
+    assert_eq!(first.buyer_user_id, Some(first_buyer.id));
+    assert_eq!(first.remaining, 1, "the second round is still on the tab");
+    assert_eq!(first.drunk_points, ROUND_DRINK_POINTS);
+
+    let second = chips
+        .cash_round_drink(patron.id)
+        .await
+        .expect("cashing works")
+        .expect("the second drink was waiting");
+    assert_eq!(
+        second.buyer_user_id,
+        Some(second_buyer.id),
+        "the drinks come in the order they were bought"
+    );
+    assert_eq!(second.remaining, 0, "and nothing is promised after them");
+    assert_eq!(
+        second.drunk_points,
+        2 * ROUND_DRINK_POINTS,
+        "two comped drinks stack into one buzz"
+    );
+
+    assert_eq!(
+        balance(&test_db.db, patron.id).await,
+        INITIAL_CHIP_BALANCE,
+        "the drinker's chips never move"
     );
 }

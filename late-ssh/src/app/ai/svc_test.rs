@@ -37,8 +37,8 @@ fn first_text_errors_on_a_body_that_is_not_gemini_json() {
     assert!(first_text("test", "<html>502 Bad Gateway</html>").is_err());
 }
 
-/// The shape 3.6-flash actually returns on the grounded JSON path: told to
-/// emit bare JSON, it fences it anyway.
+/// The shape the Flash models actually return on the grounded JSON path: told
+/// to emit bare JSON, they fence it anyway (seen on 3.6-flash).
 #[test]
 fn extract_json_object_unwraps_a_fenced_reply() {
     let fenced = "```json\n{\n  \"summary\": \"a video\"\n}\n```";

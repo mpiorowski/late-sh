@@ -8,6 +8,7 @@ use late_core::models::{
     chat_message_gild::GildTier,
     chips::{CHIP_FLOOR, Difficulty, INITIAL_CHIP_BALANCE},
     crown::CROWN_MIN_PRICE,
+    media_queue_item::{SONG_QUEUE_MAX_PAID_PER_DAY, SONG_QUEUE_REWARD_CHIPS},
     pot::{POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE},
     quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
 };
@@ -480,7 +481,13 @@ fn chips_help_lines() -> Vec<String> {
         "  You are paid once per link. Deleting your own story and re-sharing it pays nothing the second time.".to_string(),
         format!("  At most {NEWS_SHARE_MAX_PAID_PER_DAY} shares a day (UTC) are paid. Shares past that still publish, for nothing."),
         "".to_string(),
-        "8. The crown".to_string(),
+        "8. Bringing music".to_string(),
+        format!("  Queueing a YouTube track in the Music Booth (v then v) pays {SONG_QUEUE_REWARD_CHIPS} chips."),
+        "  It pays the same either way: a URL you submit, or Enter on a track in History.".to_string(),
+        "  Every track pays, repeats included: putting a song on again is worth the same as putting on one nobody has heard.".to_string(),
+        format!("  At most {SONG_QUEUE_MAX_PAID_PER_DAY} tracks a day (UTC) are paid, and that is the only limit there is. Tracks past that still queue, for nothing."),
+        "".to_string(),
+        "9. The crown".to_string(),
         format!("  One slot, one holder, one {CROWN_GLYPH} after their name in every message they send."),
         "  /crown shows who wears it and what taking it costs. /crown take buys it.".to_string(),
         format!("  A vacant crown costs {}. After that it costs 1.5x whatever the holder paid, rounded up,", thousands(CROWN_MIN_PRICE)),
@@ -492,7 +499,7 @@ fn chips_help_lines() -> Vec<String> {
         "  Every takeover posts to #lounge, naming both players.".to_string(),
         "  Like Shop spending, the crown does not count against Top Chips.".to_string(),
         "".to_string(),
-        "9. Burn milestones".to_string(),
+        "10. Burn milestones".to_string(),
         format!("  Three permanent badges in the Shop's Ultimates tab: Wick {} \u{1F56F}\u{FE0F}, Fuse {} \u{1F9E8}, Furnace {} \u{1F30B}.",
             thousands(50_000),
             thousands(150_000),
@@ -503,7 +510,7 @@ fn chips_help_lines() -> Vec<String> {
         "  Each unlock posts to #lounge, naming the price.".to_string(),
         "  Like the crown and Shop spending, they do not count against Top Chips.".to_string(),
         "".to_string(),
-        "10. The pot".to_string(),
+        "11. The pot".to_string(),
         format!("  A raffle, drawn once a week, Monday 21:00 UTC. Tickets cost {} chips each.", thousands(POT_TICKET_PRICE)),
         "  /pot shows the pot, the tickets in it, what you hold and paid, how many more you can buy today, and how long is left.".to_string(),
         "  /pot buy N buys N tickets.".to_string(),
@@ -514,16 +521,16 @@ fn chips_help_lines() -> Vec<String> {
         "  The winner is announced in #lounge, so you can read it when you get back.".to_string(),
         "  Neither the tickets you buy nor the pot you win counts toward Top Chips.".to_string(),
         "".to_string(),
-        "11. Gifts".to_string(),
+        "12. Gifts".to_string(),
         "  /gift @user <n>    send chips to someone, with an optional note after the amount".to_string(),
         format!("  A gift only goes through while it leaves you at or above {floor} chips."),
         "  Gifts move chips between players; they do not create new ones.".to_string(),
         "".to_string(),
         "What does not pay chips".to_string(),
-        "  Chatting, showcases, profiles, voice, and the Artboard pay nothing. Sharing a link to News does pay; see 7 above.".to_string(),
+        "  Chatting, showcases, profiles, voice, and the Artboard pay nothing. Sharing a link to News does pay, and so does queueing music; see 7 and 8 above.".to_string(),
         "  Monthly leaderboard awards are prestige only; the door feats above are the exception,".to_string(),
         "  and those pay again every time their gate reopens.".to_string(),
-        "  There is no login bonus, idle income, or daily stipend: chips come from playing, watering, quests, and sharing news.".to_string(),
+        "  There is no login bonus, idle income, or daily stipend: chips come from playing, watering, quests, sharing news, and bringing music.".to_string(),
         "".to_string(),
         "Where chips go".to_string(),
         "  The Shop (/shop) for badge, flag, title and name-effect rentals, Dynamic Bonsai, the pet companion, and the Aquarium.".to_string(),
@@ -1791,6 +1798,7 @@ Music Booth (v then v)
     Enter           queue selected track fresh
     d               delete selected track (staff)
 
+  Bringing a track pays you 200 chips, whether you submit a URL or queue one from History, repeats included: at most 5 a day (UTC), and past that it still queues, it just pays nothing.
   The queue is ordered by score, so upvotes pull tracks toward the front. You can't vote on the track that's already playing, but you can skip-vote it.
   History keeps up to 200 unique played tracks, most recently played first, so whatever is playing right now sits at the top. There are no history votes. Requeued history tracks start with 0 live queue votes.
 
