@@ -191,6 +191,56 @@ glyphs and the Old Signal).
   siege, on a cadence we control) and the door to pet-style spawns later
   without a second identity system.
 
+### First contact (the haunting, decided 2026-08-31)
+
+- **The game is never announced; it arrives.** Onboarding as haunting: the
+  bridge fiction says the city is behind the screen and chat is the leak,
+  so first contact IS a leak. No tutorial, no reward, no explanation, and
+  the first beats deliberately end with nothing: restraint is the magic.
+- **The escalation ladder** (cheapest to loudest, each stage roughly an
+  afternoon of render code, all pure client-side theater until the last):
+  1. **Deniable.** One-frame ambient corruption: a character in the
+     tavern's door sign wrong for a single frame, a stripe of static in
+     the rain. Nobody is sure they saw it.
+  2. **Personal.** The chosen ones' own message echo flickers and heals
+     after a send; the composer placeholder briefly reads something it
+     shouldn't.
+  3. **The whisper.** A mysterious voiced line only the chosen one sees
+     (author like `??????`), private, unpersisted, screenshot-bait.
+     "Glitches are coming" energy; still no game to play.
+  4. **The breach.** The first glyph flickers into #lounge for real,
+     someone puts it down, the game exists.
+- **The eligibility gate is a whisper campaign.** Stages 2-3 target users
+  with a filled bio, touched settings, and real tenure (thresholds at
+  design review): the static chooses the invested. Side effects are the
+  point: it pushes profile completion, and it makes the first glitch a
+  social event (the chosen asking #lounge "did anyone else see that??"
+  while half the room has no idea). The mystery ships a story into
+  #lounge before the game has a single mechanic: north-star meets day
+  zero.
+- **Hard rules:**
+  - **Never eat the message.** Enter on a written message is an act of
+    trust in the app's healthiest feature. The haunting is theater
+    *around* the send, never the send itself: the message always
+    delivers untouched; only the sender's local echo, the idle
+    composer, or the ambient frame get corrupted.
+  - **Render-only, TUI-only.** No DB rows, no chat history, and IRC
+    clients see nothing, which is the fiction stated as architecture:
+    the city only leaks through the terminal.
+  - **Aesthetic, never system.** The audience is terminal people; a
+    hijacked input can read as "compromised server", and that panic is
+    the failure mode. No fake errors, no fake disconnects, nothing
+    resembling a real terminal failure. Static and corruption are
+    obviously *voiced*, never mechanical.
+  - **Admin kill-switch from day one**, and a ready answer for the
+    inevitable "I found a display bug" report.
+- **First contact is a nonrenewable resource.** It works exactly once per
+  person. Two timing rules: never burn it on real users while it is
+  admin-scoped scaffolding, and never light it until the breach is close.
+  The whole ladder is a fuse of one to two weeks before the first real
+  spawn, not a promise without a date: "glitches are coming" followed by
+  months of nothing curdles into a broken feature.
+
 ### Offline PvP / ambush (the story engine)
 - Attacking sleeping players. Risk and consequence are what make the news
   screen worth reading and the feed worth gossiping about.
@@ -284,9 +334,15 @@ Sequencing, each phase testing something before paying for the next:
 1. **Feed budget + daily digest.** Still the hard prerequisite (global
    lines/hour budget and morning digest remain unbuilt; only the per-user
    30-min repeat window exists). Everything above multiplies feed volume.
+   Now specced separately in **DIGEST.md** (2026-08-31): the same engine
+   is the welcome-back paper, and the login news screen ships as a
+   section of that paper rather than its own surface.
 2. **Character layer + rations + login news.** Tests: do people do the
    daily loop.
-3. **Chat spawns.** Tests: does the room engage.
+3. **Chat spawns.** Tests: does the room engage. The first-contact
+   haunting ladder (see Core design) is the fuse lit one to two weeks
+   before this phase's first spawn; its machinery can be built and
+   admin-tested any time earlier, but it fires for real users only here.
 4. **Arena + betting + bounties.** Tests: spectacle and chip sink.
 5. **Seasons** wrap it once the loop is proven.
 
@@ -296,6 +352,10 @@ Sequencing, each phase testing something before paying for the next:
   Needs an answer before the ambush engine ships.
 - **V1's one visible surface.** Chat badge is almost certainly the
   cheapest; pick explicitly at design review.
+- **First-contact tuning.** The eligibility thresholds (bio length,
+  which settings count as touched, how much tenure), and the whisper
+  copy pool: the voiced lines need the same variety discipline as feed
+  templates, since a repeated whisper is a bug report, not a haunting.
 - **Professions as interdependence (v2 at the earliest).** As "+10% yield"
   they fail the design gate; as interdependence (only the blacksmith
   repairs gear, only the healer shortens recovery) they pass, because
