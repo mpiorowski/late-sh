@@ -262,6 +262,7 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
+        name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
     };
@@ -358,6 +359,7 @@ fn the_crown_glyph_renders_between_the_author_name_and_their_title() {
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
+        name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
     };
@@ -424,6 +426,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
+        name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
     };
@@ -485,6 +488,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
+        name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
     };
@@ -578,6 +582,7 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
+        name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
     };
@@ -789,6 +794,7 @@ fn mentions_and_replies_paint_a_background_wash() {
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
+        name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
     };
@@ -872,6 +878,7 @@ fn background_wash_fills_the_whole_row_width() {
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
+        name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
     };
@@ -1043,6 +1050,7 @@ fn chat_view<'a>(
         drunk_levels: DRUNK_LEVELS.get_or_init(HashMap::new),
         name_flair: NAME_STYLES.get_or_init(HashMap::new),
         peer_pomodoros: PEER_POMODOROS.get_or_init(HashMap::new),
+        name_flicker: None,
         translations: TRANSLATIONS.get_or_init(HashMap::new),
         translation_hidden: TRANSLATION_HIDDEN.get_or_init(HashSet::new),
         news_composer,
@@ -2947,6 +2955,7 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
             drunk_levels: &drunk_levels,
             name_flair: &name_flair,
             peer_pomodoros: &peer_pomodoros,
+            name_flicker: None,
             translations: &translations,
             translation_hidden: &translation_hidden,
         };

@@ -1002,7 +1002,7 @@ impl russh::server::Handler for ClientHandler {
             clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(
                 &user.settings,
             ),
-            first_contact_whisper_done: late_core::models::user::extract_first_contact_whisper_done(
+            first_contact: crate::app::deadchannel::haunt::state::FirstContactMarks::from_settings(
                 &user.settings,
             ),
             haunt_enabled: self.state.haunt_enabled.clone(),

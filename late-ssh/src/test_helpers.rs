@@ -630,9 +630,9 @@ fn make_app_with_chat_service_and_permissions(
         files: None,
         scratchpad_registry: world.scratchpad_registry,
         clubhouse_tutorial_done: true,
-        // Delivered already: the splash whisper must never arm inside a
-        // test app unless a test replays it on purpose.
-        first_contact_whisper_done: true,
+        // Everything already spent: no first-contact stage can fire inside
+        // a test app unless a test arms one on purpose.
+        first_contact: crate::app::deadchannel::haunt::state::FirstContactMarks::spent_for_tests(),
         haunt_enabled: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         show_aquarium_tray: false,
         // No SSH key: test apps follow the account default and persist no
@@ -857,9 +857,9 @@ pub fn make_app_with_paired_client(
         files: None,
         scratchpad_registry: None,
         clubhouse_tutorial_done: true,
-        // Delivered already: the splash whisper must never arm inside a
-        // test app unless a test replays it on purpose.
-        first_contact_whisper_done: true,
+        // Everything already spent: no first-contact stage can fire inside
+        // a test app unless a test arms one on purpose.
+        first_contact: crate::app::deadchannel::haunt::state::FirstContactMarks::spent_for_tests(),
         haunt_enabled: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         show_aquarium_tray: false,
         // No SSH key: test apps follow the account default and persist no

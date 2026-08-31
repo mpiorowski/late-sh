@@ -457,6 +457,9 @@ impl App {
             self.marquee_tick,
             sidebar_clock_text(self.profile_state.profile().timezone.as_deref()),
         );
+        // Stage 2's live hit, threaded into every chat message surface.
+        let name_flicker =
+            crate::app::deadchannel::haunt::ui::name_flicker_for(&self.haunt, self.marquee_tick);
         // The username directory snapshot is refreshed on the ~1s tick
         // cadence (tick.rs), where its pointer-compare also bumps the row
         // cache epoch; renders read the stored Arc only.
@@ -593,6 +596,7 @@ impl App {
             drunk_levels: &self.drunk_levels,
             name_flair: &self.name_flair,
             peer_pomodoros: &self.peer_pomodoros,
+            name_flicker,
             translations: &self.chat.translations,
             translation_hidden: &self.chat.translation_hidden,
             active_room_effects: dashboard_room_effects,
@@ -749,6 +753,7 @@ impl App {
             drunk_levels: &self.drunk_levels,
             name_flair: &self.name_flair,
             peer_pomodoros: &self.peer_pomodoros,
+            name_flicker,
             translations: &self.chat.translations,
             translation_hidden: &self.chat.translation_hidden,
             news_composer: self.chat.news.composer(),
@@ -833,6 +838,7 @@ impl App {
                     drunk_levels: &self.drunk_levels,
                     name_flair: &self.name_flair,
                     peer_pomodoros: &self.peer_pomodoros,
+                    name_flicker,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
@@ -896,6 +902,7 @@ impl App {
                     drunk_levels: &self.drunk_levels,
                     name_flair: &self.name_flair,
                     peer_pomodoros: &self.peer_pomodoros,
+                    name_flicker,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
@@ -1307,32 +1314,13 @@ impl App {
                 frame.render_widget(hint_paragraph, hint_area);
             }
             if let Some(whisper) = &ctx.whisper {
-                // The voiced line answers directly under the coffee cup.
-                let line_y = splash_bottom + 1;
-                if !whisper.line.is_empty() && line_y < area.bottom() {
-                    let line_area = Rect::new(area.x, line_y, area.width, 1);
-                    let line = ratatui::text::Line::from(ratatui::text::Span::styled(
-                        whisper.line.clone(),
-                        Style::default()
-                            .fg(theme::TEXT_BRIGHT())
-                            .add_modifier(Modifier::ITALIC),
-                    ));
-                    frame.render_widget(
-                        ratatui::widgets::Paragraph::new(line).centered(),
-                        line_area,
-                    );
-                }
-                // The static surge paints last, over everything: input is
-                // acknowledged, control withheld.
-                if let Some(progress) = whisper.surge {
-                    crate::app::deadchannel::haunt::ui::draw_static_surge(
-                        frame,
-                        area,
-                        ctx.splash_ticks,
-                        whisper.seed,
-                        progress,
-                    );
-                }
+                crate::app::deadchannel::haunt::ui::draw_splash_whisper(
+                    frame,
+                    area,
+                    splash_bottom,
+                    whisper,
+                    ctx.splash_ticks,
+                );
             }
             return;
         }

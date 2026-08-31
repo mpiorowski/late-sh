@@ -942,6 +942,9 @@ pub struct ChatState {
     /// Set by an admin's /haunt; consumed by `deadchannel::haunt::svc`
     /// (which owns the whisper and the kill switch).
     requested_haunt: Option<crate::app::deadchannel::haunt::state::HauntCommand>,
+    /// The just-landed echo of this session's own send, for the stage-2
+    /// name flicker; consumed by `deadchannel::haunt::svc` every tick.
+    own_message_landed: Option<Uuid>,
     /// Set by /watch @user; consumed by `App`.
     requested_watch: Option<String>,
     /// A stream room this session just opened; consumed by `App`, which
@@ -1255,6 +1258,7 @@ impl ChatState {
             requested_crown: None,
             requested_pot: None,
             requested_haunt: None,
+            own_message_landed: None,
             requested_watch: None,
             opened_stream_room: None,
             requested_aquarium_command: None,
@@ -2014,6 +2018,10 @@ impl ChatState {
         &mut self,
     ) -> Option<crate::app::deadchannel::haunt::state::HauntCommand> {
         self.requested_haunt.take()
+    }
+
+    pub(crate) fn take_own_message_landed(&mut self) -> Option<Uuid> {
+        self.own_message_landed.take()
     }
 
     pub(crate) fn take_requested_pot(&mut self) -> Option<PotCommand> {
@@ -3566,7 +3574,7 @@ impl ChatState {
             self.clear_composer_after_submit();
             let Some(command) = parsed else {
                 return Some(Banner::error(
-                    "Usage: /haunt, or /haunt on|off|glitch|replay|reset",
+                    "Usage: /haunt, or /haunt on|off|glitch|name|replay|invite|reset",
                 ));
             };
             self.requested_haunt = Some(command);
@@ -6384,6 +6392,11 @@ impl ChatState {
         // ends the silence actually exists.
         if message.user_id == self.user_id {
             self.clear_afk_line(room_id);
+            // First contact, stage 2 (`app/deadchannel/haunt`): the haunting
+            // rolls its dice on the landing echo of your own send. Recorded
+            // here for the same reason as the AFK clear: every submit path
+            // funnels into this one landing.
+            self.own_message_landed = Some(message.id);
         }
 
         let is_viewing_room = Some(room_id) == self.visible_room_id;

@@ -2181,7 +2181,7 @@ async fn whisper_holds_the_splash_door_then_releases_and_marks_delivery() {
 
     // `make_app` skips the splash; the replay hook re-raises it armed, the
     // same way `/haunt replay` does.
-    app.replay_whisper();
+    crate::app::deadchannel::haunt::svc::replay_whisper(&mut app);
     assert!(app.show_splash);
 
     // Esc is acknowledged but the door is held: the splash does not skip.
@@ -2207,9 +2207,9 @@ async fn whisper_holds_the_splash_door_then_releases_and_marks_delivery() {
                 .await
                 .expect("find user")
                 .expect("user exists");
-            late_core::models::user::extract_first_contact_whisper_done(&user.settings)
+            late_core::models::user::extract_first_contact_whisper_at(&user.settings).is_some()
         },
-        "first contact whisper mark persisted",
+        "first contact whisper stamp persisted",
     )
     .await;
 }

@@ -56,6 +56,52 @@ pub(crate) fn apply_clock_glitch(haunt: &HauntState, marquee_tick: usize, clock:
     }
 }
 
+/// Stage 2's live hit for the chat row builder: which message's author
+/// label to corrupt this frame, and the burst seed. Rides the rows cache
+/// key, so start and heal each rebuild the rows exactly once.
+pub(crate) fn name_flicker_for(
+    haunt: &HauntState,
+    marquee_tick: usize,
+) -> Option<(uuid::Uuid, u64)> {
+    haunt
+        .name_flicker
+        .as_ref()
+        .and_then(|flicker| flicker.corruption(marquee_tick))
+}
+
+/// An author label with one or two of its name characters swapped for
+/// glyph-alphabet characters. Deterministic per burst seed; only
+/// alphanumeric characters are touched, so badges, flags, and spacing
+/// around the name stay intact (chrome stays legible, the name is what
+/// flickers).
+pub(crate) fn glitched_name(label: &str, burst_seed: u64) -> String {
+    let targets: Vec<usize> = label
+        .char_indices()
+        .enumerate()
+        .filter(|(_, (_, ch))| ch.is_alphanumeric())
+        .map(|(char_index, _)| char_index)
+        .collect();
+    if targets.is_empty() {
+        return label.to_string();
+    }
+    let swaps = 1 + (unit_hash(0, 2, burst_seed) < 0.4) as usize;
+    let mut swap_at: Vec<usize> = (0..swaps)
+        .map(|n| targets[(unit_hash(n as u64 + 1, 2, burst_seed) * targets.len() as f32) as usize])
+        .collect();
+    swap_at.dedup();
+    label
+        .chars()
+        .enumerate()
+        .map(|(i, ch)| match swap_at.contains(&i) {
+            true => {
+                let alphabet = crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
+                alphabet[(unit_hash(i as u64, 3, burst_seed) * alphabet.len() as f32) as usize]
+            }
+            false => ch,
+        })
+        .collect()
+}
+
 /// The whisper's splash overlay: the voiced line answering directly under
 /// the coffee cup, and the static surge over everything (input is
 /// acknowledged, control withheld). The dissolving skip hint rides

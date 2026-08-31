@@ -355,11 +355,11 @@ pub struct SessionConfig {
     pub scratchpad_registry: Option<crate::app::scratchpad::registry::SharedScratchpadRegistry>,
     /// True once this user finished (or skipped) the clubhouse tutorial.
     pub clubhouse_tutorial_done: bool,
-    /// True once the first-contact splash whisper has been delivered to this
-    /// user. It fires exactly once per person (GAME.md, First contact).
-    pub first_contact_whisper_done: bool,
-    /// Process-global haunt kill switch (`/haunt on|off`), checked at whisper
-    /// arming and on every splash tick so flipping it off drops live theater.
+    /// This user's persisted first-contact marks (`app/deadchannel/haunt`).
+    pub(crate) first_contact: crate::app::deadchannel::haunt::state::FirstContactMarks,
+    /// Process-global haunt kill switch (`/haunt on|off`), checked at
+    /// arming and on every haunting tick so flipping it off drops live
+    /// theater.
     pub haunt_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Whether the aquarium tray was open when the user last toggled it.
     pub show_aquarium_tray: bool,
@@ -1316,6 +1316,12 @@ impl App {
         } else {
             Screen::Clubhouse
         };
+        let haunt = crate::app::deadchannel::haunt::svc::arm(
+            config.permissions.is_admin(),
+            config.haunt_enabled.clone(),
+            config.user_id,
+            config.first_contact,
+        );
         let mut app = Self {
             running: true,
             size: (cols, rows),
@@ -1437,7 +1443,7 @@ impl App {
             is_moderator: config.permissions.is_moderator(),
             artboard_banned: config.artboard_banned,
             artboard_ban_expires_at: config.artboard_ban_expires_at,
-            haunt: crate::app::deadchannel::haunt::svc::arm(&config),
+            haunt,
             chat: chat::state::ChatState::new(
                 chat::state::ChatServices {
                     chat: config.chat_service,

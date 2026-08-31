@@ -4987,3 +4987,83 @@ mod gild {
             .room_id
     }
 }
+
+#[tokio::test]
+async fn first_contact_invitation_sends_one_dm_and_claims_once() {
+    use crate::app::deadchannel::haunt::state::{VOICE_FINGERPRINT, VOICE_USERNAME};
+
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let target = create_test_user(&test_db.db, "first-contact-target").await;
+
+    // Two racing requests (two devices noticing the due date): the claim
+    // lets exactly one DM through.
+    service.send_first_contact_invitation_task(target.id);
+    service.send_first_contact_invitation_task(target.id);
+
+    let client = test_db.db.get().await.expect("db client");
+    crate::test_helpers::wait_until(
+        || async {
+            let client = test_db.db.get().await.expect("db client");
+            User::find_by_fingerprint(&client, VOICE_FINGERPRINT)
+                .await
+                .expect("find voice")
+                .is_some()
+        },
+        "voice ghost user created",
+    )
+    .await;
+    let voice = User::find_by_fingerprint(&client, VOICE_FINGERPRINT)
+        .await
+        .expect("find voice")
+        .expect("voice exists");
+    assert_eq!(voice.username, VOICE_USERNAME);
+
+    crate::test_helpers::wait_until(
+        || async {
+            let client = test_db.db.get().await.expect("db client");
+            ChatRoom::get_dm(&client, voice.id, target.id)
+                .await
+                .expect("find dm")
+                .is_some()
+        },
+        "invitation dm room created",
+    )
+    .await;
+    let room = ChatRoom::get_dm(&client, voice.id, target.id)
+        .await
+        .expect("find dm")
+        .expect("dm exists");
+
+    crate::test_helpers::wait_until(
+        || async {
+            let client = test_db.db.get().await.expect("db client");
+            let messages = ChatMessage::list_recent(&client, room.id, 10)
+                .await
+                .expect("list dm messages");
+            !messages.is_empty()
+        },
+        "invitation message delivered",
+    )
+    .await;
+    // Give the racing duplicate every chance to (wrongly) land too.
+    sleep(Duration::from_millis(300)).await;
+    let messages = ChatMessage::list_recent(&client, room.id, 10)
+        .await
+        .expect("list dm messages");
+    assert_eq!(messages.len(), 1, "the claim must allow exactly one DM");
+    assert_eq!(messages[0].user_id, voice.id);
+    assert!(messages[0].body.ends_with("/join #deadchannel"));
+
+    // The claim stamp survives on the target's settings.
+    let target_row = User::find_by_username(&client, &target.username)
+        .await
+        .expect("find target")
+        .expect("target exists");
+    assert!(
+        late_core::models::user::extract_first_contact_invited_at(&target_row.settings).is_some()
+    );
+}

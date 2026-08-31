@@ -2865,6 +2865,100 @@ impl ChatService {
         );
     }
 
+    /// First contact, stage 4 (`app/deadchannel/haunt`): the one
+    /// invitation DM from the game's first voice. Ensures the voice's
+    /// ghost user (fixed fingerprint, @bartender's shape, but never
+    /// auto-joined into public rooms: the voice lives in the dark), claims
+    /// the once-ever right to invite this user (a conditional settings
+    /// stamp, so two devices noticing the due date at once send one DM),
+    /// then opens the DM and sends the plea through the normal send path.
+    /// It persists on purpose: an invitation that vanishes cannot be
+    /// followed three days later.
+    pub fn send_first_contact_invitation_task(&self, target_user_id: Uuid) {
+        use crate::app::deadchannel::haunt::state::{
+            INVITATION_PLEA, VOICE_FINGERPRINT, VOICE_USERNAME,
+        };
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result: anyhow::Result<bool> = async {
+                    let client = service.db.get().await?;
+                    if !User::claim_first_contact_invitation(
+                        &client,
+                        target_user_id,
+                        chrono::Utc::now(),
+                    )
+                    .await?
+                    {
+                        return Ok(false);
+                    }
+                    let voice = match User::find_by_fingerprint(&client, VOICE_FINGERPRINT).await? {
+                        Some(existing) => existing,
+                        None => {
+                            let created = User::create(
+                                &client,
+                                late_core::models::user::UserParams {
+                                    fingerprint: VOICE_FINGERPRINT.to_string(),
+                                    username: VOICE_USERNAME.to_string(),
+                                    settings: serde_json::json!({ "bot": true }),
+                                },
+                            )
+                            .await?;
+                            late_core::models::user_ssh_key::UserSshKey::ensure(
+                                &client,
+                                created.id,
+                                VOICE_FINGERPRINT,
+                            )
+                            .await?;
+                            created
+                        }
+                    };
+                    if let Some(directory) = &service.username_directory {
+                        crate::usernames::upsert(directory, voice.id, VOICE_USERNAME);
+                    }
+                    let room =
+                        ChatRoom::get_or_create_dm(&client, voice.id, target_user_id).await?;
+                    ChatRoomMember::join(&client, room.id, voice.id).await?;
+                    ChatRoomMember::join(&client, room.id, target_user_id).await?;
+                    VoiceChannel::upsert_for_target(&client, TARGET_CHAT_ROOM, room.id, "dm", true)
+                        .await?;
+                    drop(client);
+                    service
+                        .send_message(SendMessageParams {
+                            user_id: voice.id,
+                            room_id: room.id,
+                            room_slug: None,
+                            body: INVITATION_PLEA.to_string(),
+                            reply_to_message_id: None,
+                            reply_to_user_id: None,
+                            is_admin: false,
+                        })
+                        .await?;
+                    Ok(true)
+                }
+                .await;
+                match result {
+                    Ok(true) => {
+                        tracing::info!(user_id = %target_user_id, "first contact invitation sent");
+                    }
+                    // Another session claimed it first: nothing to do.
+                    Ok(false) => {}
+                    Err(e) => {
+                        late_core::error_span!(
+                            "first_contact_invitation_failed",
+                            error = ?e,
+                            "failed to send first contact invitation"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.send_first_contact_invitation_task",
+                user_id = %target_user_id,
+            )),
+        );
+    }
+
     pub fn send_message_with_reply_task(&self, task: SendMessageTask) {
         let SendMessageTask {
             user_id,

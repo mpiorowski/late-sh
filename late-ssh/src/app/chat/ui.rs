@@ -142,6 +142,10 @@ pub struct DashboardChatView<'a> {
     /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
     /// `tick.rs`); painted as a presence badge after AFK.
     pub peer_pomodoros: &'a HashMap<Uuid, String>,
+    /// Stage-2 name-flicker hit this frame (first contact,
+    /// `app/deadchannel/haunt`): the message whose author label is
+    /// corrupted, plus its burst seed.
+    pub name_flicker: Option<(Uuid, u64)>,
     pub translations: &'a HashMap<Uuid, TranslationDisplay>,
     pub translation_hidden: &'a HashSet<Uuid>,
     pub active_room_effects: &'a [ActiveChatRoomEffect],
@@ -1214,6 +1218,7 @@ pub fn draw_dashboard_chat_card(
                 drunk_levels: view.drunk_levels,
                 name_flair: view.name_flair,
                 peer_pomodoros: view.peer_pomodoros,
+                name_flicker: view.name_flicker,
                 translations: view.translations,
                 translation_hidden: view.translation_hidden,
             },
@@ -1306,6 +1311,7 @@ struct ChatRowsContext<'a> {
     /// Resolved 24h username-effect styles per author.
     name_flair: &'a HashMap<Uuid, ResolvedName>,
     peer_pomodoros: &'a HashMap<Uuid, String>,
+    name_flicker: Option<(Uuid, u64)>,
     translations: &'a HashMap<Uuid, TranslationDisplay>,
     translation_hidden: &'a HashSet<Uuid>,
 }
@@ -1434,6 +1440,7 @@ struct ChatRowsCacheKey {
     dividers: ChatDividers,
     current_user_id: Uuid,
     show_flag_fallback: bool,
+    name_flicker: Option<(Uuid, u64)>,
 }
 
 #[derive(Default)]
@@ -1466,6 +1473,7 @@ fn chat_rows_cache_key(ctx: &ChatRowsContext<'_>, width: usize) -> ChatRowsCache
         dividers: ctx.dividers,
         current_user_id: ctx.current_user_id,
         show_flag_fallback: ctx.show_flag_fallback,
+        name_flicker: ctx.name_flicker,
     }
 }
 
@@ -1659,6 +1667,15 @@ fn ensure_chat_rows_cache(
             short_user_id(msg.user_id)
         } else {
             format_username_with_country(msg.user_id, raw_author, ctx.countries)
+        };
+        // First contact, stage 2 (`app/deadchannel/haunt`): while a hit is
+        // live, this one message's author label renders with glyph-alphabet
+        // characters, then heals. The label, never the body.
+        let author = match ctx.name_flicker {
+            Some((flicker_id, burst_seed)) if flicker_id == msg.id => {
+                crate::app::deadchannel::haunt::ui::glitched_name(&author, burst_seed)
+            }
+            _ => author,
         };
         let is_bot = is_bot_author(raw_author);
         let is_friend = ctx.friend_user_ids.contains(&msg.user_id);
@@ -2903,6 +2920,10 @@ pub struct ChatRenderInput<'a> {
     /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
     /// `tick.rs`); painted as a presence badge after AFK.
     pub peer_pomodoros: &'a HashMap<Uuid, String>,
+    /// Stage-2 name-flicker hit this frame (first contact,
+    /// `app/deadchannel/haunt`): the message whose author label is
+    /// corrupted, plus its burst seed.
+    pub name_flicker: Option<(Uuid, u64)>,
     pub translations: &'a HashMap<Uuid, TranslationDisplay>,
     pub translation_hidden: &'a HashSet<Uuid>,
     pub news_composer: &'a TextArea<'static>,
@@ -3060,6 +3081,10 @@ pub struct EmbeddedRoomChatView<'a> {
     /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
     /// `tick.rs`); painted as a presence badge after AFK.
     pub peer_pomodoros: &'a HashMap<Uuid, String>,
+    /// Stage-2 name-flicker hit this frame (first contact,
+    /// `app/deadchannel/haunt`): the message whose author label is
+    /// corrupted, plus its burst seed.
+    pub name_flicker: Option<(Uuid, u64)>,
     pub translations: &'a HashMap<Uuid, TranslationDisplay>,
     pub translation_hidden: &'a HashSet<Uuid>,
     pub keep_composer_focused: bool,
@@ -3158,6 +3183,7 @@ pub fn draw_embedded_room_chat(
             drunk_levels: view.drunk_levels,
             name_flair: view.name_flair,
             peer_pomodoros: view.peer_pomodoros,
+            name_flicker: view.name_flicker,
             translations: view.translations,
             translation_hidden: view.translation_hidden,
         },
@@ -4992,6 +5018,7 @@ fn draw_selected_content(
                     drunk_levels: view.drunk_levels,
                     name_flair: view.name_flair,
                     peer_pomodoros: view.peer_pomodoros,
+                    name_flicker: view.name_flicker,
                     translations: view.translations,
                     translation_hidden: view.translation_hidden,
                 },

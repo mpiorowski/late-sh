@@ -130,3 +130,101 @@ fn hard_cap_opens_the_door() {
         WhisperTick::Released { delivered: false }
     );
 }
+
+const DAY: fn() -> NaiveDate = || NaiveDate::from_ymd_opt(2026, 8, 31).unwrap();
+
+#[test]
+fn glitch_fires_when_due_then_heals_and_reschedules() {
+    let mut glitch = ClockGlitch::new(42, 0);
+    let due = glitch.next_at;
+    assert!((GLITCH_GAP_MIN_TICKS..GLITCH_GAP_MAX_TICKS).contains(&due));
+
+    assert_eq!(glitch.tick(due - 1, DAY(), true, true), GlitchTick::Idle);
+    assert_eq!(glitch.tick(due, DAY(), true, true), GlitchTick::Started);
+    // The burst seed is stable for the whole hold, then gone.
+    let seed = glitch.corruption(due);
+    assert!(seed.is_some());
+    assert_eq!(glitch.tick(due + 1, DAY(), true, true), GlitchTick::Idle);
+    assert_eq!(glitch.corruption(due + GLITCH_HOLD_TICKS - 1), seed);
+    assert_eq!(
+        glitch.tick(due + GLITCH_HOLD_TICKS, DAY(), true, true),
+        GlitchTick::Ended
+    );
+    assert_eq!(glitch.corruption(due + GLITCH_HOLD_TICKS), None);
+    assert_eq!(glitch.fired_today, 1);
+    // Rescheduled a full gap out.
+    let gap = glitch.next_at - (due + GLITCH_HOLD_TICKS);
+    assert!((GLITCH_GAP_MIN_TICKS..GLITCH_GAP_MAX_TICKS).contains(&gap));
+}
+
+#[test]
+fn glitch_defers_hidden_reschedules_disabled_and_caps_daily() {
+    let mut glitch = ClockGlitch::new(7, 0);
+
+    // Due while the clock is off screen: a short defer, never spent unseen.
+    let due = glitch.next_at;
+    assert_eq!(glitch.tick(due, DAY(), true, false), GlitchTick::Idle);
+    let defer = glitch.next_at - due;
+    assert!((GLITCH_DEFER_MIN_TICKS..GLITCH_DEFER_MAX_TICKS).contains(&defer));
+
+    // Due while the kill switch is off: a full re-dice.
+    let due = glitch.next_at;
+    assert_eq!(glitch.tick(due, DAY(), false, true), GlitchTick::Idle);
+    assert!((glitch.next_at - due) >= GLITCH_GAP_MIN_TICKS);
+
+    // At the daily cap the burst reschedules instead of firing; the next
+    // UTC day resets the counter and fires again.
+    glitch.fired_today = GLITCH_DAILY_CAP;
+    glitch.today = Some(DAY());
+    let due = glitch.next_at;
+    assert_eq!(glitch.tick(due, DAY(), true, true), GlitchTick::Idle);
+    let due = glitch.next_at;
+    assert_eq!(
+        glitch.tick(due, DAY().succ_opt().unwrap(), true, true),
+        GlitchTick::Started
+    );
+    assert_eq!(glitch.fired_today, 1);
+}
+
+#[test]
+fn name_flicker_rolls_caps_and_forces() {
+    let message = Uuid::now_v7();
+    // At the lifetime cap nothing fires naturally, but the admin force
+    // hook still does, and every hit counts and heals on schedule.
+    let mut flicker = NameFlicker::new(9, NAME_TOTAL_CAP);
+    assert!(!flicker.note_own_message(message, 100, DAY(), true));
+    flicker.force_next();
+    assert!(flicker.note_own_message(message, 100, DAY(), true));
+    assert_eq!(flicker.corruption(100).map(|(id, _)| id), Some(message));
+    assert!(!flicker.tick(100 + NAME_HOLD_TICKS - 1));
+    assert!(flicker.tick(100 + NAME_HOLD_TICKS));
+    assert_eq!(flicker.corruption(100 + NAME_HOLD_TICKS), None);
+    assert_eq!(flicker.total_hits(), NAME_TOTAL_CAP + 1);
+
+    // The kill switch swallows even a forced hit.
+    let mut flicker = NameFlicker::new(9, 0);
+    flicker.force_next();
+    assert!(!flicker.note_own_message(message, 100, DAY(), false));
+
+    // Under the daily cap a natural hit needs the dice; drive sends until
+    // one lands, then the day is spent until the date changes.
+    let mut flicker = NameFlicker::new(5, 0);
+    let hit_at = (0..2_000)
+        .find(|tick| flicker.note_own_message(Uuid::now_v7(), *tick, DAY(), true))
+        .expect("a 1-in-24 roll should land within 2000 sends");
+    assert!(flicker.tick(hit_at + NAME_HOLD_TICKS));
+    assert_eq!(flicker.fired_today, 1);
+    assert!(
+        (0..2_000).all(|tick| !flicker.note_own_message(Uuid::now_v7(), tick, DAY(), true)),
+        "the daily cap must hold for the rest of the day"
+    );
+    assert!(
+        (0..2_000).any(|tick| flicker.note_own_message(
+            Uuid::now_v7(),
+            tick,
+            DAY().succ_opt().unwrap(),
+            true
+        )),
+        "the next day rolls again"
+    );
+}

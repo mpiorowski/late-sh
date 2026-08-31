@@ -16,8 +16,63 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use uuid::Uuid;
+
+/// The game's first voice (stage 4): the character whose plea invites the
+/// chosen into `#deadchannel`. Rides the proven ghost-user plumbing
+/// (dedicated DB user, fixed fingerprint, @bartender's shape). The name
+/// comes from GAME.md's own note that "afterglow" was reserved for naming
+/// something inside the world; copy and name still face design review
+/// before the fuse is lit for real users.
+pub(crate) const VOICE_USERNAME: &str = "afterglow";
+pub(crate) const VOICE_FINGERPRINT: &str = "afterglow-fp-000";
+
+/// Days between the delivered whisper and the invitation DM ("some days
+/// after the held door"). `/haunt invite` skips the wait for testing.
+pub(crate) const INVITE_DELAY_DAYS: i64 = 2;
+
+/// The invitation: a plea, not a pitch, ending with the only instruction
+/// the entire haunting ever gives. Placeholder pool of one until design
+/// review (GAME.md, stage 4); it persists as a real DM on purpose, so an
+/// invitation can be followed three days later.
+pub(crate) const INVITATION_PLEA: &str = "i don't have long on this channel. \
+there is a city under your clubhouse, behind the screen, and something old \
+is broadcasting at the bottom of it. the static has been trying your name \
+for weeks. we need runners. if you're willing: /join #deadchannel";
+
+/// This user's persisted first-contact marks, read from `users.settings`
+/// at session bootstrap. One bundle so the root config carries one field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FirstContactMarks {
+    /// Stage-2 name-flicker hits so far (arms stage 3; caps stage 2).
+    pub(crate) name_hits: u32,
+    /// When the stage-3 whisper was delivered (schedules stage 4).
+    pub(crate) whisper_at: Option<DateTime<Utc>>,
+    /// When the stage-4 invitation DM was sent.
+    pub(crate) invited_at: Option<DateTime<Utc>>,
+}
+
+impl FirstContactMarks {
+    pub(crate) fn from_settings(settings: &serde_json::Value) -> Self {
+        Self {
+            name_hits: late_core::models::user::extract_first_contact_name_hits(settings),
+            whisper_at: late_core::models::user::extract_first_contact_whisper_at(settings),
+            invited_at: late_core::models::user::extract_first_contact_invited_at(settings),
+        }
+    }
+
+    /// Everything already spent: what test apps use so no stage can fire
+    /// under an admin-permission test unless a test arms one on purpose.
+    /// (`test_helpers` compiles unconditionally, so no `#[cfg(test)]`.)
+    pub(crate) fn spent_for_tests() -> Self {
+        Self {
+            name_hits: u32::MAX,
+            whisper_at: Some(Utc::now()),
+            invited_at: Some(Utc::now()),
+        }
+    }
+}
 
 /// The haunting's one slot on `App`: every stage's machine and the flags
 /// that gate them. The root owns the field; everything that reads or
@@ -29,9 +84,14 @@ pub(crate) struct HauntState {
     /// Stage 1: the clock-glitch scheduler. Session-local dice, no
     /// persistence.
     pub(crate) clock_glitch: Option<ClockGlitch>,
-    /// Whether this user has already had the once-ever whisper, mirrored
-    /// from `users.settings` at session start and kept honest in-session.
-    pub(crate) whisper_done: bool,
+    /// Stage 2: the own-name flicker roller.
+    pub(crate) name_flicker: Option<NameFlicker>,
+    /// Persisted marks, mirrored at session start and kept honest
+    /// in-session.
+    pub(crate) marks: FirstContactMarks,
+    /// Whether this session may haunt at all (the admin-scoped gate,
+    /// evaluated once at arming).
+    pub(crate) eligible: bool,
     /// Process-global kill switch, flipped by `/haunt on|off`.
     pub(crate) enabled: Arc<AtomicBool>,
 }
@@ -64,9 +124,13 @@ pub(crate) enum HauntCommand {
     Off,
     /// `/haunt glitch`: fire a clock-glitch burst right now.
     Glitch,
+    /// `/haunt name`: force the next own send to flicker.
+    Name,
     /// `/haunt replay`: re-run the splash whisper now, ignoring the mark.
     Replay,
-    /// `/haunt reset`: clear this user's once-ever mark.
+    /// `/haunt invite`: send the invitation DM now, skipping the delay.
+    Invite,
+    /// `/haunt reset`: clear every first-contact mark for this user.
     Reset,
 }
 
@@ -83,7 +147,9 @@ pub(crate) fn parse_haunt_command(body: &str) -> Option<Option<HauntCommand>> {
         "on" => Some(HauntCommand::On),
         "off" => Some(HauntCommand::Off),
         "glitch" => Some(HauntCommand::Glitch),
+        "name" => Some(HauntCommand::Name),
         "replay" => Some(HauntCommand::Replay),
+        "invite" => Some(HauntCommand::Invite),
         "reset" => Some(HauntCommand::Reset),
         _ => None,
     })
@@ -381,6 +447,115 @@ impl ClockGlitch {
         self.rng ^= self.rng >> 7;
         self.rng ^= self.rng << 17;
         min + (self.rng as usize) % (max - min)
+    }
+}
+
+/// Stage 2: the corruption chooses you, and the target is your own name.
+/// In the sender's session only, immediately after their message lands
+/// (the one moment of guaranteed attention), the author label of that
+/// just-landed message renders with a character or two from the glyph
+/// alphabet, holds ~300ms, heals. The body is never touched: the
+/// escalation over stage 1 is targeting, not content.
+///
+/// How long one hit holds, in `App::marquee_tick` units (~330ms).
+const NAME_HOLD_TICKS: usize = 5;
+/// Order of one in dozens of sends.
+const NAME_CHANCE_ONE_IN: u64 = 24;
+/// At most one hit per UTC day.
+const NAME_DAILY_CAP: u8 = 1;
+/// A handful of total hits per person, ever (the persisted counter).
+const NAME_TOTAL_CAP: u32 = 3;
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct NameFlicker {
+    /// xorshift64 state: the per-send dice.
+    rng: u64,
+    /// The live hit: which message's author label is corrupted, since when.
+    active: Option<(Uuid, usize)>,
+    /// UTC day the daily counter counts within.
+    today: Option<NaiveDate>,
+    fired_today: u8,
+    /// Lifetime hits, seeded from the persisted counter; this is also the
+    /// stage-3 arming counter.
+    total_hits: u32,
+    /// `/haunt name`: the next own send hits regardless of dice and caps.
+    force_next: bool,
+}
+
+impl NameFlicker {
+    pub(crate) fn new(seed: u64, total_hits: u32) -> Self {
+        Self {
+            rng: seed | 1,
+            active: None,
+            today: None,
+            fired_today: 0,
+            total_hits,
+            force_next: false,
+        }
+    }
+
+    /// One of this session's own messages just landed. Rolls the dice;
+    /// returns true when a hit starts (the caller repaints and persists
+    /// the counter).
+    pub(crate) fn note_own_message(
+        &mut self,
+        message_id: Uuid,
+        tick: usize,
+        today: NaiveDate,
+        enabled: bool,
+    ) -> bool {
+        if self.active.is_some() || !enabled {
+            return false;
+        }
+        if self.today != Some(today) {
+            self.today = Some(today);
+            self.fired_today = 0;
+        }
+        let forced = std::mem::take(&mut self.force_next);
+        if !forced {
+            if self.fired_today >= NAME_DAILY_CAP || self.total_hits >= NAME_TOTAL_CAP {
+                return false;
+            }
+            self.rng ^= self.rng << 13;
+            self.rng ^= self.rng >> 7;
+            self.rng ^= self.rng << 17;
+            if self.rng % NAME_CHANCE_ONE_IN != 0 {
+                return false;
+            }
+        }
+        self.active = Some((message_id, tick));
+        self.fired_today += 1;
+        self.total_hits += 1;
+        true
+    }
+
+    /// Advance one world tick; returns true on the heal edge (the caller
+    /// repaints the healed label).
+    pub(crate) fn tick(&mut self, tick: usize) -> bool {
+        match self.active {
+            Some((_, since)) if tick.saturating_sub(since) >= NAME_HOLD_TICKS => {
+                self.active = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The live hit for the row builder: which message's author label to
+    /// corrupt, and the burst seed for the deterministic swap.
+    pub(crate) fn corruption(&self, tick: usize) -> Option<(Uuid, u64)> {
+        let (message_id, since) = self.active?;
+        (tick.saturating_sub(since) < NAME_HOLD_TICKS)
+            .then(|| (message_id, self.rng ^ ((since as u64) << 1 | 1)))
+    }
+
+    pub(crate) fn total_hits(&self) -> u32 {
+        self.total_hits
+    }
+
+    /// `/haunt name`: force the next own send to hit. Admin test hook.
+    pub(crate) fn force_next(&mut self) {
+        self.force_next = true;
     }
 }
 

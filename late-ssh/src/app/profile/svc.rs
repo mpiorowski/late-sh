@@ -340,25 +340,63 @@ impl ProfileService {
         );
     }
 
-    /// Fire-and-forget: record whether the first-contact splash whisper has
-    /// been delivered (`true` when it completes; `false` from the admin
-    /// `/haunt reset` test hook). A failure is only logged: worst case the
-    /// whisper plays once more next session, which only admins can hit while
-    /// first contact stays admin-scoped.
-    pub fn set_first_contact_whisper_done(&self, user_id: Uuid, done: bool) {
+    /// Fire-and-forget: stamp when the first-contact splash whisper was
+    /// delivered. A failure is only logged: worst case the whisper plays
+    /// once more next session, which only admins can hit while first
+    /// contact stays admin-scoped.
+    pub fn set_first_contact_whisper_at(&self, user_id: Uuid, at: chrono::DateTime<chrono::Utc>) {
         let service = self.clone();
         tokio::spawn(
             async move {
                 let result = async {
                     let client = service.db.get().await?;
-                    User::set_first_contact_whisper_done(&client, user_id, done).await
+                    User::set_first_contact_whisper_at(&client, user_id, at).await
                 }
                 .await;
                 if let Err(e) = result {
-                    tracing::warn!(error = ?e, done, "failed to persist first contact whisper mark");
+                    tracing::warn!(error = ?e, "failed to persist first contact whisper stamp");
                 }
             }
             .instrument(info_span!("profile.first_contact_whisper_task", user_id = %user_id)),
+        );
+    }
+
+    /// Fire-and-forget: count one stage-2 name-flicker hit (the counter
+    /// that arms the stage-3 whisper). A lost write costs one uncounted
+    /// flicker; the in-session mirror still caps the day.
+    pub fn record_first_contact_name_hit(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::record_first_contact_name_hit(&client, user_id).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist first contact name hit");
+                }
+            }
+            .instrument(info_span!("profile.first_contact_name_hit_task", user_id = %user_id)),
+        );
+    }
+
+    /// Fire-and-forget: wipe every first-contact mark (the admin
+    /// `/haunt reset` test hook).
+    pub fn reset_first_contact(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::reset_first_contact(&client, user_id).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to reset first contact marks");
+                }
+            }
+            .instrument(info_span!("profile.first_contact_reset_task", user_id = %user_id)),
         );
     }
 

@@ -379,7 +379,9 @@ const AUTO_TRANSLATE_KEY: &str = "auto_translate";
 const TRANSLATE_MINE_TO_EN_KEY: &str = "translate_mine_to_en";
 const SHOW_FLAG_FALLBACK_KEY: &str = "show_flag_fallback";
 const CLUBHOUSE_TUTORIAL_DONE_KEY: &str = "clubhouse_tutorial_done";
-const FIRST_CONTACT_WHISPER_DONE_KEY: &str = "first_contact_whisper_done";
+const FIRST_CONTACT_NAME_HITS_KEY: &str = "first_contact_name_hits";
+const FIRST_CONTACT_WHISPER_AT_KEY: &str = "first_contact_whisper_at";
+const FIRST_CONTACT_INVITED_AT_KEY: &str = "first_contact_invited_at";
 const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
 const FAVORITE_THEME_IDS_KEY: &str = "favorite_theme_ids";
 const BIO_KEY: &str = "bio";
@@ -914,22 +916,90 @@ impl User {
         Ok(())
     }
 
-    /// Record whether the first-contact splash whisper has been delivered to
-    /// this user. It fires exactly once per person, so `true` is written when
-    /// the whisper completes; `false` exists for the admin `/haunt reset`
-    /// test hook.
-    pub async fn set_first_contact_whisper_done(
-        client: &Client,
-        user_id: Uuid,
-        done: bool,
-    ) -> Result<()> {
+    /// Count one first-contact name-flicker hit (stage 2). The counter is
+    /// what arms the stage-3 whisper for the next fresh connect, and it caps
+    /// the total flickers a person ever gets.
+    pub async fn record_first_contact_name_hit(client: &Client, user_id: Uuid) -> Result<()> {
         let updated = client
             .execute(
                 "UPDATE users
-                 SET settings = settings || jsonb_build_object($1::text, $2::bool),
+                 SET settings = jsonb_set(
+                         settings,
+                         ARRAY[$1::text],
+                         to_jsonb(COALESCE((settings->>$1)::int, 0) + 1)
+                     ),
+                     updated = current_timestamp
+                 WHERE id = $2",
+                &[&FIRST_CONTACT_NAME_HITS_KEY, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    /// Stamp when the first-contact splash whisper was delivered (stage 3).
+    /// It fires exactly once per person; the stamp is also what schedules
+    /// the stage-4 invitation some days later.
+    pub async fn set_first_contact_whisper_at(
+        client: &Client,
+        user_id: Uuid,
+        at: DateTime<Utc>,
+    ) -> Result<()> {
+        let value = at.to_rfc3339();
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::text),
                      updated = current_timestamp
                  WHERE id = $3",
-                &[&FIRST_CONTACT_WHISPER_DONE_KEY, &done, &user_id],
+                &[&FIRST_CONTACT_WHISPER_AT_KEY, &value, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    /// Claim the right to send this user their one first-contact invitation
+    /// (stage 4). Conditional on the stamp being absent, so of several
+    /// sessions noticing the due date at once exactly one sends the DM.
+    /// Returns whether this caller won the claim.
+    pub async fn claim_first_contact_invitation(
+        client: &Client,
+        user_id: Uuid,
+        at: DateTime<Utc>,
+    ) -> Result<bool> {
+        let value = at.to_rfc3339();
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::text),
+                     updated = current_timestamp
+                 WHERE id = $3 AND NOT (settings ? $1)",
+                &[&FIRST_CONTACT_INVITED_AT_KEY, &value, &user_id],
+            )
+            .await?;
+        Ok(updated == 1)
+    }
+
+    /// Wipe every first-contact mark (the admin `/haunt reset` test hook):
+    /// name hits, the whisper stamp, and the invitation stamp.
+    pub async fn reset_first_contact(client: &Client, user_id: Uuid) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings - $1 - $2 - $3,
+                     updated = current_timestamp
+                 WHERE id = $4",
+                &[
+                    &FIRST_CONTACT_NAME_HITS_KEY,
+                    &FIRST_CONTACT_WHISPER_AT_KEY,
+                    &FIRST_CONTACT_INVITED_AT_KEY,
+                    &user_id,
+                ],
             )
             .await?;
         if updated == 0 {
@@ -1490,14 +1560,35 @@ pub fn extract_clubhouse_tutorial_done(settings: &Value) -> bool {
         .unwrap_or(false)
 }
 
-/// True once the first-contact splash whisper has been delivered to this
-/// user; defaults to false. The whisper fires exactly once per person
-/// (GAME.md, First contact), so this is the once-ever guard.
-pub fn extract_first_contact_whisper_done(settings: &Value) -> bool {
+/// First-contact stage-2 name-flicker hits so far; defaults to 0. Arms the
+/// stage-3 whisper once positive, and caps total flickers per person.
+pub fn extract_first_contact_name_hits(settings: &Value) -> u32 {
     settings
-        .get(FIRST_CONTACT_WHISPER_DONE_KEY)
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+        .get(FIRST_CONTACT_NAME_HITS_KEY)
+        .and_then(Value::as_u64)
+        .map(|hits| hits.min(u32::MAX as u64) as u32)
+        .unwrap_or(0)
+}
+
+fn extract_rfc3339(settings: &Value, key: &str) -> Option<DateTime<Utc>> {
+    settings
+        .get(key)
+        .and_then(Value::as_str)
+        .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
+        .map(|at| at.with_timezone(&Utc))
+}
+
+/// When the first-contact splash whisper was delivered, or `None` while it
+/// is still owed. The whisper fires exactly once per person (GAME.md,
+/// First contact); the stamp schedules the stage-4 invitation.
+pub fn extract_first_contact_whisper_at(settings: &Value) -> Option<DateTime<Utc>> {
+    extract_rfc3339(settings, FIRST_CONTACT_WHISPER_AT_KEY)
+}
+
+/// When the first-contact invitation DM was sent, or `None` while it is
+/// still ahead.
+pub fn extract_first_contact_invited_at(settings: &Value) -> Option<DateTime<Utc>> {
+    extract_rfc3339(settings, FIRST_CONTACT_INVITED_AT_KEY)
 }
 
 /// Tweak: show text labels instead of flag emoji in the shop Flags tab for

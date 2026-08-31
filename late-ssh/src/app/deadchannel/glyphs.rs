@@ -6,5 +6,4 @@
 /// The fixed glyph alphabet: the characters the city's fauna is made of.
 /// Distinct on purpose from the static shades (`░▒▓`, `haunt/ui.rs`):
 /// static is noise, glyphs are creatures.
-pub(crate) const GLYPH_ALPHABET: [char; 10] =
-    ['▖', '▘', '▝', '▗', '▚', '▞', '╬', '╪', '╫', '┼'];
+pub(crate) const GLYPH_ALPHABET: [char; 10] = ['▖', '▘', '▝', '▗', '▚', '▞', '╬', '╪', '╫', '┼'];
