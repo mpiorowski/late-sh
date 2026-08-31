@@ -1,4 +1,4 @@
-# Haunt Context (late-ssh/src/app/haunt)
+# Haunt Context (late-ssh/src/app/deadchannel)
 
 ## Metadata
 - Domain: first contact for deadchannel (GAME.md), currently stage 3 only:

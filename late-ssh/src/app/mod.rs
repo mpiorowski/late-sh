@@ -15,11 +15,11 @@ pub mod crown;
 pub mod dashboard;
 #[cfg(test)]
 mod dashboard_flow_test;
+pub(crate) mod deadchannel;
 pub(crate) mod directory;
 pub mod door;
 pub mod files;
 pub mod games;
-pub(crate) mod haunt;
 pub(crate) mod help_modal;
 pub(crate) mod hub;
 pub(crate) mod icon_picker;

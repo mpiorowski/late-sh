@@ -283,7 +283,16 @@ glyphs and the Old Signal).
      game's public phase, once enough runners exist to make it a show.
 - **The eligibility gate is a whisper campaign.** Stages 2-4 target users
   with a filled bio, touched settings, and real tenure (thresholds at
-  design review): the static chooses the invested. Side effects are the
+  design review): the static chooses the invested. Stage 1 is universal
+  on purpose (ambient, harmless, and the "did anyone else see that?"
+  gossip works better when anyone might have). The gate is evaluated at
+  session init (three cheap reads where the user row already loads) and
+  arms that session's stage-2 dice; no stored chosen flag, so filling
+  your bio tonight means the static can find you tomorrow, and if the
+  community reverse-engineers the pattern, that folklore does the
+  profile push for free. Eligibility gates *entering* the funnel, never
+  continuing it: once the arming counter has hits, the haunting does
+  not retreat, whatever later happens to the bio. Side effects are the
   point: it pushes profile completion, and it makes the first glitch a
   social event (the chosen asking #lounge "did anyone else see that??"
   while half the room has no idea). The mystery ships a story into

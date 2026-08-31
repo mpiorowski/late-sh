@@ -273,8 +273,8 @@ struct DrawContext<'a> {
     splash_ticks: usize,
     splash_hint: &'a str,
     /// One frame of first-contact whisper theater over the splash, `None`
-    /// unless the door is held this frame. See `app/haunt`.
-    whisper: Option<crate::app::haunt::ui::WhisperFrame>,
+    /// unless the door is held this frame. See `app/deadchannel`.
+    whisper: Option<crate::app::deadchannel::haunt::ui::WhisperFrame>,
     listen_url: &'a str,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
@@ -450,7 +450,13 @@ impl App {
         let paired_client = self.paired_client_state();
         let paired_cli_supports_voice = self.paired_cli_supports_voice();
         let banner = self.active_banner().cloned();
-        let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
+        // First contact, stage 1 (`app/deadchannel/haunt`): a live glitch
+        // burst swaps a clock character or two for the glyph alphabet.
+        let sidebar_clock = crate::app::deadchannel::haunt::ui::apply_clock_glitch(
+            &self.haunt,
+            self.marquee_tick,
+            sidebar_clock_text(self.profile_state.profile().timezone.as_deref()),
+        );
         // The username directory snapshot is refreshed on the ~1s tick
         // cadence (tick.rs), where its pointer-compare also bumps the row
         // cache epoch; renders read the stored Arc only.
@@ -1122,13 +1128,11 @@ impl App {
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
-                        whisper: self.whisper.as_ref().map(|whisper| {
-                            crate::app::haunt::ui::whisper_frame(
-                                whisper,
-                                self.splash_ticks,
-                                &self.splash_hint,
-                            )
-                        }),
+                        whisper: crate::app::deadchannel::haunt::ui::whisper_frame_for(
+                            &self.haunt,
+                            self.splash_ticks,
+                            &self.splash_hint,
+                        ),
                         listen_url: &listen_url,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
@@ -1321,7 +1325,7 @@ impl App {
                 // The static surge paints last, over everything: input is
                 // acknowledged, control withheld.
                 if let Some(progress) = whisper.surge {
-                    crate::app::haunt::ui::draw_static_surge(
+                    crate::app::deadchannel::haunt::ui::draw_static_surge(
                         frame,
                         area,
                         ctx.splash_ticks,

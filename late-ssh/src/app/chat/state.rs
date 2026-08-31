@@ -329,43 +329,6 @@ fn parse_crown_command(body: &str) -> Option<Option<CrownCommand>> {
     })
 }
 
-/// The `/haunt` admin controls for first contact (`app/haunt`), requested
-/// from the composer. `App` owns the whisper state and the kill switch, so
-/// the composer just records the intent. Deliberately absent from help and
-/// autocomplete, and only ever parsed for admins: for everyone else the
-/// line posts as plain text, exactly as if the command did not exist.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum HauntCommand {
-    /// `/haunt`: kill switch, once-ever mark, and door state.
-    Status,
-    /// `/haunt on`: re-enable the haunting process-wide.
-    On,
-    /// `/haunt off`: the kill switch; a live whisper drops mid-scene.
-    Off,
-    /// `/haunt replay`: re-run the splash whisper now, ignoring the mark.
-    Replay,
-    /// `/haunt reset`: clear this user's once-ever mark.
-    Reset,
-}
-
-/// `Some(Some(command))` on a well-formed `/haunt` line, `Some(None)` on
-/// anything else after `/haunt` (usage banner), `None` when the line is not
-/// a haunt command at all.
-fn parse_haunt_command(body: &str) -> Option<Option<HauntCommand>> {
-    let rest = body.trim().strip_prefix("/haunt")?;
-    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
-        return None;
-    }
-    Some(match rest.trim() {
-        "" => Some(HauntCommand::Status),
-        "on" => Some(HauntCommand::On),
-        "off" => Some(HauntCommand::Off),
-        "replay" => Some(HauntCommand::Replay),
-        "reset" => Some(HauntCommand::Reset),
-        _ => None,
-    })
-}
-
 /// The pot, requested from the composer. `App` owns the pot service, so the
 /// composer just records the intent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -976,8 +939,9 @@ pub struct ChatState {
     requested_golive: Option<GoLiveCommand>,
     requested_crown: Option<CrownCommand>,
     requested_pot: Option<PotCommand>,
-    /// Set by an admin's /haunt; consumed by `App` (which owns the whisper).
-    requested_haunt: Option<HauntCommand>,
+    /// Set by an admin's /haunt; consumed by `deadchannel::haunt::svc`
+    /// (which owns the whisper and the kill switch).
+    requested_haunt: Option<crate::app::deadchannel::haunt::state::HauntCommand>,
     /// Set by /watch @user; consumed by `App`.
     requested_watch: Option<String>,
     /// A stream room this session just opened; consumed by `App`, which
@@ -2046,7 +2010,9 @@ impl ChatState {
         self.requested_crown.take()
     }
 
-    pub(crate) fn take_requested_haunt(&mut self) -> Option<HauntCommand> {
+    pub(crate) fn take_requested_haunt(
+        &mut self,
+    ) -> Option<crate::app::deadchannel::haunt::state::HauntCommand> {
         self.requested_haunt.take()
     }
 
@@ -3595,12 +3561,12 @@ impl ChatState {
         // non-admin the line falls through and posts as plain text, exactly
         // as if the command did not exist. First contact stays a mystery.
         if self.is_admin
-            && let Some(parsed) = parse_haunt_command(&body)
+            && let Some(parsed) = crate::app::deadchannel::haunt::state::parse_haunt_command(&body)
         {
             self.clear_composer_after_submit();
             let Some(command) = parsed else {
                 return Some(Banner::error(
-                    "Usage: /haunt, or /haunt on|off|replay|reset",
+                    "Usage: /haunt, or /haunt on|off|glitch|replay|reset",
                 ));
             };
             self.requested_haunt = Some(command);

@@ -9,8 +9,11 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 
-use super::state::WhisperState;
+use super::state::{HauntState, WhisperState};
 use crate::app::common::theme;
 
 /// One frame of whisper theater, precomputed for the splash renderer.
@@ -24,6 +27,60 @@ pub(crate) struct WhisperFrame {
     /// A live static surge, 0.0 (fresh burst) to 1.0 (faded).
     pub(crate) surge: Option<f32>,
     pub(crate) seed: u64,
+}
+
+/// The whisper theater for this frame, or `None` while the door is not
+/// held. What `DrawContext` carries; the root only routes.
+pub(crate) fn whisper_frame_for(
+    haunt: &HauntState,
+    splash_ticks: usize,
+    hint: &str,
+) -> Option<WhisperFrame> {
+    haunt
+        .whisper
+        .as_ref()
+        .map(|whisper| whisper_frame(whisper, splash_ticks, hint))
+}
+
+/// The sidebar clock as it should draw this frame: glitched while a
+/// stage-1 burst is live, untouched otherwise. Draw-time transform only;
+/// the clock text itself is never wrong.
+pub(crate) fn apply_clock_glitch(haunt: &HauntState, marquee_tick: usize, clock: String) -> String {
+    match haunt
+        .clock_glitch
+        .as_ref()
+        .and_then(|glitch| glitch.corruption(marquee_tick))
+    {
+        Some(burst_seed) => glitched_clock(&clock, burst_seed),
+        None => clock,
+    }
+}
+
+/// The whisper's splash overlay: the voiced line answering directly under
+/// the coffee cup, and the static surge over everything (input is
+/// acknowledged, control withheld). The dissolving skip hint rides
+/// `WhisperFrame::hint` in the splash's own hint draw.
+pub(crate) fn draw_splash_whisper(
+    frame: &mut Frame,
+    area: Rect,
+    splash_bottom: u16,
+    whisper: &WhisperFrame,
+    splash_ticks: usize,
+) {
+    let line_y = splash_bottom + 1;
+    if !whisper.line.is_empty() && line_y < area.bottom() {
+        let line_area = Rect::new(area.x, line_y, area.width, 1);
+        let line = Line::from(Span::styled(
+            whisper.line.clone(),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::ITALIC),
+        ));
+        frame.render_widget(Paragraph::new(line).centered(), line_area);
+    }
+    if let Some(progress) = whisper.surge {
+        draw_static_surge(frame, area, splash_ticks, whisper.seed, progress);
+    }
 }
 
 pub(crate) fn whisper_frame(state: &WhisperState, tick: usize, hint: &str) -> WhisperFrame {
@@ -113,6 +170,39 @@ fn static_glyph(unit: f32) -> char {
         1 => '▒',
         _ => '▓',
     }
+}
+
+/// Stage 1: the sidebar clock with one or two characters swapped for
+/// glyph-alphabet characters. Deterministic per burst seed, so the same
+/// burst paints the same corruption on every frame of its ~200ms hold.
+/// Only the time itself (digits and the colon) is touched: the timezone
+/// label staying intact is what makes the wrongness legible.
+pub(crate) fn glitched_clock(clock: &str, burst_seed: u64) -> String {
+    let targets: Vec<usize> = clock
+        .char_indices()
+        .enumerate()
+        .filter(|(_, (_, ch))| ch.is_ascii_digit() || *ch == ':')
+        .map(|(char_index, _)| char_index)
+        .collect();
+    if targets.is_empty() {
+        return clock.to_string();
+    }
+    let swaps = 1 + (unit_hash(0, 0, burst_seed) < 0.4) as usize;
+    let mut swap_at: Vec<usize> = (0..swaps)
+        .map(|n| targets[(unit_hash(n as u64 + 1, 0, burst_seed) * targets.len() as f32) as usize])
+        .collect();
+    swap_at.dedup();
+    clock
+        .chars()
+        .enumerate()
+        .map(|(i, ch)| match swap_at.contains(&i) {
+            true => {
+                let alphabet = crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
+                alphabet[(unit_hash(i as u64, 1, burst_seed) * alphabet.len() as f32) as usize]
+            }
+            false => ch,
+        })
+        .collect()
 }
 
 /// Deterministic hash of (key, tick, seed) spread over [0, 1).

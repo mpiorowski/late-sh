@@ -586,19 +586,12 @@ pub fn handle(app: &mut App, data: &[u8]) {
                 _ => {}
             }
         }
-        // First contact: an armed whisper holds the door. Input is
-        // acknowledged (the machine surges static and dissolves the skip
-        // hint) but the splash does not skip; the machine releases it on
-        // its own clock (`app/haunt`). Silently ignoring input would read
-        // as a hung terminal, the exact panic the hard rules forbid.
+        // First contact: an armed whisper holds the door, so input goes to
+        // the machine instead of skipping (`app/deadchannel/haunt`).
         if !saw_terminal_reply
             && !data.is_empty()
-            && let Some(whisper) = app.whisper.as_mut()
+            && crate::app::deadchannel::haunt::svc::note_splash_input(app)
         {
-            whisper.note_input(app.splash_ticks);
-            // A swallowed ESC leaves the parser mid-escape; same reset as
-            // the normal skip below.
-            app.vt_input.reset();
             return;
         }
         // Escape skips the rest of the intro animation. XTVERSION DCS replies

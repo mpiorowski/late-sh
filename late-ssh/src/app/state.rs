@@ -594,15 +594,10 @@ pub struct App {
     pub(crate) is_moderator: bool,
     pub(crate) artboard_banned: bool,
     pub(crate) artboard_ban_expires_at: Option<DateTime<Utc>>,
-    /// First contact, stage 3: the armed splash whisper (`app/haunt`).
-    /// `Some` only while the splash is holding the door for it. Admin-scoped
-    /// scaffolding: only admin sessions ever arm it.
-    pub(crate) whisper: Option<crate::app::haunt::state::WhisperState>,
-    /// Whether this user has already had the once-ever whisper, mirrored
-    /// from `users.settings` at session start and kept honest in-session.
-    pub(crate) first_contact_whisper_done: bool,
-    /// Process-global haunt kill switch, flipped by `/haunt on|off`.
-    pub(crate) haunt_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// First contact, the haunting (`app/deadchannel/haunt`): every
+    /// stage's machine and the flags that gate them, in one slot.
+    /// Admin-scoped scaffolding; `haunt::svc` owns all reads and writes.
+    pub(crate) haunt: crate::app::deadchannel::haunt::state::HauntState,
 
     /// Chat
     pub(crate) chat: chat::state::ChatState,
@@ -962,7 +957,7 @@ impl App {
 
     pub fn skip_splash_for_tests(&mut self) {
         self.show_splash = false;
-        self.whisper = None;
+        self.haunt.clear_whisper();
         self.show_settings = false;
         self.show_quit_confirm = false;
         self.show_hub_modal = false;
@@ -1442,17 +1437,7 @@ impl App {
             is_moderator: config.permissions.is_moderator(),
             artboard_banned: config.artboard_banned,
             artboard_ban_expires_at: config.artboard_ban_expires_at,
-            // First contact is a nonrenewable resource: while it is
-            // admin-scoped scaffolding the whisper never arms for anyone
-            // else (GAME.md, First contact).
-            whisper: (config.permissions.is_admin()
-                && !config.first_contact_whisper_done
-                && config
-                    .haunt_enabled
-                    .load(std::sync::atomic::Ordering::Relaxed))
-            .then(|| crate::app::haunt::state::WhisperState::for_user(config.user_id)),
-            first_contact_whisper_done: config.first_contact_whisper_done,
-            haunt_enabled: config.haunt_enabled.clone(),
+            haunt: crate::app::deadchannel::haunt::svc::arm(&config),
             chat: chat::state::ChatState::new(
                 chat::state::ChatServices {
                     chat: config.chat_service,
@@ -2582,73 +2567,6 @@ impl App {
             lounge_messages,
             chrono::Utc::now(),
         );
-    }
-
-    /// Re-run the splash with the whisper armed, ignoring the once-ever
-    /// mark. The `/haunt replay` admin test hook; a completed replay still
-    /// re-marks delivery through the normal release path.
-    pub(crate) fn replay_whisper(&mut self) {
-        self.whisper = Some(crate::app::haunt::state::WhisperState::for_user(
-            self.user_id,
-        ));
-        self.show_splash = true;
-        self.splash_ticks = 0;
-    }
-
-    /// Drain the `/haunt` admin command. The composer only records it for
-    /// admins, so everything here trusts the caller.
-    pub(crate) fn tick_haunt(&mut self) -> bool {
-        use std::sync::atomic::Ordering;
-        let Some(command) = self.chat.take_requested_haunt() else {
-            return false;
-        };
-        match command {
-            crate::app::chat::state::HauntCommand::Status => {
-                let enabled = if self.haunt_enabled.load(Ordering::Relaxed) {
-                    "on"
-                } else {
-                    "off"
-                };
-                let whisper = if self.first_contact_whisper_done {
-                    "delivered"
-                } else {
-                    "pending"
-                };
-                let door = if self.whisper.is_some() {
-                    "armed"
-                } else {
-                    "idle"
-                };
-                self.banner = Some(Banner::info(&format!(
-                    "Haunt {enabled} · whisper {whisper} · door {door}"
-                )));
-            }
-            crate::app::chat::state::HauntCommand::On => {
-                self.haunt_enabled.store(true, Ordering::Relaxed);
-                tracing::info!(user_id = %self.user_id, "haunt enabled");
-                self.banner = Some(Banner::success("Haunt on"));
-            }
-            crate::app::chat::state::HauntCommand::Off => {
-                // A live whisper drops on its own next splash tick: the
-                // machine reads this switch every tick.
-                self.haunt_enabled.store(false, Ordering::Relaxed);
-                tracing::info!(user_id = %self.user_id, "haunt disabled (kill switch)");
-                self.banner = Some(Banner::success("Haunt off"));
-            }
-            crate::app::chat::state::HauntCommand::Replay => {
-                self.replay_whisper();
-            }
-            crate::app::chat::state::HauntCommand::Reset => {
-                self.first_contact_whisper_done = false;
-                self.profile_state
-                    .service()
-                    .set_first_contact_whisper_done(self.user_id, false);
-                self.banner = Some(Banner::success(
-                    "Whisper mark cleared - it arms again next session",
-                ));
-            }
-        }
-        true
     }
 
     /// Persist "the clubhouse tutorial ran" (fire-and-forget).

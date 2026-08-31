@@ -7,7 +7,7 @@
   joins the admin commands in §8: parsed in `submit_composer` only when
   `is_admin` so a non-admin's `/haunt` posts as plain text, recorded as
   `requested_haunt` and drained by `App::tick_haunt`. Domain contract:
-  `late-ssh/src/app/haunt/CONTEXT.md`.) Previously
+  `late-ssh/src/app/deadchannel/CONTEXT.md`.) Previously
   2026-08-30 (round drinks stack: the one-open-credit index is
   gone (migration 168), replaced by a `MAX_OPEN_CREDITS` (3) cap counted in
   the grant under an advisory lock, so a patron away for three rounds is owed
@@ -386,7 +386,7 @@ Admin commands:
   the line posts as plain text, so the command does not observably exist
   (no usage banner, no autocomplete entry, no help line - the mystery is
   the feature). Drained by `App::tick_haunt`; the domain contract is
-  `late-ssh/src/app/haunt/CONTEXT.md`.
+  `late-ssh/src/app/deadchannel/CONTEXT.md`.
 - `/create-room #room` creates a permanent auto-join room and bulk-adds existing users. It is idempotent on rooms that are already permanent, and it promotes an existing non-permanent public room to permanent + auto-join (`ChatRoom::ensure_permanent` UPDATEs the row, then the caller bulk-adds users) — this is how a user-created `/public #voice` room becomes the permanent `#voice` core room. Because promotion bulk-adds every user to a room nobody can leave, `/create-room` is admin-only and a mistyped slug will promote whatever public room matches it.
 - `/delete-room #room` deletes a permanent room.
 - `/fill-room #room` bulk-adds all users to an existing public room and flips `auto_join=true`; private rooms cannot be filled.
