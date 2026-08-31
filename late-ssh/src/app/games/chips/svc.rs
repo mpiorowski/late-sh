@@ -278,9 +278,10 @@ impl ChipService {
         })
     }
 
-    /// The patron's open credit, read before the bartender decides anything so
-    /// his line can name who is buying. Not a claim: [`Self::cash_round_drink`]
-    /// is what spends it.
+    /// The patron's next open credit, read before the bartender decides
+    /// anything so the prompt knows the pour is comped. Not a claim, and not
+    /// where the buyer's name comes from: [`Self::cash_round_drink`] is what
+    /// spends a credit, and the one it spends names the buyer.
     pub async fn open_round_credit(&self, user_id: Uuid) -> anyhow::Result<Option<OpenCredit>> {
         let client = self.db.get().await?;
         DrinkCredit::find_open(&client, user_id).await

@@ -315,8 +315,9 @@ pub struct DrinkCredit;
 
 impl DrinkCredit {
     /// The credit the patron would drink next: the one closest to going cold,
-    /// out of however many they are holding. Read before pouring so the
-    /// bartender's line can name who bought it.
+    /// out of however many they are holding. Read before pouring so the bar
+    /// knows the pour is comped; who bought it comes from [`DrinkCredit::cash`],
+    /// which may spend a different credit than was open here.
     pub async fn find_open(
         client: &impl GenericClient,
         user_id: Uuid,
@@ -350,7 +351,10 @@ impl DrinkCredit {
     ///
     /// `remaining` excludes the cashed row by id rather than being counted
     /// afterwards, because a data-modifying CTE's write is not visible to the
-    /// rest of its own statement.
+    /// rest of its own statement. It can still over-count by one in the
+    /// two-simultaneous-orders race: the other pour's credit is locked but
+    /// not yet committed, so both snapshots still count it. One optimistic
+    /// scripted line, self-correcting on the next order; accepted.
     pub async fn cash(client: &impl GenericClient, user_id: Uuid) -> Result<Option<CashedCredit>> {
         let row = client
             .query_opt(

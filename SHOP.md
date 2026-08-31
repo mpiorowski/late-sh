@@ -104,11 +104,12 @@ North-star check, borrowed from GAME.md: **does it ship a story into
 | Pot per-user cap | 10 tickets per UTC day, 70 a week (was 50 per pot while the pot was daily; decided 2026-08-27) |
 | Pot payout | 80% of ticket sum to one ticket-weighted winner; 20% never re-minted |
 | Pot draw | Monday 21:00 UTC, two constants (weekly since 2026-08-27; the hour is the EU evening / US afternoon overlap) |
-| News share | 500 per link, once per URL per person, at most 3 paid per UTC day (PR #565; the only chip reward outside the Shop and the games, and `s` on an RSS entry is one keypress, so the day cap is what keeps an inbox from being a printer) |
+| News share | 500 per link, once per URL per person, at most 3 paid per UTC day (PR #565; `s` on an RSS entry is one keypress, so the day cap is what keeps an inbox from being a printer) |
+| Song queue reward | 200 per YouTube track queued, at most 5 paid per UTC day; every track pays, repeats and History re-queues included, the day cap is the only gate (the second chip reward outside the Shop and the games, after the News share) |
 | Pot threshold lines | none (removed 2026-08-27, migration 162: the size rides the status HUD on every screen all week, so a mid-week #lounge nudge repeated the border) |
 | Round price | 100 a head, matching the cheapest pour: a round is a lot of small kindnesses, and the room's size is the only multiplier |
-| Round drink | 300 drunk points, three times what the buyer paid and exactly the buzzed threshold, so a sober room visibly moves a level; the buzz is free to hand out, only the chips are a sink |
-| Round credit | one open per patron at a time, 24h to claim, cashed by ordering from @bartender |
+| Round drink | 400 drunk points, four times what the buyer paid: it was 300, exactly the buzzed threshold, and the first decay tick dropped the drinker straight back to tipsy; the buzz is free to hand out, only the chips are a sink |
+| Round credit | up to `MAX_OPEN_CREDITS` (3) open per patron (migration 168; was one), 24h each to claim, cashed oldest-first by ordering from @bartender |
 
 ## Process
 

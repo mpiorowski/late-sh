@@ -129,6 +129,7 @@ pub enum AudioEvent {
     TrustedSubmitQueued {
         user_id: Uuid,
         position: i64,
+        reward_chips: i64,
     },
     TrustedSubmitFailed {
         user_id: Uuid,
@@ -273,9 +274,9 @@ pub struct SubmitQueueResponse {
     pub duration_ms: Option<i32>,
     pub position_in_queue: i64,
     /// What bringing this track actually minted: zero when the submitter has
-    /// already been paid for it or has hit the day's cap. Read from the
-    /// grant, never from the constant, so a banner can never promise chips
-    /// that were not credited.
+    /// already been paid `SONG_QUEUE_MAX_PAID_PER_DAY` times today (UTC),
+    /// the only gate there is. Read from the grant, never from the constant,
+    /// so a banner can never promise chips that were not credited.
     pub reward_chips: i64,
 }
 
@@ -631,6 +632,7 @@ impl AudioService {
                     service.publish_event(AudioEvent::TrustedSubmitQueued {
                         user_id,
                         position: response.position_in_queue,
+                        reward_chips: response.reward_chips,
                     });
                 }
                 Err(err) => {

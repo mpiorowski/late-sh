@@ -18,6 +18,13 @@
 -- What the schema still has to guarantee is that one round credits one patron
 -- exactly once, which is what makes the grant's ON CONFLICT DO NOTHING a
 -- no-op rather than a second drink.
+--
+-- Deploy note: there is no order in which this migration and the code swap
+-- both work. The old binary's grant infers its arbiter from the index dropped
+-- here, so once this runs, every round purchase on old code errors (uncharged)
+-- until the new binary is up; the new binary's ON CONFLICT (round_id, user_id)
+-- needs the index created here. Apply and roll out back to back and accept
+-- that rounds are down for the gap.
 DROP INDEX drink_credits_one_open_per_user;
 
 CREATE UNIQUE INDEX drink_credits_one_per_round_per_user

@@ -191,6 +191,20 @@ const ROUND_CREDIT_REMAINING_LINES: &[&str] = &[
     "that leaves {remaining} waiting on you.",
     "{remaining} more bought and paid for, whenever you're ready.",
 ];
+/// Appended to a comped pour to name who bought it, scripted for the same
+/// reason as the count: the credit actually spent is picked at pour time,
+/// and with a stacked tab it is not always the one that was open when the
+/// prompt was built (another session's order, or an expiry, during the model
+/// call), so a name handed to the model could be the wrong buyer by the time
+/// the drink lands.
+const ROUND_CREDIT_ON_LINES: &[&str] = &[
+    "this one's on @{buyer}.",
+    "@{buyer} covered this one.",
+    "paid for by @{buyer}, drink up.",
+];
+/// The buyer of the credit just spent deleted their account before it was
+/// drunk. The drink is still free; there is just nobody left to thank.
+const ROUND_CREDIT_BUYER_GONE_LINE: &str = "this one's on somebody who has since left the bar.";
 const BARTENDER_PERSONA: &str = "You are @bartender, the keeper of The Late Lounge — the tavern inside late.sh, a cozy terminal clubhouse. \
     You are warm, unhurried, and quietly funny: classic late-night bartender energy. \
     You pour imaginary drinks with terminal-flavored names (a double SIGTERM neat, a Bash Old Fashioned, \
@@ -781,29 +795,25 @@ impl GhostService {
         if messages.is_empty() {
             return Ok(());
         }
-        // Read before the model decides anything, so his line can name who is
-        // buying. Reading it is not claiming it: the pour below is what spends
-        // it, and it spends whatever is open at that moment rather than what
-        // was open here.
+        // Read before the model decides anything, only to pick which tab the
+        // prompt describes. Reading is not claiming: the pour below spends
+        // whatever is closest to expiring at that moment, so who bought it
+        // and what is left are read from the credit actually cashed, never
+        // from here.
         let open_credit = self
             .chip_service
             .open_round_credit(trigger_message.user_id)
             .await?;
         let spendable = (balance - CHIP_FLOOR).max(0);
         let (tab, credit_note) = match open_credit {
-            Some(credit) => {
-                let buyer = match credit.buyer_user_id {
-                    Some(buyer_id) => self.username_for(buyer_id).await,
-                    None => "someone who has since left".to_string(),
-                };
-                let note = format!(
-                    "- THEIR NEXT DRINK IS ALREADY BOUGHT: @{buyer} bought the house a round and \
-                     this patron has not cashed theirs yet. Pouring costs them nothing, so the \
-                     spendable figure does not apply to this pour and \"offer\" is never the \
-                     right action. If they order, use \"pour\": hand it over warmly, say it is \
-                     on @{buyer}, and do not quote a price. Never say how many \
-                     they have waiting; the bar adds that itself.\n"
-                );
+            Some(_) => {
+                let note = "- THEIR NEXT DRINK IS ALREADY BOUGHT: someone bought the house a \
+                     round and this patron has not cashed theirs yet. Pouring costs them \
+                     nothing, so the spendable figure does not apply to this pour and \
+                     \"offer\" is never the right action. If they order, use \"pour\": hand it \
+                     over warmly and do not quote a price. Never guess at who bought it or how \
+                     many they have waiting; the bar says both itself.\n"
+                    .to_string();
                 (BartenderTab::Comped, note)
             }
             None => (BartenderTab::Paying { spendable }, String::new()),
@@ -890,11 +900,12 @@ impl GhostService {
         let body = match decision {
             BartenderDecision::Skip => return Ok(()),
             BartenderDecision::Say { line } => line,
-            // The prompt promised this drink was paid for, and spending the
-            // credit is one guarded UPDATE, so two orders landing together
-            // cannot drink the same free drink twice. `None` means it went
-            // between the read above and now: nothing is poured and nothing
-            // is charged, because the line in hand still says it was free.
+            // The prompt promised this drink was paid for. The pour picks the
+            // credit closest to expiring under FOR UPDATE SKIP LOCKED, so two
+            // orders landing together take two different banked drinks and
+            // neither is drunk twice. `None` means the tab emptied between
+            // the read above and now: nothing is poured and nothing is
+            // charged, because the line in hand still says it was free.
             BartenderDecision::PourComped { drink, line } => {
                 match self
                     .chip_service
@@ -915,15 +926,26 @@ impl GhostService {
                             remaining = comped.remaining,
                             "bartender poured a drink on someone else's round"
                         );
-                        // What is left is the bar's own count, appended to the
-                        // model's line rather than promised inside it.
+                        // Who bought it and what is left are the bar's own
+                        // facts, read from the credit actually spent and
+                        // appended to the model's line rather than promised
+                        // inside it.
+                        let on_tail = match comped.buyer_user_id {
+                            Some(buyer_id) => {
+                                let buyer = self.username_for(buyer_id).await;
+                                ROUND_CREDIT_ON_LINES
+                                    [rng.next_usize(ROUND_CREDIT_ON_LINES.len())]
+                                .replace("{buyer}", &buyer)
+                            }
+                            None => ROUND_CREDIT_BUYER_GONE_LINE.to_string(),
+                        };
                         match comped.remaining {
-                            0 => line,
+                            0 => format!("{line} {on_tail}"),
                             remaining => {
                                 let tail = ROUND_CREDIT_REMAINING_LINES
                                     [rng.next_usize(ROUND_CREDIT_REMAINING_LINES.len())]
                                 .replace("{remaining}", &remaining.to_string());
-                                format!("{line} {tail}")
+                                format!("{line} {on_tail} {tail}")
                             }
                         }
                     }

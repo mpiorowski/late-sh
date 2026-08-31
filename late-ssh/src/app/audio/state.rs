@@ -132,14 +132,16 @@ impl AudioState {
         let mut banner = None;
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
-                AudioEvent::TrustedSubmitQueued { user_id, position }
-                    if user_id == self.user_id =>
-                {
-                    banner = Some(if position == 0 {
-                        Banner::success("Queued audio - up next")
-                    } else {
-                        Banner::success(&format!("Queued audio - #{position} in line"))
-                    });
+                AudioEvent::TrustedSubmitQueued {
+                    user_id,
+                    position,
+                    reward_chips,
+                } if user_id == self.user_id => {
+                    banner = Some(Banner::success(&submitted_line(
+                        "Queued audio",
+                        position,
+                        reward_chips,
+                    )));
                 }
                 AudioEvent::TrustedSubmitFailed { user_id, message } if user_id == self.user_id => {
                     banner = Some(Banner::error(&message));
@@ -251,8 +253,8 @@ impl AudioState {
 
 /// The banner a submission gets: where it landed in the queue, and what
 /// bringing it paid. The chips half is dropped entirely when nothing was
-/// minted (a track this person already brought, or the day's cap), because a
-/// "+0 chips" is worse than silence.
+/// minted, which only happens past the day's cap, because a "+0 chips" is
+/// worse than silence.
 fn submitted_line(verb: &str, position: i64, reward_chips: i64) -> String {
     let place = match position {
         0 => "up next".to_string(),

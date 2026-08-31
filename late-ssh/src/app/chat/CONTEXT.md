@@ -740,11 +740,14 @@ reads a chat message, and `chat/slur.rs` has to leave that phrase alone.
   the number the patron was charged, and it has to land the moment the chips
   move rather than after a model round trip that could time out or invent a
   different figure. The prompt hands out the phrase when asked but never
-  claims a round happened. The same rule covers what a patron has left: when a
-  comped pour leaves credits behind it, `ROUND_CREDIT_REMAINING_LINES` is
-  appended to the model's line in code and the prompt is told not to say how
-  many they have waiting, because that number is a promise the bar has to
-  keep.
+  claims a round happened. The same rule covers who bought the drink and what
+  a patron has left: the pour picks the credit closest to expiring at pour
+  time, which with a stacked tab is not always the one that was open when the
+  prompt was built, so `ROUND_CREDIT_ON_LINES` names the buyer of the credit
+  actually spent and, when the pour leaves credits behind it,
+  `ROUND_CREDIT_REMAINING_LINES` follows with the count, both appended to the
+  model's line in code. The prompt is told to guess at neither, because a
+  name or a number in that line is a promise the bar has to keep.
 - **Feed.** `ActivityKind::RoundBought` posts a ticker line and no headline:
   @bartender already says it in the room, and everyone it reached is online
   by definition, so a #lounge row would be the third telling of one drink.
