@@ -2866,7 +2866,7 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
         }
     };
     // Newest first, the order the tail hands the cache.
-    let messages = vec![
+    let messages = [
         message(14, other_id, 1, "and another"),
         message(13, other_id, 2, "first thing you missed"),
         message(12, current_user_id, 3, "posting from the phone"),

@@ -933,9 +933,8 @@ impl GhostService {
                         let on_tail = match comped.buyer_user_id {
                             Some(buyer_id) => {
                                 let buyer = self.username_for(buyer_id).await;
-                                ROUND_CREDIT_ON_LINES
-                                    [rng.next_usize(ROUND_CREDIT_ON_LINES.len())]
-                                .replace("{buyer}", &buyer)
+                                ROUND_CREDIT_ON_LINES[rng.next_usize(ROUND_CREDIT_ON_LINES.len())]
+                                    .replace("{buyer}", &buyer)
                             }
                             None => ROUND_CREDIT_BUYER_GONE_LINE.to_string(),
                         };
