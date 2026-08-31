@@ -2,8 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/arcade`
-- Last updated: 2026-08-30 (Sliding Puzzle has persisted, unrewarded personal boards; it is the seventh `ArcadeStop` and rolls with the rest in `refresh_daily_games`. Previous: Lateris gained a hold slot: `c` parks the current piece, one hold per piece, persisted in `tetris_games.hold_kind`/`hold_used` by migration 146. Nonograms joined the press-again reset confirmation every other Arcade game already had, covering both `r` and `n`. Every daily puzzle now rolls over at UTC midnight inside a live session via `workspace::refresh_daily_games`, instead of only on reconnect.)
-- Last updated: 2026-08-30 (Sudoku added a 50-move undo queue via `u`/`U` to revert previous moves and candidate mark edits.)
+- Last updated: 2026-08-31 (Sudoku added a 50-move undo queue via `u`/`U` to revert previous moves and candidate mark edits. Previous: Sliding Puzzle has persisted, unrewarded personal boards; it is the seventh `ArcadeStop` and rolls with the rest in `refresh_daily_games`. Lateris gained a hold slot: `c` parks the current piece, one hold per piece, persisted in `tetris_games.hold_kind`/`hold_used` by migration 146. Nonograms joined the press-again reset confirmation every other Arcade game already had, covering both `r` and `n`. Every daily puzzle now rolls over at UTC midnight inside a live session via `workspace::refresh_daily_games`, instead of only on reconnect.)
 - Purpose: local working context for The Arcade screen and single-player terminal games.
 - Parent context: `../../../../CONTEXT.md`
 

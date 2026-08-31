@@ -315,6 +315,9 @@ impl State {
     }
 
     fn save_async(&self) {
+        // Pure state tests drive this without a runtime; prod always has one
+        // and must fail loudly if that ever stops being true.
+        #[cfg(test)]
         if tokio::runtime::Handle::try_current().is_err() {
             return;
         }
@@ -434,7 +437,7 @@ impl State {
         }
         self.clear_reset_pending();
         let (r, c) = self.cursor;
-        if self.fixed_mask[r][c] {
+        if self.fixed_mask[r][c] || self.grid[r][c] == val {
             return;
         }
 

@@ -244,6 +244,24 @@ fn undo_reverts_digit_placements_and_notes() {
 }
 
 #[test]
+fn noop_digit_press_pushes_no_undo() {
+    let mut state = test_state();
+    state.fixed_mask[0][0] = false;
+    state.grid[0][0] = 0;
+
+    // Clearing an already-empty cell queues nothing.
+    state.set_digit(0);
+    assert!(!state.undo());
+
+    // Re-typing the digit a cell already holds queues nothing.
+    state.set_digit(5);
+    state.set_digit(5);
+    assert!(state.undo());
+    assert_eq!(state.grid[0][0], 0);
+    assert!(!state.undo());
+}
+
+#[test]
 fn undo_queue_caps_at_fifty_moves() {
     let mut state = test_state();
     state.fixed_mask[0][0] = false;
