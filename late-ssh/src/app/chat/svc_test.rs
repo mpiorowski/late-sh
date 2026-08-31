@@ -5067,3 +5067,37 @@ async fn first_contact_invitation_sends_one_dm_and_claims_once() {
         late_core::models::user::extract_first_contact_invited_at(&target_row.settings).is_some()
     );
 }
+
+#[tokio::test]
+async fn first_contact_invitation_claim_survives_a_failed_send() {
+    use crate::app::deadchannel::haunt::state::VOICE_USERNAME;
+
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    // The `system` squat of 2026-07-12, aimed at the voice: a real account
+    // holds the username (its own fingerprint, not the voice's), so
+    // ensuring the ghost user fails every time.
+    let _squatter = create_test_user(&test_db.db, VOICE_USERNAME).await;
+    let target = create_test_user(&test_db.db, "fc-claim-target").await;
+
+    service.send_first_contact_invitation_task(target.id);
+
+    // The failure is silent from out here; give the task time to run its
+    // course (a negative assertion, like the racing-duplicate check above).
+    sleep(Duration::from_millis(400)).await;
+
+    // The once-ever claim must not be burned by a DM that never sent: the
+    // stamp stays absent so a later session retries the invitation.
+    let client = test_db.db.get().await.expect("db client");
+    let target_row = User::find_by_username(&client, &target.username)
+        .await
+        .expect("find target")
+        .expect("target exists");
+    assert!(
+        late_core::models::user::extract_first_contact_invited_at(&target_row.settings).is_none(),
+        "a failed invitation must leave the claim untaken"
+    );
+}

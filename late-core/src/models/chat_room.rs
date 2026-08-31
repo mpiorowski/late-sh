@@ -1020,6 +1020,15 @@ fn normalize_topic_slug(slug: &str) -> Result<String> {
     if slug == "lounge" {
         bail!("cannot create room with reserved name 'lounge'");
     }
+    if slug == "deadchannel" {
+        // The game's home channel (GAME.md, First contact): the invitation
+        // DM ends in `/join #deadchannel`, so the name has to be waiting
+        // for the game, not for whoever typed it first. The message is the
+        // fiction rather than "reserved", which would confirm there is
+        // something to reserve it for; the game itself will seed the room
+        // through the game-room path, which does not pass through here.
+        bail!("only static on that channel");
+    }
     Ok(slug)
 }
 

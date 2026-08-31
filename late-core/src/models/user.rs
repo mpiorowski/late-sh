@@ -985,6 +985,26 @@ impl User {
         Ok(updated == 1)
     }
 
+    /// Give back a won-but-unspent invitation claim: the send after the
+    /// claim failed, so the stamp comes off and a later session retries.
+    /// Only the claim's winner calls this, so a plain key removal is
+    /// enough; a stamp left behind here is a burned invitation.
+    pub async fn release_first_contact_invitation(client: &Client, user_id: Uuid) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings - $1,
+                     updated = current_timestamp
+                 WHERE id = $2",
+                &[&FIRST_CONTACT_INVITED_AT_KEY, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
     /// Wipe every first-contact mark (the admin `/haunt reset` test hook):
     /// name hits, the whisper stamp, and the invitation stamp.
     pub async fn reset_first_contact(client: &Client, user_id: Uuid) -> Result<()> {

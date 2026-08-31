@@ -524,8 +524,10 @@ impl NameFlicker {
             }
         }
         self.active = Some((message_id, tick));
-        self.fired_today += 1;
-        self.total_hits += 1;
+        // Saturating: a forced hit bypasses the caps, and the marks of a
+        // test app sit at the counter's ceiling on purpose.
+        self.fired_today = self.fired_today.saturating_add(1);
+        self.total_hits = self.total_hits.saturating_add(1);
         true
     }
 

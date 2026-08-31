@@ -193,6 +193,12 @@ glyphs and the Old Signal).
 
 ### First contact (the haunting, decided 2026-08-31)
 
+Status (2026-08-31): all four stages exist as admin-scoped scaffolding in
+`late-ssh/src/app/deadchannel/` (see that directory's CONTEXT.md); the
+`deadchannel` room slug and the voice's DM flow are guarded, and nothing
+fires for non-admin users. Copy, the voice's name, and the eligibility
+thresholds still face design review before the fuse is lit.
+
 - **The game is never announced; it arrives.** Onboarding as haunting: the
   bridge fiction says the city is behind the screen and chat is the leak,
   so first contact IS a leak. No tutorial, no reward, no explanation, and
@@ -444,6 +450,13 @@ Sequencing, each phase testing something before paying for the next:
   which settings count as touched, how much tenure), and the whisper
   copy pool: the voiced lines need the same variety discipline as feed
   templates, since a repeated whisper is a bug report, not a haunting.
+- **The voice never answers.** The invitation opens a real DM, and the
+  natural human reply to a plea is to answer it; nothing listens on the
+  voice's side. Decide deliberately at design review: a scripted
+  one-shot reply, or the fiction that the channel died after the plea,
+  stated in the DM itself. Also confirm the voice's name (`afterglow`
+  is implemented but was only reserved, not decided) before real users
+  ever see the DM.
 - **Professions as interdependence (v2 at the earliest).** As "+10% yield"
   they fail the design gate; as interdependence (only the blacksmith
   repairs gear, only the healer shortens recovery) they pass, because

@@ -420,3 +420,30 @@ async fn test_stream_room_follows_the_account_not_the_username() {
     assert_ne!(taken_over.id, original.id);
     assert_eq!(taken_over.created_by, Some(usurper.id));
 }
+
+#[tokio::test]
+async fn the_deadchannel_slug_is_reserved_for_the_game() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "dc-squatter").await;
+
+    // The game's home channel (GAME.md, First contact): the invitation DM
+    // ends in `/join #deadchannel`, so the name has to be waiting for the
+    // game, not for whoever typed it first. Same choke point as the lounge
+    // reservation; the lowercasing normalize catches case variants.
+    assert!(
+        ChatRoom::get_or_create_public_room(&client, "deadchannel")
+            .await
+            .is_err()
+    );
+    assert!(
+        ChatRoom::get_or_create_public_room(&client, "DeadChannel")
+            .await
+            .is_err()
+    );
+    assert!(
+        ChatRoom::create_private_room(&client, "deadchannel", user.id)
+            .await
+            .is_err()
+    );
+}

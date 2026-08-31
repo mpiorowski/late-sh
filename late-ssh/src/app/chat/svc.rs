@@ -2883,15 +2883,12 @@ impl ChatService {
             async move {
                 let result: anyhow::Result<bool> = async {
                     let client = service.db.get().await?;
-                    if !User::claim_first_contact_invitation(
-                        &client,
-                        target_user_id,
-                        chrono::Utc::now(),
-                    )
-                    .await?
-                    {
-                        return Ok(false);
-                    }
+                    // The voice and the DM are ensured BEFORE the once-ever
+                    // claim is taken: a failure here (say, a real account
+                    // squatting the username, the `system` squat of
+                    // 2026-07-12 aimed at the voice) must leave the claim
+                    // untaken so a later session retries. The claim guards
+                    // only the send.
                     let voice = match User::find_by_fingerprint(&client, VOICE_FINGERPRINT).await? {
                         Some(existing) => existing,
                         None => {
@@ -2903,14 +2900,29 @@ impl ChatService {
                                     settings: serde_json::json!({ "bot": true }),
                                 },
                             )
-                            .await?;
-                            late_core::models::user_ssh_key::UserSshKey::ensure(
-                                &client,
-                                created.id,
-                                VOICE_FINGERPRINT,
-                            )
-                            .await?;
-                            created
+                            .await;
+                            match created {
+                                Ok(created) => {
+                                    late_core::models::user_ssh_key::UserSshKey::ensure(
+                                        &client,
+                                        created.id,
+                                        VOICE_FINGERPRINT,
+                                    )
+                                    .await?;
+                                    created
+                                }
+                                // Two sessions racing the first ensure: the
+                                // loser's create collides on the unique
+                                // indexes, and the winner's row is there to
+                                // find. Anything else (a squatted username)
+                                // finds nothing and propagates the original
+                                // failure.
+                                Err(create_error) => {
+                                    User::find_by_fingerprint(&client, VOICE_FINGERPRINT)
+                                        .await?
+                                        .ok_or(create_error)?
+                                }
+                            }
                         }
                     };
                     if let Some(directory) = &service.username_directory {
@@ -2922,8 +2934,17 @@ impl ChatService {
                     ChatRoomMember::join(&client, room.id, target_user_id).await?;
                     VoiceChannel::upsert_for_target(&client, TARGET_CHAT_ROOM, room.id, "dm", true)
                         .await?;
+                    if !User::claim_first_contact_invitation(
+                        &client,
+                        target_user_id,
+                        chrono::Utc::now(),
+                    )
+                    .await?
+                    {
+                        return Ok(false);
+                    }
                     drop(client);
-                    service
+                    let sent = service
                         .send_message(SendMessageParams {
                             user_id: voice.id,
                             room_id: room.id,
@@ -2933,8 +2954,29 @@ impl ChatService {
                             reply_to_user_id: None,
                             is_admin: false,
                         })
-                        .await?;
-                    Ok(true)
+                        .await;
+                    match sent {
+                        Ok(_) => Ok(true),
+                        Err(send_error) => {
+                            // Give the claim back so a later session retries.
+                            // Losing the release too leaves a burned claim,
+                            // which is worth its own line.
+                            let released: anyhow::Result<()> = async {
+                                let client = service.db.get().await?;
+                                User::release_first_contact_invitation(&client, target_user_id)
+                                    .await
+                            }
+                            .await;
+                            if let Err(release_error) = released {
+                                tracing::error!(
+                                    error = ?release_error,
+                                    user_id = %target_user_id,
+                                    "failed to release a burned first contact claim"
+                                );
+                            }
+                            Err(send_error)
+                        }
+                    }
                 }
                 .await;
                 match result {

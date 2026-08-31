@@ -77,8 +77,20 @@ into the rows cache key, and
    a plea ending in the only instruction the haunting ever gives,
    `/join #deadchannel`. Self-serve: the chosen one's own session notices
    the due date; `User::claim_first_contact_invitation` (a conditional
-   settings stamp) keeps racing devices to exactly one DM. Copy and name
-   face design review before real users ever see them.
+   settings stamp) keeps racing devices to exactly one DM. **Order is
+   load-bearing:** the voice user and the DM room are ensured *before*
+   the claim is taken (any failure there, say a squatted `afterglow`
+   username, leaves the claim untaken so a later session retries; a
+   racing loser's `User::create` heals by re-finding the winner's row by
+   fingerprint), the claim guards only the send, and a failed send
+   releases the claim (`release_first_contact_invitation`; losing the
+   release too is logged as a burned claim). The `deadchannel` room slug
+   is reserved in `normalize_topic_slug` (late-core `chat_room.rs`,
+   beside the `lounge` reservation, case-insensitive, refusal message
+   "only static on that channel") so no user-created room can be waiting
+   where the invitation points; the game will seed the real room through
+   the game-room path, which skips that normalize. Copy and name face
+   design review before real users ever see them.
 
 ## 4. Persistence (`users.settings`, late-core `User`)
 
@@ -87,7 +99,9 @@ into the rows cache key, and
 - `first_contact_whisper_at` (RFC3339): stage-3 delivery; schedules
   stage 4.
 - `first_contact_invited_at` (RFC3339): stage-4 claim, written only by
-  `claim_first_contact_invitation` (conditional on absence).
+  `claim_first_contact_invitation` (conditional on absence), taken back
+  by `release_first_contact_invitation` when the send after a won claim
+  fails.
 - `reset_first_contact` wipes all three (the `/haunt reset` hook).
 - Everything else is render-only and session-local: no chat rows, no IRC
   projection (the invitation DM is the deliberate exception: stage 4 is
