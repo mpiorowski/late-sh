@@ -272,6 +272,9 @@ struct DrawContext<'a> {
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
+    /// One frame of first-contact whisper theater over the splash, `None`
+    /// unless the door is held this frame. See `app/haunt`.
+    whisper: Option<crate::app::haunt::ui::WhisperFrame>,
     listen_url: &'a str,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
@@ -1119,6 +1122,13 @@ impl App {
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
+                        whisper: self.whisper.as_ref().map(|whisper| {
+                            crate::app::haunt::ui::whisper_frame(
+                                whisper,
+                                self.splash_ticks,
+                                &self.splash_hint,
+                            )
+                        }),
                         listen_url: &listen_url,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
@@ -1275,14 +1285,50 @@ impl App {
             let splash_bottom = layout[1].bottom();
             let gap = area.bottom().saturating_sub(splash_bottom);
             let hint_y = splash_bottom + (gap * 3 / 4);
-            if hint_y < area.bottom() {
+            // While the whisper holds the door the hint may be mid-dissolve
+            // (or gone); otherwise it draws as-is.
+            let hint_text = match &ctx.whisper {
+                Some(whisper) => whisper.hint.as_deref(),
+                None => Some(ctx.splash_hint),
+            };
+            if let Some(hint_text) = hint_text
+                && hint_y < area.bottom()
+            {
                 let hint_area = Rect::new(area.x, hint_y, area.width, 1);
                 let hint = ratatui::text::Line::from(ratatui::text::Span::styled(
-                    ctx.splash_hint,
+                    hint_text.to_string(),
                     Style::default().fg(theme::TEXT_DIM()),
                 ));
                 let hint_paragraph = ratatui::widgets::Paragraph::new(hint).centered();
                 frame.render_widget(hint_paragraph, hint_area);
+            }
+            if let Some(whisper) = &ctx.whisper {
+                // The voiced line answers directly under the coffee cup.
+                let line_y = splash_bottom + 1;
+                if !whisper.line.is_empty() && line_y < area.bottom() {
+                    let line_area = Rect::new(area.x, line_y, area.width, 1);
+                    let line = ratatui::text::Line::from(ratatui::text::Span::styled(
+                        whisper.line.clone(),
+                        Style::default()
+                            .fg(theme::TEXT_BRIGHT())
+                            .add_modifier(Modifier::ITALIC),
+                    ));
+                    frame.render_widget(
+                        ratatui::widgets::Paragraph::new(line).centered(),
+                        line_area,
+                    );
+                }
+                // The static surge paints last, over everything: input is
+                // acknowledged, control withheld.
+                if let Some(progress) = whisper.surge {
+                    crate::app::haunt::ui::draw_static_surge(
+                        frame,
+                        area,
+                        ctx.splash_ticks,
+                        whisper.seed,
+                        progress,
+                    );
+                }
             }
             return;
         }

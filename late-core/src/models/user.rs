@@ -379,6 +379,7 @@ const AUTO_TRANSLATE_KEY: &str = "auto_translate";
 const TRANSLATE_MINE_TO_EN_KEY: &str = "translate_mine_to_en";
 const SHOW_FLAG_FALLBACK_KEY: &str = "show_flag_fallback";
 const CLUBHOUSE_TUTORIAL_DONE_KEY: &str = "clubhouse_tutorial_done";
+const FIRST_CONTACT_WHISPER_DONE_KEY: &str = "first_contact_whisper_done";
 const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
 const FAVORITE_THEME_IDS_KEY: &str = "favorite_theme_ids";
 const BIO_KEY: &str = "bio";
@@ -905,6 +906,30 @@ impl User {
                      updated = current_timestamp
                  WHERE id = $2",
                 &[&CLUBHOUSE_TUTORIAL_DONE_KEY, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    /// Record whether the first-contact splash whisper has been delivered to
+    /// this user. It fires exactly once per person, so `true` is written when
+    /// the whisper completes; `false` exists for the admin `/haunt reset`
+    /// test hook.
+    pub async fn set_first_contact_whisper_done(
+        client: &Client,
+        user_id: Uuid,
+        done: bool,
+    ) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::bool),
+                     updated = current_timestamp
+                 WHERE id = $3",
+                &[&FIRST_CONTACT_WHISPER_DONE_KEY, &done, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -1461,6 +1486,16 @@ pub fn extract_show_pet_strip(settings: &Value) -> bool {
 pub fn extract_clubhouse_tutorial_done(settings: &Value) -> bool {
     settings
         .get(CLUBHOUSE_TUTORIAL_DONE_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// True once the first-contact splash whisper has been delivered to this
+/// user; defaults to false. The whisper fires exactly once per person
+/// (GAME.md, First contact), so this is the once-ever guard.
+pub fn extract_first_contact_whisper_done(settings: &Value) -> bool {
+    settings
+        .get(FIRST_CONTACT_WHISPER_DONE_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(false)
 }

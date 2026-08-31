@@ -69,7 +69,30 @@ impl App {
             // The splash types one character per tick and self-expires.
             changed = true;
             self.splash_ticks = self.splash_ticks.saturating_add(1);
-            if self.splash_ticks > 90 {
+            // First contact: an armed whisper holds the door (the splash
+            // neither skips nor expires) until the machine releases it,
+            // hard-capped inside the machine. See `app/haunt`.
+            if let Some(whisper) = self.whisper.as_mut() {
+                let enabled = self
+                    .haunt_enabled
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                if let crate::app::haunt::state::WhisperTick::Released { delivered } =
+                    whisper.tick(self.splash_ticks, enabled)
+                {
+                    self.whisper = None;
+                    self.show_splash = false;
+                    // Any swallowed Esc left the parser mid-escape; same
+                    // reset the normal splash skip does.
+                    self.vt_input.reset();
+                    if delivered {
+                        self.first_contact_whisper_done = true;
+                        self.profile_state
+                            .service()
+                            .set_first_contact_whisper_done(self.user_id, true);
+                        tracing::info!(user_id = %self.user_id, "first contact whisper delivered");
+                    }
+                }
+            } else if self.splash_ticks > 90 {
                 self.show_splash = false;
             }
         }
@@ -236,6 +259,7 @@ impl App {
         changed |= self.tick_stream();
         changed |= self.tick_crown();
         changed |= self.tick_pot();
+        changed |= self.tick_haunt();
         // News state is ticked inside chat.tick()
         let profile_tick = self.profile_state.tick();
         changed |= profile_tick.changed;

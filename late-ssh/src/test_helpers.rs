@@ -294,6 +294,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby::with_seed(7),
         mention_ladders: crate::app::ai::ladder::MentionLadders::new(),
         scratchpad_registry: crate::app::scratchpad::registry::SharedScratchpadRegistry::new(),
+        haunt_enabled: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         afk_users,
         username_directory,
         flair_directory: crate::app::common::username_effect::new_directory(),
@@ -629,6 +630,10 @@ fn make_app_with_chat_service_and_permissions(
         files: None,
         scratchpad_registry: world.scratchpad_registry,
         clubhouse_tutorial_done: true,
+        // Delivered already: the splash whisper must never arm inside a
+        // test app unless a test replays it on purpose.
+        first_contact_whisper_done: true,
+        haunt_enabled: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         show_aquarium_tray: false,
         // No SSH key: test apps follow the account default and persist no
         // per-device layout, which is also what ghost bot sessions do.
@@ -852,6 +857,10 @@ pub fn make_app_with_paired_client(
         files: None,
         scratchpad_registry: None,
         clubhouse_tutorial_done: true,
+        // Delivered already: the splash whisper must never arm inside a
+        // test app unless a test replays it on purpose.
+        first_contact_whisper_done: true,
+        haunt_enabled: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         show_aquarium_tray: false,
         // No SSH key: test apps follow the account default and persist no
         // per-device layout, which is also what ghost bot sessions do.

@@ -1002,6 +1002,10 @@ impl russh::server::Handler for ClientHandler {
             clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(
                 &user.settings,
             ),
+            first_contact_whisper_done: late_core::models::user::extract_first_contact_whisper_done(
+                &user.settings,
+            ),
+            haunt_enabled: self.state.haunt_enabled.clone(),
             show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
             key_fingerprint,
             key_layout: device.layout,

@@ -340,6 +340,28 @@ impl ProfileService {
         );
     }
 
+    /// Fire-and-forget: record whether the first-contact splash whisper has
+    /// been delivered (`true` when it completes; `false` from the admin
+    /// `/haunt reset` test hook). A failure is only logged: worst case the
+    /// whisper plays once more next session, which only admins can hit while
+    /// first contact stays admin-scoped.
+    pub fn set_first_contact_whisper_done(&self, user_id: Uuid, done: bool) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::set_first_contact_whisper_done(&client, user_id, done).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, done, "failed to persist first contact whisper mark");
+                }
+            }
+            .instrument(info_span!("profile.first_contact_whisper_task", user_id = %user_id)),
+        );
+    }
+
     /// Fire-and-forget: persist one device's home rail layout onto the SSH key
     /// the session authenticated with. No event on success; a failure is only
     /// logged, since the layout already applies for the rest of the session and

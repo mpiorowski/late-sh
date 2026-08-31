@@ -19,6 +19,7 @@ pub(crate) mod directory;
 pub mod door;
 pub mod files;
 pub mod games;
+pub(crate) mod haunt;
 pub(crate) mod help_modal;
 pub(crate) mod hub;
 pub(crate) mod icon_picker;

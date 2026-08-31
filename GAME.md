@@ -199,18 +199,89 @@ glyphs and the Old Signal).
   the first beats deliberately end with nothing: restraint is the magic.
 - **The escalation ladder** (cheapest to loudest, each stage roughly an
   afternoon of render code, all pure client-side theater until the last):
-  1. **Deniable.** One-frame ambient corruption: a character in the
-     tavern's door sign wrong for a single frame, a stripe of static in
-     the rain. Nobody is sure they saw it.
-  2. **Personal.** The chosen ones' own message echo flickers and heals
-     after a send; the composer placeholder briefly reads something it
-     shouldn't.
-  3. **The whisper.** A mysterious voiced line only the chosen one sees
-     (author like `??????`), private, unpersisted, screenshot-bait.
-     "Glitches are coming" energy; still no game to play.
-  4. **The breach.** The first glyph flickers into #lounge for real,
-     someone puts it down, the game exists.
-- **The eligibility gate is a whisper campaign.** Stages 2-3 target users
+  1. **Deniable.** Ambient corruption where the eyes already are, and
+     the v1 target is decided: **the sidebar clock.** A glitch is only
+     legible against stability, and the clock is the most stable,
+     most-glanced-at element on screen (pinned core block, Home and
+     Arcade); the visualizer is the trap choice (already chaos, a burst
+     of static there reads as the visualizer being a visualizer), the
+     ticker is busy text, the splash too brief. Spec for the
+     implementer: replace one or two characters of the rendered HH:MM
+     with characters drawn from the game's fixed glyph alphabet (the
+     same set stage-4 spawns will render with, so the clock glitch is
+     retroactive foreshadowing), hold roughly 200ms (one frame at 15fps
+     is too fast to trust), restore. Rolled per session (independent
+     dice, so two people almost never see it together: "did anyone else
+     see that?" gets "no?" back, which is deniability and gossip in one
+     move), rare (order of once per hours-long session, at most once or
+     twice a day per user), render-layer only, no DB, behind the
+     kill-switch and admin-scoped until the fuse is lit. Chrome, never
+     content: chat message bodies stay untouched (a glitched clock is
+     spooky, a glitched sentence reads as data corruption). NOT the
+     clubhouse: the tavern is a hallway everyone tabs straight out of,
+     and its only lingering audience is brand-new users, the one group
+     the fuse must not spend itself on. Later variety (splash tear,
+     ticker stamp, bonsai leaves) rides the same machinery. Nobody is
+     sure they saw it.
+  2. **Personal.** The corruption chooses you, and the v1 target is
+     decided: **your own name.** Spec for the implementer: in the
+     sender's session only, immediately after their message lands (the
+     one moment of guaranteed attention: eyes always follow your own
+     send), the author label of that just-landed message renders with
+     one or two of its characters swapped for glyph-alphabet
+     characters, holds roughly 300ms, heals. The body is never touched:
+     the escalation over stage 1 is targeting, not content ("chrome,
+     never content" still holds; your name is chrome that happens to be
+     *you*). Rejected on purpose: corrupting the message echo itself,
+     which plants "did that send garbled to everyone?", a
+     data-integrity doubt and the panic rule violated in its most
+     personal form. Chosen users only (the eligibility gate), rare
+     (order of one in dozens of sends, capped once per UTC day, a
+     handful of total hits per person), render-layer only, no DB beyond
+     the per-user arming counter, kill-switch. Later variety (your name
+     in the sidebar, the composer placeholder) rides the same
+     machinery. Thematic payoff: when the stage-3 whisper says the
+     static knows your name, it is describing what already happened.
+  3. **The whisper (the held door).** Delivered on the splash screen,
+     once per person ever: this one time it does not skip. Triggered by
+     the chain, not the calendar: stage-2 hits arm it (the per-user
+     counter), and it fires on the armed user's next fresh connect, so
+     the beat is flickers one evening, then the door holds when they
+     come back: the haunting follows you home. The splash is
+     the liminal space (the doorway between outside and inside the
+     machine), inherently private and per-session, so the whisper
+     touches no chat surface at all. The load-bearing mechanic:
+     **respond, don't ignore.** Esc must visibly do something, just not
+     what it usually does: static surges, the skip hint itself corrupts
+     and dissolves, the mysterious voiced line types itself in answer.
+     Input acknowledged but control withheld reads as *something is
+     holding the door*; input silently ignored reads as a hung
+     terminal, which is the panic rule violated exactly. Hard time cap
+     of a few seconds, then it releases on its own whether or not they
+     pressed anything. Screenshot-bait, "glitches are coming" energy;
+     still no game to play.
+  4. **The invitation (decided 2026-08-31: the whole game is opt-in).**
+     Not a breach: no game ever lands on anyone unasked. Some days
+     after the held door, the contact goes real: a DM from the game's
+     first voice, a character calling for help from the other side, not
+     a system announcing a feature (name and copy at design review; a
+     plea beats a pitch, it makes the reader the protagonist). It rides
+     the proven ghost-user plumbing (@bartender's shape: dedicated DB
+     user, fixed fingerprint) and, unlike stages 1-3, it persists on
+     purpose: this is where the fiction goes real, and an invitation
+     that vanishes cannot be followed three days later. It ends with
+     the only instruction the entire haunting ever gives:
+     `/join #deadchannel`. Typing the command IS the consent: runner
+     created, the haunted channel under the clubhouse opens, the game
+     exists for you and nobody else. The name decision (rooms ARE
+     channels) becomes the consent mechanism. The invitation gates who
+     learns first, never who may enter: anyone who overhears the
+     channel's name in the lounge and types the command gets in, so
+     the chosen are wave one and gossip converts the rest. The old
+     stage 4 (a glyph flickering into #lounge, the room watching a
+     runner put it down) is not dead, it is relocated: that is the
+     game's public phase, once enough runners exist to make it a show.
+- **The eligibility gate is a whisper campaign.** Stages 2-4 target users
   with a filled bio, touched settings, and real tenure (thresholds at
   design review): the static chooses the invested. Side effects are the
   point: it pushes profile completion, and it makes the first glitch a
@@ -339,17 +410,25 @@ Sequencing, each phase testing something before paying for the next:
    section of that paper rather than its own surface.
 2. **Character layer + rations + login news.** Tests: do people do the
    daily loop.
-3. **Chat spawns.** Tests: does the room engage. The first-contact
-   haunting ladder (see Core design) is the fuse lit one to two weeks
-   before this phase's first spawn; its machinery can be built and
-   admin-tested any time earlier, but it fires for real users only here.
+3. **Chat spawns.** Tests: does the room engage. Spawns start inside
+   #deadchannel for the opted-in; the #lounge leak (the relocated
+   breach, the room watching a runner put a glyph down) is this phase's
+   public beat, shipped only once enough runners exist to make it a
+   show. The first-contact haunting ladder (see Core design) is the
+   fuse: it ends at the invitation, so it must not fire for real users
+   until phase 2's character layer can receive a `/join #deadchannel`;
+   its machinery can be built and admin-tested any time earlier.
 4. **Arena + betting + bounties.** Tests: spectacle and chip sink.
 5. **Seasons** wrap it once the loop is proven.
 
 ## Open questions
 
-- **PvP consent/grief model.** Level bands? Shields after a loss? Opt-out?
-  Needs an answer before the ambush engine ships.
+- **PvP consent/grief model.** The base layer is now decided
+  (2026-08-31): the whole game is opt-in via `/join #deadchannel`, so
+  nobody who never joined can be ambushed, ever. Still open is the
+  in-game tuning for people who did join: level bands? Shields after a
+  loss? A way to retire a runner without deleting it? Needs an answer
+  before the ambush engine ships.
 - **V1's one visible surface.** Chat badge is almost certainly the
   cheapest; pick explicitly at design review.
 - **First-contact tuning.** The eligibility thresholds (bio length,

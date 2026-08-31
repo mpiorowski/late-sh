@@ -2172,3 +2172,44 @@ async fn stored_layout(
     let key = UserSshKey::find_by_fingerprint(client, user_id, fingerprint).await?;
     Ok(key.and_then(|key| extract_key_layout(&key.settings)))
 }
+
+#[tokio::test]
+async fn whisper_holds_the_splash_door_then_releases_and_marks_delivery() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "whisper-door-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "whisper-door-it");
+
+    // `make_app` skips the splash; the replay hook re-raises it armed, the
+    // same way `/haunt replay` does.
+    app.replay_whisper();
+    assert!(app.show_splash);
+
+    // Esc is acknowledged but the door is held: the splash does not skip.
+    app.tick();
+    app.handle_input(b"\x1b");
+    assert!(app.show_splash, "expected the whisper to hold the splash");
+
+    // The machine releases on its own clock, hard-capped well under the
+    // ticks driven here, and the splash comes down with it.
+    for _ in 0..200 {
+        app.tick();
+        if !app.show_splash {
+            break;
+        }
+    }
+    assert!(!app.show_splash, "expected the whisper to release the door");
+
+    // Delivery spends the once-ever mark (fire-and-forget write).
+    wait_until(
+        || async {
+            let client = test_db.db.get().await.expect("db client");
+            let user = User::find_by_username(&client, &user.username)
+                .await
+                .expect("find user")
+                .expect("user exists");
+            late_core::models::user::extract_first_contact_whisper_done(&user.settings)
+        },
+        "first contact whisper mark persisted",
+    )
+    .await;
+}

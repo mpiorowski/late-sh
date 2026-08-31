@@ -425,6 +425,7 @@ async fn main() -> anyhow::Result<()> {
         ssh_attempt_limiter,
         ws_pair_limiter,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        haunt_enabled: Arc::new(std::sync::atomic::AtomicBool::new(true)),
     };
 
     let session_shutdown = CancellationToken::new();

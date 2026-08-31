@@ -201,4 +201,9 @@ pub struct State {
     pub ssh_attempt_limiter: IpRateLimiter,
     pub ws_pair_limiter: IpRateLimiter,
     pub is_draining: Arc<std::sync::atomic::AtomicBool>,
+    /// First contact kill switch (`/haunt on|off`, admin-only): while false
+    /// no whisper arms and a live one drops mid-scene. In-memory on purpose;
+    /// a restart comes back enabled, which is safe while the haunting stays
+    /// admin-scoped. See `app/haunt` and GAME.md, First contact.
+    pub haunt_enabled: Arc<std::sync::atomic::AtomicBool>,
 }
