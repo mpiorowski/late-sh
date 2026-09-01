@@ -251,6 +251,31 @@ fn recently_detached_lateania_leads_the_door_stops() {
 }
 
 #[test]
+fn native_remakes_slot_after_the_roguelikes() {
+    // Hub sidebar order runs Lateania, the roguelikes, then the two native
+    // remakes, and the last of them wraps home.
+    let doors = [Screen::Dcss, Screen::Darkroom, Screen::GreenDragon];
+    assert_eq!(
+        next_workspace(&[], &[], &[], &doors, GameWorkspace::Door(Screen::Dcss)),
+        GameWorkspace::Door(Screen::Darkroom)
+    );
+    assert_eq!(
+        next_workspace(&[], &[], &[], &doors, GameWorkspace::Door(Screen::Darkroom)),
+        GameWorkspace::Door(Screen::GreenDragon)
+    );
+    assert_eq!(
+        next_workspace(
+            &[],
+            &[],
+            &[],
+            &doors,
+            GameWorkspace::Door(Screen::GreenDragon)
+        ),
+        GameWorkspace::Dashboard
+    );
+}
+
+#[test]
 fn ended_door_run_restarts_from_front() {
     // The dungeon run ended while detached: its stop left the list, so the
     // next hop drains the rest of the queue instead of bailing home.

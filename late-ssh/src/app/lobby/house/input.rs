@@ -30,7 +30,7 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
 
 pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
     if byte == b'`' {
-        return crate::app::lobby::workspace::cycle_game_workspace(app);
+        return crate::app::workspace::cycle::cycle_game_workspace(app);
     }
     app.house.client().inspect(|client| client.touch_activity());
     if let Some(chat_room_id) = app.house.chat_room_id() {

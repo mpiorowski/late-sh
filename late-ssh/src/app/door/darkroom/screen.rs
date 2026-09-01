@@ -83,6 +83,23 @@ fn handle_key(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
+    app.darkroom_state.as_mut().unwrap().touch();
+
+    // Backtick hops onward on the workspace cycle. Unlike Esc this keeps the
+    // door loaded: the village goes on growing while the player is elsewhere,
+    // and the idle deadline in `App::tick` is what eventually ends the visit.
+    // The one exception is the ascent, where every key is steering and there
+    // is no unattended ship to hop away from.
+    if byte == b'`'
+        && app
+            .darkroom_state
+            .as_ref()
+            .is_some_and(|state| state.flight.is_none())
+    {
+        app.detach_door_game();
+        return true;
+    }
+
     let acted = {
         let state = app.darkroom_state.as_mut().unwrap();
         // Esc means different things per view: it aborts a flight, parks a
@@ -207,6 +224,7 @@ fn handle_arrow(app: &mut App, key: u8) -> bool {
     let Some(state) = app.darkroom_state.as_mut() else {
         return false;
     };
+    state.touch();
     if state.flight.is_some() {
         match key {
             b'A' => state.steer(0.0, -1.0),

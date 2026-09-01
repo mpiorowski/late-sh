@@ -6,6 +6,9 @@
 //! new `HubGame` entry with a `group()` arm plus a `draw_landing` for it, not a
 //! new top-level screen.
 
+use crate::app::common::primitives::Screen;
+use crate::app::state::App;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HubGame {
     Lateania,
@@ -110,6 +113,60 @@ impl HubGame {
             | HubGame::Darkroom => None,
         }
     }
+
+    /// The screen a live session of this game resumes on, or `None` when the
+    /// game is not live right now. This is the one definition of door
+    /// liveness: the backtick cycle's door leg ([`live_doors`]) and the
+    /// sidebar's in-progress pips both read it, so they cannot drift. Three
+    /// models. Lateania has no detached session, so its test is the recency
+    /// window a backtick detach arms (`App::lateania_recently_active`): hop
+    /// out and the door stays live for a few minutes, hopping in re-joins the
+    /// saved character. The roguelikes count a running (attached or detached)
+    /// game: a door sitting on its launcher is not live. Dark Room and Green
+    /// Dragon keep their loaded state across a hop, so being loaded is the
+    /// test; `App::tick` saves and drops them once the player has been away
+    /// past [`crate::app::door::game::IDLE_WINDOW`], which is what ends it.
+    /// The PTY doors (Usurper, dopewars, BashQuest, Rebels, CodeKeep) end
+    /// their session on leaving the screen, so they are never live.
+    pub(crate) fn live_screen(self, app: &App) -> Option<Screen> {
+        match self {
+            HubGame::Lateania => app.lateania_recently_active().then_some(Screen::Lateania),
+            HubGame::Dcss => app
+                .dcss_state
+                .as_ref()
+                .is_some_and(|state| state.is_running())
+                .then_some(Screen::Dcss),
+            HubGame::Nethack => app
+                .nethack_state
+                .as_ref()
+                .is_some_and(|state| state.is_running())
+                .then_some(Screen::Nethack),
+            HubGame::Brogue => app
+                .brogue_state
+                .as_ref()
+                .is_some_and(|state| state.is_running())
+                .then_some(Screen::Brogue),
+            HubGame::Darkroom => app.darkroom_state.is_some().then_some(Screen::Darkroom),
+            HubGame::GreenDragon => app
+                .greendragon_state
+                .is_some()
+                .then_some(Screen::GreenDragon),
+            HubGame::Usurper
+            | HubGame::Dopewars
+            | HubGame::Bashquest
+            | HubGame::Rebels
+            | HubGame::Codekeep => None,
+        }
+    }
+}
+
+/// The door games with a live session, by their live-game screens, in sidebar
+/// order ([`HubGame::ALL`]). The backtick cycle's door leg.
+pub(crate) fn live_doors(app: &App) -> Vec<Screen> {
+    HubGame::ALL
+        .into_iter()
+        .filter_map(|game| game.live_screen(app))
+        .collect()
 }
 
 /// Per-session hub state: which game card is currently selected.

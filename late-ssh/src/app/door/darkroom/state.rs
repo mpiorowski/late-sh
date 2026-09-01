@@ -10,6 +10,7 @@
 
 use std::collections::VecDeque;
 use std::mem::{Discriminant, discriminant};
+use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use tokio::sync::watch;
@@ -269,6 +270,10 @@ pub struct State {
     pub ending: Option<Ending>,
     /// When `tick` last ran, for live play.
     last_tick: DateTime<Utc>,
+    /// The player's last key in this door. The door outlives a hop to another
+    /// screen (the village keeps growing), so this is what ends an abandoned
+    /// visit; see [`State::idle_expired`].
+    last_input_at: Instant,
 }
 
 impl State {
@@ -290,7 +295,27 @@ impl State {
             flight: None,
             ending: None,
             last_tick: Utc::now(),
+            last_input_at: Instant::now(),
         }
+    }
+
+    /// Mark the player as still here. Every key the door handles calls this;
+    /// the idle deadline it feeds is what closes a forgotten visit.
+    pub fn touch(&mut self) {
+        self.last_input_at = Instant::now();
+    }
+
+    /// No key for [`IDLE_WINDOW`]: this visit is over. The caller saves and
+    /// drops the door, which takes it off the backtick workspace cycle.
+    pub fn idle_expired(&self) -> bool {
+        self.last_input_at.elapsed() >= crate::app::door::game::IDLE_WINDOW
+    }
+
+    /// Test-only: age the last key past the idle deadline, so the reap in
+    /// `App::tick` can be exercised without waiting half an hour.
+    #[cfg(test)]
+    pub fn force_idle_for_test(&mut self) {
+        self.last_input_at = Instant::now() - crate::app::door::game::IDLE_WINDOW;
     }
 
     /// The loaded game, or `None` while the DB round-trip is in flight.

@@ -644,7 +644,7 @@ pub struct App {
     pub(crate) leaderboard: Arc<LeaderboardData>,
     /// Dailies banked in this session today; painted over `leaderboard`'s
     /// per-user daily statuses so the Arcade card does not wait a refresh.
-    pub(crate) session_daily_wins: crate::app::arcade::workspace::SessionDailyWins,
+    pub(crate) session_daily_wins: crate::app::arcade::daily::SessionDailyWins,
 
     /// Bonsai
     pub(crate) bonsai_state: crate::app::bonsai::state::BonsaiState,
@@ -1496,7 +1496,7 @@ impl App {
                 .map(|rx| rx.borrow().clone())
                 .unwrap_or_default(),
             leaderboard_rx: config.leaderboard_rx,
-            session_daily_wins: crate::app::arcade::workspace::SessionDailyWins::new(),
+            session_daily_wins: crate::app::arcade::daily::SessionDailyWins::new(),
             bonsai_state,
             bonsai_care_state,
             bonsai_v2_state,
@@ -2025,7 +2025,7 @@ impl App {
     /// board or seat, or Home chat) while `set_screen` keeps the running door
     /// state alive. Falls back to the Games hub if the cycle has no opinion.
     pub(crate) fn detach_door_game(&mut self) {
-        if !crate::app::lobby::workspace::cycle_game_workspace(self) {
+        if !crate::app::workspace::cycle::cycle_game_workspace(self) {
             self.set_screen(Screen::Games);
         }
     }

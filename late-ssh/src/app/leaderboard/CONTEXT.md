@@ -56,7 +56,7 @@ catches up: a score set at minute 0 shows on the board within 5 minutes, not
 at once. The boards are never *empty*, just up to one interval behind; there
 is no leaderboard notify path (quest/shop snapshots have one, this does not).
 The one surface that does not wait is the Arcade lobby card's own-user
-✓/✗ tier marks: `App.session_daily_wins` (`arcade/workspace.rs::SessionDailyWins`)
+✓/✗ tier marks: `App.session_daily_wins` (`arcade/daily.rs::SessionDailyWins`)
 is marked from the session's own `GameWon` Activity events, which the daily
 services publish only after the win row commits, and the card ORs it with the
 snapshot's `user_daily_statuses`. Other players' standings still wait.

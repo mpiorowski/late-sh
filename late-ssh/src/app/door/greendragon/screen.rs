@@ -80,6 +80,23 @@ fn handle_key(app: &mut App, byte: u8) -> bool {
         return false;
     }
 
+    app.greendragon_state.as_mut().unwrap().touch();
+
+    // Backtick hops onward on the workspace cycle. Unlike Esc this keeps the
+    // character loaded (and so still listed as online): the idle deadline in
+    // `App::tick` is what eventually ends the visit. A talk line under
+    // composition owns the key first, the same as it does below, because
+    // there a ` is a character and not a hop.
+    if byte == b'`'
+        && app
+            .greendragon_state
+            .as_ref()
+            .is_some_and(|state| !state.is_typing())
+    {
+        app.detach_door_game();
+        return true;
+    }
+
     // Compute the selection in a tight borrow, then act on `app` once it's
     // released (leaving the game re-borrows `app` mutably).
     let selection = {
@@ -121,6 +138,7 @@ fn handle_arrow(app: &mut App, key: u8) -> bool {
     let Some(state) = app.greendragon_state.as_mut() else {
         return false;
     };
+    state.touch();
     if state.is_typing() {
         return true;
     }

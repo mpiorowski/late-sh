@@ -169,9 +169,15 @@ struct DrawContext<'a> {
     /// This account's character slots, for the character-select landing.
     lateania_slots: Vec<crate::app::door::lateania::svc::SlotSummary>,
     lateania_slot_cursor: usize,
-    /// The backtick-detach recency window is live: Lateania counts as a
-    /// game in progress on the hub sidebar.
+    /// Door liveness pips, all six precomputed through
+    /// `HubGame::live_screen` (the one definition the backtick cycle also
+    /// reads) before the door states are borrowed or taken below.
     lateania_live: bool,
+    nethack_live: bool,
+    dcss_live: bool,
+    brogue_live: bool,
+    darkroom_live: bool,
+    greendragon_live: bool,
     greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
     darkroom_state: Option<&'a crate::app::door::darkroom::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
@@ -190,7 +196,7 @@ struct DrawContext<'a> {
     tetris_state: &'a crate::app::arcade::tetris::state::State,
     snake_state: &'a crate::app::arcade::snake::state::State,
     rubiks_cube_state: &'a crate::app::arcade::rubiks_cube::state::State,
-    session_daily_wins: &'a crate::app::arcade::workspace::SessionDailyWins,
+    session_daily_wins: &'a crate::app::arcade::daily::SessionDailyWins,
     sliding_puzzle_state: &'a crate::app::arcade::sliding_puzzle::state::State,
     le_word_state: &'a crate::app::arcade::le_word::state::State,
     traffic_state: &'a crate::app::arcade::traffic::state::State,
@@ -318,8 +324,15 @@ struct DrawContext<'a> {
 impl App {
     pub fn render(&mut self) -> anyhow::Result<Vec<u8>> {
         // Computed up front: the method borrows all of `self`, which would
-        // collide with the mutable field borrows the view structs hold below.
-        let lateania_live = self.lateania_recently_active();
+        // collide with the mutable field borrows the view structs hold below
+        // (some door states are even taken out of `self` for the draw).
+        use crate::app::door::hub::state::HubGame;
+        let lateania_live = HubGame::Lateania.live_screen(self).is_some();
+        let nethack_live = HubGame::Nethack.live_screen(self).is_some();
+        let dcss_live = HubGame::Dcss.live_screen(self).is_some();
+        let brogue_live = HubGame::Brogue.live_screen(self).is_some();
+        let darkroom_live = HubGame::Darkroom.live_screen(self).is_some();
+        let greendragon_live = HubGame::GreenDragon.live_screen(self).is_some();
         // Clear last-frame mouse hit-test rects so screens that don't draw
         // them this frame can't leave a stale target behind.
         self.last_pet_strip_pet_rect.set(None);
@@ -1028,6 +1041,11 @@ impl App {
                         lateania_slots: self.lateania_service.character_slots(self.user_id),
                         lateania_slot_cursor: self.lateania_slot_cursor,
                         lateania_live,
+                        nethack_live,
+                        dcss_live,
+                        brogue_live,
+                        darkroom_live,
+                        greendragon_live,
                         greendragon_state: self.greendragon_state.as_ref(),
                         darkroom_state: self.darkroom_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
@@ -1406,18 +1424,11 @@ impl App {
                         lateania_slots: ctx.lateania_slots.clone(),
                         lateania_slot_cursor: ctx.lateania_slot_cursor,
                         lateania_live: ctx.lateania_live,
-                        nethack_live: ctx
-                            .nethack_state
-                            .as_deref()
-                            .is_some_and(|state| state.is_running()),
-                        dcss_live: ctx
-                            .dcss_state
-                            .as_deref()
-                            .is_some_and(|state| state.is_running()),
-                        brogue_live: ctx
-                            .brogue_state
-                            .as_deref()
-                            .is_some_and(|state| state.is_running()),
+                        nethack_live: ctx.nethack_live,
+                        dcss_live: ctx.dcss_live,
+                        brogue_live: ctx.brogue_live,
+                        darkroom_live: ctx.darkroom_live,
+                        greendragon_live: ctx.greendragon_live,
                         rc_modal: ctx.door_rc_modal.map(|(game, content)| {
                             crate::app::door::hub::ui::RcModalView { game, content }
                         }),

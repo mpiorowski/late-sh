@@ -561,6 +561,10 @@ pub struct State {
     /// or it would look attackable (upstream's `laston` refreshes every
     /// page load; ours refreshes on action, so idling needs the heartbeat).
     last_save: std::time::Instant,
+    /// The player's last key in this door. The tavern outlives a hop to
+    /// another screen, so this is what ends an abandoned visit; see
+    /// [`State::idle_expired`].
+    last_input_at: std::time::Instant,
     /// The Hall of Fame's current ranking, order flip, and page.
     hof_ranking: HofRanking,
     hof_least: bool,
@@ -641,11 +645,33 @@ impl State {
             clan_member_sel: None,
             clan_edit_field: None,
             last_save: std::time::Instant::now(),
+            last_input_at: std::time::Instant::now(),
             hof_ranking: HofRanking::Kills,
             hof_least: false,
             hof_page: 0,
             hof_page_view: None,
         }
+    }
+
+    /// Mark the player as still here. Every key the door handles calls this;
+    /// the idle deadline it feeds is what closes a forgotten visit.
+    pub fn touch(&mut self) {
+        self.last_input_at = std::time::Instant::now();
+    }
+
+    /// No key for [`IDLE_WINDOW`]: this visit is over. The caller saves and
+    /// drops the door, which drops the presence flag (so the roster stops
+    /// listing an absent player as here) and takes it off the backtick
+    /// workspace cycle.
+    pub fn idle_expired(&self) -> bool {
+        self.last_input_at.elapsed() >= crate::app::door::game::IDLE_WINDOW
+    }
+
+    /// Test-only: age the last key past the idle deadline, so the reap in
+    /// `App::tick` can be exercised without waiting half an hour.
+    #[cfg(test)]
+    pub fn force_idle_for_test(&mut self) {
+        self.last_input_at = std::time::Instant::now() - crate::app::door::game::IDLE_WINDOW;
     }
 
     /// Drain pending async loads (the initial character, a news page). Called

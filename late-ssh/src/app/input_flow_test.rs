@@ -182,6 +182,95 @@ async fn backtick_hops_out_of_lateania_and_back_in_while_the_window_is_live() {
 }
 
 #[tokio::test]
+async fn backtick_hops_out_of_darkroom_and_the_idle_deadline_ends_the_visit() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "darkroom-detach-flow").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "darkroom-detach-flow-it");
+
+    app.set_screen(Screen::Darkroom);
+    app.enter_darkroom();
+    assert!(app.darkroom_state.is_some(), "the door is loaded");
+
+    // Backtick hops out with the door still loaded (the village goes on
+    // growing off-screen). With no other stops the hop wraps to Home chat.
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert!(
+        app.darkroom_state.is_some(),
+        "expected the hop-out to keep the door loaded"
+    );
+
+    // From Home, the same backtick hops straight back in.
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Darkroom);
+
+    // Hop out once more and go away for half an hour: the next tick ends the
+    // visit exactly as an explicit leave would, and the door stops being a
+    // stop on the cycle.
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard);
+    app.darkroom_state
+        .as_mut()
+        .expect("darkroom state")
+        .force_idle_for_test();
+    assert!(
+        app.tick(),
+        "expected the reaping tick to dirty the frame so the hub pip clears"
+    );
+    assert!(
+        app.darkroom_state.is_none(),
+        "expected the idle deadline to save and drop the door"
+    );
+    app.handle_input(b"`");
+    assert_eq!(
+        app.screen,
+        Screen::Dashboard,
+        "expected no hop once the door has idled out"
+    );
+}
+
+#[tokio::test]
+async fn backtick_hops_out_of_green_dragon_and_the_idle_deadline_ends_the_visit() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "greendragon-detach-flow").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "greendragon-detach-flow-it");
+
+    app.set_screen(Screen::GreenDragon);
+    app.enter_greendragon();
+    assert!(app.greendragon_state.is_some(), "the door is loaded");
+
+    // Same hop-out/hop-in as Dark Room: the character stays loaded (and so
+    // still listed as online) across the hop.
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert!(
+        app.greendragon_state.is_some(),
+        "expected the hop-out to keep the character loaded"
+    );
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::GreenDragon);
+
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard);
+    app.greendragon_state
+        .as_mut()
+        .expect("greendragon state")
+        .force_idle_for_test();
+    assert!(
+        app.tick(),
+        "expected the reaping tick to dirty the frame so the hub pip clears"
+    );
+    assert!(
+        app.greendragon_state.is_none(),
+        "expected the idle deadline to save and drop the character"
+    );
+}
+
+#[tokio::test]
 async fn games_hub_config_modal_saves_and_clears_the_door_rc() {
     use crate::app::common::primitives::Screen;
     use crate::app::door::hub::state::HubGame;

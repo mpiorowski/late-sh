@@ -53,6 +53,7 @@ pub mod tick;
 mod tick_test;
 pub(crate) mod ultimates;
 pub mod voice;
+pub mod workspace;
 
 pub use hub::dailies::svc::QuestService;
 pub use hub::shop::svc::ShopService;
