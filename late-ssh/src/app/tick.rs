@@ -535,13 +535,17 @@ impl App {
         // so they are the two that can be abandoned: a player who hopped away
         // and never came back would keep them on the backtick cycle and in the
         // hub's in-progress list for the rest of the session. Once the door
-        // has gone `IDLE_WINDOW` without a key, end the visit exactly as an
+        // has gone `IDLE_WINDOW` without a touch, end the visit exactly as an
         // explicit leave does (settle, save, drop). Dark Room loses nothing by
         // it: the leave stamps `last_settled`, and re-joining later in the
         // same session credits the whole gap at once. Never while the door is
-        // the open screen — sitting on it reading is not being away — and the
+        // the open screen (sitting on it reading is not being away), and the
         // drop dirties the frame, because the hub pip and resume line would
-        // otherwise linger until some unrelated repaint.
+        // otherwise linger until some unrelated repaint. An open door is
+        // presence itself, so below the reaps the clock is stamped while the
+        // door is the open screen: the deadline measures time away from the
+        // door, and a keyless exit (a Ctrl+G lobby jump) must not inherit
+        // half an hour banked while watching the village.
         if self.screen != Screen::Darkroom
             && self
                 .darkroom_state
@@ -565,6 +569,16 @@ impl App {
             }
             self.leave_greendragon();
             changed = true;
+        }
+        if self.screen == Screen::Darkroom
+            && let Some(state) = self.darkroom_state.as_mut()
+        {
+            state.touch();
+        }
+        if self.screen == Screen::GreenDragon
+            && let Some(state) = self.greendragon_state.as_mut()
+        {
+            state.touch();
         }
         // Door games are launched from the Games hub, so they return there when
         // they exit. Rebels flips out of Running the tick its proxy closes;

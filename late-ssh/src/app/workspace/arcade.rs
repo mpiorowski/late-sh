@@ -1,7 +1,7 @@
 //! The Arcade leg of the backtick workspace cycle: daily puzzles with at
-//! least one player move that are not solved yet. Daily boards only — they
-//! expire at UTC midnight, so abandoned puzzles fall out of the cycle on
-//! their own. Real-time score games (Lateris, Snake, Traffic, NES) never
+//! least one player move that are not solved yet. Daily boards only, since
+//! they expire at UTC midnight, so abandoned puzzles fall out of the cycle
+//! on their own. Real-time score games (Lateris, Snake, Traffic, NES) never
 //! join.
 
 use crate::app::state::{

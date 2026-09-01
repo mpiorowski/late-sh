@@ -13,7 +13,7 @@ use crate::app::{
     state::App,
 };
 
-use super::state::{Selection, State};
+use super::state::{Mode, Selection, State};
 
 pub const GAME: GreenDragonDoorGame = GreenDragonDoorGame;
 
@@ -84,14 +84,17 @@ fn handle_key(app: &mut App, byte: u8) -> bool {
 
     // Backtick hops onward on the workspace cycle. Unlike Esc this keeps the
     // character loaded (and so still listed as online): the idle deadline in
-    // `App::tick` is what eventually ends the visit. A talk line under
-    // composition owns the key first, the same as it does below, because
-    // there a ` is a character and not a hop.
+    // `App::tick` is what eventually ends the visit. Two exceptions keep the
+    // key: a talk line under composition, where a ` is a character and not a
+    // hop, and a fight. Leaving mid-fight is never free (Esc is a flee roll,
+    // and PvP, dragon, and master fights refuse to let you run at all), so a
+    // hop here would be a free exit: wait out the idle reap and the encounter,
+    // which lives only on this session's `State`, is erased.
     if byte == b'`'
         && app
             .greendragon_state
             .as_ref()
-            .is_some_and(|state| !state.is_typing())
+            .is_some_and(|state| !state.is_typing() && state.mode() != Mode::Fight)
     {
         app.detach_door_game();
         return true;

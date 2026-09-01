@@ -206,11 +206,30 @@ async fn backtick_hops_out_of_darkroom_and_the_idle_deadline_ends_the_visit() {
     app.handle_input(b"`");
     assert_eq!(app.screen, Screen::Darkroom);
 
-    // Hop out once more and go away for half an hour: the next tick ends the
-    // visit exactly as an explicit leave would, and the door stops being a
-    // stop on the cycle.
-    app.handle_input(b"`");
-    assert_eq!(app.screen, Screen::Dashboard);
+    // Sitting on the door reading is not being away: with the idle deadline
+    // forced, a tick with the door as the open screen keeps the visit alive
+    // and stamps presence, so a keyless exit right after (a Ctrl+G lobby
+    // jump, played here as a bare screen switch) inherits none of the
+    // banked on-screen time.
+    app.darkroom_state
+        .as_mut()
+        .expect("darkroom state")
+        .force_idle_for_test();
+    app.tick();
+    assert!(
+        app.darkroom_state.is_some(),
+        "expected the open screen to shield the door from the reap"
+    );
+    app.set_screen(Screen::Dashboard);
+    app.tick();
+    assert!(
+        app.darkroom_state.is_some(),
+        "expected on-screen time not to count toward the idle deadline"
+    );
+
+    // Now actually go away for half an hour: the next tick ends the visit
+    // exactly as an explicit leave would, and the door stops being a stop
+    // on the cycle.
     app.darkroom_state
         .as_mut()
         .expect("darkroom state")
@@ -254,8 +273,25 @@ async fn backtick_hops_out_of_green_dragon_and_the_idle_deadline_ends_the_visit(
     app.handle_input(b"`");
     assert_eq!(app.screen, Screen::GreenDragon);
 
-    app.handle_input(b"`");
-    assert_eq!(app.screen, Screen::Dashboard);
+    // Same presence rule as Dark Room: an open door is never reaped, and the
+    // on-screen tick stamps the clock, so a keyless exit does not inherit
+    // the banked on-screen time.
+    app.greendragon_state
+        .as_mut()
+        .expect("greendragon state")
+        .force_idle_for_test();
+    app.tick();
+    assert!(
+        app.greendragon_state.is_some(),
+        "expected the open screen to shield the door from the reap"
+    );
+    app.set_screen(Screen::Dashboard);
+    app.tick();
+    assert!(
+        app.greendragon_state.is_some(),
+        "expected on-screen time not to count toward the idle deadline"
+    );
+
     app.greendragon_state
         .as_mut()
         .expect("greendragon state")
@@ -268,6 +304,33 @@ async fn backtick_hops_out_of_green_dragon_and_the_idle_deadline_ends_the_visit(
         app.greendragon_state.is_none(),
         "expected the idle deadline to save and drop the character"
     );
+}
+
+#[tokio::test]
+async fn backtick_is_refused_mid_fight_in_green_dragon() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "greendragon-fight-hold").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "greendragon-fight-hold-it");
+
+    app.set_screen(Screen::GreenDragon);
+    app.enter_greendragon();
+    app.greendragon_state
+        .as_mut()
+        .expect("greendragon state")
+        .force_fight_for_test();
+
+    // Esc mid-fight is a flee roll, and PvP, dragon, and master fights refuse
+    // to let you run at all; a backtick hop would sidestep all of that (the
+    // idle reap would erase the encounter), so the key stays with the fight.
+    app.handle_input(b"`");
+    assert_eq!(
+        app.screen,
+        Screen::GreenDragon,
+        "expected the hop to be refused mid-fight"
+    );
+    assert!(app.greendragon_state.is_some());
 }
 
 #[tokio::test]

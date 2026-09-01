@@ -252,8 +252,11 @@ fn recently_detached_lateania_leads_the_door_stops() {
 
 #[test]
 fn native_remakes_slot_after_the_roguelikes() {
-    // Hub sidebar order runs Lateania, the roguelikes, then the two native
-    // remakes, and the last of them wraps home.
+    // The roster order itself (Lateania, the roguelikes, then the two native
+    // remakes) is pinned on `HubGame::ALL` by
+    // `door/hub/state_test.rs::all_games_are_listed_in_order`; this list
+    // mirrors it so the exercise here is the hop through it and the wrap
+    // home off its tail.
     let doors = [Screen::Dcss, Screen::Darkroom, Screen::GreenDragon];
     assert_eq!(
         next_workspace(&[], &[], &[], &doors, GameWorkspace::Door(Screen::Dcss)),
