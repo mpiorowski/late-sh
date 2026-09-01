@@ -6395,8 +6395,18 @@ impl ChatState {
             // First contact, stage 2 (`app/deadchannel/haunt`): the haunting
             // rolls its dice on the landing echo of your own send. Recorded
             // here for the same reason as the AFK clear: every submit path
-            // funnels into this one landing.
-            self.own_message_landed = Some(message.id);
+            // funnels into this one landing. Only a message that will render
+            // its own author header is a target: a grouped continuation (a
+            // fast follow-up to your own message) draws no label at all, so
+            // a hit there would spend itself invisibly.
+            let prev = self
+                .rooms
+                .iter()
+                .find(|(room, _)| room.id == room_id)
+                .and_then(|(_, messages)| messages.first());
+            if !groups_as_continuation(prev, &message) {
+                self.own_message_landed = Some(message.id);
+            }
         }
 
         let is_viewing_room = Some(room_id) == self.visible_room_id;
@@ -8215,6 +8225,22 @@ fn format_cooldown(remaining: Duration) -> String {
     } else {
         format!("{} min", secs.div_ceil(60))
     }
+}
+
+/// The renderer groups consecutive messages from one author within this
+/// window under a single header (`ui.rs`, `is_continuation`).
+pub(crate) const MESSAGE_GROUP_WINDOW_SECS: i64 = 120;
+
+/// Whether `message`, landing at the head of the room's newest-first list,
+/// will render as a grouped continuation of `prev`: same author within the
+/// grouping window, so no author header row of its own. Mirrors the
+/// renderer's `is_continuation`; the edited check there is omitted because
+/// a just-landed message is never edited.
+fn groups_as_continuation(prev: Option<&ChatMessage>, message: &ChatMessage) -> bool {
+    prev.is_some_and(|prev| {
+        prev.user_id == message.user_id
+            && (message.created - prev.created).num_seconds().abs() < MESSAGE_GROUP_WINDOW_SECS
+    })
 }
 
 /// Given a message list containing `current`, return the id of the message

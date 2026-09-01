@@ -5069,6 +5069,30 @@ async fn first_contact_invitation_sends_one_dm_and_claims_once() {
 }
 
 #[tokio::test]
+async fn first_contact_voice_ensure_is_idempotent_and_claims_the_name() {
+    use crate::app::deadchannel::haunt::state::VOICE_USERNAME;
+
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+
+    // The startup ensure creates the row; from then on the unique username
+    // index holds the name (the `system` reservation move).
+    let first = service
+        .ensure_first_contact_voice()
+        .await
+        .expect("first ensure");
+    assert_eq!(first.username, VOICE_USERNAME);
+    let second = service
+        .ensure_first_contact_voice()
+        .await
+        .expect("second ensure");
+    assert_eq!(second.id, first.id);
+}
+
+#[tokio::test]
 async fn first_contact_invitation_claim_survives_a_failed_send() {
     use crate::app::deadchannel::haunt::state::VOICE_USERNAME;
 

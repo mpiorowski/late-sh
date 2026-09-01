@@ -1649,7 +1649,10 @@ fn ensure_chat_rows_cache(
         // edited message under the one above it hid the marker completely.
         let is_continuation = prev_user_id == Some(msg.user_id)
             && !is_edited
-            && prev_created.is_some_and(|prev| (msg.created - prev).num_seconds().abs() < 120);
+            && prev_created.is_some_and(|prev| {
+                (msg.created - prev).num_seconds().abs()
+                    < super::state::MESSAGE_GROUP_WINDOW_SECS
+            });
         let mut stamp = format!(
             "[{}]",
             crate::app::common::primitives::format_relative_time(msg.created)

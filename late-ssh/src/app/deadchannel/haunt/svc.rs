@@ -125,8 +125,10 @@ fn tick_clock_glitch(app: &mut App) -> bool {
 }
 
 /// The stage-2 roller: once the clock has spent its share of bursts,
-/// every own message that lands rolls the dice, a hit corrupts that
-/// message's author label for ~400ms (the corruption rides the chat rows
+/// every own message that lands with its own author header rolls the dice
+/// (grouped continuations never reach here; their label does not draw),
+/// a hit corrupts that message's author label for ~800ms (the corruption
+/// rides the chat rows
 /// cache key, so start and heal rebuild the rows exactly once), and every
 /// hit bumps the persisted counter whose third hit arms the stage-3
 /// whisper.

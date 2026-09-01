@@ -500,14 +500,15 @@ impl ClockGlitch {
 /// In the sender's session only, immediately after their message lands
 /// (the one moment of guaranteed attention), the author label of that
 /// just-landed message renders with two or three characters from the
-/// glyph alphabet, holds ~400ms, heals. The body is never touched: the
+/// glyph alphabet, holds ~800ms, heals. The body is never touched: the
 /// escalation over stage 1 is targeting, not content. It only rolls once
-/// stage 1 has run its course (`stage_open`).
+/// stage 1 has run its course (`stage_open`), and only on a message that
+/// renders its own author header (the landing hook in `chat/state.rs`
+/// skips grouped continuations, whose label never draws).
 ///
-/// How long one hit holds, in `App::marquee_tick` units (~400ms): a beat
-/// longer than the clock's ~200ms, because stage 2 is meant to be hard to
-/// miss.
-const NAME_HOLD_TICKS: usize = 6;
+/// How long one hit holds, in `App::marquee_tick` units (~800ms): well
+/// past the clock's ~200ms, because stage 2 is meant to be hard to miss.
+const NAME_HOLD_TICKS: usize = 12;
 /// Order of one in dozens of sends.
 const NAME_CHANCE_ONE_IN: u64 = 24;
 /// At most one hit per UTC day.

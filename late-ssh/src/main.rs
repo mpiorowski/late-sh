@@ -179,6 +179,9 @@ async fn main() -> anyhow::Result<()> {
     .with_force_admin(config.force_admin)
     .with_translation_service(translation_service.clone());
     let _poll_finalizer_recovery_task = chat_service.start_poll_finalizer_recovery_task();
+    // Same reservation move as the `system` user below: creating the game's
+    // voice row at boot lets the unique username index hold the name.
+    chat_service.ensure_first_contact_voice_task();
     let _lounge_feed_task = late_ssh::app::activity::lounge::start_lounge_feed_task(
         db.clone(),
         chat_service.clone(),

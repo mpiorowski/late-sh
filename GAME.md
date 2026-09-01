@@ -240,9 +240,12 @@ thresholds still face design review before the fuse is lit.
      one moment of guaranteed attention: eyes always follow your own
      send), the author label of that just-landed message renders with
      two or three of its characters swapped for glyph-alphabet
-     characters, holds roughly 400ms, heals (tuned 2026-09-01: heavier
-     and a beat longer than the clock, because stage 2 is meant to be
-     hard to miss). The body is never touched:
+     characters, holds roughly 800ms, heals (tuned 2026-09-01: heavier
+     and well past the clock's ~200ms, because stage 2 is meant to be
+     hard to miss). Only a send that renders its own author header is a
+     target: a fast follow-up to your own message groups under it as a
+     continuation with no label at all, so a hit there would spend
+     itself invisibly and the roll skips it. The body is never touched:
      the escalation over stage 1 is targeting, not content ("chrome,
      never content" still holds; your name is chrome that happens to be
      *you*). Rejected on purpose: corrupting the message echo itself,
@@ -292,13 +295,28 @@ thresholds still face design review before the fuse is lit.
      `/join #deadchannel`. Typing the command IS the consent: runner
      created, the haunted channel under the clubhouse opens, the game
      exists for you and nobody else. The name decision (rooms ARE
-     channels) becomes the consent mechanism. The invitation gates who
-     learns first, never who may enter: anyone who overhears the
-     channel's name in the lounge and types the command gets in, so
-     the chosen are wave one and gossip converts the rest. The old
-     stage 4 (a glyph flickering into #lounge, the room watching a
-     runner put it down) is not dead, it is relocated: that is the
-     game's public phase, once enough runners exist to make it a show.
+     channels) becomes the consent mechanism. **The invitation is the
+     key, not a head start (decided 2026-09-01, reversing the earlier
+     open-join call): `/join #deadchannel` works only for users whose
+     invitation stamp is set.** An open door would let people skip the
+     eligibility funnel entirely, and the funnel (fill your bio, touch
+     your settings, put in the hours) is the point. Everyone else gets
+     the same static line the reserved slug gives today ("only static
+     on that channel"): the door answers only to the marked. Gossip
+     still does the marketing, aimed one step earlier: overhearing the
+     name and bouncing off the door is what sends people to fill their
+     bio and wait for the static to choose them. The old stage 4 (a
+     glyph flickering into #lounge, the room watching a runner put it
+     down) is not dead, it is relocated: that is the game's public
+     phase, once enough runners exist to make it a show. The room
+     itself gets its own room kind, `kind='deadchannel'` (a forward
+     migration extends the `chat_rooms` kind CHECK, today
+     lounge/language/dm/topic/game): every room listing is a kind
+     whitelist (browse lists only `topic`, IRC lists
+     lounge/language/topic), so a new kind is invisible to all of them
+     by construction, exactly how game rooms already hide, and without
+     inheriting the game-room join path or `game_kind` semantics. The
+     channel is never discoverable, only spoken of.
 - **The eligibility gate is a whisper campaign.** Stages 2-4 target users
   with a filled bio, touched settings, and real tenure (thresholds at
   design review): the static chooses the invested. Stage 1 is universal

@@ -1863,6 +1863,29 @@ fn make_reply_msg(id: Uuid, reply_to_message_id: Uuid) -> ChatMessage {
 }
 
 #[test]
+fn a_fast_follow_up_groups_as_a_continuation() {
+    let prev = make_msg(Uuid::from_u128(10));
+
+    // Same author inside the window: no author header of its own.
+    let mut follow_up = make_msg(Uuid::from_u128(11));
+    follow_up.created = prev.created + chrono::Duration::seconds(MESSAGE_GROUP_WINDOW_SECS - 1);
+    assert!(groups_as_continuation(Some(&prev), &follow_up));
+
+    // Past the window the run breaks and the header comes back.
+    follow_up.created = prev.created + chrono::Duration::seconds(MESSAGE_GROUP_WINDOW_SECS);
+    assert!(!groups_as_continuation(Some(&prev), &follow_up));
+
+    // A different author always starts a run.
+    let mut other = make_msg(Uuid::from_u128(12));
+    other.user_id = Uuid::from_u128(7);
+    other.created = prev.created + chrono::Duration::seconds(1);
+    assert!(!groups_as_continuation(Some(&prev), &other));
+
+    // The first message of a room has nothing to group under.
+    assert!(!groups_as_continuation(None, &prev));
+}
+
+#[test]
 fn system_line_text_requires_system_author_and_prefix() {
     let system_id = Uuid::from_u128(1);
     let mut usernames = HashMap::new();

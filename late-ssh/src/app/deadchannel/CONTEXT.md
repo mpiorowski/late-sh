@@ -6,8 +6,9 @@
   scaffolding end to end.
 - Last updated: 2026-09-01 (ladder counts tuned after first hands-on:
   three persisted clock bursts open stage 2 and quiet the clock, three
-  name hits arm the door, the flicker got heavier (2-3 glyphs, ~400ms),
-  and `/haunt glitch` fires on a ~7s fuse so its banner clears first)
+  name hits arm the door, the flicker got heavier (2-3 glyphs, ~800ms)
+  and skips grouped continuations, and `/haunt glitch` fires on a ~7s
+  fuse so its banner clears first)
 - Status: Active, admin-only by design
 - Parent context: `../../../../CONTEXT.md`; design source: `GAME.md`,
   "First contact (the haunting)"
@@ -64,8 +65,12 @@ into the rows cache key, and
    (glitch hits at the cap): on the landing echo of this session's own
    send (the one moment of guaranteed attention), a ~1-in-24 roll may
    corrupt two or three characters of that message's author label for
-   ~400ms, heavier and a beat longer than the clock: name characters
-   only, never the body (the escalation is targeting, not content). One
+   ~800ms, heavier and longer than the clock: name characters only,
+   never the body (the escalation is targeting, not content). Only a
+   send that renders its own author header is a target: the landing
+   hook in `chat/state.rs` skips grouped continuations (a fast
+   follow-up to your own message, `MESSAGE_GROUP_WINDOW_SECS`), whose
+   label never draws, so a hit is never spent invisibly. One
    hit per UTC day, `NAME_TOTAL_CAP` (3) ever; every hit increments the
    persisted `first_contact_name_hits` counter. The corruption rides the
    chat rows cache key, so start and heal rebuild rows exactly once.
@@ -81,7 +86,13 @@ into the rows cache key, and
    after the delivered whisper, the game's first voice - `afterglow`
    (GAME.md reserved the name for something inside the world), a
    bartender-shaped ghost user (fixed fingerprint `afterglow-fp-000`)
-   that is never auto-joined into public rooms - sends one persistent DM:
+   that is never auto-joined into public rooms - sends one persistent DM.
+   The voice row is ensured at process startup
+   (`ChatService::ensure_first_contact_voice_task`, main.rs), the same
+   reservation move as the `system` user: the first deploy creates the
+   row and the case-insensitive unique username index holds the name
+   from then on; the invitation task re-runs the ensure, so a lost boot
+   or a squat self-heals. The DM is
    a plea ending in the only instruction the haunting ever gives,
    `/join #deadchannel`. Self-serve: the chosen one's own session notices
    the due date; `User::claim_first_contact_invitation` (a conditional
