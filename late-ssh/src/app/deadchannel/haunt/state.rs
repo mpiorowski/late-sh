@@ -346,6 +346,9 @@ const GLITCH_DEFER_MIN_TICKS: usize = 3 * 60 * 1000 / 66; // ~3 min
 const GLITCH_DEFER_MAX_TICKS: usize = 10 * 60 * 1000 / 66; // ~10 min
 /// At most this many bursts per UTC day per session.
 const GLITCH_DAILY_CAP: u8 = 2;
+/// Fuse on a forced burst: the `/haunt glitch` banner covers the sidebar
+/// clock for ~5s, so the burst waits it out.
+const GLITCH_FORCE_DELAY_TICKS: usize = 7 * 1000 / 66; // ~7 s
 
 /// What one `tick` decided. `Started` and `Ended` are the two frames the
 /// owner must actually paint.
@@ -364,6 +367,8 @@ pub(crate) struct ClockGlitch {
     next_at: usize,
     /// Tick the live burst started, while one is showing.
     active_since: Option<usize>,
+    /// Tick a forced (`/haunt glitch`) burst fires, while its fuse burns.
+    forced_at: Option<usize>,
     /// UTC day the counter below counts within.
     today: Option<NaiveDate>,
     /// Bursts fired today (session-local; the daily cap needs no DB).
@@ -376,6 +381,7 @@ impl ClockGlitch {
             rng: seed | 1,
             next_at: 0,
             active_since: None,
+            forced_at: None,
             today: None,
             fired_today: 0,
         };
@@ -399,6 +405,17 @@ impl ClockGlitch {
                 return GlitchTick::Ended;
             }
             return GlitchTick::Idle;
+        }
+        if let Some(at) = self.forced_at {
+            // A burning fuse bypasses the schedule, the caps, and the
+            // visibility gate, exactly as the instant fire did: the admin
+            // asked for it and is watching.
+            if tick < at {
+                return GlitchTick::Idle;
+            }
+            self.forced_at = None;
+            self.active_since = Some(tick);
+            return GlitchTick::Started;
         }
         if tick < self.next_at {
             return GlitchTick::Idle;
@@ -430,10 +447,11 @@ impl ClockGlitch {
             .then(|| self.rng ^ ((since as u64) << 1 | 1))
     }
 
-    /// `/haunt glitch`: start a burst right now, bypassing schedule and
-    /// caps. Admin test hook only.
+    /// `/haunt glitch`: light a short fuse (the command banner covers the
+    /// sidebar clock for ~5s), then burst, bypassing schedule and caps.
+    /// Admin test hook only.
     pub(crate) fn fire_now(&mut self, tick: usize) {
-        self.active_since = Some(tick);
+        self.forced_at = Some(tick + GLITCH_FORCE_DELAY_TICKS);
     }
 
     /// Ticks until the next scheduled burst, for `/haunt` status.

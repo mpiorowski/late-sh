@@ -187,6 +187,26 @@ fn glitch_defers_hidden_reschedules_disabled_and_caps_daily() {
 }
 
 #[test]
+fn forced_glitch_waits_out_the_banner_then_bypasses_the_caps() {
+    let mut glitch = ClockGlitch::new(9, 0);
+    glitch.fired_today = GLITCH_DAILY_CAP;
+    glitch.today = Some(DAY());
+
+    glitch.fire_now(100);
+    let due = 100 + GLITCH_FORCE_DELAY_TICKS;
+    // The fuse burns past the banner; nothing shows early, even hidden.
+    assert_eq!(glitch.tick(due - 1, DAY(), true, false), GlitchTick::Idle);
+    assert_eq!(glitch.corruption(due - 1), None);
+    // Then it bursts despite the daily cap and heals like any burst.
+    assert_eq!(glitch.tick(due, DAY(), true, true), GlitchTick::Started);
+    assert!(glitch.corruption(due).is_some());
+    assert_eq!(
+        glitch.tick(due + GLITCH_HOLD_TICKS, DAY(), true, true),
+        GlitchTick::Ended
+    );
+}
+
+#[test]
 fn name_flicker_rolls_caps_and_forces() {
     let message = Uuid::now_v7();
     // At the lifetime cap nothing fires naturally, but the admin force

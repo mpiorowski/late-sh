@@ -121,7 +121,8 @@ posts as plain text, exactly as if the command did not exist. Drained by
   (`State.haunt_enabled`, in-memory, back on after restart, safe while
   admin-scoped). `on` also re-arms the repeatable machines for a session
   that connected while it was off; `off` drops a live whisper mid-scene.
-- `/haunt glitch` - fire a clock burst now (bypasses schedule and caps).
+- `/haunt glitch` - fire a clock burst on a ~7s fuse (the banner covers
+  the clock for ~5s), bypassing schedule and caps.
 - `/haunt name` - force the next own send to flicker.
 - `/haunt replay` - re-run the splash whisper now, ignoring the marks.
 - `/haunt invite` - send the invitation DM now, skipping the delay.

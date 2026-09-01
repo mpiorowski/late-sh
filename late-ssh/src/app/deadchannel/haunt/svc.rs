@@ -272,7 +272,7 @@ fn tick_commands(app: &mut App) -> bool {
             }
             Some(glitch) => {
                 glitch.fire_now(app.marquee_tick);
-                app.banner = Some(Banner::success("Glitch fired - watch the clock"));
+                app.banner = Some(Banner::success("Glitch fires in ~7s - watch the clock"));
             }
         },
         HauntCommand::Name => match app.haunt.name_flicker.as_mut() {
