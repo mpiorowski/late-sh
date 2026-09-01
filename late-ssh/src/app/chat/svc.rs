@@ -4663,6 +4663,15 @@ impl ChatService {
     }
 
     async fn open_public_room(&self, user_id: Uuid, slug: &str) -> Result<Uuid> {
+        // The one gated join in the app (GAME.md, First contact stage 4):
+        // the invitation is the key, because an open door would let people
+        // skip the eligibility funnel the haunting exists to drive.
+        if slug
+            .trim()
+            .eq_ignore_ascii_case(late_core::models::chat_room::DEADCHANNEL_SLUG)
+        {
+            return self.join_deadchannel_room(user_id).await;
+        }
         let client = self.db.get().await?;
         // Public rooms are hosted, not owned: only mods edit their topic and
         // rules. Whether this call opens a brand-new room decides whether the
@@ -4689,6 +4698,25 @@ impl ChatService {
             // logging, never worth telling them their room failed to open.
             tracing::error!(?error, slug = %slug, room_id = %room.id, "failed to announce new public room");
         }
+        Ok(room.id)
+    }
+
+    /// `/join #deadchannel`, the invitation's only instruction (GAME.md,
+    /// First contact stage 4). Without the stamp the caller gets the exact
+    /// static line the reserved topic slug always gives, so from outside
+    /// the door and the wall are indistinguishable; with it the haunted
+    /// channel opens, seeded on the first invited entry.
+    async fn join_deadchannel_room(&self, user_id: Uuid) -> Result<Uuid> {
+        let client = self.db.get().await?;
+        let user = User::get(&client, user_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("user not found"))?;
+        if late_core::models::user::extract_first_contact_invited_at(&user.settings).is_none() {
+            anyhow::bail!("only static on that channel");
+        }
+        let room = ChatRoom::get_or_create_deadchannel_room(&client).await?;
+        ChatRoomMember::join(&client, room.id, user_id).await?;
+        tracing::info!(user_id = %user_id, room_id = %room.id, "deadchannel joined by invitation");
         Ok(room.id)
     }
 

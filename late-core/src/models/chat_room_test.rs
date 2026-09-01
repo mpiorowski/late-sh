@@ -447,3 +447,44 @@ async fn the_deadchannel_slug_is_reserved_for_the_game() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn the_deadchannel_room_is_seeded_once_and_hidden_from_every_listing() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let member = create_test_user(&test_db.db, "dc-runner").await;
+
+    let room = ChatRoom::get_or_create_deadchannel_room(&client)
+        .await
+        .expect("seed deadchannel");
+    assert_eq!(room.kind, "deadchannel");
+    assert_eq!(room.slug.as_deref(), Some("deadchannel"));
+    assert!(!room.auto_join);
+    let again = ChatRoom::get_or_create_deadchannel_room(&client)
+        .await
+        .expect("re-seed deadchannel");
+    assert_eq!(again.id, room.id);
+
+    // Never discoverable, even for a member: browse and IRC listings are
+    // kind whitelists, and the new kind is on none of them. The channel is
+    // only ever spoken of.
+    ChatRoomMember::join(&client, room.id, member.id)
+        .await
+        .expect("join member");
+    let discover = ChatRoom::list_discover_public_topic_rooms(&client)
+        .await
+        .expect("discover listing");
+    assert!(discover.iter().all(|entry| entry.room_id != room.id));
+    let summaries = ChatRoom::list_public_topic_room_summaries(&client)
+        .await
+        .expect("summary listing");
+    assert!(
+        summaries
+            .iter()
+            .all(|entry| entry.slug.as_deref() != Some("deadchannel"))
+    );
+    let irc = ChatRoom::list_irc_channels(&client, member.id)
+        .await
+        .expect("irc listing");
+    assert!(irc.iter().all(|entry| entry.id != room.id));
+}

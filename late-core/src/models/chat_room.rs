@@ -188,6 +188,25 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
+    /// The game's haunted channel (GAME.md, First contact stage 4): its own
+    /// kind, so every room listing (browse lists only `topic`, IRC lists
+    /// lounge/language/topic) excludes it by construction and the join path
+    /// can gate on the first-contact invitation. Never auto-joined; seeded
+    /// on the first invited `/join #deadchannel`.
+    pub async fn get_or_create_deadchannel_room(client: &Client) -> Result<Self> {
+        let row = client
+            .query_one(
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug)
+                 VALUES ('deadchannel', 'public', false, $1)
+                 ON CONFLICT (slug) WHERE kind = 'deadchannel'
+                 DO UPDATE SET updated = current_timestamp
+                 RETURNING *",
+                &[&DEADCHANNEL_SLUG],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
     pub async fn get_or_create_game_room(
         client: &Client,
         game_kind: GameKind,
@@ -1007,6 +1026,10 @@ pub struct PublicTopicRoomSummary {
     pub member_count: i64,
 }
 
+/// The haunted channel's slug: reserved from user creation in
+/// `normalize_topic_slug`, owned by `get_or_create_deadchannel_room`.
+pub const DEADCHANNEL_SLUG: &str = "deadchannel";
+
 pub fn canonical_dm_pair(user_a: Uuid, user_b: Uuid) -> (Uuid, Uuid) {
     if user_a.as_u128() < user_b.as_u128() {
         (user_a, user_b)
@@ -1020,13 +1043,13 @@ fn normalize_topic_slug(slug: &str) -> Result<String> {
     if slug == "lounge" {
         bail!("cannot create room with reserved name 'lounge'");
     }
-    if slug == "deadchannel" {
+    if slug == DEADCHANNEL_SLUG {
         // The game's home channel (GAME.md, First contact): the invitation
         // DM ends in `/join #deadchannel`, so the name has to be waiting
         // for the game, not for whoever typed it first. The message is the
         // fiction rather than "reserved", which would confirm there is
-        // something to reserve it for; the game itself will seed the room
-        // through the game-room path, which does not pass through here.
+        // something to reserve it for; the room itself lives under its own
+        // kind (`get_or_create_deadchannel_room`), not through here.
         bail!("only static on that channel");
     }
     Ok(slug)

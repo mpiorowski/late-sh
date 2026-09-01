@@ -108,15 +108,19 @@ into the rows cache key, and
    beside the `lounge` reservation, case-insensitive, refusal message
    "only static on that channel") so no user-created room can be waiting
    where the invitation points. **The invitation is the key (decided
-   2026-09-01):** when the game seeds the real room,
-   `/join #deadchannel` must work only for users whose
-   `first_contact_invited_at` is set; everyone else keeps getting the
-   static line, because an open door would let people skip the
-   bio/settings/tenure eligibility funnel that the haunting exists to
-   drive. The room gets its own `kind='deadchannel'` (forward migration
-   on the `chat_rooms` kind CHECK): every room listing is a kind
+   and built 2026-09-01):** `ChatService::open_public_room` routes the
+   `deadchannel` slug (case-insensitive) into `join_deadchannel_room`,
+   which requires `first_contact_invited_at`; without the stamp the
+   caller gets the same static line the reserved slug gives, so from
+   outside the door and the wall are indistinguishable. An open door
+   would let people skip the bio/settings/tenure eligibility funnel
+   that the haunting exists to drive. The room has its own
+   `kind='deadchannel'` (migration 170,
+   `ChatRoom::get_or_create_deadchannel_room`, seeded on the first
+   invited join, never auto-joined): every room listing is a kind
    whitelist (browse lists only `topic`, IRC lists
-   lounge/language/topic), so the new kind is hidden from browse and
+   lounge/language/topic, and IRC JOIN filters through
+   `is_irc_channel_kind`), so the channel is hidden from browse and
    IRC by construction, the same way game rooms already are, without
    inheriting the game-room join path. Copy and name face design review
    before real users ever see them.

@@ -296,8 +296,8 @@ thresholds still face design review before the fuse is lit.
      created, the haunted channel under the clubhouse opens, the game
      exists for you and nobody else. The name decision (rooms ARE
      channels) becomes the consent mechanism. **The invitation is the
-     key, not a head start (decided 2026-09-01, reversing the earlier
-     open-join call): `/join #deadchannel` works only for users whose
+     key, not a head start (decided and built 2026-09-01, reversing
+     the earlier open-join call): `/join #deadchannel` works only for users whose
      invitation stamp is set.** An open door would let people skip the
      eligibility funnel entirely, and the funnel (fill your bio, touch
      your settings, put in the hours) is the point. Everyone else gets
@@ -309,9 +309,9 @@ thresholds still face design review before the fuse is lit.
      glyph flickering into #lounge, the room watching a runner put it
      down) is not dead, it is relocated: that is the game's public
      phase, once enough runners exist to make it a show. The room
-     itself gets its own room kind, `kind='deadchannel'` (a forward
-     migration extends the `chat_rooms` kind CHECK, today
-     lounge/language/dm/topic/game): every room listing is a kind
+     itself has its own room kind, `kind='deadchannel'` (migration 170
+     extends the `chat_rooms` kind CHECK; the room seeds itself on the
+     first invited join): every room listing is a kind
      whitelist (browse lists only `topic`, IRC lists
      lounge/language/topic), so a new kind is invisible to all of them
      by construction, exactly how game rooms already hide, and without

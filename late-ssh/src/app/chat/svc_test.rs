@@ -5069,6 +5069,55 @@ async fn first_contact_invitation_sends_one_dm_and_claims_once() {
 }
 
 #[tokio::test]
+async fn deadchannel_join_requires_the_invitation() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "dc-hopeful").await;
+
+    // Uninvited, the door and the wall are indistinguishable: the same
+    // static line the reserved slug gives, and no room seeded.
+    service.open_public_room_task(user.id, "deadchannel".to_string());
+    match timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event")
+    {
+        ChatEvent::RoomFailed { user_id, message } => {
+            assert_eq!(user_id, user.id);
+            assert_eq!(message, "only static on that channel");
+        }
+        other => panic!("expected RoomFailed, got {other:?}"),
+    }
+
+    // The invitation stamp is the key.
+    User::claim_first_contact_invitation(&client, user.id, chrono::Utc::now())
+        .await
+        .expect("stamp invitation");
+    service.open_public_room_task(user.id, "DeadChannel".to_string());
+    let room_id = match timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event")
+    {
+        ChatEvent::RoomJoined { user_id, room_id, .. } => {
+            assert_eq!(user_id, user.id);
+            room_id
+        }
+        other => panic!("expected RoomJoined, got {other:?}"),
+    };
+    assert!(
+        ChatRoomMember::is_member(&client, room_id, user.id)
+            .await
+            .expect("membership check")
+    );
+}
+
+#[tokio::test]
 async fn first_contact_voice_ensure_is_idempotent_and_claims_the_name() {
     use crate::app::deadchannel::haunt::state::VOICE_USERNAME;
 
