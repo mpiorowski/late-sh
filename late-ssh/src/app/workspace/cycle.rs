@@ -14,10 +14,10 @@
 use uuid::Uuid;
 
 use crate::app::{
-    workspace::arcade::{ArcadeStop, active_daily_stop, open_stop, unfinished_daily_stops},
     common::primitives::{Banner, Screen},
     lobby::house::tables::HouseTable,
     state::App,
+    workspace::arcade::{ArcadeStop, active_daily_stop, open_stop, unfinished_daily_stops},
 };
 
 /// One stop on the backtick cycle: Home chat, a daily board where it's your
