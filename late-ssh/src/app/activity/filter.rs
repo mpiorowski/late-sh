@@ -162,8 +162,12 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
 /// #lounge history like anything a person said, so it is reserved for the
 /// rare, public, everyone-cares moments. The body carries no
 /// `SYSTEM_LINE_PREFIX`, which is exactly what keeps it out of the ticker
-/// diversion and in the message list. Same shape as `lounge_includes`: every
-/// kind is matched, so a new event has to decide here whether it headlines.
+/// diversion and in the message list. Every name in a headline is written as
+/// an `@mention` so the people it is about get a notification: the winner and
+/// the deposed holder are exactly the ones most likely to have been offline
+/// for it. The ticker line keeps its bare names. Same shape as
+/// `lounge_includes`: every kind is matched, so a new event has to decide
+/// here whether it headlines.
 pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
     use crate::app::common::primitives::thousands;
     use crate::app::common::username_effect::CROWN_GLYPH;
@@ -182,10 +186,10 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
             let next = thousands(*next_price);
             Some(match from {
                 Some(from) => format!(
-                    "{CROWN_GLYPH} {taker} stole the crown from {from} for {paid} chips. Next price: {next} chips."
+                    "{CROWN_GLYPH} @{taker} stole the crown from @{from} for {paid} chips. Next price: {next} chips."
                 ),
                 None => format!(
-                    "{CROWN_GLYPH} {taker} claimed the vacant crown for {paid} chips. Next price: {next} chips."
+                    "{CROWN_GLYPH} @{taker} claimed the vacant crown for {paid} chips. Next price: {next} chips."
                 ),
             })
         }
@@ -201,7 +205,7 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
         } => {
             let winner = &event.username;
             Some(format!(
-                "\u{1F3B0} {winner} won the pot: {} chips on {} of {} tickets.",
+                "\u{1F3B0} @{winner} won the pot: {} chips on {} of {} tickets.",
                 thousands(*payout),
                 thousands(*winner_tickets),
                 thousands(*total_tickets)

@@ -629,12 +629,14 @@ its own domain; only the command and the glyph are chat's.
   line ("tom stole the crown from mira for 1,688", `· `-prefixed, diverted
   into the one-row ticker like every system line) and a **headline**, a
   real message from `system` with no prefix, so it renders as a chat row
-  and stays in history: "👑 tom stole the crown from mira for 1,688 chips.
-  Next price: 2,532 chips." (`activity/filter.rs::lounge_headline`, the
+  and stays in history: "👑 @tom stole the crown from @mira for 1,688
+  chips. Next price: 2,532 chips." (`activity/filter.rs::lounge_headline`, the
   exhaustive twin of `lounge_includes`; posted by the lounge feed task right
   after the ticker line, behind the same repeat gate, keyed on the reign
   id). The event carries `next_price` so the headline quotes the ladder
-  without re-deriving it. Unlike the gild line this one names the loser on
+  without re-deriving it. Both names are written as `@mentions` in the
+  headline (never in the ticker line), so the deposed holder gets a
+  notification even when they were offline for it. Unlike the gild line this one names the loser on
   purpose: the crown is a single slot, so the takeover *is* the story.
 - **Award.** The month's last holder gets a `profile_awards` row, category
   `crown`, granted by the existing monthly snapshot
