@@ -36,6 +36,17 @@ use uuid::Uuid;
 /// willing to look at before the server rebuilds it.
 const REFRESH_INTERVAL: Duration = Duration::from_secs(300);
 
+/// How often the award snapshot loop checks whether a pass is due. The check
+/// itself is a clock read; the DB pass runs only on a UTC month rollover or
+/// the fallback below, so this cadence bounds how long freshly-completed
+/// monthly badges stay missing after the 1st, not how often we query.
+const AWARD_SNAPSHOT_CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
+/// Fallback cadence for the award snapshot when no rollover happened. Existing
+/// rows are frozen, so this pass is a cheap re-confirmation kept as a safety
+/// net against a missed rollover check (clock skew, a long stall).
+const AWARD_SNAPSHOT_FALLBACK: Duration = Duration::from_secs(24 * 60 * 60);
+
 #[derive(Clone)]
 pub struct LeaderboardService {
     db: Db,
@@ -250,6 +261,36 @@ fn should_refresh(wake: Wake, has_subscribers: bool, age: Option<Duration>) -> b
     }
 }
 
+/// The award snapshot loop's entire decision, extracted so it is testable
+/// without a runtime, a DB, or a clock.
+///
+/// `target_month` is the previous completed UTC month a pass would write rows
+/// for; `last_run` is the month the last successful pass wrote and how long
+/// ago it ran, `None` before the first one.
+fn should_snapshot_awards(
+    target_month: NaiveDate,
+    last_run: Option<(NaiveDate, Duration)>,
+) -> bool {
+    match last_run {
+        // Startup: run immediately, so a restart doubles as manual catch-up.
+        None => true,
+        // The month rolled over since the last pass. The rows the chat-label
+        // query now filters on do not exist until this pass writes them, so
+        // monthly badges are blank for everyone until it runs.
+        Some((month, _)) if month != target_month => true,
+        // Same month already written: rows are frozen, a pass is a no-op.
+        Some((_, elapsed)) => elapsed >= AWARD_SNAPSHOT_FALLBACK,
+    }
+}
+
+/// First day of the UTC month before the one containing `today`: the month
+/// `snapshot_previous_month_profile_awards` writes rows for.
+fn previous_utc_month(today: NaiveDate) -> NaiveDate {
+    let first = today.with_day(1).expect("every month has a day 1");
+    let last_of_previous = first.pred_opt().expect("date has a predecessor");
+    last_of_previous.with_day(1).expect("every month has a day 1")
+}
+
 impl LeaderboardService {
     pub fn new(db: Db) -> Self {
         let (tx, _) = watch::channel(Arc::new(LeaderboardData::default()));
@@ -407,16 +448,25 @@ impl LeaderboardService {
 
     pub fn start_profile_award_snapshot_loop(self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
-            if let Err(e) = self.snapshot_profile_awards().await {
-                tracing::error!(error = ?e, "initial profile award snapshot failed");
-            }
-
-            let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
-            interval.tick().await;
+            let mut last_run: Option<(NaiveDate, Instant)> = None;
+            let mut interval = tokio::time::interval(AWARD_SNAPSHOT_CHECK_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
+                // The first tick completes immediately, so startup snapshots.
                 interval.tick().await;
-                if let Err(e) = self.snapshot_profile_awards().await {
-                    tracing::warn!(error = ?e, "profile award snapshot failed");
+                let target_month = previous_utc_month(Utc::now().date_naive());
+                let due = should_snapshot_awards(
+                    target_month,
+                    last_run.map(|(month, at)| (month, at.elapsed())),
+                );
+                if !due {
+                    continue;
+                }
+                match self.snapshot_profile_awards().await {
+                    Ok(()) => last_run = Some((target_month, Instant::now())),
+                    // `last_run` is untouched, so the next hourly tick retries
+                    // instead of waiting out the fallback.
+                    Err(e) => tracing::warn!(error = ?e, "profile award snapshot failed"),
                 }
             }
         })

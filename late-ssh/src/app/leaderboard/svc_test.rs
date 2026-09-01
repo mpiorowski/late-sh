@@ -150,6 +150,51 @@ fn month(year: i32, month: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(year, month, 1).expect("valid month")
 }
 
+/// The award snapshot gate: the hourly tick must query the DB only at startup,
+/// on a UTC month rollover, or on the daily fallback.
+#[test]
+fn award_snapshot_runs_at_startup() {
+    assert!(should_snapshot_awards(month(2026, 8), None));
+}
+
+#[test]
+fn award_snapshot_runs_when_the_month_rolls_over() {
+    // Last pass wrote July, the clock now says August is the previous month:
+    // run regardless of how recently the last pass ran.
+    assert!(should_snapshot_awards(
+        month(2026, 8),
+        Some((month(2026, 7), Duration::from_secs(60)))
+    ));
+}
+
+#[test]
+fn award_snapshot_skips_a_warm_same_month_pass() {
+    assert!(!should_snapshot_awards(
+        month(2026, 8),
+        Some((month(2026, 8), AWARD_SNAPSHOT_FALLBACK - Duration::from_secs(1)))
+    ));
+}
+
+#[test]
+fn award_snapshot_falls_back_to_daily() {
+    assert!(should_snapshot_awards(
+        month(2026, 8),
+        Some((month(2026, 8), AWARD_SNAPSHOT_FALLBACK))
+    ));
+}
+
+#[test]
+fn previous_utc_month_steps_back_within_a_year() {
+    let today = NaiveDate::from_ymd_opt(2026, 9, 1).expect("valid date");
+    assert_eq!(previous_utc_month(today), month(2026, 8));
+}
+
+#[test]
+fn previous_utc_month_crosses_the_year_boundary() {
+    let today = NaiveDate::from_ymd_opt(2026, 1, 15).expect("valid date");
+    assert_eq!(previous_utc_month(today), month(2025, 12));
+}
+
 fn increment_for(batch: &PreparedOnlineTimeBatch, user_id: Uuid, month_start: NaiveDate) -> i64 {
     batch
         .batch
