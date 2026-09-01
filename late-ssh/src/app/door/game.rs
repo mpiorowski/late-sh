@@ -43,6 +43,15 @@ pub enum DoorGameEvent {
     },
 }
 
+/// How long a native door keeps its loaded state while the player is away:
+/// no key handled by the door, and the door not the open screen (`App::tick`
+/// stamps presence while it is). Dark Room and Green Dragon survive a screen
+/// switch (they tick off-screen), so without a deadline an abandoned door
+/// would advertise itself on the backtick cycle for the rest of the session.
+/// Past this the visit is over: the door saves and drops exactly as an
+/// explicit leave does.
+pub const IDLE_WINDOW: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
 pub trait DoorGame {
     type View<'a>;
 

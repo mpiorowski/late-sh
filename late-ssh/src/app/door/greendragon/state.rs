@@ -561,6 +561,14 @@ pub struct State {
     /// or it would look attackable (upstream's `laston` refreshes every
     /// page load; ours refreshes on action, so idling needs the heartbeat).
     last_save: std::time::Instant,
+    /// The player's last touch of this door: a key it handled, or a tick
+    /// with it as the open screen. The tavern outlives a hop to another
+    /// screen, so this is what ends an abandoned visit; see
+    /// [`State::idle_expired`].
+    last_input_at: std::time::Instant,
+    /// See [`State::force_idle_for_test`].
+    #[cfg(test)]
+    idle_forced: bool,
     /// The Hall of Fame's current ranking, order flip, and page.
     hof_ranking: HofRanking,
     hof_least: bool,
@@ -641,11 +649,72 @@ impl State {
             clan_member_sel: None,
             clan_edit_field: None,
             last_save: std::time::Instant::now(),
+            last_input_at: std::time::Instant::now(),
+            #[cfg(test)]
+            idle_forced: false,
             hof_ranking: HofRanking::Kills,
             hof_least: false,
             hof_page: 0,
             hof_page_view: None,
         }
+    }
+
+    /// Mark the player as still here. Every key the door handles calls this,
+    /// and `App::tick` calls it while the door is the open screen (sitting on
+    /// it reading is not being away); the idle deadline it feeds is what
+    /// closes a forgotten visit.
+    pub fn touch(&mut self) {
+        self.last_input_at = std::time::Instant::now();
+        #[cfg(test)]
+        {
+            self.idle_forced = false;
+        }
+    }
+
+    /// No touch for [`IDLE_WINDOW`], so half an hour away from the door: this
+    /// visit is over. The caller saves and drops the door, which drops the
+    /// presence flag (so the roster stops listing an absent player as here)
+    /// and takes it off the backtick workspace cycle.
+    pub fn idle_expired(&self) -> bool {
+        #[cfg(test)]
+        if self.idle_forced {
+            return true;
+        }
+        self.last_input_at.elapsed() >= crate::app::door::game::IDLE_WINDOW
+    }
+
+    /// Test-only: force the idle deadline, so the reap in `App::tick` can be
+    /// exercised without waiting half an hour. A flag rather than an aged
+    /// `last_input_at`, because winding an `Instant` back half an hour panics
+    /// on a machine booted more recently than that. Cleared by [`State::touch`],
+    /// exactly as a real stamp clears real idleness.
+    #[cfg(test)]
+    pub fn force_idle_for_test(&mut self) {
+        self.idle_forced = true;
+    }
+
+    /// Test-only: drop the player into a fight, so the backtick refusal can
+    /// be exercised without a forest roll.
+    #[cfg(test)]
+    pub fn force_fight_for_test(&mut self) {
+        self.encounter = Some(Encounter::single(
+            Foe {
+                name: "Shade".into(),
+                weapon: "claw".into(),
+                combatant: Combatant {
+                    attack: 1,
+                    defense: 1,
+                },
+                hp: 5,
+                max_hp: 5,
+                reward_gold: 0,
+                reward_exp: 0,
+                level: 1,
+                bandit: false,
+            },
+            FoeKind::Creature,
+        ));
+        self.mode = Mode::Fight;
     }
 
     /// Drain pending async loads (the initial character, a news page). Called

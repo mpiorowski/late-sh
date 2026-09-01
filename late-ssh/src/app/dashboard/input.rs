@@ -13,7 +13,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
     }
 
     if byte == b'`' {
-        return crate::app::lobby::workspace::cycle_game_workspace(app);
+        return crate::app::workspace::cycle::cycle_game_workspace(app);
     }
 
     if matches!(byte, b'v' | b'V') {

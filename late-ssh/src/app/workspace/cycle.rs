@@ -1,20 +1,23 @@
 //! The backtick workspace cycle: Home chat -> each daily board waiting on
 //! your move -> each house table you're seated at -> each Arcade daily
 //! puzzle you've started but not finished -> each live door game (a
-//! recently-detached Lateania world, then the running roguelikes) -> back
-//! to Home chat. The one key that spans the Lobby game domains, the Arcade
-//! dailies, and the door games: inside a running roguelike the same
-//! backtick detaches (the game keeps running) and hops onward; inside an
-//! active Lateania world it leaves (autosave) and keeps the door on the
-//! cycle for a few minutes so hopping back re-joins the character.
+//! recently-detached Lateania world, the running roguelikes, then the two
+//! loaded native remakes) -> back to Home chat. The one key that spans the
+//! Lobby game domains, the Arcade dailies, and the door games: inside a
+//! running roguelike the same backtick detaches (the game keeps running)
+//! and hops onward; inside an active Lateania world it leaves (autosave)
+//! and keeps the door on the cycle for a few minutes so hopping back
+//! re-joins the character; inside Dark Room or Green Dragon it hops with
+//! the door still loaded, and an idle deadline in `App::tick` ends the
+//! visit for a player who never comes back.
 
 use uuid::Uuid;
 
 use crate::app::{
-    arcade::workspace::{ArcadeStop, active_daily_stop, open_stop, unfinished_daily_stops},
     common::primitives::{Banner, Screen},
     lobby::house::tables::HouseTable,
     state::App,
+    workspace::arcade::{ArcadeStop, active_daily_stop, open_stop, unfinished_daily_stops},
 };
 
 /// One stop on the backtick cycle: Home chat, a daily board where it's your
@@ -32,7 +35,9 @@ pub(crate) enum GameWorkspace {
     /// roguelikes (Nethack/Dcss/Brogue) the turn-based child idles on its
     /// host while detached, so hopping in resumes exactly where the player
     /// left off. For Lateania "live" means detached recently: hopping in
-    /// re-joins the autosaved character.
+    /// re-joins the autosaved character. For Dark Room and Green Dragon it
+    /// means the door is still loaded on this session, which it stays until
+    /// an explicit leave or the idle deadline.
     Door(Screen),
 }
 
@@ -71,6 +76,18 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
             true => GameWorkspace::Door(Screen::Lateania),
             false => return false,
         },
+        // The two native remakes reach here through the backtick arm in their
+        // own `screen::handle_key`. Nothing is armed first: their state
+        // survives the hop (it keeps ticking off-screen), so being loaded is
+        // itself the proof they are live.
+        Screen::Darkroom => match app.darkroom_state.is_some() {
+            true => GameWorkspace::Door(Screen::Darkroom),
+            false => return false,
+        },
+        Screen::GreenDragon => match app.greendragon_state.is_some() {
+            true => GameWorkspace::Door(Screen::GreenDragon),
+            false => return false,
+        },
         _ => return false,
     };
     let my_turn_ids: Vec<Uuid> = app
@@ -81,7 +98,7 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
         .collect();
     let seated_tables = app.house.my_seated_tables();
     let arcade_stops = unfinished_daily_stops(app);
-    let door_stops = live_door_stops(app);
+    let door_stops = crate::app::door::hub::state::live_doors(app);
     // Preserve where the first stop in the hop chain was opened from so
     // `q`/`Esc` still returns there after any number of backtick hops.
     // Arcade stops don't record an origin (Esc there always returns to the
@@ -129,7 +146,9 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
                 | Screen::Nethack
                 | Screen::Dcss
                 | Screen::Brogue
-                | Screen::Lateania => {
+                | Screen::Lateania
+                | Screen::Darkroom
+                | Screen::GreenDragon => {
                     app.set_screen(Screen::Dashboard);
                 }
                 _ => {
@@ -180,41 +199,6 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
     }
 }
 
-/// The door games that count as live stops, in hub sidebar order. For the
-/// roguelikes that means a running (attached or detached) game: a door
-/// sitting on its launcher is not a workspace. Lateania has no detached
-/// session, so its test is the recency window a backtick detach arms: hop
-/// out and the door stays on the cycle for a few minutes, hopping in
-/// re-joins the saved character.
-fn live_door_stops(app: &App) -> Vec<Screen> {
-    let mut stops = Vec::new();
-    if app.lateania_recently_active() {
-        stops.push(Screen::Lateania);
-    }
-    if app
-        .dcss_state
-        .as_ref()
-        .is_some_and(|state| state.is_running())
-    {
-        stops.push(Screen::Dcss);
-    }
-    if app
-        .nethack_state
-        .as_ref()
-        .is_some_and(|state| state.is_running())
-    {
-        stops.push(Screen::Nethack);
-    }
-    if app
-        .brogue_state
-        .as_ref()
-        .is_some_and(|state| state.is_running())
-    {
-        stops.push(Screen::Brogue);
-    }
-    stops
-}
-
 /// The stop after `current` in `[Home, boards..., tables..., arcade...,
 /// doors...]`. A current stop missing from the list (the turn just passed,
 /// the seat was lost, the puzzle got solved, the dungeon run ended) restarts
@@ -246,5 +230,5 @@ fn next_workspace(
 }
 
 #[cfg(test)]
-#[path = "workspace_test.rs"]
-mod workspace_test;
+#[path = "cycle_test.rs"]
+mod cycle_test;

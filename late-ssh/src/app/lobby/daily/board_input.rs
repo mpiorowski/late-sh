@@ -26,7 +26,7 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
 
 pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
     if byte == b'`' {
-        return crate::app::lobby::workspace::cycle_game_workspace(app);
+        return crate::app::workspace::cycle::cycle_game_workspace(app);
     }
     if let Some(chat_room_id) = app.daily.board_chat_room_id() {
         if byte == 0x1B

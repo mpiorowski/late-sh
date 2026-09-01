@@ -42,25 +42,30 @@ pub struct HubView<'a> {
     pub nethack_live: bool,
     pub dcss_live: bool,
     pub brogue_live: bool,
+    /// The native remakes still loaded on this session: hopped away from but
+    /// not left, and not yet idled out.
+    pub darkroom_live: bool,
+    pub greendragon_live: bool,
     /// The rc config modal, drawn over the hub while open.
     pub rc_modal: Option<RcModalView<'a>>,
 }
 
 impl HubView<'_> {
     /// Whether this game counts as in progress: a detached roguelike session
-    /// to resume, or Lateania inside its backtick-detach recency window.
+    /// to resume, a native remake still loaded on this session, or Lateania
+    /// inside its backtick-detach recency window.
     fn is_live(&self, game: HubGame) -> bool {
         match game {
             HubGame::Lateania => self.lateania_live,
             HubGame::Nethack => self.nethack_live,
             HubGame::Dcss => self.dcss_live,
             HubGame::Brogue => self.brogue_live,
+            HubGame::Darkroom => self.darkroom_live,
+            HubGame::GreenDragon => self.greendragon_live,
             HubGame::Rebels
             | HubGame::Usurper
-            | HubGame::GreenDragon
             | HubGame::Dopewars
             | HubGame::Bashquest
-            | HubGame::Darkroom
             | HubGame::Codekeep => false,
         }
     }
@@ -78,7 +83,7 @@ const MIN_HEIGHT: u16 = 6;
 /// One row of the sidebar: a muted group header, a selectable game (index
 /// into [`HubGame::ALL`]), a blank separator between groups, or the faint
 /// always-on backtick hint at the top (the games that detach and hop:
-/// Lateania and the roguelikes).
+/// Lateania, the roguelikes, and the two native remakes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SidebarRow {
     Header(&'static str),

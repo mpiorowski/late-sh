@@ -129,7 +129,7 @@ impl App {
         // rather than an input path so a session parked in chat overnight is
         // already on today's boards when it looks at the Arcade again; the
         // check is a date comparison per game until the day actually changes.
-        if one_hz && crate::app::arcade::workspace::refresh_daily_games(self) {
+        if one_hz && crate::app::arcade::daily::refresh_daily_games(self) {
             changed = true;
         }
         if self.screen == Screen::Clubhouse && anim_half {
@@ -537,6 +537,55 @@ impl App {
             // frame nobody is looking at.
             let darkroom_changed = state.tick();
             changed |= darkroom_changed && self.screen == Screen::Darkroom;
+        }
+        // The two native remakes are the doors that outlive a screen switch,
+        // so they are the two that can be abandoned: a player who hopped away
+        // and never came back would keep them on the backtick cycle and in the
+        // hub's in-progress list for the rest of the session. Once the door
+        // has gone `IDLE_WINDOW` without a touch, end the visit exactly as an
+        // explicit leave does (settle, save, drop). Dark Room loses nothing by
+        // it: the leave stamps `last_settled`, and re-joining later in the
+        // same session credits the whole gap at once. Never while the door is
+        // the open screen (sitting on it reading is not being away), and the
+        // drop dirties the frame, because the hub pip and resume line would
+        // otherwise linger until some unrelated repaint. An open door is
+        // presence itself, so below the reaps the clock is stamped while the
+        // door is the open screen: the deadline measures time away from the
+        // door, and a keyless exit (a Ctrl+G lobby jump) must not inherit
+        // half an hour banked while watching the village.
+        if self.screen != Screen::Darkroom
+            && self
+                .darkroom_state
+                .as_ref()
+                .is_some_and(|state| state.idle_expired())
+        {
+            if let Some(state) = self.darkroom_state.as_mut() {
+                state.save_on_leave();
+            }
+            self.leave_darkroom();
+            changed = true;
+        }
+        if self.screen != Screen::GreenDragon
+            && self
+                .greendragon_state
+                .as_ref()
+                .is_some_and(|state| state.idle_expired())
+        {
+            if let Some(state) = self.greendragon_state.as_ref() {
+                state.save_on_leave();
+            }
+            self.leave_greendragon();
+            changed = true;
+        }
+        if self.screen == Screen::Darkroom
+            && let Some(state) = self.darkroom_state.as_mut()
+        {
+            state.touch();
+        }
+        if self.screen == Screen::GreenDragon
+            && let Some(state) = self.greendragon_state.as_mut()
+        {
+            state.touch();
         }
         // Door games are launched from the Games hub, so they return there when
         // they exit. Rebels flips out of Running the tick its proxy closes;

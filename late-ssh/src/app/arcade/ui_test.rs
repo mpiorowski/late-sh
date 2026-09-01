@@ -108,7 +108,7 @@ async fn sliding_puzzle_card_renders_rewards_and_launches() {
         personal.contains("Personal board. No reward; n starts a new scramble."),
         "{personal}"
     );
-    assert_eq!(super::workspace::active_daily_stop(&app), None);
+    assert_eq!(crate::app::workspace::arcade::active_daily_stop(&app), None);
 }
 
 /// The lobby card must turn green the moment this session banks a daily,

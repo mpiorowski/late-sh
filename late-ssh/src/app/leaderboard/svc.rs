@@ -288,7 +288,9 @@ fn should_snapshot_awards(
 fn previous_utc_month(today: NaiveDate) -> NaiveDate {
     let first = today.with_day(1).expect("every month has a day 1");
     let last_of_previous = first.pred_opt().expect("date has a predecessor");
-    last_of_previous.with_day(1).expect("every month has a day 1")
+    last_of_previous
+        .with_day(1)
+        .expect("every month has a day 1")
 }
 
 impl LeaderboardService {

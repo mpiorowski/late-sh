@@ -103,6 +103,14 @@ fn the_landing_names_both_endings_their_badges_and_the_second_pass() {
     );
 
     let confirm = landing_text(true);
-    assert!(confirm.contains("press again to burn it all down"));
+    assert!(
+        confirm.contains("Enter/Y"),
+        "confirm keys are unnamed:\n{confirm}"
+    );
+    assert!(
+        confirm.contains("n/Esc"),
+        "cancel keys are unnamed:\n{confirm}"
+    );
+    assert!(confirm.contains("burn it all down and start over"));
     assert!(!confirm.contains("light the fire"));
 }

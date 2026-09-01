@@ -65,6 +65,9 @@ live in.
   lightweight modal (Lobby-modal shape) for spending rations / setting fight
   plans / buying looks, the character sheet on the profile, the chat badge,
   and the feed. What died is the place you travel to, not the UI.
+  *Amended 2026-09-01:* the ban stands for gameplay but not for
+  transactions; the night city returns as a full-screen errand
+  destination under strict rules. See "The three surfaces".
 - **Strip the simulated-social 90%.** No gossip, flirting, gardens, outhouse
   equivalents: LORD faked a community because BBSes had one phone line; we
   have a real one and the fake one competes with it. Keep cheap *world*
@@ -151,6 +154,98 @@ glyphs and the Old Signal).
 - Ration status lives in the same mental slot as quests/streaks: sidebar
   line, streak bonuses mirroring the `QuestService` daily-streak shape.
 
+### The three surfaces (decided 2026-09-01)
+
+**Lounge = the snack. Wire = the log. City = the wallet.** Every piece of
+the game lives on exactly one of these three surfaces, and each surface
+has one job. When a mechanic doesn't know where it belongs, this table
+decides.
+
+**#lounge: the snack.** Spawns land where the eyes already are, but under
+a hard secrecy rule: **only runners see the game.** The spawn, the fight,
+the kill, all of it is render-layer theater injected into the sessions of
+invited players only. Zero DB rows in lounge, no kill lines, nothing on
+IRC, nothing in scrollback; the truth lives on the wire. Details:
+
+- A glyph posts into the lounge view of every runner present (shared
+  world event: server-side spawn with HP, hits resolved centrally, state
+  pushed to eligible sessions, rendered locally). This is the first
+  machine that is NOT like the haunting: first contact is per-session
+  private dice, a lounge spawn is one synchronized world object. Same
+  theater pipeline, different spine, and it is the expensive piece of
+  this phase.
+- Any runner answers it with one command; the command is swallowed (never
+  posts as a message), one damage roll off the LoGD curves, one reaction
+  line in the theater. A flicker dies to one hit: the snack stays a
+  snack, twenty seconds of play mid-scroll. Occasionally a bigger shape
+  (a howler) lands with several runners' worth of HP and the room gets a
+  two-minute pile-on: no party system, no invites, co-op is "whoever is
+  in the room hits it", the only multiplayer that survives the liquidity
+  math. Credit names everyone who landed a hit.
+- **Civilians see nothing, ever.** Their entire experience of the game is
+  overhearing runners' real messages around an invisible event ("dax get
+  in here", "who took the last hit", "gg") and typing "wtf are you
+  talking about". The half-conversation IS the story shipped into
+  #lounge, written by humans, better than any generated line. The
+  confusion is the marketing, and the only cure for it is the funnel:
+  fill your bio, wait for the static, get invited.
+- **The visuals are a setting.** A runner can switch off the clubhouse
+  overlay ("hide the static") and remain fully in the game: rations
+  tick, wire and city work, they just keep their chat pure chat. Plenty
+  of people here just want to chat; the game must never cost them that.
+- Timeouts give stakes: a spawn nobody answers slips deeper into the
+  wire and does something small but visible on the wire (never in
+  lounge).
+- The old "everyone watches the fight" spectacle is not dead, it is the
+  **public phase flip**: one day, when there are enough runners to make
+  it a show, spawns become visible to the whole room, and that flip IS
+  the game's public launch. No announcement needed; the first glyph
+  tearing into lounge in front of forty civilians is the announcement.
+
+**#deadchannel: the wire.** The runners' back room and the game's
+unfiltered log in one place. Everything real posts here as actual
+messages, timestamped, as it happens: every spawn and kill, every bounty
+posted and collected, every death, every offline event (your ambush at
+3am is on the wire at 3am), the Old Signal's broadcasts, plus ordinary
+runner chat between the lines. Half the messages are the game, half are
+people; that mix is the fantasy. Consequences:
+
+- **The feed budget only governs #lounge.** The wire is deliberately
+  unfiltered; people who want the firehose idle here with the sidebar
+  open, people who don't never see it. This resolves the budget tension
+  from DIGEST.md by geography instead of filtering.
+- The welcome-back paper quotes the wire instead of generating a recap:
+  the morning read is genuine news about you, not a summary.
+- The wire is also the doorway: you reach the city through #deadchannel,
+  which keeps the invite gate meaning something.
+
+**The night city: the wallet.** A full-screen destination after all
+(amending the 2026-08-07 ban), revived under one rule that keeps it safe:
+**transactions only, nothing ever happens there that you could miss.**
+Shops, the armorer, repairs, the quest board, the daily ration ritual:
+you descend with a wallet, spend ten minutes, and the game kicks you out
+while you still want more (the LORD town shape: town is menus, the game
+happens in the news and the field). No spawns, no ambushes, no timed
+events in the city, ever; the moment standing in the city beats standing
+in chat, the door-ceiling diagnosis applies and we have rebuilt the
+mistake. The market being the *only* place to buy is what makes it a
+place at all: scarcity of place is the fiction's spine, same as the
+"only place there" clubhouse.
+
+**The runner's day (the loop this geography produces):**
+
+- *Morning.* Connect, splash, lounge. The ration ticked at midnight.
+  Mid-scroll a flicker posts, invisible to civilians; one command, one
+  line back, the wire records the kill. Twenty seconds. For half the
+  players this is the whole game, and that is fine.
+- *The ritual.* Once a day, on your own schedule: drop into #deadchannel,
+  read the wire since last night (who died, what the Signal said, whose
+  bounty cleared), descend into the city, spend (repair, upgrade, take a
+  quest), get kicked out by the ration cap. Ten minutes, back to lounge.
+- *The overnight.* Your runner stays down there. What happens to it
+  (ambush, quest event, your name on a bounty) posts to the wire as it
+  happens, so tomorrow's read is news, not a report.
+
 ### The login news screen (the killer feature)
 - "While you were gone: mira ambushed you, you lost 340 gold, your bounty is
   now 8k." Every login opens with consequences.
@@ -172,10 +267,14 @@ glyphs and the Old Signal).
   check-ins.
 
 ### Chat encounters (the onboarding funnel)
-- The Mudae/Pokécord shape: something spawns in a room, first to react
-  fights it with their character, reward lands on their sheet, the line
-  ships to the feed. Zero coordination, works at any concurrency, stronger
-  the more people idle in chat: exactly our population shape.
+- The Mudae/Pokécord shape: something spawns in a room, runners present
+  fight it with their characters, reward lands on their sheets, the line
+  ships to the wire. Zero coordination, works at any concurrency,
+  stronger the more people idle in chat: exactly our population shape.
+  *Amended 2026-09-01:* the claim model is co-op pile-on, not
+  first-to-react (everyone who hits shares the credit line), and lounge
+  spawns are runner-only theater until the public phase flip; the full
+  spec lives in "The three surfaces".
 - Solves onboarding without a manual: someone who never opened a modal now
   owns a level-1 character and has a reason to look at it.
 - The Mudae warning: those bots won on pre-loaded attachment (anime
@@ -455,14 +554,20 @@ Sequencing, each phase testing something before paying for the next:
    section of that paper rather than its own surface.
 2. **Character layer + rations + login news.** Tests: do people do the
    daily loop.
-3. **Chat spawns.** Tests: does the room engage. Spawns start inside
-   #deadchannel for the opted-in; the #lounge leak (the relocated
-   breach, the room watching a runner put a glyph down) is this phase's
-   public beat, shipped only once enough runners exist to make it a
-   show. The first-contact haunting ladder (see Core design) is the
-   fuse: it ends at the invitation, so it must not fire for real users
-   until phase 2's character layer can receive a `/join #deadchannel`;
-   its machinery can be built and admin-tested any time earlier.
+3. **Chat spawns.** Tests: does the room engage. Spawns start on the
+   wire in #deadchannel, then reach #lounge as runner-only theater (the
+   snack loop, invisible to civilians; see "The three surfaces"); the
+   public phase flip (everyone sees the glyphs, the room watches a
+   runner put one down) is this phase's last beat, shipped only once
+   enough runners exist to make it a show, and doubles as the game's
+   public launch. The shared-world spawn spine (server-side HP, central
+   hit resolution, state pushed to runner sessions) is this phase's
+   real engineering cost; the haunting's per-session dice cannot be
+   reused for it. The first-contact haunting ladder (see Core design)
+   is the fuse: it ends at the invitation, so it must not fire for real
+   users until phase 2's character layer can receive a
+   `/join #deadchannel`; its machinery can be built and admin-tested
+   any time earlier.
 4. **Arena + betting + bounties.** Tests: spectacle and chip sink.
 5. **Seasons** wrap it once the loop is proven.
 
@@ -476,6 +581,25 @@ Sequencing, each phase testing something before paying for the next:
   before the ambush engine ships.
 - **V1's one visible surface.** Chat badge is almost certainly the
   cheapest; pick explicitly at design review.
+- **Quests at 30 users (the city's board).** Leading idea, undecided: a
+  quest is a *standing order* ("put down five flickers this week",
+  "survive the Signal's broadcast tonight"), fulfilled through the
+  ambient loop rather than a separate activity, so the board sells
+  reasons to care about spawns you'd see anyway. There is no walking, so
+  "go here, click thing" quests cannot exist.
+- **What dying means.** Leading idea, undecided: your runner is off the
+  wire until tomorrow; you still *see* lounge spawns but cannot answer
+  them. Punishment as spectatorship: it stings in the exact surface you
+  live in, without locking you out of chat.
+- **Who may start a fight.** Leading idea, undecided (extends the PvP
+  consent question): unprovoked player-vs-player aggression does not
+  exist; only the static starts trouble, and a bounty on your head is
+  the only thing that opens you to other runners. At 30 users one bully
+  empties the room.
+- **The big-fight grammar.** What a howler pile-on and a season boss look
+  like beat by beat (threshold reactions, frame corruption for watchers
+  after the public flip), and the exact name of the "hide the static"
+  setting.
 - **First-contact tuning.** The eligibility thresholds (bio length,
   which settings count as touched, how much tenure), and the whisper
   copy pool: the voiced lines need the same variety discipline as feed

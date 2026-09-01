@@ -171,7 +171,10 @@ fn award_snapshot_runs_when_the_month_rolls_over() {
 fn award_snapshot_skips_a_warm_same_month_pass() {
     assert!(!should_snapshot_awards(
         month(2026, 8),
-        Some((month(2026, 8), AWARD_SNAPSHOT_FALLBACK - Duration::from_secs(1)))
+        Some((
+            month(2026, 8),
+            AWARD_SNAPSHOT_FALLBACK - Duration::from_secs(1)
+        ))
     ));
 }
 

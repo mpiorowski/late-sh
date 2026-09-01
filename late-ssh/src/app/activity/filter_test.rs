@@ -84,7 +84,8 @@ fn lounge_includes_the_gild_threshold_line() {
 }
 
 /// The crown is the one event that gets a real #lounge message on top of
-/// its ticker line: both names, the price, and the next rung. Nothing else
+/// its ticker line: both names as @mentions (so the take reaches the deposed
+/// holder as a notification), the price, and the next rung. Nothing else
 /// headlines, so the ticker-only events stay out of chat history.
 #[test]
 fn lounge_headlines_only_the_crown_with_both_names_and_the_next_price() {
@@ -100,13 +101,13 @@ fn lounge_headlines_only_the_crown_with_both_names_and_the_next_price() {
     assert_eq!(stolen.action, "stole the crown from mira for 1,688");
     assert_eq!(
         lounge_headline(&stolen).as_deref(),
-        Some("\u{1F451} tom stole the crown from mira for 1,688 chips. Next price: 2,532 chips.")
+        Some("\u{1F451} @tom stole the crown from @mira for 1,688 chips. Next price: 2,532 chips.")
     );
 
     let vacant = ActivityEvent::crown_taken(Uuid::nil(), "tom", Uuid::nil(), 500, 750, None);
     assert_eq!(
         lounge_headline(&vacant).as_deref(),
-        Some("\u{1F451} tom claimed the vacant crown for 500 chips. Next price: 750 chips.")
+        Some("\u{1F451} @tom claimed the vacant crown for 500 chips. Next price: 750 chips.")
     );
 
     let joined = ActivityEvent::joined(Uuid::nil(), "tom");
@@ -128,7 +129,7 @@ fn lounge_includes_the_pots_draw_line() {
     );
     assert_eq!(
         lounge_headline(&drawn),
-        Some("\u{1F3B0} mira won the pot: 67,360 chips on 3 of 312 tickets.".to_string())
+        Some("\u{1F3B0} @mira won the pot: 67,360 chips on 3 of 312 tickets.".to_string())
     );
 
     // Feed bodies never carry an @.

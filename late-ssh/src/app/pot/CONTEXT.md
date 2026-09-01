@@ -147,7 +147,9 @@ Two `ActivityKind` arms, both explicit in `filter::lounge_includes`:
   67,360 chips from the pot on 3 of 312 tickets". It is also the second arm of
   `filter::lounge_headline` (the crown is the first): a headline is a real
   #lounge row rather than a ticker line that is gone by the time an offline
-  winner reconnects.
+  winner reconnects. The headline names the winner as `@mira` so the draw
+  also reaches them as a mention notification; the ticker line keeps the
+  bare name.
 A pot that rolls empty announces nothing: no chips moved and nobody lost.
 
 There are no mid-week size lines any more (migration 162 dropped

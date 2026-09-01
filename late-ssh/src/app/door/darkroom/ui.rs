@@ -680,12 +680,29 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
     ]);
 
     if delete_confirm {
+        // The hub's confirm prompt takes Enter/Y to go through and n/Esc to
+        // back out; a second `d` cancels like `n` does. Name those keys, so
+        // the card cannot promise a double-tap the handler never honours.
         lines.push(landing::action(
             "!",
-            "d",
-            "press again to burn it all down and start over",
+            "Enter/Y",
+            "burn it all down and start over",
             theme::ERROR(),
         ));
+        lines.push(landing::action(
+            " ",
+            "n/Esc",
+            "keep the save, the fire stays lit",
+            theme::AMBER(),
+        ));
+        lines.push(Line::from(Span::styled(
+            "  Only this run burns. Flying out once is remembered forever,",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  so the ravaged battleship is still on the next map.",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )));
     } else {
         lines.push(landing::action(
             ">",

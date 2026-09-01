@@ -131,7 +131,7 @@ between sessions contribute nothing without any bookkeeping.
 | `state.rs` | Per-session `State`: the authoritative `Game`, the `View` (Room/Outside/Path/World/Fabricator/Ship), the cursor over `Row`s, the capped notification log, the live event modal, the live flight, and the `Ending` (the epitaph's beats and its reveal clock). `tick()` drains the load channel, settles village time, and steps live play against the wall clock. |
 | `ui_event.rs`, `ui_world.rs` | The event modal and fight panel; the masked map and the ascent. |
 | `ui.rs` | Rendering only: the live page (status line, action column, stores column, log, footer with the allowance), the ending screen, and the Games-hub landing card (which credits upstream). |
-| `screen.rs` | The `DoorGame` impl (`GAME`), launcher/active key+arrow handling, and `leave` (settle, save, return to the Games hub). |
+| `screen.rs` | The `DoorGame` impl (`GAME`), launcher/active key+arrow handling, `` ` `` (hop onward on the backtick workspace cycle with the door still loaded; refused only mid-ascent, where every key is steering), and `leave` (settle, save, return to the Games hub). Every handled key calls `State::touch` (`App::tick` also stamps it while the door is the open screen), which feeds the idle deadline below. |
 
 ## Persistence
 
@@ -160,6 +160,25 @@ Esc, tick drain, and the hub launch/landing/reset.
 `enter_darkroom` is the one that differs: it derives the session's connect time
 from `App::started_at` and hands it to `State::new`, because that is what
 bounds how much elapsed time may be credited.
+
+**The door outlives a screen switch.** `set_screen` has no teardown arm for
+Dark Room (the village goes on growing off-screen, which is the whole pitch),
+so `darkroom_state.is_some()` is the session's "still playing" signal: it is
+what puts the door on the backtick workspace cycle
+(`door/hub/state.rs::live_doors`) and lights its hub pip. That means the
+door can be abandoned, so it carries a deadline: `State::last_input_at` +
+`door::game::IDLE_WINDOW` (30 min away from the door), and once it expires
+`App::tick` ends the visit with `save_on_leave()` + `leave_darkroom()`,
+exactly what Esc does. The clock measures being away, not just keys: every
+key the door handles stamps it, and so does each `App::tick` while Dark Room
+is the open screen, because sitting on it reading is not being away and a
+keyless exit (a Ctrl+G lobby jump) must not inherit time banked on-screen.
+The reap never fires while Dark Room is the open screen.
+**The reap costs the player nothing**: the leave settles, so
+`game.last_settled` is stamped at the drop, and `sim::settle`'s
+`floor = max(session_start, last_settled)` means re-joining later in the same
+SSH session credits the whole gap in one burst under the same daily cap. Only
+disconnecting forfeits time, which is pacing rule 1.
 
 ## Scope: the whole classic game
 
