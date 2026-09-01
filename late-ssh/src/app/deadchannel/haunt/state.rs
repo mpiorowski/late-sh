@@ -45,7 +45,11 @@ for weeks. we need runners. if you're willing: /join #deadchannel";
 /// at session bootstrap. One bundle so the root config carries one field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FirstContactMarks {
-    /// Stage-2 name-flicker hits so far (arms stage 3; caps stage 2).
+    /// Stage-1 clock-glitch bursts seen so far (opens stage 2 at
+    /// [`GLITCH_TOTAL_CAP`]; quiets the clock after).
+    pub(crate) glitch_hits: u32,
+    /// Stage-2 name-flicker hits so far (arms stage 3 at
+    /// [`NAME_TOTAL_CAP`]; caps stage 2).
     pub(crate) name_hits: u32,
     /// When the stage-3 whisper was delivered (schedules stage 4).
     pub(crate) whisper_at: Option<DateTime<Utc>>,
@@ -56,6 +60,7 @@ pub(crate) struct FirstContactMarks {
 impl FirstContactMarks {
     pub(crate) fn from_settings(settings: &serde_json::Value) -> Self {
         Self {
+            glitch_hits: late_core::models::user::extract_first_contact_glitch_hits(settings),
             name_hits: late_core::models::user::extract_first_contact_name_hits(settings),
             whisper_at: late_core::models::user::extract_first_contact_whisper_at(settings),
             invited_at: late_core::models::user::extract_first_contact_invited_at(settings),
@@ -67,6 +72,7 @@ impl FirstContactMarks {
     /// (`test_helpers` compiles unconditionally, so no `#[cfg(test)]`.)
     pub(crate) fn spent_for_tests() -> Self {
         Self {
+            glitch_hits: u32::MAX,
             name_hits: u32::MAX,
             whisper_at: Some(Utc::now()),
             invited_at: Some(Utc::now()),
@@ -81,8 +87,8 @@ pub(crate) struct HauntState {
     /// Stage 3: the armed splash whisper. `Some` only while the splash is
     /// holding the door for it.
     pub(crate) whisper: Option<WhisperState>,
-    /// Stage 1: the clock-glitch scheduler. Session-local dice, no
-    /// persistence.
+    /// Stage 1: the clock-glitch scheduler. Session-local dice; only the
+    /// lifetime burst counter persists.
     pub(crate) clock_glitch: Option<ClockGlitch>,
     /// Stage 2: the own-name flicker roller.
     pub(crate) name_flicker: Option<NameFlicker>,
@@ -346,6 +352,11 @@ const GLITCH_DEFER_MIN_TICKS: usize = 3 * 60 * 1000 / 66; // ~3 min
 const GLITCH_DEFER_MAX_TICKS: usize = 10 * 60 * 1000 / 66; // ~10 min
 /// At most this many bursts per UTC day per session.
 const GLITCH_DAILY_CAP: u8 = 2;
+/// The ladder's share of clock bursts (the persisted counter): once this
+/// many have been seen, the clock goes quiet and stage 2 opens. The quiet
+/// is part of the escalation; whether unchosen users keep an unbounded
+/// ambient clock is a fuse-time question (GAME.md).
+pub(crate) const GLITCH_TOTAL_CAP: u32 = 3;
 /// Fuse on a forced burst: the `/haunt glitch` banner covers the sidebar
 /// clock for ~5s, so the burst waits it out.
 const GLITCH_FORCE_DELAY_TICKS: usize = 7 * 1000 / 66; // ~7 s
@@ -373,10 +384,13 @@ pub(crate) struct ClockGlitch {
     today: Option<NaiveDate>,
     /// Bursts fired today (session-local; the daily cap needs no DB).
     fired_today: u8,
+    /// Lifetime bursts, seeded from the persisted counter; at
+    /// [`GLITCH_TOTAL_CAP`] the schedule goes quiet and stage 2 opens.
+    total_hits: u32,
 }
 
 impl ClockGlitch {
-    pub(crate) fn new(seed: u64, now_tick: usize) -> Self {
+    pub(crate) fn new(seed: u64, now_tick: usize, total_hits: u32) -> Self {
         let mut glitch = Self {
             rng: seed | 1,
             next_at: 0,
@@ -384,6 +398,7 @@ impl ClockGlitch {
             forced_at: None,
             today: None,
             fired_today: 0,
+            total_hits,
         };
         glitch.next_at = now_tick + glitch.roll(GLITCH_GAP_MIN_TICKS, GLITCH_GAP_MAX_TICKS);
         glitch
@@ -415,7 +430,13 @@ impl ClockGlitch {
             }
             self.forced_at = None;
             self.active_since = Some(tick);
+            self.total_hits = self.total_hits.saturating_add(1);
             return GlitchTick::Started;
+        }
+        if self.total_hits >= GLITCH_TOTAL_CAP {
+            // The ladder's share of bursts has been seen: the clock goes
+            // quiet for good, and the quiet is part of the escalation.
+            return GlitchTick::Idle;
         }
         if tick < self.next_at {
             return GlitchTick::Idle;
@@ -436,7 +457,14 @@ impl ClockGlitch {
         }
         self.active_since = Some(tick);
         self.fired_today += 1;
+        self.total_hits = self.total_hits.saturating_add(1);
         GlitchTick::Started
+    }
+
+    /// Lifetime bursts including this session's; the caller mirrors it into
+    /// the persisted marks on every `Started`.
+    pub(crate) fn total_hits(&self) -> u32 {
+        self.total_hits
     }
 
     /// The live burst's corruption seed while one is showing, for the
@@ -471,18 +499,24 @@ impl ClockGlitch {
 /// Stage 2: the corruption chooses you, and the target is your own name.
 /// In the sender's session only, immediately after their message lands
 /// (the one moment of guaranteed attention), the author label of that
-/// just-landed message renders with a character or two from the glyph
-/// alphabet, holds ~300ms, heals. The body is never touched: the
-/// escalation over stage 1 is targeting, not content.
+/// just-landed message renders with two or three characters from the
+/// glyph alphabet, holds ~400ms, heals. The body is never touched: the
+/// escalation over stage 1 is targeting, not content. It only rolls once
+/// stage 1 has run its course (`stage_open`).
 ///
-/// How long one hit holds, in `App::marquee_tick` units (~330ms).
-const NAME_HOLD_TICKS: usize = 5;
+/// How long one hit holds, in `App::marquee_tick` units (~400ms): a beat
+/// longer than the clock's ~200ms, because stage 2 is meant to be hard to
+/// miss.
+const NAME_HOLD_TICKS: usize = 6;
 /// Order of one in dozens of sends.
 const NAME_CHANCE_ONE_IN: u64 = 24;
 /// At most one hit per UTC day.
 const NAME_DAILY_CAP: u8 = 1;
-/// A handful of total hits per person, ever (the persisted counter).
-const NAME_TOTAL_CAP: u32 = 3;
+/// The ladder's share of name hits (the persisted counter): the third
+/// hit arms the stage-3 whisper for the next fresh connect. With the
+/// one-per-day cap, stages 1 and 2 each spread over two or three days:
+/// the full ladder is roughly a week of slow burn.
+pub(crate) const NAME_TOTAL_CAP: u32 = 3;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct NameFlicker {
@@ -514,13 +548,16 @@ impl NameFlicker {
 
     /// One of this session's own messages just landed. Rolls the dice;
     /// returns true when a hit starts (the caller repaints and persists
-    /// the counter).
+    /// the counter). `stage_open` is whether stage 1 has run its course
+    /// (glitch hits at the cap): the ladder never skips a rung, but a
+    /// forced (`/haunt name`) hit ignores it.
     pub(crate) fn note_own_message(
         &mut self,
         message_id: Uuid,
         tick: usize,
         today: NaiveDate,
         enabled: bool,
+        stage_open: bool,
     ) -> bool {
         if self.active.is_some() || !enabled {
             return false;
@@ -531,7 +568,8 @@ impl NameFlicker {
         }
         let forced = std::mem::take(&mut self.force_next);
         if !forced {
-            if self.fired_today >= NAME_DAILY_CAP || self.total_hits >= NAME_TOTAL_CAP {
+            if !stage_open || self.fired_today >= NAME_DAILY_CAP || self.total_hits >= NAME_TOTAL_CAP
+            {
                 return false;
             }
             self.rng ^= self.rng << 13;

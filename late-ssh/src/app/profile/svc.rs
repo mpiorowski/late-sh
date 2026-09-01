@@ -361,6 +361,26 @@ impl ProfileService {
         );
     }
 
+    /// Fire-and-forget: count one stage-1 clock-glitch burst (the counter
+    /// that opens stage 2 and quiets the clock at its cap). A lost write
+    /// costs one uncounted burst; the in-session mirror still caps the day.
+    pub fn record_first_contact_glitch_hit(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::record_first_contact_glitch_hit(&client, user_id).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist first contact glitch hit");
+                }
+            }
+            .instrument(info_span!("profile.first_contact_glitch_hit_task", user_id = %user_id)),
+        );
+    }
+
     /// Fire-and-forget: count one stage-2 name-flicker hit (the counter
     /// that arms the stage-3 whisper). A lost write costs one uncounted
     /// flicker; the in-session mirror still caps the day.

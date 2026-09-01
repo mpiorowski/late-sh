@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::state::{
-    ClockGlitch, FirstContactMarks, GlitchTick, HauntCommand, HauntState, INVITE_DELAY_DAYS,
-    NameFlicker, WhisperState, WhisperTick,
+    ClockGlitch, FirstContactMarks, GLITCH_TOTAL_CAP, GlitchTick, HauntCommand, HauntState,
+    INVITE_DELAY_DAYS, NAME_TOTAL_CAP, NameFlicker, WhisperState, WhisperTick,
 };
 use crate::app::common::primitives::Banner;
 use crate::app::state::App;
@@ -17,10 +17,11 @@ use crate::app::state::App;
 /// Build the session's haunting slot. First contact is a nonrenewable
 /// resource: while it is admin-scoped scaffolding nothing ever arms for
 /// anyone else (GAME.md, First contact). The chain order is the spec:
-/// stage-2 hits arm the stage-3 whisper (it fires on the next fresh
-/// connect), and the delivered whisper schedules the stage-4 invitation.
-/// Dice are per session on purpose: the same person on two evenings, or
-/// two admins side by side, roll differently.
+/// three clock bursts open stage 2, the third name hit arms the stage-3
+/// whisper (it fires on the next fresh connect), and the delivered
+/// whisper schedules the stage-4 invitation. Dice are per session on
+/// purpose: the same person on two evenings, or two admins side by side,
+/// roll differently.
 pub(crate) fn arm(
     is_admin: bool,
     enabled: Arc<AtomicBool>,
@@ -29,9 +30,9 @@ pub(crate) fn arm(
 ) -> HauntState {
     let eligible = is_admin && enabled.load(Ordering::Relaxed);
     HauntState {
-        whisper: (eligible && marks.whisper_at.is_none() && marks.name_hits > 0)
+        whisper: (eligible && marks.whisper_at.is_none() && marks.name_hits >= NAME_TOTAL_CAP)
             .then(|| WhisperState::for_user(user_id)),
-        clock_glitch: eligible.then(|| ClockGlitch::new(session_seed(user_id), 0)),
+        clock_glitch: eligible.then(|| ClockGlitch::new(session_seed(user_id), 0, marks.glitch_hits)),
         name_flicker: eligible.then(|| NameFlicker::new(session_seed(user_id), marks.name_hits)),
         marks,
         eligible,
@@ -108,16 +109,27 @@ fn tick_clock_glitch(app: &mut App) -> bool {
         enabled,
         clock_visible,
     ) {
-        GlitchTick::Started | GlitchTick::Ended => true,
+        GlitchTick::Started => {
+            // Every burst counts toward the ladder: the persisted counter
+            // is what opens stage 2 and quiets the clock at the cap.
+            app.haunt.marks.glitch_hits = glitch.total_hits();
+            app.profile_state
+                .service()
+                .record_first_contact_glitch_hit(app.user_id);
+            tracing::info!(user_id = %app.user_id, hits = app.haunt.marks.glitch_hits, "first contact clock glitch burst");
+            true
+        }
+        GlitchTick::Ended => true,
         GlitchTick::Idle => false,
     }
 }
 
-/// The stage-2 roller: every own message that lands rolls the dice, a
-/// hit corrupts that message's author label for ~300ms (the corruption
-/// rides the chat rows cache key, so start and heal rebuild the rows
-/// exactly once), and every hit bumps the persisted counter that arms
-/// the stage-3 whisper.
+/// The stage-2 roller: once the clock has spent its share of bursts,
+/// every own message that lands rolls the dice, a hit corrupts that
+/// message's author label for ~400ms (the corruption rides the chat rows
+/// cache key, so start and heal rebuild the rows exactly once), and every
+/// hit bumps the persisted counter whose third hit arms the stage-3
+/// whisper.
 fn tick_name_flicker(app: &mut App) -> bool {
     // Drained even while unarmed, so a stale echo id never waits around
     // for a later `/haunt on`.
@@ -127,6 +139,7 @@ fn tick_name_flicker(app: &mut App) -> bool {
     };
     let mut changed = false;
     let enabled = app.haunt.enabled.load(Ordering::Relaxed);
+    let stage_open = app.haunt.marks.glitch_hits >= GLITCH_TOTAL_CAP;
     changed |= flicker.tick(app.marquee_tick);
     if let Some(message_id) = landed
         && flicker.note_own_message(
@@ -134,6 +147,7 @@ fn tick_name_flicker(app: &mut App) -> bool {
             app.marquee_tick,
             chrono::Utc::now().date_naive(),
             enabled,
+            stage_open,
         )
     {
         app.haunt.marks.name_hits = flicker.total_hits();
@@ -220,6 +234,9 @@ fn tick_commands(app: &mut App) -> bool {
             };
             let glitch = match &app.haunt.clock_glitch {
                 None => "glitch idle".to_string(),
+                Some(_) if app.haunt.marks.glitch_hits >= GLITCH_TOTAL_CAP => {
+                    "glitch quiet (share spent)".to_string()
+                }
                 Some(glitch) => {
                     let minutes = glitch.next_in_ticks(app.marquee_tick) * 66 / 60_000;
                     format!("glitch in ~{minutes}m")
@@ -234,8 +251,8 @@ fn tick_commands(app: &mut App) -> bool {
                 None => "invite pending",
             };
             app.banner = Some(Banner::info(&format!(
-                "Haunt {enabled} · {glitch} · name hits {} · {door} · {whisper} · {invite}",
-                app.haunt.marks.name_hits
+                "Haunt {enabled} · {glitch} · glitch hits {}/{GLITCH_TOTAL_CAP} · name hits {}/{NAME_TOTAL_CAP} · {door} · {whisper} · {invite}",
+                app.haunt.marks.glitch_hits, app.haunt.marks.name_hits
             )));
         }
         HauntCommand::On => {
@@ -248,6 +265,7 @@ fn tick_commands(app: &mut App) -> bool {
                 app.haunt.clock_glitch = Some(ClockGlitch::new(
                     session_seed(app.user_id),
                     app.marquee_tick,
+                    app.haunt.marks.glitch_hits,
                 ));
             }
             if app.haunt.name_flicker.is_none() {
@@ -302,10 +320,14 @@ fn tick_commands(app: &mut App) -> bool {
         },
         HauntCommand::Reset => {
             app.haunt.marks = FirstContactMarks {
+                glitch_hits: 0,
                 name_hits: 0,
                 whisper_at: None,
                 invited_at: None,
             };
+            if let Some(glitch) = app.haunt.clock_glitch.as_mut() {
+                *glitch = ClockGlitch::new(session_seed(app.user_id), app.marquee_tick, 0);
+            }
             if let Some(flicker) = app.haunt.name_flicker.as_mut() {
                 *flicker = NameFlicker::new(session_seed(app.user_id), 0);
             }

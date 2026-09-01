@@ -56,7 +56,7 @@ fn glitched_name_touches_name_characters_only() {
         .zip(first.chars())
         .filter(|(before, after)| before != after)
         .collect();
-    assert!((1..=2).contains(&changed.len()), "changed: {changed:?}");
+    assert!((2..=3).contains(&changed.len()), "changed: {changed:?}");
     for (before, after) in changed {
         assert!(before.is_alphanumeric());
         assert!(crate::app::deadchannel::glyphs::GLYPH_ALPHABET.contains(&after));

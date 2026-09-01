@@ -379,6 +379,7 @@ const AUTO_TRANSLATE_KEY: &str = "auto_translate";
 const TRANSLATE_MINE_TO_EN_KEY: &str = "translate_mine_to_en";
 const SHOW_FLAG_FALLBACK_KEY: &str = "show_flag_fallback";
 const CLUBHOUSE_TUTORIAL_DONE_KEY: &str = "clubhouse_tutorial_done";
+const FIRST_CONTACT_GLITCH_HITS_KEY: &str = "first_contact_glitch_hits";
 const FIRST_CONTACT_NAME_HITS_KEY: &str = "first_contact_name_hits";
 const FIRST_CONTACT_WHISPER_AT_KEY: &str = "first_contact_whisper_at";
 const FIRST_CONTACT_INVITED_AT_KEY: &str = "first_contact_invited_at";
@@ -916,10 +917,25 @@ impl User {
         Ok(())
     }
 
+    /// Count one first-contact clock-glitch burst (stage 1). The counter is
+    /// what opens stage 2 once the ladder's share of bursts has been seen,
+    /// and it quiets the clock afterwards.
+    pub async fn record_first_contact_glitch_hit(client: &Client, user_id: Uuid) -> Result<()> {
+        Self::increment_first_contact_counter(client, FIRST_CONTACT_GLITCH_HITS_KEY, user_id).await
+    }
+
     /// Count one first-contact name-flicker hit (stage 2). The counter is
     /// what arms the stage-3 whisper for the next fresh connect, and it caps
     /// the total flickers a person ever gets.
     pub async fn record_first_contact_name_hit(client: &Client, user_id: Uuid) -> Result<()> {
+        Self::increment_first_contact_counter(client, FIRST_CONTACT_NAME_HITS_KEY, user_id).await
+    }
+
+    async fn increment_first_contact_counter(
+        client: &Client,
+        key: &str,
+        user_id: Uuid,
+    ) -> Result<()> {
         let updated = client
             .execute(
                 "UPDATE users
@@ -930,7 +946,7 @@ impl User {
                      ),
                      updated = current_timestamp
                  WHERE id = $2",
-                &[&FIRST_CONTACT_NAME_HITS_KEY, &user_id],
+                &[&key, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -1006,15 +1022,16 @@ impl User {
     }
 
     /// Wipe every first-contact mark (the admin `/haunt reset` test hook):
-    /// name hits, the whisper stamp, and the invitation stamp.
+    /// glitch hits, name hits, the whisper stamp, and the invitation stamp.
     pub async fn reset_first_contact(client: &Client, user_id: Uuid) -> Result<()> {
         let updated = client
             .execute(
                 "UPDATE users
-                 SET settings = settings - $1 - $2 - $3,
+                 SET settings = settings - $1 - $2 - $3 - $4,
                      updated = current_timestamp
-                 WHERE id = $4",
+                 WHERE id = $5",
                 &[
+                    &FIRST_CONTACT_GLITCH_HITS_KEY,
                     &FIRST_CONTACT_NAME_HITS_KEY,
                     &FIRST_CONTACT_WHISPER_AT_KEY,
                     &FIRST_CONTACT_INVITED_AT_KEY,
@@ -1580,11 +1597,22 @@ pub fn extract_clubhouse_tutorial_done(settings: &Value) -> bool {
         .unwrap_or(false)
 }
 
+/// First-contact stage-1 clock-glitch bursts seen so far; defaults to 0.
+/// Opens stage 2 at the ladder's threshold and quiets the clock after.
+pub fn extract_first_contact_glitch_hits(settings: &Value) -> u32 {
+    extract_counter(settings, FIRST_CONTACT_GLITCH_HITS_KEY)
+}
+
 /// First-contact stage-2 name-flicker hits so far; defaults to 0. Arms the
-/// stage-3 whisper once positive, and caps total flickers per person.
+/// stage-3 whisper at the ladder's threshold, and caps total flickers per
+/// person.
 pub fn extract_first_contact_name_hits(settings: &Value) -> u32 {
+    extract_counter(settings, FIRST_CONTACT_NAME_HITS_KEY)
+}
+
+fn extract_counter(settings: &Value, key: &str) -> u32 {
     settings
-        .get(FIRST_CONTACT_NAME_HITS_KEY)
+        .get(key)
         .and_then(Value::as_u64)
         .map(|hits| hits.min(u32::MAX as u64) as u32)
         .unwrap_or(0)

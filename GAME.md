@@ -220,8 +220,13 @@ thresholds still face design review before the fuse is lit.
      dice, so two people almost never see it together: "did anyone else
      see that?" gets "no?" back, which is deniability and gossip in one
      move), rare (order of once per hours-long session, at most once or
-     twice a day per user), render-layer only, no DB, behind the
-     kill-switch and admin-scoped until the fuse is lit. Chrome, never
+     twice a day per user), render-layer only (the one DB touch is the
+     per-user burst counter), behind the kill-switch and admin-scoped
+     until the fuse is lit. Ladder count (tuned 2026-09-01): **three
+     bursts total per person**, persisted; the third quiets the clock
+     for good and opens stage 2, and the quiet is itself part of the
+     escalation. Whether unchosen users keep an unbounded ambient clock
+     instead is a fuse-time question. Chrome, never
      content: chat message bodies stay untouched (a glitched clock is
      spooky, a glitched sentence reads as data corruption). NOT the
      clubhouse: the tavern is a hallway everyone tabs straight out of,
@@ -234,24 +239,31 @@ thresholds still face design review before the fuse is lit.
      sender's session only, immediately after their message lands (the
      one moment of guaranteed attention: eyes always follow your own
      send), the author label of that just-landed message renders with
-     one or two of its characters swapped for glyph-alphabet
-     characters, holds roughly 300ms, heals. The body is never touched:
+     two or three of its characters swapped for glyph-alphabet
+     characters, holds roughly 400ms, heals (tuned 2026-09-01: heavier
+     and a beat longer than the clock, because stage 2 is meant to be
+     hard to miss). The body is never touched:
      the escalation over stage 1 is targeting, not content ("chrome,
      never content" still holds; your name is chrome that happens to be
      *you*). Rejected on purpose: corrupting the message echo itself,
      which plants "did that send garbled to everyone?", a
      data-integrity doubt and the panic rule violated in its most
-     personal form. Chosen users only (the eligibility gate), rare
-     (order of one in dozens of sends, capped once per UTC day, a
-     handful of total hits per person), render-layer only, no DB beyond
-     the per-user arming counter, kill-switch. Later variety (your name
+     personal form. Chosen users only (the eligibility gate), never
+     before the clock has spent its three bursts (the ladder never
+     skips a rung), rare (order of one in dozens of sends, capped once
+     per UTC day, **three total hits per person**, the third arming the
+     door; with the daily cap, stages 1 and 2 each spread over two or
+     three days, so the full ladder is roughly a week of slow burn),
+     render-layer only, no DB beyond the per-user arming counter,
+     kill-switch. Later variety (your name
      in the sidebar, the composer placeholder) rides the same
      machinery. Thematic payoff: when the stage-3 whisper says the
      static knows your name, it is describing what already happened.
   3. **The whisper (the held door).** Delivered on the splash screen,
      once per person ever: this one time it does not skip. Triggered by
-     the chain, not the calendar: stage-2 hits arm it (the per-user
-     counter), and it fires on the armed user's next fresh connect, so
+     the chain, not the calendar: the third stage-2 hit arms it (the
+     per-user counter), and it fires on the armed user's next fresh
+     connect, so
      the beat is flickers one evening, then the door holds when they
      come back: the haunting follows you home. The splash is
      the liminal space (the doorway between outside and inside the

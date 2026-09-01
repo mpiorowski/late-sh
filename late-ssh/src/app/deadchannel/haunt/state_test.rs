@@ -135,7 +135,7 @@ const DAY: fn() -> NaiveDate = || NaiveDate::from_ymd_opt(2026, 8, 31).unwrap();
 
 #[test]
 fn glitch_fires_when_due_then_heals_and_reschedules() {
-    let mut glitch = ClockGlitch::new(42, 0);
+    let mut glitch = ClockGlitch::new(42, 0, 0);
     let due = glitch.next_at;
     assert!((GLITCH_GAP_MIN_TICKS..GLITCH_GAP_MAX_TICKS).contains(&due));
 
@@ -159,7 +159,7 @@ fn glitch_fires_when_due_then_heals_and_reschedules() {
 
 #[test]
 fn glitch_defers_hidden_reschedules_disabled_and_caps_daily() {
-    let mut glitch = ClockGlitch::new(7, 0);
+    let mut glitch = ClockGlitch::new(7, 0, 0);
 
     // Due while the clock is off screen: a short defer, never spent unseen.
     let due = glitch.next_at;
@@ -188,7 +188,7 @@ fn glitch_defers_hidden_reschedules_disabled_and_caps_daily() {
 
 #[test]
 fn forced_glitch_waits_out_the_banner_then_bypasses_the_caps() {
-    let mut glitch = ClockGlitch::new(9, 0);
+    let mut glitch = ClockGlitch::new(9, 0, 0);
     glitch.fired_today = GLITCH_DAILY_CAP;
     glitch.today = Some(DAY());
 
@@ -204,6 +204,37 @@ fn forced_glitch_waits_out_the_banner_then_bypasses_the_caps() {
         glitch.tick(due + GLITCH_HOLD_TICKS, DAY(), true, true),
         GlitchTick::Ended
     );
+    // A forced burst still counts toward the ladder.
+    assert_eq!(glitch.total_hits(), 1);
+}
+
+#[test]
+fn glitch_goes_quiet_once_the_ladders_share_is_spent() {
+    let mut glitch = ClockGlitch::new(11, 0, GLITCH_TOTAL_CAP);
+    // The natural schedule never fires again, however due it comes.
+    let due = glitch.next_at;
+    for tick in [due, due + 1, due + GLITCH_GAP_MAX_TICKS] {
+        assert_eq!(glitch.tick(tick, DAY(), true, true), GlitchTick::Idle);
+    }
+    // The admin force hook still works past the quiet.
+    glitch.fire_now(due);
+    assert_eq!(
+        glitch.tick(due + GLITCH_FORCE_DELAY_TICKS, DAY(), true, true),
+        GlitchTick::Started
+    );
+}
+
+#[test]
+fn name_flicker_waits_for_the_clock_stage() {
+    // While stage 1 has bursts left the dice never roll, however many
+    // sends land; the admin force hook ignores the gate.
+    let mut flicker = NameFlicker::new(5, 0);
+    assert!(
+        (0..2_000).all(|tick| !flicker.note_own_message(Uuid::now_v7(), tick, DAY(), true, false)),
+        "a closed stage must never roll"
+    );
+    flicker.force_next();
+    assert!(flicker.note_own_message(Uuid::now_v7(), 100, DAY(), true, false));
 }
 
 #[test]
@@ -212,9 +243,9 @@ fn name_flicker_rolls_caps_and_forces() {
     // At the lifetime cap nothing fires naturally, but the admin force
     // hook still does, and every hit counts and heals on schedule.
     let mut flicker = NameFlicker::new(9, NAME_TOTAL_CAP);
-    assert!(!flicker.note_own_message(message, 100, DAY(), true));
+    assert!(!flicker.note_own_message(message, 100, DAY(), true, true));
     flicker.force_next();
-    assert!(flicker.note_own_message(message, 100, DAY(), true));
+    assert!(flicker.note_own_message(message, 100, DAY(), true, true));
     assert_eq!(flicker.corruption(100).map(|(id, _)| id), Some(message));
     assert!(!flicker.tick(100 + NAME_HOLD_TICKS - 1));
     assert!(flicker.tick(100 + NAME_HOLD_TICKS));
@@ -224,18 +255,18 @@ fn name_flicker_rolls_caps_and_forces() {
     // The kill switch swallows even a forced hit.
     let mut flicker = NameFlicker::new(9, 0);
     flicker.force_next();
-    assert!(!flicker.note_own_message(message, 100, DAY(), false));
+    assert!(!flicker.note_own_message(message, 100, DAY(), false, true));
 
     // Under the daily cap a natural hit needs the dice; drive sends until
     // one lands, then the day is spent until the date changes.
     let mut flicker = NameFlicker::new(5, 0);
     let hit_at = (0..2_000)
-        .find(|tick| flicker.note_own_message(Uuid::now_v7(), *tick, DAY(), true))
+        .find(|tick| flicker.note_own_message(Uuid::now_v7(), *tick, DAY(), true, true))
         .expect("a 1-in-24 roll should land within 2000 sends");
     assert!(flicker.tick(hit_at + NAME_HOLD_TICKS));
     assert_eq!(flicker.fired_today, 1);
     assert!(
-        (0..2_000).all(|tick| !flicker.note_own_message(Uuid::now_v7(), tick, DAY(), true)),
+        (0..2_000).all(|tick| !flicker.note_own_message(Uuid::now_v7(), tick, DAY(), true, true)),
         "the daily cap must hold for the rest of the day"
     );
     assert!(
@@ -243,6 +274,7 @@ fn name_flicker_rolls_caps_and_forces() {
             Uuid::now_v7(),
             tick,
             DAY().succ_opt().unwrap(),
+            true,
             true
         )),
         "the next day rolls again"

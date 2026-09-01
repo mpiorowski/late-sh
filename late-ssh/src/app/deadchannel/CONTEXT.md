@@ -4,10 +4,10 @@
 - Domain: the deadchannel game (GAME.md) - today only its onboarding, the
   first-contact haunting ladder, in the `haunt/` subdomain. Admin-scoped
   scaffolding end to end.
-- Last updated: 2026-08-31 (all four haunting stages built: clock glitch,
-  own-name flicker, splash whisper, invitation DM; domain restructured as
-  game root + `haunt/` subdomain; root files reduced to one field / one
-  routing call each)
+- Last updated: 2026-09-01 (ladder counts tuned after first hands-on:
+  three persisted clock bursts open stage 2 and quiet the clock, three
+  name hits arm the door, the flicker got heavier (2-3 glyphs, ~400ms),
+  and `/haunt glitch` fires on a ~7s fuse so its banner clears first)
 - Status: Active, admin-only by design
 - Parent context: `../../../../CONTEXT.md`; design source: `GAME.md`,
   "First contact (the haunting)"
@@ -17,9 +17,12 @@
 The game is never announced; it arrives. This domain will grow into the
 whole character layer; what exists today is **first contact**: the
 escalation ladder that onboards a person through haunting instead of a
-tutorial. The chain is the spec: stage-2 hits arm the stage-3 whisper
-(it fires on the next fresh connect), and the delivered whisper schedules
-the stage-4 invitation. **While this is admin-scoped scaffolding nothing
+tutorial. The chain is the spec, and the ladder never skips a rung
+(counts tuned 2026-09-01): three clock bursts quiet the clock and open
+stage 2, the third name hit arms the stage-3 whisper (it fires on the
+next fresh connect), and the delivered whisper schedules the stage-4
+invitation. With the daily caps each of stages 1 and 2 spreads over two
+or three days: the full ladder is roughly a week of slow burn. **While this is admin-scoped scaffolding nothing
 ever fires for real users** (first contact is a nonrenewable resource);
 the only gate today is `is_admin`, with the real eligibility campaign
 (bio, settings, tenure) due at design review before the fuse is lit.
@@ -53,17 +56,22 @@ into the rows cache key, and
    then heals. Scheduled per session with independent dice: roughly one
    burst per 40min-3h, at most `GLITCH_DAILY_CAP` (2) per UTC day,
    deferred a few minutes whenever the clock is off screen so a burst is
-   never spent unseen. Chrome, never content; timezone label untouched.
-2. **Name flicker (personal).** On the landing echo of this session's own
+   never spent unseen. Every burst increments the persisted
+   `first_contact_glitch_hits` counter; at `GLITCH_TOTAL_CAP` (3) the
+   clock goes quiet for good and stage 2 opens (the quiet is part of the
+   escalation). Chrome, never content; timezone label untouched.
+2. **Name flicker (personal).** Only once stage 1 has spent its share
+   (glitch hits at the cap): on the landing echo of this session's own
    send (the one moment of guaranteed attention), a ~1-in-24 roll may
-   corrupt that message's author label for ~300ms: name characters only,
-   never the body (the escalation is targeting, not content). One hit per
-   UTC day, `NAME_TOTAL_CAP` (3) ever; every hit increments the persisted
-   `first_contact_name_hits` counter. The corruption rides the chat rows
-   cache key, so start and heal rebuild rows exactly once.
-3. **Whisper (the held door).** Arms at connect only when name hits > 0
-   and `first_contact_whisper_at` is unset: the haunting follows you
-   home. The splash neither skips nor expires while held; input is
+   corrupt two or three characters of that message's author label for
+   ~400ms, heavier and a beat longer than the clock: name characters
+   only, never the body (the escalation is targeting, not content). One
+   hit per UTC day, `NAME_TOTAL_CAP` (3) ever; every hit increments the
+   persisted `first_contact_name_hits` counter. The corruption rides the
+   chat rows cache key, so start and heal rebuild rows exactly once.
+3. **Whisper (the held door).** Arms at connect only when name hits have
+   reached `NAME_TOTAL_CAP` and `first_contact_whisper_at` is unset: the
+   haunting follows you home. The splash neither skips nor expires while held; input is
    acknowledged (static surge, skip-hint dissolve) but never obeyed; the
    voiced line types itself (in answer to the first keypress, or on its
    own); a hard cap (~10s) releases whatever the phase. Delivery stamps
@@ -94,15 +102,19 @@ into the rows cache key, and
 
 ## 4. Persistence (`users.settings`, late-core `User`)
 
-- `first_contact_name_hits` (int): stage-2 hits; arms stage 3, caps
-  stage 2. `record_first_contact_name_hit` is a SQL increment.
+- `first_contact_glitch_hits` (int): stage-1 bursts; opens stage 2 at
+  the cap and quiets the clock. `record_first_contact_glitch_hit` is a
+  SQL increment.
+- `first_contact_name_hits` (int): stage-2 hits; the third arms stage
+  3, and it caps stage 2. `record_first_contact_name_hit` is a SQL
+  increment.
 - `first_contact_whisper_at` (RFC3339): stage-3 delivery; schedules
   stage 4.
 - `first_contact_invited_at` (RFC3339): stage-4 claim, written only by
   `claim_first_contact_invitation` (conditional on absence), taken back
   by `release_first_contact_invitation` when the send after a won claim
   fails.
-- `reset_first_contact` wipes all three (the `/haunt reset` hook).
+- `reset_first_contact` wipes all four (the `/haunt reset` hook).
 - Everything else is render-only and session-local: no chat rows, no IRC
   projection (the invitation DM is the deliberate exception: stage 4 is
   where the fiction goes real, and an invitation that vanishes cannot be
@@ -115,8 +127,8 @@ Parsed in `chat/state.rs::submit_composer` **only when `is_admin`**
 posts as plain text, exactly as if the command did not exist. Drained by
 `haunt::svc::tick`.
 
-- `/haunt` - status: kill switch, glitch schedule, name hits, door,
-  whisper, invite.
+- `/haunt` - status: kill switch, glitch schedule, glitch and name hit
+  counters against their caps, door, whisper, invite.
 - `/haunt on` / `/haunt off` - the process-global kill switch
   (`State.haunt_enabled`, in-memory, back on after restart, safe while
   admin-scoped). `on` also re-arms the repeatable machines for a session
@@ -126,7 +138,7 @@ posts as plain text, exactly as if the command did not exist. Drained by
 - `/haunt name` - force the next own send to flicker.
 - `/haunt replay` - re-run the splash whisper now, ignoring the marks.
 - `/haunt invite` - send the invitation DM now, skipping the delay.
-- `/haunt reset` - wipe all three marks; the chain starts over.
+- `/haunt reset` - wipe every mark; the chain starts over.
 
 ## 6. Gotchas
 
