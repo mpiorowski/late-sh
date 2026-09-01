@@ -107,9 +107,19 @@ into the rows cache key, and
    is reserved in `normalize_topic_slug` (late-core `chat_room.rs`,
    beside the `lounge` reservation, case-insensitive, refusal message
    "only static on that channel") so no user-created room can be waiting
-   where the invitation points; the game will seed the real room through
-   the game-room path, which skips that normalize. Copy and name face
-   design review before real users ever see them.
+   where the invitation points. **The invitation is the key (decided
+   2026-09-01):** when the game seeds the real room,
+   `/join #deadchannel` must work only for users whose
+   `first_contact_invited_at` is set; everyone else keeps getting the
+   static line, because an open door would let people skip the
+   bio/settings/tenure eligibility funnel that the haunting exists to
+   drive. The room gets its own `kind='deadchannel'` (forward migration
+   on the `chat_rooms` kind CHECK): every room listing is a kind
+   whitelist (browse lists only `topic`, IRC lists
+   lounge/language/topic), so the new kind is hidden from browse and
+   IRC by construction, the same way game rooms already are, without
+   inheriting the game-room join path. Copy and name face design review
+   before real users ever see them.
 
 ## 4. Persistence (`users.settings`, late-core `User`)
 
