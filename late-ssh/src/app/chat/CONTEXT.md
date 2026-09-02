@@ -387,7 +387,8 @@ Admin commands:
 - `/haunt [on|off|live on|live off|glitch|name|replay|invite|reset]` controls the
   first-contact haunting. Parsed in `submit_composer` **only when
   `is_admin`** (enum + parser live in `deadchannel/haunt/state.rs`): for
-  everyone else the line posts as plain text, so the command does not
+  everyone else, moderators included even though the ladder now runs
+  for them, the line posts as plain text, so the command does not
   observably exist (no usage banner, no autocomplete entry, no help
   line - the mystery is the feature). Drained by
   `deadchannel::haunt::svc::tick`. Chat's other haunting seams: the

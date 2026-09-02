@@ -21,9 +21,9 @@ pub enum AppFlag {
     /// First contact's kill switch (`/haunt on|off`): while off no haunting
     /// stage arms and a live one drops mid-scene.
     HauntEnabled,
-    /// First contact's fuse (`/haunt live on|off`): while unlit only admins
-    /// are haunted; lit, stage 1 fires for everyone and the eligibility
-    /// gate decides who goes further.
+    /// First contact's fuse (`/haunt live on|off`): while unlit only staff
+    /// (admins and moderators) are haunted; lit, stage 1 fires for everyone
+    /// and the eligibility gate decides who goes further.
     HauntLive,
 }
 

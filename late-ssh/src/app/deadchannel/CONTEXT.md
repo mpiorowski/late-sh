@@ -4,14 +4,19 @@
 - Domain: the deadchannel game (GAME.md) - today only its onboarding, the
   first-contact haunting ladder, in the `haunt/` subdomain. Built for
   several replicas (root CONTEXT.md, multi-replica rule); gated behind
-  the `haunt_live` fuse, unlit, so only admins are haunted today.
-- Last updated: 2026-09-02 (the eligibility gate and the replica rework:
+  the `haunt_live` fuse, unlit, so only staff (admins and moderators)
+  are haunted today, and only they can finish the ladder and join.
+- Last updated: 2026-09-02 (staff scope: the ladder runs for moderators
+  as well as admins, `Permissions::can_moderate`, while `/haunt` stays
+  admin-only so mods meet it cold; whoever finishes gets the DM and the
+  invitation stamp opens `/join #deadchannel`, the full flow end to end.
+  Same day, earlier: the eligibility gate and the replica rework:
   stage 1 universal behind the `haunt_live` fuse, stages 2-4 behind
   tenure + touched settings + an AI-screened bio evaluated at bootstrap;
   the kill switch and fuse moved to `app_flags` rows; the daily and
   lifetime hit caps moved into conditional claims on the user row; the
   whisper stamp became a claim)
-- Status: Active, admins only until `/haunt live on`
+- Status: Active, staff only until `/haunt live on`
 - Parent context: `../../../../CONTEXT.md`; design source: `GAME.md`,
   "First contact (the haunting)"
 
@@ -31,7 +36,7 @@ roughly a week and a half of slow burn.
 
 Who is haunted (GAME.md, "the eligibility gate is a whisper campaign"):
 **stage 1 is universal, stages 2-4 need the gate.** Stage 1 arms for
-admins always and for everyone once the `haunt_live` fuse is lit (an
+staff (admins and moderators) always and for everyone once the `haunt_live` fuse is lit (an
 `app_flags` row, `/haunt live on|off`; unlit today, so nothing fires for
 real users while copy and thresholds await design review). Stages 2-4
 arm when the gate passes: at least `ACTIVE_MIN_HOURS` (168, seven days)
@@ -221,9 +226,11 @@ and `metrics::record_first_contact_beat` / `record_first_contact_bio_screen`.
 ## 5. `/haunt` (admin composer command)
 
 Parsed in `chat/state.rs::submit_composer` **only when `is_admin`**
-(enum + parser live in `haunt/state.rs`); for everyone else the line
-posts as plain text, exactly as if the command did not exist. Drained by
-`haunt::svc::tick`.
+(enum + parser live in `haunt/state.rs`); for everyone else, moderators
+included, the line posts as plain text, exactly as if the command did
+not exist. Admin-only on purpose while the ladder runs for staff: a
+moderator who could type `/haunt` would know what the glitches were.
+Drained by `haunt::svc::tick`.
 
 - `/haunt` - status: kill switch, fuse, whether stage 1 and the chosen
   stages armed for this session, the gate's three legs (active hours,
@@ -235,7 +242,7 @@ posts as plain text, exactly as if the command did not exist. Drained by
   repeatable machines, so the flip (and the gate) is testable without
   reconnecting or a passing bio; `off` drops a live whisper mid-scene.
 - `/haunt live on` / `/haunt live off` - the fuse (`haunt_live`): lit,
-  stage 1 arms for every connecting user, not only admins, and the gate
+  stage 1 arms for every connecting user, not only staff, and the gate
   decides who goes further. Takes effect from each user's next connect.
 - `/haunt glitch` - fire a clock burst on a ~7s fuse (the banner covers
   the clock for ~5s), bypassing schedule and caps.
@@ -266,7 +273,7 @@ posts as plain text, exactly as if the command did not exist. Drained by
 - Every voiced or corrupted character obeys the screenshot test (static /
   signal / city / channel vocabulary, never Unix internals); the whisper
   pool and the invitation plea need feed-template-grade variety before
-  leaving admin scope (GAME.md, Open questions).
+  leaving staff scope (GAME.md, Open questions).
 - The invitation runs through `ChatService::send_message`, so DM
   delivery, unread badges, and IRC projection behave like any DM.
 - Test apps pass `FirstContactMarks::spent_for_tests()` and

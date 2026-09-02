@@ -422,9 +422,12 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
 
     let device = load_device_state(state, user_id, key_fingerprint.as_deref()).await;
 
-    let first_contact_gate =
-        crate::app::deadchannel::haunt::svc::bootstrap_gate(state, permissions.is_admin(), &user)
-            .await;
+    let first_contact_gate = crate::app::deadchannel::haunt::svc::bootstrap_gate(
+        state,
+        permissions.can_moderate(),
+        &user,
+    )
+    .await;
     SessionConfig {
         cols,
         rows,

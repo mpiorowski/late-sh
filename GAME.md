@@ -297,7 +297,8 @@ Status (2026-09-02): all four stages and the eligibility gate exist in
 for several replicas (switches as `app_flags` rows, every cap and stamp
 a conditional claim on the user row). Stage 1 is universal behind the
 `haunt_live` fuse (`/haunt live on`), unlit, so nothing fires for
-non-admin users yet; stages 2-4 sit behind connected time, touched
+non-staff users yet (staff: admins and moderators, the mods meeting it
+cold as the first playtest); stages 2-4 sit behind connected time, touched
 settings, and an AI-screened bio with placeholder thresholds (7 days of
 online time, 2 keys, 200 characters). Copy, the voice's name, and the thresholds still face
 design review before the fuse is lit.
@@ -324,7 +325,7 @@ design review before the fuse is lit.
      see that?" gets "no?" back, which is deniability and gossip in one
      move), rare (order of once per hours-long session, at most once or
      twice a day per user), render-layer only (the one DB touch is the
-     per-user burst counter), behind the kill-switch and admin-scoped
+     per-user burst counter), behind the kill-switch and staff-scoped
      until the fuse is lit. Ladder count (tuned 2026-09-01): **three
      bursts total per person**, persisted; the third quiets the clock
      for good and opens stage 2, and the quiet is itself part of the
@@ -462,7 +463,7 @@ design review before the fuse is lit.
     inevitable "I found a display bug" report.
 - **First contact is a nonrenewable resource.** It works exactly once per
   person. Two timing rules: never burn it on real users while it is
-  admin-scoped scaffolding, and never light it until the breach is close.
+  staff-scoped scaffolding, and never light it until the breach is close.
   The whole ladder is a fuse of one to two weeks before the first real
   spawn, not a promise without a date: "glitches are coming" followed by
   months of nothing curdles into a broken feature.
@@ -577,8 +578,9 @@ Sequencing, each phase testing something before paying for the next:
    reused for it. The first-contact haunting ladder (see Core design)
    is the fuse: it ends at the invitation, so it must not fire for real
    users until phase 2's character layer can receive a
-   `/join #deadchannel`; its machinery can be built and admin-tested
-   any time earlier.
+   `/join #deadchannel`; its machinery can be built and staff-tested
+   any time earlier, the invitation stamp being the only key to the
+   room.
 4. **Arena + betting + bounties.** Tests: spectacle and chip sink.
 5. **Seasons** wrap it once the loop is proven.
 

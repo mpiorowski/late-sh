@@ -1323,7 +1323,7 @@ impl App {
             Screen::Clubhouse
         };
         let haunt = crate::app::deadchannel::haunt::svc::arm(
-            config.permissions.is_admin(),
+            config.permissions.can_moderate(),
             config.app_flags_rx.clone(),
             config.user_id,
             config.first_contact,

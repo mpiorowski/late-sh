@@ -33,14 +33,14 @@ use crate::state::State;
 /// find you tomorrow (GAME.md).
 ///
 /// The flags come first, and they are the same pair `arm` reads: with
-/// `haunt_enabled` off, or the `haunt_live` fuse unlit for a non-admin,
+/// `haunt_enabled` off, or the `haunt_live` fuse unlit for a non-staff user,
 /// nobody can be haunted this session, so the connect path spends
 /// nothing on them: no online-time round trip, no paid bio screen. With
 /// the flags unread (`None`) the gate is shut, like every other stage.
-pub(crate) async fn bootstrap_gate(state: &State, is_admin: bool, user: &User) -> FirstContactGate {
+pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -> FirstContactGate {
     let snapshot: Option<AppFlags> = *state.app_flags.subscribe().borrow();
     let armable =
-        snapshot.is_some_and(|flags| flags.haunt_enabled && (is_admin || flags.haunt_live));
+        snapshot.is_some_and(|flags| flags.haunt_enabled && (is_staff || flags.haunt_live));
     if !armable {
         return FirstContactGate::closed();
     }
@@ -73,7 +73,8 @@ pub(crate) async fn bootstrap_gate(state: &State, is_admin: bool, user: &User) -
     gate
 }
 
-/// Build the session's haunting slot. Stage 1 arms for admins always and
+/// Build the session's haunting slot. Stage 1 arms for staff (admins and
+/// moderators, `Permissions::can_moderate`) always and
 /// for everyone once the `haunt_live` fuse is lit; stages 2-4 arm behind
 /// the gate, or for anyone whose funnel already has a stage-2 hit
 /// (eligibility gates entering, never continuing). First contact is a
@@ -85,7 +86,7 @@ pub(crate) async fn bootstrap_gate(state: &State, is_admin: bool, user: &User) -
 /// Dice are per session on purpose: the same person on two evenings, or
 /// two people side by side, roll differently.
 pub(crate) fn arm(
-    is_admin: bool,
+    is_staff: bool,
     flags: watch::Receiver<Option<AppFlags>>,
     user_id: uuid::Uuid,
     marks: FirstContactMarks,
@@ -94,7 +95,7 @@ pub(crate) fn arm(
     let snapshot: Option<AppFlags> = *flags.borrow();
     let enabled = snapshot.is_some_and(|flags| flags.haunt_enabled);
     let live = snapshot.is_some_and(|flags| flags.haunt_live);
-    let stage1 = enabled && (is_admin || live);
+    let stage1 = enabled && (is_staff || live);
     let chosen = stage1 && (gate.passes() || marks.name_hits > 0);
     let whisper_armed =
         chosen && marks.name_hits >= NAME_TOTAL_CAP && marks.whisper_due(chrono::Utc::now());
@@ -635,7 +636,7 @@ fn tick_commands(app: &mut App) -> bool {
             );
         }
         HauntCommand::LiveOff => {
-            set_flag(app, AppFlag::HauntLive, false, "Fuse out: admins only");
+            set_flag(app, AppFlag::HauntLive, false, "Fuse out: staff only");
         }
         HauntCommand::Glitch => match app.haunt.clock_glitch.as_mut() {
             None => {

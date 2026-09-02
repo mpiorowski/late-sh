@@ -15,7 +15,7 @@
 //! lifetime and daily caps are enforced by conditional claims on the user
 //! row; the machines only decide *when to ask* and hold their schedule
 //! while the row answers. The switches are `app_flags` rows read through a
-//! process-shared `watch`. Stage 1 fires for admins always and for
+//! process-shared `watch`. Stage 1 fires for staff always and for
 //! everyone once the `haunt_live` fuse is lit; stages 2-4 need the gate.
 
 use chrono::{DateTime, Utc};
@@ -302,7 +302,7 @@ pub(crate) struct HauntState {
     /// The eligibility gate as evaluated at bootstrap (for `/haunt` status
     /// and the arming decision).
     pub(crate) gate: FirstContactGate,
-    /// Stage 1 armed for this session: admins always, everyone once the
+    /// Stage 1 armed for this session: staff always, everyone once the
     /// `haunt_live` fuse is lit. Evaluated once at arming.
     pub(crate) stage1: bool,
     /// Stages 2-4 armed: stage 1 plus the gate, or a funnel already entered
@@ -329,7 +329,7 @@ impl HauntState {
         (*self.flags.borrow()).is_some_and(|flags| flags.haunt_enabled)
     }
 
-    /// The fuse: stage 1 for everyone, not only admins.
+    /// The fuse: stage 1 for everyone, not only staff.
     pub(crate) fn live(&self) -> bool {
         (*self.flags.borrow()).is_some_and(|flags| flags.haunt_live)
     }
@@ -384,7 +384,7 @@ pub(crate) enum HauntCommand {
     Off,
     /// `/haunt live on`: light the fuse; stage 1 fires for everyone.
     LiveOn,
-    /// `/haunt live off`: back to admins only.
+    /// `/haunt live off`: back to staff only.
     LiveOff,
     /// `/haunt glitch`: fire a clock-glitch burst right now.
     Glitch,
@@ -443,7 +443,7 @@ const DISSOLVE_TICKS: usize = 12;
 /// you. Screenshot-test vocabulary only (static, signal, city, channel,
 /// door); a repeated whisper is a bug report, not a haunting, so this
 /// pool grows under the same variety discipline as feed templates
-/// (GAME.md, Open questions) before it ever leaves admin scope.
+/// (GAME.md, Open questions) before it ever leaves staff scope.
 const WHISPER_LINES: [&str; 6] = [
     "you were not supposed to notice this yet",
     "the sky down here is the color of a dead channel",
