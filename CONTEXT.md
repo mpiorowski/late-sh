@@ -44,7 +44,7 @@ late.sh runs as one SSH replica today, and a multi-replica rework is coming. Eve
 
 When a design cannot meet the rule (a hot path that would need a DB round trip per tick), say so in the local `CONTEXT.md`, keep the per-replica piece as small as possible, and list it in the §7 table so the rework finds it.
 
-The rework itself (transport half: session ownership and pair-WS routing; app half: migrating the §7 table row by row) is planned in `SCALE.md`, Pain Point 2 and Next Work item 8. This section is the rule; that file is the plan.
+The rework itself (transport half: session ownership and pair-WS routing; app half: migrating the §7 table row by row) is planned in `SCALE.md`, Pain Point 2 and Next Work item 8. This section is the rule; that file is the plan. Findings that are fine today and wrong at 10x go to `SCALE.md` "Small Debts (fix as touched)", not to a Pain Point.
 
 ### Context Directory (Read-First Routing) [STABLE]
 
