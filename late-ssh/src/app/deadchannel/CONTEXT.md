@@ -45,7 +45,9 @@ online-time leaderboard's table, one primary-key read at bootstrap;
 account age is not tenure, hours spent here are), at least
 `TOUCHED_SETTINGS_MIN` (2) keys from the
 closed `TOUCHED_SETTINGS_KEYS` list in late-core `user.rs`, and a bio of
-at least `BIO_MIN_CHARS` (200) that the AI screen passed. The gate is
+at least `BIO_MIN_CHARS` (100) that the AI screen passed (the length is
+only the floor under which no screen is spent; the screen decides
+whether it reads as a person). The gate is
 evaluated once at session bootstrap (`svc::bootstrap_gate`: the user row
 that already loads plus the one online-time read, which fails closed to
 zero hours) and is never stored: filling

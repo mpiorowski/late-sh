@@ -69,7 +69,7 @@ for weeks. we need runners. if you're willing: /join #deadchannel";
 /// a year ago and left is not invested, one that lived here for a week
 /// is. Read from the online-time leaderboard's table.
 pub(crate) const ACTIVE_MIN_HOURS: i64 = 7 * 24;
-pub(crate) const BIO_MIN_CHARS: usize = 200;
+pub(crate) const BIO_MIN_CHARS: usize = 100;
 pub(crate) const TOUCHED_SETTINGS_MIN: usize = 2;
 /// A failed or stranded (pending) bio screen is claimed again after this
 /// long; a pass is final for that text.

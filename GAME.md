@@ -300,7 +300,7 @@ a conditional claim on the user row). Stage 1 is universal behind the
 non-staff users yet (staff: admins and moderators, the mods meeting it
 cold as the first playtest); stages 2-4 sit behind connected time, touched
 settings, and an AI-screened bio with placeholder thresholds (7 days of
-online time, 2 keys, 200 characters). Copy, the voice's name, and the thresholds still face
+online time, 2 keys, 100 characters, the AI screen doing the real judging above that floor). Copy, the voice's name, and the thresholds still face
 design review before the fuse is lit.
 
 - **The game is never announced; it arrives.** Onboarding as haunting: the
