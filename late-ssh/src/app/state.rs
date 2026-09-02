@@ -357,10 +357,14 @@ pub struct SessionConfig {
     pub clubhouse_tutorial_done: bool,
     /// This user's persisted first-contact marks (`app/deadchannel/haunt`).
     pub(crate) first_contact: crate::app::deadchannel::haunt::state::FirstContactMarks,
-    /// Process-global haunt kill switch (`/haunt on|off`), checked at
-    /// arming and on every haunting tick so flipping it off drops live
-    /// theater.
-    pub haunt_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The first-contact eligibility gate as evaluated at bootstrap.
+    pub(crate) first_contact_gate: crate::app::deadchannel::haunt::state::FirstContactGate,
+    /// Process-wide switches (`app/flags`), read at arming and on every
+    /// haunting tick so flipping the kill switch off drops live theater.
+    pub app_flags_rx: tokio::sync::watch::Receiver<Option<late_core::models::app_flag::AppFlags>>,
+    /// The flag service, for `/haunt on|off|live`. `None` on headless/test
+    /// paths, which turns those commands into a banner.
+    pub app_flags: Option<crate::app::flags::svc::AppFlagService>,
     /// Whether the aquarium tray was open when the user last toggled it.
     pub show_aquarium_tray: bool,
     /// Fingerprint of the SSH key this session authenticated with: the only
@@ -596,8 +600,10 @@ pub struct App {
     pub(crate) artboard_ban_expires_at: Option<DateTime<Utc>>,
     /// First contact, the haunting (`app/deadchannel/haunt`): every
     /// stage's machine and the flags that gate them, in one slot.
-    /// Admin-scoped scaffolding; `haunt::svc` owns all reads and writes.
+    /// `haunt::svc` owns all reads and writes.
     pub(crate) haunt: crate::app::deadchannel::haunt::state::HauntState,
+    /// Process-wide switches, for the `/haunt` flag commands.
+    pub(crate) app_flags: Option<crate::app::flags::svc::AppFlagService>,
 
     /// Chat
     pub(crate) chat: chat::state::ChatState,
@@ -1318,9 +1324,10 @@ impl App {
         };
         let haunt = crate::app::deadchannel::haunt::svc::arm(
             config.permissions.is_admin(),
-            config.haunt_enabled.clone(),
+            config.app_flags_rx.clone(),
             config.user_id,
             config.first_contact,
+            config.first_contact_gate,
         );
         let mut app = Self {
             running: true,
@@ -1444,6 +1451,7 @@ impl App {
             artboard_banned: config.artboard_banned,
             artboard_ban_expires_at: config.artboard_ban_expires_at,
             haunt,
+            app_flags: config.app_flags.clone(),
             chat: chat::state::ChatState::new(
                 chat::state::ChatServices {
                     chat: config.chat_service,

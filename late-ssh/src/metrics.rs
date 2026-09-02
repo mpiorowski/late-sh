@@ -61,6 +61,35 @@ pub enum OnlineTimeFlushResult {
     Failed,
 }
 
+/// One rung of the first-contact ladder actually reaching a person (GAME.md,
+/// First contact). The two hit beats count won DB claims, never local dice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FirstContactBeat {
+    GlitchBurst,
+    NameFlicker,
+    WhisperDelivered,
+    InvitationRequested,
+}
+
+/// How one bio screen (the first-contact eligibility gate's AI leg)
+/// resolved. `Passed` and `Failed` are the verdicts that spent an API call
+/// and landed; the rest are the reasons a claim produced no verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BioScreenOutcome {
+    Passed,
+    Failed,
+    /// The model answered with nothing usable; the pending claim stays and
+    /// is retried after the stale window.
+    Unavailable,
+    /// The call itself broke (network, API error).
+    CallFailed,
+    /// Another session on any replica already holds the claim.
+    LostClaim,
+    /// The bio changed while the call was in flight; the verdict was
+    /// dropped and the new text gets its own screen.
+    TextChanged,
+}
+
 #[cfg(feature = "otel")]
 mod inner {
     use std::sync::OnceLock;
@@ -71,9 +100,9 @@ mod inner {
     };
 
     use super::{
-        ActivityGame, CrownRefusal, DailyWinPayout, DoorGame, GildRefusal, GildTier,
-        NewsShareReward, OnlineTimeFlushResult, PotRefusal, RenderReason, RoundRefusal,
-        SongQueueReward, SummaryResult, TranslationResult,
+        ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
+        GildRefusal, GildTier, NewsShareReward, OnlineTimeFlushResult, PotRefusal, RenderReason,
+        RoundRefusal, SongQueueReward, SummaryResult, TranslationResult,
     };
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -527,6 +556,58 @@ mod inner {
         })
     }
 
+    fn first_contact_beats_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_first_contact_beats_total")
+                .with_description("First-contact ladder beats delivered, by beat")
+                .build()
+        })
+    }
+
+    fn first_contact_bio_screens_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_first_contact_bio_screens_total")
+                .with_description("First-contact bio screens, by outcome")
+                .build()
+        })
+    }
+
+    fn first_contact_beat_label(beat: FirstContactBeat) -> &'static str {
+        match beat {
+            FirstContactBeat::GlitchBurst => "glitch_burst",
+            FirstContactBeat::NameFlicker => "name_flicker",
+            FirstContactBeat::WhisperDelivered => "whisper_delivered",
+            FirstContactBeat::InvitationRequested => "invitation_requested",
+        }
+    }
+
+    fn bio_screen_outcome_label(outcome: BioScreenOutcome) -> &'static str {
+        match outcome {
+            BioScreenOutcome::Passed => "passed",
+            BioScreenOutcome::Failed => "failed",
+            BioScreenOutcome::Unavailable => "unavailable",
+            BioScreenOutcome::CallFailed => "call_failed",
+            BioScreenOutcome::LostClaim => "lost_claim",
+            BioScreenOutcome::TextChanged => "text_changed",
+        }
+    }
+
+    pub fn record_first_contact_beat(beat: FirstContactBeat) {
+        first_contact_beats_total()
+            .add(1, &[KeyValue::new("beat", first_contact_beat_label(beat))]);
+    }
+
+    pub fn record_first_contact_bio_screen(outcome: BioScreenOutcome) {
+        first_contact_bio_screens_total().add(
+            1,
+            &[KeyValue::new("outcome", bio_screen_outcome_label(outcome))],
+        );
+    }
+
     pub fn record_ssh_connection() {
         ssh_connections_total().add(1, &[]);
     }
@@ -826,12 +907,14 @@ mod inner {
 #[cfg(not(feature = "otel"))]
 mod inner {
     use super::{
-        ActivityGame, CrownRefusal, DailyWinPayout, DoorGame, GildRefusal, GildTier,
-        NewsShareReward, OnlineTimeFlushResult, PotRefusal, RenderReason, RoundRefusal,
-        SongQueueReward, SummaryResult, TranslationResult,
+        ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
+        GildRefusal, GildTier, NewsShareReward, OnlineTimeFlushResult, PotRefusal, RenderReason,
+        RoundRefusal, SongQueueReward, SummaryResult, TranslationResult,
     };
 
     pub fn record_ssh_connection() {}
+    pub fn record_first_contact_beat(_beat: FirstContactBeat) {}
+    pub fn record_first_contact_bio_screen(_outcome: BioScreenOutcome) {}
     pub fn record_render(_reason: RenderReason) {}
     pub fn record_render_skipped_clean() {}
     pub fn add_ssh_session(_delta: i64) {}

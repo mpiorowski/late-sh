@@ -865,6 +865,8 @@ impl russh::server::Handler for ClientHandler {
             }
         };
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
+        let first_contact_gate =
+            crate::app::deadchannel::haunt::svc::bootstrap_gate(&self.state, &user).await;
         let mut app = crate::app::state::App::new(SessionConfig {
             // Terminal / layout
             cols: terminal_size.cols,
@@ -1005,7 +1007,9 @@ impl russh::server::Handler for ClientHandler {
             first_contact: crate::app::deadchannel::haunt::state::FirstContactMarks::from_settings(
                 &user.settings,
             ),
-            haunt_enabled: self.state.haunt_enabled.clone(),
+            first_contact_gate,
+            app_flags_rx: self.state.app_flags.subscribe(),
+            app_flags: Some(self.state.app_flags.clone()),
             show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
             key_fingerprint,
             key_layout: device.layout,

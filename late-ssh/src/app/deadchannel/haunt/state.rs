@@ -1,22 +1,27 @@
 //! First contact state machines (GAME.md, First contact): stage 1, the
-//! clock glitch ([`ClockGlitch`]), and stage 3, the held door
-//! ([`WhisperState`]).
+//! clock glitch ([`ClockGlitch`]), stage 2, the own-name flicker
+//! ([`NameFlicker`]), stage 3, the held door ([`WhisperState`]), and the
+//! eligibility gate ([`FirstContactGate`]) that decides who goes past
+//! stage 1.
 //!
 //! The whisper is delivered on the splash screen, once per person ever:
 //! this one time the splash does not skip. Input is always acknowledged
 //! (static surges, the skip hint dissolves) but control is withheld until
 //! the voiced line has landed; a hard time cap then opens the door no
 //! matter what. Pure state machines: no I/O, no clock reads. `App` owns
-//! arming, the kill switch, and persisting the once-ever mark.
+//! arming, the switches, and the persistence.
 //!
-//! Currently admin-scoped scaffolding: only admin sessions ever arm any
-//! of it, so the nonrenewable first contact is never burned on real users
-//! while the breach is far away.
+//! Replica rule (root CONTEXT.md): nothing here is a source of truth. The
+//! lifetime and daily caps are enforced by conditional claims on the user
+//! row; the machines only decide *when to ask* and hold their schedule
+//! while the row answers. The switches are `app_flags` rows read through a
+//! process-shared `watch`. Stage 1 fires for admins always and for
+//! everyone once the `haunt_live` fuse is lit; stages 2-4 need the gate.
 
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
+use late_core::models::app_flag::AppFlags;
+use late_core::models::user::{FirstContactBioVerdict, FirstContactHitCaps, FirstContactHitClaim};
+use tokio::sync::{oneshot, watch};
 use uuid::Uuid;
 
 /// The game's first voice (stage 4): the character whose plea invites the
@@ -40,6 +45,161 @@ pub(crate) const INVITATION_PLEA: &str = "i don't have long on this channel. \
 there is a city under your clubhouse, behind the screen, and something old \
 is broadcasting at the bottom of it. the static has been trying your name \
 for weeks. we need runners. if you're willing: /join #deadchannel";
+
+/// The eligibility gate (GAME.md, "the static chooses the invested"):
+/// stages 2-4 target people who have put in the hours, deliberately
+/// touched settings, and written a bio that reads as a person. Evaluated
+/// once at session bootstrap (the user row that already loads plus one
+/// primary-key read of `user_online_time`), and never stored: filling
+/// your bio tonight means the static can find you tomorrow. The
+/// thresholds are placeholders pending design review (GAME.md, Open
+/// questions, "First-contact tuning").
+///
+/// Tenure is connected time, not account age: an account that signed up
+/// a year ago and left is not invested, one that lived here for a week
+/// is. Read from the online-time leaderboard's table.
+pub(crate) const ACTIVE_MIN_HOURS: i64 = 7 * 24;
+pub(crate) const BIO_MIN_CHARS: usize = 200;
+pub(crate) const TOUCHED_SETTINGS_MIN: usize = 2;
+/// A failed or stranded (pending) bio screen is claimed again after this
+/// long; a pass is final for that text.
+pub(crate) const BIO_RESCREEN_AFTER_HOURS: i64 = 24;
+
+/// Where the bio leg of the gate stands for the bio text on the row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BioStanding {
+    /// Under [`BIO_MIN_CHARS`]: no screen is spent on it.
+    TooShort,
+    /// AI is switched off in this install and no pass is on record, so the
+    /// leg cannot pass. Failing closed on a nonrenewable resource.
+    AiOff,
+    /// No usable verdict for the current text (never screened, the text
+    /// changed, or the last verdict is stale): this session claims one.
+    Unscreened,
+    /// A screen is in flight, claimed by some session on some replica.
+    Pending,
+    Passed,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FirstContactGate {
+    /// Lifetime connected hours, as last flushed.
+    pub(crate) active_hours: i64,
+    pub(crate) touched_settings: usize,
+    pub(crate) bio_chars: usize,
+    pub(crate) bio: BioStanding,
+}
+
+impl FirstContactGate {
+    pub(crate) fn evaluate(
+        now: DateTime<Utc>,
+        online_milliseconds: i64,
+        settings: &serde_json::Value,
+        ai_enabled: bool,
+    ) -> Self {
+        let bio = late_core::models::user::extract_bio(settings);
+        let bio_chars = bio.chars().count();
+        let screen = late_core::models::user::extract_first_contact_bio_screen(settings);
+        let stale_after = chrono::Duration::hours(BIO_RESCREEN_AFTER_HOURS);
+        let standing = if bio_chars < BIO_MIN_CHARS {
+            BioStanding::TooShort
+        } else {
+            match screen {
+                Some(screen) if screen.hash == bio_hash(&bio) => match screen.verdict {
+                    FirstContactBioVerdict::Passed => BioStanding::Passed,
+                    FirstContactBioVerdict::Pending | FirstContactBioVerdict::Failed
+                        if now - screen.at >= stale_after =>
+                    {
+                        if ai_enabled {
+                            BioStanding::Unscreened
+                        } else {
+                            BioStanding::AiOff
+                        }
+                    }
+                    FirstContactBioVerdict::Pending => BioStanding::Pending,
+                    FirstContactBioVerdict::Failed => BioStanding::Failed,
+                },
+                // A verdict for other text, or none at all.
+                Some(_) | None => {
+                    if ai_enabled {
+                        BioStanding::Unscreened
+                    } else {
+                        BioStanding::AiOff
+                    }
+                }
+            }
+        };
+        Self {
+            active_hours: online_milliseconds / (60 * 60 * 1000),
+            touched_settings: late_core::models::user::count_touched_settings(settings),
+            bio_chars,
+            bio: standing,
+        }
+    }
+
+    /// All three legs hold: the static may choose this person.
+    pub(crate) fn passes(&self) -> bool {
+        self.active_hours >= ACTIVE_MIN_HOURS
+            && self.touched_settings >= TOUCHED_SETTINGS_MIN
+            && self.bio_passes()
+    }
+
+    pub(crate) fn bio_passes(&self) -> bool {
+        match self.bio {
+            BioStanding::Passed => true,
+            BioStanding::TooShort
+            | BioStanding::AiOff
+            | BioStanding::Unscreened
+            | BioStanding::Pending
+            | BioStanding::Failed => false,
+        }
+    }
+
+    /// Whether bootstrap should claim a bio screen for this session.
+    pub(crate) fn needs_bio_screen(&self) -> bool {
+        match self.bio {
+            BioStanding::Unscreened => true,
+            BioStanding::TooShort
+            | BioStanding::AiOff
+            | BioStanding::Pending
+            | BioStanding::Passed
+            | BioStanding::Failed => false,
+        }
+    }
+
+    /// Nothing passes: what test apps use so no stage past 1 can arm
+    /// unless a test arms one on purpose.
+    pub(crate) fn closed_for_tests() -> Self {
+        Self {
+            active_hours: 0,
+            touched_settings: 0,
+            bio_chars: 0,
+            bio: BioStanding::TooShort,
+        }
+    }
+}
+
+/// The key a bio screen verdict is filed under: a rewritten bio never
+/// inherits a verdict. Sixteen hex characters of blake3 is plenty for one
+/// user's own history of bios.
+pub(crate) fn bio_hash(bio: &str) -> String {
+    blake3::hash(bio.trim().as_bytes()).to_hex()[..16].to_string()
+}
+
+pub(crate) fn glitch_caps() -> FirstContactHitCaps {
+    FirstContactHitCaps {
+        daily: GLITCH_DAILY_CAP,
+        total: GLITCH_TOTAL_CAP,
+    }
+}
+
+pub(crate) fn name_caps() -> FirstContactHitCaps {
+    FirstContactHitCaps {
+        daily: NAME_DAILY_CAP,
+        total: NAME_TOTAL_CAP,
+    }
+}
 
 /// This user's persisted first-contact marks, read from `users.settings`
 /// at session bootstrap. One bundle so the root config carries one field.
@@ -87,22 +247,45 @@ pub(crate) struct HauntState {
     /// Stage 3: the armed splash whisper. `Some` only while the splash is
     /// holding the door for it.
     pub(crate) whisper: Option<WhisperState>,
-    /// Stage 1: the clock-glitch scheduler. Session-local dice; only the
-    /// lifetime burst counter persists.
+    /// Stage 1: the clock-glitch scheduler. Session-local dice; the caps
+    /// live on the row.
     pub(crate) clock_glitch: Option<ClockGlitch>,
     /// Stage 2: the own-name flicker roller.
     pub(crate) name_flicker: Option<NameFlicker>,
     /// Persisted marks, mirrored at session start and kept honest
-    /// in-session.
+    /// in-session from every won claim.
     pub(crate) marks: FirstContactMarks,
-    /// Whether this session may haunt at all (the admin-scoped gate,
-    /// evaluated once at arming).
-    pub(crate) eligible: bool,
-    /// Process-global kill switch, flipped by `/haunt on|off`.
-    pub(crate) enabled: Arc<AtomicBool>,
+    /// The eligibility gate as evaluated at bootstrap (for `/haunt` status
+    /// and the arming decision).
+    pub(crate) gate: FirstContactGate,
+    /// Stage 1 armed for this session: admins always, everyone once the
+    /// `haunt_live` fuse is lit. Evaluated once at arming.
+    pub(crate) stage1: bool,
+    /// Stages 2-4 armed: stage 1 plus the gate, or a funnel already entered
+    /// (eligibility gates entering, never continuing). `/haunt on` forces
+    /// it for the session.
+    pub(crate) chosen: bool,
+    /// Process-wide switches (`app/flags`), one `watch` shared by every
+    /// session on this replica and kept in step across replicas by the
+    /// `app_flag_changed` notify. `None` until the first load: off.
+    pub(crate) flags: watch::Receiver<Option<AppFlags>>,
+    /// Capped hit claims in flight (at most one per machine). The machine
+    /// that asked holds its schedule until the row answers; `svc::tick`
+    /// drains these.
+    pub(crate) pending_claims: Vec<PendingClaim>,
 }
 
 impl HauntState {
+    /// The kill switch. `None` (flags never loaded) reads as off.
+    pub(crate) fn enabled(&self) -> bool {
+        (*self.flags.borrow()).is_some_and(|flags| flags.haunt_enabled)
+    }
+
+    /// The fuse: stage 1 for everyone, not only admins.
+    pub(crate) fn live(&self) -> bool {
+        (*self.flags.borrow()).is_some_and(|flags| flags.haunt_live)
+    }
+
     /// Whether the splash may not self-expire this tick: an armed whisper
     /// owns the release.
     pub(crate) fn holds_splash_door(&self) -> bool {
@@ -115,19 +298,37 @@ impl HauntState {
     }
 }
 
+/// Which machine asked the row for a hit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HitStage {
+    Glitch,
+    Name { message_id: Uuid },
+}
+
+/// One claim out on the row. An `Err` (or a dropped sender) means the row
+/// could not be asked; the machine defers.
+pub(crate) struct PendingClaim {
+    pub(crate) stage: HitStage,
+    pub(crate) rx: oneshot::Receiver<anyhow::Result<FirstContactHitClaim>>,
+}
+
 /// The `/haunt` admin controls, recorded by the composer and drained by
 /// `svc::tick`. Deliberately absent from help and autocomplete, and only
 /// ever parsed for admins: for everyone else the line posts as plain
 /// text, exactly as if the command did not exist.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HauntCommand {
-    /// `/haunt`: kill switch, once-ever mark, door and glitch state.
+    /// `/haunt`: switches, gate, marks, door and glitch state.
     Status,
-    /// `/haunt on`: re-enable the haunting process-wide.
+    /// `/haunt on`: re-enable the haunting everywhere (the kill switch row).
     On,
     /// `/haunt off`: the kill switch; a live whisper drops mid-scene and
-    /// the glitch scheduler stops firing.
+    /// the schedulers stop firing, on every replica.
     Off,
+    /// `/haunt live on`: light the fuse; stage 1 fires for everyone.
+    LiveOn,
+    /// `/haunt live off`: back to admins only.
+    LiveOff,
     /// `/haunt glitch`: fire a clock-glitch burst right now.
     Glitch,
     /// `/haunt name`: force the next own send to flicker.
@@ -136,7 +337,7 @@ pub(crate) enum HauntCommand {
     Replay,
     /// `/haunt invite`: send the invitation DM now, skipping the delay.
     Invite,
-    /// `/haunt reset`: clear every first-contact mark for this user.
+    /// `/haunt reset`: clear every first-contact chain mark for this user.
     Reset,
 }
 
@@ -148,15 +349,18 @@ pub(crate) fn parse_haunt_command(body: &str) -> Option<Option<HauntCommand>> {
     if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
         return None;
     }
-    Some(match rest.trim() {
-        "" => Some(HauntCommand::Status),
-        "on" => Some(HauntCommand::On),
-        "off" => Some(HauntCommand::Off),
-        "glitch" => Some(HauntCommand::Glitch),
-        "name" => Some(HauntCommand::Name),
-        "replay" => Some(HauntCommand::Replay),
-        "invite" => Some(HauntCommand::Invite),
-        "reset" => Some(HauntCommand::Reset),
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    Some(match words.as_slice() {
+        [] => Some(HauntCommand::Status),
+        ["on"] => Some(HauntCommand::On),
+        ["off"] => Some(HauntCommand::Off),
+        ["live", "on"] => Some(HauntCommand::LiveOn),
+        ["live", "off"] => Some(HauntCommand::LiveOff),
+        ["glitch"] => Some(HauntCommand::Glitch),
+        ["name"] => Some(HauntCommand::Name),
+        ["replay"] => Some(HauntCommand::Replay),
+        ["invite"] => Some(HauntCommand::Invite),
+        ["reset"] => Some(HauntCommand::Reset),
         _ => None,
     })
 }
@@ -338,7 +542,11 @@ impl WhisperState {
 /// sidebar clock (pinned core block, Home and Arcade). One burst swaps a
 /// character or two of the rendered time for glyph-alphabet characters,
 /// holds ~200ms, restores. Rolled per session with independent dice (two
-/// people almost never see it together), rare, render-layer only, no DB.
+/// people almost never see it together), rare, render-layer only. The
+/// one DB touch per burst is the capped claim on the user row, which is
+/// what makes the daily and lifetime caps exact across devices and
+/// replicas: the machine says `Due`, holds its schedule, and starts only
+/// on a won claim.
 ///
 /// How long one burst holds: 3 ticks (~200ms). One frame at 15fps is too
 /// fast to trust; this survives the sidebar's ~132ms wake cadence.
@@ -346,12 +554,12 @@ const GLITCH_HOLD_TICKS: usize = 3;
 /// Gap between bursts: order of once per hours-long session.
 const GLITCH_GAP_MIN_TICKS: usize = 40 * 60 * 1000 / 66; // ~40 min
 const GLITCH_GAP_MAX_TICKS: usize = 3 * 60 * 60 * 1000 / 66; // ~3 h
-/// When the burst comes due while the clock is off screen, defer a little
-/// instead of spending it invisibly.
+/// When the burst comes due while the clock is off screen, or the row
+/// could not be asked, defer a little instead of spending it invisibly.
 const GLITCH_DEFER_MIN_TICKS: usize = 3 * 60 * 1000 / 66; // ~3 min
 const GLITCH_DEFER_MAX_TICKS: usize = 10 * 60 * 1000 / 66; // ~10 min
-/// At most this many bursts per UTC day per session.
-const GLITCH_DAILY_CAP: u8 = 2;
+/// At most this many bursts per UTC day per person (enforced by the row).
+pub(crate) const GLITCH_DAILY_CAP: u32 = 2;
 /// The ladder's share of clock bursts (the persisted counter): once this
 /// many have been seen, the clock goes quiet and stage 2 opens. The quiet
 /// is part of the escalation; whether unchosen users keep an unbounded
@@ -362,10 +570,13 @@ pub(crate) const GLITCH_TOTAL_CAP: u32 = 3;
 const GLITCH_FORCE_DELAY_TICKS: usize = 7 * 1000 / 66; // ~7 s
 
 /// What one `tick` decided. `Started` and `Ended` are the two frames the
-/// owner must actually paint.
+/// owner must actually paint; `Due` asks the owner to claim a burst.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GlitchTick {
     Idle,
+    /// The schedule came due with the clock on screen: claim one burst on
+    /// the row, then call `start` or `claim_capped`/`claim_failed`.
+    Due,
     Started,
     Ended,
 }
@@ -380,12 +591,11 @@ pub(crate) struct ClockGlitch {
     active_since: Option<usize>,
     /// Tick a forced (`/haunt glitch`) burst fires, while its fuse burns.
     forced_at: Option<usize>,
-    /// UTC day the counter below counts within.
-    today: Option<NaiveDate>,
-    /// Bursts fired today (session-local; the daily cap needs no DB).
-    fired_today: u8,
-    /// Lifetime bursts, seeded from the persisted counter; at
-    /// [`GLITCH_TOTAL_CAP`] the schedule goes quiet and stage 2 opens.
+    /// A claim is out on the row; the schedule holds until it answers.
+    claiming: bool,
+    /// Lifetime bursts, seeded from the persisted counter and refreshed by
+    /// every claim answer; at [`GLITCH_TOTAL_CAP`] the schedule goes quiet
+    /// and stage 2 opens.
     total_hits: u32,
 }
 
@@ -396,8 +606,7 @@ impl ClockGlitch {
             next_at: 0,
             active_since: None,
             forced_at: None,
-            today: None,
-            fired_today: 0,
+            claiming: false,
             total_hits,
         };
         glitch.next_at = now_tick + glitch.roll(GLITCH_GAP_MIN_TICKS, GLITCH_GAP_MAX_TICKS);
@@ -406,13 +615,7 @@ impl ClockGlitch {
 
     /// Advance one world tick. `clock_visible` is whether the sidebar
     /// clock is actually on screen; a burst never spends itself unseen.
-    pub(crate) fn tick(
-        &mut self,
-        tick: usize,
-        today: NaiveDate,
-        enabled: bool,
-        clock_visible: bool,
-    ) -> GlitchTick {
+    pub(crate) fn tick(&mut self, tick: usize, enabled: bool, clock_visible: bool) -> GlitchTick {
         if let Some(since) = self.active_since {
             if tick.saturating_sub(since) >= GLITCH_HOLD_TICKS {
                 self.active_since = None;
@@ -429,9 +632,13 @@ impl ClockGlitch {
                 return GlitchTick::Idle;
             }
             self.forced_at = None;
+            self.claiming = false;
             self.active_since = Some(tick);
             self.total_hits = self.total_hits.saturating_add(1);
             return GlitchTick::Started;
+        }
+        if self.claiming {
+            return GlitchTick::Idle;
         }
         if self.total_hits >= GLITCH_TOTAL_CAP {
             // The ladder's share of bursts has been seen: the clock goes
@@ -441,13 +648,8 @@ impl ClockGlitch {
         if tick < self.next_at {
             return GlitchTick::Idle;
         }
-        if self.today != Some(today) {
-            self.today = Some(today);
-            self.fired_today = 0;
-        }
-        if !enabled || self.fired_today >= GLITCH_DAILY_CAP {
-            // The kill switch and the daily cap both re-dice the full gap;
-            // the day rollover resets the counter when it next comes due.
+        if !enabled {
+            // The kill switch re-dices the full gap.
             self.next_at = tick + self.roll(GLITCH_GAP_MIN_TICKS, GLITCH_GAP_MAX_TICKS);
             return GlitchTick::Idle;
         }
@@ -455,10 +657,31 @@ impl ClockGlitch {
             self.next_at = tick + self.roll(GLITCH_DEFER_MIN_TICKS, GLITCH_DEFER_MAX_TICKS);
             return GlitchTick::Idle;
         }
+        self.claiming = true;
+        GlitchTick::Due
+    }
+
+    /// The row granted the burst: show it now. `hits` is the lifetime
+    /// counter after the claim.
+    pub(crate) fn start(&mut self, tick: usize, hits: u32) {
+        self.claiming = false;
         self.active_since = Some(tick);
-        self.fired_today += 1;
-        self.total_hits = self.total_hits.saturating_add(1);
-        GlitchTick::Started
+        self.total_hits = hits;
+    }
+
+    /// The row refused (today's or the lifetime cap): a full re-dice, and
+    /// the mirror takes the row's count so a spent share goes quiet here
+    /// too.
+    pub(crate) fn claim_capped(&mut self, tick: usize, hits: u32) {
+        self.claiming = false;
+        self.total_hits = hits;
+        self.next_at = tick + self.roll(GLITCH_GAP_MIN_TICKS, GLITCH_GAP_MAX_TICKS);
+    }
+
+    /// The row could not be asked: defer a little and try again.
+    pub(crate) fn claim_failed(&mut self, tick: usize) {
+        self.claiming = false;
+        self.next_at = tick + self.roll(GLITCH_DEFER_MIN_TICKS, GLITCH_DEFER_MAX_TICKS);
     }
 
     /// Lifetime bursts including this session's; the caller mirrors it into
@@ -504,20 +727,33 @@ impl ClockGlitch {
 /// escalation over stage 1 is targeting, not content. It only rolls once
 /// stage 1 has run its course (`stage_open`), and only on a message that
 /// renders its own author header (the landing hook in `chat/state.rs`
-/// skips grouped continuations, whose label never draws).
+/// skips grouped continuations, whose label never draws). A natural hit
+/// is a claim on the row first (the daily and lifetime caps live there)
+/// and shows on the tick the claim comes back won.
 ///
 /// How long one hit holds, in `App::marquee_tick` units (~800ms): well
 /// past the clock's ~200ms, because stage 2 is meant to be hard to miss.
 const NAME_HOLD_TICKS: usize = 12;
 /// Order of one in dozens of sends.
 const NAME_CHANCE_ONE_IN: u64 = 24;
-/// At most one hit per UTC day.
-const NAME_DAILY_CAP: u8 = 1;
+/// At most one hit per UTC day per person (enforced by the row).
+pub(crate) const NAME_DAILY_CAP: u32 = 1;
 /// The ladder's share of name hits (the persisted counter): the third
 /// hit arms the stage-3 whisper for the next fresh connect. With the
 /// one-per-day cap, stages 1 and 2 each spread over two or three days:
 /// the full ladder is roughly a week of slow burn.
 pub(crate) const NAME_TOTAL_CAP: u32 = 3;
+
+/// What a landed own message rolled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NameRoll {
+    Miss,
+    /// The dice landed: claim one hit on the row, then `start` or
+    /// `claim_capped`/`claim_failed`.
+    Claim,
+    /// `/haunt name`: the hit is already showing, uncapped.
+    Forced,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct NameFlicker {
@@ -525,11 +761,10 @@ pub(crate) struct NameFlicker {
     rng: u64,
     /// The live hit: which message's author label is corrupted, since when.
     active: Option<(Uuid, usize)>,
-    /// UTC day the daily counter counts within.
-    today: Option<NaiveDate>,
-    fired_today: u8,
-    /// Lifetime hits, seeded from the persisted counter; this is also the
-    /// stage-3 arming counter.
+    /// A claim is out on the row for this message's label.
+    claiming: Option<Uuid>,
+    /// Lifetime hits, seeded from the persisted counter and refreshed by
+    /// every claim answer; this is also the stage-3 arming counter.
     total_hits: u32,
     /// `/haunt name`: the next own send hits regardless of dice and caps.
     force_next: bool,
@@ -540,52 +775,62 @@ impl NameFlicker {
         Self {
             rng: seed | 1,
             active: None,
-            today: None,
-            fired_today: 0,
+            claiming: None,
             total_hits,
             force_next: false,
         }
     }
 
-    /// One of this session's own messages just landed. Rolls the dice;
-    /// returns true when a hit starts (the caller repaints and persists
-    /// the counter). `stage_open` is whether stage 1 has run its course
-    /// (glitch hits at the cap): the ladder never skips a rung, but a
-    /// forced (`/haunt name`) hit ignores it.
+    /// One of this session's own messages just landed. Rolls the dice.
+    /// `stage_open` is whether stage 1 has run its course (glitch hits at
+    /// the cap): the ladder never skips a rung, but a forced (`/haunt
+    /// name`) hit ignores it, and the caps, and shows at once.
     pub(crate) fn note_own_message(
         &mut self,
         message_id: Uuid,
         tick: usize,
-        today: NaiveDate,
         enabled: bool,
         stage_open: bool,
-    ) -> bool {
-        if self.active.is_some() || !enabled {
-            return false;
+    ) -> NameRoll {
+        if self.active.is_some() || self.claiming.is_some() || !enabled {
+            return NameRoll::Miss;
         }
-        if self.today != Some(today) {
-            self.today = Some(today);
-            self.fired_today = 0;
+        if std::mem::take(&mut self.force_next) {
+            self.active = Some((message_id, tick));
+            // Saturating: the marks of a test app sit at the ceiling.
+            self.total_hits = self.total_hits.saturating_add(1);
+            return NameRoll::Forced;
         }
-        let forced = std::mem::take(&mut self.force_next);
-        if !forced {
-            if !stage_open || self.fired_today >= NAME_DAILY_CAP || self.total_hits >= NAME_TOTAL_CAP
-            {
-                return false;
-            }
-            self.rng ^= self.rng << 13;
-            self.rng ^= self.rng >> 7;
-            self.rng ^= self.rng << 17;
-            if self.rng % NAME_CHANCE_ONE_IN != 0 {
-                return false;
-            }
+        if !stage_open || self.total_hits >= NAME_TOTAL_CAP {
+            return NameRoll::Miss;
         }
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        if self.rng % NAME_CHANCE_ONE_IN != 0 {
+            return NameRoll::Miss;
+        }
+        self.claiming = Some(message_id);
+        NameRoll::Claim
+    }
+
+    /// The row granted the hit: corrupt `message_id`'s label from `tick`.
+    pub(crate) fn start(&mut self, message_id: Uuid, tick: usize, hits: u32) {
+        self.claiming = None;
         self.active = Some((message_id, tick));
-        // Saturating: a forced hit bypasses the caps, and the marks of a
-        // test app sit at the counter's ceiling on purpose.
-        self.fired_today = self.fired_today.saturating_add(1);
-        self.total_hits = self.total_hits.saturating_add(1);
-        true
+        self.total_hits = hits;
+    }
+
+    /// The row refused (today's or the lifetime cap); the mirror takes the
+    /// row's count.
+    pub(crate) fn claim_capped(&mut self, hits: u32) {
+        self.claiming = None;
+        self.total_hits = hits;
+    }
+
+    /// The row could not be asked; the next send rolls again.
+    pub(crate) fn claim_failed(&mut self) {
+        self.claiming = None;
     }
 
     /// Advance one world tick; returns true on the heal edge (the caller

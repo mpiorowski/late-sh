@@ -292,11 +292,15 @@ place at all: scarcity of place is the fiction's spine, same as the
 
 ### First contact (the haunting, decided 2026-08-31)
 
-Status (2026-08-31): all four stages exist as admin-scoped scaffolding in
-`late-ssh/src/app/deadchannel/` (see that directory's CONTEXT.md); the
-`deadchannel` room slug and the voice's DM flow are guarded, and nothing
-fires for non-admin users. Copy, the voice's name, and the eligibility
-thresholds still face design review before the fuse is lit.
+Status (2026-09-02): all four stages and the eligibility gate exist in
+`late-ssh/src/app/deadchannel/` (see that directory's CONTEXT.md), built
+for several replicas (switches as `app_flags` rows, every cap and stamp
+a conditional claim on the user row). Stage 1 is universal behind the
+`haunt_live` fuse (`/haunt live on`), unlit, so nothing fires for
+non-admin users yet; stages 2-4 sit behind connected time, touched
+settings, and an AI-screened bio with placeholder thresholds (7 days of
+online time, 2 keys, 200 characters). Copy, the voice's name, and the thresholds still face
+design review before the fuse is lit.
 
 - **The game is never announced; it arrives.** Onboarding as haunting: the
   bridge fiction says the city is behind the screen and chat is the leak,
@@ -418,7 +422,10 @@ thresholds still face design review before the fuse is lit.
      channel is never discoverable, only spoken of.
 - **The eligibility gate is a whisper campaign.** Stages 2-4 target users
   with a filled bio, touched settings, and real tenure (thresholds at
-  design review): the static chooses the invested. Stage 1 is universal
+  design review; built 2026-09-02 with placeholders, and the bio leg is
+  an AI screen, "does this read as a person describing themselves",
+  cached per bio text so it costs one call per rewrite, never per
+  login): the static chooses the invested. Stage 1 is universal
   on purpose (ambient, harmless, and the "did anyone else see that?"
   gossip works better when anyone might have). The gate is evaluated at
   session init (three cheap reads where the user row already loads) and
@@ -600,10 +607,15 @@ Sequencing, each phase testing something before paying for the next:
   like beat by beat (threshold reactions, frame corruption for watchers
   after the public flip), and the exact name of the "hide the static"
   setting.
-- **First-contact tuning.** The eligibility thresholds (bio length,
-  which settings count as touched, how much tenure), and the whisper
-  copy pool: the voiced lines need the same variety discipline as feed
-  templates, since a repeated whisper is a bug report, not a haunting.
+- **First-contact tuning.** The eligibility thresholds (built as
+  placeholders: 200 bio characters, 2 of a closed list of 11 deliberately
+  set keys, 7 days of lifetime connected time from the online-time
+  leaderboard's table rather than account age, since an account that
+  signed up and left is not invested; people will paste a generated bio to
+  clear the screen and that is fine, the gate measures investment, not
+  authorship), and the whisper copy pool: the voiced lines need the same
+  variety discipline as feed templates, since a repeated whisper is a
+  bug report, not a haunting.
 - **The voice never answers.** The invitation opens a real DM, and the
   natural human reply to a plea is to answer it; nothing listens on the
   voice's side. Decide deliberately at design review: a scripted

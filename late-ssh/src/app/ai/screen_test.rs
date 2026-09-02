@@ -81,3 +81,25 @@ async fn a_disabled_ai_service_yields_no_verdict_rather_than_an_allow() {
         TitleScreen::Unavailable
     );
 }
+
+#[test]
+fn a_bio_verdict_is_read_and_unreadable_json_is_no_verdict() {
+    assert_eq!(
+        parse_bio_screen(r#"{"passes": true, "reason": "talks about their work"}"#),
+        BioScreen::Passed
+    );
+    assert_eq!(
+        parse_bio_screen("```json\n{\"passes\": false, \"reason\": \"keyboard mash\"}\n```"),
+        BioScreen::Failed
+    );
+    // No verdict is not a pass and not a fail: the claim stays pending.
+    assert_eq!(parse_bio_screen("not json"), BioScreen::Unavailable);
+    assert_eq!(
+        parse_bio_screen(r#"{"reason": "no verdict"}"#),
+        BioScreen::Unavailable
+    );
+    assert_eq!(
+        parse_bio_screen(r#"{"passes": "yes"}"#),
+        BioScreen::Unavailable
+    );
+}

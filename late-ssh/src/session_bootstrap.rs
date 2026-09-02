@@ -422,6 +422,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
 
     let device = load_device_state(state, user_id, key_fingerprint.as_deref()).await;
 
+    let first_contact_gate =
+        crate::app::deadchannel::haunt::svc::bootstrap_gate(state, &user).await;
     SessionConfig {
         cols,
         rows,
@@ -557,7 +559,9 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         first_contact: crate::app::deadchannel::haunt::state::FirstContactMarks::from_settings(
             &user.settings,
         ),
-        haunt_enabled: state.haunt_enabled.clone(),
+        first_contact_gate,
+        app_flags_rx: state.app_flags.subscribe(),
+        app_flags: Some(state.app_flags.clone()),
         show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
         afk_users: state.afk_users.clone(),
         username_directory: Some(state.username_directory.clone()),

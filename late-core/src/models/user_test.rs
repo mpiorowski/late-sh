@@ -410,3 +410,256 @@ async fn friend_and_ignored_user_ids_reads_both_lists_from_one_row() {
         "the combined read must agree with the single-list helper"
     );
 }
+
+async fn create_first_contact_user(
+    client: &deadpool_postgres::Client,
+    settings: serde_json::Value,
+) -> User {
+    User::create(
+        client,
+        UserParams {
+            fingerprint: format!("fp-first-contact-{}", Uuid::now_v7()),
+            username: "haunted".to_string(),
+            settings,
+        },
+    )
+    .await
+    .expect("failed to create user")
+}
+
+#[tokio::test]
+async fn first_contact_hit_claim_enforces_both_caps_in_the_row() {
+    use crate::models::user::{FirstContactHitCaps, FirstContactHitClaim};
+    let (client, _test_db) = setup_db().await;
+    let user = create_first_contact_user(&client, json!({})).await;
+    let caps = FirstContactHitCaps { daily: 2, total: 3 };
+    let day1 = chrono::NaiveDate::from_ymd_opt(2026, 9, 2).unwrap();
+    let day2 = day1.succ_opt().unwrap();
+
+    // Two wins on day one, then the daily cap holds whatever the caller
+    // believes about its own session.
+    assert_eq!(
+        User::claim_first_contact_glitch_burst(&client, user.id, day1, caps)
+            .await
+            .unwrap(),
+        FirstContactHitClaim::Won { hits: 1 }
+    );
+    assert_eq!(
+        User::claim_first_contact_glitch_burst(&client, user.id, day1, caps)
+            .await
+            .unwrap(),
+        FirstContactHitClaim::Won { hits: 2 }
+    );
+    assert_eq!(
+        User::claim_first_contact_glitch_burst(&client, user.id, day1, caps)
+            .await
+            .unwrap(),
+        FirstContactHitClaim::Capped { hits: 2 }
+    );
+
+    // The day rolls inside the claim; the lifetime cap then closes it.
+    assert_eq!(
+        User::claim_first_contact_glitch_burst(&client, user.id, day2, caps)
+            .await
+            .unwrap(),
+        FirstContactHitClaim::Won { hits: 3 }
+    );
+    assert_eq!(
+        User::claim_first_contact_glitch_burst(&client, user.id, day2, caps)
+            .await
+            .unwrap(),
+        FirstContactHitClaim::Capped { hits: 3 }
+    );
+
+    // The name counter is independent, and the mirror read matches.
+    assert_eq!(
+        User::claim_first_contact_name_hit(&client, user.id, day2, caps)
+            .await
+            .unwrap(),
+        FirstContactHitClaim::Won { hits: 1 }
+    );
+    let settings = User::find_by_fingerprint(&client, &user.fingerprint)
+        .await
+        .unwrap()
+        .unwrap()
+        .settings;
+    assert_eq!(
+        crate::models::user::extract_first_contact_glitch_hits(&settings),
+        3
+    );
+    assert_eq!(
+        crate::models::user::extract_first_contact_name_hits(&settings),
+        1
+    );
+
+    // Reset wipes the chain and the day counters, so the claim wins again.
+    User::reset_first_contact(&client, user.id).await.unwrap();
+    assert_eq!(
+        User::claim_first_contact_glitch_burst(&client, user.id, day2, caps)
+            .await
+            .unwrap(),
+        FirstContactHitClaim::Won { hits: 1 }
+    );
+}
+
+#[tokio::test]
+async fn first_contact_whisper_claim_wins_once() {
+    let (client, _test_db) = setup_db().await;
+    let user = create_first_contact_user(&client, json!({})).await;
+    let at = chrono::Utc::now();
+
+    assert!(
+        User::claim_first_contact_whisper(&client, user.id, at)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !User::claim_first_contact_whisper(&client, user.id, at)
+            .await
+            .unwrap()
+    );
+    let settings = User::find_by_fingerprint(&client, &user.fingerprint)
+        .await
+        .unwrap()
+        .unwrap()
+        .settings;
+    assert_eq!(
+        crate::models::user::extract_first_contact_whisper_at(&settings)
+            .map(|stamp| stamp.timestamp()),
+        Some(at.timestamp())
+    );
+}
+
+#[tokio::test]
+async fn first_contact_bio_screen_is_claimed_once_per_text_and_retried_when_stale() {
+    use crate::models::user::{
+        FirstContactBioScreen, FirstContactBioVerdict, extract_first_contact_bio_screen,
+    };
+    let (client, _test_db) = setup_db().await;
+    let user = create_first_contact_user(&client, json!({})).await;
+    let now = chrono::Utc::now();
+    let retry_after = chrono::Duration::hours(24);
+
+    // First claim on a text wins; a racing second claim on the same text
+    // loses while the first is pending and fresh.
+    assert!(
+        User::claim_first_contact_bio_screen(&client, user.id, "h1", now, retry_after)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !User::claim_first_contact_bio_screen(&client, user.id, "h1", now, retry_after)
+            .await
+            .unwrap()
+    );
+
+    // A verdict lands only for the text on record.
+    assert!(
+        !User::set_first_contact_bio_verdict(
+            &client,
+            user.id,
+            "h0",
+            FirstContactBioVerdict::Passed,
+            now
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        User::set_first_contact_bio_verdict(
+            &client,
+            user.id,
+            "h1",
+            FirstContactBioVerdict::Failed,
+            now
+        )
+        .await
+        .unwrap()
+    );
+    let settings = User::find_by_fingerprint(&client, &user.fingerprint)
+        .await
+        .unwrap()
+        .unwrap()
+        .settings;
+    assert_eq!(
+        extract_first_contact_bio_screen(&settings),
+        Some(FirstContactBioScreen {
+            hash: "h1".to_string(),
+            verdict: FirstContactBioVerdict::Failed,
+            at: chrono::DateTime::parse_from_rfc3339(&now.to_rfc3339())
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        })
+    );
+
+    // A fresh failure is not retried; a day later it is. A rewritten bio
+    // (new hash) is screened at once.
+    assert!(
+        !User::claim_first_contact_bio_screen(&client, user.id, "h1", now, retry_after)
+            .await
+            .unwrap()
+    );
+    assert!(
+        User::claim_first_contact_bio_screen(
+            &client,
+            user.id,
+            "h1",
+            now + chrono::Duration::hours(25),
+            retry_after
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        User::claim_first_contact_bio_screen(&client, user.id, "h2", now, retry_after)
+            .await
+            .unwrap()
+    );
+
+    // A pass is final for that text, however old.
+    assert!(
+        User::set_first_contact_bio_verdict(
+            &client,
+            user.id,
+            "h2",
+            FirstContactBioVerdict::Passed,
+            now
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        !User::claim_first_contact_bio_screen(
+            &client,
+            user.id,
+            "h2",
+            now + chrono::Duration::days(400),
+            retry_after
+        )
+        .await
+        .unwrap()
+    );
+}
+
+#[test]
+fn touched_settings_count_only_deliberate_keys() {
+    use crate::models::user::count_touched_settings;
+    assert_eq!(count_touched_settings(&json!({})), 0);
+    // Keys every account gets written by default do not count.
+    assert_eq!(
+        count_touched_settings(&json!({
+            "audio_source": "radio",
+            "clubhouse_tutorial_done": true,
+            "first_contact_glitch_hits": 3
+        })),
+        0
+    );
+    assert_eq!(
+        count_touched_settings(&json!({
+            "theme_id": "night",
+            "country": "PL",
+            "timezone": null
+        })),
+        2
+    );
+}

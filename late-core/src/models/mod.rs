@@ -1,4 +1,5 @@
 pub mod account_link;
+pub mod app_flag;
 pub mod arcade_handle;
 #[cfg(test)]
 mod arcade_handle_test;

@@ -402,6 +402,20 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
     })
 }
 
+/// One user's lifetime connected time, as last flushed. Zero for a user
+/// the tracker has never checkpointed. The first-contact eligibility gate
+/// reads this at session bootstrap (its "tenure" leg is time spent here,
+/// not account age).
+pub async fn total_online_milliseconds(client: &Client, user_id: Uuid) -> Result<i64> {
+    let row = client
+        .query_opt(
+            "SELECT total_milliseconds FROM user_online_time WHERE user_id = $1",
+            &[&user_id],
+        )
+        .await?;
+    Ok(row.map(|row| row.get("total_milliseconds")).unwrap_or(0))
+}
+
 /// Adds one process checkpoint of connected time for every user in a single
 /// statement. `flush_id` makes retrying the same uncertain statement
 /// idempotent: the service never advances to another batch until this one is

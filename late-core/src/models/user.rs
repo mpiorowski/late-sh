@@ -383,6 +383,11 @@ const FIRST_CONTACT_GLITCH_HITS_KEY: &str = "first_contact_glitch_hits";
 const FIRST_CONTACT_NAME_HITS_KEY: &str = "first_contact_name_hits";
 const FIRST_CONTACT_WHISPER_AT_KEY: &str = "first_contact_whisper_at";
 const FIRST_CONTACT_INVITED_AT_KEY: &str = "first_contact_invited_at";
+const FIRST_CONTACT_GLITCH_DAY_KEY: &str = "first_contact_glitch_day";
+const FIRST_CONTACT_GLITCH_DAY_HITS_KEY: &str = "first_contact_glitch_day_hits";
+const FIRST_CONTACT_NAME_DAY_KEY: &str = "first_contact_name_day";
+const FIRST_CONTACT_NAME_DAY_HITS_KEY: &str = "first_contact_name_day_hits";
+const FIRST_CONTACT_BIO_KEY: &str = "first_contact_bio";
 const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
 const FAVORITE_THEME_IDS_KEY: &str = "favorite_theme_ids";
 const BIO_KEY: &str = "bio";
@@ -955,28 +960,203 @@ impl User {
         Ok(())
     }
 
-    /// Stamp when the first-contact splash whisper was delivered (stage 3).
-    /// It fires exactly once per person; the stamp is also what schedules
-    /// the stage-4 invitation some days later.
-    pub async fn set_first_contact_whisper_at(
+    /// Claim one capped first-contact clock-glitch burst (stage 1). The
+    /// row is the only judge of both caps, so two devices on two replicas
+    /// cannot double a day: the increment lands only while the lifetime
+    /// counter is under `caps.total` and today's counter under
+    /// `caps.daily`, and the day rolls inside the same statement.
+    pub async fn claim_first_contact_glitch_burst(
+        client: &Client,
+        user_id: Uuid,
+        today: chrono::NaiveDate,
+        caps: FirstContactHitCaps,
+    ) -> Result<FirstContactHitClaim> {
+        Self::claim_first_contact_hit(
+            client,
+            FirstContactHitKeys {
+                hits: FIRST_CONTACT_GLITCH_HITS_KEY,
+                day: FIRST_CONTACT_GLITCH_DAY_KEY,
+                day_hits: FIRST_CONTACT_GLITCH_DAY_HITS_KEY,
+            },
+            user_id,
+            today,
+            caps,
+        )
+        .await
+    }
+
+    /// Claim one capped first-contact name-flicker hit (stage 2). Same
+    /// contract as [`User::claim_first_contact_glitch_burst`].
+    pub async fn claim_first_contact_name_hit(
+        client: &Client,
+        user_id: Uuid,
+        today: chrono::NaiveDate,
+        caps: FirstContactHitCaps,
+    ) -> Result<FirstContactHitClaim> {
+        Self::claim_first_contact_hit(
+            client,
+            FirstContactHitKeys {
+                hits: FIRST_CONTACT_NAME_HITS_KEY,
+                day: FIRST_CONTACT_NAME_DAY_KEY,
+                day_hits: FIRST_CONTACT_NAME_DAY_HITS_KEY,
+            },
+            user_id,
+            today,
+            caps,
+        )
+        .await
+    }
+
+    async fn claim_first_contact_hit(
+        client: &Client,
+        keys: FirstContactHitKeys,
+        user_id: Uuid,
+        today: chrono::NaiveDate,
+        caps: FirstContactHitCaps,
+    ) -> Result<FirstContactHitClaim> {
+        let today = today.format("%Y-%m-%d").to_string();
+        let total_cap = i32::try_from(caps.total).unwrap_or(i32::MAX);
+        let daily_cap = i32::try_from(caps.daily).unwrap_or(i32::MAX);
+        let won = client
+            .query_opt(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object(
+                         $1::text, COALESCE((settings->>$1)::int, 0) + 1,
+                         $2::text, $4::text,
+                         $3::text, CASE WHEN settings->>$2 = $4
+                                        THEN COALESCE((settings->>$3)::int, 0) + 1
+                                        ELSE 1 END
+                     ),
+                     updated = current_timestamp
+                 WHERE id = $5
+                   AND COALESCE((settings->>$1)::int, 0) < $6
+                   AND (settings->>$2 IS DISTINCT FROM $4
+                        OR COALESCE((settings->>$3)::int, 0) < $7)
+                 RETURNING (settings->>$1)::int AS hits",
+                &[
+                    &keys.hits,
+                    &keys.day,
+                    &keys.day_hits,
+                    &today,
+                    &user_id,
+                    &total_cap,
+                    &daily_cap,
+                ],
+            )
+            .await?;
+        if let Some(row) = won {
+            let hits: i32 = row.get("hits");
+            return Ok(FirstContactHitClaim::Won {
+                hits: u32::try_from(hits).unwrap_or(0),
+            });
+        }
+        let row = client
+            .query_opt(
+                "SELECT COALESCE((settings->>$1)::int, 0) AS hits FROM users WHERE id = $2",
+                &[&keys.hits, &user_id],
+            )
+            .await?;
+        let Some(row) = row else {
+            bail!("user not found");
+        };
+        let hits: i32 = row.get("hits");
+        Ok(FirstContactHitClaim::Capped {
+            hits: u32::try_from(hits).unwrap_or(0),
+        })
+    }
+
+    /// Claim the once-ever delivery of the first-contact splash whisper
+    /// (stage 3). Conditional on the stamp being absent, so two devices
+    /// that both played the held door leave exactly one stamp; the stamp
+    /// is also what schedules the stage-4 invitation. Returns whether
+    /// this caller won.
+    pub async fn claim_first_contact_whisper(
         client: &Client,
         user_id: Uuid,
         at: DateTime<Utc>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let value = at.to_rfc3339();
         let updated = client
             .execute(
                 "UPDATE users
                  SET settings = settings || jsonb_build_object($1::text, $2::text),
                      updated = current_timestamp
-                 WHERE id = $3",
+                 WHERE id = $3 AND NOT (settings ? $1)",
                 &[&FIRST_CONTACT_WHISPER_AT_KEY, &value, &user_id],
             )
             .await?;
-        if updated == 0 {
-            bail!("user not found");
-        }
-        Ok(())
+        Ok(updated == 1)
+    }
+
+    /// Claim the right to screen this user's bio (the first-contact
+    /// eligibility gate). The verdict is keyed to a hash of the bio text:
+    /// the claim wins when no verdict exists for this hash, or when the one
+    /// that exists is not a pass and is older than `retry_after` (a pending
+    /// claim whose replica died, or a failure worth one more look). A won
+    /// claim stamps a pending verdict, so racing sessions on any number of
+    /// replicas spend exactly one AI call per bio text. Returns whether
+    /// this caller won.
+    pub async fn claim_first_contact_bio_screen(
+        client: &Client,
+        user_id: Uuid,
+        hash: &str,
+        now: DateTime<Utc>,
+        retry_after: chrono::Duration,
+    ) -> Result<bool> {
+        let stale_before = now - retry_after;
+        let pending = json!({
+            "hash": hash,
+            "verdict": FirstContactBioVerdict::Pending.as_str(),
+            "at": now.to_rfc3339(),
+        });
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::jsonb),
+                     updated = current_timestamp
+                 WHERE id = $3
+                   AND (settings->$1->>'hash' IS DISTINCT FROM $4
+                        OR (settings->$1->>'verdict' <> $5
+                            AND (settings->$1->>'at')::timestamptz < $6))",
+                &[
+                    &FIRST_CONTACT_BIO_KEY,
+                    &pending,
+                    &user_id,
+                    &hash,
+                    &FirstContactBioVerdict::Passed.as_str(),
+                    &stale_before,
+                ],
+            )
+            .await?;
+        Ok(updated == 1)
+    }
+
+    /// Record the screen's verdict for the bio text `hash` names. Lands only
+    /// while that text is still the one on record: a bio rewritten during
+    /// the call gets no stale verdict, and the next session claims a fresh
+    /// screen for it. Returns whether the verdict landed.
+    pub async fn set_first_contact_bio_verdict(
+        client: &Client,
+        user_id: Uuid,
+        hash: &str,
+        verdict: FirstContactBioVerdict,
+        at: DateTime<Utc>,
+    ) -> Result<bool> {
+        let value = json!({
+            "hash": hash,
+            "verdict": verdict.as_str(),
+            "at": at.to_rfc3339(),
+        });
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::jsonb),
+                     updated = current_timestamp
+                 WHERE id = $3 AND settings->$1->>'hash' = $4",
+                &[&FIRST_CONTACT_BIO_KEY, &value, &user_id, &hash],
+            )
+            .await?;
+        Ok(updated == 1)
     }
 
     /// Claim the right to send this user their one first-contact invitation
@@ -1021,20 +1201,28 @@ impl User {
         Ok(())
     }
 
-    /// Wipe every first-contact mark (the admin `/haunt reset` test hook):
-    /// glitch hits, name hits, the whisper stamp, and the invitation stamp.
+    /// Wipe every first-contact chain mark (the admin `/haunt reset` test
+    /// hook): glitch hits, name hits, both daily counters, the whisper
+    /// stamp, and the invitation stamp. The bio screen verdict stays: it is
+    /// a cache of a paid check on the bio text, not a rung of the chain.
     pub async fn reset_first_contact(client: &Client, user_id: Uuid) -> Result<()> {
         let updated = client
             .execute(
                 "UPDATE users
-                 SET settings = settings - $1 - $2 - $3 - $4,
+                 SET settings = settings - $1::text[],
                      updated = current_timestamp
-                 WHERE id = $5",
+                 WHERE id = $2",
                 &[
-                    &FIRST_CONTACT_GLITCH_HITS_KEY,
-                    &FIRST_CONTACT_NAME_HITS_KEY,
-                    &FIRST_CONTACT_WHISPER_AT_KEY,
-                    &FIRST_CONTACT_INVITED_AT_KEY,
+                    &vec![
+                        FIRST_CONTACT_GLITCH_HITS_KEY,
+                        FIRST_CONTACT_NAME_HITS_KEY,
+                        FIRST_CONTACT_WHISPER_AT_KEY,
+                        FIRST_CONTACT_INVITED_AT_KEY,
+                        FIRST_CONTACT_GLITCH_DAY_KEY,
+                        FIRST_CONTACT_GLITCH_DAY_HITS_KEY,
+                        FIRST_CONTACT_NAME_DAY_KEY,
+                        FIRST_CONTACT_NAME_DAY_HITS_KEY,
+                    ],
                     &user_id,
                 ],
             )
@@ -1637,6 +1825,109 @@ pub fn extract_first_contact_whisper_at(settings: &Value) -> Option<DateTime<Utc
 /// still ahead.
 pub fn extract_first_contact_invited_at(settings: &Value) -> Option<DateTime<Utc>> {
     extract_rfc3339(settings, FIRST_CONTACT_INVITED_AT_KEY)
+}
+
+/// The keys a person only ever touches on purpose: the "touched settings"
+/// leg of the first-contact eligibility gate counts how many of these are
+/// present. Closed list; a key that every account gets written by default
+/// (audio source, tutorial done, the first-contact marks) does not belong
+/// here, since it would measure nothing.
+const TOUCHED_SETTINGS_KEYS: [&str; 11] = [
+    THEME_ID_KEY,
+    COUNTRY_KEY,
+    TIMEZONE_KEY,
+    IDE_KEY,
+    TERMINAL_KEY,
+    OS_KEY,
+    RIGHT_SIDEBAR_COMPONENTS_KEY,
+    RIGHT_SIDEBAR_MODE_KEY,
+    NOTIFY_KINDS_KEY,
+    TRANSLATE_TO_KEY,
+    FAVORITE_THEME_IDS_KEY,
+];
+
+/// How many deliberately-set settings this account carries (see
+/// [`TOUCHED_SETTINGS_KEYS`]).
+pub fn count_touched_settings(settings: &Value) -> usize {
+    TOUCHED_SETTINGS_KEYS
+        .iter()
+        .filter(|key| settings.get(**key).is_some_and(|value| !value.is_null()))
+        .count()
+}
+
+/// The screen's standing on one bio text, keyed by a hash of that text so
+/// a rewritten bio never inherits a verdict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirstContactBioVerdict {
+    /// A session claimed the screen and the call is (or was) in flight.
+    Pending,
+    Passed,
+    Failed,
+}
+
+impl FirstContactBioVerdict {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "pending" => Some(Self::Pending),
+            "passed" => Some(Self::Passed),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// The persisted bio screen: which text it judged, what it said, when.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FirstContactBioScreen {
+    pub hash: String,
+    pub verdict: FirstContactBioVerdict,
+    pub at: DateTime<Utc>,
+}
+
+/// The bio screen on record, or `None` when no bio was ever screened (or
+/// the record is unreadable, which the gate treats the same way: screen
+/// again).
+pub fn extract_first_contact_bio_screen(settings: &Value) -> Option<FirstContactBioScreen> {
+    let record = settings.get(FIRST_CONTACT_BIO_KEY)?;
+    let hash = record.get("hash")?.as_str()?.to_string();
+    let verdict = FirstContactBioVerdict::from_key(record.get("verdict")?.as_str()?)?;
+    let at = DateTime::parse_from_rfc3339(record.get("at")?.as_str()?)
+        .ok()?
+        .with_timezone(&Utc);
+    Some(FirstContactBioScreen { hash, verdict, at })
+}
+
+/// The two caps a first-contact hit claim enforces in the row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FirstContactHitCaps {
+    /// Hits allowed per UTC day.
+    pub daily: u32,
+    /// Hits allowed ever.
+    pub total: u32,
+}
+
+/// What a capped first-contact hit claim decided. Both carry the lifetime
+/// counter after the claim, so the caller's mirror stays honest either way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirstContactHitClaim {
+    Won { hits: u32 },
+    Capped { hits: u32 },
+}
+
+/// The three settings keys one capped counter lives in.
+#[derive(Clone, Copy)]
+struct FirstContactHitKeys {
+    hits: &'static str,
+    day: &'static str,
+    day_hits: &'static str,
 }
 
 /// Tweak: show text labels instead of flag emoji in the shop Flags tab for

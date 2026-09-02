@@ -1,10 +1,13 @@
-//! Screening for text a player writes and everyone else has to read.
+//! Screening for text a player writes.
 //!
-//! Today that is the Shop's custom title (SHOP.md phase 1b): 20 characters the
-//! buyer types and then wears after their name in every message they send. The
-//! call is ungrounded and schema-enforced (`AiService::generate_json`), so the
-//! verdict comes back as JSON in a shape Gemini guarantees, the same trade the
-//! bartender's order flow makes.
+//! Two screens live here. The Shop's custom title (SHOP.md phase 1b): 20
+//! characters the buyer types and then wears after their name in every
+//! message they send. And the profile bio, for first contact's eligibility
+//! gate (GAME.md, "the static chooses the invested"): does it read as a real
+//! person describing themselves, or as filler typed to clear a length bar.
+//! Both calls are ungrounded and schema-enforced (`AiService::generate_json`),
+//! so the verdict comes back as JSON in a shape Gemini guarantees, the same
+//! trade the bartender's order flow makes.
 //!
 //! Two rules govern this module, and both point the same way:
 //!
@@ -153,6 +156,113 @@ fn strip_code_fence(raw: &str) -> &str {
     };
     let rest = rest.strip_prefix("json").unwrap_or(rest);
     rest.trim().strip_suffix("```").unwrap_or(rest).trim()
+}
+
+/// What the screen made of a profile bio. Unlike the title screen there is
+/// no buyer waiting and no text to refuse: the verdict is cached on the
+/// user row and only ever decides whether the haunting goes past stage 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BioScreen {
+    /// Reads as a person. The gate's bio leg passes.
+    Passed,
+    /// Reads as filler, mash, or a pasted wall. Retried after a day, since
+    /// the person may rewrite it and the model may be wrong.
+    Failed,
+    /// No verdict exists: AI is switched off, or the call came back with
+    /// nothing usable. The caller leaves its claim pending; the gate treats
+    /// it as not passed.
+    Unavailable,
+}
+
+/// Nobody is waiting on this (it runs in the background of a login), so it
+/// can outlast the title screen's budget without holding anyone up.
+const BIO_SCREEN_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Bios are bounded upstream by the settings modal, but the prompt is the
+/// last line: a paste of a novel is capped before it becomes a bill.
+const BIO_SCREEN_MAX_CHARS: usize = 2_000;
+
+const BIO_SCREEN_PERSONA: &str = "You screen profile bios for a late-night terminal chat community of computer people. \
+    A bio is a few sentences a member wrote about themselves, shown on their profile. \
+    You are not judging taste, grammar, language, or length: bios in any language, terse bios, weird bios, and joke bios are all fine.";
+
+/// Screen one bio. `Err` means the call itself broke (network, API error)
+/// and is the caller's to log; every other outcome is a verdict or its
+/// absence.
+pub async fn screen_bio(ai: &AiService, bio: &str) -> Result<BioScreen> {
+    if !ai.is_enabled() {
+        return Ok(BioScreen::Unavailable);
+    }
+    let bio: String = bio.chars().take(BIO_SCREEN_MAX_CHARS).collect();
+
+    let system_prompt = format!(
+        "{BIO_SCREEN_PERSONA}\n\n\
+        PASS when the text reads as a real person describing themselves: what they do, what they like, \
+        where they are from, how they feel, what they are looking for, in-jokes, opinions, a story, a manifesto, \
+        even if it is short on detail or oddly written.\n\
+        FAIL only when it is plainly not that: keyboard mash or random characters; one word or phrase repeated to fill space; \
+        lorem ipsum or template text; a pasted block that is clearly not about the writer (a license, a man page, source code, \
+        song lyrics, a news article); an advertisement or a link dump; or a bio that is only a list of unrelated words.\n\n\
+        When it is borderline, pass it. This is a bar, not a border checkpoint.\n\n\
+        Return a verdict as JSON. \"reason\" is one short phrase (under 12 words) naming what decided it."
+    );
+    let prompt = format!("Bio to screen, between the markers:\n<<<{bio}>>>");
+
+    let reply = match tokio::time::timeout(
+        BIO_SCREEN_TIMEOUT,
+        ai.generate_json(SCREEN_MODEL, &system_prompt, &prompt, bio_screen_schema()),
+    )
+    .await
+    {
+        Ok(Ok(Some(reply))) => reply,
+        Ok(Ok(None)) => return Ok(BioScreen::Unavailable),
+        Ok(Err(error)) => return Err(error),
+        Err(_) => return Err(anyhow::anyhow!("bio screen timed out")),
+    };
+
+    Ok(parse_bio_screen(&reply))
+}
+
+fn bio_screen_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "passes": { "type": "boolean" },
+            "reason": { "type": "string" }
+        },
+        "required": ["passes", "reason"],
+        "propertyOrdering": ["passes", "reason"]
+    })
+}
+
+#[derive(serde::Deserialize)]
+struct BioScreenRaw {
+    passes: bool,
+    reason: Option<String>,
+}
+
+/// Turn the model's JSON into a verdict. Unreadable JSON is no verdict at
+/// all (the claim stays pending and is retried after the stale window),
+/// never a pass: a gate nobody could read must not open.
+fn parse_bio_screen(raw: &str) -> BioScreen {
+    let cleaned = strip_code_fence(raw);
+    match serde_json::from_str::<BioScreenRaw>(cleaned) {
+        Ok(verdict) => {
+            tracing::info!(
+                passes = verdict.passes,
+                reason = verdict.reason.as_deref().unwrap_or(""),
+                "bio screen verdict"
+            );
+            match verdict.passes {
+                true => BioScreen::Passed,
+                false => BioScreen::Failed,
+            }
+        }
+        Err(error) => {
+            tracing::warn!(error = ?error, "bio screen returned unreadable json");
+            BioScreen::Unavailable
+        }
+    }
 }
 
 #[cfg(test)]
