@@ -106,5 +106,8 @@ fn every_award_is_listed() {
             award.badge()
         );
     }
-    assert!(!rendered.contains("more"), "badges were truncated: {rendered}");
+    assert!(
+        !rendered.contains("more"),
+        "badges were truncated: {rendered}"
+    );
 }
