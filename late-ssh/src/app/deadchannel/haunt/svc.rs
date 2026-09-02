@@ -14,8 +14,8 @@ use tracing::{Instrument, info_span};
 use super::state::{
     BIO_RESCREEN_AFTER_HOURS, BioStanding, ClockGlitch, FirstContactGate, FirstContactMarks,
     GLITCH_TOTAL_CAP, GlitchTick, HauntCommand, HauntState, HitStage, INVITE_DELAY_DAYS,
-    NAME_TOTAL_CAP, NameFlicker, NameRoll, PendingClaim, PendingFlagWrite, WhisperState,
-    WhisperTick, bio_hash, glitch_caps, name_caps,
+    NAME_TOTAL_CAP, NameFlicker, NameRoll, PendingClaim, PendingFlagWrite, WHISPER_GAP_HOURS,
+    WHISPER_TOTAL_CAP, WhisperState, WhisperTick, bio_hash, glitch_caps, name_caps,
 };
 use crate::app::ai::screen::{BioScreen, screen_bio};
 use crate::app::ai::svc::AiService;
@@ -68,7 +68,8 @@ pub(crate) async fn bootstrap_gate(state: &State, user: &User) -> FirstContactGa
 /// nonrenewable resource: with the flags unread (`None`) nothing arms.
 /// The chain order is the spec: three clock bursts open stage 2, the
 /// third name hit arms the stage-3 whisper (it fires on the next fresh
-/// connect), and the delivered whisper schedules the stage-4 invitation.
+/// connect, then once more on a later day), and the last delivered
+/// whisper schedules the stage-4 invitation.
 /// Dice are per session on purpose: the same person on two evenings, or
 /// two people side by side, roll differently.
 pub(crate) fn arm(
@@ -83,9 +84,10 @@ pub(crate) fn arm(
     let live = snapshot.is_some_and(|flags| flags.haunt_live);
     let stage1 = enabled && (is_admin || live);
     let chosen = stage1 && (gate.passes() || marks.name_hits > 0);
+    let whisper_armed =
+        chosen && marks.name_hits >= NAME_TOTAL_CAP && marks.whisper_due(chrono::Utc::now());
     HauntState {
-        whisper: (chosen && marks.whisper_at.is_none() && marks.name_hits >= NAME_TOTAL_CAP)
-            .then(|| WhisperState::for_user(user_id)),
+        whisper: whisper_armed.then(|| WhisperState::for_user(user_id, marks.whisper_hits)),
         clock_glitch: stage1.then(|| ClockGlitch::new(session_seed(user_id), 0, marks.glitch_hits)),
         name_flicker: chosen.then(|| NameFlicker::new(session_seed(user_id), marks.name_hits)),
         marks,
@@ -240,9 +242,9 @@ fn tick_flag_writes(app: &mut App) -> bool {
 }
 
 /// Drive the armed whisper for one splash tick. Release (natural, hard
-/// cap, or kill switch) closes the splash here and claims the once-ever
-/// mark only on a delivered line; the stamp is also what starts the
-/// invitation clock.
+/// cap, or kill switch) closes the splash here and claims one capped
+/// delivery only on a delivered line; the last stamp is also what starts
+/// the invitation clock.
 fn tick_splash_door(app: &mut App) -> bool {
     let enabled = app.haunt.enabled();
     let Some(whisper) = app.haunt.whisper.as_mut() else {
@@ -258,12 +260,16 @@ fn tick_splash_door(app: &mut App) -> bool {
             app.vt_input.reset();
             if delivered {
                 let now = chrono::Utc::now();
+                app.haunt.marks.whisper_hits = app.haunt.marks.whisper_hits.saturating_add(1);
                 app.haunt.marks.whisper_at = Some(now);
-                app.profile_state
-                    .service()
-                    .claim_first_contact_whisper(app.user_id, now);
+                app.profile_state.service().claim_first_contact_whisper(
+                    app.user_id,
+                    now,
+                    chrono::Duration::hours(WHISPER_GAP_HOURS),
+                    WHISPER_TOTAL_CAP,
+                );
                 metrics::record_first_contact_beat(FirstContactBeat::WhisperDelivered);
-                tracing::info!(user_id = %app.user_id, "first contact whisper delivered");
+                tracing::info!(user_id = %app.user_id, hits = app.haunt.marks.whisper_hits, "first contact whisper delivered");
             }
         }
     }
@@ -364,13 +370,17 @@ fn tick_name_flicker(app: &mut App) -> bool {
     changed
 }
 
-/// The stage-4 clock: some days after the delivered whisper, the game's
-/// first voice sends its one persistent DM. Self-serve on purpose (the
+/// The stage-4 clock: some days after the last delivered whisper, the
+/// game's first voice sends its one persistent DM. Self-serve on purpose (the
 /// chosen one's own session notices), so there is no cross-user sweep;
 /// the conditional settings claim in the send task keeps two devices
 /// from double-sending.
 fn tick_invitation(app: &mut App) {
-    if !app.haunt.chosen || app.haunt.marks.invited_at.is_some() || !app.haunt.enabled() {
+    if !app.haunt.chosen
+        || app.haunt.marks.invited_at.is_some()
+        || !app.haunt.marks.whispers_spent()
+        || !app.haunt.enabled()
+    {
         return;
     }
     let Some(whisper_at) = app.haunt.marks.whisper_at else {
@@ -409,11 +419,16 @@ pub(crate) fn note_splash_input(app: &mut App) -> bool {
     true
 }
 
-/// Re-run the splash with the whisper armed, ignoring the marks. The
-/// `/haunt replay` admin test hook (also used by tests); a completed
-/// replay still re-stamps delivery through the normal release path.
+/// Re-run the splash with the whisper armed, ignoring the due rule (the
+/// pool still follows the marks, so a replay after the first door speaks
+/// the second line). The `/haunt replay` admin test hook (also used by
+/// tests); a completed replay still claims delivery through the normal
+/// release path, where the row's cap and gap decide whether it counts.
 pub(crate) fn replay_whisper(app: &mut App) {
-    app.haunt.whisper = Some(WhisperState::for_user(app.user_id));
+    app.haunt.whisper = Some(WhisperState::for_user(
+        app.user_id,
+        app.haunt.marks.whisper_hits,
+    ));
     app.show_splash = true;
     app.splash_ticks = 0;
 }
@@ -543,10 +558,10 @@ fn tick_commands(app: &mut App) -> bool {
                     format!("glitch in ~{minutes}m")
                 }
             };
-            let whisper = match app.haunt.marks.whisper_at {
-                Some(_) => "whisper delivered",
-                None => "whisper pending",
-            };
+            let whisper = format!(
+                "whispers {}/{WHISPER_TOTAL_CAP}",
+                app.haunt.marks.whisper_hits.min(WHISPER_TOTAL_CAP)
+            );
             let invite = match app.haunt.marks.invited_at {
                 Some(_) => "invited",
                 None => "invite pending",
@@ -648,6 +663,7 @@ fn tick_commands(app: &mut App) -> bool {
             app.haunt.marks = FirstContactMarks {
                 glitch_hits: 0,
                 name_hits: 0,
+                whisper_hits: 0,
                 whisper_at: None,
                 invited_at: None,
             };

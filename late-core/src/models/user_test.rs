@@ -503,20 +503,54 @@ async fn first_contact_hit_claim_enforces_both_caps_in_the_row() {
 }
 
 #[tokio::test]
-async fn first_contact_whisper_claim_wins_once() {
+async fn first_contact_whisper_claim_wins_up_to_the_cap_a_gap_apart() {
     let (client, _test_db) = setup_db().await;
     let user = create_first_contact_user(&client, json!({})).await;
     let at = chrono::Utc::now();
+    let gap = chrono::Duration::hours(24);
+    let cap = 2;
 
+    // The first delivery wins; a racing second device in the same window
+    // loses, and so does the next evening's connect inside the gap.
     assert!(
-        User::claim_first_contact_whisper(&client, user.id, at)
+        User::claim_first_contact_whisper(&client, user.id, at, gap, cap)
             .await
             .unwrap()
     );
     assert!(
-        !User::claim_first_contact_whisper(&client, user.id, at)
+        !User::claim_first_contact_whisper(&client, user.id, at, gap, cap)
             .await
             .unwrap()
+    );
+    assert!(
+        !User::claim_first_contact_whisper(
+            &client,
+            user.id,
+            at + chrono::Duration::hours(23),
+            gap,
+            cap
+        )
+        .await
+        .unwrap()
+    );
+
+    // A day later the second one lands; the cap then closes the door.
+    let later = at + chrono::Duration::hours(25);
+    assert!(
+        User::claim_first_contact_whisper(&client, user.id, later, gap, cap)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !User::claim_first_contact_whisper(
+            &client,
+            user.id,
+            later + chrono::Duration::days(30),
+            gap,
+            cap
+        )
+        .await
+        .unwrap()
     );
     let settings = User::find_by_fingerprint(&client, &user.fingerprint)
         .await
@@ -524,9 +558,21 @@ async fn first_contact_whisper_claim_wins_once() {
         .unwrap()
         .settings;
     assert_eq!(
+        crate::models::user::extract_first_contact_whisper_hits(&settings),
+        2
+    );
+    assert_eq!(
         crate::models::user::extract_first_contact_whisper_at(&settings)
             .map(|stamp| stamp.timestamp()),
-        Some(at.timestamp())
+        Some(later.timestamp())
+    );
+
+    // Reset wipes the counter and the stamp, so the door opens again.
+    User::reset_first_contact(&client, user.id).await.unwrap();
+    assert!(
+        User::claim_first_contact_whisper(&client, user.id, at, gap, cap)
+            .await
+            .unwrap()
     );
 }
 

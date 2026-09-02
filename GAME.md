@@ -366,12 +366,16 @@ design review before the fuse is lit.
      machinery. Thematic payoff: when the stage-3 whisper says the
      static knows your name, it is describing what already happened.
   3. **The whisper (the held door).** Delivered on the splash screen,
-     once per person ever: this one time it does not skip. Triggered by
-     the chain, not the calendar: the third stage-2 hit arms it (the
-     per-user counter), and it fires on the armed user's next fresh
-     connect, so
+     twice per person ever and never the same line twice: these two
+     times it does not skip. Triggered by the chain, not the calendar:
+     the third stage-2 hit arms it (the per-user counter), and it fires
+     on the armed user's next fresh connect, so
      the beat is flickers one evening, then the door holds when they
-     come back: the haunting follows you home. The splash is
+     come back: the haunting follows you home. A day or more later the
+     door holds again with a harder line (the first pool: the static
+     noticed you; the second: "something is trying to break in. do you
+     see it?"), which stretches the wait before the DM and turns one
+     jump-scare into a pattern. The splash is
      the liminal space (the doorway between outside and inside the
      machine), inherently private and per-session, so the whisper
      touches no chat surface at all. The load-bearing mechanic:
@@ -386,7 +390,7 @@ design review before the fuse is lit.
      still no game to play.
   4. **The invitation (decided 2026-08-31: the whole game is opt-in).**
      Not a breach: no game ever lands on anyone unasked. Some days
-     after the held door, the contact goes real: a DM from the game's
+     after the second held door, the contact goes real: a DM from the game's
      first voice, a character calling for help from the other side, not
      a system announcing a feature (name and copy at design review; a
      plea beats a pitch, it makes the reader the protagonist). It rides

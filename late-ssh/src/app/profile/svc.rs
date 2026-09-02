@@ -342,25 +342,31 @@ impl ProfileService {
         );
     }
 
-    /// Fire-and-forget: claim the once-ever delivery stamp of the
-    /// first-contact splash whisper. A lost claim means another device
-    /// played the held door in the same window; it is logged, since the
-    /// whisper is meant to be seen once, and there is nothing to undo. A
-    /// failure is only logged: worst case the whisper plays once more next
-    /// session.
-    pub fn claim_first_contact_whisper(&self, user_id: Uuid, at: chrono::DateTime<chrono::Utc>) {
+    /// Fire-and-forget: claim one capped delivery of the first-contact
+    /// splash whisper. A lost claim means another device played the held
+    /// door in the same window, or the row's gap had not passed; it is
+    /// logged, since each whisper is meant to be seen once, and there is
+    /// nothing to undo. A failure is only logged: worst case the whisper
+    /// plays once more next session.
+    pub fn claim_first_contact_whisper(
+        &self,
+        user_id: Uuid,
+        at: chrono::DateTime<chrono::Utc>,
+        gap: chrono::Duration,
+        cap: u32,
+    ) {
         let service = self.clone();
         tokio::spawn(
             async move {
                 let result = async {
                     let client = service.db.get().await?;
-                    User::claim_first_contact_whisper(&client, user_id, at).await
+                    User::claim_first_contact_whisper(&client, user_id, at, gap, cap).await
                 }
                 .await;
                 match result {
                     Ok(true) => {}
                     Ok(false) => {
-                        tracing::warn!(user_id = %user_id, "first contact whisper double-played: stamp already set");
+                        tracing::warn!(user_id = %user_id, "first contact whisper played but the row refused the mark: double-play, gap, or cap");
                     }
                     Err(e) => {
                         tracing::warn!(error = ?e, "failed to persist first contact whisper stamp");

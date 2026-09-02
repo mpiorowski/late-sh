@@ -14,7 +14,7 @@ fn hold_through(state: &mut WhisperState, from: usize, to: usize) {
 
 #[test]
 fn natural_delivery_without_input() {
-    let mut state = WhisperState::with_seed(0);
+    let mut state = WhisperState::with_seed(0, 0);
     let line_len = state.line().chars().count();
 
     // Held until the answer beat, then the line types itself.
@@ -64,8 +64,41 @@ fn natural_delivery_without_input() {
 }
 
 #[test]
+fn the_second_door_speaks_from_its_own_pool_and_the_marks_space_the_two_apart() {
+    use chrono::TimeZone;
+
+    // The pool follows how many whispers have already played, never the
+    // seed alone: one person hears two different lines.
+    let first = WhisperState::with_seed(0, 0);
+    let second = WhisperState::with_seed(0, 1);
+    assert_eq!(first.line(), WHISPER_LINES[0]);
+    assert_eq!(second.line(), WHISPER_LINES_SECOND[0]);
+    assert!(!WHISPER_LINES.contains(&second.line()));
+
+    // Due, a gap, the cap.
+    let now = Utc.with_ymd_and_hms(2026, 9, 2, 22, 0, 0).unwrap();
+    let marks = |whisper_hits: u32, whisper_at: Option<DateTime<Utc>>| FirstContactMarks {
+        glitch_hits: GLITCH_TOTAL_CAP,
+        name_hits: NAME_TOTAL_CAP,
+        whisper_hits,
+        whisper_at,
+        invited_at: None,
+    };
+    let never = marks(0, None);
+    assert!(never.whisper_due(now));
+    assert!(!never.whispers_spent());
+    let tonight = marks(1, Some(now - chrono::Duration::hours(WHISPER_GAP_HOURS - 1)));
+    assert!(!tonight.whisper_due(now));
+    let later_day = marks(1, Some(now - chrono::Duration::hours(WHISPER_GAP_HOURS)));
+    assert!(later_day.whisper_due(now));
+    let spent = marks(WHISPER_TOTAL_CAP, Some(now - chrono::Duration::days(30)));
+    assert!(!spent.whisper_due(now));
+    assert!(spent.whispers_spent());
+}
+
+#[test]
 fn input_answers_early_and_never_skips() {
-    let mut state = WhisperState::with_seed(3);
+    let mut state = WhisperState::with_seed(3, 0);
     let line_len = state.line().chars().count();
 
     // Esc at tick 20: the line starts in answer, the static surges, the
@@ -107,7 +140,7 @@ fn input_answers_early_and_never_skips() {
 
 #[test]
 fn kill_switch_drops_the_scene_unspent() {
-    let mut state = WhisperState::with_seed(1);
+    let mut state = WhisperState::with_seed(1, 0);
     hold_through(&mut state, 1, ANSWER_TICK + 4);
     assert_eq!(
         state.tick(ANSWER_TICK + 5, false),
@@ -124,7 +157,7 @@ fn kill_switch_drops_the_scene_unspent() {
 fn hard_cap_opens_the_door() {
     // A machine that somehow never advanced still releases at the cap,
     // undelivered because the line never finished.
-    let mut state = WhisperState::with_seed(2);
+    let mut state = WhisperState::with_seed(2, 0);
     assert_eq!(
         state.tick(HARD_CAP_TICKS, true),
         WhisperTick::Released { delivered: false }

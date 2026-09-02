@@ -381,6 +381,7 @@ const SHOW_FLAG_FALLBACK_KEY: &str = "show_flag_fallback";
 const CLUBHOUSE_TUTORIAL_DONE_KEY: &str = "clubhouse_tutorial_done";
 const FIRST_CONTACT_GLITCH_HITS_KEY: &str = "first_contact_glitch_hits";
 const FIRST_CONTACT_NAME_HITS_KEY: &str = "first_contact_name_hits";
+const FIRST_CONTACT_WHISPER_HITS_KEY: &str = "first_contact_whisper_hits";
 const FIRST_CONTACT_WHISPER_AT_KEY: &str = "first_contact_whisper_at";
 const FIRST_CONTACT_INVITED_AT_KEY: &str = "first_contact_invited_at";
 const FIRST_CONTACT_GLITCH_DAY_KEY: &str = "first_contact_glitch_day";
@@ -1065,24 +1066,44 @@ impl User {
         })
     }
 
-    /// Claim the once-ever delivery of the first-contact splash whisper
-    /// (stage 3). Conditional on the stamp being absent, so two devices
-    /// that both played the held door leave exactly one stamp; the stamp
-    /// is also what schedules the stage-4 invitation. Returns whether
-    /// this caller won.
+    /// Claim one delivery of the first-contact splash whisper (stage 3).
+    /// The row judges both limits: the increment lands only while the
+    /// delivery counter is under `cap` and the last delivery is at least
+    /// `gap` before `at` (or there was none), so two devices that both
+    /// played the held door in one window leave exactly one mark, and the
+    /// second whisper never lands the same evening as the first. The
+    /// stamp is what schedules the stage-4 invitation once the counter
+    /// reaches the cap. Returns whether this caller won.
     pub async fn claim_first_contact_whisper(
         client: &Client,
         user_id: Uuid,
         at: DateTime<Utc>,
+        gap: chrono::Duration,
+        cap: u32,
     ) -> Result<bool> {
         let value = at.to_rfc3339();
+        let cap = i32::try_from(cap).unwrap_or(i32::MAX);
+        let not_before = at - gap;
         let updated = client
             .execute(
                 "UPDATE users
-                 SET settings = settings || jsonb_build_object($1::text, $2::text),
+                 SET settings = settings || jsonb_build_object(
+                         $1::text, COALESCE((settings->>$1)::int, 0) + 1,
+                         $2::text, $3::text
+                     ),
                      updated = current_timestamp
-                 WHERE id = $3 AND NOT (settings ? $1)",
-                &[&FIRST_CONTACT_WHISPER_AT_KEY, &value, &user_id],
+                 WHERE id = $4
+                   AND COALESCE((settings->>$1)::int, 0) < $5
+                   AND (settings->>$2 IS NULL
+                        OR (settings->>$2)::timestamptz <= $6)",
+                &[
+                    &FIRST_CONTACT_WHISPER_HITS_KEY,
+                    &FIRST_CONTACT_WHISPER_AT_KEY,
+                    &value,
+                    &user_id,
+                    &cap,
+                    &not_before,
+                ],
             )
             .await?;
         Ok(updated == 1)
@@ -1203,7 +1224,7 @@ impl User {
 
     /// Wipe every first-contact chain mark (the admin `/haunt reset` test
     /// hook): glitch hits, name hits, both daily counters, the whisper
-    /// stamp, and the invitation stamp. The bio screen verdict stays: it is
+    /// counter and stamp, and the invitation stamp. The bio screen verdict stays: it is
     /// a cache of a paid check on the bio text, not a rung of the chain.
     pub async fn reset_first_contact(client: &Client, user_id: Uuid) -> Result<()> {
         let updated = client
@@ -1216,6 +1237,7 @@ impl User {
                     &vec![
                         FIRST_CONTACT_GLITCH_HITS_KEY,
                         FIRST_CONTACT_NAME_HITS_KEY,
+                        FIRST_CONTACT_WHISPER_HITS_KEY,
                         FIRST_CONTACT_WHISPER_AT_KEY,
                         FIRST_CONTACT_INVITED_AT_KEY,
                         FIRST_CONTACT_GLITCH_DAY_KEY,
@@ -1814,9 +1836,17 @@ fn extract_rfc3339(settings: &Value, key: &str) -> Option<DateTime<Utc>> {
         .map(|at| at.with_timezone(&Utc))
 }
 
-/// When the first-contact splash whisper was delivered, or `None` while it
-/// is still owed. The whisper fires exactly once per person (GAME.md,
-/// First contact); the stamp schedules the stage-4 invitation.
+/// First-contact stage-3 whispers delivered so far; defaults to 0. The
+/// held door plays a capped number of times per person (GAME.md, First
+/// contact), each on a later day; the counter at its cap schedules the
+/// stage-4 invitation.
+pub fn extract_first_contact_whisper_hits(settings: &Value) -> u32 {
+    extract_counter(settings, FIRST_CONTACT_WHISPER_HITS_KEY)
+}
+
+/// When the last first-contact splash whisper was delivered, or `None`
+/// while none has been. Spaces the whispers apart and, once the counter
+/// is at its cap, starts the clock on the stage-4 invitation.
 pub fn extract_first_contact_whisper_at(settings: &Value) -> Option<DateTime<Utc>> {
     extract_rfc3339(settings, FIRST_CONTACT_WHISPER_AT_KEY)
 }

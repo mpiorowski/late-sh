@@ -23,9 +23,11 @@ escalation ladder that onboards a person through haunting instead of a
 tutorial. The chain is the spec, and the ladder never skips a rung
 (counts tuned 2026-09-01): three clock bursts quiet the clock and open
 stage 2, the third name hit arms the stage-3 whisper (it fires on the
-next fresh connect), and the delivered whisper schedules the stage-4
+next fresh connect, and once more on a later day: two doors, two
+different lines), and the second delivered whisper schedules the stage-4
 invitation. With the daily caps each of stages 1 and 2 spreads over two
-or three days: the full ladder is roughly a week of slow burn.
+or three days, and the two doors a day or more apart: the full ladder is
+roughly a week and a half of slow burn.
 
 Who is haunted (GAME.md, "the eligibility gate is a whisper campaign"):
 **stage 1 is universal, stages 2-4 need the gate.** Stage 1 arms for
@@ -116,20 +118,27 @@ and `metrics::record_first_contact_beat` / `record_first_contact_bio_screen`.
    while the claim is out, and the label corrupts on the tick the claim
    comes back won. The corruption rides the chat rows cache key, so
    start and heal rebuild rows exactly once. Chosen only.
-3. **Whisper (the held door).** Arms at connect only when name hits have
-   reached `NAME_TOTAL_CAP` and `first_contact_whisper_at` is unset: the
-   haunting follows you home. The splash neither skips nor expires while held; input is
+3. **Whisper (the held door).** Plays `WHISPER_TOTAL_CAP` (2) times per
+   person, at least `WHISPER_GAP_HOURS` (24) apart, each from its own
+   line pool: the first door says the static noticed you, the second
+   that something is trying to get through. Arms at connect only when
+   name hits have reached `NAME_TOTAL_CAP` and
+   `FirstContactMarks::whisper_due` holds (under the cap, and the last
+   delivery a day or more ago): the haunting follows you home, and comes
+   back. The splash neither skips nor expires while held; input is
    acknowledged (static surge, skip-hint dissolve) but never obeyed; the
    voiced line types itself (in answer to the first keypress, or on its
    own); a hard cap (~10s) releases whatever the phase. Delivery claims
-   `first_contact_whisper_at` (`claim_first_contact_whisper`, conditional
-   on absence, so two devices that both played leave one stamp; the
-   loser is logged as a double-play, the one race the claim-on-delivery
-   shape accepts, because claiming at arming would burn the whisper on
-   every dropped SSH session). A kill-switch drop or lost session leaves
-   the mark unspent.
+   one mark (`claim_first_contact_whisper`: increments
+   `first_contact_whisper_hits` and stamps `first_contact_whisper_at`,
+   conditional on the cap and the gap in the row, so two devices that
+   both played leave one mark and the same evening never counts twice;
+   the loser is logged, the one race the claim-on-delivery shape
+   accepts, because claiming at arming would burn a whisper on every
+   dropped SSH session). A kill-switch drop or lost session leaves the
+   mark unspent.
 4. **Invitation (the whole game is opt-in).** `INVITE_DELAY_DAYS` (2)
-   after the delivered whisper, the game's first voice - `afterglow`
+   after the second delivered whisper, the game's first voice - `afterglow`
    (GAME.md reserved the name for something inside the world), a
    bartender-shaped ghost user (fixed fingerprint `afterglow-fp-000`)
    that is never auto-joined into public rooms - sends one persistent DM.
@@ -184,9 +193,10 @@ and `metrics::record_first_contact_beat` / `record_first_contact_bio_screen`.
   `first_contact_name_day_hits`: stage-2 hits, same shape
   (`claim_first_contact_name_hit`; `record_first_contact_name_hit` for
   forced hits). The third hit arms stage 3.
-- `first_contact_whisper_at` (RFC3339): stage-3 delivery, written only by
-  `claim_first_contact_whisper` (conditional on absence); schedules
-  stage 4.
+- `first_contact_whisper_hits` (int) and `first_contact_whisper_at`
+  (RFC3339): stage-3 deliveries and the last one's time, written only by
+  `claim_first_contact_whisper` (conditional on the cap and the gap);
+  the counter at its cap schedules stage 4 from the stamp.
 - `first_contact_bio` (object `{hash, verdict, at}`): the bio screen
   cache. `claim_first_contact_bio_screen` stamps `pending` for a hash
   when no verdict exists for it, or the one on record is not `passed`

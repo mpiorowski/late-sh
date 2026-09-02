@@ -33,9 +33,19 @@ use uuid::Uuid;
 pub(crate) const VOICE_USERNAME: &str = "afterglow";
 pub(crate) const VOICE_FINGERPRINT: &str = "afterglow-fp-000";
 
-/// Days between the delivered whisper and the invitation DM ("some days
-/// after the held door"). `/haunt invite` skips the wait for testing.
+/// Days between the last delivered whisper and the invitation DM ("some
+/// days after the held door"). `/haunt invite` skips the wait for testing.
 pub(crate) const INVITE_DELAY_DAYS: i64 = 2;
+
+/// How many times the held door plays per person: the first whisper
+/// notices you, the second says something is trying to get through, and
+/// the invitation follows the second. Enforced by the row
+/// (`User::claim_first_contact_whisper`).
+pub(crate) const WHISPER_TOTAL_CAP: u32 = 2;
+/// The least time between two whispers, so the second never lands the
+/// same evening as the first: it waits for a fresh connect on a later
+/// day. Enforced by the row alongside the cap.
+pub(crate) const WHISPER_GAP_HOURS: i64 = 24;
 
 /// The invitation: a plea, not a pitch, ending with the only instruction
 /// the entire haunting ever gives. Placeholder pool of one until design
@@ -219,7 +229,11 @@ pub(crate) struct FirstContactMarks {
     /// Stage-2 name-flicker hits so far (arms stage 3 at
     /// [`NAME_TOTAL_CAP`]; caps stage 2).
     pub(crate) name_hits: u32,
-    /// When the stage-3 whisper was delivered (schedules stage 4).
+    /// Stage-3 whispers delivered so far (the door plays
+    /// [`WHISPER_TOTAL_CAP`] times; the last one schedules stage 4).
+    pub(crate) whisper_hits: u32,
+    /// When the last stage-3 whisper was delivered (spaces the whispers
+    /// apart; at the cap, schedules stage 4).
     pub(crate) whisper_at: Option<DateTime<Utc>>,
     /// When the stage-4 invitation DM was sent.
     pub(crate) invited_at: Option<DateTime<Utc>>,
@@ -230,9 +244,29 @@ impl FirstContactMarks {
         Self {
             glitch_hits: late_core::models::user::extract_first_contact_glitch_hits(settings),
             name_hits: late_core::models::user::extract_first_contact_name_hits(settings),
+            whisper_hits: late_core::models::user::extract_first_contact_whisper_hits(settings),
             whisper_at: late_core::models::user::extract_first_contact_whisper_at(settings),
             invited_at: late_core::models::user::extract_first_contact_invited_at(settings),
         }
+    }
+
+    /// Whether the held door is owed at `now`: under the cap, and either
+    /// never played or played at least [`WHISPER_GAP_HOURS`] ago. The row
+    /// re-judges the same rule on delivery.
+    pub(crate) fn whisper_due(&self, now: DateTime<Utc>) -> bool {
+        if self.whisper_hits >= WHISPER_TOTAL_CAP {
+            return false;
+        }
+        match self.whisper_at {
+            None => true,
+            Some(at) => now - at >= chrono::Duration::hours(WHISPER_GAP_HOURS),
+        }
+    }
+
+    /// Whether every whisper has played: the stage-4 clock runs from
+    /// `whisper_at` only once this holds.
+    pub(crate) fn whispers_spent(&self) -> bool {
+        self.whisper_hits >= WHISPER_TOTAL_CAP
     }
 
     /// Everything already spent: what test apps use so no stage can fire
@@ -242,6 +276,7 @@ impl FirstContactMarks {
         Self {
             glitch_hits: u32::MAX,
             name_hits: u32::MAX,
+            whisper_hits: u32::MAX,
             whisper_at: Some(Utc::now()),
             invited_at: Some(Utc::now()),
         }
@@ -403,10 +438,11 @@ const SURGE_TICKS: usize = 8;
 /// How long the skip hint takes to dissolve after the first keypress.
 const DISSOLVE_TICKS: usize = 12;
 
-/// The voiced lines. Screenshot-test vocabulary only (static, signal,
-/// city, channel, door); a repeated whisper is a bug report, not a
-/// haunting, so this pool grows under the same variety discipline as feed
-/// templates (GAME.md, Open questions) before it ever leaves admin scope.
+/// The voiced lines for the first held door: the static has noticed
+/// you. Screenshot-test vocabulary only (static, signal, city, channel,
+/// door); a repeated whisper is a bug report, not a haunting, so this
+/// pool grows under the same variety discipline as feed templates
+/// (GAME.md, Open questions) before it ever leaves admin scope.
 const WHISPER_LINES: [&str; 6] = [
     "you were not supposed to notice this yet",
     "the sky down here is the color of a dead channel",
@@ -414,6 +450,16 @@ const WHISPER_LINES: [&str; 6] = [
     "something behind the screen just learned your name",
     "the door is held. not yet.",
     "there is a city under this room. it noticed you",
+];
+
+/// The voiced lines for the second held door, a later day: whatever
+/// noticed you is now trying to get through. The escalation is in the
+/// verb, the vocabulary stays the same.
+const WHISPER_LINES_SECOND: [&str; 4] = [
+    "something is trying to break in. do you see it?",
+    "it found the door. it is pushing from the other side",
+    "the static is not weather anymore. it is knocking",
+    "listen. that is not the signal dropping. that is something coming up",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -450,13 +496,20 @@ pub(crate) struct WhisperState {
 }
 
 impl WhisperState {
-    pub(crate) fn for_user(user_id: Uuid) -> Self {
-        Self::with_seed(user_id.as_u128() as u64)
+    /// The door for this user's next whisper: `delivered_before` is how
+    /// many have already played, which picks the pool (the first door
+    /// notices you, every later one is something trying to get through).
+    pub(crate) fn for_user(user_id: Uuid, delivered_before: u32) -> Self {
+        Self::with_seed(user_id.as_u128() as u64, delivered_before)
     }
 
-    fn with_seed(seed: u64) -> Self {
+    fn with_seed(seed: u64, delivered_before: u32) -> Self {
+        let line = match delivered_before {
+            0 => WHISPER_LINES[(seed % WHISPER_LINES.len() as u64) as usize],
+            _ => WHISPER_LINES_SECOND[(seed % WHISPER_LINES_SECOND.len() as u64) as usize],
+        };
         Self {
-            line: WHISPER_LINES[(seed % WHISPER_LINES.len() as u64) as usize],
+            line,
             phase: WhisperPhase::Held,
             last_input_tick: None,
             first_input_tick: None,
