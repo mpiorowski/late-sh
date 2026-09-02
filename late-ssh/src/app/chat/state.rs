@@ -657,6 +657,14 @@ pub(crate) fn is_chat_list_room(room: &ChatRoom) -> bool {
     room.kind == "dm" || room.permanent || matches!(room.visibility.as_str(), "public" | "private")
 }
 
+/// The haunted channel (`app/deadchannel`, GAME.md): joined by invitation
+/// only, and once joined it sits at the bottom of Core, above Discover,
+/// never in Channels. The rail builders in `ui.rs` and
+/// `visual_order_for_rooms` all key off this.
+pub(crate) fn is_deadchannel_room(room: &ChatRoom) -> bool {
+    room.kind == late_core::models::chat_room::DEADCHANNEL_KIND
+}
+
 /// Payload handed from chat to the app layer (via `take_requested_open_sheet`)
 /// to open the character sheet modal. `editable` is true when the sheet
 /// belongs to the viewer.
@@ -6940,6 +6948,14 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     {
         order.push(RoomSlot::Room(room.id));
     }
+    // The haunted channel, for whoever was invited in: the last room in
+    // Core, under voice, above Discover. Mirrored by both rail builders.
+    if let Some((room, _)) = rooms.iter().find(|(r, _)| is_deadchannel_room(r))
+        && pushed_rooms.insert(room.id)
+        && !core_collapsed
+    {
+        order.push(RoomSlot::Room(room.id));
+    }
     if !core_collapsed {
         // Discover ("browse rooms") lives at the bottom of Core.
         order.push(RoomSlot::Discover);
@@ -7005,6 +7021,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         if is_chat_list_room(room)
             && room.kind != "dm"
             && !core_order.contains(&room.slug.as_deref().unwrap_or(""))
+            && !is_deadchannel_room(room)
             && room.slug.as_deref() != Some("voice")
             && pushed_rooms.insert(room.id)
             && !channels_collapsed

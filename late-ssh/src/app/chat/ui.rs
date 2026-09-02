@@ -41,8 +41,8 @@ use crate::usernames::UsernameLookup;
 use super::state::{
     MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot, RoomVisualOrderInput,
     SelectedRoomSlotState, SelectionScroll, TranslationDisplay, compare_dm_rooms_for_nav,
-    dm_is_promoted_unread, dm_peer_is_ignored, is_chat_list_room, is_selected_slot,
-    visual_order_for_rooms,
+    dm_is_promoted_unread, dm_peer_is_ignored, is_chat_list_room, is_deadchannel_room,
+    is_selected_slot, visual_order_for_rooms,
 };
 use super::ui_text::{AuthorTint, Gutter, reaction_label, wrap_chat_entry_to_lines};
 
@@ -3655,6 +3655,20 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         };
         push_row(feeds_line, Some(RoomSlot::Feeds), view.feeds_selected);
     }
+    // The haunted channel, once invited in: the last row of Core.
+    if let Some((room, _)) = chat_rooms.iter().find(|(r, _)| is_deadchannel_room(r)) {
+        let is_selected = room_selected(room.id);
+        push_row(
+            room_line(
+                room,
+                room_display_label(room, view.usernames, view.current_user_id),
+                is_selected,
+                view.room_jump_active.then(|| jump_keys.next()).flatten(),
+            ),
+            Some(RoomSlot::Room(room.id)),
+            is_selected,
+        );
+    }
 
     if view.cyberspace_linked {
         // Two rows, two badges: entries on `feeds`, their notification
@@ -3752,7 +3766,11 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
     let mut public_rooms: Vec<_> = chat_rooms
         .iter()
         .filter(|(r, _)| {
-            is_chat_list_room(r) && r.kind != "dm" && !r.permanent && r.visibility == "public"
+            is_chat_list_room(r)
+                && r.kind != "dm"
+                && !r.permanent
+                && r.visibility == "public"
+                && !is_deadchannel_room(r)
         })
         .collect();
     public_rooms.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
@@ -4340,6 +4358,14 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         }) {
             push_slot(RoomSlot::Room(room.id), &mut push_row);
         }
+        // The haunted channel, once invited in: the last room in Core.
+        if let Some((room, _)) = view
+            .chat_rooms
+            .iter()
+            .find(|(r, _)| is_deadchannel_room(r) && !favorite_ids.contains(&r.id))
+        {
+            push_slot(RoomSlot::Room(room.id), &mut push_row);
+        }
         // Discover ("+ browse rooms") is the last entry in Core.
         push_slot(RoomSlot::Discover, &mut push_row);
     }
@@ -4421,6 +4447,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
                 && r.kind != "dm"
                 && !core_order.contains(&r.slug.as_deref().unwrap_or(""))
                 && r.slug.as_deref() != Some("voice")
+                && !is_deadchannel_room(r)
                 && !favorite_ids.contains(&r.id)
         })
         .collect();

@@ -182,8 +182,11 @@ and `metrics::record_first_contact_beat` / `record_first_contact_bio_screen`.
    lounge/language/topic, and IRC JOIN filters through
    `is_irc_channel_kind`), so the channel is hidden from browse and
    IRC by construction, the same way game rooms already are, without
-   inheriting the game-room join path. Copy and name face design review
-   before real users ever see them.
+   inheriting the game-room join path. Once joined it does show on the
+   rail: the last room in Core, under `#voice`, above Discover, never in
+   Channels (`chat/state.rs::is_deadchannel_room`, read by
+   `visual_order_for_rooms` and both rail builders in `chat/ui.rs`).
+   Copy and name face design review before real users ever see them.
 
 ## 4. Persistence (`users.settings`, late-core `User`; `app_flags`)
 

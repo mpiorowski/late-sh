@@ -763,6 +763,7 @@ fn visual_order_matches_cozy_rail_grouping() {
     let public_zeta = Uuid::from_u128(21);
     let private_beta = Uuid::from_u128(30);
     let game_table = Uuid::from_u128(40);
+    let deadchannel = Uuid::from_u128(50);
     let dm_bob = make_dm(bob, me);
     let dm_alice = make_dm(me, alice);
 
@@ -785,6 +786,15 @@ fn visual_order_matches_cozy_rail_grouping() {
         ),
         (dm_alice.clone(), Vec::new()),
         make_room(public_alpha, "topic", "public", false, Some("alpha")),
+        // Public and non-permanent like alpha, but its own kind: the
+        // haunted channel closes Core instead of sorting into Channels.
+        make_room(
+            deadchannel,
+            "deadchannel",
+            "public",
+            false,
+            Some("deadchannel"),
+        ),
     ];
 
     assert_eq!(
@@ -810,6 +820,7 @@ fn visual_order_matches_cozy_rail_grouping() {
             RoomSlot::Notifications,
             RoomSlot::News,
             RoomSlot::Feeds,
+            RoomSlot::Room(deadchannel),
             RoomSlot::Discover,
             RoomSlot::Room(public_zeta),
             RoomSlot::Room(private_beta),

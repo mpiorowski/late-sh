@@ -1029,6 +1029,10 @@ pub struct PublicTopicRoomSummary {
 /// The haunted channel's slug: reserved from user creation in
 /// `normalize_topic_slug`, owned by `get_or_create_deadchannel_room`.
 pub const DEADCHANNEL_SLUG: &str = "deadchannel";
+/// The haunted channel's `chat_rooms.kind` (migration 170): its own kind
+/// so every kind whitelist (browse, IRC, the rail's sections) excludes or
+/// places it by construction rather than by slug.
+pub const DEADCHANNEL_KIND: &str = "deadchannel";
 
 pub fn canonical_dm_pair(user_a: Uuid, user_b: Uuid) -> (Uuid, Uuid) {
     if user_a.as_u128() < user_b.as_u128() {
