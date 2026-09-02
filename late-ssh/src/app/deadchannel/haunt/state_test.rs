@@ -356,6 +356,16 @@ fn the_gate_needs_all_three_legs_and_screens_only_when_useful() {
     assert!(gate.needs_bio_screen());
     assert!(!gate.passes());
 
+    // The free legs come before the paid one: short of the hours, or of
+    // the touched settings, the bio is not screened at all.
+    let gate = FirstContactGate::evaluate(now, tenured - 1, &settings(&bio, json!(null)), true);
+    assert_eq!(gate.bio, BioStanding::Unscreened);
+    assert!(!gate.needs_bio_screen());
+    let one_setting_unscreened = json!({ "bio": bio, "theme_id": "night" });
+    let gate = FirstContactGate::evaluate(now, tenured, &one_setting_unscreened, true);
+    assert_eq!(gate.touched_settings, 1);
+    assert!(!gate.needs_bio_screen());
+
     // AI off and nothing on record: fail closed, and no screen to claim.
     let gate = FirstContactGate::evaluate(now, tenured, &settings(&bio, json!(null)), false);
     assert_eq!(gate.bio, BioStanding::AiOff);

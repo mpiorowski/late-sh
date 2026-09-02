@@ -384,7 +384,7 @@ User commands:
 - `/upload <url>` downloads a public image URL server-side, reuploads it to configured public file storage, and inserts the resulting URL into the composer for the user to send.
 
 Admin commands:
-- `/haunt [on|off|glitch|name|replay|invite|reset]` controls the
+- `/haunt [on|off|live on|live off|glitch|name|replay|invite|reset]` controls the
   first-contact haunting. Parsed in `submit_composer` **only when
   `is_admin`** (enum + parser live in `deadchannel/haunt/state.rs`): for
   everyone else the line posts as plain text, so the command does not

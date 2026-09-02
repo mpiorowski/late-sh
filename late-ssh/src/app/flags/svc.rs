@@ -16,7 +16,7 @@ use late_core::db::{Db, DbConfig};
 use late_core::models::app_flag::{
     APP_FLAG_CHANGED_CHANNEL, AppFlag, AppFlags, listen_for_app_flag_changes,
 };
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 use tracing::{Instrument, info_span};
 
 #[derive(Clone)]
@@ -113,12 +113,16 @@ impl AppFlagService {
         }
     }
 
-    /// Fire-and-forget: flip one switch. The notify brings the new value
+    /// Flip one switch. The answer (the row written, or the error) comes
+    /// back on the returned channel so the caller can tell the admin the
+    /// truth: a kill switch that reports "off" before the row says so is
+    /// the one banner that must not lie. The notify brings the new value
     /// back to this replica like any other, so the caller's own view
-    /// updates on the tick after the round trip. A failure is only logged;
-    /// the caller's banner already said "on", so the log is the one place
-    /// the miss shows.
-    pub fn set_task(&self, flag: AppFlag, enabled: bool) {
+    /// updates on the tick after the round trip. Errors are the
+    /// receiver's to log, once; a receiver that went away (the session
+    /// ended) is the only case logged here.
+    pub fn set_task(&self, flag: AppFlag, enabled: bool) -> oneshot::Receiver<Result<()>> {
+        let (tx, rx) = oneshot::channel();
         let service = self.clone();
         tokio::spawn(
             async move {
@@ -127,11 +131,12 @@ impl AppFlagService {
                     AppFlags::set(&client, flag, enabled).await
                 }
                 .await;
-                if let Err(error) = result {
-                    tracing::error!(error = ?error, key = flag.key(), enabled, "failed to set app flag");
+                if let Err(Err(error)) = tx.send(result) {
+                    tracing::error!(error = ?error, key = flag.key(), enabled, "failed to set app flag; nobody left to tell");
                 }
             }
             .instrument(info_span!("app_flags.set_task", key = flag.key(), enabled)),
         );
+        rx
     }
 }

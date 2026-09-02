@@ -14,8 +14,8 @@ use tracing::{Instrument, info_span};
 use super::state::{
     BIO_RESCREEN_AFTER_HOURS, BioStanding, ClockGlitch, FirstContactGate, FirstContactMarks,
     GLITCH_TOTAL_CAP, GlitchTick, HauntCommand, HauntState, HitStage, INVITE_DELAY_DAYS,
-    NAME_TOTAL_CAP, NameFlicker, NameRoll, PendingClaim, WhisperState, WhisperTick, bio_hash,
-    glitch_caps, name_caps,
+    NAME_TOTAL_CAP, NameFlicker, NameRoll, PendingClaim, PendingFlagWrite, WhisperState,
+    WhisperTick, bio_hash, glitch_caps, name_caps,
 };
 use crate::app::ai::screen::{BioScreen, screen_bio};
 use crate::app::ai::svc::AiService;
@@ -94,6 +94,7 @@ pub(crate) fn arm(
         chosen,
         flags,
         pending_claims: Vec::new(),
+        pending_flag_writes: Vec::new(),
     }
 }
 
@@ -108,6 +109,7 @@ fn session_seed(user_id: uuid::Uuid) -> u64 {
 pub(crate) fn tick(app: &mut App) -> bool {
     let mut changed = false;
     changed |= tick_claims(app);
+    changed |= tick_flag_writes(app);
     if app.show_splash {
         changed |= tick_splash_door(app);
     }
@@ -189,6 +191,50 @@ fn tick_claims(app: &mut App) -> bool {
                 tracing::warn!(user_id = %app.user_id, error = ?error, "first contact name flicker claim failed");
             }
         }
+    }
+    changed
+}
+
+/// Drain answered `/haunt on|off|live` writes into the banner. The row is
+/// the truth: "off" is only said once the row says off, and a failed
+/// write is said out loud, since the admin who flipped the kill switch
+/// is the one person who must not be told a comforting lie.
+fn tick_flag_writes(app: &mut App) -> bool {
+    let mut answered = Vec::new();
+    app.haunt
+        .pending_flag_writes
+        .retain_mut(|pending| match pending.rx.try_recv() {
+            Ok(outcome) => {
+                answered.push((pending.flag, pending.enabled, pending.done, outcome));
+                false
+            }
+            Err(oneshot::error::TryRecvError::Empty) => true,
+            Err(oneshot::error::TryRecvError::Closed) => {
+                answered.push((
+                    pending.flag,
+                    pending.enabled,
+                    pending.done,
+                    Err(anyhow::anyhow!("flag write task dropped its sender")),
+                ));
+                false
+            }
+        });
+    let mut changed = false;
+    for (flag, enabled, done, outcome) in answered {
+        match outcome {
+            Ok(()) => {
+                tracing::info!(user_id = %app.user_id, key = flag.key(), enabled, "haunt flag set");
+                app.banner = Some(Banner::success(done));
+            }
+            Err(error) => {
+                tracing::error!(user_id = %app.user_id, key = flag.key(), enabled, error = ?error, "failed to set haunt flag");
+                app.banner = Some(Banner::error(&format!(
+                    "Flag {} not written: {error}",
+                    flag.key()
+                )));
+            }
+        }
+        changed = true;
     }
     changed
 }
@@ -455,13 +501,19 @@ fn bio_standing_label(standing: BioStanding) -> &'static str {
     }
 }
 
-/// Flip a process-wide switch, or explain why this session cannot.
-fn set_flag(app: &mut App, flag: AppFlag, enabled: bool, done: &str) {
+/// Ask for a process-wide switch to flip, or explain why this session
+/// cannot. The banner comes on the tick the row answers
+/// (`tick_flag_writes`), not now.
+fn set_flag(app: &mut App, flag: AppFlag, enabled: bool, done: &'static str) {
     match &app.app_flags {
         Some(service) => {
-            service.set_task(flag, enabled);
-            tracing::info!(user_id = %app.user_id, key = flag.key(), enabled, "haunt flag set");
-            app.banner = Some(Banner::success(done));
+            let rx = service.set_task(flag, enabled);
+            app.haunt.pending_flag_writes.push(PendingFlagWrite {
+                flag,
+                enabled,
+                done,
+                rx,
+            });
         }
         None => {
             app.banner = Some(Banner::error("No flag service on this session"));

@@ -3574,7 +3574,7 @@ impl ChatState {
             self.clear_composer_after_submit();
             let Some(command) = parsed else {
                 return Some(Banner::error(
-                    "Usage: /haunt, or /haunt on|off|glitch|name|replay|invite|reset",
+                    "Usage: /haunt, or /haunt on|off|live on|live off|glitch|name|replay|invite|reset",
                 ));
             };
             self.requested_haunt = Some(command);

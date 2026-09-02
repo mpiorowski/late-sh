@@ -42,7 +42,9 @@ at least `BIO_MIN_CHARS` (200) that the AI screen passed. The gate is
 evaluated once at session bootstrap (`svc::bootstrap_gate`: the user row
 that already loads plus the one online-time read, which fails closed to
 zero hours) and is never stored: filling
-your bio tonight means the static can find you tomorrow. Eligibility
+your bio tonight means the static can find you tomorrow. The free legs
+come first: the bio screen (a paid AI call) is only claimed once the
+hours and the touched settings already pass. Eligibility
 gates entering the funnel, never continuing it: any stage-2 hit on
 record arms stages 2-4 whatever the bio later becomes. All three
 thresholds are placeholders pending design review.

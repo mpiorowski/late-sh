@@ -2865,15 +2865,6 @@ impl ChatService {
         );
     }
 
-    /// First contact, stage 4 (`app/deadchannel/haunt`): the one
-    /// invitation DM from the game's first voice. Ensures the voice's
-    /// ghost user (fixed fingerprint, @bartender's shape, but never
-    /// auto-joined into public rooms: the voice lives in the dark), claims
-    /// the once-ever right to invite this user (a conditional settings
-    /// stamp, so two devices noticing the due date at once send one DM),
-    /// then opens the DM and sends the plea through the normal send path.
-    /// It persists on purpose: an invitation that vanishes cannot be
-    /// followed three days later.
     /// Ensure the game's first voice exists (GAME.md, First contact stage
     /// 4). Runs at startup like the `system` user: the first deploy creates
     /// the row, and the case-insensitive unique username index reserves the
@@ -2939,6 +2930,15 @@ impl ChatService {
         );
     }
 
+    /// First contact, stage 4 (`app/deadchannel/haunt`): the one
+    /// invitation DM from the game's first voice. Ensures the voice's
+    /// ghost user (fixed fingerprint, @bartender's shape, but never
+    /// auto-joined into public rooms: the voice lives in the dark), opens
+    /// the DM, claims the once-ever right to invite this user (a
+    /// conditional settings stamp, so two devices noticing the due date at
+    /// once send one DM), then sends the plea through the normal send
+    /// path. It persists on purpose: an invitation that vanishes cannot
+    /// be followed three days later.
     pub fn send_first_contact_invitation_task(&self, target_user_id: Uuid) {
         use crate::app::deadchannel::haunt::state::INVITATION_PLEA;
         let service = self.clone();

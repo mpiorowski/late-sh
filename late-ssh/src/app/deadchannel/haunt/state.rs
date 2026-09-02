@@ -19,7 +19,7 @@
 //! everyone once the `haunt_live` fuse is lit; stages 2-4 need the gate.
 
 use chrono::{DateTime, Utc};
-use late_core::models::app_flag::AppFlags;
+use late_core::models::app_flag::{AppFlag, AppFlags};
 use late_core::models::user::{FirstContactBioVerdict, FirstContactHitCaps, FirstContactHitClaim};
 use tokio::sync::{oneshot, watch};
 use uuid::Uuid;
@@ -140,9 +140,7 @@ impl FirstContactGate {
 
     /// All three legs hold: the static may choose this person.
     pub(crate) fn passes(&self) -> bool {
-        self.active_hours >= ACTIVE_MIN_HOURS
-            && self.touched_settings >= TOUCHED_SETTINGS_MIN
-            && self.bio_passes()
+        self.tenure_and_settings_pass() && self.bio_passes()
     }
 
     pub(crate) fn bio_passes(&self) -> bool {
@@ -156,8 +154,14 @@ impl FirstContactGate {
         }
     }
 
-    /// Whether bootstrap should claim a bio screen for this session.
+    /// Whether bootstrap should claim a bio screen for this session. The
+    /// two free legs come first: a screen is a paid AI call, and a person
+    /// without the hours or the touched settings cannot pass the gate
+    /// whatever the verdict says, so their bio is not read until they can.
     pub(crate) fn needs_bio_screen(&self) -> bool {
+        if !self.tenure_and_settings_pass() {
+            return false;
+        }
         match self.bio {
             BioStanding::Unscreened => true,
             BioStanding::TooShort
@@ -166,6 +170,10 @@ impl FirstContactGate {
             | BioStanding::Passed
             | BioStanding::Failed => false,
         }
+    }
+
+    fn tenure_and_settings_pass(&self) -> bool {
+        self.active_hours >= ACTIVE_MIN_HOURS && self.touched_settings >= TOUCHED_SETTINGS_MIN
     }
 
     /// Nothing passes: what test apps use so no stage past 1 can arm
@@ -273,6 +281,10 @@ pub(crate) struct HauntState {
     /// that asked holds its schedule until the row answers; `svc::tick`
     /// drains these.
     pub(crate) pending_claims: Vec<PendingClaim>,
+    /// `/haunt on|off|live` writes in flight. The banner waits for the
+    /// row's answer, so an admin flipping the kill switch is told what
+    /// actually happened; `svc::tick` drains these.
+    pub(crate) pending_flag_writes: Vec<PendingFlagWrite>,
 }
 
 impl HauntState {
@@ -310,6 +322,15 @@ pub(crate) enum HitStage {
 pub(crate) struct PendingClaim {
     pub(crate) stage: HitStage,
     pub(crate) rx: oneshot::Receiver<anyhow::Result<FirstContactHitClaim>>,
+}
+
+/// One `app_flags` write out on the row, with the banner to show once it
+/// lands.
+pub(crate) struct PendingFlagWrite {
+    pub(crate) flag: AppFlag,
+    pub(crate) enabled: bool,
+    pub(crate) done: &'static str,
+    pub(crate) rx: oneshot::Receiver<anyhow::Result<()>>,
 }
 
 /// The `/haunt` admin controls, recorded by the composer and drained by
