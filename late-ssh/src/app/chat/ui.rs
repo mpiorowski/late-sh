@@ -1650,8 +1650,7 @@ fn ensure_chat_rows_cache(
         let is_continuation = prev_user_id == Some(msg.user_id)
             && !is_edited
             && prev_created.is_some_and(|prev| {
-                (msg.created - prev).num_seconds().abs()
-                    < super::state::MESSAGE_GROUP_WINDOW_SECS
+                (msg.created - prev).num_seconds().abs() < super::state::MESSAGE_GROUP_WINDOW_SECS
             });
         let mut stamp = format!(
             "[{}]",

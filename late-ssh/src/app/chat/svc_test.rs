@@ -5104,7 +5104,9 @@ async fn deadchannel_join_requires_the_invitation() {
         .expect("event timeout")
         .expect("event")
     {
-        ChatEvent::RoomJoined { user_id, room_id, .. } => {
+        ChatEvent::RoomJoined {
+            user_id, room_id, ..
+        } => {
             assert_eq!(user_id, user.id);
             room_id
         }
