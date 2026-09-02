@@ -72,3 +72,39 @@ fn the_help_modal_lists_every_milestone_badge() {
         "these badges are granted but absent from the help modal: {missing:?}"
     );
 }
+
+/// The overview lists every award it is handed. It used to cut off at six with
+/// a "+N more" tail, which hid exactly the badges a long-running account earned.
+#[test]
+fn every_award_is_listed() {
+    use chrono::{NaiveDate, Utc};
+    use late_core::models::profile_award::ProfileAward;
+    use uuid::Uuid;
+
+    let awards: Vec<ProfileAward> = MILESTONE_AWARD_CATEGORIES
+        .iter()
+        .map(|category| ProfileAward {
+            id: Uuid::now_v7(),
+            user_id: Uuid::now_v7(),
+            category: (*category).to_string(),
+            period_month: NaiveDate::from_ymd_opt(2026, 1, 1).expect("valid month"),
+            rank: 1,
+            score_value: 0,
+            awarded_at: Utc::now(),
+        })
+        .collect();
+
+    let rendered: String = badges::badge_lines(&awards)
+        .iter()
+        .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+        .collect();
+
+    for award in &awards {
+        assert!(
+            rendered.contains(&award.badge()),
+            "{} is missing from the rendered badge list: {rendered}",
+            award.badge()
+        );
+    }
+    assert!(!rendered.contains("more"), "badges were truncated: {rendered}");
+}

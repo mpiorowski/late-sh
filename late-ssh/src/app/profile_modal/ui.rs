@@ -93,7 +93,7 @@ fn profile_frame(frame: &mut Frame, area: Rect, state: &ProfileModalState) -> Op
 }
 
 /// The big layout: no sub-boxes, just labelled sections. The about (bio),
-/// earned-award preview, showcases, and badge-code legend live in the left
+/// showcases, earned awards, and badge-code legend live in the left
 /// column; bonsai sits on the right, and the aquarium gets the whole bottom
 /// band.
 fn draw_dashboard(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
@@ -350,12 +350,6 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
         lines.extend(gild_lines);
     }
 
-    let badge_lines = badges::preview_lines(state.profile_awards());
-    if !badge_lines.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(section_heading("Badges"));
-        lines.extend(badge_lines);
-    }
     let showcases = state.showcases_for_viewed();
     if !showcases.is_empty() {
         lines.push(Line::from(""));
@@ -369,6 +363,13 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
                 text,
             ));
         }
+    }
+
+    let badge_lines = badges::badge_lines(state.profile_awards());
+    if !badge_lines.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(section_heading("Badges"));
+        lines.extend(badge_lines);
     }
 
     lines
