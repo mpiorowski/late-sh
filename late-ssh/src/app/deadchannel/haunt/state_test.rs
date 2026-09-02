@@ -87,7 +87,10 @@ fn the_second_door_speaks_from_its_own_pool_and_the_marks_space_the_two_apart() 
     let never = marks(0, None);
     assert!(never.whisper_due(now));
     assert!(!never.whispers_spent());
-    let tonight = marks(1, Some(now - chrono::Duration::hours(WHISPER_GAP_HOURS - 1)));
+    let tonight = marks(
+        1,
+        Some(now - chrono::Duration::hours(WHISPER_GAP_HOURS - 1)),
+    );
     assert!(!tonight.whisper_due(now));
     let later_day = marks(1, Some(now - chrono::Duration::hours(WHISPER_GAP_HOURS)));
     assert!(later_day.whisper_due(now));
