@@ -633,8 +633,7 @@ fn make_app_with_chat_service_and_permissions(
         // Everything already spent: no first-contact stage can fire inside
         // a test app unless a test arms one on purpose.
         first_contact: crate::app::deadchannel::haunt::state::FirstContactMarks::spent_for_tests(),
-        first_contact_gate:
-            crate::app::deadchannel::haunt::state::FirstContactGate::closed_for_tests(),
+        first_contact_gate: crate::app::deadchannel::haunt::state::FirstContactGate::closed(),
         app_flags_rx: test_app_flags_rx(),
         app_flags: None,
         show_aquarium_tray: false,
@@ -863,8 +862,7 @@ pub fn make_app_with_paired_client(
         // Everything already spent: no first-contact stage can fire inside
         // a test app unless a test arms one on purpose.
         first_contact: crate::app::deadchannel::haunt::state::FirstContactMarks::spent_for_tests(),
-        first_contact_gate:
-            crate::app::deadchannel::haunt::state::FirstContactGate::closed_for_tests(),
+        first_contact_gate: crate::app::deadchannel::haunt::state::FirstContactGate::closed(),
         app_flags_rx: test_app_flags_rx(),
         app_flags: None,
         show_aquarium_tray: false,

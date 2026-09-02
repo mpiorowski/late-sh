@@ -31,7 +31,19 @@ use crate::state::State;
 /// claim a screen for it in the background; the verdict lands on the row
 /// for the next session: filling your bio tonight means the static can
 /// find you tomorrow (GAME.md).
-pub(crate) async fn bootstrap_gate(state: &State, user: &User) -> FirstContactGate {
+///
+/// The flags come first, and they are the same pair `arm` reads: with
+/// `haunt_enabled` off, or the `haunt_live` fuse unlit for a non-admin,
+/// nobody can be haunted this session, so the connect path spends
+/// nothing on them: no online-time round trip, no paid bio screen. With
+/// the flags unread (`None`) the gate is shut, like every other stage.
+pub(crate) async fn bootstrap_gate(state: &State, is_admin: bool, user: &User) -> FirstContactGate {
+    let snapshot: Option<AppFlags> = *state.app_flags.subscribe().borrow();
+    let armable =
+        snapshot.is_some_and(|flags| flags.haunt_enabled && (is_admin || flags.haunt_live));
+    if !armable {
+        return FirstContactGate::closed();
+    }
     let online_milliseconds = async {
         let client = state.db.get().await?;
         late_core::models::leaderboard::total_online_milliseconds(&client, user.id).await

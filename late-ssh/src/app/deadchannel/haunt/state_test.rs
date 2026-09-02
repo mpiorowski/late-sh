@@ -471,6 +471,21 @@ fn the_gate_needs_all_three_legs_and_screens_only_when_useful() {
         true,
     );
     assert_eq!(gate.bio, BioStanding::Unscreened);
+
+    // The gate bootstrap hands back when the fuse is unlit: no leg holds,
+    // and nothing is worth the paid screen.
+    let closed = FirstContactGate::closed();
+    assert_eq!(
+        closed,
+        FirstContactGate {
+            active_hours: 0,
+            touched_settings: 0,
+            bio_chars: 0,
+            bio: BioStanding::TooShort,
+        }
+    );
+    assert!(!closed.passes());
+    assert!(!closed.needs_bio_screen());
 }
 
 #[test]

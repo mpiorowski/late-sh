@@ -186,9 +186,10 @@ impl FirstContactGate {
         self.active_hours >= ACTIVE_MIN_HOURS && self.touched_settings >= TOUCHED_SETTINGS_MIN
     }
 
-    /// Nothing passes: what test apps use so no stage past 1 can arm
-    /// unless a test arms one on purpose.
-    pub(crate) fn closed_for_tests() -> Self {
+    /// Nothing passes, and nothing is worth screening: what bootstrap
+    /// returns when the fuse is unlit, and what test apps use so no stage
+    /// past 1 can arm unless a test arms one on purpose.
+    pub(crate) fn closed() -> Self {
         Self {
             active_hours: 0,
             touched_settings: 0,
@@ -271,7 +272,7 @@ impl FirstContactMarks {
 
     /// Everything already spent: what test apps use so no stage can fire
     /// under an admin-permission test unless a test arms one on purpose.
-    /// (`test_helpers` compiles unconditionally, so no `#[cfg(test)]`.)
+    #[cfg(test)]
     pub(crate) fn spent_for_tests() -> Self {
         Self {
             glitch_hits: u32::MAX,
@@ -769,7 +770,7 @@ impl ClockGlitch {
     pub(crate) fn corruption(&self, tick: usize) -> Option<u64> {
         let since = self.active_since?;
         (tick.saturating_sub(since) < GLITCH_HOLD_TICKS)
-            .then(|| self.rng ^ ((since as u64) << 1 | 1))
+            .then_some(self.rng ^ ((since as u64) << 1 | 1))
     }
 
     /// `/haunt glitch`: light a short fuse (the command banner covers the
@@ -881,7 +882,7 @@ impl NameFlicker {
         self.rng ^= self.rng << 13;
         self.rng ^= self.rng >> 7;
         self.rng ^= self.rng << 17;
-        if self.rng % NAME_CHANCE_ONE_IN != 0 {
+        if !self.rng.is_multiple_of(NAME_CHANCE_ONE_IN) {
             return NameRoll::Miss;
         }
         self.claiming = Some(message_id);
@@ -924,7 +925,7 @@ impl NameFlicker {
     pub(crate) fn corruption(&self, tick: usize) -> Option<(Uuid, u64)> {
         let (message_id, since) = self.active?;
         (tick.saturating_sub(since) < NAME_HOLD_TICKS)
-            .then(|| (message_id, self.rng ^ ((since as u64) << 1 | 1)))
+            .then_some((message_id, self.rng ^ ((since as u64) << 1 | 1)))
     }
 
     pub(crate) fn total_hits(&self) -> u32 {
