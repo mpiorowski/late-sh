@@ -44,6 +44,8 @@ late.sh runs as one SSH replica today, and a multi-replica rework is coming. Eve
 
 When a design cannot meet the rule (a hot path that would need a DB round trip per tick), say so in the local `CONTEXT.md`, keep the per-replica piece as small as possible, and list it in the §7 table so the rework finds it.
 
+The rework itself (transport half: session ownership and pair-WS routing; app half: migrating the §7 table row by row) is planned in `SCALE.md`, Pain Point 2 and Next Work item 8. This section is the rule; that file is the plan.
+
 ### Context Directory (Read-First Routing) [STABLE]
 
 Use this root file as the entry point. Before changing a domain, read the matching local context file(s) below. If a task crosses domains, read every row it touches and keep root plus local docs aligned.

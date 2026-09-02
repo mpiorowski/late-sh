@@ -1,6 +1,6 @@
 # late.sh Scale Notes
 
-Last updated: 2026-08-18, second entry (7-day production health check, read-only. The 2026-07-26 DB fixes are now **verified in prod**, not projected: every pre-fix query shape is idle and total live DB load is about 1.9% of one core, so the chat poll is no longer the binding constraint on the 1000-user target. The largest remaining DB item is `list_discover_public_topic_rooms`, which **regressed to 771 ms mean** and turns out to be a stale-visibility-map problem rather than a query-shape problem. New sections: "Live Production Baseline (2026-08-18)" and "Observability Gaps". Previously 2026-08-18, first entry: added Pain Point 8: stream egress is the first cost that scales with *viewers* rather than sessions, the go-live publish ceiling is now pinned in code, and the OBS/WHIP path is still uncapped by construction. Previously 2026-08-06: SCALE.md is now the single home for performance findings: absorbed root CONTEXT.md's §8.5 input-lag notes into Pain Point 1 and the discover-room CNPG CPU-saturation observation into DB Hot Queries; root context keeps only current-state contracts and routes perf here. Next infra step is unchanged: add a second cluster node and move everything except `service-ssh` off `server-1`)
+Last updated: 2026-09-02 (the app-side half of horizontal scaling started: root CONTEXT.md §0 now carries a multi-replica rule for all new work, `app_flags` + `app/flags/svc.rs` is the first shared primitive (process-wide switches as rows behind a LISTEN/NOTIFY-fed watch), and the first-contact haunting is the first feature built replica-clean end to end. Pain Point 2 and Next Work item 8 now split the job into the transport half (session ownership, pair-WS routing) and the app half (the per-feature ownership migration, tracked in root CONTEXT.md §7). Previously 2026-08-18, second entry: 7-day production health check, read-only. The 2026-07-26 DB fixes are now **verified in prod**, not projected: every pre-fix query shape is idle and total live DB load is about 1.9% of one core, so the chat poll is no longer the binding constraint on the 1000-user target. The largest remaining DB item is `list_discover_public_topic_rooms`, which **regressed to 771 ms mean** and turns out to be a stale-visibility-map problem rather than a query-shape problem. New sections: "Live Production Baseline (2026-08-18)" and "Observability Gaps". Previously 2026-08-18, first entry: added Pain Point 8: stream egress is the first cost that scales with *viewers* rather than sessions, the go-live publish ceiling is now pinned in code, and the OBS/WHIP path is still uncapped by construction. Previously 2026-08-06: SCALE.md is now the single home for performance findings: absorbed root CONTEXT.md's §8.5 input-lag notes into Pain Point 1 and the discover-room CNPG CPU-saturation observation into DB Hot Queries; root context keeps only current-state contracts and routes perf here. Next infra step is unchanged: add a second cluster node and move everything except `service-ssh` off `server-1`)
 
 This document records the current production capacity posture, what was discovered during the HN-spike investigations (June 2026 and the 2026-07-22 OOM, see CONTEXT.md §10.5), the DB query findings, the shipped render-cost program, and the roadmap toward roughly 1000 concurrent users.
 
@@ -135,6 +135,21 @@ The pair-WS surface itself was hardened 2026-07-22 (per-token cap of 8 sockets, 
 For horizontal scaling, one SSH session must stay on the same pod for its lifetime. That does not mean one pod per user. It means each pod owns many sessions, and pair traffic routes to the session owner.
 
 Target shape for 1000 users: a handful of SSH pods after the render-cost program, not 1000 pods. How many depends on the prod re-measurement above.
+
+**The app half of the problem (started 2026-09-02).** Session ownership and pair-WS routing are the transport half; the list above is the app half, and it only shrinks if features stop adding to it. Two things now hold that line:
+
+- **The rule.** Root CONTEXT.md §0 "Multi-replica rule": every new feature is designed as if several `late-ssh` processes were already running. Truth lives in Postgres, once-only actions are conditional `UPDATE ... WHERE` claims or advisory locks, cross-session fan-out is `LISTEN/NOTIFY`, background work dedupes through the DB, switches are rows. Presence is the one named exception and may not grow.
+- **The primitive.** `app_flags` (migration 171, `late-core/src/models/app_flag.rs`, `late-ssh/src/app/flags/svc.rs`): process-wide on/off switches as rows, a trigger notify, one listener per replica re-reading the table into a shared `watch`. The haunt's kill switch and fuse are its first tenants; every remaining in-memory `AtomicBool` that someone wants to flip at runtime moves here as it is touched (a variant, a seed row, a field).
+
+The first feature built under the rule is the first-contact haunting (`late-ssh/src/app/deadchannel/`): switches as rows, every daily and lifetime cap a claim on the user row, the once-ever stamps claims, the AI bio screen claimed per bio text. It is the template for the migration of the list above.
+
+What each remaining item needs is not the same, which is why "move it to flags" is the wrong instinct for most of them (the per-row plan lives in root CONTEXT.md §7 "Multi-replica readiness"):
+
+- session registry, paired client registry: stay pod-local by design under sticky ownership (the transport half, item 8 below)
+- active user presence, clubhouse lobby, scratchpad pairings, stream registry: a shared presence store (Redis) or an explicit "pod-local, dies with the pod" decision per structure; the round's buyer roster and the clubhouse headcount are the two places a wrong answer is user-visible
+- ghost bots (@bot, @graybeard, @bartender, the door announcers): single-leader election so two replicas never answer the same mention
+- translation daily call cap and single-flight set: a shared counter
+- leaderboard refresh loops: already DB-backed, duplicate work only
 
 ### 3. Connect storms hit DB and service startup paths
 
@@ -705,6 +720,8 @@ Minimum viable design:
 - On session end, remove token ownership
 
 Do not scale `service-ssh` randomly before this exists.
+
+The app half runs in parallel and is the longer job: work the root CONTEXT.md §7 "Multi-replica readiness" table row by row, in the order the transport design needs them (presence first, since sticky sessions alone do not make the headcount or a round's roster right; ghost single-leader second, since duplicate bot replies are the first thing users would notice; the translation cap last). New features never add rows to that table (CONTEXT.md §0 rule); switches go to `app_flags` as they are touched (Pain Point 2).
 
 ### 9. Add PgBouncer
 
