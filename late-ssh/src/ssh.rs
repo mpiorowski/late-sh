@@ -1014,6 +1014,7 @@ impl russh::server::Handler for ClientHandler {
             first_contact_gate,
             app_flags_rx: self.state.app_flags.subscribe(),
             app_flags: Some(self.state.app_flags.clone()),
+            runner_looks_rx: self.state.runner_looks.subscribe(),
             show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
             key_fingerprint,
             key_layout: device.layout,

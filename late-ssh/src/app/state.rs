@@ -365,6 +365,10 @@ pub struct SessionConfig {
     /// The flag service, for `/haunt on|off|live`. `None` on headless/test
     /// paths, which turns those commands into a banner.
     pub app_flags: Option<crate::app::flags::svc::AppFlagService>,
+    /// Every runner's look (`app/deadchannel/runner`), copied on the ~1s
+    /// tick edge into `App::runner_looks` for the #deadchannel portraits.
+    pub(crate) runner_looks_rx:
+        tokio::sync::watch::Receiver<crate::app::deadchannel::runner::svc::RunnerLooks>,
     /// Whether the aquarium tray was open when the user last toggled it.
     pub show_aquarium_tray: bool,
     /// Fingerprint of the SSH key this session authenticated with: the only
@@ -517,6 +521,12 @@ pub struct App {
     /// from the flair directory about once a second (which also steps
     /// shimmer); renderers read this owned map, never the directory mutex.
     pub(crate) name_flair: HashMap<Uuid, crate::app::common::username_effect::ResolvedName>,
+    /// Every runner's look, the owned copy the chat renderer paints
+    /// #deadchannel portraits from; refreshed from `runner_looks_rx` on the
+    /// same ~1s edge as `name_flair`.
+    pub(crate) runner_looks: crate::app::deadchannel::runner::svc::RunnerLooks,
+    pub(crate) runner_looks_rx:
+        tokio::sync::watch::Receiver<crate::app::deadchannel::runner::svc::RunnerLooks>,
     /// Per-peer `/pomodoro` badges, rebuilt from the pomodoro directory on the
     /// same ~1s cadence; chat author labels read this owned map, never the
     /// directory mutex.
@@ -1385,6 +1395,8 @@ impl App {
             clubhouse_bot_id: None,
             drunk_levels: HashMap::new(),
             name_flair: HashMap::new(),
+            runner_looks: config.runner_looks_rx.borrow().clone(),
+            runner_looks_rx: config.runner_looks_rx.clone(),
             peer_pomodoros: HashMap::new(),
             online_count: active_users
                 .as_ref()

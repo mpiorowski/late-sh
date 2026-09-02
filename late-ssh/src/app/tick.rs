@@ -700,6 +700,13 @@ impl App {
                     self.chat_ctx_epoch += 1;
                 }
             }
+            // Runner looks (the #deadchannel portraits) ride the same edge:
+            // a pointer bump when the directory changed, and the chat rows
+            // rebuild once for every portrait in view.
+            if self.runner_looks_rx.has_changed().unwrap_or(false) {
+                self.runner_looks = self.runner_looks_rx.borrow_and_update().clone();
+                self.chat_ctx_epoch += 1;
+            }
             // The pot resolves on the same edge, and for the same reason:
             // the panel reads owned values, and only a change the viewer can
             // actually see (a new size, a minute off the countdown) marks the

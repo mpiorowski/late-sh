@@ -309,6 +309,12 @@ async fn main() -> anyhow::Result<()> {
     // See `app/flags/svc.rs`.
     let app_flag_service = late_ssh::app::flags::svc::AppFlagService::new(db.clone());
     let _app_flag_listener_task = app_flag_service.start_listener_task(config.db.clone());
+    // Runner looks (the #deadchannel portraits) cross replicas the same
+    // way; the listener seeds this replica on every (re)connect. See
+    // `app/deadchannel/runner/svc.rs`.
+    let runner_look_service =
+        late_ssh::app::deadchannel::runner::svc::RunnerLookService::new(db.clone());
+    let _runner_look_listener_task = runner_look_service.start_listener_task(config.db.clone());
     // The crown's glyph crosses replicas over Postgres, not over any
     // in-process broadcast; the listener also seeds this replica's holder on
     // every (re)connect. See `app/crown/svc.rs`.
@@ -434,6 +440,7 @@ async fn main() -> anyhow::Result<()> {
         ws_pair_limiter,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         app_flags: app_flag_service.clone(),
+        runner_looks: runner_look_service.clone(),
     };
 
     let session_shutdown = CancellationToken::new();

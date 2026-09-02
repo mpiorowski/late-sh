@@ -5117,6 +5117,31 @@ async fn deadchannel_join_requires_the_invitation() {
             .await
             .expect("membership check")
     );
+
+    // Consent created the character: one runner row wearing a look the
+    // piece table knows, and a rejoin keeps that same face.
+    let runner =
+        late_core::models::deadchannel_runner::DeadchannelRunner::find_by_user(&client, user.id)
+            .await
+            .expect("find runner")
+            .expect("runner created by the invited join");
+    crate::app::deadchannel::runner::state::Look::parse(&runner.look).expect("stored look parses");
+    service.open_public_room_task(user.id, "deadchannel".to_string());
+    match timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event")
+    {
+        ChatEvent::RoomJoined { user_id, .. } => assert_eq!(user_id, user.id),
+        other => panic!("expected RoomJoined, got {other:?}"),
+    }
+    let again =
+        late_core::models::deadchannel_runner::DeadchannelRunner::find_by_user(&client, user.id)
+            .await
+            .expect("find runner again")
+            .expect("runner still there");
+    assert_eq!(again.id, runner.id);
+    assert_eq!(again.look, runner.look);
 }
 
 #[tokio::test]

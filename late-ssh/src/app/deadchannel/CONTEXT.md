@@ -1,12 +1,20 @@
 # deadchannel Context (late-ssh/src/app/deadchannel)
 
 ## Metadata
-- Domain: the deadchannel game (GAME.md) - today only its onboarding, the
-  first-contact haunting ladder, in the `haunt/` subdomain. Built for
+- Domain: the deadchannel game (GAME.md): its onboarding, the
+  first-contact haunting ladder, in the `haunt/` subdomain, and the
+  start of the character layer, the runner and its look, in `runner/`
+  (phase 2, build order step 1). Built for
   several replicas (root CONTEXT.md, multi-replica rule); gated behind
   the `haunt_live` fuse, unlit, so only staff (admins and moderators)
   are haunted today, and only they can finish the ladder and join.
-- Last updated: 2026-09-02 (staff scope: the ladder runs for moderators
+- Last updated: 2026-09-02 (the runner: `/join #deadchannel` now creates
+  a `deadchannel_runners` row wearing a random starter look (pieces and
+  tints from the closed table in `runner/state.rs`), and inside
+  #deadchannel every runner's portrait sits in a six-cell gutter on the
+  right of their messages; looks cross replicas through the
+  `deadchannel_runner_changed` notify into a process-shared directory,
+  `runner/svc.rs`. Same day, earlier: staff scope: the ladder runs for moderators
   as well as admins, `Permissions::can_moderate`, while `/haunt` stays
   admin-only so mods meet it cold; whoever finishes gets the DM and the
   invitation stamp opens `/join #deadchannel`, the full flow end to end.
@@ -76,6 +84,9 @@ number of replicas spend one AI call per text.
 | `haunt/state.rs` | The pure machines and data: `HauntState` (the one `App` slot), `FirstContactMarks` (persisted marks bundle), `FirstContactGate` + `BioStanding` + the thresholds and `bio_hash` (the eligibility gate), `ClockGlitch` (stage 1), `NameFlicker` (stage 2), `WhisperState` (stage 3), the voice/invitation constants (stage 4), `PendingClaim`/`HitStage` (claims in flight), `HauntCommand` + `parse_haunt_command`. No I/O, no clock reads. |
 | `haunt/svc.rs` | Orchestration: `bootstrap_gate` (gate + bio screen claim at connect), `arm` (session start), one `tick(app)` (claim drain, splash door, glitch scheduler, name-flicker roller, invitation clock, `/haunt` drain), `note_splash_input`, `replay_whisper`, the bio screen task. The only haunting layer touching `App`, logging, metrics, and persistence. |
 | `haunt/ui.rs` | Pure render helpers: whisper frame + splash overlay + static surge, `apply_clock_glitch`, `glitched_name`, `name_flicker_for`. Deterministic per burst seed, stateless like the sidebar equalizer. |
+| `runner/state.rs` | The look: `PIECES` (the closed starter table, one five-cell row per piece, `Slot` hood/eyes/coat), `Tint` (the closed palette, gold deliberately absent), `Look` + `Worn` (typed, table references), `Look::random` (the join's dice), `Look::to_json` / `Look::parse` (the JSON contract on the runner row; unknown codes are a `LookError`, never a blank), `PORTRAIT_WIDTH` / `PORTRAIT_HEIGHT`. No I/O. `state_test` asserts every row is five single-width cells. |
+| `runner/ui.rs` | `portrait_spans`: the look as three styled spans, one per worn piece in its tint; `tint_color` maps the palette onto the theme. Pure. |
+| `runner/svc.rs` | `RunnerLookService`: the process-shared look directory (`watch<Arc<HashMap<Uuid, Look>>>`), seeded and refreshed from `deadchannel_runners` on the `deadchannel_runner_changed` LISTEN, the `app/flags` shape. A look that fails to parse is logged and skipped. `fixed_looks_rx` for test apps. |
 
 Root integration is deliberately thin: `App.haunt` (the one field),
 `haunt::svc::tick(self)` in `tick.rs` (plus the splash block consulting
@@ -90,6 +101,20 @@ into the rows cache key, and
 `app/flags/svc.rs` (the switches), `app/ai/screen.rs::screen_bio` (the
 bio verdict), `ProfileService`'s first-contact tasks (the row claims),
 and `metrics::record_first_contact_beat` / `record_first_contact_bio_screen`.
+
+The runner's seams are as thin: `ChatService::join_deadchannel_room`
+creates the row (`DeadchannelRunner::ensure_for_user`, a conditional
+insert, so two devices joining at once share one face; a fresh row is
+the `RunnerCreated` beat), `State.runner_looks` holds the directory
+service (`main.rs` starts its listener), `App.runner_looks` is the
+session's owned copy refreshed on the 1 Hz edge in `tick.rs` (bumping
+`chat_ctx_epoch`, so the rows rebuild once per change), and chat's rows
+builder takes `runner_looks: Option<&HashMap>`, `Some` only while the
+rendered room is #deadchannel: every entry in the room wraps
+`PORTRAIT_GUTTER` (6) cells short, and a block-opening message by a
+runner gets `attach_portrait` (blank body rows added up to three, the
+face right-aligned on the first three rows). Continuations and system
+lines carry no face; every other room renders exactly as before.
 
 ## 3. The four stages (behavior contract)
 
@@ -190,7 +215,15 @@ and `metrics::record_first_contact_beat` / `record_first_contact_bio_screen`.
    `visual_order_for_rooms` and both rail builders in `chat/ui.rs`).
    Copy and name face design review before real users ever see them.
 
-## 4. Persistence (`users.settings`, late-core `User`; `app_flags`)
+## 4. Persistence (`users.settings`, late-core `User`; `app_flags`; `deadchannel_runners`)
+
+- `deadchannel_runners` (migration 172, model
+  `late-core/src/models/deadchannel_runner.rs`): one row per user
+  (`user_id` unique, cascade on delete), `look` JSONB in the shape
+  `{"hood": {"piece", "tint"}, "eyes": ..., "coat": ..., "mark": {"glyph"}}`.
+  Created only by the invited join; phase 2 grows it column by column.
+  Insert and update fire `deadchannel_runner_changed` (payload: the user
+  id, for logs only; listeners re-read every look).
 
 - `first_contact_glitch_hits` (int) + `first_contact_glitch_day`
   (YYYY-MM-DD) + `first_contact_glitch_day_hits` (int): stage-1 bursts.
@@ -287,3 +320,12 @@ Drained by `haunt::svc::tick`.
   those helpers carry no `#[cfg(test)]`).
 - `right_sidebar_visible` was made `pub(crate)` for the glitch's
   visibility gate; it still lives in `tick.rs`.
+- The look directory starts empty and fills on the listener's first
+  load, so a portrait can be absent for the first seconds after a
+  replica boots; a session copies the directory on its next 1 Hz tick.
+  The `mark` is stored from birth but not yet painted anywhere: the
+  chat badge stack and the clubhouse floor glyph are the next slice.
+- Piece rows must stay single width. `◉ ◈ ◌` and their kin are
+  ambiguous-width glyphs; the state test guards the table, and any new
+  piece with a shape glyph should be checked in the terminals people
+  here use before it ships.

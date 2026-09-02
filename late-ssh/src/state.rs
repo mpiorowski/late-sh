@@ -205,4 +205,8 @@ pub struct State {
     /// switch and fuse), served to every replica over Postgres. See
     /// `app/flags` and the multi-replica rule in the root CONTEXT.md.
     pub app_flags: crate::app::flags::svc::AppFlagService,
+    /// Every runner's look (`deadchannel_runners` rows), served to every
+    /// replica over Postgres so the #deadchannel portraits agree everywhere.
+    /// See `app/deadchannel/runner`.
+    pub runner_looks: crate::app::deadchannel::runner::svc::RunnerLookService,
 }

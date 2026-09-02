@@ -69,6 +69,8 @@ pub enum FirstContactBeat {
     NameFlicker,
     WhisperDelivered,
     InvitationRequested,
+    /// The invitation accepted: `/join #deadchannel` created the runner.
+    RunnerCreated,
 }
 
 /// How one bio screen (the first-contact eligibility gate's AI leg)
@@ -582,6 +584,7 @@ mod inner {
             FirstContactBeat::NameFlicker => "name_flicker",
             FirstContactBeat::WhisperDelivered => "whisper_delivered",
             FirstContactBeat::InvitationRequested => "invitation_requested",
+            FirstContactBeat::RunnerCreated => "runner_created",
         }
     }
 

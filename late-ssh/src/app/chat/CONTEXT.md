@@ -393,9 +393,17 @@ Admin commands:
   line - the mystery is the feature). Drained by
   `deadchannel::haunt::svc::tick`. Chat's other haunting seams: the
   `own_message_landed` slot `push_message` records for the stage-2 name
-  flicker, `name_flicker` in the rows-cache key, and
-  `ChatService::send_first_contact_invitation_task`. The domain contract
-  is `late-ssh/src/app/deadchannel/CONTEXT.md`.
+  flicker, `name_flicker` in the rows-cache key,
+  `ChatService::send_first_contact_invitation_task`, and the runner:
+  `join_deadchannel_room` creates the `deadchannel_runners` row with a
+  random starter look, and `ensure_chat_rows_cache` takes
+  `runner_looks: Option<&HashMap<Uuid, Look>>` (`Some` only while the
+  rendered room is `kind='deadchannel'`, from `DashboardChatView` /
+  `ChatRenderInput.runner_looks`, the app's 1 Hz copy of the look
+  directory): the wire wraps every entry six cells short and seats the
+  author's three-row portrait in that gutter beside a block-opening
+  message (`attach_portrait`). No other room changes. The domain
+  contract is `late-ssh/src/app/deadchannel/CONTEXT.md`.
 - `/create-room #room` creates a permanent auto-join room and bulk-adds existing users. It is idempotent on rooms that are already permanent, and it promotes an existing non-permanent public room to permanent + auto-join (`ChatRoom::ensure_permanent` UPDATEs the row, then the caller bulk-adds users) — this is how a user-created `/public #voice` room becomes the permanent `#voice` core room. Because promotion bulk-adds every user to a room nobody can leave, `/create-room` is admin-only and a mistyped slug will promote whatever public room matches it.
 - `/delete-room #room` deletes a permanent room.
 - `/fill-room #room` bulk-adds all users to an existing public room and flips `auto_join=true`; private rooms cannot be filled.

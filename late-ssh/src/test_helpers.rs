@@ -295,6 +295,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         mention_ladders: crate::app::ai::ladder::MentionLadders::new(),
         scratchpad_registry: crate::app::scratchpad::registry::SharedScratchpadRegistry::new(),
         app_flags: crate::app::flags::svc::AppFlagService::new(db.clone()),
+        runner_looks: crate::app::deadchannel::runner::svc::RunnerLookService::new(db.clone()),
         afk_users,
         username_directory,
         flair_directory: crate::app::common::username_effect::new_directory(),
@@ -636,6 +637,9 @@ fn make_app_with_chat_service_and_permissions(
         first_contact_gate: crate::app::deadchannel::haunt::state::FirstContactGate::closed(),
         app_flags_rx: test_app_flags_rx(),
         app_flags: None,
+        runner_looks_rx: crate::app::deadchannel::runner::svc::fixed_looks_rx(
+            std::collections::HashMap::new(),
+        ),
         show_aquarium_tray: false,
         // No SSH key: test apps follow the account default and persist no
         // per-device layout, which is also what ghost bot sessions do.
@@ -865,6 +869,9 @@ pub fn make_app_with_paired_client(
         first_contact_gate: crate::app::deadchannel::haunt::state::FirstContactGate::closed(),
         app_flags_rx: test_app_flags_rx(),
         app_flags: None,
+        runner_looks_rx: crate::app::deadchannel::runner::svc::fixed_looks_rx(
+            std::collections::HashMap::new(),
+        ),
         show_aquarium_tray: false,
         // No SSH key: test apps follow the account default and persist no
         // per-device layout, which is also what ghost bot sessions do.

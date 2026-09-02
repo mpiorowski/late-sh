@@ -15,7 +15,7 @@ pub mod crown;
 pub mod dashboard;
 #[cfg(test)]
 mod dashboard_flow_test;
-pub(crate) mod deadchannel;
+pub mod deadchannel;
 pub(crate) mod directory;
 pub mod door;
 pub mod files;

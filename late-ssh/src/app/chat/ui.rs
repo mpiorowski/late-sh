@@ -139,6 +139,9 @@ pub struct DashboardChatView<'a> {
     /// Resolved 24h username-effect styles per author (see
     /// `common/username_effect.rs`); fg painted over the bare name only.
     pub name_flair: &'a HashMap<Uuid, ResolvedName>,
+    /// Every runner's look (`app/deadchannel/runner`), for the portrait
+    /// gutter beside messages; consulted only when `room` is #deadchannel.
+    pub runner_looks: &'a HashMap<Uuid, crate::app::deadchannel::runner::state::Look>,
     /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
     /// `tick.rs`); painted as a presence badge after AFK.
     pub peer_pomodoros: &'a HashMap<Uuid, String>,
@@ -1221,6 +1224,10 @@ pub fn draw_dashboard_chat_card(
                 name_flicker: view.name_flicker,
                 translations: view.translations,
                 translation_hidden: view.translation_hidden,
+                runner_looks: view
+                    .room
+                    .filter(|room| super::state::is_deadchannel_room(room))
+                    .map(|_| view.runner_looks),
             },
         );
         let visible = visible_chat_rows(
@@ -1314,6 +1321,11 @@ struct ChatRowsContext<'a> {
     name_flicker: Option<(Uuid, u64)>,
     translations: &'a HashMap<Uuid, TranslationDisplay>,
     translation_hidden: &'a HashSet<Uuid>,
+    /// `Some` only while the rendered room is #deadchannel: the wire keeps
+    /// a portrait gutter on the right of every entry and paints each
+    /// runner's face beside their message (`app/deadchannel/runner`).
+    /// `None` everywhere else, and the rows are exactly what they were.
+    runner_looks: Option<&'a HashMap<Uuid, crate::app::deadchannel::runner::state::Look>>,
 }
 
 // ── Mouse hit-test types ────────────────────────────────────
@@ -1840,11 +1852,28 @@ fn ensure_chat_rows_cache(
             .translations
             .get(&msg.id)
             .filter(|_| !ctx.translation_hidden.contains(&msg.id));
-        let wrapped = wrap_chat_entry_to_lines(
+        // The #deadchannel portrait gutter (`app/deadchannel/runner`): in
+        // the wire every author is a runner, and the message list keeps
+        // `PORTRAIT_GUTTER` cells on the right where the author's face sits
+        // beside their message. Every entry in the room wraps short of the
+        // gutter so the column stays straight; the face itself paints only
+        // on an entry that opens a block (a continuation shares the face
+        // above it, the way it shares the header), never on a system line.
+        let portrait = ctx.runner_looks.and_then(|looks| {
+            (!is_continuation && !is_system)
+                .then(|| looks.get(&msg.user_id))
+                .flatten()
+                .map(crate::app::deadchannel::runner::ui::portrait_spans)
+        });
+        let text_width = match ctx.runner_looks {
+            Some(_) => width.saturating_sub(PORTRAIT_GUTTER).max(1),
+            None => width,
+        };
+        let mut wrapped = wrap_chat_entry_to_lines(
             &msg.body,
             &stamp,
             &prefix,
-            width,
+            text_width,
             author_style,
             author_tint,
             body_style,
@@ -1856,6 +1885,9 @@ fn ensure_chat_rows_cache(
             gild,
             translation,
         );
+        if let Some(portrait) = portrait {
+            attach_portrait(&mut wrapped.lines, portrait, text_width);
+        }
         let line_count = wrapped.lines.len();
         all_rows.extend(wrapped.lines);
 
@@ -1918,6 +1950,34 @@ fn ensure_chat_rows_cache(
     cache.selected_ranges = selected_ranges;
     cache.highlighted_ranges = highlighted_ranges;
     cache.header_segments = header_segments;
+}
+
+/// Cells the wire reserves on the right of every entry: the portrait plus
+/// one cell of air between it and the text.
+const PORTRAIT_GUTTER: usize = crate::app::deadchannel::runner::state::PORTRAIT_WIDTH + 1;
+
+/// Seat a portrait in the gutter beside an entry's first rows, one span per
+/// portrait row, right-aligned to `text_width + PORTRAIT_GUTTER`. An entry
+/// shorter than the portrait grows blank body rows so the face is never
+/// cut; a row already wider than the text column keeps its text and gets
+/// no face on that row (the header's stamp can run long on a narrow card).
+fn attach_portrait(
+    lines: &mut Vec<Line<'static>>,
+    portrait: [Span<'static>; crate::app::deadchannel::runner::state::PORTRAIT_HEIGHT],
+    text_width: usize,
+) {
+    while lines.len() < portrait.len() {
+        lines.push(Line::from(""));
+    }
+    for (line, span) in lines.iter_mut().zip(portrait) {
+        let used = line.width();
+        if used > text_width {
+            continue;
+        }
+        line.spans
+            .push(Span::raw(" ".repeat(text_width - used + 1)));
+        line.spans.push(span);
+    }
 }
 
 /// Output of `visible_chat_rows`: the painted screen lines and a parallel
@@ -2919,6 +2979,9 @@ pub struct ChatRenderInput<'a> {
     /// Resolved 24h username-effect styles per author (see
     /// `common/username_effect.rs`); fg painted over the bare name only.
     pub name_flair: &'a HashMap<Uuid, ResolvedName>,
+    /// Every runner's look (`app/deadchannel/runner`), for the portrait
+    /// gutter beside messages; consulted only when `room` is #deadchannel.
+    pub runner_looks: &'a HashMap<Uuid, crate::app::deadchannel::runner::state::Look>,
     /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
     /// `tick.rs`); painted as a presence badge after AFK.
     pub peer_pomodoros: &'a HashMap<Uuid, String>,
@@ -3188,6 +3251,9 @@ pub fn draw_embedded_room_chat(
             name_flicker: view.name_flicker,
             translations: view.translations,
             translation_hidden: view.translation_hidden,
+            // Embedded game chats are house tables and daily boards, never
+            // the wire.
+            runner_looks: None,
         },
     );
     let visible = visible_chat_rows(
@@ -5050,6 +5116,8 @@ fn draw_selected_content(
                     name_flicker: view.name_flicker,
                     translations: view.translations,
                     translation_hidden: view.translation_hidden,
+                    runner_looks: super::state::is_deadchannel_room(room)
+                        .then_some(view.runner_looks),
                 },
             );
             let visible = visible_chat_rows(

@@ -51,6 +51,7 @@ pub mod darkroom_save;
 pub mod darkroom_veteran;
 #[cfg(test)]
 mod darkroom_veteran_test;
+pub mod deadchannel_runner;
 pub mod door_log_cursor;
 pub mod door_milestone;
 pub mod door_rc;
