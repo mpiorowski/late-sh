@@ -991,7 +991,10 @@ impl NameFlicker {
         }
         let wave = (elapsed / NAME_WAVE_TICKS) as u64;
         let seed = self.rng ^ ((hit.since as u64) << 1 | 1);
-        Some((hit.message_id, seed ^ wave.wrapping_mul(0x9E37_79B9_7F4A_7C15)))
+        Some((
+            hit.message_id,
+            seed ^ wave.wrapping_mul(0x9E37_79B9_7F4A_7C15),
+        ))
     }
 
     pub(crate) fn total_hits(&self) -> u32 {
