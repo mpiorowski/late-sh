@@ -709,3 +709,36 @@ fn touched_settings_count_only_deliberate_keys() {
         2
     );
 }
+
+#[tokio::test]
+async fn paper_shown_claim_wins_once_per_edition_and_only_moves_forward() {
+    let (client, _test_db) = setup_db().await;
+    let user = create_first_contact_user(&client, json!({})).await;
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 9, 3).unwrap();
+    let yesterday = today.pred_opt().unwrap();
+    let tomorrow = today.succ_opt().unwrap();
+
+    // The first login of the day wins the pop; a second device the same
+    // day loses, and so does an older edition arriving late.
+    assert!(
+        User::claim_paper_shown(&client, user.id, today)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !User::claim_paper_shown(&client, user.id, today)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !User::claim_paper_shown(&client, user.id, yesterday)
+            .await
+            .unwrap()
+    );
+    // The next edition is a new claim.
+    assert!(
+        User::claim_paper_shown(&client, user.id, tomorrow)
+            .await
+            .unwrap()
+    );
+}

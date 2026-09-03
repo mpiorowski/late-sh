@@ -31,6 +31,7 @@ pub(crate) mod leaderboard;
 pub mod lobby;
 pub(crate) mod mod_modal;
 pub(crate) mod notify;
+pub mod paper;
 pub mod pet;
 pub mod pot;
 pub mod profile;

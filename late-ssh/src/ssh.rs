@@ -916,6 +916,7 @@ impl russh::server::Handler for ClientHandler {
             chat_service,
             translation_service: self.state.translation_service.clone(),
             summary_service: self.state.summary_service.clone(),
+            paper_service: self.state.paper_service.clone(),
             notification_service: self.state.notification_service.clone(),
             article_service,
             feed_service: self.state.feed_service.clone(),
@@ -1066,6 +1067,7 @@ impl russh::server::Handler for ClientHandler {
 
             is_new_user: self.is_new_user,
             land_on_home: late_core::models::user::extract_land_on_home(&user.settings),
+            paper_at_login: late_core::models::user::extract_paper_at_login(&user.settings),
 
             // Display config
             initial_theme_id: late_ssh_theme_id(&user.settings),

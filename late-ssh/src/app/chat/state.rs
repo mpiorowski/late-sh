@@ -960,6 +960,8 @@ pub struct ChatState {
     /// Set by an admin's /haunt; consumed by `deadchannel::haunt::svc`
     /// (which owns the whisper and the kill switch).
     requested_haunt: Option<crate::app::deadchannel::haunt::state::HauntCommand>,
+    /// Set by `/paper`; consumed by `paper::svc::tick` every tick.
+    requested_paper: Option<crate::app::paper::state::PaperCommand>,
     /// The just-landed echo of this session's own send, for the stage-2
     /// name flicker; consumed by `deadchannel::haunt::svc` every tick.
     own_message_landed: Option<Uuid>,
@@ -1276,6 +1278,7 @@ impl ChatState {
             requested_crown: None,
             requested_pot: None,
             requested_haunt: None,
+            requested_paper: None,
             own_message_landed: None,
             requested_watch: None,
             opened_stream_room: None,
@@ -2030,6 +2033,12 @@ impl ChatState {
 
     pub(crate) fn take_requested_crown(&mut self) -> Option<CrownCommand> {
         self.requested_crown.take()
+    }
+
+    pub(crate) fn take_requested_paper(
+        &mut self,
+    ) -> Option<crate::app::paper::state::PaperCommand> {
+        self.requested_paper.take()
     }
 
     pub(crate) fn take_requested_haunt(
@@ -3580,6 +3589,22 @@ impl ChatState {
                 return Some(Banner::error("Usage: /crown, or /crown take"));
             };
             self.requested_crown = Some(command);
+            return None;
+        }
+
+        // `/paper` opens The Late Edition for anyone; the switches after it
+        // are admin-only and say so, unlike `/haunt`, which hides.
+        if let Some(parsed) = crate::app::paper::state::parse_paper_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(command) = parsed else {
+                return Some(Banner::error(
+                    "Usage: /paper, or /paper on|off|outside on|outside off|print|preview|reset",
+                ));
+            };
+            if command.admin_only() && !self.is_admin {
+                return Some(Banner::error("Only admins can touch the presses"));
+            }
+            self.requested_paper = Some(command);
             return None;
         }
 

@@ -270,6 +270,7 @@ struct DrawContext<'a> {
     /// border HUD segment; there is no pot panel in the sidebar.
     pot: &'a crate::app::pot::state::PotView,
     login_announcements: Option<&'a announcements::LoginAnnouncements>,
+    paper_modal: Option<&'a crate::app::paper::state::PaperModal>,
     stream_modal: Option<&'a crate::app::state::StreamModal>,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
@@ -978,6 +979,7 @@ impl App {
             || self.show_bonsai_v2_modal
             || self.show_lobby_modal
             || login_announcements_visible
+            || self.paper.modal_visible()
             || self.show_help
             || self.show_ultimate_modal
             || self.show_splash
@@ -997,6 +999,7 @@ impl App {
             || self.show_bonsai_v2_modal
             || self.show_lobby_modal
             || login_announcements_visible
+            || self.paper.modal_visible()
             || self.show_help
             || self.show_ultimate_modal
             || self.show_splash
@@ -1147,6 +1150,7 @@ impl App {
                         } else {
                             None
                         },
+                        paper_modal: self.paper.modal.as_ref(),
                         stream_modal: self.stream_modal.as_ref(),
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
@@ -1858,6 +1862,9 @@ impl App {
         if let Some(modal) = ctx.login_announcements {
             announcements::draw(frame, inner, modal);
         }
+        if let Some(modal) = ctx.paper_modal {
+            crate::app::paper::ui::draw(frame, inner, modal);
+        }
 
         if ctx.show_help {
             help_modal::ui::draw(frame, inner, ctx.help_modal_state, ctx.listen_url);
@@ -1956,6 +1963,7 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_bonsai_modal
         || ctx.show_bonsai_v2_modal
         || ctx.login_announcements.is_some()
+        || ctx.paper_modal.is_some()
         || ctx.stream_modal.is_some()
         || ctx.show_help
         || ctx.show_ultimate_modal

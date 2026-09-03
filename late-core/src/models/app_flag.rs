@@ -25,6 +25,12 @@ pub enum AppFlag {
     /// (admins and moderators) are haunted; lit, stage 1 fires for everyone
     /// and the eligibility gate decides who goes further.
     HauntLive,
+    /// The daily paper's kill switch (`/paper off`): while off the sweeper
+    /// prints nothing and `/paper` answers unavailable.
+    PaperEnabled,
+    /// The paper's "Outside" page (`/paper outside on|off`): the grounded
+    /// look at the world beyond late.sh. Off until it has earned its ink.
+    PaperOutsideEnabled,
 }
 
 impl AppFlag {
@@ -32,6 +38,8 @@ impl AppFlag {
         match self {
             Self::HauntEnabled => "haunt_enabled",
             Self::HauntLive => "haunt_live",
+            Self::PaperEnabled => "paper_enabled",
+            Self::PaperOutsideEnabled => "paper_outside_enabled",
         }
     }
 }
@@ -42,6 +50,8 @@ impl AppFlag {
 pub struct AppFlags {
     pub haunt_enabled: bool,
     pub haunt_live: bool,
+    pub paper_enabled: bool,
+    pub paper_outside_enabled: bool,
 }
 
 impl AppFlags {
@@ -63,6 +73,8 @@ impl AppFlags {
         Ok(Self {
             haunt_enabled: lookup(AppFlag::HauntEnabled)?,
             haunt_live: lookup(AppFlag::HauntLive)?,
+            paper_enabled: lookup(AppFlag::PaperEnabled)?,
+            paper_outside_enabled: lookup(AppFlag::PaperOutsideEnabled)?,
         })
     }
 

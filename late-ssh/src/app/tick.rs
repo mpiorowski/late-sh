@@ -80,6 +80,9 @@ impl App {
         // the clock-glitch scheduler, and the `/haunt` drain. Must follow
         // the splash block, which advances the clock it reads.
         changed |= crate::app::deadchannel::haunt::svc::tick(self);
+        // The Late Edition: the login pop once the splash is down, `/paper`,
+        // and the results of both.
+        changed |= crate::app::paper::svc::tick(self);
 
         let mut messages = Vec::new();
         if let Some(rx) = &mut self.session_rx {

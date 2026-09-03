@@ -309,6 +309,14 @@ async fn main() -> anyhow::Result<()> {
     // See `app/flags/svc.rs`.
     let app_flag_service = late_ssh::app::flags::svc::AppFlagService::new(db.clone());
     let _app_flag_listener_task = app_flag_service.start_listener_task(config.db.clone());
+    // The Late Edition's press: every replica sweeps, the rows decide who
+    // prints. See `app/paper/svc.rs`.
+    let paper_service = late_ssh::app::paper::svc::PaperService::new(
+        db.clone(),
+        ai_service.clone(),
+        app_flag_service.subscribe(),
+    );
+    let _paper_sweeper_task = paper_service.start_sweeper_task();
     // Runner looks (the #deadchannel portraits) cross replicas the same
     // way; the listener seeds this replica on every (re)connect. See
     // `app/deadchannel/runner/svc.rs`.
@@ -378,6 +386,7 @@ async fn main() -> anyhow::Result<()> {
         ai_service: ai_service.clone(),
         translation_service: translation_service.clone(),
         summary_service: summary_service.clone(),
+        paper_service: paper_service.clone(),
         audio_service: audio_service.clone(),
         voice_service,
         stream_service,

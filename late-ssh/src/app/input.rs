@@ -809,6 +809,12 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         handle_login_announcements_input(app, &event);
         return;
     }
+    // The Late Edition sits right under the announcements: the operator's
+    // word first, then graybeard's, then everything else.
+    if app.paper.modal_visible() {
+        crate::app::paper::input::handle_input(app, &event);
+        return;
+    }
 
     // Stream URL + QR modal: Esc closes it and nothing else does. The modal
     // carries hand-copied capability values (the watch link, the WHIP server
@@ -2192,6 +2198,10 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.login_announcements_visible() {
         dismiss_login_announcements(app);
+        return;
+    }
+    if app.paper.modal_visible() {
+        app.paper.close_modal();
         return;
     }
     if app.chat.has_news_modal() {

@@ -360,6 +360,7 @@ User commands:
 - `/roll [NdM ...]` rolls dice into the current room; bare `/roll` defaults to `d20`, caps are 100 dice per group and 1000 sides.
 - `/search [query]` opens the Ctrl+/ modal in message-search mode, pre-filled with `?query`. Parsed in `submit_composer`, drained via `take_requested_message_search` in `handle_post_submit_requests` (the modal is App-owned).
 - `/summary` asks the AI for a catch-up of the visible public room, from when you last left the app on this device (24h when the device has no mark), or exactly the window you type (`/summary 6h`, `/summary 90m`, up to 48h); see §14 Summary. `/history` opens the scroll-back modal, at the first message you missed when this session has an AFK line for the room; see §14 History Modal.
+- `/paper` opens The Late Edition, @graybeard's daily paper (`app/paper`, App-owned modal); `/paper on|off`, `/paper outside on|off`, `/paper print|preview|reset` are admin-only and banner for anyone else. Parsed in `submit_composer` into `requested_paper`, drained by `paper::svc::tick`.
 - `/voice` joins the enabled voice channel for the active room; `/mute` toggles paired-CLI mic mute.
 - `/ultimate` opens owned Ultimate Spells.
 - Staff-only `/audio`, `/audio fallback`, and `/audio skip` route trusted music controls.
@@ -1086,6 +1087,8 @@ Scroll-driven room history (`history_modal/`), opened by `/history` or by a sear
 - **Public rooms only**, enforced in the SQL (`ChatMessage::list_public_room_since`: membership required, `visibility = 'public'`, system lines and ignored users excluded) with a fast client-side banner first. Private rooms and DMs never reach the summarizer.
 - **Guardrails**: a per-user-per-room slot, reserved under one lock before any work (a duplicate submit while a request runs collapses into it instead of spending a second fetch, cap slot, and model call) and armed as the cooldown on success only (`SUMMARY_COOLDOWN`, 10 min; failures release the slot so `/summary` is its own retry); a global daily cap (`SUMMARY_DAILY_CAP`, tripping logs the requesting user); a 2-way concurrency gate; and `record_chat_summary` telemetry per outcome. Results are per viewer (everyone's cursor differs), so unlike translation there is no shared cache; the slot is what absorbs repeats.
 - The system prompt marks the transcript as untrusted chat content: instructions inside messages are reported, not followed.
+
+The daily paper is the other AI catch-up and deliberately not this one: a fixed window printed once per room for everyone, not a per-viewer window from a device mark. It lives in `app/paper` (see its CONTEXT.md); chat only parses `/paper` and lends the rail order and membership to its layout.
 
 ### Tail And Delta Recovery
 

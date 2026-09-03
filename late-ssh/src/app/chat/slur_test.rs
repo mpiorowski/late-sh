@@ -8,12 +8,25 @@ const CORPUS: &str = "the deploy went through but the migration is still pending
     and nobody wants to touch it before the release window closes tomorrow morning \
     someone should probably check whether the cache warmed up correctly again";
 
+/// Words the patron actually mangled. The hiccup is an inserted word, not a
+/// mangled one, so it comes out before the two lists are lined up: leaving it
+/// in would shift every word after it and read as damage the scrambler never
+/// did.
 fn changed_word_count(original: &str, slurred: &str) -> usize {
+    let spoken = slurred.split_whitespace().filter(|word| *word != "*hic*");
     original
         .split_whitespace()
-        .zip(slurred.split_whitespace())
+        .zip(spoken)
         .filter(|(before, after)| before != after)
         .count()
+}
+
+/// Share of messages in 100 that come out carrying at least one `*hic*`.
+fn hiccup_percent(level: u8) -> usize {
+    let hiccuped = (1..1_000)
+        .filter(|seed| slur(CORPUS, level, *seed).contains("*hic*"))
+        .count();
+    hiccuped * 100 / 999
 }
 
 #[test]
@@ -75,6 +88,39 @@ fn each_drink_reads_harder_than_the_last() {
     assert!(
         tipsy < buzzed && buzzed < sloshed && sloshed < wasted,
         "every drink should read harder: {tipsy} {buzzed} {sloshed} {wasted}"
+    );
+}
+
+/// The hiccup is the loudest thing the drink does, so it is the one dial worth
+/// pinning by number: it must be common enough at the top that a wasted patron
+/// reads as wasted from one message, and absent at tipsy, where the welcome
+/// round parks every newcomer.
+#[test]
+fn a_wasted_patron_hiccups_most_of_the_time() {
+    let [tipsy, buzzed, sloshed, wasted] = [1, 2, 3, DRUNK_MAX_LEVEL].map(hiccup_percent);
+
+    assert_eq!(tipsy, 0, "one drink in should never hiccup");
+    assert!(
+        (8..22).contains(&buzzed),
+        "buzzed should hiccup now and then, hit {buzzed}%"
+    );
+    assert!(
+        (25..40).contains(&sloshed),
+        "sloshed should hiccup regularly, hit {sloshed}%"
+    );
+    assert!(
+        wasted >= 75,
+        "wasted should hiccup in most messages, hit {wasted}%"
+    );
+
+    // Two rolls at the top, so a long sentence can break twice.
+    let twice = (1..1_000)
+        .filter(|seed| slur(CORPUS, DRUNK_MAX_LEVEL, *seed).matches("*hic*").count() >= 2)
+        .count();
+    assert!(
+        twice * 100 / 999 >= 25,
+        "a wasted patron should stammer twice fairly often, hit {}%",
+        twice * 100 / 999
     );
 }
 

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -62,6 +63,34 @@ impl Article {
             )
             .await?;
         Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    /// Articles shared inside `[floor, ceiling)` with the sharer's username,
+    /// oldest first: the input of the paper's "what we were reading" page.
+    pub async fn list_shared_between(
+        client: &Client,
+        floor: DateTime<Utc>,
+        ceiling: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<(Self, String)>> {
+        let rows = client
+            .query(
+                "SELECT a.*, u.username AS sharer
+                 FROM articles a
+                 JOIN users u ON u.id = a.user_id
+                 WHERE a.created >= $1 AND a.created < $2
+                 ORDER BY a.created ASC, a.id ASC
+                 LIMIT $3",
+                &[&floor, &ceiling, &limit],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let sharer: String = row.get("sharer");
+                (Self::from(row), sharer)
+            })
+            .collect())
     }
 
     /// Publish an article and pay its author [`NEWS_SHARE_REWARD_CHIPS`],

@@ -126,6 +126,7 @@ const COMMANDS: &[Command] = &[
     global("me", "send an action line (/me waves)"),
     global("members", "room members"),
     global("pair", "shared coding scratchpad; both run /pair @user"),
+    global("paper", "The Late Edition, graybeard's daily paper"),
     global("paste-image", "upload image from CLI clipboard"),
     global("pet", "toggle the pet strip (/pet feed, /pet water)"),
     global("petname", "name your pet (/petname Mochi; bare shows)"),

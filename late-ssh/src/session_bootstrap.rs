@@ -441,6 +441,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         chat_service: state.chat_service.clone(),
         translation_service: state.translation_service.clone(),
         summary_service: state.summary_service.clone(),
+        paper_service: state.paper_service.clone(),
         notification_service: state.notification_service.clone(),
         article_service: state.article_service.clone(),
         feed_service: state.feed_service.clone(),
@@ -583,6 +584,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         leaderboard_rx: Some(state.leaderboard_service.subscribe()),
         is_new_user,
         land_on_home: late_core::models::user::extract_land_on_home(&user.settings),
+        paper_at_login: late_core::models::user::extract_paper_at_login(&user.settings),
         initial_theme_id: late_core::models::user::extract_theme_id(&user.settings)
             .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
         initial_interaction_mode: late_core::models::user::extract_interaction_mode(&user.settings),

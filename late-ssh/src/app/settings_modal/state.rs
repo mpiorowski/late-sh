@@ -113,12 +113,13 @@ pub(crate) enum TweakRow {
     ComposerKeepFocused,
     FlagFallback,
     LandOnHome,
+    PaperAtLogin,
     // Input group.
     InteractionMode,
 }
 
 impl TweakRow {
-    pub(crate) const ALL: [TweakRow; 9] = [
+    pub(crate) const ALL: [TweakRow; 10] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
@@ -127,6 +128,7 @@ impl TweakRow {
         TweakRow::ComposerKeepFocused,
         TweakRow::FlagFallback,
         TweakRow::LandOnHome,
+        TweakRow::PaperAtLogin,
         TweakRow::InteractionMode,
     ];
 }
@@ -854,6 +856,9 @@ impl SettingsModalState {
             }
             TweakRow::LandOnHome => {
                 self.draft.land_on_home ^= true;
+            }
+            TweakRow::PaperAtLogin => {
+                self.draft.paper_at_login ^= true;
             }
             TweakRow::InteractionMode => {
                 // Applied on the app (it flips the mouse live and persists on its
@@ -2207,6 +2212,7 @@ impl SettingsModalState {
                 keep_composer_focused: self.draft.keep_composer_focused,
                 start_with_music_muted: self.draft.start_with_music_muted,
                 land_on_home: self.draft.land_on_home,
+                paper_at_login: self.draft.paper_at_login,
                 show_flag_fallback: self.draft.show_flag_fallback,
                 show_pet_strip: self.draft.show_pet_strip,
                 translate_to: self.draft.translate_to,

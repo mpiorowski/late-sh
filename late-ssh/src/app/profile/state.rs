@@ -218,6 +218,7 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         keep_composer_focused: profile.keep_composer_focused,
         start_with_music_muted: profile.start_with_music_muted,
         land_on_home: profile.land_on_home,
+        paper_at_login: profile.paper_at_login,
         show_flag_fallback: profile.show_flag_fallback,
         show_pet_strip: profile.show_pet_strip,
         translate_to: profile.translate_to,

@@ -51,8 +51,14 @@ struct Intensity {
     /// only effect that changes a word's letters rather than their order, so
     /// it stays rare and only turns up once a patron is properly drunk.
     slur_percent: u32,
-    /// Chance in 100 that the whole message picks up a single `*hic*`.
+    /// Chance in 100 that the message picks up a `*hic*`, rolled
+    /// [`Intensity::hiccup_rolls`] times.
     hiccup_percent: u32,
+    /// How many independent hiccup rolls the message gets. One is a single
+    /// stammer at most; a wasted patron gets two, so a long sentence can
+    /// break twice and the effect stops being something you have to wait
+    /// around for.
+    hiccup_rolls: u32,
 }
 
 /// Levels mirror `late_core::models::drinks::drunk_level`: 0 sober through 4
@@ -65,24 +71,28 @@ fn intensity_for(level: u8) -> Option<Intensity> {
             depth: Depth::One,
             slur_percent: 0,
             hiccup_percent: 0,
+            hiccup_rolls: 0,
         }),
         2 => Some(Intensity {
             word_percent: 32,
             depth: Depth::One,
             slur_percent: 0,
-            hiccup_percent: 0,
+            hiccup_percent: 15,
+            hiccup_rolls: 1,
         }),
         3 => Some(Intensity {
             word_percent: 60,
             depth: Depth::Two,
             slur_percent: 15,
-            hiccup_percent: 0,
+            hiccup_percent: 35,
+            hiccup_rolls: 1,
         }),
         _ => Some(Intensity {
             word_percent: 85,
             depth: Depth::Shuffle,
             slur_percent: 30,
-            hiccup_percent: 25,
+            hiccup_percent: 60,
+            hiccup_rolls: 2,
         }),
     }
 }
@@ -113,8 +123,10 @@ pub(crate) fn slur(body: &str, level: u8, seed: u64) -> String {
         out.push_str(&slur_line(line, &intensity, &mut rng));
     }
 
-    if rng.percent(intensity.hiccup_percent) {
-        out = with_hiccup(&out, quoted_len, &mut rng);
+    for _ in 0..intensity.hiccup_rolls {
+        if rng.percent(intensity.hiccup_percent) {
+            out = with_hiccup(&out, quoted_len, &mut rng);
+        }
     }
     out
 }

@@ -204,6 +204,8 @@ pub struct SessionConfig {
     pub chat_service: ChatService,
     pub translation_service: crate::app::ai::translate::TranslationService,
     pub summary_service: crate::app::ai::summary::SummaryService,
+    /// The Late Edition (`app/paper`): the newsstand this session reads from.
+    pub paper_service: crate::app::paper::svc::PaperService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
     pub feed_service: crate::app::chat::feeds::svc::FeedService,
@@ -415,6 +417,8 @@ pub struct SessionConfig {
     /// (page 0) when the session starts. Ignored for brand-new users so they
     /// still get the clubhouse first-visit tutorial.
     pub land_on_home: bool,
+    /// Tweak: pop The Late Edition once a day after the splash.
+    pub paper_at_login: bool,
 
     /// Display config
     pub initial_theme_id: String,
@@ -478,6 +482,8 @@ pub struct App {
     /// running -> ready transition needs its own one-shot frame.
     pub(crate) ultimate_cooldown_was_running: bool,
     pub(crate) login_announcements: Option<crate::app::announcements::LoginAnnouncements>,
+    /// The Late Edition: its modal, the login pop, and the `/paper` drain.
+    pub(crate) paper: crate::app::paper::state::PaperState,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState,
     pub(crate) aquarium_state: hub::aquarium::state::AquariumState,
@@ -1367,6 +1373,12 @@ impl App {
             show_ultimate_modal: false,
             ultimate_cooldown_was_running: false,
             login_announcements: config.initial_announcements,
+            // A first session already gets the splash, the tour, and the
+            // bartender; the paper can wait a day.
+            paper: crate::app::paper::state::PaperState::new(
+                config.paper_service,
+                config.paper_at_login && !config.is_new_user,
+            ),
             help_modal_state: help_modal::state::HelpModalState::new(),
             leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState::new(),
             aquarium_state,

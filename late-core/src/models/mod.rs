@@ -111,6 +111,7 @@ pub mod nonogram;
 pub mod notification;
 #[cfg(test)]
 mod notification_test;
+pub mod paper;
 pub mod pet;
 #[cfg(test)]
 mod pet_test;

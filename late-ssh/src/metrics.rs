@@ -53,6 +53,33 @@ pub enum SummaryResult {
     Failed,
 }
 
+/// How one page of The Late Edition (`app/paper`) came off the press.
+/// `Printed` is the variant that spent a model call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaperPrintResult {
+    Printed,
+    /// Under the message threshold, or nothing to write about; no call.
+    Quiet,
+    /// Another replica held the claim; no call.
+    Lost,
+    Failed,
+}
+
+/// How a request to open the paper resolved. `Login` and `Command` are the
+/// two ways a reader got it; the rest are why they did not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaperOpenResult {
+    Login,
+    Command,
+    /// Nothing printed for today's edition.
+    Empty,
+    /// This account's login pop for the edition was already claimed.
+    AlreadyShown,
+    /// The paper's kill switch is off, or AI is unconfigured here.
+    Unavailable,
+    Failed,
+}
+
 /// How a five-minute online-time flush resolved. `Failed` means the batch is
 /// retained in memory for retry; a sustained run of failures is accruing time
 /// that dies with the process.
@@ -119,9 +146,9 @@ mod inner {
 
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
-        GateVerdict, GildRefusal, GildTier, NewsShareReward, OnlineTimeFlushResult, PotRefusal,
-        RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult,
+        GateVerdict, GildRefusal, GildTier, NewsShareReward, OnlineTimeFlushResult,
+        PaperOpenResult, PaperPrintResult, PotRefusal, RenderReason, RoundRefusal, SongQueueReward,
+        SshRejectReason, SummaryResult, TranslationResult,
     };
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -927,6 +954,60 @@ mod inner {
         chat_summaries_total().add(1, &[KeyValue::new("result", summary_result_label(result))]);
     }
 
+    fn paper_print_result_label(result: PaperPrintResult) -> &'static str {
+        match result {
+            PaperPrintResult::Printed => "printed",
+            PaperPrintResult::Quiet => "quiet",
+            PaperPrintResult::Lost => "lost",
+            PaperPrintResult::Failed => "failed",
+        }
+    }
+
+    fn paper_prints_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_paper_prints_total")
+                .with_description("Daily paper pages (rooms and sections) by print result")
+                .build()
+        })
+    }
+
+    pub fn record_paper_print(result: PaperPrintResult) {
+        paper_prints_total().add(
+            1,
+            &[KeyValue::new("result", paper_print_result_label(result))],
+        );
+    }
+
+    fn paper_open_result_label(result: PaperOpenResult) -> &'static str {
+        match result {
+            PaperOpenResult::Login => "login",
+            PaperOpenResult::Command => "command",
+            PaperOpenResult::Empty => "empty",
+            PaperOpenResult::AlreadyShown => "already_shown",
+            PaperOpenResult::Unavailable => "unavailable",
+            PaperOpenResult::Failed => "failed",
+        }
+    }
+
+    fn paper_opens_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_paper_opens_total")
+                .with_description("Daily paper open requests (login pop and /paper) by resolution")
+                .build()
+        })
+    }
+
+    pub fn record_paper_open(result: PaperOpenResult) {
+        paper_opens_total().add(
+            1,
+            &[KeyValue::new("result", paper_open_result_label(result))],
+        );
+    }
+
     fn door_ingest_lines_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -994,9 +1075,9 @@ mod inner {
 mod inner {
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
-        GateVerdict, GildRefusal, GildTier, NewsShareReward, OnlineTimeFlushResult, PotRefusal,
-        RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult,
+        GateVerdict, GildRefusal, GildTier, NewsShareReward, OnlineTimeFlushResult,
+        PaperOpenResult, PaperPrintResult, PotRefusal, RenderReason, RoundRefusal, SongQueueReward,
+        SshRejectReason, SummaryResult, TranslationResult,
     };
 
     pub fn record_ssh_connection() {}
@@ -1032,6 +1113,8 @@ mod inner {
     pub fn record_pot_drawn(_payout: i64, _tickets: i64) {}
     pub fn record_chat_translation(_result: TranslationResult) {}
     pub fn record_chat_summary(_result: SummaryResult) {}
+    pub fn record_paper_print(_result: PaperPrintResult) {}
+    pub fn record_paper_open(_result: PaperOpenResult) {}
     pub fn record_door_ingest_line(_game: DoorGame) {}
     pub fn record_door_ingest_session_failure(_game: DoorGame) {}
     pub fn record_online_time_flush(_result: OnlineTimeFlushResult) {}
