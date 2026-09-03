@@ -30,7 +30,7 @@ use crate::app::{
     state::{App, SessionConfig},
 };
 use crate::authz::Permissions as AuthzPermissions;
-use crate::metrics;
+use crate::metrics::{self, SshRejectReason};
 use crate::proxy_protocol;
 use crate::render_signal::RenderSignal;
 use crate::session_bootstrap::{ArcadeSessionPreloads, load_arcade_session_preloads};
@@ -125,10 +125,9 @@ struct ClientHandler {
     transport_peer_addr: Option<std::net::SocketAddr>,
     peer_addr: Option<std::net::SocketAddr>,
     peer_ip: Option<IpAddr>,
-    _conn_permit: Option<OwnedSemaphorePermit>,
+    _conn_permit: OwnedSemaphorePermit,
     per_ip_incremented: bool,
     active_user_incremented: bool,
-    over_limit: bool,
 
     /// Activity feed
     activity_feed_rx: Option<tokio::sync::broadcast::Receiver<ActivityEvent>>,
@@ -246,11 +245,52 @@ pub async fn run_with_listener(
                                     error = ?err,
                                     "failed to resolve proxy protocol header; dropping connection"
                                 );
+                                metrics::record_ssh_connection_rejected(SshRejectReason::ProxyHeader);
                                 return;
                             }
                         };
 
-                    let handler = server.new_client_with_addrs(Some(transport_peer_addr), proxied_addr);
+                    // Admission runs before the SSH handshake so a refused
+                    // socket costs nothing past this line: `tcp` drops on
+                    // return, no permit, no russh task, no buffers. A flood
+                    // that held its connections open through the handshake
+                    // is what exhausted the global permits on 2026-09-03.
+                    let effective_peer_addr = proxied_addr.or(Some(transport_peer_addr));
+                    let admission = match server.admit(effective_peer_addr) {
+                        Ok(admission) => admission,
+                        Err(reason) => {
+                            // `ip` stays a dedicated field: the incident
+                            // queries in CONTEXT.md group rejections by it.
+                            let ip = effective_peer_addr.map(|addr| addr.ip());
+                            match reason {
+                                SshRejectReason::RateLimited => tracing::warn!(
+                                    ?ip,
+                                    ?transport_peer_addr,
+                                    max_attempts = server.state.ssh_attempt_limiter.max_attempts(),
+                                    window_secs = server.state.ssh_attempt_limiter.window_secs(),
+                                    "ssh rate limit exceeded for peer ip"
+                                ),
+                                SshRejectReason::PerIpLimit => tracing::warn!(
+                                    ?ip,
+                                    ?transport_peer_addr,
+                                    limit = server.state.config.max_conns_per_ip,
+                                    "per-ip limit reached, rejecting new client"
+                                ),
+                                SshRejectReason::GlobalLimit => tracing::info!(
+                                    ?transport_peer_addr,
+                                    ?effective_peer_addr,
+                                    "connection limit reached, rejecting new client"
+                                ),
+                                SshRejectReason::ProxyHeader => {
+                                    unreachable!("admit never reports a proxy header failure")
+                                }
+                            }
+                            metrics::record_ssh_connection_rejected(reason);
+                            return;
+                        }
+                    };
+
+                    let handler = server.new_client(Some(transport_peer_addr), proxied_addr, admission);
                     match russh::server::run_stream(config, tcp, handler).await {
                         Ok(session) => {
                             if let Err(err) = session.await {
@@ -284,52 +324,57 @@ pub async fn run_with_listener(
     Ok(())
 }
 
+/// What an admitted connection holds for its lifetime. Released by
+/// `ClientHandler::drop`.
+struct Admission {
+    permit: OwnedSemaphorePermit,
+    per_ip_incremented: bool,
+}
+
 impl Server {
-    fn new_client_with_addrs(
-        &self,
-        transport_peer_addr: Option<SocketAddr>,
-        proxied_addr: Option<SocketAddr>,
-    ) -> ClientHandler {
+    /// Decide whether a fresh TCP connection may start the SSH handshake.
+    /// Cheap per-IP checks run first so a rate-limited peer never touches the
+    /// global semaphore; the permit is taken last and only kept on success.
+    fn admit(&self, effective_peer_addr: Option<SocketAddr>) -> Result<Admission, SshRejectReason> {
         metrics::record_ssh_connection();
-        let permit = self.state.conn_limit.clone().try_acquire_owned().ok();
-        let mut over_limit = permit.is_none();
-        let effective_peer_addr = proxied_addr.or(transport_peer_addr);
         let peer_ip = effective_peer_addr.map(|addr| addr.ip());
         let mut per_ip_incremented = false;
 
-        if over_limit {
-            tracing::info!(
-                ?transport_peer_addr,
-                ?effective_peer_addr,
-                "connection limit reached, rejecting new client"
-            );
-        } else if let Some(ip) = peer_ip {
+        if let Some(ip) = peer_ip {
             if !self.state.ssh_attempt_limiter.allow(ip) {
-                over_limit = true;
-                tracing::warn!(
-                    ?ip,
-                    max_attempts = self.state.ssh_attempt_limiter.max_attempts(),
-                    window_secs = self.state.ssh_attempt_limiter.window_secs(),
-                    "ssh rate limit exceeded for peer ip"
-                );
+                return Err(SshRejectReason::RateLimited);
             }
-
             let mut counts = self.state.conn_counts.lock_recover();
-            if !over_limit {
-                let count = counts.entry(ip).or_insert(0);
-                if *count >= self.state.config.max_conns_per_ip {
-                    over_limit = true;
-                    tracing::warn!(
-                        ?ip,
-                        limit = self.state.config.max_conns_per_ip,
-                        "per-ip limit reached, rejecting new client"
-                    );
-                } else {
-                    *count += 1;
-                    per_ip_incremented = true;
+            let count = counts.entry(ip).or_insert(0);
+            if *count >= self.state.config.max_conns_per_ip {
+                return Err(SshRejectReason::PerIpLimit);
+            }
+            *count += 1;
+            per_ip_incremented = true;
+        }
+
+        match self.state.conn_limit.clone().try_acquire_owned() {
+            Ok(permit) => Ok(Admission {
+                permit,
+                per_ip_incremented,
+            }),
+            Err(_) => {
+                if let Some(ip) = peer_ip {
+                    release_per_ip_slot(&self.state, ip);
                 }
+                Err(SshRejectReason::GlobalLimit)
             }
         }
+    }
+
+    fn new_client(
+        &self,
+        transport_peer_addr: Option<SocketAddr>,
+        proxied_addr: Option<SocketAddr>,
+        admission: Admission,
+    ) -> ClientHandler {
+        let effective_peer_addr = proxied_addr.or(transport_peer_addr);
+        let peer_ip = effective_peer_addr.map(|addr| addr.ip());
 
         tracing::debug!(
             ?transport_peer_addr,
@@ -345,10 +390,9 @@ impl Server {
             transport_peer_addr,
             peer_addr: effective_peer_addr,
             peer_ip,
-            _conn_permit: permit,
-            per_ip_incremented,
+            _conn_permit: admission.permit,
+            per_ip_incremented: admission.per_ip_incremented,
             active_user_incremented: false,
-            over_limit,
             channel: None,
             app_channel_id: None,
             app: None,
@@ -364,11 +408,14 @@ impl Server {
     }
 }
 
-impl russh::server::Server for Server {
-    type Handler = ClientHandler;
-
-    fn new_client(&mut self, peer_addr: Option<std::net::SocketAddr>) -> ClientHandler {
-        self.new_client_with_addrs(peer_addr, peer_addr)
+fn release_per_ip_slot(state: &State, ip: IpAddr) {
+    let mut counts = state.conn_counts.lock_recover();
+    if let Some(count) = counts.get_mut(&ip) {
+        if *count <= 1 {
+            counts.remove(&ip);
+        } else {
+            *count -= 1;
+        }
     }
 }
 
@@ -445,20 +492,13 @@ impl Drop for ClientHandler {
             crate::state::set_afk_user(&self.state.afk_users, user_id, user_still_afk);
         }
 
-        if self.over_limit || !self.per_ip_incremented {
+        if !self.per_ip_incremented {
             return;
         }
         let Some(ip) = self.peer_ip else {
             return;
         };
-        let mut counts = self.state.conn_counts.lock_recover();
-        if let Some(count) = counts.get_mut(&ip) {
-            if *count <= 1 {
-                counts.remove(&ip);
-            } else {
-                *count -= 1;
-            }
-        }
+        release_per_ip_slot(&self.state, ip);
     }
 }
 
@@ -527,10 +567,6 @@ impl russh::server::Handler for ClientHandler {
         key: &russh::keys::PublicKey,
     ) -> Result<Auth, Self::Error> {
         tracing::debug!("public key auth accepted");
-        if self.over_limit {
-            tracing::debug!("connection over limit, rejecting auth");
-            return Ok(reject_publickey_only());
-        }
         if !self.state.config.open_access {
             tracing::debug!("open access disabled, rejecting public key auth");
             return Ok(reject_publickey_only());
@@ -674,10 +710,6 @@ impl russh::server::Handler for ClientHandler {
         _session: &mut Session,
     ) -> Result<bool, Self::Error> {
         tracing::debug!("session channel opened");
-        if self.over_limit {
-            tracing::debug!("connection over limit, rejecting channel open");
-            return Ok(false);
-        }
         self.channel = Some(channel);
         Ok(true)
     }

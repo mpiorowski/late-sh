@@ -92,6 +92,21 @@ pub enum BioScreenOutcome {
     TextChanged,
 }
 
+/// Why an inbound SSH TCP connection was closed before the SSH handshake.
+/// Every variant is a socket the accept loop dropped on the floor; none of
+/// them ever reached russh, so they cost no permit, task, or buffers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SshRejectReason {
+    /// The trusted proxy never delivered a PROXY protocol header in time.
+    ProxyHeader,
+    /// The per-IP attempt rate limiter refused the connection.
+    RateLimited,
+    /// The IP already holds `max_conns_per_ip` open connections.
+    PerIpLimit,
+    /// The global `max_conns_global` semaphore is exhausted.
+    GlobalLimit,
+}
+
 #[cfg(feature = "otel")]
 mod inner {
     use std::sync::OnceLock;
@@ -104,7 +119,7 @@ mod inner {
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GildRefusal, GildTier, NewsShareReward, OnlineTimeFlushResult, PotRefusal, RenderReason,
-        RoundRefusal, SongQueueReward, SummaryResult, TranslationResult,
+        RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult, TranslationResult,
     };
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -611,6 +626,34 @@ mod inner {
         );
     }
 
+    fn ssh_connections_rejected_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_connections_rejected_total")
+                .with_description(
+                    "Inbound SSH TCP connections closed before the handshake, by reason",
+                )
+                .build()
+        })
+    }
+
+    fn ssh_reject_reason_label(reason: SshRejectReason) -> &'static str {
+        match reason {
+            SshRejectReason::ProxyHeader => "proxy_header",
+            SshRejectReason::RateLimited => "rate_limited",
+            SshRejectReason::PerIpLimit => "per_ip_limit",
+            SshRejectReason::GlobalLimit => "global_limit",
+        }
+    }
+
+    pub fn record_ssh_connection_rejected(reason: SshRejectReason) {
+        ssh_connections_rejected_total().add(
+            1,
+            &[KeyValue::new("reason", ssh_reject_reason_label(reason))],
+        );
+    }
+
     pub fn record_ssh_connection() {
         ssh_connections_total().add(1, &[]);
     }
@@ -912,10 +955,11 @@ mod inner {
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GildRefusal, GildTier, NewsShareReward, OnlineTimeFlushResult, PotRefusal, RenderReason,
-        RoundRefusal, SongQueueReward, SummaryResult, TranslationResult,
+        RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult, TranslationResult,
     };
 
     pub fn record_ssh_connection() {}
+    pub fn record_ssh_connection_rejected(_reason: SshRejectReason) {}
     pub fn record_first_contact_beat(_beat: FirstContactBeat) {}
     pub fn record_first_contact_bio_screen(_outcome: BioScreenOutcome) {}
     pub fn record_render(_reason: RenderReason) {}

@@ -8,7 +8,7 @@ use russh::{
 };
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::time::{Duration, timeout};
 
 #[tokio::test]
@@ -130,8 +130,37 @@ async fn new_account_uses_generated_name_instead_of_ssh_login() {
     handle.abort();
 }
 
+async fn authenticate(
+    client: &mut client::Handle<TestClient>,
+    user: &str,
+    key: Arc<PrivateKey>,
+) -> bool {
+    let hash = client
+        .best_supported_rsa_hash()
+        .await
+        .expect("rsa hash")
+        .flatten();
+    client
+        .authenticate_publickey(user, PrivateKeyWithHashAlg::new(key, hash))
+        .await
+        .expect("authenticate")
+        .success()
+}
+
+fn new_client_key() -> Arc<PrivateKey> {
+    Arc::new(
+        PrivateKey::random(
+            &mut UnwrapErr(SysRng),
+            russh::keys::ssh_key::Algorithm::Ed25519,
+        )
+        .expect("generate client key"),
+    )
+}
+
+/// A refused connection never reaches the SSH handshake: the socket is
+/// closed instead of answering with a banner and failing at auth later.
 #[tokio::test]
-async fn rejects_second_auth_when_ssh_attempt_rate_limit_is_one() {
+async fn rate_limited_connection_is_closed_before_the_handshake() {
     let test_db = new_test_db().await;
     let mut config = test_config(test_db.db.config().clone());
     config.max_conns_per_ip = 100;
@@ -144,55 +173,131 @@ async fn rejects_second_auth_when_ssh_attempt_rate_limit_is_one() {
         let _ = run_with_listener(listener, state, None).await;
     });
 
-    let user = "rate-limit-user";
-    let key = Arc::new(
-        PrivateKey::random(
-            &mut UnwrapErr(SysRng),
-            russh::keys::ssh_key::Algorithm::Ed25519,
-        )
-        .expect("generate client key"),
-    );
-
+    let key = new_client_key();
     let mut c1 = client::connect(Arc::new(client::Config::default()), addr, TestClient)
         .await
         .expect("connect client 1");
-    let auth1 = c1
-        .authenticate_publickey(
-            user,
-            PrivateKeyWithHashAlg::new(
-                key.clone(),
-                c1.best_supported_rsa_hash()
-                    .await
-                    .expect("rsa hash")
-                    .flatten(),
-            ),
-        )
-        .await
-        .expect("auth client 1")
-        .success();
-    assert!(auth1, "first auth should succeed");
+    assert!(
+        authenticate(&mut c1, "rate-limit-user", key.clone()).await,
+        "first auth should succeed"
+    );
     c1.disconnect(russh::Disconnect::ByApplication, "", "en")
         .await
         .expect("disconnect client 1");
 
-    let mut c2 = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+    let mut stream = TcpStream::connect(addr).await.expect("tcp connect 2");
+    let mut buf = [0u8; 64];
+    let n = timeout(Duration::from_secs(2), stream.read(&mut buf))
         .await
-        .expect("connect client 2");
-    let auth2 = c2
-        .authenticate_publickey(
-            user,
-            PrivateKeyWithHashAlg::new(
-                key.clone(),
-                c2.best_supported_rsa_hash()
-                    .await
-                    .expect("rsa hash")
-                    .flatten(),
-            ),
-        )
+        .expect("read timeout")
+        .expect("read");
+    assert_eq!(
+        n, 0,
+        "rate-limited connection must be closed without a banner"
+    );
+
+    handle.abort();
+}
+
+/// Per-IP refusals happen before the global permit is taken, so a peer
+/// hammering the rate limiter cannot starve other addresses of slots.
+#[tokio::test]
+async fn rate_limited_peer_does_not_consume_a_global_permit() {
+    let test_db = new_test_db().await;
+    let mut config = test_config(test_db.db.config().clone());
+    config.max_conns_global = 2;
+    config.max_conns_per_ip = 100;
+    config.ssh_max_attempts_per_ip = 1;
+    let state = test_app_state(test_db.db.clone(), config);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    let handle = tokio::spawn(async move {
+        let _ = run_with_listener(listener, state, None).await;
+    });
+
+    // 127.0.0.1 takes permit 1 and its only allowed attempt.
+    let mut c1 = client::connect(Arc::new(client::Config::default()), addr, TestClient)
         .await
-        .expect("auth client 2")
-        .success();
-    assert!(!auth2, "second auth should be rejected by ssh rate limiter");
+        .expect("connect client 1");
+    assert!(authenticate(&mut c1, "permit-user-1", new_client_key()).await);
+
+    // 127.0.0.1 again: rate-limited, closed, and must not hold permit 2.
+    let mut rejected = TcpStream::connect(addr).await.expect("tcp connect 2");
+    let mut buf = [0u8; 64];
+    let n = timeout(Duration::from_secs(2), rejected.read(&mut buf))
+        .await
+        .expect("read timeout")
+        .expect("read");
+    assert_eq!(n, 0, "rate-limited connection must be closed");
+
+    // A different address still gets the second permit.
+    let socket = TcpSocket::new_v4().expect("socket");
+    socket
+        .bind("127.0.0.2:0".parse().expect("loopback alias"))
+        .expect("bind 127.0.0.2");
+    let stream = socket.connect(addr).await.expect("connect from 127.0.0.2");
+    let mut c3 = client::connect_stream(Arc::new(client::Config::default()), stream, TestClient)
+        .await
+        .expect("connect client 3");
+    assert!(
+        authenticate(&mut c3, "permit-user-3", new_client_key()).await,
+        "second permit must still be available to another address"
+    );
+
+    handle.abort();
+}
+
+/// The global cap closes the socket outright and frees the slot when the
+/// admitted session ends.
+#[tokio::test]
+async fn global_limit_closes_socket_and_frees_slot_on_disconnect() {
+    let test_db = new_test_db().await;
+    let mut config = test_config(test_db.db.config().clone());
+    config.max_conns_global = 1;
+    config.max_conns_per_ip = 100;
+    let state = test_app_state(test_db.db.clone(), config);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    let handle = tokio::spawn(async move {
+        let _ = run_with_listener(listener, state, None).await;
+    });
+
+    let mut c1 = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+        .await
+        .expect("connect client 1");
+    assert!(authenticate(&mut c1, "global-limit-user", new_client_key()).await);
+
+    let mut rejected = TcpStream::connect(addr).await.expect("tcp connect 2");
+    let mut buf = [0u8; 64];
+    let n = timeout(Duration::from_secs(2), rejected.read(&mut buf))
+        .await
+        .expect("read timeout")
+        .expect("read");
+    assert_eq!(
+        n, 0,
+        "over the global limit the socket is closed, no banner"
+    );
+
+    c1.disconnect(russh::Disconnect::ByApplication, "", "en")
+        .await
+        .expect("disconnect client 1");
+
+    wait_until(
+        || async {
+            let Ok(mut stream) = TcpStream::connect(addr).await else {
+                return false;
+            };
+            let mut buf = [0u8; 64];
+            match timeout(Duration::from_secs(2), stream.read(&mut buf)).await {
+                Ok(Ok(n)) => n > 0 && buf.starts_with(b"SSH-2.0-"),
+                _ => false,
+            }
+        },
+        "slot is free again after the admitted session disconnects",
+    )
+    .await;
 
     handle.abort();
 }
