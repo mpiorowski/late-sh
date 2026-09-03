@@ -81,7 +81,7 @@ impl GildTier {
         }
     }
 
-    /// What the buyer pays. Decided in SHOP.md's fixed-numbers table: an
+    /// What the buyer pays. Decided 2026-08-25: an
     /// hour, a day, a week of completionist arcade play (~2,000 a day), in
     /// the 4x-5x steps the rest of the Shop ladder uses.
     pub const fn price(self) -> i64 {

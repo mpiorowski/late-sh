@@ -13,8 +13,8 @@ use crate::{
 };
 
 /// The ladder is the product: the crown is never priced by us, only by
-/// whoever last paid for it. SHOP.md's fixed-numbers table quotes these six
-/// rungs, so a change here is a decision rather than a refactor.
+/// whoever last paid for it. These six rungs are the decided ladder
+/// (2026-08-26), so a change here is a decision rather than a refactor.
 #[test]
 fn the_price_ladder_climbs_from_a_vacant_crown() {
     let mut prices = Vec::new();

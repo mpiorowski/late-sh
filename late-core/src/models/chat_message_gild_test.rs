@@ -141,7 +141,7 @@ async fn gilding_notifies_every_replica() {
 }
 
 /// The prices, the split, and the markers are the product. They are quoted in
-/// SHOP.md and in the help copy, so a change here is a decision, not a
+/// the help copy, so a change here is a decision, not a
 /// refactor.
 #[test]
 fn tier_roster() {

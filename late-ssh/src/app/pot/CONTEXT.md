@@ -4,7 +4,7 @@
 - Domain: the weekly pot, late.sh's parimutuel raffle and its largest concurrency-safe chip sink
 - Scope: `late-ssh/src/app/pot/`, `late-core/src/models/pot.rs`, migration 160, the status HUD badge, the `/pot` composer commands
 - Read this before: changing the ticket price or the cap, the draw hour, the payout split, the sweeper, or anything that reads `pots` / `pot_tickets`
-- Related: root `CONTEXT.md` (routing, chips), `SHOP.md` phase 5 (the decided design and the fixed numbers), `late-ssh/src/app/crown/svc.rs` (the service shape this copies)
+- Related: root `CONTEXT.md` (routing, chips), `late-ssh/src/app/crown/svc.rs` (the service shape this copies)
 
 ## 1. Summary
 
@@ -36,8 +36,8 @@ Commands are parsed in `late-ssh/src/app/chat/state.rs` (`parse_pot_command`,
 
 ## 3. The fixed numbers
 
-All of them live in `late-core/src/models/pot.rs` and are decided in SHOP.md's
-fixed-numbers table. Change them there, not in a code comment.
+All of them live in `late-core/src/models/pot.rs`. The constants are the
+decision; this table mirrors them.
 
 | Dial | Value | Constant |
 |---|---|---|
@@ -182,7 +182,7 @@ every screen all week, so a #lounge nudge only repeated what the border said.
   (the daily cap) reaches the service, so nothing downstream re-checks the
   number; whether today still has room is the insert's `WHERE`.
 
-## 11. Out of scope (SHOP.md phase 5)
+## 11. Out of scope (decided with the pot, 2026-08-27)
 
 A machine in the Late Lounge tavern, a sealed-bid twin for the marquee,
 seeding the pot with minted chips, and more than one pot at a time.

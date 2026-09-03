@@ -388,7 +388,7 @@ async fn apply_move_settles_a_seat_and_refuses_what_the_balance_cannot_cover() {
     );
 }
 
-// ---- the repeatable door payouts (SHOP.md Phase 6) -----------------------
+// ---- the repeatable door payouts (migration 158) --------------------------
 
 /// Walk every claim this account holds past a lockout window without sleeping.
 async fn age_claims(db: &late_core::db::Db, user_id: Uuid, days: i32) {

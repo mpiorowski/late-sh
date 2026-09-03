@@ -1,6 +1,6 @@
 //! Service integration tests for the pot against a real ephemeral DB.
 //!
-//! The transaction is where every acceptance rule in SHOP.md phase 5 lands:
+//! The transaction is where every rule of the pot lands:
 //! the cap refuses uncharged, the ledger shows the 20% gap, two sweepers
 //! settle one payout, and there is always exactly one open pot afterwards.
 

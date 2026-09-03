@@ -1324,7 +1324,7 @@ impl GreenDragonService {
     /// only, on the `NOT EXISTS` award insert — the rankless GDS profile
     /// badge.
     ///
-    /// Every kill pays (SHOP.md Phase 6): the kill resets the character to
+    /// Every kill pays (migrations 158 and 159): the kill resets the character to
     /// level 1, so climbing back to the dragon is a real 7-10 days under the
     /// daily turn cap, and that is the whole gate. The payout is keyed on
     /// `<character row id>:<kill number>`, so a retry pays once and a deleted-

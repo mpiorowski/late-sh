@@ -157,7 +157,7 @@ impl DarkroomService {
     /// and — first escape of this kind only, on the `NOT EXISTS` award insert
     /// — a rankless profile badge.
     ///
-    /// The chips land for every run that gets out (SHOP.md Phase 6): the
+    /// The chips land for every run that gets out (migration 158): the
     /// ending wipes the save, so a repeat is the whole arc walked again, and
     /// the run is the whole gate. `run_id` is that gate, keyed per ending, so
     /// a retry of this task pays once.

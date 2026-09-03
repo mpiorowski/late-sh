@@ -51,7 +51,7 @@ pub async fn listen_for_crown_changes(client: &Client) -> Result<()> {
 }
 
 /// What a vacant crown costs, and the floor every ratchet is clamped to.
-/// Decided in SHOP.md's fixed-numbers table: a Bronze gild's price, low
+/// Decided 2026-08-26 (lowered from 5,000): a Bronze gild's price, low
 /// enough that the month's race starts on day one (a fresh account can
 /// claim it), because the 1.5x ratchet, not the floor, is what makes the
 /// crown expensive.

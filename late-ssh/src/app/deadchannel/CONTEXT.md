@@ -26,8 +26,9 @@
   lifetime hit caps moved into conditional claims on the user row; the
   whisper stamp became a claim)
 - Status: Active, staff only until `/haunt live on`
-- Parent context: `../../../../CONTEXT.md`; design source: `GAME.md`,
-  "First contact (the haunting)"
+- Parent context: `../../../../CONTEXT.md`; design sources live in this
+  directory: `GAME.md` (the game: thesis, first contact, the runner) and
+  `DIGEST.md` (the feed budget and the welcome-back paper)
 
 ## 1. Summary
 

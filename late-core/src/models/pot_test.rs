@@ -23,8 +23,8 @@ fn holder(user_id: Uuid, tickets: i64) -> PotTicketHolder {
 }
 
 /// The whole-state assertion for the draw: fixed tickets plus a fixed seed
-/// give one exact result, every field of it. SHOP.md's payout rule (80% to
-/// the winner, the fifth burned) is what the last two fields pin.
+/// give one exact result, every field of it. The payout rule (80% to the
+/// winner, the fifth burned) is what the last two fields pin.
 #[test]
 fn a_seeded_draw_settles_to_one_exact_result() {
     // Ordered by user id, the way `PotTicket::holders` returns them, so the

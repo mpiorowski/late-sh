@@ -268,7 +268,7 @@ struct BossAchievement {
     mob_name: &'static str,
     award_category: &'static str,
     /// Chip payout via a reward template: once per character, and at most once
-    /// every 7 days per account (SHOP.md Phase 6). `None` means the profile
+    /// every 7 days per account (migration 158). `None` means the profile
     /// badge is the whole prize.
     payout: Option<BossPayout>,
 }
@@ -2214,7 +2214,7 @@ impl LateaniaService {
     }
 }
 
-/// Pay one realm crown, behind two gates at once (SHOP.md Phase 6): the
+/// Pay one realm crown, behind two gates at once (migration 158): the
 /// character persists, so a maxed one would take the easy crowns nightly
 /// without the 7-day account lockout, and `d` deletes the character, so the
 /// lockout alone would be a reroll farm. The character row id is what the

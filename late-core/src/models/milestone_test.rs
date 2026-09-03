@@ -19,8 +19,9 @@ const FUSE_PRICE: i64 = 150_000;
 const FURNACE_PRICE: i64 = 500_000;
 const ULTIMATE_PRICE: i64 = 1_000_000;
 
-/// SHOP.md's fixed-numbers table quotes this ladder, and the emoji are the
-/// product. A change here is a decision, not a refactor.
+/// This ladder (decided 2026-08-26, down from 100k / 500k / 1M when the
+/// ultimates came down to 1M) and the emoji are the product. A change here
+/// is a decision, not a refactor.
 #[tokio::test]
 async fn seeded_catalog_contains_the_three_burn_milestones() {
     let test_db = test_db().await;

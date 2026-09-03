@@ -1,6 +1,6 @@
 //! Service integration tests for the crown against a real ephemeral DB.
 //!
-//! The transaction is where every acceptance rule in SHOP.md phase 3 lands:
+//! The transaction is where every rule of the crown lands:
 //! the ladder charges what it says, a refusal never touches the ledger, and
 //! two racing takes settle to one debit.
 

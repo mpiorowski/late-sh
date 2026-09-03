@@ -22,12 +22,12 @@ use crate::app::activity::{
     event::{ActivityEvent, ActivityGame, ActivityKind},
 };
 
-// `period_kind = "lifetime"` is gone from every write path: SHOP.md Phase 6
+// `period_kind = "lifetime"` is gone from every write path: migration 158
 // made every door milestone repeatable, so nothing pays once per account for
 // life any more. The rows already banked under it stay as history, and no gate
 // reads them.
 const PER_EVENT_REWARD_PERIOD_KIND: &str = "event";
-/// The lobby's pair-day cap (SHOP.md Phase 7): one paid win per opponent per
+/// The lobby's pair-day cap (decided 2026-08-27): one paid win per opponent per
 /// game per UTC day the match was posted. The key is
 /// `<opponent id>:<posting date>`, and the claim row carries the template's
 /// `game` like every other claim, so each roster game has its own row.
@@ -487,7 +487,7 @@ impl ChipService {
     ///
     /// Both claims are scoped to the template's `game`, so the cap is per
     /// roster game: chess and battleship against the same opponent on the
-    /// same day both pay. Decided in SHOP.md Phase 7 (2026-08-27): honest
+    /// same day both pay. Decided 2026-08-27: honest
     /// friends who play several games together are never touched, and a
     /// colluding pair is bounded at one paid win per game per direction per
     /// day, which is the whole list of eight before it stops.

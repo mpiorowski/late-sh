@@ -23,7 +23,7 @@ use uuid::Uuid;
 /// `crown_changed`.
 pub const POT_CHANGED_CHANNEL: &str = "pot_changed";
 
-/// What one ticket costs. Decided in SHOP.md's fixed-numbers table: cheap
+/// What one ticket costs. Decided 2026-08-27: cheap
 /// enough that an arcade afternoon buys a handful, so the pot fills from the
 /// whole clubhouse rather than from three whales.
 pub const POT_TICKET_PRICE: i64 = 100;

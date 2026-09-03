@@ -725,8 +725,10 @@ reads a chat message, and `chat/slur.rs` has to leave that phrase alone.
   floor-guarded, burned whole, out of Top Chips like the crown.
 - **Presence is `state::online_human_ids_excluding`**, the in-process
   `active_users` roster minus the bots and the buyer. Single-replica by
-  choice (SHOP.md Phase 8 status); the credits it grants are DB rows and cash
-  from anywhere. Excluding the buyer is what makes "nobody to buy for" a real
+  choice: there is no presence table (`users.last_seen` is written at connect
+  only), building one was more work than the feature, and the round joins the
+  multi-replica debt in the root `CONTEXT.md`; the credits it grants are DB
+  rows and cash from anywhere. Excluding the buyer is what makes "nobody to buy for" a real
   refusal rather than a round bought for one.
 - **Only the buyer is poured into**, on the spot, `ROUND_DRINK_POINTS` in the
   purchase transaction: they typed the order. Everyone else gets a

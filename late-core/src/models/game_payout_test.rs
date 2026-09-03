@@ -188,7 +188,7 @@ async fn cooldown_grant_records_claim_and_suppresses_repeat() {
     assert_eq!(row.get::<_, i64>("delta"), 500);
 }
 
-// ---- the multi-key grant (SHOP.md Phase 6) -------------------------------
+// ---- the multi-key grant (migration 158) ---------------------------------
 
 const WEEK: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 

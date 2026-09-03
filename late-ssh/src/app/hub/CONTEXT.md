@@ -86,7 +86,7 @@ Current user-facing chip amounts:
 - Bonsai watering pays 200 chips once per day when the daily care row changes from unwatered to watered.
 - Quest completions pay their template-defined chip reward automatically once per active assignment.
 - Asterion escapes pay 4000 chips once per UTC day through `game_payout_claims`.
-- Lateania boss achievements pay through `game_payout_claims` behind two gates (SHOP.md Phase 6, migration 158): 10,000 chips for the Archdemon Mal'gareth and the King Who Was Promised Nothing, 20,000 for Yssgar and Kaethyr Ascendant, each once per `mud_characters.id` and at most once every 7 days per account.
+- Lateania boss achievements pay through `game_payout_claims` behind two gates (migration 158): 10,000 chips for the Archdemon Mal'gareth and the King Who Was Promised Nothing, 20,000 for Yssgar and Kaethyr Ascendant, each once per `mud_characters.id` and at most once every 7 days per account.
 - Chess decisive wins pay 500 chips through `game_payout_claims` with a 60-minute per-player cooldown.
 - ssHattrick decisive wins pay 300 chips through `game_payout_claims` with a 15-minute per-player cooldown.
 - Tron wins pay 50/75/100 chips for 2/3/4 round-start riders through `game_payout_claims` with a 5-minute per-player cooldown.

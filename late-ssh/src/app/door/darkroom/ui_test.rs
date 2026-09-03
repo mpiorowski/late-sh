@@ -76,7 +76,7 @@ fn landing_text(delete_confirm: bool) -> String {
 /// The landing has to tell a player what the two endings pay, which badge
 /// each leaves, why a second run is worth walking (the battleship and the
 /// beacon are not on a first map), and how the door is driven once inside.
-/// The amounts are SHOP.md Phase 6's; the badge codes are the profile's.
+/// The amounts are migration 158's; the badge codes are the profile's.
 #[test]
 fn the_landing_names_both_endings_their_badges_and_the_second_pass() {
     let text = landing_text(false);

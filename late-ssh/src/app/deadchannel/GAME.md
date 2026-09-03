@@ -293,7 +293,7 @@ place at all: scarcity of place is the fiction's spine, same as the
 ### First contact (the haunting, decided 2026-08-31)
 
 Status (2026-09-02): all four stages and the eligibility gate exist in
-`late-ssh/src/app/deadchannel/` (see that directory's CONTEXT.md), built
+this directory, `late-ssh/src/app/deadchannel/` (see `CONTEXT.md` beside this file), built
 for several replicas (switches as `app_flags` rows, every cap and stamp
 a conditional claim on the user row). Stage 1 is universal behind the
 `haunt_live` fuse (`/haunt live on`), unlit, so nothing fires for
@@ -873,8 +873,8 @@ database, the way the door keeps its ladders in `data.rs`.
   the UTC day, so a wound looks the same all day instead of shimmering
   every frame.
 
-**Pricing** (placeholders, design review; every purchase burned whole per
-SHOP.md):
+**Pricing** (placeholders, design review; every purchase burned whole, see
+"Shop rules the game inherits" below):
 
 | Piece | Chips |
 |---|---|
@@ -933,9 +933,38 @@ are conditional claims on the row (`WHERE day < $today`, `WHERE
 rations_left > 0 ... RETURNING`), so several replicas and two devices of
 one person always agree. The invited join creates the row with a random
 starter look and no band. Piece ownership rides `user_purchases` with a
-new catalog category (SHOP.md: one wallet, one identity system, catalog
-edits as migrations); the mark reaches the chat author line through the
+new catalog category; the mark reaches the chat author line through the
 existing chat label query, never a second directory.
+
+### Shop rules the game inherits
+
+The chip-sink roadmap that built the Shop (rentals, gild, crown, burn
+milestones, pot, door payouts, the round) is finished and its doc is gone
+(2026-09-03); its ideas that never shipped are dropped. The rules it ran
+on still bind every piece, band, and ration the city sells:
+
+- **Chips never buy power.** Only visibility (pieces, tints, the mark) and
+  stakes. No purchase changes a fight's outcome.
+- **Every chip movement is a named `ChipMove` variant** in
+  `late-core/src/models/chips.rs`. Never reuse `ShopPurchase` or `Credit`
+  for a new mechanic.
+- **Burns are the gap between a debit and a credit.** No house wallet, no
+  chips in limbo. A purchase burned whole is a debit and nothing else.
+- **One wallet, one identity system.** Ownership rides `user_purchases`;
+  name-adjacent visuals ride the existing flair pipeline or the chat label
+  query. Never a second directory, never a second wallet.
+- **Catalog edits are migrations** (`ON CONFLICT (sku) DO UPDATE`). Retire
+  SKUs with `active = false`, never delete: purchase history keeps them.
+- **Replica-safe.** Anything drawn or settled by a sweeper claims its row
+  with `UPDATE ... WHERE status = 'open' RETURNING *`, so exactly one
+  replica wins.
+- **Prices sit in one price band with the Shop.** A completionist arcade
+  day is about 2,000 chips; rentals price against that day, the month
+  tier is 40x the day tier, and the crown's 1.5x ratchet is the only
+  price we never set.
+- **Spectator side bets on fights** (the arena, phase 4) were parked in
+  the shop roadmap for the game to own; the pot's parimutuel shape is the
+  engine to copy when they come.
 
 ### The ladder above (brief; the next pass names it)
 
