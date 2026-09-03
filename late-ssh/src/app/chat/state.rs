@@ -665,6 +665,16 @@ pub(crate) fn is_deadchannel_room(room: &ChatRoom) -> bool {
     room.kind == late_core::models::chat_room::DEADCHANNEL_KIND
 }
 
+/// Whether a room's message list keeps the portrait gutter and paints
+/// each author's face beside their block (`ui.rs`, `attach_portrait`).
+/// The gutter itself is room-agnostic; this is the only switch, and today
+/// it is on for #deadchannel alone (GAME.md, "V1's one visible surface").
+/// Widening the faces to other rooms means changing this predicate, not
+/// the renderer.
+pub(crate) fn room_shows_portraits(room: &ChatRoom) -> bool {
+    is_deadchannel_room(room)
+}
+
 /// Payload handed from chat to the app layer (via `take_requested_open_sheet`)
 /// to open the character sheet modal. `editable` is true when the sheet
 /// belongs to the viewer.

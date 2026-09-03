@@ -12,7 +12,8 @@
   a `deadchannel_runners` row wearing a random starter look (pieces and
   tints from the closed table in `runner/state.rs`), and inside
   #deadchannel every runner's portrait sits in a six-cell gutter on the
-  right of their messages; looks cross replicas through the
+  right of their messages (hood on the separator row above the block,
+  eyes on the header, coat on the first body row); looks cross replicas through the
   `deadchannel_runner_changed` notify into a process-shared directory,
   `runner/svc.rs`. Same day, earlier: staff scope: the ladder runs for moderators
   as well as admins, `Permissions::can_moderate`, while `/haunt` stays

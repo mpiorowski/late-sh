@@ -1226,7 +1226,7 @@ pub fn draw_dashboard_chat_card(
                 translation_hidden: view.translation_hidden,
                 runner_looks: view
                     .room
-                    .filter(|room| super::state::is_deadchannel_room(room))
+                    .filter(|room| super::state::room_shows_portraits(room))
                     .map(|_| view.runner_looks),
             },
         );
@@ -1321,10 +1321,11 @@ struct ChatRowsContext<'a> {
     name_flicker: Option<(Uuid, u64)>,
     translations: &'a HashMap<Uuid, TranslationDisplay>,
     translation_hidden: &'a HashSet<Uuid>,
-    /// `Some` only while the rendered room is #deadchannel: the wire keeps
-    /// a portrait gutter on the right of every entry and paints each
-    /// runner's face beside their message (`app/deadchannel/runner`).
-    /// `None` everywhere else, and the rows are exactly what they were.
+    /// `Some` only while `state::room_shows_portraits` says so for the
+    /// rendered room: the list keeps a portrait gutter on the right of
+    /// every entry and paints each author's face beside their block
+    /// (`app/deadchannel/runner`). The gutter code below is room-agnostic;
+    /// `None` leaves the rows exactly what they were.
     runner_looks: Option<&'a HashMap<Uuid, crate::app::deadchannel::runner::state::Look>>,
 }
 
@@ -1813,11 +1814,14 @@ fn ensure_chat_rows_cache(
             .flatten();
         let is_system = system_text.is_some();
 
-        if !(first || is_continuation || is_system && prev_was_system) {
+        let separator_row = if first || is_continuation || is_system && prev_was_system {
+            None
+        } else {
             all_rows.push(Line::from(""));
             row_message.push(None);
             row_kind.push(RowKindLite::Blank);
-        }
+            Some(all_rows.len() - 1)
+        };
         first = false;
 
         let left_app_here = ctx.dividers.left_app.filter(|_| {
@@ -1885,8 +1889,20 @@ fn ensure_chat_rows_cache(
             gild,
             translation,
         );
-        if let Some(portrait) = portrait {
-            attach_portrait(&mut wrapped.lines, portrait, text_width);
+        if let Some([hood, eyes, coat]) = portrait {
+            // The blank separator above the block is dead space, so the
+            // hood sits there and the face ends level with the first body
+            // row: a one-line message needs no padded row under it. Only
+            // when the separator is the row directly above (no divider in
+            // between), and only when there is one: the first block in
+            // the list seats all three rows on the entry itself.
+            match separator_row.filter(|index| index + 1 == all_rows.len()) {
+                Some(index) => {
+                    seat_portrait_row(&mut all_rows[index], hood, text_width);
+                    attach_portrait(&mut wrapped.lines, vec![eyes, coat], text_width);
+                }
+                None => attach_portrait(&mut wrapped.lines, vec![hood, eyes, coat], text_width),
+            }
         }
         let line_count = wrapped.lines.len();
         all_rows.extend(wrapped.lines);
@@ -1956,28 +1972,29 @@ fn ensure_chat_rows_cache(
 /// one cell of air between it and the text.
 const PORTRAIT_GUTTER: usize = crate::app::deadchannel::runner::state::PORTRAIT_WIDTH + 1;
 
-/// Seat a portrait in the gutter beside an entry's first rows, one span per
-/// portrait row, right-aligned to `text_width + PORTRAIT_GUTTER`. An entry
-/// shorter than the portrait grows blank body rows so the face is never
-/// cut; a row already wider than the text column keeps its text and gets
-/// no face on that row (the header's stamp can run long on a narrow card).
-fn attach_portrait(
-    lines: &mut Vec<Line<'static>>,
-    portrait: [Span<'static>; crate::app::deadchannel::runner::state::PORTRAIT_HEIGHT],
-    text_width: usize,
-) {
-    while lines.len() < portrait.len() {
+/// Seat portrait rows in the gutter beside an entry's first rows, one span
+/// per row. An entry shorter than the rows it must carry grows blank body
+/// rows so the face is never cut.
+fn attach_portrait(lines: &mut Vec<Line<'static>>, rows: Vec<Span<'static>>, text_width: usize) {
+    while lines.len() < rows.len() {
         lines.push(Line::from(""));
     }
-    for (line, span) in lines.iter_mut().zip(portrait) {
-        let used = line.width();
-        if used > text_width {
-            continue;
-        }
-        line.spans
-            .push(Span::raw(" ".repeat(text_width - used + 1)));
-        line.spans.push(span);
+    for (line, span) in lines.iter_mut().zip(rows) {
+        seat_portrait_row(line, span, text_width);
     }
+}
+
+/// Right-align one portrait row to `text_width + PORTRAIT_GUTTER`. A row
+/// already wider than the text column keeps its text and gets no face (the
+/// header's stamp can run long on a narrow card).
+fn seat_portrait_row(line: &mut Line<'static>, span: Span<'static>, text_width: usize) {
+    let used = line.width();
+    if used > text_width {
+        return;
+    }
+    line.spans
+        .push(Span::raw(" ".repeat(text_width - used + 1)));
+    line.spans.push(span);
 }
 
 /// Output of `visible_chat_rows`: the painted screen lines and a parallel
@@ -5116,7 +5133,7 @@ fn draw_selected_content(
                     name_flicker: view.name_flicker,
                     translations: view.translations,
                     translation_hidden: view.translation_hidden,
-                    runner_looks: super::state::is_deadchannel_room(room)
+                    runner_looks: super::state::room_shows_portraits(room)
                         .then_some(view.runner_looks),
                 },
             );

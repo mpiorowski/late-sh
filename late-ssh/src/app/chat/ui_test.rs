@@ -3055,9 +3055,10 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
 }
 
 /// The #deadchannel portrait gutter (`app/deadchannel/runner`): a runner's
-/// face sits beside the first three rows of their message, the text wraps
-/// short of the gutter for every entry in the room, and a continuation
-/// shares the face above it.
+/// face rides the blank separator above their block plus the header and
+/// first body row, the text wraps short of the gutter for every entry in
+/// the room, a continuation shares the face above it, and the first block
+/// in the list (no separator above) seats all three rows on the entry.
 #[test]
 fn the_wire_seats_a_runners_portrait_beside_their_message() {
     use crate::app::deadchannel::runner::state::Look;
@@ -3069,43 +3070,45 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
     let current_user_id = Uuid::from_u128(2);
     let runner_id = Uuid::from_u128(3);
     let civilian_id = Uuid::from_u128(4);
+    let elder_id = Uuid::from_u128(5);
     let created = Utc::now();
     let message = |id: u128, user_id: Uuid, body: &str| ChatMessage {
         id: Uuid::from_u128(id),
-        created,
-        updated: created,
+        created: created + chrono::Duration::seconds(id as i64),
+        updated: created + chrono::Duration::seconds(id as i64),
         reply_to_message_id: None,
         reply_to_user_id: None,
         room_id,
         user_id,
         body: body.to_string(),
     };
-    // Newest first, the order the builder walks.
+    // Newest first, the order the builder walks. Oldest is a runner's
+    // one-liner opening the list, then a civilian, then mira's block.
     let messages = vec![
-        message(12, civilian_id, "who took the last hit"),
-        message(11, runner_id, "gg"),
+        message(13, runner_id, "gg"),
         message(
-            10,
+            12,
             runner_id,
             "dax get in here, the static is thick tonight and it is not waiting",
         ),
+        message(11, civilian_id, "who took the last hit"),
+        message(10, elder_id, "o7"),
     ];
 
     let usernames = HashMap::from([
         (current_user_id, "alice".to_string()),
         (runner_id, "mira".to_string()),
         (civilian_id, "afterglow".to_string()),
+        (elder_id, "dax".to_string()),
     ]);
-    let looks = HashMap::from([(
-        runner_id,
-        Look::parse(&serde_json::json!({
-            "hood": {"piece": "hood.cross", "tint": "amber"},
-            "eyes": {"piece": "eyes.gem", "tint": "white"},
-            "coat": {"piece": "coat.heavy", "tint": "static"},
-            "mark": {"glyph": "▚"}
-        }))
-        .expect("parse look"),
-    )]);
+    let look = Look::parse(&serde_json::json!({
+        "hood": {"piece": "hood.cross", "tint": "amber"},
+        "eyes": {"piece": "eyes.gem", "tint": "white"},
+        "coat": {"piece": "coat.heavy", "tint": "static"},
+        "mark": {"glyph": "▚"}
+    }))
+    .expect("parse look");
+    let looks = HashMap::from([(runner_id, look), (elder_id, look)]);
     let countries = HashMap::new();
     let bonsai_glyphs = HashMap::new();
     let chat_badges = HashMap::new();
@@ -3162,14 +3165,36 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
         })
         .collect();
 
-    // The runner's block: header, two wrapped body rows, then the
-    // continuation, then a blank and the civilian. The face rides the
-    // first three rows, right-aligned to the full width.
-    assert!(rendered[0].contains("mira"), "{rendered:?}");
+    // The list opens with dax's one-liner: no separator above it, so the
+    // face takes the header, the body row, and one padded row under them.
+    assert!(rendered[0].contains("dax"), "{rendered:?}");
     assert!(rendered[0].ends_with(" ╬═╬ "), "{rendered:?}");
+    assert!(rendered[1].contains("o7"), "{rendered:?}");
     assert!(rendered[1].ends_with("▐◈ ◈▌"), "{rendered:?}");
-    assert!(rendered[2].ends_with(" ▟▓▙ "), "{rendered:?}");
-    for row in &rendered[..3] {
+    assert_eq!(rendered[2].trim(), "▟▓▙", "{rendered:?}");
+    // Mira's block sits below the civilian: the hood rides the blank
+    // separator above her header, so the face ends level with her first
+    // body row and nothing is padded under it.
+    let mira = rendered
+        .iter()
+        .position(|row| row.contains("mira"))
+        .expect("mira's header");
+    assert_eq!(rendered[mira - 1].trim(), "╬═╬", "{rendered:?}");
+    assert!(rendered[mira].ends_with("▐◈ ◈▌"), "{rendered:?}");
+    assert!(
+        rendered[mira + 1].trim_start().starts_with("dax get"),
+        "{rendered:?}"
+    );
+    assert!(rendered[mira + 1].ends_with(" ▟▓▙ "), "{rendered:?}");
+    assert!(!rendered[mira + 2].contains('▟'), "{rendered:?}");
+    for row in [
+        &rendered[0],
+        &rendered[1],
+        &rendered[2],
+        &rendered[mira - 1],
+        &rendered[mira],
+        &rendered[mira + 1],
+    ] {
         assert_eq!(row.width(), width, "{row:?}");
     }
     // Every row in the room wraps short of the gutter: nothing but a face
@@ -3192,7 +3217,6 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
         .iter()
         .position(|row| row.contains("afterglow"))
         .expect("civilian header");
-    for row in &rendered[civilian..] {
-        assert!(!row.contains('◈'), "{rendered:?}");
-    }
+    assert!(!rendered[civilian].contains('◈'), "{rendered:?}");
+    assert!(!rendered[civilian + 1].contains('◈'), "{rendered:?}");
 }

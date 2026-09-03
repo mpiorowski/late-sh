@@ -397,13 +397,18 @@ Admin commands:
   `ChatService::send_first_contact_invitation_task`, and the runner:
   `join_deadchannel_room` creates the `deadchannel_runners` row with a
   random starter look, and `ensure_chat_rows_cache` takes
-  `runner_looks: Option<&HashMap<Uuid, Look>>` (`Some` only while the
-  rendered room is `kind='deadchannel'`, from `DashboardChatView` /
+  `runner_looks: Option<&HashMap<Uuid, Look>>` (`Some` only while
+  `state::room_shows_portraits` holds for the rendered room, today
+  `kind='deadchannel'` alone, the one switch to widen; from `DashboardChatView` /
   `ChatRenderInput.runner_looks`, the app's 1 Hz copy of the look
   directory): the wire wraps every entry six cells short and seats the
   author's three-row portrait in that gutter beside a block-opening
-  message (`attach_portrait`). No other room changes. The domain
-  contract is `late-ssh/src/app/deadchannel/CONTEXT.md`.
+  message: the hood rides the blank separator above the block, the eyes
+  the header, the coat the first body row, so a one-line message pads
+  nothing under itself (`attach_portrait` / `seat_portrait_row`). The
+  first block in the list has no separator and seats all three rows on
+  the entry. No other room changes. The domain contract is
+  `late-ssh/src/app/deadchannel/CONTEXT.md`.
 - `/create-room #room` creates a permanent auto-join room and bulk-adds existing users. It is idempotent on rooms that are already permanent, and it promotes an existing non-permanent public room to permanent + auto-join (`ChatRoom::ensure_permanent` UPDATEs the row, then the caller bulk-adds users) — this is how a user-created `/public #voice` room becomes the permanent `#voice` core room. Because promotion bulk-adds every user to a room nobody can leave, `/create-room` is admin-only and a mistyped slug will promote whatever public room matches it.
 - `/delete-room #room` deletes a permanent room.
 - `/fill-room #room` bulk-adds all users to an existing public room and flips `auto_join=true`; private rooms cannot be filled.
