@@ -4,10 +4,10 @@
 //! moderator, developer, artist, dj.
 
 const MODERATOR: &str = "🛡️";
-const ARTIST: &str = "🎨";
+const ARTIST: &str = "🖌️";
 const DEVELOPER: &str = "🔨️";
 /// DJ / music guy that keeps the YT booth going.
-const DJ: &str = "🎧";
+const DJ: &str = "🎛️";
 
 const SPECIAL_BADGES: &[(&str, &[&str])] = &[
     ("mevanlc", &[MODERATOR, DEVELOPER]),
