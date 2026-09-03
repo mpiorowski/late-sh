@@ -41,7 +41,7 @@ fn sliding_puzzle_uses_its_user_facing_title() {
 async fn sliding_puzzle_card_renders_rewards_and_launches() {
     use crate::{
         app::common::primitives::Screen,
-        test_helpers::{make_app, new_test_db, render_plain},
+        test_helpers::{make_app, new_test_db, render_plain, strip_ansi},
     };
     use late_core::{
         models::{user::RightSidebarMode, user_ssh_key::KeyLayout},
@@ -61,7 +61,7 @@ async fn sliding_puzzle_card_renders_rewards_and_launches() {
 
     let lobby = render_plain(&mut app);
     assert!(lobby.contains("Sliding Puzzle"));
-    assert!(lobby.contains("Slide numbered tiles into order."));
+    assert!(lobby.contains("Slide tiles into order by number or image."));
     assert!(lobby.contains("✗100✗250✗500"));
 
     app.handle_input(b"\r");
@@ -80,6 +80,7 @@ async fn sliding_puzzle_card_renders_rewards_and_launches() {
     assert!(game.contains("500 chips"));
     assert!(game.contains("hjkl"), "{game}");
     assert!(game.contains("[]change diff"), "{game}");
+    assert!(game.contains("iart"), "{game}");
     assert!(game.contains("n/rnew/reset"), "{game}");
     assert!(game.contains("d/pdaily/personal"), "{game}");
     assert!(game.contains("qexit"));
@@ -89,7 +90,8 @@ async fn sliding_puzzle_card_renders_rewards_and_launches() {
     app.resize(80, 24).expect("resize narrow game terminal");
     let narrow = render_plain(&mut app);
     assert!(narrow.contains("hjkl"), "{narrow}");
-    assert!(narrow.contains("[]change diff"), "{narrow}");
+    assert!(narrow.contains("[]diff"), "{narrow}");
+    assert!(narrow.contains("iart"), "{narrow}");
     assert!(narrow.contains("rreset"), "{narrow}");
     assert!(narrow.contains("d/pmode"), "{narrow}");
     assert!(narrow.contains("qexit"), "{narrow}");
@@ -97,6 +99,80 @@ async fn sliding_puzzle_card_renders_rewards_and_launches() {
     // too-small fallback would satisfy every key hint above it.
     assert!(narrow.contains("│24│"), "{narrow}");
     assert!(!narrow.contains("Terminal too small"), "{narrow}");
+
+    app.handle_input(b"i");
+    app.reset_render();
+    let loading_image = strip_ansi(&String::from_utf8_lossy(
+        &app.render().expect("render loading image view"),
+    ));
+    assert!(loading_image.contains("Loading art"), "{loading_image}");
+    assert!(loading_image.contains("│24│"), "{loading_image}");
+    assert!(
+        !loading_image.contains("Terminal too small"),
+        "{loading_image}"
+    );
+
+    app.sliding_puzzle_state
+        .apply_image_result_for_test(Err("source unavailable".to_string()));
+    app.reset_render();
+    let failed_image = strip_ansi(&String::from_utf8_lossy(
+        &app.render().expect("render failed image view"),
+    ));
+    assert!(
+        failed_image.contains("Art unavailable; i twice to retry."),
+        "{failed_image}"
+    );
+    assert!(failed_image.contains("│24│"), "{failed_image}");
+
+    let dimension = 5;
+    let geometry = crate::app::arcade::sliding_puzzle::image::MIN_IMAGE_TILE_GEOMETRY;
+    let image_width = dimension * usize::from(geometry.width);
+    let image_height = dimension * usize::from(geometry.height);
+    let preview = (0..image_height)
+        .map(|row| {
+            ratatui::text::Line::from(
+                (0..image_width)
+                    .map(|column| {
+                        let source_cell = row / usize::from(geometry.height) * dimension
+                            + column / usize::from(geometry.width);
+                        ratatui::text::Span::raw(char::from(b'A' + source_cell as u8).to_string())
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    app.sliding_puzzle_state
+        .apply_image_result_for_test(Ok(preview));
+    let mut unsolved = (1..=24).chain(std::iter::once(0)).collect::<Vec<_>>();
+    unsolved.swap(0, 1);
+    app.sliding_puzzle_state.set_board_for_test(
+        late_core::models::chips::Difficulty::Hard,
+        unsolved,
+        1,
+    );
+    app.reset_render();
+    let ready_image = strip_ansi(&String::from_utf8_lossy(
+        &app.render().expect("render ready image view"),
+    ));
+    assert!(ready_image.contains("AAAAAA"), "{ready_image}");
+    assert!(ready_image.contains("XX24XX"), "{ready_image}");
+    assert!(ready_image.contains("┌────┐"), "{ready_image}");
+    assert!(!ready_image.contains("│24│"), "{ready_image}");
+
+    let solved = (1..=24).chain(std::iter::once(0)).collect();
+    app.sliding_puzzle_state.set_board_for_test(
+        late_core::models::chips::Difficulty::Hard,
+        solved,
+        2,
+    );
+    app.reset_render();
+    let solved_image = strip_ansi(&String::from_utf8_lossy(
+        &app.render().expect("render solved image view"),
+    ));
+    assert!(!solved_image.contains("XX24XX"), "{solved_image}");
+
+    app.handle_input(b"I");
+    assert!(render_plain(&mut app).contains("Numbered tile view."));
 
     app.handle_input(b"p");
     let personal = render_plain(&mut app);

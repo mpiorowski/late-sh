@@ -4,9 +4,17 @@ use late_core::models::{
     sliding_puzzle::{Game, GameParams},
 };
 use rand_core::{OsRng, RngCore};
+use ratatui::layout::Rect;
 use uuid::Uuid;
 
-use super::svc::SlidingPuzzleService;
+use super::{
+    image::{ImageStatus, ImageTiles, NativePuzzleImageSet, TileView, image_tile_geometry},
+    svc::SlidingPuzzleService,
+};
+use crate::app::files::{
+    inline_image::{InlineImagePreview, InlineImageRenderSettings},
+    terminal_image::TerminalImageProtocol,
+};
 
 const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
 
@@ -64,7 +72,6 @@ struct Snapshot {
     win_reported: bool,
 }
 
-#[derive(Clone)]
 pub struct State {
     user_id: Uuid,
     puzzle_date: NaiveDate,
@@ -74,6 +81,7 @@ pub struct State {
     personal_snapshots: [Option<Snapshot>; 3],
     reset_pending: Option<ResetAction>,
     message: String,
+    image_tiles: ImageTiles,
     svc: SlidingPuzzleService,
 }
 
@@ -123,6 +131,7 @@ impl State {
             personal_snapshots,
             reset_pending: None,
             message: "Slide a tile into the gap: direction key or click.".to_string(),
+            image_tiles: ImageTiles::new(),
             svc,
         }
     }
@@ -143,6 +152,57 @@ impl State {
 
     pub fn mode_label(&self) -> &'static str {
         self.mode.as_str()
+    }
+
+    pub fn tile_view(&self) -> TileView {
+        self.image_tiles.view()
+    }
+
+    pub fn toggle_tile_view(&mut self) {
+        self.reset_pending = None;
+        let seed = self.active_snapshot().seed;
+        let difficulty = self.difficulty();
+        self.image_tiles.toggle(seed, difficulty);
+        self.message = match self.tile_view() {
+            TileView::Numbered => "Numbered tile view.".to_string(),
+            TileView::Image => "Image tile view selected.".to_string(),
+        };
+    }
+
+    pub(crate) fn poll_image_tiles(
+        &mut self,
+        settings: InlineImageRenderSettings,
+        board_area: Rect,
+        protocol: Option<TerminalImageProtocol>,
+    ) -> bool {
+        let seed = self.active_snapshot().seed;
+        let difficulty = self.difficulty();
+        let Some(geometry) = image_tile_geometry(board_area, difficulty) else {
+            return false;
+        };
+        self.image_tiles
+            .poll(seed, difficulty, geometry, settings, protocol)
+    }
+
+    /// Frees the session's image caches once this board is no longer the open
+    /// screen. `poll_image_tiles` only runs while it is, so nothing else can.
+    pub(crate) fn release_image_tiles(&mut self) -> bool {
+        self.image_tiles.release()
+    }
+
+    pub(crate) fn image_status(&self) -> ImageStatus {
+        self.image_tiles
+            .status_for(self.active_snapshot().seed, self.difficulty())
+    }
+
+    pub(crate) fn image_preview(&self) -> Option<&InlineImagePreview> {
+        self.image_tiles
+            .preview_for(self.active_snapshot().seed, self.difficulty())
+    }
+
+    pub(crate) fn display_native_tiles(&self) -> Option<&NativePuzzleImageSet> {
+        self.image_tiles
+            .native_tiles_for(self.active_snapshot().seed, self.difficulty())
     }
 
     pub fn reward_chips(&self) -> Option<i64> {
@@ -422,6 +482,14 @@ impl State {
     #[cfg(test)]
     pub(crate) fn scramble_seed(&self) -> u64 {
         self.active_snapshot().seed
+    }
+
+    #[cfg(test)]
+    pub(crate) fn apply_image_result_for_test(
+        &mut self,
+        result: Result<InlineImagePreview, String>,
+    ) {
+        self.image_tiles.apply_active_result_for_test(result);
     }
 
     fn request_action(&mut self, action: ResetAction, message: &str) -> bool {

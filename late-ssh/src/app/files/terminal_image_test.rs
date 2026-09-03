@@ -1,6 +1,7 @@
 use super::*;
+use image::Rgba;
 
-fn sixel_placement_key(
+fn persistent_placement_key(
     msg_id: Uuid,
     x: u16,
     y: u16,
@@ -14,6 +15,7 @@ fn sixel_placement_key(
         cols,
         rows,
         cache_key: 0,
+        opaque: false,
     }
 }
 
@@ -21,13 +23,14 @@ fn sixel_placement_key(
 // wipe can hold the screen constant; the screen-change test flips it.
 const SEED_SCREEN_TAG: u16 = 0;
 
-fn seed_sixel_state(state: &mut TerminalImageRenderState, msg_id: Uuid) {
+fn seed_persistent_raster_state(state: &mut TerminalImageRenderState, msg_id: Uuid) {
     state.protocol = Some(TerminalImageProtocol::Sixel);
-    state.placements = vec![sixel_placement_key(msg_id, 2, 3, 5, 2)];
-    state.last_intent = SixelIntent {
+    state.placements = vec![persistent_placement_key(msg_id, 2, 3, 5, 2)];
+    state.last_intent = PersistentRasterIntent {
         image_modal_msg_id: Some(msg_id),
-        overlay_blocks_sixel: false,
+        overlay_blocks_raster: false,
         screen_tag: SEED_SCREEN_TAG,
+        non_modal_image_tag: None,
     };
 }
 
@@ -35,9 +38,15 @@ fn seed_sixel_state(state: &mut TerminalImageRenderState, msg_id: Uuid) {
 fn pre_frame_wipe_skips_when_image_modal_unchanged() {
     let mut state = TerminalImageRenderState::default();
     let msg = Uuid::new_v4();
-    seed_sixel_state(&mut state, msg);
+    seed_persistent_raster_state(&mut state, msg);
     // Same modal, no overlay, same screen → no wipe, no churn.
-    let out = state.pre_frame_sixel_wipe_bytes(Some(msg), false, SEED_SCREEN_TAG);
+    let out = state.pre_frame_persistent_raster_wipe_bytes(
+        Some(msg),
+        false,
+        SEED_SCREEN_TAG,
+        None,
+        Some(TerminalImageProtocol::Sixel),
+    );
     assert!(out.is_empty());
     assert_eq!(state.placements.len(), 1);
 }
@@ -46,8 +55,14 @@ fn pre_frame_wipe_skips_when_image_modal_unchanged() {
 fn pre_frame_wipe_fires_when_image_modal_closes() {
     let mut state = TerminalImageRenderState::default();
     let msg = Uuid::new_v4();
-    seed_sixel_state(&mut state, msg);
-    let out = state.pre_frame_sixel_wipe_bytes(None, false, SEED_SCREEN_TAG);
+    seed_persistent_raster_state(&mut state, msg);
+    let out = state.pre_frame_persistent_raster_wipe_bytes(
+        None,
+        false,
+        SEED_SCREEN_TAG,
+        None,
+        Some(TerminalImageProtocol::Sixel),
+    );
     assert!(!out.is_empty(), "expected wipe bytes when modal closed");
     // Each wiped row writes a cursor sequence; 2 rows for a 5x2 rect.
     let wipe = String::from_utf8_lossy(&out);
@@ -66,8 +81,14 @@ fn pre_frame_wipe_fires_when_image_swapped() {
     let mut state = TerminalImageRenderState::default();
     let old_msg = Uuid::new_v4();
     let new_msg = Uuid::new_v4();
-    seed_sixel_state(&mut state, old_msg);
-    let out = state.pre_frame_sixel_wipe_bytes(Some(new_msg), false, SEED_SCREEN_TAG);
+    seed_persistent_raster_state(&mut state, old_msg);
+    let out = state.pre_frame_persistent_raster_wipe_bytes(
+        Some(new_msg),
+        false,
+        SEED_SCREEN_TAG,
+        None,
+        Some(TerminalImageProtocol::Sixel),
+    );
     assert!(!out.is_empty());
     assert!(state.placements.is_empty());
 }
@@ -76,9 +97,15 @@ fn pre_frame_wipe_fires_when_image_swapped() {
 fn pre_frame_wipe_fires_when_overlay_opens() {
     let mut state = TerminalImageRenderState::default();
     let msg = Uuid::new_v4();
-    seed_sixel_state(&mut state, msg);
+    seed_persistent_raster_state(&mut state, msg);
     // Same modal still open, but a foreground overlay (icon picker) opened.
-    let out = state.pre_frame_sixel_wipe_bytes(Some(msg), true, SEED_SCREEN_TAG);
+    let out = state.pre_frame_persistent_raster_wipe_bytes(
+        Some(msg),
+        true,
+        SEED_SCREEN_TAG,
+        None,
+        Some(TerminalImageProtocol::Sixel),
+    );
     assert!(
         !out.is_empty(),
         "expected wipe when overlay opens on top of Sixel"
@@ -89,11 +116,17 @@ fn pre_frame_wipe_fires_when_overlay_opens() {
 fn pre_frame_wipe_fires_when_screen_changes() {
     let mut state = TerminalImageRenderState::default();
     let msg = Uuid::new_v4();
-    seed_sixel_state(&mut state, msg);
+    seed_persistent_raster_state(&mut state, msg);
     // No modal/overlay change, but the screen changed out from under a
     // non-modal Sixel placement (e.g. leaving the Lateania landing banner).
     // The leftover pixels must be wiped or they leak onto the next screen.
-    let out = state.pre_frame_sixel_wipe_bytes(Some(msg), false, SEED_SCREEN_TAG + 1);
+    let out = state.pre_frame_persistent_raster_wipe_bytes(
+        Some(msg),
+        false,
+        SEED_SCREEN_TAG + 1,
+        None,
+        Some(TerminalImageProtocol::Sixel),
+    );
     assert!(
         !out.is_empty(),
         "expected wipe when the screen changes while Sixel was visible"
@@ -102,9 +135,110 @@ fn pre_frame_wipe_fires_when_screen_changes() {
 }
 
 #[test]
+fn pre_frame_wipe_fires_when_non_modal_image_generation_changes() {
+    let mut state = TerminalImageRenderState::default();
+    let msg = Uuid::new_v4();
+    seed_persistent_raster_state(&mut state, msg);
+    state.last_intent.non_modal_image_tag = Some(11);
+
+    // Hold the modal id, overlay, screen and protocol at their seeded values
+    // so the tag is the only term that differs. Passing `None` for the modal
+    // id here would satisfy `needs_wipe` through `modal_closed_or_swapped`
+    // and the assertion would hold with the tag check deleted entirely.
+    let out = state.pre_frame_persistent_raster_wipe_bytes(
+        Some(msg),
+        false,
+        SEED_SCREEN_TAG,
+        Some(12),
+        Some(TerminalImageProtocol::Sixel),
+    );
+
+    assert!(!out.is_empty(), "expected wipe when board raster changes");
+    assert!(state.placements.is_empty());
+}
+
+#[test]
+fn pre_frame_wipe_cleans_iterm_when_non_modal_image_disappears() {
+    let mut state = TerminalImageRenderState::default();
+    let msg = Uuid::new_v4();
+    state.protocol = Some(TerminalImageProtocol::Iterm2);
+    state.placements = vec![persistent_placement_key(msg, 2, 3, 5, 2)];
+    state.last_intent = PersistentRasterIntent {
+        image_modal_msg_id: None,
+        overlay_blocks_raster: false,
+        screen_tag: SEED_SCREEN_TAG,
+        non_modal_image_tag: Some(11),
+    };
+
+    let out = state.pre_frame_persistent_raster_wipe_bytes(
+        None,
+        false,
+        SEED_SCREEN_TAG,
+        None,
+        Some(TerminalImageProtocol::Iterm2),
+    );
+
+    assert!(!out.is_empty(), "expected iTerm2 cell wipe");
+    assert!(state.placements.is_empty());
+}
+
+#[test]
+fn pre_frame_wipe_fires_before_switching_away_from_a_persistent_protocol() {
+    let mut state = TerminalImageRenderState::default();
+    let msg = Uuid::new_v4();
+    seed_persistent_raster_state(&mut state, msg);
+    state.last_intent.non_modal_image_tag = Some(11);
+
+    // Only the protocol differs from the seeded frame; see the note above.
+    let out = state.pre_frame_persistent_raster_wipe_bytes(
+        Some(msg),
+        false,
+        SEED_SCREEN_TAG,
+        Some(11),
+        Some(TerminalImageProtocol::Kitty),
+    );
+
+    assert!(!out.is_empty(), "expected wipe before protocol change");
+    assert!(state.placements.is_empty());
+}
+
+/// The `was_persistent_raster` gate is what keeps Kitty — which deletes by
+/// id — out of the wipe path entirely. Without it every Kitty frame that
+/// changed a modal would emit a pointless rect of spaces.
+#[test]
+fn pre_frame_wipe_skips_a_previous_kitty_frame() {
+    let mut state = TerminalImageRenderState::default();
+    let msg = Uuid::new_v4();
+    state.protocol = Some(TerminalImageProtocol::Kitty);
+    state.placements = vec![persistent_placement_key(msg, 2, 3, 5, 2)];
+    state.last_intent = PersistentRasterIntent {
+        image_modal_msg_id: Some(msg),
+        overlay_blocks_raster: false,
+        screen_tag: SEED_SCREEN_TAG,
+        non_modal_image_tag: None,
+    };
+
+    let out = state.pre_frame_persistent_raster_wipe_bytes(
+        None,
+        true,
+        SEED_SCREEN_TAG + 1,
+        Some(12),
+        Some(TerminalImageProtocol::Kitty),
+    );
+
+    assert!(out.is_empty(), "Kitty deletes by id and must not be wiped");
+}
+
+#[test]
 fn pre_frame_wipe_noop_when_no_prior_sixel() {
     let mut state = TerminalImageRenderState::default();
-    let out = state.pre_frame_sixel_wipe_bytes(None, false, SEED_SCREEN_TAG);
+    let out = state.pre_frame_persistent_raster_wipe_bytes(
+        None,
+        false,
+        SEED_SCREEN_TAG,
+        None,
+        Some(TerminalImageProtocol::Sixel),
+    );
     assert!(out.is_empty());
 }
 
@@ -123,12 +257,148 @@ fn build_commands_suppresses_sixel_emission_under_overlay() {
     let cmds = state.build_commands(
         Some(TerminalImageProtocol::Sixel),
         &frame,
-        /* suppress_sixel */ true,
+        /* suppress_raster */ true,
     );
     let any_sixel = cmds.iter().any(|c| c.starts_with(b"\x1bP"));
     assert!(
         !any_sixel,
         "Sixel should be suppressed; got commands: {cmds:?}"
+    );
+}
+
+#[test]
+fn persistent_raster_tag_tracks_both_placement_and_content() {
+    let rect = Rect::new(36, 1, 48, 24);
+    let moved = Rect::new(24, 1, 48, 24);
+
+    assert_ne!(
+        persistent_raster_tag(rect, 17),
+        persistent_raster_tag(moved, 17),
+        "a raster that moves must count as changed"
+    );
+    assert_ne!(
+        persistent_raster_tag(rect, 17),
+        persistent_raster_tag(rect, 18),
+        "a raster whose content changes must count as changed"
+    );
+    assert_eq!(
+        persistent_raster_tag(rect, 17),
+        persistent_raster_tag(rect, 17)
+    );
+}
+
+#[test]
+fn build_commands_suppresses_iterm_emission_under_overlay() {
+    let mut state = TerminalImageRenderState::default();
+    let placement = TerminalImagePlacement {
+        message_id: Uuid::new_v4(),
+        area: Rect::new(2, 3, 5, 2),
+        data: TerminalImageData::new(vec![1, 2, 3], None, 5, 2),
+    };
+    let mut frame = TerminalImageFrame::default();
+    frame.push(placement);
+
+    let commands = state.build_commands(Some(TerminalImageProtocol::Iterm2), &frame, true);
+
+    assert!(commands.is_empty(), "iTerm2 must not emit under overlay");
+}
+
+fn opaque_test_data(color: Rgba<u8>, protocol: TerminalImageProtocol) -> TerminalImageData {
+    let rgba = RgbaImage::from_pixel(
+        TERMINAL_IMAGE_CELL_PIXEL_WIDTH,
+        TERMINAL_IMAGE_CELL_PIXEL_HEIGHT,
+        color,
+    );
+    terminal_image_from_rgba(&rgba, 1, 1, protocol).expect("encode opaque test image")
+}
+
+fn placement(message_id: Uuid, x: u16, data: TerminalImageData) -> TerminalImagePlacement {
+    TerminalImagePlacement {
+        message_id,
+        area: Rect::new(x, 3, 1, 1),
+        data,
+    }
+}
+
+#[test]
+fn kitty_opaque_cell_replacement_is_installed_before_targeted_cleanup() {
+    let old_id = Uuid::from_u128(1);
+    let new_id = Uuid::from_u128(2);
+    let old = placement(
+        old_id,
+        2,
+        opaque_test_data(Rgba([255, 0, 0, 255]), TerminalImageProtocol::Kitty),
+    );
+    let new = placement(
+        new_id,
+        2,
+        opaque_test_data(Rgba([0, 255, 0, 255]), TerminalImageProtocol::Kitty),
+    );
+    let mut state = TerminalImageRenderState::default();
+    let mut frame = TerminalImageFrame::default();
+    frame.push(old);
+    state.build_commands(Some(TerminalImageProtocol::Kitty), &frame, false);
+
+    frame.clear();
+    frame.push(new);
+    let commands = state.build_commands(Some(TerminalImageProtocol::Kitty), &frame, false);
+    let stream = commands.concat();
+    let text = String::from_utf8_lossy(&stream);
+    let transmit = text.find("a=T").expect("new image transmission");
+    let targeted_delete = format!("a=d,d=I,i={}", kitty_image_id(old_id));
+    let delete = text
+        .find(&targeted_delete)
+        .expect("old image targeted delete");
+
+    assert!(
+        transmit < delete,
+        "new image must be placed before old cleanup"
+    );
+    assert!(
+        !text.contains("a=d,d=Z"),
+        "must not clear every Kitty placement"
+    );
+    assert!(
+        !text.contains("a=d,d=R"),
+        "must not clear the shared image-id range"
+    );
+}
+
+#[test]
+fn iterm_opaque_cell_replacement_emits_only_changed_cells() {
+    let unchanged = placement(
+        Uuid::from_u128(1),
+        2,
+        opaque_test_data(Rgba([255, 0, 0, 255]), TerminalImageProtocol::Iterm2),
+    );
+    let old = placement(
+        Uuid::from_u128(2),
+        3,
+        opaque_test_data(Rgba([0, 255, 0, 255]), TerminalImageProtocol::Iterm2),
+    );
+    let new = placement(
+        Uuid::from_u128(3),
+        3,
+        opaque_test_data(Rgba([0, 0, 255, 255]), TerminalImageProtocol::Iterm2),
+    );
+    let mut state = TerminalImageRenderState::default();
+    let mut frame = TerminalImageFrame::default();
+    frame.push(unchanged.clone());
+    frame.push(old);
+    state.build_commands(Some(TerminalImageProtocol::Iterm2), &frame, false);
+
+    frame.clear();
+    frame.push(unchanged);
+    frame.push(new);
+    let commands = state.build_commands(Some(TerminalImageProtocol::Iterm2), &frame, false);
+    let image_commands = commands
+        .iter()
+        .filter(|command| command.starts_with(b"\x1b]1337;"))
+        .count();
+
+    assert_eq!(
+        image_commands, 1,
+        "unchanged cells must not be retransmitted"
     );
 }
 

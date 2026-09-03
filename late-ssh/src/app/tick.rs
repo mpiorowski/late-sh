@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use super::state::{App, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS, GAME_SELECTION_TRAFFIC};
+use super::state::{
+    App, GAME_SELECTION_SLIDING_PUZZLE, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS,
+    GAME_SELECTION_TRAFFIC,
+};
 use crate::app::activity::event::ActivityKind;
 use crate::app::common::primitives::Screen;
 use crate::app::common::theme;
@@ -192,8 +195,29 @@ impl App {
                 }
             }
         }
-        self.chat
-            .poll_inline_images(self.inline_image_render_settings());
+        let inline_image_render_settings = self.inline_image_render_settings();
+        self.chat.poll_inline_images(inline_image_render_settings);
+        if self.screen == Screen::Arcade
+            && self.is_playing_game
+            && self.game_selection == GAME_SELECTION_SLIDING_PUZZLE
+        {
+            let board_area = crate::app::arcade::ui::game_content_area(
+                self.content_area(),
+                true,
+                crate::app::arcade::ui::SHOW_GAME_BOTTOM_BAR,
+            );
+            changed |= self.sliding_puzzle_state.poll_image_tiles(
+                inline_image_render_settings,
+                board_area,
+                self.terminal_image_protocol,
+            );
+        } else {
+            // `poll_image_tiles` is the only thing that evicts this game's
+            // rasters, and it stops running the moment the board is not the
+            // open screen. Free them here or a session that played once holds
+            // them until it disconnects.
+            changed |= self.sliding_puzzle_state.release_image_tiles();
+        }
         changed |= self.chat.poll_terminal_images();
         for output in self.chat.take_mod_outputs() {
             self.mod_modal_state

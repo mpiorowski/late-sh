@@ -963,6 +963,7 @@ fn arcade_help_lines() -> Vec<String> {
         "",
         "Notes",
         "  Game-specific controls appear inside the Arcade page.",
+        "  Sliding Puzzle: i toggles numbered and image tiles; this view is session only and keeps the same board and rewards.",
         "  Daily puzzle completions, run scores, chips, payouts, and leaderboards are covered in Economy.",
         "",
         "Leaderboard badges",

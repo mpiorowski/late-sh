@@ -276,6 +276,8 @@ fn arcade_sections() -> Vec<GuideSection> {
                     .to_string(),
                 "hjkl or arrows slide a tile in the indicated direction.".to_string(),
                 "Click an adjacent tile to slide it into the gap.".to_string(),
+                "i toggles numbered and image tiles; this view is session only and keeps the same board and rewards."
+                    .to_string(),
                 "d selects daily; p selects personal; n twice starts a new personal board."
                     .to_string(),
                 "Personal boards persist but grant no chips, quest progress, or Arcade Win."

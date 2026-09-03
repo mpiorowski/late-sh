@@ -13,6 +13,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
         }
         b'p' | b'P' => state.show_personal(),
         b'd' | b'D' => state.show_daily(),
+        b'i' | b'I' => state.toggle_tile_view(),
         b'[' => state.prev_difficulty(),
         b']' => state.next_difficulty(),
         b'r' | b'R' | b'0' => {
@@ -56,7 +57,7 @@ pub fn handle_mouse(state: &mut State, area: Rect, mouse: MouseEvent) -> bool {
     let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
         return false;
     };
-    let Some(index) = super::ui::hit_test(area, state.difficulty(), x, y) else {
+    let Some(index) = super::ui::hit_test(area, state.difficulty(), state.tile_view(), x, y) else {
         return false;
     };
 

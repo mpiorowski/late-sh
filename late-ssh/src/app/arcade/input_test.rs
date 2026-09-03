@@ -92,7 +92,13 @@ async fn sliding_puzzle_left_click_moves_an_adjacent_tile_into_the_gap() {
     let (x, y) = (0..area.height)
         .flat_map(|y| (0..area.width).map(move |x| (x, y)))
         .find(|&(x, y)| {
-            crate::app::arcade::sliding_puzzle::ui::hit_test(area, difficulty, x, y) == Some(7)
+            crate::app::arcade::sliding_puzzle::ui::hit_test(
+                area,
+                difficulty,
+                crate::app::arcade::sliding_puzzle::image::TileView::Numbered,
+                x,
+                y,
+            ) == Some(7)
         })
         .expect("clickable tile");
     let event = ParsedInput::Mouse(MouseEvent {

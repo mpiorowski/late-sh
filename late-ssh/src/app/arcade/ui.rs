@@ -12,6 +12,7 @@ use ratatui::{
 
 use crate::app::{
     common::theme,
+    files::terminal_image::{TerminalImageFrame, TerminalImageProtocol},
     state::{
         GAME_SELECTION_2048, GAME_SELECTION_LE_WORD, GAME_SELECTION_MINESWEEPER,
         GAME_SELECTION_NONOGRAMS, GAME_SELECTION_RUBIKS_CUBE, GAME_SELECTION_SLIDING_PUZZLE,
@@ -282,8 +283,20 @@ pub struct ArcadeHubView<'a> {
     pub quest_state: &'a crate::app::hub::dailies::state::QuestState,
 }
 
-pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
-    let show_bottom_bar = true;
+/// Arcade games always draw their status/keys/tip footer. Mouse hit-testing
+/// and the pre-frame raster wipe both run outside the draw path and have to
+/// reach the same answer, so it is stated once here instead of being
+/// re-decided as a literal at each call site.
+pub const SHOW_GAME_BOTTOM_BAR: bool = true;
+
+pub fn draw_arcade_hub(
+    frame: &mut Frame,
+    area: Rect,
+    view: &ArcadeHubView<'_>,
+    terminal_image_protocol: Option<TerminalImageProtocol>,
+    terminal_images: &mut TerminalImageFrame,
+) {
+    let show_bottom_bar = SHOW_GAME_BOTTOM_BAR;
     if view.is_playing_game {
         if view.game_selection == GAME_SELECTION_2048 {
             super::twenty_forty_eight::ui::draw_game(
@@ -311,6 +324,8 @@ pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) 
                 area,
                 view.sliding_puzzle_state,
                 show_bottom_bar,
+                terminal_image_protocol,
+                terminal_images,
             );
             return;
         } else if view.game_selection == GAME_SELECTION_LE_WORD {
@@ -562,7 +577,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                 GameEntry {
                     idx: GAME_SELECTION_SLIDING_PUZZLE,
                     name: "Sliding Puzzle",
-                    descriptions: &["Slide numbered tiles into order."],
+                    descriptions: &["Slide tiles into order by number or image."],
                     selected_style: Style::default()
                         .fg(theme::TEXT_BRIGHT())
                         .add_modifier(Modifier::BOLD),

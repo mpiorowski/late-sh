@@ -260,39 +260,9 @@ pub(crate) fn handle_event(app: &mut App, event: &crate::app::input::ParsedInput
 }
 
 fn arcade_content_area(app: &App) -> Rect {
-    let area = Rect::new(0, 0, app.size.0, app.size.1);
-    let inner = Rect {
-        x: area.x.saturating_add(1),
-        y: area.y.saturating_add(1),
-        width: area.width.saturating_sub(2),
-        height: area.height.saturating_sub(2),
-    };
-
-    if right_sidebar_visible(app) {
-        Rect {
-            width: inner.width.saturating_sub(24),
-            ..inner
-        }
-    } else {
-        inner
-    }
-}
-
-fn right_sidebar_visible(app: &App) -> bool {
-    if app.show_settings {
-        return crate::app::render::resolve_right_sidebar_enabled(
-            app.settings_modal_state.device_rails().1,
-            Screen::Arcade,
-            app.size.0,
-        );
-    }
-
-    let (_, right_sidebar_mode) = app.rail_modes();
-    crate::app::render::resolve_right_sidebar_enabled(
-        right_sidebar_mode,
-        Screen::Arcade,
-        app.size.0,
-    )
+    // Mouse coordinates must land on the same cells the draw path used, so
+    // this reads the shared definition rather than re-deriving the layout.
+    app.content_area()
 }
 
 #[cfg(test)]

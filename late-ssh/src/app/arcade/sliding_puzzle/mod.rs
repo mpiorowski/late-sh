@@ -1,3 +1,4 @@
+pub mod image;
 pub mod input;
 pub mod state;
 pub mod svc;

@@ -39,6 +39,35 @@ use crate::app::files::terminal_image::TerminalImageFrame;
 pub(crate) const AUTO_ROOM_LIST_MIN_COLS: u16 = 96;
 pub(crate) const AUTO_RIGHT_SIDEBAR_MIN_COLS: u16 = 72;
 
+pub(crate) const RIGHT_SIDEBAR_WIDTH: u16 = 24;
+
+fn app_frame_inner_area(area: Rect) -> Rect {
+    Block::default().borders(Borders::ALL).inner(area)
+}
+
+fn app_content_and_sidebar_areas(inner: Rect, show_right_sidebar: bool) -> (Rect, Option<Rect>) {
+    if show_right_sidebar {
+        let layout =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Length(RIGHT_SIDEBAR_WIDTH)])
+                .split(inner);
+        (layout[0], Some(layout[1]))
+    } else {
+        (inner, None)
+    }
+}
+
+impl App {
+    /// The rect the current screen draws into: inside the app border, minus
+    /// the right rail when it shows. This is the one definition — the draw
+    /// path, mouse hit-testing, and the pre-frame raster wipe all derive
+    /// their geometry from it, and they have to agree cell for cell or
+    /// placements land in the wrong place.
+    pub(crate) fn content_area(&self) -> Rect {
+        let inner = app_frame_inner_area(Rect::new(0, 0, self.size.0, self.size.1));
+        app_content_and_sidebar_areas(inner, self.right_sidebar_visible()).0
+    }
+}
+
 fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
     if show_settings {
         draft_enabled
@@ -952,18 +981,18 @@ impl App {
         });
         let mut terminal_image_frame = TerminalImageFrame::default();
 
-        // Sixel cleanup, pre-frame phase. Sixel — unlike Kitty — has no
-        // delete-by-id protocol, so prior pixels persist on the terminal
-        // raster layer until the cells underneath are written to. Compute
+        // Persistent raster cleanup, pre-frame phase. iTerm2/Sixel — unlike
+        // Kitty — have no delete-by-id protocol, so prior pixels can persist
+        // until the covered cells are rewritten. Compute
         // the wipe HERE so the bytes land in `shared` BEFORE ratatui's frame
         // diff. ratatui's normal cell writes then overwrite the wiped area
-        // with the correct new content. See `pre_frame_sixel_wipe_bytes`.
+        // with the correct new content. See `pre_frame_persistent_raster_wipe_bytes`.
         //
         // Read each modal flag individually instead of passing `self` to a
         // helper — `dashboard_view` already holds `&mut self.dashboard_chat_rows_cache`
         // so the borrow checker rejects an `&self` reborrow here.
         let image_modal_msg_id = self.chat.image_modal().map(|m| m.message_id);
-        let overlay_blocks_sixel = self.show_settings
+        let overlay_blocks_raster = self.show_settings
             || self.show_quit_confirm
             || self.show_mod_modal
             || self.show_hub_modal
@@ -982,8 +1011,10 @@ impl App {
             || news_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
-            || self.booth_modal_state.is_open();
-        let suppress_new_sixel = self.show_settings
+            || self.booth_modal_state.is_open()
+            || self.stream_modal.is_some()
+            || self.chat.history_modal.is_open();
+        let suppress_new_raster = self.show_settings
             || self.show_mod_modal
             || self.show_hub_modal
             || self.show_profile_modal
@@ -1001,12 +1032,33 @@ impl App {
             || news_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
-            || self.booth_modal_state.is_open();
-        let pre_wipe = self.terminal_image_render_state.pre_frame_sixel_wipe_bytes(
-            image_modal_msg_id,
-            overlay_blocks_sixel,
-            screen as u16,
-        );
+            || self.booth_modal_state.is_open()
+            || self.stream_modal.is_some()
+            || self.chat.history_modal.is_open();
+        // Which screen owns a non-modal raster is decided here; what that
+        // raster will look like is the screen's own business.
+        let non_modal_image_tag = (screen == Screen::Arcade
+            && self.is_playing_game
+            && self.game_selection == crate::app::state::GAME_SELECTION_SLIDING_PUZZLE)
+            .then(|| {
+                let inner = app_frame_inner_area(area);
+                let (content_area, _) = app_content_and_sidebar_areas(inner, show_right_sidebar);
+                crate::app::arcade::sliding_puzzle::ui::persistent_raster_tag(
+                    content_area,
+                    &self.sliding_puzzle_state,
+                    self.terminal_image_protocol,
+                )
+            })
+            .flatten();
+        let pre_wipe = self
+            .terminal_image_render_state
+            .pre_frame_persistent_raster_wipe_bytes(
+                image_modal_msg_id,
+                overlay_blocks_raster,
+                screen as u16,
+                non_modal_image_tag,
+                self.terminal_image_protocol,
+            );
         if !pre_wipe.is_empty() {
             use std::io::Write;
             let _ = self.shared.write_all(&pre_wipe);
@@ -1219,7 +1271,7 @@ impl App {
         let image_commands = self.terminal_image_render_state.build_commands(
             self.terminal_image_protocol,
             &terminal_image_frame,
-            suppress_new_sixel,
+            suppress_new_raster,
         );
         self.pending_terminal_commands.extend(image_commands);
 
@@ -1383,7 +1435,7 @@ impl App {
             block = block.title_bottom(sponsor_title);
         }
 
-        let inner = block.inner(area);
+        let inner = app_frame_inner_area(area);
         frame.render_widget(block, area);
         frame.render_widget(Clear, inner);
 
@@ -1394,13 +1446,8 @@ impl App {
             ctx.show_aquarium_tray && ctx.shop_state.entitlements().has_aquarium();
         let mut aquarium_tray_area = None;
 
-        let (content_area, sidebar_area) = if ctx.show_right_sidebar {
-            let main_layout =
-                Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner);
-            (main_layout[0], Some(main_layout[1]))
-        } else {
-            (inner, None)
-        };
+        let (content_area, sidebar_area) =
+            app_content_and_sidebar_areas(inner, ctx.show_right_sidebar);
         let foreground_overlay_open = foreground_terminal_overlay_open(&ctx);
         match screen {
             Screen::Dashboard => {
@@ -1606,6 +1653,8 @@ impl App {
                     session_daily_completion: ctx.session_daily_wins.today(),
                     quest_state: ctx.quest_state,
                 },
+                ctx.terminal_image_protocol,
+                terminal_images,
             ),
             Screen::Leaderboard => crate::app::leaderboard::ui::draw(
                 frame,
