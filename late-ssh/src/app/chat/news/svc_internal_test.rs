@@ -1,10 +1,15 @@
 use super::{
-    ArticleExtraction, display_author, encode_ascii_payload, extraction_looks_not_found,
-    is_ai_blocklisted_url, is_twitter_url, is_youtube_url, sanitize_payload_field,
-    truncate_for_chat,
+    TweetIdentity, display_author, encode_ascii_payload, handle_from_author_url,
+    is_ai_blocklisted_url, is_tweet_url, is_youtube_url, sanitize_payload_field, truncate_for_chat,
+    tweet_date_from_oembed_html, tweet_status_id, tweet_summary, tweet_text_from_oembed_html,
+    tweet_title,
 };
 use std::collections::HashMap;
 use uuid::Uuid;
+
+/// The exact `html` X returns for a post with a video attached, entities and
+/// all. Everything the card shows is parsed back out of this one string.
+const OEMBED_HTML: &str = "<blockquote class=\"twitter-tweet\" data-dnt=\"true\"><p lang=\"en\" dir=\"ltr\">This is GPT-6 Astra.<br><br>Anything you can do on a computer, Astra can do for you. Fast. <a href=\"https://t.co/gDd0IsewJw\">pic.twitter.com/gDd0IsewJw</a></p>&mdash; OpenAI (@OpenAI) <a href=\"https://x.com/OpenAI/status/2095595741528125780?ref_src=twsrc%5Etfw\">September 3, 2026</a></blockquote>";
 
 #[test]
 fn youtube_url_detection_covers_common_hosts() {
@@ -24,26 +29,6 @@ fn ai_blocklist_covers_cyberspace_and_nothing_else() {
         "https://example.com/cyberspace.online"
     ));
     assert!(!is_ai_blocklisted_url("https://notcyberspace.online/post"));
-}
-
-#[test]
-fn not_found_detection_flags_low_confidence_ai_output() {
-    let extraction = ArticleExtraction {
-        title: "Video Not Found".to_string(),
-        image_url: None,
-        summary: "• No content details are available to generate a summary.".to_string(),
-    };
-    assert!(extraction_looks_not_found(&extraction));
-}
-
-#[test]
-fn not_found_detection_allows_normal_extractions() {
-    let extraction = ArticleExtraction {
-        title: "Never Run claude /init".to_string(),
-        image_url: Some("https://i.ytimg.com/vi/abc/default.jpg".to_string()),
-        summary: "• Explains tradeoffs of generated context files.".to_string(),
-    };
-    assert!(!extraction_looks_not_found(&extraction));
 }
 
 #[test]
@@ -155,12 +140,127 @@ fn is_youtube_url_rejects_invalid_url() {
 }
 
 #[test]
-fn twitter_url_detection_covers_common_hosts() {
-    assert!(is_twitter_url("https://twitter.com/user/status/123"));
-    assert!(is_twitter_url("https://x.com/user/status/123"));
-    assert!(is_twitter_url("https://mobile.twitter.com/user/status/123"));
-    assert!(!is_twitter_url("https://youtube.com/watch?v=abc"));
-    assert!(!is_twitter_url("not a url at all"));
+fn tweet_url_detection_covers_post_shapes_only() {
+    assert!(is_tweet_url("https://twitter.com/user/status/123"));
+    assert!(is_tweet_url("https://x.com/user/status/123"));
+    assert!(is_tweet_url("https://mobile.twitter.com/user/status/123"));
+    assert!(is_tweet_url("https://x.com/i/web/status/123"));
+    assert!(!is_tweet_url("https://youtube.com/watch?v=abc"));
+    assert!(!is_tweet_url("not a url at all"));
+}
+
+/// A profile, search, or list URL has no post for oEmbed to resolve, so it
+/// has to stay on the generic AI path rather than fail the share outright.
+#[test]
+fn non_post_x_urls_stay_off_the_tweet_path() {
+    assert!(!is_tweet_url("https://x.com/OpenAI"));
+    assert!(!is_tweet_url("https://x.com/search?q=rust"));
+    assert!(!is_tweet_url("https://x.com/i/lists/123"));
+    assert!(!is_tweet_url("https://x.com/OpenAI/status/not-an-id"));
+}
+
+#[test]
+fn tweet_status_id_ignores_trailing_segments_and_tracking_params() {
+    assert_eq!(
+        tweet_status_id("https://x.com/OpenAI/status/2095595741528125780?s=20"),
+        Some("2095595741528125780".to_string())
+    );
+    assert_eq!(
+        tweet_status_id("https://x.com/OpenAI/status/2095595741528125780/video/1"),
+        Some("2095595741528125780".to_string())
+    );
+}
+
+#[test]
+fn oembed_html_yields_the_posts_own_words() {
+    assert_eq!(
+        tweet_text_from_oembed_html(OEMBED_HTML),
+        "This is GPT-6 Astra.\nAnything you can do on a computer, Astra can do for you. Fast."
+    );
+}
+
+#[test]
+fn oembed_html_yields_the_post_date() {
+    assert_eq!(
+        tweet_date_from_oembed_html(OEMBED_HTML),
+        Some("September 3, 2026".to_string())
+    );
+}
+
+/// A link the author typed is part of what they said; `pic.twitter.com/...`
+/// is X's own media shortlink and only adds noise to the card.
+#[test]
+fn post_text_keeps_authored_links_and_drops_media_shortlinks() {
+    let html = "<blockquote><p lang=\"en\">Read <a href=\"https://t.co/x\">example.com/post</a> now <a href=\"https://t.co/y\">pic.x.com/abc</a></p>&mdash; A (@a) <a href=\"https://x.com/a/status/1\">May 1, 2026</a></blockquote>";
+    assert_eq!(
+        tweet_text_from_oembed_html(html),
+        "Read example.com/post now"
+    );
+}
+
+#[test]
+fn post_text_decodes_entities_without_double_decoding() {
+    let html = "<blockquote><p lang=\"en\">Rust &amp; C&#39;s &lt;stdio.h&gt; &amp;lt;stays&amp;gt;</p></blockquote>";
+    assert_eq!(
+        tweet_text_from_oembed_html(html),
+        "Rust & C's <stdio.h> &lt;stays&gt;"
+    );
+}
+
+#[test]
+fn post_without_text_yields_nothing_rather_than_a_blank_card() {
+    let profile_html =
+        "<a class=\"twitter-timeline\" href=\"https://x.com/OpenAI\">Posts by OpenAI</a>";
+    assert!(tweet_text_from_oembed_html(profile_html).is_empty());
+    assert_eq!(tweet_date_from_oembed_html(profile_html), None);
+}
+
+#[test]
+fn handle_comes_from_the_structured_author_url() {
+    assert_eq!(handle_from_author_url("https://x.com/OpenAI"), "OpenAI");
+    assert_eq!(handle_from_author_url("not a url"), "");
+}
+
+#[test]
+fn post_card_leads_with_the_author_and_the_opening_line() {
+    assert_eq!(
+        tweet_title("OpenAI", "This is GPT-6 Astra."),
+        "OpenAI on X: This is GPT-6 Astra."
+    );
+}
+
+#[test]
+fn post_card_summary_is_the_post_then_the_attribution() {
+    let identity = TweetIdentity {
+        author_name: "OpenAI".to_string(),
+        handle: "OpenAI".to_string(),
+        text: String::new(),
+        date: Some("September 3, 2026".to_string()),
+    };
+    let lines = vec!["This is GPT-6 Astra.", "Anything you can do, Astra can do."];
+
+    assert_eq!(
+        tweet_summary(&identity, &lines),
+        "• This is GPT-6 Astra.\n• Anything you can do, Astra can do.\n• Posted by OpenAI (@OpenAI) on X, September 3, 2026."
+    );
+}
+
+/// A post that oEmbed answers for but whose author or date did not parse
+/// still has to produce a readable card rather than dangling punctuation.
+#[test]
+fn post_card_survives_missing_author_and_date() {
+    let identity = TweetIdentity {
+        author_name: String::new(),
+        handle: String::new(),
+        text: String::new(),
+        date: None,
+    };
+
+    assert_eq!(tweet_title("", ""), "Post on X");
+    assert_eq!(
+        tweet_summary(&identity, &["hello"]),
+        "• hello\n• Posted by an X account on X."
+    );
 }
 
 #[test]

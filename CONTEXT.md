@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-09-03 (the runner, deadchannel phase 2 step 1: `/join #deadchannel` creates a `deadchannel_runners` row (migration 172) wearing a random starter look, and #deadchannel paints each runner's three-row portrait in a gutter beside their messages; looks are a process-shared directory fed by `LISTEN deadchannel_runner_changed`, `late-ssh/src/app/deadchannel/runner/`, `late-ssh/src/app/deadchannel/CONTEXT.md`.)
+- Last updated: 2026-09-03 (X posts shared to News are built from the post's own public metadata instead of AI search: `extract_tweet` parses author, text, and date out of `publish.x.com/oembed` and takes the thumbnail and sensitivity flag from fxtwitter, with no AI in the path at all; `late-ssh/src/app/chat/news/svc.rs`, `late-ssh/src/app/chat/CONTEXT.md` §News.)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
