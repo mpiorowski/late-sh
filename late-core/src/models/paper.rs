@@ -5,9 +5,11 @@
 //! `printing` row before it spends a model call, so two replicas sweeping
 //! the same minute cannot both pay for one room; the winner fills the text
 //! in and flips the row to `ready`, a loser finds no row to insert. A print
-//! that fails deletes its row so the next sweep retries, and a `printing`
-//! row nobody finished (a replica died mid-call) is reclaimed once it is
-//! older than the caller's stale bound.
+//! that fails flips its row to `failed` and keeps the attempt count: the
+//! next sweep claims it again until the caller's attempt cap, after which
+//! the row is settled for the day. A `printing` row nobody finished (a
+//! replica died mid-call) is reclaimed once it is older than the caller's
+//! stale bound.
 
 use anyhow::{Result, bail};
 use chrono::{DateTime, NaiveDate, Utc};
@@ -22,9 +24,12 @@ pub enum PaperStatus {
     Printing,
     /// Printed; `text` is set.
     Ready,
-    /// Looked at and skipped: under the message threshold, or nothing to
-    /// write about. No call was spent.
+    /// Looked at and skipped: under the message threshold (no call
+    /// spent), or the model had nothing usable to say.
     Quiet,
+    /// The last print attempt failed. Claimed again by the next sweep
+    /// while under the attempt cap; settled once at it.
+    Failed,
 }
 
 impl PaperStatus {
@@ -33,6 +38,7 @@ impl PaperStatus {
             Self::Printing => "printing",
             Self::Ready => "ready",
             Self::Quiet => "quiet",
+            Self::Failed => "failed",
         }
     }
 
@@ -41,6 +47,7 @@ impl PaperStatus {
             "printing" => Ok(Self::Printing),
             "ready" => Ok(Self::Ready),
             "quiet" => Ok(Self::Quiet),
+            "failed" => Ok(Self::Failed),
             other => bail!("unknown paper status {other:?}"),
         }
     }
@@ -74,13 +81,18 @@ impl PaperSectionKind {
 }
 
 /// A public room the sweeper has not settled for this edition: no row yet,
-/// or a `printing` row past the stale bound. Counts cover the edition's
-/// window and exclude system-feed lines.
+/// a `printing` row past the stale bound, or a `failed` row under the
+/// attempt cap. Counts cover the edition's window and exclude system-feed
+/// lines. Carries what a page needs, so an in-memory preview can lay one
+/// out without a row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaperCandidate {
     pub room_id: Uuid,
     /// The room's rail name (slug, or the language code for language rooms).
     pub label: String,
+    pub kind: String,
+    pub permanent: bool,
+    pub member_count: i64,
     pub message_count: i64,
     pub author_count: i64,
 }
@@ -212,21 +224,27 @@ pub struct PaperRoomEdition;
 
 impl PaperRoomEdition {
     /// Public rooms with at least one human message inside
-    /// `[floor, ceiling)` that this edition has not settled: no row, or a
-    /// `printing` claim older than `stale_before`. Public lounge, topic,
-    /// and language rooms only; DMs, game rooms, and the haunted channel
-    /// never reach the paper.
+    /// `[floor, ceiling)` that this edition has not settled: no row, a
+    /// `printing` claim older than `stale_before`, or a `failed` row with
+    /// fewer than `max_attempts` claims. Public lounge, topic, and language
+    /// rooms only; DMs, game rooms, and the haunted channel never reach the
+    /// paper.
     pub async fn list_candidates(
         client: &Client,
         edition: NaiveDate,
         floor: DateTime<Utc>,
         ceiling: DateTime<Utc>,
         stale_before: DateTime<Utc>,
+        max_attempts: i32,
     ) -> Result<Vec<PaperCandidate>> {
         let rows = client
             .query(
                 "SELECT r.id AS room_id,
                         COALESCE(r.slug, r.language_code) AS label,
+                        r.kind,
+                        r.permanent,
+                        (SELECT COUNT(*)::bigint FROM chat_room_members m
+                          WHERE m.room_id = r.id) AS member_count,
                         COUNT(*)::bigint AS message_count,
                         COUNT(DISTINCT msg.user_id)::bigint AS author_count
                  FROM chat_rooms r
@@ -242,11 +260,13 @@ impl PaperRoomEdition {
                         SELECT 1 FROM paper_room_editions e
                         WHERE e.room_id = r.id
                           AND e.edition = $1
-                          AND (e.status <> 'printing' OR e.claimed_at >= $4)
+                          AND (e.status IN ('ready', 'quiet')
+                               OR (e.status = 'printing' AND e.claimed_at >= $4)
+                               OR (e.status = 'failed' AND e.attempts >= $5))
                    )
                  GROUP BY r.id, label
                  ORDER BY message_count DESC, label ASC",
-                &[&edition, &floor, &ceiling, &stale_before],
+                &[&edition, &floor, &ceiling, &stale_before, &max_attempts],
             )
             .await?;
         Ok(rows
@@ -254,16 +274,64 @@ impl PaperRoomEdition {
             .map(|row| PaperCandidate {
                 room_id: row.get("room_id"),
                 label: row.get("label"),
+                kind: row.get("kind"),
+                permanent: row.get("permanent"),
+                member_count: row.get("member_count"),
                 message_count: row.get("message_count"),
                 author_count: row.get("author_count"),
             })
             .collect())
     }
 
-    /// Take the room's page for this edition. Wins when no row exists or
-    /// the existing claim is `printing` and older than `stale_before`;
-    /// the win is the only licence to spend the model call.
+    /// Take the room's page for this edition. Wins when no row exists, the
+    /// existing claim is `printing` and older than `stale_before`, or the
+    /// row is `failed` with fewer than `max_attempts` claims; the win is
+    /// the only licence to spend the model call. Every win counts an
+    /// attempt.
     pub async fn claim_printing(
+        client: &Client,
+        room_id: Uuid,
+        edition: NaiveDate,
+        message_count: i64,
+        author_count: i64,
+        stale_before: DateTime<Utc>,
+        max_attempts: i32,
+    ) -> Result<bool> {
+        let message_count = i32::try_from(message_count)?;
+        let author_count = i32::try_from(author_count)?;
+        let claimed = client
+            .execute(
+                "INSERT INTO paper_room_editions
+                    (room_id, edition, status, message_count, author_count, attempts, claimed_at)
+                 VALUES ($1, $2, 'printing', $3, $4, 1, current_timestamp)
+                 ON CONFLICT (room_id, edition) DO UPDATE
+                    SET status = 'printing',
+                        claimed_at = current_timestamp,
+                        attempts = paper_room_editions.attempts + 1,
+                        message_count = EXCLUDED.message_count,
+                        author_count = EXCLUDED.author_count
+                    WHERE (paper_room_editions.status = 'printing'
+                           AND paper_room_editions.claimed_at < $5)
+                       OR (paper_room_editions.status = 'failed'
+                           AND paper_room_editions.attempts < $6)",
+                &[
+                    &room_id,
+                    &edition,
+                    &message_count,
+                    &author_count,
+                    &stale_before,
+                    &max_attempts,
+                ],
+            )
+            .await?;
+        Ok(claimed == 1)
+    }
+
+    /// Record that the room fell under the threshold: no call spent, and
+    /// the next sweep skips it. Takes over a `printing` claim older than
+    /// `stale_before` or a `failed` row (the room is under the threshold
+    /// now, whatever it was); a `ready` or `quiet` row stands.
+    pub async fn mark_quiet(
         client: &Client,
         room_id: Uuid,
         edition: NaiveDate,
@@ -273,17 +341,20 @@ impl PaperRoomEdition {
     ) -> Result<bool> {
         let message_count = i32::try_from(message_count)?;
         let author_count = i32::try_from(author_count)?;
-        let claimed = client
+        let settled = client
             .execute(
                 "INSERT INTO paper_room_editions
-                    (room_id, edition, status, message_count, author_count, claimed_at)
-                 VALUES ($1, $2, 'printing', $3, $4, current_timestamp)
+                    (room_id, edition, status, message_count, author_count, attempts,
+                     claimed_at, generated_at)
+                 VALUES ($1, $2, 'quiet', $3, $4, 0, current_timestamp, current_timestamp)
                  ON CONFLICT (room_id, edition) DO UPDATE
-                    SET claimed_at = current_timestamp,
+                    SET status = 'quiet',
+                        generated_at = current_timestamp,
                         message_count = EXCLUDED.message_count,
                         author_count = EXCLUDED.author_count
-                    WHERE paper_room_editions.status = 'printing'
-                      AND paper_room_editions.claimed_at < $5",
+                    WHERE (paper_room_editions.status = 'printing'
+                           AND paper_room_editions.claimed_at < $5)
+                       OR paper_room_editions.status = 'failed'",
                 &[
                     &room_id,
                     &edition,
@@ -293,47 +364,29 @@ impl PaperRoomEdition {
                 ],
             )
             .await?;
-        Ok(claimed == 1)
+        Ok(settled == 1)
     }
 
-    /// Record that the room fell under the threshold: no call spent, and
-    /// the next sweep skips it. A row already there (any status) stands.
-    pub async fn mark_quiet(
-        client: &Client,
-        room_id: Uuid,
-        edition: NaiveDate,
-        message_count: i64,
-        author_count: i64,
-    ) -> Result<bool> {
-        let message_count = i32::try_from(message_count)?;
-        let author_count = i32::try_from(author_count)?;
-        let inserted = client
-            .execute(
-                "INSERT INTO paper_room_editions
-                    (room_id, edition, status, message_count, author_count, claimed_at, generated_at)
-                 VALUES ($1, $2, 'quiet', $3, $4, current_timestamp, current_timestamp)
-                 ON CONFLICT (room_id, edition) DO NOTHING",
-                &[&room_id, &edition, &message_count, &author_count],
-            )
-            .await?;
-        Ok(inserted == 1)
-    }
-
-    /// The winner's page text. Bails when the claim is no longer held
-    /// (reclaimed as stale by another replica, or released): the text is
-    /// then the other replica's to write.
+    /// The winner's page: `ready` with the text, or `quiet` when the model
+    /// had nothing usable to say, so no call is spent on the room again.
+    /// Bails when the claim is no longer held (reclaimed as stale by
+    /// another replica): the page is then the other replica's to write.
     pub async fn finish(
         client: &Client,
         room_id: Uuid,
         edition: NaiveDate,
-        text: &str,
+        text: Option<&str>,
     ) -> Result<()> {
+        let status = match text {
+            Some(_) => PaperStatus::Ready,
+            None => PaperStatus::Quiet,
+        };
         let updated = client
             .execute(
                 "UPDATE paper_room_editions
-                 SET status = 'ready', text = $3, generated_at = current_timestamp
+                 SET status = $3, text = $4, generated_at = current_timestamp
                  WHERE room_id = $1 AND edition = $2 AND status = 'printing'",
-                &[&room_id, &edition, &text],
+                &[&room_id, &edition, &status.as_str(), &text],
             )
             .await?;
         if updated == 0 {
@@ -355,11 +408,13 @@ impl PaperRoomEdition {
         Ok(deleted)
     }
 
-    /// Give the claim back after a failed print so the next sweep retries.
-    pub async fn release(client: &Client, room_id: Uuid, edition: NaiveDate) -> Result<()> {
+    /// Record a failed print under the held claim. The attempt count
+    /// stays, so the next sweep retries only while under the cap.
+    pub async fn mark_failed(client: &Client, room_id: Uuid, edition: NaiveDate) -> Result<()> {
         client
             .execute(
-                "DELETE FROM paper_room_editions
+                "UPDATE paper_room_editions
+                 SET status = 'failed'
                  WHERE room_id = $1 AND edition = $2 AND status = 'printing'",
                 &[&room_id, &edition],
             )
@@ -371,20 +426,24 @@ impl PaperRoomEdition {
 pub struct PaperSectionRow;
 
 impl PaperSectionRow {
-    /// Whether this edition still needs `section` printed: no row, or a
-    /// `printing` claim older than `stale_before`.
+    /// Whether this edition still needs `section` printed: no row, a
+    /// `printing` claim older than `stale_before`, or a `failed` row with
+    /// fewer than `max_attempts` claims.
     pub async fn is_unsettled(
         client: &Client,
         edition: NaiveDate,
         section: PaperSectionKind,
         stale_before: DateTime<Utc>,
+        max_attempts: i32,
     ) -> Result<bool> {
         let settled = client
             .query_opt(
                 "SELECT 1 FROM paper_sections
                  WHERE edition = $1 AND section = $2
-                   AND (status <> 'printing' OR claimed_at >= $3)",
-                &[&edition, &section.as_str(), &stale_before],
+                   AND (status IN ('ready', 'quiet')
+                        OR (status = 'printing' AND claimed_at >= $3)
+                        OR (status = 'failed' AND attempts >= $4))",
+                &[&edition, &section.as_str(), &stale_before, &max_attempts],
             )
             .await?;
         Ok(settled.is_none())
@@ -396,42 +455,29 @@ impl PaperSectionRow {
         edition: NaiveDate,
         section: PaperSectionKind,
         stale_before: DateTime<Utc>,
+        max_attempts: i32,
     ) -> Result<bool> {
         let claimed = client
             .execute(
-                "INSERT INTO paper_sections (edition, section, status, claimed_at)
-                 VALUES ($1, $2, 'printing', current_timestamp)
+                "INSERT INTO paper_sections (edition, section, status, attempts, claimed_at)
+                 VALUES ($1, $2, 'printing', 1, current_timestamp)
                  ON CONFLICT (edition, section) DO UPDATE
-                    SET claimed_at = current_timestamp
-                    WHERE paper_sections.status = 'printing'
-                      AND paper_sections.claimed_at < $3",
-                &[&edition, &section.as_str(), &stale_before],
+                    SET status = 'printing',
+                        claimed_at = current_timestamp,
+                        attempts = paper_sections.attempts + 1
+                    WHERE (paper_sections.status = 'printing'
+                           AND paper_sections.claimed_at < $3)
+                       OR (paper_sections.status = 'failed'
+                           AND paper_sections.attempts < $4)",
+                &[&edition, &section.as_str(), &stale_before, &max_attempts],
             )
             .await?;
         Ok(claimed == 1)
     }
 
-    /// Same contract as [`PaperRoomEdition::mark_quiet`].
-    pub async fn mark_quiet(
-        client: &Client,
-        edition: NaiveDate,
-        section: PaperSectionKind,
-    ) -> Result<bool> {
-        let inserted = client
-            .execute(
-                "INSERT INTO paper_sections (edition, section, status, claimed_at, generated_at)
-                 VALUES ($1, $2, 'quiet', current_timestamp, current_timestamp)
-                 ON CONFLICT (edition, section) DO NOTHING",
-                &[&edition, &section.as_str()],
-            )
-            .await?;
-        Ok(inserted == 1)
-    }
-
-    /// Same contract as [`PaperRoomEdition::finish`]. A held `printing`
-    /// claim can also settle as `quiet` when the print found nothing to
-    /// say (the outside world reported nothing dated), so no call is spent
-    /// on it again.
+    /// Same contract as [`PaperRoomEdition::finish`]: `quiet` when the
+    /// print found nothing to say (nobody shared, the outside world
+    /// reported nothing dated), so no call is spent on it again.
     pub async fn finish(
         client: &Client,
         edition: NaiveDate,
@@ -492,15 +538,16 @@ impl PaperSectionRow {
         Ok(deleted)
     }
 
-    /// Same contract as [`PaperRoomEdition::release`].
-    pub async fn release(
+    /// Same contract as [`PaperRoomEdition::mark_failed`].
+    pub async fn mark_failed(
         client: &Client,
         edition: NaiveDate,
         section: PaperSectionKind,
     ) -> Result<()> {
         client
             .execute(
-                "DELETE FROM paper_sections
+                "UPDATE paper_sections
+                 SET status = 'failed'
                  WHERE edition = $1 AND section = $2 AND status = 'printing'",
                 &[&edition, &section.as_str()],
             )

@@ -9,20 +9,25 @@
 -- A row is the claim. `printing` is held while the call runs (a stale one,
 -- older than the sweeper's reclaim window, is taken over rather than
 -- trusted); `ready` carries the text; `quiet` records that the room was
--- looked at and fell under the message threshold, so the next sweep does not
--- count it again. A failed print deletes its row, so the next sweep retries.
+-- looked at and fell under the message threshold, or that the model had
+-- nothing usable to say, so the next sweep does not count it again. A
+-- failed print leaves a `failed` row with its attempt count: the next sweep
+-- claims it again until the sweeper's attempt cap, after which the row is
+-- settled and no more calls are spent on it that day.
 CREATE TABLE paper_room_editions (
     room_id UUID NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
     edition DATE NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('printing', 'ready', 'quiet')),
+    status TEXT NOT NULL CHECK (status IN ('printing', 'ready', 'quiet', 'failed')),
     message_count INTEGER NOT NULL,
     author_count INTEGER NOT NULL,
     text TEXT,
+    -- Claims taken on this row, counting the first.
+    attempts INTEGER NOT NULL,
     claimed_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
     generated_at TIMESTAMPTZ,
     PRIMARY KEY (room_id, edition),
     CHECK ((status = 'ready') = (text IS NOT NULL)),
-    CHECK ((status = 'printing') = (generated_at IS NULL))
+    CHECK ((status IN ('ready', 'quiet')) = (generated_at IS NOT NULL))
 );
 
 CREATE INDEX paper_room_editions_edition_idx ON paper_room_editions (edition);
@@ -33,13 +38,14 @@ CREATE INDEX paper_room_editions_edition_idx ON paper_room_editions (edition);
 CREATE TABLE paper_sections (
     edition DATE NOT NULL,
     section TEXT NOT NULL CHECK (section IN ('reading', 'outside')),
-    status TEXT NOT NULL CHECK (status IN ('printing', 'ready', 'quiet')),
+    status TEXT NOT NULL CHECK (status IN ('printing', 'ready', 'quiet', 'failed')),
     text TEXT,
+    attempts INTEGER NOT NULL,
     claimed_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
     generated_at TIMESTAMPTZ,
     PRIMARY KEY (edition, section),
     CHECK ((status = 'ready') = (text IS NOT NULL)),
-    CHECK ((status = 'printing') = (generated_at IS NULL))
+    CHECK ((status IN ('ready', 'quiet')) = (generated_at IS NOT NULL))
 );
 
 -- Both switches start on: the presses run, and the outside-world section

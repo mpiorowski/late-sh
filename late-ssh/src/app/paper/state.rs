@@ -76,11 +76,12 @@ pub(crate) enum PaperCommand {
     OutsideOff,
     /// `/paper print`: sweep now instead of waiting for the interval.
     Print,
-    /// `/paper preview`: print tomorrow's edition from today's messages so
-    /// far, so a column can be read without waiting for midnight.
+    /// `/paper preview`: lay out tomorrow's edition from today's messages
+    /// so far, in memory and for the caller only, so a column can be read
+    /// without waiting for midnight and without touching the real rows.
     Preview,
-    /// `/paper reset`: drop today's and tomorrow's rows and the caller's
-    /// login stamp, so both can be seen again.
+    /// `/paper reset`: drop today's rows and the caller's login stamp, so
+    /// both the print and the pop can be seen again.
     Reset,
 }
 
@@ -186,8 +187,12 @@ fn heading(text: &str) -> Line<'static> {
     ))
 }
 
-fn room_head(page: &PaperRoomPage, joinable: bool, bumped: bool) -> Line<'static> {
-    let people = if joinable { "members" } else { "people" };
+/// A room's headline. `elsewhere` rooms (the reader is not in them) count
+/// "members" and, for topic rooms, carry the `/join` hint; the reader's own
+/// rooms count "people".
+fn room_head(page: &PaperRoomPage, elsewhere: bool, bumped: bool) -> Line<'static> {
+    let people = if elsewhere { "members" } else { "people" };
+    let joinable = elsewhere && page.kind == "topic";
     let mut spans = vec![
         Span::styled(
             format!("#{}", page.label),
@@ -277,6 +282,7 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<Line<'static>> {
     }
     let mut quiet: Vec<&PaperRoomPage> = Vec::new();
     let mut at_the_press: Vec<&PaperRoomPage> = Vec::new();
+    let mut missed: Vec<&PaperRoomPage> = Vec::new();
     let mut printed_any = false;
     for page in &member_pages {
         match page.status {
@@ -294,11 +300,15 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<Line<'static>> {
             }
             PaperStatus::Quiet => quiet.push(page),
             PaperStatus::Printing => at_the_press.push(page),
+            PaperStatus::Failed => missed.push(page),
         }
     }
 
     // Elsewhere: public rooms the reader is not in, bumped first, then by
-    // activity (the rows already come sorted by message count).
+    // activity (the rows already come sorted by message count). The
+    // `/join` hint is for topic rooms only: `/join #<label>` opens (or
+    // creates) a topic room by slug, and a language room's label is its
+    // language code, which would open a brand-new topic room instead.
     let mut elsewhere: Vec<&PaperRoomPage> = edition
         .rooms
         .iter()
@@ -342,7 +352,7 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<Line<'static>> {
         lines.extend(column_lines(text));
     }
 
-    if !quiet.is_empty() || !at_the_press.is_empty() {
+    if !quiet.is_empty() || !at_the_press.is_empty() || !missed.is_empty() {
         lines.push(Line::from(""));
         let mut footer = Vec::new();
         if !quiet.is_empty() {
@@ -350,6 +360,9 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<Line<'static>> {
         }
         if !at_the_press.is_empty() {
             footer.push(format!("still at the press: {}", labels(&at_the_press)));
+        }
+        if !missed.is_empty() {
+            footer.push(format!("missed the press: {}", labels(&missed)));
         }
         lines.push(Line::from(Span::styled(
             footer.join(" · "),

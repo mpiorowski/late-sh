@@ -8,8 +8,11 @@
 //! page reads the same to everyone and is printed once. The sweeper runs on
 //! every replica, and `paper_room_editions` rows are the claims that make
 //! exactly one of them pay for a page (root CONTEXT.md, multi-replica
-//! rule): claim, call the model, fill the text in; a failed print releases
-//! the claim and the next sweep retries. Readers only ever read rows.
+//! rule): claim, call the model, fill the text in; a failed print marks
+//! the row and the next sweep retries it, up to `PAPER_MAX_ATTEMPTS` per
+//! day. Readers only ever read rows. An admin's `/paper preview` is the
+//! one print that never writes a row: it is laid out in memory for that
+//! admin alone, so tomorrow's real edition is printed whole at midnight.
 //!
 //! @graybeard writes it. His persona is the chat one (`app/ai/ghost.rs`)
 //! with the column's rules laid on top: the facts come from the transcript
@@ -30,7 +33,8 @@ use late_core::models::app_flag::{AppFlag, AppFlags};
 use late_core::models::article::Article;
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::paper::{
-    PaperCandidate, PaperEdition, PaperRoomEdition, PaperSectionKind, PaperSectionRow,
+    PaperCandidate, PaperEdition, PaperRoomEdition, PaperRoomPage, PaperSection, PaperSectionKind,
+    PaperSectionRow, PaperStatus,
 };
 use late_core::models::user::User;
 use tokio::sync::{broadcast, oneshot, watch};
@@ -56,6 +60,12 @@ pub const PAPER_SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// A `printing` claim older than this belongs to a replica that died
 /// mid-call and is taken over. Well past the longest model call.
 pub const PAPER_STALE_CLAIM: chrono::Duration = chrono::Duration::minutes(20);
+
+/// How many times one page is claimed and printed before a failing print
+/// is left alone for the day. Three sweeps is fifteen minutes of retries;
+/// past that an outage or a bad key would only turn the day's budget into
+/// a retry storm on the key every other AI feature shares.
+pub const PAPER_MAX_ATTEMPTS: i32 = 3;
 
 /// Lines per room column: denser than `/summary`'s ten, because the paper
 /// stacks many rooms in one modal.
@@ -123,8 +133,9 @@ pub enum PrintJob {
     /// Today's edition over yesterday's window: the sweeper's own job,
     /// just now instead of at the next interval.
     Today,
-    /// Tomorrow's edition over today so far. The rows are real, so the
-    /// midnight sweep leaves them alone; `/paper reset` clears them.
+    /// Tomorrow's edition over today so far, laid out in memory for the
+    /// admin who asked and never written to a row: the midnight sweep
+    /// prints the real thing over the whole day.
     Preview,
 }
 
@@ -134,8 +145,12 @@ pub enum PressOutcome {
         edition: NaiveDate,
         tally: PrintTally,
     },
-    /// Today's and tomorrow's rows are gone and the caller's login stamp
-    /// is off.
+    /// The preview edition, for the admin's own modal.
+    Previewed {
+        edition: PaperEdition,
+        tally: PrintTally,
+    },
+    /// Today's rows are gone and the caller's login stamp is off.
     Reset,
     /// The kill switch is off, or AI is unconfigured here.
     Unavailable,
@@ -143,7 +158,8 @@ pub enum PressOutcome {
 }
 
 /// How one print run went, page by page. Quiet rooms are named with the
-/// count the press saw, so a threshold miss is visible from the banner.
+/// count the press saw, so a threshold miss (under `PAPER_MIN_MESSAGES`)
+/// and a blank column (over it) are both visible from the banner.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PrintTally {
     pub printed: usize,
@@ -165,10 +181,7 @@ impl PrintTally {
                 .iter()
                 .map(|(label, count)| format!("#{label} {count}"))
                 .collect();
-            line.push_str(&format!(
-                " · quiet under {PAPER_MIN_MESSAGES}: {}",
-                named.join(", ")
-            ));
+            line.push_str(&format!(" · quiet: {}", named.join(", ")));
         }
         line
     }
@@ -284,83 +297,125 @@ impl PaperService {
             }
         };
         for candidate in candidates {
-            match self
+            let printed = self
                 .print_room(edition, floor, ceiling, &candidate, stale_before)
-                .await
-            {
-                Ok(Print::Printed) => {
-                    tally.printed += 1;
-                    metrics::record_paper_print(PaperPrintResult::Printed);
-                    tracing::info!(
-                        %edition,
-                        room_id = %candidate.room_id,
-                        label = %candidate.label,
-                        messages = candidate.message_count,
-                        "paper room page printed"
-                    );
-                }
-                Ok(Print::Quiet) => {
-                    tally.quiet += 1;
-                    tally
-                        .quiet_rooms
-                        .push((candidate.label.clone(), candidate.message_count));
-                    metrics::record_paper_print(PaperPrintResult::Quiet);
-                }
-                Ok(Print::Lost) => {
-                    tally.lost += 1;
-                    metrics::record_paper_print(PaperPrintResult::Lost);
-                }
-                Err(error) => {
-                    tally.failed += 1;
-                    metrics::record_paper_print(PaperPrintResult::Failed);
-                    late_core::error_span!(
-                        "paper_room_print_failed",
-                        error = ?error,
-                        %edition,
-                        room_id = %candidate.room_id,
-                        label = %candidate.label,
-                        "failed to print a paper room page"
-                    );
-                }
-            }
+                .await;
+            note_room_print(&mut tally, edition, &candidate, &printed);
         }
 
-        let mut sections = vec![PaperSectionKind::Reading];
-        if with_outside {
-            sections.push(PaperSectionKind::Outside);
-        }
-        for section in sections {
-            match self
-                .print_section(edition, floor, ceiling, section, stale_before)
-                .await
-            {
-                Ok(Print::Printed) => {
-                    tally.printed += 1;
-                    metrics::record_paper_print(PaperPrintResult::Printed);
-                    tracing::info!(%edition, section = section.as_str(), "paper section printed");
-                }
-                Ok(Print::Quiet) => {
-                    tally.quiet += 1;
-                    metrics::record_paper_print(PaperPrintResult::Quiet);
-                }
-                Ok(Print::Lost) => {
-                    tally.lost += 1;
-                    metrics::record_paper_print(PaperPrintResult::Lost);
-                }
+        for section in sections_to_print(with_outside) {
+            // Settled sections (the steady state for the rest of the day)
+            // are skipped without a tally line or a metric: `Lost` is for
+            // a claim another replica holds right now, nothing else.
+            match self.section_unsettled(edition, section, stale_before).await {
+                Ok(true) => {}
+                Ok(false) => continue,
                 Err(error) => {
-                    tally.failed += 1;
-                    metrics::record_paper_print(PaperPrintResult::Failed);
-                    late_core::error_span!(
-                        "paper_section_print_failed",
-                        error = ?error,
-                        %edition,
-                        section = section.as_str(),
-                        "failed to print a paper section"
-                    );
+                    note_section_print(&mut tally, edition, section, &Err(error));
+                    continue;
                 }
             }
+            let printed = self
+                .print_section(edition, floor, ceiling, section, stale_before)
+                .await;
+            note_section_print(&mut tally, edition, section, &printed);
         }
         tally
+    }
+
+    /// `/paper preview`: tomorrow's edition over today so far, laid out
+    /// from the same printers but never written to a row, so the midnight
+    /// sweep prints the real edition over the whole day. Nothing is
+    /// claimed, so every room is printed (no `Lost`); the model calls are
+    /// spent for real and recorded like any other print.
+    async fn preview_edition(
+        &self,
+        edition: NaiveDate,
+        floor: DateTime<Utc>,
+        ceiling: DateTime<Utc>,
+        with_outside: bool,
+    ) -> (PaperEdition, PrintTally) {
+        let stale_before = Utc::now() - PAPER_STALE_CLAIM;
+        let mut tally = PrintTally::default();
+        let mut rooms = Vec::new();
+        let mut sections = Vec::new();
+
+        let candidates = match self
+            .list_candidates(edition, floor, ceiling, stale_before)
+            .await
+        {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                late_core::error_span!(
+                    "paper_candidates_failed",
+                    error = ?error,
+                    %edition,
+                    "failed to list rooms for the paper"
+                );
+                tally.failed += 1;
+                Vec::new()
+            }
+        };
+        for candidate in candidates {
+            let (printed, page) = self.preview_room(floor, ceiling, &candidate).await;
+            note_room_print(&mut tally, edition, &candidate, &printed);
+            rooms.push(page);
+        }
+
+        for section in sections_to_print(with_outside) {
+            let written = match section {
+                PaperSectionKind::Reading => self.write_reading_page(floor, ceiling).await,
+                PaperSectionKind::Outside => self.write_outside_page(edition).await,
+            };
+            let (printed, page) = match written {
+                Ok(Some(text)) => (
+                    Ok(Print::Printed),
+                    PaperSection {
+                        section,
+                        status: PaperStatus::Ready,
+                        text: Some(text),
+                    },
+                ),
+                Ok(None) => (
+                    Ok(Print::Quiet),
+                    PaperSection {
+                        section,
+                        status: PaperStatus::Quiet,
+                        text: None,
+                    },
+                ),
+                Err(error) => (
+                    Err(error),
+                    PaperSection {
+                        section,
+                        status: PaperStatus::Failed,
+                        text: None,
+                    },
+                ),
+            };
+            note_section_print(&mut tally, edition, section, &printed);
+            sections.push(page);
+        }
+
+        (
+            PaperEdition {
+                edition,
+                rooms,
+                sections,
+            },
+            tally,
+        )
+    }
+
+    async fn section_unsettled(
+        &self,
+        edition: NaiveDate,
+        section: PaperSectionKind,
+        stale_before: DateTime<Utc>,
+    ) -> anyhow::Result<bool> {
+        let client = self.db.get().await?;
+        PaperSectionRow::is_unsettled(&client, edition, section, stale_before, PAPER_MAX_ATTEMPTS)
+            .await
     }
 
     async fn list_candidates(
@@ -371,7 +426,15 @@ impl PaperService {
         stale_before: DateTime<Utc>,
     ) -> anyhow::Result<Vec<PaperCandidate>> {
         let client = self.db.get().await?;
-        PaperRoomEdition::list_candidates(&client, edition, floor, ceiling, stale_before).await
+        PaperRoomEdition::list_candidates(
+            &client,
+            edition,
+            floor,
+            ceiling,
+            stale_before,
+            PAPER_MAX_ATTEMPTS,
+        )
+        .await
     }
 
     /// One room: settle it quiet, or claim it and print. Clients are
@@ -393,6 +456,7 @@ impl PaperService {
                 edition,
                 candidate.message_count,
                 candidate.author_count,
+                stale_before,
             )
             .await?;
             return Ok(Print::Quiet);
@@ -406,6 +470,7 @@ impl PaperService {
                 candidate.message_count,
                 candidate.author_count,
                 stale_before,
+                PAPER_MAX_ATTEMPTS,
             )
             .await?
         };
@@ -413,35 +478,61 @@ impl PaperService {
             return Ok(Print::Lost);
         }
         match self.write_room_column(floor, ceiling, candidate).await {
-            Ok(Some(text)) => {
+            Ok(text) => {
+                // `None` (the model had nothing usable) settles quiet under
+                // the claim, one call and done, the same as a section.
                 let client = self.db.get().await?;
-                PaperRoomEdition::finish(&client, candidate.room_id, edition, &text).await?;
-                Ok(Print::Printed)
-            }
-            Ok(None) => {
-                // The model had nothing usable; free the claim so the next
-                // sweep tries again rather than leaving a hole all day.
-                self.release_room(candidate.room_id, edition).await;
-                anyhow::bail!("model returned no usable column")
+                PaperRoomEdition::finish(&client, candidate.room_id, edition, text.as_deref())
+                    .await?;
+                Ok(match text {
+                    Some(_) => Print::Printed,
+                    None => Print::Quiet,
+                })
             }
             Err(error) => {
-                self.release_room(candidate.room_id, edition).await;
+                let marked = async {
+                    let client = self.db.get().await?;
+                    PaperRoomEdition::mark_failed(&client, candidate.room_id, edition).await
+                }
+                .await;
+                if let Err(mark_error) = marked {
+                    // Logged here rather than passed up: the caller is
+                    // already reporting the print failure, and this is a
+                    // second, separate one (the claim stays until the
+                    // stale bound reclaims it).
+                    tracing::warn!(error = ?mark_error, room_id = %candidate.room_id, %edition, "failed to mark a paper claim failed");
+                }
                 Err(error)
             }
         }
     }
 
-    async fn release_room(&self, room_id: Uuid, edition: NaiveDate) {
-        let released = async {
-            let client = self.db.get().await?;
-            PaperRoomEdition::release(&client, room_id, edition).await
+    /// One room for the preview: the same threshold and printer as
+    /// `print_room`, with the page built in memory instead of a row.
+    async fn preview_room(
+        &self,
+        floor: DateTime<Utc>,
+        ceiling: DateTime<Utc>,
+        candidate: &PaperCandidate,
+    ) -> (anyhow::Result<Print>, PaperRoomPage) {
+        let page = |status: PaperStatus, text: Option<String>| PaperRoomPage {
+            room_id: candidate.room_id,
+            label: candidate.label.clone(),
+            member_count: candidate.member_count,
+            kind: candidate.kind.clone(),
+            permanent: candidate.permanent,
+            status,
+            message_count: candidate.message_count,
+            author_count: candidate.author_count,
+            text,
+        };
+        if candidate.message_count < PAPER_MIN_MESSAGES {
+            return (Ok(Print::Quiet), page(PaperStatus::Quiet, None));
         }
-        .await;
-        if let Err(error) = released {
-            // Logged here rather than passed up: the caller is already
-            // reporting the print failure, and this is a second, separate
-            // one (the claim stays until the stale bound reclaims it).
-            tracing::warn!(error = ?error, %room_id, %edition, "failed to release a paper claim");
+        match self.write_room_column(floor, ceiling, candidate).await {
+            Ok(Some(text)) => (Ok(Print::Printed), page(PaperStatus::Ready, Some(text))),
+            Ok(None) => (Ok(Print::Quiet), page(PaperStatus::Quiet, None)),
+            Err(error) => (Err(error), page(PaperStatus::Failed, None)),
         }
     }
 
@@ -479,9 +570,9 @@ impl PaperService {
             .and_then(|text| tidy_column(text, PAPER_ROOM_LINES)))
     }
 
-    /// One edition-level section, same claim shape as a room. A section
-    /// with nothing to write about (no shares, no dated news) settles
-    /// quiet under its claim so no call is spent on it again.
+    /// One unsettled edition-level section, same claim shape as a room. A
+    /// section with nothing to write about (no shares, no dated news)
+    /// settles quiet under its claim so no call is spent on it again.
     async fn print_section(
         &self,
         edition: NaiveDate,
@@ -490,16 +581,16 @@ impl PaperService {
         section: PaperSectionKind,
         stale_before: DateTime<Utc>,
     ) -> anyhow::Result<Print> {
-        let unsettled = {
-            let client = self.db.get().await?;
-            PaperSectionRow::is_unsettled(&client, edition, section, stale_before).await?
-        };
-        if !unsettled {
-            return Ok(Print::Lost);
-        }
         let claimed = {
             let client = self.db.get().await?;
-            PaperSectionRow::claim_printing(&client, edition, section, stale_before).await?
+            PaperSectionRow::claim_printing(
+                &client,
+                edition,
+                section,
+                stale_before,
+                PAPER_MAX_ATTEMPTS,
+            )
+            .await?
         };
         if !claimed {
             return Ok(Print::Lost);
@@ -518,13 +609,13 @@ impl PaperService {
                 })
             }
             Err(error) => {
-                let released = async {
+                let marked = async {
                     let client = self.db.get().await?;
-                    PaperSectionRow::release(&client, edition, section).await
+                    PaperSectionRow::mark_failed(&client, edition, section).await
                 }
                 .await;
-                if let Err(release_error) = released {
-                    tracing::warn!(error = ?release_error, %edition, section = section.as_str(), "failed to release a paper claim");
+                if let Err(mark_error) = marked {
+                    tracing::warn!(error = ?mark_error, %edition, section = section.as_str(), "failed to mark a paper claim failed");
                 }
                 Err(error)
             }
@@ -615,33 +706,29 @@ impl PaperService {
                     PressOutcome::Unavailable
                 } else {
                     let now = Utc::now();
-                    let (edition, floor, ceiling) = match job {
+                    match job {
                         PrintJob::Today => {
                             let edition = edition_for(now);
                             let (floor, ceiling) = edition_window(edition);
-                            (edition, floor, ceiling)
+                            let tally = service
+                                .print_edition(edition, floor, ceiling, flags.paper_outside_enabled)
+                                .await;
+                            PressOutcome::Printed { edition, tally }
                         }
                         PrintJob::Preview => {
                             let today = edition_for(now);
                             let (_, today_start) = edition_window(today);
-                            (today + chrono::Duration::days(1), today_start, now)
+                            let (edition, tally) = service
+                                .preview_edition(
+                                    today + chrono::Duration::days(1),
+                                    today_start,
+                                    now,
+                                    flags.paper_outside_enabled,
+                                )
+                                .await;
+                            PressOutcome::Previewed { edition, tally }
                         }
-                    };
-                    // A preview re-counts every time: today is still
-                    // growing, so yesterday's quiet verdicts are stale.
-                    if job == PrintJob::Preview
-                        && let Err(error) = service.delete_edition(edition).await
-                    {
-                        tracing::error!(error = ?error, %edition, "failed to clear the preview edition");
-                        let _ = service
-                            .event_tx
-                            .send(PaperEvent::Press { user_id, outcome: PressOutcome::Failed });
-                        return;
                     }
-                    let tally = service
-                        .print_edition(edition, floor, ceiling, flags.paper_outside_enabled)
-                        .await;
-                    PressOutcome::Printed { edition, tally }
                 };
                 let _ = service
                     .event_tx
@@ -651,8 +738,9 @@ impl PaperService {
         );
     }
 
-    /// `/paper reset`: drop today's and tomorrow's rows (the sweeper's and
-    /// the preview's) and the caller's login stamp.
+    /// `/paper reset`: drop today's rows and the caller's login stamp, so
+    /// the next sweep prints the edition again and the next session pops
+    /// it again.
     pub fn request_reset(&self, user_id: Uuid) {
         let service = self.clone();
         tokio::spawn(
@@ -674,18 +762,10 @@ impl PaperService {
 
     async fn reset(&self, user_id: Uuid) -> anyhow::Result<()> {
         let today = edition_for(Utc::now());
-        for edition in [today, today + chrono::Duration::days(1)] {
-            self.delete_edition(edition).await?;
-        }
         let client = self.db.get().await?;
+        PaperRoomEdition::delete_edition(&client, today).await?;
+        PaperSectionRow::delete_edition(&client, today).await?;
         User::clear_paper_shown(&client, user_id).await?;
-        Ok(())
-    }
-
-    async fn delete_edition(&self, edition: NaiveDate) -> anyhow::Result<()> {
-        let client = self.db.get().await?;
-        PaperRoomEdition::delete_edition(&client, edition).await?;
-        PaperSectionRow::delete_edition(&client, edition).await?;
         Ok(())
     }
 
@@ -721,37 +801,115 @@ impl PaperService {
         }
     }
 
-    /// The login pop only ever considers today's edition. `/paper` also
-    /// looks one day ahead, so an admin's `/paper preview` (tomorrow's
-    /// edition over today so far) is readable the moment it prints without
-    /// spending anyone's stamp or popping over anyone.
+    /// Today's edition, for the login pop (which spends the account's
+    /// stamp) or `/paper` (which does not). A preview is never a row, so
+    /// nothing here can hand a reader an unfinished draft.
     async fn open(&self, user_id: Uuid, trigger: PaperTrigger) -> anyhow::Result<Opened> {
         let today = edition_for(Utc::now());
         let client = self.db.get().await?;
+        let edition = PaperEdition::load(&client, today).await?;
+        if !edition.has_print() {
+            return Ok(Opened::Empty);
+        }
         match trigger {
             PaperTrigger::Login => {
-                let edition = PaperEdition::load(&client, today).await?;
-                if !edition.has_print() {
-                    return Ok(Opened::Empty);
-                }
                 if User::claim_paper_shown(&client, user_id, today).await? {
                     Ok(Opened::Ready(edition))
                 } else {
                     Ok(Opened::AlreadyShown)
                 }
             }
-            PaperTrigger::Command => {
-                let preview =
-                    PaperEdition::load(&client, today + chrono::Duration::days(1)).await?;
-                if preview.has_print() {
-                    return Ok(Opened::Ready(preview));
-                }
-                let edition = PaperEdition::load(&client, today).await?;
-                if !edition.has_print() {
-                    return Ok(Opened::Empty);
-                }
-                Ok(Opened::Ready(edition))
-            }
+            PaperTrigger::Command => Ok(Opened::Ready(edition)),
+        }
+    }
+}
+
+/// The sections an edition prints, in page order.
+fn sections_to_print(with_outside: bool) -> Vec<PaperSectionKind> {
+    let mut sections = vec![PaperSectionKind::Reading];
+    if with_outside {
+        sections.push(PaperSectionKind::Outside);
+    }
+    sections
+}
+
+/// The one place a room print's outcome becomes a tally line, a metric,
+/// and a log line, for the sweeper and the preview alike.
+fn note_room_print(
+    tally: &mut PrintTally,
+    edition: NaiveDate,
+    candidate: &PaperCandidate,
+    printed: &anyhow::Result<Print>,
+) {
+    match printed {
+        Ok(Print::Printed) => {
+            tally.printed += 1;
+            metrics::record_paper_print(PaperPrintResult::Printed);
+            tracing::info!(
+                %edition,
+                room_id = %candidate.room_id,
+                label = %candidate.label,
+                messages = candidate.message_count,
+                "paper room page printed"
+            );
+        }
+        Ok(Print::Quiet) => {
+            tally.quiet += 1;
+            tally
+                .quiet_rooms
+                .push((candidate.label.clone(), candidate.message_count));
+            metrics::record_paper_print(PaperPrintResult::Quiet);
+        }
+        Ok(Print::Lost) => {
+            tally.lost += 1;
+            metrics::record_paper_print(PaperPrintResult::Lost);
+        }
+        Err(error) => {
+            tally.failed += 1;
+            metrics::record_paper_print(PaperPrintResult::Failed);
+            late_core::error_span!(
+                "paper_room_print_failed",
+                error = ?error,
+                %edition,
+                room_id = %candidate.room_id,
+                label = %candidate.label,
+                "failed to print a paper room page"
+            );
+        }
+    }
+}
+
+/// Same as [`note_room_print`], for a section.
+fn note_section_print(
+    tally: &mut PrintTally,
+    edition: NaiveDate,
+    section: PaperSectionKind,
+    printed: &anyhow::Result<Print>,
+) {
+    match printed {
+        Ok(Print::Printed) => {
+            tally.printed += 1;
+            metrics::record_paper_print(PaperPrintResult::Printed);
+            tracing::info!(%edition, section = section.as_str(), "paper section printed");
+        }
+        Ok(Print::Quiet) => {
+            tally.quiet += 1;
+            metrics::record_paper_print(PaperPrintResult::Quiet);
+        }
+        Ok(Print::Lost) => {
+            tally.lost += 1;
+            metrics::record_paper_print(PaperPrintResult::Lost);
+        }
+        Err(error) => {
+            tally.failed += 1;
+            metrics::record_paper_print(PaperPrintResult::Failed);
+            late_core::error_span!(
+                "paper_section_print_failed",
+                error = ?error,
+                %edition,
+                section = section.as_str(),
+                "failed to print a paper section"
+            );
         }
     }
 }
@@ -991,8 +1149,13 @@ fn drain_events(app: &mut App) -> bool {
                     PressOutcome::Printed { edition, tally } => {
                         Banner::success(&tally.banner_line(edition))
                     }
+                    PressOutcome::Previewed { edition, tally } => {
+                        let line = tally.banner_line(edition.edition);
+                        app.paper.modal = Some(edition_modal(app, &edition));
+                        Banner::success(&format!("Preview, not printed. {line}"))
+                    }
                     PressOutcome::Reset => Banner::success(
-                        "Paper reset: today's and tomorrow's rows dropped, your login pop is re-armed for your next session",
+                        "Paper reset: today's rows dropped, your login pop is re-armed for your next session",
                     ),
                     PressOutcome::Unavailable => {
                         Banner::error("Presses stopped, or AI is not configured here")
@@ -1011,24 +1174,7 @@ fn drain_events(app: &mut App) -> bool {
 fn open_paper(app: &mut App, trigger: PaperTrigger, outcome: PaperOutcome) {
     match (trigger, outcome) {
         (_, PaperOutcome::Ready(edition)) => {
-            let rail_order: Vec<Uuid> = app
-                .chat
-                .visual_order()
-                .into_iter()
-                .filter_map(|slot| match slot {
-                    crate::app::chat::state::RoomSlot::Room(id) => Some(id),
-                    _ => None,
-                })
-                .collect();
-            let member_room_ids = app.chat.rooms.iter().map(|(room, _)| room.id).collect();
-            let bumped_labels =
-                crate::app::chat::ui::bumped_join_room_slugs(app.shop_state.active_room_effects());
-            let modal = PaperModal::edition(PaperLayout {
-                edition: &edition,
-                rail_order: &rail_order,
-                member_room_ids: &member_room_ids,
-                bumped_labels: &bumped_labels,
-            });
+            let modal = edition_modal(app, &edition);
             if app.login_announcements_visible() || !app.clubhouse.tutorial_settled() {
                 app.paper.pending_modal = Some(modal);
             } else {
@@ -1054,6 +1200,29 @@ fn open_paper(app: &mut App, trigger: PaperTrigger, outcome: PaperOutcome) {
             app.banner = Some(Banner::error("The paper is not available right now"));
         }
     }
+}
+
+/// An edition laid out for this session: the reader's rail order,
+/// memberships, and shop bumps.
+fn edition_modal(app: &App, edition: &PaperEdition) -> PaperModal {
+    let rail_order: Vec<Uuid> = app
+        .chat
+        .visual_order()
+        .into_iter()
+        .filter_map(|slot| match slot {
+            crate::app::chat::state::RoomSlot::Room(id) => Some(id),
+            _ => None,
+        })
+        .collect();
+    let member_room_ids = app.chat.rooms.iter().map(|(room, _)| room.id).collect();
+    let bumped_labels =
+        crate::app::chat::ui::bumped_join_room_slugs(app.shop_state.active_room_effects());
+    PaperModal::edition(PaperLayout {
+        edition,
+        rail_order: &rail_order,
+        member_room_ids: &member_room_ids,
+        bumped_labels: &bumped_labels,
+    })
 }
 
 /// Drain `/paper` from the composer. The open is for everyone; the
@@ -1090,7 +1259,7 @@ fn tick_commands(app: &mut App) -> bool {
         }
         PaperCommand::Preview => {
             app.banner = Some(Banner::info(
-                "Printing tomorrow's edition from today so far…",
+                "Previewing tomorrow's edition from today so far…",
             ));
             app.paper
                 .service

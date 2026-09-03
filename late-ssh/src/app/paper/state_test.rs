@@ -19,7 +19,12 @@ fn page(
         room_id: Uuid::from_u128(id),
         label: label.to_string(),
         member_count: 10 + id as i64,
-        kind: if label == "lounge" { "lounge" } else { "topic" }.to_string(),
+        kind: match label {
+            "lounge" => "lounge",
+            "pl" => "language",
+            _ => "topic",
+        }
+        .to_string(),
         permanent: label == "lounge",
         status,
         message_count: messages,
@@ -54,12 +59,14 @@ fn the_paper_follows_the_rail_then_elsewhere_then_the_back_pages() {
                 Some("- lounge line one\n- lounge line two"),
             ),
             page(2, "rust", PaperStatus::Ready, 30, Some("- rust line")),
+            page(9, "pl", PaperStatus::Ready, 28, Some("- pl line")),
             page(3, "retro", PaperStatus::Ready, 25, Some("- retro line")),
             page(4, "music", PaperStatus::Ready, 20, Some("- music line")),
             page(5, "art", PaperStatus::Ready, 12, Some("- art line")),
             page(6, "dnd", PaperStatus::Ready, 9, Some("- dnd line")),
             page(7, "quietroom", PaperStatus::Quiet, 2, None),
             page(8, "slow", PaperStatus::Printing, 7, None),
+            page(10, "broken", PaperStatus::Failed, 15, None),
         ],
         sections: vec![
             PaperSection {
@@ -74,15 +81,19 @@ fn the_paper_follows_the_rail_then_elsewhere_then_the_back_pages() {
             },
         ],
     };
-    // The reader is in lounge, rust, quietroom, and slow; the rail puts the
-    // favorite (rust) first. Of the rooms they are not in, `dnd` is bumped.
-    let member_room_ids: HashSet<Uuid> =
-        [1u128, 2, 7, 8].into_iter().map(Uuid::from_u128).collect();
+    // The reader is in lounge, rust, quietroom, slow, and broken; the rail
+    // puts the favorite (rust) first. Of the rooms they are not in, `dnd`
+    // is bumped and `pl` is a language room.
+    let member_room_ids: HashSet<Uuid> = [1u128, 2, 7, 8, 10]
+        .into_iter()
+        .map(Uuid::from_u128)
+        .collect();
     let rail_order = [
         Uuid::from_u128(2),
         Uuid::from_u128(1),
         Uuid::from_u128(7),
         Uuid::from_u128(8),
+        Uuid::from_u128(10),
     ];
     let bumped = vec!["dnd".to_string()];
 
@@ -112,20 +123,23 @@ fn the_paper_follows_the_rail_then_elsewhere_then_the_back_pages() {
             "#dnd · 9 messages · 16 members · bumped · /join #dnd",
             "- dnd line",
             "",
+            // A language room: no `/join` hint, since `/join #pl` would
+            // open a topic room named "pl" instead.
+            "#pl · 28 messages · 19 members",
+            "- pl line",
+            "",
             "#retro · 25 messages · 13 members · /join #retro",
             "- retro line",
-            "",
-            "#music · 20 messages · 14 members · /join #music",
-            "- music line",
             "",
             "WHAT WE WERE READING",
             "- someone shared a thing",
             "",
-            "quiet: #quietroom · still at the press: #slow",
+            "quiet: #quietroom · still at the press: #slow · missed the press: #broken",
         ]
     );
-    // `art` was the fourth elsewhere room and fell off the cap.
+    // `music` and `art` were the elsewhere rooms past the cap.
     assert_eq!(PAPER_ELSEWHERE_LIMIT, 3);
+    assert!(!lines.iter().any(|line| line.contains("#music")));
     assert!(!lines.iter().any(|line| line.contains("#art")));
 }
 

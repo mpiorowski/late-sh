@@ -13,6 +13,9 @@ const EDITION: NaiveDate = match NaiveDate::from_ymd_opt(2026, 9, 3) {
     None => unreachable!(),
 };
 
+/// The sweeper's attempt cap, as the tests here drive it.
+const MAX_ATTEMPTS: i32 = 3;
+
 /// The edition's window: the whole of the day before it.
 fn window() -> (chrono::DateTime<Utc>, chrono::DateTime<Utc>) {
     let ceiling = EDITION.and_hms_opt(0, 0, 0).unwrap().and_utc();
@@ -83,10 +86,16 @@ async fn candidates_count_the_window_and_skip_settled_rooms() {
         .expect("private room");
     say(&client, &db, &private, "erin", 9).await;
 
-    let candidates =
-        PaperRoomEdition::list_candidates(&client, EDITION, floor, ceiling, stale_before)
-            .await
-            .expect("candidates");
+    let candidates = PaperRoomEdition::list_candidates(
+        &client,
+        EDITION,
+        floor,
+        ceiling,
+        stale_before,
+        MAX_ATTEMPTS,
+    )
+    .await
+    .expect("candidates");
     let by_id: Vec<(Uuid, &str, i64, i64)> = candidates
         .iter()
         .map(|c| (c.room_id, c.label.as_str(), c.message_count, c.author_count))
@@ -100,19 +109,33 @@ async fn candidates_count_the_window_and_skip_settled_rooms() {
     // Settling a room takes it out of the next sweep: quiet for good, a
     // fresh claim while it holds, and a stale claim only until reclaimed.
     assert!(
-        PaperRoomEdition::mark_quiet(&client, quiet.id, EDITION, 1, 1)
+        PaperRoomEdition::mark_quiet(&client, quiet.id, EDITION, 1, 1, stale_before)
             .await
             .expect("quiet")
     );
     assert!(
-        PaperRoomEdition::claim_printing(&client, busy.id, EDITION, 6, 2, stale_before)
-            .await
-            .expect("claim")
+        PaperRoomEdition::claim_printing(
+            &client,
+            busy.id,
+            EDITION,
+            6,
+            2,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("claim")
     );
-    let remaining =
-        PaperRoomEdition::list_candidates(&client, EDITION, floor, ceiling, stale_before)
-            .await
-            .expect("candidates");
+    let remaining = PaperRoomEdition::list_candidates(
+        &client,
+        EDITION,
+        floor,
+        ceiling,
+        stale_before,
+        MAX_ATTEMPTS,
+    )
+    .await
+    .expect("candidates");
     assert!(remaining.is_empty(), "{remaining:?}");
     let reclaimable = PaperRoomEdition::list_candidates(
         &client,
@@ -120,6 +143,7 @@ async fn candidates_count_the_window_and_skip_settled_rooms() {
         floor,
         ceiling,
         Utc::now() + Duration::hours(1),
+        MAX_ATTEMPTS,
     )
     .await
     .expect("candidates");
@@ -144,15 +168,31 @@ async fn a_room_claim_is_won_once_reclaimed_when_stale_and_finished_by_its_holde
     let stale_before = Utc::now() - Duration::minutes(15);
 
     assert!(
-        PaperRoomEdition::claim_printing(&client, room.id, EDITION, 7, 3, stale_before)
-            .await
-            .expect("claim")
+        PaperRoomEdition::claim_printing(
+            &client,
+            room.id,
+            EDITION,
+            7,
+            3,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("claim")
     );
     // The second replica loses while the claim is fresh.
     assert!(
-        !PaperRoomEdition::claim_printing(&client, room.id, EDITION, 7, 3, stale_before)
-            .await
-            .expect("claim")
+        !PaperRoomEdition::claim_printing(
+            &client,
+            room.id,
+            EDITION,
+            7,
+            3,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("claim")
     );
     // A crashed printer's claim is taken over once it is old enough.
     assert!(
@@ -162,25 +202,26 @@ async fn a_room_claim_is_won_once_reclaimed_when_stale_and_finished_by_its_holde
             EDITION,
             7,
             3,
-            Utc::now() + Duration::hours(1)
+            Utc::now() + Duration::hours(1),
+            MAX_ATTEMPTS
         )
         .await
         .expect("reclaim")
     );
 
-    PaperRoomEdition::finish(&client, room.id, EDITION, "- a page")
+    PaperRoomEdition::finish(&client, room.id, EDITION, Some("- a page"))
         .await
         .expect("finish");
     // Finished is final: a late finisher has nothing to write into, and a
-    // release after the fact does not take the page away.
+    // failure marked after the fact does not take the page away.
     assert!(
-        PaperRoomEdition::finish(&client, room.id, EDITION, "- another")
+        PaperRoomEdition::finish(&client, room.id, EDITION, Some("- another"))
             .await
             .is_err()
     );
-    PaperRoomEdition::release(&client, room.id, EDITION)
+    PaperRoomEdition::mark_failed(&client, room.id, EDITION)
         .await
-        .expect("release");
+        .expect("mark failed");
 
     let edition = PaperEdition::load(&client, EDITION).await.expect("load");
     assert!(edition.has_print());
@@ -206,23 +247,195 @@ async fn a_room_claim_is_won_once_reclaimed_when_stale_and_finished_by_its_holde
         )
     );
 
-    // A release while printing does drop the claim, so the next sweep
-    // can retry.
-    let retry = ChatRoom::get_or_create_public_room(&client, "retry")
+    // A blank column settles quiet under the claim: one call, no retry.
+    let blank = ChatRoom::get_or_create_public_room(&client, "blank")
         .await
         .expect("room");
     assert!(
-        PaperRoomEdition::claim_printing(&client, retry.id, EDITION, 5, 1, stale_before)
+        PaperRoomEdition::claim_printing(
+            &client,
+            blank.id,
+            EDITION,
+            5,
+            1,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("claim")
+    );
+    PaperRoomEdition::finish(&client, blank.id, EDITION, None)
+        .await
+        .expect("finish quiet");
+    assert!(
+        !PaperRoomEdition::claim_printing(
+            &client,
+            blank.id,
+            EDITION,
+            5,
+            1,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("quiet is settled")
+    );
+}
+
+#[tokio::test]
+async fn a_failing_print_is_retried_up_to_the_cap_then_left_alone() {
+    let test_db = test_db().await;
+    let db = test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let (floor, ceiling) = window();
+    let stale_before = Utc::now() - Duration::minutes(15);
+    let room = ChatRoom::get_or_create_public_room(&client, "flaky")
+        .await
+        .expect("room");
+    say(&client, &db, &room, "frank", 6).await;
+
+    let candidates = || async {
+        PaperRoomEdition::list_candidates(
+            &client,
+            EDITION,
+            floor,
+            ceiling,
+            stale_before,
+            MAX_ATTEMPTS,
+        )
+        .await
+        .expect("candidates")
+        .into_iter()
+        .map(|c| c.room_id)
+        .collect::<Vec<_>>()
+    };
+
+    // Each failed attempt hands the room back to the next sweep, until the
+    // cap: the last failure settles it and no more claims are handed out.
+    for attempt in 1..=MAX_ATTEMPTS {
+        assert_eq!(candidates().await, vec![room.id], "attempt {attempt}");
+        assert!(
+            PaperRoomEdition::claim_printing(
+                &client,
+                room.id,
+                EDITION,
+                6,
+                1,
+                stale_before,
+                MAX_ATTEMPTS
+            )
+            .await
+            .expect("claim"),
+            "attempt {attempt}"
+        );
+        PaperRoomEdition::mark_failed(&client, room.id, EDITION)
+            .await
+            .expect("mark failed");
+    }
+    assert!(candidates().await.is_empty());
+    assert!(
+        !PaperRoomEdition::claim_printing(
+            &client,
+            room.id,
+            EDITION,
+            6,
+            1,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("capped")
+    );
+    let edition = PaperEdition::load(&client, EDITION).await.expect("load");
+    assert_eq!(
+        edition
+            .rooms
+            .iter()
+            .map(|page| (page.room_id, page.status))
+            .collect::<Vec<_>>(),
+        vec![(room.id, PaperStatus::Failed)]
+    );
+    assert!(!edition.has_print());
+
+    // A room that is under the threshold by the time it is looked at
+    // again settles quiet over its failed row, and so does a stale claim.
+    assert!(
+        PaperRoomEdition::mark_quiet(&client, room.id, EDITION, 2, 1, stale_before)
+            .await
+            .expect("quiet over failed")
+    );
+    let stale = ChatRoom::get_or_create_public_room(&client, "stale")
+        .await
+        .expect("room");
+    assert!(
+        PaperRoomEdition::claim_printing(
+            &client,
+            stale.id,
+            EDITION,
+            6,
+            1,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("claim")
+    );
+    assert!(
+        !PaperRoomEdition::mark_quiet(&client, stale.id, EDITION, 2, 1, stale_before)
+            .await
+            .expect("a fresh claim stands")
+    );
+    assert!(
+        PaperRoomEdition::mark_quiet(
+            &client,
+            stale.id,
+            EDITION,
+            2,
+            1,
+            Utc::now() + Duration::hours(1)
+        )
+        .await
+        .expect("a stale claim settles quiet")
+    );
+
+    // Sections cap the same way.
+    for _ in 1..=MAX_ATTEMPTS {
+        assert!(
+            PaperSectionRow::is_unsettled(
+                &client,
+                EDITION,
+                PaperSectionKind::Reading,
+                stale_before,
+                MAX_ATTEMPTS
+            )
+            .await
+            .expect("unsettled")
+        );
+        assert!(
+            PaperSectionRow::claim_printing(
+                &client,
+                EDITION,
+                PaperSectionKind::Reading,
+                stale_before,
+                MAX_ATTEMPTS
+            )
             .await
             .expect("claim")
-    );
-    PaperRoomEdition::release(&client, retry.id, EDITION)
-        .await
-        .expect("release");
-    assert!(
-        PaperRoomEdition::claim_printing(&client, retry.id, EDITION, 5, 1, stale_before)
+        );
+        PaperSectionRow::mark_failed(&client, EDITION, PaperSectionKind::Reading)
             .await
-            .expect("claim again")
+            .expect("mark failed");
+    }
+    assert!(
+        !PaperSectionRow::is_unsettled(
+            &client,
+            EDITION,
+            PaperSectionKind::Reading,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("capped")
     );
 }
 
@@ -233,19 +446,37 @@ async fn sections_settle_as_ready_or_quiet_and_load_with_the_edition() {
     let stale_before = Utc::now() - Duration::minutes(15);
 
     assert!(
-        PaperSectionRow::is_unsettled(&client, EDITION, PaperSectionKind::Reading, stale_before)
-            .await
-            .expect("unsettled")
+        PaperSectionRow::is_unsettled(
+            &client,
+            EDITION,
+            PaperSectionKind::Reading,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("unsettled")
     );
     assert!(
-        PaperSectionRow::claim_printing(&client, EDITION, PaperSectionKind::Reading, stale_before)
-            .await
-            .expect("claim")
+        PaperSectionRow::claim_printing(
+            &client,
+            EDITION,
+            PaperSectionKind::Reading,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("claim")
     );
     assert!(
-        !PaperSectionRow::is_unsettled(&client, EDITION, PaperSectionKind::Reading, stale_before)
-            .await
-            .expect("held")
+        !PaperSectionRow::is_unsettled(
+            &client,
+            EDITION,
+            PaperSectionKind::Reading,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("held")
     );
     // A print that found nothing to say settles quiet under the same claim.
     PaperSectionRow::finish(&client, EDITION, PaperSectionKind::Reading, None)
@@ -253,9 +484,15 @@ async fn sections_settle_as_ready_or_quiet_and_load_with_the_edition() {
         .expect("finish quiet");
 
     assert!(
-        PaperSectionRow::claim_printing(&client, EDITION, PaperSectionKind::Outside, stale_before)
-            .await
-            .expect("claim")
+        PaperSectionRow::claim_printing(
+            &client,
+            EDITION,
+            PaperSectionKind::Outside,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("claim")
     );
     PaperSectionRow::finish(
         &client,
@@ -265,10 +502,17 @@ async fn sections_settle_as_ready_or_quiet_and_load_with_the_edition() {
     )
     .await
     .expect("finish ready");
+    // Ready is settled: no claim is handed out again.
     assert!(
-        !PaperSectionRow::mark_quiet(&client, EDITION, PaperSectionKind::Outside)
-            .await
-            .expect("quiet after ready is a no-op")
+        !PaperSectionRow::claim_printing(
+            &client,
+            EDITION,
+            PaperSectionKind::Outside,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("ready is settled")
     );
 
     let edition = PaperEdition::load(&client, EDITION).await.expect("load");
@@ -309,7 +553,8 @@ async fn recent_ready_sections_come_back_newest_first_and_only_from_earlier_edit
                 &client,
                 day(offset),
                 PaperSectionKind::Outside,
-                stale_before
+                stale_before,
+                MAX_ATTEMPTS
             )
             .await
             .expect("claim")
@@ -320,9 +565,15 @@ async fn recent_ready_sections_come_back_newest_first_and_only_from_earlier_edit
     }
     // A different section on the same day is not this section's memory.
     assert!(
-        PaperSectionRow::claim_printing(&client, day(-1), PaperSectionKind::Reading, stale_before)
-            .await
-            .expect("claim")
+        PaperSectionRow::claim_printing(
+            &client,
+            day(-1),
+            PaperSectionKind::Reading,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("claim")
     );
     PaperSectionRow::finish(
         &client,

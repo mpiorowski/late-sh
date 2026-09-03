@@ -7,8 +7,8 @@ use late_core::models::paper::PaperRoomEdition;
 use late_core::test_utils::create_test_user;
 
 use super::svc::{
-    PAPER_ROOM_LINES, PaperEvent, PaperOutcome, PaperService, PaperTrigger, PressOutcome, PrintJob,
-    edition_for, edition_window, outside_prompt, tidy_column,
+    PAPER_MAX_ATTEMPTS, PAPER_ROOM_LINES, PaperEvent, PaperOutcome, PaperService, PaperTrigger,
+    PressOutcome, PrintJob, edition_for, edition_window, outside_prompt, tidy_column,
 };
 use crate::app::ai::svc::AiService;
 use crate::test_helpers::{
@@ -78,15 +78,30 @@ async fn wait_press(rx: &mut tokio::sync::broadcast::Receiver<PaperEvent>) -> Pr
 }
 
 async fn seed_lounge_page(db: &late_core::db::Db, text: &str) -> ChatRoom {
+    seed_lounge_page_for(db, edition_for(Utc::now()), text).await
+}
+
+async fn seed_lounge_page_for(
+    db: &late_core::db::Db,
+    edition: chrono::NaiveDate,
+    text: &str,
+) -> ChatRoom {
     let client = db.get().await.expect("db client");
     let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
-    let edition = edition_for(Utc::now());
     assert!(
-        PaperRoomEdition::claim_printing(&client, lounge.id, edition, 12, 4, Utc::now())
-            .await
-            .expect("claim")
+        PaperRoomEdition::claim_printing(
+            &client,
+            lounge.id,
+            edition,
+            12,
+            4,
+            Utc::now(),
+            PAPER_MAX_ATTEMPTS
+        )
+        .await
+        .expect("claim")
     );
-    PaperRoomEdition::finish(&client, lounge.id, edition, text)
+    PaperRoomEdition::finish(&client, lounge.id, edition, Some(text))
         .await
         .expect("finish");
     lounge
@@ -183,35 +198,34 @@ async fn the_newsstand_answers_unavailable_empty_and_ready_and_claims_the_login_
     assert_eq!(trigger, PaperTrigger::Login);
     assert!(matches!(outcome, PaperOutcome::Ready(_)));
 
-    // A preview (tomorrow's edition) is what `/paper` shows once it exists,
-    // and the login pop never looks at it.
-    let tomorrow = edition_for(Utc::now()) + chrono::Duration::days(1);
-    {
-        let client = test_db.db.get().await.expect("db client");
-        let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
-        assert!(
-            PaperRoomEdition::claim_printing(&client, lounge.id, tomorrow, 3, 1, Utc::now())
-                .await
-                .expect("claim")
-        );
-        PaperRoomEdition::finish(&client, lounge.id, tomorrow, "- the preview")
-            .await
-            .expect("finish");
-    }
+    // The newsstand sells today's edition and nothing else: rows dated
+    // tomorrow (there should be none; a preview never writes any) are
+    // neither shown by `/paper` nor popped at login.
+    let today = edition_for(Utc::now());
+    seed_lounge_page_for(&test_db.db, today + chrono::Duration::days(1), "- tomorrow").await;
     service.request(user.id, PaperTrigger::Command);
     let (_, _, outcome) = wait_open(&mut rx).await;
     let PaperOutcome::Ready(edition) = outcome else {
-        panic!("expected the preview, got {outcome:?}");
+        panic!("expected today's paper, got {outcome:?}");
     };
-    assert_eq!(edition.edition, tomorrow);
-    assert_eq!(edition.rooms[0].text.as_deref(), Some("- the preview"));
+    assert_eq!(edition.edition, today);
+    assert_eq!(edition.rooms[0].text.as_deref(), Some("- printed again"));
     service.request(other.id, PaperTrigger::Login);
     assert!(
         tokio::time::timeout(Duration::from_millis(300), rx.recv())
             .await
             .is_err(),
-        "today's pop was already spent and the preview must not pop"
+        "today's pop was already spent and tomorrow's rows must not pop"
     );
+
+    // A preview needs the press (a configured AI service), which the test
+    // harness does not have, so it is unavailable here rather than a
+    // model call; the in-memory layout itself is `preview_edition`.
+    service.request_print(user.id, PrintJob::Preview);
+    assert!(matches!(
+        wait_press(&mut rx).await,
+        PressOutcome::Unavailable
+    ));
 }
 
 #[tokio::test]
