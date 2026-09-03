@@ -459,6 +459,31 @@ impl PaperSectionRow {
         Ok(())
     }
 
+    /// The newest `limit` printed pages of `section` from editions before
+    /// `edition`, newest first: the press's memory, so a column does not
+    /// repeat what an earlier edition already said.
+    pub async fn list_recent_ready(
+        client: &Client,
+        section: PaperSectionKind,
+        before: NaiveDate,
+        limit: i64,
+    ) -> Result<Vec<(NaiveDate, String)>> {
+        let rows = client
+            .query(
+                "SELECT edition, text
+                 FROM paper_sections
+                 WHERE section = $1 AND status = 'ready' AND edition < $2
+                 ORDER BY edition DESC
+                 LIMIT $3",
+                &[&section.as_str(), &before, &limit],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("edition"), row.get("text")))
+            .collect())
+    }
+
     /// Same contract as [`PaperRoomEdition::delete_edition`].
     pub async fn delete_edition(client: &Client, edition: NaiveDate) -> Result<u64> {
         let deleted = client

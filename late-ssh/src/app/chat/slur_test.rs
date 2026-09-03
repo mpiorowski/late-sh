@@ -91,22 +91,19 @@ fn each_drink_reads_harder_than_the_last() {
     );
 }
 
-/// The hiccup is the loudest thing the drink does, so it is the one dial worth
-/// pinning by number: it must be common enough at the top that a wasted patron
-/// reads as wasted from one message, and absent at tipsy, where the welcome
-/// round parks every newcomer.
+/// The hiccup is the loudest thing the drink does, and it belongs to the top
+/// of the ladder: it is how a wasted patron reads as wasted from a single
+/// message. Sloshed gets it rarely, as a hint of what is coming; below that it
+/// never fires at all.
 #[test]
-fn a_wasted_patron_hiccups_most_of_the_time() {
+fn only_the_top_of_the_ladder_hiccups() {
     let [tipsy, buzzed, sloshed, wasted] = [1, 2, 3, DRUNK_MAX_LEVEL].map(hiccup_percent);
 
     assert_eq!(tipsy, 0, "one drink in should never hiccup");
+    assert_eq!(buzzed, 0, "buzzed should never hiccup");
     assert!(
-        (8..22).contains(&buzzed),
-        "buzzed should hiccup now and then, hit {buzzed}%"
-    );
-    assert!(
-        (25..40).contains(&sloshed),
-        "sloshed should hiccup regularly, hit {sloshed}%"
+        (3..14).contains(&sloshed),
+        "sloshed should hiccup only once in a while, hit {sloshed}%"
     );
     assert!(
         wasted >= 75,
@@ -115,7 +112,12 @@ fn a_wasted_patron_hiccups_most_of_the_time() {
 
     // Two rolls at the top, so a long sentence can break twice.
     let twice = (1..1_000)
-        .filter(|seed| slur(CORPUS, DRUNK_MAX_LEVEL, *seed).matches("*hic*").count() >= 2)
+        .filter(|seed| {
+            slur(CORPUS, DRUNK_MAX_LEVEL, *seed)
+                .matches("*hic*")
+                .count()
+                >= 2
+        })
         .count();
     assert!(
         twice * 100 / 999 >= 25,

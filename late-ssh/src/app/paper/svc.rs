@@ -16,10 +16,10 @@
 //! and nowhere else, one jab per line is the ration, and for the column
 //! (unlike chat) he does name who drove a thread.
 //!
-//! Two switches (`app_flags`): `paper_enabled` stops the presses and turns
-//! `/paper` into a banner, `paper_outside_enabled` adds the grounded
-//! "Outside" page. Both are rows, flipped with `/paper on|off` and
-//! `/paper outside on|off` by admins.
+//! Two switches (`app_flags`), both seeded on: `paper_enabled` stops the
+//! presses and turns `/paper` into a banner, `paper_outside_enabled` drops
+//! the grounded "Outside" page. Both are rows, flipped with `/paper on|off`
+//! and `/paper outside on|off` by admins.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -71,6 +71,9 @@ pub const PAPER_ROOM_CHAR_BUDGET: usize = 120_000;
 const PAPER_ROOM_FETCH_LIMIT: i64 = (PAPER_ROOM_CHAR_BUDGET / 16) as i64;
 /// Shares in one day; past this the reading page reads the newest.
 const PAPER_READING_FETCH_LIMIT: i64 = 80;
+/// Earlier Outside pages handed back to the model as "already covered",
+/// so a slow news week does not print the same story four days running.
+const PAPER_OUTSIDE_MEMORY_EDITIONS: i64 = 5;
 
 const EVENT_CHANNEL_CAP: usize = 64;
 
@@ -557,11 +560,17 @@ impl PaperService {
     /// so the reply is tidied like any other and a `NOTHING` answer
     /// settles the page quiet.
     async fn write_outside_page(&self, edition: NaiveDate) -> anyhow::Result<Option<String>> {
-        let prompt = format!(
-            "Today is {}. Find what happened in computing in the last two days and write the \
-             Outside column. Output ONLY the lines.",
-            edition.format("%A, %B %-d %Y")
-        );
+        let covered = {
+            let client = self.db.get().await?;
+            PaperSectionRow::list_recent_ready(
+                &client,
+                PaperSectionKind::Outside,
+                edition,
+                PAPER_OUTSIDE_MEMORY_EDITIONS,
+            )
+            .await?
+        };
+        let prompt = outside_prompt(edition, &covered);
         let reply = self
             .ai
             .generate_reply(&outside_system_prompt(), &prompt)
@@ -847,12 +856,35 @@ fn outside_system_prompt() -> String {
     format!(
         "{GRAYBEARD_PERSONA}\n\n{}\n\nThis column is 'Outside': what happened in computing in \
          the last two days beyond late.sh, found with Google Search. Releases, outages, \
-         security advisories, notable open source, big-company moves. Each line states the \
-         fact in plain words with its date before any aside. No links. Only things you actually \
-         found and that are dated within the last two days; if there are none, output exactly \
-         the single word NOTHING.",
+         security advisories, notable open source, big-company moves, languages, kernels, \
+         hardware. Each line states the fact in plain words with its date before any aside. \
+         No links. AI news is rationed hard: at most one line, and only when it is enormous, \
+         the kind everyone will have heard of by Friday (a new frontier model, a major lab \
+         folding or being bought, a landmark ruling). Funding rounds, benchmarks, point \
+         releases, chatbot features, and opinion pieces about AI do not make the paper. \
+         Never repeat a story from the earlier editions you are shown, even with new wording; \
+         a story earns a second line only if it moved (a fix shipped, a number changed, a \
+         reversal). Only things you actually found and that are dated within the last two \
+         days; if there are none, output exactly the single word NOTHING.",
         column_rules(PAPER_OUTSIDE_LINES)
     )
+}
+
+/// The Outside user turn: the date anchor plus the press's memory.
+pub(crate) fn outside_prompt(edition: NaiveDate, covered: &[(NaiveDate, String)]) -> String {
+    let mut prompt = format!(
+        "Today is {}. Find what happened in computing in the last two days and write the \
+         Outside column.",
+        edition.format("%A, %B %-d %Y")
+    );
+    if !covered.is_empty() {
+        prompt.push_str("\n\nAlready covered in earlier editions, do not repeat:\n");
+        for (day, text) in covered {
+            prompt.push_str(&format!("[{day}]\n{text}\n"));
+        }
+    }
+    prompt.push_str("\n\nOutput ONLY the lines.");
+    prompt
 }
 
 /// Tidy a model reply into at most `max_lines` `- ` lines: trims, drops
@@ -895,16 +927,21 @@ pub(crate) fn tidy_column(text: &str, max_lines: usize) -> Option<String> {
 pub(crate) fn tick(app: &mut App) -> bool {
     let mut changed = false;
 
-    if app.paper.login_pop_pending && !app.show_splash {
+    // The pop is the last thing in a session's opening sequence: after
+    // the splash, after the announcements (the operator's word before
+    // graybeard's), and after a newcomer's tour, which captures keys and
+    // must not end up under a modal.
+    let opening_done =
+        !app.show_splash && !app.login_announcements_visible() && app.clubhouse.tutorial_settled();
+    if app.paper.login_pop_pending && opening_done {
         app.paper.login_pop_pending = false;
         app.paper.awaiting = Some(PaperTrigger::Login);
         app.paper.service.request(app.user_id, PaperTrigger::Login);
     }
 
-    // A ready paper waits for the announcements: the operator's word
-    // comes before graybeard's.
+    // A ready paper that landed mid-sequence waits its turn the same way.
     if app.paper.modal.is_none()
-        && !app.login_announcements_visible()
+        && opening_done
         && let Some(modal) = app.paper.pending_modal.take()
     {
         app.paper.modal = Some(modal);
@@ -992,7 +1029,7 @@ fn open_paper(app: &mut App, trigger: PaperTrigger, outcome: PaperOutcome) {
                 member_room_ids: &member_room_ids,
                 bumped_labels: &bumped_labels,
             });
-            if app.login_announcements_visible() {
+            if app.login_announcements_visible() || !app.clubhouse.tutorial_settled() {
                 app.paper.pending_modal = Some(modal);
             } else {
                 app.paper.modal = Some(modal);
@@ -1124,9 +1161,9 @@ fn tick_flag_writes(app: &mut App) -> bool {
 }
 
 impl PaperState {
-    /// Built at session start. The login pop is armed for returning users
-    /// with the tweak on; a first session already gets the splash, the
-    /// tour, and the bartender, and the paper can wait a day.
+    /// Built at session start. The login pop is armed for every reader
+    /// with the tweak on, newcomers included; `tick` holds it until the
+    /// opening sequence (splash, announcements, tour) is over.
     pub(crate) fn new(service: PaperService, pop_at_login: bool) -> Self {
         let rx = service.subscribe();
         Self {

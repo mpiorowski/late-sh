@@ -1373,11 +1373,11 @@ impl App {
             show_ultimate_modal: false,
             ultimate_cooldown_was_running: false,
             login_announcements: config.initial_announcements,
-            // A first session already gets the splash, the tour, and the
-            // bartender; the paper can wait a day.
+            // Newcomers get it too: after the tour, it is the best answer
+            // to "is anyone here?" and doubles as the room directory.
             paper: crate::app::paper::state::PaperState::new(
                 config.paper_service,
-                config.paper_at_login && !config.is_new_user,
+                config.paper_at_login,
             ),
             help_modal_state: help_modal::state::HelpModalState::new(),
             leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState::new(),

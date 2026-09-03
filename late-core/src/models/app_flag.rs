@@ -29,7 +29,8 @@ pub enum AppFlag {
     /// prints nothing and `/paper` answers unavailable.
     PaperEnabled,
     /// The paper's "Outside" page (`/paper outside on|off`): the grounded
-    /// look at the world beyond late.sh. Off until it has earned its ink.
+    /// look at the world beyond late.sh. On from the start; the switch is
+    /// there for the day it reads like slop.
     PaperOutsideEnabled,
 }
 

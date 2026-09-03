@@ -12,8 +12,16 @@ use ratatui::{
 use super::state::PaperModal;
 use crate::app::common::theme;
 
+/// The paper takes most of the screen: on a busy day it is many rooms of
+/// five lines each, and a small box would be all scrolling.
+const PAPER_WIDTH_PERMILLE: u16 = 900;
+const PAPER_HEIGHT_PERMILLE: u16 = 900;
+const PAPER_MAX_WIDTH: u16 = 160;
+
 pub(crate) fn draw(frame: &mut Frame, area: Rect, modal: &PaperModal) {
-    let popup = centered_rect(84, 34, area);
+    let width = permille(area.width, PAPER_WIDTH_PERMILLE).clamp(24, PAPER_MAX_WIDTH);
+    let height = permille(area.height, PAPER_HEIGHT_PERMILLE).max(5);
+    let popup = centered_rect(width, height, area);
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
@@ -62,6 +70,12 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, modal: &PaperModal) {
         ),
     ]);
     frame.render_widget(Paragraph::new(footer).centered(), layout[2]);
+}
+
+/// `value * permille / 1000` without the `u16` overflow a wide terminal
+/// would hit.
+fn permille(value: u16, permille: u16) -> u16 {
+    (u32::from(value) * u32::from(permille) / 1000) as u16
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {

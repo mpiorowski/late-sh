@@ -8,7 +8,7 @@ use late_core::test_utils::create_test_user;
 
 use super::svc::{
     PAPER_ROOM_LINES, PaperEvent, PaperOutcome, PaperService, PaperTrigger, PressOutcome, PrintJob,
-    edition_for, edition_window, tidy_column,
+    edition_for, edition_window, outside_prompt, tidy_column,
 };
 use crate::app::ai::svc::AiService;
 use crate::test_helpers::{
@@ -266,4 +266,83 @@ async fn slash_paper_reopens_the_edition_and_a_non_admin_cannot_stop_the_presses
     app.handle_input(b"i");
     app.handle_input(b"/paper off\r");
     wait_for_render_contains(&mut app, "Only admins can touch the presses").await;
+}
+
+#[tokio::test]
+async fn a_newcomers_paper_waits_until_the_tour_is_walked() {
+    use crate::app::clubhouse::state::Tutorial;
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "paper-newcomer").await;
+    seed_lounge_page(&test_db.db, "- the regulars argued about editors").await;
+    {
+        let client = test_db.db.get().await.expect("db client");
+        let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+        ChatRoomMember::join(&client, lounge.id, user.id)
+            .await
+            .expect("join lounge");
+    }
+
+    let mut app = make_app(test_db.db.clone(), user.id, "paper-newcomer-token");
+    app.skip_splash_for_tests();
+    wait_for_render_contains(&mut app, "lounge").await;
+    // A first-ever session: land in the tavern with the walkthrough pending,
+    // and the paper armed like any other login.
+    app.set_screen(Screen::Clubhouse);
+    app.clubhouse.tutorial = Tutorial::Pending;
+    app.paper.login_pop_pending = true;
+    assert_render_not_contains_for(&mut app, "The Late Edition", Duration::from_millis(300)).await;
+    app.clubhouse.enter_screen();
+    assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
+
+    // Nothing pops while the tour holds the keys, however long it takes.
+    for bytes in [&b"1"[..], b"\r", b"2", b"\r", b"3", b"4", b"5", b"6"] {
+        app.handle_input(bytes);
+        let frame = render_plain(&mut app);
+        assert!(!frame.contains("The Late Edition"), "{frame}");
+    }
+    app.handle_input(b"0");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::Homecoming);
+    assert_render_not_contains_for(&mut app, "The Late Edition", Duration::from_millis(300)).await;
+
+    // Settling in is the last step of the opening; the paper is next.
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::Done);
+    wait_for_render_contains(&mut app, "The Late Edition").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("- the regulars argued about editors"),
+        "{frame}"
+    );
+}
+
+#[test]
+fn the_outside_prompt_carries_the_date_and_the_earlier_editions() {
+    let edition = chrono::NaiveDate::from_ymd_opt(2026, 9, 4).unwrap();
+    let bare = outside_prompt(edition, &[]);
+    assert!(
+        bare.starts_with("Today is Friday, September 4 2026."),
+        "{bare}"
+    );
+    assert!(!bare.contains("Already covered"), "{bare}");
+    assert!(bare.ends_with("Output ONLY the lines."), "{bare}");
+
+    let covered = vec![
+        (
+            edition.pred_opt().unwrap(),
+            "- a kernel shipped".to_string(),
+        ),
+        (
+            edition - chrono::Duration::days(3),
+            "- an outage\n- a ruling".to_string(),
+        ),
+    ];
+    let remembered = outside_prompt(edition, &covered);
+    assert!(
+        remembered.contains(
+            "Already covered in earlier editions, do not repeat:\n[2026-09-03]\n- a kernel shipped\n[2026-09-01]\n- an outage\n- a ruling\n"
+        ),
+        "{remembered}"
+    );
 }

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-09-03 (The Late Edition: @graybeard's daily paper, printed once per public room per UTC day by a row-claiming sweeper and popped once a day at login or opened with `/paper`; `paper_room_editions` / `paper_sections` (migration 173), `paper_enabled` / `paper_outside_enabled` switches, the `paper_at_login` tweak, `late-ssh/src/app/paper/CONTEXT.md`.)
+- Last updated: 2026-09-03 (The Late Edition: @graybeard's daily paper, printed once per public room per UTC day by a row-claiming sweeper and popped once a day at login or opened with `/paper`; `paper_room_editions` / `paper_sections` (migration 173), `paper_enabled` / `paper_outside_enabled` switches, both seeded on, the `paper_at_login` tweak, `late-ssh/src/app/paper/CONTEXT.md`.)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 

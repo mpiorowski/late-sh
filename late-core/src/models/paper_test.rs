@@ -290,3 +290,61 @@ async fn sections_settle_as_ready_or_quiet_and_load_with_the_edition() {
     );
     assert!(edition.has_print());
 }
+
+#[tokio::test]
+async fn recent_ready_sections_come_back_newest_first_and_only_from_earlier_editions() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let stale_before = Utc::now() - Duration::minutes(15);
+    let day = |offset: i64| EDITION + Duration::days(offset);
+
+    for (offset, text) in [
+        (-3, Some("- three days ago")),
+        (-2, None),
+        (-1, Some("- yesterday")),
+        (0, Some("- today")),
+    ] {
+        assert!(
+            PaperSectionRow::claim_printing(
+                &client,
+                day(offset),
+                PaperSectionKind::Outside,
+                stale_before
+            )
+            .await
+            .expect("claim")
+        );
+        PaperSectionRow::finish(&client, day(offset), PaperSectionKind::Outside, text)
+            .await
+            .expect("finish");
+    }
+    // A different section on the same day is not this section's memory.
+    assert!(
+        PaperSectionRow::claim_printing(&client, day(-1), PaperSectionKind::Reading, stale_before)
+            .await
+            .expect("claim")
+    );
+    PaperSectionRow::finish(
+        &client,
+        day(-1),
+        PaperSectionKind::Reading,
+        Some("- a share"),
+    )
+    .await
+    .expect("finish");
+
+    let recent = PaperSectionRow::list_recent_ready(&client, PaperSectionKind::Outside, EDITION, 5)
+        .await
+        .expect("recent");
+    assert_eq!(
+        recent,
+        vec![
+            (day(-1), "- yesterday".to_string()),
+            (day(-3), "- three days ago".to_string()),
+        ]
+    );
+    let capped = PaperSectionRow::list_recent_ready(&client, PaperSectionKind::Outside, EDITION, 1)
+        .await
+        .expect("recent");
+    assert_eq!(capped, vec![(day(-1), "- yesterday".to_string())]);
+}

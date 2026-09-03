@@ -69,9 +69,10 @@ pub(crate) enum PaperCommand {
     On,
     /// `/paper off`: stop the presses everywhere; `/paper` banners.
     Off,
-    /// `/paper outside on`: print the Outside page from the next sweep.
+    /// `/paper outside on`: print the Outside page from the next sweep
+    /// (the seeded state).
     OutsideOn,
-    /// `/paper outside off`: drop it.
+    /// `/paper outside off`: drop it, for the day it reads like slop.
     OutsideOff,
     /// `/paper print`: sweep now instead of waiting for the interval.
     Print,

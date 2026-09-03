@@ -77,14 +77,14 @@ fn intensity_for(level: u8) -> Option<Intensity> {
             word_percent: 32,
             depth: Depth::One,
             slur_percent: 0,
-            hiccup_percent: 15,
-            hiccup_rolls: 1,
+            hiccup_percent: 0,
+            hiccup_rolls: 0,
         }),
         3 => Some(Intensity {
             word_percent: 60,
             depth: Depth::Two,
             slur_percent: 15,
-            hiccup_percent: 35,
+            hiccup_percent: 8,
             hiccup_rolls: 1,
         }),
         _ => Some(Intensity {

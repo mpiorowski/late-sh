@@ -42,8 +42,9 @@ CREATE TABLE paper_sections (
     CHECK ((status = 'printing') = (generated_at IS NULL))
 );
 
--- The paper's kill switch starts on; the outside-world section starts off
--- until someone has read a week of it and decided it is not slop.
+-- Both switches start on: the presses run, and the outside-world section
+-- prints from the first edition (`/paper outside off` drops it if it reads
+-- like slop).
 INSERT INTO app_flags (key, enabled) VALUES
     ('paper_enabled', true),
-    ('paper_outside_enabled', false);
+    ('paper_outside_enabled', true);
