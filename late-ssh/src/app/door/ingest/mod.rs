@@ -1,4 +1,4 @@
-// The door log pipe (devdocs/PLAN-ROGUELIKE-BOARDS.md): late-ssh tails the
+// The door log pipe (contract in `app/leaderboard/CONTEXT.md`): late-ssh tails the
 // roguelike door hosts' append-only xlog files over a reserved `late_stats`
 // SSH session and lands runs/milestones in the DB, which feeds the door
 // boards, badge payouts, and #lounge feed events. One connect-with-retry task

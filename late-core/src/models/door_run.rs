@@ -1,5 +1,5 @@
 // Finished roguelike-door games, ingested from the door hosts' append-only
-// xlog files over the stats SSH session (devdocs/PLAN-ROGUELIKE-BOARDS.md).
+// xlog files over the stats SSH session (`late-ssh/src/app/leaderboard/CONTEXT.md`).
 // One row per finished game; the (game, source_file, source_offset) unique
 // key makes re-ingest after a cursor reset a no-op, which is the whole
 // idempotency story. All parsing lives in late-ssh; this module owns only the

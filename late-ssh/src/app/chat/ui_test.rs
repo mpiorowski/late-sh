@@ -3201,7 +3201,11 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
             "row {index} of mira's block is not washed: {rendered:?}"
         );
     }
-    assert_eq!(visible.lines[mira - 2].spans[0].style.bg, None, "{rendered:?}");
+    assert_eq!(
+        visible.lines[mira - 2].spans[0].style.bg,
+        None,
+        "{rendered:?}"
+    );
     assert!(matches!(visible.hits[mira - 1].kind, ChatRowKind::None));
     for row in [
         &rendered[0],

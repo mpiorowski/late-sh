@@ -75,7 +75,7 @@ roster!(
 roster!(
     /// The external roguelike-door roster: games whose runs are ingested
     /// from their host's log files into `door_runs`
-    /// (devdocs/PLAN-ROGUELIKE-BOARDS.md). Each variant gets the uniform
+    /// (`late-ssh/src/app/leaderboard/CONTEXT.md`). Each variant gets the uniform
     /// board triple: Wins (all-time), Deepest dive, and Top score (monthly +
     /// all-time), all from the per-window union query.
     DoorGame: Dcss, Nethack, Brogue

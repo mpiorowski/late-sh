@@ -106,8 +106,9 @@ Monthly windows use UTC calendar months. No refresh query scans full history.
 The three external roguelike doors feed their boards, badges, chips, and feed
 lines from **host-written log files, never from the terminal**. Shipped in four
 phases over 2026-08-07..10 (DCSS, NetHack + scrape removal, Brogue, then the
-DCSS file publishing); `devdocs/PLAN-ROGUELIKE-BOARDS.md` is the build record
-that the migrations and a few source comments still point at.
+DCSS file publishing). The build record (`devdocs/PLAN-ROGUELIKE-BOARDS.md`)
+was deleted on 2026-09-03; migrations 136 and 140 still name that path in
+their header comments, and this section is where they now lead.
 
 - **Transport: a stats SSH session on the door host.** Each host reserves one
   SSH username, `late_stats` (inside the already-reserved `late_*` handle
