@@ -403,11 +403,14 @@ Admin commands:
   `ChatRenderInput.runner_looks`, the app's 1 Hz copy of the look
   directory): the wire wraps every entry six cells short and seats the
   author's three-row portrait in that gutter beside a block-opening
-  message, on the message's own rows: hood on the header, eyes and coat
-  on the first body rows, a short message growing blank body rows to fit
-  (`attach_portrait` / `seat_portrait_row`). Kept on the entry's rows so
-  the mention wash and the jump highlight cover the whole face; the
-  separator above a block stays blank. No other room changes. The domain contract is
+  message: the hood rides the blank separator above the block, the eyes
+  the header, the coat the first body row, so a one-line message pads
+  nothing under itself (`attach_portrait` / `seat_portrait_row`); that
+  separator row then belongs to the block (`row_message`, and the jump
+  highlight's range), so the mention wash and the highlight cover the
+  whole face, while its kind stays `Blank` and a click there selects
+  nothing. The first block in the list has no separator and seats all
+  three rows on the entry. No other room changes. The domain contract is
   `late-ssh/src/app/deadchannel/CONTEXT.md`.
 - `/create-room #room` creates a permanent auto-join room and bulk-adds existing users. It is idempotent on rooms that are already permanent, and it promotes an existing non-permanent public room to permanent + auto-join (`ChatRoom::ensure_permanent` UPDATEs the row, then the caller bulk-adds users) — this is how a user-created `/public #voice` room becomes the permanent `#voice` core room. Because promotion bulk-adds every user to a room nobody can leave, `/create-room` is admin-only and a mistyped slug will promote whatever public room matches it.
 - `/delete-room #room` deletes a permanent room.

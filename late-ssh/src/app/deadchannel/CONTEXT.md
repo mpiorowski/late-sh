@@ -12,9 +12,10 @@
   a `deadchannel_runners` row wearing a random starter look (pieces and
   tints from the closed table in `runner/state.rs`), and inside
   #deadchannel every runner's portrait sits in a six-cell gutter on the
-  right of their messages, on the message's own rows; looks cross
-  replicas through the `deadchannel_runner_changed` notify into a
-  process-shared directory, `runner/svc.rs`)
+  right of their messages (hood on the separator row above the block,
+  eyes on the header, coat on the first body row); looks cross replicas
+  through the `deadchannel_runner_changed` notify into a process-shared
+  directory, `runner/svc.rs`)
 - Status: Active, staff only until `/haunt live on`
 - Parent context: `../../../../CONTEXT.md`; design sources live in this
   directory: `GAME.md` (the game: thesis, first contact, the runner) and

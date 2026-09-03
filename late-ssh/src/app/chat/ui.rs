@@ -1814,11 +1814,14 @@ fn ensure_chat_rows_cache(
             .flatten();
         let is_system = system_text.is_some();
 
-        if !(first || is_continuation || is_system && prev_was_system) {
+        let separator_row = if first || is_continuation || is_system && prev_was_system {
+            None
+        } else {
             all_rows.push(Line::from(""));
             row_message.push(None);
             row_kind.push(RowKindLite::Blank);
-        }
+            Some(all_rows.len() - 1)
+        };
         first = false;
 
         let left_app_here = ctx.dividers.left_app.filter(|_| {
@@ -1886,12 +1889,29 @@ fn ensure_chat_rows_cache(
             gild,
             translation,
         );
-        if let Some(rows) = portrait {
-            // The face sits on the entry's own rows (header, then body),
-            // so every per-message treatment (the mention wash, the jump
-            // highlight, selection) covers the whole portrait. A short
-            // message grows blank body rows to fit it.
-            attach_portrait(&mut wrapped.lines, rows, text_width);
+        // Where the block's per-message treatments (the mention wash, the
+        // jump highlight) begin: the entry's first row, or the separator
+        // above it once the hood sits there.
+        let mut block_start = row_start;
+        if let Some([hood, eyes, coat]) = portrait {
+            // The blank separator above the block is dead space, so the
+            // hood sits there and the face ends level with the first body
+            // row: a one-line message needs no padded row under it. Only
+            // when the separator is the row directly above (no divider in
+            // between), and only when there is one: the first block in
+            // the list seats all three rows on the entry itself.
+            match separator_row.filter(|index| index + 1 == all_rows.len()) {
+                Some(index) => {
+                    seat_portrait_row(&mut all_rows[index], hood, text_width);
+                    attach_portrait(&mut wrapped.lines, vec![eyes, coat], text_width);
+                    // The hood row is the block's now: it takes the wash
+                    // and the highlight with the rest of the face. Its kind
+                    // stays `Blank`, so a click there still selects nothing.
+                    row_message[index] = Some(msg.id);
+                    block_start = index;
+                }
+                None => attach_portrait(&mut wrapped.lines, vec![hood, eyes, coat], text_width),
+            }
         }
         let line_count = wrapped.lines.len();
         all_rows.extend(wrapped.lines);
@@ -1930,7 +1950,7 @@ fn ensure_chat_rows_cache(
             row_start
         };
         selected_ranges.insert(msg.id, (body_start, all_rows.len()));
-        highlighted_ranges.insert(msg.id, (row_start, all_rows.len()));
+        highlighted_ranges.insert(msg.id, (block_start, all_rows.len()));
 
         prev_user_id = Some(msg.user_id);
         prev_created = Some(msg.created);
@@ -1961,14 +1981,10 @@ fn ensure_chat_rows_cache(
 /// one cell of air between it and the text.
 const PORTRAIT_GUTTER: usize = crate::app::deadchannel::runner::state::PORTRAIT_WIDTH + 1;
 
-/// Seat the portrait in the gutter beside an entry's first rows, one span
-/// per row. An entry shorter than the portrait grows blank body rows so
-/// the face is never cut.
-fn attach_portrait(
-    lines: &mut Vec<Line<'static>>,
-    rows: [Span<'static>; crate::app::deadchannel::runner::state::PORTRAIT_HEIGHT],
-    text_width: usize,
-) {
+/// Seat portrait rows in the gutter beside an entry's first rows, one span
+/// per row. An entry shorter than the rows it must carry grows blank body
+/// rows so the face is never cut.
+fn attach_portrait(lines: &mut Vec<Line<'static>>, rows: Vec<Span<'static>>, text_width: usize) {
     while lines.len() < rows.len() {
         lines.push(Line::from(""));
     }
