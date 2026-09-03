@@ -26,33 +26,48 @@ crate::model! {
     }
 }
 
+/// Whether `ensure_for_user` wrote the row or found one already there.
+/// The insert is the only witness of that, so it is reported rather than
+/// inferred; the invited join counts a runner created exactly once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunnerOrigin {
+    Created,
+    Existing,
+}
+
 impl DeadchannelRunner {
     /// Create the runner for `user_id` wearing `look`, or return the one
     /// that already exists. A conditional insert, so two devices joining at
     /// once (on any replicas) create one runner and both see the same look;
-    /// the loser's `look` is discarded.
+    /// the loser's `look` is discarded and comes back as `Existing`.
     pub async fn ensure_for_user(
         client: &Client,
         user_id: Uuid,
         look: &serde_json::Value,
-    ) -> Result<Self> {
-        client
-            .execute(
+    ) -> Result<(Self, RunnerOrigin)> {
+        let inserted = client
+            .query_opt(
                 "INSERT INTO deadchannel_runners (user_id, look)
                  VALUES ($1, $2)
-                 ON CONFLICT (user_id) DO NOTHING",
+                 ON CONFLICT (user_id) DO NOTHING
+                 RETURNING *",
                 &[&user_id, look],
             )
             .await
             .context("inserting deadchannel runner")?;
-        let row = client
-            .query_one(
-                "SELECT * FROM deadchannel_runners WHERE user_id = $1",
-                &[&user_id],
-            )
-            .await
-            .context("reading deadchannel runner after ensure")?;
-        Ok(Self::from(row))
+        match inserted {
+            Some(row) => Ok((Self::from(row), RunnerOrigin::Created)),
+            None => {
+                let row = client
+                    .query_one(
+                        "SELECT * FROM deadchannel_runners WHERE user_id = $1",
+                        &[&user_id],
+                    )
+                    .await
+                    .context("reading existing deadchannel runner")?;
+                Ok((Self::from(row), RunnerOrigin::Existing))
+            }
+        }
     }
 
     pub async fn find_by_user(client: &Client, user_id: Uuid) -> Result<Option<Self>> {

@@ -6,9 +6,11 @@
 //! A portrait is three rows of five cells, one slot per row: hood on top,
 //! eyes in the middle, coat at the bottom. Rows stack, so any hood composes
 //! with any coat and the set needs no compatibility rules. Every row is
-//! exactly [`PORTRAIT_WIDTH`] single-width cells (`state_test` asserts it
-//! over the whole table), because an ambiguous-width glyph would tear the
-//! portrait in some terminals.
+//! exactly [`PORTRAIT_WIDTH`] cells with no wide (CJK, emoji) glyph
+//! (`state_test` asserts it over the whole table). The rows are block and
+//! box-drawing glyphs, East Asian ambiguous width like the rest of the
+//! TUI's frames, so a portrait assumes the ambiguous-narrow terminal the
+//! whole app already assumes.
 
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};

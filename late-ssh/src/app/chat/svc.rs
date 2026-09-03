@@ -4720,19 +4720,24 @@ impl ChatService {
         // Consent creates the character (GAME.md, Phase 2): the runner row,
         // wearing a random starter look. A conditional insert, so a second
         // device or a rejoin finds the runner already there and keeps its
-        // face; only a fresh row counts as the ladder's last beat.
+        // face; only a fresh row counts as the ladder's last beat, and the
+        // insert itself says which this was.
         let look = crate::app::deadchannel::runner::state::Look::random(&mut rand::thread_rng());
-        let runner = late_core::models::deadchannel_runner::DeadchannelRunner::ensure_for_user(
-            &client,
-            user_id,
-            &look.to_json(),
-        )
-        .await?;
-        if runner.look == look.to_json() {
-            tracing::info!(user_id = %user_id, runner_id = %runner.id, "runner created");
-            crate::metrics::record_first_contact_beat(
-                crate::metrics::FirstContactBeat::RunnerCreated,
-            );
+        let (runner, origin) =
+            late_core::models::deadchannel_runner::DeadchannelRunner::ensure_for_user(
+                &client,
+                user_id,
+                &look.to_json(),
+            )
+            .await?;
+        match origin {
+            late_core::models::deadchannel_runner::RunnerOrigin::Created => {
+                tracing::info!(user_id = %user_id, runner_id = %runner.id, "runner created");
+                crate::metrics::record_first_contact_beat(
+                    crate::metrics::FirstContactBeat::RunnerCreated,
+                );
+            }
+            late_core::models::deadchannel_runner::RunnerOrigin::Existing => {}
         }
         Ok(room.id)
     }

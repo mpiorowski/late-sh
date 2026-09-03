@@ -4,11 +4,13 @@ use unicode_width::UnicodeWidthChar;
 
 use super::*;
 
-/// The hard rule behind the whole catalog: a row is exactly five
-/// single-width cells, so a portrait never tears in a terminal that
-/// renders ambiguous-width glyphs double wide.
+/// The hard rule behind the whole catalog: a row is exactly five cells
+/// and none of them is a wide glyph (CJK, emoji), so the gutter math in
+/// the chat rows holds. This does not, and cannot, check East Asian
+/// ambiguous width: `width()` counts that whole class as one cell, and
+/// the table is made of it, like the rest of the TUI's box drawing.
 #[test]
-fn every_piece_row_is_five_single_width_cells() {
+fn every_piece_row_is_five_cells_and_never_wide() {
     for piece in PIECES {
         let cells = piece.row.chars().count();
         assert_eq!(

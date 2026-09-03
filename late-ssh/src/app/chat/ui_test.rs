@@ -3055,10 +3055,10 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
 }
 
 /// The #deadchannel portrait gutter (`app/deadchannel/runner`): a runner's
-/// face rides the blank separator above their block plus the header and
-/// first body row, the text wraps short of the gutter for every entry in
-/// the room, a continuation shares the face above it, and the first block
-/// in the list (no separator above) seats all three rows on the entry.
+/// face sits on the header and first body rows of their block (a short
+/// message grows blank rows to fit it), the text wraps short of the gutter
+/// for every entry in the room, the separator above a block stays blank,
+/// and a continuation shares the face above it.
 #[test]
 fn the_wire_seats_a_runners_portrait_beside_their_message() {
     use crate::app::deadchannel::runner::state::Look;
@@ -3165,35 +3165,35 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
         })
         .collect();
 
-    // The list opens with dax's one-liner: no separator above it, so the
-    // face takes the header, the body row, and one padded row under them.
+    // The list opens with dax's one-liner: the face takes the header, the
+    // body row, and one padded row under them.
     assert!(rendered[0].contains("dax"), "{rendered:?}");
     assert!(rendered[0].ends_with(" ╬═╬ "), "{rendered:?}");
     assert!(rendered[1].contains("o7"), "{rendered:?}");
     assert!(rendered[1].ends_with("▐◈ ◈▌"), "{rendered:?}");
     assert_eq!(rendered[2].trim(), "▟▓▙", "{rendered:?}");
-    // Mira's block sits below the civilian: the hood rides the blank
-    // separator above her header, so the face ends level with her first
-    // body row and nothing is padded under it.
+    // Mira's block sits below the civilian: the separator above her header
+    // stays blank, and the face rides her own rows, header first.
     let mira = rendered
         .iter()
         .position(|row| row.contains("mira"))
         .expect("mira's header");
-    assert_eq!(rendered[mira - 1].trim(), "╬═╬", "{rendered:?}");
-    assert!(rendered[mira].ends_with("▐◈ ◈▌"), "{rendered:?}");
+    assert_eq!(rendered[mira - 1], "", "{rendered:?}");
+    assert!(rendered[mira].ends_with(" ╬═╬ "), "{rendered:?}");
     assert!(
         rendered[mira + 1].trim_start().starts_with("dax get"),
         "{rendered:?}"
     );
-    assert!(rendered[mira + 1].ends_with(" ▟▓▙ "), "{rendered:?}");
-    assert!(!rendered[mira + 2].contains('▟'), "{rendered:?}");
+    assert!(rendered[mira + 1].ends_with("▐◈ ◈▌"), "{rendered:?}");
+    assert!(rendered[mira + 2].ends_with(" ▟▓▙ "), "{rendered:?}");
+    assert!(!rendered[mira + 3].contains('▟'), "{rendered:?}");
     for row in [
         &rendered[0],
         &rendered[1],
         &rendered[2],
-        &rendered[mira - 1],
         &rendered[mira],
         &rendered[mira + 1],
+        &rendered[mira + 2],
     ] {
         assert_eq!(row.width(), width, "{row:?}");
     }

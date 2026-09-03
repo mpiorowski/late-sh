@@ -8,23 +8,13 @@
   several replicas (root CONTEXT.md, multi-replica rule); gated behind
   the `haunt_live` fuse, unlit, so only staff (admins and moderators)
   are haunted today, and only they can finish the ladder and join.
-- Last updated: 2026-09-02 (the runner: `/join #deadchannel` now creates
+- Last updated: 2026-09-03 (the runner: `/join #deadchannel` now creates
   a `deadchannel_runners` row wearing a random starter look (pieces and
   tints from the closed table in `runner/state.rs`), and inside
   #deadchannel every runner's portrait sits in a six-cell gutter on the
-  right of their messages (hood on the separator row above the block,
-  eyes on the header, coat on the first body row); looks cross replicas through the
-  `deadchannel_runner_changed` notify into a process-shared directory,
-  `runner/svc.rs`. Same day, earlier: staff scope: the ladder runs for moderators
-  as well as admins, `Permissions::can_moderate`, while `/haunt` stays
-  admin-only so mods meet it cold; whoever finishes gets the DM and the
-  invitation stamp opens `/join #deadchannel`, the full flow end to end.
-  Same day, earlier: the eligibility gate and the replica rework:
-  stage 1 universal behind the `haunt_live` fuse, stages 2-4 behind
-  tenure + touched settings + an AI-screened bio evaluated at bootstrap;
-  the kill switch and fuse moved to `app_flags` rows; the daily and
-  lifetime hit caps moved into conditional claims on the user row; the
-  whisper stamp became a claim)
+  right of their messages, on the message's own rows; looks cross
+  replicas through the `deadchannel_runner_changed` notify into a
+  process-shared directory, `runner/svc.rs`)
 - Status: Active, staff only until `/haunt live on`
 - Parent context: `../../../../CONTEXT.md`; design sources live in this
   directory: `GAME.md` (the game: thesis, first contact, the runner) and
@@ -327,7 +317,10 @@ Drained by `haunt::svc::tick`.
   replica boots; a session copies the directory on its next 1 Hz tick.
   The `mark` is stored from birth but not yet painted anywhere: the
   chat badge stack and the clubhouse floor glyph are the next slice.
-- Piece rows must stay single width. `◉ ◈ ◌` and their kin are
-  ambiguous-width glyphs; the state test guards the table, and any new
-  piece with a shape glyph should be checked in the terminals people
-  here use before it ships.
+- Piece rows are five cells with no wide glyph; the state test guards
+  that and nothing more. The rows are block, box-drawing, and shape
+  glyphs (`◈ ◌ ●` and their kin), which are East Asian ambiguous width
+  like the rest of the TUI's frames, so portraits assume the same
+  ambiguous-narrow terminal the whole app does. Any new piece with a
+  shape glyph should still be checked in the terminals people here use
+  before it ships.
