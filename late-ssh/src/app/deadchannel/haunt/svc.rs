@@ -42,6 +42,15 @@ pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -
     let armable =
         snapshot.is_some_and(|flags| flags.haunt_enabled && (is_staff || flags.haunt_live));
     if !armable {
+        // Staff are haunted while the fuse is unlit, so a shut gate for
+        // one of them means haunting is off (or the flags are unread) and
+        // is the line to look for when the ladder seems dead. For everyone
+        // else an unlit fuse is the normal state of the world.
+        if is_staff {
+            tracing::info!(user_id = %user.id, is_staff, "first contact gate shut: haunting off or flags unread");
+        } else {
+            tracing::debug!(user_id = %user.id, is_staff, "first contact gate shut: fuse unlit");
+        }
         return FirstContactGate::closed();
     }
     let online_milliseconds = async {
@@ -61,6 +70,21 @@ pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -
         online_milliseconds,
         &user.settings,
         state.ai_service.is_enabled(),
+    );
+    // Who the static could choose, and why not: one line per connect with
+    // every leg's number, and the verdict counted so the thresholds can be
+    // tuned against how many people each one turns away.
+    let verdict = gate.verdict();
+    metrics::record_first_contact_gate(verdict, is_staff);
+    tracing::info!(
+        user_id = %user.id,
+        is_staff,
+        active_hours = gate.active_hours,
+        touched_settings = gate.touched_settings,
+        bio_chars = gate.bio_chars,
+        bio = ?gate.bio,
+        verdict = ?verdict,
+        "first contact gate evaluated"
     );
     if gate.needs_bio_screen() {
         screen_bio_task(
@@ -99,6 +123,21 @@ pub(crate) fn arm(
     let chosen = stage1 && (gate.passes() || marks.name_hits > 0);
     let whisper_armed =
         chosen && marks.name_hits >= NAME_TOTAL_CAP && marks.whisper_due(chrono::Utc::now());
+    // What this session can fire, for whom. Stage 1 off is the quiet
+    // default for everyone while the fuse is unlit, so only an armed
+    // session is worth a line.
+    if stage1 {
+        tracing::info!(
+            user_id = %user_id,
+            is_staff,
+            chosen,
+            whisper_armed,
+            glitch_hits = marks.glitch_hits,
+            name_hits = marks.name_hits,
+            whisper_hits = marks.whisper_hits,
+            "first contact armed"
+        );
+    }
     HauntState {
         whisper: whisper_armed.then(|| WhisperState::for_user(user_id, marks.whisper_hits)),
         clock_glitch: stage1.then(|| ClockGlitch::new(session_seed(user_id), 0, marks.glitch_hits)),
@@ -339,9 +378,10 @@ fn tick_clock_glitch(app: &mut App) -> bool {
 /// every own message that lands with its own author header rolls the dice
 /// (grouped continuations never reach here; their label does not draw).
 /// A roll that lands claims a hit on the row; on a won claim
-/// (`tick_claims`) that message's author label corrupts for ~800ms (the
-/// corruption rides the chat rows cache key, so start and heal rebuild
-/// the rows exactly once), and the row's counter is what arms the
+/// (`tick_claims`) that message's author label corrupts in two ~800ms
+/// waves with different glyphs (the corruption rides the chat rows cache
+/// key, so start, the wave edge, and heal each rebuild the rows exactly
+/// once), and the row's counter is what arms the
 /// stage-3 whisper at its third hit.
 fn tick_name_flicker(app: &mut App) -> bool {
     // Drained even while unarmed, so a stale echo id never waits around

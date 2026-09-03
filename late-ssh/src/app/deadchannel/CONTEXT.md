@@ -131,7 +131,9 @@ lines carry no face; every other room renders exactly as before.
    (glitch hits at the cap): on the landing echo of this session's own
    send (the one moment of guaranteed attention), a ~1-in-24 roll may
    corrupt two or three characters of that message's author label for
-   ~800ms, heavier and longer than the clock: name characters only,
+   ~800ms, then a different two or three for ~800ms more (two waves,
+   `NAME_WAVES`, each with its own seed), heavier and longer than the
+   clock: name characters only,
    never the body (the escalation is targeting, not content). Only a
    send that renders its own author header is a target: the landing
    hook in `chat/state.rs` skips grouped continuations (a fast
@@ -318,6 +320,18 @@ Drained by `haunt::svc::tick`.
   replica boots; a session copies the directory on its next 1 Hz tick.
   The `mark` is stored from birth but not yet painted anywhere: the
   chat badge stack and the clubhouse floor glyph are the next slice.
+- Where to look when the ladder seems dead (per person, in the logs, all
+  keyed by `user_id`): `first contact gate evaluated` at every connect
+  once the fuse is lit (for staff, always) with each leg's number, the
+  bio standing, and the `GateVerdict`; `first contact gate shut` when
+  haunting is off (info for staff, debug for everyone else); `first
+  contact armed` for every session that can fire stage 1, with `chosen`
+  and `whisper_armed`; then one line per hit, whisper, invitation, bio
+  screen, and runner. How many the gate turns away, and on which leg, is
+  `late_ssh_first_contact_gate_total{verdict, audience}` (one count per
+  connect, not per person); bio screens by outcome are
+  `late_ssh_first_contact_bio_screens_total`; delivered beats are
+  `late_ssh_first_contact_beats_total`.
 - Piece rows are five cells with no wide glyph; the state test guards
   that and nothing more. The rows are block, box-drawing, and shape
   glyphs (`◈ ◌ ●` and their kin), which are East Asian ambiguous width

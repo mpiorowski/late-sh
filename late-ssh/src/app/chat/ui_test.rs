@@ -3085,7 +3085,7 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
     };
     // Newest first, the order the builder walks. Oldest is a runner's
     // one-liner opening the list, then a civilian, then mira's block.
-    let messages = vec![
+    let messages = [
         message(13, runner_id, "gg"),
         message(
             12,

@@ -1,9 +1,9 @@
-use super::{ARTIST, DEVELOPER, MODERATOR, special_badges};
+use super::{ARTIST, DEVELOPER, DJ, MODERATOR, special_badges};
 use unicode_width::UnicodeWidthStr;
 
 #[test]
 fn badges_use_emoji_width_glyphs() {
-    for badge in [MODERATOR, ARTIST, DEVELOPER] {
+    for badge in [MODERATOR, ARTIST, DEVELOPER, DJ] {
         assert_eq!(UnicodeWidthStr::width(badge), 2);
     }
 }
@@ -32,6 +32,11 @@ fn odd_has_mod_and_developer() {
 #[test]
 fn tasmania_has_mod_and_developer() {
     assert_eq!(special_badges("Tasmania"), &[MODERATOR, DEVELOPER]);
+}
+
+#[test]
+fn fellshard_has_dj() {
+    assert_eq!(special_badges("fellshard"), &[DJ]);
 }
 
 #[test]

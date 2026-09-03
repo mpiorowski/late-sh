@@ -346,10 +346,13 @@ fuse is lit.
      one moment of guaranteed attention: eyes always follow your own
      send), the author label of that just-landed message renders with
      two or three of its characters swapped for glyph-alphabet
-     characters, holds roughly 800ms, heals (tuned 2026-09-01: heavier
-     and well past the clock's ~200ms, because stage 2 is meant to be
-     hard to miss). Only a send that renders its own author header is a
-     target: a fast follow-up to your own message groups under it as a
+     characters, holds roughly 800ms, swaps to a different two or three
+     for roughly 800ms more, heals (tuned 2026-09-01: heavier and well
+     past the clock's ~200ms; the second wave added 2026-09-03, because
+     stage 2 is meant to be hard to miss and a single flash can be
+     written off as a render hiccup). Only a send that renders its own
+     author header is a target: a fast follow-up to your own message
+     groups under it as a
      continuation with no label at all, so a hit there would spend
      itself invisibly and the roll skips it. The body is never touched:
      the escalation over stage 1 is targeting, not content ("chrome,

@@ -6,6 +6,7 @@ use late_core::models::media_queue_item::SongQueueReward;
 use crate::app::activity::event::ActivityGame;
 use crate::app::chat::svc::GildRefusal;
 use crate::app::crown::svc::CrownRefusal;
+use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::games::chips::svc::RoundRefusal;
 use crate::app::lobby::daily::svc::DailyWinPayout;
 use crate::app::pot::svc::PotRefusal;
@@ -118,8 +119,9 @@ mod inner {
 
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
-        GildRefusal, GildTier, NewsShareReward, OnlineTimeFlushResult, PotRefusal, RenderReason,
-        RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult, TranslationResult,
+        GateVerdict, GildRefusal, GildTier, NewsShareReward, OnlineTimeFlushResult, PotRefusal,
+        RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
+        TranslationResult,
     };
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -593,6 +595,31 @@ mod inner {
         })
     }
 
+    fn first_contact_gate_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_first_contact_gate_total")
+                .with_description(
+                    "First-contact eligibility gate evaluations at connect (one per session, not per person), by verdict and audience",
+                )
+                .build()
+        })
+    }
+
+    fn first_contact_gate_verdict_label(verdict: GateVerdict) -> &'static str {
+        match verdict {
+            GateVerdict::Passed => "passed",
+            GateVerdict::TooFewHours => "too_few_hours",
+            GateVerdict::TooFewSettings => "too_few_settings",
+            GateVerdict::BioTooShort => "bio_too_short",
+            GateVerdict::BioAiOff => "bio_ai_off",
+            GateVerdict::BioUnscreened => "bio_unscreened",
+            GateVerdict::BioPending => "bio_pending",
+            GateVerdict::BioFailed => "bio_failed",
+        }
+    }
+
     fn first_contact_beat_label(beat: FirstContactBeat) -> &'static str {
         match beat {
             FirstContactBeat::GlitchBurst => "glitch_burst",
@@ -623,6 +650,19 @@ mod inner {
         first_contact_bio_screens_total().add(
             1,
             &[KeyValue::new("outcome", bio_screen_outcome_label(outcome))],
+        );
+    }
+
+    /// One gate evaluation at connect. `staff` splits admins and
+    /// moderators (haunted while the fuse is unlit) from everyone else.
+    pub fn record_first_contact_gate(verdict: GateVerdict, staff: bool) {
+        let audience = if staff { "staff" } else { "public" };
+        first_contact_gate_total().add(
+            1,
+            &[
+                KeyValue::new("verdict", first_contact_gate_verdict_label(verdict)),
+                KeyValue::new("audience", audience),
+            ],
         );
     }
 
@@ -954,14 +994,16 @@ mod inner {
 mod inner {
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
-        GildRefusal, GildTier, NewsShareReward, OnlineTimeFlushResult, PotRefusal, RenderReason,
-        RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult, TranslationResult,
+        GateVerdict, GildRefusal, GildTier, NewsShareReward, OnlineTimeFlushResult, PotRefusal,
+        RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
+        TranslationResult,
     };
 
     pub fn record_ssh_connection() {}
     pub fn record_ssh_connection_rejected(_reason: SshRejectReason) {}
     pub fn record_first_contact_beat(_beat: FirstContactBeat) {}
     pub fn record_first_contact_bio_screen(_outcome: BioScreenOutcome) {}
+    pub fn record_first_contact_gate(_verdict: GateVerdict, _staff: bool) {}
     pub fn record_render(_reason: RenderReason) {}
     pub fn record_render_skipped_clean() {}
     pub fn add_ssh_session(_delta: i64) {}

@@ -61,4 +61,9 @@ fn glitched_name_touches_name_characters_only() {
         assert!(before.is_alphanumeric());
         assert!(crate::app::deadchannel::glyphs::GLYPH_ALPHABET.contains(&after));
     }
+    // The second wave of a hit arrives as a different seed, and it has to
+    // read as a different corruption, or the wave edge is invisible.
+    let second_wave = glitched_name(label, 4 ^ 0x9E37_79B9_7F4A_7C15);
+    assert_ne!(second_wave, first);
+    assert_ne!(second_wave, label);
 }
