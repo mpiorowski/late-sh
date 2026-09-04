@@ -95,8 +95,8 @@ Local state:
 - `late-ssh/src/app/artboard/page.rs`
   - Page-level integration with `crate::app::state::App`.
   - Distinguishes view mode from active Artboard interaction.
-  - View mode supports cursor movement, page/home/end, Alt-arrow panning, right-drag pan, `?` local help, Esc to the rail, and `i`/Enter activation.
-  - Active/help/glyph modes delegate to `input.rs`; the rail, listings, archive lists, and the hang flow to `gallery/input.rs`, whose `Ignored` falls through to the view-mode keys so `i`, `?`, and the Ctrl keys work from the rail.
+  - View mode supports cursor movement, page/home/end, Alt-arrow panning, right-drag pan, `Ctrl+P` local help (`?` is the global guide), Esc to the rail, and `i`/Enter activation.
+  - Active/help/glyph modes delegate to `input.rs`; the rail, listings, archive lists, and the hang flow to `gallery/input.rs`, whose `Ignored` falls through to the view-mode keys so `i` and the Ctrl keys work from the rail; framing and the title prompt let Ctrl+P through too.
   - Converts `InputAction::Copy` into `app.pending_clipboard` and `InputAction::Leave` into edit-mode deactivation.
 
 - `late-ssh/src/app/artboard/ui.rs`
@@ -227,7 +227,7 @@ Keyboard reference:
 | Stroke floating brush | `Ctrl+Shift+arrows` | Repeated stamps while moving |
 | Toggle brush transparency | activate same swatch again | Floating preview reflects transparency |
 | Glyph picker | `Ctrl+]` | Searchable emoji / Unicode picker |
-| Help | `Ctrl+P` or `?` in view mode | Four tabs: Overview / Drawing / Brushes / Session |
+| Help | `Ctrl+P` | Four tabs: Overview / Drawing / Brushes / Session; `?` is the global guide in view mode, a glyph in edit mode |
 | Ownership overlay | `Ctrl+\` | Renders owner initials with deterministic colors |
 | Leave edit mode | `Esc` | Also closes help/glyph picker/local transient state first |
 | Leave Artboard page | `1-7`, `Tab`, `Shift+Tab` | Available from view mode; blocked while active/help/glyph picker is open |

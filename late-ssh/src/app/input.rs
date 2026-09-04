@@ -3643,14 +3643,16 @@ fn handle_voice_global_chord(app: &mut App, ctx: InputContext, event: &ParsedInp
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     let artboard_blocks_page_switch = artboard_blocks_global_page_switch(app, ctx.screen);
 
-    // `?` opens the global guide unless the current screen owns local help.
+    // `?` opens the global guide everywhere, the Artboard included; the
+    // Artboard's own help is Ctrl+P. While the Artboard is drawing, typing
+    // a title, framing, or has an overlay up, `?` is the page's.
     let guide_shortcut = byte == b'?'
         && !ctx.chat_composing
         && !ctx.feeds_processing
         && !ctx.news_composing
         && !ctx.showcase_composing
         && !ctx.work_composing
-        && ctx.screen != Screen::Artboard;
+        && !artboard_blocks_page_switch;
     let chat_message_shortcut =
         ctx.screen == Screen::Dashboard && app.chat.selected_message_id.is_some();
     if guide_shortcut && !chat_message_shortcut {

@@ -786,13 +786,16 @@ async fn artboard_view_help_and_active_input_share_one_lifecycle() {
         "q should close local Artboard help"
     );
 
+    // `?` is the global guide here as on every page; Ctrl+P is the
+    // Artboard's own help.
     app.handle_input(b"?");
-    wait_for_render_contains(&mut app, "Artboard Help").await;
+    wait_for_render_contains(&mut app, " Guide ").await;
     assert!(
-        render_plain(&mut app).contains("Artboard Help"),
-        "? in view mode should open local Artboard help"
+        !render_plain(&mut app).contains("Artboard Help"),
+        "? in view mode should open the global guide, not the local help"
     );
-    app.handle_input(b"q");
+    app.handle_input(b"?");
+    assert!(!app.show_help, "? should close the guide");
 
     // The rail folded away when the board took the keys, so the board's
     // cell (8, 3) is at screen column 10.

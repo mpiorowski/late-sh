@@ -43,11 +43,6 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
             state.toggle_ownership_overlay();
             true
         }
-        b'?' => {
-            state.toggle_help();
-            state.clear_pending_canvas_click();
-            true
-        }
         0x1B => {
             // Esc on the board goes back to the rail; the rail unfolds.
             state.gallery_mut().focus_rail();

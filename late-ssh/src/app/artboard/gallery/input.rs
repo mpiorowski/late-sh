@@ -390,6 +390,8 @@ fn handle_framing_key(state: &mut State, screen_size: (u16, u16), byte: u8) -> G
             state.frame_selection_for_hang();
             GalleryAction::Handled
         }
+        // Ctrl+P: the page's help, framing or not.
+        0x10 => GalleryAction::Ignored,
         _ => {
             let _ = screen_size;
             GalleryAction::Handled
@@ -465,6 +467,7 @@ fn handle_confirm_key(state: &mut State, byte: u8) -> GalleryAction {
             state.gallery_mut().title_push(byte as char);
             GalleryAction::Handled
         }
+        0x10 => GalleryAction::Ignored,
         _ => GalleryAction::Handled,
     }
 }
