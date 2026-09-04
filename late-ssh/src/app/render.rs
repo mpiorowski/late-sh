@@ -2316,7 +2316,20 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 ],
             }
         };
-        for (key, desc) in hints {
+        // The local guide is always one key away, and the top border always
+        // says so: `?` in view mode (typing a title or framing takes the
+        // key, so those two states leave it out), Ctrl+P while drawing.
+        let help_hint: &[(&str, &str)] = match gallery_focus {
+            _ if ctx.artboard_interacting => &[],
+            Some((_, true)) => &[],
+            Some((crate::app::artboard::gallery::state::Focus::Rail, _))
+            | Some((crate::app::artboard::gallery::state::Focus::Archive, _))
+            | Some((crate::app::artboard::gallery::state::Focus::List, _))
+            | Some((crate::app::artboard::gallery::state::Focus::Piece, _))
+            | Some((crate::app::artboard::gallery::state::Focus::Canvas, _))
+            | None => &[("?", "help")],
+        };
+        for (key, desc) in hints.iter().chain(help_hint) {
             spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
             spans.push(Span::styled(
                 *key,
