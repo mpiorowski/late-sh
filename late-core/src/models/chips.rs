@@ -351,6 +351,11 @@ impl ChipMove {
             // A round is the same vanity burn as the crown, one rung more
             // generous: buying the bar a drink must not cost the buyer their
             // place on the earners board.
+            // The gallery prize counts, unlike the pot: it is paid for
+            // work other people chose to applaud, the way a door milestone
+            // is paid for a run, not drawn from a hat. At 10,000 it sits
+            // between the door pairs (20,000 / 50,000), so it does not buy
+            // the next month's Top Chips on its own.
             Self::FloorRestore
             | Self::ShopPurchase
             | Self::GildReceived

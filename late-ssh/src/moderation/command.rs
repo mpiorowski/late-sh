@@ -1229,9 +1229,9 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
         ],
         "artboard remove" => &[
             "artboard remove <piece-id-prefix> [reason...]",
-            "Takes a gallery piece down for good, applause included. The id is printed under the",
-            "piece in the gallery's full-frame view; at least its first 8 characters are needed,",
-            "and the prefix must match exactly one piece.",
+            "Takes a gallery piece down for good, applause included. The first 13 characters of",
+            "the id are printed under the piece in the gallery's full-frame view (Enter on a piece);",
+            "at least 8 are needed, and the prefix must match exactly one piece.",
         ],
         "artboard curate" => &[
             "artboard curate <live|YYYY-MM-DD> [reason...]",

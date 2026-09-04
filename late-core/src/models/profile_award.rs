@@ -202,7 +202,8 @@ pub async fn list_profile_awards_for_user(
 }
 
 /// What one snapshot pass wrote: the award rows it created and the gallery
-/// prizes it paid for them. A re-run creates nothing and pays nothing.
+/// prizes it paid for them. Once a month is settled a re-run creates
+/// nothing and pays nothing, however the applause has moved since.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AwardSnapshotOutcome {
     pub inserted: u64,
@@ -214,7 +215,9 @@ pub struct AwardSnapshotOutcome {
 /// rows written. One transaction: an award row without its prize would be
 /// a prize lost forever, since the `ON CONFLICT DO NOTHING` re-run never
 /// sees that row again. `RETURNING` on the insert is what keeps a second
-/// replica's pass from paying: it inserts nothing, so it pays nothing.
+/// replica's pass from paying: it inserts nothing, so it pays nothing. The
+/// gallery arm is settled once per month (see `gallery_best`), because its
+/// input, applause, is the one score that keeps moving after the rollover.
 pub async fn snapshot_previous_month_profile_awards(
     client: &mut Client,
 ) -> Result<AwardSnapshotOutcome> {
@@ -310,12 +313,26 @@ pub async fn snapshot_previous_month_profile_awards(
                 LIMIT 1
              ),
              -- The gallery: each hanger's best piece of the month by
-             -- applause, and only hangers whose best piece cleared the
-             -- floor. Applause is counted now, not at month end, which is
-             -- the same count to within the hour this pass runs after the
-             -- rollover.
+             -- applause (earliest hang breaks a tie between their own),
+             -- and only hangers whose best piece cleared the floor.
+             --
+             -- This arm pays chips, and applause keeps moving after the
+             -- rollover (the listings, the splash and the paper all invite
+             -- `v`, which also withdraws), so unlike the other arms its
+             -- input is not frozen by the period window. The `NOT EXISTS`
+             -- is what freezes it instead: the first pass after the
+             -- rollover settles the month, and once any `artboard` row
+             -- exists for it every later pass (the 24h fallback, a
+             -- restart, another replica) ranks nobody, inserts nothing and
+             -- pays nothing, however the applause has moved since.
+             -- Without it a hanger who climbed into the top 3 on a later
+             -- pass would get a fresh row past `ON CONFLICT` and a fresh
+             -- prize, and the month's pool would have no bound.
              gallery_best AS (
-                SELECT p.user_id, MAX(applause.count)::bigint AS value
+                SELECT DISTINCT ON (p.user_id)
+                       p.user_id,
+                       applause.count::bigint AS value,
+                       p.created AS hung_at
                 FROM artboard_pieces p
                 JOIN (
                     SELECT piece_id, count(*) AS count
@@ -324,8 +341,13 @@ pub async fn snapshot_previous_month_profile_awards(
                 ) applause ON applause.piece_id = p.id
                 CROSS JOIN bounds
                 WHERE p.period_month = bounds.period_month
-                GROUP BY p.user_id
-                HAVING MAX(applause.count) >= $3
+                  AND applause.count >= $3
+                  AND NOT EXISTS (
+                    SELECT 1 FROM profile_awards
+                    WHERE category = 'artboard'
+                      AND period_month = bounds.period_month
+                  )
+                ORDER BY p.user_id, applause.count DESC, p.created ASC
              ),
              ranked AS (
                 SELECT user_id,
@@ -355,10 +377,16 @@ pub async fn snapshot_previous_month_profile_awards(
                        1::bigint AS rank
                 FROM crown_holder
                 UNION ALL
+                -- ROW_NUMBER, not RANK: this is the one arm that mints
+                -- chips, and RANK would hand every hanger tied at the top
+                -- the full first prize. Ties break toward the earlier
+                -- hang, the same order `ArtboardPiece::previous_month_winner`
+                -- and the hall of fame use, so the splash's winner is the
+                -- `ART1` holder. At most three rows, three prizes, a month.
                 SELECT user_id,
                        'artboard'::text AS category,
                        value,
-                       RANK() OVER (ORDER BY value DESC) AS rank
+                       ROW_NUMBER() OVER (ORDER BY value DESC, hung_at ASC) AS rank
                 FROM gallery_best
              )
              SELECT ranked.user_id, ranked.category, bounds.period_month, ranked.rank::int, ranked.value

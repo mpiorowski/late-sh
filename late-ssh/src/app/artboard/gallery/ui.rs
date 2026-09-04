@@ -405,14 +405,23 @@ pub fn draw_piece_view(frame: &mut Frame, area: Rect, state: &State) {
     );
     frame.render_widget(Paragraph::new(notice_line(gallery)), rows[2]);
     draw_piece_canvas(frame, rows[3], piece);
-    frame.render_widget(
-        Paragraph::new(key_hint_line(&[
-            ("v", "applaud"),
-            ("j/k", "next/prev"),
-            ("Esc", "back"),
-        ])),
-        rows[4],
-    );
+    // The id is what `/mod artboard remove <id-prefix>` takes, and this is
+    // the only place it is shown; without it a mod has nothing to type.
+    // The first two groups (12 hex digits) are enough to be unique and
+    // short enough to copy by eye.
+    let mut keys = key_hint_line(&[("v", "applaud"), ("j/k", "next/prev"), ("Esc", "back")]);
+    keys.spans.push(Span::styled(
+        format!("   id {}", piece_id_prefix(piece.id)),
+        Style::default().fg(theme::TEXT_FAINT()),
+    ));
+    frame.render_widget(Paragraph::new(keys), rows[4]);
+}
+
+/// The part of a piece id the full-frame view prints for mods: the first
+/// two groups, `0192abcd-1234`, which is over
+/// [`late_core::models::artboard_piece::PIECE_ID_PREFIX_MIN_CHARS`].
+pub fn piece_id_prefix(id: uuid::Uuid) -> String {
+    id.to_string().chars().take(13).collect()
 }
 
 /// The piece's canvas, top-left aligned inside `area`, cropped to fit with a

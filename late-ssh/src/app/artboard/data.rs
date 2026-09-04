@@ -35,7 +35,7 @@ fn overview_lines() -> Vec<String> {
         "  the board is wiped on the 1st of every month; the gallery is not",
         "",
         "The gallery (rail on the left, view mode)",
-        "  g                 focus the rail; j/k or arrows move, Enter opens",
+        "  Esc               back to the rail from the board; j/k or arrows move, Enter opens",
         "  Hang a piece      frame your work on the board, name it, hang it",
         "  frame rules       at least 40 glyphs, at most 100x40, 75% painted by you",
         "  v                 applaud a piece (one per person, take it back with v again)",

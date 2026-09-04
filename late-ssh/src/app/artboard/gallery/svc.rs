@@ -214,10 +214,18 @@ impl GalleryService {
         })
     }
 
+    /// The kill switch covers this read too: while the gallery is off the
+    /// splash goes back to the coffee cup on the next refresh, so a piece
+    /// that has to come down fast is off the highest-traffic surface
+    /// within the hour without waiting for `/mod artboard remove`.
     pub async fn refresh_splash(&self) -> Result<Option<GalleryPiece>> {
         let Some(db) = self.db.as_ref() else {
             return Ok(None);
         };
+        if !self.is_enabled() {
+            let _ = self.splash_tx.send(None);
+            return Ok(None);
+        }
         let client = db.get().await?;
         let piece = match ArtboardPiece::previous_month_winner(&client).await? {
             Some(piece) => Some(GalleryPiece::decode(piece)?),
@@ -225,19 +233,6 @@ impl GalleryService {
         };
         let _ = self.splash_tx.send(piece.clone());
         Ok(piece)
-    }
-
-    /// The most applauded piece hung on `day`, for The Late Edition's wall
-    /// column. A plain read at open time, so no claim is needed.
-    pub async fn wall_piece_for(&self, day: NaiveDate) -> Result<Option<GalleryPiece>> {
-        let Some(db) = self.db.as_ref() else {
-            return Ok(None);
-        };
-        let client = db.get().await?;
-        match ArtboardPiece::most_applauded_hung_on(&client, day).await? {
-            Some(piece) => Ok(Some(GalleryPiece::decode(piece)?)),
-            None => Ok(None),
-        }
     }
 
     /// The rail's numbers, one query. Without a database everything is

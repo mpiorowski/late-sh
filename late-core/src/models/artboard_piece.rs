@@ -186,9 +186,15 @@ const PIECE_VIEW_SQL: &str =
      JOIN users u ON u.id = p.user_id";
 
 impl ArtboardPiece {
-    /// Hang a piece. The daily cap is counted in the insert's own guard and
-    /// the per-month duplicate is the unique index, so two devices hanging
-    /// at once still get one of each answer.
+    /// Hang a piece. The per-month duplicate is the unique index, so two
+    /// devices hanging the same cells at once get exactly one `Hung`. The
+    /// daily cap is counted in the insert's own guard with no lock on the
+    /// user's rows, so under READ COMMITTED two hangs from one account in
+    /// the same instant can both read two and both land: the cap is
+    /// best-effort across concurrent sessions, exact within one (the hang
+    /// flow holds `Submitting` until the answer). The exact shape would be
+    /// the pot's (`Pot::buy_in_tx` under `lock_open_for_buy`); a fourth
+    /// piece on a day is not worth the lock.
     pub async fn hang(client: &impl GenericClient, params: HangParams) -> Result<HangOutcome> {
         let inserted = client
             .query_opt(

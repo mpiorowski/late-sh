@@ -235,9 +235,11 @@ async fn arcade_wins_snapshot_scores_every_daily_puzzle_in_the_roster() {
     assert_eq!(classic_award, Some((2, Difficulty::Easy.points())));
 }
 
-/// The gallery award ranks hangers by their best piece's applause, needs
-/// the applause floor to rank at all, and pays its chips exactly once
-/// however many replicas run the snapshot.
+/// The gallery award ranks hangers by their best piece's applause, breaks a
+/// tie toward the earlier hang so a tie never doubles the prize, needs the
+/// applause floor to rank at all, and pays its chips exactly once: however
+/// many replicas run the snapshot, and however the applause moves after the
+/// month is settled.
 #[tokio::test]
 async fn the_gallery_award_ranks_best_pieces_and_pays_once() {
     let test_db = test_db().await;
@@ -263,7 +265,8 @@ async fn the_gallery_award_ranks_best_pieces_and_pays_once() {
         }
     };
     // The winner's best piece has four hands; a weaker second piece must not
-    // add to the score.
+    // add to the score. The runner-up ties at four but hung later, which
+    // is what decides second place: with RANK both would be paid first.
     let best = hang(winner.id, "best", "hash-best").await;
     let lesser = hang(winner.id, "lesser", "hash-lesser").await;
     let second = hang(runner_up.id, "second", "hash-second").await;
@@ -276,7 +279,7 @@ async fn the_gallery_award_ranks_best_pieces_and_pays_once() {
     ArtboardPiece::toggle_applause(&client, lesser.id, fans[0].id)
         .await
         .expect("applaud");
-    for fan in &fans[..3] {
+    for fan in &fans {
         ArtboardPiece::toggle_applause(&client, second.id, fan.id)
             .await
             .expect("applaud");
@@ -291,16 +294,23 @@ async fn the_gallery_award_ranks_best_pieces_and_pays_once() {
     let first_pass = snapshot_previous_month_profile_awards(&mut client)
         .await
         .expect("snapshot");
-    let second_pass = snapshot_previous_month_profile_awards(&mut client)
-        .await
-        .expect("snapshot again");
     assert_eq!(
         first_pass.gallery_prizes_paid,
         vec![(winner.id, 1, 10_000), (runner_up.id, 2, 5_000)]
     );
+
+    // Applause keeps moving after the rollover. The quiet piece clears the
+    // floor now and would take third; the month is settled, so the re-run
+    // (a restart, the 24h fallback, another replica) pays nobody.
+    ArtboardPiece::toggle_applause(&client, quiet.id, fans[2].id)
+        .await
+        .expect("late applause");
+    let second_pass = snapshot_previous_month_profile_awards(&mut client)
+        .await
+        .expect("snapshot again");
     assert!(
         second_pass.gallery_prizes_paid.is_empty(),
-        "a re-run pays nothing"
+        "a re-run pays nothing, even after the ranking moved"
     );
 
     let gallery_award = |awards: Vec<crate::models::profile_award::ProfileAward>| {
@@ -316,14 +326,14 @@ async fn the_gallery_award_ranks_best_pieces_and_pays_once() {
     let awards = list_profile_awards_for_user(&client, runner_up.id)
         .await
         .expect("awards");
-    assert_eq!(gallery_award(awards), Some(("ART2".to_string(), 3)));
+    assert_eq!(gallery_award(awards), Some(("ART2".to_string(), 4)));
     let awards = list_profile_awards_for_user(&client, unranked.id)
         .await
         .expect("awards");
     assert_eq!(
         gallery_award(awards),
         None,
-        "two hands are under the applause floor"
+        "two hands were under the floor when the month settled; the third came too late"
     );
 
     let balance = UserChips::find(&client, winner.id)

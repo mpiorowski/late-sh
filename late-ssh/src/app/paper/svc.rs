@@ -818,22 +818,28 @@ impl PaperService {
         }
         // The wall is a plain read, no claim: the piece is a row already,
         // and the paper prints it the way it prints anything, in black and
-        // white. A decode failure loses the column, not the paper.
+        // white. A decode failure loses the column, not the paper. The
+        // gallery's kill switch drops the column too: a piece that has to
+        // come down fast must not keep printing at every login.
         let covered = today.pred_opt().unwrap_or(today);
-        let wall = match ArtboardPiece::most_applauded_hung_on(&client, covered).await? {
-            Some(piece) => match GalleryPiece::decode(piece) {
-                Ok(piece) => Some(PaperWall {
-                    title: piece.title.clone(),
-                    username: piece.username.clone(),
-                    applause: piece.applause,
-                    lines: piece_text_lines(&piece.canvas, piece.width, piece.height),
-                }),
-                Err(error) => {
-                    tracing::warn!(error = ?error, "paper wall piece could not be decoded");
-                    None
-                }
-            },
-            None => None,
+        let wall = if !self.flags().artboard_gallery_enabled {
+            None
+        } else {
+            match ArtboardPiece::most_applauded_hung_on(&client, covered).await? {
+                Some(piece) => match GalleryPiece::decode(piece) {
+                    Ok(piece) => Some(PaperWall {
+                        title: piece.title.clone(),
+                        username: piece.username.clone(),
+                        applause: piece.applause,
+                        lines: piece_text_lines(&piece.canvas, piece.width, piece.height),
+                    }),
+                    Err(error) => {
+                        tracing::warn!(error = ?error, "paper wall piece could not be decoded");
+                        None
+                    }
+                },
+                None => None,
+            }
         };
         match trigger {
             PaperTrigger::Login => {
