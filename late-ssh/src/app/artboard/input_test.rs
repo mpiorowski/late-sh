@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::artboard::gallery::svc::GalleryService;
 use crate::app::artboard::provenance::ArtboardProvenance;
 use crate::app::artboard::state::PAINT_PALETTE;
 use crate::app::artboard::svc::{ArtboardSnapshotService, DartboardService, DartboardSnapshot};
@@ -697,6 +698,8 @@ fn test_state() -> State {
     State::new(
         svc,
         ArtboardSnapshotService::disabled(),
+        GalleryService::disabled(),
+        uuid::Uuid::nil(),
         "painter".to_string(),
         shared_provenance,
     )

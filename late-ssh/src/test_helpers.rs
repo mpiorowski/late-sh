@@ -372,6 +372,10 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         house_registry: test_house_registry(db.clone()),
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),
+        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(
+            db.clone(),
+            test_app_flags_rx(),
+        ),
         leaderboard_service,
         quest_service,
         shop_service,
@@ -569,6 +573,10 @@ fn make_app_with_chat_service_and_permissions(
         dartboard_provenance: test_dartboard_provenance(),
         artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
             db.clone(),
+        ),
+        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(
+            db.clone(),
+            test_app_flags_rx(),
         ),
         username: world.username.unwrap_or_else(|| "test-user".to_string()),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
@@ -807,6 +815,10 @@ pub fn make_app_with_paired_client(
         dartboard_provenance: test_dartboard_provenance(),
         artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
             db.clone(),
+        ),
+        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(
+            db.clone(),
+            test_app_flags_rx(),
         ),
         username: "test-user".to_string(),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
@@ -1057,6 +1069,7 @@ pub fn test_app_flags_rx()
         haunt_live: false,
         paper_enabled: true,
         paper_outside_enabled: false,
+        artboard_gallery_enabled: true,
     }));
     rx
 }

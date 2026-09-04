@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::artboard::gallery::svc::GalleryService;
 use crate::app::artboard::provenance::ArtboardProvenance;
 use crate::app::artboard::state::State;
 use dartboard_core::{CellValue, RgbColor};
@@ -10,6 +11,16 @@ use super::super::svc::{ArtboardSnapshotService, DartboardService, DartboardSnap
 #[test]
 fn canvas_area_matches_artboard_frame_layout() {
     assert_eq!(canvas_area_for_screen((80, 24)), Rect::new(1, 1, 54, 22));
+    // The rail takes 20 columns plus a gap off the left in view mode.
+    assert_eq!(
+        canvas_area_for_state((80, 24), true),
+        Rect::new(22, 1, 33, 22)
+    );
+    // Rail hidden (edit mode, or a narrow terminal) is the old layout.
+    assert_eq!(
+        canvas_area_for_state((80, 24), false),
+        canvas_area_for_screen((80, 24))
+    );
 }
 
 #[test]
@@ -61,7 +72,7 @@ fn clipboard_preview_offset_skips_leading_blank_rows_and_columns() {
 fn help_tab_hit_uses_overlay_tab_rects() {
     let mut state = test_state();
     state.toggle_help();
-    let area = artboard_game_area_for_screen((80, 24));
+    let area = artboard_game_area_for_screen((80, 24), false);
     let popup = help_popup_area(area);
     let layout = help_layout(popup).expect("help layout");
     let drawing = tab_rects(layout[1])
@@ -352,6 +363,8 @@ fn test_state() -> State {
     State::new(
         svc,
         ArtboardSnapshotService::disabled(),
+        GalleryService::disabled(),
+        uuid::Uuid::nil(),
         "painter".to_string(),
         shared_provenance,
     )

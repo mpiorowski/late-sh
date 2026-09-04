@@ -4,7 +4,7 @@ use dartboard_tui::{CanvasStyle, CanvasWidgetState, SelectionView};
 use ratatui::{
     Frame,
     buffer::Buffer,
-    layout::{Constraint, Flex, Layout, Margin, Rect},
+    layout::{Constraint, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
@@ -13,6 +13,13 @@ use ratatui::{
 use crate::app::common::theme;
 
 use super::data::lines_for;
+use super::gallery::{
+    state::{Focus as GalleryFocus, HangFlow},
+    ui::{
+        MIN_WIDTH_FOR_RAIL, RAIL_WIDTH, draw_framing_bar, draw_gallery_pane, draw_hang_modal,
+        draw_piece_view, draw_rail,
+    },
+};
 use super::state::{BrushMode, HelpTab, PAINT_PALETTE, PRIMARY_SWATCH_IDX, State};
 
 const INFO_WIDTH: u16 = 21;
@@ -31,16 +38,58 @@ pub(crate) enum SwatchHit {
 }
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, interacting: bool) {
-    let info = artboard_info_lines(state, interacting);
-    let layout = artboard_layout(area);
-    let info_area = info_block_area(layout.info_anchor, info.len());
-    draw_canvas(frame, area, layout.canvas, info_area, state, interacting);
-    draw_artboard_sidebar(frame, info_area, &info);
+    // The rail is the page's table of contents in view mode; painting wants
+    // the width back, and a narrow terminal only lends it while the rail
+    // has focus.
+    let rail_visible = !interacting
+        && (area.width >= MIN_WIDTH_FOR_RAIL || state.gallery().focus() != GalleryFocus::Canvas);
+    state.gallery().set_rail_visible(rail_visible);
+    let board_area = if rail_visible {
+        let columns = Layout::horizontal([
+            Constraint::Length(RAIL_WIDTH),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .split(area);
+        draw_rail(frame, columns[0], state);
+        columns[2]
+    } else {
+        area
+    };
+
+    if state.gallery().shows_gallery_pane() {
+        match state.gallery().focus() {
+            GalleryFocus::Piece => draw_piece_view(frame, board_area, state),
+            GalleryFocus::Canvas
+            | GalleryFocus::Rail
+            | GalleryFocus::List
+            | GalleryFocus::Archive => draw_gallery_pane(frame, board_area, state),
+        }
+    } else {
+        let info = artboard_info_lines(state, interacting);
+        let layout = artboard_layout(board_area);
+        let info_area = info_block_area(layout.info_anchor, info.len());
+        draw_canvas(
+            frame,
+            board_area,
+            layout.canvas,
+            info_area,
+            state,
+            interacting,
+        );
+        draw_artboard_sidebar(frame, info_area, &info);
+        if state.gallery().is_framing() {
+            draw_framing_bar(frame, layout.canvas, state);
+        }
+    }
+    if matches!(
+        state.gallery().hang(),
+        HangFlow::Confirm { .. } | HangFlow::Submitting
+    ) {
+        draw_hang_modal(frame, area, state);
+    }
     if state.is_help_open() {
         draw_help(frame, area, state);
-    }
-    if state.is_snapshot_browser_open() {
-        draw_snapshot_browser(frame, area, state);
     }
     if state.is_glyph_picker_open()
         && let Some(catalog) = state.glyph_catalog()
@@ -49,8 +98,26 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, interacting: bool
     }
 }
 
+/// The board's area with the rail hidden: edit mode, or a narrow terminal.
 pub fn canvas_area_for_screen(screen_size: (u16, u16)) -> Rect {
-    artboard_game_area_for_screen(screen_size)
+    artboard_game_area_for_screen(screen_size, false)
+}
+
+/// The board's area as the last draw laid it out: the rail, when visible,
+/// takes its columns off the left.
+pub fn canvas_area_for_state(screen_size: (u16, u16), rail_visible: bool) -> Rect {
+    artboard_game_area_for_screen(screen_size, rail_visible)
+}
+
+/// A piece's canvas drawn cell for cell into `area`, origin at the top
+/// left, in the board's own style. Every gallery surface draws through
+/// here so a piece looks the same on the wall, the splash, and the modal.
+pub(crate) fn render_piece_canvas(buf: &mut Buffer, area: Rect, canvas: &Canvas) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let state = CanvasWidgetState::new(canvas, Pos { x: 0, y: 0 });
+    render_canvas_widget(buf, area, &state, dartboard_canvas_style());
 }
 
 fn dartboard_canvas_style() -> CanvasStyle {
@@ -522,7 +589,7 @@ pub(crate) fn swatch_box_rects(
     screen_size: (u16, u16),
     state: &State,
 ) -> [Option<Rect>; SWATCH_CAPACITY] {
-    let game_area = artboard_game_area_for_screen(screen_size);
+    let game_area = artboard_game_area_for_screen(screen_size, state.gallery().rail_visible());
     let info_area = artboard_info_area_for_screen(screen_size, state);
     swatch_box_rects_in_game_area(game_area, info_area, state.private_notice.is_some())
 }
@@ -870,34 +937,37 @@ fn swatch_strip_rect(rects: &[Option<Rect>; SWATCH_CAPACITY]) -> Option<Rect> {
     ))
 }
 
-fn artboard_game_area_for_screen(screen_size: (u16, u16)) -> Rect {
+fn artboard_game_area_for_screen(screen_size: (u16, u16), rail_visible: bool) -> Rect {
     let screen = Rect::new(0, 0, screen_size.0, screen_size.1);
     let app_inner = Block::default().borders(Borders::ALL).inner(screen);
-    Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(app_inner)[0]
+    let content =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(app_inner)[0];
+    // `rail_visible` is what the last draw decided (it applied the width
+    // gate against the real content area, sidebar or not), so it is taken
+    // as read here rather than re-derived from an assumed sidebar.
+    if rail_visible {
+        Layout::horizontal([
+            Constraint::Length(RAIL_WIDTH),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .split(content)[2]
+    } else {
+        content
+    }
 }
 
 fn artboard_info_area_for_screen(screen_size: (u16, u16), state: &State) -> Option<Rect> {
     let info_lines = artboard_info_lines(state, false);
-    let layout = artboard_layout(artboard_game_area_for_screen(screen_size));
+    let layout = artboard_layout(artboard_game_area_for_screen(
+        screen_size,
+        state.gallery().rail_visible(),
+    ));
     info_block_area(layout.info_anchor, info_lines.len())
 }
 
 fn help_popup_area(area: Rect) -> Rect {
     centered_percent_rect(80, 85, area)
-}
-
-fn snapshot_browser_popup_area(area: Rect) -> Rect {
-    centered_rect(74, 24, area)
-}
-
-fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
-    let vertical = Layout::vertical([Constraint::Length(height.min(area.height))])
-        .flex(Flex::Center)
-        .split(area);
-    let horizontal = Layout::horizontal([Constraint::Length(width.min(area.width))])
-        .flex(Flex::Center)
-        .split(vertical[0]);
-    horizontal[0]
 }
 
 fn centered_percent_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
@@ -959,7 +1029,7 @@ pub(crate) fn help_tab_hit(
     }
     let col = sgr_x.checked_sub(1)?;
     let row = sgr_y.checked_sub(1)?;
-    let area = artboard_game_area_for_screen(screen_size);
+    let area = artboard_game_area_for_screen(screen_size, state.gallery().rail_visible());
     let popup = help_popup_area(area);
     let layout = help_layout(popup)?;
     tab_rects(layout[1])
@@ -1023,139 +1093,6 @@ fn draw_help(frame: &mut Frame, area: Rect, state: &State) {
         Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
     ]);
     frame.render_widget(Paragraph::new(footer), layout[4]);
-}
-
-fn draw_snapshot_browser(frame: &mut Frame, area: Rect, state: &State) {
-    let popup = snapshot_browser_popup_area(area);
-    frame.render_widget(Clear, popup);
-
-    let block = Block::default()
-        .title(" Artboard Snapshots ")
-        .title_style(
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        )
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-
-    if inner.width < 12 || inner.height < 5 {
-        return;
-    }
-
-    let layout = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(3),
-        Constraint::Length(1),
-    ])
-    .split(inner);
-
-    let active_label = state
-        .active_archive_snapshot()
-        .map(|snapshot| format!("{} {}", snapshot.kind.label(), snapshot.label))
-        .unwrap_or_else(|| "live".to_string());
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("  Viewing ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(active_label, Style::default().fg(theme::TEXT_BRIGHT())),
-        ])),
-        layout[0],
-    );
-
-    let list_area = layout[1].inner(Margin::new(2, 0));
-    let visible_height = list_area.height as usize;
-    state.set_snapshot_browser_visible_height(visible_height);
-    let lines = snapshot_browser_lines(state, visible_height, list_area.width as usize);
-    frame.render_widget(Paragraph::new(Text::from(lines)), list_area);
-
-    let footer = Line::from(vec![
-        Span::styled("  ↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" navigate  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" view  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" close  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("top row", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" live", Style::default().fg(theme::TEXT_DIM())),
-    ]);
-    frame.render_widget(Paragraph::new(footer), layout[2]);
-}
-
-fn snapshot_browser_lines(
-    state: &State,
-    visible_height: usize,
-    width: usize,
-) -> Vec<Line<'static>> {
-    let total = state.snapshot_browser_items().len() + 1;
-    let start = state.snapshot_browser_scroll_offset().min(total);
-    let end = (start + visible_height).min(total);
-    let mut lines = Vec::new();
-
-    for option_idx in start..end {
-        let selected = option_idx == state.snapshot_browser_selected_index();
-        if option_idx == 0 {
-            lines.push(snapshot_browser_row(
-                selected,
-                "live",
-                "Current artboard",
-                "editable after closing",
-                width,
-            ));
-            continue;
-        }
-        let snapshot = &state.snapshot_browser_items()[option_idx - 1];
-        lines.push(snapshot_browser_row(
-            selected,
-            snapshot.kind.label(),
-            &snapshot.label,
-            &snapshot.board_key,
-            width,
-        ));
-    }
-
-    if state.snapshot_browser_loading() {
-        lines.push(Line::from(Span::styled(
-            "  loading snapshots...",
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-    } else if let Some(error) = state.snapshot_browser_error() {
-        lines.push(Line::from(Span::styled(
-            format!("  {error}"),
-            Style::default().fg(theme::AMBER_DIM()),
-        )));
-    } else if total == 1 {
-        lines.push(Line::from(Span::styled(
-            "  no special, daily, or monthly snapshots yet",
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-    }
-
-    lines
-}
-
-fn snapshot_browser_row(
-    selected: bool,
-    kind: &str,
-    label: &str,
-    detail: &str,
-    width: usize,
-) -> Line<'static> {
-    let marker = if selected { ">" } else { " " };
-    let mut text = format!(" {marker} {kind:<7} {label:<10} {detail}");
-    if text.chars().count() > width {
-        text = text.chars().take(width).collect();
-    }
-    let style = if selected {
-        Style::default()
-            .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_HIGHLIGHT())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::TEXT())
-    };
-    Line::from(Span::styled(text, style))
 }
 
 fn draw_tabs(frame: &mut Frame, area: Rect, selected: HelpTab) {

@@ -7,7 +7,7 @@ async fn the_seed_loads_and_a_set_flips_one_switch() {
     let client = test_db.db.get().await.expect("db client");
 
     // Migration 171's seed (kill switch on, fuse unlit) plus 173's (paper
-    // and its outside page both on).
+    // and its outside page both on) and 174's (the gallery on).
     let flags = AppFlags::load(&client).await.expect("load");
     assert_eq!(
         flags,
@@ -16,6 +16,7 @@ async fn the_seed_loads_and_a_set_flips_one_switch() {
             haunt_live: false,
             paper_enabled: true,
             paper_outside_enabled: true,
+            artboard_gallery_enabled: true,
         }
     );
 
@@ -32,6 +33,7 @@ async fn the_seed_loads_and_a_set_flips_one_switch() {
             haunt_live: true,
             paper_enabled: true,
             paper_outside_enabled: true,
+            artboard_gallery_enabled: true,
         }
     );
 }

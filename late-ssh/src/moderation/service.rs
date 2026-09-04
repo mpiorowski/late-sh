@@ -4,8 +4,10 @@ use dartboard_core::Canvas;
 use late_core::{
     db::Db,
     models::{
+        app_flag::{AppFlag, AppFlags},
         artboard::{Snapshot as ArtboardSnapshot, SnapshotSummary as ArtboardSnapshotSummary},
         artboard_ban::{ArtboardBan, ArtboardBanListItem},
+        artboard_piece::{ArtboardPiece, PieceLookup},
         audio_ban::{AudioBan, AudioBanListItem},
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
@@ -276,6 +278,14 @@ impl ModerationService {
             }
             ModCommand::ArtboardCurate { source, reason } => {
                 self.artboard_curate(actor_user_id, permissions, source, reason)
+                    .await
+            }
+            ModCommand::ArtboardRemovePiece { id_prefix, reason } => {
+                self.artboard_remove_piece(actor_user_id, permissions, id_prefix, reason)
+                    .await
+            }
+            ModCommand::ArtboardGallery { enabled } => {
+                self.artboard_gallery_switch(actor_user_id, permissions, enabled)
                     .await
             }
             ModCommand::Audio {
@@ -1565,6 +1575,96 @@ impl ModerationService {
             lines.push(format!("backup: {backup_key}"));
         }
         Ok(lines)
+    }
+
+    /// Take a gallery piece down. The applause goes with it; an award
+    /// already snapshotted from it stays. The audit row keeps what was
+    /// removed, since the piece itself is gone.
+    async fn artboard_remove_piece(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        id_prefix: String,
+        reason: String,
+    ) -> Result<Vec<String>> {
+        ensure_has(permissions, Caps::RESTORE_ARTBOARD)?;
+        let mut client = self.db.get().await?;
+        let piece_id = match ArtboardPiece::lookup_by_id_prefix(&client, &id_prefix).await? {
+            PieceLookup::One(piece_id) => piece_id,
+            PieceLookup::NotFound => anyhow::bail!("no gallery piece starts with {id_prefix}"),
+            PieceLookup::Ambiguous(count) => {
+                anyhow::bail!("{count} gallery pieces start with {id_prefix}; give more of the id")
+            }
+        };
+        let tx = client.transaction().await?;
+        let Some(removed) = ArtboardPiece::remove(&tx, piece_id).await? else {
+            anyhow::bail!("gallery piece {piece_id} is already gone");
+        };
+        ModerationAuditLog::record(
+            &tx,
+            actor_user_id,
+            "artboard_remove_piece",
+            "artboard_piece",
+            Some(removed.user_id),
+            json!({
+                "piece_id": piece_id.to_string(),
+                "title": removed.title.clone(),
+                "reason": reason.clone(),
+            }),
+        )
+        .await?;
+        tx.commit().await?;
+
+        let _ = self.event_tx.send(ModerationEvent::ArtboardPieceRemoved {
+            actor_user_id,
+            piece_id,
+            owner_user_id: removed.user_id,
+            title: removed.title.clone(),
+            reason,
+        });
+
+        Ok(vec![format!(
+            "took down gallery piece {piece_id} (\"{}\")",
+            removed.title
+        )])
+    }
+
+    /// The gallery's kill switch. A row flip, so every replica follows
+    /// (`app_flags` trigger); the rail on each session hides the gallery on
+    /// its next tick.
+    async fn artboard_gallery_switch(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        enabled: bool,
+    ) -> Result<Vec<String>> {
+        ensure_admin(permissions)?;
+        let mut client = self.db.get().await?;
+        let tx = client.transaction().await?;
+        AppFlags::set(&tx, AppFlag::ArtboardGalleryEnabled, enabled).await?;
+        ModerationAuditLog::record(
+            &tx,
+            actor_user_id,
+            "artboard_gallery_switch",
+            "artboard_piece",
+            None,
+            json!({ "enabled": enabled }),
+        )
+        .await?;
+        tx.commit().await?;
+
+        let _ = self
+            .event_tx
+            .send(ModerationEvent::ArtboardGallerySwitched {
+                actor_user_id,
+                enabled,
+            });
+
+        Ok(vec![if enabled {
+            "artboard gallery on".to_string()
+        } else {
+            "artboard gallery off: nothing hangs or applauds until it is back".to_string()
+        }])
     }
 
     async fn artboard_curate(

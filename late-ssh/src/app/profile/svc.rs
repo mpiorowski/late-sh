@@ -1,6 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use late_core::models::account_link;
+use late_core::models::artboard_piece::{ArtboardPiece, GalleryCounts};
 use late_core::models::bonsai::{BonsaiV2Tree, Tree};
 use late_core::models::bonsai_decay_protection::BonsaiDecayProtection;
 use late_core::models::chat_message_gild::{ChatMessageGild, GildCounts};
@@ -51,6 +52,9 @@ pub struct ProfileSnapshot {
     pub profile_awards: Vec<ProfileAward>,
     /// Gilds this profile's owner has received, per tier.
     pub gild_counts: GildCounts,
+    /// Pieces this profile's owner has hung in the Artboard gallery, and
+    /// the applause they gathered.
+    pub gallery_counts: GalleryCounts,
 }
 
 #[derive(Clone, Debug)]
@@ -222,6 +226,7 @@ impl ProfileService {
         let aquarium_fish = marketplace::active_aquarium_fish_for_user(&client, user_id).await?;
         let profile_awards = list_profile_awards_for_user(&client, user_id).await?;
         let gild_counts = ChatMessageGild::counts_for_author(&client, user_id).await?;
+        let gallery_counts = ArtboardPiece::counts_for_user(&client, user_id).await?;
         self.publish_snapshot(
             user_id,
             ProfileSnapshot {
@@ -235,6 +240,7 @@ impl ProfileService {
                 aquarium_fish,
                 profile_awards,
                 gild_counts,
+                gallery_counts,
             },
         )?;
         Ok(())

@@ -80,6 +80,27 @@ pub enum PaperOpenResult {
     Failed,
 }
 
+/// How a hang attempt on the Artboard gallery ended. `Hung` is the row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GalleryHangResult {
+    Hung,
+    /// The account's pieces for the UTC day were already up.
+    DailyCap,
+    /// The same cells already hang this month.
+    Duplicate,
+    Failed,
+}
+
+/// How an applause toggle on a gallery piece ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GalleryApplauseResult {
+    Applauded,
+    Withdrawn,
+    OwnPiece,
+    NotFound,
+    Failed,
+}
+
 /// How a five-minute online-time flush resolved. `Failed` means the batch is
 /// retained in memory for retry; a sustained run of failures is accruing time
 /// that dies with the process.
@@ -146,9 +167,10 @@ mod inner {
 
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
-        GateVerdict, GildRefusal, GildTier, NewsShareReward, OnlineTimeFlushResult,
-        PaperOpenResult, PaperPrintResult, PotRefusal, RenderReason, RoundRefusal, SongQueueReward,
-        SshRejectReason, SummaryResult, TranslationResult,
+        GalleryApplauseResult, GalleryHangResult, GateVerdict, GildRefusal, GildTier,
+        NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PotRefusal,
+        RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
+        TranslationResult,
     };
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -1008,6 +1030,62 @@ mod inner {
         );
     }
 
+    fn gallery_hang_result_label(result: GalleryHangResult) -> &'static str {
+        match result {
+            GalleryHangResult::Hung => "hung",
+            GalleryHangResult::DailyCap => "daily_cap",
+            GalleryHangResult::Duplicate => "duplicate",
+            GalleryHangResult::Failed => "failed",
+        }
+    }
+
+    fn gallery_hangs_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_artboard_gallery_hangs_total")
+                .with_description("Artboard gallery hang attempts by result")
+                .build()
+        })
+    }
+
+    pub fn record_gallery_hang(result: GalleryHangResult) {
+        gallery_hangs_total().add(
+            1,
+            &[KeyValue::new("result", gallery_hang_result_label(result))],
+        );
+    }
+
+    fn gallery_applause_result_label(result: GalleryApplauseResult) -> &'static str {
+        match result {
+            GalleryApplauseResult::Applauded => "applauded",
+            GalleryApplauseResult::Withdrawn => "withdrawn",
+            GalleryApplauseResult::OwnPiece => "own_piece",
+            GalleryApplauseResult::NotFound => "not_found",
+            GalleryApplauseResult::Failed => "failed",
+        }
+    }
+
+    fn gallery_applause_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_artboard_gallery_applause_total")
+                .with_description("Artboard gallery applause toggles by result")
+                .build()
+        })
+    }
+
+    pub fn record_gallery_applause(result: GalleryApplauseResult) {
+        gallery_applause_total().add(
+            1,
+            &[KeyValue::new(
+                "result",
+                gallery_applause_result_label(result),
+            )],
+        );
+    }
+
     fn door_ingest_lines_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -1075,9 +1153,10 @@ mod inner {
 mod inner {
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
-        GateVerdict, GildRefusal, GildTier, NewsShareReward, OnlineTimeFlushResult,
-        PaperOpenResult, PaperPrintResult, PotRefusal, RenderReason, RoundRefusal, SongQueueReward,
-        SshRejectReason, SummaryResult, TranslationResult,
+        GalleryApplauseResult, GalleryHangResult, GateVerdict, GildRefusal, GildTier,
+        NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PotRefusal,
+        RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
+        TranslationResult,
     };
 
     pub fn record_ssh_connection() {}
@@ -1115,6 +1194,8 @@ mod inner {
     pub fn record_chat_summary(_result: SummaryResult) {}
     pub fn record_paper_print(_result: PaperPrintResult) {}
     pub fn record_paper_open(_result: PaperOpenResult) {}
+    pub fn record_gallery_hang(_result: GalleryHangResult) {}
+    pub fn record_gallery_applause(_result: GalleryApplauseResult) {}
     pub fn record_door_ingest_line(_game: DoorGame) {}
     pub fn record_door_ingest_session_failure(_game: DoorGame) {}
     pub fn record_online_time_flush(_result: OnlineTimeFlushResult) {}

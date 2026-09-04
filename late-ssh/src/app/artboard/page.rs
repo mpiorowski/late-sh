@@ -3,6 +3,7 @@ use crate::app::{
     state::App,
 };
 
+use super::gallery::input::GalleryAction;
 use super::ui::{info_hit, swatch_hit};
 
 const VIEW_MODE_ALT_PAN_STEP: isize = 4;
@@ -19,14 +20,23 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
         return handle_action(app, action);
     }
 
-    if state.is_snapshot_browser_open() {
-        return handle_snapshot_browser_key(state, byte);
-    }
-
     if is_interacting {
         let action = super::input::handle_byte(state, size, byte);
         return handle_action(app, action);
     }
+
+    // The rail, a listing, an archive list, or the hang flow sees the key
+    // first; what it ignores (`i`, `?`, the Ctrl keys) still means what it
+    // means on the board.
+    if state.gallery_claims_input() {
+        match super::gallery::input::handle_key(state, size, byte) {
+            GalleryAction::Ignored => {}
+            action => return handle_gallery_action(app, action),
+        }
+    }
+    let Some(state) = app.dartboard_state.as_mut() else {
+        return false;
+    };
 
     match byte {
         0x1C => {
@@ -39,7 +49,9 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
             true
         }
         b'g' | b'G' => {
-            state.toggle_snapshot_browser_or_live();
+            // "Go to the rail". On a narrow terminal the rail appears for
+            // as long as it has focus.
+            state.gallery_mut().focus_rail();
             true
         }
         b'i' | b'I' | b'\r' | b'\n' => {
@@ -72,9 +84,15 @@ pub(crate) fn handle_arrow(app: &mut App, key: u8) -> bool {
         return super::input::handle_arrow(state, size, key);
     }
 
-    if state.is_snapshot_browser_open() {
-        return handle_snapshot_browser_arrow(state, key);
+    if state.gallery_claims_input() {
+        match super::gallery::input::handle_arrow(state, size, key) {
+            GalleryAction::Ignored => {}
+            action => return handle_gallery_action(app, action),
+        }
     }
+    let Some(state) = app.dartboard_state.as_mut() else {
+        return false;
+    };
 
     match key {
         b'A' => {
@@ -109,8 +127,16 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         return handle_action(app, action);
     }
 
-    if state.is_snapshot_browser_open() {
-        return handle_snapshot_browser_event(state, event);
+    // The gallery sees every event while it has focus, and every mouse
+    // event while the rail is up (a click on the rail must win over the
+    // board under it). `Ignored` falls through to the board.
+    if state.gallery_claims_input()
+        || (matches!(event, ParsedInput::Mouse(_)) && state.gallery().rail_visible())
+    {
+        match super::gallery::input::handle_event(state, size, event) {
+            GalleryAction::Ignored => {}
+            action => return handle_gallery_action(app, action),
+        }
     }
 
     match event {
@@ -185,36 +211,6 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     }
 }
 
-fn handle_snapshot_browser_key(state: &mut super::state::State, byte: u8) -> bool {
-    match byte {
-        b'g' | b'G' | b'q' | b'Q' | 0x1B => state.close_snapshot_browser(),
-        b'j' | b'J' => state.move_snapshot_browser_selection(1),
-        b'k' | b'K' => state.move_snapshot_browser_selection(-1),
-        b'\r' | b'\n' => state.activate_snapshot_browser_selection(),
-        _ => return false,
-    }
-    true
-}
-
-fn handle_snapshot_browser_arrow(state: &mut super::state::State, key: u8) -> bool {
-    match key {
-        b'A' => state.move_snapshot_browser_selection(-1),
-        b'B' => state.move_snapshot_browser_selection(1),
-        _ => return false,
-    }
-    true
-}
-
-fn handle_snapshot_browser_event(state: &mut super::state::State, event: &ParsedInput) -> bool {
-    match event {
-        ParsedInput::Home => state.snapshot_browser_home(),
-        ParsedInput::PageUp => state.snapshot_browser_page(-1),
-        ParsedInput::PageDown => state.snapshot_browser_page(1),
-        _ => return false,
-    }
-    true
-}
-
 fn handle_view_mode_mouse(
     state: &mut super::state::State,
     size: (u16, u16),
@@ -234,6 +230,31 @@ fn handle_view_mode_mouse(
     }
 
     false
+}
+
+fn handle_gallery_action(app: &mut App, action: GalleryAction) -> bool {
+    match action {
+        GalleryAction::Ignored => false,
+        GalleryAction::Handled => true,
+        GalleryAction::FocusBoard => {
+            if let Some(state) = app.dartboard_state.as_mut()
+                && state.is_archive_view_active()
+            {
+                state.exit_archive_view();
+            }
+            true
+        }
+        GalleryAction::BeginHang => {
+            app.begin_artboard_hang();
+            true
+        }
+        GalleryAction::OpenArchive(kind) => {
+            if let Some(state) = app.dartboard_state.as_mut() {
+                state.open_archive_list(kind);
+            }
+            true
+        }
+    }
 }
 
 fn handle_action(app: &mut App, action: super::input::InputAction) -> bool {

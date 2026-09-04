@@ -252,6 +252,8 @@ pub struct SessionConfig {
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: crate::app::artboard::provenance::SharedArtboardProvenance,
     pub artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService,
+    /// The Artboard gallery: listings, hanging, applause, the splash piece.
+    pub gallery_service: crate::app::artboard::gallery::svc::GalleryService,
     pub username: String,
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
@@ -849,6 +851,11 @@ pub struct App {
     pub(crate) dartboard_server: dartboard_local::ServerHandle,
     pub(crate) dartboard_provenance: crate::app::artboard::provenance::SharedArtboardProvenance,
     pub(crate) artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService,
+    pub(crate) gallery_service: crate::app::artboard::gallery::svc::GalleryService,
+    /// Last month's winning piece, for the splash. Process-wide `watch`
+    /// refreshed by `GalleryService::start_splash_refresh_task`.
+    pub(crate) gallery_splash_rx:
+        tokio::sync::watch::Receiver<Option<crate::app::artboard::gallery::svc::GalleryPiece>>,
     pub(crate) username: String,
 
     /// Late Chips balance (loaded on login, updated via leaderboard refresh)
@@ -1204,6 +1211,8 @@ impl App {
         let dartboard_server = config.dartboard_server.clone();
         let dartboard_provenance = config.dartboard_provenance.clone();
         let artboard_snapshot_service = config.artboard_snapshot_service.clone();
+        let gallery_service = config.gallery_service.clone();
+        let gallery_splash_rx = gallery_service.subscribe_splash();
         let username = config.username.clone();
 
         let initial_bonsai_decay_protection = config.initial_bonsai_decay_protection;
@@ -1650,6 +1659,8 @@ impl App {
             dartboard_server,
             dartboard_provenance,
             artboard_snapshot_service,
+            gallery_service,
+            gallery_splash_rx,
             username,
             chip_balance: config.initial_chip_balance,
             pending_clipboard: None,
@@ -1709,6 +1720,8 @@ impl App {
         self.dartboard_state = Some(crate::app::artboard::state::State::new(
             svc,
             self.artboard_snapshot_service.clone(),
+            self.gallery_service.clone(),
+            self.user_id,
             self.username.clone(),
             self.dartboard_provenance.clone(),
         ));
@@ -1988,7 +2001,39 @@ impl App {
         }
         self.enter_dartboard();
         self.artboard_interacting = true;
+        // Painting takes the rail's width; the board owns the keys.
+        if let Some(state) = self.dartboard_state.as_mut() {
+            state.gallery_mut().focus_canvas();
+        }
         true
+    }
+
+    /// Start framing a piece for the gallery. The same gate as editing
+    /// (a banned account frames nothing), plus the gallery's own: the
+    /// switch is on and the live board is up, not an archive.
+    pub(crate) fn begin_artboard_hang(&mut self) {
+        self.expire_artboard_ban_if_needed();
+        if self.artboard_banned {
+            self.banner = Some(Banner::error(
+                "Artboard editing is disabled for this account.",
+            ));
+            return;
+        }
+        self.enter_dartboard();
+        let Some(state) = self.dartboard_state.as_mut() else {
+            return;
+        };
+        if !state.gallery().is_enabled() {
+            self.banner = Some(Banner::error("The gallery is closed right now."));
+            return;
+        }
+        if state.is_archive_view_active() {
+            self.banner = Some(Banner::error(
+                "Return to the live board first; archives cannot be hung.",
+            ));
+            return;
+        }
+        state.begin_framing();
     }
 
     pub(crate) fn deactivate_artboard_interaction(&mut self) {
@@ -1997,7 +2042,7 @@ impl App {
             state.clear_local_state();
             state.close_help();
             state.close_glyph_picker();
-            state.close_snapshot_browser();
+            state.gallery_mut().cancel_hang();
         }
     }
 

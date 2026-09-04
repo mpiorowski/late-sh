@@ -350,6 +350,27 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
         lines.extend(gild_lines);
     }
 
+    let gallery = state.gallery_counts();
+    if gallery.pieces > 0 {
+        lines.push(Line::from(""));
+        lines.push(section_heading("Artboard gallery"));
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!(
+                    "{} {}",
+                    gallery.pieces,
+                    if gallery.pieces == 1 {
+                        "piece"
+                    } else {
+                        "pieces"
+                    }
+                ),
+                text,
+            ),
+            Span::styled(format!(" · {} applause", gallery.applause), dim),
+        ]));
+    }
+
     let showcases = state.showcases_for_viewed();
     if !showcases.is_empty() {
         lines.push(Line::from(""));

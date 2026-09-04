@@ -964,6 +964,7 @@ impl russh::server::Handler for ClientHandler {
             artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
                 self.state.db.clone(),
             ),
+            gallery_service: self.state.gallery_service.clone(),
             username: user.username.clone(),
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,

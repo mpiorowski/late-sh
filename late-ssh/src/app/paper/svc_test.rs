@@ -119,6 +119,7 @@ async fn the_newsstand_answers_unavailable_empty_and_ready_and_claims_the_login_
             haunt_live: false,
             paper_enabled: false,
             paper_outside_enabled: false,
+            artboard_gallery_enabled: true,
         }));
     let dark = PaperService::new(test_db.db.clone(), AiService::new(false, None), stopped_rx);
     let mut dark_rx = dark.subscribe();
@@ -151,7 +152,7 @@ async fn the_newsstand_answers_unavailable_empty_and_ready_and_claims_the_login_
     let lounge = seed_lounge_page(&test_db.db, "- someone said something").await;
     service.request(user.id, PaperTrigger::Login);
     let (_, _, outcome) = wait_open(&mut rx).await;
-    let PaperOutcome::Ready(edition) = outcome else {
+    let PaperOutcome::Ready(edition, _) = outcome else {
         panic!("expected a ready paper, got {outcome:?}");
     };
     assert_eq!(edition.rooms.len(), 1);
@@ -166,7 +167,7 @@ async fn the_newsstand_answers_unavailable_empty_and_ready_and_claims_the_login_
     service.request(user.id, PaperTrigger::Command);
     let (_, trigger, outcome) = wait_open(&mut rx).await;
     assert_eq!(trigger, PaperTrigger::Command);
-    assert!(matches!(outcome, PaperOutcome::Ready(_)));
+    assert!(matches!(outcome, PaperOutcome::Ready(..)));
     assert!(
         tokio::time::timeout(Duration::from_millis(300), rx.recv())
             .await
@@ -179,7 +180,7 @@ async fn the_newsstand_answers_unavailable_empty_and_ready_and_claims_the_login_
     service.request(other.id, PaperTrigger::Login);
     let (user_id, _, outcome) = wait_open(&mut rx).await;
     assert_eq!(user_id, other.id);
-    assert!(matches!(outcome, PaperOutcome::Ready(_)));
+    assert!(matches!(outcome, PaperOutcome::Ready(..)));
 
     // `/paper reset` drops the rows and the caller's stamp: the edition
     // reads empty again and the login pop can be won again.
@@ -196,7 +197,7 @@ async fn the_newsstand_answers_unavailable_empty_and_ready_and_claims_the_login_
     service.request(user.id, PaperTrigger::Login);
     let (_, trigger, outcome) = wait_open(&mut rx).await;
     assert_eq!(trigger, PaperTrigger::Login);
-    assert!(matches!(outcome, PaperOutcome::Ready(_)));
+    assert!(matches!(outcome, PaperOutcome::Ready(..)));
 
     // The newsstand sells today's edition and nothing else: rows dated
     // tomorrow (there should be none; a preview never writes any) are
@@ -205,7 +206,7 @@ async fn the_newsstand_answers_unavailable_empty_and_ready_and_claims_the_login_
     seed_lounge_page_for(&test_db.db, today + chrono::Duration::days(1), "- tomorrow").await;
     service.request(user.id, PaperTrigger::Command);
     let (_, _, outcome) = wait_open(&mut rx).await;
-    let PaperOutcome::Ready(edition) = outcome else {
+    let PaperOutcome::Ready(edition, _) = outcome else {
         panic!("expected today's paper, got {outcome:?}");
     };
     assert_eq!(edition.edition, today);

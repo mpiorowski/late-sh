@@ -279,6 +279,9 @@ struct DrawContext<'a> {
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
+    /// Last month's winning gallery piece, hung over the splash when it
+    /// fits; the coffee cup otherwise.
+    splash_piece: Option<&'a crate::app::artboard::gallery::svc::GalleryPiece>,
     /// One frame of first-contact whisper theater over the splash, `None`
     /// unless the door is held this frame. See `app/deadchannel`.
     whisper: Option<crate::app::deadchannel::haunt::ui::WhisperFrame>,
@@ -660,6 +663,11 @@ impl App {
         let showcase_composing = self.chat.showcase.composing();
         let web_base_url = self.web_url.as_str();
         // Built before the frame borrows `self` mutably below.
+        let gallery_splash_piece = if self.show_splash {
+            self.gallery_splash_rx.borrow().clone()
+        } else {
+            None
+        };
         let listen_url = crate::app::state::listen_url(&self.web_url);
         let work_view = chat::work::ui::WorkListView {
             items: self.chat.work.all_items(),
@@ -1159,6 +1167,7 @@ impl App {
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
+                        splash_piece: gallery_splash_piece.as_ref(),
                         whisper: crate::app::deadchannel::haunt::ui::whisper_frame_for(
                             &self.haunt,
                             self.splash_ticks,
@@ -1280,44 +1289,72 @@ impl App {
                 text.push(' ');
             }
 
-            let steam_frames = [
-                ["   (  )   ", "    )(    "],
-                ["    )(    ", "   (  )   "],
-                ["   )  (   ", "    )(    "],
-                ["    )(    ", "   (  )   "],
-            ];
-            let steam = &steam_frames[(ctx.splash_ticks / 6) % steam_frames.len()];
-            let base = [" .------. ", "|      |`\\", "|      | /", " `----'   "];
-
-            let mut lines = Vec::new();
-            for s in steam {
-                lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
-                    *s,
-                    Style::default().fg(theme::TEXT_FAINT()),
-                )));
-            }
-            for b in &base {
-                lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
-                    *b,
-                    Style::default().fg(theme::TEXT_DIM()),
-                )));
-            }
-            lines.push(ratatui::text::Line::from(""));
-            lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
-                text,
-                Style::default().fg(theme::TEXT_MUTED()),
-            )));
-
-            let p = ratatui::widgets::Paragraph::new(lines).centered();
-            let layout = ratatui::layout::Layout::vertical([
-                ratatui::layout::Constraint::Fill(1),
-                ratatui::layout::Constraint::Length(8),
-                ratatui::layout::Constraint::Fill(1),
+            // Last month's winning piece takes the cup's place when the
+            // terminal has room for it; the typed line stays under either.
+            let piece_area = ratatui::layout::Layout::vertical([
+                ratatui::layout::Constraint::Min(0),
+                ratatui::layout::Constraint::Length(3),
             ])
             .split(area);
+            let piece_drawn = match ctx.splash_piece {
+                Some(piece) => crate::app::artboard::gallery::ui::draw_splash_piece(
+                    frame,
+                    piece_area[0],
+                    piece,
+                ),
+                None => false,
+            };
 
-            frame.render_widget(p, layout[1]);
-            let splash_bottom = layout[1].bottom();
+            let splash_bottom = if piece_drawn {
+                let line_area = Rect::new(piece_area[1].x, piece_area[1].y, piece_area[1].width, 1);
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new(ratatui::text::Line::from(
+                        ratatui::text::Span::styled(text, Style::default().fg(theme::TEXT_MUTED())),
+                    ))
+                    .centered(),
+                    line_area,
+                );
+                line_area.bottom()
+            } else {
+                let steam_frames = [
+                    ["   (  )   ", "    )(    "],
+                    ["    )(    ", "   (  )   "],
+                    ["   )  (   ", "    )(    "],
+                    ["    )(    ", "   (  )   "],
+                ];
+                let steam = &steam_frames[(ctx.splash_ticks / 6) % steam_frames.len()];
+                let base = [" .------. ", "|      |`\\", "|      | /", " `----'   "];
+
+                let mut lines = Vec::new();
+                for s in steam {
+                    lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
+                        *s,
+                        Style::default().fg(theme::TEXT_FAINT()),
+                    )));
+                }
+                for b in &base {
+                    lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
+                        *b,
+                        Style::default().fg(theme::TEXT_DIM()),
+                    )));
+                }
+                lines.push(ratatui::text::Line::from(""));
+                lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
+                    text,
+                    Style::default().fg(theme::TEXT_MUTED()),
+                )));
+
+                let p = ratatui::widgets::Paragraph::new(lines).centered();
+                let layout = ratatui::layout::Layout::vertical([
+                    ratatui::layout::Constraint::Fill(1),
+                    ratatui::layout::Constraint::Length(8),
+                    ratatui::layout::Constraint::Fill(1),
+                ])
+                .split(area);
+
+                frame.render_widget(p, layout[1]);
+                layout[1].bottom()
+            };
             let gap = area.bottom().saturating_sub(splash_bottom);
             let hint_y = splash_bottom + (gap * 3 / 4);
             // While the whisper holds the door the hint may be mid-dissolve
@@ -2235,6 +2272,9 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             "by github.com/mevanlc ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
+        let gallery_focus = ctx
+            .dartboard_state
+            .map(|state| (state.gallery().focus(), state.gallery().is_framing()));
         let hints: &[(&str, &str)] = if ctx.artboard_interacting {
             &[
                 ("active", "draw"),
@@ -2244,12 +2284,37 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 ("Ctrl+P", "help"),
             ]
         } else {
-            &[
-                ("view", "pan"),
-                ("Alt+arrows/R-drag", "pan"),
-                ("i", "edit"),
-                ("g", "gallery"),
-            ]
+            match gallery_focus {
+                Some((_, true)) => &[
+                    ("framing", "select your work"),
+                    ("Shift+arrows/drag", "frame"),
+                    ("Enter", "hang"),
+                    ("Esc", "cancel"),
+                ],
+                Some((crate::app::artboard::gallery::state::Focus::Rail, _)) => {
+                    &[("rail", "j/k"), ("Enter", "open"), ("Esc", "board")]
+                }
+                Some((crate::app::artboard::gallery::state::Focus::Archive, _)) => &[
+                    ("archives", "j/k travel"),
+                    ("Enter", "board"),
+                    ("Esc", "rail"),
+                ],
+                Some((crate::app::artboard::gallery::state::Focus::List, _)) => &[
+                    ("gallery", "j/k"),
+                    ("v", "applaud"),
+                    ("Enter", "full frame"),
+                    ("Esc", "rail"),
+                ],
+                Some((crate::app::artboard::gallery::state::Focus::Piece, _)) => {
+                    &[("piece", "j/k next"), ("v", "applaud"), ("Esc", "back")]
+                }
+                Some((crate::app::artboard::gallery::state::Focus::Canvas, _)) | None => &[
+                    ("view", "pan"),
+                    ("Alt+arrows/R-drag", "pan"),
+                    ("i", "edit"),
+                    ("g", "gallery"),
+                ],
+            }
         };
         for (key, desc) in hints {
             spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));

@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::artboard::gallery::svc::GalleryService;
 use crate::app::artboard::provenance::ArtboardProvenance;
 use crate::app::artboard::svc::{ArtboardSnapshotService, DartboardService, DartboardSnapshot};
 use dartboard_core::{CanvasOp, CellValue, RgbColor};
@@ -17,6 +18,8 @@ fn test_state() -> State {
     let mut state = State::new(
         svc,
         ArtboardSnapshotService::disabled(),
+        GalleryService::disabled(),
+        uuid::Uuid::nil(),
         "painter".to_string(),
         shared_provenance,
     );

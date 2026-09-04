@@ -17,11 +17,18 @@ use tokio::sync::{
     broadcast::{self, error::TryRecvError},
     watch,
 };
+use uuid::Uuid;
 
+use super::gallery::{
+    frame::frame_piece,
+    state::{Focus as GalleryFocus, GalleryState, HangFlow, RailRow},
+    svc::GalleryService,
+};
 use super::provenance::{SharedArtboardProvenance, apply_shared_op};
 use super::svc::{
-    ArtboardArchiveLoader, ArtboardArchiveResult, ArtboardArchiveSnapshot, ArtboardSnapshotService,
-    DartboardEvent, DartboardService, DartboardSnapshot,
+    ArtboardArchiveEntry, ArtboardArchiveLoader, ArtboardArchiveResult, ArtboardArchiveSnapshot,
+    ArtboardSnapshotKind, ArtboardSnapshotService, DartboardEvent, DartboardService,
+    DartboardSnapshot,
 };
 use crate::app::icon_picker::{self, catalog::IconCatalogData};
 
@@ -72,7 +79,8 @@ pub struct State {
     snapshot_rx: watch::Receiver<DartboardSnapshot>,
     event_rx: broadcast::Receiver<DartboardEvent>,
     archive_loader: ArtboardArchiveLoader,
-    snapshot_browser: SnapshotBrowserState,
+    archives: ArchiveBrowser,
+    gallery: GalleryState,
     owner_overlay_cache: std::cell::RefCell<Option<(Pos, u16, u16, Canvas)>>,
 }
 
@@ -80,6 +88,8 @@ impl State {
     pub fn new(
         svc: DartboardService,
         snapshot_service: ArtboardSnapshotService,
+        gallery_service: GalleryService,
+        viewer_id: Uuid,
         username: String,
         shared_provenance: SharedArtboardProvenance,
     ) -> Self {
@@ -112,7 +122,8 @@ impl State {
             snapshot_rx,
             event_rx,
             archive_loader,
-            snapshot_browser: SnapshotBrowserState::default(),
+            archives: ArchiveBrowser::default(),
+            gallery: GalleryState::new(gallery_service, viewer_id),
             owner_overlay_cache: std::cell::RefCell::new(None),
         }
     }
@@ -125,6 +136,7 @@ impl State {
     /// tick drains and reports it.
     pub fn tick(&mut self) -> bool {
         let mut changed = self.drain_archive_results();
+        changed |= self.gallery.tick();
         changed |= !self.event_rx.is_empty();
 
         if !self.is_archive_view_active() && self.snapshot_rx.has_changed().unwrap_or(false) {
@@ -196,7 +208,7 @@ impl State {
     }
 
     pub fn set_viewport_for_screen(&mut self, screen_size: (u16, u16)) {
-        let viewport = super::ui::canvas_area_for_screen(screen_size);
+        let viewport = super::ui::canvas_area_for_state(screen_size, self.gallery.rail_visible());
         self.editor
             .set_viewport(viewport_to_editor(viewport), &self.snapshot.canvas);
     }
@@ -421,7 +433,7 @@ impl State {
         x: u16,
         y: u16,
     ) -> Option<Pos> {
-        let viewport = super::ui::canvas_area_for_screen(screen_size);
+        let viewport = super::ui::canvas_area_for_state(screen_size, self.gallery.rail_visible());
         canvas_pos_for_screen_point(
             viewport,
             self.editor.viewport_origin,
@@ -766,127 +778,256 @@ impl State {
         self.last_canvas_click = None;
     }
 
-    pub fn is_snapshot_browser_open(&self) -> bool {
-        self.snapshot_browser.open
-    }
+    // ----- archives -----
 
     pub fn is_archive_view_active(&self) -> bool {
-        self.snapshot_browser.active.is_some()
+        self.archives.active.is_some()
     }
 
     pub fn active_archive_snapshot(&self) -> Option<&ArtboardArchiveSnapshot> {
-        self.snapshot_browser.active.as_ref()
+        self.archives.active.as_ref()
     }
 
-    pub fn snapshot_browser_items(&self) -> &[ArtboardArchiveSnapshot] {
-        &self.snapshot_browser.items
-    }
-
-    pub fn snapshot_browser_selected_index(&self) -> usize {
-        self.snapshot_browser.selected_index
-    }
-
-    pub fn snapshot_browser_scroll_offset(&self) -> usize {
-        self.snapshot_browser.scroll_offset
-    }
-
-    pub fn snapshot_browser_loading(&self) -> bool {
-        self.snapshot_browser.loading
-    }
-
-    pub fn snapshot_browser_error(&self) -> Option<&str> {
-        self.snapshot_browser.error.as_deref()
-    }
-
-    pub fn set_snapshot_browser_visible_height(&self, height: usize) {
-        self.snapshot_browser.visible_height.set(height);
-    }
-
-    pub fn toggle_snapshot_browser_or_live(&mut self) {
-        if self.snapshot_browser.open {
-            self.close_snapshot_browser();
-        } else if self.is_archive_view_active() {
-            self.exit_archive_view();
-        } else {
-            self.open_snapshot_browser();
+    /// The archive kind whose list the rail is showing, while it is.
+    pub fn browsed_archive_kind(&self) -> Option<ArtboardSnapshotKind> {
+        if self.gallery.focus() != GalleryFocus::Archive {
+            return None;
+        }
+        match self.gallery.selected_row() {
+            RailRow::Archive(kind) => Some(kind),
+            RailRow::Board | RailRow::Gallery(_) | RailRow::Hang => None,
         }
     }
 
-    pub fn open_snapshot_browser(&mut self) {
+    pub fn archive_entries(&self, kind: ArtboardSnapshotKind) -> &[ArtboardArchiveEntry] {
+        &self.archives.lists[kind.index()].entries
+    }
+
+    pub fn archive_selected(&self, kind: ArtboardSnapshotKind) -> usize {
+        self.archives.lists[kind.index()].selected
+    }
+
+    pub fn archive_scroll(&self, kind: ArtboardSnapshotKind) -> usize {
+        self.archives.lists[kind.index()].scroll
+    }
+
+    pub fn archive_loading(&self, kind: ArtboardSnapshotKind) -> bool {
+        self.archives.lists[kind.index()].loading
+    }
+
+    pub fn archive_error(&self, kind: ArtboardSnapshotKind) -> Option<&str> {
+        self.archives.lists[kind.index()].error.as_deref()
+    }
+
+    /// The count the rail shows next to an archive row, once listed.
+    pub fn archive_count(&self, kind: ArtboardSnapshotKind) -> Option<usize> {
+        let list = &self.archives.lists[kind.index()];
+        list.loaded.then_some(list.entries.len())
+    }
+
+    /// The key being fetched right now, so the list can mark it.
+    pub fn archive_loading_key(&self) -> Option<&str> {
+        self.archives.inflight.as_deref()
+    }
+
+    pub fn archive_load_error(&self) -> Option<&str> {
+        self.archives.load_error.as_deref()
+    }
+
+    pub fn set_archive_visible_height(&self, height: usize) {
+        self.archives.visible_height.set(height.max(1));
+    }
+
+    /// Turn the rail into `kind`'s list. The keys load once per session;
+    /// the cursor's snapshot loads as it moves.
+    pub fn open_archive_list(&mut self, kind: ArtboardSnapshotKind) {
         self.close_help();
         self.close_glyph_picker();
         self.clear_local_state();
-        self.snapshot_browser.open = true;
-        self.snapshot_browser.error = None;
-        self.snapshot_browser.loading = true;
-        self.snapshot_browser.selected_index = self
-            .snapshot_browser
-            .active
-            .as_ref()
-            .and_then(|active| {
-                self.snapshot_browser
-                    .items
-                    .iter()
-                    .position(|item| item.board_key == active.board_key)
-                    .map(|idx| idx + 1)
-            })
-            .unwrap_or(0);
-        self.clamp_snapshot_browser_selection();
-        self.archive_loader.request_list();
+        self.gallery.rail_select(RailRow::Archive(kind));
+        self.gallery.focus_archive();
+        self.ensure_archive_listed(kind);
+        self.want_selected_archive(kind);
     }
 
-    pub fn close_snapshot_browser(&mut self) {
-        self.snapshot_browser.open = false;
+    /// Back to the rail rows. Whatever archive is on the board stays there
+    /// until the Board row (or `exit_archive_view`) brings the live board
+    /// back.
+    pub fn close_archive_list(&mut self) {
+        self.gallery.focus_rail();
     }
 
-    pub fn move_snapshot_browser_selection(&mut self, delta: isize) {
-        if !self.snapshot_browser.open {
-            return;
-        }
-        let last = self.snapshot_browser_option_count().saturating_sub(1) as isize;
-        self.snapshot_browser.selected_index =
-            (self.snapshot_browser.selected_index as isize + delta).clamp(0, last) as usize;
-        self.ensure_snapshot_browser_selection_visible();
-    }
-
-    pub fn snapshot_browser_home(&mut self) {
-        self.snapshot_browser.selected_index = 0;
-        self.snapshot_browser.scroll_offset = 0;
-    }
-
-    pub fn snapshot_browser_page(&mut self, delta_pages: isize) {
-        let page = self.snapshot_browser.visible_height.get().max(1) as isize;
-        self.move_snapshot_browser_selection(delta_pages.saturating_mul(page));
-    }
-
-    pub fn activate_snapshot_browser_selection(&mut self) {
-        if !self.snapshot_browser.open {
-            return;
-        }
-        if self.snapshot_browser.selected_index == 0 {
-            self.exit_archive_view();
-            self.snapshot_browser.open = false;
-            return;
-        }
-        let Some(item) = self
-            .snapshot_browser
-            .items
-            .get(self.snapshot_browser.selected_index - 1)
-            .cloned()
-        else {
+    pub fn archive_move(&mut self, delta: isize) {
+        let Some(kind) = self.browsed_archive_kind() else {
             return;
         };
-        self.activate_archive_snapshot(item);
-        self.snapshot_browser.open = false;
+        let visible = self.archives.visible_height.get().max(1);
+        let list = &mut self.archives.lists[kind.index()];
+        if list.entries.is_empty() {
+            list.selected = 0;
+            list.scroll = 0;
+            return;
+        }
+        let last = list.entries.len() as isize - 1;
+        list.selected = (list.selected as isize + delta).clamp(0, last) as usize;
+        if list.selected < list.scroll {
+            list.scroll = list.selected;
+        } else if list.selected >= list.scroll + visible {
+            list.scroll = list.selected + 1 - visible;
+        }
+        self.want_selected_archive(kind);
+    }
+
+    pub fn archive_page(&mut self, pages: isize) {
+        let visible = self.archives.visible_height.get().max(1) as isize;
+        self.archive_move(pages.saturating_mul(visible));
+    }
+
+    pub fn archive_select(&mut self, index: usize) {
+        let Some(kind) = self.browsed_archive_kind() else {
+            return;
+        };
+        let list = &mut self.archives.lists[kind.index()];
+        if index < list.entries.len() {
+            list.selected = index;
+            self.want_selected_archive(kind);
+        }
+    }
+
+    /// The archive list index under a screen point, from the last draw of
+    /// the rail.
+    pub fn archive_index_at(&self, x: u16, y: u16) -> Option<usize> {
+        let kind = self.browsed_archive_kind()?;
+        let line = self.gallery.rail_line_at(x, y)?;
+        let line = line.checked_sub(super::gallery::ui::ARCHIVE_LIST_HEADER_LINES)?;
+        let list = &self.archives.lists[kind.index()];
+        let index = list.scroll + line;
+        (index < list.entries.len()).then_some(index)
     }
 
     pub fn exit_archive_view(&mut self) {
-        self.snapshot_browser.active = None;
+        self.archives.active = None;
+        self.archives.wanted = None;
         self.snapshot = self.snapshot_rx.borrow_and_update().clone();
         self.invalidate_owner_overlay_cache();
         self.editor.clamp_cursor(&self.snapshot.canvas);
         self.editor.clamp_viewport_origin(&self.snapshot.canvas);
         self.clear_local_state();
+    }
+
+    fn ensure_archive_listed(&mut self, kind: ArtboardSnapshotKind) {
+        let list = &mut self.archives.lists[kind.index()];
+        if list.loaded || list.loading {
+            return;
+        }
+        list.loading = true;
+        list.error = None;
+        self.archive_loader.request_list(kind);
+    }
+
+    /// Point the board at the entry under the cursor.
+    fn want_selected_archive(&mut self, kind: ArtboardSnapshotKind) {
+        let list = &self.archives.lists[kind.index()];
+        let Some(entry) = list.entries.get(list.selected) else {
+            return;
+        };
+        self.archives.wanted = Some((kind, entry.board_key.clone()));
+        self.request_wanted_archive();
+    }
+
+    /// Show the wanted archive: from the board if it is already up, from
+    /// the cache if it has been seen, otherwise from the database, one
+    /// fetch at a time. A cursor that moves on while a fetch is out is
+    /// caught up with when the fetch lands.
+    fn request_wanted_archive(&mut self) {
+        let Some((kind, board_key)) = self.archives.wanted.clone() else {
+            return;
+        };
+        if self
+            .archives
+            .active
+            .as_ref()
+            .is_some_and(|active| active.board_key == board_key)
+        {
+            return;
+        }
+        if let Some(cached) = self
+            .archives
+            .cache
+            .iter()
+            .find(|snapshot| snapshot.board_key == board_key)
+            .cloned()
+        {
+            self.activate_archive_snapshot(cached);
+            return;
+        }
+        if self.archives.inflight.is_some() {
+            return;
+        }
+        self.archives.inflight = Some(board_key.clone());
+        self.archive_loader.request_load(kind, board_key);
+    }
+
+    // ----- gallery -----
+
+    pub fn gallery(&self) -> &GalleryState {
+        &self.gallery
+    }
+
+    pub fn gallery_mut(&mut self) -> &mut GalleryState {
+        &mut self.gallery
+    }
+
+    /// True while the gallery, not the board, owns view-mode input: the
+    /// rail, a listing, a piece, or the hang flow has focus.
+    pub fn gallery_claims_input(&self) -> bool {
+        !matches!(self.gallery.hang(), HangFlow::Idle)
+            || self.gallery.focus() != GalleryFocus::Canvas
+    }
+
+    /// True when Esc has an Artboard overlay to close before it can mean
+    /// anything global.
+    pub fn claims_escape(&self) -> bool {
+        self.help_open || self.glyph_picker_open || self.gallery.claims_escape()
+    }
+
+    /// Start framing a piece on the live board. Every overlay closes and
+    /// the local selection is cleared so the frame starts empty.
+    pub fn begin_framing(&mut self) {
+        self.close_help();
+        self.close_glyph_picker();
+        self.clear_local_state();
+        self.gallery.begin_framing();
+    }
+
+    pub fn cancel_framing(&mut self) {
+        self.clear_local_state();
+        self.gallery.cancel_hang();
+    }
+
+    /// Crop the current selection into a piece and move on to naming it,
+    /// or say on the framing bar why it cannot hang.
+    pub fn frame_selection_for_hang(&mut self) {
+        let Some(selection) = self.editor.selection() else {
+            self.gallery
+                .set_framing_notice("Select a frame first (Shift+arrows or drag).".to_string());
+            return;
+        };
+        let bounds = selection
+            .bounds()
+            .normalized_for_canvas(&self.snapshot.canvas);
+        match frame_piece(
+            &self.snapshot.canvas,
+            &self.snapshot.provenance,
+            bounds,
+            &self.username,
+        ) {
+            Ok(framed) => {
+                self.clear_local_state();
+                self.gallery.set_confirm(framed);
+            }
+            Err(error) => self.gallery.set_framing_notice(error.notice()),
+        }
     }
 
     pub fn is_help_open(&self) -> bool {
@@ -1072,57 +1213,66 @@ impl State {
         let mut changed = false;
         while let Some(result) = self.archive_loader.try_recv() {
             changed = true;
-            self.snapshot_browser.loading = false;
             match result {
-                ArtboardArchiveResult::Loaded(items) => {
-                    self.snapshot_browser.items = items;
-                    self.snapshot_browser.error = None;
-                    self.clamp_snapshot_browser_selection();
+                ArtboardArchiveResult::Listed { kind, entries } => {
+                    let list = &mut self.archives.lists[kind.index()];
+                    list.entries = entries;
+                    list.loaded = true;
+                    list.loading = false;
+                    list.error = None;
+                    list.selected = list.selected.min(list.entries.len().saturating_sub(1));
+                    list.scroll = list.scroll.min(list.selected);
+                    if self.browsed_archive_kind() == Some(kind) {
+                        self.want_selected_archive(kind);
+                    }
                 }
-                ArtboardArchiveResult::Failed(error) => {
-                    self.snapshot_browser.error = Some(error);
-                    self.clamp_snapshot_browser_selection();
+                ArtboardArchiveResult::ListFailed { kind, error } => {
+                    let list = &mut self.archives.lists[kind.index()];
+                    list.loading = false;
+                    list.error = Some(error);
+                }
+                ArtboardArchiveResult::Loaded(snapshot) => {
+                    self.archives.inflight = None;
+                    self.archives.load_error = None;
+                    self.archives
+                        .cache
+                        .retain(|cached| cached.board_key != snapshot.board_key);
+                    if self.archives.cache.len() >= ARCHIVE_CACHE_SIZE {
+                        self.archives.cache.remove(0);
+                    }
+                    self.archives.cache.push(snapshot);
+                    self.request_wanted_archive();
+                }
+                ArtboardArchiveResult::LoadFailed { board_key, error } => {
+                    self.archives.inflight = None;
+                    self.archives.load_error = Some(error);
+                    // Do not chase the same key again; the cursor moving
+                    // on sets a new one.
+                    if self
+                        .archives
+                        .wanted
+                        .as_ref()
+                        .is_some_and(|(_, wanted)| *wanted == board_key)
+                    {
+                        self.archives.wanted = None;
+                    }
+                    self.request_wanted_archive();
                 }
             }
         }
         changed
     }
 
-    fn snapshot_browser_option_count(&self) -> usize {
-        self.snapshot_browser.items.len() + 1
-    }
-
-    fn clamp_snapshot_browser_selection(&mut self) {
-        let last = self.snapshot_browser_option_count().saturating_sub(1);
-        self.snapshot_browser.selected_index = self.snapshot_browser.selected_index.min(last);
-        self.ensure_snapshot_browser_selection_visible();
-    }
-
-    fn ensure_snapshot_browser_selection_visible(&mut self) {
-        let visible = self.snapshot_browser.visible_height.get().max(1);
-        if self.snapshot_browser.selected_index < self.snapshot_browser.scroll_offset {
-            self.snapshot_browser.scroll_offset = self.snapshot_browser.selected_index;
-        } else if self.snapshot_browser.selected_index
-            >= self.snapshot_browser.scroll_offset + visible
-        {
-            self.snapshot_browser.scroll_offset =
-                self.snapshot_browser.selected_index + 1 - visible;
-        }
-    }
-
     fn activate_archive_snapshot(&mut self, item: ArtboardArchiveSnapshot) {
         self.clear_local_state();
-        if let Ok(canvas) = serde_json::from_value(item.canvas.clone()) {
-            self.snapshot.canvas = canvas;
-        }
-        if let Ok(provenance) = serde_json::from_value(item.provenance.clone()) {
-            self.snapshot.provenance = provenance;
-        }
+        self.snapshot.canvas = item.canvas.clone();
+        self.snapshot.provenance = item.provenance.clone();
         self.snapshot.peers.clear();
         self.snapshot.connect_rejected = None;
+        self.invalidate_owner_overlay_cache();
         self.editor.clamp_cursor(&self.snapshot.canvas);
         self.editor.clamp_viewport_origin(&self.snapshot.canvas);
-        self.snapshot_browser.active = Some(item);
+        self.archives.active = Some(item);
     }
 
     fn active_user_color(&self) -> RgbColor {
@@ -1403,16 +1553,34 @@ pub enum BrushMode {
     Glyph(char),
 }
 
+/// How many decoded archives a session keeps so stepping back through
+/// the list is free.
+const ARCHIVE_CACHE_SIZE: usize = 8;
+
 #[derive(Default)]
-struct SnapshotBrowserState {
-    open: bool,
+struct ArchiveList {
+    entries: Vec<ArtboardArchiveEntry>,
+    loaded: bool,
     loading: bool,
     error: Option<String>,
-    items: Vec<ArtboardArchiveSnapshot>,
-    selected_index: usize,
-    scroll_offset: usize,
-    visible_height: Cell<usize>,
+    selected: usize,
+    scroll: usize,
+}
+
+/// The archive side of the rail: one key list per kind, the snapshot the
+/// cursor asks for, the one on the board, and the few seen lately.
+#[derive(Default)]
+struct ArchiveBrowser {
+    lists: [ArchiveList; 3],
+    /// The key under the cursor, the one the board should show.
+    wanted: Option<(ArtboardSnapshotKind, String)>,
+    /// The key a fetch is out for. One at a time.
+    inflight: Option<String>,
+    cache: Vec<ArtboardArchiveSnapshot>,
+    /// The archive on the board, replacing the live snapshot.
     active: Option<ArtboardArchiveSnapshot>,
+    load_error: Option<String>,
+    visible_height: Cell<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

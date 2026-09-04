@@ -423,6 +423,8 @@ Moderation modal commands:
 - `view <@user|#room|bans|slows|audit|artboard|help> [pagenumber]`
 - `artboard curate <live|YYYY-MM-DD> [reason...]`
 - `artboard restore [YYYY-MM-DD] [reason...]`
+- `artboard remove <piece-id-prefix> [reason...]` (takes a gallery piece down; the id is printed in the piece's full-frame view, 8+ characters, must match one piece)
+- `artboard gallery <on|off>` (admin; the `artboard_gallery_enabled` switch)
 - `room-voice <#room> <on|off>`
 - `kick <server|voice|#room> @name [reason...]`
 - `ban <server|#room|artboard|audio> @name [duration] [reason...]`

@@ -2240,11 +2240,10 @@ fn dispatch_escape(app: &mut App) {
         let Some(state) = app.dartboard_state.as_ref() else {
             return;
         };
-        if state.is_snapshot_browser_open() {
-            dispatch_screen_key(app, ctx.screen, 0x1B);
-            return;
-        }
-        if state.is_glyph_picker_open() || state.is_help_open() {
+        // Every Artboard overlay (help, glyph picker, the rail with its
+        // listings and archive lists, the hang flow) takes Esc before it
+        // can mean quit.
+        if state.claims_escape() {
             dispatch_screen_key(app, ctx.screen, 0x1B);
             return;
         }
@@ -3711,7 +3710,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && app
                     .dartboard_state
                     .as_ref()
-                    .is_some_and(|state| state.is_snapshot_browser_open())
+                    .is_some_and(|state| state.gallery().claims_q())
             {
                 return false;
             }
@@ -3886,6 +3885,10 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.set_screen(Screen::Clubhouse);
             true
         }
+        b'\t' if artboard_rail_takes_tab(app, ctx.screen) => {
+            dispatch_screen_key(app, Screen::Artboard, b'\t');
+            true
+        }
         b'\t' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(ctx.screen.next());
@@ -3895,6 +3898,25 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     }
 }
 
+/// Tab backs out of an Artboard pane (a listing, a piece, an archive list)
+/// to the rail. On the rail and on the board it is the page switch it is
+/// everywhere, so the page cycle never sticks on the page's landing spot.
+fn artboard_rail_takes_tab(app: &App, screen: Screen) -> bool {
+    if screen != Screen::Artboard || app.artboard_interacting {
+        return false;
+    }
+    app.dartboard_state.as_ref().is_some_and(|state| {
+        !state.is_help_open()
+            && !state.is_glyph_picker_open()
+            && matches!(
+                state.gallery().focus(),
+                crate::app::artboard::gallery::state::Focus::List
+                    | crate::app::artboard::gallery::state::Focus::Piece
+                    | crate::app::artboard::gallery::state::Focus::Archive
+            )
+    })
+}
+
 fn artboard_blocks_global_page_switch(app: &App, screen: Screen) -> bool {
     if screen != Screen::Artboard {
         return false;
@@ -3902,7 +3924,10 @@ fn artboard_blocks_global_page_switch(app: &App, screen: Screen) -> bool {
     let Some(state) = app.dartboard_state.as_ref() else {
         return app.artboard_interacting;
     };
-    app.artboard_interacting || state.is_help_open() || state.is_glyph_picker_open()
+    app.artboard_interacting
+        || state.is_help_open()
+        || state.is_glyph_picker_open()
+        || state.gallery().captures_typing()
 }
 
 fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {

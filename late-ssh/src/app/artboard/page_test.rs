@@ -111,6 +111,8 @@ fn test_state() -> State {
     State::new(
         svc,
         ArtboardSnapshotService::disabled(),
+        crate::app::artboard::gallery::svc::GalleryService::disabled(),
+        uuid::Uuid::nil(),
         "viewer".to_string(),
         shared_provenance,
     )

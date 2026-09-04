@@ -168,8 +168,20 @@ impl PaperModal {
 /// Everything the layout needs from the session: the edition's rows and
 /// how this reader's rail is ordered (favorites first, as the rail draws
 /// them), which rooms they are in, and which rooms carry a shop bump.
+/// The wall column: yesterday's most applauded gallery piece, printed in
+/// black and white the way a paper prints anything.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaperWall {
+    pub title: String,
+    pub username: String,
+    pub applause: i64,
+    pub lines: Vec<String>,
+}
+
 pub(crate) struct PaperLayout<'a> {
     pub edition: &'a PaperEdition,
+    /// The piece on the wall, when yesterday hung one.
+    pub wall: Option<&'a PaperWall>,
     /// Member rooms in rail order; rooms the edition has no page for are
     /// skipped, rooms missing from the rail follow by activity.
     pub rail_order: &'a [Uuid],
@@ -250,6 +262,7 @@ fn labels(pages: &[&PaperRoomPage]) -> String {
 pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<Line<'static>> {
     let PaperLayout {
         edition,
+        wall,
         rail_order,
         member_room_ids,
         bumped_labels,
@@ -350,6 +363,33 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<Line<'static>> {
         lines.push(Line::from(""));
         lines.push(heading(title));
         lines.extend(column_lines(text));
+    }
+
+    if let Some(wall) = wall {
+        lines.push(Line::from(""));
+        lines.push(heading("ON THE WALL"));
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("\"{}\"", wall.title),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    " by @{}, hung yesterday, {} applause so far. Page 4 has it in colour.",
+                    wall.username, wall.applause
+                ),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+        lines.push(Line::from(""));
+        for line in &wall.lines {
+            lines.push(Line::from(Span::styled(
+                format!("    {line}"),
+                Style::default().fg(theme::TEXT()),
+            )));
+        }
     }
 
     if !quiet.is_empty() || !at_the_press.is_empty() || !missed.is_empty() {

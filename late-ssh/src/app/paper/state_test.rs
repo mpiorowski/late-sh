@@ -98,6 +98,7 @@ fn the_paper_follows_the_rail_then_elsewhere_then_the_back_pages() {
     let bumped = vec!["dnd".to_string()];
 
     let lines = plain(&lay_out(PaperLayout {
+        wall: None,
         edition: &edition,
         rail_order: &rail_order,
         member_room_ids: &member_room_ids,
@@ -152,6 +153,7 @@ fn a_member_room_missing_from_the_rail_still_gets_its_column() {
     };
     let member_room_ids: HashSet<Uuid> = [Uuid::from_u128(1)].into_iter().collect();
     let lines = plain(&lay_out(PaperLayout {
+        wall: None,
         edition: &edition,
         rail_order: &[],
         member_room_ids: &member_room_ids,

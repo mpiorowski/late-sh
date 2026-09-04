@@ -523,7 +523,7 @@ fn handle_shared_pointer(state: &mut State, mouse: &MouseEvent) -> InputAction {
     }
 }
 
-fn app_pointer_event_from_mouse(mouse: &MouseEvent) -> Option<AppPointerEvent> {
+pub(crate) fn app_pointer_event_from_mouse(mouse: &MouseEvent) -> Option<AppPointerEvent> {
     let column = mouse.x.checked_sub(1)?;
     let row = mouse.y.checked_sub(1)?;
     let kind = match mouse.kind {

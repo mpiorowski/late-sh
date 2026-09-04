@@ -5,6 +5,9 @@ pub mod arcade_handle;
 mod arcade_handle_test;
 pub mod artboard;
 pub mod artboard_ban;
+pub mod artboard_piece;
+#[cfg(test)]
+mod artboard_piece_test;
 #[cfg(test)]
 mod artboard_test;
 pub mod article;

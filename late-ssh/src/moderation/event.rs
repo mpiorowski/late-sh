@@ -68,6 +68,17 @@ pub enum ModerationEvent {
         board_key: String,
         reason: String,
     },
+    ArtboardPieceRemoved {
+        actor_user_id: Uuid,
+        piece_id: Uuid,
+        owner_user_id: Uuid,
+        title: String,
+        reason: String,
+    },
+    ArtboardGallerySwitched {
+        actor_user_id: Uuid,
+        enabled: bool,
+    },
     AudioAction {
         actor_user_id: Uuid,
         target_user_id: Uuid,

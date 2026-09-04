@@ -317,6 +317,13 @@ async fn main() -> anyhow::Result<()> {
         app_flag_service.subscribe(),
     );
     let _paper_sweeper_task = paper_service.start_sweeper_task();
+    // The Artboard gallery: every replica re-reads last month's winner for
+    // the splash; nothing here writes. See `app/artboard/gallery/svc.rs`.
+    let gallery_service = late_ssh::app::artboard::gallery::svc::GalleryService::new(
+        db.clone(),
+        app_flag_service.subscribe(),
+    );
+    let _gallery_splash_task = gallery_service.start_splash_refresh_task();
     // Runner looks (the #deadchannel portraits) cross replicas the same
     // way; the listener seeds this replica on every (re)connect. See
     // `app/deadchannel/runner/svc.rs`.
@@ -421,6 +428,7 @@ async fn main() -> anyhow::Result<()> {
         chip_service,
         house_registry,
         dartboard_server,
+        gallery_service,
         dartboard_provenance,
         leaderboard_service: leaderboard_service.clone(),
         quest_service,

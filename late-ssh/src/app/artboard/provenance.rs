@@ -50,6 +50,21 @@ impl ArtboardProvenance {
         self.cells.insert(pos, username.into());
     }
 
+    /// Every attributed hand and how many glyph origins it painted, most
+    /// first, ties by name. The gallery's credits are read off this.
+    pub fn glyph_counts_by_username(&self) -> Vec<(String, usize)> {
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for username in self.cells.values() {
+            *counts.entry(username.as_str()).or_default() += 1;
+        }
+        let mut counts: Vec<(String, usize)> = counts
+            .into_iter()
+            .map(|(username, count)| (username.to_string(), count))
+            .collect();
+        counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        counts
+    }
+
     pub fn apply_op(&mut self, before: &Canvas, op: &CanvasOp, username: &str) {
         match op {
             CanvasOp::PaintCell { pos, ch, .. } => {

@@ -670,6 +670,7 @@ impl User {
                                    WHEN 'arcade_wins' THEN 0
                                    WHEN 'top_chips' THEN 1
                                    WHEN 'crown' THEN 5
+                                   WHEN 'artboard' THEN 6
                                    WHEN 'tetris' THEN 2
                                    WHEN 'twenty_forty_eight' THEN 3
                                    WHEN 'snake' THEN 4

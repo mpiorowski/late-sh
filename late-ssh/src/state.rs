@@ -164,6 +164,8 @@ pub struct State {
     pub house_registry: crate::app::lobby::house::registry::HouseTableRegistry,
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: SharedArtboardProvenance,
+    /// The Artboard gallery: listings, hanging, applause, the splash piece.
+    pub gallery_service: crate::app::artboard::gallery::svc::GalleryService,
     pub leaderboard_service: LeaderboardService,
     pub quest_service: QuestService,
     pub shop_service: ShopService,

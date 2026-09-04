@@ -32,6 +32,9 @@ pub enum AppFlag {
     /// look at the world beyond late.sh. On from the start; the switch is
     /// there for the day it reads like slop.
     PaperOutsideEnabled,
+    /// The Artboard gallery's kill switch (`/gallery on|off`): while off
+    /// nothing can be hung or applauded and the rail hides the gallery.
+    ArtboardGalleryEnabled,
 }
 
 impl AppFlag {
@@ -41,6 +44,7 @@ impl AppFlag {
             Self::HauntLive => "haunt_live",
             Self::PaperEnabled => "paper_enabled",
             Self::PaperOutsideEnabled => "paper_outside_enabled",
+            Self::ArtboardGalleryEnabled => "artboard_gallery_enabled",
         }
     }
 }
@@ -53,6 +57,7 @@ pub struct AppFlags {
     pub haunt_live: bool,
     pub paper_enabled: bool,
     pub paper_outside_enabled: bool,
+    pub artboard_gallery_enabled: bool,
 }
 
 impl AppFlags {
@@ -76,13 +81,18 @@ impl AppFlags {
             haunt_live: lookup(AppFlag::HauntLive)?,
             paper_enabled: lookup(AppFlag::PaperEnabled)?,
             paper_outside_enabled: lookup(AppFlag::PaperOutsideEnabled)?,
+            artboard_gallery_enabled: lookup(AppFlag::ArtboardGalleryEnabled)?,
         })
     }
 
     /// Flip one switch. The trigger tells every replica, including the one
     /// that wrote it. Bails when the row is missing, same reasoning as
     /// [`AppFlags::load`].
-    pub async fn set(client: &Client, flag: AppFlag, enabled: bool) -> Result<()> {
+    pub async fn set(
+        client: &impl deadpool_postgres::GenericClient,
+        flag: AppFlag,
+        enabled: bool,
+    ) -> Result<()> {
         let updated = client
             .execute(
                 "UPDATE app_flags SET enabled = $2, updated = current_timestamp WHERE key = $1",

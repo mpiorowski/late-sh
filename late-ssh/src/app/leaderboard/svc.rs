@@ -475,9 +475,15 @@ impl LeaderboardService {
     }
 
     async fn snapshot_profile_awards(&self) -> Result<()> {
-        let client = self.db.get().await?;
-        let changed = snapshot_previous_month_profile_awards(&client).await?;
-        tracing::debug!(changed, "profile award snapshot refreshed");
+        let mut client = self.db.get().await?;
+        let outcome = snapshot_previous_month_profile_awards(&mut client).await?;
+        tracing::debug!(
+            changed = outcome.inserted,
+            "profile award snapshot refreshed"
+        );
+        for (user_id, rank, chips) in outcome.gallery_prizes_paid {
+            tracing::info!(%user_id, rank, chips, "artboard gallery prize paid");
+        }
         Ok(())
     }
 }

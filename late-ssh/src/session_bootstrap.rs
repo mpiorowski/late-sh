@@ -487,6 +487,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         dartboard_server: state.dartboard_server.clone(),
         dartboard_provenance: state.dartboard_provenance.clone(),
         artboard_snapshot_service: ArtboardSnapshotService::new(state.db.clone()),
+        gallery_service: state.gallery_service.clone(),
         username: user.username.clone(),
         bonsai_service: state.bonsai_service.clone(),
         initial_bonsai_tree,

@@ -30,6 +30,7 @@ use std::time::Duration;
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::app_flag::{AppFlag, AppFlags};
+use late_core::models::artboard_piece::ArtboardPiece;
 use late_core::models::article::Article;
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::paper::{
@@ -41,9 +42,12 @@ use tokio::sync::{broadcast, oneshot, watch};
 use tracing::Instrument;
 use uuid::Uuid;
 
-use super::state::{PaperCommand, PaperLayout, PaperModal, PaperState, PendingFlagWrite};
+use super::state::{
+    PaperCommand, PaperLayout, PaperModal, PaperState, PaperWall, PendingFlagWrite,
+};
 use crate::app::ai::ghost::GRAYBEARD_PERSONA;
 use crate::app::ai::svc::AiService;
+use crate::app::artboard::gallery::{svc::GalleryPiece, ui::piece_text_lines};
 use crate::app::common::primitives::Banner;
 use crate::app::state::App;
 use crate::metrics::{self, PaperOpenResult, PaperPrintResult};
@@ -189,7 +193,7 @@ impl PrintTally {
 
 #[derive(Clone, Debug)]
 pub enum PaperOutcome {
-    Ready(PaperEdition),
+    Ready(PaperEdition, Option<PaperWall>),
     /// Nothing printed for today's edition yet.
     Empty,
     /// The kill switch is off.
@@ -236,6 +240,7 @@ impl PaperService {
             haunt_live: false,
             paper_enabled: false,
             paper_outside_enabled: false,
+            artboard_gallery_enabled: false,
         })
     }
 
@@ -778,12 +783,12 @@ impl PaperService {
             return Some(PaperOutcome::Unavailable);
         }
         match self.open(user_id, trigger).await {
-            Ok(Opened::Ready(edition)) => {
+            Ok(Opened::Ready(edition, wall)) => {
                 metrics::record_paper_open(match trigger {
                     PaperTrigger::Login => PaperOpenResult::Login,
                     PaperTrigger::Command => PaperOpenResult::Command,
                 });
-                Some(PaperOutcome::Ready(edition))
+                Some(PaperOutcome::Ready(edition, wall))
             }
             Ok(Opened::Empty) => {
                 metrics::record_paper_open(PaperOpenResult::Empty);
@@ -811,15 +816,34 @@ impl PaperService {
         if !edition.has_print() {
             return Ok(Opened::Empty);
         }
+        // The wall is a plain read, no claim: the piece is a row already,
+        // and the paper prints it the way it prints anything, in black and
+        // white. A decode failure loses the column, not the paper.
+        let covered = today.pred_opt().unwrap_or(today);
+        let wall = match ArtboardPiece::most_applauded_hung_on(&client, covered).await? {
+            Some(piece) => match GalleryPiece::decode(piece) {
+                Ok(piece) => Some(PaperWall {
+                    title: piece.title.clone(),
+                    username: piece.username.clone(),
+                    applause: piece.applause,
+                    lines: piece_text_lines(&piece.canvas, piece.width, piece.height),
+                }),
+                Err(error) => {
+                    tracing::warn!(error = ?error, "paper wall piece could not be decoded");
+                    None
+                }
+            },
+            None => None,
+        };
         match trigger {
             PaperTrigger::Login => {
                 if User::claim_paper_shown(&client, user_id, today).await? {
-                    Ok(Opened::Ready(edition))
+                    Ok(Opened::Ready(edition, wall))
                 } else {
                     Ok(Opened::AlreadyShown)
                 }
             }
-            PaperTrigger::Command => Ok(Opened::Ready(edition)),
+            PaperTrigger::Command => Ok(Opened::Ready(edition, wall)),
         }
     }
 }
@@ -917,7 +941,7 @@ fn note_section_print(
 /// What the newsstand found, before the orchestration layer maps it to
 /// a metric and an outcome.
 enum Opened {
-    Ready(PaperEdition),
+    Ready(PaperEdition, Option<PaperWall>),
     Empty,
     /// The login claim lost to another device or replica.
     AlreadyShown,
@@ -1151,7 +1175,7 @@ fn drain_events(app: &mut App) -> bool {
                     }
                     PressOutcome::Previewed { edition, tally } => {
                         let line = tally.banner_line(edition.edition);
-                        app.paper.modal = Some(edition_modal(app, &edition));
+                        app.paper.modal = Some(edition_modal(app, &edition, None));
                         Banner::success(&format!("Preview, not printed. {line}"))
                     }
                     PressOutcome::Reset => Banner::success(
@@ -1173,8 +1197,8 @@ fn drain_events(app: &mut App) -> bool {
 /// depending on who asked.
 fn open_paper(app: &mut App, trigger: PaperTrigger, outcome: PaperOutcome) {
     match (trigger, outcome) {
-        (_, PaperOutcome::Ready(edition)) => {
-            let modal = edition_modal(app, &edition);
+        (_, PaperOutcome::Ready(edition, wall)) => {
+            let modal = edition_modal(app, &edition, wall.as_ref());
             if app.login_announcements_visible() || !app.clubhouse.tutorial_settled() {
                 app.paper.pending_modal = Some(modal);
             } else {
@@ -1204,7 +1228,7 @@ fn open_paper(app: &mut App, trigger: PaperTrigger, outcome: PaperOutcome) {
 
 /// An edition laid out for this session: the reader's rail order,
 /// memberships, and shop bumps.
-fn edition_modal(app: &App, edition: &PaperEdition) -> PaperModal {
+fn edition_modal(app: &App, edition: &PaperEdition, wall: Option<&PaperWall>) -> PaperModal {
     let rail_order: Vec<Uuid> = app
         .chat
         .visual_order()
@@ -1219,6 +1243,7 @@ fn edition_modal(app: &App, edition: &PaperEdition) -> PaperModal {
         crate::app::chat::ui::bumped_join_room_slugs(app.shop_state.active_room_effects());
     PaperModal::edition(PaperLayout {
         edition,
+        wall,
         rail_order: &rail_order,
         member_room_ids: &member_room_ids,
         bumped_labels: &bumped_labels,
