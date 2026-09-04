@@ -1,20 +1,16 @@
 //! The Late Edition's session state and the pure layout: from an edition's
-//! rows plus this reader's rail order to the modal's lines. No I/O here;
-//! `svc.rs` owns the requests and the tick.
+//! rows plus this reader's rail order to the modal's lines. No I/O here,
+//! and no palette either: lines carry `PaperInk`, and `ui.rs` picks the
+//! colours inside the draw. `svc.rs` owns the requests and the tick.
 
 use std::collections::HashSet;
 
 use late_core::models::app_flag::AppFlag;
 use late_core::models::paper::{PaperEdition, PaperRoomPage, PaperSectionKind, PaperStatus};
-use ratatui::{
-    style::{Modifier, Style},
-    text::{Line, Span},
-};
 use tokio::sync::{broadcast, oneshot};
 use uuid::Uuid;
 
 use super::svc::{PaperEvent, PaperService, PaperTrigger};
-use crate::app::common::theme;
 
 /// Rooms the reader is not in that make the paper: the top few by
 /// activity, bumped rooms first. A cap, so the paper stays a paper and
@@ -124,7 +120,7 @@ pub(crate) fn parse_paper_command(body: &str) -> Option<Option<PaperCommand>> {
 #[derive(Clone, Debug)]
 pub(crate) struct PaperModal {
     pub title: String,
-    pub lines: Vec<Line<'static>>,
+    pub lines: Vec<PaperLine>,
     pub scroll_offset: u16,
     /// Still waiting for `/paper`'s answer; Esc drops the request.
     pub at_the_press: bool,
@@ -136,11 +132,8 @@ impl PaperModal {
         Self {
             title: " The Late Edition ".to_string(),
             lines: vec![
-                Line::from(""),
-                Line::from(Span::styled(
-                    "  at the press…",
-                    Style::default().fg(theme::TEXT_DIM()),
-                )),
+                PaperLine::new(),
+                vec![PaperSpan::new("  at the press…", PaperInk::Meta)],
             ],
             scroll_offset: 0,
             at_the_press: true,
@@ -190,61 +183,85 @@ pub(crate) struct PaperLayout<'a> {
     pub bumped_labels: &'a [String],
 }
 
-fn heading(text: &str) -> Line<'static> {
-    Line::from(Span::styled(
-        text.to_string(),
-        Style::default()
-            .fg(theme::AMBER_GLOW())
-            .add_modifier(Modifier::BOLD),
-    ))
+/// What a span of the paper is, never what colour it is. The palette is a
+/// render-pass thing (`theme`'s thread local is set by `App::render`), and
+/// the modal is laid out a tick earlier, on whatever worker thread the
+/// session happened to wake on: reading the palette here printed the paper
+/// in whichever session last rendered on that thread. `ui.rs` maps these
+/// to styles inside the draw, where the reader's theme is the live one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PaperInk {
+    /// A section heading: AMBER ON THE PAGE.
+    Heading,
+    /// A room's name, or the wall piece's title.
+    Title,
+    /// The counts beside a title.
+    Meta,
+    /// A shop bump on an elsewhere room.
+    Bumped,
+    /// The `/join` hint on an elsewhere topic room.
+    JoinHint,
+    /// A column's own text.
+    Body,
+    /// The byline and the footer.
+    Faint,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PaperSpan {
+    pub text: String,
+    pub ink: PaperInk,
+}
+
+impl PaperSpan {
+    pub(crate) fn new(text: impl Into<String>, ink: PaperInk) -> Self {
+        Self {
+            text: text.into(),
+            ink,
+        }
+    }
+}
+
+/// One printed line: the spans left to right, empty for a blank line.
+pub(crate) type PaperLine = Vec<PaperSpan>;
+
+fn heading(text: &str) -> PaperLine {
+    vec![PaperSpan::new(text, PaperInk::Heading)]
 }
 
 /// A room's headline. `elsewhere` rooms (the reader is not in them) count
 /// "members" and, for topic rooms, carry the `/join` hint; the reader's own
 /// rooms count "people".
-fn room_head(page: &PaperRoomPage, elsewhere: bool, bumped: bool) -> Line<'static> {
+fn room_head(page: &PaperRoomPage, elsewhere: bool, bumped: bool) -> PaperLine {
     let people = if elsewhere { "members" } else { "people" };
     let joinable = elsewhere && page.kind == "topic";
     let mut spans = vec![
-        Span::styled(
-            format!("#{}", page.label),
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
+        PaperSpan::new(format!("#{}", page.label), PaperInk::Title),
+        PaperSpan::new(
             format!(
                 " · {} message{} · {} {people}",
                 page.message_count,
                 if page.message_count == 1 { "" } else { "s" },
                 page.member_count
             ),
-            Style::default().fg(theme::TEXT_DIM()),
+            PaperInk::Meta,
         ),
     ];
     if bumped {
-        spans.push(Span::styled(
-            " · bumped",
-            Style::default().fg(theme::AMBER_GLOW()),
-        ));
+        spans.push(PaperSpan::new(" · bumped", PaperInk::Bumped));
     }
     if joinable {
-        spans.push(Span::styled(
+        spans.push(PaperSpan::new(
             format!(" · /join #{}", page.label),
-            Style::default().fg(theme::AMBER_DIM()),
+            PaperInk::JoinHint,
         ));
     }
-    Line::from(spans)
+    spans
 }
 
-fn column_lines(text: &str) -> Vec<Line<'static>> {
+fn column_lines(text: &str) -> Vec<PaperLine> {
     text.lines()
-        .map(|line| {
-            Line::from(Span::styled(
-                line.to_string(),
-                Style::default().fg(theme::TEXT()),
-            ))
-        })
+        .map(|line| vec![PaperSpan::new(line, PaperInk::Body)])
         .collect()
 }
 
@@ -259,7 +276,7 @@ fn labels(pages: &[&PaperRoomPage]) -> String {
 /// The whole paper, top to bottom: byline, your rooms in rail order,
 /// elsewhere, what we were reading, outside, and a footer naming the
 /// rooms that were quiet or still at the press.
-pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<Line<'static>> {
+pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<PaperLine> {
     let PaperLayout {
         edition,
         wall,
@@ -268,13 +285,13 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<Line<'static>> {
         bumped_labels,
     } = layout;
     let covered = edition.edition.pred_opt().unwrap_or(edition.edition);
-    let mut lines = vec![Line::from(Span::styled(
+    let mut lines = vec![vec![PaperSpan::new(
         format!(
             "by @graybeard · covers {} (UTC) · he read it all so you would not have to",
             covered.format("%a %b %-d")
         ),
-        Style::default().fg(theme::TEXT_FAINT()),
-    ))];
+        PaperInk::Faint,
+    )]];
 
     // Member rooms in rail order, then any the rail does not list.
     let mut member_pages: Vec<&PaperRoomPage> = Vec::new();
@@ -301,11 +318,11 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<Line<'static>> {
         match page.status {
             PaperStatus::Ready => {
                 if !printed_any {
-                    lines.push(Line::from(""));
+                    lines.push(PaperLine::new());
                     lines.push(heading("YOUR ROOMS"));
                     printed_any = true;
                 }
-                lines.push(Line::from(""));
+                lines.push(PaperLine::new());
                 lines.push(room_head(page, false, false));
                 if let Some(text) = &page.text {
                     lines.extend(column_lines(text));
@@ -335,10 +352,10 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<Line<'static>> {
     elsewhere.sort_by_key(|page| !is_bumped(page));
     elsewhere.truncate(PAPER_ELSEWHERE_LIMIT);
     if !elsewhere.is_empty() {
-        lines.push(Line::from(""));
+        lines.push(PaperLine::new());
         lines.push(heading("ELSEWHERE ON LATE.SH"));
         for page in elsewhere {
-            lines.push(Line::from(""));
+            lines.push(PaperLine::new());
             lines.push(room_head(page, true, is_bumped(page)));
             if let Some(text) = &page.text {
                 lines.extend(column_lines(text));
@@ -360,40 +377,32 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<Line<'static>> {
         let Some(text) = &section.text else {
             continue;
         };
-        lines.push(Line::from(""));
+        lines.push(PaperLine::new());
         lines.push(heading(title));
         lines.extend(column_lines(text));
     }
 
     if let Some(wall) = wall {
-        lines.push(Line::from(""));
+        lines.push(PaperLine::new());
         lines.push(heading("ON THE WALL"));
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("\"{}\"", wall.title),
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
+        lines.push(vec![
+            PaperSpan::new(format!("\"{}\"", wall.title), PaperInk::Title),
+            PaperSpan::new(
                 format!(
                     " by @{}, hung yesterday, {} applause so far. Page 4 has it in colour.",
                     wall.username, wall.applause
                 ),
-                Style::default().fg(theme::TEXT_DIM()),
+                PaperInk::Meta,
             ),
-        ]));
-        lines.push(Line::from(""));
+        ]);
+        lines.push(PaperLine::new());
         for line in &wall.lines {
-            lines.push(Line::from(Span::styled(
-                format!("    {line}"),
-                Style::default().fg(theme::TEXT()),
-            )));
+            lines.push(vec![PaperSpan::new(format!("    {line}"), PaperInk::Body)]);
         }
     }
 
     if !quiet.is_empty() || !at_the_press.is_empty() || !missed.is_empty() {
-        lines.push(Line::from(""));
+        lines.push(PaperLine::new());
         let mut footer = Vec::new();
         if !quiet.is_empty() {
             footer.push(format!("quiet: {}", labels(&quiet)));
@@ -404,10 +413,7 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<Line<'static>> {
         if !missed.is_empty() {
             footer.push(format!("missed the press: {}", labels(&missed)));
         }
-        lines.push(Line::from(Span::styled(
-            footer.join(" · "),
-            Style::default().fg(theme::TEXT_FAINT()),
-        )));
+        lines.push(vec![PaperSpan::new(footer.join(" · "), PaperInk::Faint)]);
     }
 
     lines

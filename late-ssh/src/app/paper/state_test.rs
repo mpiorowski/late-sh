@@ -6,7 +6,9 @@ use late_core::models::paper::{
 };
 use uuid::Uuid;
 
-use super::{PAPER_ELSEWHERE_LIMIT, PaperCommand, PaperLayout, lay_out, parse_paper_command};
+use super::{
+    PAPER_ELSEWHERE_LIMIT, PaperCommand, PaperLayout, PaperLine, lay_out, parse_paper_command,
+};
 
 fn page(
     id: u128,
@@ -33,13 +35,12 @@ fn page(
     }
 }
 
-fn plain(lines: &[ratatui::text::Line<'static>]) -> Vec<String> {
+fn plain(lines: &[PaperLine]) -> Vec<String> {
     lines
         .iter()
         .map(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
+            line.iter()
+                .map(|span| span.text.as_str())
                 .collect::<String>()
         })
         .collect()

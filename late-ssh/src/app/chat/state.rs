@@ -22,11 +22,7 @@ use late_core::{
     },
 };
 use rand_core::{OsRng, RngCore};
-use ratatui::{
-    layout::Rect,
-    style::{Modifier, Style},
-    text::{Line, Span},
-};
+use ratatui::layout::Rect;
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
 use uuid::Uuid;
@@ -38,8 +34,7 @@ use crate::app::ai::summary::{
     SummaryBasis, SummaryEvent, SummaryOutcome, SummaryService, SummaryWindow,
 };
 use crate::app::ai::translate::{TranslationEvent, TranslationOutcome, TranslationService};
-use crate::app::common::overlay::Overlay;
-use crate::app::common::theme;
+use crate::app::common::overlay::{Overlay, OverlayInk, OverlayLine, OverlaySpan};
 
 use crate::app::common::{composer, mentions, primitives::Banner};
 use crate::app::help_modal::data::HelpTopic;
@@ -7452,7 +7447,7 @@ fn parse_me_command(input: &str) -> Option<Option<String>> {
 fn format_member_overlay_lines(
     members: &[RoomMemberListItem],
     active_users: Option<&ActiveUsers>,
-) -> Vec<Line<'static>> {
+) -> Vec<OverlayLine> {
     let online_ids = active_users
         .map(|users| users.lock_recover().keys().copied().collect::<HashSet<_>>())
         .unwrap_or_default();
@@ -7472,27 +7467,18 @@ fn format_member_overlay_lines(
 
     rows.into_iter()
         .map(|(online, _, label)| {
-            let (status, status_style, name_style) = if online {
-                (
-                    "[on ]",
-                    Style::default()
-                        .fg(theme::SUCCESS())
-                        .add_modifier(Modifier::BOLD),
-                    Style::default().fg(theme::TEXT()),
-                )
+            // Ink, not colour: the overlay is built here in the tick and
+            // drawn a step later, once `render` has claimed this thread for
+            // the reader's theme (see `common/overlay.rs`).
+            let (status, status_ink, name_ink) = if online {
+                ("[on ]", OverlayInk::Strong, OverlayInk::Body)
             } else {
-                (
-                    "[off]",
-                    Style::default().fg(theme::TEXT_DIM()),
-                    Style::default().fg(theme::TEXT_DIM()),
-                )
+                ("[off]", OverlayInk::Dim, OverlayInk::Dim)
             };
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled(status, status_style),
-                Span::raw(" "),
-                Span::styled(label, name_style),
-            ])
+            vec![
+                OverlaySpan::new(format!(" {status} "), status_ink),
+                OverlaySpan::new(label, name_ink),
+            ]
         })
         .collect()
 }

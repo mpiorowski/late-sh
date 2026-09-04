@@ -9,7 +9,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use super::state::PaperModal;
+use super::state::{PaperInk, PaperLine, PaperModal};
 use crate::app::common::theme;
 
 /// The paper takes most of the screen: on a busy day it is many rooms of
@@ -52,7 +52,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, modal: &PaperModal) {
         vertical: 0,
     });
     frame.render_widget(
-        Paragraph::new(modal.lines.clone())
+        Paragraph::new(modal.lines.iter().map(ink_line).collect::<Vec<_>>())
             .wrap(Wrap { trim: false })
             .scroll((modal.scroll_offset, 0)),
         body_area,
@@ -72,6 +72,34 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, modal: &PaperModal) {
     frame.render_widget(Paragraph::new(footer).centered(), layout[2]);
 }
 
+/// The palette, read here and nowhere earlier: `theme`'s thread local
+/// holds the theme of whichever session is being drawn on this thread, and
+/// it is set at the top of `App::render`. A line styled back when the tick
+/// laid the paper out would take a stranger's colours.
+fn ink_style(ink: PaperInk) -> Style {
+    match ink {
+        PaperInk::Heading => Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD),
+        PaperInk::Title => Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .add_modifier(Modifier::BOLD),
+        PaperInk::Meta => Style::default().fg(theme::TEXT_DIM()),
+        PaperInk::Bumped => Style::default().fg(theme::AMBER_GLOW()),
+        PaperInk::JoinHint => Style::default().fg(theme::AMBER_DIM()),
+        PaperInk::Body => Style::default().fg(theme::TEXT()),
+        PaperInk::Faint => Style::default().fg(theme::TEXT_FAINT()),
+    }
+}
+
+fn ink_line(line: &PaperLine) -> Line<'static> {
+    Line::from(
+        line.iter()
+            .map(|span| Span::styled(span.text.clone(), ink_style(span.ink)))
+            .collect::<Vec<_>>(),
+    )
+}
+
 /// `value * permille / 1000` without the `u16` overflow a wide terminal
 /// would hit.
 fn permille(value: u16, permille: u16) -> u16 {
@@ -87,3 +115,7 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
         .split(vertical[0]);
     horizontal[0]
 }
+
+#[cfg(test)]
+#[path = "ui_test.rs"]
+mod ui_test;

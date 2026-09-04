@@ -3952,3 +3952,64 @@ fn selection_scroll_steps_within_measured_overflow_and_reports_edges() {
     assert_eq!(scroll.rows.get(), 0);
     assert!(!scroll.step(1));
 }
+
+/// The `/members` overlay is built in `drain_events`, which runs during the
+/// session tick, and `theme`'s palette is a thread local `App::render` sets
+/// afterwards. A span styled at build time therefore took whichever session
+/// last rendered on this worker thread. Two overlays over the same members,
+/// built under different ambient themes, must draw the same for one reader.
+#[test]
+fn the_members_overlay_draws_in_the_readers_theme_whoever_built_it() {
+    use crate::app::common::overlay::{Overlay, draw_overlay};
+    use ratatui::{Terminal, backend::TestBackend, style::Color};
+
+    fn members() -> Vec<crate::app::chat::svc::RoomMemberListItem> {
+        vec![
+            crate::app::chat::svc::RoomMemberListItem {
+                user_id: Uuid::from_u128(1),
+                username: Some("alice".to_string()),
+            },
+            crate::app::chat::svc::RoomMemberListItem {
+                user_id: Uuid::from_u128(2),
+                username: Some("bob".to_string()),
+            },
+        ]
+    }
+
+    fn drawn_colors(overlay: &Overlay) -> Vec<Color> {
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| draw_overlay(frame, frame.area(), overlay))
+            .expect("draw");
+        let buffer = terminal.backend().buffer();
+        let mut colors = Vec::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                let cell = &buffer[(x, y)];
+                if cell.symbol().trim().is_empty() {
+                    continue;
+                }
+                colors.push(cell.fg);
+            }
+        }
+        colors
+    }
+
+    theme::set_current_by_id("dracula");
+    let built_on_a_borrowed_thread =
+        Overlay::styled("Members", format_member_overlay_lines(&members(), None));
+    theme::set_current_by_id("late");
+    let built_at_home = Overlay::styled("Members", format_member_overlay_lines(&members(), None));
+
+    // The reader's own render pass, both times.
+    theme::set_current_by_id("late");
+    let borrowed = drawn_colors(&built_on_a_borrowed_thread);
+    theme::set_current_by_id("late");
+    let home = drawn_colors(&built_at_home);
+
+    assert_eq!(
+        borrowed, home,
+        "the member list took its colours from whichever session last rendered on this thread"
+    );
+}
