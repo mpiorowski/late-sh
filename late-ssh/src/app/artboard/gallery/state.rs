@@ -257,9 +257,11 @@ impl GalleryState {
         matches!(self.hang, HangFlow::Framing | HangFlow::Confirm { .. })
     }
 
-    /// True when Esc has somewhere to go before it means "back to view".
+    /// True when Esc has somewhere to go on this page: out of a pane to the
+    /// rail, or from the board to the rail. On the rail itself Esc is not
+    /// the page's.
     pub fn claims_escape(&self) -> bool {
-        self.captures_typing() || self.focus != Focus::Canvas
+        self.captures_typing() || self.focus != Focus::Rail
     }
 
     /// True when `q` is not the quit key: a piece is up, or a title is

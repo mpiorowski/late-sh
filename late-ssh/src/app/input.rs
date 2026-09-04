@@ -2240,10 +2240,11 @@ fn dispatch_escape(app: &mut App) {
         let Some(state) = app.dartboard_state.as_ref() else {
             return;
         };
-        // Every Artboard overlay (help, glyph picker, the rail with its
-        // listings and archive lists, the hang flow) takes Esc before it
-        // can mean quit.
-        if state.claims_escape() {
+        // Every Artboard overlay (help, glyph picker, the rail's listings
+        // and archive lists, the hang flow) takes Esc before it can mean
+        // quit, and Esc on the board in view mode goes to the rail. Edit
+        // mode's Esc is the editor's, handled below.
+        if !app.artboard_interacting && state.claims_escape() {
             dispatch_screen_key(app, ctx.screen, 0x1B);
             return;
         }

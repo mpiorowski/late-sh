@@ -256,12 +256,8 @@ fn handle_rail_key(state: &mut State, byte: u8) -> GalleryAction {
             GalleryAction::Handled
         }
         b'\r' | b'\n' | b'l' | b'L' => from_activation(state.gallery_mut().rail_activate()),
-        0x1B | b'h' | b'H' => {
-            state.gallery_mut().focus_canvas();
-            GalleryAction::Handled
-        }
-        // `g` is "go to the rail"; already here.
-        b'g' | b'G' => GalleryAction::Handled,
+        // Esc on the rail is nobody's: the board is one Enter away, never
+        // one Esc.
         _ => GalleryAction::Ignored,
     }
 }
@@ -282,7 +278,7 @@ fn handle_archive_key(state: &mut State, byte: u8) -> GalleryAction {
             state.gallery_mut().focus_canvas();
             GalleryAction::Handled
         }
-        0x1B | b'h' | b'H' | b'g' | b'G' | b'q' | b'Q' => {
+        0x1B | b'h' | b'H' | b'q' | b'Q' => {
             state.close_archive_list();
             GalleryAction::Handled
         }
@@ -352,7 +348,7 @@ fn handle_list_key(state: &mut State, byte: u8) -> GalleryAction {
             state.gallery_mut().applaud_selected();
             GalleryAction::Handled
         }
-        0x1B | b'h' | b'H' | b'g' | b'G' => {
+        0x1B | b'h' | b'H' => {
             state.gallery_mut().focus_rail();
             GalleryAction::Handled
         }

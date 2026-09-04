@@ -2445,8 +2445,10 @@ async fn artboard_gallery_hangs_a_framed_piece_from_the_rail() {
     app.handle_input(b"\x1b");
     wait_for_render_contains(&mut app, "Mode       view").await;
 
-    // Down the rail to Hang a piece: Board, four gallery rows, then it.
-    app.handle_input(b"g");
+    // Esc on the board unfolds the rail; down it to Hang a piece: Board,
+    // four gallery rows, then it.
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "rail j/k").await;
     for _ in 0..5 {
         app.handle_input(b"j");
     }
@@ -2482,12 +2484,10 @@ async fn artboard_gallery_hangs_a_framed_piece_from_the_rail() {
         "the hung piece should open under Mine; frame={frame:?}"
     );
 
-    // Back out to the board: list to rail, rail to board. One Esc per
-    // frame: two in one burst read as a single escape sequence.
+    // Back out: list to rail. Esc on the rail is not the page's, so the
+    // digit keys still switch pages from there.
     app.handle_input(b"\x1b");
     wait_for_render_contains(&mut app, "rail j/k").await;
-    app.handle_input(b"\x1b");
-    wait_for_render_contains(&mut app, "Cursor").await;
     app.handle_input(b"1");
     wait_for_render_contains(&mut app, " Home ").await;
 }

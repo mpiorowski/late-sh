@@ -39,7 +39,7 @@ fn the_rail_shrinks_to_board_and_archives_while_the_gallery_is_off() {
 fn the_page_lands_on_the_rail_and_activation_answers_the_page() {
     let mut gallery = state();
     assert_eq!(gallery.focus(), Focus::Rail);
-    assert!(gallery.claims_escape());
+    assert!(!gallery.claims_escape());
     gallery.rail_move(5);
     assert_eq!(
         gallery.selected_row(),
@@ -60,7 +60,15 @@ fn the_page_lands_on_the_rail_and_activation_answers_the_page() {
     assert_eq!(gallery.selected_row(), RailRow::Board);
     assert_eq!(gallery.rail_activate(), RailActivation::FocusCanvas);
     assert_eq!(gallery.focus(), Focus::Canvas);
-    assert!(!gallery.claims_escape());
+    assert!(
+        gallery.claims_escape(),
+        "Esc on the board goes back to the rail"
+    );
+    gallery.focus_rail();
+    assert!(
+        !gallery.claims_escape(),
+        "Esc on the rail is not the page's"
+    );
 }
 
 #[test]

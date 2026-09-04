@@ -48,9 +48,8 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
             state.clear_pending_canvas_click();
             true
         }
-        b'g' | b'G' => {
-            // "Go to the rail". On a narrow terminal the rail appears for
-            // as long as it has focus.
+        0x1B => {
+            // Esc on the board goes back to the rail; the rail unfolds.
             state.gallery_mut().focus_rail();
             true
         }

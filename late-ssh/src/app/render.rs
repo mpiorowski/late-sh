@@ -2292,7 +2292,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                     ("Esc", "cancel"),
                 ],
                 Some((crate::app::artboard::gallery::state::Focus::Rail, _)) => {
-                    &[("rail", "j/k"), ("Enter", "open"), ("Esc", "board")]
+                    &[("rail", "j/k"), ("Enter", "open"), ("Tab", "next page")]
                 }
                 Some((crate::app::artboard::gallery::state::Focus::Archive, _)) => &[
                     ("archives", "j/k travel"),
@@ -2312,7 +2312,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                     ("view", "pan"),
                     ("Alt+arrows/R-drag", "pan"),
                     ("i", "edit"),
-                    ("g", "gallery"),
+                    ("Esc", "rail"),
                 ],
             }
         };

@@ -1604,7 +1604,7 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                         Span::styled("the glyph picker", text),
                     ]),
                     Line::from(vec![
-                        Span::styled("[g] ", key),
+                        Span::styled("[Esc] ", key),
                         Span::styled("the rail: gallery and archives · ", text),
                         Span::styled("[?] ", key),
                         Span::styled("the local guide, here and everywhere", text),
