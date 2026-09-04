@@ -113,7 +113,12 @@ fn only_the_top_of_the_ladder_hiccups() {
 
     // One roll at every level, so a single message never stammers twice.
     let twice = (1..1_000)
-        .filter(|seed| slur(CORPUS, DRUNK_MAX_LEVEL, *seed).matches("*hic*").count() > 1)
+        .filter(|seed| {
+            slur(CORPUS, DRUNK_MAX_LEVEL, *seed)
+                .matches("*hic*")
+                .count()
+                > 1
+        })
         .count();
     assert_eq!(twice, 0, "a message should never carry two hiccups");
 }
