@@ -136,7 +136,7 @@ pub enum HangFlow {
     Framing,
     /// The frame passed the local rails; naming it.
     Confirm {
-        framed: FramedPiece,
+        framed: Box<FramedPiece>,
         title: String,
     },
     /// Sent to the database; waiting for the answer.
@@ -526,7 +526,7 @@ impl GalleryState {
     /// The frame passed the local rails: move on to naming it.
     pub fn set_confirm(&mut self, framed: FramedPiece) {
         self.hang = HangFlow::Confirm {
-            framed,
+            framed: Box::new(framed),
             title: String::new(),
         };
         self.notice = None;
@@ -562,7 +562,7 @@ impl GalleryState {
             self.notice = Some("Give it a title first.".to_string());
             return;
         }
-        let framed = framed.clone();
+        let framed = framed.as_ref().clone();
         self.hang = HangFlow::Submitting;
         self.notice = None;
         self.service

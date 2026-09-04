@@ -131,7 +131,7 @@ pub enum GalleryResult {
         listing: PieceListing,
         error: String,
     },
-    Hung(GalleryPiece),
+    Hung(Box<GalleryPiece>),
     HangRefused(HangRefusal),
     HangFailed(String),
     Applause {
@@ -349,7 +349,7 @@ impl GalleryService {
                             height = piece.height,
                             "artboard piece hung"
                         );
-                        GalleryResult::Hung(piece)
+                        GalleryResult::Hung(Box::new(piece))
                     }
                     Err(error) => {
                         metrics::record_gallery_hang(GalleryHangResult::Failed);

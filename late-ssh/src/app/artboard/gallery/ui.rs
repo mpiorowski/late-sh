@@ -287,9 +287,8 @@ pub fn draw_gallery_pane(frame: &mut Frame, area: Rect, state: &State) {
     ])
     .split(rows[3]);
     draw_list(frame, columns[0], gallery, section);
-    match gallery.selected_piece() {
-        Some(piece) => draw_preview(frame, columns[2], piece, gallery.focus()),
-        None => {}
+    if let Some(piece) = gallery.selected_piece() {
+        draw_preview(frame, columns[2], piece, gallery.focus());
     }
 }
 
@@ -563,7 +562,7 @@ pub fn draw_framing_bar(frame: &mut Frame, canvas_area: Rect, state: &State) {
 pub fn draw_hang_modal(frame: &mut Frame, area: Rect, state: &State) {
     let gallery = state.gallery();
     let (framed, title, submitting) = match gallery.hang() {
-        HangFlow::Confirm { framed, title } => (Some(framed), title.as_str(), false),
+        HangFlow::Confirm { framed, title } => (Some(framed.as_ref()), title.as_str(), false),
         HangFlow::Submitting => (None, "", true),
         HangFlow::Idle | HangFlow::Framing => return,
     };
