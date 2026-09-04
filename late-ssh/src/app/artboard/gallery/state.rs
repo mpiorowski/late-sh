@@ -4,7 +4,9 @@
 
 use std::cell::Cell;
 
-use late_core::models::artboard_piece::{ApplauseOutcome, PIECE_TITLE_MAX_CHARS, PieceListing};
+use late_core::models::artboard_piece::{
+    ApplauseOutcome, ListingCounts, PIECE_TITLE_MAX_CHARS, PieceListing,
+};
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -170,6 +172,9 @@ pub struct GalleryState {
     focus: Focus,
     rail_index: usize,
     sections: [SectionState; 4],
+    /// The rail's numbers, fetched on entry so they are there before any
+    /// listing is opened. A loaded listing's own length wins over them.
+    counts: Option<ListingCounts>,
     hang: HangFlow,
     /// The last thing the gallery had to say: a refusal, a landed hang, a
     /// failed applause. Shown in the gallery pane's notice line and on the
@@ -188,6 +193,7 @@ pub struct GalleryState {
 impl GalleryState {
     pub fn new(service: GalleryService, viewer_id: Uuid) -> Self {
         let (results_tx, results_rx) = mpsc::unbounded_channel();
+        service.counts_task(viewer_id, results_tx.clone());
         Self {
             service,
             viewer_id,
@@ -196,6 +202,7 @@ impl GalleryState {
             focus: Focus::Rail,
             rail_index: 0,
             sections: Default::default(),
+            counts: None,
             hang: HangFlow::Idle,
             notice: None,
             pending_applause: None,
@@ -400,10 +407,15 @@ impl GalleryState {
         self.sections[section.index()].scroll
     }
 
-    /// The count the rail shows next to a section, once it has loaded.
+    /// The count the rail shows next to a section: the listing's length
+    /// once it has loaded, the entry-time count before that.
     pub fn section_count(&self, section: GallerySection) -> Option<usize> {
         let state = &self.sections[section.index()];
-        state.loaded.then_some(state.pieces.len())
+        if state.loaded {
+            return Some(state.pieces.len());
+        }
+        self.counts
+            .map(|counts| counts.get(section.listing()).max(0) as usize)
     }
 
     pub fn selected_piece(&self) -> Option<&GalleryPiece> {
@@ -564,6 +576,13 @@ impl GalleryState {
         while let Ok(result) = self.results_rx.try_recv() {
             changed = true;
             match result {
+                GalleryResult::Counts(counts) => {
+                    self.counts = Some(counts);
+                }
+                GalleryResult::CountsFailed(_) => {
+                    // The rail shows no number; the listing's own load
+                    // reports its error where it is read.
+                }
                 GalleryResult::Listed { listing, pieces } => {
                     let section = GallerySection::from_listing(listing);
                     let state = &mut self.sections[section.index()];
@@ -596,6 +615,8 @@ impl GalleryState {
                             self.reload(section);
                         }
                     }
+                    self.service
+                        .counts_task(self.viewer_id, self.results_tx.clone());
                     self.rail_select(RailRow::Gallery(GallerySection::Mine));
                     self.focus = Focus::List;
                 }

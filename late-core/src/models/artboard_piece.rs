@@ -132,6 +132,27 @@ pub struct GalleryCounts {
     pub applause: i64,
 }
 
+/// How many rows each listing holds, for the page rail before a listing
+/// is opened. One query, no canvases.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ListingCounts {
+    pub this_month: i64,
+    pub newest: i64,
+    pub hall_of_fame: i64,
+    pub mine: i64,
+}
+
+impl ListingCounts {
+    pub fn get(self, listing: PieceListing) -> i64 {
+        match listing {
+            PieceListing::ThisMonth => self.this_month,
+            PieceListing::Newest => self.newest,
+            PieceListing::HallOfFame => self.hall_of_fame,
+            PieceListing::Mine => self.mine,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemovedPiece {
     pub id: Uuid,
@@ -401,6 +422,34 @@ impl ArtboardPiece {
         Ok(GalleryCounts {
             pieces: row.get("pieces"),
             applause: row.get("applause"),
+        })
+    }
+
+    /// The four listing sizes in one round trip: the rail's numbers. The
+    /// hall of fame counts past months whose best piece cleared the award
+    /// floor, the same months `list(HallOfFame)` returns.
+    pub async fn listing_counts(
+        client: &impl GenericClient,
+        viewer_id: Uuid,
+    ) -> Result<ListingCounts> {
+        let row = client
+            .query_one(
+                "SELECT
+                    (SELECT count(*) FROM artboard_pieces
+                      WHERE period_month = date_trunc('month', now() AT TIME ZONE 'UTC')::date) AS this_month,
+                    (SELECT count(*) FROM artboard_pieces) AS newest,
+                    (SELECT count(DISTINCT p.period_month) FROM artboard_pieces p
+                      WHERE p.period_month < date_trunc('month', now() AT TIME ZONE 'UTC')::date
+                        AND (SELECT count(*) FROM artboard_piece_votes v WHERE v.piece_id = p.id) >= $2) AS hall_of_fame,
+                    (SELECT count(*) FROM artboard_pieces WHERE user_id = $1) AS mine",
+                &[&viewer_id, &GALLERY_AWARD_MIN_APPLAUSE],
+            )
+            .await?;
+        Ok(ListingCounts {
+            this_month: row.get("this_month"),
+            newest: row.get("newest"),
+            hall_of_fame: row.get("hall_of_fame"),
+            mine: row.get("mine"),
         })
     }
 

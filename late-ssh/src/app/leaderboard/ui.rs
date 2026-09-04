@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
 use uuid::Uuid;
 
@@ -44,27 +44,38 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>
     }
 
     let rows = Layout::vertical([
-        Constraint::Length(1), // breathing room
-        Constraint::Min(0),    // body
+        Constraint::Min(0),    // body: rail with its rule, detail
         Constraint::Length(1), // footer
     ])
     .split(area);
-    let columns = Layout::horizontal([
-        Constraint::Length(RAIL_WIDTH),
-        Constraint::Length(1),
-        Constraint::Min(0),
-    ])
-    .split(rows[1]);
+    let columns =
+        Layout::horizontal([Constraint::Length(RAIL_WIDTH + 1), Constraint::Min(0)]).split(rows[0]);
 
     draw_rail(frame, columns[0], view.state);
-    draw_detail(frame, columns[2], view);
+    draw_detail(frame, below_breathing_row(columns[1]), view);
     frame.render_widget(
         Paragraph::new(hint_line(&[("j/k", "select board"), ("Tab", "next page")])),
-        rows[2],
+        rows[1],
     );
 }
 
-fn draw_rail(frame: &mut Frame, area: Rect, state: &LeaderboardPageState) {
+/// The row under the top border stays empty; the rail's rule runs through
+/// it so the line reaches the frame, like the room rail's.
+fn below_breathing_row(area: Rect) -> Rect {
+    Rect {
+        y: area.y + 1,
+        height: area.height.saturating_sub(1),
+        ..area
+    }
+}
+
+/// The rail in its column with the full-height rule on the right edge.
+fn draw_rail(frame: &mut Frame, column: Rect, state: &LeaderboardPageState) {
+    let block = Block::default()
+        .borders(Borders::RIGHT)
+        .border_style(Style::default().fg(theme::BORDER_DIM()));
+    let area = below_breathing_row(block.inner(column));
+    frame.render_widget(block, column);
     let (lines, selected_line) = rail_lines(state);
 
     // Keep the selection visible on short terminals without recentering on

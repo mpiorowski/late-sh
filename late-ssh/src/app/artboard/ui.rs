@@ -16,8 +16,8 @@ use super::data::lines_for;
 use super::gallery::{
     state::{Focus as GalleryFocus, HangFlow},
     ui::{
-        MIN_WIDTH_FOR_RAIL, RAIL_WIDTH, draw_framing_bar, draw_gallery_pane, draw_hang_modal,
-        draw_piece_view, draw_rail,
+        RAIL_WIDTH, draw_framing_bar, draw_gallery_pane, draw_hang_modal, draw_piece_view,
+        draw_rail,
     },
 };
 use super::state::{BrushMode, HelpTab, PAINT_PALETTE, PRIMARY_SWATCH_IDX, State};
@@ -38,21 +38,16 @@ pub(crate) enum SwatchHit {
 }
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, interacting: bool) {
-    // The rail is the page's table of contents in view mode; painting wants
-    // the width back, and a narrow terminal only lends it while the rail
-    // has focus.
-    let rail_visible = !interacting
-        && (area.width >= MIN_WIDTH_FOR_RAIL || state.gallery().focus() != GalleryFocus::Canvas);
+    // The rail is the page's table of contents: it shows while it (or a
+    // pane under it) has focus and folds away when the board takes the
+    // keys, so painting and looking both get the full width.
+    let rail_visible = !interacting && state.gallery().focus() != GalleryFocus::Canvas;
     state.gallery().set_rail_visible(rail_visible);
     let board_area = if rail_visible {
-        let columns = Layout::horizontal([
-            Constraint::Length(RAIL_WIDTH),
-            Constraint::Length(1),
-            Constraint::Min(0),
-        ])
-        .split(area);
+        let columns = Layout::horizontal([Constraint::Length(RAIL_WIDTH + 1), Constraint::Min(0)])
+            .split(area);
         draw_rail(frame, columns[0], state);
-        columns[2]
+        columns[1]
     } else {
         area
     };

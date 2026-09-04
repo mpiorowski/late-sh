@@ -117,7 +117,13 @@ async fn the_archive_list_loads_keys_first_and_the_cursor_loads_one_board() {
         .map(|entry| entry.label.as_str())
         .collect();
     assert_eq!(labels, vec!["2026-04-23", "2026-04-22"]);
-    assert_eq!(state.archive_count(ArtboardSnapshotKind::Curated), None);
+    // Every kind's keys are listed on entry, so the rail's numbers are
+    // there before a list is opened.
+    wait_for_archive(&mut state, |state| {
+        state.archive_count(ArtboardSnapshotKind::Curated).is_some()
+    })
+    .await;
+    assert_eq!(state.archive_count(ArtboardSnapshotKind::Curated), Some(1));
     wait_for_archive(&mut state, |state| state.is_archive_view_active()).await;
     assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 0 }), 'B');
 

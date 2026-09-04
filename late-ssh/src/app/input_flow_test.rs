@@ -794,9 +794,9 @@ async fn artboard_view_help_and_active_input_share_one_lifecycle() {
     );
     app.handle_input(b"q");
 
-    // The rail (20 columns plus a gap) sits left of the board in view mode,
-    // so the board's cell (8, 3) is 21 columns further right than it was.
-    app.handle_input(b"\x1b[<0;31;5M");
+    // The rail folded away when the board took the keys, so the board's
+    // cell (8, 3) is at screen column 10.
+    app.handle_input(b"\x1b[<0;10;5M");
     wait_for_render_contains(&mut app, "Mode       active").await;
     wait_for_render_contains(&mut app, "Cursor     8,3").await;
 
@@ -2455,15 +2455,15 @@ async fn artboard_gallery_hangs_a_framed_piece_from_the_rail() {
 
     // A frame with nothing in it is refused on the bar, not hung.
     app.handle_input(b"\r");
-    // The framing bar is the board's width, 33 columns here, so only the
-    // head of a notice is visible.
+    // The framing bar is one line; wait on the head of the notice.
     wait_for_render_contains(&mut app, "Select a frame").await;
 
-    // Drag the frame over the block: board (0,0) to (9,3), which on an 80
-    // column terminal with the rail up is screen column 23 to 32.
-    app.handle_input(b"\x1b[<0;23;2M");
-    app.handle_input(b"\x1b[<32;32;5M");
-    app.handle_input(b"\x1b[<0;32;5m");
+    // Drag the frame over the block: board (0,0) to (9,3). Framing hands
+    // the keys to the board, so the rail is folded and the board starts at
+    // screen column 2.
+    app.handle_input(b"\x1b[<0;2;2M");
+    app.handle_input(b"\x1b[<32;11;5M");
+    app.handle_input(b"\x1b[<0;11;5m");
     wait_for_render_contains(&mut app, "frame 10x4").await;
     app.handle_input(b"\r");
     wait_for_render_contains(&mut app, "Hang it in the").await;

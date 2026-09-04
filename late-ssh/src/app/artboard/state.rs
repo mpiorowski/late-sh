@@ -97,7 +97,7 @@ impl State {
         let snapshot = snapshot_rx.borrow().clone();
         let event_rx = svc.subscribe_events();
         let archive_loader = ArtboardArchiveLoader::new(snapshot_service);
-        Self {
+        let mut state = Self {
             snapshot,
             private_notice: None,
             svc,
@@ -125,7 +125,13 @@ impl State {
             archives: ArchiveBrowser::default(),
             gallery: GalleryState::new(gallery_service, viewer_id),
             owner_overlay_cache: std::cell::RefCell::new(None),
+        };
+        // The archive keys are cheap (no canvases): list them on entry so
+        // the rail's numbers are there before anyone opens a list.
+        for kind in ArtboardSnapshotKind::ALL {
+            state.ensure_archive_listed(kind);
         }
+        state
     }
 
     /// Returns true when this tick changed anything render-visible: a canvas

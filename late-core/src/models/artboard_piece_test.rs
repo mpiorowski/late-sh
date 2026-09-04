@@ -2,8 +2,8 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::models::artboard_piece::{
-    ApplauseOutcome, ArtboardPiece, HangOutcome, HangParams, PIECE_DAILY_CAP, PieceListing,
-    PieceLookup,
+    ApplauseOutcome, ArtboardPiece, HangOutcome, HangParams, ListingCounts, PIECE_DAILY_CAP,
+    PieceListing, PieceLookup,
 };
 use crate::test_utils::{create_test_user, test_db};
 
@@ -160,5 +160,36 @@ async fn a_mod_takes_a_piece_down_by_id_prefix() {
             .await
             .expect("remove again")
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn listing_counts_answer_without_listing() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let painter = create_test_user(&test_db.db, "gallery-counter").await;
+    let other = create_test_user(&test_db.db, "gallery-counted").await;
+
+    assert_eq!(
+        ArtboardPiece::listing_counts(&client, painter.id)
+            .await
+            .expect("counts"),
+        ListingCounts::default()
+    );
+
+    hang(&client, hang_params(painter.id, "one", "hash-count-1")).await;
+    hang(&client, hang_params(painter.id, "two", "hash-count-2")).await;
+    hang(&client, hang_params(other.id, "three", "hash-count-3")).await;
+
+    assert_eq!(
+        ArtboardPiece::listing_counts(&client, painter.id)
+            .await
+            .expect("counts"),
+        ListingCounts {
+            this_month: 3,
+            newest: 3,
+            hall_of_fame: 0,
+            mine: 2,
+        }
     );
 }

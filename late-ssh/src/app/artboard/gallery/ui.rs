@@ -23,10 +23,6 @@ use super::svc::{GalleryPiece, applause_label};
 
 /// The rail's width, gap included.
 pub const RAIL_WIDTH: u16 = 20;
-/// Under this many columns the rail shows only while it has focus (`g`
-/// brings it up, Enter or Esc on the board row puts it away), so the board
-/// keeps the width the rest of the time.
-pub const MIN_WIDTH_FOR_RAIL: u16 = 64;
 /// Lines above the entries when the rail shows an archive list: the kind's
 /// heading and the key hint.
 pub const ARCHIVE_LIST_HEADER_LINES: usize = 2;
@@ -48,7 +44,9 @@ pub enum RailLine {
 /// The rail's lines top to bottom. Shared by the draw path and the hit
 /// test so a click lands on what it sees.
 pub fn rail_layout(rows: &[RailRow]) -> Vec<RailLine> {
-    let mut lines = Vec::new();
+    // A breathing row first, like every page rail; then one heading per
+    // group.
+    let mut lines = vec![RailLine::Blank];
     for row in rows {
         match row {
             RailRow::Board => lines.push(RailLine::Row(*row)),
@@ -80,7 +78,15 @@ pub fn rail_row_for_line(rows: &[RailRow], line: usize) -> Option<RailRow> {
     }
 }
 
+/// The rail in its column, with the full-height rule on its right edge,
+/// like the room rail and the Games hub. `area` is `RAIL_WIDTH + 1` wide.
 pub fn draw_rail(frame: &mut Frame, area: Rect, state: &State) {
+    let block = Block::default()
+        .borders(Borders::RIGHT)
+        .border_style(Style::default().fg(theme::BORDER_DIM()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let area = inner;
     let gallery = state.gallery();
     gallery.set_rail_area(area);
     if let Some(kind) = state.browsed_archive_kind() {

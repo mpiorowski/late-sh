@@ -22,7 +22,7 @@ use dartboard_core::Canvas;
 use late_core::db::Db;
 use late_core::models::app_flag::AppFlags;
 use late_core::models::artboard_piece::{
-    ApplauseOutcome, ArtboardPiece, HangOutcome, HangParams, PieceListing,
+    ApplauseOutcome, ArtboardPiece, HangOutcome, HangParams, ListingCounts, PieceListing,
 };
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
@@ -121,6 +121,8 @@ impl HangRefusal {
 /// What a spawned gallery task reports back.
 #[derive(Debug)]
 pub enum GalleryResult {
+    Counts(ListingCounts),
+    CountsFailed(String),
     Listed {
         listing: PieceListing,
         pieces: Vec<GalleryPiece>,
@@ -236,6 +238,34 @@ impl GalleryService {
             Some(piece) => Ok(Some(GalleryPiece::decode(piece)?)),
             None => Ok(None),
         }
+    }
+
+    /// The rail's numbers, one query. Without a database everything is
+    /// zero.
+    pub fn counts_task(&self, viewer_id: Uuid, tx: mpsc::UnboundedSender<GalleryResult>) {
+        let Some(db) = self.db.clone() else {
+            let _ = tx.send(GalleryResult::Counts(ListingCounts::default()));
+            return;
+        };
+        tokio::spawn(async move {
+            let result = async {
+                let client = db.get().await?;
+                ArtboardPiece::listing_counts(&client, viewer_id).await
+            }
+            .await;
+            let msg = match result {
+                Ok(counts) => GalleryResult::Counts(counts),
+                Err(error) => {
+                    tracing::warn!(
+                        error = ?error,
+                        %viewer_id,
+                        "artboard gallery counts failed"
+                    );
+                    GalleryResult::CountsFailed(format!("{error:#}"))
+                }
+            };
+            let _ = tx.send(msg);
+        });
     }
 
     pub fn list_task(
