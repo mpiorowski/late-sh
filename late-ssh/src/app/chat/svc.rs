@@ -2939,7 +2939,11 @@ impl ChatService {
     /// once send one DM), then sends the plea through the normal send
     /// path. It persists on purpose: an invitation that vanishes cannot
     /// be followed three days later.
-    pub fn send_first_contact_invitation_task(&self, target_user_id: Uuid) {
+    pub fn send_first_contact_invitation_task(
+        &self,
+        target_user_id: Uuid,
+        target_username: String,
+    ) {
         use crate::app::deadchannel::haunt::state::INVITATION_PLEA;
         let service = self.clone();
         tokio::spawn(
@@ -2996,6 +3000,7 @@ impl ChatService {
                                 tracing::error!(
                                     error = ?release_error,
                                     user_id = %target_user_id,
+                                    username = %target_username,
                                     "failed to release a burned first contact claim"
                                 );
                             }
@@ -3006,7 +3011,7 @@ impl ChatService {
                 .await;
                 match result {
                     Ok(true) => {
-                        tracing::info!(user_id = %target_user_id, "first contact invitation sent");
+                        tracing::info!(user_id = %target_user_id, username = %target_username, "first contact invitation sent");
                     }
                     // Another session claimed it first: nothing to do.
                     Ok(false) => {}
@@ -3014,6 +3019,8 @@ impl ChatService {
                         late_core::error_span!(
                             "first_contact_invitation_failed",
                             error = ?e,
+                            user_id = %target_user_id,
+                            username = %target_username,
                             "failed to send first contact invitation"
                         );
                     }
@@ -4716,7 +4723,7 @@ impl ChatService {
         }
         let room = ChatRoom::get_or_create_deadchannel_room(&client).await?;
         ChatRoomMember::join(&client, room.id, user_id).await?;
-        tracing::info!(user_id = %user_id, room_id = %room.id, "deadchannel joined by invitation");
+        tracing::info!(user_id = %user_id, username = %user.username, room_id = %room.id, "deadchannel joined by invitation");
         // Consent creates the character (GAME.md, Phase 2): the runner row,
         // wearing a random starter look. A conditional insert, so a second
         // device or a rejoin finds the runner already there and keeps its
@@ -4732,7 +4739,7 @@ impl ChatService {
             .await?;
         match origin {
             late_core::models::deadchannel_runner::RunnerOrigin::Created => {
-                tracing::info!(user_id = %user_id, runner_id = %runner.id, "runner created");
+                tracing::info!(user_id = %user_id, username = %user.username, runner_id = %runner.id, "runner created");
                 crate::metrics::record_first_contact_beat(
                     crate::metrics::FirstContactBeat::RunnerCreated,
                 );

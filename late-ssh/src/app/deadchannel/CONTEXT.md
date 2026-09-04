@@ -8,8 +8,11 @@
   several replicas (root CONTEXT.md, multi-replica rule); gated behind
   the `haunt_live` fuse, unlit, so only staff (admins and moderators)
   are haunted today, and only they can finish the ladder and join.
-- Last updated: 2026-09-03 (the runner: `/join #deadchannel` now creates
-  a `deadchannel_runners` row wearing a random starter look (pieces and
+- Last updated: 2026-09-04 (every deadchannel log line now carries
+  `username` beside `user_id`, and Grafana has a "deadchannel" row over
+  the haunt logs and the three first-contact counters; the runner:
+  `/join #deadchannel` now creates a `deadchannel_runners` row wearing a
+  random starter look (pieces and
   tints from the closed table in `runner/state.rs`), and inside
   #deadchannel every runner's portrait sits in a six-cell gutter on the
   right of their messages (hood on the separator row above the block,
@@ -321,7 +324,8 @@ Drained by `haunt::svc::tick`.
   The `mark` is stored from birth but not yet painted anywhere: the
   chat badge stack and the clubhouse floor glyph are the next slice.
 - Where to look when the ladder seems dead (per person, in the logs, all
-  keyed by `user_id`): `first contact gate evaluated` at every connect
+  keyed by `user_id` and `username`, the two fields every deadchannel line
+  carries): `first contact gate evaluated` at every connect
   once the fuse is lit (for staff, always) with each leg's number, the
   bio standing, and the `GateVerdict`; `first contact gate shut` when
   haunting is off (info for staff, debug for everyone else); `first
@@ -331,7 +335,15 @@ Drained by `haunt::svc::tick`.
   `late_ssh_first_contact_gate_total{verdict, audience}` (one count per
   connect, not per person); bio screens by outcome are
   `late_ssh_first_contact_bio_screens_total`; delivered beats are
-  `late_ssh_first_contact_beats_total`.
+  `late_ssh_first_contact_beats_total`. The name is a log field only, never
+  a metric label: the three counters stay keyed on closed enums so the
+  series count cannot grow with the player base. Grafana's "deadchannel"
+  row (`monitoring/dashboards/observability.json`) reads both: the beat and
+  gate counters as reset-safe `max_over_time` sums, and the per-person
+  ladder and gate legs from the log lines. Counters live on the pod, so a
+  deploy zeroes the live value; every panel there sums per-instance
+  high-water marks instead. The row ships to prod with the dashboard
+  ConfigMap, on a `-infra` release (`infra/monitoring.tf`), not on merge.
 - Piece rows are five cells with no wide glyph; the state test guards
   that and nothing more. The rows are block, box-drawing, and shape
   glyphs (`◈ ◌ ●` and their kin), which are East Asian ambiguous width

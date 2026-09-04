@@ -3,7 +3,7 @@
   "uid": "observability",
   "title": "Runtime Observability",
   "timezone": "browser",
-  "version": 14,
+  "version": 15,
   "schemaVersion": 39,
   "style": "dark",
   "tags": [
@@ -1517,6 +1517,426 @@
         "w": 12,
         "x": 12,
         "y": 127
+      }
+    },
+    {
+      "type": "row",
+      "title": "deadchannel",
+      "collapsed": false,
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 135
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "First Contact Ladder",
+      "description": "Beats delivered per stage over the selected range. Counters are per-pod and reset on restart, so this sums each pod's high-water mark instead of the live value: a deploy never zeroes the ladder.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (beat) (max_over_time(late_ssh_first_contact_beats_total[$__range]))",
+          "legendFormat": "{{beat}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 136
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Gate Verdicts",
+      "description": "Connects by eligibility verdict, the same reset-safe sum. One count per connect, not per person: which leg turns people away, and how often.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (verdict) (max_over_time(late_ssh_first_contact_gate_total[$__range]))",
+          "legendFormat": "{{verdict}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 136
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Bio Screens",
+      "description": "AI bio-screen outcomes. Claimed once per bio text per day, so a flapping API costs at most one call per person per day.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (max_over_time(late_ssh_first_contact_bio_screens_total[$__range]))",
+          "legendFormat": "{{outcome}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 136
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Beats Over Time",
+      "description": "When the ladder actually fires. Bars are beats per interval by stage; the slow burn should show as scattered singles, never a cluster.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (beat) (increase(late_ssh_first_contact_beats_total[$__rate_interval]))",
+          "legendFormat": "{{beat}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "sum"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 144
+      }
+    },
+    {
+      "type": "table",
+      "title": "Ladder by Runner",
+      "description": "How far each person has been walked, read off the hit lines themselves rather than the arming line, so it never lags a session. An empty cell is a stage not yet reached. Sessions logged before the username field shipped still get a row, just without a name.",
+      "datasource": {
+        "uid": "victorialogs",
+        "type": "victoriametrics-logs-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "_msg:\"first contact\" OR _msg:\"haunt flag\" OR _msg:\"runner created\" OR _msg:\"deadchannel joined\" | stats by (user_id) max(username) runner, max(hits) if (_msg:\"clock glitch burst\") glitch, max(hits) if (_msg:\"name flicker hit\") name, max(hits) if (_msg:\"whisper delivered\") whisper, count() if (_msg:\"invitation requested\") invited, count() if (_msg:\"runner created\") runner_row, count() if (_msg:\"first contact armed\") sessions",
+          "queryType": "stats"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "runner": 0,
+              "user_id": 1,
+              "glitch": 2,
+              "name": 3,
+              "whisper": 4,
+              "invited": 5,
+              "runner_row": 6,
+              "sessions": 7
+            },
+            "renameByName": {
+              "runner": "Runner",
+              "user_id": "User ID",
+              "glitch": "Glitch",
+              "name": "Name",
+              "whisper": "Whisper",
+              "invited": "Invited",
+              "runner_row": "Runner row",
+              "sessions": "Sessions"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false
+        },
+        "sortBy": [
+          {
+            "displayName": "Glitch",
+            "desc": true
+          }
+        ],
+        "cellHeight": "sm"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 152
+      }
+    },
+    {
+      "type": "table",
+      "title": "Gate Legs by Runner",
+      "description": "The three eligibility legs per person, at their highest seen value: lifetime connected hours (needs 168), touched settings keys (needs 2), and bio length (needs 100 before a screen is ever spent).",
+      "datasource": {
+        "uid": "victorialogs",
+        "type": "victoriametrics-logs-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "_msg:\"first contact gate evaluated\" | stats by (user_id) max(username) runner, max(active_hours) hours, max(touched_settings) settings, max(bio_chars) bio_chars, count() connects",
+          "queryType": "stats"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "runner": 0,
+              "user_id": 1,
+              "hours": 2,
+              "settings": 3,
+              "bio_chars": 4,
+              "connects": 5
+            },
+            "renameByName": {
+              "runner": "Runner",
+              "user_id": "User ID",
+              "hours": "Active hours",
+              "settings": "Settings keys",
+              "bio_chars": "Bio chars",
+              "connects": "Connects"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false
+        },
+        "sortBy": [
+          {
+            "displayName": "Active hours",
+            "desc": true
+          }
+        ],
+        "cellHeight": "sm"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 152
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Haunt Log",
+      "description": "Every deadchannel line in one place, newest first: the gate, arming, each hit, the whisper, the invitation, the admin switches, and the runner's birth. Expand a row for the username, the counters, and the trace id.",
+      "datasource": {
+        "uid": "victorialogs",
+        "type": "victoriametrics-logs-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "_msg:\"first contact\" OR _msg:\"haunt flag\" OR _msg:\"runner created\" OR _msg:\"deadchannel joined\"",
+          "queryType": "instant"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 161
       }
     }
   ]

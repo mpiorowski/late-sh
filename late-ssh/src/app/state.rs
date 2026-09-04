@@ -1351,6 +1351,7 @@ impl App {
             config.permissions.can_moderate(),
             config.app_flags_rx.clone(),
             config.user_id,
+            &config.username,
             config.first_contact,
             config.first_contact_gate,
         );

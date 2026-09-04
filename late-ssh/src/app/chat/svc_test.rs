@@ -5003,8 +5003,8 @@ async fn first_contact_invitation_sends_one_dm_and_claims_once() {
 
     // Two racing requests (two devices noticing the due date): the claim
     // lets exactly one DM through.
-    service.send_first_contact_invitation_task(target.id);
-    service.send_first_contact_invitation_task(target.id);
+    service.send_first_contact_invitation_task(target.id, target.username.clone());
+    service.send_first_contact_invitation_task(target.id, target.username.clone());
 
     let client = test_db.db.get().await.expect("db client");
     crate::test_helpers::wait_until(
@@ -5185,7 +5185,7 @@ async fn first_contact_invitation_claim_survives_a_failed_send() {
     let _squatter = create_test_user(&test_db.db, VOICE_USERNAME).await;
     let target = create_test_user(&test_db.db, "fc-claim-target").await;
 
-    service.send_first_contact_invitation_task(target.id);
+    service.send_first_contact_invitation_task(target.id, target.username.clone());
 
     // The failure is silent from out here; give the task time to run its
     // course (a negative assertion, like the racing-duplicate check above).

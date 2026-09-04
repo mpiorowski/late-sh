@@ -47,9 +47,9 @@ pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -
         // is the line to look for when the ladder seems dead. For everyone
         // else an unlit fuse is the normal state of the world.
         if is_staff {
-            tracing::info!(user_id = %user.id, is_staff, "first contact gate shut: haunting off or flags unread");
+            tracing::info!(user_id = %user.id, username = %user.username, is_staff, "first contact gate shut: haunting off or flags unread");
         } else {
-            tracing::debug!(user_id = %user.id, is_staff, "first contact gate shut: fuse unlit");
+            tracing::debug!(user_id = %user.id, username = %user.username, is_staff, "first contact gate shut: fuse unlit");
         }
         return FirstContactGate::closed();
     }
@@ -61,7 +61,7 @@ pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -
     let online_milliseconds = match online_milliseconds {
         Ok(milliseconds) => milliseconds,
         Err(error) => {
-            tracing::warn!(user_id = %user.id, error = ?error, "failed to read online time for the first contact gate");
+            tracing::warn!(user_id = %user.id, username = %user.username, error = ?error, "failed to read online time for the first contact gate");
             0
         }
     };
@@ -78,6 +78,7 @@ pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -
     metrics::record_first_contact_gate(verdict, is_staff);
     tracing::info!(
         user_id = %user.id,
+        username = %user.username,
         is_staff,
         active_hours = gate.active_hours,
         touched_settings = gate.touched_settings,
@@ -91,6 +92,7 @@ pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -
             state.db.clone(),
             state.ai_service.clone(),
             user.id,
+            user.username.clone(),
             late_core::models::user::extract_bio(&user.settings),
         );
     }
@@ -113,6 +115,7 @@ pub(crate) fn arm(
     is_staff: bool,
     flags: watch::Receiver<Option<AppFlags>>,
     user_id: uuid::Uuid,
+    username: &str,
     marks: FirstContactMarks,
     gate: FirstContactGate,
 ) -> HauntState {
@@ -129,6 +132,7 @@ pub(crate) fn arm(
     if stage1 {
         tracing::info!(
             user_id = %user_id,
+            username = %username,
             is_staff,
             chosen,
             whisper_armed,
@@ -206,7 +210,7 @@ fn tick_claims(app: &mut App) -> bool {
                 }
                 app.haunt.marks.glitch_hits = hits;
                 metrics::record_first_contact_beat(FirstContactBeat::GlitchBurst);
-                tracing::info!(user_id = %app.user_id, hits, "first contact clock glitch burst");
+                tracing::info!(user_id = %app.user_id, username = %app.username, hits, "first contact clock glitch burst");
                 changed = true;
             }
             (HitStage::Glitch, Ok(FirstContactHitClaim::Capped { hits })) => {
@@ -214,13 +218,13 @@ fn tick_claims(app: &mut App) -> bool {
                     glitch.claim_capped(tick, hits);
                 }
                 app.haunt.marks.glitch_hits = hits;
-                tracing::debug!(user_id = %app.user_id, hits, "first contact clock glitch capped by the row");
+                tracing::debug!(user_id = %app.user_id, username = %app.username, hits, "first contact clock glitch capped by the row");
             }
             (HitStage::Glitch, Err(error)) => {
                 if let Some(glitch) = app.haunt.clock_glitch.as_mut() {
                     glitch.claim_failed(tick);
                 }
-                tracing::warn!(user_id = %app.user_id, error = ?error, "first contact clock glitch claim failed");
+                tracing::warn!(user_id = %app.user_id, username = %app.username, error = ?error, "first contact clock glitch claim failed");
             }
             (HitStage::Name { message_id }, Ok(FirstContactHitClaim::Won { hits })) => {
                 if let Some(flicker) = app.haunt.name_flicker.as_mut() {
@@ -228,7 +232,7 @@ fn tick_claims(app: &mut App) -> bool {
                 }
                 app.haunt.marks.name_hits = hits;
                 metrics::record_first_contact_beat(FirstContactBeat::NameFlicker);
-                tracing::info!(user_id = %app.user_id, hits, "first contact name flicker hit");
+                tracing::info!(user_id = %app.user_id, username = %app.username, hits, "first contact name flicker hit");
                 changed = true;
             }
             (HitStage::Name { .. }, Ok(FirstContactHitClaim::Capped { hits })) => {
@@ -236,13 +240,13 @@ fn tick_claims(app: &mut App) -> bool {
                     flicker.claim_capped(hits);
                 }
                 app.haunt.marks.name_hits = hits;
-                tracing::debug!(user_id = %app.user_id, hits, "first contact name flicker capped by the row");
+                tracing::debug!(user_id = %app.user_id, username = %app.username, hits, "first contact name flicker capped by the row");
             }
             (HitStage::Name { .. }, Err(error)) => {
                 if let Some(flicker) = app.haunt.name_flicker.as_mut() {
                     flicker.claim_failed();
                 }
-                tracing::warn!(user_id = %app.user_id, error = ?error, "first contact name flicker claim failed");
+                tracing::warn!(user_id = %app.user_id, username = %app.username, error = ?error, "first contact name flicker claim failed");
             }
         }
     }
@@ -277,11 +281,11 @@ fn tick_flag_writes(app: &mut App) -> bool {
     for (flag, enabled, done, outcome) in answered {
         match outcome {
             Ok(()) => {
-                tracing::info!(user_id = %app.user_id, key = flag.key(), enabled, "haunt flag set");
+                tracing::info!(user_id = %app.user_id, username = %app.username, key = flag.key(), enabled, "haunt flag set");
                 app.banner = Some(Banner::success(done));
             }
             Err(error) => {
-                tracing::error!(user_id = %app.user_id, key = flag.key(), enabled, error = ?error, "failed to set haunt flag");
+                tracing::error!(user_id = %app.user_id, username = %app.username, key = flag.key(), enabled, error = ?error, "failed to set haunt flag");
                 app.banner = Some(Banner::error(&format!(
                     "Flag {} not written: {error}",
                     flag.key()
@@ -321,7 +325,7 @@ fn tick_splash_door(app: &mut App) -> bool {
                     WHISPER_TOTAL_CAP,
                 );
                 metrics::record_first_contact_beat(FirstContactBeat::WhisperDelivered);
-                tracing::info!(user_id = %app.user_id, hits = app.haunt.marks.whisper_hits, "first contact whisper delivered");
+                tracing::info!(user_id = %app.user_id, username = %app.username, hits = app.haunt.marks.whisper_hits, "first contact whisper delivered");
             }
         }
     }
@@ -366,7 +370,7 @@ fn tick_clock_glitch(app: &mut App) -> bool {
                 .service()
                 .record_first_contact_glitch_hit(app.user_id);
             metrics::record_first_contact_beat(FirstContactBeat::GlitchBurst);
-            tracing::info!(user_id = %app.user_id, hits = app.haunt.marks.glitch_hits, "first contact clock glitch burst (forced)");
+            tracing::info!(user_id = %app.user_id, username = %app.username, hits = app.haunt.marks.glitch_hits, "first contact clock glitch burst (forced)");
             true
         }
         GlitchTick::Ended => true,
@@ -416,7 +420,7 @@ fn tick_name_flicker(app: &mut App) -> bool {
                 .service()
                 .record_first_contact_name_hit(app.user_id);
             metrics::record_first_contact_beat(FirstContactBeat::NameFlicker);
-            tracing::info!(user_id = %app.user_id, hits = app.haunt.marks.name_hits, "first contact name flicker hit (forced)");
+            tracing::info!(user_id = %app.user_id, username = %app.username, hits = app.haunt.marks.name_hits, "first contact name flicker hit (forced)");
             changed = true;
         }
     }
@@ -452,9 +456,9 @@ fn send_invitation(app: &mut App, now: chrono::DateTime<chrono::Utc>) {
     app.haunt.marks.invited_at = Some(now);
     app.chat
         .service
-        .send_first_contact_invitation_task(app.user_id);
+        .send_first_contact_invitation_task(app.user_id, app.username.clone());
     metrics::record_first_contact_beat(FirstContactBeat::InvitationRequested);
-    tracing::info!(user_id = %app.user_id, "first contact invitation requested");
+    tracing::info!(user_id = %app.user_id, username = %app.username, "first contact invitation requested");
 }
 
 /// Route splash input into the held door. Returns true when consumed:
@@ -492,7 +496,7 @@ pub(crate) fn replay_whisper(app: &mut App) {
 /// session's screen in flight. A call that breaks leaves the pending
 /// claim to expire (`BIO_RESCREEN_AFTER_HOURS`) rather than releasing it,
 /// so a flapping API cannot burn a call per login.
-fn screen_bio_task(db: Db, ai: AiService, user_id: uuid::Uuid, bio: String) {
+fn screen_bio_task(db: Db, ai: AiService, user_id: uuid::Uuid, username: String, bio: String) {
     tokio::spawn(
         async move {
             let hash = bio_hash(&bio);
@@ -500,12 +504,12 @@ fn screen_bio_task(db: Db, ai: AiService, user_id: uuid::Uuid, bio: String) {
             let outcome = match outcome {
                 Ok(outcome) => outcome,
                 Err(error) => {
-                    tracing::warn!(user_id = %user_id, error = ?error, "first contact bio screen failed");
+                    tracing::warn!(user_id = %user_id, username = %username, error = ?error, "first contact bio screen failed");
                     BioScreenOutcome::CallFailed
                 }
             };
             metrics::record_first_contact_bio_screen(outcome);
-            tracing::info!(user_id = %user_id, hash, outcome = ?outcome, "first contact bio screen");
+            tracing::info!(user_id = %user_id, username = %username, hash, outcome = ?outcome, "first contact bio screen");
         }
         .instrument(info_span!("haunt.bio_screen_task", user_id = %user_id)),
     );
