@@ -10,8 +10,8 @@
   are haunted today, and only they can finish the ladder and join.
 - Last updated: 2026-09-05 (stage 2 is no longer private: a name hit now
   travels to every session in the room, on every replica, over the
-  `deadchannel_name_hit` notify, and each witness replays it when the
-  message reaches them; `NameHitWire` and `WitnessFlicker`. Before that,
+  `deadchannel_name_hit` notify on chat's message listener, and each
+  witness replays it once the message is on their screen. Before that,
   2026-09-04: every deadchannel log line now carries
   `username` beside `user_id`, and Grafana has a "deadchannel" row over
   the haunt logs and the three first-contact counters; the runner:
@@ -81,8 +81,8 @@ number of replicas spend one AI call per text.
 | File | Owns |
 |---|---|
 | `glyphs.rs` | `GLYPH_ALPHABET`, the game's shared character vocabulary. Game-level: the haunting borrows it, stage-4-era spawns will render with it (the clock glitch is retroactive foreshadowing). Distinct from the static shades `░▒▓` (noise, not creatures). |
-| `haunt/state.rs` | The pure machines and data: `HauntState` (the one `App` slot), `FirstContactMarks` (persisted marks bundle), `FirstContactGate` + `BioStanding` + the thresholds and `bio_hash` (the eligibility gate), `ClockGlitch` (stage 1), `NameFlicker` (stage 2, the person being haunted) and `WitnessFlicker` + `HeardHit` + `WITNESS_WINDOW_SECS` (stage 2, everyone else in the room), `ActiveHit` (the playback and the wave seed both share, so every screen corrupts identically), `WhisperState` (stage 3), the voice/invitation constants (stage 4), `PendingClaim`/`HitStage` (claims in flight), `HauntCommand` + `parse_haunt_command`. No I/O, no clock reads. |
-| `haunt/svc.rs` | Orchestration: `bootstrap_gate` (gate + bio screen claim at connect), `arm` (session start), one `tick(app)` (claim drain, splash door, glitch scheduler, name-flicker roller, witness replay, invitation clock, `/haunt` drain), `note_splash_input`, `replay_whisper`, the bio screen task, and `NameHitWire`, the process-wide stage-2 wire (publish on a won or forced hit, LISTEN on `deadchannel_name_hit`, one `broadcast` line per session). The only haunting layer touching `App`, logging, metrics, and persistence. |
+| `haunt/state.rs` | The pure machines and data: `HauntState` (the one `App` slot), `FirstContactMarks` (persisted marks bundle), `FirstContactGate` + `BioStanding` + the thresholds and `bio_hash` (the eligibility gate), `ClockGlitch` (stage 1), `NameFlicker` (stage 2, the person being haunted), `ActiveHit` (one hit's playback, holding the wave seed: the roller's own hit and the `witness` slot share it, so every screen corrupts identically), `WhisperState` (stage 3), the voice/invitation constants (stage 4), `PendingClaim`/`HitStage` (claims in flight), `HauntCommand` + `parse_haunt_command`. No I/O, no clock reads. |
+| `haunt/svc.rs` | Orchestration: `bootstrap_gate` (gate + bio screen claim at connect), `arm` (session start), one `tick(app)` (claim drain, splash door, glitch scheduler, name-flicker roller, witness replay, invitation clock, `/haunt` drain), `note_splash_input`, `replay_whisper`, the bio screen task, and `publish_name_hit` (a won or forced hit goes on the wire through `ChatService::publish_name_hit`). The only haunting layer touching `App`, logging, metrics, and persistence. |
 | `haunt/ui.rs` | Pure render helpers: whisper frame + splash overlay + static surge, `apply_clock_glitch`, `glitched_name`, `name_flicker_for`. Deterministic per burst seed, stateless like the sidebar equalizer. |
 | `runner/state.rs` | The look: `PIECES` (the closed starter table, one five-cell row per piece, `Slot` hood/eyes/coat), `Tint` (the closed palette, gold deliberately absent), `Look` + `Worn` (typed, table references), `Look::random` (the join's dice), `Look::to_json` / `Look::parse` (the JSON contract on the runner row; unknown codes are a `LookError`, never a blank), `PORTRAIT_WIDTH` / `PORTRAIT_HEIGHT`. No I/O. `state_test` asserts every row is five single-width cells. |
 | `runner/ui.rs` | `portrait_spans`: the look as three styled spans, one per worn piece in its tint; `tint_color` maps the palette onto the theme. Pure. |
@@ -96,16 +96,20 @@ routing splash input, and three one-line draw calls in `render.rs`
 Chat's seams: the `/haunt` submit hook (admin-gated), the
 `requested_haunt` slot, the `own_message_landed` slot set in
 `push_message` (the message id *and* its room, since the won hit is put
-on the wire for that room a tick later), `ChatState::has_message` (what a
-witnessed beat waits on), `name_flicker` threaded through the chat view
-structs into the rows cache key (unchanged: the row builder corrupts
+on the wire for that room a tick later), the stage-2 wire itself
+(`ChatService::publish_name_hit` does the `pg_notify`; chat's message
+listener, the one that already carries gild markers, turns the notify
+into `ChatEvent::NameHit`; `note_name_hit` hands the beat over through
+the `witnessed_hit_landed` slot as soon as the message is on screen,
+holding it in `pending_name_hits` until `push_message` lands the message
+if a replica's delta is behind), `name_flicker` threaded through the chat
+view structs into the rows cache key (unchanged: the row builder corrupts
 whichever message id it is handed, so witnessing cost the chat renderer
 nothing), and `ChatService::send_first_contact_invitation_task`. Outside the domain:
 `app/flags/svc.rs` (the switches), `app/ai/screen.rs::screen_bio` (the
 bio verdict), `ProfileService`'s first-contact tasks (the row claims),
 `late-core`'s `models/deadchannel_name_hit.rs` (the wire's channel,
-payload, and parse), `State.name_hits` with its listener started in
-`main.rs`, and `metrics::record_first_contact_beat` /
+payload, and parse), and `metrics::record_first_contact_beat` /
 `record_first_contact_bio_screen`.
 
 The runner's seams are as thin: `ChatService::join_deadchannel_room`
@@ -162,22 +166,22 @@ lines carry no face; every other room renders exactly as before.
    session that rolled it: a won (or forced) hit goes onto the
    `deadchannel_name_hit` wire and every session in that room replays it
    on the same name. Rolling, capping, and claiming are unchanged and
-   still belong to one session; `WitnessFlicker` decides nothing, it
-   replays. Three properties carry it: the *seed* rides the wire, so every
-   screen swaps the same characters in the same two waves
-   (`ActiveHit::corruption` is the one playback both sides use); the beat
-   *waits for its message*, because Postgres delivers it in milliseconds
-   while the room delta brings the message to another replica seconds
-   later, so a witness holds the beat until `ChatState::has_message` says
-   the message has landed in the room on screen; and past
-   `WITNESS_WINDOW_SECS` (30) it is **dropped rather than played late**,
-   so somebody opening the room a minute afterwards sees a clean name.
-   Each session paints one beat at a time and spends it once
-   (`played`), the person being haunted declines their own copy off the
-   wire (their own machine is already painting it, and a second device of
-   theirs witnesses it normally), and the audience is exactly stage 1's:
-   the kill switch drops a witnessed beat mid-wave, and while the fuse is
-   unlit only staff are in the audience, so nothing of the haunting
+   still belong to one session; a witness decides nothing, it replays.
+   Three properties carry it: the *seed* rides the wire, so every screen
+   swaps the same characters in the same two waves (`ActiveHit` is the
+   one playback both sides use; the witness's copy sits in
+   `HauntState.witness`); the beat *waits for its message*, which only
+   matters across replicas (on the sender's own replica the chat
+   broadcast lands the message before the claim is even out), so chat
+   holds a beat whose message the room delta has not brought yet and
+   hands it over as the message lands; and past `NAME_HIT_WAIT` (30s,
+   chat's constant) it is **dropped rather than played late**, so
+   somebody opening the room a minute afterwards sees a clean name. The
+   person being haunted declines their own copy off the wire by
+   recognising their live hit (a second device of theirs holds no live
+   hit and witnesses it normally), and the audience is exactly stage 1's:
+   a beat is only painted while the kill switch is on, and while the fuse
+   is unlit only staff are in the audience, so nothing of the haunting
    reaches a real user before `/haunt live on`.
 3. **Whisper (the held door).** Plays `WHISPER_TOTAL_CAP` (2) times per
    person, at least `WHISPER_GAP_HOURS` (24) apart, each from its own
@@ -290,7 +294,7 @@ lines carry no face; every other room renders exactly as before.
   and a half of theater whose mark is already a conditional claim on the
   user row, so there is no truth to store. The channel carries a
   self-contained payload
-  (`<message>:<room>:<user>:<seed>:<millis>`), the publisher's pooled
+  (`<message>:<room>:<user>:<seed>`), the publisher's pooled
   connection is not the listener's (so Postgres hands the beat back to the
   publishing replica too, and every session hears it exactly one way), and
   a replica that boots mid-beat misses it like a person who was not
@@ -315,8 +319,7 @@ Drained by `haunt::svc::tick`.
   stages armed for this session, the gate's three legs (active hours,
   touched settings, bio length and standing), glitch schedule, glitch
   and name hit counters against their caps, the witness (whether a beat
-  of somebody else's is on this screen and how many are held waiting for
-  their message), door, whisper, invite.
+  of somebody else's is on this screen), door, whisper, invite.
 - `/haunt on` / `/haunt off` - the kill switch, an `app_flags` row: the
   flip lands on every replica through the `app_flag_changed` notify and
   survives a restart. `on` also forces this session chosen and arms the
@@ -343,30 +346,29 @@ Drained by `haunt::svc::tick`.
 - A hit shows one tick after the claim wins, not on the tick the dice
   landed (one DB round trip). For the flicker that is still on the
   landing echo's ~800ms hold; the glitch never had a moment to miss.
-- The room sees a hit later than the person being haunted does, and that
-  is not a bug to chase. Every other session, on this replica or another,
-  learns of a new message from the chat snapshot refresh
-  (`CHAT_REFRESH_INTERVAL`, 10s), so the beat is heard in milliseconds and
-  the message it names shows up seconds later. The name therefore corrupts
-  as the message *arrives* on a witness's screen, then heals. That is why
-  a live "flicker now" broadcast was not the shape: it would have fired
-  before anyone else had the message and been seen by nobody.
-  `WITNESS_WINDOW_SECS` (30) is sized against that 10s cadence and has to
-  stay comfortably above it. Do not reach for a shared clock to make the
-  waves simultaneous; it would cost persistence and buy nothing the
+- On this replica the room sees a hit within a tick of the person being
+  haunted: the chat broadcast (`ChatEvent::MessageCreated`) lands the
+  message in every local session before the sender's claim is even out.
+  Only a session on *another* replica learns of the message from the chat
+  snapshot refresh (`CHAT_REFRESH_INTERVAL`, 10s), so there the beat is
+  heard first and the name corrupts as the message *arrives*, then
+  heals. That is why chat holds the beat rather than the haunting
+  painting on receipt, and why `NAME_HIT_WAIT` (30s) has to stay
+  comfortably above that cadence. Do not reach for a shared clock to make
+  the waves simultaneous; it would cost persistence and buy nothing the
   fiction wants.
 - A witnessed beat is spent when it starts, and "started" only means the
-  hit's room is the selected one and the message has landed in it. A
-  witness who is off in the arcade with #lounge still selected spends the
-  beat without seeing it. That is the same bargain the own-flicker makes
-  (it fires on the landing echo and trusts the eye is there) and cheaper
-  than teaching the haunting what is on screen; if it turns out to matter,
-  the fix is a visibility gate like the clock glitch's, not a queue.
-- A witnessed beat needs the *message*, not just the beat. If stage 2
-  looks dead from a second session, check that the witness is in the same
-  room (`selected_room_id`) and that the message has landed there
-  (`ChatState::has_message`) inside `WITNESS_WINDOW_SECS`; the beat is
-  dropped, not queued, once that window is gone.
+  message is in this session's copy of the room, whether or not that room
+  is on screen. A witness who is off in the arcade spends the beat
+  without seeing it. That is the same bargain the own-flicker makes (it
+  fires on the landing echo and trusts the eye is there) and cheaper than
+  teaching the haunting what is on screen; if it turns out to matter, the
+  fix is a visibility gate like the clock glitch's, not a queue.
+- If stage 2 looks dead from a second session, check that the session
+  holds the room (a beat for a room it is not in is dropped on receipt),
+  that chat's message listener is running (tests and headless paths do
+  not start it, so there stage 2 stays private to the session that rolled
+  it), and that the message landed inside `NAME_HIT_WAIT`.
 - The wire is a delivery path, never a source of truth, so it is one of
   the few pieces of deadchannel state that is process-local by design.
   The caps it could be tempted to enforce already live in the row claim.
@@ -397,11 +399,6 @@ Drained by `haunt::svc::tick`.
   replica boots; a session copies the directory on its next 1 Hz tick.
   The `mark` is stored from birth but not yet painted anywhere: the
   chat badge stack and the clubhouse floor glyph are the next slice.
-- The `broadcast` line a session holds is created at `App` construction
-  from `SessionConfig.name_hits`, so a session hears every beat from the
-  moment it exists; `None` (headless, tests, the aquarium path) keeps
-  stage 2 private to the session that rolled it, which is what every
-  existing test app gets.
 - Where to look when the ladder seems dead (per person, in the logs, all
   keyed by `user_id` and `username`, the two fields every deadchannel line
   carries): `first contact gate evaluated` at every connect
