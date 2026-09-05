@@ -7,8 +7,10 @@ use late_core::models::paper::{
 use uuid::Uuid;
 
 use super::{
-    PAPER_ELSEWHERE_LIMIT, PaperCommand, PaperLayout, PaperLine, lay_out, parse_paper_command,
+    PAPER_ELSEWHERE_LIMIT, PaperCommand, PaperInk, PaperLayout, PaperLine, PaperWall, lay_out,
+    parse_paper_command,
 };
+use crate::app::artboard::gallery::ui::PaintRun;
 
 fn page(
     id: u128,
@@ -99,7 +101,7 @@ fn the_paper_follows_the_rail_then_elsewhere_then_the_back_pages() {
     let bumped = vec!["dnd".to_string()];
 
     let lines = plain(&lay_out(PaperLayout {
-        wall: None,
+        wall: &[],
         edition: &edition,
         rail_order: &rail_order,
         member_room_ids: &member_room_ids,
@@ -154,7 +156,7 @@ fn a_member_room_missing_from_the_rail_still_gets_its_column() {
     };
     let member_room_ids: HashSet<Uuid> = [Uuid::from_u128(1)].into_iter().collect();
     let lines = plain(&lay_out(PaperLayout {
-        wall: None,
+        wall: &[],
         edition: &edition,
         rail_order: &[],
         member_room_ids: &member_room_ids,
@@ -219,4 +221,106 @@ fn paper_commands_parse_and_everything_else_falls_through() {
     assert!(!PaperCommand::Open.admin_only());
     assert!(PaperCommand::Off.admin_only());
     assert!(PaperCommand::Preview.admin_only());
+}
+
+/// A wall piece `height` lines tall, its first line painted red and the
+/// rest plain.
+fn wall_piece(title: &str, applause: i64, height: usize) -> PaperWall {
+    let red = dartboard_core::RgbColor::new(255, 0, 0);
+    let lines = (0..height)
+        .map(|row| {
+            vec![PaintRun {
+                text: format!("row {row}"),
+                fg: if row == 0 { Some(red) } else { None },
+            }]
+        })
+        .collect();
+    PaperWall {
+        title: title.to_string(),
+        username: "painter".to_string(),
+        applause,
+        lines,
+    }
+}
+
+#[test]
+fn the_wall_prints_the_pieces_in_colour_within_its_line_budget() {
+    let edition = PaperEdition {
+        edition: NaiveDate::from_ymd_opt(2026, 9, 3).unwrap(),
+        rooms: Vec::new(),
+        sections: Vec::new(),
+    };
+    // 40 + 2 and 10 + 2 lines fit the budget of 60; the third piece's 10
+    // + 2 would pass it and stays on page 4.
+    let wall = [
+        wall_piece("tall", 5, 40),
+        wall_piece("small", 2, 10),
+        wall_piece("late", 1, 10),
+    ];
+    let laid = lay_out(PaperLayout {
+        wall: &wall,
+        edition: &edition,
+        rail_order: &[],
+        member_room_ids: &HashSet::new(),
+        bumped_labels: &[],
+    });
+    let lines = plain(&laid);
+    let start = lines
+        .iter()
+        .position(|line| line == "ON THE WALL")
+        .expect("the wall heading");
+    let titles: Vec<&String> = lines[start..]
+        .iter()
+        .filter(|line| line.starts_with('"'))
+        .collect();
+    assert_eq!(
+        titles,
+        vec![
+            "\"tall\" by @painter, hung yesterday, 5 applause so far.",
+            "\"small\" by @painter, hung yesterday, 2 applause so far."
+        ]
+    );
+    assert_eq!(
+        lines.last().map(String::as_str),
+        Some("    the whole wall hangs on page 4, the Artboard gallery")
+    );
+    // The painted glyphs keep their colour; the rest print as body text.
+    let first_row = &laid[start + 3];
+    assert_eq!(
+        first_row
+            .iter()
+            .map(|span| (span.text.as_str(), span.ink))
+            .collect::<Vec<_>>(),
+        vec![
+            ("    ", PaperInk::Body),
+            (
+                "row 0",
+                PaperInk::Paint(dartboard_core::RgbColor::new(255, 0, 0))
+            )
+        ]
+    );
+    assert_eq!(
+        laid[start + 4]
+            .iter()
+            .map(|span| (span.text.as_str(), span.ink))
+            .collect::<Vec<_>>(),
+        vec![("    ", PaperInk::Body), ("row 1", PaperInk::Body)]
+    );
+}
+
+#[test]
+fn an_empty_wall_prints_no_column() {
+    let edition = PaperEdition {
+        edition: NaiveDate::from_ymd_opt(2026, 9, 3).unwrap(),
+        rooms: Vec::new(),
+        sections: Vec::new(),
+    };
+    let lines = plain(&lay_out(PaperLayout {
+        wall: &[],
+        edition: &edition,
+        rail_order: &[],
+        member_room_ids: &HashSet::new(),
+        bumped_labels: &[],
+    }));
+    assert!(!lines.iter().any(|line| line == "ON THE WALL"));
 }

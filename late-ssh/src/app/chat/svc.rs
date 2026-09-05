@@ -30,6 +30,10 @@ use late_core::{
         chat_room_member::ChatRoomMember,
         chat_slow_mode::ChatSlowMode,
         chips::UserChips,
+        deadchannel_name_hit::{
+            DEADCHANNEL_NAME_HIT_CHANNEL, NameHitSignal, listen_for_name_hits, notify_name_hit,
+            parse_name_hit_payload,
+        },
         drinks::UserDrinks,
         message_translation::{TranslateLang, needs_translation},
         moderation_audit_log::ModerationAuditLog,
@@ -847,6 +851,17 @@ pub enum ChatEvent {
         room_id: Uuid,
         message_id: Uuid,
         summary: Option<ChatMessageGildSummary>,
+    },
+    /// The static took somebody's name (`app/deadchannel/haunt`, stage 2):
+    /// this message's author label corrupts on every screen in the room.
+    /// Off the Postgres notify like a gild, so every replica, this one
+    /// included, hears it one way. Carries no `target_user_ids`: the beat
+    /// is only ever put on the wire for a room the sender is in, and a
+    /// session that does not hold that room drops it.
+    NameHit {
+        room_id: Uuid,
+        message_id: Uuid,
+        seed: u64,
     },
     /// A gild landed. Read by the buyer (what it cost, what is left) and by
     /// the author (who paid, what arrived); everyone else repaints off
@@ -3983,24 +3998,53 @@ impl ChatService {
         }
     }
 
-    /// Keep every replica's gild markers in step. One long-lived Postgres
-    /// connection LISTENs on [`CHAT_MESSAGE_GILDED_CHANNEL`] and rebroadcasts
-    /// each gild locally; a dropped connection reconnects after five
-    /// seconds, and until it does markers only lag until the next room tail
-    /// load. Same shape as `ShopService::start_listener_task`.
-    pub fn start_gild_listener_task(&self, db_config: DbConfig) -> tokio::task::JoinHandle<()> {
+    /// Tell the room the static took a name (`app/deadchannel/haunt`, stage
+    /// 2). Fire and forget on purpose, and logged here rather than
+    /// upstream: the beat is one frame of theater, and the session that
+    /// just won its claim must not wait on Postgres to paint it. This
+    /// replica hears the beat back over the listener like every other.
+    pub(crate) fn publish_name_hit(&self, signal: NameHitSignal) {
+        let db = self.db.clone();
+        tokio::spawn(
+            async move {
+                let sent = async {
+                    let client = db.get().await?;
+                    notify_name_hit(&client, &signal).await
+                }
+                .await;
+                if let Err(error) = sent {
+                    tracing::warn!(
+                        error = ?error,
+                        user_id = %signal.user_id,
+                        message_id = %signal.message_id,
+                        "first contact name flicker never reached the room"
+                    );
+                }
+            }
+            .instrument(info_span!("chat.publish_name_hit")),
+        );
+    }
+
+    /// Keep every replica's per-message markers in step. One long-lived
+    /// Postgres connection LISTENs on [`CHAT_MESSAGE_GILDED_CHANNEL`] and
+    /// [`DEADCHANNEL_NAME_HIT_CHANNEL`] and rebroadcasts each notification
+    /// locally; a dropped connection reconnects after five seconds, and
+    /// until it does gild markers only lag until the next room tail load
+    /// (a name hit fired meanwhile is simply not witnessed here). Same
+    /// shape as `ShopService::start_listener_task`.
+    pub fn start_message_listener_task(&self, db_config: DbConfig) -> tokio::task::JoinHandle<()> {
         let service = self.clone();
         tokio::spawn(async move {
             loop {
-                if let Err(error) = service.listen_for_gilds_once(&db_config).await {
-                    tracing::warn!(error = ?error, "chat gild postgres listener stopped");
+                if let Err(error) = service.listen_for_message_events_once(&db_config).await {
+                    tracing::warn!(error = ?error, "chat message postgres listener stopped");
                 }
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
         })
     }
 
-    async fn listen_for_gilds_once(&self, db_config: &DbConfig) -> Result<()> {
+    async fn listen_for_message_events_once(&self, db_config: &DbConfig) -> Result<()> {
         let mut config = tokio_postgres::Config::new();
         config.host(&db_config.host);
         config.port(db_config.port);
@@ -4009,7 +4053,10 @@ impl ChatService {
         config.dbname(&db_config.dbname);
 
         let (client, mut connection) = config.connect(tokio_postgres::NoTls).await?;
-        let listen = listen_for_gild_changes(&client);
+        let listen = async {
+            listen_for_gild_changes(&client).await?;
+            listen_for_name_hits(&client).await
+        };
         tokio::pin!(listen);
         loop {
             tokio::select! {
@@ -4021,7 +4068,7 @@ impl ChatService {
                     let Some(message) = message else {
                         return Ok(());
                     };
-                    self.handle_gild_notification(message?).await?;
+                    self.handle_message_notification(message?).await?;
                 }
             }
         }
@@ -4030,14 +4077,33 @@ impl ChatService {
             let Some(message) = std::future::poll_fn(|cx| connection.poll_message(cx)).await else {
                 return Ok(());
             };
-            self.handle_gild_notification(message?).await?;
+            self.handle_message_notification(message?).await?;
         }
     }
 
-    async fn handle_gild_notification(&self, message: tokio_postgres::AsyncMessage) -> Result<()> {
+    async fn handle_message_notification(
+        &self,
+        message: tokio_postgres::AsyncMessage,
+    ) -> Result<()> {
         let tokio_postgres::AsyncMessage::Notification(notification) = message else {
             return Ok(());
         };
+        if notification.channel() == DEADCHANNEL_NAME_HIT_CHANNEL {
+            match parse_name_hit_payload(notification.payload()) {
+                Some(signal) => {
+                    let _ = self.evt_tx.send(ChatEvent::NameHit {
+                        room_id: signal.room_id,
+                        message_id: signal.message_id,
+                        seed: signal.seed,
+                    });
+                }
+                None => tracing::warn!(
+                    payload = notification.payload(),
+                    "unreadable deadchannel name hit payload"
+                ),
+            }
+            return Ok(());
+        }
         if notification.channel() != CHAT_MESSAGE_GILDED_CHANNEL {
             return Ok(());
         }

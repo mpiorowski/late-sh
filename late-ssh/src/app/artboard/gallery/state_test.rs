@@ -1,3 +1,5 @@
+use chrono::{NaiveDate, Utc};
+
 use super::*;
 use crate::app::artboard::gallery::svc::GalleryService;
 
@@ -110,4 +112,53 @@ fn the_hang_flow_needs_a_title_and_typing_captures_keys() {
     gallery.cancel_hang();
     assert_eq!(gallery.hang(), &HangFlow::Idle);
     assert!(!gallery.claims_q());
+}
+
+/// A piece as a listing holds it, for the refusal rules.
+fn listed_piece(user: u128, period_month: NaiveDate) -> GalleryPiece {
+    GalleryPiece {
+        id: Uuid::now_v7(),
+        user_id: Uuid::from_u128(user),
+        username: format!("user-{user}"),
+        title: "a piece".to_string(),
+        width: 4,
+        height: 2,
+        canvas: dartboard_core::Canvas::with_size(4, 2),
+        credits: Vec::new(),
+        applause: 0,
+        applauded_by_viewer: false,
+        created: Utc::now(),
+        period_month,
+    }
+}
+
+#[test]
+fn applause_and_take_down_refuse_before_the_round_trip() {
+    let viewer = Uuid::from_u128(1);
+    let this_month = NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
+    let last_month = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+    let mine = listed_piece(1, this_month);
+    let theirs = listed_piece(2, this_month);
+    let mine_settled = listed_piece(1, last_month);
+    let theirs_settled = listed_piece(2, last_month);
+
+    assert_eq!(applause_refusal(&theirs, viewer, this_month), None);
+    assert_eq!(
+        applause_refusal(&mine, viewer, this_month),
+        Some(OWN_PIECE_APPLAUSE)
+    );
+    assert_eq!(
+        applause_refusal(&theirs_settled, viewer, this_month),
+        Some(CLOSED_MONTH_APPLAUSE)
+    );
+
+    assert_eq!(take_down_refusal(&mine, viewer, this_month), None);
+    assert_eq!(
+        take_down_refusal(&theirs, viewer, this_month),
+        Some(NOT_YOURS_TAKE_DOWN)
+    );
+    assert_eq!(
+        take_down_refusal(&mine_settled, viewer, this_month),
+        Some(CLOSED_MONTH_TAKE_DOWN)
+    );
 }

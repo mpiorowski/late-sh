@@ -14,7 +14,7 @@ use crate::models::chips::{ChipMove, UserChips};
 /// night is still worth putting on now, and a jukebox that only pays for
 /// music nobody has heard is a jukebox that argues with the person filling
 /// it. The day's cap is the only gate.
-pub const SONG_QUEUE_REWARD_CHIPS: i64 = 200;
+pub const SONG_QUEUE_REWARD_CHIPS: i64 = 100;
 
 /// How many tracks are paid per person per UTC day, and the whole of the
 /// reward's gating: nothing else looks at what was queued or by whom. The

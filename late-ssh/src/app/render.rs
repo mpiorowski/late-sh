@@ -279,9 +279,10 @@ struct DrawContext<'a> {
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
-    /// Last month's winning gallery piece, hung over the splash when it
-    /// fits; the coffee cup otherwise.
-    splash_piece: Option<&'a crate::app::artboard::gallery::svc::GalleryPiece>,
+    /// This login's podium piece, hung over the splash when it fits; the
+    /// coffee cup otherwise, and always once the account has seen the
+    /// podium this month.
+    splash_piece: Option<&'a crate::app::artboard::gallery::svc::SplashPiece>,
     /// One frame of first-contact whisper theater over the splash, `None`
     /// unless the door is held this frame. See `app/deadchannel`.
     whisper: Option<crate::app::deadchannel::haunt::ui::WhisperFrame>,
@@ -662,12 +663,6 @@ impl App {
         let showcase_unread_count = self.chat.showcase.unread_count();
         let showcase_composing = self.chat.showcase.composing();
         let web_base_url = self.web_url.as_str();
-        // Built before the frame borrows `self` mutably below.
-        let gallery_splash_piece = if self.show_splash {
-            self.gallery_splash_rx.borrow().clone()
-        } else {
-            None
-        };
         let listen_url = crate::app::state::listen_url(&self.web_url);
         let work_view = chat::work::ui::WorkListView {
             items: self.chat.work.all_items(),
@@ -1167,7 +1162,7 @@ impl App {
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
-                        splash_piece: gallery_splash_piece.as_ref(),
+                        splash_piece: self.splash_piece.as_ref(),
                         whisper: crate::app::deadchannel::haunt::ui::whisper_frame_for(
                             &self.haunt,
                             self.splash_ticks,
@@ -1289,7 +1284,7 @@ impl App {
                 text.push(' ');
             }
 
-            // Last month's winning piece takes the cup's place when the
+            // The login's podium piece takes the cup's place when the
             // terminal has room for it; the typed line stays under either.
             let piece_area = ratatui::layout::Layout::vertical([
                 ratatui::layout::Constraint::Min(0),

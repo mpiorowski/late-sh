@@ -316,18 +316,16 @@ pub async fn snapshot_previous_month_profile_awards(
              -- applause (earliest hang breaks a tie between their own),
              -- and only hangers whose best piece cleared the floor.
              --
-             -- This arm pays chips, and applause keeps moving after the
-             -- rollover (the listings, the splash and the paper all invite
-             -- `v`, which also withdraws), so unlike the other arms its
-             -- input is not frozen by the period window. The `NOT EXISTS`
-             -- is what freezes it instead: the first pass after the
-             -- rollover settles the month, and once any `artboard` row
-             -- exists for it every later pass (the 24h fallback, a
-             -- restart, another replica) ranks nobody, inserts nothing and
-             -- pays nothing, however the applause has moved since.
-             -- Without it a hanger who climbed into the top 3 on a later
-             -- pass would get a fresh row past `ON CONFLICT` and a fresh
-             -- prize, and the month's pool would have no bound.
+             -- This arm pays chips, so it must run to completion exactly
+             -- once a month. `ArtboardPiece::toggle_applause` closes the
+             -- month at the rollover, but a mod removal (`removed_at`)
+             -- still moves the ranking afterwards, and `ON CONFLICT DO
+             -- NOTHING` alone would let a hanger who climbed into the top
+             -- 3 on a later pass (the 24h fallback, a restart, another
+             -- replica) get a fresh row and a fresh prize. The `NOT
+             -- EXISTS` settles it: once any `artboard` row exists for the
+             -- month every later pass ranks nobody, inserts nothing and
+             -- pays nothing.
              gallery_best AS (
                 SELECT DISTINCT ON (p.user_id)
                        p.user_id,
@@ -341,6 +339,7 @@ pub async fn snapshot_previous_month_profile_awards(
                 ) applause ON applause.piece_id = p.id
                 CROSS JOIN bounds
                 WHERE p.period_month = bounds.period_month
+                  AND p.removed_at IS NULL
                   AND applause.count >= $3
                   AND NOT EXISTS (
                     SELECT 1 FROM profile_awards
@@ -380,9 +379,10 @@ pub async fn snapshot_previous_month_profile_awards(
                 -- ROW_NUMBER, not RANK: this is the one arm that mints
                 -- chips, and RANK would hand every hanger tied at the top
                 -- the full first prize. Ties break toward the earlier
-                -- hang, the same order `ArtboardPiece::previous_month_winner`
-                -- and the hall of fame use, so the splash's winner is the
-                -- `ART1` holder. At most three rows, three prizes, a month.
+                -- hang, the same order `ArtboardPiece::previous_month_podium`
+                -- and the hall of fame use, so the splash's podium is
+                -- `ART1`-`ART3` in order. At most three rows, three prizes,
+                -- a month.
                 SELECT user_id,
                        'artboard'::text AS category,
                        value,

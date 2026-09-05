@@ -44,6 +44,11 @@ pub fn handle_key(state: &mut State, screen_size: (u16, u16), byte: u8) -> Galle
     if byte == b'\t' {
         return handle_tab(state);
     }
+    // A take-down is asked with one `x` and sent with the next; any other
+    // key in between withdraws the question.
+    if !matches!(byte, b'x' | b'X') {
+        state.gallery_mut().forget_take_down_question();
+    }
     match state.gallery().focus() {
         Focus::Canvas => GalleryAction::Ignored,
         Focus::Rail => handle_rail_key(state, byte),
@@ -348,6 +353,10 @@ fn handle_list_key(state: &mut State, byte: u8) -> GalleryAction {
             state.gallery_mut().applaud_selected();
             GalleryAction::Handled
         }
+        b'x' | b'X' => {
+            state.gallery_mut().take_down_selected();
+            GalleryAction::Handled
+        }
         0x1B | b'h' | b'H' => {
             state.gallery_mut().focus_rail();
             GalleryAction::Handled
@@ -368,6 +377,10 @@ fn handle_piece_key(state: &mut State, byte: u8) -> GalleryAction {
         }
         b'v' | b'V' => {
             state.gallery_mut().applaud_selected();
+            GalleryAction::Handled
+        }
+        b'x' | b'X' => {
+            state.gallery_mut().take_down_selected();
             GalleryAction::Handled
         }
         0x1B | b'q' | b'Q' | b'\r' | b'\n' | b'h' | b'H' => {

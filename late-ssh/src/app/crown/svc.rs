@@ -243,7 +243,7 @@ impl CrownService {
     /// connection LISTENs on [`CROWN_CHANGED_CHANNEL`]; a dropped connection
     /// reconnects after five seconds and re-seeds, so a take committed
     /// during the gap is not lost. Same shape as
-    /// `ChatService::start_gild_listener_task`.
+    /// `ChatService::start_message_listener_task`.
     pub fn start_listener_task(&self, db_config: DbConfig) -> tokio::task::JoinHandle<()> {
         let service = self.clone();
         tokio::spawn(async move {

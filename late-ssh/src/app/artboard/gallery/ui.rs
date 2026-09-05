@@ -2,7 +2,7 @@
 //! listing pane (list plus preview), the full-frame piece, the hang modal,
 //! the framing bar, and the splash piece.
 
-use dartboard_core::Canvas;
+use dartboard_core::{Canvas, RgbColor};
 use late_core::models::artboard_piece::PIECE_TITLE_MAX_CHARS;
 use ratatui::{
     Frame,
@@ -19,7 +19,7 @@ use crate::app::common::theme;
 
 use super::frame::Credit;
 use super::state::{Focus, GallerySection, GalleryState, HangFlow, RailRow};
-use super::svc::{GalleryPiece, applause_label};
+use super::svc::{GalleryPiece, SplashPiece, applause_label};
 
 /// The rail's width, gap included.
 pub const RAIL_WIDTH: u16 = 20;
@@ -270,13 +270,20 @@ pub fn draw_gallery_pane(frame: &mut Frame, area: Rect, state: &State) {
     );
     frame.render_widget(Paragraph::new(notice_line(gallery)), rows[2]);
 
+    // Your own piece cannot be applauded and only it can be taken down,
+    // so the hint names the key that works on the selected piece.
+    let mine = gallery
+        .selected_piece()
+        .is_some_and(|piece| gallery.is_mine(piece));
     if area.width < PREVIEW_MIN_PANE_WIDTH {
         let body = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(rows[3]);
         draw_list(frame, body[0], gallery, section);
-        frame.render_widget(
-            Paragraph::new(key_hint_line(&[("Enter", "view"), ("v", "applaud")])),
-            body[1],
-        );
+        let hints: &[(&str, &str)] = if mine {
+            &[("Enter", "view"), ("x", "take down")]
+        } else {
+            &[("Enter", "view"), ("v", "applaud")]
+        };
+        frame.render_widget(Paragraph::new(key_hint_line(hints)), body[1]);
         return;
     }
     let list_width = (area.width / 5 * 2).clamp(LIST_MIN_WIDTH, area.width.saturating_sub(20));
@@ -288,7 +295,7 @@ pub fn draw_gallery_pane(frame: &mut Frame, area: Rect, state: &State) {
     .split(rows[3]);
     draw_list(frame, columns[0], gallery, section);
     if let Some(piece) = gallery.selected_piece() {
-        draw_preview(frame, columns[2], piece, gallery.focus());
+        draw_preview(frame, columns[2], piece, mine, gallery.focus());
     }
 }
 
@@ -350,7 +357,7 @@ fn draw_list(frame: &mut Frame, area: Rect, gallery: &GalleryState, section: Gal
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn draw_preview(frame: &mut Frame, area: Rect, piece: &GalleryPiece, focus: Focus) {
+fn draw_preview(frame: &mut Frame, area: Rect, piece: &GalleryPiece, mine: bool, focus: Focus) {
     if area.width < 10 || area.height < 4 {
         return;
     }
@@ -371,10 +378,11 @@ fn draw_preview(frame: &mut Frame, area: Rect, piece: &GalleryPiece, focus: Focu
         rows[1],
     );
     draw_piece_canvas(frame, rows[2], piece);
-    let keys: &[(&str, &str)] = match focus {
-        Focus::List => &[("v", "applaud"), ("Enter", "full frame"), ("Esc", "rail")],
-        Focus::Rail => &[("Enter/→", "browse")],
-        Focus::Canvas | Focus::Piece | Focus::Archive => &[],
+    let keys: &[(&str, &str)] = match (focus, mine) {
+        (Focus::List, true) => &[("x", "take down"), ("Enter", "full frame"), ("Esc", "rail")],
+        (Focus::List, false) => &[("v", "applaud"), ("Enter", "full frame"), ("Esc", "rail")],
+        (Focus::Rail, _) => &[("Enter/→", "browse")],
+        (Focus::Canvas | Focus::Piece | Focus::Archive, _) => &[],
     };
     frame.render_widget(Paragraph::new(key_hint_line(keys)), rows[3]);
 }
@@ -408,7 +416,12 @@ pub fn draw_piece_view(frame: &mut Frame, area: Rect, state: &State) {
     // the only place it is shown; without it a mod has nothing to type.
     // The first two groups (12 hex digits) are enough to be unique and
     // short enough to copy by eye.
-    let mut keys = key_hint_line(&[("v", "applaud"), ("j/k", "next/prev"), ("Esc", "back")]);
+    let hints: &[(&str, &str)] = if gallery.is_mine(piece) {
+        &[("x", "take down"), ("j/k", "next/prev"), ("Esc", "back")]
+    } else {
+        &[("v", "applaud"), ("j/k", "next/prev"), ("Esc", "back")]
+    };
+    let mut keys = key_hint_line(hints);
     keys.spans.push(Span::styled(
         format!("   id {}", piece_id_prefix(piece.id)),
         Style::default().fg(theme::TEXT_FAINT()),
@@ -449,10 +462,11 @@ pub fn draw_piece_canvas(frame: &mut Frame, area: Rect, piece: &GalleryPiece) {
     }
 }
 
-/// The splash: last month's winner over the door, if it fits under the
-/// caption. Returns false when the terminal is too small for it, so the
-/// caller keeps the coffee cup.
-pub fn draw_splash_piece(frame: &mut Frame, area: Rect, piece: &GalleryPiece) -> bool {
+/// The splash: this login's podium piece over the door, if it fits under
+/// the caption. Returns false when the terminal is too small for it, so
+/// the caller keeps the coffee cup.
+pub fn draw_splash_piece(frame: &mut Frame, area: Rect, splash: &SplashPiece) -> bool {
+    let piece = &splash.piece;
     let needed_height = piece.height as u16 + 4;
     let needed_width = (piece.width as u16).max(40) + 2;
     if area.height < needed_height + 2 || area.width < needed_width {
@@ -482,7 +496,11 @@ pub fn draw_splash_piece(frame: &mut Frame, area: Rect, piece: &GalleryPiece) ->
     let caption_y = block.y + piece.height as u16 + 1;
     let caption = Line::from(vec![
         Span::styled(
-            format!("piece of {}: ", month_label(piece.period_month)),
+            format!(
+                "{} of {}: ",
+                place_label(splash.place),
+                month_label(piece.period_month)
+            ),
             Style::default().fg(theme::TEXT_FAINT()),
         ),
         Span::styled(
@@ -731,6 +749,16 @@ fn month_label(month: chrono::NaiveDate) -> String {
     month.format("%b %Y").to_string()
 }
 
+/// A podium place as the caption says it: 1st, 2nd, 3rd.
+fn place_label(place: i64) -> String {
+    match place {
+        1 => "1st".to_string(),
+        2 => "2nd".to_string(),
+        3 => "3rd".to_string(),
+        n => format!("{n}th"),
+    }
+}
+
 fn notice_line(gallery: &GalleryState) -> Line<'static> {
     match gallery.notice() {
         Some(notice) => Line::from(Span::styled(
@@ -772,28 +800,57 @@ fn key_hint_line(keys: &[(&str, &str)]) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Lines of plain glyphs for a piece, for surfaces that draw text rather
-/// than cells (The Late Edition).
-pub fn piece_text_lines(canvas: &Canvas, width: usize, height: usize) -> Vec<String> {
+/// A run of glyphs in one colour, for surfaces that draw text rather than
+/// cells (The Late Edition). `None` is an unpainted glyph: the surface's
+/// own text colour, the way the board draws it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaintRun {
+    pub text: String,
+    pub fg: Option<RgbColor>,
+}
+
+/// A piece as lines of colour runs, one line per canvas row, trailing
+/// blanks trimmed. Every glyph keeps its own colour, so a text surface
+/// prints the piece the way the board painted it.
+pub fn piece_paint_lines(canvas: &Canvas, width: usize, height: usize) -> Vec<Vec<PaintRun>> {
     (0..height)
         .map(|y| {
-            let mut line = String::new();
+            let mut runs: Vec<PaintRun> = Vec::new();
             let mut x = 0;
             while x < width {
                 let pos = dartboard_core::Pos { x, y };
-                match canvas.glyph_at(pos) {
-                    Some(glyph) if glyph.pos == pos => {
-                        line.push(glyph.ch);
-                        x += glyph.width.max(1);
-                    }
-                    Some(_) => x += 1,
-                    None => {
-                        line.push(' ');
+                let (ch, fg, advance) = match canvas.glyph_at(pos) {
+                    Some(glyph) if glyph.pos == pos => (glyph.ch, glyph.fg, glyph.width.max(1)),
+                    Some(_) => {
                         x += 1;
+                        continue;
                     }
+                    None => (' ', None, 1),
+                };
+                x += advance;
+                match runs.last_mut() {
+                    Some(run) if run.fg == fg => run.text.push(ch),
+                    _ => runs.push(PaintRun {
+                        text: ch.to_string(),
+                        fg,
+                    }),
                 }
             }
-            line.trim_end().to_string()
+            // Blank cells past the last glyph are the paper's margin, not
+            // the piece's.
+            if let Some(run) = runs.last_mut()
+                && run.fg.is_none()
+            {
+                run.text = run.text.trim_end().to_string();
+                if run.text.is_empty() {
+                    runs.pop();
+                }
+            }
+            runs
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "ui_test.rs"]
+mod ui_test;

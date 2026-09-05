@@ -3,7 +3,12 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-09-04 (the `/members` overlay carries `OverlayInk` instead of baked colours, so it stops painting in whichever session last rendered on this thread; every deadchannel log line now carries `username`; first-contact seams: the admin-only `/haunt`
+- Last updated: 2026-09-05 (stage 2 of the haunting is witnessed by the
+  room: `ChatEvent::NameHit` comes off the `deadchannel_name_hit` Postgres
+  notify on the same listener as the gild markers, now
+  `ChatService::start_message_listener_task`; `push_message` promotes a
+  held beat when its message lands, and `take_witnessed_hit_landed` hands
+  it to the haunting. Before that, 2026-09-04: the `/members` overlay carries `OverlayInk` instead of baked colours, so it stops painting in whichever session last rendered on this thread; every deadchannel log line now carries `username`; first-contact seams: the admin-only `/haunt`
   command in §8 (parsed only when `is_admin`, so a non-admin's `/haunt`
   posts as plain text), the `own_message_landed` slot `push_message`
   records for the stage-2 name flicker, `name_flicker` threaded through
@@ -396,7 +401,16 @@ Admin commands:
   line - the mystery is the feature). Drained by
   `deadchannel::haunt::svc::tick`. Chat's other haunting seams: the
   `own_message_landed` slot `push_message` records for the stage-2 name
-  flicker, `name_flicker` in the rows-cache key,
+  flicker (the message id and its room, since a won hit is put on the
+  wire for that room), `ChatService::publish_name_hit` (the `pg_notify`
+  on `deadchannel_name_hit`, fire and forget), `ChatEvent::NameHit` off
+  the message listener into `note_name_hit`, which hands the beat over
+  at once if the message is on screen and otherwise holds it in
+  `pending_name_hits` for `push_message` to promote (a beat from another
+  replica can arrive seconds before the room delta brings its message;
+  one that never lands ages out after `NAME_HIT_WAIT`, 30s), the
+  `witnessed_hit_landed` slot the haunting drains, `name_flicker` in the
+  rows-cache key,
   `ChatService::send_first_contact_invitation_task`, and the runner:
   `join_deadchannel_room` creates the `deadchannel_runners` row with a
   random starter look, and `ensure_chat_rows_cache` takes
@@ -529,9 +543,10 @@ session. `late-core/src/models/chat_message_gild.rs` owns the table
   count, `pg_notify`, commit. Any early return drops the transaction.
 - **Repaint is DB-backed, not broadcast-backed.** The gild transaction
   notifies `chat_message_gilded` with a `<message id>:<room id>` payload;
-  `ChatService::start_gild_listener_task` (one connection per process, wired
-  in `main.rs`, reconnecting after 5s) turns each notification into a local
-  `ChatEvent::MessageGildsUpdated`. This process is not special-cased: it
+  `ChatService::start_message_listener_task` (one connection per process,
+  wired in `main.rs`, reconnecting after 5s; it also carries the
+  haunting's `deadchannel_name_hit` channel) turns each notification into
+  a local `ChatEvent::MessageGildsUpdated`. This process is not special-cased: it
   learns about its own gilds the same way a second replica does, so there is
   exactly one code path that draws a marker. `GildSucceeded` / `GildFailed`
   ride the in-process broadcast, but they only carry the two banners (buyer
@@ -1194,7 +1209,7 @@ Test gaps:
 - `#announcements` admin-only currently depends on the provided `room_slug`; stale/missing slug is a fragile path.
 - Login `#announcements` modal marks `chat_room_members.last_read_at` only when dismissed; do not add a separate announcement-read table unless the room model itself changes.
 - Reaction tasks are async; UI should not assume optimistic success.
-- A gild marker repaints off the Postgres notify, not off `evt_tx`. If `start_gild_listener_task` is not running (tests, or a process wired without it) the marker only appears on the next room tail load. Do not "fix" that by broadcasting locally as well: two paths would mean two repaints and a marker that behaves differently on the replica that sold it.
+- A gild marker repaints off the Postgres notify, not off `evt_tx`. If `start_message_listener_task` is not running (tests, or a process wired without it) the marker only appears on the next room tail load. Do not "fix" that by broadcasting locally as well: two paths would mean two repaints and a marker that behaves differently on the replica that sold it.
 - Poll create/vote tasks are async; `ChatEvent::PollUpdated` patches the local active-poll map and `ChatSnapshot.active_polls` refreshes authoritative visibility. Successful poll creation spawns a sleep-until-expiry finalizer that atomically claims the expired poll in Postgres, marks it inactive, and posts compact results into the room as the poll creator. `ChatService::start_poll_finalizer_recovery_task` runs a coarse 10-minute recovery scan for expired active polls so restarts/redeploys do not strand result posts; the DB claim is the cross-replica duplicate guard.
 - Poll vote shortcuts use `va/vb/vc` when the selected/visible real room has an active poll, leaving music `v1/v2/v3` selectors available.
 - Room visual order must stay consistent between state and UI hit-testing/row-building.

@@ -5,17 +5,29 @@
 
 use std::collections::HashSet;
 
+use dartboard_core::RgbColor;
 use late_core::models::app_flag::AppFlag;
 use late_core::models::paper::{PaperEdition, PaperRoomPage, PaperSectionKind, PaperStatus};
 use tokio::sync::{broadcast, oneshot};
 use uuid::Uuid;
 
 use super::svc::{PaperEvent, PaperService, PaperTrigger};
+use crate::app::artboard::gallery::ui::PaintRun;
 
 /// Rooms the reader is not in that make the paper: the top few by
 /// activity, bumped rooms first. A cap, so the paper stays a paper and
 /// not the whole site.
 pub(crate) const PAPER_ELSEWHERE_LIMIT: usize = 3;
+/// How many of yesterday's pieces ON THE WALL prints, most applauded
+/// first. The lead piece prints whatever its count; the runners-up need
+/// at least one hand on them (`svc.rs` applies that), so a quiet day
+/// never pads the column.
+pub(crate) const PAPER_WALL_PIECES: i64 = 3;
+/// Lines the wall may spend on pieces (each costs its height plus two).
+/// The lead piece always prints; a runner-up that would push the column
+/// past this is left to page 4, so one tall piece does not bury the rest
+/// of the edition.
+pub(crate) const PAPER_WALL_LINE_BUDGET: usize = 60;
 
 /// The paper's per-session state, owned by `App`.
 pub(crate) struct PaperState {
@@ -161,20 +173,21 @@ impl PaperModal {
 /// Everything the layout needs from the session: the edition's rows and
 /// how this reader's rail is ordered (favorites first, as the rail draws
 /// them), which rooms they are in, and which rooms carry a shop bump.
-/// The wall column: yesterday's most applauded gallery piece, printed in
-/// black and white the way a paper prints anything.
+/// One piece on the wall: yesterday's most applauded, printed in its own
+/// colours, glyph for glyph.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaperWall {
     pub title: String,
     pub username: String,
     pub applause: i64,
-    pub lines: Vec<String>,
+    pub lines: Vec<Vec<PaintRun>>,
 }
 
 pub(crate) struct PaperLayout<'a> {
     pub edition: &'a PaperEdition,
-    /// The piece on the wall, when yesterday hung one.
-    pub wall: Option<&'a PaperWall>,
+    /// The pieces on the wall, most applauded first; empty when yesterday
+    /// hung nothing.
+    pub wall: &'a [PaperWall],
     /// Member rooms in rail order; rooms the edition has no page for are
     /// skipped, rooms missing from the rail follow by activity.
     pub rail_order: &'a [Uuid],
@@ -205,6 +218,8 @@ pub(crate) enum PaperInk {
     Body,
     /// The byline and the footer.
     Faint,
+    /// A painted glyph on the wall, in the colour it was painted.
+    Paint(RgbColor),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -382,23 +397,43 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<PaperLine> {
         lines.extend(column_lines(text));
     }
 
-    if let Some(wall) = wall {
+    if !wall.is_empty() {
         lines.push(PaperLine::new());
         lines.push(heading("ON THE WALL"));
-        lines.push(vec![
-            PaperSpan::new(format!("\"{}\"", wall.title), PaperInk::Title),
-            PaperSpan::new(
-                format!(
-                    " by @{}, hung yesterday, {} applause so far. Page 4 has it in colour.",
-                    wall.username, wall.applause
+        let mut spent = 0;
+        for (slot, piece) in wall.iter().enumerate() {
+            let cost = piece.lines.len() + 2;
+            if slot > 0 && spent + cost > PAPER_WALL_LINE_BUDGET {
+                break;
+            }
+            spent += cost;
+            lines.push(vec![
+                PaperSpan::new(format!("\"{}\"", piece.title), PaperInk::Title),
+                PaperSpan::new(
+                    format!(
+                        " by @{}, hung yesterday, {} applause so far.",
+                        piece.username, piece.applause
+                    ),
+                    PaperInk::Meta,
                 ),
-                PaperInk::Meta,
-            ),
-        ]);
-        lines.push(PaperLine::new());
-        for line in &wall.lines {
-            lines.push(vec![PaperSpan::new(format!("    {line}"), PaperInk::Body)]);
+            ]);
+            lines.push(PaperLine::new());
+            for line in &piece.lines {
+                let mut spans = vec![PaperSpan::new("    ", PaperInk::Body)];
+                for run in line {
+                    let ink = match run.fg {
+                        Some(color) => PaperInk::Paint(color),
+                        None => PaperInk::Body,
+                    };
+                    spans.push(PaperSpan::new(run.text.clone(), ink));
+                }
+                lines.push(spans);
+            }
         }
+        lines.push(vec![PaperSpan::new(
+            "    the whole wall hangs on page 4, the Artboard gallery",
+            PaperInk::Faint,
+        )]);
     }
 
     if !quiet.is_empty() || !at_the_press.is_empty() || !missed.is_empty() {

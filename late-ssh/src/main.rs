@@ -301,9 +301,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .with_chip_service(chip_service.clone())
         .with_activity(activity_publisher.clone());
-    // Gild markers cross replicas over Postgres, not over this process's
-    // chat broadcast; see `ChatService::start_gild_listener_task`.
-    let _chat_gild_listener_task = chat_service.start_gild_listener_task(config.db.clone());
+    // Gild markers and stage-2 name hits cross replicas over Postgres, not
+    // over this process's chat broadcast; see
+    // `ChatService::start_message_listener_task`.
+    let _chat_message_listener_task = chat_service.start_message_listener_task(config.db.clone());
     // Process-wide switches (the haunt kill switch and fuse) cross replicas
     // over Postgres; the listener seeds this replica on every (re)connect.
     // See `app/flags/svc.rs`.

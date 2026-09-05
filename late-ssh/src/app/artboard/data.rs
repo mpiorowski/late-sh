@@ -39,6 +39,8 @@ fn overview_lines() -> Vec<String> {
         "  Hang a piece      frame your work on the board, name it, hang it",
         "  frame rules       at least 40 glyphs, at most 100x40, 75% painted by you",
         "  v                 applaud a piece (one per person, take it back with v again)",
+        "  x                 take your own piece down (this month only; x again to confirm)",
+        "  past months       settled: no applause, no take-downs",
         "  month end         top 3 by best piece win ART1-3 badges and 10k / 5k / 1k chips",
         "  three applause    the least a piece needs to count for the month",
         "  three a day       the most pieces one account hangs per UTC day",
