@@ -1809,7 +1809,7 @@ Music Booth (v then v)
     Enter           queue selected track fresh
     d               delete selected track (staff)
 
-  Bringing a track pays you 200 chips, whether you submit a URL or queue one from History, repeats included: at most 5 a day (UTC), and past that it still queues, it just pays nothing.
+  Bringing a track pays you 100 chips, whether you submit a URL or queue one from History, repeats included: at most 5 a day (UTC), and past that it still queues, it just pays nothing.
   The queue is ordered by score, so upvotes pull tracks toward the front. You can't vote on the track that's already playing, but you can skip-vote it.
   History keeps up to 200 unique played tracks, most recently played first, so whatever is playing right now sits at the top. There are no history votes. Requeued history tracks start with 0 live queue votes.
 

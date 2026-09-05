@@ -1,6 +1,6 @@
 use chrono::{Datelike, Duration, Months, Utc};
 
-use crate::models::artboard_piece::{ArtboardPiece, HangOutcome, PieceListing};
+use crate::models::artboard_piece::{ApplauseOutcome, ArtboardPiece, HangOutcome, PieceListing};
 use crate::models::artboard_piece_test::hang_params;
 use crate::models::chips::{ChipMove, Difficulty, UserChips};
 use crate::models::crown::CrownReign;
@@ -299,18 +299,21 @@ async fn the_gallery_award_ranks_best_pieces_and_pays_once() {
         vec![(winner.id, 1, 10_000), (runner_up.id, 2, 5_000)]
     );
 
-    // Applause keeps moving after the rollover. The quiet piece clears the
-    // floor now and would take third; the month is settled, so the re-run
-    // (a restart, the 24h fallback, another replica) pays nobody.
-    ArtboardPiece::toggle_applause(&client, quiet.id, fans[2].id)
-        .await
-        .expect("late applause");
+    // The month is closed at the rollover: late applause is refused, and
+    // the re-run (a restart, the 24h fallback, another replica) pays
+    // nobody because the month already has its rows.
+    assert_eq!(
+        ArtboardPiece::toggle_applause(&client, quiet.id, fans[2].id)
+            .await
+            .expect("late applause"),
+        ApplauseOutcome::Closed
+    );
     let second_pass = snapshot_previous_month_profile_awards(&mut client)
         .await
         .expect("snapshot again");
     assert!(
         second_pass.gallery_prizes_paid.is_empty(),
-        "a re-run pays nothing, even after the ranking moved"
+        "a re-run pays nothing"
     );
 
     let gallery_award = |awards: Vec<crate::models::profile_award::ProfileAward>| {
@@ -355,7 +358,10 @@ async fn the_gallery_award_ranks_best_pieces_and_pays_once() {
     let podium = ArtboardPiece::previous_month_podium(&client)
         .await
         .expect("podium");
-    assert_eq!(podium.first().map(|piece| piece.id), Some(best.id));
+    assert_eq!(
+        podium.first().map(|entry| (entry.place, entry.piece.id)),
+        Some((1, best.id))
+    );
     let hall = ArtboardPiece::list(&client, winner.id, PieceListing::HallOfFame)
         .await
         .expect("hall of fame");

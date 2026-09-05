@@ -299,7 +299,7 @@ impl GalleryState {
 
     pub fn focus_rail(&mut self) {
         self.focus = Focus::Rail;
-        self.take_down_asked = None;
+        self.forget_take_down_question();
     }
 
     /// True for the viewer's own piece: the one they may take down.
@@ -445,6 +445,7 @@ impl GalleryState {
             return;
         };
         let visible = self.list_visible_height.get().max(1);
+        self.forget_take_down_question();
         let state = &mut self.sections[section.index()];
         if state.pieces.is_empty() {
             state.selected = 0;
@@ -453,7 +454,6 @@ impl GalleryState {
         }
         let last = state.pieces.len() as isize - 1;
         state.selected = (state.selected as isize + delta).clamp(0, last) as usize;
-        self.take_down_asked = None;
         if state.selected < state.scroll {
             state.scroll = state.selected;
         } else if state.selected >= state.scroll + visible {
@@ -469,7 +469,7 @@ impl GalleryState {
         if index < state.pieces.len() {
             state.selected = index;
         }
-        self.take_down_asked = None;
+        self.forget_take_down_question();
     }
 
     pub fn list_page(&mut self, pages: isize) {
@@ -495,7 +495,7 @@ impl GalleryState {
         if self.focus == Focus::Piece {
             self.focus = Focus::List;
         }
-        self.take_down_asked = None;
+        self.forget_take_down_question();
     }
 
     /// Applaud the selected piece, or take the applause back. One in
@@ -537,7 +537,7 @@ impl GalleryState {
         if self.take_down_asked != Some(piece_id) {
             self.take_down_asked = Some(piece_id);
             self.notice = Some(format!(
-                "Take \"{title}\" down for good? x again to confirm, anything else keeps it."
+                "Take \"{title}\" down? x again to confirm. Its day slot and cells stay spent."
             ));
             return;
         }
@@ -547,9 +547,12 @@ impl GalleryState {
             .take_down_task(piece_id, self.viewer_id, self.results_tx.clone());
     }
 
-    /// Any key that is not the confirming `x` withdraws the question.
+    /// Any key that is not the confirming `x` withdraws the question, and
+    /// the prompt with it; a notice about anything else stays.
     pub fn forget_take_down_question(&mut self) {
-        self.take_down_asked = None;
+        if self.take_down_asked.take().is_some() {
+            self.notice = None;
+        }
     }
 
     // ----- hang flow -----

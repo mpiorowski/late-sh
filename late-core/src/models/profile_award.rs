@@ -316,18 +316,16 @@ pub async fn snapshot_previous_month_profile_awards(
              -- applause (earliest hang breaks a tie between their own),
              -- and only hangers whose best piece cleared the floor.
              --
-             -- This arm pays chips, and applause keeps moving after the
-             -- rollover (the listings, the splash and the paper all invite
-             -- `v`, which also withdraws), so unlike the other arms its
-             -- input is not frozen by the period window. The `NOT EXISTS`
-             -- is what freezes it instead: the first pass after the
-             -- rollover settles the month, and once any `artboard` row
-             -- exists for it every later pass (the 24h fallback, a
-             -- restart, another replica) ranks nobody, inserts nothing and
-             -- pays nothing, however the applause has moved since.
-             -- Without it a hanger who climbed into the top 3 on a later
-             -- pass would get a fresh row past `ON CONFLICT` and a fresh
-             -- prize, and the month's pool would have no bound.
+             -- This arm pays chips, so it must run to completion exactly
+             -- once a month. `ArtboardPiece::toggle_applause` closes the
+             -- month at the rollover, but a mod removal (`removed_at`)
+             -- still moves the ranking afterwards, and `ON CONFLICT DO
+             -- NOTHING` alone would let a hanger who climbed into the top
+             -- 3 on a later pass (the 24h fallback, a restart, another
+             -- replica) get a fresh row and a fresh prize. The `NOT
+             -- EXISTS` settles it: once any `artboard` row exists for the
+             -- month every later pass ranks nobody, inserts nothing and
+             -- pays nothing.
              gallery_best AS (
                 SELECT DISTINCT ON (p.user_id)
                        p.user_id,

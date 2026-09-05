@@ -57,8 +57,12 @@ pub(crate) fn apply_clock_glitch(haunt: &HauntState, marquee_tick: usize, clock:
 }
 
 /// Stage 2's live hit for the chat row builder: which message's author
-/// label to corrupt this frame, and the burst seed. Rides the rows cache
+/// label to corrupt this frame, and this wave's seed. Rides the rows cache
 /// key, so start and heal each rebuild the rows exactly once.
+///
+/// Two sources, one slot: this session's own hit (it is being haunted) and
+/// a beat it is witnessing on somebody else's name. Own first, because the
+/// one moment stage 2 is built around is your eye on your own send.
 pub(crate) fn name_flicker_for(
     haunt: &HauntState,
     marquee_tick: usize,
@@ -67,6 +71,12 @@ pub(crate) fn name_flicker_for(
         .name_flicker
         .as_ref()
         .and_then(|flicker| flicker.corruption(marquee_tick))
+        .or_else(|| {
+            haunt
+                .witness
+                .as_ref()
+                .and_then(|hit| hit.corruption(marquee_tick))
+        })
 }
 
 /// An author label with two or three of its name characters swapped for

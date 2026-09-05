@@ -18,9 +18,11 @@
 //!
 //! A month closes at the rollover: applause on a piece from a past month is
 //! refused (`ApplauseOutcome::Closed`), and so is its hanger's take-down
-//! (`TakeDownOutcome::Closed`). That is what keeps the hall of fame and the
-//! splash podium, which read live applause, in step with the award that
-//! was minted from the same counts.
+//! (`TakeDownOutcome::Closed`). That is what keeps the hall of fame, which
+//! reads live applause, in step with the award that was minted from the
+//! same counts. The splash podium reads the award rows themselves
+//! ([`ArtboardPiece::previous_month_podium`]), so a mod removal after the
+//! month settled leaves a gap rather than moving anyone up.
 
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
@@ -126,6 +128,14 @@ pub enum ApplauseOutcome {
     OwnPiece,
     /// The piece's month is over; its applause is what the award counted.
     Closed,
+}
+
+/// One place on last month's podium: the rank the award minted (1 is
+/// `ART1`) and the piece that hangs for it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PodiumPiece {
+    pub place: i64,
+    pub piece: ArtboardPiece,
 }
 
 /// How the hanger's own take-down ended.
@@ -353,34 +363,41 @@ impl ArtboardPiece {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
-    /// Last month's podium, best first: each hanger's single best piece
-    /// over the award floor, at most [`GALLERY_PODIUM_SIZE`] of them. What
-    /// the splash hangs over the door. One piece per hanger and ties toward
-    /// the earlier hang, exactly the way the award query ranks, so index
-    /// `n` is the piece that won `ART{n+1}`: a hanger with the month's
-    /// three best pieces takes one place, not the whole podium.
-    pub async fn previous_month_podium(client: &impl GenericClient) -> Result<Vec<Self>> {
+    /// Last month's podium, `ART1` first: the `artboard` award rows the
+    /// snapshot minted for the month, each with its hanger's best piece
+    /// still up (applause, then the earlier hang: the award's own order,
+    /// so it is the piece that won unless a mod took that one down). The
+    /// place travels with the row, so a removal leaves a gap instead of
+    /// promoting whoever stood behind; a hanger with nothing left up is
+    /// off the podium. Empty until the award pass has run.
+    pub async fn previous_month_podium(client: &impl GenericClient) -> Result<Vec<PodiumPiece>> {
         let rows = client
             .query(
                 &format!(
-                    "SELECT * FROM (
-                        SELECT DISTINCT ON (user_id) *
-                        FROM ({PIECE_VIEW_SQL}) pieces
-                        WHERE period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
-                          AND applause >= $2
-                        ORDER BY user_id, applause DESC, created ASC
-                     ) best
-                     ORDER BY applause DESC, created ASC
-                     LIMIT $3"
+                    "SELECT pieces.*, award.rank::bigint AS place
+                     FROM profile_awards award
+                     JOIN LATERAL (
+                        SELECT * FROM ({PIECE_VIEW_SQL}) pieces
+                        WHERE pieces.user_id = award.user_id
+                          AND pieces.period_month = award.period_month
+                        ORDER BY pieces.applause DESC, pieces.created ASC
+                        LIMIT 1
+                     ) pieces ON true
+                     WHERE award.category = 'artboard'
+                       AND award.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
+                       AND award.rank <= $2::bigint
+                     ORDER BY award.rank ASC"
                 ),
-                &[
-                    &Uuid::nil(),
-                    &GALLERY_AWARD_MIN_APPLAUSE,
-                    &GALLERY_PODIUM_SIZE,
-                ],
+                &[&Uuid::nil(), &GALLERY_PODIUM_SIZE],
             )
             .await?;
-        Ok(rows.into_iter().map(Self::from).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| PodiumPiece {
+                place: row.get("place"),
+                piece: Self::from(row),
+            })
+            .collect())
     }
 
     /// The most applauded pieces hung on one UTC day, best first, at most

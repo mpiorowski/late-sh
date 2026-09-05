@@ -55,7 +55,7 @@ use crate::metrics::{self, PaperOpenResult, PaperPrintResult};
 
 /// A room needs this many human messages in the edition's window to get
 /// a column; under it the room is listed as quiet and no call is spent.
-pub const PAPER_MIN_MESSAGES: i64 = 5;
+pub const PAPER_MIN_MESSAGES: i64 = 3;
 
 /// How often each replica looks for unprinted pages. The first sweep
 /// after UTC midnight prints the day; the rest find nothing to do, which

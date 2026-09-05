@@ -957,9 +957,23 @@ pub struct ChatState {
     requested_haunt: Option<crate::app::deadchannel::haunt::state::HauntCommand>,
     /// Set by `/paper`; consumed by `paper::svc::tick` every tick.
     requested_paper: Option<crate::app::paper::state::PaperCommand>,
-    /// The just-landed echo of this session's own send, for the stage-2
-    /// name flicker; consumed by `deadchannel::haunt::svc` every tick.
-    own_message_landed: Option<Uuid>,
+    /// The just-landed echo of this session's own send, and the room it
+    /// landed in, for the stage-2 name flicker; consumed by
+    /// `deadchannel::haunt::svc` every tick. The room travels with it
+    /// because a won hit is put on the wire for the rest of that room, and
+    /// by then the sender may have tabbed elsewhere.
+    own_message_landed: Option<(Uuid, Uuid)>,
+    /// A stage-2 hit off the wire (`ChatEvent::NameHit`) whose message is
+    /// on screen: the message id and the wave seed. Consumed by
+    /// `deadchannel::haunt::svc` every tick, which paints it.
+    witnessed_hit_landed: Option<(Uuid, u64)>,
+    /// Hits heard before their message reached this session, keyed by
+    /// message id: the seed and when it was heard. Only another replica
+    /// can put a beat here (this replica's own broadcast delivers the
+    /// message before the sender has even claimed the hit); the room delta
+    /// brings the message along and `push_message` promotes the beat. A
+    /// beat whose message never lands ages out at the next insert.
+    pending_name_hits: HashMap<Uuid, (u64, Instant)>,
     /// Set by /watch @user; consumed by `App`.
     requested_watch: Option<String>,
     /// A stream room this session just opened; consumed by `App`, which
@@ -1275,6 +1289,8 @@ impl ChatState {
             requested_haunt: None,
             requested_paper: None,
             own_message_landed: None,
+            witnessed_hit_landed: None,
+            pending_name_hits: HashMap::new(),
             requested_watch: None,
             opened_stream_room: None,
             requested_aquarium_command: None,
@@ -2042,8 +2058,31 @@ impl ChatState {
         self.requested_haunt.take()
     }
 
-    pub(crate) fn take_own_message_landed(&mut self) -> Option<Uuid> {
+    pub(crate) fn take_own_message_landed(&mut self) -> Option<(Uuid, Uuid)> {
         self.own_message_landed.take()
+    }
+
+    pub(crate) fn take_witnessed_hit_landed(&mut self) -> Option<(Uuid, u64)> {
+        self.witnessed_hit_landed.take()
+    }
+
+    /// A stage-2 beat off the wire. Worth nothing until the message it
+    /// corrupts is here to corrupt: handed straight to the haunting if the
+    /// message is already in the room, held for `push_message` if the room
+    /// delta has not brought it yet, dropped if this session does not hold
+    /// the room at all.
+    fn note_name_hit(&mut self, room_id: Uuid, message_id: Uuid, seed: u64) {
+        if self.find_message_in_room(room_id, message_id).is_some() {
+            self.witnessed_hit_landed = Some((message_id, seed));
+            return;
+        }
+        if !self.rooms.iter().any(|(room, _)| room.id == room_id) {
+            return;
+        }
+        let now = Instant::now();
+        self.pending_name_hits
+            .retain(|_, (_, heard)| now.duration_since(*heard) < NAME_HIT_WAIT);
+        self.pending_name_hits.insert(message_id, (seed, now));
     }
 
     pub(crate) fn take_requested_pot(&mut self) -> Option<PotCommand> {
@@ -6121,6 +6160,13 @@ impl ChatState {
                     }
                     self.bump_room_version(room_id);
                 }
+                ChatEvent::NameHit {
+                    room_id,
+                    message_id,
+                    seed,
+                } => {
+                    self.note_name_hit(room_id, message_id, seed);
+                }
                 ChatEvent::GildSucceeded {
                     user_id,
                     tier,
@@ -6443,7 +6489,7 @@ impl ChatState {
                 .find(|(room, _)| room.id == room_id)
                 .and_then(|(_, messages)| messages.first());
             if !groups_as_continuation(prev, &message) {
-                self.own_message_landed = Some(message.id);
+                self.own_message_landed = Some((message.id, room_id));
             }
         }
 
@@ -6463,6 +6509,12 @@ impl ChatState {
 
         if messages.iter().any(|existing| existing.id == message.id) {
             return;
+        }
+
+        // A stage-2 beat heard from another replica before this message
+        // got here: the name corrupts as the message arrives.
+        if let Some((seed, _)) = self.pending_name_hits.remove(&message.id) {
+            self.witnessed_hit_landed = Some((message.id, seed));
         }
 
         // Service snapshots are newest-first; keep same order for cheap appends at the front.
@@ -8268,6 +8320,13 @@ fn format_cooldown(remaining: Duration) -> String {
 /// The renderer groups consecutive messages from one author within this
 /// window under a single header (`ui.rs`, `is_continuation`).
 pub(crate) const MESSAGE_GROUP_WINDOW_SECS: i64 = 120;
+
+/// How long a stage-2 beat waits for its message. Another replica's
+/// message reaches this session on the chat snapshot's cadence
+/// (`CHAT_REFRESH_INTERVAL`, 10s), so this has to stay comfortably above
+/// it; past it the beat is dropped rather than played late, so somebody
+/// who opens the room a minute afterwards sees a clean name.
+const NAME_HIT_WAIT: Duration = Duration::from_secs(30);
 
 /// Whether `message`, landing at the head of the room's newest-first list,
 /// will render as a grouped continuation of `prev`: same author within the

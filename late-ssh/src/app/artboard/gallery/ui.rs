@@ -270,13 +270,20 @@ pub fn draw_gallery_pane(frame: &mut Frame, area: Rect, state: &State) {
     );
     frame.render_widget(Paragraph::new(notice_line(gallery)), rows[2]);
 
+    // Your own piece cannot be applauded and only it can be taken down,
+    // so the hint names the key that works on the selected piece.
+    let mine = gallery
+        .selected_piece()
+        .is_some_and(|piece| gallery.is_mine(piece));
     if area.width < PREVIEW_MIN_PANE_WIDTH {
         let body = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(rows[3]);
         draw_list(frame, body[0], gallery, section);
-        frame.render_widget(
-            Paragraph::new(key_hint_line(&[("Enter", "view"), ("v", "applaud")])),
-            body[1],
-        );
+        let hints: &[(&str, &str)] = if mine {
+            &[("Enter", "view"), ("x", "take down")]
+        } else {
+            &[("Enter", "view"), ("v", "applaud")]
+        };
+        frame.render_widget(Paragraph::new(key_hint_line(hints)), body[1]);
         return;
     }
     let list_width = (area.width / 5 * 2).clamp(LIST_MIN_WIDTH, area.width.saturating_sub(20));
@@ -288,7 +295,7 @@ pub fn draw_gallery_pane(frame: &mut Frame, area: Rect, state: &State) {
     .split(rows[3]);
     draw_list(frame, columns[0], gallery, section);
     if let Some(piece) = gallery.selected_piece() {
-        draw_preview(frame, columns[2], piece, gallery.focus());
+        draw_preview(frame, columns[2], piece, mine, gallery.focus());
     }
 }
 
@@ -350,7 +357,7 @@ fn draw_list(frame: &mut Frame, area: Rect, gallery: &GalleryState, section: Gal
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn draw_preview(frame: &mut Frame, area: Rect, piece: &GalleryPiece, focus: Focus) {
+fn draw_preview(frame: &mut Frame, area: Rect, piece: &GalleryPiece, mine: bool, focus: Focus) {
     if area.width < 10 || area.height < 4 {
         return;
     }
@@ -371,10 +378,11 @@ fn draw_preview(frame: &mut Frame, area: Rect, piece: &GalleryPiece, focus: Focu
         rows[1],
     );
     draw_piece_canvas(frame, rows[2], piece);
-    let keys: &[(&str, &str)] = match focus {
-        Focus::List => &[("v", "applaud"), ("Enter", "full frame"), ("Esc", "rail")],
-        Focus::Rail => &[("Enter/→", "browse")],
-        Focus::Canvas | Focus::Piece | Focus::Archive => &[],
+    let keys: &[(&str, &str)] = match (focus, mine) {
+        (Focus::List, true) => &[("x", "take down"), ("Enter", "full frame"), ("Esc", "rail")],
+        (Focus::List, false) => &[("v", "applaud"), ("Enter", "full frame"), ("Esc", "rail")],
+        (Focus::Rail, _) => &[("Enter/→", "browse")],
+        (Focus::Canvas | Focus::Piece | Focus::Archive, _) => &[],
     };
     frame.render_widget(Paragraph::new(key_hint_line(keys)), rows[3]);
 }

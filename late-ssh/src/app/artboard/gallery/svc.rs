@@ -8,12 +8,12 @@
 //! `late_core::models::artboard_piece` (the SQL rails) and `frame.rs` (the
 //! local ones).
 //!
-//! The splash podium (last month's top three) is process-wide: one `watch`
-//! refreshed hourly; each login claims the next place for its account
-//! (`claim_splash_piece`) and the door shows that piece, or the coffee cup
-//! once the account has seen the podium. Reading the watch is all it
-//! does, so any number of replicas may run it (root CONTEXT.md,
-//! multi-replica rule).
+//! The splash podium (last month's `ART1`-`ART3`, from the award rows) is
+//! process-wide: one `watch` refreshed hourly; each login claims the next
+//! place for its account (`claim_splash_piece`) and the door shows that
+//! piece, or the coffee cup once the account has seen the podium. Reading
+//! the watch is all it does, so any number of replicas may run it (root
+//! CONTEXT.md, multi-replica rule).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,7 +25,7 @@ use late_core::db::Db;
 use late_core::models::app_flag::AppFlags;
 use late_core::models::artboard_piece::{
     ApplauseOutcome, ArtboardPiece, HangOutcome, HangParams, ListingCounts, PieceListing,
-    TakeDownOutcome,
+    PodiumPiece, TakeDownOutcome,
 };
 use late_core::models::user::User;
 use tokio::sync::{mpsc, watch};
@@ -36,16 +36,27 @@ use crate::metrics::{self, GalleryApplauseResult, GalleryHangResult, GalleryTake
 
 use super::frame::{Credit, FramedPiece};
 
-/// How often the splash podium is re-read. It changes once a month, and a
-/// mod removal is the only thing that could change it in between.
+/// How often the splash podium is re-read. It changes once a month, when
+/// the award pass mints it, and a mod removal is the only thing that could
+/// change it in between.
 const SPLASH_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
-/// What the door shows this session: a podium place (1 is the winner) and
-/// its piece. Claimed once at bootstrap; the session never re-reads it.
+/// One place on the podium, and what the door shows this session once it
+/// is claimed: the rank the award minted (1 is `ART1`) and the piece that
+/// hangs for it. Claimed once at bootstrap; the session never re-reads it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SplashPiece {
     pub place: i64,
     pub piece: GalleryPiece,
+}
+
+impl SplashPiece {
+    fn decode(entry: PodiumPiece) -> Result<Self> {
+        Ok(Self {
+            place: entry.place,
+            piece: GalleryPiece::decode(entry.piece)?,
+        })
+    }
 }
 
 /// A piece as the page draws it: the row decoded into a canvas, with the
@@ -124,7 +135,9 @@ impl HangRefusal {
     pub fn notice(self) -> &'static str {
         match self {
             Self::DailyCap => "You have hung today's three pieces already. Tomorrow.",
-            Self::Duplicate => "Those exact cells already hang in the gallery this month.",
+            Self::Duplicate => {
+                "Those exact cells hung in the gallery this month already, even if taken down since."
+            }
             Self::Disabled => "The gallery is closed right now.",
         }
     }
@@ -168,8 +181,8 @@ pub enum GalleryResult {
 pub struct GalleryService {
     db: Option<Db>,
     flags_rx: watch::Receiver<Option<AppFlags>>,
-    splash_tx: Arc<watch::Sender<Vec<GalleryPiece>>>,
-    splash_rx: watch::Receiver<Vec<GalleryPiece>>,
+    splash_tx: Arc<watch::Sender<Vec<SplashPiece>>>,
+    splash_rx: watch::Receiver<Vec<SplashPiece>>,
 }
 
 impl GalleryService {
@@ -205,18 +218,20 @@ impl GalleryService {
                 .is_some_and(|flags| flags.artboard_gallery_enabled)
     }
 
-    /// The podium as this replica last read it, best first. Tests and the
-    /// claim below read it; sessions get their piece through
+    /// The podium as this replica last read it, `ART1` first. Tests and
+    /// the claim below read it; sessions get their piece through
     /// `claim_splash_piece`.
-    pub fn splash_podium(&self) -> Vec<GalleryPiece> {
+    pub fn splash_podium(&self) -> Vec<SplashPiece> {
         self.splash_rx.borrow().clone()
     }
 
     /// The piece this login shows over the door, if the account has a
     /// podium place left this month. One `UPDATE` per login while places
     /// remain, none once the account has seen them all (the stamp's
-    /// `WHERE` fails and nothing is written). A failed claim is the cup:
-    /// the door is not worth failing a login over.
+    /// `WHERE` fails and nothing is written). The claim counts entries,
+    /// not ranks: a podium with a gap (a mod removal) is shorter and the
+    /// caption still says the rank the award minted. A failed claim is the
+    /// cup: the door is not worth failing a login over.
     pub async fn claim_splash_piece(&self, user_id: Uuid) -> Option<SplashPiece> {
         let Some(db) = self.db.as_ref() else {
             return None;
@@ -225,7 +240,7 @@ impl GalleryService {
             return None;
         }
         let podium = self.splash_podium();
-        let Some(month) = podium.first().map(|piece| piece.period_month) else {
+        let Some(month) = podium.first().map(|entry| entry.piece.period_month) else {
             return None;
         };
         let claimed = async {
@@ -234,12 +249,12 @@ impl GalleryService {
         }
         .await;
         match claimed {
-            Ok(Some(place)) => match podium.into_iter().nth((place - 1) as usize) {
-                Some(piece) => Some(SplashPiece { place, piece }),
+            Ok(Some(slot)) => match podium.into_iter().nth((slot - 1) as usize) {
+                Some(entry) => Some(entry),
                 None => {
                     tracing::warn!(
                         %user_id,
-                        place,
+                        slot,
                         "artboard gallery splash claim landed past the podium"
                     );
                     None
@@ -271,7 +286,8 @@ impl GalleryService {
                         tracing::debug!("artboard gallery has no splash podium")
                     }
                     Ok(podium) => tracing::debug!(
-                        winner_id = %podium[0].id,
+                        first_piece_id = %podium[0].piece.id,
+                        first_place = podium[0].place,
                         places = podium.len(),
                         "artboard gallery splash podium refreshed"
                     ),
@@ -288,7 +304,7 @@ impl GalleryService {
     /// splash goes back to the coffee cup on the next refresh, so a piece
     /// that has to come down fast is off the highest-traffic surface
     /// within the hour without waiting for `/mod artboard remove`.
-    pub async fn refresh_splash(&self) -> Result<Vec<GalleryPiece>> {
+    pub async fn refresh_splash(&self) -> Result<Vec<SplashPiece>> {
         let Some(db) = self.db.as_ref() else {
             return Ok(Vec::new());
         };
@@ -300,7 +316,7 @@ impl GalleryService {
         let podium = ArtboardPiece::previous_month_podium(&client)
             .await?
             .into_iter()
-            .map(GalleryPiece::decode)
+            .map(SplashPiece::decode)
             .collect::<Result<Vec<_>>>()?;
         let _ = self.splash_tx.send(podium.clone());
         Ok(podium)

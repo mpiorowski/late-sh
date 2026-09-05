@@ -7,15 +7,17 @@
 
 use late_core::db::Db;
 use late_core::models::app_flag::{AppFlag, AppFlags};
+use late_core::models::deadchannel_name_hit::NameHitSignal;
 use late_core::models::user::{FirstContactBioVerdict, FirstContactHitClaim, User};
 use tokio::sync::{oneshot, watch};
 use tracing::{Instrument, info_span};
 
 use super::state::{
-    BIO_RESCREEN_AFTER_HOURS, BioStanding, ClockGlitch, FirstContactGate, FirstContactMarks,
-    GLITCH_TOTAL_CAP, GlitchTick, HauntCommand, HauntState, HitStage, INVITE_DELAY_DAYS,
-    NAME_TOTAL_CAP, NameFlicker, NameRoll, PendingClaim, PendingFlagWrite, WHISPER_GAP_HOURS,
-    WHISPER_TOTAL_CAP, WhisperState, WhisperTick, bio_hash, glitch_caps, name_caps,
+    ActiveHit, BIO_RESCREEN_AFTER_HOURS, BioStanding, ClockGlitch, FirstContactGate,
+    FirstContactMarks, GLITCH_TOTAL_CAP, GlitchTick, HauntCommand, HauntState, HitStage,
+    INVITE_DELAY_DAYS, NAME_TOTAL_CAP, NameFlicker, NameRoll, PendingClaim, PendingFlagWrite,
+    WHISPER_GAP_HOURS, WHISPER_TOTAL_CAP, WhisperState, WhisperTick, bio_hash, glitch_caps,
+    name_caps,
 };
 use crate::app::ai::screen::{BioScreen, screen_bio};
 use crate::app::ai::svc::AiService;
@@ -146,6 +148,7 @@ pub(crate) fn arm(
         whisper: whisper_armed.then(|| WhisperState::for_user(user_id, marks.whisper_hits)),
         clock_glitch: stage1.then(|| ClockGlitch::new(session_seed(user_id), 0, marks.glitch_hits)),
         name_flicker: chosen.then(|| NameFlicker::new(session_seed(user_id), marks.name_hits)),
+        witness: None,
         marks,
         gate,
         stage1,
@@ -173,6 +176,7 @@ pub(crate) fn tick(app: &mut App) -> bool {
     }
     changed |= tick_clock_glitch(app);
     changed |= tick_name_flicker(app);
+    changed |= tick_witness(app);
     tick_invitation(app);
     changed |= tick_commands(app);
     changed
@@ -226,11 +230,18 @@ fn tick_claims(app: &mut App) -> bool {
                 }
                 tracing::warn!(user_id = %app.user_id, username = %app.username, error = ?error, "first contact clock glitch claim failed");
             }
-            (HitStage::Name { message_id }, Ok(FirstContactHitClaim::Won { hits })) => {
+            (
+                HitStage::Name {
+                    message_id,
+                    room_id,
+                },
+                Ok(FirstContactHitClaim::Won { hits }),
+            ) => {
                 if let Some(flicker) = app.haunt.name_flicker.as_mut() {
                     flicker.start(message_id, tick, hits);
                 }
                 app.haunt.marks.name_hits = hits;
+                publish_name_hit(app, message_id, room_id);
                 metrics::record_first_contact_beat(FirstContactBeat::NameFlicker);
                 tracing::info!(user_id = %app.user_id, username = %app.username, hits, "first contact name flicker hit");
                 changed = true;
@@ -398,7 +409,7 @@ fn tick_name_flicker(app: &mut App) -> bool {
     };
     let mut changed = false;
     changed |= flicker.tick(app.marquee_tick);
-    let Some(message_id) = landed else {
+    let Some((message_id, room_id)) = landed else {
         return changed;
     };
     match flicker.note_own_message(message_id, app.marquee_tick, enabled, stage_open) {
@@ -410,7 +421,10 @@ fn tick_name_flicker(app: &mut App) -> bool {
                 name_caps(),
             );
             app.haunt.pending_claims.push(PendingClaim {
-                stage: HitStage::Name { message_id },
+                stage: HitStage::Name {
+                    message_id,
+                    room_id,
+                },
                 rx,
             });
         }
@@ -419,12 +433,81 @@ fn tick_name_flicker(app: &mut App) -> bool {
             app.profile_state
                 .service()
                 .record_first_contact_name_hit(app.user_id);
+            // A forced hit skips the row's caps, not the room: `/haunt
+            // name` is the one way to watch the public half of stage 2
+            // land, so it has to travel like a real one.
+            publish_name_hit(app, message_id, room_id);
             metrics::record_first_contact_beat(FirstContactBeat::NameFlicker);
             tracing::info!(user_id = %app.user_id, username = %app.username, hits = app.haunt.marks.name_hits, "first contact name flicker hit (forced)");
             changed = true;
         }
     }
     changed
+}
+
+/// Put the live hit on the wire for the rest of the room. Read back off
+/// the machine that is already painting it, so the seed the room gets is
+/// the seed this screen is using: same characters, same two waves,
+/// everywhere. This replica hears it back over the same listener as the
+/// others; `tick_witness` recognises the live hit and declines the copy.
+fn publish_name_hit(app: &App, message_id: uuid::Uuid, room_id: uuid::Uuid) {
+    let Some((live_id, seed)) = app
+        .haunt
+        .name_flicker
+        .as_ref()
+        .and_then(NameFlicker::live_hit)
+    else {
+        return;
+    };
+    debug_assert_eq!(live_id, message_id);
+    app.chat.service.publish_name_hit(NameHitSignal {
+        message_id,
+        room_id,
+        user_id: app.user_id,
+        seed,
+    });
+}
+
+/// Replay the beats this session hears on other people's names. Every
+/// session runs this, haunted or not: stage 2 is the rung the room
+/// watches somebody climb. The chat state hands a beat over only once the
+/// message it names is on this screen (`take_witnessed_hit_landed`), so
+/// the name corrupts as the message arrives, then heals, on the seed that
+/// rode the wire.
+fn tick_witness(app: &mut App) -> bool {
+    // Drained even outside the audience, so a stale beat never waits
+    // around for a later `/haunt on`.
+    let landed = app.chat.take_witnessed_hit_landed();
+    let changed = ActiveHit::tick(&mut app.haunt.witness, app.marquee_tick);
+    let Some((message_id, seed)) = landed else {
+        return changed;
+    };
+    // The audience is exactly stage 1's: the kill switch keeps other
+    // people's hauntings off this screen too, and while the fuse is unlit
+    // staff are haunted where only staff can see it.
+    if !(app.haunt.enabled() && app.haunt.stage1) {
+        return changed;
+    }
+    // This session's own hit coming back off the wire: its own machine is
+    // already painting it. A second device of the same person never
+    // claimed, holds no live hit, and witnesses it like anyone else.
+    let own_hit = app
+        .haunt
+        .name_flicker
+        .as_ref()
+        .and_then(NameFlicker::live_hit)
+        .map(|(id, _)| id);
+    if own_hit == Some(message_id) {
+        return changed;
+    }
+    app.haunt.witness = Some(ActiveHit::new(message_id, app.marquee_tick, seed));
+    tracing::debug!(
+        user_id = %app.user_id,
+        username = %app.username,
+        message_id = %message_id,
+        "first contact name flicker witnessed"
+    );
+    true
 }
 
 /// The stage-4 clock: some days after the last delivered whisper, the
@@ -623,9 +706,14 @@ fn tick_commands(app: &mut App) -> bool {
                 Some(_) => "invited",
                 None => "invite pending",
             };
+            // Whether a beat of somebody else's is on this screen right now.
+            let witness = match app.haunt.witness.is_some() {
+                true => "witnessing",
+                false => "witness idle",
+            };
             let gate = app.haunt.gate;
             app.banner = Some(Banner::info(&format!(
-                "Haunt {} · live {} · stage1 {} · chosen {} (active {}h, settings {}, bio {}ch {}) · {glitch} · glitch hits {}/{GLITCH_TOTAL_CAP} · name hits {}/{NAME_TOTAL_CAP} · {door} · {whisper} · {invite}",
+                "Haunt {} · live {} · stage1 {} · chosen {} (active {}h, settings {}, bio {}ch {}) · {glitch} · glitch hits {}/{GLITCH_TOTAL_CAP} · name hits {}/{NAME_TOTAL_CAP} · {witness} · {door} · {whisper} · {invite}",
                 on_off(app.haunt.enabled()),
                 on_off(app.haunt.live()),
                 on_off(app.haunt.stage1),

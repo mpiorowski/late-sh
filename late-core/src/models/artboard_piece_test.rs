@@ -4,8 +4,9 @@ use uuid::Uuid;
 
 use crate::models::artboard_piece::{
     ApplauseOutcome, ArtboardPiece, HangOutcome, HangParams, ListingCounts, PIECE_DAILY_CAP,
-    PieceListing, PieceLookup, TakeDownOutcome,
+    PieceListing, PieceLookup, PodiumPiece, TakeDownOutcome,
 };
+use crate::models::profile_award::snapshot_previous_month_profile_awards;
 use crate::test_utils::{create_test_user, roll_artboard_pieces_back_a_month, test_db};
 
 pub(crate) fn hang_params(user_id: Uuid, title: &str, content_hash: &str) -> HangParams {
@@ -329,7 +330,7 @@ async fn listing_counts_answer_without_listing() {
 #[tokio::test]
 async fn the_podium_and_the_wall_read_best_first_and_break_ties_by_hang() {
     let test_db = test_db().await;
-    let client = test_db.db.get().await.expect("db client");
+    let mut client = test_db.db.get().await.expect("db client");
     let painter = create_test_user(&test_db.db, "podium-painter").await;
     // The daily cap is three, so the fourth piece is somebody else's.
     let other = create_test_user(&test_db.db, "podium-other").await;
@@ -375,22 +376,45 @@ async fn the_podium_and_the_wall_read_best_first_and_break_ties_by_hang() {
         "a day that hung nothing is an empty wall"
     );
 
-    // Last month's podium once the month rolls: one place per hanger
-    // (`early` is the painter's second best, so it is not on it), the
-    // award's order, and the floor keeps `quiet` off it.
+    // Last month's podium is the award's: nothing until the month rolls
+    // and the snapshot mints it, then one place per hanger in the award's
+    // order (`early` is the painter's second best, so it is not on it),
+    // and the floor keeps `quiet` off it.
+    roll_artboard_pieces_back_a_month(&client).await;
     assert!(
         ArtboardPiece::previous_month_podium(&client)
             .await
             .expect("podium")
             .is_empty(),
-        "this month's pieces are not last month's podium"
+        "no podium before the award pass"
     );
-    roll_artboard_pieces_back_a_month(&client).await;
+    snapshot_previous_month_profile_awards(&mut client)
+        .await
+        .expect("snapshot");
+    let places = |podium: Vec<PodiumPiece>| {
+        podium
+            .into_iter()
+            .map(|entry| (entry.place, entry.piece.id))
+            .collect::<Vec<_>>()
+    };
     let podium = ArtboardPiece::previous_month_podium(&client)
         .await
         .expect("podium");
-    assert_eq!(
-        podium.iter().map(|piece| piece.id).collect::<Vec<_>>(),
-        vec![best.id, late.id]
-    );
+    assert_eq!(places(podium), vec![(1, best.id), (2, late.id)]);
+
+    // A mod removal after the month settled keeps the places: the winner's
+    // next piece hangs for `ART1`, and once nothing of theirs is left the
+    // place is a gap, not a promotion.
+    ArtboardPiece::remove(&client, best.id).await.expect("remove");
+    let podium = ArtboardPiece::previous_month_podium(&client)
+        .await
+        .expect("podium");
+    assert_eq!(places(podium), vec![(1, early.id), (2, late.id)]);
+    ArtboardPiece::remove(&client, early.id)
+        .await
+        .expect("remove");
+    let podium = ArtboardPiece::previous_month_podium(&client)
+        .await
+        .expect("podium");
+    assert_eq!(places(podium), vec![(2, late.id)]);
 }

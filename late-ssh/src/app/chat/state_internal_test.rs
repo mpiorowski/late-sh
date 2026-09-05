@@ -3190,6 +3190,95 @@ async fn auto_mode_requests_fire_without_a_pending_placeholder() {
 }
 
 #[tokio::test]
+async fn a_name_hit_waits_for_its_message_then_lands() {
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let viewer = late_core::test_utils::create_test_user(&test_db.db, "witness_viewer").await;
+    let author = late_core::test_utils::create_test_user(&test_db.db, "witness_author").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, lounge.id, author.id)
+        .await
+        .expect("join author");
+    let seed = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "seed".to_string(),
+        },
+    )
+    .await
+    .expect("seed message");
+
+    let db = test_db.db.clone();
+    let notifications = crate::app::chat::notifications::svc::NotificationService::new(db.clone());
+    let chat = crate::app::chat::svc::ChatService::new(db.clone(), notifications.clone());
+    let ai = crate::app::ai::svc::AiService::new(false, None);
+    let translation = crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
+    let summary = crate::app::ai::summary::SummaryService::new(db.clone(), ai.clone());
+    let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
+    let (notifier, _outbox) = crate::app::notify::channel();
+    let mut state = ChatState::new(
+        ChatServices {
+            chat: chat.clone(),
+            translation,
+            summary,
+            notifications,
+            articles,
+            feeds: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
+            showcases: crate::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
+            work: crate::app::chat::work::svc::WorkService::new(db.clone()),
+            cyberspace: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+                db,
+                "http://127.0.0.1:1".to_string(),
+            ),
+        },
+        ChatSession {
+            user_id: viewer.id,
+            username: viewer.username.clone(),
+            permissions: crate::authz::Permissions::new(false, false),
+            device_left_at: None,
+        },
+        None,
+        notifier,
+        crate::app::ai::ladder::MentionLadders::new(),
+        None,
+    );
+    load_room_tail(&mut state, lounge.id, seed.id).await;
+
+    // A beat for a message already on screen is handed over at once, and
+    // exactly once.
+    state.note_name_hit(lounge.id, seed.id, 7);
+    assert_eq!(state.take_witnessed_hit_landed(), Some((seed.id, 7)));
+    assert_eq!(state.take_witnessed_hit_landed(), None);
+
+    // A beat heard from another replica before the room delta brought its
+    // message: held, then handed over as the message lands.
+    let incoming = Uuid::now_v7();
+    state.note_name_hit(lounge.id, incoming, 9);
+    assert_eq!(state.take_witnessed_hit_landed(), None);
+    state.push_message(ChatMessage {
+        room_id: lounge.id,
+        user_id: author.id,
+        body: "late to the room".to_string(),
+        ..make_msg(incoming)
+    });
+    assert_eq!(state.take_witnessed_hit_landed(), Some((incoming, 9)));
+
+    // A beat for a room this session does not hold is nobody's business.
+    state.note_name_hit(Uuid::now_v7(), Uuid::now_v7(), 11);
+    assert_eq!(state.take_witnessed_hit_landed(), None);
+    assert!(state.pending_name_hits.is_empty());
+}
+
+#[tokio::test]
 async fn author_shared_translations_show_without_auto_mode_or_t() {
     use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
     use late_core::models::chat_room::ChatRoom;

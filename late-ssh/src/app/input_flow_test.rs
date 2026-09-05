@@ -2517,6 +2517,7 @@ async fn artboard_gallery_hangs_a_framed_piece_from_the_rail() {
     app.handle_input(b"x");
     wait_for_render_contains(&mut app, "x again to confirm").await;
     app.handle_input(b"j");
+    wait_for_render_not_contains(&mut app, "x again to confirm").await;
     app.handle_input(b"x");
     wait_for_render_contains(&mut app, "x again to confirm").await;
     app.handle_input(b"x");
