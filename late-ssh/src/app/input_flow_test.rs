@@ -2512,6 +2512,19 @@ async fn artboard_gallery_hangs_a_framed_piece_from_the_rail() {
         "`v` on the Artboard belongs to the gallery"
     );
 
+    // `x` asks first; any other key withdraws the question; `x` twice
+    // takes the hanger's own piece down and Mine empties.
+    app.handle_input(b"x");
+    wait_for_render_contains(&mut app, "x again to confirm").await;
+    app.handle_input(b"j");
+    app.handle_input(b"x");
+    wait_for_render_contains(&mut app, "x again to confirm").await;
+    app.handle_input(b"x");
+    wait_for_render_contains(&mut app, "Taken down").await;
+    // The pane is narrow in the test terminal; the head of the empty
+    // listing's line is enough.
+    wait_for_render_contains(&mut app, "you have not hung a piece").await;
+
     // The letter hotkeys are off the whole page, typing or not.
     app.banner = None;
     app.handle_input(b"m");

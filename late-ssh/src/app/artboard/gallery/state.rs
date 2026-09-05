@@ -4,8 +4,9 @@
 
 use std::cell::Cell;
 
+use chrono::{Datelike, NaiveDate, Utc};
 use late_core::models::artboard_piece::{
-    ApplauseOutcome, ListingCounts, PIECE_TITLE_MAX_CHARS, PieceListing,
+    ApplauseOutcome, ListingCounts, PIECE_TITLE_MAX_CHARS, PieceListing, TakeDownOutcome,
 };
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
@@ -30,8 +31,8 @@ impl GallerySection {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::ThisMonth => "This month",
-            Self::Newest => "New",
+            Self::ThisMonth => "Ranking",
+            Self::Newest => "Latest",
             Self::HallOfFame => "Hall of fame",
             Self::Mine => "Mine",
         }
@@ -41,9 +42,9 @@ impl GallerySection {
     pub fn hint(self) -> &'static str {
         match self {
             Self::ThisMonth => {
-                "this month's pieces, most applauded first; top 3 at month end win ART badges and chips"
+                "this month's pieces by applause; top 3 at month end win ART badges and chips"
             }
-            Self::Newest => "the latest pieces hung, any month",
+            Self::Newest => "the newest pieces first, any month",
             Self::HallOfFame => "each past month's winner",
             Self::Mine => "everything you have hung",
         }
@@ -182,6 +183,11 @@ pub struct GalleryState {
     notice: Option<String>,
     /// The piece whose applause is in flight, so a held `v` sends one.
     pending_applause: Option<Uuid>,
+    /// The piece a first `x` asked about; a second `x` on it sends the
+    /// take-down, anything else forgets the question.
+    take_down_asked: Option<Uuid>,
+    /// The piece whose take-down is in flight.
+    pending_take_down: Option<Uuid>,
     /// Published by the draw path so hit tests and the viewport math agree
     /// with what is on screen.
     rail_visible: Cell<bool>,
@@ -206,6 +212,8 @@ impl GalleryState {
             hang: HangFlow::Idle,
             notice: None,
             pending_applause: None,
+            take_down_asked: None,
+            pending_take_down: None,
             rail_visible: Cell::new(false),
             rail_area: Cell::new(Rect::default()),
             list_area: Cell::new(Rect::default()),
@@ -291,6 +299,12 @@ impl GalleryState {
 
     pub fn focus_rail(&mut self) {
         self.focus = Focus::Rail;
+        self.take_down_asked = None;
+    }
+
+    /// True for the viewer's own piece: the one they may take down.
+    pub fn is_mine(&self, piece: &GalleryPiece) -> bool {
+        piece.user_id == self.viewer_id
     }
 
     pub fn focus_archive(&mut self) {
@@ -439,6 +453,7 @@ impl GalleryState {
         }
         let last = state.pieces.len() as isize - 1;
         state.selected = (state.selected as isize + delta).clamp(0, last) as usize;
+        self.take_down_asked = None;
         if state.selected < state.scroll {
             state.scroll = state.selected;
         } else if state.selected >= state.scroll + visible {
@@ -454,6 +469,7 @@ impl GalleryState {
         if index < state.pieces.len() {
             state.selected = index;
         }
+        self.take_down_asked = None;
     }
 
     pub fn list_page(&mut self, pages: isize) {
@@ -479,16 +495,18 @@ impl GalleryState {
         if self.focus == Focus::Piece {
             self.focus = Focus::List;
         }
+        self.take_down_asked = None;
     }
 
     /// Applaud the selected piece, or take the applause back. One in
-    /// flight at a time per session.
+    /// flight at a time per session. What the row would refuse is refused
+    /// here first, so the notice is immediate and the round trip saved.
     pub fn applaud_selected(&mut self) {
         let Some(piece) = self.selected_piece() else {
             return;
         };
-        if piece.user_id == self.viewer_id {
-            self.notice = Some("You cannot applaud your own piece.".to_string());
+        if let Some(refusal) = applause_refusal(piece, self.viewer_id, current_period_month()) {
+            self.notice = Some(refusal.to_string());
             return;
         }
         if self.pending_applause.is_some() {
@@ -498,6 +516,40 @@ impl GalleryState {
         self.pending_applause = Some(piece_id);
         self.service
             .applaud_task(piece_id, self.viewer_id, self.results_tx.clone());
+    }
+
+    /// `x` on a piece: the first asks, the second on the same piece sends
+    /// the take-down. Only the viewer's own piece, only while its month
+    /// runs; the row checks both again.
+    pub fn take_down_selected(&mut self) {
+        let Some(piece) = self.selected_piece() else {
+            return;
+        };
+        if let Some(refusal) = take_down_refusal(piece, self.viewer_id, current_period_month()) {
+            self.notice = Some(refusal.to_string());
+            return;
+        }
+        if self.pending_take_down.is_some() {
+            return;
+        }
+        let piece_id = piece.id;
+        let title = piece.title.clone();
+        if self.take_down_asked != Some(piece_id) {
+            self.take_down_asked = Some(piece_id);
+            self.notice = Some(format!(
+                "Take \"{title}\" down for good? x again to confirm, anything else keeps it."
+            ));
+            return;
+        }
+        self.take_down_asked = None;
+        self.pending_take_down = Some(piece_id);
+        self.service
+            .take_down_task(piece_id, self.viewer_id, self.results_tx.clone());
+    }
+
+    /// Any key that is not the confirming `x` withdraws the question.
+    pub fn forget_take_down_question(&mut self) {
+        self.take_down_asked = None;
     }
 
     // ----- hang flow -----
@@ -653,17 +705,13 @@ impl GalleryState {
                                 Some(format!("Applause withdrawn. {}.", applause_label(count)));
                         }
                         ApplauseOutcome::OwnPiece => {
-                            self.notice = Some("You cannot applaud your own piece.".to_string());
+                            self.notice = Some(OWN_PIECE_APPLAUSE.to_string());
+                        }
+                        ApplauseOutcome::Closed => {
+                            self.notice = Some(CLOSED_MONTH_APPLAUSE.to_string());
                         }
                         ApplauseOutcome::NotFound => {
-                            for state in &mut self.sections {
-                                state.pieces.retain(|piece| piece.id != piece_id);
-                                state.selected =
-                                    state.selected.min(state.pieces.len().saturating_sub(1));
-                            }
-                            if self.focus == Focus::Piece {
-                                self.focus = Focus::List;
-                            }
+                            self.drop_piece(piece_id);
                             self.notice = Some("That piece was taken down.".to_string());
                         }
                     }
@@ -672,9 +720,46 @@ impl GalleryState {
                     self.pending_applause = None;
                     self.notice = Some(error);
                 }
+                GalleryResult::TakeDown { piece_id, outcome } => {
+                    self.pending_take_down = None;
+                    match outcome {
+                        TakeDownOutcome::TakenDown => {
+                            self.drop_piece(piece_id);
+                            self.notice = Some("Taken down. The wall forgets it.".to_string());
+                            self.service
+                                .counts_task(self.viewer_id, self.results_tx.clone());
+                        }
+                        TakeDownOutcome::NotFound => {
+                            self.drop_piece(piece_id);
+                            self.notice = Some("That piece was already down.".to_string());
+                        }
+                        TakeDownOutcome::NotYours => {
+                            self.notice = Some(NOT_YOURS_TAKE_DOWN.to_string());
+                        }
+                        TakeDownOutcome::Closed => {
+                            self.notice = Some(CLOSED_MONTH_TAKE_DOWN.to_string());
+                        }
+                    }
+                }
+                GalleryResult::TakeDownFailed { piece_id: _, error } => {
+                    self.pending_take_down = None;
+                    self.notice = Some(error);
+                }
             }
         }
         changed
+    }
+
+    /// A piece that is no longer on the wall leaves every listing; a full
+    /// frame on it goes back to its list.
+    fn drop_piece(&mut self, piece_id: Uuid) {
+        for state in &mut self.sections {
+            state.pieces.retain(|piece| piece.id != piece_id);
+            state.selected = state.selected.min(state.pieces.len().saturating_sub(1));
+        }
+        if self.focus == Focus::Piece {
+            self.focus = Focus::List;
+        }
     }
 
     fn update_piece(&mut self, piece_id: Uuid, mut apply: impl FnMut(&mut GalleryPiece)) {
@@ -685,6 +770,50 @@ impl GalleryState {
                 }
             }
         }
+    }
+}
+
+const OWN_PIECE_APPLAUSE: &str = "You cannot applaud your own piece.";
+const CLOSED_MONTH_APPLAUSE: &str = "Applause closed with the month. The ranking stands.";
+const NOT_YOURS_TAKE_DOWN: &str = "Only the hanger takes a piece down.";
+const CLOSED_MONTH_TAKE_DOWN: &str = "Last month's wall is settled; that piece stays up.";
+
+/// The first day of the current UTC month, the `period_month` a piece hung
+/// now would carry.
+fn current_period_month() -> NaiveDate {
+    let today = Utc::now().date_naive();
+    today.with_day(1).unwrap_or(today)
+}
+
+/// Why `v` would be refused on `piece`, before the round trip. The row
+/// refuses the same things (`ArtboardPiece::toggle_applause`).
+pub(crate) fn applause_refusal(
+    piece: &GalleryPiece,
+    viewer_id: Uuid,
+    current_month: NaiveDate,
+) -> Option<&'static str> {
+    if piece.user_id == viewer_id {
+        Some(OWN_PIECE_APPLAUSE)
+    } else if piece.period_month < current_month {
+        Some(CLOSED_MONTH_APPLAUSE)
+    } else {
+        None
+    }
+}
+
+/// Why `x` would be refused on `piece`, before the round trip. The row
+/// refuses the same things (`ArtboardPiece::take_down`).
+pub(crate) fn take_down_refusal(
+    piece: &GalleryPiece,
+    viewer_id: Uuid,
+    current_month: NaiveDate,
+) -> Option<&'static str> {
+    if piece.user_id != viewer_id {
+        Some(NOT_YOURS_TAKE_DOWN)
+    } else if piece.period_month < current_month {
+        Some(CLOSED_MONTH_TAKE_DOWN)
+    } else {
+        None
     }
 }
 

@@ -341,6 +341,7 @@ pub async fn snapshot_previous_month_profile_awards(
                 ) applause ON applause.piece_id = p.id
                 CROSS JOIN bounds
                 WHERE p.period_month = bounds.period_month
+                  AND p.removed_at IS NULL
                   AND applause.count >= $3
                   AND NOT EXISTS (
                     SELECT 1 FROM profile_awards

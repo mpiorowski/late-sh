@@ -98,6 +98,17 @@ pub enum GalleryApplauseResult {
     Withdrawn,
     OwnPiece,
     NotFound,
+    Closed,
+    Failed,
+}
+
+/// How a hanger's own take-down resolved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GalleryTakeDownResult {
+    TakenDown,
+    NotFound,
+    NotYours,
+    Closed,
     Failed,
 }
 
@@ -167,9 +178,9 @@ mod inner {
 
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
-        GalleryApplauseResult, GalleryHangResult, GateVerdict, GildRefusal, GildTier,
-        NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PotRefusal,
-        RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
+        GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
+        GildTier, NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult,
+        PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
         TranslationResult,
     };
 
@@ -1062,8 +1073,39 @@ mod inner {
             GalleryApplauseResult::Withdrawn => "withdrawn",
             GalleryApplauseResult::OwnPiece => "own_piece",
             GalleryApplauseResult::NotFound => "not_found",
+            GalleryApplauseResult::Closed => "closed",
             GalleryApplauseResult::Failed => "failed",
         }
+    }
+
+    fn gallery_take_down_result_label(result: GalleryTakeDownResult) -> &'static str {
+        match result {
+            GalleryTakeDownResult::TakenDown => "taken_down",
+            GalleryTakeDownResult::NotFound => "not_found",
+            GalleryTakeDownResult::NotYours => "not_yours",
+            GalleryTakeDownResult::Closed => "closed",
+            GalleryTakeDownResult::Failed => "failed",
+        }
+    }
+
+    fn gallery_take_downs_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_artboard_gallery_take_downs_total")
+                .with_description("Artboard gallery take-downs by the hanger, by result")
+                .build()
+        })
+    }
+
+    pub fn record_gallery_take_down(result: GalleryTakeDownResult) {
+        gallery_take_downs_total().add(
+            1,
+            &[KeyValue::new(
+                "result",
+                gallery_take_down_result_label(result),
+            )],
+        );
     }
 
     fn gallery_applause_total() -> &'static Counter<u64> {
@@ -1153,9 +1195,9 @@ mod inner {
 mod inner {
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
-        GalleryApplauseResult, GalleryHangResult, GateVerdict, GildRefusal, GildTier,
-        NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PotRefusal,
-        RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
+        GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
+        GildTier, NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult,
+        PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
         TranslationResult,
     };
 
@@ -1196,6 +1238,7 @@ mod inner {
     pub fn record_paper_open(_result: PaperOpenResult) {}
     pub fn record_gallery_hang(_result: GalleryHangResult) {}
     pub fn record_gallery_applause(_result: GalleryApplauseResult) {}
+    pub fn record_gallery_take_down(_result: GalleryTakeDownResult) {}
     pub fn record_door_ingest_line(_game: DoorGame) {}
     pub fn record_door_ingest_session_failure(_game: DoorGame) {}
     pub fn record_online_time_flush(_result: OnlineTimeFlushResult) {}

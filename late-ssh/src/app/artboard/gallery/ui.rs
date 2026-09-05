@@ -408,7 +408,12 @@ pub fn draw_piece_view(frame: &mut Frame, area: Rect, state: &State) {
     // the only place it is shown; without it a mod has nothing to type.
     // The first two groups (12 hex digits) are enough to be unique and
     // short enough to copy by eye.
-    let mut keys = key_hint_line(&[("v", "applaud"), ("j/k", "next/prev"), ("Esc", "back")]);
+    let hints: &[(&str, &str)] = if gallery.is_mine(piece) {
+        &[("x", "take down"), ("j/k", "next/prev"), ("Esc", "back")]
+    } else {
+        &[("v", "applaud"), ("j/k", "next/prev"), ("Esc", "back")]
+    };
+    let mut keys = key_hint_line(hints);
     keys.spans.push(Span::styled(
         format!("   id {}", piece_id_prefix(piece.id)),
         Style::default().fg(theme::TEXT_FAINT()),

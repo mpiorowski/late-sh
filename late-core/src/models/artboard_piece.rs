@@ -9,6 +9,18 @@
 //! and the rails that are enforced in SQL: the daily cap, the per-month
 //! duplicate refusal, one applause per person, and no applause for your own
 //! piece.
+//!
+//! A piece comes down by soft delete (`removed_at`, migration 175): the
+//! hanger can take their own piece down while its month is running, a mod
+//! any time. The row stays, so the daily cap and the duplicate rail still
+//! count it; everything that lists or looks up a piece reads through
+//! [`PIECE_VIEW_SQL`], which sees only rows still up.
+//!
+//! A month closes at the rollover: applause on a piece from a past month is
+//! refused (`ApplauseOutcome::Closed`), and so is its hanger's take-down
+//! (`TakeDownOutcome::Closed`). That is what keeps the hall of fame and the
+//! splash podium, which read live applause, in step with the award that
+//! was minted from the same counts.
 
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
@@ -112,6 +124,19 @@ pub enum ApplauseOutcome {
     Withdrawn(i64),
     NotFound,
     OwnPiece,
+    /// The piece's month is over; its applause is what the award counted.
+    Closed,
+}
+
+/// How the hanger's own take-down ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TakeDownOutcome {
+    TakenDown,
+    NotFound,
+    /// Somebody else's piece; only a mod takes those down.
+    NotYours,
+    /// The piece's month is over; last month's wall is settled.
+    Closed,
 }
 
 /// The gallery's listings, one query each.
@@ -177,6 +202,8 @@ pub const PIECE_ID_PREFIX_MIN_CHARS: usize = 8;
 
 /// Every listing and lookup reads through this shape: the row, the author's
 /// name, the applause count, and whether `$1` (the viewer) applauded it.
+/// Only pieces still up: a taken-down row is invisible here and everywhere
+/// that reads through it.
 const PIECE_VIEW_SQL: &str =
     "SELECT p.id, p.created, p.user_id, u.username, p.title, p.width, p.height,
             p.canvas, p.provenance, p.glyph_count, p.own_share_percent, p.period_month,
@@ -185,13 +212,16 @@ const PIECE_VIEW_SQL: &str =
                 SELECT 1 FROM artboard_piece_votes v
                 WHERE v.piece_id = p.id AND v.user_id = $1
             ) AS applauded_by_viewer
-     FROM artboard_pieces p
+     FROM (SELECT * FROM artboard_pieces WHERE removed_at IS NULL) p
      JOIN users u ON u.id = p.user_id";
 
 impl ArtboardPiece {
     /// Hang a piece. The per-month duplicate is the unique index, so two
     /// devices hanging the same cells at once get exactly one `Hung`. The
-    /// daily cap is counted in the insert's own guard with no lock on the
+    /// daily cap is counted in the insert's own guard over every row of the
+    /// day, taken-down ones included, so hang-and-regret does not buy a
+    /// fourth piece; the unique index counts them too, so the same cells
+    /// cannot come back within the month. No lock on the
     /// user's rows, so under READ COMMITTED two hangs from one account in
     /// the same instant can both read two and both land: the cap is
     /// best-effort across concurrent sessions, exact within one (the hang
@@ -323,17 +353,23 @@ impl ArtboardPiece {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
-    /// Last month's podium, best first: the pieces that cleared the award
-    /// floor, at most [`GALLERY_PODIUM_SIZE`] of them. What the splash
-    /// hangs over the door. Ties break toward the earlier hang, the same
-    /// way the award query ranks, so index 0 is the `ART1` holder's piece.
+    /// Last month's podium, best first: each hanger's single best piece
+    /// over the award floor, at most [`GALLERY_PODIUM_SIZE`] of them. What
+    /// the splash hangs over the door. One piece per hanger and ties toward
+    /// the earlier hang, exactly the way the award query ranks, so index
+    /// `n` is the piece that won `ART{n+1}`: a hanger with the month's
+    /// three best pieces takes one place, not the whole podium.
     pub async fn previous_month_podium(client: &impl GenericClient) -> Result<Vec<Self>> {
         let rows = client
             .query(
                 &format!(
-                    "SELECT * FROM ({PIECE_VIEW_SQL}) pieces
-                     WHERE period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
-                       AND applause >= $2
+                    "SELECT * FROM (
+                        SELECT DISTINCT ON (user_id) *
+                        FROM ({PIECE_VIEW_SQL}) pieces
+                        WHERE period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
+                          AND applause >= $2
+                        ORDER BY user_id, applause DESC, created ASC
+                     ) best
                      ORDER BY applause DESC, created ASC
                      LIMIT $3"
                 ),
@@ -378,6 +414,25 @@ impl ArtboardPiece {
         piece_id: Uuid,
         user_id: Uuid,
     ) -> Result<ApplauseOutcome> {
+        let piece = client
+            .query_opt(
+                "SELECT user_id,
+                        period_month < date_trunc('month', now() AT TIME ZONE 'UTC')::date AS closed
+                 FROM artboard_pieces
+                 WHERE id = $1 AND removed_at IS NULL",
+                &[&piece_id],
+            )
+            .await?;
+        let Some(piece) = piece else {
+            return Ok(ApplauseOutcome::NotFound);
+        };
+        if piece.get::<_, bool>("closed") {
+            return Ok(ApplauseOutcome::Closed);
+        }
+        let author_user_id: Uuid = piece.get("user_id");
+        if author_user_id == user_id {
+            return Ok(ApplauseOutcome::OwnPiece);
+        }
         let withdrawn = client
             .execute(
                 "DELETE FROM artboard_piece_votes WHERE piece_id = $1 AND user_id = $2",
@@ -387,19 +442,6 @@ impl ArtboardPiece {
         if withdrawn > 0 {
             let count = Self::applause_count(client, piece_id).await?;
             return Ok(ApplauseOutcome::Withdrawn(count));
-        }
-        let author = client
-            .query_opt(
-                "SELECT user_id FROM artboard_pieces WHERE id = $1",
-                &[&piece_id],
-            )
-            .await?;
-        let Some(author) = author else {
-            return Ok(ApplauseOutcome::NotFound);
-        };
-        let author_user_id: Uuid = author.get("user_id");
-        if author_user_id == user_id {
-            return Ok(ApplauseOutcome::OwnPiece);
         }
         client
             .execute(
@@ -430,8 +472,11 @@ impl ArtboardPiece {
         let row = client
             .query_one(
                 "SELECT
-                    (SELECT count(*) FROM artboard_pieces WHERE user_id = $1) AS pieces,
-                    (SELECT count(*) FROM artboard_piece_votes WHERE author_user_id = $1) AS applause",
+                    (SELECT count(*) FROM artboard_pieces
+                      WHERE user_id = $1 AND removed_at IS NULL) AS pieces,
+                    (SELECT count(*) FROM artboard_piece_votes v
+                      JOIN artboard_pieces p ON p.id = v.piece_id
+                      WHERE v.author_user_id = $1 AND p.removed_at IS NULL) AS applause",
                 &[&user_id],
             )
             .await?;
@@ -452,12 +497,15 @@ impl ArtboardPiece {
             .query_one(
                 "SELECT
                     (SELECT count(*) FROM artboard_pieces
-                      WHERE period_month = date_trunc('month', now() AT TIME ZONE 'UTC')::date) AS this_month,
-                    (SELECT count(*) FROM artboard_pieces) AS newest,
+                      WHERE period_month = date_trunc('month', now() AT TIME ZONE 'UTC')::date
+                        AND removed_at IS NULL) AS this_month,
+                    (SELECT count(*) FROM artboard_pieces WHERE removed_at IS NULL) AS newest,
                     (SELECT count(DISTINCT p.period_month) FROM artboard_pieces p
                       WHERE p.period_month < date_trunc('month', now() AT TIME ZONE 'UTC')::date
+                        AND p.removed_at IS NULL
                         AND (SELECT count(*) FROM artboard_piece_votes v WHERE v.piece_id = p.id) >= $2) AS hall_of_fame,
-                    (SELECT count(*) FROM artboard_pieces WHERE user_id = $1) AS mine",
+                    (SELECT count(*) FROM artboard_pieces
+                      WHERE user_id = $1 AND removed_at IS NULL) AS mine",
                 &[&viewer_id, &GALLERY_AWARD_MIN_APPLAUSE],
             )
             .await?;
@@ -483,7 +531,9 @@ impl ArtboardPiece {
         let pattern = format!("{}%", prefix.to_ascii_lowercase());
         let rows = client
             .query(
-                "SELECT id FROM artboard_pieces WHERE id::text LIKE $1 LIMIT 2",
+                "SELECT id FROM artboard_pieces
+                 WHERE id::text LIKE $1 AND removed_at IS NULL
+                 LIMIT 2",
                 &[&pattern],
             )
             .await?;
@@ -494,15 +544,20 @@ impl ArtboardPiece {
         }
     }
 
-    /// Take a piece down. Its applause goes with it (cascade); an award
-    /// already snapshotted from it stays, the way every award does.
+    /// A mod takes a piece down, whoever hung it and whenever. Soft: the
+    /// row and its applause stay, out of every listing; an award already
+    /// snapshotted from it stays, the way every award does. `None` when
+    /// the piece is already down or never was.
     pub async fn remove(
         client: &impl GenericClient,
         piece_id: Uuid,
     ) -> Result<Option<RemovedPiece>> {
         let row = client
             .query_opt(
-                "DELETE FROM artboard_pieces WHERE id = $1 RETURNING id, user_id, title",
+                "UPDATE artboard_pieces
+                 SET removed_at = now()
+                 WHERE id = $1 AND removed_at IS NULL
+                 RETURNING id, user_id, title",
                 &[&piece_id],
             )
             .await?;
@@ -511,5 +566,40 @@ impl ArtboardPiece {
             user_id: row.get("user_id"),
             title: row.get("title"),
         }))
+    }
+
+    /// The hanger takes their own piece down. Owner and month are in the
+    /// `UPDATE` itself: only `user_id`'s piece, only while its month runs.
+    /// A miss is looked up once more to say why.
+    pub async fn take_down(
+        client: &impl GenericClient,
+        piece_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<TakeDownOutcome> {
+        let updated = client
+            .execute(
+                "UPDATE artboard_pieces
+                 SET removed_at = now()
+                 WHERE id = $1
+                   AND user_id = $2
+                   AND removed_at IS NULL
+                   AND period_month = date_trunc('month', now() AT TIME ZONE 'UTC')::date",
+                &[&piece_id, &user_id],
+            )
+            .await?;
+        if updated == 1 {
+            return Ok(TakeDownOutcome::TakenDown);
+        }
+        let piece = client
+            .query_opt(
+                "SELECT user_id FROM artboard_pieces WHERE id = $1 AND removed_at IS NULL",
+                &[&piece_id],
+            )
+            .await?;
+        match piece {
+            None => Ok(TakeDownOutcome::NotFound),
+            Some(row) if row.get::<_, Uuid>("user_id") != user_id => Ok(TakeDownOutcome::NotYours),
+            Some(_) => Ok(TakeDownOutcome::Closed),
+        }
     }
 }

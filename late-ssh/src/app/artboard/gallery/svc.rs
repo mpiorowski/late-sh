@@ -25,13 +25,14 @@ use late_core::db::Db;
 use late_core::models::app_flag::AppFlags;
 use late_core::models::artboard_piece::{
     ApplauseOutcome, ArtboardPiece, HangOutcome, HangParams, ListingCounts, PieceListing,
+    TakeDownOutcome,
 };
 use late_core::models::user::User;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use crate::app::artboard::provenance::ArtboardProvenance;
-use crate::metrics::{self, GalleryApplauseResult, GalleryHangResult};
+use crate::metrics::{self, GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult};
 
 use super::frame::{Credit, FramedPiece};
 
@@ -150,6 +151,14 @@ pub enum GalleryResult {
         outcome: ApplauseOutcome,
     },
     ApplauseFailed {
+        piece_id: Uuid,
+        error: String,
+    },
+    TakeDown {
+        piece_id: Uuid,
+        outcome: TakeDownOutcome,
+    },
+    TakeDownFailed {
         piece_id: Uuid,
         error: String,
     },
@@ -472,6 +481,7 @@ impl GalleryService {
                         ApplauseOutcome::Withdrawn(_) => GalleryApplauseResult::Withdrawn,
                         ApplauseOutcome::OwnPiece => GalleryApplauseResult::OwnPiece,
                         ApplauseOutcome::NotFound => GalleryApplauseResult::NotFound,
+                        ApplauseOutcome::Closed => GalleryApplauseResult::Closed,
                     });
                     GalleryResult::Applause { piece_id, outcome }
                 }
@@ -487,6 +497,58 @@ impl GalleryService {
                     GalleryResult::ApplauseFailed {
                         piece_id,
                         error: "Your applause did not land. Try again.".to_string(),
+                    }
+                }
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    /// The hanger takes their own piece down. Owner and month are checked
+    /// in the row's own `UPDATE` (`ArtboardPiece::take_down`).
+    pub fn take_down_task(
+        &self,
+        piece_id: Uuid,
+        user_id: Uuid,
+        tx: mpsc::UnboundedSender<GalleryResult>,
+    ) {
+        let Some(db) = self.db.clone() else {
+            return;
+        };
+        if !self.is_enabled() {
+            return;
+        }
+        tokio::spawn(async move {
+            let result = async {
+                let client = db.get().await?;
+                ArtboardPiece::take_down(&client, piece_id, user_id).await
+            }
+            .await;
+            let msg = match result {
+                Ok(outcome) => {
+                    metrics::record_gallery_take_down(match outcome {
+                        TakeDownOutcome::TakenDown => GalleryTakeDownResult::TakenDown,
+                        TakeDownOutcome::NotFound => GalleryTakeDownResult::NotFound,
+                        TakeDownOutcome::NotYours => GalleryTakeDownResult::NotYours,
+                        TakeDownOutcome::Closed => GalleryTakeDownResult::Closed,
+                    });
+                    if outcome == TakeDownOutcome::TakenDown {
+                        tracing::info!(%user_id, %piece_id, "artboard gallery piece taken down by its hanger");
+                    }
+                    GalleryResult::TakeDown { piece_id, outcome }
+                }
+                Err(error) => {
+                    metrics::record_gallery_take_down(GalleryTakeDownResult::Failed);
+                    late_core::error_span!(
+                        "artboard_gallery_take_down",
+                        error = ?error,
+                        %user_id,
+                        %piece_id,
+                        "artboard piece could not be taken down"
+                    );
+                    GalleryResult::TakeDownFailed {
+                        piece_id,
+                        error: "The piece did not come down. Try again.".to_string(),
                     }
                 }
             };
