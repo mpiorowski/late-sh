@@ -405,7 +405,9 @@ async fn the_podium_and_the_wall_read_best_first_and_break_ties_by_hang() {
     // A mod removal after the month settled keeps the places: the winner's
     // next piece hangs for `ART1`, and once nothing of theirs is left the
     // place is a gap, not a promotion.
-    ArtboardPiece::remove(&client, best.id).await.expect("remove");
+    ArtboardPiece::remove(&client, best.id)
+        .await
+        .expect("remove");
     let podium = ArtboardPiece::previous_month_podium(&client)
         .await
         .expect("podium");

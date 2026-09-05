@@ -233,16 +233,12 @@ impl GalleryService {
     /// caption still says the rank the award minted. A failed claim is the
     /// cup: the door is not worth failing a login over.
     pub async fn claim_splash_piece(&self, user_id: Uuid) -> Option<SplashPiece> {
-        let Some(db) = self.db.as_ref() else {
-            return None;
-        };
+        let db = self.db.as_ref()?;
         if !self.is_enabled() {
             return None;
         }
         let podium = self.splash_podium();
-        let Some(month) = podium.first().map(|entry| entry.piece.period_month) else {
-            return None;
-        };
+        let month = podium.first().map(|entry| entry.piece.period_month)?;
         let claimed = async {
             let client = db.get().await?;
             User::claim_splash_podium_slot(&client, user_id, month, podium.len() as i64).await
