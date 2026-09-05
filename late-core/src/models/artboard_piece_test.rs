@@ -1,3 +1,4 @@
+use chrono::Utc;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -5,7 +6,7 @@ use crate::models::artboard_piece::{
     ApplauseOutcome, ArtboardPiece, HangOutcome, HangParams, ListingCounts, PIECE_DAILY_CAP,
     PieceListing, PieceLookup,
 };
-use crate::test_utils::{create_test_user, test_db};
+use crate::test_utils::{create_test_user, roll_artboard_pieces_back_a_month, test_db};
 
 pub(crate) fn hang_params(user_id: Uuid, title: &str, content_hash: &str) -> HangParams {
     HangParams {
@@ -191,5 +192,73 @@ async fn listing_counts_answer_without_listing() {
             hall_of_fame: 0,
             mine: 2,
         }
+    );
+}
+
+#[tokio::test]
+async fn the_podium_and_the_wall_read_best_first_and_break_ties_by_hang() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let painter = create_test_user(&test_db.db, "podium-painter").await;
+    // The daily cap is three, so the fourth piece is somebody else's.
+    let other = create_test_user(&test_db.db, "podium-other").await;
+    let mut fans = Vec::new();
+    for index in 0..4 {
+        fans.push(create_test_user(&test_db.db, &format!("podium-fan-{index}")).await);
+    }
+
+    // Four pieces the same day: `early` and `late` tie at three, `best`
+    // has four, `quiet` has none.
+    let early = hang(&client, hang_params(painter.id, "early", "hash-early")).await;
+    let best = hang(&client, hang_params(painter.id, "best", "hash-best")).await;
+    let late = hang(&client, hang_params(painter.id, "late", "hash-late")).await;
+    let quiet = hang(&client, hang_params(other.id, "quiet", "hash-quiet")).await;
+    for (piece, hands) in [(&early, 3), (&best, 4), (&late, 3)] {
+        for fan in &fans[..hands] {
+            ArtboardPiece::toggle_applause(&client, piece.id, fan.id)
+                .await
+                .expect("applaud");
+        }
+    }
+
+    // The paper's wall: best first, the tie to the earlier hang, and any
+    // count qualifies, so `quiet` would be fourth.
+    let today = Utc::now().date_naive();
+    let wall = ArtboardPiece::most_applauded_hung_on(&client, today, 3)
+        .await
+        .expect("wall");
+    assert_eq!(
+        wall.iter().map(|piece| piece.id).collect::<Vec<_>>(),
+        vec![best.id, early.id, late.id]
+    );
+    let whole_day = ArtboardPiece::most_applauded_hung_on(&client, today, 10)
+        .await
+        .expect("wall");
+    assert_eq!(whole_day.last().map(|piece| piece.id), Some(quiet.id));
+    let yesterday = today.pred_opt().unwrap();
+    assert!(
+        ArtboardPiece::most_applauded_hung_on(&client, yesterday, 3)
+            .await
+            .expect("wall")
+            .is_empty(),
+        "a day that hung nothing is an empty wall"
+    );
+
+    // Last month's podium once the month rolls: the same order, and the
+    // floor keeps `quiet` off it.
+    assert!(
+        ArtboardPiece::previous_month_podium(&client)
+            .await
+            .expect("podium")
+            .is_empty(),
+        "this month's pieces are not last month's podium"
+    );
+    roll_artboard_pieces_back_a_month(&client).await;
+    let podium = ArtboardPiece::previous_month_podium(&client)
+        .await
+        .expect("podium");
+    assert_eq!(
+        podium.iter().map(|piece| piece.id).collect::<Vec<_>>(),
+        vec![best.id, early.id, late.id]
     );
 }

@@ -377,6 +377,10 @@ const LAND_ON_HOME_KEY: &str = "land_on_home";
 const PAPER_AT_LOGIN_KEY: &str = "paper_at_login";
 /// The edition (UTC date, ISO) whose login pop this account has had.
 const PAPER_SHOWN_ON_KEY: &str = "paper_shown_on";
+/// `{"month": "YYYY-MM", "shown": n}`: how many of last month's podium
+/// pieces the splash has shown this account, and for which month. One
+/// key, overwritten in place; it never grows.
+const SPLASH_PODIUM_KEY: &str = "splash_podium";
 const TRANSLATE_TO_KEY: &str = "translate_to";
 const AUTO_TRANSLATE_KEY: &str = "auto_translate";
 const TRANSLATE_MINE_TO_EN_KEY: &str = "translate_mine_to_en";
@@ -1480,6 +1484,46 @@ impl User {
             )
             .await?;
         Ok(updated == 1)
+    }
+
+    /// Claim the next of `podium_size` splash slots for `month` (the podium's
+    /// `period_month`): the first login of a month gets slot 1, the next
+    /// slot 2, and so on up to the podium's size, after which the door
+    /// shows the coffee cup and this returns `None` without writing. Wins
+    /// once per login across every device and replica, the way the paper's
+    /// stamp does: the row is the only judge. A stored month past `month`
+    /// (a replica behind the calendar) never resets and never counts.
+    pub async fn claim_splash_podium_slot(
+        client: &Client,
+        user_id: Uuid,
+        month: chrono::NaiveDate,
+        podium_size: i64,
+    ) -> Result<Option<i64>> {
+        let value = month.format("%Y-%m").to_string();
+        let row = client
+            .query_opt(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object(
+                         $1::text,
+                         jsonb_build_object(
+                             'month', $2::text,
+                             'shown', CASE
+                                 WHEN settings->$1->>'month' = $2
+                                 THEN (settings->$1->>'shown')::bigint + 1
+                                 ELSE 1::bigint
+                             END
+                         )
+                     ),
+                     updated = current_timestamp
+                 WHERE id = $3
+                   AND (COALESCE(settings->$1->>'month', '') < $2
+                        OR (settings->$1->>'month' = $2
+                            AND (settings->$1->>'shown')::bigint < $4))
+                 RETURNING (settings->$1->>'shown')::bigint AS slot",
+                &[&SPLASH_PODIUM_KEY, &value, &user_id, &podium_size],
+            )
+            .await?;
+        Ok(row.map(|row| row.get("slot")))
     }
 
     /// Take the paper's login stamp off (the admin `/paper reset` hook), so

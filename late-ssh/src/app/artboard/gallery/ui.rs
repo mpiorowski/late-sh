@@ -2,7 +2,7 @@
 //! listing pane (list plus preview), the full-frame piece, the hang modal,
 //! the framing bar, and the splash piece.
 
-use dartboard_core::Canvas;
+use dartboard_core::{Canvas, RgbColor};
 use late_core::models::artboard_piece::PIECE_TITLE_MAX_CHARS;
 use ratatui::{
     Frame,
@@ -19,7 +19,7 @@ use crate::app::common::theme;
 
 use super::frame::Credit;
 use super::state::{Focus, GallerySection, GalleryState, HangFlow, RailRow};
-use super::svc::{GalleryPiece, applause_label};
+use super::svc::{GalleryPiece, SplashPiece, applause_label};
 
 /// The rail's width, gap included.
 pub const RAIL_WIDTH: u16 = 20;
@@ -449,10 +449,11 @@ pub fn draw_piece_canvas(frame: &mut Frame, area: Rect, piece: &GalleryPiece) {
     }
 }
 
-/// The splash: last month's winner over the door, if it fits under the
-/// caption. Returns false when the terminal is too small for it, so the
-/// caller keeps the coffee cup.
-pub fn draw_splash_piece(frame: &mut Frame, area: Rect, piece: &GalleryPiece) -> bool {
+/// The splash: this login's podium piece over the door, if it fits under
+/// the caption. Returns false when the terminal is too small for it, so
+/// the caller keeps the coffee cup.
+pub fn draw_splash_piece(frame: &mut Frame, area: Rect, splash: &SplashPiece) -> bool {
+    let piece = &splash.piece;
     let needed_height = piece.height as u16 + 4;
     let needed_width = (piece.width as u16).max(40) + 2;
     if area.height < needed_height + 2 || area.width < needed_width {
@@ -482,7 +483,11 @@ pub fn draw_splash_piece(frame: &mut Frame, area: Rect, piece: &GalleryPiece) ->
     let caption_y = block.y + piece.height as u16 + 1;
     let caption = Line::from(vec![
         Span::styled(
-            format!("piece of {}: ", month_label(piece.period_month)),
+            format!(
+                "{} of {}: ",
+                place_label(splash.place),
+                month_label(piece.period_month)
+            ),
             Style::default().fg(theme::TEXT_FAINT()),
         ),
         Span::styled(
@@ -731,6 +736,16 @@ fn month_label(month: chrono::NaiveDate) -> String {
     month.format("%b %Y").to_string()
 }
 
+/// A podium place as the caption says it: 1st, 2nd, 3rd.
+fn place_label(place: i64) -> String {
+    match place {
+        1 => "1st".to_string(),
+        2 => "2nd".to_string(),
+        3 => "3rd".to_string(),
+        n => format!("{n}th"),
+    }
+}
+
 fn notice_line(gallery: &GalleryState) -> Line<'static> {
     match gallery.notice() {
         Some(notice) => Line::from(Span::styled(
@@ -772,28 +787,57 @@ fn key_hint_line(keys: &[(&str, &str)]) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Lines of plain glyphs for a piece, for surfaces that draw text rather
-/// than cells (The Late Edition).
-pub fn piece_text_lines(canvas: &Canvas, width: usize, height: usize) -> Vec<String> {
+/// A run of glyphs in one colour, for surfaces that draw text rather than
+/// cells (The Late Edition). `None` is an unpainted glyph: the surface's
+/// own text colour, the way the board draws it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaintRun {
+    pub text: String,
+    pub fg: Option<RgbColor>,
+}
+
+/// A piece as lines of colour runs, one line per canvas row, trailing
+/// blanks trimmed. Every glyph keeps its own colour, so a text surface
+/// prints the piece the way the board painted it.
+pub fn piece_paint_lines(canvas: &Canvas, width: usize, height: usize) -> Vec<Vec<PaintRun>> {
     (0..height)
         .map(|y| {
-            let mut line = String::new();
+            let mut runs: Vec<PaintRun> = Vec::new();
             let mut x = 0;
             while x < width {
                 let pos = dartboard_core::Pos { x, y };
-                match canvas.glyph_at(pos) {
-                    Some(glyph) if glyph.pos == pos => {
-                        line.push(glyph.ch);
-                        x += glyph.width.max(1);
-                    }
-                    Some(_) => x += 1,
-                    None => {
-                        line.push(' ');
+                let (ch, fg, advance) = match canvas.glyph_at(pos) {
+                    Some(glyph) if glyph.pos == pos => (glyph.ch, glyph.fg, glyph.width.max(1)),
+                    Some(_) => {
                         x += 1;
+                        continue;
                     }
+                    None => (' ', None, 1),
+                };
+                x += advance;
+                match runs.last_mut() {
+                    Some(run) if run.fg == fg => run.text.push(ch),
+                    _ => runs.push(PaintRun {
+                        text: ch.to_string(),
+                        fg,
+                    }),
                 }
             }
-            line.trim_end().to_string()
+            // Blank cells past the last glyph are the paper's margin, not
+            // the piece's.
+            if let Some(run) = runs.last_mut()
+                && run.fg.is_none()
+            {
+                run.text = run.text.trim_end().to_string();
+                if run.text.is_empty() {
+                    runs.pop();
+                }
+            }
+            runs
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "ui_test.rs"]
+mod ui_test;

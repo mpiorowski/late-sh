@@ -396,6 +396,10 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             None
         }
     };
+    // The door: the next of last month's podium pieces this account has
+    // not seen, or the cup. One claim per login, the gallery logs its
+    // own failures.
+    let splash_piece = state.gallery_service.claim_splash_piece(user_id).await;
     let initial_announcements = match state.db.get().await {
         Ok(client) => {
             match crate::app::announcements::load_login_announcements(&client, user_id).await {
@@ -488,6 +492,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         dartboard_provenance: state.dartboard_provenance.clone(),
         artboard_snapshot_service: ArtboardSnapshotService::new(state.db.clone()),
         gallery_service: state.gallery_service.clone(),
+        splash_piece,
         username: user.username.clone(),
         bonsai_service: state.bonsai_service.clone(),
         initial_bonsai_tree,

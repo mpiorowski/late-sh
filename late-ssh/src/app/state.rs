@@ -252,8 +252,12 @@ pub struct SessionConfig {
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: crate::app::artboard::provenance::SharedArtboardProvenance,
     pub artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService,
-    /// The Artboard gallery: listings, hanging, applause, the splash piece.
+    /// The Artboard gallery: listings, hanging, applause, the splash podium.
     pub gallery_service: crate::app::artboard::gallery::svc::GalleryService,
+    /// The podium piece this login shows over the door, claimed at
+    /// bootstrap (`GalleryService::claim_splash_piece`); `None` is the
+    /// coffee cup.
+    pub splash_piece: Option<crate::app::artboard::gallery::svc::SplashPiece>,
     pub username: String,
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
@@ -852,10 +856,9 @@ pub struct App {
     pub(crate) dartboard_provenance: crate::app::artboard::provenance::SharedArtboardProvenance,
     pub(crate) artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService,
     pub(crate) gallery_service: crate::app::artboard::gallery::svc::GalleryService,
-    /// Last month's winning piece, for the splash. Process-wide `watch`
-    /// refreshed by `GalleryService::start_splash_refresh_task`.
-    pub(crate) gallery_splash_rx:
-        tokio::sync::watch::Receiver<Option<crate::app::artboard::gallery::svc::GalleryPiece>>,
+    /// The podium piece over this session's splash, claimed once at
+    /// bootstrap; `None` draws the coffee cup.
+    pub(crate) splash_piece: Option<crate::app::artboard::gallery::svc::SplashPiece>,
     pub(crate) username: String,
 
     /// Late Chips balance (loaded on login, updated via leaderboard refresh)
@@ -1212,7 +1215,7 @@ impl App {
         let dartboard_provenance = config.dartboard_provenance.clone();
         let artboard_snapshot_service = config.artboard_snapshot_service.clone();
         let gallery_service = config.gallery_service.clone();
-        let gallery_splash_rx = gallery_service.subscribe_splash();
+        let splash_piece = config.splash_piece.clone();
         let username = config.username.clone();
 
         let initial_bonsai_decay_protection = config.initial_bonsai_decay_protection;
@@ -1661,7 +1664,7 @@ impl App {
             dartboard_provenance,
             artboard_snapshot_service,
             gallery_service,
-            gallery_splash_rx,
+            splash_piece,
             username,
             chip_balance: config.initial_chip_balance,
             pending_clipboard: None,

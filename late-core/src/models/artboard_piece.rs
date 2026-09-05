@@ -32,6 +32,9 @@ pub const PIECE_TITLE_MAX_CHARS: usize = 40;
 /// Applause a piece needs before it counts toward the monthly award at all.
 /// Two friends clapping is not a competition.
 pub const GALLERY_AWARD_MIN_APPLAUSE: i64 = 3;
+/// The month's podium: the places the award prints (`ART1`-`ART3`) and
+/// the pieces the splash hangs over the door, one per login, in order.
+pub const GALLERY_PODIUM_SIZE: i64 = 3;
 /// How many pieces one listing returns. The month's board and the newest
 /// list both stop here; the gallery is a wall, not an archive.
 pub const GALLERY_LISTING_LIMIT: i64 = 100;
@@ -320,44 +323,51 @@ impl ArtboardPiece {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
-    /// Last month's most applauded piece, if any cleared the award floor:
-    /// what the splash hangs over the door. Ties break toward the earlier
-    /// hang, the same way the award query ranks.
-    pub async fn previous_month_winner(client: &impl GenericClient) -> Result<Option<Self>> {
-        let row = client
-            .query_opt(
+    /// Last month's podium, best first: the pieces that cleared the award
+    /// floor, at most [`GALLERY_PODIUM_SIZE`] of them. What the splash
+    /// hangs over the door. Ties break toward the earlier hang, the same
+    /// way the award query ranks, so index 0 is the `ART1` holder's piece.
+    pub async fn previous_month_podium(client: &impl GenericClient) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
                 &format!(
                     "SELECT * FROM ({PIECE_VIEW_SQL}) pieces
                      WHERE period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
                        AND applause >= $2
                      ORDER BY applause DESC, created ASC
-                     LIMIT 1"
+                     LIMIT $3"
                 ),
-                &[&Uuid::nil(), &GALLERY_AWARD_MIN_APPLAUSE],
+                &[
+                    &Uuid::nil(),
+                    &GALLERY_AWARD_MIN_APPLAUSE,
+                    &GALLERY_PODIUM_SIZE,
+                ],
             )
             .await?;
-        Ok(row.map(Self::from))
+        Ok(rows.into_iter().map(Self::from).collect())
     }
 
-    /// The most applauded piece hung on one UTC day: the paper's wall
-    /// column. Any applause count qualifies, a quiet day is `None`.
+    /// The most applauded pieces hung on one UTC day, best first, at most
+    /// `limit` of them: the paper's wall column. Any applause count
+    /// qualifies, a quiet day is empty.
     pub async fn most_applauded_hung_on(
         client: &impl GenericClient,
         day: NaiveDate,
-    ) -> Result<Option<Self>> {
-        let row = client
-            .query_opt(
+        limit: i64,
+    ) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
                 &format!(
                     "SELECT * FROM ({PIECE_VIEW_SQL}) pieces
                      WHERE created >= ($2::date AT TIME ZONE 'UTC')
                        AND created < (($2::date + INTERVAL '1 day') AT TIME ZONE 'UTC')
                      ORDER BY applause DESC, created ASC
-                     LIMIT 1"
+                     LIMIT $3"
                 ),
-                &[&Uuid::nil(), &day],
+                &[&Uuid::nil(), &day, &limit],
             )
             .await?;
-        Ok(row.map(Self::from))
+        Ok(rows.into_iter().map(Self::from).collect())
     }
 
     /// Applaud a piece, or take the applause back if it is already there.

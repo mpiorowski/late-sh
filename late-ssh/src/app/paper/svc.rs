@@ -43,11 +43,12 @@ use tracing::Instrument;
 use uuid::Uuid;
 
 use super::state::{
-    PaperCommand, PaperLayout, PaperModal, PaperState, PaperWall, PendingFlagWrite,
+    PAPER_WALL_PIECES, PaperCommand, PaperLayout, PaperModal, PaperState, PaperWall,
+    PendingFlagWrite,
 };
 use crate::app::ai::ghost::GRAYBEARD_PERSONA;
 use crate::app::ai::svc::AiService;
-use crate::app::artboard::gallery::{svc::GalleryPiece, ui::piece_text_lines};
+use crate::app::artboard::gallery::{svc::GalleryPiece, ui::piece_paint_lines};
 use crate::app::common::primitives::Banner;
 use crate::app::state::App;
 use crate::metrics::{self, PaperOpenResult, PaperPrintResult};
@@ -193,7 +194,7 @@ impl PrintTally {
 
 #[derive(Clone, Debug)]
 pub enum PaperOutcome {
-    Ready(PaperEdition, Option<PaperWall>),
+    Ready(PaperEdition, Vec<PaperWall>),
     /// Nothing printed for today's edition yet.
     Empty,
     /// The kill switch is off.
@@ -816,30 +817,34 @@ impl PaperService {
         if !edition.has_print() {
             return Ok(Opened::Empty);
         }
-        // The wall is a plain read, no claim: the piece is a row already,
-        // and the paper prints it the way it prints anything, in black and
-        // white. A decode failure loses the column, not the paper. The
-        // gallery's kill switch drops the column too: a piece that has to
-        // come down fast must not keep printing at every login.
+        // The wall is a plain read, no claim: the pieces are rows already,
+        // printed in their own colours. A decode failure loses that piece,
+        // not the column. The gallery's kill switch drops the column: a
+        // piece that has to come down fast must not keep printing at every
+        // login. The lead piece prints whatever its count; the runners-up
+        // need a hand on them, so a quiet day is one piece, not three.
         let covered = today.pred_opt().unwrap_or(today);
         let wall = if !self.flags().artboard_gallery_enabled {
-            None
+            Vec::new()
         } else {
-            match ArtboardPiece::most_applauded_hung_on(&client, covered).await? {
-                Some(piece) => match GalleryPiece::decode(piece) {
+            ArtboardPiece::most_applauded_hung_on(&client, covered, PAPER_WALL_PIECES)
+                .await?
+                .into_iter()
+                .enumerate()
+                .filter(|(slot, piece)| *slot == 0 || piece.applause >= 1)
+                .filter_map(|(_, piece)| match GalleryPiece::decode(piece) {
                     Ok(piece) => Some(PaperWall {
                         title: piece.title.clone(),
                         username: piece.username.clone(),
                         applause: piece.applause,
-                        lines: piece_text_lines(&piece.canvas, piece.width, piece.height),
+                        lines: piece_paint_lines(&piece.canvas, piece.width, piece.height),
                     }),
                     Err(error) => {
                         tracing::warn!(error = ?error, "paper wall piece could not be decoded");
                         None
                     }
-                },
-                None => None,
-            }
+                })
+                .collect()
         };
         match trigger {
             PaperTrigger::Login => {
@@ -947,7 +952,7 @@ fn note_section_print(
 /// What the newsstand found, before the orchestration layer maps it to
 /// a metric and an outcome.
 enum Opened {
-    Ready(PaperEdition, Option<PaperWall>),
+    Ready(PaperEdition, Vec<PaperWall>),
     Empty,
     /// The login claim lost to another device or replica.
     AlreadyShown,
@@ -1181,7 +1186,7 @@ fn drain_events(app: &mut App) -> bool {
                     }
                     PressOutcome::Previewed { edition, tally } => {
                         let line = tally.banner_line(edition.edition);
-                        app.paper.modal = Some(edition_modal(app, &edition, None));
+                        app.paper.modal = Some(edition_modal(app, &edition, &[]));
                         Banner::success(&format!("Preview, not printed. {line}"))
                     }
                     PressOutcome::Reset => Banner::success(
@@ -1204,7 +1209,7 @@ fn drain_events(app: &mut App) -> bool {
 fn open_paper(app: &mut App, trigger: PaperTrigger, outcome: PaperOutcome) {
     match (trigger, outcome) {
         (_, PaperOutcome::Ready(edition, wall)) => {
-            let modal = edition_modal(app, &edition, wall.as_ref());
+            let modal = edition_modal(app, &edition, &wall);
             if app.login_announcements_visible() || !app.clubhouse.tutorial_settled() {
                 app.paper.pending_modal = Some(modal);
             } else {
@@ -1234,7 +1239,7 @@ fn open_paper(app: &mut App, trigger: PaperTrigger, outcome: PaperOutcome) {
 
 /// An edition laid out for this session: the reader's rail order,
 /// memberships, and shop bumps.
-fn edition_modal(app: &App, edition: &PaperEdition, wall: Option<&PaperWall>) -> PaperModal {
+fn edition_modal(app: &App, edition: &PaperEdition, wall: &[PaperWall]) -> PaperModal {
     let rail_order: Vec<Uuid> = app
         .chat
         .visual_order()

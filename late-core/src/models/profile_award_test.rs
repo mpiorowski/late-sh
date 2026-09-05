@@ -350,12 +350,12 @@ async fn the_gallery_award_ranks_best_pieces_and_pays_once() {
         .expect("ledger");
     assert_eq!(ledger.len(), 1, "one prize row, however many passes ran");
 
-    // Last month's winner is what the splash and the hall of fame show.
-    let splash = ArtboardPiece::previous_month_winner(&client)
+    // Last month's podium is what the splash and the hall of fame show,
+    // the winner first.
+    let podium = ArtboardPiece::previous_month_podium(&client)
         .await
-        .expect("winner")
-        .expect("a winner cleared the floor");
-    assert_eq!(splash.id, best.id);
+        .expect("podium");
+    assert_eq!(podium.first().map(|piece| piece.id), Some(best.id));
     let hall = ArtboardPiece::list(&client, winner.id, PieceListing::HallOfFame)
         .await
         .expect("hall of fame");

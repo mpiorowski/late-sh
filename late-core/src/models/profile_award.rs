@@ -380,9 +380,10 @@ pub async fn snapshot_previous_month_profile_awards(
                 -- ROW_NUMBER, not RANK: this is the one arm that mints
                 -- chips, and RANK would hand every hanger tied at the top
                 -- the full first prize. Ties break toward the earlier
-                -- hang, the same order `ArtboardPiece::previous_month_winner`
-                -- and the hall of fame use, so the splash's winner is the
-                -- `ART1` holder. At most three rows, three prizes, a month.
+                -- hang, the same order `ArtboardPiece::previous_month_podium`
+                -- and the hall of fame use, so the splash's podium is
+                -- `ART1`-`ART3` in order. At most three rows, three prizes,
+                -- a month.
                 SELECT user_id,
                        'artboard'::text AS category,
                        value,

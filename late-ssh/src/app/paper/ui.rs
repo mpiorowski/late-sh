@@ -89,6 +89,9 @@ fn ink_style(ink: PaperInk) -> Style {
         PaperInk::JoinHint => Style::default().fg(theme::AMBER_DIM()),
         PaperInk::Body => Style::default().fg(theme::TEXT()),
         PaperInk::Faint => Style::default().fg(theme::TEXT_FAINT()),
+        PaperInk::Paint(color) => {
+            Style::default().fg(ratatui::style::Color::Rgb(color.r, color.g, color.b))
+        }
     }
 }
 
