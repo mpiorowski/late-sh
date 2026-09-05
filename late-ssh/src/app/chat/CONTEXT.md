@@ -524,8 +524,9 @@ session. `late-core/src/models/chat_message_gild.rs` owns the table
   `ChipMove::GildReceived`; the buyer pays the full price as
   `ChipMove::GildSent` (floor-guarded like a gift). The last third has no
   ledger row at all: the burn *is* the gap between the two reasons.
-  `GildReceived` is excluded from earnings, so Top Chips ranks what a player
-  earned rather than who has generous friends.
+  Both reasons are excluded from earnings, like every transfer between
+  players, so Top Chips ranks what a player earned rather than who has
+  generous friends, and tipping never costs the tipper a place.
 - **Guards** (`ChatService::gild_message`, one closed `GildRefusal` enum with
   the wording): message gone, not a member, not a public room (so never a DM
   and never a private room), a game room (`kind = 'game'`: arcade tables,

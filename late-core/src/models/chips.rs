@@ -86,11 +86,19 @@ macro_rules! chip_moves {
 }
 
 chip_moves!(
-    /// Generic game credit: house-table payouts, bonsai watering bonus.
+    /// House-table payout: a poker pot or a blackjack settlement. Wagered
+    /// money, not earned money: it stays off the Top Chips board with
+    /// [`ChipMove::Bet`], since netting the two still lets a poker table
+    /// fold every hand to one seat and walk that seat up the board.
     Credit,
-    /// Generic wager debit: house-table bets, may drain the balance to zero
-    /// (losing settlements restore the floor afterwards).
+    /// House-table wager: poker and blackjack bets, may drain the balance to
+    /// zero (losing settlements restore the floor afterwards).
     Bet,
+    /// The flat bonus for watering your bonsai. A daily-habit drip rather
+    /// than something achieved, so it stays off the Top Chips board; it has
+    /// its own reason so the ledger never has to guess whether a generic
+    /// credit was a poker pot or a watering can.
+    BonsaiWatered,
     /// Post-settlement top-up back to [`CHIP_FLOOR`]. Has its own write path
     /// ([`UserChips::restore_floor`]), never goes through [`UserChips::apply`].
     FloorRestore,
@@ -193,6 +201,7 @@ impl ChipMove {
         match self {
             Self::Credit => "chip_credit",
             Self::Bet => "chip_debit",
+            Self::BonsaiWatered => "bonsai_watered",
             Self::FloorRestore => "floor_restore",
             Self::GiftSent => "chip_gift_sent",
             Self::GiftReceived => "chip_gift_received",
@@ -248,6 +257,7 @@ impl ChipMove {
             | Self::GiftReceived
             | Self::SsnakeArenaEarned
             | Self::SsnakeArenaLost => "user_chips",
+            Self::BonsaiWatered => "bonsai_trees",
             Self::GildSent | Self::GildReceived => "chat_messages",
             Self::CrownTaken => "crown_reigns",
             Self::PotTicket | Self::PotWon => "pots",
@@ -289,6 +299,7 @@ impl ChipMove {
     pub const fn direction(self) -> ChipDirection {
         match self {
             Self::Credit
+            | Self::BonsaiWatered
             | Self::GiftReceived
             | Self::GildReceived
             | Self::PotWon
@@ -335,41 +346,46 @@ impl ChipMove {
         }
     }
 
-    /// Whether the move counts toward the monthly chip-earner leaderboard
-    /// and the permanent monthly award snapshot.
+    /// Whether the move counts toward the monthly Top Chips board and the
+    /// permanent monthly award snapshot.
+    ///
+    /// One rule decides it: a move counts only if the house minted it for
+    /// something the player did. Wagers (the tables), transfers between
+    /// players (gifts, gilds), and spending (drinks, rounds, the crown, the
+    /// pot, the Shop) are out on both sides of the ledger. Excluding only
+    /// one side is never right: with the win in and the stake out, a table
+    /// or a lottery becomes free upside; with the stake in and the win out,
+    /// playing is a pure negative on a board the player cannot climb; with
+    /// the sent side out and the received side in, a group can funnel chips
+    /// into one player at no cost. So a transfer is out entirely, and a
+    /// spend that has no credit side is out because buying a beer must not
+    /// cost anyone their place.
+    ///
+    /// The bonsai water bonus is minted but not for an achievement: it is a
+    /// daily-habit drip, so it sits out too.
+    /// Super Snake is the one paired earned/lost move that stays in: the
+    /// house mints every food, nothing moves between seats, and the payout
+    /// scaling already caps the grind.
+    /// The gallery prize counts, unlike the pot: it is paid for work other
+    /// people chose to applaud, the way a door milestone is paid for a run,
+    /// not drawn from a hat.
     pub const fn counts_as_earnings(self) -> bool {
         match self {
-            // A gild's credit is a tip, not a standing: Top Chips ranks what
-            // a player earned, and buying an author to the top of the board
-            // would make the board about who has generous friends. The crown
-            // is Shop-like vanity spending: a burn that bought a glyph must
-            // not knock the buyer off the earners board.
-            // The pot is excluded on both sides on purpose: a lottery win
-            // must not top the earners board, and if the win is out then the
-            // ticket has to be out too, or buying in would be a pure
-            // negative on a board the winner cannot climb.
-            // A round is the same vanity burn as the crown, one rung more
-            // generous: buying the bar a drink must not cost the buyer their
-            // place on the earners board.
-            // The gallery prize counts, unlike the pot: it is paid for
-            // work other people chose to applaud, the way a door milestone
-            // is paid for a run, not drawn from a hat. At 10,000 it sits
-            // between the door pairs (20,000 / 50,000), so it does not buy
-            // the next month's Top Chips on its own.
-            Self::FloorRestore
-            | Self::ShopPurchase
+            Self::Credit
+            | Self::Bet
+            | Self::BonsaiWatered
+            | Self::FloorRestore
+            | Self::GiftSent
+            | Self::GiftReceived
+            | Self::GildSent
             | Self::GildReceived
             | Self::CrownTaken
             | Self::PotTicket
             | Self::PotWon
-            | Self::RoundPurchase => false,
-            Self::Credit
-            | Self::Bet
-            | Self::GiftSent
-            | Self::GildSent
-            | Self::GiftReceived
+            | Self::RoundPurchase
             | Self::DrinkPurchase
-            | Self::NewsShared
+            | Self::ShopPurchase => false,
+            Self::NewsShared
             | Self::ArtboardPrize
             | Self::SongQueued
             | Self::QuestReward

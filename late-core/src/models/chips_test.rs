@@ -179,21 +179,26 @@ fn constants() {
 /// so a new variant cannot silently alias an existing ledger reason.
 #[test]
 fn earning_exclusions_and_reason_uniqueness() {
+    // One rule: a move counts only if the house minted it for something the
+    // player did. Wagers, transfers between players, and spending are out on
+    // both sides of the ledger, so neither grinding a table, colluding at
+    // poker, nor funnelling gifts can buy a place, and no spend can cost one.
     assert_eq!(
         ChipMove::excluded_earning_reasons(),
         vec![
+            "chip_credit",
+            "chip_debit",
+            "bonsai_watered",
             "floor_restore",
+            "chip_gift_sent",
+            "chip_gift_received",
+            "chip_gild_sent",
             "chip_gild_received",
             "chip_crown_taken",
-            // The pot is excluded on both sides: a lottery win must not top
-            // the earners board, and excluding only the win would make
-            // buying in a pure negative on a board the winner cannot climb.
             "pot_ticket",
             "pot_won",
-            // The same vanity burn as the crown, one rung more generous:
-            // buying the bar a drink must not cost the buyer their place on
-            // the earners board.
             "round_purchase",
+            "drink_purchase",
             "shop_purchase"
         ]
     );

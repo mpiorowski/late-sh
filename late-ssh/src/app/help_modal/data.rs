@@ -473,7 +473,7 @@ fn chips_help_lines() -> Vec<String> {
             thousands(GildTier::Gold.author_share())),
         "  The marker stays on the message forever. There is no un-gild, and you cannot gild yourself or a bot.".to_string(),
         "  One gild per message per buyer. Buying a higher tier later raises it at that tier's full price; it never goes down.".to_string(),
-        "  Gilds received do NOT count toward Top Chips: the board ranks what you earned, not what you were tipped.".to_string(),
+        "  Gilds do not count toward Top Chips on either side: the board ranks what the house paid you, not what moved between players.".to_string(),
         "".to_string(),
         "7. Sharing news".to_string(),
         format!("  Publishing a link to News pays {NEWS_SHARE_REWARD_CHIPS} chips."),
@@ -546,7 +546,7 @@ fn chips_help_lines() -> Vec<String> {
         "  The crown (/crown take), which burns the whole price.".to_string(),
         format!("  Pot tickets (/pot buy N) at {} chips each, of which a fifth is burned at the draw.", thousands(POT_TICKET_PRICE)),
         "  Burn milestones and the two ultimate spells (1,000,000 each), the top of the Shop.".to_string(),
-        "  Monthly Top Chips ranks net chip delta, so Shop and crown spending never lower your rank; betting losses do.".to_string(),
+        "  Monthly Top Chips counts only what the house paid you: dailies, quests, doors, the arena, prizes. Table bets and wins, gifts, gilds, and every kind of spending stay off it.".to_string(),
     ]
 }
 

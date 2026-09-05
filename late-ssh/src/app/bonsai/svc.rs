@@ -157,7 +157,14 @@ impl BonsaiService {
 
     async fn add_water_chip_bonus(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
-        UserChips::apply(&**client, user_id, ChipMove::Credit, WATER_CHIP_BONUS, None).await?;
+        UserChips::apply(
+            &**client,
+            user_id,
+            ChipMove::BonsaiWatered,
+            WATER_CHIP_BONUS,
+            None,
+        )
+        .await?;
         Ok(())
     }
 

@@ -40,7 +40,9 @@ fn all_purpose_guide_folds_music_into_pair_topic() {
 fn bot_context_includes_hub_guide_facts() {
     let context = bot_app_context();
     assert!(context.contains("## Economy\n"));
-    assert!(context.contains("Monthly Top Chips counts net chip delta."));
+    assert!(
+        context.contains("Monthly Top Chips counts only chips the house paid you for playing.")
+    );
     assert!(context.contains("Lateris, 2048, Snake, and Traffic record run scores."));
     assert!(context.contains("Four-seat fixed-stack Texas Hold'em"));
 }
@@ -130,7 +132,9 @@ fn chips_guide_lists_every_earning_surface() {
     // Economy keeps ranking rules; the amounts live here, in one place.
     let economy = lines_for(HelpTopic::Economy, false, "").join("\n");
     assert!(economy.contains("The Chips tab lists every way to earn chips"));
-    assert!(economy.contains("Monthly Top Chips counts net chip delta."));
+    assert!(
+        economy.contains("Monthly Top Chips counts only chips the house paid you for playing.")
+    );
 }
 
 #[test]
