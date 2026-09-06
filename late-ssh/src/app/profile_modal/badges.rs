@@ -1,7 +1,8 @@
-//! Earned-award list for the profile overview.
+//! Earned-award list for the profile.
 //!
-//! Profile awards are stored permanently, and the overview shows every one of
-//! them: the badges are the reason to scroll down that far.
+//! Profile awards are stored permanently, and the profile shows every one of
+//! them: wrapped onto as many rows as the width needs, never folded into a
+//! "+N more". The badges are the reason to scroll down that far.
 
 use late_core::models::profile_award::ProfileAward;
 use ratatui::{
@@ -11,27 +12,38 @@ use ratatui::{
 
 use crate::app::common::theme;
 
-pub(crate) fn badge_lines(awards: &[ProfileAward]) -> Vec<Line<'static>> {
-    if awards.is_empty() {
-        return Vec::new();
-    }
-
+pub(crate) fn badge_lines(awards: &[ProfileAward], width: usize) -> Vec<Line<'static>> {
     let badge_style = Style::default()
         .fg(theme::AMBER_GLOW())
         .add_modifier(Modifier::BOLD);
+    const GAP: &str = "  ";
 
-    let mut spans = Vec::new();
+    let mut lines = Vec::new();
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
     for award in awards {
-        if !spans.is_empty() {
-            spans.push(Span::raw("  "));
+        let text = format!("[{} {}]", award.badge(), award.month_label());
+        let text_width = text.chars().count();
+        let needed = if spans.is_empty() {
+            text_width
+        } else {
+            used + GAP.len() + text_width
+        };
+        if !spans.is_empty() && needed > width {
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            used = 0;
         }
-        spans.push(Span::styled(
-            format!("[{} {}]", award.badge(), award.month_label()),
-            badge_style,
-        ));
+        if !spans.is_empty() {
+            spans.push(Span::raw(GAP));
+            used += GAP.len();
+        }
+        spans.push(Span::styled(text, badge_style));
+        used += text_width;
     }
-
-    vec![Line::from(spans)]
+    if !spans.is_empty() {
+        lines.push(Line::from(spans));
+    }
+    lines
 }
 
 /// The full badge guide: what each code means, how it is earned, and whether

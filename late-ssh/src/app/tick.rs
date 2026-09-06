@@ -208,8 +208,11 @@ impl App {
             self.chat.pending_chat_screen_switch = false;
             self.set_screen(Screen::Dashboard);
         }
-        if let Some((user_id, username)) = self.chat.take_requested_open_profile() {
+        if let Some((user_id, username, section)) = self.chat.take_requested_open_profile() {
             self.open_profile_modal(user_id, username);
+            if section == crate::app::chat::svc::ProfileSection::Chips {
+                self.profile_modal_state.jump_to_chips();
+            }
             changed = true;
         }
         if let Some(request) = self.chat.take_requested_open_sheet() {

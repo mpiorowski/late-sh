@@ -5,6 +5,7 @@ use late_core::models::artboard_piece::{ArtboardPiece, GalleryCounts};
 use late_core::models::bonsai::{BonsaiV2Tree, Tree};
 use late_core::models::bonsai_decay_protection::BonsaiDecayProtection;
 use late_core::models::chat_message_gild::{ChatMessageGild, GildCounts};
+use late_core::models::chips::{ChipLedgerEntry, ChipMove, PROFILE_LEDGER_ROWS, UserChips};
 use late_core::models::irc_token::IrcToken;
 use late_core::models::marketplace;
 use late_core::models::profile::{Profile, ProfileParams};
@@ -55,6 +56,13 @@ pub struct ProfileSnapshot {
     /// Pieces this profile's owner has hung in the Artboard gallery, and
     /// the applause they gathered.
     pub gallery_counts: GalleryCounts,
+    /// The newest ledger rows, newest first: the public chip audit.
+    pub chip_ledger: Vec<ChipLedgerEntry>,
+    /// This UTC month's sum by the Top Chips rule, the board's own figure.
+    pub chips_earned_month: i64,
+    /// Usernames for the user ids that gift rows carry as `source_ref`, so
+    /// the audit can say who a gift went to or came from.
+    pub ledger_usernames: HashMap<Uuid, String>,
 }
 
 #[derive(Clone, Debug)]
@@ -227,6 +235,19 @@ impl ProfileService {
         let profile_awards = list_profile_awards_for_user(&client, user_id).await?;
         let gild_counts = ChatMessageGild::counts_for_author(&client, user_id).await?;
         let gallery_counts = ArtboardPiece::counts_for_user(&client, user_id).await?;
+        let chip_ledger = UserChips::recent_ledger(&client, user_id, PROFILE_LEDGER_ROWS).await?;
+        let chips_earned_month = UserChips::earned_this_month(&client, user_id).await?;
+        let counterparty_ids: Vec<Uuid> = chip_ledger
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.chip_move(),
+                    Some(ChipMove::GiftSent | ChipMove::GiftReceived)
+                )
+            })
+            .filter_map(|entry| entry.source_ref.as_deref()?.parse().ok())
+            .collect();
+        let ledger_usernames = User::list_usernames_by_ids(&client, &counterparty_ids).await?;
         self.publish_snapshot(
             user_id,
             ProfileSnapshot {
@@ -241,6 +262,9 @@ impl ProfileService {
                 profile_awards,
                 gild_counts,
                 gallery_counts,
+                chip_ledger,
+                chips_earned_month,
+                ledger_usernames,
             },
         )?;
         Ok(())

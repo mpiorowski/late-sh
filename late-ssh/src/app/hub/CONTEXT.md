@@ -58,7 +58,7 @@ The runtime is ambient-only for now:
 - `+` / `-` in the Aquarium Shop category adjusts the selected fish's active count, bounded by owned quantity and the 20-fish active cap.
 - No non-Shop service calls, economy, or activity events.
 - It ticks only while the tray is open and rebinds on terminal resize.
-- Active fish are also projected into profile snapshots via `marketplace::active_aquarium_fish_for_user`; Profile modal renders an Aquarium tab/panel for viewed users using active fish counts.
+- Active fish are also projected into profile snapshots via `marketplace::active_aquarium_fish_for_user`; the profile modal paints the reef as a band of its scrolling column (`aquarium::ui::draw_into`, into an off-screen buffer) for viewed users with active fish.
 
 Assets live under `late-ssh/assets/aquarium`. The source was adapted from `github.com/mevanlc/reefs`; keep attribution/licensing notes with any future asset or behavior changes.
 

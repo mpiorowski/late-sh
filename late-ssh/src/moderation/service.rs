@@ -136,7 +136,7 @@ impl ModerationInfra {
         self
     }
 
-    fn force_admin(&self) -> bool {
+    pub(crate) fn force_admin(&self) -> bool {
         self.force_admin
     }
 

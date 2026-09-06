@@ -570,6 +570,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /tea               post a tea cup",
         "  /ultimate          open owned Ultimate Spells",
         "  /profile [@user]   open your profile, or another user's profile",
+        "  /chips [@user]     the same profile, scrolled to the chip ledger",
         "  /exit              open quit confirm",
         "  /public #room      open/create opt-in public room",
         "  /join #room        same as /public",
@@ -880,8 +881,10 @@ fn social_help_lines() -> Vec<String> {
         "Read-only profile modal",
         "  p                 open selected chat author's profile card",
         "  /profile [@user]  open your own profile card, or another user's",
+        "  /chips [@user]    the same card, scrolled to the chip ledger",
         "  j / k, arrows     scroll",
         "  PageUp/PageDown   page",
+        "  g / G             top / bottom",
         "  Esc / q           close",
     ]
     .into_iter()
@@ -945,11 +948,16 @@ fn directory_help_lines() -> Vec<String> {
         "Read-only profile modal",
         "  p                 open selected chat author's profile card",
         "  /profile [@user]  open your own profile card, or another user's",
+        "  /chips [@user]    the same card, scrolled to the chip ledger",
         "  j / k, arrows     scroll profile modal",
         "  PageUp/PageDown   page profile modal",
+        "  g / G             top / bottom of the profile modal",
         "  Esc / q           close profile modal",
-        "  Profiles show username, country, timezone/current time, chips, markdown bio,",
-        "  bonsai, late.fetch fields, and the user's showcases when available.",
+        "  One scrolling column on every screen: the bonsai beside the late.fetch",
+        "  grid (country, local time, chips and this month's Top Chips figure, gilds,",
+        "  gallery, created, ide, os, terminal, theme, langs), then the markdown bio,",
+        "  showcases, every badge, the aquarium, and the chip ledger: the newest",
+        "  ledger rows with what each paid for, rows the board ignores marked off.",
     ]
     .into_iter()
     .map(str::to_string)

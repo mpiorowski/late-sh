@@ -917,6 +917,7 @@ pub enum ChatEvent {
         user_id: Uuid,
         target_user_id: Uuid,
         target_username: String,
+        section: ProfileSection,
     },
     OpenProfileFailed {
         user_id: Uuid,
@@ -1117,6 +1118,14 @@ pub enum ChatEvent {
         user_id: Uuid,
         message: String,
     },
+}
+
+/// Where an opened profile modal lands: the top, or scrolled to the chips
+/// ledger (`/chips`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProfileSection {
+    Top,
+    Chips,
 }
 
 /// Result of a successful admin chip grant, returned by `grant_chips`.
@@ -3670,7 +3679,14 @@ impl ChatService {
         Ok(room.id)
     }
 
-    pub fn open_profile_by_username_task(&self, user_id: Uuid, target_username: String) {
+    /// Resolve `@name` for `/profile` and `/chips`; `section` says where the
+    /// opened modal lands.
+    pub fn open_profile_by_username_task(
+        &self,
+        user_id: Uuid,
+        target_username: String,
+        section: ProfileSection,
+    ) {
         let service = self.clone();
         let span = info_span!(
             "chat.open_profile_by_username_task",
@@ -3685,6 +3701,7 @@ impl ChatService {
                             user_id,
                             target_user_id,
                             target_username: name,
+                            section,
                         });
                     }
                     Err(e) => {
@@ -3991,9 +4008,10 @@ impl ChatService {
         );
     }
 
-    /// `/grant @user <amount>`: an admin mints chips for a player. The admin
-    /// flag is read from the database here, not trusted from the session,
-    /// and the credit leaves no ledger row by decision (see
+    /// `/grant @user <amount>`: an admin mints chips for a player. Admin is
+    /// decided here by the same rule the session bootstrap uses,
+    /// `users.is_admin || force_admin`, rather than trusted from the
+    /// session; the credit leaves no ledger row by decision (see
     /// `UserChips::admin_grant`).
     async fn grant_chips(
         &self,
@@ -4015,7 +4033,7 @@ impl ChatService {
         let admin = User::get(&client, admin_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("admin not found"))?;
-        if !admin.is_admin {
+        if !(admin.is_admin || self.moderation_infra.force_admin()) {
             anyhow::bail!("/grant is admin-only");
         }
         let recipient = User::find_by_username(&client, target_username)

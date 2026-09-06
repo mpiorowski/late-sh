@@ -57,7 +57,7 @@ use super::{
     showcase,
     svc::{
         ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, GRANT_MAX_AMOUNT, GildRefusal,
-        ReportKind, RoomMemberListItem,
+        ProfileSection, ReportKind, RoomMemberListItem,
     },
     ui_text::{NewsPayload, parse_news_payload, parse_report_payload},
     work,
@@ -939,7 +939,7 @@ pub struct ChatState {
     /// modal pre-filled with `?query`.
     requested_message_search: Option<String>,
     requested_petname: Option<PetnameRequest>,
-    requested_open_profile: Option<(Uuid, String)>,
+    requested_open_profile: Option<(Uuid, String, ProfileSection)>,
     requested_open_sheet: Option<SheetOpenRequest>,
     requested_quit: bool,
     requested_audio_url: Option<String>,
@@ -2002,7 +2002,7 @@ impl ChatState {
         self.requested_message_search.take()
     }
 
-    pub fn take_requested_open_profile(&mut self) -> Option<(Uuid, String)> {
+    pub fn take_requested_open_profile(&mut self) -> Option<(Uuid, String, ProfileSection)> {
         self.requested_open_profile.take()
     }
 
@@ -3723,7 +3723,15 @@ impl ChatState {
             }
         }
 
-        if let Some(target) = parse_user_command(&body, "/profile") {
+        // `/profile [@user]` opens the card at the top; `/chips [@user]` is
+        // the same card scrolled to the ledger, the public chip audit.
+        for (command, section) in [
+            ("/profile", ProfileSection::Top),
+            ("/chips", ProfileSection::Chips),
+        ] {
+            let Some(target) = parse_user_command(&body, command) else {
+                continue;
+            };
             self.clear_composer_after_submit();
             match target {
                 None => {
@@ -3734,11 +3742,14 @@ impl ChatState {
                         .filter(|name| !name.is_empty())
                         .map(ToOwned::to_owned)
                         .unwrap_or_else(|| short_user_id(self.user_id));
-                    self.requested_open_profile = Some((self.user_id, username));
+                    self.requested_open_profile = Some((self.user_id, username, section));
                 }
                 Some(name) => {
-                    self.service
-                        .open_profile_by_username_task(self.user_id, name.to_string());
+                    self.service.open_profile_by_username_task(
+                        self.user_id,
+                        name.to_string(),
+                        section,
+                    );
                 }
             }
             return None;
@@ -5906,8 +5917,9 @@ impl ChatState {
                     user_id,
                     target_user_id,
                     target_username,
+                    section,
                 } if self.user_id == user_id => {
-                    self.requested_open_profile = Some((target_user_id, target_username));
+                    self.requested_open_profile = Some((target_user_id, target_username, section));
                 }
                 ChatEvent::OpenProfileFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&sentence_case(&message)));

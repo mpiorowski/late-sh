@@ -1,13 +1,20 @@
 use std::collections::HashMap;
 
 use anyhow::{Result, bail, ensure};
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use tokio_postgres::{Client, GenericClient, Transaction};
 use uuid::Uuid;
 
 pub const CHIP_FLOOR: i64 = 100;
 pub const INITIAL_CHIP_BALANCE: i64 = 1_000;
 pub const CHIP_USER_CHANGED_CHANNEL: &str = "chip_user_changed";
+/// SQL for the start of the current UTC month, the window every monthly
+/// chip figure shares: the Top Chips board, the award snapshot, and the
+/// "earned this month" line on a profile.
+pub const MONTH_TS_FILTER: &str =
+    "date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'";
+/// How many ledger rows a profile shows.
+pub const PROFILE_LEDGER_ROWS: i64 = 40;
 
 pub async fn listen_for_chip_changes(client: &Client) -> Result<()> {
     client
@@ -450,6 +457,14 @@ impl ChipMove {
         }
     }
 
+    /// The variant behind a persisted `chip_ledger.reason`, or `None` for a
+    /// reason nothing in the roster ever wrote (seed data, hand-written
+    /// rows). Derived from `ALL`, so a new variant is parseable the moment
+    /// it exists.
+    pub fn from_reason(reason: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|mv| mv.reason() == reason)
+    }
+
     /// The `chip_ledger.reason` values excluded from earnings queries.
     /// Both consumers (monthly leaderboard, monthly award snapshot) build
     /// their exclusion list here, so they can never drift apart.
@@ -459,6 +474,22 @@ impl ChipMove {
             .filter(|mv| !mv.counts_as_earnings())
             .map(|mv| mv.reason())
             .collect()
+    }
+}
+
+/// One `chip_ledger` row as a profile shows it. `reason` stays the persisted
+/// string so a row nothing in the roster wrote still renders, as "other".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChipLedgerEntry {
+    pub delta: i64,
+    pub reason: String,
+    pub source_ref: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl ChipLedgerEntry {
+    pub fn chip_move(&self) -> Option<ChipMove> {
+        ChipMove::from_reason(&self.reason)
     }
 }
 
@@ -787,6 +818,53 @@ impl UserChips {
             bail!("gild credit returned no row");
         };
         Ok(Some((sender, author)))
+    }
+
+    /// A user's newest ledger rows, newest first. Owner-scoped in the query.
+    pub async fn recent_ledger(
+        client: &Client,
+        user_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<ChipLedgerEntry>> {
+        let rows = client
+            .query(
+                "SELECT delta, reason, source_ref, created_at
+                 FROM chip_ledger
+                 WHERE user_id = $1
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT $2",
+                &[&user_id, &limit],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ChipLedgerEntry {
+                delta: row.get("delta"),
+                reason: row.get("reason"),
+                source_ref: row.get("source_ref"),
+                created_at: row.get("created_at"),
+            })
+            .collect())
+    }
+
+    /// What a user has earned this UTC month by the Top Chips rule
+    /// ([`ChipMove::counts_as_earnings`]): the same sum the board ranks, so
+    /// the profile figure and the board never disagree.
+    pub async fn earned_this_month(client: &Client, user_id: Uuid) -> Result<i64> {
+        let excluded = ChipMove::excluded_earning_reasons();
+        let row = client
+            .query_one(
+                &format!(
+                    "SELECT COALESCE(SUM(delta), 0)::bigint AS earned
+                     FROM chip_ledger
+                     WHERE user_id = $1
+                       AND reason <> ALL($2)
+                       AND created_at >= {MONTH_TS_FILTER}"
+                ),
+                &[&user_id, &excluded],
+            )
+            .await?;
+        Ok(row.get("earned"))
     }
 
     /// All user chip balances (for per-user lookup in leaderboard refresh).

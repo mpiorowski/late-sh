@@ -5291,6 +5291,35 @@ mod grant {
         );
     }
 
+    /// Local and staging sessions are admins through `force_admin`, not the
+    /// `users.is_admin` column; the grant must apply the same rule the
+    /// session bootstrap does, or every dev account is refused.
+    #[tokio::test]
+    async fn force_admin_counts_as_admin() {
+        let test_db = new_test_db().await;
+        let service = ChatService::new(
+            test_db.db.clone(),
+            NotificationService::new(test_db.db.clone()),
+        )
+        .with_force_admin(true)
+        .with_chip_service(ChipService::new(test_db.db.clone()));
+        let dev = create_test_user(&test_db.db, "grant-forced-admin").await;
+        let player = create_test_user(&test_db.db, "grant-forced-player").await;
+
+        let event = grant(&service, dev.id, "grant-forced-player", 100).await;
+        match event {
+            ChatEvent::GrantSucceeded {
+                recipient_id,
+                recipient_balance,
+                ..
+            } => {
+                assert_eq!(recipient_id, player.id);
+                assert_eq!(recipient_balance, INITIAL_CHIP_BALANCE + 100);
+            }
+            other => panic!("a force_admin session grants like an admin, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn a_non_admin_is_refused_and_nothing_moves() {
         let test_db = new_test_db().await;
