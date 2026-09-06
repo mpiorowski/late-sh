@@ -255,13 +255,8 @@ fn build_segments(state: &ProfileModalState, width: u16) -> (Vec<Segment>, Optio
     if state.chip_ledger().is_empty() {
         lines.push(Line::from(Span::styled("no chips moved yet", dim)));
     }
-    for entry in state.chip_ledger() {
-        lines.push(ledger::row_line(
-            entry,
-            width_usize,
-            |id| state.ledger_username(id).map(str::to_string),
-            |gild_ref| state.ledger_gild(gild_ref).cloned(),
-        ));
+    for row in state.chip_ledger() {
+        lines.push(ledger::row_line(row, width_usize));
     }
     segments.push(Segment::Text(lines));
 

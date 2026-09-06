@@ -2,20 +2,20 @@
 //!
 //! The ledger is public, so this is where anyone can audit a place on the
 //! Top Chips board: every row says what it paid for, and rows the board
-//! ignores are marked. Every `ChipMove` gets a label and a decision about
-//! what its `source_ref` means to a reader, both exhaustive, so a new reason
-//! cannot ship without copy.
+//! ignores are marked. Every `ChipMove` gets a label and every resolved
+//! `LedgerDetail` gets copy, both exhaustive, so a new reason or detail
+//! cannot ship without words. What a ref points at is decided in
+//! `profile::ledger`; this module only says it.
 
 use chrono::{DateTime, Utc};
-use late_core::models::chat_message_gild::GildParties;
-use late_core::models::chips::{ChipLedgerEntry, ChipMove};
+use late_core::models::chips::ChipMove;
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
-use uuid::Uuid;
 
 use crate::app::common::theme;
+use crate::app::profile::ledger::{LedgerDetail, LedgerRow};
 
 /// Column widths for a row: `Sep 06  +1,333  gild received  <detail>`.
 const DATE_WIDTH: usize = 6;
@@ -80,94 +80,46 @@ pub(crate) fn label(mv: ChipMove) -> &'static str {
     }
 }
 
-/// What the row's `source_ref` means to a reader, if anything. Most refs
-/// are ids that only the database cares about; the ones a person can read
-/// (a drink, a SKU, a link, the other side of a gift or a gild) are shown.
-/// `username` resolves a user id; `gild` resolves a gild row's ref to its
-/// author and buyer.
-pub(crate) fn detail(
-    mv: ChipMove,
-    source_ref: Option<&str>,
-    username: impl Fn(Uuid) -> Option<String>,
-    gild: impl Fn(Uuid) -> Option<GildParties>,
-) -> Option<String> {
-    let source_ref = source_ref?;
-    let name = |id: Uuid| username(id).map(|name| format!("@{name}"));
-    match mv {
-        ChipMove::GiftSent => {
-            let recipient: Uuid = source_ref.parse().ok()?;
-            Some(format!("to {}", name(recipient)?))
+/// The resolved detail, in a couple of words.
+pub(crate) fn detail(detail: &LedgerDetail) -> String {
+    match detail {
+        LedgerDetail::GiftTo { username } => format!("to @{username}"),
+        LedgerDetail::GiftFrom { username } => format!("from @{username}"),
+        LedgerDetail::GildTo { username } => format!("to @{username}"),
+        LedgerDetail::GildFrom { usernames } => {
+            let names: Vec<String> = usernames.iter().map(|name| format!("@{name}")).collect();
+            format!("from {}", names.join(", "))
         }
-        ChipMove::GiftReceived => {
-            let sender: Uuid = source_ref.parse().ok()?;
-            Some(format!("from {}", name(sender)?))
+        LedgerDetail::GamePayout { game, payout_kind } => {
+            format!("{} · {}", humanize(game), humanize(payout_kind))
         }
-        ChipMove::GildSent => {
-            let message_id: Uuid = source_ref.parse().ok()?;
-            Some(format!("to {}", name(gild(message_id)?.author_user_id)?))
+        LedgerDetail::CrownFrom { username } => format!("from @{username}"),
+        LedgerDetail::PotTickets { count } => plural(*count, "ticket"),
+        LedgerDetail::PotWon { tickets } => format!("of {}", plural(*tickets, "ticket")),
+        LedgerDetail::Quest { title } => title.clone(),
+        LedgerDetail::GalleryPlace { rank, month } => {
+            format!("#{rank} · {}", month.format("%b %Y"))
         }
-        // One buyer per gild ref. Rows written before the ref became the
-        // gild id carry the message id instead and resolve to every buyer of
-        // that message, so the list is the honest answer for them.
-        ChipMove::GildReceived => {
-            let message_id: Uuid = source_ref.parse().ok()?;
-            let buyers: Vec<String> = gild(message_id)?
-                .buyer_user_ids
-                .iter()
-                .filter_map(|id| name(*id))
-                .collect();
-            if buyers.is_empty() {
-                None
-            } else {
-                Some(format!("from {}", buyers.join(", ")))
-            }
-        }
-        ChipMove::DrinkPurchase | ChipMove::ShopPurchase | ChipMove::NewsShared => {
-            Some(source_ref.to_string())
-        }
-        ChipMove::DailyQuestStreakReward => Some(format!("streak day {source_ref}")),
-        ChipMove::LegacyTableCredit
-        | ChipMove::LegacyTableDebit
-        | ChipMove::BlackjackBet
-        | ChipMove::BlackjackPayout
-        | ChipMove::PokerBet
-        | ChipMove::PokerPayout
-        | ChipMove::BonsaiWatered
-        | ChipMove::FloorRestore
-        | ChipMove::InitialBalance
-        | ChipMove::CrownTaken
-        | ChipMove::PotTicket
-        | ChipMove::PotWon
-        | ChipMove::ArtboardPrize
-        | ChipMove::SongQueued
-        | ChipMove::RoundPurchase
-        | ChipMove::QuestReward
-        | ChipMove::DailyPuzzleWin
-        | ChipMove::AsterionEscape
-        | ChipMove::DailyChessWin
-        | ChipMove::DailyChess960Win
-        | ChipMove::DailyBattleshipWin
-        | ChipMove::DailyConnectFourWin
-        | ChipMove::DailyReversiWin
-        | ChipMove::DailyCheckersWin
-        | ChipMove::DailyBackgammonWin
-        | ChipMove::DailyBriscolaWin
-        | ChipMove::TronWin
-        | ChipMove::SsnakeArenaEarned
-        | ChipMove::SsnakeArenaLost
-        | ChipMove::GreendragonDragonSlain
-        | ChipMove::DarkroomEscape
-        | ChipMove::DarkroomBeaconEscape
-        | ChipMove::NethackAmuletAcquired
-        | ChipMove::NethackAscension
-        | ChipMove::DcssOrbFound
-        | ChipMove::DcssOrbEscape
-        | ChipMove::BrogueEscape
-        | ChipMove::BrogueMastery
-        | ChipMove::LateaniaArchdemonDefeat
-        | ChipMove::LateaniaFrontierKingDefeat
-        | ChipMove::LateaniaSunderingDeepDefeat
-        | ChipMove::LateaniaKaethyrAscendantDefeat => None,
+        LedgerDetail::RoundFor { patrons } => format!("for {}", plural(*patrons, "patron")),
+        LedgerDetail::Song { title } => title.clone(),
+        LedgerDetail::Drink(drink) => drink.clone(),
+        LedgerDetail::Sku(sku) => sku.clone(),
+        LedgerDetail::Link(url) => url.clone(),
+        LedgerDetail::StreakDay(day) => format!("streak day {day}"),
+    }
+}
+
+/// A reward template key as words: `daily_win_hard` reads `daily win hard`.
+fn humanize(key: &str) -> String {
+    key.replace('_', " ")
+}
+
+/// `1 ticket`, `3 tickets`.
+fn plural(count: i64, noun: &str) -> String {
+    if count == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{count} {noun}s")
     }
 }
 
@@ -234,20 +186,12 @@ fn delta_style(delta: i64) -> Style {
 }
 
 /// One ledger row, clipped to `width`.
-pub(crate) fn row_line(
-    entry: &ChipLedgerEntry,
-    width: usize,
-    username: impl Fn(Uuid) -> Option<String>,
-    gild: impl Fn(Uuid) -> Option<GildParties>,
-) -> Line<'static> {
+pub(crate) fn row_line(row: &LedgerRow, width: usize) -> Line<'static> {
+    let entry = &row.entry;
     let dim = Style::default().fg(theme::TEXT_DIM());
-    let (label, detail, counts) = match entry.chip_move() {
-        Some(mv) => (
-            label(mv),
-            detail(mv, entry.source_ref.as_deref(), username, gild),
-            mv.counts_as_earnings(),
-        ),
-        None => ("other", None, true),
+    let (label, counts) = match entry.chip_move() {
+        Some(mv) => (label(mv), mv.counts_as_earnings()),
+        None => ("other", true),
     };
     let text_style = if counts {
         Style::default().fg(theme::TEXT())
@@ -275,7 +219,7 @@ pub(crate) fn row_line(
     ];
     let used = DATE_WIDTH + 2 + DELTA_WIDTH + 2 + LABEL_WIDTH;
     let tail = if counts { 0 } else { OFF_BOARD.len() + 2 };
-    if let Some(detail) = detail {
+    if let Some(detail) = row.detail.as_ref().map(detail) {
         let room = width.saturating_sub(used + 2 + tail);
         if room > 0 {
             spans.push(Span::raw("  "));

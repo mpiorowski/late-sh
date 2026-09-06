@@ -9,6 +9,8 @@
 //! This module owns every read and write of `crown_reigns`. The chips move
 //! through `chips.rs`; the transaction that does both belongs to the caller.
 
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use deadpool_postgres::GenericClient;
@@ -117,6 +119,37 @@ impl From<Row> for CrownReign {
 }
 
 impl CrownReign {
+    /// Who each of these reigns took the crown from, keyed by reign id: the
+    /// reign taken most recently before it, whatever month it belonged to,
+    /// since a take is the only thing that closes a reign. A reign that
+    /// found the crown never held is absent. One index scan per id.
+    pub async fn deposed_for_reigns(
+        client: &impl GenericClient,
+        ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Uuid>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = client
+            .query(
+                "SELECT r.id, p.holder_user_id
+                 FROM crown_reigns r
+                 JOIN LATERAL (
+                     SELECT holder_user_id FROM crown_reigns
+                     WHERE taken_at < r.taken_at
+                     ORDER BY taken_at DESC
+                     LIMIT 1
+                 ) p ON true
+                 WHERE r.id = ANY($1)",
+                &[&ids],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("id"), row.get("holder_user_id")))
+            .collect())
+    }
+
     /// Whether this reign still counts. An open reign from a previous UTC
     /// month is stale: the crown reads as vacant at the minimum price from
     /// the rollover onwards, and the next take closes the row. This is how

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 
@@ -169,6 +171,40 @@ impl ProfileAward {
             self.month_label()
         )
     }
+}
+
+/// The awards behind a batch of ledger refs, keyed by id: one primary-key
+/// scan. Ids matching nothing are absent.
+pub async fn find_profile_awards_by_ids(
+    client: &Client,
+    ids: &[Uuid],
+) -> Result<HashMap<Uuid, ProfileAward>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = client
+        .query(
+            "SELECT id, user_id, category, period_month, rank, score_value, awarded_at
+             FROM profile_awards
+             WHERE id = ANY($1)",
+            &[&ids],
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let award = ProfileAward {
+                id: row.get("id"),
+                user_id: row.get("user_id"),
+                category: row.get("category"),
+                period_month: row.get("period_month"),
+                rank: row.get("rank"),
+                score_value: row.get("score_value"),
+                awarded_at: row.get("awarded_at"),
+            };
+            (award.id, award)
+        })
+        .collect())
 }
 
 pub async fn list_profile_awards_for_user(

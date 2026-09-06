@@ -135,3 +135,39 @@ async fn past_the_daily_cap_a_track_still_queues_and_mints_nothing() {
         "nothing is minted past the cap"
     );
 }
+
+/// A song row's ref is the video id; the newest queue row with a title
+/// names it, and a video only ever queued untitled says nothing.
+#[tokio::test]
+async fn titles_resolve_from_the_newest_titled_queue_row() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "title-user").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    MediaQueueItem::insert_youtube(
+        &mut client,
+        user.id,
+        "vid-a",
+        Some("Old title"),
+        None,
+        None,
+        false,
+    )
+    .await
+    .expect("first queue");
+    MediaQueueItem::insert_youtube(&mut client, user.id, "vid-b", None, None, None, false)
+        .await
+        .expect("untitled queue");
+
+    let titles = MediaQueueItem::titles_for_video_ids(
+        &client,
+        &[
+            "vid-a".to_string(),
+            "vid-b".to_string(),
+            "vid-none".to_string(),
+        ],
+    )
+    .await
+    .expect("titles");
+    assert_eq!(titles.len(), 1);
+    assert_eq!(titles.get("vid-a").map(String::as_str), Some("Old title"));
+}

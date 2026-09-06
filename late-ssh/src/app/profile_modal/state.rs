@@ -1,10 +1,8 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 
 use late_core::models::artboard_piece::GalleryCounts;
 use late_core::models::bonsai::Tree;
-use late_core::models::chat_message_gild::{GildCounts, GildParties};
-use late_core::models::chips::ChipLedgerEntry;
+use late_core::models::chat_message_gild::GildCounts;
 use late_core::models::profile::Profile;
 use late_core::models::profile_award::ProfileAward;
 use ratatui::layout::Rect;
@@ -15,6 +13,7 @@ use crate::app::bonsai::svc::BonsaiService;
 use crate::app::bonsai_v2::state::BonsaiV2State;
 use crate::app::chat::showcase::svc::{ShowcaseFeedItem, ShowcaseService, ShowcaseSnapshot};
 use crate::app::hub::aquarium::state::AquariumState;
+use crate::app::profile::ledger::LedgerRow;
 use crate::app::profile::svc::{ProfileService, ProfileSnapshot};
 
 /// The vertical extent the last draw measured: how tall the composed body
@@ -61,10 +60,8 @@ pub(crate) struct ProfileModalState {
     profile_awards: Vec<ProfileAward>,
     gild_counts: GildCounts,
     gallery_counts: GalleryCounts,
-    chip_ledger: Vec<ChipLedgerEntry>,
+    chip_ledger: Vec<LedgerRow>,
     chips_earned_month: i64,
-    ledger_gilds: HashMap<Uuid, GildParties>,
-    ledger_usernames: HashMap<Uuid, String>,
     snapshot_rx: Option<watch::Receiver<ProfileSnapshot>>,
     /// First body row shown. Clamped against `extent` on every move, and
     /// again by `draw` once the body has been measured.
@@ -111,8 +108,6 @@ impl ProfileModalState {
             gallery_counts: GalleryCounts::default(),
             chip_ledger: Vec::new(),
             chips_earned_month: 0,
-            ledger_gilds: HashMap::new(),
-            ledger_usernames: HashMap::new(),
             snapshot_rx: None,
             scroll_offset: Cell::new(0),
             extent: Cell::new(ScrollExtent::default()),
@@ -132,8 +127,6 @@ impl ProfileModalState {
         self.gallery_counts = GalleryCounts::default();
         self.chip_ledger.clear();
         self.chips_earned_month = 0;
-        self.ledger_gilds.clear();
-        self.ledger_usernames.clear();
         self.aquarium_fish.clear();
         *self.aquarium.get_mut() = None;
         let mut snapshot_rx = self.profile_service.subscribe_snapshot(user_id);
@@ -167,8 +160,6 @@ impl ProfileModalState {
         self.gallery_counts = GalleryCounts::default();
         self.chip_ledger.clear();
         self.chips_earned_month = 0;
-        self.ledger_gilds.clear();
-        self.ledger_usernames.clear();
         self.scroll_offset.set(0);
         self.extent.set(ScrollExtent::default());
         self.jump_to_chips.set(false);
@@ -220,8 +211,6 @@ impl ProfileModalState {
             self.gallery_counts = GalleryCounts::default();
             self.chip_ledger.clear();
             self.chips_earned_month = 0;
-            self.ledger_gilds.clear();
-            self.ledger_usernames.clear();
             if !self.aquarium_fish.is_empty() {
                 self.aquarium_fish.clear();
                 *self.aquarium.get_mut() = None;
@@ -238,8 +227,6 @@ impl ProfileModalState {
         self.gallery_counts = snapshot.gallery_counts;
         self.chip_ledger = snapshot.chip_ledger;
         self.chips_earned_month = snapshot.chips_earned_month;
-        self.ledger_gilds = snapshot.ledger_gilds;
-        self.ledger_usernames = snapshot.ledger_usernames;
 
         if snapshot.aquarium_fish != self.aquarium_fish {
             self.aquarium_fish = snapshot.aquarium_fish;
@@ -331,20 +318,12 @@ impl ProfileModalState {
         self.gallery_counts
     }
 
-    pub(crate) fn chip_ledger(&self) -> &[ChipLedgerEntry] {
+    pub(crate) fn chip_ledger(&self) -> &[LedgerRow] {
         &self.chip_ledger
     }
 
     pub(crate) fn chips_earned_month(&self) -> i64 {
         self.chips_earned_month
-    }
-
-    pub(crate) fn ledger_username(&self, user_id: Uuid) -> Option<&str> {
-        self.ledger_usernames.get(&user_id).map(String::as_str)
-    }
-
-    pub(crate) fn ledger_gild(&self, source_ref: Uuid) -> Option<&GildParties> {
-        self.ledger_gilds.get(&source_ref)
     }
 
     pub(crate) fn profile(&self) -> Option<&Profile> {

@@ -1,7 +1,5 @@
-use chrono::{TimeZone, Utc};
-use late_core::models::chat_message_gild::GildParties;
+use chrono::{NaiveDate, TimeZone, Utc};
 use late_core::models::chips::{ChipLedgerEntry, ChipMove};
-use uuid::Uuid;
 
 use super::*;
 
@@ -12,21 +10,16 @@ fn text(line: &Line<'_>) -> String {
         .collect::<String>()
 }
 
-fn entry(delta: i64, reason: &str, source_ref: Option<&str>) -> ChipLedgerEntry {
-    ChipLedgerEntry {
-        delta,
-        reason: reason.to_string(),
-        source_ref: source_ref.map(str::to_string),
-        created_at: Utc.with_ymd_and_hms(2026, 9, 6, 12, 0, 0).unwrap(),
+fn row(delta: i64, reason: &str, detail: Option<LedgerDetail>) -> LedgerRow {
+    LedgerRow {
+        entry: ChipLedgerEntry {
+            delta,
+            reason: reason.to_string(),
+            source_ref: Some("ref".to_string()),
+            created_at: Utc.with_ymd_and_hms(2026, 9, 6, 12, 0, 0).unwrap(),
+        },
+        detail,
     }
-}
-
-fn no_names(_: Uuid) -> Option<String> {
-    None
-}
-
-fn no_gilds(_: Uuid) -> Option<GildParties> {
-    None
 }
 
 /// Every reason has copy, and no two reasons collide on a label except the
@@ -45,71 +38,155 @@ fn every_move_has_a_label() {
     }
 }
 
+/// Every detail kind reads as a phrase a person would say.
 #[test]
-fn a_gift_row_names_the_other_party() {
-    let alice = Uuid::now_v7();
-    let names = |id: Uuid| (id == alice).then(|| "alice".to_string());
-    let sent = entry(-300, "chip_gift_sent", Some(&alice.to_string()));
-    let line = text(&row_line(&sent, 80, names, no_gilds));
-    assert_eq!(line, "Sep 06      -300  gift sent           to @alice  off");
-
-    let received = entry(300, "chip_gift_received", Some(&alice.to_string()));
-    let line = text(&row_line(&received, 80, names, no_gilds));
+fn every_detail_has_copy() {
+    let alice = || "alice".to_string();
     assert_eq!(
-        line,
-        "Sep 06      +300  gift received       from @alice  off"
+        detail(&LedgerDetail::GiftTo { username: alice() }),
+        "to @alice"
+    );
+    assert_eq!(
+        detail(&LedgerDetail::GiftFrom { username: alice() }),
+        "from @alice"
+    );
+    assert_eq!(
+        detail(&LedgerDetail::GildTo { username: alice() }),
+        "to @alice"
+    );
+    assert_eq!(
+        detail(&LedgerDetail::GildFrom {
+            usernames: vec![alice(), "bob".to_string()]
+        }),
+        "from @alice, @bob"
+    );
+    assert_eq!(
+        detail(&LedgerDetail::GamePayout {
+            game: "minesweeper".to_string(),
+            payout_kind: "daily_win_hard".to_string(),
+        }),
+        "minesweeper · daily win hard"
+    );
+    assert_eq!(
+        detail(&LedgerDetail::CrownFrom { username: alice() }),
+        "from @alice"
+    );
+    assert_eq!(detail(&LedgerDetail::PotTickets { count: 1 }), "1 ticket");
+    assert_eq!(detail(&LedgerDetail::PotTickets { count: 3 }), "3 tickets");
+    assert_eq!(
+        detail(&LedgerDetail::PotWon { tickets: 42 }),
+        "of 42 tickets"
+    );
+    assert_eq!(
+        detail(&LedgerDetail::Quest {
+            title: "Water your bonsai".to_string()
+        }),
+        "Water your bonsai"
+    );
+    assert_eq!(
+        detail(&LedgerDetail::GalleryPlace {
+            rank: 1,
+            month: NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(),
+        }),
+        "#1 · Aug 2026"
+    );
+    assert_eq!(
+        detail(&LedgerDetail::RoundFor { patrons: 4 }),
+        "for 4 patrons"
+    );
+    assert_eq!(
+        detail(&LedgerDetail::Song {
+            title: "Never Gonna Give You Up".to_string()
+        }),
+        "Never Gonna Give You Up"
+    );
+    assert_eq!(
+        detail(&LedgerDetail::Drink("Segfault Sour".to_string())),
+        "Segfault Sour"
+    );
+    assert_eq!(
+        detail(&LedgerDetail::Sku("bonsai-dynamic".to_string())),
+        "bonsai-dynamic"
+    );
+    assert_eq!(
+        detail(&LedgerDetail::Link("https://example.com".to_string())),
+        "https://example.com"
+    );
+    assert_eq!(
+        detail(&LedgerDetail::StreakDay("7".to_string())),
+        "streak day 7"
     );
 }
 
-/// A gild row names the other side through the gilded message: the author
-/// on the sent side, every buyer of that message on the received side.
+#[test]
+fn a_gift_row_names_the_other_party() {
+    let sent = row(
+        -300,
+        "chip_gift_sent",
+        Some(LedgerDetail::GiftTo {
+            username: "alice".to_string(),
+        }),
+    );
+    assert_eq!(
+        text(&row_line(&sent, 80)),
+        "Sep 06      -300  gift sent           to @alice  off"
+    );
+}
+
 #[test]
 fn a_gild_row_names_who_gilded_whom() {
-    let author = Uuid::now_v7();
-    let alice = Uuid::now_v7();
-    let bob = Uuid::now_v7();
-    let message_id = Uuid::now_v7();
-    let names = move |id: Uuid| {
-        if id == author {
-            Some("author".to_string())
-        } else if id == alice {
-            Some("alice".to_string())
-        } else if id == bob {
-            Some("bob".to_string())
-        } else {
-            None
-        }
-    };
-    let gilds = move |id: Uuid| {
-        (id == message_id).then(|| GildParties {
-            author_user_id: author,
-            buyer_user_ids: vec![alice, bob],
-        })
-    };
-
-    let sent = entry(-500, "chip_gild_sent", Some(&message_id.to_string()));
+    let sent = row(
+        -500,
+        "chip_gild_sent",
+        Some(LedgerDetail::GildTo {
+            username: "author".to_string(),
+        }),
+    );
     assert_eq!(
-        text(&row_line(&sent, 80, names, gilds)),
+        text(&row_line(&sent, 80)),
         "Sep 06      -500  gild sent           to @author"
     );
-    let received = entry(333, "chip_gild_received", Some(&message_id.to_string()));
+    let received = row(
+        333,
+        "chip_gild_received",
+        Some(LedgerDetail::GildFrom {
+            usernames: vec!["alice".to_string(), "bob".to_string()],
+        }),
+    );
     assert_eq!(
-        text(&row_line(&received, 80, names, gilds)),
+        text(&row_line(&received, 80)),
         "Sep 06      +333  gild received       from @alice, @bob"
+    );
+}
+
+/// An arcade payout says which game and which milestone paid.
+#[test]
+fn a_payout_row_names_the_game() {
+    let puzzle = row(
+        100,
+        "daily_puzzle_win",
+        Some(LedgerDetail::GamePayout {
+            game: "sudoku".to_string(),
+            payout_kind: "daily_win_hard".to_string(),
+        }),
+    );
+    assert_eq!(
+        text(&row_line(&puzzle, 80)),
+        "Sep 06      +100  daily puzzle        sudoku · daily win hard"
     );
 }
 
 /// A row the board ignores is marked; a row it counts is not.
 #[test]
 fn off_board_rows_are_marked() {
-    let poker = entry(2400, "poker_payout", Some("hand"));
+    let poker = row(2400, "poker_payout", None);
     assert_eq!(
-        text(&row_line(&poker, 80, no_names, no_gilds)),
+        text(&row_line(&poker, 80)),
         "Sep 06    +2,400  poker payout        off"
     );
-    let quest = entry(500, "quest_reward", Some("assignment-id"));
+    let quest = row(500, "quest_reward", None);
     assert_eq!(
-        text(&row_line(&quest, 80, no_names, no_gilds)),
+        text(&row_line(&quest, 80)),
         "Sep 06      +500  quest reward      "
     );
 }
@@ -118,36 +195,38 @@ fn off_board_rows_are_marked() {
 /// still renders rather than panicking, and counts like the board counts it.
 #[test]
 fn an_unknown_reason_renders_as_other() {
-    let seed = entry(5075, "leaderboard_seed", Some("leaderboard-v2"));
+    let seed = row(5075, "leaderboard_seed", None);
     assert_eq!(
-        text(&row_line(&seed, 80, no_names, no_gilds)),
+        text(&row_line(&seed, 80)),
         "Sep 06    +5,075  other             "
     );
 }
 
-/// A readable ref is shown and clipped to the width; an id is not shown.
+/// A long detail is clipped to the width; a row without one ends at the label.
 #[test]
-fn readable_refs_show_and_clip() {
-    let drink = entry(-400, "drink_purchase", Some("Segfault Sour"));
+fn details_show_and_clip() {
+    let drink = row(
+        -400,
+        "drink_purchase",
+        Some(LedgerDetail::Drink("Segfault Sour".to_string())),
+    );
     assert_eq!(
-        text(&row_line(&drink, 80, no_names, no_gilds)),
+        text(&row_line(&drink, 80)),
         "Sep 06      -400  drink               Segfault Sour"
     );
-    let news = entry(
+    let news = row(
         250,
         "news_shared",
-        Some("https://example.com/a/very/long/path/that/keeps/going"),
+        Some(LedgerDetail::Link(
+            "https://example.com/a/very/long/path/that/keeps/going".to_string(),
+        )),
     );
-    let line = text(&row_line(&news, 60, no_names, no_gilds));
+    let line = text(&row_line(&news, 60));
     assert_eq!(line.chars().count(), 60);
     assert!(line.ends_with('…'));
-    let gild = entry(
-        1333,
-        "chip_gild_received",
-        Some(&Uuid::now_v7().to_string()),
-    );
+    let gild = row(1333, "chip_gild_received", None);
     assert_eq!(
-        text(&row_line(&gild, 80, no_names, no_gilds)),
+        text(&row_line(&gild, 80)),
         "Sep 06    +1,333  gild received     "
     );
 }
