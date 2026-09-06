@@ -244,18 +244,18 @@ fn wall_piece(title: &str, applause: i64, height: usize) -> PaperWall {
 }
 
 #[test]
-fn the_wall_prints_the_pieces_in_colour_within_its_line_budget() {
+fn the_wall_prints_every_piece_in_colour_most_applauded_first() {
     let edition = PaperEdition {
         edition: NaiveDate::from_ymd_opt(2026, 9, 3).unwrap(),
         rooms: Vec::new(),
         sections: Vec::new(),
     };
-    // 40 + 2 and 10 + 2 lines fit the budget of 60; the third piece's 10
-    // + 2 would pass it and stays on page 4.
+    // Three pieces, tall or not, applauded or not: all three print, in
+    // the order they came, which is most applauded first.
     let wall = [
         wall_piece("tall", 5, 40),
         wall_piece("small", 2, 10),
-        wall_piece("late", 1, 10),
+        wall_piece("late", 0, 30),
     ];
     let laid = lay_out(PaperLayout {
         wall: &wall,
@@ -277,7 +277,8 @@ fn the_wall_prints_the_pieces_in_colour_within_its_line_budget() {
         titles,
         vec![
             "\"tall\" by @painter, hung yesterday, 5 applause so far.",
-            "\"small\" by @painter, hung yesterday, 2 applause so far."
+            "\"small\" by @painter, hung yesterday, 2 applause so far.",
+            "\"late\" by @painter, hung yesterday, 0 applause so far."
         ]
     );
     assert_eq!(

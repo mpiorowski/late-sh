@@ -821,8 +821,7 @@ impl PaperService {
         // printed in their own colours. A decode failure loses that piece,
         // not the column. The gallery's kill switch drops the column: a
         // piece that has to come down fast must not keep printing at every
-        // login. The lead piece prints whatever its count; the runners-up
-        // need a hand on them, so a quiet day is one piece, not three.
+        // login.
         let covered = today.pred_opt().unwrap_or(today);
         let wall = if !self.flags().artboard_gallery_enabled {
             Vec::new()
@@ -830,9 +829,7 @@ impl PaperService {
             ArtboardPiece::most_applauded_hung_on(&client, covered, PAPER_WALL_PIECES)
                 .await?
                 .into_iter()
-                .enumerate()
-                .filter(|(slot, piece)| *slot == 0 || piece.applause >= 1)
-                .filter_map(|(_, piece)| match GalleryPiece::decode(piece) {
+                .filter_map(|piece| match GalleryPiece::decode(piece) {
                     Ok(piece) => Some(PaperWall {
                         title: piece.title.clone(),
                         username: piece.username.clone(),

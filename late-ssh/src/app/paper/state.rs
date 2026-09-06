@@ -19,15 +19,8 @@ use crate::app::artboard::gallery::ui::PaintRun;
 /// not the whole site.
 pub(crate) const PAPER_ELSEWHERE_LIMIT: usize = 3;
 /// How many of yesterday's pieces ON THE WALL prints, most applauded
-/// first. The lead piece prints whatever its count; the runners-up need
-/// at least one hand on them (`svc.rs` applies that), so a quiet day
-/// never pads the column.
+/// first. That is the whole rule: no applause floor, no line budget.
 pub(crate) const PAPER_WALL_PIECES: i64 = 3;
-/// Lines the wall may spend on pieces (each costs its height plus two).
-/// The lead piece always prints; a runner-up that would push the column
-/// past this is left to page 4, so one tall piece does not bury the rest
-/// of the edition.
-pub(crate) const PAPER_WALL_LINE_BUDGET: usize = 60;
 
 /// The paper's per-session state, owned by `App`.
 pub(crate) struct PaperState {
@@ -400,13 +393,7 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<PaperLine> {
     if !wall.is_empty() {
         lines.push(PaperLine::new());
         lines.push(heading("ON THE WALL"));
-        let mut spent = 0;
-        for (slot, piece) in wall.iter().enumerate() {
-            let cost = piece.lines.len() + 2;
-            if slot > 0 && spent + cost > PAPER_WALL_LINE_BUDGET {
-                break;
-            }
-            spent += cost;
+        for piece in wall {
             lines.push(vec![
                 PaperSpan::new(format!("\"{}\"", piece.title), PaperInk::Title),
                 PaperSpan::new(
