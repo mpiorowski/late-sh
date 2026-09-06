@@ -348,3 +348,68 @@ async fn admin_grant_moves_the_balance_and_writes_nothing() {
     assert_eq!(row.get::<_, i64>("rows"), 1, "only the stipend is written");
     assert_eq!(row.get::<_, i64>("total"), INITIAL_CHIP_BALANCE);
 }
+
+/// Two first touches of the same user at once: one transaction holds the
+/// stipend insert open, a second `ensure` arrives and waits on it, and must
+/// still come back with the row once the first commits. A fallback that
+/// reads the statement's pre-wait snapshot sees no row and fails the caller
+/// (a login, a gift, a gild) for a user who does have chips.
+#[tokio::test]
+async fn ensure_survives_a_concurrent_first_insert() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "chips-ensure-race").await;
+    let mut holder = test_db.db.get().await.expect("holder client");
+    let tx = holder.transaction().await.expect("holder tx");
+    UserChips::ensure_in(&*tx, user.id)
+        .await
+        .expect("first insert, uncommitted");
+
+    let db = test_db.db.clone();
+    let user_id = user.id;
+    let waiter = tokio::spawn(async move {
+        let client = db.get().await.expect("waiter client");
+        UserChips::ensure(&client, user_id).await
+    });
+
+    // Wait until the second ensure is parked on the first's uncommitted row.
+    let probe = test_db.db.get().await.expect("probe client");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let blocked: i64 = probe
+            .query_one(
+                "SELECT COUNT(*) FROM pg_stat_activity
+                 WHERE datname = current_database()
+                   AND wait_event_type = 'Lock'
+                   AND query LIKE '%user_chips%'",
+                &[],
+            )
+            .await
+            .expect("probe pg_stat_activity")
+            .get(0);
+        if blocked > 0 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the second ensure never blocked on the first"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tx.commit().await.expect("commit first insert");
+
+    let second = waiter
+        .await
+        .expect("waiter task")
+        .expect("the second ensure returns the row the first committed");
+    assert_eq!(second.balance, INITIAL_CHIP_BALANCE);
+
+    let stipend_rows: i64 = probe
+        .query_one(
+            "SELECT COUNT(*) FROM chip_ledger WHERE user_id = $1",
+            &[&user.id],
+        )
+        .await
+        .expect("ledger rows")
+        .get(0);
+    assert_eq!(stipend_rows, 1, "one stipend row, however many first touches");
+}

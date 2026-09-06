@@ -535,7 +535,7 @@ impl UserChips {
     /// row itself; later calls only read.
     pub async fn ensure_in(client: &impl GenericClient, user_id: Uuid) -> Result<Self> {
         let row = client
-            .query_one(
+            .query_opt(
                 "WITH inserted AS (
                     INSERT INTO user_chips (user_id, balance)
                     VALUES ($1, $2)
@@ -561,7 +561,18 @@ impl UserChips {
                 ],
             )
             .await?;
-        Ok(Self::from(row))
+        match row {
+            Some(row) => Ok(Self::from(row)),
+            // A concurrent first insert: `ON CONFLICT` waited for it to
+            // commit, but the fallback branch above read this statement's
+            // pre-wait snapshot and saw no row. A second statement does.
+            None => {
+                let row = client
+                    .query_one("SELECT * FROM user_chips WHERE user_id = $1", &[&user_id])
+                    .await?;
+                Ok(Self::from(row))
+            }
+        }
     }
 
     /// The single write path for delta chip moves: one guarded balance
