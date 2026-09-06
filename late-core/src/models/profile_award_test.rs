@@ -296,7 +296,7 @@ async fn the_gallery_award_ranks_best_pieces_and_pays_once() {
         .expect("snapshot");
     assert_eq!(
         first_pass.gallery_prizes_paid,
-        vec![(winner.id, 1, 10_000), (runner_up.id, 2, 5_000)]
+        vec![(winner.id, 1, 20_000), (runner_up.id, 2, 10_000)]
     );
 
     // The month is closed at the rollover: late applause is refused, and
@@ -343,7 +343,7 @@ async fn the_gallery_award_ranks_best_pieces_and_pays_once() {
         .await
         .expect("chips")
         .expect("the prize opened a balance");
-    assert_eq!(balance.balance, 10_000);
+    assert_eq!(balance.balance, 20_000);
     let ledger = client
         .query(
             "SELECT delta FROM chip_ledger WHERE user_id = $1 AND reason = $2",

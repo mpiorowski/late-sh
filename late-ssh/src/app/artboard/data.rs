@@ -41,7 +41,7 @@ fn overview_lines() -> Vec<String> {
         "  v                 applaud a piece (one per person, take it back with v again)",
         "  x                 take your own piece down (this month only; x again to confirm)",
         "  past months       settled: no applause, no take-downs",
-        "  month end         top 3 by best piece win ART1-3 badges and 10k / 5k / 1k chips",
+        "  month end         top 3 by best piece win ART1-3 badges and 20k / 10k / 5k chips",
         "  three applause    the least a piece needs to count for the month",
         "  three a day       the most pieces one account hangs per UTC day",
         "",

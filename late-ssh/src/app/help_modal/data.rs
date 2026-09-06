@@ -991,7 +991,7 @@ fn arcade_help_lines() -> Vec<String> {
         "  [CRWN]    The Crown, to whoever wore it when the month ended.",
         "            It is the one monthly badge with no rank digit: the crown has one holder.",
         "  [ART]     Artboard Gallery: your most applauded piece of the month. Top 3 by best piece,",
-        "            3 applause to count, and the one ranked badge that pays: 10,000 / 5,000 / 1,000 chips.",
+        "            3 applause to count, and the one ranked badge that pays: 20,000 / 10,000 / 5,000 chips.",
         "  The door badges are one-off feats, shown with no rank digit. The badge lands the first",
         "  time; the chips land again on the gate shown here. Full guide on the Leaderboards page.",
         "  [LMG]     Lateania Archdemon             10,000 chips  per character, 7-day gap",

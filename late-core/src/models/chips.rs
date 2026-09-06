@@ -133,10 +133,14 @@ chip_moves!(
     /// user id.
     InitialBalance,
     /// Chips paid to gild someone else's chat message. Floor-guarded like a
-    /// gift; `source_ref` is the gilded message id.
+    /// gift; `source_ref` is the gild row id (`chat_message_gilds.id`), which
+    /// names one buyer and one author, so either side of the pair resolves
+    /// to exactly the other. Rows written before 2026-09-06 carry the
+    /// gilded message id instead.
     GildSent,
     /// Two thirds of a gild reaching the message's author. The other third
-    /// has no ledger row at all: that gap is the burn.
+    /// has no ledger row at all: that gap is the burn. Same `source_ref` as
+    /// [`ChipMove::GildSent`].
     GildReceived,
     /// Chips paid to take the crown. Floor-guarded, and burned whole: there
     /// is no matching credit anywhere, so every take shrinks the supply by
@@ -293,7 +297,7 @@ impl ChipMove {
             Self::GiftSent | Self::GiftReceived | Self::InitialBalance => "users",
             Self::SsnakeArenaEarned | Self::SsnakeArenaLost => "ssnake_visits",
             Self::BonsaiWatered => "bonsai_daily_care",
-            Self::GildSent | Self::GildReceived => "chat_messages",
+            Self::GildSent | Self::GildReceived => "chat_message_gilds",
             Self::CrownTaken => "crown_reigns",
             Self::PotTicket | Self::PotWon => "pots",
             Self::NewsShared => "articles",
@@ -788,16 +792,17 @@ impl UserChips {
     /// the message's author is credited `author_share`, and the difference is
     /// simply never minted. Same shape as [`Self::transfer_gift`] (both
     /// statements, so the caller owns the transaction), with the split.
-    /// `message_id` is the `source_ref` on both ledger rows, so the pair is
-    /// auditable from either side. `None` when the buyer cannot pay and keep
-    /// the floor.
+    /// `gild_id` (the `chat_message_gilds` row the caller just placed or
+    /// raised) is the `source_ref` on both ledger rows, so the pair is
+    /// auditable from either side and each row names exactly one
+    /// counterparty. `None` when the buyer cannot pay and keep the floor.
     pub async fn transfer_gild(
         tx: &Transaction<'_>,
         sender_id: Uuid,
         author_id: Uuid,
         price: i64,
         author_share: i64,
-        message_id: Uuid,
+        gild_id: Uuid,
     ) -> Result<Option<(Self, Self)>> {
         ensure!(price > 0, "gild price must be positive");
         ensure!(
@@ -811,7 +816,7 @@ impl UserChips {
         Self::ensure_in(tx, sender_id).await?;
         Self::ensure_in(tx, author_id).await?;
 
-        let source_ref = message_id.to_string();
+        let source_ref = gild_id.to_string();
         let Some(sender) =
             Self::apply(tx, sender_id, ChipMove::GildSent, price, &source_ref).await?
         else {

@@ -99,7 +99,7 @@ async fn transfer_gild_burns_the_last_third() {
         .expect("stake the buyer");
 
     let tier = GildTier::Silver;
-    let message_id = Uuid::now_v7();
+    let gild_id = Uuid::now_v7();
     let tx = client.transaction().await.expect("gild transaction");
     let (buyer_chips, author_chips) = UserChips::transfer_gild(
         &tx,
@@ -107,7 +107,7 @@ async fn transfer_gild_burns_the_last_third() {
         author.id,
         tier.price(),
         tier.author_share(),
-        message_id,
+        gild_id,
     )
     .await
     .expect("gild succeeds")
@@ -130,7 +130,7 @@ async fn transfer_gild_burns_the_last_third() {
             "SELECT COALESCE(SUM(delta), 0)::bigint AS total
              FROM chip_ledger
              WHERE source_ref = $1",
-            &[&message_id.to_string()],
+            &[&gild_id.to_string()],
         )
         .await
         .expect("ledger sum");

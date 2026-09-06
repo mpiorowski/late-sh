@@ -343,8 +343,8 @@ impl ProfileModalState {
         self.ledger_usernames.get(&user_id).map(String::as_str)
     }
 
-    pub(crate) fn ledger_gild(&self, message_id: Uuid) -> Option<&GildParties> {
-        self.ledger_gilds.get(&message_id)
+    pub(crate) fn ledger_gild(&self, source_ref: Uuid) -> Option<&GildParties> {
+        self.ledger_gilds.get(&source_ref)
     }
 
     pub(crate) fn profile(&self) -> Option<&Profile> {

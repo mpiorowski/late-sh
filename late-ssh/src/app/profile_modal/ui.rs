@@ -260,7 +260,7 @@ fn build_segments(state: &ProfileModalState, width: u16) -> (Vec<Segment>, Optio
             entry,
             width_usize,
             |id| state.ledger_username(id).map(str::to_string),
-            |message_id| state.ledger_gild(message_id).cloned(),
+            |gild_ref| state.ledger_gild(gild_ref).cloned(),
         ));
     }
     segments.push(Segment::Text(lines));

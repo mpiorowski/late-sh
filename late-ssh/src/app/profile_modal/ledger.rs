@@ -83,8 +83,8 @@ pub(crate) fn label(mv: ChipMove) -> &'static str {
 /// What the row's `source_ref` means to a reader, if anything. Most refs
 /// are ids that only the database cares about; the ones a person can read
 /// (a drink, a SKU, a link, the other side of a gift or a gild) are shown.
-/// `username` resolves a user id; `gild` resolves a gilded message id to
-/// its author and buyers.
+/// `username` resolves a user id; `gild` resolves a gild row's ref to its
+/// author and buyer.
 pub(crate) fn detail(
     mv: ChipMove,
     source_ref: Option<&str>,
@@ -106,9 +106,9 @@ pub(crate) fn detail(
             let message_id: Uuid = source_ref.parse().ok()?;
             Some(format!("to {}", name(gild(message_id)?.author_user_id)?))
         }
-        // Several buyers can gild one message, and each gild is its own row
-        // carrying the same message id, so the row names every buyer of that
-        // message rather than guessing which one it was.
+        // One buyer per gild ref. Rows written before the ref became the
+        // gild id carry the message id instead and resolve to every buyer of
+        // that message, so the list is the honest answer for them.
         ChipMove::GildReceived => {
             let message_id: Uuid = source_ref.parse().ok()?;
             let buyers: Vec<String> = gild(message_id)?

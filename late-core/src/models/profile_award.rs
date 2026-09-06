@@ -38,9 +38,9 @@ pub const GALLERY_AWARD_CATEGORY: &str = "artboard";
 /// transaction, once per award row.
 pub fn gallery_prize_chips(rank: i32) -> Option<i64> {
     match rank {
-        1 => Some(10_000),
-        2 => Some(5_000),
-        3 => Some(1_000),
+        1 => Some(20_000),
+        2 => Some(10_000),
+        3 => Some(5_000),
         _ => None,
     }
 }

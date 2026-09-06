@@ -60,8 +60,8 @@ pub struct ProfileSnapshot {
     pub chip_ledger: Vec<ChipLedgerEntry>,
     /// This UTC month's sum by the Top Chips rule, the board's own figure.
     pub chips_earned_month: i64,
-    /// Author and buyers of each gilded message the ledger refers to, so a
-    /// gild row can say who gilded whom.
+    /// The parties behind each gild ref in the ledger, so a gild row can say
+    /// who gilded whom.
     pub ledger_gilds: HashMap<Uuid, GildParties>,
     /// Usernames for every user id the ledger points at: gift counterparties
     /// and gild parties.
@@ -247,10 +247,8 @@ impl ProfileService {
                 .filter_map(|entry| entry.source_ref.as_deref()?.parse().ok())
                 .collect()
         };
-        let gild_message_ids =
-            refs_for(|mv| matches!(mv, ChipMove::GildSent | ChipMove::GildReceived));
-        let ledger_gilds =
-            ChatMessageGild::parties_for_messages(&client, &gild_message_ids).await?;
+        let gild_refs = refs_for(|mv| matches!(mv, ChipMove::GildSent | ChipMove::GildReceived));
+        let ledger_gilds = ChatMessageGild::parties_for_refs(&client, &gild_refs).await?;
         let mut named_ids =
             refs_for(|mv| matches!(mv, ChipMove::GiftSent | ChipMove::GiftReceived));
         for parties in ledger_gilds.values() {

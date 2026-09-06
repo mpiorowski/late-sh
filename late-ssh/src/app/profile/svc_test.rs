@@ -11,7 +11,7 @@ use crate::test_helpers::new_test_db;
 use late_core::models::{
     artboard_ban::ArtboardBan,
     chat_message::{ChatMessage, ChatMessageParams},
-    chat_message_gild::{ChatMessageGild, GildTier},
+    chat_message_gild::{ChatMessageGild, GildPlacement, GildTier},
     chat_room::ChatRoom,
     chips::{INITIAL_CHIP_BALANCE, UserChips},
     moderation_audit_log::ModerationAuditLog,
@@ -116,16 +116,20 @@ async fn find_profile_names_the_parties_of_a_gild() {
 
     let tier = GildTier::Bronze;
     let tx = client.transaction().await.expect("tx");
-    ChatMessageGild::place_in_tx(&tx, message.id, author.id, buyer.id, tier)
+    let gild = match ChatMessageGild::place_in_tx(&tx, message.id, author.id, buyer.id, tier)
         .await
-        .expect("place gild");
+        .expect("place gild")
+    {
+        GildPlacement::Placed(gild) => gild,
+        other => panic!("a first gild is placed, got {other:?}"),
+    };
     UserChips::transfer_gild(
         &tx,
         buyer.id,
         author.id,
         tier.price(),
         tier.author_share(),
-        message.id,
+        gild.id,
     )
     .await
     .expect("gild chips")
@@ -143,8 +147,8 @@ async fn find_profile_names_the_parties_of_a_gild() {
 
     let parties = snapshot
         .ledger_gilds
-        .get(&message.id)
-        .expect("the gilded message's parties ride with the ledger");
+        .get(&gild.id)
+        .expect("the gild's parties ride with the ledger, keyed by its ref");
     assert_eq!(parties.author_user_id, author.id);
     assert_eq!(parties.buyer_user_ids, vec![buyer.id]);
     assert_eq!(

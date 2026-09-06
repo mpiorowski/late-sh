@@ -412,11 +412,11 @@ async fn summaries_cover_a_page_of_messages() {
     );
 }
 
-/// The profile ledger names both sides of a gild from the message id alone:
-/// the author, and every buyer, oldest gild first. A message nobody gilded
-/// is absent rather than empty.
+/// The profile ledger resolves a gild ref either way: a gild row id names
+/// its one buyer, a message id (older rows) names every buyer of the
+/// message, oldest first. A ref matching nothing is absent, not empty.
 #[tokio::test]
-async fn parties_name_the_author_and_every_buyer() {
+async fn parties_resolve_a_gild_id_exactly_and_a_message_id_to_every_buyer() {
     let test_db = test_db().await;
     let mut client = test_db.db.get().await.expect("db client");
     let room = ChatRoom::ensure_lounge(&client).await.expect("lounge");
@@ -440,21 +440,40 @@ async fn parties_name_the_author_and_every_buyer() {
     }
 
     let tx = client.transaction().await.expect("tx");
-    place(&tx, ids[0], author.id, first.id, GildTier::Bronze).await;
-    place(&tx, ids[0], author.id, second.id, GildTier::Gold).await;
+    let first_gild = place(&tx, ids[0], author.id, first.id, GildTier::Bronze).await;
+    let second_gild = place(&tx, ids[0], author.id, second.id, GildTier::Gold).await;
     tx.commit().await.expect("commit");
 
-    let parties = ChatMessageGild::parties_for_messages(&client, &ids)
-        .await
-        .expect("parties");
+    let parties = ChatMessageGild::parties_for_refs(
+        &client,
+        &[first_gild.id, second_gild.id, ids[0], ids[1]],
+    )
+    .await
+    .expect("parties");
     assert_eq!(
         parties,
-        HashMap::from([(
-            ids[0],
-            GildParties {
-                author_user_id: author.id,
-                buyer_user_ids: vec![first.id, second.id],
-            }
-        )])
+        HashMap::from([
+            (
+                first_gild.id,
+                GildParties {
+                    author_user_id: author.id,
+                    buyer_user_ids: vec![first.id],
+                }
+            ),
+            (
+                second_gild.id,
+                GildParties {
+                    author_user_id: author.id,
+                    buyer_user_ids: vec![second.id],
+                }
+            ),
+            (
+                ids[0],
+                GildParties {
+                    author_user_id: author.id,
+                    buyer_user_ids: vec![first.id, second.id],
+                }
+            ),
+        ])
     );
 }

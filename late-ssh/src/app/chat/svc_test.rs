@@ -4609,16 +4609,19 @@ mod gild {
             .expect("stake");
     }
 
-    /// Every ledger row written against this message, summed. Zero means
-    /// nothing was charged and nothing was paid.
+    /// Every ledger row written for a gild on this message, counted. The
+    /// rows carry the gild row id as their ref, so the count goes through
+    /// the gild table. Zero means nothing was charged and nothing was paid.
     async fn gild_ledger_total(db: &late_core::db::Db, message_id: Uuid) -> i64 {
         let client = db.get().await.expect("db client");
         let row = client
             .query_one(
                 "SELECT COUNT(*)::bigint AS rows
                  FROM chip_ledger
-                 WHERE source_ref = $1",
-                &[&message_id.to_string()],
+                 WHERE source_ref IN (
+                     SELECT id::text FROM chat_message_gilds WHERE message_id = $1
+                 )",
+                &[&message_id],
             )
             .await
             .expect("ledger count");

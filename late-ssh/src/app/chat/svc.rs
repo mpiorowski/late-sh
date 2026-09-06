@@ -4431,10 +4431,10 @@ impl ChatService {
                 "message author changed under the gild lock"
             )));
         }
-        let upgraded_from =
+        let (upgraded_from, gild_id) =
             match ChatMessageGild::place_in_tx(&tx, message.id, author_id, user_id, tier).await? {
-                GildPlacement::Placed(_) => None,
-                GildPlacement::Upgraded { from, .. } => Some(from),
+                GildPlacement::Placed(gild) => (None, gild.id),
+                GildPlacement::Upgraded { from, gild } => (Some(from), gild.id),
                 GildPlacement::SameTier => {
                     return Err(GildError::Refused(GildRefusal::AlreadyGilded));
                 }
@@ -4448,7 +4448,7 @@ impl ChatService {
             author_id,
             tier.price(),
             tier.author_share(),
-            message.id,
+            gild_id,
         )
         .await?
         else {
