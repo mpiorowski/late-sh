@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use late_core::models::artboard_piece::GalleryCounts;
 use late_core::models::bonsai::Tree;
-use late_core::models::chat_message_gild::GildCounts;
+use late_core::models::chat_message_gild::{GildCounts, GildParties};
 use late_core::models::chips::ChipLedgerEntry;
 use late_core::models::profile::Profile;
 use late_core::models::profile_award::ProfileAward;
@@ -63,6 +63,7 @@ pub(crate) struct ProfileModalState {
     gallery_counts: GalleryCounts,
     chip_ledger: Vec<ChipLedgerEntry>,
     chips_earned_month: i64,
+    ledger_gilds: HashMap<Uuid, GildParties>,
     ledger_usernames: HashMap<Uuid, String>,
     snapshot_rx: Option<watch::Receiver<ProfileSnapshot>>,
     /// First body row shown. Clamped against `extent` on every move, and
@@ -110,6 +111,7 @@ impl ProfileModalState {
             gallery_counts: GalleryCounts::default(),
             chip_ledger: Vec::new(),
             chips_earned_month: 0,
+            ledger_gilds: HashMap::new(),
             ledger_usernames: HashMap::new(),
             snapshot_rx: None,
             scroll_offset: Cell::new(0),
@@ -130,6 +132,7 @@ impl ProfileModalState {
         self.gallery_counts = GalleryCounts::default();
         self.chip_ledger.clear();
         self.chips_earned_month = 0;
+        self.ledger_gilds.clear();
         self.ledger_usernames.clear();
         self.aquarium_fish.clear();
         *self.aquarium.get_mut() = None;
@@ -164,6 +167,7 @@ impl ProfileModalState {
         self.gallery_counts = GalleryCounts::default();
         self.chip_ledger.clear();
         self.chips_earned_month = 0;
+        self.ledger_gilds.clear();
         self.ledger_usernames.clear();
         self.scroll_offset.set(0);
         self.extent.set(ScrollExtent::default());
@@ -216,6 +220,7 @@ impl ProfileModalState {
             self.gallery_counts = GalleryCounts::default();
             self.chip_ledger.clear();
             self.chips_earned_month = 0;
+            self.ledger_gilds.clear();
             self.ledger_usernames.clear();
             if !self.aquarium_fish.is_empty() {
                 self.aquarium_fish.clear();
@@ -233,6 +238,7 @@ impl ProfileModalState {
         self.gallery_counts = snapshot.gallery_counts;
         self.chip_ledger = snapshot.chip_ledger;
         self.chips_earned_month = snapshot.chips_earned_month;
+        self.ledger_gilds = snapshot.ledger_gilds;
         self.ledger_usernames = snapshot.ledger_usernames;
 
         if snapshot.aquarium_fish != self.aquarium_fish {
@@ -335,6 +341,10 @@ impl ProfileModalState {
 
     pub(crate) fn ledger_username(&self, user_id: Uuid) -> Option<&str> {
         self.ledger_usernames.get(&user_id).map(String::as_str)
+    }
+
+    pub(crate) fn ledger_gild(&self, message_id: Uuid) -> Option<&GildParties> {
+        self.ledger_gilds.get(&message_id)
     }
 
     pub(crate) fn profile(&self) -> Option<&Profile> {

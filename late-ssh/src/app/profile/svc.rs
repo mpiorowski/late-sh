@@ -4,7 +4,7 @@ use late_core::models::account_link;
 use late_core::models::artboard_piece::{ArtboardPiece, GalleryCounts};
 use late_core::models::bonsai::{BonsaiV2Tree, Tree};
 use late_core::models::bonsai_decay_protection::BonsaiDecayProtection;
-use late_core::models::chat_message_gild::{ChatMessageGild, GildCounts};
+use late_core::models::chat_message_gild::{ChatMessageGild, GildCounts, GildParties};
 use late_core::models::chips::{ChipLedgerEntry, ChipMove, PROFILE_LEDGER_ROWS, UserChips};
 use late_core::models::irc_token::IrcToken;
 use late_core::models::marketplace;
@@ -60,8 +60,11 @@ pub struct ProfileSnapshot {
     pub chip_ledger: Vec<ChipLedgerEntry>,
     /// This UTC month's sum by the Top Chips rule, the board's own figure.
     pub chips_earned_month: i64,
-    /// Usernames for the user ids that gift rows carry as `source_ref`, so
-    /// the audit can say who a gift went to or came from.
+    /// Author and buyers of each gilded message the ledger refers to, so a
+    /// gild row can say who gilded whom.
+    pub ledger_gilds: HashMap<Uuid, GildParties>,
+    /// Usernames for every user id the ledger points at: gift counterparties
+    /// and gild parties.
     pub ledger_usernames: HashMap<Uuid, String>,
 }
 
@@ -237,17 +240,24 @@ impl ProfileService {
         let gallery_counts = ArtboardPiece::counts_for_user(&client, user_id).await?;
         let chip_ledger = UserChips::recent_ledger(&client, user_id, PROFILE_LEDGER_ROWS).await?;
         let chips_earned_month = UserChips::earned_this_month(&client, user_id).await?;
-        let counterparty_ids: Vec<Uuid> = chip_ledger
-            .iter()
-            .filter(|entry| {
-                matches!(
-                    entry.chip_move(),
-                    Some(ChipMove::GiftSent | ChipMove::GiftReceived)
-                )
-            })
-            .filter_map(|entry| entry.source_ref.as_deref()?.parse().ok())
-            .collect();
-        let ledger_usernames = User::list_usernames_by_ids(&client, &counterparty_ids).await?;
+        let refs_for = |moves: fn(ChipMove) -> bool| -> Vec<Uuid> {
+            chip_ledger
+                .iter()
+                .filter(|entry| entry.chip_move().is_some_and(moves))
+                .filter_map(|entry| entry.source_ref.as_deref()?.parse().ok())
+                .collect()
+        };
+        let gild_message_ids =
+            refs_for(|mv| matches!(mv, ChipMove::GildSent | ChipMove::GildReceived));
+        let ledger_gilds =
+            ChatMessageGild::parties_for_messages(&client, &gild_message_ids).await?;
+        let mut named_ids =
+            refs_for(|mv| matches!(mv, ChipMove::GiftSent | ChipMove::GiftReceived));
+        for parties in ledger_gilds.values() {
+            named_ids.push(parties.author_user_id);
+            named_ids.extend(parties.buyer_user_ids.iter().copied());
+        }
+        let ledger_usernames = User::list_usernames_by_ids(&client, &named_ids).await?;
         self.publish_snapshot(
             user_id,
             ProfileSnapshot {
@@ -264,6 +274,7 @@ impl ProfileService {
                 gallery_counts,
                 chip_ledger,
                 chips_earned_month,
+                ledger_gilds,
                 ledger_usernames,
             },
         )?;

@@ -411,5 +411,8 @@ async fn ensure_survives_a_concurrent_first_insert() {
         .await
         .expect("ledger rows")
         .get(0);
-    assert_eq!(stipend_rows, 1, "one stipend row, however many first touches");
+    assert_eq!(
+        stipend_rows, 1,
+        "one stipend row, however many first touches"
+    );
 }

@@ -183,6 +183,15 @@ pub struct ChatMessageGildSummary {
     pub count: i64,
 }
 
+/// Who was on either side of a gilded message: its author and every buyer,
+/// oldest gild first. The profile ledger stores only the message id on a
+/// gild row, and this is how it puts names on it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GildParties {
+    pub author_user_id: Uuid,
+    pub buyer_user_ids: Vec<Uuid>,
+}
+
 /// Gilds received, per tier, for one author. Fixed shape rather than a map,
 /// so the profile renders three rows without deciding what a missing key
 /// means.
@@ -378,6 +387,46 @@ impl ChatMessageGild {
             );
         }
         Ok(summaries)
+    }
+
+    /// Author and buyers for each gilded message, in one query. Messages
+    /// with no gilds are absent.
+    pub async fn parties_for_messages(
+        client: &impl GenericClient,
+        message_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, GildParties>> {
+        if message_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let rows = client
+            .query(
+                "SELECT message_id, author_user_id, user_id
+                 FROM chat_message_gilds
+                 WHERE message_id = ANY($1)
+                 ORDER BY created, id",
+                &[&message_ids],
+            )
+            .await?;
+
+        let mut parties: HashMap<Uuid, GildParties> = HashMap::new();
+        for row in rows {
+            let message_id: Uuid = row.get("message_id");
+            let buyer_user_id: Uuid = row.get("user_id");
+            match parties.get_mut(&message_id) {
+                Some(message) => message.buyer_user_ids.push(buyer_user_id),
+                None => {
+                    parties.insert(
+                        message_id,
+                        GildParties {
+                            author_user_id: row.get("author_user_id"),
+                            buyer_user_ids: vec![buyer_user_id],
+                        },
+                    );
+                }
+            }
+        }
+        Ok(parties)
     }
 
     /// The marker for one message, after it just changed.

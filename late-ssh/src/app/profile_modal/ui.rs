@@ -256,9 +256,12 @@ fn build_segments(state: &ProfileModalState, width: u16) -> (Vec<Segment>, Optio
         lines.push(Line::from(Span::styled("no chips moved yet", dim)));
     }
     for entry in state.chip_ledger() {
-        lines.push(ledger::row_line(entry, width_usize, |id| {
-            state.ledger_username(id).map(str::to_string)
-        }));
+        lines.push(ledger::row_line(
+            entry,
+            width_usize,
+            |id| state.ledger_username(id).map(str::to_string),
+            |message_id| state.ledger_gild(message_id).cloned(),
+        ));
     }
     segments.push(Segment::Text(lines));
 

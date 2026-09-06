@@ -7,6 +7,7 @@
 //! cannot ship without copy.
 
 use chrono::{DateTime, Utc};
+use late_core::models::chat_message_gild::GildParties;
 use late_core::models::chips::{ChipLedgerEntry, ChipMove};
 use ratatui::{
     style::{Modifier, Style},
@@ -81,20 +82,46 @@ pub(crate) fn label(mv: ChipMove) -> &'static str {
 
 /// What the row's `source_ref` means to a reader, if anything. Most refs
 /// are ids that only the database cares about; the ones a person can read
-/// (a drink, a SKU, a link, the other side of a gift) are shown.
+/// (a drink, a SKU, a link, the other side of a gift or a gild) are shown.
+/// `username` resolves a user id; `gild` resolves a gilded message id to
+/// its author and buyers.
 pub(crate) fn detail(
     mv: ChipMove,
     source_ref: Option<&str>,
     username: impl Fn(Uuid) -> Option<String>,
+    gild: impl Fn(Uuid) -> Option<GildParties>,
 ) -> Option<String> {
     let source_ref = source_ref?;
-    let counterparty = || {
-        let id: Uuid = source_ref.parse().ok()?;
-        username(id).map(|name| format!("@{name}"))
-    };
+    let name = |id: Uuid| username(id).map(|name| format!("@{name}"));
     match mv {
-        ChipMove::GiftSent => Some(format!("to {}", counterparty()?)),
-        ChipMove::GiftReceived => Some(format!("from {}", counterparty()?)),
+        ChipMove::GiftSent => {
+            let recipient: Uuid = source_ref.parse().ok()?;
+            Some(format!("to {}", name(recipient)?))
+        }
+        ChipMove::GiftReceived => {
+            let sender: Uuid = source_ref.parse().ok()?;
+            Some(format!("from {}", name(sender)?))
+        }
+        ChipMove::GildSent => {
+            let message_id: Uuid = source_ref.parse().ok()?;
+            Some(format!("to {}", name(gild(message_id)?.author_user_id)?))
+        }
+        // Several buyers can gild one message, and each gild is its own row
+        // carrying the same message id, so the row names every buyer of that
+        // message rather than guessing which one it was.
+        ChipMove::GildReceived => {
+            let message_id: Uuid = source_ref.parse().ok()?;
+            let buyers: Vec<String> = gild(message_id)?
+                .buyer_user_ids
+                .iter()
+                .filter_map(|id| name(*id))
+                .collect();
+            if buyers.is_empty() {
+                None
+            } else {
+                Some(format!("from {}", buyers.join(", ")))
+            }
+        }
         ChipMove::DrinkPurchase | ChipMove::ShopPurchase | ChipMove::NewsShared => {
             Some(source_ref.to_string())
         }
@@ -108,8 +135,6 @@ pub(crate) fn detail(
         | ChipMove::BonsaiWatered
         | ChipMove::FloorRestore
         | ChipMove::InitialBalance
-        | ChipMove::GildSent
-        | ChipMove::GildReceived
         | ChipMove::CrownTaken
         | ChipMove::PotTicket
         | ChipMove::PotWon
@@ -213,12 +238,13 @@ pub(crate) fn row_line(
     entry: &ChipLedgerEntry,
     width: usize,
     username: impl Fn(Uuid) -> Option<String>,
+    gild: impl Fn(Uuid) -> Option<GildParties>,
 ) -> Line<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let (label, detail, counts) = match entry.chip_move() {
         Some(mv) => (
             label(mv),
-            detail(mv, entry.source_ref.as_deref(), username),
+            detail(mv, entry.source_ref.as_deref(), username, gild),
             mv.counts_as_earnings(),
         ),
         None => ("other", None, true),

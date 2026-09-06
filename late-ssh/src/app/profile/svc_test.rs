@@ -10,6 +10,8 @@ use crate::state::{ActiveSession, ActiveUser};
 use crate::test_helpers::new_test_db;
 use late_core::models::{
     artboard_ban::ArtboardBan,
+    chat_message::{ChatMessage, ChatMessageParams},
+    chat_message_gild::{ChatMessageGild, GildTier},
     chat_room::ChatRoom,
     chips::{INITIAL_CHIP_BALANCE, UserChips},
     moderation_audit_log::ModerationAuditLog,
@@ -90,6 +92,72 @@ async fn find_profile_publishes_stored_chip_balance() {
 
     assert_eq!(snapshot.user_id, Some(user.id));
     assert_eq!(snapshot.chip_balance, Some(chips.balance));
+}
+
+/// A gild in the viewed user's ledger comes with what the modal needs to
+/// name it: the gilded message's author and buyers, and their usernames.
+#[tokio::test]
+async fn find_profile_names_the_parties_of_a_gild() {
+    let test_db = new_test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let author = create_test_user(&test_db.db, "profile-gild-author").await;
+    let buyer = create_test_user(&test_db.db, "profile-gild-buyer").await;
+    let room = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: author.id,
+            body: "worth a gild".to_string(),
+        },
+    )
+    .await
+    .expect("message");
+
+    let tier = GildTier::Bronze;
+    let tx = client.transaction().await.expect("tx");
+    ChatMessageGild::place_in_tx(&tx, message.id, author.id, buyer.id, tier)
+        .await
+        .expect("place gild");
+    UserChips::transfer_gild(
+        &tx,
+        buyer.id,
+        author.id,
+        tier.price(),
+        tier.author_share(),
+        message.id,
+    )
+    .await
+    .expect("gild chips")
+    .expect("buyer can afford bronze");
+    tx.commit().await.expect("commit");
+
+    let service = ProfileService::new(test_db.db.clone(), default_active_users());
+    let mut snapshot_rx = service.subscribe_snapshot(author.id);
+    service.find_profile(author.id);
+    timeout(Duration::from_secs(2), snapshot_rx.changed())
+        .await
+        .expect("snapshot timeout")
+        .expect("watch changed");
+    let snapshot = snapshot_rx.borrow_and_update().clone();
+
+    let parties = snapshot
+        .ledger_gilds
+        .get(&message.id)
+        .expect("the gilded message's parties ride with the ledger");
+    assert_eq!(parties.author_user_id, author.id);
+    assert_eq!(parties.buyer_user_ids, vec![buyer.id]);
+    assert_eq!(
+        snapshot.ledger_usernames.get(&buyer.id).map(String::as_str),
+        Some("profile-gild-buyer")
+    );
+    assert_eq!(
+        snapshot
+            .ledger_usernames
+            .get(&author.id)
+            .map(String::as_str),
+        Some("profile-gild-author")
+    );
 }
 
 #[tokio::test]

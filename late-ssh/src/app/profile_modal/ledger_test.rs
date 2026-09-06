@@ -1,4 +1,5 @@
 use chrono::{TimeZone, Utc};
+use late_core::models::chat_message_gild::GildParties;
 use late_core::models::chips::{ChipLedgerEntry, ChipMove};
 use uuid::Uuid;
 
@@ -24,6 +25,10 @@ fn no_names(_: Uuid) -> Option<String> {
     None
 }
 
+fn no_gilds(_: Uuid) -> Option<GildParties> {
+    None
+}
+
 /// Every reason has copy, and no two reasons collide on a label except the
 /// Super Snake pair, which is one game seen from both sides.
 #[test]
@@ -45,14 +50,52 @@ fn a_gift_row_names_the_other_party() {
     let alice = Uuid::now_v7();
     let names = |id: Uuid| (id == alice).then(|| "alice".to_string());
     let sent = entry(-300, "chip_gift_sent", Some(&alice.to_string()));
-    let line = text(&row_line(&sent, 80, names));
+    let line = text(&row_line(&sent, 80, names, no_gilds));
     assert_eq!(line, "Sep 06      -300  gift sent           to @alice  off");
 
     let received = entry(300, "chip_gift_received", Some(&alice.to_string()));
-    let line = text(&row_line(&received, 80, names));
+    let line = text(&row_line(&received, 80, names, no_gilds));
     assert_eq!(
         line,
         "Sep 06      +300  gift received       from @alice  off"
+    );
+}
+
+/// A gild row names the other side through the gilded message: the author
+/// on the sent side, every buyer of that message on the received side.
+#[test]
+fn a_gild_row_names_who_gilded_whom() {
+    let author = Uuid::now_v7();
+    let alice = Uuid::now_v7();
+    let bob = Uuid::now_v7();
+    let message_id = Uuid::now_v7();
+    let names = move |id: Uuid| {
+        if id == author {
+            Some("author".to_string())
+        } else if id == alice {
+            Some("alice".to_string())
+        } else if id == bob {
+            Some("bob".to_string())
+        } else {
+            None
+        }
+    };
+    let gilds = move |id: Uuid| {
+        (id == message_id).then(|| GildParties {
+            author_user_id: author,
+            buyer_user_ids: vec![alice, bob],
+        })
+    };
+
+    let sent = entry(-500, "chip_gild_sent", Some(&message_id.to_string()));
+    assert_eq!(
+        text(&row_line(&sent, 80, names, gilds)),
+        "Sep 06      -500  gild sent           to @author"
+    );
+    let received = entry(333, "chip_gild_received", Some(&message_id.to_string()));
+    assert_eq!(
+        text(&row_line(&received, 80, names, gilds)),
+        "Sep 06      +333  gild received       from @alice, @bob"
     );
 }
 
@@ -61,12 +104,12 @@ fn a_gift_row_names_the_other_party() {
 fn off_board_rows_are_marked() {
     let poker = entry(2400, "poker_payout", Some("hand"));
     assert_eq!(
-        text(&row_line(&poker, 80, no_names)),
+        text(&row_line(&poker, 80, no_names, no_gilds)),
         "Sep 06    +2,400  poker payout        off"
     );
     let quest = entry(500, "quest_reward", Some("assignment-id"));
     assert_eq!(
-        text(&row_line(&quest, 80, no_names)),
+        text(&row_line(&quest, 80, no_names, no_gilds)),
         "Sep 06      +500  quest reward      "
     );
 }
@@ -77,7 +120,7 @@ fn off_board_rows_are_marked() {
 fn an_unknown_reason_renders_as_other() {
     let seed = entry(5075, "leaderboard_seed", Some("leaderboard-v2"));
     assert_eq!(
-        text(&row_line(&seed, 80, no_names)),
+        text(&row_line(&seed, 80, no_names, no_gilds)),
         "Sep 06    +5,075  other             "
     );
 }
@@ -87,7 +130,7 @@ fn an_unknown_reason_renders_as_other() {
 fn readable_refs_show_and_clip() {
     let drink = entry(-400, "drink_purchase", Some("Segfault Sour"));
     assert_eq!(
-        text(&row_line(&drink, 80, no_names)),
+        text(&row_line(&drink, 80, no_names, no_gilds)),
         "Sep 06      -400  drink               Segfault Sour"
     );
     let news = entry(
@@ -95,7 +138,7 @@ fn readable_refs_show_and_clip() {
         "news_shared",
         Some("https://example.com/a/very/long/path/that/keeps/going"),
     );
-    let line = text(&row_line(&news, 60, no_names));
+    let line = text(&row_line(&news, 60, no_names, no_gilds));
     assert_eq!(line.chars().count(), 60);
     assert!(line.ends_with('…'));
     let gild = entry(
@@ -104,7 +147,7 @@ fn readable_refs_show_and_clip() {
         Some(&Uuid::now_v7().to_string()),
     );
     assert_eq!(
-        text(&row_line(&gild, 80, no_names)),
+        text(&row_line(&gild, 80, no_names, no_gilds)),
         "Sep 06    +1,333  gild received     "
     );
 }
