@@ -1,6 +1,6 @@
 use crate::{
     models::{
-        chips::{ChipMove, UserChips},
+        chips::UserChips,
         marketplace::{
             MarketplaceItem, THEMATRIX_ULTIMATE_SKU, WONDERLAND_ULTIMATE_SKU,
             purchase_durable_item_by_sku,
@@ -94,15 +94,9 @@ async fn the_dearest_milestone_owned_is_the_one_that_shows() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "milestone-ladder").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        WICK_PRICE + FUSE_PRICE,
-        None,
-    )
-    .await
-    .expect("fund chips");
+    UserChips::admin_grant(&**client, user.id, WICK_PRICE + FUSE_PRICE)
+        .await
+        .expect("fund chips");
 
     assert_eq!(
         MilestoneBadge::highest_for_user(&client, user.id)
@@ -145,15 +139,9 @@ async fn the_seed_lists_one_milestone_per_owner_and_skips_everyone_else() {
     let owner = create_test_user(&test_db.db, "milestone-owner").await;
     let bystander = create_test_user(&test_db.db, "milestone-bystander").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
-        &**client,
-        owner.id,
-        ChipMove::Credit,
-        WICK_PRICE + FURNACE_PRICE,
-        None,
-    )
-    .await
-    .expect("fund chips");
+    UserChips::admin_grant(&**client, owner.id, WICK_PRICE + FURNACE_PRICE)
+        .await
+        .expect("fund chips");
 
     purchase_durable_item_by_sku(&mut client, owner.id, WICK_SKU)
         .await

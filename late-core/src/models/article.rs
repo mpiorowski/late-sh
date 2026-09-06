@@ -169,7 +169,7 @@ impl Article {
                 user_id,
                 ChipMove::NewsShared,
                 NEWS_SHARE_REWARD_CHIPS,
-                Some(&article.url),
+                &article.url,
             )
             .await?;
             NewsShareReward::Paid

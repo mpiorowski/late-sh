@@ -755,7 +755,7 @@ async fn credit_chip_reward(
     chip_move: ChipMove,
     source_ref: &str,
 ) -> Result<()> {
-    match UserChips::apply(client, user_id, chip_move, amount, Some(source_ref)).await? {
+    match UserChips::apply(client, user_id, chip_move, amount, source_ref).await? {
         Some(_) => Ok(()),
         None => anyhow::bail!("quest chip credit returned no row"),
     }

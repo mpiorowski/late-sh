@@ -512,7 +512,7 @@ impl CrownService {
             user_id,
             ChipMove::CrownTaken,
             price,
-            Some(&reign.id.to_string()),
+            &reign.id.to_string(),
         )
         .await?
         else {

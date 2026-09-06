@@ -146,7 +146,7 @@ impl MediaQueueItem {
                 submitter_id,
                 ChipMove::SongQueued,
                 SONG_QUEUE_REWARD_CHIPS,
-                Some(external_id),
+                external_id,
             )
             .await?;
             SongQueueReward::Paid

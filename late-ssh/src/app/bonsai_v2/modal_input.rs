@@ -92,7 +92,9 @@ fn water(app: &mut App) {
     };
     let grants_admin_chips = changed && app.is_admin && !earns_chips;
     if grants_admin_chips {
-        app.bonsai_v2_state.svc.water_chip_bonus_task(app.user_id);
+        app.bonsai_v2_state
+            .svc
+            .water_chip_bonus_task(app.user_id, chrono::Utc::now().date_naive());
     }
     let chip_bonus = if earns_chips || grants_admin_chips {
         format!(", +{WATER_CHIP_BONUS} chips")

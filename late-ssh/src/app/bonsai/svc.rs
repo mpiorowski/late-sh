@@ -134,7 +134,7 @@ impl BonsaiService {
         }
         let first_daily_water = DailyCare::mark_watered(&client, user_id, today).await?;
         if first_daily_water {
-            self.add_water_chip_bonus(user_id).await?;
+            self.add_water_chip_bonus(user_id, today).await?;
         }
 
         // Broadcast
@@ -146,23 +146,25 @@ impl BonsaiService {
         Ok(true)
     }
 
-    pub fn water_chip_bonus_task(&self, user_id: Uuid) {
+    /// The bonus for `today`'s watering, paid by the v2 modal, which has
+    /// already decided this watering earns one.
+    pub fn water_chip_bonus_task(&self, user_id: Uuid, today: chrono::NaiveDate) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.add_water_chip_bonus(user_id).await {
+            if let Err(e) = svc.add_water_chip_bonus(user_id, today).await {
                 tracing::error!(error = ?e, "failed to credit bonsai water chips");
             }
         });
     }
 
-    async fn add_water_chip_bonus(&self, user_id: Uuid) -> Result<()> {
+    async fn add_water_chip_bonus(&self, user_id: Uuid, today: chrono::NaiveDate) -> Result<()> {
         let client = self.db.get().await?;
         UserChips::apply(
             &**client,
             user_id,
             ChipMove::BonsaiWatered,
             WATER_CHIP_BONUS,
-            None,
+            &today.to_string(),
         )
         .await?;
         Ok(())

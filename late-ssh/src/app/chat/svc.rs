@@ -85,6 +85,8 @@ const USERNAME_DIRECTORY_TTL: Duration = Duration::from_secs(30);
 const POLL_FINALIZER_RECOVERY_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const POLL_FINALIZER_BATCH_LIMIT: i64 = 25;
 pub(crate) const GIFT_MAX_AMOUNT: i64 = 1_000_000;
+/// The most an admin can mint in one `/grant`. A typo guard, not a policy.
+pub(crate) const GRANT_MAX_AMOUNT: i64 = 10_000_000;
 const GIFT_COOLDOWN: Duration = Duration::from_secs(30);
 /// Same window as a gift, for the same reason: one buyer cannot machine-gun
 /// a room with paid markers.
@@ -1103,6 +1105,25 @@ pub enum ChatEvent {
         user_id: Uuid,
         message: String,
     },
+    GrantSucceeded {
+        /// The admin who granted.
+        user_id: Uuid,
+        recipient_id: Uuid,
+        recipient_username: String,
+        amount: i64,
+        recipient_balance: i64,
+    },
+    GrantFailed {
+        user_id: Uuid,
+        message: String,
+    },
+}
+
+/// Result of a successful admin chip grant, returned by `grant_chips`.
+struct GrantOutcome {
+    recipient_id: Uuid,
+    recipient_username: String,
+    recipient_balance: i64,
 }
 
 /// Result of a successful chip gift, returned by `gift_chips`.
@@ -3936,6 +3957,78 @@ impl ChatService {
             }
             .instrument(span),
         );
+    }
+
+    pub fn grant_chips_task(&self, admin_id: Uuid, target_username: String, amount: i64) {
+        let service = self.clone();
+        let span = info_span!(
+            "chat.grant_chips_task",
+            admin_id = %admin_id,
+            target_username = %target_username,
+            amount
+        );
+        tokio::spawn(
+            async move {
+                let event = match service
+                    .grant_chips(admin_id, &target_username, amount)
+                    .await
+                {
+                    Ok(grant) => ChatEvent::GrantSucceeded {
+                        user_id: admin_id,
+                        recipient_id: grant.recipient_id,
+                        recipient_username: grant.recipient_username,
+                        amount,
+                        recipient_balance: grant.recipient_balance,
+                    },
+                    Err(error) => ChatEvent::GrantFailed {
+                        user_id: admin_id,
+                        message: service_sentence_case(&error.to_string()),
+                    },
+                };
+                let _ = service.evt_tx.send(event);
+            }
+            .instrument(span),
+        );
+    }
+
+    /// `/grant @user <amount>`: an admin mints chips for a player. The admin
+    /// flag is read from the database here, not trusted from the session,
+    /// and the credit leaves no ledger row by decision (see
+    /// `UserChips::admin_grant`).
+    async fn grant_chips(
+        &self,
+        admin_id: Uuid,
+        target_username: &str,
+        amount: i64,
+    ) -> Result<GrantOutcome> {
+        if amount <= 0 {
+            anyhow::bail!("grant amount must be positive");
+        }
+        if amount > GRANT_MAX_AMOUNT {
+            anyhow::bail!("grant amount is too large");
+        }
+        let Some(chip_service) = &self.chip_service else {
+            anyhow::bail!("chip grants are unavailable");
+        };
+
+        let client = self.db.get().await?;
+        let admin = User::get(&client, admin_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("admin not found"))?;
+        if !admin.is_admin {
+            anyhow::bail!("/grant is admin-only");
+        }
+        let recipient = User::find_by_username(&client, target_username)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("recipient not found"))?;
+        drop(client);
+
+        let recipient_balance = chip_service.grant_chips(recipient.id, amount).await?;
+        Ok(GrantOutcome {
+            recipient_id: recipient.id,
+            recipient_username: recipient.username,
+            recipient_balance,
+        })
     }
 
     async fn gift_chips(

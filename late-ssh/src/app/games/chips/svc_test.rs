@@ -274,10 +274,11 @@ async fn transfer_chips_leaves_unrelated_users_untouched() {
         .get(0);
     assert_eq!(balance, 1_000, "a transfer must not touch a third user");
 
+    // The stipend row is the bystander's own; nothing else may be.
     let ledger_rows: i64 = client
         .query_one(
-            "SELECT COUNT(*) FROM chip_ledger WHERE user_id = $1",
-            &[&bystander.id],
+            "SELECT COUNT(*) FROM chip_ledger WHERE user_id = $1 AND reason <> $2",
+            &[&bystander.id, &ChipMove::InitialBalance.reason()],
         )
         .await
         .expect("bystander ledger")
@@ -362,13 +363,13 @@ async fn apply_move_settles_a_seat_and_refuses_what_the_balance_cannot_cover() {
     chips.ensure_chips(user.id).await.expect("chips row");
 
     let balance = chips
-        .apply_move(user.id, ChipMove::SsnakeArenaEarned, 250)
+        .apply_move(user.id, ChipMove::SsnakeArenaEarned, 250, "test-visit")
         .await
         .expect("credit succeeds");
     assert_eq!(balance, Some(1_250), "starting 1000 plus the seat's take");
 
     let declined = chips
-        .apply_move(user.id, ChipMove::SsnakeArenaLost, 5_000)
+        .apply_move(user.id, ChipMove::SsnakeArenaLost, 5_000, "test-visit")
         .await
         .expect("the call itself succeeds");
     assert_eq!(declined, None, "a debit past zero is refused, not applied");
@@ -600,12 +601,14 @@ async fn a_round_charges_for_the_drinks_it_actually_pours() {
 
     let rows = client
         .query(
-            "SELECT delta, reason, source_ref FROM chip_ledger WHERE user_id = $1",
-            &[&buyer.id],
+            "SELECT delta, reason, source_ref
+             FROM chip_ledger
+             WHERE user_id = $1 AND reason <> $2",
+            &[&buyer.id, &ChipMove::InitialBalance.reason()],
         )
         .await
         .expect("ledger");
-    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.len(), 1, "one charge beyond the stipend");
     assert_eq!(rows[0].get::<_, i64>("delta"), -200);
     assert_eq!(rows[0].get::<_, &str>("reason"), "round_purchase");
     assert_eq!(

@@ -275,15 +275,9 @@ async fn aquarium_food_purchase_can_be_consumed_from_inventory() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "aquarium-food-use").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        AQUARIUM_PRICE + AQUARIUM_FOOD_PRICE,
-        None,
-    )
-    .await
-    .expect("fund chips");
+    UserChips::admin_grant(&**client, user.id, AQUARIUM_PRICE + AQUARIUM_FOOD_PRICE)
+        .await
+        .expect("fund chips");
 
     assert!(
         !aquarium_is_hungry(&client, user.id)
@@ -418,12 +412,10 @@ async fn aquarium_fish_are_repeatable_and_active_count_is_owned_count_bound() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "aquarium-repeatable").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
+    UserChips::admin_grant(
         &**client,
         user.id,
-        ChipMove::Credit,
         AQUARIUM_PRICE + AQUARIUM_FISH_PRICE * (AQUARIUM_MAX_FISH as i64 + 1),
-        None,
     )
     .await
     .expect("fund chips");
@@ -499,12 +491,10 @@ async fn aquarium_active_adjustment_rejects_projected_total_over_cap() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "aquarium-projected-cap").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
+    UserChips::admin_grant(
         &**client,
         user.id,
-        ChipMove::Credit,
         AQUARIUM_PRICE + AQUARIUM_FISH_PRICE * AQUARIUM_MAX_FISH as i64 + AQUARIUM_FISH_PRICE * 2,
-        None,
     )
     .await
     .expect("fund chips");
@@ -547,17 +537,10 @@ async fn fish_purchase_requires_aquarium_and_returns_current_balance() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "aquarium-required-balance").await;
     let mut client = test_db.db.get().await.expect("db client");
-    let balance = UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        AQUARIUM_FISH_PRICE,
-        None,
-    )
-    .await
-    .expect("fund chips")
-    .expect("credited")
-    .balance;
+    let balance = UserChips::admin_grant(&**client, user.id, AQUARIUM_FISH_PRICE)
+        .await
+        .expect("fund chips")
+        .balance;
 
     let result = purchase_durable_item_by_sku(&mut client, user.id, "aquarium_fish_seahorse")
         .await
@@ -613,7 +596,7 @@ async fn consumable_purchase_repeats_and_daily_limit_is_enforced() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "marketplace-consumable-repeat").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(&**client, user.id, ChipMove::Credit, ROOM_SPARK_PRICE, None)
+    UserChips::admin_grant(&**client, user.id, ROOM_SPARK_PRICE)
         .await
         .expect("fund chips");
 
@@ -634,15 +617,9 @@ async fn pet_companion_purchase_stamps_adoption_time() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "marketplace-pet-adoption").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        PET_COMPANION_PRICE,
-        None,
-    )
-    .await
-    .expect("fund chips");
+    UserChips::admin_grant(&**client, user.id, PET_COMPANION_PRICE)
+        .await
+        .expect("fund chips");
 
     let pet_before = PetCompanion::ensure(&client, user.id)
         .await
@@ -668,17 +645,10 @@ async fn durable_purchase_debits_chips_and_records_entitlement() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "marketplace-purchase").await;
     let mut client = test_db.db.get().await.expect("db client");
-    let starting_balance = UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        PET_COMPANION_PRICE,
-        None,
-    )
-    .await
-    .expect("fund chips")
-    .expect("credited")
-    .balance;
+    let starting_balance = UserChips::admin_grant(&**client, user.id, PET_COMPANION_PRICE)
+        .await
+        .expect("fund chips")
+        .balance;
 
     let result = purchase_durable_item_by_sku(&mut client, user.id, PET_COMPANION_SKU)
         .await
@@ -770,15 +740,9 @@ async fn dynamic_bonsai_purchase_equips_bonsai_variant_slot() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "dynamic-bonsai-equip").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        DYNAMIC_BONSAI_PRICE,
-        None,
-    )
-    .await
-    .expect("fund chips");
+    UserChips::admin_grant(&**client, user.id, DYNAMIC_BONSAI_PRICE)
+        .await
+        .expect("fund chips");
 
     let purchase = purchase_durable_item_by_sku(&mut client, user.id, DYNAMIC_BONSAI_SKU)
         .await
@@ -852,15 +816,9 @@ async fn chat_author_metadata_marks_dynamic_bonsai_only_when_selected() {
     assert!(!metadata[0].dynamic_bonsai_selected);
     assert_eq!(metadata[0].bonsai_v2_badge_glyph.as_deref(), Some("DYN"));
 
-    UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        DYNAMIC_BONSAI_PRICE,
-        None,
-    )
-    .await
-    .expect("fund chips");
+    UserChips::admin_grant(&**client, user.id, DYNAMIC_BONSAI_PRICE)
+        .await
+        .expect("fund chips");
     purchase_durable_item_by_sku(&mut client, user.id, DYNAMIC_BONSAI_SKU)
         .await
         .expect("purchase dynamic bonsai")
@@ -885,17 +843,10 @@ async fn durable_purchase_is_idempotent_for_owned_item() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "marketplace-idempotent").await;
     let mut client = test_db.db.get().await.expect("db client");
-    let starting_balance = UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        PET_COMPANION_PRICE,
-        None,
-    )
-    .await
-    .expect("fund chips")
-    .expect("credited")
-    .balance;
+    let starting_balance = UserChips::admin_grant(&**client, user.id, PET_COMPANION_PRICE)
+        .await
+        .expect("fund chips")
+        .balance;
 
     let first = purchase_durable_item_by_sku(&mut client, user.id, PET_COMPANION_SKU)
         .await
@@ -1015,17 +966,10 @@ async fn badge_rental_activates_one_row_per_slot_and_a_rebuy_replaces_it() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "badge-rental-buy").await;
     let mut client = test_db.db.get().await.expect("db client");
-    let starting_balance = UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        BADGE_RENTAL_MONTH_PRICE * 2,
-        None,
-    )
-    .await
-    .expect("fund chips")
-    .expect("credited")
-    .balance;
+    let starting_balance = UserChips::admin_grant(&**client, user.id, BADGE_RENTAL_MONTH_PRICE * 2)
+        .await
+        .expect("fund chips")
+        .balance;
 
     let before = chrono::Utc::now();
     let result = purchase_item_by_sku_with_chat_effect(&mut client, user.id, "badge_cat_day", None)
@@ -1101,12 +1045,10 @@ async fn a_permanent_badge_equip_never_reaches_the_chat_label() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "badge-rental-legacy").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
+    UserChips::admin_grant(
         &**client,
         user.id,
-        ChipMove::Credit,
         BASIC_BADGE_PRICE + BADGE_RENTAL_DAY_PRICE,
-        None,
     )
     .await
     .expect("fund chips");
@@ -1230,15 +1172,9 @@ async fn curated_titles_are_retired_and_cannot_be_bought() {
     // A retired SKU is not for sale, funded or not: the purchase is a no-op
     // (nothing bought, nothing activated), the same contract the retired
     // permanent badges follow.
-    UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        CUSTOM_TITLE_MONTH_PRICE,
-        None,
-    )
-    .await
-    .expect("fund chips");
+    UserChips::admin_grant(&**client, user.id, CUSTOM_TITLE_MONTH_PRICE)
+        .await
+        .expect("fund chips");
     let funded = UserChips::ensure(&client, user.id)
         .await
         .expect("balance")
@@ -1270,12 +1206,10 @@ async fn title_rental_replaces_expires_and_leaves_the_username_effect_alone() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "title-rental-buy").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
+    UserChips::admin_grant(
         &**client,
         user.id,
-        ChipMove::Credit,
         CUSTOM_TITLE_MONTH_PRICE + CUSTOM_TITLE_DAY_PRICE + USERNAME_GLOW_PRICE,
-        None,
     )
     .await
     .expect("fund chips");
@@ -1401,15 +1335,9 @@ async fn custom_title_purchase_wears_the_buyers_collapsed_text() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "custom-title-buy").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        CUSTOM_TITLE_DAY_PRICE,
-        None,
-    )
-    .await
-    .expect("fund chips");
+    UserChips::admin_grant(&**client, user.id, CUSTOM_TITLE_DAY_PRICE)
+        .await
+        .expect("fund chips");
     let funded = UserChips::ensure(&client, user.id)
         .await
         .expect("balance")
@@ -1457,15 +1385,9 @@ async fn a_custom_title_bought_without_text_charges_nobody() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "custom-title-mismatch").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        CUSTOM_TITLE_MONTH_PRICE,
-        None,
-    )
-    .await
-    .expect("fund chips");
+    UserChips::admin_grant(&**client, user.id, CUSTOM_TITLE_MONTH_PRICE)
+        .await
+        .expect("fund chips");
     let funded = UserChips::ensure(&client, user.id)
         .await
         .expect("balance")
@@ -1652,13 +1574,10 @@ async fn monthly_username_effect_purchase_runs_for_thirty_days() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "username-effect-month").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
+    UserChips::admin_grant(
         &**client,
-        user.id,
-        ChipMove::Credit,
-        // The month price plus the day buy that precedes it.
+        user.id, // The month price plus the day buy that precedes it.
         USERNAME_GLOW_PRICE * (USERNAME_MONTH_PRICE_MULTIPLIER + 1),
-        None,
     )
     .await
     .expect("fund chips");
@@ -1704,12 +1623,10 @@ async fn username_effect_rebuy_replaces_the_live_effect() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "username-effect-rebuy").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
+    UserChips::admin_grant(
         &**client,
         user.id,
-        ChipMove::Credit,
         USERNAME_GLOW_PRICE * 2 + USERNAME_GRADIENT_PRICE,
-        None,
     )
     .await
     .expect("fund chips");
@@ -1942,17 +1859,10 @@ async fn bonsai_decay_shield_purchase_debits_and_activates_a_two_week_window() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "bonsai-shield-buy").await;
     let mut client = test_db.db.get().await.expect("db client");
-    let starting_balance = UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        BONSAI_DECAY_SHIELD_PRICE,
-        None,
-    )
-    .await
-    .expect("fund chips")
-    .expect("credited")
-    .balance;
+    let starting_balance = UserChips::admin_grant(&**client, user.id, BONSAI_DECAY_SHIELD_PRICE)
+        .await
+        .expect("fund chips")
+        .balance;
 
     let before = chrono::Utc::now();
     let result = purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
@@ -1975,15 +1885,9 @@ async fn bonsai_decay_shield_is_repeatable_and_repeated_use_grows_quantity() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "bonsai-shield-repeat").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        BONSAI_DECAY_SHIELD_PRICE * 2,
-        None,
-    )
-    .await
-    .expect("fund chips");
+    UserChips::admin_grant(&**client, user.id, BONSAI_DECAY_SHIELD_PRICE * 2)
+        .await
+        .expect("fund chips");
 
     let first = purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
         .await
@@ -2005,15 +1909,9 @@ async fn bonsai_decay_shield_rebuy_extends_the_live_window_instead_of_resetting_
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "bonsai-shield-extend").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        BONSAI_DECAY_SHIELD_PRICE * 2,
-        None,
-    )
-    .await
-    .expect("fund chips");
+    UserChips::admin_grant(&**client, user.id, BONSAI_DECAY_SHIELD_PRICE * 2)
+        .await
+        .expect("fund chips");
 
     let first = purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
         .await
@@ -2050,15 +1948,9 @@ async fn bonsai_decay_shield_rebuy_after_expiry_starts_a_fresh_window_from_now()
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "bonsai-shield-after-expiry").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        BONSAI_DECAY_SHIELD_PRICE * 2,
-        None,
-    )
-    .await
-    .expect("fund chips");
+    UserChips::admin_grant(&**client, user.id, BONSAI_DECAY_SHIELD_PRICE * 2)
+        .await
+        .expect("fund chips");
 
     let first = purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
         .await
@@ -2098,15 +1990,9 @@ async fn bonsai_decay_shield_expired_rows_are_excluded_from_active_queries() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "bonsai-shield-expired").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::apply(
-        &**client,
-        user.id,
-        ChipMove::Credit,
-        BONSAI_DECAY_SHIELD_PRICE,
-        None,
-    )
-    .await
-    .expect("fund chips");
+    UserChips::admin_grant(&**client, user.id, BONSAI_DECAY_SHIELD_PRICE)
+        .await
+        .expect("fund chips");
 
     let purchase = purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
         .await

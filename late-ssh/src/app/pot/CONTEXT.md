@@ -55,10 +55,9 @@ Two `ChipMove` variants, both in the roster in `late-core/src/models/chips.rs`:
   id. One ledger row per buy, not per ticket.
 - `PotWon`: credit, `source_ref` is the pot id.
 
-**Both are `counts_as_earnings = false`.** The win is excluded because a
-lottery must not top the earners board; the ticket is excluded because if the
-win is out and the ticket is in, buying into the pot would be a pure negative
-on a board the winner cannot climb back up.
+**Both are `counts_as_earnings = true`** (since 2026-09-06). Top Chips
+counts everything except the house tables and gifts, so a ticket is a debit
+on the board and a win is a credit, the same as any other spend or prize.
 
 The burn is the gap between the two reasons, exactly like the gild's missing
 third: there is no third ledger row and no wallet holding the fifth.

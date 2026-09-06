@@ -321,7 +321,9 @@ The main composer is a `ratatui_textarea::TextArea<'static>`.
 
 `/me <action>` stores a CTCP-style action body through `chat/action.rs` and renders locally as italic `* name action`; IRC delivery unwraps it into the same readable action text. Keep new action handling on the shared helpers so TUI and IRC stay aligned.
 
-`/gift @user <chips>` transfers chips through `ChipService` and `late-core::models::chips::UserChips::transfer_gift`. The transfer is one transaction: sender debit, recipient credit, two ledger rows, and chip notifications. It enforces the chip floor, rejects self-gifts, caps gift size, and applies a short per-sender cooldown in `ChatService`.
+`/gift @user <chips>` transfers chips through `ChipService` and `late-core::models::chips::UserChips::transfer_gift`. The transfer is one transaction: sender debit, recipient credit, two ledger rows each carrying the other party's id as `source_ref`, and chip notifications. It enforces the chip floor, rejects self-gifts, caps gift size, and applies a short per-sender cooldown in `ChatService`. Neither gift reason counts on Top Chips.
+
+`/grant @user <chips>` is the admin mint (decided 2026-09-06, replacing `scripts/add_admin_chips.sh`). `parse_grant_command` takes a user and an amount and nothing else; the composer refuses it for non-admins, and `ChatService::grant_chips` re-reads `users.is_admin` from the database rather than trusting the session. The credit goes through `ChipService::grant_chips` to `UserChips::admin_grant`, which by decision writes **no ledger row**: the ledger records what players did, and a grant is the house's doing. The recipient's row is ensured first, so a player who has never logged in lands on the stipend plus the grant. Both parties get a banner (`ChatEvent::GrantSucceeded` / `GrantFailed`).
 
 `/members` renders a styled overlay with online members first, offline members second, each group sorted alphabetically. Preserve the fixed status-cell shape so overlay rows do not jump as online state changes.
 
@@ -524,9 +526,9 @@ session. `late-core/src/models/chat_message_gild.rs` owns the table
   `ChipMove::GildReceived`; the buyer pays the full price as
   `ChipMove::GildSent` (floor-guarded like a gift). The last third has no
   ledger row at all: the burn *is* the gap between the two reasons.
-  Both reasons are excluded from earnings, like every transfer between
-  players, so Top Chips ranks what a player earned rather than who has
-  generous friends, and tipping never costs the tipper a place.
+  Both reasons count on Top Chips (since 2026-09-06): a gild is paid for
+  a message other people rated, the way the gallery prize is paid for
+  applause, so it is earned in a way a gift is not.
 - **Guards** (`ChatService::gild_message`, one closed `GildRefusal` enum with
   the wording): message gone, not a member, not a public room (so never a DM
   and never a private room), a game room (`kind = 'game'`: arcade tables,
@@ -611,8 +613,9 @@ its own domain; only the command and the glyph are chat's.
   `source_ref` = the reign id, and there is no matching credit reason
   anywhere. The whole price leaves the money supply, so the burn is the
   absence of a credit rather than a transfer to a house wallet. It is
-  `counts_as_earnings = false` like `ShopPurchase`: taking the crown never
-  lowers the buyer's Top Chips standing (pinned by
+  `counts_as_earnings = true` like `ShopPurchase` (since 2026-09-06): a
+  take is a debit on the Top Chips board like any other spend. Only the
+  house tables and gifts are out (pinned by
   `chips_test::earning_exclusions_and_reason_uniqueness`).
 - **Guards** (`CrownService::take`, one closed `CrownRefusal` enum with the
   wording): you already wear it, and the chip floor. That is all: there is

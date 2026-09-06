@@ -417,7 +417,7 @@ pub async fn snapshot_previous_month_profile_awards(
             user_id,
             ChipMove::ArtboardPrize,
             chips,
-            Some(&award_id.to_string()),
+            &award_id.to_string(),
         )
         .await?;
         gallery_prizes_paid.push((user_id, rank, chips));

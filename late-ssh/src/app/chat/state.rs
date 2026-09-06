@@ -56,8 +56,8 @@ use super::{
     notifications::svc::NotificationService,
     showcase,
     svc::{
-        ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, GildRefusal, ReportKind,
-        RoomMemberListItem,
+        ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, GRANT_MAX_AMOUNT, GildRefusal,
+        ReportKind, RoomMemberListItem,
     },
     ui_text::{NewsPayload, parse_news_payload, parse_report_payload},
     work,
@@ -3949,6 +3949,25 @@ impl ChatState {
             }
         }
 
+        if let Some(parsed) = parse_grant_command(&body) {
+            self.clear_composer_after_submit();
+            if !self.is_admin {
+                return Some(Banner::error("/grant is admin-only"));
+            }
+            match parsed {
+                GrantParse::Invalid => {
+                    return Some(Banner::error("Usage: /grant @user <amount>"));
+                }
+                GrantParse::Grant { username, amount } => {
+                    self.service
+                        .grant_chips_task(self.user_id, username.clone(), amount);
+                    return Some(Banner::success(&format!(
+                        "Granting {amount} chips to @{username}..."
+                    )));
+                }
+            }
+        }
+
         if body.trim() == "/list" {
             self.clear_composer_after_submit();
             self.service.list_public_rooms_task(self.user_id);
@@ -6290,6 +6309,30 @@ impl ChatState {
                 ChatEvent::GiftFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
+                ChatEvent::GrantSucceeded {
+                    user_id,
+                    recipient_username,
+                    amount,
+                    recipient_balance,
+                    ..
+                } if self.user_id == user_id => {
+                    banner = Some(Banner::success(&format!(
+                        "Granted {amount} chips to @{recipient_username} (balance {recipient_balance})"
+                    )));
+                }
+                ChatEvent::GrantSucceeded {
+                    recipient_id,
+                    amount,
+                    recipient_balance,
+                    ..
+                } if self.user_id == recipient_id => {
+                    banner = Some(Banner::success(&format!(
+                        "The house granted you {amount} chips (balance {recipient_balance})"
+                    )));
+                }
+                ChatEvent::GrantFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
+                }
                 ChatEvent::PublicRoomsListed {
                     user_id,
                     title,
@@ -7321,6 +7364,36 @@ pub(crate) enum GiftParse {
         /// Optional note: `/gift @user 100 happy birthday`.
         message: Option<String>,
     },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum GrantParse {
+    Invalid,
+    Grant { username: String, amount: i64 },
+}
+
+/// `/grant @user <amount>`, the admin mint. No note: nothing is said to the
+/// recipient beyond the banner, and nothing is written down.
+pub(crate) fn parse_grant_command(input: &str) -> Option<GrantParse> {
+    let rest = input.trim().strip_prefix("/grant")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let mut parts = rest.split_whitespace();
+    let (Some(username), Some(amount), None) = (parts.next(), parts.next(), parts.next()) else {
+        return Some(GrantParse::Invalid);
+    };
+    let username = username.strip_prefix('@').unwrap_or(username).trim();
+    let Ok(amount) = amount.parse::<i64>() else {
+        return Some(GrantParse::Invalid);
+    };
+    if username.is_empty() || amount <= 0 || amount > GRANT_MAX_AMOUNT {
+        return Some(GrantParse::Invalid);
+    }
+    Some(GrantParse::Grant {
+        username: username.to_string(),
+        amount,
+    })
 }
 
 pub(crate) fn parse_gift_command(input: &str) -> Option<GiftParse> {
