@@ -118,10 +118,22 @@ async fn a_wide_terminal_shows_every_section_in_order() {
     let lines = render(&fixture.state, 130, 60);
     let text = lines.join("\n");
 
-    // The hero: the name heads the grid, and the grid names the facts.
-    let name = row_of(&lines, "wide-viewed").expect("name in the grid");
+    // The hero: a late.fetch heading, the name heading the grid, and the
+    // grid naming the facts.
+    let heading = row_of(&lines, "late.fetch ─").expect("late.fetch heading");
+    // The name is the modal's title and nothing else: not repeated in the grid.
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.contains("wide-viewed"))
+            .count(),
+        1,
+        "{text}"
+    );
+    let name = row_of(&lines, "country   ").expect("first grid row");
+    assert!(heading < name, "{text}");
     for key in [
-        "country", "chips", "created", "ide", "os", "terminal", "theme", "langs",
+        "country", "chips", "created", "member", "ide", "os", "terminal", "theme", "langs",
     ] {
         assert!(
             row_of(&lines, &format!("{key:<10}")).is_some(),

@@ -7,10 +7,11 @@
 //! scrolling text column without a second layout for small screens: every
 //! section takes exactly the rows it needs, and nothing is ever cut.
 //!
-//! Top to bottom: the hero (the bonsai as the neofetch logo, the late.fetch
-//! grid beside it), bio, showcases, badges (all of them, always), the
-//! aquarium, and the chips ledger. The same order on every screen; the only
-//! reflow is the hero stacking when the column is too narrow for two.
+//! Top to bottom: late.fetch (the fact grid in the left half, the bonsai as
+//! the neofetch logo in the right half, the tree scaled to the grid's
+//! height), bio, showcases, badges (all of them, always), the aquarium, and
+//! the chips ledger. The same order on every screen; the only reflow is the
+//! hero stacking when the column is too narrow for two halves.
 
 use chrono::Utc;
 use late_core::models::chat_message_gild::{GildCounts, GildTier};
@@ -27,7 +28,7 @@ use ratatui::{
 
 use crate::app::{
     bonsai::{state::stage_for, ui::render_tree_art_lines},
-    bonsai_v2::render::render_tree_lines,
+    bonsai_v2::render::render_preview_lines,
     chat::showcase::svc::ShowcaseFeedItem,
     common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
     hub::aquarium::{state::AquariumState, ui as aquarium_ui},
@@ -47,13 +48,12 @@ const MIN_WIDTH: u16 = 48;
 const CHROME_ROWS: u16 = 4;
 /// Left and right breathing room inside the border.
 const SIDE_MARGIN: u16 = 2;
-/// The bonsai column of the hero, and the gap to the grid beside it.
-const HERO_ART_WIDTH: u16 = 34;
-const HERO_GAP: u16 = 3;
-/// Tallest the hero grows: bigger trees lose crown rows, never the pot.
-const HERO_MAX_HEIGHT: u16 = 16;
-/// The hero is two columns when the body is at least this wide.
-const HERO_SIDE_BY_SIDE_MIN_WIDTH: u16 = HERO_ART_WIDTH + HERO_GAP + 46;
+/// The hero is two equal halves when the body is at least this wide: the
+/// left half has to hold the chips row, the widest fact.
+const HERO_SIDE_BY_SIDE_MIN_WIDTH: u16 = 90;
+/// The hero is never shorter than this: a short fact grid must not squash
+/// the tree, which is the one thing on the card that is a picture.
+const HERO_MIN_HEIGHT: usize = 14;
 /// The reef band: the tallest creature plus the surface and floor rows.
 const AQUARIUM_HEIGHT: u16 = 11;
 
@@ -181,22 +181,16 @@ fn build_segments(state: &ProfileModalState, width: u16) -> (Vec<Segment>, Optio
 
     let mut segments = Vec::new();
 
-    // ── hero: the bonsai as the logo, the grid as the info column ──
+    // ── late.fetch: the grid as the info column, the bonsai as the logo ──
+    // The tree is fitted to the grid's height, so the hero is exactly as
+    // tall as the facts and never a column of air beside them.
     let side_by_side = width >= HERO_SIDE_BY_SIDE_MIN_WIDTH;
-    let art_width = if side_by_side {
-        HERO_ART_WIDTH
-    } else {
-        width.min(HERO_ART_WIDTH)
-    };
-    let art = bonsai_lines(state, art_width as usize);
     let grid = late_fetch_lines(state, profile);
-    let art = if side_by_side {
-        // The pot sits on the grid's last row when the tree is the shorter
-        // of the two; a taller tree grows up from there.
-        bottom_pad(art, grid.len())
-    } else {
-        art
-    };
+    let art_width = if side_by_side { width / 2 } else { width };
+    let art = bonsai_block(state, art_width as usize, grid.len().max(HERO_MIN_HEIGHT));
+    let mut heading = section_lines("late.fetch", width_usize);
+    heading.remove(0); // the row under the border already breathes
+    segments.push(Segment::Text(heading));
     segments.push(Segment::Hero {
         art,
         grid,
@@ -288,14 +282,14 @@ fn compose(segments: &[Segment], width: u16, height: u16, state: &ProfileModalSt
                 side_by_side,
             } => {
                 if *side_by_side {
-                    let art_area = Rect {
-                        width: HERO_ART_WIDTH.min(width),
+                    let half = width / 2;
+                    let grid_area = Rect {
+                        width: half,
                         ..area
                     };
-                    let grid_x = HERO_ART_WIDTH + HERO_GAP;
-                    let grid_area = Rect {
-                        x: grid_x,
-                        width: width.saturating_sub(grid_x),
+                    let art_area = Rect {
+                        x: half,
+                        width: width - half,
                         ..area
                     };
                     Paragraph::new(art.clone()).render(art_area, &mut buf);
@@ -416,17 +410,17 @@ fn section_lines(label: &str, width: usize) -> Vec<Line<'static>> {
     ]
 }
 
-/// The bonsai as art lines, at most `HERO_MAX_HEIGHT` tall. A taller tree
-/// loses crown rows from the top so the pot and trunk stay.
-fn bonsai_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'static>> {
+/// The bonsai as exactly `height` rows, the pot on the last one. A Dynamic
+/// Bonsai is scaled down to fit (never up); the classic sprite is cropped
+/// from the crown so the pot and trunk stay.
+fn bonsai_block(state: &ProfileModalState, width: usize, height: usize) -> Vec<Line<'static>> {
     let dim = Style::default().fg(theme::TEXT_DIM());
-    let mut lines = if state.dynamic_bonsai_selected() {
+    let placeholder = |text: &str| vec![Line::from(Span::styled(text.to_string(), dim)).centered()];
+
+    let mut tree = if state.dynamic_bonsai_selected() {
         match state.bonsai_v2() {
-            Some(bonsai) => render_tree_lines(bonsai, width, HERO_MAX_HEIGHT as usize, false),
-            None => vec![Line::from(Span::styled(
-                "Dynamic Bonsai not planted yet",
-                dim,
-            ))],
+            Some(bonsai) => render_preview_lines(bonsai, width, height),
+            None => placeholder("Dynamic Bonsai not planted yet"),
         }
     } else if let Some(tree) = state.bonsai() {
         let stage = stage_for(tree.is_alive, tree.growth_points);
@@ -441,13 +435,13 @@ fn bonsai_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'static>> {
         // Wall tick 0: the profile preview stays still (sin(0) sway).
         render_tree_art_lines(stage, tree.seed, wilting, width, 0, None)
     } else {
-        vec![Line::from(Span::styled("no bonsai yet", dim))]
+        placeholder("no bonsai yet")
     };
-    let max = HERO_MAX_HEIGHT as usize;
-    if lines.len() > max {
-        lines.drain(0..lines.len() - max);
+
+    if tree.len() > height {
+        tree.drain(0..tree.len() - height);
     }
-    lines
+    bottom_pad(tree, height)
 }
 
 /// Pad `lines` with blank rows on top until they are `height` tall.
@@ -458,9 +452,9 @@ fn bottom_pad(mut lines: Vec<Line<'static>>, height: usize) -> Vec<Line<'static>
     out
 }
 
-/// The neofetch column: the name, a rule, then one `key   value` row per
-/// fact. Unset values are dim rather than absent, so every profile has the
-/// same shape.
+/// The neofetch column: one `key   value` row per fact (the name is already
+/// the modal's title). Unset values are dim rather than absent, so every
+/// profile has the same shape.
 fn late_fetch_lines(
     state: &ProfileModalState,
     profile: &late_core::models::profile::Profile,
@@ -470,19 +464,7 @@ fn late_fetch_lines(
     let value = Style::default().fg(theme::TEXT());
     let bright = Style::default().fg(theme::TEXT_BRIGHT());
 
-    let name = header_name(state);
-    let mut lines = vec![
-        Line::from(Span::styled(
-            name.clone(),
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            "─".repeat(name.chars().count().max(8)),
-            Style::default().fg(theme::BORDER_DIM()),
-        )),
-    ];
+    let mut lines = Vec::new();
 
     let row = |label: &str, spans: Vec<Span<'static>>| {
         let mut out = vec![Span::styled(format!("{label:<10}"), key)];
@@ -555,6 +537,15 @@ fn late_fetch_lines(
         ));
     }
 
+    if !state.profile_awards().is_empty() {
+        lines.push(row(
+            "badges",
+            vec![Span::styled(
+                state.profile_awards().len().to_string(),
+                value,
+            )],
+        ));
+    }
     lines.push(row(
         "created",
         vec![set_or(
@@ -564,6 +555,16 @@ fn late_fetch_lines(
                 .map(|at| at.format("%Y-%m-%d").to_string()),
         )],
     ));
+    if let Some(created) = profile.created_at.as_ref() {
+        let days = (Utc::now() - *created).num_days().max(0);
+        let member = match days {
+            0 => "since today".to_string(),
+            1 => "1 day".to_string(),
+            2..=59 => format!("{days} days"),
+            _ => format!("{} months", days / 30),
+        };
+        lines.push(row("member", vec![Span::styled(member, value)]));
+    }
     lines.push(row("ide", vec![set_or(profile.ide.clone())]));
     lines.push(row("os", vec![set_or(profile.os.clone())]));
     lines.push(row("terminal", vec![set_or(profile.terminal.clone())]));
