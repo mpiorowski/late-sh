@@ -374,6 +374,13 @@ const ROOM_LIST_MODE_KEY: &str = "room_list_mode";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const LAND_ON_HOME_KEY: &str = "land_on_home";
+const PAPER_AT_LOGIN_KEY: &str = "paper_at_login";
+/// The edition (UTC date, ISO) whose login pop this account has had.
+const PAPER_SHOWN_ON_KEY: &str = "paper_shown_on";
+/// `{"month": "YYYY-MM", "shown": n}`: how many of last month's podium
+/// pieces the splash has shown this account, and for which month. One
+/// key, overwritten in place; it never grows.
+const SPLASH_PODIUM_KEY: &str = "splash_podium";
 const TRANSLATE_TO_KEY: &str = "translate_to";
 const AUTO_TRANSLATE_KEY: &str = "auto_translate";
 const TRANSLATE_MINE_TO_EN_KEY: &str = "translate_mine_to_en";
@@ -667,6 +674,7 @@ impl User {
                                    WHEN 'arcade_wins' THEN 0
                                    WHEN 'top_chips' THEN 1
                                    WHEN 'crown' THEN 5
+                                   WHEN 'artboard' THEN 6
                                    WHEN 'tetris' THEN 2
                                    WHEN 'twenty_forty_eight' THEN 3
                                    WHEN 'snake' THEN 4
@@ -1455,6 +1463,87 @@ impl User {
         Ok(row.get("settings"))
     }
 
+    /// Claim this account's one login pop of the paper for `edition`. Wins
+    /// once per edition across every device and replica: the stamp is the
+    /// only judge, and ISO dates compare as text, so a later edition always
+    /// beats the stamp and the same or an older one never does.
+    pub async fn claim_paper_shown(
+        client: &Client,
+        user_id: Uuid,
+        edition: chrono::NaiveDate,
+    ) -> Result<bool> {
+        let value = edition.format("%Y-%m-%d").to_string();
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::text),
+                     updated = current_timestamp
+                 WHERE id = $3
+                   AND COALESCE(settings->>$1, '') < $2",
+                &[&PAPER_SHOWN_ON_KEY, &value, &user_id],
+            )
+            .await?;
+        Ok(updated == 1)
+    }
+
+    /// Claim the next of `podium_size` splash slots for `month` (the podium's
+    /// `period_month`): the first login of a month gets slot 1, the next
+    /// slot 2, and so on up to the podium's size, after which the door
+    /// shows the coffee cup and this returns `None` without writing. Wins
+    /// once per login across every device and replica, the way the paper's
+    /// stamp does: the row is the only judge. A stored month past `month`
+    /// (a replica behind the calendar) never resets and never counts.
+    pub async fn claim_splash_podium_slot(
+        client: &Client,
+        user_id: Uuid,
+        month: chrono::NaiveDate,
+        podium_size: i64,
+    ) -> Result<Option<i64>> {
+        let value = month.format("%Y-%m").to_string();
+        let row = client
+            .query_opt(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object(
+                         $1::text,
+                         jsonb_build_object(
+                             'month', $2::text,
+                             'shown', CASE
+                                 WHEN settings->$1->>'month' = $2
+                                 THEN (settings->$1->>'shown')::bigint + 1
+                                 ELSE 1::bigint
+                             END
+                         )
+                     ),
+                     updated = current_timestamp
+                 WHERE id = $3
+                   AND (COALESCE(settings->$1->>'month', '') < $2
+                        OR (settings->$1->>'month' = $2
+                            AND (settings->$1->>'shown')::bigint < $4))
+                 RETURNING (settings->$1->>'shown')::bigint AS slot",
+                &[&SPLASH_PODIUM_KEY, &value, &user_id, &podium_size],
+            )
+            .await?;
+        Ok(row.map(|row| row.get("slot")))
+    }
+
+    /// Take the paper's login stamp off (the admin `/paper reset` hook), so
+    /// the next session pops the paper again whatever edition is printed.
+    pub async fn clear_paper_shown(client: &Client, user_id: Uuid) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings - $1,
+                     updated = current_timestamp
+                 WHERE id = $2",
+                &[&PAPER_SHOWN_ON_KEY, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
     pub async fn update_settings(client: &Client, user_id: Uuid, settings: &Value) -> Result<()> {
         let updated = client
             .execute(
@@ -1776,6 +1865,15 @@ pub fn extract_land_on_home(settings: &Value) -> bool {
         .get(LAND_ON_HOME_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+/// Tweak: open The Late Edition (the daily paper) once a day at login.
+/// Defaults to true; `/paper` still opens it by hand when off.
+pub fn extract_paper_at_login(settings: &Value) -> bool {
+    settings
+        .get(PAPER_AT_LOGIN_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
 }
 
 /// Whether the aquarium tray was open when the user last toggled it; defaults

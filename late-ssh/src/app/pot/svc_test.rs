@@ -141,7 +141,7 @@ async fn a_buy_debits_once_and_grows_the_pot() {
     let client = test_db.db.get().await.expect("db client");
     let service = PotService::new(test_db.db.clone());
     let buyer = create_test_user(&test_db.db, "pot-buyer").await;
-    UserChips::apply(&**client, buyer.id, ChipMove::Credit, 10_000, None)
+    UserChips::admin_grant(&**client, buyer.id, 10_000)
         .await
         .expect("stake the buyer");
     let before = balance(&client, buyer.id).await;
@@ -175,7 +175,7 @@ async fn a_buy_past_the_daily_cap_is_refused_uncharged() {
     let client = test_db.db.get().await.expect("db client");
     let service = PotService::new(test_db.db.clone());
     let buyer = create_test_user(&test_db.db, "pot-cap").await;
-    UserChips::apply(&**client, buyer.id, ChipMove::Credit, 100_000, None)
+    UserChips::admin_grant(&**client, buyer.id, 100_000)
         .await
         .expect("stake the buyer");
 
@@ -212,9 +212,9 @@ async fn a_buy_the_player_cannot_afford_changes_nothing() {
     UserChips::apply(
         &**client,
         pauper.id,
-        ChipMove::Bet,
+        ChipMove::BlackjackBet,
         INITIAL_CHIP_BALANCE - CHIP_FLOOR,
-        None,
+        "test-round",
     )
     .await
     .expect("lose the stake");
@@ -251,7 +251,7 @@ async fn the_draw_pays_four_fifths_and_burns_the_rest() {
     let mut buyers = Vec::new();
     for index in 0..3 {
         let buyer = create_test_user(&test_db.db, &format!("pot-draw-{index}")).await;
-        UserChips::apply(&**client, buyer.id, ChipMove::Credit, 10_000, None)
+        UserChips::admin_grant(&**client, buyer.id, 10_000)
             .await
             .expect("stake");
         buyers.push(buyer);
@@ -321,7 +321,7 @@ async fn two_sweepers_produce_one_payout() {
     let first = PotService::new(test_db.db.clone());
     let second = PotService::new(test_db.db.clone());
     let buyer = create_test_user(&test_db.db, "pot-race-buyer").await;
-    UserChips::apply(&**client, buyer.id, ChipMove::Credit, 10_000, None)
+    UserChips::admin_grant(&**client, buyer.id, 10_000)
         .await
         .expect("stake");
 
@@ -415,7 +415,7 @@ async fn a_session_only_reads_its_own_holding() {
     let mine = create_test_user(&test_db.db, "pot-mine").await;
     let theirs = create_test_user(&test_db.db, "pot-theirs").await;
     for user in [&mine, &theirs] {
-        UserChips::apply(&**client, user.id, ChipMove::Credit, 10_000, None)
+        UserChips::admin_grant(&**client, user.id, 10_000)
             .await
             .expect("stake");
     }

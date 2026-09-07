@@ -396,6 +396,10 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             None
         }
     };
+    // The door: the next of last month's podium pieces this account has
+    // not seen, or the cup. One claim per login, the gallery logs its
+    // own failures.
+    let splash_piece = state.gallery_service.claim_splash_piece(user_id).await;
     let initial_announcements = match state.db.get().await {
         Ok(client) => {
             match crate::app::announcements::load_login_announcements(&client, user_id).await {
@@ -441,6 +445,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         chat_service: state.chat_service.clone(),
         translation_service: state.translation_service.clone(),
         summary_service: state.summary_service.clone(),
+        paper_service: state.paper_service.clone(),
         notification_service: state.notification_service.clone(),
         article_service: state.article_service.clone(),
         feed_service: state.feed_service.clone(),
@@ -486,6 +491,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         dartboard_server: state.dartboard_server.clone(),
         dartboard_provenance: state.dartboard_provenance.clone(),
         artboard_snapshot_service: ArtboardSnapshotService::new(state.db.clone()),
+        gallery_service: state.gallery_service.clone(),
+        splash_piece,
         username: user.username.clone(),
         bonsai_service: state.bonsai_service.clone(),
         initial_bonsai_tree,
@@ -583,6 +590,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         leaderboard_rx: Some(state.leaderboard_service.subscribe()),
         is_new_user,
         land_on_home: late_core::models::user::extract_land_on_home(&user.settings),
+        paper_at_login: late_core::models::user::extract_paper_at_login(&user.settings),
         initial_theme_id: late_core::models::user::extract_theme_id(&user.settings)
             .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
         initial_interaction_mode: late_core::models::user::extract_interaction_mode(&user.settings),

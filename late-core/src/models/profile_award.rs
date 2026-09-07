@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 
-use super::chips::ChipMove;
+use super::artboard_piece::GALLERY_AWARD_MIN_APPLAUSE;
+use super::chips::{ChipMove, UserChips};
 use super::leaderboard::DailyPuzzle;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -26,6 +29,23 @@ pub const DARKROOM_BEACON_AWARD_CATEGORY: &str = "darkroom_beacon";
 /// badge would be noise. That split is why it is in
 /// [`is_rankless_award`] and not in [`MILESTONE_AWARD_CATEGORIES`].
 pub const CROWN_AWARD_CATEGORY: &str = "crown";
+/// The Artboard gallery's monthly board: ranked like the arcade boards
+/// (`ART1` to `ART3`), scored by the best single piece's applause so ten
+/// mediocre frames never beat one good one, and the only ranked award that
+/// pays chips ([`gallery_prize_chips`]). A user needs a piece with at least
+/// [`GALLERY_AWARD_MIN_APPLAUSE`] to be ranked at all.
+pub const GALLERY_AWARD_CATEGORY: &str = "artboard";
+
+/// The chip prize behind each gallery placement. Paid inside the snapshot
+/// transaction, once per award row.
+pub fn gallery_prize_chips(rank: i32) -> Option<i64> {
+    match rank {
+        1 => Some(20_000),
+        2 => Some(10_000),
+        3 => Some(5_000),
+        _ => None,
+    }
+}
 
 /// Every rankless milestone award: the one-off badges a game grants outright
 /// rather than the monthly ranked boards. They differ from the ranked awards
@@ -153,6 +173,40 @@ impl ProfileAward {
     }
 }
 
+/// The awards behind a batch of ledger refs, keyed by id: one primary-key
+/// scan. Ids matching nothing are absent.
+pub async fn find_profile_awards_by_ids(
+    client: &Client,
+    ids: &[Uuid],
+) -> Result<HashMap<Uuid, ProfileAward>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = client
+        .query(
+            "SELECT id, user_id, category, period_month, rank, score_value, awarded_at
+             FROM profile_awards
+             WHERE id = ANY($1)",
+            &[&ids],
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let award = ProfileAward {
+                id: row.get("id"),
+                user_id: row.get("user_id"),
+                category: row.get("category"),
+                period_month: row.get("period_month"),
+                rank: row.get("rank"),
+                score_value: row.get("score_value"),
+                awarded_at: row.get("awarded_at"),
+            };
+            (award.id, award)
+        })
+        .collect())
+}
+
 pub async fn list_profile_awards_for_user(
     client: &Client,
     user_id: Uuid,
@@ -171,6 +225,8 @@ pub async fn list_profile_awards_for_user(
                         WHEN 'tetris' THEN 2
                         WHEN 'twenty_forty_eight' THEN 3
                         WHEN 'snake' THEN 4
+                        WHEN 'crown' THEN 5
+                        WHEN 'artboard' THEN 6
                         ELSE 99
                       END,
                       awarded_at DESC",
@@ -181,7 +237,26 @@ pub async fn list_profile_awards_for_user(
     Ok(rows.into_iter().map(ProfileAward::from).collect())
 }
 
-pub async fn snapshot_previous_month_profile_awards(client: &Client) -> Result<u64> {
+/// What one snapshot pass wrote: the award rows it created and the gallery
+/// prizes it paid for them. Once a month is settled a re-run creates
+/// nothing and pays nothing, however the applause has moved since.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AwardSnapshotOutcome {
+    pub inserted: u64,
+    /// `(user_id, rank, chips)` for each gallery prize paid in this pass.
+    pub gallery_prizes_paid: Vec<(Uuid, i32, i64)>,
+}
+
+/// Write last month's ranked awards, and pay the gallery prizes for the
+/// rows written. One transaction: an award row without its prize would be
+/// a prize lost forever, since the `ON CONFLICT DO NOTHING` re-run never
+/// sees that row again. `RETURNING` on the insert is what keeps a second
+/// replica's pass from paying: it inserts nothing, so it pays nothing. The
+/// gallery arm is settled once per month (see `gallery_best`), because its
+/// input, applause, is the one score that keeps moving after the rollover.
+pub async fn snapshot_previous_month_profile_awards(
+    client: &mut Client,
+) -> Result<AwardSnapshotOutcome> {
     let rank_limit = i64::from(PROFILE_AWARD_RANK_LIMIT);
     let excluded_reasons = ChipMove::excluded_earning_reasons();
     // One arm per daily puzzle, generated from the roster with the same
@@ -201,8 +276,9 @@ pub async fn snapshot_previous_month_profile_awards(client: &Client) -> Result<u
         })
         .collect::<Vec<_>>()
         .join("\nUNION ALL\n");
-    let inserted = client
-        .execute(
+    let tx = client.transaction().await?;
+    let inserted = tx
+        .query(
             &format!("INSERT INTO profile_awards (user_id, category, period_month, rank, score_value)
              WITH bounds AS (
                 SELECT
@@ -272,6 +348,42 @@ pub async fn snapshot_previous_month_profile_awards(client: &Client) -> Result<u
                 ORDER BY crown_reigns.taken_at DESC, crown_reigns.id DESC
                 LIMIT 1
              ),
+             -- The gallery: each hanger's best piece of the month by
+             -- applause (earliest hang breaks a tie between their own),
+             -- and only hangers whose best piece cleared the floor.
+             --
+             -- This arm pays chips, so it must run to completion exactly
+             -- once a month. `ArtboardPiece::toggle_applause` closes the
+             -- month at the rollover, but a mod removal (`removed_at`)
+             -- still moves the ranking afterwards, and `ON CONFLICT DO
+             -- NOTHING` alone would let a hanger who climbed into the top
+             -- 3 on a later pass (the 24h fallback, a restart, another
+             -- replica) get a fresh row and a fresh prize. The `NOT
+             -- EXISTS` settles it: once any `artboard` row exists for the
+             -- month every later pass ranks nobody, inserts nothing and
+             -- pays nothing.
+             gallery_best AS (
+                SELECT DISTINCT ON (p.user_id)
+                       p.user_id,
+                       applause.count::bigint AS value,
+                       p.created AS hung_at
+                FROM artboard_pieces p
+                JOIN (
+                    SELECT piece_id, count(*) AS count
+                    FROM artboard_piece_votes
+                    GROUP BY piece_id
+                ) applause ON applause.piece_id = p.id
+                CROSS JOIN bounds
+                WHERE p.period_month = bounds.period_month
+                  AND p.removed_at IS NULL
+                  AND applause.count >= $3
+                  AND NOT EXISTS (
+                    SELECT 1 FROM profile_awards
+                    WHERE category = 'artboard'
+                      AND period_month = bounds.period_month
+                  )
+                ORDER BY p.user_id, applause.count DESC, p.created ASC
+             ),
              ranked AS (
                 SELECT user_id,
                        'top_chips'::text AS category,
@@ -299,18 +411,59 @@ pub async fn snapshot_previous_month_profile_awards(client: &Client) -> Result<u
                        value,
                        1::bigint AS rank
                 FROM crown_holder
+                UNION ALL
+                -- ROW_NUMBER, not RANK: this is the one arm that mints
+                -- chips, and RANK would hand every hanger tied at the top
+                -- the full first prize. Ties break toward the earlier
+                -- hang, the same order `ArtboardPiece::previous_month_podium`
+                -- and the hall of fame use, so the splash's podium is
+                -- `ART1`-`ART3` in order. At most three rows, three prizes,
+                -- a month.
+                SELECT user_id,
+                       'artboard'::text AS category,
+                       value,
+                       ROW_NUMBER() OVER (ORDER BY value DESC, hung_at ASC) AS rank
+                FROM gallery_best
              )
              SELECT ranked.user_id, ranked.category, bounds.period_month, ranked.rank::int, ranked.value
              FROM ranked
              CROSS JOIN bounds
              WHERE ranked.rank <= $1
              ON CONFLICT (user_id, category, period_month)
-             DO NOTHING"),
-            &[&rank_limit, &excluded_reasons],
+             DO NOTHING
+             RETURNING id, user_id, category, rank"),
+            &[&rank_limit, &excluded_reasons, &GALLERY_AWARD_MIN_APPLAUSE],
         )
         .await?;
 
-    Ok(inserted)
+    let mut gallery_prizes_paid = Vec::new();
+    for row in &inserted {
+        let category: String = row.get("category");
+        if category != GALLERY_AWARD_CATEGORY {
+            continue;
+        }
+        let rank: i32 = row.get("rank");
+        let Some(chips) = gallery_prize_chips(rank) else {
+            continue;
+        };
+        let award_id: Uuid = row.get("id");
+        let user_id: Uuid = row.get("user_id");
+        UserChips::apply(
+            &tx,
+            user_id,
+            ChipMove::ArtboardPrize,
+            chips,
+            &award_id.to_string(),
+        )
+        .await?;
+        gallery_prizes_paid.push((user_id, rank, chips));
+    }
+    tx.commit().await?;
+
+    Ok(AwardSnapshotOutcome {
+        inserted: inserted.len() as u64,
+        gallery_prizes_paid,
+    })
 }
 
 /// Grant a one-time, rankless milestone award (Lateania bosses, NetHack
@@ -374,6 +527,7 @@ pub fn award_category_code(category: &str) -> &'static str {
         DARKROOM_ESCAPE_AWARD_CATEGORY => "ADE",
         DARKROOM_BEACON_AWARD_CATEGORY => "ADB",
         CROWN_AWARD_CATEGORY => "CRWN",
+        GALLERY_AWARD_CATEGORY => "ART",
         _ => "LB",
     }
 }
@@ -399,6 +553,7 @@ pub fn award_category_label(category: &str) -> &'static str {
         DARKROOM_ESCAPE_AWARD_CATEGORY => "A Dark Room Escape",
         DARKROOM_BEACON_AWARD_CATEGORY => "A Dark Room Homefleet",
         CROWN_AWARD_CATEGORY => "The Crown",
+        GALLERY_AWARD_CATEGORY => "Artboard Gallery",
         _ => "Leaderboard",
     }
 }
@@ -408,6 +563,7 @@ pub fn award_category_priority(category: &str) -> i32 {
         "arcade_wins" => 0,
         "top_chips" => 1,
         CROWN_AWARD_CATEGORY => 5,
+        GALLERY_AWARD_CATEGORY => 6,
         "tetris" => 2,
         "twenty_forty_eight" => 3,
         "snake" => 4,
@@ -460,6 +616,7 @@ pub fn format_score_value(category: &str, value: i64) -> String {
         }
         // The crown's score is what the final holder burned to take it.
         CROWN_AWARD_CATEGORY => format!("{value} chips"),
+        GALLERY_AWARD_CATEGORY => format!("{value} applause"),
         _ => format!("{value} score"),
     }
 }

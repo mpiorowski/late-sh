@@ -1,9 +1,13 @@
 use super::*;
+use crate::app::artboard::gallery::svc::GalleryService;
 use crate::app::artboard::provenance::ArtboardProvenance;
 use crate::app::artboard::state::PAINT_PALETTE;
 use crate::app::artboard::svc::{ArtboardSnapshotService, DartboardService, DartboardSnapshot};
 use dartboard_core::{Canvas, CellValue};
 use dartboard_editor::Clipboard;
+use ratatui::widgets::{Block, Borders};
+
+use super::super::ui::artboard_info_area_for_screen;
 
 #[test]
 fn hover_motion_does_not_move_cursor() {
@@ -553,6 +557,83 @@ fn ctrl_u_and_ctrl_y_cycle_paint_color() {
 }
 
 #[test]
+fn ctrl_k_opens_the_color_picker_and_enter_applies_the_typed_hex() {
+    let mut state = test_state();
+    assert!(matches!(
+        handle_byte(&mut state, (80, 24), 0x0B),
+        InputAction::Handled
+    ));
+    assert!(state.is_color_picker_open());
+
+    // Typing goes to the picker's hex field, not the canvas.
+    for byte in b"0a0b0c" {
+        assert!(matches!(
+            handle_byte(&mut state, (80, 24), *byte),
+            InputAction::Handled
+        ));
+    }
+    assert_eq!(
+        state
+            .snapshot
+            .canvas
+            .get(dartboard_core::Pos { x: 0, y: 0 }),
+        ' '
+    );
+    assert!(matches!(
+        handle_byte(&mut state, (80, 24), b'\r'),
+        InputAction::Handled
+    ));
+    assert!(!state.is_color_picker_open());
+    assert_eq!(
+        state.active_paint_color(),
+        dartboard_core::RgbColor::new(0x0A, 0x0B, 0x0C)
+    );
+}
+
+#[test]
+fn color_picker_arrows_nudge_and_esc_discards() {
+    let mut state = test_state();
+    handle_byte(&mut state, (80, 24), 0x0B);
+    assert!(handle_arrow(&mut state, (80, 24), b'B'));
+    assert!(handle_arrow(&mut state, (80, 24), b'C'));
+    assert!(matches!(
+        handle_event(&mut state, (80, 24), &ParsedInput::ShiftArrow(b'C')),
+        InputAction::Handled
+    ));
+    let expected = dartboard_core::RgbColor::new(255, 253, 96);
+    assert_eq!(state.color_picker().unwrap().color, expected);
+
+    assert!(matches!(
+        handle_byte(&mut state, (80, 24), 0x1B),
+        InputAction::Handled
+    ));
+    assert!(!state.is_color_picker_open());
+    assert_eq!(state.active_paint_color(), PAINT_PALETTE[1]);
+}
+
+#[test]
+fn clicking_a_palette_cell_in_the_info_block_selects_it() {
+    let mut state = test_state();
+    let inner = artboard_info_area_for_screen((80, 24), &state)
+        .map(|area| Block::default().borders(Borders::ALL).inner(area))
+        .unwrap();
+    // Second palette row, third cell: SGR coordinates are 1-based.
+    let action = handle_mouse(
+        &mut state,
+        (80, 24),
+        &MouseEvent {
+            kind: MouseEventKind::Down,
+            button: Some(MouseButton::Left),
+            x: inner.x + 11 + 2 + 1,
+            y: inner.y + 3 + 1,
+            modifiers: Default::default(),
+        },
+    );
+    assert!(matches!(action, InputAction::Handled));
+    assert_eq!(state.active_paint_palette_index(), Some(10));
+}
+
+#[test]
 fn help_overlay_routes_navigation_keys() {
     let mut state = test_state();
     assert!(matches!(
@@ -697,6 +778,8 @@ fn test_state() -> State {
     State::new(
         svc,
         ArtboardSnapshotService::disabled(),
+        GalleryService::disabled(),
+        uuid::Uuid::nil(),
         "painter".to_string(),
         shared_provenance,
     )

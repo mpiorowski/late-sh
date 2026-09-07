@@ -12,6 +12,8 @@
 //! [`draw_from_seed`]). The chips move through `chips.rs`; the transaction
 //! that does both belongs to the caller.
 
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, Duration, Utc, Weekday};
 use serde::{Deserialize, Serialize};
@@ -253,6 +255,27 @@ fn mix(seed: u64) -> u64 {
 
 impl Pot {
     /// The pot taking tickets right now, if there is one.
+    /// The pots behind a batch of ledger refs, keyed by id: one primary-key
+    /// scan. Ids matching nothing are absent.
+    pub async fn find_by_ids(
+        client: &impl GenericClient,
+        ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Self>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = client
+            .query("SELECT * FROM pots WHERE id = ANY($1)", &[&ids])
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let pot = Self::from(row);
+                (pot.id, pot)
+            })
+            .collect())
+    }
+
     pub async fn find_open(client: &impl GenericClient) -> Result<Option<Self>> {
         let row = client
             .query_opt("SELECT * FROM pots WHERE status = 'open'", &[])

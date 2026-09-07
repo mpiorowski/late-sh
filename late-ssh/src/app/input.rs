@@ -134,6 +134,8 @@ pub enum ParsedInput {
     AltS,
     AltA,
     AltC,
+    /// Alt+K samples the Artboard colour under the cursor.
+    AltK,
     Paste(Vec<u8>),
     PageUp,
     PageDown,
@@ -528,6 +530,7 @@ impl Perform for VtCollector {
                 b'a' | b'A' => self.events.push(ParsedInput::AltA),
                 b's' | b'S' => self.events.push(ParsedInput::AltS),
                 b'c' | b'C' => self.events.push(ParsedInput::AltC),
+                b'k' | b'K' => self.events.push(ParsedInput::AltK),
                 _ => {}
             }
         }
@@ -809,6 +812,12 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         handle_login_announcements_input(app, &event);
         return;
     }
+    // The Late Edition sits right under the announcements: the operator's
+    // word first, then graybeard's, then everything else.
+    if app.paper.modal_visible() {
+        crate::app::paper::input::handle_input(app, &event);
+        return;
+    }
 
     // Stream URL + QR modal: Esc closes it and nothing else does. The modal
     // carries hand-copied capability values (the watch link, the WHIP server
@@ -1022,7 +1031,7 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
                 chat::input::handle_post_submit_requests(app, from_dashboard);
             }
         }
-        ParsedInput::AltA | ParsedInput::AltC => {}
+        ParsedInput::AltA | ParsedInput::AltC | ParsedInput::AltK => {}
         // Mouse events feed global hit tests first, then vertical wheel
         // fallback for screens that scroll outside richer local handlers.
         ParsedInput::Mouse(mouse) => {
@@ -1275,11 +1284,12 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         }
         // 0x1D (Ctrl+] / Ctrl+5 / raw GS) opens the chat icon picker on
         // chat-bearing screens, but active Artboard editing owns this
-        // keystroke as the glyph-picker open key — let it fall through
-        // to the byte dispatch below.
+        // keystroke as the glyph-picker open key, and the hang flow must
+        // not get a picker dropped on it either — let it fall through to
+        // the byte dispatch below.
         ParsedInput::Byte(0x1D)
             if !((ctx.screen == Screen::Arcade && app.is_playing_game)
-                || (ctx.screen == Screen::Artboard && app.artboard_interacting)) =>
+                || artboard_owns_keys(app, ctx.screen)) =>
         {
             try_open_icon_picker(app)
         }
@@ -2194,6 +2204,10 @@ fn dispatch_escape(app: &mut App) {
         dismiss_login_announcements(app);
         return;
     }
+    if app.paper.modal_visible() {
+        app.paper.close_modal();
+        return;
+    }
     if app.chat.has_news_modal() {
         app.chat.close_news_modal();
         return;
@@ -2230,11 +2244,11 @@ fn dispatch_escape(app: &mut App) {
         let Some(state) = app.dartboard_state.as_ref() else {
             return;
         };
-        if state.is_snapshot_browser_open() {
-            dispatch_screen_key(app, ctx.screen, 0x1B);
-            return;
-        }
-        if state.is_glyph_picker_open() || state.is_help_open() {
+        // Every Artboard overlay (help, glyph picker, the rail's listings
+        // and archive lists, the hang flow) takes Esc before it can mean
+        // quit, and Esc on the board in view mode goes to the rail. Edit
+        // mode's Esc is the editor's, handled below.
+        if !app.artboard_interacting && state.claims_escape() {
             dispatch_screen_key(app, ctx.screen, 0x1B);
             return;
         }
@@ -3580,8 +3594,9 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
 
     // Reserved app-level chords. Do not touch these keys or add local handlers
     // for them without updating help/docs/tests. Active Artboard editing owns
-    // raw control bytes as drawing commands.
-    if app.screen == Screen::Artboard && app.artboard_interacting {
+    // raw control bytes as drawing commands, and so does a piece title being
+    // typed: a modal must not open over the hang flow.
+    if artboard_owns_keys(app, app.screen) {
         return false;
     }
 
@@ -3633,14 +3648,16 @@ fn handle_voice_global_chord(app: &mut App, ctx: InputContext, event: &ParsedInp
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     let artboard_blocks_page_switch = artboard_blocks_global_page_switch(app, ctx.screen);
 
-    // `?` opens the global guide unless the current screen owns local help.
+    // `?` opens the global guide everywhere, the Artboard included; the
+    // Artboard's own help is Ctrl+P. While the Artboard is drawing, typing
+    // a title, framing, or has an overlay up, `?` is the page's.
     let guide_shortcut = byte == b'?'
         && !ctx.chat_composing
         && !ctx.feeds_processing
         && !ctx.news_composing
         && !ctx.showcase_composing
         && !ctx.work_composing
-        && ctx.screen != Screen::Artboard;
+        && !artboard_blocks_page_switch;
     let chat_message_shortcut =
         ctx.screen == Screen::Dashboard && app.chat.selected_message_id.is_some();
     if guide_shortcut && !chat_message_shortcut {
@@ -3675,7 +3692,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return false;
     }
 
-    if ctx.screen == Screen::Artboard && app.artboard_interacting {
+    if artboard_owns_keys(app, ctx.screen) {
         return false;
     }
 
@@ -3695,20 +3712,28 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return true;
     }
 
+    // The Artboard owns its letters. The paired-client hotkeys (`m` mute,
+    // `+`/`-` volume, `v` the music prefix) and `w` (Bonsai Care) stay off
+    // that page entirely, the way the voice chords do: the page spends
+    // those letters itself (`v` applauds a piece), and every one of them is
+    // a printable that a piece title may want. Only quit, the page
+    // switches, and the guide stay global there.
+    let global_letter_keys = ctx.screen != Screen::Artboard;
+
     match byte {
         b'q' | b'Q' => {
             if ctx.screen == Screen::Artboard
                 && app
                     .dartboard_state
                     .as_ref()
-                    .is_some_and(|state| state.is_snapshot_browser_open())
+                    .is_some_and(|state| state.gallery().claims_q())
             {
                 return false;
             }
             trigger_global_quit(app);
             true
         }
-        b'm' | b'M' => {
+        b'm' | b'M' if global_letter_keys => {
             let label = app
                 .paired_client_state()
                 .map(|state| match state.client_kind {
@@ -3727,7 +3752,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             }
             true
         }
-        b'+' | b'=' => {
+        b'+' | b'=' if global_letter_keys => {
             let label = app
                 .paired_client_state()
                 .map(|state| match state.client_kind {
@@ -3746,7 +3771,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             }
             true
         }
-        b'-' | b'_' => {
+        b'-' | b'_' if global_letter_keys => {
             let label = app
                 .paired_client_state()
                 .map(|state| match state.client_kind {
@@ -3766,7 +3791,8 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             true
         }
         b'v' | b'V'
-            if !ctx.chat_composing
+            if global_letter_keys
+                && !ctx.chat_composing
                 && !ctx.feeds_processing
                 && !ctx.news_composing
                 && !ctx.showcase_composing
@@ -3816,7 +3842,8 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             true
         }
         b'w' | b'W'
-            if !ctx.chat_composing
+            if global_letter_keys
+                && !ctx.chat_composing
                 && !ctx.feeds_processing
                 && !ctx.news_composing
                 && !ctx.showcase_composing
@@ -3876,6 +3903,10 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.set_screen(Screen::Clubhouse);
             true
         }
+        b'\t' if artboard_rail_takes_tab(app, ctx.screen) => {
+            dispatch_screen_key(app, Screen::Artboard, b'\t');
+            true
+        }
         b'\t' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(ctx.screen.next());
@@ -3885,6 +3916,39 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     }
 }
 
+/// Tab backs out of an Artboard pane (a listing, a piece, an archive list)
+/// to the rail. On the rail and on the board it is the page switch it is
+/// everywhere, so the page cycle never sticks on the page's landing spot.
+fn artboard_rail_takes_tab(app: &App, screen: Screen) -> bool {
+    if screen != Screen::Artboard || app.artboard_interacting {
+        return false;
+    }
+    app.dartboard_state.as_ref().is_some_and(|state| {
+        !state.is_help_open()
+            && !state.is_glyph_picker_open()
+            && !state.is_color_picker_open()
+            && matches!(
+                state.gallery().focus(),
+                crate::app::artboard::gallery::state::Focus::List
+                    | crate::app::artboard::gallery::state::Focus::Piece
+                    | crate::app::artboard::gallery::state::Focus::Archive
+            )
+    })
+}
+
+/// True while the Artboard owns every key a global hotkey would otherwise
+/// claim: drawing on the board, framing a piece, or typing its title.
+fn artboard_owns_keys(app: &App, screen: Screen) -> bool {
+    if screen != Screen::Artboard {
+        return false;
+    }
+    app.artboard_interacting
+        || app
+            .dartboard_state
+            .as_ref()
+            .is_some_and(|state| state.gallery().captures_typing())
+}
+
 fn artboard_blocks_global_page_switch(app: &App, screen: Screen) -> bool {
     if screen != Screen::Artboard {
         return false;
@@ -3892,7 +3956,11 @@ fn artboard_blocks_global_page_switch(app: &App, screen: Screen) -> bool {
     let Some(state) = app.dartboard_state.as_ref() else {
         return app.artboard_interacting;
     };
-    app.artboard_interacting || state.is_help_open() || state.is_glyph_picker_open()
+    app.artboard_interacting
+        || state.is_help_open()
+        || state.is_glyph_picker_open()
+        || state.is_color_picker_open()
+        || state.gallery().captures_typing()
 }
 
 fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {

@@ -319,6 +319,11 @@ pub(crate) struct HauntState {
     pub(crate) clock_glitch: Option<ClockGlitch>,
     /// Stage 2: the own-name flicker roller.
     pub(crate) name_flicker: Option<NameFlicker>,
+    /// Stage 2 as the rest of the room sees it: somebody else's hit,
+    /// replayed here from the seed that rode the wire. Every session can
+    /// hold one, armed or not: witnessing is not a rung of the ladder, it
+    /// is being in the room when a rung is climbed.
+    pub(crate) witness: Option<ActiveHit>,
     /// Persisted marks, mirrored at session start and kept honest
     /// in-session from every won claim.
     pub(crate) marks: FirstContactMarks,
@@ -373,7 +378,13 @@ impl HauntState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HitStage {
     Glitch,
-    Name { message_id: Uuid },
+    /// The room travels with the claim so the won beat can be put on the
+    /// wire without going back to the chat state for it: by the time the
+    /// row answers, the sender may be looking at another room.
+    Name {
+        message_id: Uuid,
+        room_id: Uuid,
+    },
 }
 
 /// One claim out on the row. An `Err` (or a dropped sender) means the row
@@ -852,6 +863,14 @@ pub(crate) const NAME_DAILY_CAP: u32 = 1;
 /// the full ladder is roughly a week of slow burn.
 pub(crate) const NAME_TOTAL_CAP: u32 = 3;
 
+/// The wave base for one hit: the session's dice mixed with the tick it
+/// started on, so two hits in one session never swap the same characters.
+/// Travels on the wire, which is what makes every screen in the room
+/// paint the same corruption.
+fn wave_seed(rng: u64, since: usize) -> u64 {
+    rng ^ ((since as u64) << 1 | 1)
+}
+
 /// What a landed own message rolled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NameRoll {
@@ -864,21 +883,64 @@ pub(crate) enum NameRoll {
 }
 
 /// The live hit: which message's author label is corrupted, since when,
-/// and which wave the rows were last rebuilt for.
+/// with which wave base, and which wave the rows were last rebuilt for.
+///
+/// One hit is painted by the person being haunted and by everyone else in
+/// the room, on their own tick clocks and never quite in step (a witness
+/// starts when the message reaches them). The seed is what keeps the
+/// theater identical anyway: it rides the wire, so every screen swaps the
+/// same characters in the same two waves.
 #[derive(Debug, PartialEq, Eq)]
-struct ActiveHit {
+pub(crate) struct ActiveHit {
     message_id: Uuid,
     since: usize,
+    seed: u64,
     painted_wave: usize,
 }
 
 impl ActiveHit {
-    fn new(message_id: Uuid, since: usize) -> Self {
+    pub(crate) fn new(message_id: Uuid, since: usize, seed: u64) -> Self {
         Self {
             message_id,
             since,
+            seed,
             painted_wave: 0,
         }
+    }
+
+    /// Advance one world tick; returns true on a repaint edge: the start of
+    /// the next wave (the caller repaints the label with that wave's
+    /// glyphs) and the heal. `None` back means the hit is over.
+    pub(crate) fn tick(hit: &mut Option<Self>, tick: usize) -> bool {
+        let Some(active) = hit.as_mut() else {
+            return false;
+        };
+        let elapsed = tick.saturating_sub(active.since);
+        if elapsed >= NAME_HOLD_TICKS {
+            *hit = None;
+            return true;
+        }
+        let wave = elapsed / NAME_WAVE_TICKS;
+        if wave == active.painted_wave {
+            return false;
+        }
+        active.painted_wave = wave;
+        true
+    }
+
+    /// The live corruption for the row builder: which message's author
+    /// label, and this wave's seed. Each wave hands out its own, so the
+    /// swapped glyphs change at the wave edge.
+    pub(crate) fn corruption(&self, tick: usize) -> Option<(Uuid, u64)> {
+        let elapsed = tick.saturating_sub(self.since);
+        if elapsed >= NAME_HOLD_TICKS {
+            return None;
+        }
+        let wave = (elapsed / NAME_WAVE_TICKS) as u64;
+        Some((
+            self.message_id,
+            self.seed ^ wave.wrapping_mul(0x9E37_79B9_7F4A_7C15),
+        ))
     }
 }
 
@@ -922,7 +984,7 @@ impl NameFlicker {
             return NameRoll::Miss;
         }
         if std::mem::take(&mut self.force_next) {
-            self.active = Some(ActiveHit::new(message_id, tick));
+            self.active = Some(ActiveHit::new(message_id, tick, wave_seed(self.rng, tick)));
             // Saturating: the marks of a test app sit at the ceiling.
             self.total_hits = self.total_hits.saturating_add(1);
             return NameRoll::Forced;
@@ -943,7 +1005,7 @@ impl NameFlicker {
     /// The row granted the hit: corrupt `message_id`'s label from `tick`.
     pub(crate) fn start(&mut self, message_id: Uuid, tick: usize, hits: u32) {
         self.claiming = None;
-        self.active = Some(ActiveHit::new(message_id, tick));
+        self.active = Some(ActiveHit::new(message_id, tick, wave_seed(self.rng, tick)));
         self.total_hits = hits;
     }
 
@@ -963,38 +1025,19 @@ impl NameFlicker {
     /// of the next wave (the caller repaints the label with that wave's
     /// glyphs) and the heal (the caller repaints the healed label).
     pub(crate) fn tick(&mut self, tick: usize) -> bool {
-        let Some(hit) = self.active.as_mut() else {
-            return false;
-        };
-        let elapsed = tick.saturating_sub(hit.since);
-        if elapsed >= NAME_HOLD_TICKS {
-            self.active = None;
-            return true;
-        }
-        let wave = elapsed / NAME_WAVE_TICKS;
-        if wave == hit.painted_wave {
-            return false;
-        }
-        hit.painted_wave = wave;
-        true
+        ActiveHit::tick(&mut self.active, tick)
     }
 
     /// The live hit for the row builder: which message's author label to
-    /// corrupt, and the burst seed for the deterministic swap. Each wave
-    /// of the hit hands out its own seed, so the swapped glyphs change at
-    /// the wave edge; the first wave's seed is the hit's own.
+    /// corrupt, and this wave's seed for the deterministic swap.
     pub(crate) fn corruption(&self, tick: usize) -> Option<(Uuid, u64)> {
-        let hit = self.active.as_ref()?;
-        let elapsed = tick.saturating_sub(hit.since);
-        if elapsed >= NAME_HOLD_TICKS {
-            return None;
-        }
-        let wave = (elapsed / NAME_WAVE_TICKS) as u64;
-        let seed = self.rng ^ ((hit.since as u64) << 1 | 1);
-        Some((
-            hit.message_id,
-            seed ^ wave.wrapping_mul(0x9E37_79B9_7F4A_7C15),
-        ))
+        self.active.as_ref()?.corruption(tick)
+    }
+
+    /// The live hit's wave base, for the beat the room is told about
+    /// (`svc::publish_name_hit`). `None` while nothing is showing.
+    pub(crate) fn live_hit(&self) -> Option<(Uuid, u64)> {
+        self.active.as_ref().map(|hit| (hit.message_id, hit.seed))
     }
 
     pub(crate) fn total_hits(&self) -> u32 {

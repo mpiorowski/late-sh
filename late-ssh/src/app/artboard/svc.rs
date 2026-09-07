@@ -1,6 +1,7 @@
 use std::{sync::mpsc, thread, time::Duration};
 
 use anyhow::Context;
+use chrono::{DateTime, Utc};
 use dartboard_core::{
     Canvas, CanvasOp, Client, ClientOpId, Peer, RgbColor, Seq, ServerMsg, UserId,
 };
@@ -61,6 +62,9 @@ pub enum ArtboardSnapshotKind {
 }
 
 impl ArtboardSnapshotKind {
+    /// Rail order: the three archive rows, top to bottom.
+    pub const ALL: [Self; 3] = [Self::Daily, Self::Monthly, Self::Curated];
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Daily => "daily",
@@ -68,21 +72,69 @@ impl ArtboardSnapshotKind {
             Self::Curated => "curated",
         }
     }
+
+    /// The rail row's label.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Daily => "Daily",
+            Self::Monthly => "Monthly",
+            Self::Curated => "Curated",
+        }
+    }
+
+    pub fn prefix(self) -> &'static str {
+        match self {
+            Self::Daily => Snapshot::DAILY_PREFIX,
+            Self::Monthly => Snapshot::MONTHLY_PREFIX,
+            Self::Curated => Snapshot::CURATED_PREFIX,
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Daily => 0,
+            Self::Monthly => 1,
+            Self::Curated => 2,
+        }
+    }
 }
 
+/// One row of an archive list: the key and when it was saved, nothing
+/// heavier. The canvas comes later, one snapshot at a time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtboardArchiveEntry {
+    pub board_key: String,
+    pub kind: ArtboardSnapshotKind,
+    /// The key without its prefix: `2026-04-23`, `2026-04`, a curated name.
+    pub label: String,
+    pub updated: DateTime<Utc>,
+}
+
+/// One archive, decoded and ready to put on the board.
 #[derive(Debug, Clone)]
 pub struct ArtboardArchiveSnapshot {
     pub board_key: String,
     pub kind: ArtboardSnapshotKind,
     pub label: String,
-    pub canvas: serde_json::Value,
-    pub provenance: serde_json::Value,
+    pub canvas: Canvas,
+    pub provenance: ArtboardProvenance,
 }
 
 #[derive(Debug)]
 pub enum ArtboardArchiveResult {
-    Loaded(Vec<ArtboardArchiveSnapshot>),
-    Failed(String),
+    Listed {
+        kind: ArtboardSnapshotKind,
+        entries: Vec<ArtboardArchiveEntry>,
+    },
+    ListFailed {
+        kind: ArtboardSnapshotKind,
+        error: String,
+    },
+    Loaded(ArtboardArchiveSnapshot),
+    LoadFailed {
+        board_key: String,
+        error: String,
+    },
 }
 
 pub struct ArtboardArchiveLoader {
@@ -97,8 +149,12 @@ impl ArtboardArchiveLoader {
         Self { service, tx, rx }
     }
 
-    pub fn request_list(&self) {
-        self.service.list_archives_task(self.tx.clone());
+    pub fn request_list(&self, kind: ArtboardSnapshotKind) {
+        self.service.list_task(kind, self.tx.clone());
+    }
+
+    pub fn request_load(&self, kind: ArtboardSnapshotKind, board_key: String) {
+        self.service.load_task(kind, board_key, self.tx.clone());
     }
 
     pub fn try_recv(&mut self) -> Option<ArtboardArchiveResult> {
@@ -120,16 +176,61 @@ impl ArtboardSnapshotService {
         Self { db: None }
     }
 
-    fn list_archives_task(&self, tx: tokio_mpsc::UnboundedSender<ArtboardArchiveResult>) {
+    /// The keys of one archive kind, newest first. Without a database the
+    /// list is empty, not an error.
+    fn list_task(
+        &self,
+        kind: ArtboardSnapshotKind,
+        tx: tokio_mpsc::UnboundedSender<ArtboardArchiveResult>,
+    ) {
         let Some(db) = self.db.clone() else {
-            let _ = tx.send(ArtboardArchiveResult::Loaded(Vec::new()));
+            let _ = tx.send(ArtboardArchiveResult::Listed {
+                kind,
+                entries: Vec::new(),
+            });
             return;
         };
         tokio::spawn(async move {
-            let result = list_archive_snapshots(&db).await;
+            let result = list_archive_entries(&db, kind).await;
             let msg = match result {
-                Ok(snapshots) => ArtboardArchiveResult::Loaded(snapshots),
-                Err(error) => ArtboardArchiveResult::Failed(format!("{error:#}")),
+                Ok(entries) => ArtboardArchiveResult::Listed { kind, entries },
+                Err(error) => {
+                    warn!(error = ?error, kind = kind.label(), "artboard archive listing failed");
+                    ArtboardArchiveResult::ListFailed {
+                        kind,
+                        error: format!("{error:#}"),
+                    }
+                }
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    /// One archive, decoded off the render path.
+    fn load_task(
+        &self,
+        kind: ArtboardSnapshotKind,
+        board_key: String,
+        tx: tokio_mpsc::UnboundedSender<ArtboardArchiveResult>,
+    ) {
+        let Some(db) = self.db.clone() else {
+            let _ = tx.send(ArtboardArchiveResult::LoadFailed {
+                board_key,
+                error: "archives are unavailable".to_string(),
+            });
+            return;
+        };
+        tokio::spawn(async move {
+            let result = load_archive_snapshot(&db, kind, &board_key).await;
+            let msg = match result {
+                Ok(snapshot) => ArtboardArchiveResult::Loaded(snapshot),
+                Err(error) => {
+                    warn!(error = ?error, %board_key, "artboard archive load failed");
+                    ArtboardArchiveResult::LoadFailed {
+                        board_key,
+                        error: format!("{error:#}"),
+                    }
+                }
             };
             let _ = tx.send(msg);
         });
@@ -143,43 +244,61 @@ pub struct DartboardService {
     event_tx: broadcast::Sender<DartboardEvent>,
 }
 
-async fn list_archive_snapshots(db: &Db) -> anyhow::Result<Vec<ArtboardArchiveSnapshot>> {
+async fn list_archive_entries(
+    db: &Db,
+    kind: ArtboardSnapshotKind,
+) -> anyhow::Result<Vec<ArtboardArchiveEntry>> {
     let client = db
         .get()
         .await
-        .context("failed to get db client for artboard snapshot list")?;
-    let mut snapshots = Vec::new();
-    for (prefix, kind) in [
-        (Snapshot::DAILY_PREFIX, ArtboardSnapshotKind::Daily),
-        (Snapshot::MONTHLY_PREFIX, ArtboardSnapshotKind::Monthly),
-        (Snapshot::CURATED_PREFIX, ArtboardSnapshotKind::Curated),
-    ] {
-        let rows = Snapshot::list_by_board_key_prefix(&client, prefix)
-            .await
-            .with_context(|| format!("failed to list {prefix} artboard snapshots"))?;
-        for row in rows {
-            snapshots.push(decode_archive_snapshot(row, kind)?);
-        }
-    }
-    Ok(snapshots)
+        .context("failed to get db client for artboard archive list")?;
+    let rows = Snapshot::list_summaries_by_board_key_prefix(&client, kind.prefix())
+        .await
+        .with_context(|| format!("failed to list {} artboard archives", kind.label()))?;
+    Ok(rows
+        .into_iter()
+        .map(|row| ArtboardArchiveEntry {
+            label: archive_label(&row.board_key),
+            board_key: row.board_key,
+            kind,
+            updated: row.updated,
+        })
+        .collect())
 }
 
-fn decode_archive_snapshot(
-    snapshot: Snapshot,
+async fn load_archive_snapshot(
+    db: &Db,
     kind: ArtboardSnapshotKind,
+    board_key: &str,
 ) -> anyhow::Result<ArtboardArchiveSnapshot> {
-    let label = snapshot
-        .board_key
-        .split_once(':')
-        .map(|(_, label)| label.to_string())
-        .unwrap_or_else(|| snapshot.board_key.clone());
+    let client = db
+        .get()
+        .await
+        .context("failed to get db client for artboard archive load")?;
+    let row = Snapshot::find_by_board_key(&client, board_key)
+        .await
+        .with_context(|| format!("failed to load artboard archive {board_key}"))?;
+    let Some(row) = row else {
+        anyhow::bail!("archive {board_key} is gone");
+    };
+    let canvas: Canvas =
+        serde_json::from_value(row.canvas).context("failed to decode archive canvas")?;
+    let provenance: ArtboardProvenance =
+        serde_json::from_value(row.provenance).context("failed to decode archive provenance")?;
     Ok(ArtboardArchiveSnapshot {
-        board_key: snapshot.board_key,
+        label: archive_label(&row.board_key),
+        board_key: row.board_key,
         kind,
-        label,
-        canvas: snapshot.canvas,
-        provenance: snapshot.provenance,
+        canvas,
+        provenance,
     })
+}
+
+fn archive_label(board_key: &str) -> String {
+    match board_key.split_once(':') {
+        Some((_, label)) => label.to_string(),
+        None => board_key.to_string(),
+    }
 }
 
 enum Command {

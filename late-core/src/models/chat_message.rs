@@ -361,6 +361,40 @@ impl ChatMessage {
         Ok(page)
     }
 
+    /// One public room's human messages inside `[floor, ceiling)`, for the
+    /// daily paper (`paper_room_editions`). No viewer: the page is printed
+    /// once for everyone, so there is no membership check and no ignore
+    /// list, only the public-room line (`room.visibility = 'public'`) and
+    /// the system-feed exclusion. Newest-first under `limit`, returned
+    /// oldest-first, same as [`Self::list_public_room_since`].
+    pub async fn list_public_room_between(
+        client: &Client,
+        room_id: Uuid,
+        floor: DateTime<Utc>,
+        ceiling: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
+                "SELECT msg.*
+                 FROM chat_messages msg
+                 JOIN users author ON author.id = msg.user_id
+                 JOIN chat_rooms room ON room.id = msg.room_id
+                 WHERE msg.room_id = $1
+                   AND room.visibility = 'public'
+                   AND msg.created >= $2
+                   AND msg.created < $3
+                   AND COALESCE((author.settings->>'system')::boolean, false) = false
+                 ORDER BY msg.created DESC, msg.id DESC
+                 LIMIT $4",
+                &[&room_id, &floor, &ceiling, &limit],
+            )
+            .await?;
+        let mut page: Vec<Self> = rows.into_iter().map(Self::from).collect();
+        page.reverse();
+        Ok(page)
+    }
+
     /// The oldest message in a room created after `cutoff` and authored by
     /// someone other than the viewer: the message the `new messages` divider
     /// points at. Read scoping, ignored users, and system-feed exclusion

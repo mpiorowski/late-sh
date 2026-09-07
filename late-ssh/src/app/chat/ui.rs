@@ -4688,7 +4688,7 @@ fn stream_rail_label(stream: &crate::app::stream::registry::LiveStreamView) -> S
 /// Slugs of public topic rooms currently carrying a `room_bump` effect,
 /// sorted alphabetically. These are advertised as read-only text at the top
 /// of the rail (no slot, no selection, no jump key).
-fn bumped_join_room_slugs(
+pub(crate) fn bumped_join_room_slugs(
     active_room_effects: &HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
 ) -> Vec<String> {
     let mut slugs = active_room_effects

@@ -1,18 +1,63 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::Style,
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
 use super::theme;
 
+/// What a span of an overlay is, never what colour it is. Overlays are
+/// built during the session tick (`/members` arrives through
+/// `ChatState::drain_events`), and `theme`'s palette lives in a thread
+/// local that `App::render` sets afterwards, on whatever worker thread the
+/// session woke on: a span styled at build time takes whichever session
+/// last rendered there. `draw_overlay` resolves ink inside the draw, where
+/// the reader's theme is the live one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverlayInk {
+    /// Here now: bold, in the success colour.
+    Strong,
+    /// Ordinary body text, and what an unstyled line is made of.
+    Body,
+    /// Absent, or secondary to what sits beside it.
+    Dim,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OverlaySpan {
+    pub text: String,
+    pub ink: OverlayInk,
+}
+
+impl OverlaySpan {
+    pub fn new(text: impl Into<String>, ink: OverlayInk) -> Self {
+        Self {
+            text: text.into(),
+            ink,
+        }
+    }
+}
+
+/// One overlay line: the spans left to right.
+pub type OverlayLine = Vec<OverlaySpan>;
+
+fn ink_style(ink: OverlayInk) -> Style {
+    match ink {
+        OverlayInk::Strong => Style::default()
+            .fg(theme::SUCCESS())
+            .add_modifier(Modifier::BOLD),
+        OverlayInk::Body => Style::default().fg(theme::TEXT()),
+        OverlayInk::Dim => Style::default().fg(theme::TEXT_DIM()),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Overlay {
     pub title: String,
     pub lines: Vec<String>,
-    pub styled_lines: Option<Vec<Line<'static>>>,
+    pub styled_lines: Option<Vec<OverlayLine>>,
     pub scroll_offset: u16,
     pub close_on_any_key: bool,
 }
@@ -28,7 +73,7 @@ impl Overlay {
         }
     }
 
-    pub fn styled(title: impl Into<String>, lines: Vec<Line<'static>>) -> Self {
+    pub fn styled(title: impl Into<String>, lines: Vec<OverlayLine>) -> Self {
         Self {
             title: title.into(),
             lines: Vec::new(),
@@ -92,18 +137,28 @@ pub fn draw_overlay(frame: &mut Frame, anchor: Rect, overlay: &Overlay) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
 
-    let lines: Vec<Line> = overlay.styled_lines.clone().unwrap_or_else(|| {
-        overlay
+    let lines: Vec<Line> = match &overlay.styled_lines {
+        Some(styled) => styled
+            .iter()
+            .map(|line| {
+                Line::from(
+                    line.iter()
+                        .map(|span| Span::styled(span.text.clone(), ink_style(span.ink)))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect(),
+        None => overlay
             .lines
             .iter()
             .map(|line| {
                 Line::from(Span::styled(
                     format!(" {line}"),
-                    Style::default().fg(theme::TEXT()),
+                    ink_style(OverlayInk::Body),
                 ))
             })
-            .collect()
-    });
+            .collect(),
+    };
 
     frame.render_widget(Clear, area);
     frame.render_widget(

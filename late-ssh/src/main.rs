@@ -301,14 +301,30 @@ async fn main() -> anyhow::Result<()> {
         )
         .with_chip_service(chip_service.clone())
         .with_activity(activity_publisher.clone());
-    // Gild markers cross replicas over Postgres, not over this process's
-    // chat broadcast; see `ChatService::start_gild_listener_task`.
-    let _chat_gild_listener_task = chat_service.start_gild_listener_task(config.db.clone());
+    // Gild markers and stage-2 name hits cross replicas over Postgres, not
+    // over this process's chat broadcast; see
+    // `ChatService::start_message_listener_task`.
+    let _chat_message_listener_task = chat_service.start_message_listener_task(config.db.clone());
     // Process-wide switches (the haunt kill switch and fuse) cross replicas
     // over Postgres; the listener seeds this replica on every (re)connect.
     // See `app/flags/svc.rs`.
     let app_flag_service = late_ssh::app::flags::svc::AppFlagService::new(db.clone());
     let _app_flag_listener_task = app_flag_service.start_listener_task(config.db.clone());
+    // The Late Edition's press: every replica sweeps, the rows decide who
+    // prints. See `app/paper/svc.rs`.
+    let paper_service = late_ssh::app::paper::svc::PaperService::new(
+        db.clone(),
+        ai_service.clone(),
+        app_flag_service.subscribe(),
+    );
+    let _paper_sweeper_task = paper_service.start_sweeper_task();
+    // The Artboard gallery: every replica re-reads last month's winner for
+    // the splash; nothing here writes. See `app/artboard/gallery/svc.rs`.
+    let gallery_service = late_ssh::app::artboard::gallery::svc::GalleryService::new(
+        db.clone(),
+        app_flag_service.subscribe(),
+    );
+    let _gallery_splash_task = gallery_service.start_splash_refresh_task();
     // Runner looks (the #deadchannel portraits) cross replicas the same
     // way; the listener seeds this replica on every (re)connect. See
     // `app/deadchannel/runner/svc.rs`.
@@ -378,6 +394,7 @@ async fn main() -> anyhow::Result<()> {
         ai_service: ai_service.clone(),
         translation_service: translation_service.clone(),
         summary_service: summary_service.clone(),
+        paper_service: paper_service.clone(),
         audio_service: audio_service.clone(),
         voice_service,
         stream_service,
@@ -412,6 +429,7 @@ async fn main() -> anyhow::Result<()> {
         chip_service,
         house_registry,
         dartboard_server,
+        gallery_service,
         dartboard_provenance,
         leaderboard_service: leaderboard_service.clone(),
         quest_service,

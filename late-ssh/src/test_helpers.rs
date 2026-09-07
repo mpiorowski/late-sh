@@ -237,6 +237,11 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         crate::app::ai::translate::TranslationService::new(db.clone(), ai_service.clone());
     let summary_service =
         crate::app::ai::summary::SummaryService::new(db.clone(), ai_service.clone());
+    let paper_service = crate::app::paper::svc::PaperService::new(
+        db.clone(),
+        ai_service.clone(),
+        test_app_flags_rx(),
+    );
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let feed_service = crate::app::chat::feeds::svc::FeedService::new(db.clone());
     let showcase_service = crate::app::chat::showcase::svc::ShowcaseService::new(db.clone());
@@ -317,6 +322,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         ai_service,
         translation_service,
         summary_service,
+        paper_service,
         article_service,
         feed_service,
         cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
@@ -366,6 +372,10 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         house_registry: test_house_registry(db.clone()),
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),
+        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(
+            db.clone(),
+            test_app_flags_rx(),
+        ),
         leaderboard_service,
         quest_service,
         shop_service,
@@ -483,6 +493,11 @@ fn make_app_with_chat_service_and_permissions(
             db.clone(),
             AiService::new(false, None),
         ),
+        paper_service: crate::app::paper::svc::PaperService::new(
+            db.clone(),
+            AiService::new(false, None),
+            test_app_flags_rx(),
+        ),
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(
             db.clone(),
@@ -559,6 +574,10 @@ fn make_app_with_chat_service_and_permissions(
         artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
             db.clone(),
         ),
+        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(
+            db.clone(),
+            test_app_flags_rx(),
+        ),
         username: world.username.unwrap_or_else(|| "test-user".to_string()),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
@@ -624,6 +643,7 @@ fn make_app_with_chat_service_and_permissions(
         user_id,
         permissions,
         artboard_banned: false,
+        splash_piece: None,
         artboard_ban_expires_at: None,
         active_users: world.active_users,
         clubhouse_lobby: None,
@@ -656,6 +676,7 @@ fn make_app_with_chat_service_and_permissions(
         initial_announcements: None,
         is_new_user: false,
         land_on_home: false,
+        paper_at_login: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
         initial_interaction_mode: None,
@@ -714,6 +735,11 @@ pub fn make_app_with_paired_client(
         summary_service: crate::app::ai::summary::SummaryService::new(
             db.clone(),
             AiService::new(false, None),
+        ),
+        paper_service: crate::app::paper::svc::PaperService::new(
+            db.clone(),
+            AiService::new(false, None),
+            test_app_flags_rx(),
         ),
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(
@@ -791,6 +817,10 @@ pub fn make_app_with_paired_client(
         artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
             db.clone(),
         ),
+        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(
+            db.clone(),
+            test_app_flags_rx(),
+        ),
         username: "test-user".to_string(),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
@@ -856,6 +886,7 @@ pub fn make_app_with_paired_client(
         user_id,
         permissions: Permissions::default(),
         artboard_banned: false,
+        splash_piece: None,
         artboard_ban_expires_at: None,
         active_users: None,
         clubhouse_lobby: None,
@@ -888,6 +919,7 @@ pub fn make_app_with_paired_client(
         initial_announcements: None,
         is_new_user: false,
         land_on_home: false,
+        paper_at_login: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_icecast_stream: late_core::models::user::IcecastStream::default(),
         initial_radio_station: late_core::models::user::RadioStation::default(),
@@ -1037,6 +1069,9 @@ pub fn test_app_flags_rx()
     let (_tx, rx) = tokio::sync::watch::channel(Some(late_core::models::app_flag::AppFlags {
         haunt_enabled: true,
         haunt_live: false,
+        paper_enabled: true,
+        paper_outside_enabled: false,
+        artboard_gallery_enabled: true,
     }));
     rx
 }

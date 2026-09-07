@@ -480,3 +480,31 @@ fn simulate_day_protection_keeps_an_already_spent_tree_alive() {
 
     assert!(state.is_alive);
 }
+
+/// One watering a day, for everyone: the second press the same day is
+/// refused and leaves the tree exactly as the first left it.
+#[tokio::test]
+async fn a_second_watering_the_same_day_is_refused() {
+    let mut state = state_for_graph(seeded_graph(42, 0), None);
+    state.vigor = 50;
+    state.water_stress = 40;
+
+    assert!(state.water());
+    let today = BonsaiService::today();
+    assert_eq!(state.last_watered, Some(today));
+    assert_eq!(state.vigor, 68);
+    assert_eq!(state.water_stress, 5);
+    let snapshot = |state: &BonsaiV2State| {
+        (
+            serde_json::to_value(&state.graph).expect("graph json"),
+            state.state_revision,
+            state.vigor,
+            state.water_stress,
+        )
+    };
+    let after_first = snapshot(&state);
+
+    assert!(!state.water());
+    assert_eq!(state.message.as_deref(), Some("Already watered today"));
+    assert_eq!(snapshot(&state), after_first);
+}

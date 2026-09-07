@@ -541,3 +541,35 @@ fn haunt_commands_parse_the_fuse_words() {
     assert_eq!(parse_haunt_command("/haunt on off"), Some(None));
     assert_eq!(parse_haunt_command("/haunted"), None);
 }
+
+#[test]
+fn a_witness_paints_the_same_corruption_the_haunted_does() {
+    // The seed rides the wire, so the room's screens swap the characters
+    // the sender's screen swaps, in the same two waves, even though every
+    // one of them started painting at a different tick.
+    let message = Uuid::now_v7();
+    let mut flicker = NameFlicker::new(9, 0);
+    flicker.force_next();
+    assert_eq!(
+        flicker.note_own_message(message, 100, true, true),
+        NameRoll::Forced
+    );
+    let (_, seed) = flicker.live_hit().expect("the hit is showing");
+
+    // Nine ticks later than the sender: another replica, another eye.
+    let mut witness = Some(ActiveHit::new(message, 109, seed));
+    for wave in 0..NAME_WAVES {
+        let offset = wave * NAME_WAVE_TICKS;
+        assert_eq!(
+            witness
+                .as_ref()
+                .and_then(|hit| hit.corruption(109 + offset)),
+            flicker
+                .corruption(100 + offset)
+                .map(|(_, seed)| (message, seed)),
+            "wave {wave} must corrupt identically on both screens"
+        );
+    }
+    assert!(ActiveHit::tick(&mut witness, 109 + NAME_HOLD_TICKS));
+    assert_eq!(witness, None);
+}

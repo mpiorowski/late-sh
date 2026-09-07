@@ -283,6 +283,13 @@ fn vt_parser_emits_alt_c_for_explicit_clipboard_chord() {
 }
 
 #[test]
+fn vt_parser_emits_alt_k_for_the_artboard_eyedropper() {
+    let mut parser = VtInputParser::default();
+    assert_eq!(parser.feed(b"\x1bk"), vec![ParsedInput::AltK]);
+    assert_eq!(parser.feed(b"\x1bK"), vec![ParsedInput::AltK]);
+}
+
+#[test]
 fn vt_parser_emits_alt_a_for_explicit_aquarium_chord() {
     let mut parser = VtInputParser::default();
     assert_eq!(parser.feed(b"\x1ba"), vec![ParsedInput::AltA]);

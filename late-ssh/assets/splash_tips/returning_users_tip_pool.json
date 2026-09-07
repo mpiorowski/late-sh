@@ -16,6 +16,7 @@
   "Mid-dungeon in NetHack, DCSS, or Brogue? Press ` to step out to chat; the game keeps running and ` (or Enter on its hub card) drops you back in. Mid-adventure in Lateania, ` hops out with an autosave and hops back in for the next 5 minutes",
   "Select any message and press t to translate it into your language",
   "Away for a while? /summary in a public room gives you an AI catch-up of what you missed",
+  "Missed a day? /paper opens The Late Edition, graybeard's grumpy digest of every public room",
   "/history opens right on your first unread message when a room has news for you",
   "Someone said something good? Select it and press g to gild it: two thirds of what you pay lands in their balance, and the marker never comes off",
   "The crown costs 1.5x whatever the last holder paid, and it goes back to vacant every month"

@@ -340,9 +340,9 @@ fuse is lit.
      the fuse must not spend itself on. Later variety (splash tear,
      ticker stamp, bonsai leaves) rides the same machinery. Nobody is
      sure they saw it.
-  2. **Personal.** The corruption chooses you, and the v1 target is
-     decided: **your own name.** Spec for the implementer: in the
-     sender's session only, immediately after their message lands (the
+  2. **Personal, and witnessed.** The corruption chooses you, and the v1
+     target is decided: **your own name.** Spec for the implementer:
+     immediately after their message lands (the
      one moment of guaranteed attention: eyes always follow your own
      send), the author label of that just-landed message renders with
      two or three of its characters swapped for glyph-alphabet
@@ -360,7 +360,30 @@ fuse is lit.
      *you*). Rejected on purpose: corrupting the message echo itself,
      which plants "did that send garbled to everyone?", a
      data-integrity doubt and the panic rule violated in its most
-     personal form. Chosen users only (the eligibility gate), never
+     personal form.
+
+     **Reversed 2026-09-05: the room sees it too.** Stage 2 shipped
+     private ("in the sender's session only") and that was the wrong
+     call, for one reason: a beat nobody else can corroborate is a beat
+     the person can talk themselves out of, and stage 3 then walks in and
+     says the static knows your name to somebody who has already decided
+     they imagined it. Stage 1 wants deniability and gets it honestly,
+     from independent dice ("did anyone else see that?" / "no?"). Stage 2
+     is the rung where that answer turns into *yes*, and a room that saw
+     it is worth more than a person who is not sure they did. It costs
+     nothing the panic rule protects: the corruption is still the label
+     and never the body, so nobody is left looking at a garbled sentence
+     wondering whether their send went out broken. What was rejected
+     above stays rejected; that was the message echo, not the name. What
+     the room sees is somebody's *name* tearing, which reads as the
+     static reaching for a person, which is what the fiction has been
+     claiming all along. Deliberately not simultaneous: everyone paints
+     the same two waves from whenever the message reached them, because
+     pinning the room to one clock would mean persisting a beat that is
+     over in a second and a half. Somebody who arrives after the fact
+     sees a clean name: the static does not perform for an empty room.
+
+     Chosen users only (the eligibility gate), never
      before the clock has spent its three bursts (the ladder never
      skips a rung), rare (order of one in dozens of sends, capped once
      per UTC day, **three total hits per person**, the third arming the

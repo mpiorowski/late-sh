@@ -176,9 +176,11 @@ struct TickLoop {
 
 /// A seat's final figure on its way to the ledger. The sign lives in the
 /// `ChipMove`, so a losing visit and a winning one travel the same path.
+/// `visit_id` is the ledger row's `source_ref`: one visit, one row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Settlement {
     user_id: Uuid,
+    visit_id: Uuid,
     chips: i64,
     chip_move: ChipMove,
 }
@@ -186,15 +188,17 @@ struct Settlement {
 impl Settlement {
     /// `None` when the seat comes out exactly even: nothing moved, so nothing
     /// is written and nobody is notified.
-    fn for_net(user_id: Uuid, net: i64) -> Option<Self> {
+    fn for_net(user_id: Uuid, visit_id: Uuid, net: i64) -> Option<Self> {
         match net.cmp(&0) {
             Ordering::Greater => Some(Self {
                 user_id,
+                visit_id,
                 chips: net,
                 chip_move: ChipMove::SsnakeArenaEarned,
             }),
             Ordering::Less => Some(Self {
                 user_id,
+                visit_id,
                 chips: -net,
                 chip_move: ChipMove::SsnakeArenaLost,
             }),
@@ -415,7 +419,12 @@ impl SsnakeService {
         let chip_svc = self.chip_svc.clone();
         tokio::spawn(async move {
             match chip_svc
-                .apply_move(settlement.user_id, settlement.chip_move, settlement.chips)
+                .apply_move(
+                    settlement.user_id,
+                    settlement.chip_move,
+                    settlement.chips,
+                    &settlement.visit_id.to_string(),
+                )
                 .await
             {
                 Ok(Some(_)) => {}
@@ -458,6 +467,9 @@ struct PlayerState {
     /// Net chips run up since sitting down, still unbanked. Survives arena
     /// shuffles and crashes; standing up banks it and clears it.
     chips: i64,
+    /// Minted when the seat is taken; the ledger row's `source_ref` when
+    /// the visit is banked.
+    visit_id: Uuid,
     /// What moved `chips` last, for the owner's pop.
     last_chip: Option<SsnakeChipKind>,
     /// Length to regrow to after the death shrink (original `S1OldLength`).
@@ -473,6 +485,7 @@ impl PlayerState {
             input_queue: VecDeque::new(),
             last_moved: None,
             chips: 0,
+            visit_id: Uuid::now_v7(),
             last_chip: None,
             respawn_length: 0,
         }
@@ -645,7 +658,11 @@ impl SharedState {
         }
         // Read after the bail penalty: the whole visit, including the exit
         // charge, is what lands in the ledger.
-        let settlement = Settlement::for_net(user_id, self.players[index].chips);
+        let settlement = Settlement::for_net(
+            user_id,
+            self.players[index].visit_id,
+            self.players[index].chips,
+        );
         self.seats[index] = None;
         self.players[index] = PlayerState::empty();
         self.skip_votes = [None; MAX_SEATS];

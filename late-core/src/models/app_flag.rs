@@ -25,6 +25,16 @@ pub enum AppFlag {
     /// (admins and moderators) are haunted; lit, stage 1 fires for everyone
     /// and the eligibility gate decides who goes further.
     HauntLive,
+    /// The daily paper's kill switch (`/paper off`): while off the sweeper
+    /// prints nothing and `/paper` answers unavailable.
+    PaperEnabled,
+    /// The paper's "Outside" page (`/paper outside on|off`): the grounded
+    /// look at the world beyond late.sh. On from the start; the switch is
+    /// there for the day it reads like slop.
+    PaperOutsideEnabled,
+    /// The Artboard gallery's kill switch (`/gallery on|off`): while off
+    /// nothing can be hung or applauded and the rail hides the gallery.
+    ArtboardGalleryEnabled,
 }
 
 impl AppFlag {
@@ -32,6 +42,9 @@ impl AppFlag {
         match self {
             Self::HauntEnabled => "haunt_enabled",
             Self::HauntLive => "haunt_live",
+            Self::PaperEnabled => "paper_enabled",
+            Self::PaperOutsideEnabled => "paper_outside_enabled",
+            Self::ArtboardGalleryEnabled => "artboard_gallery_enabled",
         }
     }
 }
@@ -42,6 +55,9 @@ impl AppFlag {
 pub struct AppFlags {
     pub haunt_enabled: bool,
     pub haunt_live: bool,
+    pub paper_enabled: bool,
+    pub paper_outside_enabled: bool,
+    pub artboard_gallery_enabled: bool,
 }
 
 impl AppFlags {
@@ -63,13 +79,20 @@ impl AppFlags {
         Ok(Self {
             haunt_enabled: lookup(AppFlag::HauntEnabled)?,
             haunt_live: lookup(AppFlag::HauntLive)?,
+            paper_enabled: lookup(AppFlag::PaperEnabled)?,
+            paper_outside_enabled: lookup(AppFlag::PaperOutsideEnabled)?,
+            artboard_gallery_enabled: lookup(AppFlag::ArtboardGalleryEnabled)?,
         })
     }
 
     /// Flip one switch. The trigger tells every replica, including the one
     /// that wrote it. Bails when the row is missing, same reasoning as
     /// [`AppFlags::load`].
-    pub async fn set(client: &Client, flag: AppFlag, enabled: bool) -> Result<()> {
+    pub async fn set(
+        client: &impl deadpool_postgres::GenericClient,
+        flag: AppFlag,
+        enabled: bool,
+    ) -> Result<()> {
         let updated = client
             .execute(
                 "UPDATE app_flags SET enabled = $2, updated = current_timestamp WHERE key = $1",

@@ -230,6 +230,16 @@ pub fn status_line(segments: Vec<(&'static str, String, Color)>) -> Line<'static
     Line::from(spans)
 }
 
+/// The share hint a finished daily adds to its key line: `s` copies the
+/// card. Empty while the board is still open.
+pub fn share_hints(card_ready: bool) -> Vec<(&'static str, &'static str)> {
+    if card_ready {
+        vec![("s", "share")]
+    } else {
+        Vec::new()
+    }
+}
+
 pub fn keys_line(hints: Vec<(&'static str, &'static str)>) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     for (i, (key, desc)) in hints.into_iter().enumerate() {
@@ -367,72 +377,6 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
     let selection = view.game_selection;
     let mut selected_line: usize = 0;
 
-    push_game_section(&mut lines, "─── Score Games ───");
-    lines.push(Line::from(""));
-
-    lines.push(Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            "Chase personal bests and monthly leaderboard spots.",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ]));
-    lines.push(Line::from(""));
-
-    for (idx, name, desc, status) in [
-        (
-            GAME_SELECTION_2048,
-            "2048",
-            "Slide, merge, and chase the warmest tile.",
-            format!(
-                "Best {}",
-                view.twenty_forty_eight_state
-                    .best_score
-                    .max(view.twenty_forty_eight_state.score)
-            ),
-        ),
-        (
-            GAME_SELECTION_TETRIS,
-            "Lateris",
-            "Endless falling blocks. Speed rises as you survive.",
-            format!("Best {}", view.tetris_state.best_score),
-        ),
-        (
-            GAME_SELECTION_SNAKE,
-            "Snake",
-            "Eat grow and avoid danger. Speed rises as you survive.",
-            format!("Best {}", view.snake_state.best_score),
-        ),
-        (
-            GAME_SELECTION_TRAFFIC,
-            "Traffic",
-            "You're LATE and stuck in TRAFFIC. Overtake or crash.",
-            if view.traffic_state.best_score > 0 {
-                format!("Best {:>11}", view.traffic_state.best_score)
-            } else {
-                "No runs yet".to_string()
-            },
-        ),
-    ] {
-        draw_game_entry(
-            &mut lines,
-            &mut selected_line,
-            selection,
-            GameEntry {
-                idx,
-                name,
-                descriptions: &[desc],
-                selected_style: Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-                normal_style: Style::default().fg(theme::TEXT()),
-                description_style: Style::default().fg(theme::TEXT_DIM()),
-                status: vec![Span::styled(status, Style::default().fg(theme::SUCCESS()))],
-                label_width: 16,
-            },
-        );
-    }
-
     push_game_section(&mut lines, "─── Daily Games ───");
     lines.push(Line::from(""));
 
@@ -440,6 +384,27 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
         Span::raw("  "),
         Span::styled(
             "Win once per UTC day for chips. Replay for practice and leaderboard.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            " s ",
+            Style::default()
+                .fg(theme::BG_SELECTION())
+                .bg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            "Share your day card",
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            ": copies a spoiler-free score for today's dailies. Every finished puzzle has one too.",
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ]));
@@ -578,6 +543,72 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                 },
             );
         }
+    }
+
+    push_game_section(&mut lines, "─── Score Games ───");
+    lines.push(Line::from(""));
+
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            "Chase personal bests and monthly leaderboard spots.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
+    for (idx, name, desc, status) in [
+        (
+            GAME_SELECTION_2048,
+            "2048",
+            "Slide, merge, and chase the warmest tile.",
+            format!(
+                "Best {}",
+                view.twenty_forty_eight_state
+                    .best_score
+                    .max(view.twenty_forty_eight_state.score)
+            ),
+        ),
+        (
+            GAME_SELECTION_TETRIS,
+            "Lateris",
+            "Endless falling blocks. Speed rises as you survive.",
+            format!("Best {}", view.tetris_state.best_score),
+        ),
+        (
+            GAME_SELECTION_SNAKE,
+            "Snake",
+            "Eat grow and avoid danger. Speed rises as you survive.",
+            format!("Best {}", view.snake_state.best_score),
+        ),
+        (
+            GAME_SELECTION_TRAFFIC,
+            "Traffic",
+            "You're LATE and stuck in TRAFFIC. Overtake or crash.",
+            if view.traffic_state.best_score > 0 {
+                format!("Best {:>11}", view.traffic_state.best_score)
+            } else {
+                "No runs yet".to_string()
+            },
+        ),
+    ] {
+        draw_game_entry(
+            &mut lines,
+            &mut selected_line,
+            selection,
+            GameEntry {
+                idx,
+                name,
+                descriptions: &[desc],
+                selected_style: Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+                normal_style: Style::default().fg(theme::TEXT()),
+                description_style: Style::default().fg(theme::TEXT_DIM()),
+                status: vec![Span::styled(status, Style::default().fg(theme::SUCCESS()))],
+                label_width: 16,
+            },
+        );
     }
 
     // Scroll so the selected game stays at the vertical center of the viewport.

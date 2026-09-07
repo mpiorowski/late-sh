@@ -1,5 +1,6 @@
 use anyhow::{Result, ensure};
 use chrono::NaiveDate;
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -13,6 +14,17 @@ pub const GAME_PAYOUT_PERIOD_UTC_DAY: &str = "utc_day";
 pub struct GamePayoutClaim {
     pub credited: bool,
     pub balance: i64,
+}
+
+/// What a claim paid for, as the reward template named it: `game` is the
+/// template's game key (`sudoku`, `daily_chess`, `nethack`) and
+/// `payout_kind` the milestone inside it (`daily_win_hard`, `win`,
+/// `ascension`). Both are open strings from template params, and old rows
+/// carry values no live template writes any more, so they stay strings.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GamePayoutSource {
+    pub game: String,
+    pub payout_kind: String,
 }
 
 pub struct GamePayout;
@@ -65,6 +77,35 @@ pub struct GamePayoutMultiGrant<'a> {
 }
 
 impl GamePayout {
+    /// The game and milestone behind a batch of claim ids, keyed by id: one
+    /// primary-key scan. Ids matching nothing are absent.
+    pub async fn sources_for_ids(
+        client: &Client,
+        ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, GamePayoutSource>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = client
+            .query(
+                "SELECT id, game, payout_kind FROM game_payout_claims WHERE id = ANY($1)",
+                &[&ids],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get("id"),
+                    GamePayoutSource {
+                        game: row.get("game"),
+                        payout_kind: row.get("payout_kind"),
+                    },
+                )
+            })
+            .collect())
+    }
+
     pub async fn has_claimed_daily(
         client: &Client,
         user_id: Uuid,

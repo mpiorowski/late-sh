@@ -788,6 +788,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Constraint::Length(1),                // breathing
         Constraint::Length(1),                // Startup subsection heading
         Constraint::Length(1),                // land on home row
+        Constraint::Length(1),                // daily paper row
         Constraint::Length(1),                // breathing
         Constraint::Length(1),                // Input subsection heading
         Constraint::Length(1),                // interaction mode row
@@ -885,8 +886,18 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         )),
         sections[14],
     );
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::PaperAtLogin,
+            width,
+            "Daily paper at login",
+            toggle_span(state.draft().paper_at_login),
+        )),
+        sections[15],
+    );
 
-    frame.render_widget(Paragraph::new(section_heading("Input")), sections[16]);
+    frame.render_widget(Paragraph::new(section_heading("Input")), sections[17]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -895,7 +906,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Interaction mode",
             interaction_mode_span(state.interaction_mode()),
         )),
-        sections[17],
+        sections[18],
     );
 
     if gem_strip_height > 0 {

@@ -110,7 +110,7 @@ pub(crate) const GAME_SELECTION_SNAKE: usize = 7;
 pub(crate) const GAME_SELECTION_TRAFFIC: usize = 8;
 pub(crate) const GAME_SELECTION_RUBIKS_CUBE: usize = 9;
 pub(crate) const GAME_SELECTION_SLIDING_PUZZLE: usize = 10;
-pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
+pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_LE_WORD;
 
 /// Rail modes in force: this device's stored layout when its key has one, else
 /// the account default. Free-standing so `App::new` can seed the settings draft
@@ -204,6 +204,8 @@ pub struct SessionConfig {
     pub chat_service: ChatService,
     pub translation_service: crate::app::ai::translate::TranslationService,
     pub summary_service: crate::app::ai::summary::SummaryService,
+    /// The Late Edition (`app/paper`): the newsstand this session reads from.
+    pub paper_service: crate::app::paper::svc::PaperService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
     pub feed_service: crate::app::chat::feeds::svc::FeedService,
@@ -250,6 +252,12 @@ pub struct SessionConfig {
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: crate::app::artboard::provenance::SharedArtboardProvenance,
     pub artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService,
+    /// The Artboard gallery: listings, hanging, applause, the splash podium.
+    pub gallery_service: crate::app::artboard::gallery::svc::GalleryService,
+    /// The podium piece this login shows over the door, claimed at
+    /// bootstrap (`GalleryService::claim_splash_piece`); `None` is the
+    /// coffee cup.
+    pub splash_piece: Option<crate::app::artboard::gallery::svc::SplashPiece>,
     pub username: String,
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
@@ -415,6 +423,8 @@ pub struct SessionConfig {
     /// (page 0) when the session starts. Ignored for brand-new users so they
     /// still get the clubhouse first-visit tutorial.
     pub land_on_home: bool,
+    /// Tweak: pop The Late Edition once a day after the splash.
+    pub paper_at_login: bool,
 
     /// Display config
     pub initial_theme_id: String,
@@ -478,6 +488,8 @@ pub struct App {
     /// running -> ready transition needs its own one-shot frame.
     pub(crate) ultimate_cooldown_was_running: bool,
     pub(crate) login_announcements: Option<crate::app::announcements::LoginAnnouncements>,
+    /// The Late Edition: its modal, the login pop, and the `/paper` drain.
+    pub(crate) paper: crate::app::paper::state::PaperState,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState,
     pub(crate) aquarium_state: hub::aquarium::state::AquariumState,
@@ -843,6 +855,10 @@ pub struct App {
     pub(crate) dartboard_server: dartboard_local::ServerHandle,
     pub(crate) dartboard_provenance: crate::app::artboard::provenance::SharedArtboardProvenance,
     pub(crate) artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService,
+    pub(crate) gallery_service: crate::app::artboard::gallery::svc::GalleryService,
+    /// The podium piece over this session's splash, claimed once at
+    /// bootstrap; `None` draws the coffee cup.
+    pub(crate) splash_piece: Option<crate::app::artboard::gallery::svc::SplashPiece>,
     pub(crate) username: String,
 
     /// Late Chips balance (loaded on login, updated via leaderboard refresh)
@@ -1198,6 +1214,8 @@ impl App {
         let dartboard_server = config.dartboard_server.clone();
         let dartboard_provenance = config.dartboard_provenance.clone();
         let artboard_snapshot_service = config.artboard_snapshot_service.clone();
+        let gallery_service = config.gallery_service.clone();
+        let splash_piece = config.splash_piece.clone();
         let username = config.username.clone();
 
         let initial_bonsai_decay_protection = config.initial_bonsai_decay_protection;
@@ -1336,6 +1354,7 @@ impl App {
             config.permissions.can_moderate(),
             config.app_flags_rx.clone(),
             config.user_id,
+            &config.username,
             config.first_contact,
             config.first_contact_gate,
         );
@@ -1367,6 +1386,12 @@ impl App {
             show_ultimate_modal: false,
             ultimate_cooldown_was_running: false,
             login_announcements: config.initial_announcements,
+            // Newcomers get it too: after the tour, it is the best answer
+            // to "is anyone here?" and doubles as the room directory.
+            paper: crate::app::paper::state::PaperState::new(
+                config.paper_service,
+                config.paper_at_login,
+            ),
             help_modal_state: help_modal::state::HelpModalState::new(),
             leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState::new(),
             aquarium_state,
@@ -1638,6 +1663,8 @@ impl App {
             dartboard_server,
             dartboard_provenance,
             artboard_snapshot_service,
+            gallery_service,
+            splash_piece,
             username,
             chip_balance: config.initial_chip_balance,
             pending_clipboard: None,
@@ -1697,6 +1724,8 @@ impl App {
         self.dartboard_state = Some(crate::app::artboard::state::State::new(
             svc,
             self.artboard_snapshot_service.clone(),
+            self.gallery_service.clone(),
+            self.user_id,
             self.username.clone(),
             self.dartboard_provenance.clone(),
         ));
@@ -1976,7 +2005,39 @@ impl App {
         }
         self.enter_dartboard();
         self.artboard_interacting = true;
+        // Painting takes the rail's width; the board owns the keys.
+        if let Some(state) = self.dartboard_state.as_mut() {
+            state.gallery_mut().focus_canvas();
+        }
         true
+    }
+
+    /// Start framing a piece for the gallery. The same gate as editing
+    /// (a banned account frames nothing), plus the gallery's own: the
+    /// switch is on and the live board is up, not an archive.
+    pub(crate) fn begin_artboard_hang(&mut self) {
+        self.expire_artboard_ban_if_needed();
+        if self.artboard_banned {
+            self.banner = Some(Banner::error(
+                "Artboard editing is disabled for this account.",
+            ));
+            return;
+        }
+        self.enter_dartboard();
+        let Some(state) = self.dartboard_state.as_mut() else {
+            return;
+        };
+        if !state.gallery().is_enabled() {
+            self.banner = Some(Banner::error("The gallery is closed right now."));
+            return;
+        }
+        if state.is_archive_view_active() {
+            self.banner = Some(Banner::error(
+                "Return to the live board first; archives cannot be hung.",
+            ));
+            return;
+        }
+        state.begin_framing();
     }
 
     pub(crate) fn deactivate_artboard_interaction(&mut self) {
@@ -1985,7 +2046,7 @@ impl App {
             state.clear_local_state();
             state.close_help();
             state.close_glyph_picker();
-            state.close_snapshot_browser();
+            state.gallery_mut().cancel_hang();
         }
     }
 

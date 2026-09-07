@@ -270,6 +270,7 @@ struct DrawContext<'a> {
     /// border HUD segment; there is no pot panel in the sidebar.
     pot: &'a crate::app::pot::state::PotView,
     login_announcements: Option<&'a announcements::LoginAnnouncements>,
+    paper_modal: Option<&'a crate::app::paper::state::PaperModal>,
     stream_modal: Option<&'a crate::app::state::StreamModal>,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
@@ -278,6 +279,10 @@ struct DrawContext<'a> {
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
+    /// This login's podium piece, hung over the splash when it fits; the
+    /// coffee cup otherwise, and always once the account has seen the
+    /// podium this month.
+    splash_piece: Option<&'a crate::app::artboard::gallery::svc::SplashPiece>,
     /// One frame of first-contact whisper theater over the splash, `None`
     /// unless the door is held this frame. See `app/deadchannel`.
     whisper: Option<crate::app::deadchannel::haunt::ui::WhisperFrame>,
@@ -658,7 +663,6 @@ impl App {
         let showcase_unread_count = self.chat.showcase.unread_count();
         let showcase_composing = self.chat.showcase.composing();
         let web_base_url = self.web_url.as_str();
-        // Built before the frame borrows `self` mutably below.
         let listen_url = crate::app::state::listen_url(&self.web_url);
         let work_view = chat::work::ui::WorkListView {
             items: self.chat.work.all_items(),
@@ -978,6 +982,7 @@ impl App {
             || self.show_bonsai_v2_modal
             || self.show_lobby_modal
             || login_announcements_visible
+            || self.paper.modal_visible()
             || self.show_help
             || self.show_ultimate_modal
             || self.show_splash
@@ -997,6 +1002,7 @@ impl App {
             || self.show_bonsai_v2_modal
             || self.show_lobby_modal
             || login_announcements_visible
+            || self.paper.modal_visible()
             || self.show_help
             || self.show_ultimate_modal
             || self.show_splash
@@ -1147,6 +1153,7 @@ impl App {
                         } else {
                             None
                         },
+                        paper_modal: self.paper.modal.as_ref(),
                         stream_modal: self.stream_modal.as_ref(),
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
@@ -1155,6 +1162,7 @@ impl App {
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
+                        splash_piece: self.splash_piece.as_ref(),
                         whisper: crate::app::deadchannel::haunt::ui::whisper_frame_for(
                             &self.haunt,
                             self.splash_ticks,
@@ -1276,44 +1284,72 @@ impl App {
                 text.push(' ');
             }
 
-            let steam_frames = [
-                ["   (  )   ", "    )(    "],
-                ["    )(    ", "   (  )   "],
-                ["   )  (   ", "    )(    "],
-                ["    )(    ", "   (  )   "],
-            ];
-            let steam = &steam_frames[(ctx.splash_ticks / 6) % steam_frames.len()];
-            let base = [" .------. ", "|      |`\\", "|      | /", " `----'   "];
-
-            let mut lines = Vec::new();
-            for s in steam {
-                lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
-                    *s,
-                    Style::default().fg(theme::TEXT_FAINT()),
-                )));
-            }
-            for b in &base {
-                lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
-                    *b,
-                    Style::default().fg(theme::TEXT_DIM()),
-                )));
-            }
-            lines.push(ratatui::text::Line::from(""));
-            lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
-                text,
-                Style::default().fg(theme::TEXT_MUTED()),
-            )));
-
-            let p = ratatui::widgets::Paragraph::new(lines).centered();
-            let layout = ratatui::layout::Layout::vertical([
-                ratatui::layout::Constraint::Fill(1),
-                ratatui::layout::Constraint::Length(8),
-                ratatui::layout::Constraint::Fill(1),
+            // The login's podium piece takes the cup's place when the
+            // terminal has room for it; the typed line stays under either.
+            let piece_area = ratatui::layout::Layout::vertical([
+                ratatui::layout::Constraint::Min(0),
+                ratatui::layout::Constraint::Length(3),
             ])
             .split(area);
+            let piece_drawn = match ctx.splash_piece {
+                Some(piece) => crate::app::artboard::gallery::ui::draw_splash_piece(
+                    frame,
+                    piece_area[0],
+                    piece,
+                ),
+                None => false,
+            };
 
-            frame.render_widget(p, layout[1]);
-            let splash_bottom = layout[1].bottom();
+            let splash_bottom = if piece_drawn {
+                let line_area = Rect::new(piece_area[1].x, piece_area[1].y, piece_area[1].width, 1);
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new(ratatui::text::Line::from(
+                        ratatui::text::Span::styled(text, Style::default().fg(theme::TEXT_MUTED())),
+                    ))
+                    .centered(),
+                    line_area,
+                );
+                line_area.bottom()
+            } else {
+                let steam_frames = [
+                    ["   (  )   ", "    )(    "],
+                    ["    )(    ", "   (  )   "],
+                    ["   )  (   ", "    )(    "],
+                    ["    )(    ", "   (  )   "],
+                ];
+                let steam = &steam_frames[(ctx.splash_ticks / 6) % steam_frames.len()];
+                let base = [" .------. ", "|      |`\\", "|      | /", " `----'   "];
+
+                let mut lines = Vec::new();
+                for s in steam {
+                    lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
+                        *s,
+                        Style::default().fg(theme::TEXT_FAINT()),
+                    )));
+                }
+                for b in &base {
+                    lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
+                        *b,
+                        Style::default().fg(theme::TEXT_DIM()),
+                    )));
+                }
+                lines.push(ratatui::text::Line::from(""));
+                lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
+                    text,
+                    Style::default().fg(theme::TEXT_MUTED()),
+                )));
+
+                let p = ratatui::widgets::Paragraph::new(lines).centered();
+                let layout = ratatui::layout::Layout::vertical([
+                    ratatui::layout::Constraint::Fill(1),
+                    ratatui::layout::Constraint::Length(8),
+                    ratatui::layout::Constraint::Fill(1),
+                ])
+                .split(area);
+
+                frame.render_widget(p, layout[1]);
+                layout[1].bottom()
+            };
             let gap = area.bottom().saturating_sub(splash_bottom);
             let hint_y = splash_bottom + (gap * 3 / 4);
             // While the whisper holds the door the hint may be mid-dissolve
@@ -1858,6 +1894,9 @@ impl App {
         if let Some(modal) = ctx.login_announcements {
             announcements::draw(frame, inner, modal);
         }
+        if let Some(modal) = ctx.paper_modal {
+            crate::app::paper::ui::draw(frame, inner, modal);
+        }
 
         if ctx.show_help {
             help_modal::ui::draw(frame, inner, ctx.help_modal_state, ctx.listen_url);
@@ -1956,6 +1995,7 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_bonsai_modal
         || ctx.show_bonsai_v2_modal
         || ctx.login_announcements.is_some()
+        || ctx.paper_modal.is_some()
         || ctx.stream_modal.is_some()
         || ctx.show_help
         || ctx.show_ultimate_modal
@@ -2227,6 +2267,9 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             "by github.com/mevanlc ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
+        let gallery_focus = ctx
+            .dartboard_state
+            .map(|state| (state.gallery().focus(), state.gallery().is_framing()));
         let hints: &[(&str, &str)] = if ctx.artboard_interacting {
             &[
                 ("active", "draw"),
@@ -2236,14 +2279,46 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 ("Ctrl+P", "help"),
             ]
         } else {
-            &[
-                ("view", "pan"),
-                ("Alt+arrows/R-drag", "pan"),
-                ("i", "edit"),
-                ("g", "gallery"),
-            ]
+            match gallery_focus {
+                Some((_, true)) => &[
+                    ("framing", "select your work"),
+                    ("Shift+arrows/drag", "frame"),
+                    ("Enter", "hang"),
+                    ("Esc", "cancel"),
+                ],
+                Some((crate::app::artboard::gallery::state::Focus::Rail, _)) => {
+                    &[("rail", "j/k"), ("Enter", "open"), ("Tab", "next page")]
+                }
+                Some((crate::app::artboard::gallery::state::Focus::Archive, _)) => &[
+                    ("archives", "j/k travel"),
+                    ("Enter", "board"),
+                    ("Esc", "rail"),
+                ],
+                Some((crate::app::artboard::gallery::state::Focus::List, _)) => &[
+                    ("gallery", "j/k"),
+                    ("v", "applaud"),
+                    ("Enter", "full frame"),
+                    ("Esc", "rail"),
+                ],
+                Some((crate::app::artboard::gallery::state::Focus::Piece, _)) => {
+                    &[("piece", "j/k next"), ("v", "applaud"), ("Esc", "back")]
+                }
+                Some((crate::app::artboard::gallery::state::Focus::Canvas, _)) | None => &[
+                    ("view", "pan"),
+                    ("Alt+arrows/R-drag", "pan"),
+                    ("i", "edit"),
+                    ("Esc", "rail"),
+                ],
+            }
         };
-        for (key, desc) in hints {
+        // The page's own help is Ctrl+P in every state, and the top border
+        // always says so (`?` is the global guide, here as everywhere).
+        let help_hint: &[(&str, &str)] = if ctx.artboard_interacting {
+            &[]
+        } else {
+            &[("Ctrl+P", "help")]
+        };
+        for (key, desc) in hints.iter().chain(help_hint) {
             spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
             spans.push(Span::styled(
                 *key,

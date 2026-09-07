@@ -336,7 +336,7 @@ impl ArticleService {
             );
         }
 
-        // 1. Quick existence check — acquire and release before the slow AI work
+        // 1. Quick existence check: acquire and release before the slow AI work
         tracing::info!(%url, "checking article url");
         {
             let client = self.db.get().await?;
@@ -352,8 +352,8 @@ impl ArticleService {
         // legacy AI-first flow.
         let extraction = if is_youtube_url(url) {
             self.extract_youtube(url).await?
-        } else if is_tweet_url(url) {
-            self.extract_tweet(url).await?
+        } else if let Some(status_id) = tweet_status_id(url) {
+            self.extract_tweet(url, &status_id).await?
         } else {
             self.extract_via_ai(url).await?
         };
@@ -365,7 +365,7 @@ impl ArticleService {
         let announcement =
             build_news_chat_announcement(&extraction.title, &extraction.summary, url, &ascii_art);
 
-        // 4. Save to database and pay the sharer — scoped so the client is
+        // 4. Save to database and pay the sharer, scoped so the client is
         //    dropped before helper calls. Both share paths (the News composer
         //    and an RSS entry shared with `s`) land here, so this is the one
         //    place a share is rewarded.
@@ -603,7 +603,7 @@ impl ArticleService {
     }
 
     /// Ask the AI for a summary of a known video. The user message must be
-    /// just the raw URL — Gemini only invokes its Search tool when the
+    /// just the raw URL: Gemini only invokes its Search tool when the
     /// prompt looks like a research task, not a formatting task. Verified
     /// title and channel go in the system prompt as context.
     #[tracing::instrument(skip(self), fields(url = %url, title = %title, author = %author))]
@@ -642,42 +642,40 @@ impl ArticleService {
     /// built from those. The AI path invented titles for these links because
     /// x.com serves no `og:` tags even to crawlers and Search has almost
     /// nothing indexed against a bare status URL.
-    #[tracing::instrument(skip(self), fields(url = %url))]
-    async fn extract_tweet(&self, url: &str) -> Result<ArticleExtraction> {
+    #[tracing::instrument(skip(self), fields(url = %url, status_id = %status_id))]
+    async fn extract_tweet(&self, url: &str, status_id: &str) -> Result<ArticleExtraction> {
         let identity = self.fetch_tweet_identity(url).await?.context(
-            "X could not resolve this post — it may be deleted, from a protected account, or not a post URL",
+            "X could not resolve this post: it may be deleted, from a protected account, or not a post URL",
         )?;
 
         // oEmbed carries neither an image nor a sensitivity flag, so this is
-        // the only source for either. It is best effort by design: losing it
-        // costs the card its thumbnail, not the share.
-        let media = match self.fetch_tweet_media(url).await {
+        // the only source for either, and the sensitivity flag is the only
+        // NSFW gate on this path. A lookup that cannot answer therefore
+        // rejects the share rather than waving it through unscreened; the
+        // counter makes an fxtwitter outage visible as a run of
+        // `unavailable` verdicts.
+        let media = match self.fetch_tweet_media(status_id).await {
             Ok(media) => media,
             Err(e) => {
-                tracing::warn!(%url, error = ?e, "tweet media lookup failed; card falls back to placeholder art");
-                None
+                metrics::record_news_x_media_lookup(XMediaLookup::Unavailable);
+                tracing::warn!(%url, error = ?e, "tweet media lookup failed; rejecting the share unscreened");
+                anyhow::bail!(
+                    "X could not confirm this post is safe to share right now. Try again in a minute."
+                );
             }
         };
 
-        if media.as_ref().is_some_and(|m| m.possibly_sensitive) {
+        if media.possibly_sensitive {
+            metrics::record_news_x_media_lookup(XMediaLookup::Sensitive);
             tracing::warn!(%url, "X flags this post as sensitive; rejecting the share");
             anyhow::bail!("Link was rejected due to content policy violations or being invalid.");
         }
-
-        let lines: Vec<&str> = identity
-            .text
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .collect();
+        metrics::record_news_x_media_lookup(XMediaLookup::Clean);
 
         Ok(ArticleExtraction {
-            title: tweet_title(
-                &identity.author_name,
-                lines.first().copied().unwrap_or_default(),
-            ),
-            image_url: media.and_then(|m| m.thumbnail_url),
-            summary: tweet_summary(&identity, &lines),
+            title: tweet_title(&identity.author_name, &identity.lines[0]),
+            image_url: media.thumbnail_url,
+            summary: tweet_summary(&identity),
         })
     }
 
@@ -698,8 +696,8 @@ impl ArticleService {
         }
 
         let payload: TweetOEmbedResponse = res.json().await?;
-        let text = tweet_text_from_oembed_html(&payload.html);
-        if text.is_empty() {
+        let lines = tweet_text_from_oembed_html(&payload.html);
+        if lines.is_empty() {
             tracing::warn!(%url, "X oEmbed body carried no post text");
             return Ok(None);
         }
@@ -708,19 +706,15 @@ impl ArticleService {
             author_name: payload.author_name.trim().to_string(),
             handle: handle_from_author_url(&payload.author_url),
             date: tweet_date_from_oembed_html(&payload.html),
-            text,
+            lines,
         }))
     }
 
     /// The post's thumbnail and sensitivity flag, which oEmbed does not
-    /// carry. Every caller treats a `None` here as "no picture, not known
-    /// sensitive" rather than as a failure.
-    #[tracing::instrument(skip(self), fields(url = %url))]
-    async fn fetch_tweet_media(&self, url: &str) -> Result<Option<TweetMedia>> {
-        let Some(status_id) = tweet_status_id(url) else {
-            return Ok(None);
-        };
-
+    /// carry. Any response that is not a post is an error, because without
+    /// the flag the caller has no verdict on the post at all.
+    #[tracing::instrument(skip(self), fields(status_id = %status_id))]
+    async fn fetch_tweet_media(&self, status_id: &str) -> Result<TweetMedia> {
         let endpoint = reqwest::Url::parse(&format!("{TWEET_MEDIA_ENDPOINT}{status_id}"))?;
         let res = self
             .http_client
@@ -730,21 +724,20 @@ impl ArticleService {
             .send_traced()
             .await?;
         if !res.status().is_success() {
-            tracing::warn!(%url, status = %res.status(), "tweet media lookup returned no post");
-            return Ok(None);
+            anyhow::bail!("tweet media lookup answered {}", res.status());
         }
 
         let payload: TweetMediaResponse = res.json().await?;
         let Some(tweet) = payload.tweet else {
-            return Ok(None);
+            anyhow::bail!("tweet media lookup answered without a post");
         };
 
-        Ok(Some(TweetMedia {
+        Ok(TweetMedia {
             thumbnail_url: tweet
                 .media
                 .and_then(|media| media.all.into_iter().find_map(tweet_media_image)),
             possibly_sensitive: tweet.possibly_sensitive,
-        }))
+        })
     }
 }
 
@@ -769,7 +762,7 @@ struct YoutubeOEmbedResponse {
 struct TweetOEmbedResponse {
     #[serde(default)]
     author_name: String,
-    /// `https://x.com/<handle>` — the structured source for the handle,
+    /// `https://x.com/<handle>`, the structured source for the handle,
     /// which the rendered blockquote only spells out in prose.
     #[serde(default)]
     author_url: String,
@@ -783,7 +776,9 @@ struct TweetOEmbedResponse {
 struct TweetIdentity {
     author_name: String,
     handle: String,
-    text: String,
+    /// The post's own text, one entry per line the author broke it into.
+    /// Never empty: a body with no text never becomes an identity.
+    lines: Vec<String>,
     date: Option<String>,
 }
 
@@ -791,6 +786,17 @@ struct TweetIdentity {
 struct TweetMedia {
     thumbnail_url: Option<String>,
     possibly_sensitive: bool,
+}
+
+/// How the fxtwitter lookup behind an X share resolved. That lookup is the
+/// only NSFW gate on the X path, so `Unavailable` counts the shares the gate
+/// turned away without a verdict, which is what an fxtwitter outage looks
+/// like from the outside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XMediaLookup {
+    Clean,
+    Sensitive,
+    Unavailable,
 }
 
 #[derive(Deserialize)]
@@ -863,7 +869,7 @@ mod summary_parser {
     }
 }
 
-/// Placeholder summary for when the AI summary call returns nothing —
+/// Placeholder summary for when the AI summary call returns nothing:
 /// usually because the API key is unset or Gemini came back empty.
 fn youtube_fallback_summary(author: &str) -> String {
     let who = author.trim();
@@ -939,20 +945,12 @@ fn tweet_status_id(url: &str) -> Option<String> {
     None
 }
 
-fn is_tweet_url(url: &str) -> bool {
-    tweet_status_id(url).is_some()
-}
-
 /// Headline for a post card: the author and the post's opening line, which
 /// is what makes one post distinguishable from another in the feed.
 fn tweet_title(author_name: &str, headline: &str) -> String {
-    let author = author_name.trim();
-    let headline = headline.trim();
-    match (author.is_empty(), headline.is_empty()) {
-        (true, true) => "Post on X".to_string(),
-        (true, false) => truncate_for_chat(headline, TWEET_TITLE_MAX_CHARS),
-        (false, true) => format!("Post by {author} on X"),
-        (false, false) => {
+    match author_name.trim() {
+        "" => truncate_for_chat(headline, TWEET_TITLE_MAX_CHARS),
+        author => {
             truncate_for_chat(&format!("{author} on X: {headline}"), TWEET_TITLE_MAX_CHARS)
         }
     }
@@ -961,8 +959,9 @@ fn tweet_title(author_name: &str, headline: &str) -> String {
 /// The post's own lines as bullets, closed by the attribution. A post that
 /// breaks its own text into lines keeps that shape, which is usually how the
 /// author meant it to read.
-fn tweet_summary(identity: &TweetIdentity, lines: &[&str]) -> String {
-    let mut bullets: Vec<String> = lines
+fn tweet_summary(identity: &TweetIdentity) -> String {
+    let mut bullets: Vec<String> = identity
+        .lines
         .iter()
         .take(TWEET_TEXT_BULLETS)
         .map(|line| format!("• {line}"))
@@ -1013,13 +1012,13 @@ fn handle_from_author_url(author_url: &str) -> String {
         .to_string()
 }
 
-/// The post's own words out of the `<blockquote>` oEmbed returns. The text
-/// lives in the first `<p>`, `<br>` is the author's line break, and the
-/// trailing `pic.twitter.com/...` anchor is X's own media shortlink rather
-/// than anything the author typed.
-fn tweet_text_from_oembed_html(html: &str) -> String {
+/// The post's own words out of the `<blockquote>` oEmbed returns, one entry
+/// per non-empty line. The text lives in the first `<p>`, `<br>` is the
+/// author's line break, and the trailing `pic.twitter.com/...` anchor is X's
+/// own media shortlink rather than anything the author typed.
+fn tweet_text_from_oembed_html(html: &str) -> Vec<String> {
     let Some(body) = inner_html(html, "p") else {
-        return String::new();
+        return Vec::new();
     };
 
     let with_breaks = body
@@ -1031,8 +1030,8 @@ fn tweet_text_from_oembed_html(html: &str) -> String {
     text.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
+        .map(str::to_string)
+        .collect()
 }
 
 /// The post's date out of the attribution that follows the text, where
@@ -1108,7 +1107,7 @@ fn decode_html_entities(input: &str) -> String {
         .replace("&#39;", "'")
         .replace("&apos;", "'")
         .replace("&nbsp;", " ")
-        .replace("&mdash;", "—")
+        .replace("&mdash;", "\u{2014}")
         .replace("&amp;", "&")
 }
 

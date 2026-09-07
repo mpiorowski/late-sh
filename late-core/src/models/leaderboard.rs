@@ -5,13 +5,13 @@ use chrono::NaiveDate;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::chips::{ChipMove, Difficulty, UserChips};
+use super::chips::{ChipMove, Difficulty, MONTH_TS_FILTER, UserChips};
 use super::door_run::DoorRunResult;
 
-/// UTC calendar-month window over a `puzzle_date` date column.
+/// UTC calendar-month window over a `puzzle_date` date column. The
+/// timestamptz twin is `chips::MONTH_TS_FILTER`, shared with the profile's
+/// "earned this month" figure.
 const MONTH_DATE_FILTER: &str = "date_trunc('month', now() AT TIME ZONE 'UTC')::date";
-/// UTC calendar-month window over a timestamptz column.
-const MONTH_TS_FILTER: &str = "date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'";
 /// Rows kept per board. Deep enough that the page can show an around-you
 /// tail for almost everyone; RANK ties can push slightly past it.
 const BOARD_DEPTH: i64 = 500;

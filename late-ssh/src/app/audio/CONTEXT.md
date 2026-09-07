@@ -124,7 +124,7 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 
 ### Submission reward
 Queueing a track pays the person who brought it `SONG_QUEUE_REWARD_CHIPS`
-(200), minted through `ChipMove::SongQueued`. The gate lives in
+(100), minted through `ChipMove::SongQueued`. The gate lives in
 `MediaQueueItem::insert_youtube` (`late-core/src/models/media_queue_item.rs`),
 which is the only path a submission may take, so booth, `/audio`, trusted
 submits, and a history re-queue cannot pay different amounts or forget to pay.

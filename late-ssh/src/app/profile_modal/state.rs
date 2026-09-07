@@ -1,7 +1,9 @@
 use std::cell::{Cell, RefCell};
 
+use late_core::models::artboard_piece::GalleryCounts;
 use late_core::models::bonsai::Tree;
 use late_core::models::chat_message_gild::GildCounts;
+use late_core::models::chips::MonthChips;
 use late_core::models::profile::Profile;
 use late_core::models::profile_award::ProfileAward;
 use ratatui::layout::Rect;
@@ -12,37 +14,23 @@ use crate::app::bonsai::svc::BonsaiService;
 use crate::app::bonsai_v2::state::BonsaiV2State;
 use crate::app::chat::showcase::svc::{ShowcaseFeedItem, ShowcaseService, ShowcaseSnapshot};
 use crate::app::hub::aquarium::state::AquariumState;
+use crate::app::profile::ledger::LedgerRow;
 use crate::app::profile::svc::{ProfileService, ProfileSnapshot};
 
-/// Tabs for the compact fallback layout (small terminals). The dashboard shows
-/// everything at once and ignores this.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ProfileTab {
-    Overview,
-    Bonsai,
-    Aquarium,
+/// The vertical extent the last draw measured: how tall the composed body
+/// is, how many rows the viewport showed, and where the chips section
+/// starts. `draw` takes `&self`, so these are interior-mutable, the same
+/// way `popup_area` is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ScrollExtent {
+    pub(crate) content_height: u16,
+    pub(crate) viewport_height: u16,
+    pub(crate) chips_top: Option<u16>,
 }
 
-impl ProfileTab {
-    pub(crate) const ALL: [ProfileTab; 3] = [
-        ProfileTab::Overview,
-        ProfileTab::Bonsai,
-        ProfileTab::Aquarium,
-    ];
-
-    pub(crate) fn title(self) -> &'static str {
-        match self {
-            ProfileTab::Overview => "Overview",
-            ProfileTab::Bonsai => "Bonsai",
-            ProfileTab::Aquarium => "Aquarium",
-        }
-    }
-
-    fn index(self) -> usize {
-        ProfileTab::ALL
-            .iter()
-            .position(|tab| *tab == self)
-            .unwrap_or(0)
+impl ScrollExtent {
+    fn max_offset(self) -> u16 {
+        self.content_height.saturating_sub(self.viewport_height)
     }
 }
 
@@ -72,9 +60,17 @@ pub(crate) struct ProfileModalState {
     popup_area: Cell<Rect>,
     profile_awards: Vec<ProfileAward>,
     gild_counts: GildCounts,
-    tab: ProfileTab,
+    gallery_counts: GalleryCounts,
+    chip_ledger: Vec<LedgerRow>,
+    chips_month: MonthChips,
     snapshot_rx: Option<watch::Receiver<ProfileSnapshot>>,
-    scroll_offset: u16,
+    /// First body row shown. Clamped against `extent` on every move, and
+    /// again by `draw` once the body has been measured.
+    scroll_offset: Cell<u16>,
+    extent: Cell<ScrollExtent>,
+    /// Set by `/chips`: the next draw that knows where the chips section
+    /// is scrolls there and clears this.
+    jump_to_chips: Cell<bool>,
 }
 
 impl Drop for ProfileModalState {
@@ -110,9 +106,13 @@ impl ProfileModalState {
             popup_area: Cell::new(Rect::default()),
             profile_awards: Vec::new(),
             gild_counts: GildCounts::default(),
-            tab: ProfileTab::Overview,
+            gallery_counts: GalleryCounts::default(),
+            chip_ledger: Vec::new(),
+            chips_month: MonthChips::default(),
             snapshot_rx: None,
-            scroll_offset: 0,
+            scroll_offset: Cell::new(0),
+            extent: Cell::new(ScrollExtent::default()),
+            jump_to_chips: Cell::new(false),
         }
     }
 
@@ -120,10 +120,14 @@ impl ProfileModalState {
         self.prune_current_channel();
         self.viewed_user_id = Some(user_id);
         self.fallback_name = fallback_name.into();
-        self.scroll_offset = 0;
-        self.tab = ProfileTab::Overview;
+        self.scroll_offset.set(0);
+        self.extent.set(ScrollExtent::default());
+        self.jump_to_chips.set(false);
         self.profile_awards.clear();
         self.gild_counts = GildCounts::default();
+        self.gallery_counts = GalleryCounts::default();
+        self.chip_ledger.clear();
+        self.chips_month = MonthChips::default();
         self.aquarium_fish.clear();
         *self.aquarium.get_mut() = None;
         let mut snapshot_rx = self.profile_service.subscribe_snapshot(user_id);
@@ -133,6 +137,12 @@ impl ProfileModalState {
         self.snapshot_rx = Some(snapshot_rx);
         self.profile_service.find_profile(user_id);
         self.showcase_service.list_task();
+    }
+
+    /// `/chips`: land on the chips section as soon as the body has been
+    /// measured (the next draw).
+    pub(crate) fn jump_to_chips(&self) {
+        self.jump_to_chips.set(true);
     }
 
     pub(crate) fn close(&mut self) {
@@ -148,8 +158,12 @@ impl ProfileModalState {
         *self.aquarium.get_mut() = None;
         self.profile_awards.clear();
         self.gild_counts = GildCounts::default();
-        self.tab = ProfileTab::Overview;
-        self.scroll_offset = 0;
+        self.gallery_counts = GalleryCounts::default();
+        self.chip_ledger.clear();
+        self.chips_month = MonthChips::default();
+        self.scroll_offset.set(0);
+        self.extent.set(ScrollExtent::default());
+        self.jump_to_chips.set(false);
         self.snapshot_rx = None;
     }
 
@@ -195,6 +209,9 @@ impl ProfileModalState {
             self.dynamic_bonsai_selected = false;
             self.profile_awards.clear();
             self.gild_counts = GildCounts::default();
+            self.gallery_counts = GalleryCounts::default();
+            self.chip_ledger.clear();
+            self.chips_month = MonthChips::default();
             if !self.aquarium_fish.is_empty() {
                 self.aquarium_fish.clear();
                 *self.aquarium.get_mut() = None;
@@ -208,6 +225,9 @@ impl ProfileModalState {
         self.dynamic_bonsai_selected = snapshot.dynamic_bonsai_selected;
         self.profile_awards = snapshot.profile_awards;
         self.gild_counts = snapshot.gild_counts;
+        self.gallery_counts = snapshot.gallery_counts;
+        self.chip_ledger = snapshot.chip_ledger;
+        self.chips_month = snapshot.chips_month;
 
         if snapshot.aquarium_fish != self.aquarium_fish {
             self.aquarium_fish = snapshot.aquarium_fish;
@@ -237,23 +257,6 @@ impl ProfileModalState {
             .iter()
             .filter(|item| item.showcase.user_id == user_id)
             .collect()
-    }
-
-    pub(crate) fn tab(&self) -> ProfileTab {
-        self.tab
-    }
-
-    pub(crate) fn set_tab(&mut self, tab: ProfileTab) {
-        if self.tab != tab {
-            self.tab = tab;
-            self.scroll_offset = 0;
-        }
-    }
-
-    pub(crate) fn cycle_tab(&mut self, delta: isize) {
-        let len = ProfileTab::ALL.len() as isize;
-        let next = (self.tab.index() as isize + delta).rem_euclid(len) as usize;
-        self.set_tab(ProfileTab::ALL[next]);
     }
 
     pub(crate) fn bonsai(&self) -> Option<&Tree> {
@@ -312,6 +315,18 @@ impl ProfileModalState {
         self.gild_counts
     }
 
+    pub(crate) fn gallery_counts(&self) -> GalleryCounts {
+        self.gallery_counts
+    }
+
+    pub(crate) fn chip_ledger(&self) -> &[LedgerRow] {
+        &self.chip_ledger
+    }
+
+    pub(crate) fn chips_month(&self) -> MonthChips {
+        self.chips_month
+    }
+
     pub(crate) fn profile(&self) -> Option<&Profile> {
         self.profile.as_ref()
     }
@@ -324,17 +339,36 @@ impl ProfileModalState {
         &self.fallback_name
     }
 
-    pub(crate) fn loading(&self) -> bool {
-        self.profile.is_none()
-    }
-
     pub(crate) fn scroll_offset(&self) -> u16 {
-        self.scroll_offset
+        self.scroll_offset.get()
     }
 
-    pub(crate) fn scroll_by(&mut self, delta: i16) {
-        let next = self.scroll_offset as i32 + delta as i32;
-        self.scroll_offset = next.clamp(0, u16::MAX as i32) as u16;
+    pub(crate) fn scroll_by(&self, delta: i16) {
+        let next = self.scroll_offset.get() as i32 + delta as i32;
+        self.scroll_offset
+            .set(next.clamp(0, self.extent.get().max_offset() as i32) as u16);
+    }
+
+    pub(crate) fn scroll_to_top(&self) {
+        self.scroll_offset.set(0);
+    }
+
+    pub(crate) fn scroll_to_bottom(&self) {
+        self.scroll_offset.set(self.extent.get().max_offset());
+    }
+
+    /// Record what the last draw measured, then settle the offset: clamp it
+    /// to the new extent, and honour a pending `/chips` jump once the chips
+    /// section has a known row. Called by `draw`.
+    pub(crate) fn set_scroll_extent(&self, extent: ScrollExtent) {
+        self.extent.set(extent);
+        if self.jump_to_chips.get()
+            && let Some(top) = extent.chips_top
+        {
+            self.scroll_offset.set(top);
+            self.jump_to_chips.set(false);
+        }
+        self.scroll_by(0);
     }
 
     fn prune_current_channel(&self) {

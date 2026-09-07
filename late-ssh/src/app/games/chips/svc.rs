@@ -171,12 +171,6 @@ impl ChipService {
         Ok(())
     }
 
-    pub async fn debit_bet(&self, user_id: Uuid, amount: i64) -> anyhow::Result<Option<i64>> {
-        let client = self.db.get().await?;
-        let chips = UserChips::apply(&**client, user_id, ChipMove::Bet, amount, None).await?;
-        Ok(chips.map(|c| c.balance))
-    }
-
     /// Charge a bartender drink (floor-guarded) and record the buzz in one
     /// transaction, so a crash can't charge without pouring. Returns None
     /// when the user can't cover the drink and keep the chip floor.
@@ -189,7 +183,7 @@ impl ChipService {
         let mut client = self.db.get().await?;
         let tx = client.transaction().await?;
         let Some(chips) =
-            UserChips::apply(&*tx, user_id, ChipMove::DrinkPurchase, price, Some(drink)).await?
+            UserChips::apply(&*tx, user_id, ChipMove::DrinkPurchase, price, drink).await?
         else {
             return Ok(None);
         };
@@ -251,14 +245,8 @@ impl ChipService {
 
         let total = grant.total_chips();
         let source_ref = grant.round.id.to_string();
-        let Some(chips) = UserChips::apply(
-            &*tx,
-            buyer_id,
-            ChipMove::RoundPurchase,
-            total,
-            Some(&source_ref),
-        )
-        .await?
+        let Some(chips) =
+            UserChips::apply(&*tx, buyer_id, ChipMove::RoundPurchase, total, &source_ref).await?
         else {
             return Err(RoundError::Refused(RoundRefusal::InsufficientChips {
                 patrons,
@@ -323,27 +311,44 @@ impl ChipService {
         UserDrinks::record_welcome_pour(&client, user_id, points).await
     }
 
-    pub async fn credit_payout(&self, user_id: Uuid, amount: i64) -> anyhow::Result<i64> {
+    /// A house-table payout (a blackjack settlement, a poker pot). Credits
+    /// never decline, so a missing row is an error rather than a `None`.
+    pub async fn credit_payout(
+        &self,
+        user_id: Uuid,
+        chip_move: ChipMove,
+        amount: i64,
+        source_ref: &str,
+    ) -> anyhow::Result<i64> {
         let client = self.db.get().await?;
-        match UserChips::apply(&**client, user_id, ChipMove::Credit, amount, None).await? {
+        match UserChips::apply(&**client, user_id, chip_move, amount, source_ref).await? {
             Some(chips) => Ok(chips.balance),
             None => anyhow::bail!("chip credit returned no row"),
         }
     }
 
     /// One ledger move for a named [`ChipMove`], with no reward template and
-    /// no cooldown behind it: the perpetual Super Snake arena settles every
-    /// food, arena clear, and crash the instant it happens. `None` means a
-    /// debit the balance could not cover.
+    /// no cooldown behind it: house-table bets, and the perpetual Super
+    /// Snake arena banking a visit. `None` means a debit the balance could
+    /// not cover.
     pub async fn apply_move(
         &self,
         user_id: Uuid,
         chip_move: ChipMove,
         amount: i64,
+        source_ref: &str,
     ) -> anyhow::Result<Option<i64>> {
         let client = self.db.get().await?;
-        let chips = UserChips::apply(&**client, user_id, chip_move, amount, None).await?;
+        let chips = UserChips::apply(&**client, user_id, chip_move, amount, source_ref).await?;
         Ok(chips.map(|chips| chips.balance))
+    }
+
+    /// An admin minting chips for a player with `/grant`. Leaves no ledger
+    /// row by decision; see [`UserChips::admin_grant`].
+    pub async fn grant_chips(&self, recipient_id: Uuid, amount: i64) -> anyhow::Result<i64> {
+        let client = self.db.get().await?;
+        let chips = UserChips::admin_grant(&**client, recipient_id, amount).await?;
+        Ok(chips.balance)
     }
 
     pub async fn transfer_chips(
@@ -577,9 +582,11 @@ impl ChipService {
         Ok(reward_grant(template.reward_chips, claim))
     }
 
-    pub async fn restore_floor(&self, user_id: Uuid) -> anyhow::Result<i64> {
+    /// Top a losing house-table seat back up to the floor. `source_ref` is
+    /// the round or hand that emptied it.
+    pub async fn restore_floor(&self, user_id: Uuid, source_ref: &str) -> anyhow::Result<i64> {
         let client = self.db.get().await?;
-        let chips = UserChips::restore_floor(&client, user_id).await?;
+        let chips = UserChips::restore_floor(&client, user_id, source_ref).await?;
         Ok(chips.balance)
     }
 }

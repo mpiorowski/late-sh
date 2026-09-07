@@ -136,16 +136,25 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // breathing room under the top border
             Constraint::Min(0),    // sidebar + selected game's landing
             Constraint::Length(1), // footer hints
         ])
         .split(area);
 
-    let body = Layout::default()
+    // The sidebar column runs from the top border so its rule reaches the
+    // frame; the row under the border stays empty on both sides.
+    let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(0)])
-        .split(layout[1]);
+        .split(layout[0]);
+    let body = [
+        columns[0],
+        Rect {
+            y: columns[1].y + 1,
+            height: columns[1].height.saturating_sub(1),
+            ..columns[1]
+        },
+    ];
 
     let selected = view.selected.min(HubGame::ALL.len() - 1);
     draw_sidebar(frame, body[0], selected, view);
@@ -216,7 +225,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
         }
     }
 
-    draw_footer(frame, layout[2]);
+    draw_footer(frame, layout[1]);
 
     if let Some(modal) = &view.rc_modal {
         draw_rc_modal(frame, area, modal);
@@ -327,7 +336,13 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, selected: usize, view: &HubView) 
     let block = Block::default()
         .borders(Borders::RIGHT)
         .border_style(Style::default().fg(theme::BORDER_DIM()));
-    let inner = block.inner(area);
+    // The list starts under the breathing row; the rule above it is the
+    // block's.
+    let inner = Rect {
+        y: area.y + 1,
+        height: area.height.saturating_sub(1),
+        ..block.inner(area)
+    };
     frame.render_widget(block, area);
 
     let rows = sidebar_rows();

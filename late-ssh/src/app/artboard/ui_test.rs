@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::artboard::gallery::svc::GalleryService;
 use crate::app::artboard::provenance::ArtboardProvenance;
 use crate::app::artboard::state::State;
 use dartboard_core::{CellValue, RgbColor};
@@ -10,6 +11,16 @@ use super::super::svc::{ArtboardSnapshotService, DartboardService, DartboardSnap
 #[test]
 fn canvas_area_matches_artboard_frame_layout() {
     assert_eq!(canvas_area_for_screen((80, 24)), Rect::new(1, 1, 54, 22));
+    // The rail takes 20 columns plus a gap off the left in view mode.
+    assert_eq!(
+        canvas_area_for_state((80, 24), true),
+        Rect::new(22, 1, 33, 22)
+    );
+    // Rail hidden (edit mode, or a narrow terminal) is the old layout.
+    assert_eq!(
+        canvas_area_for_state((80, 24), false),
+        canvas_area_for_screen((80, 24))
+    );
 }
 
 #[test]
@@ -17,7 +28,7 @@ fn info_box_overlays_top_right_of_full_canvas_width() {
     let state = test_state();
     assert_eq!(
         artboard_info_area_for_screen((80, 24), &state),
-        Some(Rect::new(34, 1, 21, 11))
+        Some(Rect::new(34, 1, 21, 12))
     );
 }
 
@@ -61,7 +72,7 @@ fn clipboard_preview_offset_skips_leading_blank_rows_and_columns() {
 fn help_tab_hit_uses_overlay_tab_rects() {
     let mut state = test_state();
     state.toggle_help();
-    let area = artboard_game_area_for_screen((80, 24));
+    let area = artboard_game_area_for_screen((80, 24), false);
     let popup = help_popup_area(area);
     let layout = help_layout(popup).expect("help layout");
     let drawing = tab_rects(layout[1])
@@ -74,6 +85,80 @@ fn help_tab_hit_uses_overlay_tab_rects() {
         help_tab_hit((80, 24), &state, rect.x + 1, rect.y + 1),
         Some(HelpTab::Drawing)
     );
+}
+
+#[test]
+fn color_picker_hit_reads_bars_and_presets() {
+    let mut state = test_state();
+    assert_eq!(color_picker_hit((80, 24), &state, 30, 12), None);
+    state.open_color_picker();
+    let popup = color_picker_popup(artboard_game_area_for_screen((80, 24), false));
+    let layout = color_picker_layout(popup).unwrap();
+    let green = channel_bar_rect(layout.channels[1]);
+    assert_eq!(
+        color_picker_hit((80, 24), &state, green.x + 1, green.y + 1),
+        Some(ColorPickerHit::Channel(Channel::Green, 0))
+    );
+    assert_eq!(
+        color_picker_hit((80, 24), &state, green.right(), green.y + 1),
+        Some(ColorPickerHit::Channel(Channel::Green, 255))
+    );
+    let preset = preset_rect(layout.presets, 7);
+    assert_eq!(
+        color_picker_hit((80, 24), &state, preset.x + 2, preset.y + 1),
+        Some(ColorPickerHit::Preset(7))
+    );
+    // The label column is dead.
+    assert_eq!(
+        color_picker_hit((80, 24), &state, layout.hex.x + 1, layout.hex.y + 1),
+        None
+    );
+}
+
+#[test]
+fn color_picker_modal_shows_the_working_color() {
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+    let mut state = test_state();
+    state.open_color_picker();
+    for ch in "c0ffee".chars() {
+        state.color_picker_mut().unwrap().type_hex(ch);
+    }
+    terminal
+        .draw(|frame| draw_game(frame, frame.area(), &state, true))
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect()
+        })
+        .collect();
+    let text = rows.join("\n");
+    assert!(text.contains(" Paint color "), "{text}");
+    assert!(text.contains("#C0FFEE"), "{text}");
+    assert!(text.contains("Red"), "{text}");
+    assert!(text.contains("Hex      #C0FFEE"), "{text}");
+    assert!(text.contains("Presets"), "{text}");
+    assert!(text.contains("⏎ apply"), "{text}");
+}
+
+#[test]
+fn palette_hit_maps_the_two_info_rows() {
+    let state = test_state();
+    let inner = artboard_info_area_for_screen((80, 24), &state)
+        .map(|area| Block::default().borders(Borders::ALL).inner(area))
+        .unwrap();
+    let first = (inner.x + INFO_LABEL_WIDTH + 1, inner.y + 2 + 1);
+    assert_eq!(palette_hit((80, 24), &state, first.0, first.1), Some(0));
+    assert_eq!(
+        palette_hit((80, 24), &state, first.0 + 7, first.1 + 1),
+        Some(15)
+    );
+    // The label, and the Mode row above, are not cells.
+    assert_eq!(palette_hit((80, 24), &state, first.0 - 1, first.1), None);
+    assert_eq!(palette_hit((80, 24), &state, first.0, first.1 - 2), None);
 }
 
 #[test]
@@ -109,11 +194,12 @@ fn info_lines_include_compact_rows_before_users() {
     assert!(lines[2].to_string().starts_with("Palette"));
     assert_eq!(lines[2].to_string().matches('•').count(), 1);
     assert_eq!(lines[3].to_string().matches('•').count(), 0);
-    assert_eq!(lines[4].to_string(), "Cursor     0,0");
-    assert_eq!(lines[5].to_string(), "Mouse      0,0");
-    assert_eq!(lines[6].to_string(), "Owner      ?");
-    assert_eq!(lines[7].to_string(), "Users");
-    assert_eq!(lines[8].to_string(), "• painter (you)");
+    assert_eq!(lines[4].to_string(), "Keys       ^U ^Y ^K");
+    assert_eq!(lines[5].to_string(), "Cursor     0,0");
+    assert_eq!(lines[6].to_string(), "Mouse      0,0");
+    assert_eq!(lines[7].to_string(), "Owner      ?");
+    assert_eq!(lines[8].to_string(), "Users");
+    assert_eq!(lines[9].to_string(), "• painter (you)");
 }
 
 #[test]
@@ -122,7 +208,7 @@ fn info_lines_show_selection_dimensions() {
     state.begin_selection_from_cursor();
     let lines = artboard_info_lines(&state, true);
     assert_eq!(lines[0].to_string(), "Mode       active");
-    assert_eq!(lines[4].to_string(), "Cursor     1x1");
+    assert_eq!(lines[5].to_string(), "Cursor     1x1");
 
     state.move_right((80, 24));
     state.move_right((80, 24));
@@ -131,7 +217,7 @@ fn info_lines_show_selection_dimensions() {
 
     let lines = artboard_info_lines(&state, true);
     assert_eq!(lines[0].to_string(), "Mode       active");
-    assert_eq!(lines[4].to_string(), "Cursor     3x2");
+    assert_eq!(lines[5].to_string(), "Cursor     3x2");
 }
 
 #[test]
@@ -352,6 +438,8 @@ fn test_state() -> State {
     State::new(
         svc,
         ArtboardSnapshotService::disabled(),
+        GalleryService::disabled(),
+        uuid::Uuid::nil(),
         "painter".to_string(),
         shared_provenance,
     )

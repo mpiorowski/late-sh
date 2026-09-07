@@ -123,3 +123,31 @@ fn daily_streak_bonus_starts_on_second_consecutive_full_daily_and_caps() {
         })
     );
 }
+
+/// A quest reward row's ref is the assignment id; the assignment's template
+/// names the quest.
+#[tokio::test]
+async fn assignment_titles_resolve_through_the_template() {
+    let test_db = crate::test_utils::test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    ensure_current_assignments(&mut client, Utc::now())
+        .await
+        .expect("assignments");
+    let row = client
+        .query_one(
+            "SELECT a.id, t.title FROM quest_assignments a
+             JOIN reward_templates t ON t.id = a.template_id
+             ORDER BY a.id LIMIT 1",
+            &[],
+        )
+        .await
+        .expect("one seeded assignment");
+    let assignment_id: Uuid = row.get("id");
+    let title: String = row.get("title");
+
+    let titles = assignment_titles(&**client, &[assignment_id, Uuid::now_v7()])
+        .await
+        .expect("titles");
+    assert_eq!(titles.len(), 1);
+    assert_eq!(titles.get(&assignment_id), Some(&title));
+}

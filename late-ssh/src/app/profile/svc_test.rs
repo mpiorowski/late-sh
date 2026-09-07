@@ -4,15 +4,24 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use crate::app::profile::ledger::LedgerDetail;
 use crate::app::profile::svc::{ProfileEvent, ProfileService};
 use crate::session::{SessionMessage, SessionRegistry};
 use crate::state::{ActiveSession, ActiveUser};
 use crate::test_helpers::new_test_db;
+use chrono::Utc;
 use late_core::models::{
     artboard_ban::ArtboardBan,
+    chat_message::{ChatMessage, ChatMessageParams},
+    chat_message_gild::{ChatMessageGild, GildPlacement, GildTier},
     chat_room::ChatRoom,
     chips::{ChipMove, INITIAL_CHIP_BALANCE, UserChips},
+    crown::{CROWN_MIN_PRICE, CrownReign, next_price},
+    drink_round::{DrinkRound, MAX_OPEN_CREDITS, ROUND_CREDIT_TTL_HOURS, ROUND_PRICE_PER_PATRON},
+    game_payout::GamePayout,
+    media_queue_item::MediaQueueItem,
     moderation_audit_log::ModerationAuditLog,
+    pot::{POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE, Pot, PotTicket, next_draw_at},
     profile::{Profile, ProfileParams},
     room_ban::RoomBan,
     server_ban::{ServerBan, ServerBanActivation},
@@ -73,10 +82,9 @@ async fn find_profile_publishes_stored_chip_balance() {
     UserChips::ensure(&client, user.id)
         .await
         .expect("ensure chips");
-    let chips = UserChips::apply(&**client, user.id, ChipMove::Credit, 250, None)
+    let chips = UserChips::admin_grant(&**client, user.id, 250)
         .await
-        .expect("add chips")
-        .expect("credited");
+        .expect("add chips");
 
     let service = ProfileService::new(test_db.db.clone(), default_active_users());
     let mut snapshot_rx = service.subscribe_snapshot(user.id);
@@ -91,6 +99,268 @@ async fn find_profile_publishes_stored_chip_balance() {
 
     assert_eq!(snapshot.user_id, Some(user.id));
     assert_eq!(snapshot.chip_balance, Some(chips.balance));
+}
+
+/// A gild in the viewed user's ledger comes with what the modal needs to
+/// name it: the gilded message's author and buyers, and their usernames.
+#[tokio::test]
+async fn find_profile_names_the_parties_of_a_gild() {
+    let test_db = new_test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let author = create_test_user(&test_db.db, "profile-gild-author").await;
+    let buyer = create_test_user(&test_db.db, "profile-gild-buyer").await;
+    let room = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: author.id,
+            body: "worth a gild".to_string(),
+        },
+    )
+    .await
+    .expect("message");
+
+    let tier = GildTier::Bronze;
+    let tx = client.transaction().await.expect("tx");
+    let gild = match ChatMessageGild::place_in_tx(&tx, message.id, author.id, buyer.id, tier)
+        .await
+        .expect("place gild")
+    {
+        GildPlacement::Placed(gild) => gild,
+        other => panic!("a first gild is placed, got {other:?}"),
+    };
+    UserChips::transfer_gild(
+        &tx,
+        buyer.id,
+        author.id,
+        tier.price(),
+        tier.author_share(),
+        gild.id,
+    )
+    .await
+    .expect("gild chips")
+    .expect("buyer can afford bronze");
+    tx.commit().await.expect("commit");
+
+    let service = ProfileService::new(test_db.db.clone(), default_active_users());
+    let mut snapshot_rx = service.subscribe_snapshot(author.id);
+    service.find_profile(author.id);
+    timeout(Duration::from_secs(2), snapshot_rx.changed())
+        .await
+        .expect("snapshot timeout")
+        .expect("watch changed");
+    let snapshot = snapshot_rx.borrow_and_update().clone();
+
+    let details: Vec<Option<LedgerDetail>> = snapshot
+        .chip_ledger
+        .iter()
+        .map(|row| row.detail.clone())
+        .collect();
+    assert_eq!(
+        details,
+        vec![
+            Some(LedgerDetail::GildFrom {
+                usernames: vec!["profile-gild-buyer".to_string()]
+            }),
+            None,
+        ],
+        "newest first: the gild, then the starting chips"
+    );
+}
+
+/// A daily puzzle payout row says which game and milestone paid, read
+/// through the claim its ref points at.
+#[tokio::test]
+async fn find_profile_names_the_game_behind_a_payout() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "profile-payout-user").await;
+    GamePayout::grant_daily(
+        &client,
+        user.id,
+        "minesweeper",
+        "daily_win_hard",
+        chrono::Utc::now().date_naive(),
+        300,
+        ChipMove::DailyPuzzleWin,
+    )
+    .await
+    .expect("daily payout");
+
+    let service = ProfileService::new(test_db.db.clone(), default_active_users());
+    let mut snapshot_rx = service.subscribe_snapshot(user.id);
+    service.find_profile(user.id);
+    timeout(Duration::from_secs(2), snapshot_rx.changed())
+        .await
+        .expect("snapshot timeout")
+        .expect("watch changed");
+    let snapshot = snapshot_rx.borrow_and_update().clone();
+
+    let newest = snapshot.chip_ledger.first().expect("the payout row");
+    assert_eq!(newest.entry.delta, 300);
+    assert_eq!(
+        newest.detail,
+        Some(LedgerDetail::GamePayout {
+            game: "minesweeper".to_string(),
+            payout_kind: "daily_win_hard".to_string(),
+        })
+    );
+}
+
+/// The house rows resolve through their own tables: a round says how many
+/// patrons it reached, a pot buy how many tickets, a crown take who lost
+/// it, a queued song its title. Every source the service loads is exercised
+/// once, so a lookup left unwired shows up as a missing detail.
+#[tokio::test]
+async fn find_profile_resolves_the_house_rows() {
+    let test_db = new_test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "profile-house-user").await;
+    let patron = create_test_user(&test_db.db, "profile-house-patron").await;
+    let loser = create_test_user(&test_db.db, "profile-house-loser").await;
+    UserChips::ensure(&client, user.id)
+        .await
+        .expect("starting chips");
+    UserChips::ensure(&client, loser.id)
+        .await
+        .expect("loser's starting chips");
+    // A payout tops the user up past the floor the house rows keep below.
+    GamePayout::grant_daily(
+        &client,
+        user.id,
+        "sudoku",
+        "daily_win_hard",
+        Utc::now().date_naive(),
+        1000,
+        ChipMove::DailyPuzzleWin,
+    )
+    .await
+    .expect("payout");
+
+    let tx = client.transaction().await.expect("tx");
+    let grant = DrinkRound::open(
+        &tx,
+        user.id,
+        ROUND_PRICE_PER_PATRON,
+        &[patron.id],
+        ROUND_CREDIT_TTL_HOURS,
+        MAX_OPEN_CREDITS,
+    )
+    .await
+    .expect("round");
+    UserChips::apply(
+        &*tx,
+        user.id,
+        ChipMove::RoundPurchase,
+        grant.total_chips(),
+        &grant.round.id.to_string(),
+    )
+    .await
+    .expect("round chips")
+    .expect("can afford one patron");
+    tx.commit().await.expect("commit");
+
+    let tx = client.transaction().await.expect("tx");
+    let pot = Pot::open_in_tx(&tx, next_draw_at(Utc::now()), POT_TICKET_PRICE)
+        .await
+        .expect("pot");
+    PotTicket::buy_in_tx(&tx, pot.id, user.id, 1, POT_MAX_TICKETS_PER_DAY)
+        .await
+        .expect("buy")
+        .expect("under the cap");
+    UserChips::apply(
+        &*tx,
+        user.id,
+        ChipMove::PotTicket,
+        POT_TICKET_PRICE,
+        &pot.id.to_string(),
+    )
+    .await
+    .expect("ticket chips")
+    .expect("can afford a ticket");
+    tx.commit().await.expect("commit");
+
+    let tx = client.transaction().await.expect("tx");
+    let first_reign = CrownReign::open_in_tx(&tx, loser.id, CROWN_MIN_PRICE)
+        .await
+        .expect("first reign");
+    UserChips::apply(
+        &*tx,
+        loser.id,
+        ChipMove::CrownTaken,
+        CROWN_MIN_PRICE,
+        &first_reign.id.to_string(),
+    )
+    .await
+    .expect("loser's crown chips")
+    .expect("loser can afford the crown");
+    tx.commit().await.expect("commit");
+    let tx = client.transaction().await.expect("tx");
+    CrownReign::close_in_tx(&tx, first_reign.id)
+        .await
+        .expect("close");
+    let price = next_price(Some(CROWN_MIN_PRICE));
+    let reign = CrownReign::open_in_tx(&tx, user.id, price)
+        .await
+        .expect("reign");
+    UserChips::apply(
+        &*tx,
+        user.id,
+        ChipMove::CrownTaken,
+        price,
+        &reign.id.to_string(),
+    )
+    .await
+    .expect("crown chips")
+    .expect("can afford the crown");
+    tx.commit().await.expect("commit");
+
+    MediaQueueItem::insert_youtube(
+        &mut client,
+        user.id,
+        "dQw4w9WgXcQ",
+        Some("Never Gonna Give You Up"),
+        None,
+        None,
+        false,
+    )
+    .await
+    .expect("queue a song");
+
+    let service = ProfileService::new(test_db.db.clone(), default_active_users());
+    let mut snapshot_rx = service.subscribe_snapshot(user.id);
+    service.find_profile(user.id);
+    timeout(Duration::from_secs(2), snapshot_rx.changed())
+        .await
+        .expect("snapshot timeout")
+        .expect("watch changed");
+    let snapshot = snapshot_rx.borrow_and_update().clone();
+
+    let details: Vec<Option<LedgerDetail>> = snapshot
+        .chip_ledger
+        .iter()
+        .map(|row| row.detail.clone())
+        .collect();
+    assert_eq!(
+        details,
+        vec![
+            Some(LedgerDetail::Song {
+                title: "Never Gonna Give You Up".to_string()
+            }),
+            Some(LedgerDetail::CrownFrom {
+                username: "profile-house-loser".to_string()
+            }),
+            Some(LedgerDetail::PotTickets { count: 1 }),
+            Some(LedgerDetail::RoundFor { patrons: 1 }),
+            Some(LedgerDetail::GamePayout {
+                game: "sudoku".to_string(),
+                payout_kind: "daily_win_hard".to_string(),
+            }),
+            None,
+        ],
+        "newest first, the starting chips last"
+    );
 }
 
 #[tokio::test]
@@ -138,6 +408,7 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             keep_composer_focused: false,
             start_with_music_muted: false,
             land_on_home: false,
+            paper_at_login: true,
             show_flag_fallback: false,
             show_pet_strip: true,
             translate_to: late_core::models::message_translation::TranslateLang::En,
@@ -214,6 +485,7 @@ async fn edit_profile_normalizes_username_before_persisting() {
             keep_composer_focused: false,
             start_with_music_muted: false,
             land_on_home: false,
+            paper_at_login: true,
             show_flag_fallback: false,
             show_pet_strip: true,
             translate_to: late_core::models::message_translation::TranslateLang::En,
@@ -285,6 +557,7 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             keep_composer_focused: false,
             start_with_music_muted: false,
             land_on_home: false,
+            paper_at_login: true,
             show_flag_fallback: false,
             show_pet_strip: true,
             translate_to: late_core::models::message_translation::TranslateLang::En,
@@ -567,6 +840,7 @@ async fn edit_profile_snapshots_stay_per_user() {
             keep_composer_focused: false,
             start_with_music_muted: false,
             land_on_home: false,
+            paper_at_login: true,
             show_flag_fallback: false,
             show_pet_strip: true,
             translate_to: late_core::models::message_translation::TranslateLang::En,

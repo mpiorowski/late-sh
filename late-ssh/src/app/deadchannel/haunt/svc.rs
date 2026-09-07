@@ -7,15 +7,17 @@
 
 use late_core::db::Db;
 use late_core::models::app_flag::{AppFlag, AppFlags};
+use late_core::models::deadchannel_name_hit::NameHitSignal;
 use late_core::models::user::{FirstContactBioVerdict, FirstContactHitClaim, User};
 use tokio::sync::{oneshot, watch};
 use tracing::{Instrument, info_span};
 
 use super::state::{
-    BIO_RESCREEN_AFTER_HOURS, BioStanding, ClockGlitch, FirstContactGate, FirstContactMarks,
-    GLITCH_TOTAL_CAP, GlitchTick, HauntCommand, HauntState, HitStage, INVITE_DELAY_DAYS,
-    NAME_TOTAL_CAP, NameFlicker, NameRoll, PendingClaim, PendingFlagWrite, WHISPER_GAP_HOURS,
-    WHISPER_TOTAL_CAP, WhisperState, WhisperTick, bio_hash, glitch_caps, name_caps,
+    ActiveHit, BIO_RESCREEN_AFTER_HOURS, BioStanding, ClockGlitch, FirstContactGate,
+    FirstContactMarks, GLITCH_TOTAL_CAP, GlitchTick, HauntCommand, HauntState, HitStage,
+    INVITE_DELAY_DAYS, NAME_TOTAL_CAP, NameFlicker, NameRoll, PendingClaim, PendingFlagWrite,
+    WHISPER_GAP_HOURS, WHISPER_TOTAL_CAP, WhisperState, WhisperTick, bio_hash, glitch_caps,
+    name_caps,
 };
 use crate::app::ai::screen::{BioScreen, screen_bio};
 use crate::app::ai::svc::AiService;
@@ -47,9 +49,9 @@ pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -
         // is the line to look for when the ladder seems dead. For everyone
         // else an unlit fuse is the normal state of the world.
         if is_staff {
-            tracing::info!(user_id = %user.id, is_staff, "first contact gate shut: haunting off or flags unread");
+            tracing::info!(user_id = %user.id, username = %user.username, is_staff, "first contact gate shut: haunting off or flags unread");
         } else {
-            tracing::debug!(user_id = %user.id, is_staff, "first contact gate shut: fuse unlit");
+            tracing::debug!(user_id = %user.id, username = %user.username, is_staff, "first contact gate shut: fuse unlit");
         }
         return FirstContactGate::closed();
     }
@@ -61,7 +63,7 @@ pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -
     let online_milliseconds = match online_milliseconds {
         Ok(milliseconds) => milliseconds,
         Err(error) => {
-            tracing::warn!(user_id = %user.id, error = ?error, "failed to read online time for the first contact gate");
+            tracing::warn!(user_id = %user.id, username = %user.username, error = ?error, "failed to read online time for the first contact gate");
             0
         }
     };
@@ -78,6 +80,7 @@ pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -
     metrics::record_first_contact_gate(verdict, is_staff);
     tracing::info!(
         user_id = %user.id,
+        username = %user.username,
         is_staff,
         active_hours = gate.active_hours,
         touched_settings = gate.touched_settings,
@@ -91,6 +94,7 @@ pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -
             state.db.clone(),
             state.ai_service.clone(),
             user.id,
+            user.username.clone(),
             late_core::models::user::extract_bio(&user.settings),
         );
     }
@@ -113,6 +117,7 @@ pub(crate) fn arm(
     is_staff: bool,
     flags: watch::Receiver<Option<AppFlags>>,
     user_id: uuid::Uuid,
+    username: &str,
     marks: FirstContactMarks,
     gate: FirstContactGate,
 ) -> HauntState {
@@ -129,6 +134,7 @@ pub(crate) fn arm(
     if stage1 {
         tracing::info!(
             user_id = %user_id,
+            username = %username,
             is_staff,
             chosen,
             whisper_armed,
@@ -142,6 +148,7 @@ pub(crate) fn arm(
         whisper: whisper_armed.then(|| WhisperState::for_user(user_id, marks.whisper_hits)),
         clock_glitch: stage1.then(|| ClockGlitch::new(session_seed(user_id), 0, marks.glitch_hits)),
         name_flicker: chosen.then(|| NameFlicker::new(session_seed(user_id), marks.name_hits)),
+        witness: None,
         marks,
         gate,
         stage1,
@@ -169,6 +176,7 @@ pub(crate) fn tick(app: &mut App) -> bool {
     }
     changed |= tick_clock_glitch(app);
     changed |= tick_name_flicker(app);
+    changed |= tick_witness(app);
     tick_invitation(app);
     changed |= tick_commands(app);
     changed
@@ -206,7 +214,7 @@ fn tick_claims(app: &mut App) -> bool {
                 }
                 app.haunt.marks.glitch_hits = hits;
                 metrics::record_first_contact_beat(FirstContactBeat::GlitchBurst);
-                tracing::info!(user_id = %app.user_id, hits, "first contact clock glitch burst");
+                tracing::info!(user_id = %app.user_id, username = %app.username, hits, "first contact clock glitch burst");
                 changed = true;
             }
             (HitStage::Glitch, Ok(FirstContactHitClaim::Capped { hits })) => {
@@ -214,21 +222,28 @@ fn tick_claims(app: &mut App) -> bool {
                     glitch.claim_capped(tick, hits);
                 }
                 app.haunt.marks.glitch_hits = hits;
-                tracing::debug!(user_id = %app.user_id, hits, "first contact clock glitch capped by the row");
+                tracing::debug!(user_id = %app.user_id, username = %app.username, hits, "first contact clock glitch capped by the row");
             }
             (HitStage::Glitch, Err(error)) => {
                 if let Some(glitch) = app.haunt.clock_glitch.as_mut() {
                     glitch.claim_failed(tick);
                 }
-                tracing::warn!(user_id = %app.user_id, error = ?error, "first contact clock glitch claim failed");
+                tracing::warn!(user_id = %app.user_id, username = %app.username, error = ?error, "first contact clock glitch claim failed");
             }
-            (HitStage::Name { message_id }, Ok(FirstContactHitClaim::Won { hits })) => {
+            (
+                HitStage::Name {
+                    message_id,
+                    room_id,
+                },
+                Ok(FirstContactHitClaim::Won { hits }),
+            ) => {
                 if let Some(flicker) = app.haunt.name_flicker.as_mut() {
                     flicker.start(message_id, tick, hits);
                 }
                 app.haunt.marks.name_hits = hits;
+                publish_name_hit(app, message_id, room_id);
                 metrics::record_first_contact_beat(FirstContactBeat::NameFlicker);
-                tracing::info!(user_id = %app.user_id, hits, "first contact name flicker hit");
+                tracing::info!(user_id = %app.user_id, username = %app.username, hits, "first contact name flicker hit");
                 changed = true;
             }
             (HitStage::Name { .. }, Ok(FirstContactHitClaim::Capped { hits })) => {
@@ -236,13 +251,13 @@ fn tick_claims(app: &mut App) -> bool {
                     flicker.claim_capped(hits);
                 }
                 app.haunt.marks.name_hits = hits;
-                tracing::debug!(user_id = %app.user_id, hits, "first contact name flicker capped by the row");
+                tracing::debug!(user_id = %app.user_id, username = %app.username, hits, "first contact name flicker capped by the row");
             }
             (HitStage::Name { .. }, Err(error)) => {
                 if let Some(flicker) = app.haunt.name_flicker.as_mut() {
                     flicker.claim_failed();
                 }
-                tracing::warn!(user_id = %app.user_id, error = ?error, "first contact name flicker claim failed");
+                tracing::warn!(user_id = %app.user_id, username = %app.username, error = ?error, "first contact name flicker claim failed");
             }
         }
     }
@@ -277,11 +292,11 @@ fn tick_flag_writes(app: &mut App) -> bool {
     for (flag, enabled, done, outcome) in answered {
         match outcome {
             Ok(()) => {
-                tracing::info!(user_id = %app.user_id, key = flag.key(), enabled, "haunt flag set");
+                tracing::info!(user_id = %app.user_id, username = %app.username, key = flag.key(), enabled, "haunt flag set");
                 app.banner = Some(Banner::success(done));
             }
             Err(error) => {
-                tracing::error!(user_id = %app.user_id, key = flag.key(), enabled, error = ?error, "failed to set haunt flag");
+                tracing::error!(user_id = %app.user_id, username = %app.username, key = flag.key(), enabled, error = ?error, "failed to set haunt flag");
                 app.banner = Some(Banner::error(&format!(
                     "Flag {} not written: {error}",
                     flag.key()
@@ -321,7 +336,7 @@ fn tick_splash_door(app: &mut App) -> bool {
                     WHISPER_TOTAL_CAP,
                 );
                 metrics::record_first_contact_beat(FirstContactBeat::WhisperDelivered);
-                tracing::info!(user_id = %app.user_id, hits = app.haunt.marks.whisper_hits, "first contact whisper delivered");
+                tracing::info!(user_id = %app.user_id, username = %app.username, hits = app.haunt.marks.whisper_hits, "first contact whisper delivered");
             }
         }
     }
@@ -366,7 +381,7 @@ fn tick_clock_glitch(app: &mut App) -> bool {
                 .service()
                 .record_first_contact_glitch_hit(app.user_id);
             metrics::record_first_contact_beat(FirstContactBeat::GlitchBurst);
-            tracing::info!(user_id = %app.user_id, hits = app.haunt.marks.glitch_hits, "first contact clock glitch burst (forced)");
+            tracing::info!(user_id = %app.user_id, username = %app.username, hits = app.haunt.marks.glitch_hits, "first contact clock glitch burst (forced)");
             true
         }
         GlitchTick::Ended => true,
@@ -394,7 +409,7 @@ fn tick_name_flicker(app: &mut App) -> bool {
     };
     let mut changed = false;
     changed |= flicker.tick(app.marquee_tick);
-    let Some(message_id) = landed else {
+    let Some((message_id, room_id)) = landed else {
         return changed;
     };
     match flicker.note_own_message(message_id, app.marquee_tick, enabled, stage_open) {
@@ -406,7 +421,10 @@ fn tick_name_flicker(app: &mut App) -> bool {
                 name_caps(),
             );
             app.haunt.pending_claims.push(PendingClaim {
-                stage: HitStage::Name { message_id },
+                stage: HitStage::Name {
+                    message_id,
+                    room_id,
+                },
                 rx,
             });
         }
@@ -415,12 +433,81 @@ fn tick_name_flicker(app: &mut App) -> bool {
             app.profile_state
                 .service()
                 .record_first_contact_name_hit(app.user_id);
+            // A forced hit skips the row's caps, not the room: `/haunt
+            // name` is the one way to watch the public half of stage 2
+            // land, so it has to travel like a real one.
+            publish_name_hit(app, message_id, room_id);
             metrics::record_first_contact_beat(FirstContactBeat::NameFlicker);
-            tracing::info!(user_id = %app.user_id, hits = app.haunt.marks.name_hits, "first contact name flicker hit (forced)");
+            tracing::info!(user_id = %app.user_id, username = %app.username, hits = app.haunt.marks.name_hits, "first contact name flicker hit (forced)");
             changed = true;
         }
     }
     changed
+}
+
+/// Put the live hit on the wire for the rest of the room. Read back off
+/// the machine that is already painting it, so the seed the room gets is
+/// the seed this screen is using: same characters, same two waves,
+/// everywhere. This replica hears it back over the same listener as the
+/// others; `tick_witness` recognises the live hit and declines the copy.
+fn publish_name_hit(app: &App, message_id: uuid::Uuid, room_id: uuid::Uuid) {
+    let Some((live_id, seed)) = app
+        .haunt
+        .name_flicker
+        .as_ref()
+        .and_then(NameFlicker::live_hit)
+    else {
+        return;
+    };
+    debug_assert_eq!(live_id, message_id);
+    app.chat.service.publish_name_hit(NameHitSignal {
+        message_id,
+        room_id,
+        user_id: app.user_id,
+        seed,
+    });
+}
+
+/// Replay the beats this session hears on other people's names. Every
+/// session runs this, haunted or not: stage 2 is the rung the room
+/// watches somebody climb. The chat state hands a beat over only once the
+/// message it names is on this screen (`take_witnessed_hit_landed`), so
+/// the name corrupts as the message arrives, then heals, on the seed that
+/// rode the wire.
+fn tick_witness(app: &mut App) -> bool {
+    // Drained even outside the audience, so a stale beat never waits
+    // around for a later `/haunt on`.
+    let landed = app.chat.take_witnessed_hit_landed();
+    let changed = ActiveHit::tick(&mut app.haunt.witness, app.marquee_tick);
+    let Some((message_id, seed)) = landed else {
+        return changed;
+    };
+    // The audience is exactly stage 1's: the kill switch keeps other
+    // people's hauntings off this screen too, and while the fuse is unlit
+    // staff are haunted where only staff can see it.
+    if !(app.haunt.enabled() && app.haunt.stage1) {
+        return changed;
+    }
+    // This session's own hit coming back off the wire: its own machine is
+    // already painting it. A second device of the same person never
+    // claimed, holds no live hit, and witnesses it like anyone else.
+    let own_hit = app
+        .haunt
+        .name_flicker
+        .as_ref()
+        .and_then(NameFlicker::live_hit)
+        .map(|(id, _)| id);
+    if own_hit == Some(message_id) {
+        return changed;
+    }
+    app.haunt.witness = Some(ActiveHit::new(message_id, app.marquee_tick, seed));
+    tracing::debug!(
+        user_id = %app.user_id,
+        username = %app.username,
+        message_id = %message_id,
+        "first contact name flicker witnessed"
+    );
+    true
 }
 
 /// The stage-4 clock: some days after the last delivered whisper, the
@@ -452,9 +539,9 @@ fn send_invitation(app: &mut App, now: chrono::DateTime<chrono::Utc>) {
     app.haunt.marks.invited_at = Some(now);
     app.chat
         .service
-        .send_first_contact_invitation_task(app.user_id);
+        .send_first_contact_invitation_task(app.user_id, app.username.clone());
     metrics::record_first_contact_beat(FirstContactBeat::InvitationRequested);
-    tracing::info!(user_id = %app.user_id, "first contact invitation requested");
+    tracing::info!(user_id = %app.user_id, username = %app.username, "first contact invitation requested");
 }
 
 /// Route splash input into the held door. Returns true when consumed:
@@ -492,7 +579,7 @@ pub(crate) fn replay_whisper(app: &mut App) {
 /// session's screen in flight. A call that breaks leaves the pending
 /// claim to expire (`BIO_RESCREEN_AFTER_HOURS`) rather than releasing it,
 /// so a flapping API cannot burn a call per login.
-fn screen_bio_task(db: Db, ai: AiService, user_id: uuid::Uuid, bio: String) {
+fn screen_bio_task(db: Db, ai: AiService, user_id: uuid::Uuid, username: String, bio: String) {
     tokio::spawn(
         async move {
             let hash = bio_hash(&bio);
@@ -500,12 +587,12 @@ fn screen_bio_task(db: Db, ai: AiService, user_id: uuid::Uuid, bio: String) {
             let outcome = match outcome {
                 Ok(outcome) => outcome,
                 Err(error) => {
-                    tracing::warn!(user_id = %user_id, error = ?error, "first contact bio screen failed");
+                    tracing::warn!(user_id = %user_id, username = %username, error = ?error, "first contact bio screen failed");
                     BioScreenOutcome::CallFailed
                 }
             };
             metrics::record_first_contact_bio_screen(outcome);
-            tracing::info!(user_id = %user_id, hash, outcome = ?outcome, "first contact bio screen");
+            tracing::info!(user_id = %user_id, username = %username, hash, outcome = ?outcome, "first contact bio screen");
         }
         .instrument(info_span!("haunt.bio_screen_task", user_id = %user_id)),
     );
@@ -619,9 +706,14 @@ fn tick_commands(app: &mut App) -> bool {
                 Some(_) => "invited",
                 None => "invite pending",
             };
+            // Whether a beat of somebody else's is on this screen right now.
+            let witness = match app.haunt.witness.is_some() {
+                true => "witnessing",
+                false => "witness idle",
+            };
             let gate = app.haunt.gate;
             app.banner = Some(Banner::info(&format!(
-                "Haunt {} · live {} · stage1 {} · chosen {} (active {}h, settings {}, bio {}ch {}) · {glitch} · glitch hits {}/{GLITCH_TOTAL_CAP} · name hits {}/{NAME_TOTAL_CAP} · {door} · {whisper} · {invite}",
+                "Haunt {} · live {} · stage1 {} · chosen {} (active {}h, settings {}, bio {}ch {}) · {glitch} · glitch hits {}/{GLITCH_TOTAL_CAP} · name hits {}/{NAME_TOTAL_CAP} · {witness} · {door} · {whisper} · {invite}",
                 on_off(app.haunt.enabled()),
                 on_off(app.haunt.live()),
                 on_off(app.haunt.stage1),

@@ -497,6 +497,15 @@ impl State {
         };
     }
 
+    /// True when no tour stands between the newcomer and the rest of the
+    /// app: none was ever due, or it has been walked. `Pending` (armed,
+    /// not yet at the door) is not settled, unlike `tutorial_forced_step`,
+    /// which only reports a step that is capturing keys right now. The
+    /// daily paper waits on this so it never opens over the walkthrough.
+    pub fn tutorial_settled(&self) -> bool {
+        matches!(self.tutorial, Tutorial::Off | Tutorial::Done)
+    }
+
     /// The single input the forced tour accepts right now, or `None` when
     /// input is free (no tour, or the tour is done). The gate in
     /// `app/input.rs` swallows everything else while this is `Some`.
