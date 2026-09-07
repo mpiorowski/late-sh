@@ -5,10 +5,19 @@ use late_core::models::artboard_piece::{ArtboardPiece, GalleryCounts};
 use late_core::models::bonsai::{BonsaiV2Tree, Tree};
 use late_core::models::bonsai_decay_protection::BonsaiDecayProtection;
 use late_core::models::chat_message_gild::{ChatMessageGild, GildCounts};
+use late_core::models::chips::{PROFILE_LEDGER_ROWS, UserChips};
+use late_core::models::crown::CrownReign;
+use late_core::models::drink_round::DrinkRound;
+use late_core::models::game_payout::GamePayout;
 use late_core::models::irc_token::IrcToken;
 use late_core::models::marketplace;
+use late_core::models::media_queue_item::MediaQueueItem;
+use late_core::models::pot::Pot;
 use late_core::models::profile::{Profile, ProfileParams};
-use late_core::models::profile_award::{ProfileAward, list_profile_awards_for_user};
+use late_core::models::profile_award::{
+    ProfileAward, find_profile_awards_by_ids, list_profile_awards_for_user,
+};
+use late_core::models::quest;
 use late_core::models::user::{
     FirstContactHitCaps, FirstContactHitClaim, User, sanitize_username_input,
 };
@@ -23,6 +32,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, oneshot, watch};
 use tracing::{Instrument, info_span};
 
+use crate::app::profile::ledger::{self, LedgerRow, LedgerSources};
 use crate::ircd::registry::IrcRegistry;
 use crate::session::{SessionMessage, SessionRegistry};
 use crate::state::ActiveUsers;
@@ -55,6 +65,11 @@ pub struct ProfileSnapshot {
     /// Pieces this profile's owner has hung in the Artboard gallery, and
     /// the applause they gathered.
     pub gallery_counts: GalleryCounts,
+    /// The newest ledger rows, newest first, each with its ref resolved to
+    /// what a reader can use: the public chip audit.
+    pub chip_ledger: Vec<LedgerRow>,
+    /// This UTC month's sum by the Top Chips rule, the board's own figure.
+    pub chips_earned_month: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -227,6 +242,36 @@ impl ProfileService {
         let profile_awards = list_profile_awards_for_user(&client, user_id).await?;
         let gild_counts = ChatMessageGild::counts_for_author(&client, user_id).await?;
         let gallery_counts = ArtboardPiece::counts_for_user(&client, user_id).await?;
+        let chip_ledger = UserChips::recent_ledger(&client, user_id, PROFILE_LEDGER_ROWS).await?;
+        let chips_earned_month = UserChips::earned_this_month(&client, user_id).await?;
+        // One batched lookup per table the ledger's refs point at, each a
+        // primary-key or unique-index scan over at most PROFILE_LEDGER_ROWS
+        // ids, and only when a profile is opened.
+        let refs = ledger::refs(&chip_ledger);
+        let gilds = ChatMessageGild::parties_for_refs(&client, &refs.gilds).await?;
+        let payouts = GamePayout::sources_for_ids(&client, &refs.payouts).await?;
+        let deposed = CrownReign::deposed_for_reigns(&client, &refs.reigns).await?;
+        let pots = Pot::find_by_ids(&**client, &refs.pots).await?;
+        let quests = quest::assignment_titles(&**client, &refs.quests).await?;
+        let awards = find_profile_awards_by_ids(&client, &refs.awards).await?;
+        let rounds = DrinkRound::find_by_ids(&client, &refs.rounds).await?;
+        let songs = MediaQueueItem::titles_for_video_ids(&client, &refs.videos).await?;
+        let named_ids = ledger::named_user_ids(&refs, &gilds, &deposed);
+        let usernames = User::list_usernames_by_ids(&client, &named_ids).await?;
+        let chip_ledger = ledger::resolve(
+            chip_ledger,
+            &LedgerSources {
+                gilds,
+                payouts,
+                deposed,
+                pots,
+                quests,
+                awards,
+                rounds,
+                songs,
+                usernames,
+            },
+        );
         self.publish_snapshot(
             user_id,
             ProfileSnapshot {
@@ -241,6 +286,8 @@ impl ProfileService {
                 profile_awards,
                 gild_counts,
                 gallery_counts,
+                chip_ledger,
+                chips_earned_month,
             },
         )?;
         Ok(())

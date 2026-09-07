@@ -234,3 +234,33 @@ async fn taking_the_crown_notifies_every_replica() {
     }
     assert_eq!(seen, 1, "only the committed take notifies");
 }
+
+/// A ledger row's ref is a reign id; the reign taken right before it names
+/// who lost the crown. The first reign ever took it from nobody.
+#[tokio::test]
+async fn deposed_holders_resolve_from_the_reign_before() {
+    let test_db = test_db().await;
+    let first = create_test_user(&test_db.db, "crown-first").await;
+    let second = create_test_user(&test_db.db, "crown-second").await;
+    let mut client = test_db.db.get().await.expect("db client");
+
+    let tx = client.transaction().await.expect("tx");
+    let first_reign = CrownReign::open_in_tx(&tx, first.id, CROWN_MIN_PRICE)
+        .await
+        .expect("first reign");
+    tx.commit().await.expect("commit");
+    let tx = client.transaction().await.expect("tx");
+    CrownReign::close_in_tx(&tx, first_reign.id)
+        .await
+        .expect("close");
+    let second_reign = CrownReign::open_in_tx(&tx, second.id, next_price(Some(CROWN_MIN_PRICE)))
+        .await
+        .expect("second reign");
+    tx.commit().await.expect("commit");
+
+    let deposed = CrownReign::deposed_for_reigns(&client, &[first_reign.id, second_reign.id])
+        .await
+        .expect("deposed");
+    assert_eq!(deposed.len(), 1);
+    assert_eq!(deposed.get(&second_reign.id), Some(&first.id));
+}

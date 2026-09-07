@@ -105,6 +105,7 @@ const COMMANDS: &[Command] = &[
     global("binds", "open the chat guide (same as ?)"),
     global("brb", "go AFK and mute audio (/brb back in 5)"),
     global("bug", "report a bug to #bugs (/bug <what broke>)"),
+    global("chips", "chip ledger (/chips @user; bare = you)"),
     global("coffee", "post coffee cup"),
     global("crown", "the crown (/crown; /crown take to buy it)"),
     global("cs", "cyberspace (/cs post, chat, link, unlink)"),

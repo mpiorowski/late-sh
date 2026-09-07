@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use tokio_postgres::Client;
@@ -146,7 +148,7 @@ impl MediaQueueItem {
                 submitter_id,
                 ChipMove::SongQueued,
                 SONG_QUEUE_REWARD_CHIPS,
-                Some(external_id),
+                external_id,
             )
             .await?;
             SongQueueReward::Paid
@@ -157,6 +159,33 @@ impl MediaQueueItem {
 
     pub async fn find_by_id(client: &Client, id: Uuid) -> Result<Option<Self>> {
         Self::get(client, id).await
+    }
+
+    /// The newest known title for each YouTube video id, keyed by video id:
+    /// one scan of the `(media_kind, external_id)` index. A video that was
+    /// only ever queued without a title, or never queued, is absent.
+    pub async fn titles_for_video_ids(
+        client: &Client,
+        video_ids: &[String],
+    ) -> Result<HashMap<String, String>> {
+        if video_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = client
+            .query(
+                "SELECT DISTINCT ON (external_id) external_id, title
+                 FROM media_queue_items
+                 WHERE media_kind = 'youtube'
+                   AND external_id = ANY($1)
+                   AND title IS NOT NULL
+                 ORDER BY external_id, created DESC",
+                &[&video_ids],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("external_id"), row.get("title")))
+            .collect())
     }
 
     /// Whether this YouTube video is already queued or playing. The playlist

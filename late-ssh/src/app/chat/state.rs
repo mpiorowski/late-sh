@@ -56,8 +56,8 @@ use super::{
     notifications::svc::NotificationService,
     showcase,
     svc::{
-        ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, GildRefusal, ReportKind,
-        RoomMemberListItem,
+        ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, GRANT_MAX_AMOUNT, GildRefusal,
+        ProfileSection, ReportKind, RoomMemberListItem,
     },
     ui_text::{NewsPayload, parse_news_payload, parse_report_payload},
     work,
@@ -939,7 +939,7 @@ pub struct ChatState {
     /// modal pre-filled with `?query`.
     requested_message_search: Option<String>,
     requested_petname: Option<PetnameRequest>,
-    requested_open_profile: Option<(Uuid, String)>,
+    requested_open_profile: Option<(Uuid, String, ProfileSection)>,
     requested_open_sheet: Option<SheetOpenRequest>,
     requested_quit: bool,
     requested_audio_url: Option<String>,
@@ -2002,7 +2002,7 @@ impl ChatState {
         self.requested_message_search.take()
     }
 
-    pub fn take_requested_open_profile(&mut self) -> Option<(Uuid, String)> {
+    pub fn take_requested_open_profile(&mut self) -> Option<(Uuid, String, ProfileSection)> {
         self.requested_open_profile.take()
     }
 
@@ -3723,7 +3723,15 @@ impl ChatState {
             }
         }
 
-        if let Some(target) = parse_user_command(&body, "/profile") {
+        // `/profile [@user]` opens the card at the top; `/chips [@user]` is
+        // the same card scrolled to the ledger, the public chip audit.
+        for (command, section) in [
+            ("/profile", ProfileSection::Top),
+            ("/chips", ProfileSection::Chips),
+        ] {
+            let Some(target) = parse_user_command(&body, command) else {
+                continue;
+            };
             self.clear_composer_after_submit();
             match target {
                 None => {
@@ -3734,11 +3742,14 @@ impl ChatState {
                         .filter(|name| !name.is_empty())
                         .map(ToOwned::to_owned)
                         .unwrap_or_else(|| short_user_id(self.user_id));
-                    self.requested_open_profile = Some((self.user_id, username));
+                    self.requested_open_profile = Some((self.user_id, username, section));
                 }
                 Some(name) => {
-                    self.service
-                        .open_profile_by_username_task(self.user_id, name.to_string());
+                    self.service.open_profile_by_username_task(
+                        self.user_id,
+                        name.to_string(),
+                        section,
+                    );
                 }
             }
             return None;
@@ -3944,6 +3955,25 @@ impl ChatState {
                         .gift_chips_task(self.user_id, username.clone(), amount, message);
                     return Some(Banner::success(&format!(
                         "Sending {amount} chips to @{username}..."
+                    )));
+                }
+            }
+        }
+
+        if let Some(parsed) = parse_grant_command(&body) {
+            self.clear_composer_after_submit();
+            if !self.is_admin {
+                return Some(Banner::error("/grant is admin-only"));
+            }
+            match parsed {
+                GrantParse::Invalid => {
+                    return Some(Banner::error("Usage: /grant @user <amount>"));
+                }
+                GrantParse::Grant { username, amount } => {
+                    self.service
+                        .grant_chips_task(self.user_id, username.clone(), amount);
+                    return Some(Banner::success(&format!(
+                        "Granting {amount} chips to @{username}..."
                     )));
                 }
             }
@@ -5887,8 +5917,9 @@ impl ChatState {
                     user_id,
                     target_user_id,
                     target_username,
+                    section,
                 } if self.user_id == user_id => {
-                    self.requested_open_profile = Some((target_user_id, target_username));
+                    self.requested_open_profile = Some((target_user_id, target_username, section));
                 }
                 ChatEvent::OpenProfileFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&sentence_case(&message)));
@@ -6288,6 +6319,30 @@ impl ChatState {
                     )));
                 }
                 ChatEvent::GiftFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
+                }
+                ChatEvent::GrantSucceeded {
+                    user_id,
+                    recipient_username,
+                    amount,
+                    recipient_balance,
+                    ..
+                } if self.user_id == user_id => {
+                    banner = Some(Banner::success(&format!(
+                        "Granted {amount} chips to @{recipient_username} (balance {recipient_balance})"
+                    )));
+                }
+                ChatEvent::GrantSucceeded {
+                    recipient_id,
+                    amount,
+                    recipient_balance,
+                    ..
+                } if self.user_id == recipient_id => {
+                    banner = Some(Banner::success(&format!(
+                        "The house granted you {amount} chips (balance {recipient_balance})"
+                    )));
+                }
+                ChatEvent::GrantFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
                 ChatEvent::PublicRoomsListed {
@@ -7321,6 +7376,36 @@ pub(crate) enum GiftParse {
         /// Optional note: `/gift @user 100 happy birthday`.
         message: Option<String>,
     },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum GrantParse {
+    Invalid,
+    Grant { username: String, amount: i64 },
+}
+
+/// `/grant @user <amount>`, the admin mint. No note: nothing is said to the
+/// recipient beyond the banner, and nothing is written down.
+pub(crate) fn parse_grant_command(input: &str) -> Option<GrantParse> {
+    let rest = input.trim().strip_prefix("/grant")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let mut parts = rest.split_whitespace();
+    let (Some(username), Some(amount), None) = (parts.next(), parts.next(), parts.next()) else {
+        return Some(GrantParse::Invalid);
+    };
+    let username = username.strip_prefix('@').unwrap_or(username).trim();
+    let Ok(amount) = amount.parse::<i64>() else {
+        return Some(GrantParse::Invalid);
+    };
+    if username.is_empty() || amount <= 0 || amount > GRANT_MAX_AMOUNT {
+        return Some(GrantParse::Invalid);
+    }
+    Some(GrantParse::Grant {
+        username: username.to_string(),
+        amount,
+    })
 }
 
 pub(crate) fn parse_gift_command(input: &str) -> Option<GiftParse> {

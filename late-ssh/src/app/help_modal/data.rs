@@ -570,6 +570,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /tea               post a tea cup",
         "  /ultimate          open owned Ultimate Spells",
         "  /profile [@user]   open your profile, or another user's profile",
+        "  /chips [@user]     the same profile, scrolled to the chip ledger",
         "  /exit              open quit confirm",
         "  /public #room      open/create opt-in public room",
         "  /join #room        same as /public",
@@ -880,8 +881,10 @@ fn social_help_lines() -> Vec<String> {
         "Read-only profile modal",
         "  p                 open selected chat author's profile card",
         "  /profile [@user]  open your own profile card, or another user's",
+        "  /chips [@user]    the same card, scrolled to the chip ledger",
         "  j / k, arrows     scroll",
         "  PageUp/PageDown   page",
+        "  g / G             top / bottom",
         "  Esc / q           close",
     ]
     .into_iter()
@@ -945,11 +948,16 @@ fn directory_help_lines() -> Vec<String> {
         "Read-only profile modal",
         "  p                 open selected chat author's profile card",
         "  /profile [@user]  open your own profile card, or another user's",
+        "  /chips [@user]    the same card, scrolled to the chip ledger",
         "  j / k, arrows     scroll profile modal",
         "  PageUp/PageDown   page profile modal",
+        "  g / G             top / bottom of the profile modal",
         "  Esc / q           close profile modal",
-        "  Profiles show username, country, timezone/current time, chips, markdown bio,",
-        "  bonsai, late.fetch fields, and the user's showcases when available.",
+        "  One scrolling column on every screen: the bonsai beside the late.fetch",
+        "  grid (country, local time, chips and this month's Top Chips figure, gilds,",
+        "  gallery, created, ide, os, terminal, theme, langs), then the markdown bio,",
+        "  showcases, every badge, the aquarium, and the chip ledger: the newest",
+        "  ledger rows with what each paid for, rows the board ignores marked off.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -983,7 +991,7 @@ fn arcade_help_lines() -> Vec<String> {
         "  [CRWN]    The Crown, to whoever wore it when the month ended.",
         "            It is the one monthly badge with no rank digit: the crown has one holder.",
         "  [ART]     Artboard Gallery: your most applauded piece of the month. Top 3 by best piece,",
-        "            3 applause to count, and the one ranked badge that pays: 10,000 / 5,000 / 1,000 chips.",
+        "            3 applause to count, and the one ranked badge that pays: 20,000 / 10,000 / 5,000 chips.",
         "  The door badges are one-off feats, shown with no rank digit. The badge lands the first",
         "  time; the chips land again on the gate shown here. Full guide on the Leaderboards page.",
         "  [LMG]     Lateania Archdemon             10,000 chips  per character, 7-day gap",

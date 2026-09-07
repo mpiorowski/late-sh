@@ -130,6 +130,43 @@ fn parse_gift_command_rejects_invalid_amounts_and_junk() {
 }
 
 #[test]
+fn parse_grant_command_takes_a_user_and_an_amount_only() {
+    assert_eq!(
+        parse_grant_command("/grant @alice 500"),
+        Some(GrantParse::Grant {
+            username: "alice".to_string(),
+            amount: 500,
+        })
+    );
+    assert_eq!(
+        parse_grant_command("/grant alice 500"),
+        Some(GrantParse::Grant {
+            username: "alice".to_string(),
+            amount: 500,
+        })
+    );
+    // No note, unlike /gift: a trailing word is a mistake, not a message.
+    assert_eq!(
+        parse_grant_command("/grant @alice 500 for the win"),
+        Some(GrantParse::Invalid)
+    );
+    assert_eq!(parse_grant_command("/grant"), Some(GrantParse::Invalid));
+    assert_eq!(
+        parse_grant_command("/grant @a 0"),
+        Some(GrantParse::Invalid)
+    );
+    assert_eq!(
+        parse_grant_command("/grant @a -5"),
+        Some(GrantParse::Invalid)
+    );
+    assert_eq!(
+        parse_grant_command("/grant @a 10000001"),
+        Some(GrantParse::Invalid)
+    );
+    assert_eq!(parse_grant_command("/granted @a 5"), None);
+}
+
+#[test]
 fn read_cursor_flush_queue_coalesces_room_until_deadline() {
     let room_id = Uuid::from_u128(1);
     let now = Instant::now();

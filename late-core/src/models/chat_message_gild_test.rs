@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::future::poll_fn;
 use std::time::Duration;
 
@@ -8,7 +9,7 @@ use crate::{
         chat_message::{ChatMessage, ChatMessageParams},
         chat_message_gild::{
             CHAT_MESSAGE_GILDED_CHANNEL, ChatMessageGild, ChatMessageGildSummary, GildCounts,
-            GildPlacement, GildTier, listen_for_gild_changes, parse_gilded_payload,
+            GildParties, GildPlacement, GildTier, listen_for_gild_changes, parse_gilded_payload,
         },
         chat_room::ChatRoom,
     },
@@ -408,5 +409,71 @@ async fn summaries_cover_a_page_of_messages() {
             .await
             .expect("empty page")
             .is_empty()
+    );
+}
+
+/// The profile ledger resolves a gild ref either way: a gild row id names
+/// its one buyer, a message id (older rows) names every buyer of the
+/// message, oldest first. A ref matching nothing is absent, not empty.
+#[tokio::test]
+async fn parties_resolve_a_gild_id_exactly_and_a_message_id_to_every_buyer() {
+    let test_db = test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let room = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let author = create_test_user(&test_db.db, "gild-parties-author").await;
+    let first = create_test_user(&test_db.db, "gild-parties-first").await;
+    let second = create_test_user(&test_db.db, "gild-parties-second").await;
+
+    let mut ids = Vec::new();
+    for body in ["gilded twice", "never gilded"] {
+        let message = ChatMessage::create(
+            &client,
+            ChatMessageParams {
+                room_id: room.id,
+                user_id: author.id,
+                body: body.to_string(),
+            },
+        )
+        .await
+        .expect("message");
+        ids.push(message.id);
+    }
+
+    let tx = client.transaction().await.expect("tx");
+    let first_gild = place(&tx, ids[0], author.id, first.id, GildTier::Bronze).await;
+    let second_gild = place(&tx, ids[0], author.id, second.id, GildTier::Gold).await;
+    tx.commit().await.expect("commit");
+
+    let parties = ChatMessageGild::parties_for_refs(
+        &client,
+        &[first_gild.id, second_gild.id, ids[0], ids[1]],
+    )
+    .await
+    .expect("parties");
+    assert_eq!(
+        parties,
+        HashMap::from([
+            (
+                first_gild.id,
+                GildParties {
+                    author_user_id: author.id,
+                    buyer_user_ids: vec![first.id],
+                }
+            ),
+            (
+                second_gild.id,
+                GildParties {
+                    author_user_id: author.id,
+                    buyer_user_ids: vec![second.id],
+                }
+            ),
+            (
+                ids[0],
+                GildParties {
+                    author_user_id: author.id,
+                    buyer_user_ids: vec![first.id, second.id],
+                }
+            ),
+        ])
     );
 }

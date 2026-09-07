@@ -5,7 +5,7 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 
 use super::{
-    chips::{ChipMove, INITIAL_CHIP_BALANCE, UserChips},
+    chips::{ChipMove, UserChips},
     rental::{
         BADGE_RENTAL_ITEM_KIND, BadgeRental, CustomTitle, RENTAL_DAY_SECS, TITLE_EFFECT_KIND,
         TITLE_RENTAL_ITEM_KIND, is_custom_title, title_from_payload,
@@ -443,7 +443,7 @@ async fn purchase_item_by_sku_inner(
             user_id,
             ChipMove::ShopPurchase,
             item.price_chips,
-            Some(&item.sku),
+            &item.sku,
         )
         .await?
         {
@@ -539,7 +539,7 @@ async fn purchase_item_by_sku_inner(
         user_id,
         ChipMove::ShopPurchase,
         item.price_chips,
-        Some(&item.sku),
+        &item.sku,
     )
     .await?
     {
@@ -1372,13 +1372,7 @@ async fn has_reached_daily_purchase_limit(
 }
 
 async fn lock_user_chips_in_tx(tx: &tokio_postgres::Transaction<'_>, user_id: Uuid) -> Result<i64> {
-    tx.execute(
-        "INSERT INTO user_chips (user_id, balance)
-         VALUES ($1, $2)
-         ON CONFLICT (user_id) DO NOTHING",
-        &[&user_id, &INITIAL_CHIP_BALANCE],
-    )
-    .await?;
+    UserChips::ensure_in(tx, user_id).await?;
     let row = tx
         .query_one(
             "SELECT balance

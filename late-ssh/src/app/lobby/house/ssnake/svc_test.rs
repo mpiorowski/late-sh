@@ -118,10 +118,12 @@ fn food_pays_the_eater_scaled_by_moving_snakes() {
     assert_eq!(state.players[1].chips, 0, "only the eater is paid");
     assert_eq!(state.points_left, 4);
     // Nothing reaches the ledger mid-flight; the seat banks on the way out.
+    let visit_id = state.players[0].visit_id;
     assert_eq!(
         state.leave(a, false),
         Some(Settlement {
             user_id: a,
+            visit_id,
             chips: SSNAKE_FOOD_CHIPS * 2,
             chip_move: ChipMove::SsnakeArenaEarned,
         })
@@ -344,10 +346,12 @@ fn a_seat_that_crashed_more_than_it_ate_banks_a_debit() {
     // as a winning one and the amount stays positive.
     let (mut state, a, _, _) = arena_state();
     state.players[0].chips = -30;
+    let visit_id = state.players[0].visit_id;
     assert_eq!(
         state.leave(a, false),
         Some(Settlement {
             user_id: a,
+            visit_id,
             chips: 30,
             chip_move: ChipMove::SsnakeArenaLost,
         })
@@ -393,10 +397,12 @@ fn bailing_out_while_moving_costs_the_crash_penalty() {
 
     // The penalty lands before the seat is cashed out, so what reaches the
     // ledger is the whole visit including the exit charge.
+    let visit_id = state.players[0].visit_id;
     assert_eq!(
         state.leave(a, true),
         Some(Settlement {
             user_id: a,
+            visit_id,
             chips: 100 - SSNAKE_CRASH_CHIPS,
             chip_move: ChipMove::SsnakeArenaEarned,
         })
@@ -432,12 +438,14 @@ fn the_idle_kick_banks_the_seat_without_charging_it() {
     state.last_activity[0] = Instant::now() - Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS + 1);
     let generation = state.activity_generation[0];
 
+    let visit_id = state.players[0].visit_id;
     let outcome = state.kick_inactive_user(a, generation);
     assert!(outcome.reclaimed);
     assert_eq!(
         outcome.settlement,
         Some(Settlement {
             user_id: a,
+            visit_id,
             chips: 250,
             chip_move: ChipMove::SsnakeArenaEarned,
         }),

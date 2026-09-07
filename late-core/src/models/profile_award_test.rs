@@ -9,8 +9,9 @@ use crate::models::profile_award::{
     LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
     LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY, LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY,
     NETHACK_AMULET_AWARD_CATEGORY, NETHACK_ASCENSION_AWARD_CATEGORY, award_badge,
-    award_category_label, format_score_value, is_milestone_award, is_rankless_award,
-    list_profile_awards_for_user, snapshot_previous_month_profile_awards, top_badge_per_game,
+    award_category_label, find_profile_awards_by_ids, format_score_value, is_milestone_award,
+    is_rankless_award, list_profile_awards_for_user, snapshot_previous_month_profile_awards,
+    top_badge_per_game,
 };
 use crate::models::rubiks_cube::DailyWin as RubiksCubeDailyWin;
 use crate::models::sliding_puzzle::DailyWin as SlidingPuzzleDailyWin;
@@ -296,7 +297,7 @@ async fn the_gallery_award_ranks_best_pieces_and_pays_once() {
         .expect("snapshot");
     assert_eq!(
         first_pass.gallery_prizes_paid,
-        vec![(winner.id, 1, 10_000), (runner_up.id, 2, 5_000)]
+        vec![(winner.id, 1, 20_000), (runner_up.id, 2, 10_000)]
     );
 
     // The month is closed at the rollover: late applause is refused, and
@@ -343,15 +344,29 @@ async fn the_gallery_award_ranks_best_pieces_and_pays_once() {
         .await
         .expect("chips")
         .expect("the prize opened a balance");
-    assert_eq!(balance.balance, 10_000);
+    assert_eq!(balance.balance, 20_000);
     let ledger = client
         .query(
-            "SELECT delta FROM chip_ledger WHERE user_id = $1 AND reason = $2",
+            "SELECT delta, source_ref FROM chip_ledger WHERE user_id = $1 AND reason = $2",
             &[&winner.id, &ChipMove::ArtboardPrize.reason()],
         )
         .await
         .expect("ledger");
     assert_eq!(ledger.len(), 1, "one prize row, however many passes ran");
+    // The prize row points at its award, so a ledger reader can say which
+    // month and which place it was for.
+    let award_id: uuid::Uuid = ledger[0]
+        .get::<_, String>("source_ref")
+        .parse()
+        .expect("the ref is the award id");
+    let awards = find_profile_awards_by_ids(&client, &[award_id])
+        .await
+        .expect("awards by id");
+    let award = awards.get(&award_id).expect("the award behind the prize");
+    assert_eq!(
+        (award.category.as_str(), award.rank),
+        (GALLERY_AWARD_CATEGORY, 1)
+    );
 
     // Last month's podium is what the splash and the hall of fame show,
     // the winner first.

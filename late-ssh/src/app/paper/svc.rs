@@ -55,7 +55,7 @@ use crate::metrics::{self, PaperOpenResult, PaperPrintResult};
 
 /// A room needs this many human messages in the edition's window to get
 /// a column; under it the room is listed as quiet and no call is spent.
-pub const PAPER_MIN_MESSAGES: i64 = 3;
+pub const PAPER_MIN_MESSAGES: i64 = 5;
 
 /// How often each replica looks for unprinted pages. The first sweep
 /// after UTC midnight prints the day; the rest find nothing to do, which
@@ -821,8 +821,7 @@ impl PaperService {
         // printed in their own colours. A decode failure loses that piece,
         // not the column. The gallery's kill switch drops the column: a
         // piece that has to come down fast must not keep printing at every
-        // login. The lead piece prints whatever its count; the runners-up
-        // need a hand on them, so a quiet day is one piece, not three.
+        // login.
         let covered = today.pred_opt().unwrap_or(today);
         let wall = if !self.flags().artboard_gallery_enabled {
             Vec::new()
@@ -830,9 +829,7 @@ impl PaperService {
             ArtboardPiece::most_applauded_hung_on(&client, covered, PAPER_WALL_PIECES)
                 .await?
                 .into_iter()
-                .enumerate()
-                .filter(|(slot, piece)| *slot == 0 || piece.applause >= 1)
-                .filter_map(|(_, piece)| match GalleryPiece::decode(piece) {
+                .filter_map(|piece| match GalleryPiece::decode(piece) {
                     Ok(piece) => Some(PaperWall {
                         title: piece.title.clone(),
                         username: piece.username.clone(),

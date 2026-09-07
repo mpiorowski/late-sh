@@ -58,7 +58,7 @@ The runtime is ambient-only for now:
 - `+` / `-` in the Aquarium Shop category adjusts the selected fish's active count, bounded by owned quantity and the 20-fish active cap.
 - No non-Shop service calls, economy, or activity events.
 - It ticks only while the tray is open and rebinds on terminal resize.
-- Active fish are also projected into profile snapshots via `marketplace::active_aquarium_fish_for_user`; Profile modal renders an Aquarium tab/panel for viewed users using active fish counts.
+- Active fish are also projected into profile snapshots via `marketplace::active_aquarium_fish_for_user`; the profile modal paints the reef as a band of its scrolling column (`aquarium::ui::draw_into`, into an off-screen buffer) for viewed users with active fish.
 
 Assets live under `late-ssh/assets/aquarium`. The source was adapted from `github.com/mevanlc/reefs`; keep attribution/licensing notes with any future asset or behavior changes.
 
@@ -90,9 +90,9 @@ Current user-facing chip amounts:
 - Chess decisive wins pay 500 chips through `game_payout_claims` with a 60-minute per-player cooldown.
 - ssHattrick decisive wins pay 300 chips through `game_payout_claims` with a 15-minute per-player cooldown.
 - Tron wins pay 50/75/100 chips for 2/3/4 round-start riders through `game_payout_claims` with a 5-minute per-player cooldown.
-- Blackjack and Poker chips move through bets and pots (`ChipMove::Bet` / `ChipMove::Credit`), and neither side counts toward Top Chips: wagered money is off the board so a colluding table cannot fold one seat to the top.
+- Blackjack and Poker chips move through per-game reasons (`ChipMove::BlackjackBet` / `BlackjackPayout`, `PokerBet` / `PokerPayout`, plus `FloorRestore` after a losing settlement), every row carrying the round or hand id as `source_ref`, and no side counts toward Top Chips: wagered money is off the board so a colluding table cannot fold one seat to the top. The old shared `chip_credit` / `chip_debit` reasons live on as retired `LegacyTable*` variants so their rows stay excluded.
 - Tic-Tac-Toe currently publishes activity wins but does not pay chips.
-- Chat gilds are a player-to-player sink that lives outside the Shop entirely: `$` on someone else's message in a public room pays 500 / 5,000 / 50,000 chips, two thirds of which reaches the author (`ChipMove::GildReceived`; both gild reasons are excluded from Top Chips) while the last third is burned. Nothing about it is a `marketplace_item` or a `reward_template`; see `late-ssh/src/app/chat/CONTEXT.md` §9b Gilds.
+- Chat gilds are a player-to-player sink that lives outside the Shop entirely: `$` on someone else's message in a public room pays 500 / 5,000 / 50,000 chips, two thirds of which reaches the author (`ChipMove::GildReceived`; both gild reasons count on Top Chips since 2026-09-06) while the last third is burned. Nothing about it is a `marketplace_item` or a `reward_template`; see `late-ssh/src/app/chat/CONTEXT.md` §9b Gilds.
 
 `reward_templates` is the DB-backed source of truth for fixed minted rewards: daily puzzle base payouts, Asterion daily escape, Chess win cooldown payouts, ssHattrick win cooldown payouts, Tron win cooldown payouts, and quest rewards. Betting games still settle from wager/pot state. Keep `late-ssh/src/app/help_modal/hub_guide.rs`, `dailies.rs`, root context, and Arcade/Rooms context aligned when seeded reward rows change.
 

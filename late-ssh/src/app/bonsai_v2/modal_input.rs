@@ -76,46 +76,16 @@ fn water(app: &mut App) {
         return;
     }
 
-    let today = BonsaiService::today();
-    let v2_water_day = if app.is_admin && app.bonsai_v2_state.last_simulated_date > today {
-        app.bonsai_v2_state.last_simulated_date
-    } else {
-        today
-    };
-    let repeat_v2_water = app.is_admin && app.bonsai_v2_state.last_watered == Some(v2_water_day);
-    let earns_chips = app.bonsai_state.last_watered != Some(today);
-    let legacy_gain = app.bonsai_state.water();
-    let changed = if app.is_admin {
-        app.bonsai_v2_state.admin_water()
-    } else {
-        app.bonsai_v2_state.water()
-    };
-    let grants_admin_chips = changed && app.is_admin && !earns_chips;
-    if grants_admin_chips {
-        app.bonsai_v2_state.svc.water_chip_bonus_task(app.user_id);
-    }
-    let chip_bonus = if earns_chips || grants_admin_chips {
-        format!(", +{WATER_CHIP_BONUS} chips")
-    } else {
-        String::new()
-    };
-    let growth_text = legacy_gain
-        .map(|gained| {
-            if gained > 0 {
-                format!("legacy +{gained}")
-            } else {
-                "legacy maxed".to_string()
-            }
-        })
-        .unwrap_or_else(|| "legacy already watered".to_string());
-
+    let earns_chips = app.bonsai_state.last_watered != Some(BonsaiService::today());
+    // Watering Dynamic waters classic too; the daily chips are paid there.
+    let _ = app.bonsai_state.water();
+    let changed = app.bonsai_v2_state.water();
     if changed {
-        let label = if repeat_v2_water {
-            "Admin watered again"
+        app.bonsai_v2_state.message = Some(if earns_chips {
+            format!("Watered Dynamic Bonsai (+{WATER_CHIP_BONUS} chips)")
         } else {
-            "Watered Dynamic Bonsai"
-        };
-        app.bonsai_v2_state.message = Some(format!("{label} ({growth_text}{chip_bonus})"));
+            "Watered Dynamic Bonsai".to_string()
+        });
     }
 }
 

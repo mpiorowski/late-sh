@@ -321,7 +321,9 @@ The main composer is a `ratatui_textarea::TextArea<'static>`.
 
 `/me <action>` stores a CTCP-style action body through `chat/action.rs` and renders locally as italic `* name action`; IRC delivery unwraps it into the same readable action text. Keep new action handling on the shared helpers so TUI and IRC stay aligned.
 
-`/gift @user <chips>` transfers chips through `ChipService` and `late-core::models::chips::UserChips::transfer_gift`. The transfer is one transaction: sender debit, recipient credit, two ledger rows, and chip notifications. It enforces the chip floor, rejects self-gifts, caps gift size, and applies a short per-sender cooldown in `ChatService`.
+`/gift @user <chips>` transfers chips through `ChipService` and `late-core::models::chips::UserChips::transfer_gift`. The transfer is one transaction: sender debit, recipient credit, two ledger rows each carrying the other party's id as `source_ref`, and chip notifications. It enforces the chip floor, rejects self-gifts, caps gift size, and applies a short per-sender cooldown in `ChatService`. Neither gift reason counts on Top Chips.
+
+`/grant @user <chips>` is the admin mint (decided 2026-09-06, replacing `scripts/add_admin_chips.sh`). `parse_grant_command` takes a user and an amount and nothing else; the composer refuses it for non-admins, and `ChatService::grant_chips` decides admin by the session bootstrap's own rule, `users.is_admin || force_admin`, re-read from the database rather than trusted from the session (the `force_admin` half is what makes local and staging accounts admins). The credit goes through `ChipService::grant_chips` to `UserChips::admin_grant`, which by decision writes **no ledger row**: the ledger records what players did, and a grant is the house's doing. The recipient's row is ensured first, so a player who has never logged in lands on the stipend plus the grant. Both parties get a banner (`ChatEvent::GrantSucceeded` / `GrantFailed`).
 
 `/members` renders a styled overlay with online members first, offline members second, each group sorted alphabetically. Preserve the fixed status-cell shape so overlay rows do not jump as online state changes.
 
@@ -383,7 +385,7 @@ User commands:
 - `/bug <text>` and `/suggest <text>` post a report card into `#bugs` / `#suggestions` regardless of the composer's current room (`ChatService::send_report_task` resolves the room by slug and joins the caller first). A report is a normal chat message whose body starts with `ReportKind::marker()` (`---BUG---` / `---SUGGESTION---`, same trick as `---NEWS---` cards), so reactions, replies, pins, and deletes work unchanged; `ui_text::wrap_report_to_lines` renders the card. Text under 10 chars (`REPORT_MIN_CHARS`) banners usage instead of posting. Those two rooms are report-only: `send_message` rejects free-text sends from non-staff (`report-only:<slug>` error, covers IRC too since it checks the DB slug), while admins/moderators keep plain text so they can reply under a report; everyone keeps reactions ("+1"). The staff-flag DB lookup runs only on that rare gated path.
 - `/coffee` and `/tea` post a small ASCII-cup chat message to the current room as a coffee/tea-break ritual. No arguments. Steam pattern rotates per invocation through `CUP_VARIANT_COUNT` variants tracked on `ChatState::next_cup_variant` (session-local, not persisted). Routes through the normal `send_message_with_reply_task` send path — the body is a regular chat message subject to the same length/visibility rules.
 - `/private #room` creates a private topic room and joins the caller.
-- `/profile [@user]` opens a user's read-only profile modal. Bare `/profile` opens the caller's own profile as others see it. `@username` autocompletion is available after `/profile `.
+- `/profile [@user]` opens a user's read-only profile modal. Bare `/profile` opens the caller's own profile as others see it. `@username` autocompletion is available after `/profile `. `/chips [@user]` is the same modal opened on its chips ledger (`ProfileSection::Chips` rides on `OpenProfileResolved` and the `requested_open_profile` handoff; the modal scrolls there on its first measured draw).
 - `/public #room` (alias `/join #room`) opens or creates an opt-in public room for the caller only (`auto_join=false`).
 - `/sheet [@user]` (room-scoped to `#dnd`) opens the character sheet modal: bare form opens your own sheet editable (name + freeform body, saved per user per room on field submit via `ChatService::save_sheet_task`); targeted form opens another user's sheet read-only, or banners if they have none. Resolution and fetch happen in `ChatService::open_sheet_task`; saves and reads validate the shared `RoomScopedCommand` metadata plus room membership in `ChatService::ensure_room_scoped_command_access`; the modal lives in `app/sheet_modal`.
 - `/settings` opens settings.
@@ -524,9 +526,9 @@ session. `late-core/src/models/chat_message_gild.rs` owns the table
   `ChipMove::GildReceived`; the buyer pays the full price as
   `ChipMove::GildSent` (floor-guarded like a gift). The last third has no
   ledger row at all: the burn *is* the gap between the two reasons.
-  Both reasons are excluded from earnings, like every transfer between
-  players, so Top Chips ranks what a player earned rather than who has
-  generous friends, and tipping never costs the tipper a place.
+  Both reasons count on Top Chips (since 2026-09-06): a gild is paid for
+  a message other people rated, the way the gallery prize is paid for
+  applause, so it is earned in a way a gift is not.
 - **Guards** (`ChatService::gild_message`, one closed `GildRefusal` enum with
   the wording): message gone, not a member, not a public room (so never a DM
   and never a private room), a game room (`kind = 'game'`: arcade tables,
@@ -611,8 +613,9 @@ its own domain; only the command and the glyph are chat's.
   `source_ref` = the reign id, and there is no matching credit reason
   anywhere. The whole price leaves the money supply, so the burn is the
   absence of a credit rather than a transfer to a house wallet. It is
-  `counts_as_earnings = false` like `ShopPurchase`: taking the crown never
-  lowers the buyer's Top Chips standing (pinned by
+  `counts_as_earnings = true` like `ShopPurchase` (since 2026-09-06): a
+  take is a debit on the Top Chips board like any other spend. Only the
+  house tables and gifts are out (pinned by
   `chips_test::earning_exclusions_and_reason_uniqueness`).
 - **Guards** (`CrownService::take`, one closed `CrownRefusal` enum with the
   wording): you already wear it, and the chip floor. That is all: there is

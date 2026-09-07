@@ -183,6 +183,16 @@ pub struct ChatMessageGildSummary {
     pub count: i64,
 }
 
+/// Who was on either side of a gild. Looked up by the ledger row's
+/// `source_ref`: for a gild row id that is one author and one buyer; for a
+/// message id (rows written before the ref became the gild id) it is the
+/// author and every buyer of that message, oldest first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GildParties {
+    pub author_user_id: Uuid,
+    pub buyer_user_ids: Vec<Uuid>,
+}
+
 /// Gilds received, per tier, for one author. Fixed shape rather than a map,
 /// so the profile renders three rows without deciding what a missing key
 /// means.
@@ -378,6 +388,60 @@ impl ChatMessageGild {
             );
         }
         Ok(summaries)
+    }
+
+    /// The parties behind a batch of ledger refs, in one query. Each ref is
+    /// matched as a gild row id (the primary key) or as a message id (the
+    /// leading column of the buyer index), so both index scans are cheap and
+    /// the caller need not know which kind of ref a row carries. The result
+    /// is keyed by whichever matched: a gild id maps to its one buyer, a
+    /// message id to every buyer of that message. Refs matching nothing are
+    /// absent.
+    pub async fn parties_for_refs(
+        client: &impl GenericClient,
+        refs: &[Uuid],
+    ) -> Result<HashMap<Uuid, GildParties>> {
+        if refs.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let rows = client
+            .query(
+                "SELECT id, message_id, author_user_id, user_id
+                 FROM chat_message_gilds
+                 WHERE id = ANY($1) OR message_id = ANY($1)
+                 ORDER BY created, id",
+                &[&refs],
+            )
+            .await?;
+
+        let mut parties: HashMap<Uuid, GildParties> = HashMap::new();
+        for row in rows {
+            let gild_id: Uuid = row.get("id");
+            let message_id: Uuid = row.get("message_id");
+            let author_user_id: Uuid = row.get("author_user_id");
+            let buyer_user_id: Uuid = row.get("user_id");
+            parties.insert(
+                gild_id,
+                GildParties {
+                    author_user_id,
+                    buyer_user_ids: vec![buyer_user_id],
+                },
+            );
+            match parties.get_mut(&message_id) {
+                Some(message) => message.buyer_user_ids.push(buyer_user_id),
+                None => {
+                    parties.insert(
+                        message_id,
+                        GildParties {
+                            author_user_id,
+                            buyer_user_ids: vec![buyer_user_id],
+                        },
+                    );
+                }
+            }
+        }
+        Ok(parties)
     }
 
     /// The marker for one message, after it just changed.
