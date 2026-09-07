@@ -2,13 +2,13 @@
 //!
 //! The ledger is public, so this is where anyone can audit a place on the
 //! Top Chips board: every row says what it paid for, and rows the board
-//! ignores are marked. Every `ChipMove` gets a label and every resolved
+//! ignores are dimmed. Every `ChipMove` gets a label and every resolved
 //! `LedgerDetail` gets copy, both exhaustive, so a new reason or detail
 //! cannot ship without words. What a ref points at is decided in
 //! `profile::ledger`; this module only says it.
 
 use chrono::{DateTime, Utc};
-use late_core::models::chips::ChipMove;
+use late_core::models::chips::{ChipMove, MonthChips};
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
@@ -21,9 +21,6 @@ use crate::app::profile::ledger::{LedgerDetail, LedgerRow};
 const DATE_WIDTH: usize = 6;
 const DELTA_WIDTH: usize = 8;
 const LABEL_WIDTH: usize = 18;
-/// Trailing marker for a row the Top Chips board does not count.
-const OFF_BOARD: &str = "off";
-
 /// What the row was, in a couple of words.
 pub(crate) fn label(mv: ChipMove) -> &'static str {
     match mv {
@@ -148,8 +145,10 @@ fn signed(value: i64) -> String {
     }
 }
 
-/// The header above the rows: the balance and this month's board figure.
-pub(crate) fn summary_line(balance: Option<i64>, earned_month: i64) -> Line<'static> {
+/// The header above the rows: the balance, this month's board figure, and
+/// the month's net, which is what the balance actually did once spending
+/// and the off-board rows are in.
+pub(crate) fn summary_line(balance: Option<i64>, month: MonthChips) -> Line<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let value = Style::default().fg(theme::TEXT_BRIGHT());
     let mut spans = Vec::new();
@@ -163,16 +162,22 @@ pub(crate) fn summary_line(balance: Option<i64>, earned_month: i64) -> Line<'sta
     }
     spans.push(Span::styled("this month ", dim));
     spans.push(Span::styled(
-        signed(earned_month),
-        delta_style(earned_month),
+        signed(month.earned),
+        delta_style(month.earned),
     ));
+    spans.push(Span::styled(
+        "  ·  ",
+        Style::default().fg(theme::BORDER_DIM()),
+    ));
+    spans.push(Span::styled("net ", dim));
+    spans.push(Span::styled(signed(month.net), delta_style(month.net)));
     Line::from(spans)
 }
 
-/// What the marker on a row means, under the summary.
+/// What a dim row means, under the summary.
 pub(crate) fn off_board_note() -> Line<'static> {
     Line::from(Span::styled(
-        format!("rows marked {OFF_BOARD} do not count for Top Chips"),
+        "dim rows do not count for Top Chips".to_string(),
         Style::default().fg(theme::TEXT_DIM()),
     ))
 }
@@ -218,16 +223,12 @@ pub(crate) fn row_line(row: &LedgerRow, width: usize) -> Line<'static> {
         Span::styled(format!("{label:<LABEL_WIDTH$}"), text_style),
     ];
     let used = DATE_WIDTH + 2 + DELTA_WIDTH + 2 + LABEL_WIDTH;
-    let tail = if counts { 0 } else { OFF_BOARD.len() + 2 };
     if let Some(detail) = row.detail.as_ref().map(detail) {
-        let room = width.saturating_sub(used + 2 + tail);
+        let room = width.saturating_sub(used + 2);
         if room > 0 {
             spans.push(Span::raw("  "));
             spans.push(Span::styled(clip(&detail, room), text_style));
         }
-    }
-    if !counts {
-        spans.push(Span::styled(format!("  {OFF_BOARD}"), dim));
     }
     Line::from(spans)
 }

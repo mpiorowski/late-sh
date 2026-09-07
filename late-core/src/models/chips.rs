@@ -391,20 +391,17 @@ impl ChipMove {
     /// Whether the move counts toward the monthly Top Chips board and the
     /// permanent monthly award snapshot.
     ///
-    /// The rule is short: everything counts, on both sides of the ledger,
-    /// except the two house tables and gifts. Blackjack and poker are out
-    /// because a table can fold every hand to one seat and walk it up the
-    /// board. Gifts are out because a group can funnel chips into one
-    /// player at no cost to the board. Excluding only one side of either is
-    /// never right: with the win in and the stake out a table becomes free
-    /// upside, and with the sent side out and the received side in the
-    /// funnel is back. The floor restore goes with the tables, since only a
-    /// losing settlement mints it.
-    ///
-    /// Gilds stay in: a gild is paid for a message other people rated, the
-    /// way the gallery prize is paid for applause. The starting stipend
-    /// stays in because everyone gets the same one, so it moves nobody.
-    /// Admin grants never reach the ledger at all
+    /// The board ranks what a player earned, so only credits can count and
+    /// a debit never does: spending (the Shop, the bar, the pot, the crown,
+    /// a gild) costs nobody their place, and an arena visit that ended in
+    /// the red is simply not an earning. Of the credits, three stay out:
+    /// the two house tables, because a table can fold every hand to one
+    /// seat and walk it up the board; gifts, because a group can funnel
+    /// chips into one player at no cost to the board; and the starting
+    /// stipend, which everyone gets once. Gilds received stay in: a gild
+    /// burns a third on the way, so it cannot funnel for free, and it is
+    /// paid for a message other people rated. The pot stays in: the house
+    /// mints it. Admin grants never reach the ledger at all
     /// ([`UserChips::admin_grant`]), so the board never sees them.
     pub const fn counts_as_earnings(self) -> bool {
         match self {
@@ -416,20 +413,21 @@ impl ChipMove {
             | Self::PokerPayout
             | Self::FloorRestore
             | Self::GiftSent
-            | Self::GiftReceived => false,
-            Self::GildSent
-            | Self::GildReceived
+            | Self::GiftReceived
             | Self::InitialBalance
-            | Self::BonsaiWatered
+            | Self::GildSent
             | Self::CrownTaken
             | Self::PotTicket
+            | Self::RoundPurchase
+            | Self::DrinkPurchase
+            | Self::ShopPurchase
+            | Self::SsnakeArenaLost => false,
+            Self::BonsaiWatered
+            | Self::GildReceived
             | Self::PotWon
             | Self::NewsShared
             | Self::ArtboardPrize
             | Self::SongQueued
-            | Self::RoundPurchase
-            | Self::DrinkPurchase
-            | Self::ShopPurchase
             | Self::QuestReward
             | Self::DailyQuestStreakReward
             | Self::DailyPuzzleWin
@@ -444,7 +442,6 @@ impl ChipMove {
             | Self::DailyBriscolaWin
             | Self::TronWin
             | Self::SsnakeArenaEarned
-            | Self::SsnakeArenaLost
             | Self::GreendragonDragonSlain
             | Self::DarkroomEscape
             | Self::DarkroomBeaconEscape
@@ -495,6 +492,15 @@ impl ChipLedgerEntry {
     pub fn chip_move(&self) -> Option<ChipMove> {
         ChipMove::from_reason(&self.reason)
     }
+}
+
+/// A user's chips this UTC month, from [`UserChips::month_figures`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MonthChips {
+    /// The Top Chips sum: counting credits only.
+    pub earned: i64,
+    /// Every row, both sides: what the balance actually did.
+    pub net: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -863,24 +869,30 @@ impl UserChips {
             .collect())
     }
 
-    /// What a user has earned this UTC month by the Top Chips rule
-    /// ([`ChipMove::counts_as_earnings`]): the same sum the board ranks, so
-    /// the profile figure and the board never disagree.
-    pub async fn earned_this_month(client: &Client, user_id: Uuid) -> Result<i64> {
+    /// This UTC month's two figures in one scan: what the user earned by
+    /// the Top Chips rule ([`ChipMove::counts_as_earnings`], the same sum
+    /// the board ranks, so the profile figure and the board never
+    /// disagree), and the net of every ledger row, which is what actually
+    /// happened to the balance.
+    pub async fn month_figures(client: &Client, user_id: Uuid) -> Result<MonthChips> {
         let excluded = ChipMove::excluded_earning_reasons();
         let row = client
             .query_one(
                 &format!(
-                    "SELECT COALESCE(SUM(delta), 0)::bigint AS earned
+                    "SELECT COALESCE(SUM(delta) FILTER (WHERE reason <> ALL($2)), 0)::bigint
+                              AS earned,
+                            COALESCE(SUM(delta), 0)::bigint AS net
                      FROM chip_ledger
                      WHERE user_id = $1
-                       AND reason <> ALL($2)
                        AND created_at >= {MONTH_TS_FILTER}"
                 ),
                 &[&user_id, &excluded],
             )
             .await?;
-        Ok(row.get("earned"))
+        Ok(MonthChips {
+            earned: row.get("earned"),
+            net: row.get("net"),
+        })
     }
 
     /// All user chip balances (for per-user lookup in leaderboard refresh).

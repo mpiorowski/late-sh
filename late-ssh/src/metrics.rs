@@ -4,6 +4,7 @@ use late_core::models::leaderboard::DoorGame;
 use late_core::models::media_queue_item::SongQueueReward;
 
 use crate::app::activity::event::ActivityGame;
+use crate::app::arcade::share::ShareCardKind;
 use crate::app::chat::svc::GildRefusal;
 use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
@@ -176,6 +177,7 @@ mod inner {
         metrics::{Counter, UpDownCounter},
     };
 
+    use super::ShareCardKind;
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
@@ -822,6 +824,34 @@ mod inner {
         game_wins_total().add(1, &[KeyValue::new("game", game_label(game))]);
     }
 
+    fn share_cards_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_share_cards_total")
+                .with_description("Share cards copied to the clipboard")
+                .build()
+        })
+    }
+
+    fn share_card_kind_label(kind: ShareCardKind) -> &'static str {
+        match kind {
+            ShareCardKind::LeWord => "le_word",
+            ShareCardKind::Nonogram => "nonogram",
+            ShareCardKind::Sudoku => "sudoku",
+            ShareCardKind::Minesweeper => "minesweeper",
+            ShareCardKind::Solitaire => "solitaire",
+            ShareCardKind::RubiksCube => "rubiks_cube",
+            ShareCardKind::SlidingPuzzle => "sliding_puzzle",
+            ShareCardKind::Day => "day",
+        }
+    }
+
+    /// One share card copied.
+    pub fn record_share_card(kind: ShareCardKind) {
+        share_cards_total().add(1, &[KeyValue::new("card", share_card_kind_label(kind))]);
+    }
+
     fn daily_win_payout_label(payout: DailyWinPayout) -> &'static str {
         match payout {
             DailyWinPayout::Paid => "paid",
@@ -1193,6 +1223,7 @@ mod inner {
 
 #[cfg(not(feature = "otel"))]
 mod inner {
+    use super::ShareCardKind;
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
@@ -1219,6 +1250,7 @@ mod inner {
     pub fn record_chat_message_sent() {}
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}
+    pub fn record_share_card(_kind: ShareCardKind) {}
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}

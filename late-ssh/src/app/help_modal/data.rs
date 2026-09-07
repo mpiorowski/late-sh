@@ -473,7 +473,7 @@ fn chips_help_lines() -> Vec<String> {
             thousands(GildTier::Gold.author_share())),
         "  The marker stays on the message forever. There is no un-gild, and you cannot gild yourself or a bot.".to_string(),
         "  One gild per message per buyer. Buying a higher tier later raises it at that tier's full price; it never goes down.".to_string(),
-        "  Gilds do not count toward Top Chips on either side: the board ranks what the house paid you, not what moved between players.".to_string(),
+        "  A gild you receive counts toward Top Chips: a third burns on the way, so it cannot funnel chips for free. The chips you spend gilding do not count, like any other spend.".to_string(),
         "".to_string(),
         "7. Sharing news".to_string(),
         format!("  Publishing a link to News pays {NEWS_SHARE_REWARD_CHIPS} chips."),
@@ -520,7 +520,7 @@ fn chips_help_lines() -> Vec<String> {
         "  The holder takes 80% of everything the tickets paid in; the other fifth is destroyed.".to_string(),
         "  Nobody in the pot means nobody is paid: it rolls, and a fresh pot opens either way.".to_string(),
         "  The winner is announced in #lounge, so you can read it when you get back.".to_string(),
-        "  Neither the tickets you buy nor the pot you win counts toward Top Chips.".to_string(),
+        "  The pot you win counts toward Top Chips; the tickets you buy, like any other spend, do not.".to_string(),
         "".to_string(),
         "12. Gifts".to_string(),
         "  /gift @user <n>    send chips to someone, with an optional note after the amount".to_string(),
@@ -546,7 +546,7 @@ fn chips_help_lines() -> Vec<String> {
         "  The crown (/crown take), which burns the whole price.".to_string(),
         format!("  Pot tickets (/pot buy N) at {} chips each, of which a fifth is burned at the draw.", thousands(POT_TICKET_PRICE)),
         "  Burn milestones and the two ultimate spells (1,000,000 each), the top of the Shop.".to_string(),
-        "  Monthly Top Chips counts only what the house paid you: dailies, quests, doors, the arena, prizes. Table bets and wins, gifts, gilds, and every kind of spending stay off it.".to_string(),
+        "  Monthly Top Chips counts what you earned: dailies, quests, doors, the arena, prizes, the pot, gilds received. Table bets and wins, gifts, the starting chips, and every kind of spending stay off it.".to_string(),
     ]
 }
 
@@ -974,6 +974,8 @@ fn arcade_help_lines() -> Vec<String> {
         "  Enter             play selected game",
         "  Esc / q           leave current game",
         "  `                 in a daily puzzle: hop games waiting on you (boards, tables, dailies, live dungeons)",
+        "  s                 in the lobby: copy your day card (one square per daily won today, plus your streak)",
+        "  s                 on a finished daily: copy that puzzle's share card, ready to paste anywhere",
         "",
         "Notes",
         "  Game-specific controls appear inside the Arcade page.",

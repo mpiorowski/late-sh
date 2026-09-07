@@ -81,7 +81,7 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "CHIP",
             "Top Chips",
-            "last month's chips earned from the house (Top Chips board; table money, transfers, and spending ignored)",
+            "last month's chips earned (Top Chips board; table money, gifts, and spending ignored)",
         ),
         (
             "AW",

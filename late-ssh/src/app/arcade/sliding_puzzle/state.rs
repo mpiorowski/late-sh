@@ -149,6 +149,10 @@ impl State {
         (self.mode == Mode::Daily).then(|| self.difficulty().chips())
     }
 
+    pub fn puzzle_date(&self) -> NaiveDate {
+        self.puzzle_date
+    }
+
     pub fn board(&self) -> &[u8] {
         &self.active_snapshot().tiles
     }
@@ -419,8 +423,9 @@ impl State {
         snapshot.win_reported = false;
     }
 
-    #[cfg(test)]
-    pub(crate) fn scramble_seed(&self) -> u64 {
+    /// The seed the active board was scrambled from, so the share card can
+    /// redraw the day's starting position.
+    pub fn scramble_seed(&self) -> u64 {
         self.active_snapshot().seed
     }
 

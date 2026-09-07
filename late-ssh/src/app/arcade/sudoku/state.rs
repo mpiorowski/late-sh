@@ -470,6 +470,10 @@ impl State {
         self.reset_pending = None;
     }
 
+    pub fn daily_date(&self) -> NaiveDate {
+        self.daily_date
+    }
+
     fn check_win(&mut self) {
         let mut s = String::with_capacity(81);
         for r in 0..9 {
