@@ -178,7 +178,7 @@ fn a_payout_row_names_the_game() {
 
 /// A row the board ignores keeps its detail and only loses its colour.
 #[test]
-fn off_board_rows_are_marked() {
+fn off_board_rows_are_dimmed_and_keep_their_detail() {
     let poker = row(2400, "poker_payout", None);
     assert_eq!(
         text(&row_line(&poker, 80)),
