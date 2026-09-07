@@ -21,8 +21,6 @@ use crate::app::profile::ledger::{LedgerDetail, LedgerRow};
 const DATE_WIDTH: usize = 6;
 const DELTA_WIDTH: usize = 8;
 const LABEL_WIDTH: usize = 18;
-/// Trailing marker for a row the Top Chips board does not count.
-
 /// What the row was, in a couple of words.
 pub(crate) fn label(mv: ChipMove) -> &'static str {
     match mv {
