@@ -81,14 +81,15 @@ const TICK_SECS: u64 = 2;
 const SUMMON_ID_START: u32 = 990_000_000;
 /// A roamer takes a step at most this often (in ticks); at 2s/tick that is ~8s.
 const MOB_MOVE_COOLDOWN: u8 = 4;
-/// Ticks a wounded, stunned, or festering mob may go with nobody targeting it
-/// before it recovers in full (health, stuns, DoTs). The grace (~6s) absorbs
-/// a dropped connection that comes straight back and a target switched for a
-/// moment, not a death and the walk back from the temple; it is far shorter
-/// than any ability cooldown, so a foe can never be whittled down across
-/// engagements. Fleeing skips the grace: the foe you turn your back on
-/// recovers on the spot.
-const MOB_RESET_TICKS: u8 = 3;
+/// Ticks a wounded, stunned, or festering mob may go with nobody left fighting
+/// it before it recovers in full (health, stuns, DoTs). The clock only starts
+/// once every player it is angry at has left its room (fled, died, walked off,
+/// disconnected): switching your lock onto the add it just summoned is still
+/// the same fight, so it keeps its wounds and keeps swinging at you. The grace
+/// (~20s) is room enough to duck next door and come straight back, and short
+/// enough that a foe cannot be whittled down across separate engagements: the
+/// shared potion cooldown is 5 ticks, so a round trip buys two gulps at most.
+const MOB_RESET_TICKS: u8 = 10;
 /// Ticks between two gulps of any heal/restore consumable. Draughts used to
 /// be spammable inside a fight, bounded by gold alone; a breath between them
 /// makes a potion a decision instead of a second health bar.
@@ -3388,9 +3389,18 @@ struct MobInstance {
     /// Ticks until a Summoner may call another add.
     summon_cooldown: u8,
     /// Consecutive ticks this mob has been wounded, stunned, or festering with
-    /// nobody targeting it. At `MOB_RESET_TICKS` it recovers in full. Reset
-    /// to zero whenever a player holds it as a target.
+    /// nobody left fighting it. At `MOB_RESET_TICKS` it recovers in full.
+    /// Reset to zero whenever a player holds it as a target or stands in its
+    /// room on `engaged_by`.
     untargeted: u8,
+    /// Everyone who has drawn on this mob and has not broken off. A fighter
+    /// stays on the list while they stand, so the mob keeps striking them and
+    /// keeps its wounds even while their lock sits on something else (its own
+    /// summoned add, a pack-mate). Fleeing and falling take you off it at
+    /// once; walking off (or dropping) leaves the entry until the recovery
+    /// sweep sees nobody fighting and lets the whole list go, with the wounds
+    /// if it has any. Nothing on it ever outlives the fight it was drawn in.
+    engaged_by: HashSet<Uuid>,
 }
 
 /// Where a damage-over-time stack came from. The two behave differently on
@@ -3576,6 +3586,7 @@ impl WorldState {
                         revealed: !matches!(behavior, MobBehavior::Ambusher),
                         summon_cooldown: 0,
                         untargeted: 0,
+                        engaged_by: HashSet::new(),
                         spawn: spawn.clone(),
                     },
                 )
@@ -6142,6 +6153,12 @@ impl WorldState {
             // Opportunist: the Rogue's first strike of a fight always crits.
             player.opening_strike = player.class == Some(Class::Rogue);
         }
+        // Drawing on a foe puts you on its list: from here it is fighting you
+        // until you flee, fall, or leave its room, whatever your lock says.
+        if let Some(m) = self.mobs.get_mut(&mob_id) {
+            m.engaged_by.insert(user_id);
+            m.untargeted = 0;
+        }
         // A named boss is an event, not another roster row - open with a bark.
         let boss = self
             .mobs
@@ -7111,6 +7128,7 @@ impl WorldState {
         let wounded = m.hp < m.spawn.max_hp;
         m.hp = m.spawn.max_hp;
         m.untargeted = 0;
+        m.engaged_by.clear();
         let stunned = self.mob_stuns.remove(&mob_id).is_some_and(|t| t > 0);
         let festering = self.mob_dots.remove(&mob_id).is_some();
         let shed = wounded || stunned || festering;
@@ -7121,16 +7139,44 @@ impl WorldState {
         shed
     }
 
-    /// The recovery sweep, once per tick after every round has resolved: a
-    /// mob that has gone `MOB_RESET_TICKS` with nobody holding it as a target
-    /// while wounded, stunned, or festering recovers in full, and everyone in
-    /// its room is told. Covers the attacker dying, disconnecting, or walking
-    /// off in any way `flee` does not see.
-    fn recover_abandoned_mobs(&mut self) {
+    /// Every mob still in a fight this tick: someone holds it as a target, or
+    /// someone it has been drawn on by is alive and standing in its room. The
+    /// second half is what makes a target switch (its own summoned add, a
+    /// pack-mate) part of the same fight instead of the end of one.
+    fn mobs_in_a_fight(&self) -> HashSet<u32> {
         let targeted: HashSet<u32> = self.players.values().filter_map(|p| p.target).collect();
+        let standing: HashSet<(Uuid, RoomId)> = self
+            .players
+            .iter()
+            .filter(|(_, p)| !p.dead)
+            .map(|(id, p)| (*id, p.room))
+            .collect();
+        self.mobs
+            .iter()
+            .filter(|(id, m)| {
+                m.alive
+                    && (targeted.contains(id)
+                        || m.engaged_by
+                            .iter()
+                            .any(|uid| standing.contains(&(*uid, m.current_room))))
+            })
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    /// The recovery sweep, once per tick after every round has resolved: a
+    /// mob that has gone `MOB_RESET_TICKS` with nobody left fighting it while
+    /// wounded, stunned, or festering recovers in full, and everyone in its
+    /// room is told. Still fighting means either holding it as a target or
+    /// standing in its room on its `engaged_by` list, so killing the add it
+    /// summoned never hands the fight back at full health. What does start the
+    /// clock is leaving: fleeing, falling, walking off, disconnecting. A mob
+    /// with nothing to shed skips the clock and simply forgets its fighters.
+    fn recover_abandoned_mobs(&mut self) {
+        let fighting = self.mobs_in_a_fight();
         let mut due: Vec<u32> = Vec::new();
         for (id, m) in self.mobs.iter_mut() {
-            if !m.alive || targeted.contains(id) {
+            if !m.alive || fighting.contains(id) {
                 m.untargeted = 0;
                 continue;
             }
@@ -7138,7 +7184,11 @@ impl WorldState {
                 || self.mob_stuns.get(id).is_some_and(|t| *t > 0)
                 || self.mob_dots.contains_key(id);
             if !afflicted {
+                // Nothing to shed and nobody left fighting: forget them now,
+                // or a foe drawn on and never wounded would lie in wait for
+                // whoever comes back through its room, and never roam.
                 m.untargeted = 0;
+                m.engaged_by.clear();
                 continue;
             }
             m.untargeted = m.untargeted.saturating_add(1);
@@ -7220,23 +7270,15 @@ impl WorldState {
             player.target = None;
             player.pvp_target = None;
         }
-        // The foe you leave recovers on the spot, unless someone else is still
-        // fighting it: whittling a boss down across engagements is not a
-        // strategy, it is the hole this closes.
-        if let Some(mob_id) = fled_mob {
-            let still_fought = self.players.values().any(|p| p.target == Some(mob_id));
-            if !still_fought && self.recover_mob(mob_id) {
-                let name = self
-                    .mobs
-                    .get(&mob_id)
-                    .map(|m| m.spawn.name.to_string())
-                    .unwrap_or_default();
-                self.log_to(
-                    user_id,
-                    LogKind::Combat,
-                    format!("{name} shakes off its wounds as you run."),
-                );
-            }
+        // Breaking off takes you off the foe's list, which starts its recovery
+        // clock (`MOB_RESET_TICKS`) unless someone else is still on it. Turn
+        // straight back around and the wounds are still there; take the long
+        // way and you start over, so a boss still cannot be whittled down
+        // across separate engagements.
+        if let Some(mob_id) = fled_mob
+            && let Some(m) = self.mobs.get_mut(&mob_id)
+        {
+            m.engaged_by.remove(&user_id);
         }
         match exit {
             Some((dir, dest)) => {
@@ -7768,6 +7810,8 @@ impl WorldState {
                 mob.alive = true;
                 mob.hp = mob.spawn.max_hp;
                 mob.respawn_at = None;
+                mob.engaged_by.clear();
+                mob.untargeted = 0;
                 // A respawned roamer returns home and re-hides if it ambushes.
                 mob.current_room = mob.leash_home;
                 mob.move_cooldown = 0;
@@ -8153,6 +8197,57 @@ impl WorldState {
             self.resolve_mob_behavior(user_id, mob_id);
         }
 
+        // A foe you drew on keeps swinging at you while you stand in its room,
+        // even when your lock has moved onto something else (the add it just
+        // summoned, a pack-mate it dragged in). The round above only ever
+        // resolves the mob a player is actually targeting, so without this a
+        // target switch would be a truce - and, with the recovery rule reading
+        // the same list, a free place to stand and heal up.
+        let targeted: HashSet<u32> = self.players.values().filter_map(|p| p.target).collect();
+        let mut standing_fights: Vec<(u32, Vec<Uuid>)> = Vec::new();
+        for (id, m) in self.mobs.iter() {
+            if !m.alive || m.engaged_by.is_empty() || targeted.contains(id) {
+                continue;
+            }
+            let victims: Vec<Uuid> = m
+                .engaged_by
+                .iter()
+                .filter(|uid| {
+                    self.players
+                        .get(uid)
+                        .is_some_and(|p| !p.dead && p.room == m.current_room)
+                })
+                .copied()
+                .collect();
+            if !victims.is_empty() {
+                standing_fights.push((*id, victims));
+            }
+        }
+        for (mob_id, victims) in standing_fights {
+            // A stun holds it here too, and burns a tick doing so.
+            if let Some(v) = self.mob_stuns.get_mut(&mob_id)
+                && *v > 0
+            {
+                *v -= 1;
+                self.mark_world_dirty();
+                continue;
+            }
+            let Some((dmg, dtype, name)) = self.mobs.get(&mob_id).map(|m| {
+                let enraged = matches!(m.behavior, MobBehavior::Brute) && m.hp * 3 < m.spawn.max_hp;
+                let dmg = if enraged {
+                    m.spawn.damage * 3 / 2
+                } else {
+                    m.spawn.damage
+                };
+                (dmg, m.spawn.profile.attack_type, m.spawn.name.to_string())
+            }) else {
+                continue;
+            };
+            for uid in victims {
+                self.strike_player(uid, dmg, dtype, &name);
+            }
+        }
+
         // Resolve a combat round for each pvp-engaged player: the same shape
         // as the mob loop above, but the foe is another adventurer. Both
         // sides of a duel carry their own `pvp_target` (set on the victim by
@@ -8438,6 +8533,7 @@ impl WorldState {
                 revealed: true,
                 summon_cooldown: 0,
                 untargeted: 0,
+                engaged_by: HashSet::new(),
                 spawn,
             },
         );
@@ -8461,7 +8557,7 @@ impl WorldState {
     fn move_roamers(&mut self) {
         let dark = self.time_of_day().is_dark();
         let world_boss = self.world_boss;
-        let engaged: Vec<u32> = self.players.values().filter_map(|p| p.target).collect();
+        let engaged = self.mobs_in_a_fight();
         let player_rooms: Vec<RoomId> = self
             .players
             .values()
@@ -8695,6 +8791,7 @@ impl WorldState {
                 revealed: true,
                 summon_cooldown: 0,
                 untargeted: 0,
+                engaged_by: HashSet::new(),
                 spawn,
             },
         );
@@ -8819,6 +8916,7 @@ impl WorldState {
                 p.empower = 0;
                 p.death_save_used = false;
                 let plural = if left == 1 { "" } else { "s" };
+                self.fall_out_of_every_fight(user_id);
                 self.log_to(
                     user_id,
                     LogKind::System,
@@ -8852,6 +8950,7 @@ impl WorldState {
             } else {
                 "You have fallen! Your spirit lingers by your corpse. Wait for a resurrection, or press r to release to the temple.".to_string()
             };
+            self.fall_out_of_every_fight(user_id);
             self.log_to(user_id, LogKind::System, death_message);
             if let Some(name) = lost_escort {
                 self.log_to(
@@ -8874,6 +8973,16 @@ impl WorldState {
     }
 
     // ---- Death, the temple, and resurrection ----------------------------
+
+    /// The blow that fells you ends your part of every fight: no foe keeps
+    /// swinging at a fighter who rises where they fell, whether by a veteran
+    /// charge or a healer's rite. Whoever is still on its list keeps it busy;
+    /// otherwise its recovery clock starts here.
+    fn fall_out_of_every_fight(&mut self, user_id: Uuid) {
+        for m in self.mobs.values_mut() {
+            m.engaged_by.remove(&user_id);
+        }
+    }
 
     /// Send a (usually dead) player to the Temple of the Dawn, fully restored,
     /// clearing the corpse state. Shared by the auto-release tick and the manual
