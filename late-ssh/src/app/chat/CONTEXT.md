@@ -526,9 +526,10 @@ session. `late-core/src/models/chat_message_gild.rs` owns the table
   `ChipMove::GildReceived`; the buyer pays the full price as
   `ChipMove::GildSent` (floor-guarded like a gift). The last third has no
   ledger row at all: the burn *is* the gap between the two reasons.
-  Both reasons count on Top Chips (since 2026-09-06): a gild is paid for
-  a message other people rated, the way the gallery prize is paid for
-  applause, so it is earned in a way a gift is not.
+  `GildReceived` counts on Top Chips: a gild is paid for a message other
+  people rated, the way the gallery prize is paid for applause, and the
+  burned third means it cannot funnel chips for free the way a gift can.
+  `GildSent` does not: Top Chips ranks earnings and a debit never counts.
 - **Guards** (`ChatService::gild_message`, one closed `GildRefusal` enum with
   the wording): message gone, not a member, not a public room (so never a DM
   and never a private room), a game room (`kind = 'game'`: arcade tables,
@@ -612,10 +613,9 @@ its own domain; only the command and the glyph are chat's.
 - **Burn.** `ChipMove::CrownTaken` is a floor-guarded debit with
   `source_ref` = the reign id, and there is no matching credit reason
   anywhere. The whole price leaves the money supply, so the burn is the
-  absence of a credit rather than a transfer to a house wallet. It is
-  `counts_as_earnings = true` like `ShopPurchase` (since 2026-09-06): a
-  take is a debit on the Top Chips board like any other spend. Only the
-  house tables and gifts are out (pinned by
+  absence of a credit rather than a transfer to a house wallet. Like
+  `ShopPurchase` it is `counts_as_earnings = false`: Top Chips ranks
+  earnings and a debit never counts (pinned by
   `chips_test::earning_exclusions_and_reason_uniqueness`).
 - **Guards** (`CrownService::take`, one closed `CrownRefusal` enum with the
   wording): you already wear it, and the chip floor. That is all: there is

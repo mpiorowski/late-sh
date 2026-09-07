@@ -55,9 +55,9 @@ Two `ChipMove` variants, both in the roster in `late-core/src/models/chips.rs`:
   id. One ledger row per buy, not per ticket.
 - `PotWon`: credit, `source_ref` is the pot id.
 
-**Both are `counts_as_earnings = true`** (since 2026-09-06). Top Chips
-counts everything except the house tables and gifts, so a ticket is a debit
-on the board and a win is a credit, the same as any other spend or prize.
+`PotWon` is `counts_as_earnings = true` (the house mints it) and `PotTicket`
+is `false`: Top Chips ranks earnings, and a debit never counts, so buying
+tickets cannot lower a place.
 
 The burn is the gap between the two reasons, exactly like the gild's missing
 third: there is no third ledger row and no wallet holding the fifth.

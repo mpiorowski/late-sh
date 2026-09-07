@@ -129,7 +129,7 @@ fn a_gift_row_names_the_other_party() {
     );
     assert_eq!(
         text(&row_line(&sent, 80)),
-        "Sep 06      -300  gift sent           to @alice  off"
+        "Sep 06      -300  gift sent           to @alice"
     );
 }
 
@@ -176,13 +176,18 @@ fn a_payout_row_names_the_game() {
     );
 }
 
-/// A row the board ignores is marked; a row it counts is not.
+/// A row the board ignores keeps its detail and only loses its colour.
 #[test]
 fn off_board_rows_are_marked() {
     let poker = row(2400, "poker_payout", None);
     assert_eq!(
         text(&row_line(&poker, 80)),
-        "Sep 06    +2,400  poker payout        off"
+        "Sep 06    +2,400  poker payout      "
+    );
+    let shop = row(-8000, "shop_purchase", Some(LedgerDetail::Sku("username_glow_month".to_string())));
+    assert_eq!(
+        text(&row_line(&shop, 80)),
+        "Sep 06    -8,000  shop                username_glow_month"
     );
     let quest = row(500, "quest_reward", None);
     assert_eq!(
@@ -249,6 +254,6 @@ fn the_summary_reads_balance_then_month() {
     assert_eq!(text(&summary_line(None, -50)), "this month -50");
     assert_eq!(
         text(&off_board_note()),
-        "rows marked off do not count for Top Chips"
+        "dim rows do not count for Top Chips"
     );
 }

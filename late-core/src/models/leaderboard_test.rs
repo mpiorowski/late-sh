@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     models::{
-        chips::Difficulty,
+        chips::{ChipMove, Difficulty, UserChips},
         le_word,
         leaderboard::{
             DailyPuzzle, OnlineTimeIncrement, RankedEntry, apply_online_time_batch,
@@ -524,4 +524,63 @@ async fn door_boards_rank_wins_depth_and_score() {
         2_000_000
     );
     assert_eq!(entry_for(&boards.score.monthly, winner.id).value, 2_000_000);
+}
+
+/// Top Chips ranks what a player earned. Spending is a debit and never
+/// counts, whatever it bought, so a heavy spender who out-earns everyone
+/// tops the board instead of vanishing under a negative net; the tables
+/// and gifts stay off it too. `earned_this_month` is the
+/// same sum, so the profile figure agrees with the board.
+#[tokio::test]
+async fn top_chips_counts_earnings_and_never_spending() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let spender = create_test_user(&test_db.db, "lb_chip_spender").await;
+    let saver = create_test_user(&test_db.db, "lb_chip_saver").await;
+    let apply = |user_id, mv, amount| UserChips::apply(&**client, user_id, mv, amount, "lb-test");
+    // Balances big enough that every move below is affordable; the stipend
+    // row `ensure` writes on the way in is not an earning either.
+    UserChips::ensure(&client, spender.id).await.expect("spender chips");
+    UserChips::ensure(&client, saver.id).await.expect("saver chips");
+    client
+        .execute(
+            "UPDATE user_chips SET balance = 100000 WHERE user_id = ANY($1)",
+            &[&vec![spender.id, saver.id]],
+        )
+        .await
+        .expect("fund accounts");
+
+    // Spender: 3,200 earned, 12,300 spent, plus every excluded credit.
+    apply(spender.id, ChipMove::DailyPuzzleWin, 500).await.expect("puzzle win").expect("affordable");
+    apply(spender.id, ChipMove::QuestReward, 750).await.expect("quest reward").expect("affordable");
+    apply(spender.id, ChipMove::GildReceived, 750).await.expect("gild received").expect("affordable");
+    apply(spender.id, ChipMove::PotWon, 1_000).await.expect("pot won").expect("affordable");
+    apply(spender.id, ChipMove::PotTicket, 1_000).await.expect("pot ticket").expect("affordable");
+    apply(spender.id, ChipMove::ShopPurchase, 8_000).await.expect("shop").expect("affordable");
+    apply(spender.id, ChipMove::RoundPurchase, 1_600).await.expect("round").expect("affordable");
+    apply(spender.id, ChipMove::DrinkPurchase, 100).await.expect("drink").expect("affordable");
+    apply(spender.id, ChipMove::GildSent, 500).await.expect("gild sent").expect("affordable");
+    apply(spender.id, ChipMove::CrownTaken, 1_000).await.expect("crown").expect("affordable");
+    apply(spender.id, ChipMove::SsnakeArenaLost, 100).await.expect("arena lost").expect("affordable");
+    apply(spender.id, ChipMove::PokerPayout, 5_000).await.expect("poker payout").expect("affordable");
+    apply(spender.id, ChipMove::BlackjackPayout, 5_000).await.expect("blackjack payout").expect("affordable");
+    apply(spender.id, ChipMove::GiftReceived, 5_000).await.expect("gift received").expect("affordable");
+    apply(spender.id, ChipMove::BonsaiWatered, 200).await.expect("bonsai").expect("affordable");
+    // Saver: 2,000 earned, nothing spent.
+    apply(saver.id, ChipMove::DailyPuzzleWin, 2_000).await.expect("saver win").expect("affordable");
+
+    let data = fetch_leaderboard_data(&client).await.expect("fetch leaderboard");
+    let board = &data.monthly_chip_earners;
+    let spender_row = entry_for(board, spender.id);
+    assert_eq!(spender_row.value, 3_200, "spending must not subtract");
+    assert_eq!(entry_for(board, saver.id).value, 2_000);
+    assert!(
+        spender_row.rank < entry_for(board, saver.id).rank,
+        "the bigger earner ranks first however much they spent"
+    );
+    assert_eq!(
+        UserChips::earned_this_month(&client, spender.id).await.expect("earned"),
+        3_200,
+        "the profile figure is the board figure"
+    );
 }

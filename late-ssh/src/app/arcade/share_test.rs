@@ -96,35 +96,3 @@ fn half_block_picture_packs_two_rows_per_line() {
         vec![Row::Text("█▄▀".to_string()), Row::Text("  ▀".to_string())]
     );
 }
-
-#[test]
-fn zz_print_every_card() {
-    use crate::app::arcade::le_word::state::score_guess;
-    use crate::app::arcade::minesweeper::state::Click;
-    use crate::app::arcade::rubiks_cube::state::Face;
-    use crate::app::arcade::solitaire::state::Suit;
-    use late_core::models::chips::Difficulty;
-    let d = day(2026, 9, 7);
-    let mut out = String::new();
-    let mut show = |name: &str, card: ShareCard| {
-        out.push_str(&format!("\n=== {name}\n{}\n", render(&card, ShareFormat::Emoji)));
-    };
-    show("le word", crate::app::arcade::le_word::share::card(d, &[
-        score_guess("adieu", "shade"), score_guess("shame", "shade"), score_guess("shade", "shade")], true));
-    let pic: Vec<Vec<bool>> = (0..10).map(|r| (0..10).map(|c| {
-        let (x, y) = (c as i32 - 4, r as i32 - 4); x * x + y * y <= 12 && !(y == -1 && (x == -2 || x == 2)) && !(y == 2 && x.abs() <= 2)
-    }).collect()).collect();
-    show("nonograms", crate::app::arcade::nonogram::share::card(d, "easy", &pic));
-    show("sudoku", crate::app::arcade::sudoku::share::card(d, "medium", &[2, 1, 5, 3, 4, 9, 6, 8, 7]));
-    let mut clicks = vec![Click::Safe; 14]; clicks[5] = Click::Flag; clicks[9] = Click::Boom; clicks[12] = Click::Flag;
-    show("minesweeper", crate::app::arcade::minesweeper::share::card(d, "medium", 40, 2, &clicks));
-    show("solitaire", crate::app::arcade::solitaire::share::card(d, 3, 612, &[
-        (Some(Suit::Spades), 13), (Some(Suit::Hearts), 13), (Some(Suit::Diamonds), 13), (Some(Suit::Clubs), 13)]));
-    let faces: Vec<Face> = "RUFLDBRRUFBDLURFDBRULFDBURRFLDBULFRD".chars().map(|ch| match ch {
-        'U' => Face::Up, 'D' => Face::Down, 'F' => Face::Front, 'B' => Face::Back, 'R' => Face::Right, _ => Face::Left }).collect();
-    show("rubik's cube", crate::app::arcade::rubiks_cube::share::card(d, faces.len() as u32, &faces));
-    show("sliding puzzle", crate::app::arcade::sliding_puzzle::share::card(d, Difficulty::Medium, 143, &[
-        1, 3, 6, 4, 2, 9, 12, 7, 0, 5, 11, 8, 0, 2, 6, 10]));
-    show("day card", day_card(d, |p| matches!(p, DailyPuzzle::LeWord | DailyPuzzle::Sudoku | DailyPuzzle::Minesweeper | DailyPuzzle::Solitaire), 12));
-    std::fs::write("/tmp/claude-1000/-home-mat-projects-late-sh/7d5004ad-eb2c-4da7-b59a-e9b43d874a64/scratchpad/cards.txt", out).unwrap();
-}
