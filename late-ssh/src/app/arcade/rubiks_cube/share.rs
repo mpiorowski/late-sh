@@ -1,16 +1,14 @@
-//! The Rubik's Cube share card: the solve as a colour ribbon, one square
-//! per face turn, wrapping at twelve per row. Nobody can spoil a cube, so
-//! the card is pure signature.
+//! The Rubik's Cube share card: the front face of today's scramble, an
+//! arrow with the move count, and the same face solved. Before and after,
+//! which nobody needs explained. The scramble is the day's puzzle, so it
+//! spoils nothing.
 
 use chrono::NaiveDate;
 use late_core::models::leaderboard::DailyPuzzle;
 
-use crate::app::arcade::share::{self, Glyph, MAX_ROW_GLYPHS, ShareCard};
+use crate::app::arcade::share::{self, Glyph, Row, ShareCard};
 
-use super::state::{Face, State};
-
-/// Turns per ribbon row: the widest a glyph row may be.
-pub const RIBBON_WIDTH: usize = MAX_ROW_GLYPHS;
+use super::state::{Face, State, Sticker, scrambled_stickers};
 
 /// Whether today's cube has been turned and is solved.
 pub fn is_ready(state: &State) -> bool {
@@ -22,36 +20,46 @@ pub fn from_state(state: &State) -> Option<ShareCard> {
     if !is_ready(state) {
         return None;
     }
+    let front = Face::Front.index();
     Some(card(
         state.puzzle_date(),
         state.user_moves(),
-        state.move_log(),
+        scrambled_stickers(state.puzzle_date())[front],
+        state.stickers()[front][0],
     ))
 }
 
-/// `moves` is the full count; `faces` is this session's turn log, which is
-/// shorter when the cube was restored from a save. The ribbon shows the
-/// last `MAX_ROWS * RIBBON_WIDTH` turns.
-pub fn card(puzzle_date: NaiveDate, moves: u32, faces: &[Face]) -> ShareCard {
+/// `scrambled_front` is the front face as the day started, row-major;
+/// `solved_front` is the one colour that face ended up in. A cube solved
+/// in any orientation is solved, so the finished face is whichever colour
+/// landed in front, not always green.
+pub fn card(
+    puzzle_date: NaiveDate,
+    moves: u32,
+    scrambled_front: [Sticker; 9],
+    solved_front: Sticker,
+) -> ShareCard {
     let number = share::puzzle_number(share::epoch(DailyPuzzle::RubiksCube), puzzle_date);
-    let result = format!("{moves} moves");
-    let glyphs: Vec<Glyph> = faces.iter().map(|face| glyph(*face)).collect();
+    let mut rows: Vec<Row> = scrambled_front
+        .chunks(3)
+        .map(|row| Row::Glyphs(row.iter().map(|sticker| glyph(*sticker)).collect()))
+        .collect();
+    rows.push(share::arrow_row(moves));
+    rows.extend((0..3).map(|_| Row::Glyphs(vec![glyph(solved_front); 3])));
     ShareCard {
-        title: share::title("Rubik's Cube", number, &result),
-        rows: share::ribbon(&glyphs, RIBBON_WIDTH),
+        title: share::title("Rubik's Cube", number, None),
+        rows,
     }
 }
 
-/// Western colour scheme: white up, yellow down, green front, blue back,
-/// red right, orange left.
-fn glyph(face: Face) -> Glyph {
-    match face {
-        Face::Up => Glyph::White,
-        Face::Down => Glyph::Yellow,
-        Face::Front => Glyph::Green,
-        Face::Back => Glyph::Blue,
-        Face::Right => Glyph::Red,
-        Face::Left => Glyph::Orange,
+fn glyph(sticker: Sticker) -> Glyph {
+    match sticker {
+        Sticker::White => Glyph::White,
+        Sticker::Yellow => Glyph::Yellow,
+        Sticker::Orange => Glyph::Orange,
+        Sticker::Red => Glyph::Red,
+        Sticker::Green => Glyph::Green,
+        Sticker::Blue => Glyph::Blue,
     }
 }
 

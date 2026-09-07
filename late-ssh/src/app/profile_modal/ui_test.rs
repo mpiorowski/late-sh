@@ -140,9 +140,10 @@ async fn a_wide_terminal_shows_every_section_in_order() {
             "{key} missing from the late.fetch grid:\n{text}"
         );
     }
+    let chips_fact = &lines[row_of(&lines, "chips     ").unwrap()];
     assert!(
-        lines[row_of(&lines, "chips     ").unwrap()].contains("this month"),
-        "the chips fact carries the board figure:\n{text}"
+        chips_fact.contains("7,300") && !chips_fact.contains("this month"),
+        "the chips fact is the balance alone:\n{text}"
     );
 
     // Then the sections, in the order the design fixes.
@@ -163,10 +164,11 @@ async fn a_wide_terminal_shows_every_section_in_order() {
     assert!(lines[gift].contains("+300") && lines[quest].contains("+500"));
 
     // The summary agrees with the board rule: the quests count, the gift
-    // and the stipend do not. 1,000 stipend + 12 x 500 quests + 300 gift.
+    // and the stipend do not. 1,000 stipend + 12 x 500 quests + 300 gift,
+    // and the net is all of it.
     let summary = row_of(&lines, "balance 7,300").expect("balance");
     assert!(
-        lines[summary].contains("this month +6,000"),
+        lines[summary].contains("this month +6,000  ·  net +7,300"),
         "{}",
         lines[summary]
     );

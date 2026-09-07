@@ -57,7 +57,7 @@ pub fn card(
         })
         .collect();
     ShareCard {
-        title: share::title("Solitaire", number, &result),
+        title: share::title("Solitaire", number, Some(&result)),
         rows,
     }
 }

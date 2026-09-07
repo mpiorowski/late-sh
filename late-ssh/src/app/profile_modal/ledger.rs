@@ -8,7 +8,7 @@
 //! `profile::ledger`; this module only says it.
 
 use chrono::{DateTime, Utc};
-use late_core::models::chips::ChipMove;
+use late_core::models::chips::{ChipMove, MonthChips};
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
@@ -147,8 +147,10 @@ fn signed(value: i64) -> String {
     }
 }
 
-/// The header above the rows: the balance and this month's board figure.
-pub(crate) fn summary_line(balance: Option<i64>, earned_month: i64) -> Line<'static> {
+/// The header above the rows: the balance, this month's board figure, and
+/// the month's net, which is what the balance actually did once spending
+/// and the off-board rows are in.
+pub(crate) fn summary_line(balance: Option<i64>, month: MonthChips) -> Line<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let value = Style::default().fg(theme::TEXT_BRIGHT());
     let mut spans = Vec::new();
@@ -162,9 +164,15 @@ pub(crate) fn summary_line(balance: Option<i64>, earned_month: i64) -> Line<'sta
     }
     spans.push(Span::styled("this month ", dim));
     spans.push(Span::styled(
-        signed(earned_month),
-        delta_style(earned_month),
+        signed(month.earned),
+        delta_style(month.earned),
     ));
+    spans.push(Span::styled(
+        "  ·  ",
+        Style::default().fg(theme::BORDER_DIM()),
+    ));
+    spans.push(Span::styled("net ", dim));
+    spans.push(Span::styled(signed(month.net), delta_style(month.net)));
     Line::from(spans)
 }
 

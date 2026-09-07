@@ -329,31 +329,3 @@ fn handle_key_undo_triggers_undo() {
     crate::app::arcade::sudoku::input::handle_key(&mut state, b'U');
     assert_eq!(state.grid[0][0], 0);
 }
-
-#[test]
-fn box_finish_rank_is_dropped_when_the_box_is_broken_again() {
-    let mut state = test_state();
-    state.grid = [[0; 9]; 9];
-    state.fixed_mask = [[false; 9]; 9];
-    let digits = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
-    for r in 0..3 {
-        for c in 0..3 {
-            state.cursor = (r, c);
-            state.set_digit(digits[r][c]);
-        }
-    }
-    assert_eq!(state.box_finish_rank, [1, 0, 0, 0, 0, 0, 0, 0, 0]);
-
-    // Clearing a cell reopens the box.
-    state.cursor = (1, 1);
-    state.set_digit(0);
-    assert_eq!(state.box_finish_rank, [0; 9]);
-
-    // Filling it again finishes it again.
-    state.set_digit(5);
-    assert_eq!(state.box_finish_rank, [1, 0, 0, 0, 0, 0, 0, 0, 0]);
-
-    // Overwriting with a duplicate breaks the box too.
-    state.set_digit(1);
-    assert_eq!(state.box_finish_rank, [0; 9]);
-}

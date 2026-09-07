@@ -35,7 +35,7 @@ pub fn card(puzzle_date: NaiveDate, difficulty_key: &str, filled: &[Vec<bool>]) 
     let width = filled.first().map_or(0, Vec::len);
     let result = format!("{difficulty_key} {width}×{height}");
     ShareCard {
-        title: share::title("Nonograms", number, &result),
+        title: share::title("Nonograms", number, Some(&result)),
         rows: share::half_block_picture(filled),
     }
 }

@@ -1,49 +1,56 @@
 use chrono::NaiveDate;
 use late_core::models::chips::Difficulty;
 
-use crate::app::arcade::share::{Glyph, Row, ShareCard};
+use crate::app::arcade::share::{Glyph, MAX_ROWS, Row, ShareCard};
 
 use super::card;
 
 #[test]
-fn heatmap_grades_cells_by_thirds_of_the_busiest_cell() {
-    // 3x3 board, busiest cell visited 9 times.
-    let visits = [0, 1, 3, 4, 6, 7, 9, 2, 5];
+fn card_is_the_scramble_then_the_solved_stripes() {
+    // 3x3: tiles 1-3 are red, 4-6 yellow, 7-8 green, the gap dark.
+    let scrambled = [4, 1, 7, 0, 5, 2, 8, 3, 6];
     let card = card(
         NaiveDate::from_ymd_opt(2026, 8, 31).unwrap(),
         Difficulty::Easy,
         42,
-        &visits,
+        &scrambled,
     );
     assert_eq!(
         card,
         ShareCard {
-            title: "late.sh Sliding Puzzle #2 · easy 3×3 · 42 moves".to_string(),
+            title: "late.sh Sliding Puzzle #2 · easy 3×3".to_string(),
             rows: vec![
-                Row::Glyphs(vec![Glyph::White, Glyph::Yellow, Glyph::Yellow]),
-                Row::Glyphs(vec![Glyph::Orange, Glyph::Orange, Glyph::Red]),
-                Row::Glyphs(vec![Glyph::Red, Glyph::Yellow, Glyph::Orange]),
+                Row::Glyphs(vec![Glyph::Yellow, Glyph::Red, Glyph::Green]),
+                Row::Glyphs(vec![Glyph::Dark, Glyph::Yellow, Glyph::Red]),
+                Row::Glyphs(vec![Glyph::Green, Glyph::Red, Glyph::Yellow]),
+                Row::Text("⬇️ 42 moves".to_string()),
+                Row::Glyphs(vec![Glyph::Red; 3]),
+                Row::Glyphs(vec![Glyph::Yellow; 3]),
+                Row::Glyphs(vec![Glyph::Green, Glyph::Green, Glyph::Dark]),
             ],
         }
     );
 }
 
 #[test]
-fn a_restored_board_with_no_visits_is_all_white() {
+fn the_hard_board_fills_the_card_exactly() {
+    let scrambled: Vec<u8> = (0..25).map(|i| ((i * 7) % 25) as u8).collect();
     let card = card(
         NaiveDate::from_ymd_opt(2026, 8, 30).unwrap(),
-        Difficulty::Medium,
-        80,
-        &[0; 16],
+        Difficulty::Hard,
+        300,
+        &scrambled,
     );
+    assert_eq!(card.title, "late.sh Sliding Puzzle #1 · hard 5×5");
+    assert_eq!(card.rows.len(), MAX_ROWS);
     assert_eq!(
-        card.title,
-        "late.sh Sliding Puzzle #1 · medium 4×4 · 80 moves"
-    );
-    assert_eq!(card.rows.len(), 4);
-    assert!(
-        card.rows
-            .iter()
-            .all(|row| *row == Row::Glyphs(vec![Glyph::White; 4]))
+        card.rows[MAX_ROWS - 1],
+        Row::Glyphs(vec![
+            Glyph::Blue,
+            Glyph::Blue,
+            Glyph::Blue,
+            Glyph::Blue,
+            Glyph::Dark
+        ])
     );
 }

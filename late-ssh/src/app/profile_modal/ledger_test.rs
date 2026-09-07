@@ -1,5 +1,5 @@
 use chrono::{NaiveDate, TimeZone, Utc};
-use late_core::models::chips::{ChipLedgerEntry, ChipMove};
+use late_core::models::chips::{ChipLedgerEntry, ChipMove, MonthChips};
 
 use super::*;
 
@@ -184,7 +184,11 @@ fn off_board_rows_are_dimmed_and_keep_their_detail() {
         text(&row_line(&poker, 80)),
         "Sep 06    +2,400  poker payout      "
     );
-    let shop = row(-8000, "shop_purchase", Some(LedgerDetail::Sku("username_glow_month".to_string())));
+    let shop = row(
+        -8000,
+        "shop_purchase",
+        Some(LedgerDetail::Sku("username_glow_month".to_string())),
+    );
     assert_eq!(
         text(&row_line(&shop, 80)),
         "Sep 06    -8,000  shop                username_glow_month"
@@ -246,12 +250,27 @@ fn thousands_groups_and_keeps_the_sign() {
 }
 
 #[test]
-fn the_summary_reads_balance_then_month() {
+fn the_summary_reads_balance_then_month_then_net() {
+    // Earned by the board rule, then what the balance actually did: a
+    // spender can be up on the board and down on the month.
+    let month = MonthChips {
+        earned: 860,
+        net: -2_445,
+    };
     assert_eq!(
-        text(&summary_line(Some(168_092), 860)),
-        "balance 168,092  ·  this month +860"
+        text(&summary_line(Some(168_092), month)),
+        "balance 168,092  ·  this month +860  ·  net -2,445"
     );
-    assert_eq!(text(&summary_line(None, -50)), "this month -50");
+    assert_eq!(
+        text(&summary_line(
+            None,
+            MonthChips {
+                earned: 0,
+                net: -50
+            }
+        )),
+        "this month 0  ·  net -50"
+    );
     assert_eq!(
         text(&off_board_note()),
         "dim rows do not count for Top Chips"

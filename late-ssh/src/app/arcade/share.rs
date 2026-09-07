@@ -1,8 +1,10 @@
 //! Share cards: the result a player pastes wherever they already talk.
 //! Every card has the same shape, a `late.sh <Game> #<n>` header, at most
-//! ten body rows, and the footer `ssh late.sh`, never a URL, because the
-//! command is the brand and the filter at once. Every card but one gives
-//! nothing away; the Nonogram card is the finished picture by choice.
+//! eleven body rows, and the footer `ssh late.sh`, never a URL, because the
+//! command is the brand and the filter at once. No card needs a legend: a
+//! body is the puzzle itself (a guess grid, a scramble above its solve, the
+//! clues you were given) or plain words. Every card but one gives nothing
+//! away; the Nonogram card is the finished picture by choice.
 //!
 //! This module owns the grammar (the card struct, the closed glyph set, the
 //! renderer, the puzzle numbering) and the day card. Each daily builds its
@@ -15,14 +17,9 @@ use late_core::models::leaderboard::DailyPuzzle;
 /// The footer of every card. Never a URL.
 pub const FOOTER: &str = "ssh late.sh";
 
-/// The widest a glyph row may be, so a card fits a phone screenshot. Text
-/// rows (a half-block picture, a stat line) are narrower per character and
-/// are not bound by it.
-pub const MAX_ROW_GLYPHS: usize = 12;
-
-/// The most body rows a card may carry: the hard Nonogram's 20x20 picture
-/// packs into exactly this many half-block rows.
-pub const MAX_ROWS: usize = 10;
+/// The most body rows a card may carry, so it fits a phone screenshot: the
+/// hard Sliding Puzzle's 5x5 scramble, its arrow row, and its 5x5 solve.
+pub const MAX_ROWS: usize = 11;
 
 /// How a card is written out. Emoji renders on every social network; ASCII
 /// is for people who post in monospace.
@@ -132,9 +129,18 @@ pub fn render(card: &ShareCard, format: ShareFormat) -> String {
     out
 }
 
-/// The header line: `late.sh <Game> #<n> · <result>`.
-pub fn title(game: &str, number: i64, result: &str) -> String {
-    format!("late.sh {game} #{number} · {result}")
+/// The header line: `late.sh <Game> #<n> · <result>`, or just
+/// `late.sh <Game> #<n>` when the body already tells the result.
+pub fn title(game: &str, number: i64, result: Option<&str>) -> String {
+    match result {
+        Some(result) => format!("late.sh {game} #{number} · {result}"),
+        None => format!("late.sh {game} #{number}"),
+    }
+}
+
+/// The row between a puzzle's start and its solve: `⬇️ 36 moves`.
+pub fn arrow_row(moves: u32) -> Row {
+    Row::Text(format!("⬇️ {moves} moves"))
 }
 
 /// The first day each daily ran. Puzzle numbers count from here so two
@@ -192,28 +198,19 @@ pub fn day_card(day: NaiveDate, won: impl Fn(DailyPuzzle) -> bool, streak_days: 
         format!("{won_count}/{}", DAY_CARD_ORDER.len())
     };
     ShareCard {
-        title: title("Daily", number, &result),
+        title: title("Daily", number, Some(&result)),
         rows: vec![Row::Glyphs(marks)],
     }
 }
 
-/// Wrap a run of glyphs into rows of `per_row`, keeping only the last
-/// `MAX_ROWS * per_row` so a long history still fits the card.
-pub fn ribbon(glyphs: &[Glyph], per_row: usize) -> Vec<Row> {
-    let keep = MAX_ROWS * per_row;
-    let start = glyphs.len().saturating_sub(keep);
-    glyphs[start..]
-        .chunks(per_row)
-        .map(|chunk| Row::Glyphs(chunk.to_vec()))
-        .collect()
-}
-
 /// A 0/1 picture as half-block text, two picture rows per text row, so a
-/// 10x10 fits in five rows. `filled` is true for a dark cell.
+/// 10x10 fits in five rows. `filled` is true for a dark cell. Leading
+/// spaces are kept, since they place the picture; trailing spaces and
+/// empty lines are dropped.
 pub fn half_block_picture(filled: &[Vec<bool>]) -> Vec<Row> {
     filled
         .chunks(2)
-        .map(|pair| {
+        .filter_map(|pair| {
             let top = &pair[0];
             let bottom = pair.get(1);
             let text: String = top
@@ -229,7 +226,12 @@ pub fn half_block_picture(filled: &[Vec<bool>]) -> Vec<Row> {
                     }
                 })
                 .collect();
-            Row::Text(text.trim_end().to_string())
+            let text = text.trim_end();
+            if text.is_empty() {
+                None
+            } else {
+                Some(Row::Text(text.to_string()))
+            }
         })
         .collect()
 }

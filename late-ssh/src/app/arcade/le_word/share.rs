@@ -38,7 +38,7 @@ pub fn card(puzzle_date: NaiveDate, scores: &[[LetterScore; WORD_LEN]], won: boo
         .map(|row| Row::Glyphs(row.iter().map(|score| glyph(*score)).collect()))
         .collect();
     ShareCard {
-        title: share::title("Le Word", number, &result),
+        title: share::title("Le Word", number, Some(&result)),
         rows,
     }
 }

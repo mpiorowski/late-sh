@@ -1,50 +1,52 @@
 use chrono::NaiveDate;
 
-use crate::app::arcade::rubiks_cube::state::Face;
-use crate::app::arcade::share::{Glyph, MAX_ROWS, Row, ShareCard};
+use crate::app::arcade::rubiks_cube::state::{Face, Sticker, scrambled_stickers};
+use crate::app::arcade::share::{Glyph, Row, ShareCard};
 
-use super::{RIBBON_WIDTH, card};
+use super::card;
 
 #[test]
-fn ribbon_colours_each_turn_by_face_and_wraps_at_twelve() {
-    let faces = [
-        Face::Up,
-        Face::Down,
-        Face::Front,
-        Face::Back,
-        Face::Right,
-        Face::Left,
-        Face::Up,
-        Face::Up,
-        Face::Up,
-        Face::Up,
-        Face::Up,
-        Face::Up,
-        Face::Front,
+fn card_is_the_scrambled_face_then_the_solved_face() {
+    let scrambled = [
+        Sticker::Red,
+        Sticker::Blue,
+        Sticker::Green,
+        Sticker::Yellow,
+        Sticker::Green,
+        Sticker::White,
+        Sticker::Orange,
+        Sticker::Green,
+        Sticker::Red,
     ];
-    let card = card(NaiveDate::from_ymd_opt(2026, 6, 18).unwrap(), 13, &faces);
-    let mut first = vec![
-        Glyph::White,
-        Glyph::Yellow,
-        Glyph::Green,
-        Glyph::Blue,
-        Glyph::Red,
-        Glyph::Orange,
-    ];
-    first.extend(vec![Glyph::White; 6]);
+    let card = card(
+        NaiveDate::from_ymd_opt(2026, 6, 18).unwrap(),
+        36,
+        scrambled,
+        Sticker::Green,
+    );
     assert_eq!(
         card,
         ShareCard {
-            title: "late.sh Rubik's Cube #1 · 13 moves".to_string(),
-            rows: vec![Row::Glyphs(first), Row::Glyphs(vec![Glyph::Green])],
+            title: "late.sh Rubik's Cube #1".to_string(),
+            rows: vec![
+                Row::Glyphs(vec![Glyph::Red, Glyph::Blue, Glyph::Green]),
+                Row::Glyphs(vec![Glyph::Yellow, Glyph::Green, Glyph::White]),
+                Row::Glyphs(vec![Glyph::Orange, Glyph::Green, Glyph::Red]),
+                Row::Text("⬇️ 36 moves".to_string()),
+                Row::Glyphs(vec![Glyph::Green; 3]),
+                Row::Glyphs(vec![Glyph::Green; 3]),
+                Row::Glyphs(vec![Glyph::Green; 3]),
+            ],
         }
     );
 }
 
 #[test]
-fn a_long_solve_keeps_the_tail_that_fits_the_card() {
-    let faces = vec![Face::Right; MAX_ROWS * RIBBON_WIDTH + 5];
-    let card = card(NaiveDate::from_ymd_opt(2026, 6, 18).unwrap(), 101, &faces);
-    assert_eq!(card.rows.len(), MAX_ROWS);
-    assert_eq!(card.title, "late.sh Rubik's Cube #1 · 101 moves");
+fn the_daily_scramble_is_stable_and_not_solved() {
+    let date = NaiveDate::from_ymd_opt(2026, 9, 7).unwrap();
+    let a = scrambled_stickers(date);
+    let b = scrambled_stickers(date);
+    assert_eq!(a, b);
+    let front = a[Face::Front.index()];
+    assert!(front.iter().any(|sticker| *sticker != front[0]));
 }

@@ -62,9 +62,6 @@ struct Snapshot {
     tiles: Vec<u8>,
     moves: u32,
     win_reported: bool,
-    /// Session-local: how often the blank has sat on each cell. Feeds the
-    /// share card's heatmap; never saved.
-    blank_visits: Vec<u32>,
 }
 
 #[derive(Clone)]
@@ -154,11 +151,6 @@ impl State {
 
     pub fn puzzle_date(&self) -> NaiveDate {
         self.puzzle_date
-    }
-
-    /// This session's blank-tile visits per cell on the active board.
-    pub fn blank_visits(&self) -> &[u32] {
-        &self.active_snapshot().blank_visits
     }
 
     pub fn board(&self) -> &[u8] {
@@ -332,12 +324,6 @@ impl State {
                 return false;
             }
             snapshot.moves = snapshot.moves.saturating_add(1);
-            let blank = snapshot
-                .tiles
-                .iter()
-                .position(|tile| *tile == 0)
-                .expect("a sliding puzzle board always has a blank tile");
-            snapshot.blank_visits[blank] = snapshot.blank_visits[blank].saturating_add(1);
             let solved = snapshot.tiles == solved_board(difficulty);
             if solved {
                 snapshot.win_reported = true;
@@ -437,8 +423,9 @@ impl State {
         snapshot.win_reported = false;
     }
 
-    #[cfg(test)]
-    pub(crate) fn scramble_seed(&self) -> u64 {
+    /// The seed the active board was scrambled from, so the share card can
+    /// redraw the day's starting position.
+    pub fn scramble_seed(&self) -> u64 {
         self.active_snapshot().seed
     }
 
@@ -495,7 +482,6 @@ fn fresh_snapshot(difficulty: Difficulty, seed: u64) -> Snapshot {
         tiles: generate_scramble(difficulty, seed).tiles,
         moves: 0,
         win_reported: false,
-        blank_visits: vec![0; board_len(difficulty)],
     }
 }
 
@@ -507,7 +493,6 @@ fn snapshot_from_game(game: &Game, difficulty: Difficulty) -> Option<Snapshot> {
         tiles,
         moves: game.moves.max(0) as u32,
         win_reported,
-        blank_visits: vec![0; board_len(difficulty)],
     })
 }
 

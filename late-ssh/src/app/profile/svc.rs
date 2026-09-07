@@ -5,7 +5,7 @@ use late_core::models::artboard_piece::{ArtboardPiece, GalleryCounts};
 use late_core::models::bonsai::{BonsaiV2Tree, Tree};
 use late_core::models::bonsai_decay_protection::BonsaiDecayProtection;
 use late_core::models::chat_message_gild::{ChatMessageGild, GildCounts};
-use late_core::models::chips::{PROFILE_LEDGER_ROWS, UserChips};
+use late_core::models::chips::{MonthChips, PROFILE_LEDGER_ROWS, UserChips};
 use late_core::models::crown::CrownReign;
 use late_core::models::drink_round::DrinkRound;
 use late_core::models::game_payout::GamePayout;
@@ -68,8 +68,8 @@ pub struct ProfileSnapshot {
     /// The newest ledger rows, newest first, each with its ref resolved to
     /// what a reader can use: the public chip audit.
     pub chip_ledger: Vec<LedgerRow>,
-    /// This UTC month's sum by the Top Chips rule, the board's own figure.
-    pub chips_earned_month: i64,
+    /// This UTC month's earned (the board's own figure) and net.
+    pub chips_month: MonthChips,
 }
 
 #[derive(Clone, Debug)]
@@ -243,7 +243,7 @@ impl ProfileService {
         let gild_counts = ChatMessageGild::counts_for_author(&client, user_id).await?;
         let gallery_counts = ArtboardPiece::counts_for_user(&client, user_id).await?;
         let chip_ledger = UserChips::recent_ledger(&client, user_id, PROFILE_LEDGER_ROWS).await?;
-        let chips_earned_month = UserChips::earned_this_month(&client, user_id).await?;
+        let chips_month = UserChips::month_figures(&client, user_id).await?;
         // One batched lookup per table the ledger's refs point at, each a
         // primary-key or unique-index scan over at most PROFILE_LEDGER_ROWS
         // ids, and only when a profile is opened.
@@ -287,7 +287,7 @@ impl ProfileService {
                 gild_counts,
                 gallery_counts,
                 chip_ledger,
-                chips_earned_month,
+                chips_month,
             },
         )?;
         Ok(())

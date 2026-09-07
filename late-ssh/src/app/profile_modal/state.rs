@@ -3,6 +3,7 @@ use std::cell::{Cell, RefCell};
 use late_core::models::artboard_piece::GalleryCounts;
 use late_core::models::bonsai::Tree;
 use late_core::models::chat_message_gild::GildCounts;
+use late_core::models::chips::MonthChips;
 use late_core::models::profile::Profile;
 use late_core::models::profile_award::ProfileAward;
 use ratatui::layout::Rect;
@@ -61,7 +62,7 @@ pub(crate) struct ProfileModalState {
     gild_counts: GildCounts,
     gallery_counts: GalleryCounts,
     chip_ledger: Vec<LedgerRow>,
-    chips_earned_month: i64,
+    chips_month: MonthChips,
     snapshot_rx: Option<watch::Receiver<ProfileSnapshot>>,
     /// First body row shown. Clamped against `extent` on every move, and
     /// again by `draw` once the body has been measured.
@@ -107,7 +108,7 @@ impl ProfileModalState {
             gild_counts: GildCounts::default(),
             gallery_counts: GalleryCounts::default(),
             chip_ledger: Vec::new(),
-            chips_earned_month: 0,
+            chips_month: MonthChips::default(),
             snapshot_rx: None,
             scroll_offset: Cell::new(0),
             extent: Cell::new(ScrollExtent::default()),
@@ -126,7 +127,7 @@ impl ProfileModalState {
         self.gild_counts = GildCounts::default();
         self.gallery_counts = GalleryCounts::default();
         self.chip_ledger.clear();
-        self.chips_earned_month = 0;
+        self.chips_month = MonthChips::default();
         self.aquarium_fish.clear();
         *self.aquarium.get_mut() = None;
         let mut snapshot_rx = self.profile_service.subscribe_snapshot(user_id);
@@ -159,7 +160,7 @@ impl ProfileModalState {
         self.gild_counts = GildCounts::default();
         self.gallery_counts = GalleryCounts::default();
         self.chip_ledger.clear();
-        self.chips_earned_month = 0;
+        self.chips_month = MonthChips::default();
         self.scroll_offset.set(0);
         self.extent.set(ScrollExtent::default());
         self.jump_to_chips.set(false);
@@ -210,7 +211,7 @@ impl ProfileModalState {
             self.gild_counts = GildCounts::default();
             self.gallery_counts = GalleryCounts::default();
             self.chip_ledger.clear();
-            self.chips_earned_month = 0;
+            self.chips_month = MonthChips::default();
             if !self.aquarium_fish.is_empty() {
                 self.aquarium_fish.clear();
                 *self.aquarium.get_mut() = None;
@@ -226,7 +227,7 @@ impl ProfileModalState {
         self.gild_counts = snapshot.gild_counts;
         self.gallery_counts = snapshot.gallery_counts;
         self.chip_ledger = snapshot.chip_ledger;
-        self.chips_earned_month = snapshot.chips_earned_month;
+        self.chips_month = snapshot.chips_month;
 
         if snapshot.aquarium_fish != self.aquarium_fish {
             self.aquarium_fish = snapshot.aquarium_fish;
@@ -322,8 +323,8 @@ impl ProfileModalState {
         &self.chip_ledger
     }
 
-    pub(crate) fn chips_earned_month(&self) -> i64 {
-        self.chips_earned_month
+    pub(crate) fn chips_month(&self) -> MonthChips {
+        self.chips_month
     }
 
     pub(crate) fn profile(&self) -> Option<&Profile> {

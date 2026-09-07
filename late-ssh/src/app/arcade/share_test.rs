@@ -10,7 +10,7 @@ fn day(y: i32, m: u32, d: u32) -> NaiveDate {
 #[test]
 fn renders_header_rows_and_footer_in_both_formats() {
     let card = ShareCard {
-        title: title("Le Word", 214, "4/6"),
+        title: title("Le Word", 214, Some("4/6")),
         rows: vec![
             Row::Glyphs(vec![Glyph::Dark, Glyph::Yellow, Glyph::Green]),
             Row::Text("♠ 13".to_string()),
@@ -67,29 +67,19 @@ fn day_card_without_a_streak_omits_the_flame() {
 }
 
 #[test]
-fn ribbon_wraps_and_keeps_only_the_tail_that_fits() {
-    let glyphs: Vec<Glyph> = (0..5)
-        .map(|i| if i % 2 == 0 { Glyph::Green } else { Glyph::Red })
-        .collect();
-    assert_eq!(
-        ribbon(&glyphs, 2),
-        vec![
-            Row::Glyphs(vec![Glyph::Green, Glyph::Red]),
-            Row::Glyphs(vec![Glyph::Green, Glyph::Red]),
-            Row::Glyphs(vec![Glyph::Green]),
-        ]
-    );
-    let long = vec![Glyph::Blue; MAX_ROWS * 3 + 2];
-    let rows = ribbon(&long, 3);
-    assert_eq!(rows.len(), MAX_ROWS);
+fn a_bare_title_has_no_result() {
+    assert_eq!(title("Rubik's Cube", 82, None), "late.sh Rubik's Cube #82");
 }
 
 #[test]
-fn half_block_picture_packs_two_rows_per_line() {
+fn half_block_picture_packs_two_rows_per_line_and_drops_empty_lines() {
     let picture = vec![
         vec![true, false, true],
         vec![true, true, false],
         vec![false, false, true],
+        vec![false, false, false],
+        vec![false, false, false],
+        vec![false, false, false],
     ];
     assert_eq!(
         half_block_picture(&picture),

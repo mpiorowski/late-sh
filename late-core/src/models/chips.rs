@@ -494,6 +494,15 @@ impl ChipLedgerEntry {
     }
 }
 
+/// A user's chips this UTC month, from [`UserChips::month_figures`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MonthChips {
+    /// The Top Chips sum: counting credits only.
+    pub earned: i64,
+    /// Every row, both sides: what the balance actually did.
+    pub net: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct UserChips {
     pub user_id: Uuid,
@@ -860,24 +869,30 @@ impl UserChips {
             .collect())
     }
 
-    /// What a user has earned this UTC month by the Top Chips rule
-    /// ([`ChipMove::counts_as_earnings`]): the same sum the board ranks, so
-    /// the profile figure and the board never disagree.
-    pub async fn earned_this_month(client: &Client, user_id: Uuid) -> Result<i64> {
+    /// This UTC month's two figures in one scan: what the user earned by
+    /// the Top Chips rule ([`ChipMove::counts_as_earnings`], the same sum
+    /// the board ranks, so the profile figure and the board never
+    /// disagree), and the net of every ledger row, which is what actually
+    /// happened to the balance.
+    pub async fn month_figures(client: &Client, user_id: Uuid) -> Result<MonthChips> {
         let excluded = ChipMove::excluded_earning_reasons();
         let row = client
             .query_one(
                 &format!(
-                    "SELECT COALESCE(SUM(delta), 0)::bigint AS earned
+                    "SELECT COALESCE(SUM(delta) FILTER (WHERE reason <> ALL($2)), 0)::bigint
+                              AS earned,
+                            COALESCE(SUM(delta), 0)::bigint AS net
                      FROM chip_ledger
                      WHERE user_id = $1
-                       AND reason <> ALL($2)
                        AND created_at >= {MONTH_TS_FILTER}"
                 ),
                 &[&user_id, &excluded],
             )
             .await?;
-        Ok(row.get("earned"))
+        Ok(MonthChips {
+            earned: row.get("earned"),
+            net: row.get("net"),
+        })
     }
 
     /// All user chip balances (for per-user lookup in leaderboard refresh).

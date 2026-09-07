@@ -529,8 +529,9 @@ async fn door_boards_rank_wins_depth_and_score() {
 /// Top Chips ranks what a player earned. Spending is a debit and never
 /// counts, whatever it bought, so a heavy spender who out-earns everyone
 /// tops the board instead of vanishing under a negative net; the tables
-/// and gifts stay off it too. `earned_this_month` is the
-/// same sum, so the profile figure agrees with the board.
+/// and gifts stay off it too. `month_figures` is the
+/// same sum, so the profile figure agrees with the board; its net is every
+/// row, stipend included.
 #[tokio::test]
 async fn top_chips_counts_earnings_and_never_spending() {
     let test_db = test_db().await;
@@ -578,9 +579,8 @@ async fn top_chips_counts_earnings_and_never_spending() {
         spender_row.rank < entry_for(board, saver.id).rank,
         "the bigger earner ranks first however much they spent"
     );
-    assert_eq!(
-        UserChips::earned_this_month(&client, spender.id).await.expect("earned"),
-        3_200,
-        "the profile figure is the board figure"
-    );
+    let month = UserChips::month_figures(&client, spender.id).await.expect("month figures");
+    assert_eq!(month.earned, 3_200, "the profile figure is the board figure");
+    // 1,000 stipend + 18,200 credited - 12,300 spent.
+    assert_eq!(month.net, 6_900, "the net is every row");
 }

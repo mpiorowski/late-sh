@@ -178,8 +178,11 @@ ssh late.sh
 - Header: `late.sh <Game> #<n> · <result>`. The number is days since that
   game's first daily, so two people's cards from the same day match. The
   epochs live in one constant table.
-- Body: at most 10 rows, no spoilers. A card must fit in a phone screenshot
-  next to the header and footer. Three exceptions, where the art is the
+- Body: at most 11 rows, no spoilers, no legend. A card must fit in a phone
+  screenshot next to the header and footer, and a stranger must be able to
+  read it without being told the rule: the body is the puzzle itself (a
+  guess grid, the day's scramble above the solve, the clues you were given)
+  or plain words. Three exceptions to "no spoilers", where the art is the
   card: the Nonogram picture, Artboard pieces and the bonsai.
 - Footer: always `ssh late.sh`, never a URL. The command is the brand and the
   filter at once. Someone who knows what to do with it is in the tavern in
@@ -213,24 +216,26 @@ in a game module.
 **1. Arcade dailies.** Seven cards plus one.
 
 - Le Word: the guess grid. A loss shows all six rows and `X/6`.
-- Nonogram: the finished picture in half-blocks, so a 10x10 is 5 rows. The
-  picture is the solution, and that is accepted: copying a picture by hand
-  into clue-checked cells is more work than solving it, and the picture is
-  the brag.
-- Sudoku: no digits. A 3x3 of coloured squares, one per box, coloured by
-  which third of your solve finished it (green, yellow, red). Every solver
-  gets a different fingerprint on the same puzzle. Plus time.
-- Minesweeper: no board, that spoils the mines. Difficulty, time, and a strip
-  of your last ten clicks as glyphs: safe, flag, boom. A boom at the end
-  tells the story on its own. Click history is session-local, so a board
-  resumed from a save shows the clicks since resume.
+- Nonogram: the finished picture in half-blocks, so a 10x10 is 5 rows and
+  the hard 20x20 is 10. The picture is the solution, and that is accepted:
+  the picture is the brag.
+- Sudoku: the 9x9 with no digits. White is a clue you were given, green is
+  a cell you filled. It reads as a sudoku because it is one, and hard shows
+  itself in how few white squares there are.
+- Minesweeper: no board, that spoils the mines. Difficulty, lives, mine
+  count, and a strip of your last ten clicks as glyphs: safe, flag, boom. A
+  boom at the end tells the story on its own. Click history is
+  session-local, so a board resumed from a save shows the clicks since
+  resume.
 - Solitaire: the four foundation piles as bars out of 13, spade heart diamond
-  club, plus moves. A loss card shows exactly how far you got.
-- Rubik's Cube: the solve as a colour ribbon, one square per face turn
-  coloured by face, wrapping at 12 per row, so a 40-move solve is four rows.
-  Nobody can spoil a cube; this is pure signature. Plus move count.
-- Sliding Puzzle: a heatmap of where the blank tile spent its time, 4 rows
-  for a 4x4, plus moves against par.
+  club, plus score and draw count. Only on a win, since Klondike never
+  declares a loss.
+- Rubik's Cube: before and after. The front face of the day's scramble, an
+  arrow row with the move count, and the same face solved. Nobody needs
+  that explained.
+- Sliding Puzzle: before and after, the same way. Tiles wear the colour of
+  their home row, so the scramble is a jumble and the solve is clean
+  stripes with the gap in the corner. 7 rows for a 3x3, 11 for the 5x5.
 - The day card, from the arcade lobby: one row of seven glyphs, one per
   daily, filled for each you won today, plus your streak.
   `late.sh Daily #214 · 7/7 · 🔥 41`. This is the card people will paste

@@ -50,7 +50,7 @@ pub fn card(
         rows.push(Row::Glyphs(strip));
     }
     ShareCard {
-        title: share::title("Minesweeper", number, &result),
+        title: share::title("Minesweeper", number, Some(&result)),
         rows,
     }
 }
