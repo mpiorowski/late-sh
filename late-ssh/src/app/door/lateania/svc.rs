@@ -3394,11 +3394,12 @@ struct MobInstance {
     /// room on `engaged_by`.
     untargeted: u8,
     /// Everyone who has drawn on this mob and has not broken off. A fighter
-    /// stays on the list until they flee, fall, or leave the room, so the mob
-    /// keeps striking them and keeps its wounds even while their lock sits on
-    /// something else (its own summoned add, a pack-mate). Cleared when the
-    /// mob recovers or dies; a stale entry is harmless, since the list is only
-    /// ever read against players who are alive and in the room.
+    /// stays on the list while they stand, so the mob keeps striking them and
+    /// keeps its wounds even while their lock sits on something else (its own
+    /// summoned add, a pack-mate). Fleeing and falling take you off it at
+    /// once; walking off (or dropping) leaves the entry until the recovery
+    /// sweep sees nobody fighting and lets the whole list go, with the wounds
+    /// if it has any. Nothing on it ever outlives the fight it was drawn in.
     engaged_by: HashSet<Uuid>,
 }
 
@@ -7169,7 +7170,8 @@ impl WorldState {
     /// room is told. Still fighting means either holding it as a target or
     /// standing in its room on its `engaged_by` list, so killing the add it
     /// summoned never hands the fight back at full health. What does start the
-    /// clock is leaving: fleeing, falling, walking off, disconnecting.
+    /// clock is leaving: fleeing, falling, walking off, disconnecting. A mob
+    /// with nothing to shed skips the clock and simply forgets its fighters.
     fn recover_abandoned_mobs(&mut self) {
         let fighting = self.mobs_in_a_fight();
         let mut due: Vec<u32> = Vec::new();
@@ -7182,7 +7184,11 @@ impl WorldState {
                 || self.mob_stuns.get(id).is_some_and(|t| *t > 0)
                 || self.mob_dots.contains_key(id);
             if !afflicted {
+                // Nothing to shed and nobody left fighting: forget them now,
+                // or a foe drawn on and never wounded would lie in wait for
+                // whoever comes back through its room, and never roam.
                 m.untargeted = 0;
+                m.engaged_by.clear();
                 continue;
             }
             m.untargeted = m.untargeted.saturating_add(1);
@@ -8910,6 +8916,7 @@ impl WorldState {
                 p.empower = 0;
                 p.death_save_used = false;
                 let plural = if left == 1 { "" } else { "s" };
+                self.fall_out_of_every_fight(user_id);
                 self.log_to(
                     user_id,
                     LogKind::System,
@@ -8943,6 +8950,7 @@ impl WorldState {
             } else {
                 "You have fallen! Your spirit lingers by your corpse. Wait for a resurrection, or press r to release to the temple.".to_string()
             };
+            self.fall_out_of_every_fight(user_id);
             self.log_to(user_id, LogKind::System, death_message);
             if let Some(name) = lost_escort {
                 self.log_to(
@@ -8965,6 +8973,16 @@ impl WorldState {
     }
 
     // ---- Death, the temple, and resurrection ----------------------------
+
+    /// The blow that fells you ends your part of every fight: no foe keeps
+    /// swinging at a fighter who rises where they fell, whether by a veteran
+    /// charge or a healer's rite. Whoever is still on its list keeps it busy;
+    /// otherwise its recovery clock starts here.
+    fn fall_out_of_every_fight(&mut self, user_id: Uuid) {
+        for m in self.mobs.values_mut() {
+            m.engaged_by.remove(&user_id);
+        }
+    }
 
     /// Send a (usually dead) player to the Temple of the Dawn, fully restored,
     /// clearing the corpse state. Shared by the auto-release tick and the manual

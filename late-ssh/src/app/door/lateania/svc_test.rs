@@ -873,6 +873,52 @@ fn stepping_out_of_the_room_starts_the_recovery_clock() {
 }
 
 #[test]
+fn a_fighter_raised_where_they_fell_is_out_of_the_fight() {
+    let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
+    s.mobs.get_mut(&mob_id).unwrap().spawn.damage = 10;
+    // The Warrior falls to the foe (Unbreakable already spent, no veteran
+    // charge) and a Cleric standing in the same room raises them on the spot.
+    s.players.get_mut(&uid(1)).unwrap().death_save_used = true;
+    s.strike_player(uid(1), 9999, DamageType::Physical, "the foe");
+    assert!(s.players[&uid(1)].dead, "the warrior is a corpse");
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Cleric);
+    s.players.get_mut(&uid(2)).unwrap().room = s.players[&uid(1)].room;
+    s.players.get_mut(&uid(2)).unwrap().resource = s.players[&uid(2)].max_resource;
+    s.resurrect_nearest(uid(2));
+    assert!(!s.players[&uid(1)].dead, "raised where they fell");
+    let hp_risen = s.players[&uid(1)].hp;
+    s.tick();
+    assert_eq!(
+        s.players[&uid(1)].hp, hp_risen,
+        "falling ended your fight: the foe does not strike a fighter who just rose, untargeted, beside it"
+    );
+}
+
+#[test]
+fn a_full_health_foe_forgets_a_fighter_who_walked_off() {
+    let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
+    // Drawn on but never wounded: nothing for the recovery sweep to shed.
+    {
+        let m = s.mobs.get_mut(&mob_id).unwrap();
+        m.hp = m.spawn.max_hp;
+        m.spawn.damage = 10;
+    }
+    s.players.get_mut(&uid(1)).unwrap().target = None;
+    s.players.get_mut(&uid(1)).unwrap().room = 2002;
+    s.tick();
+    // Back in the room later, with no engage: a foe with nothing to shake off
+    // must have let the fight go, not lie in wait for the next tick.
+    s.players.get_mut(&uid(1)).unwrap().room = 2001;
+    let hp_before = s.players[&uid(1)].hp;
+    s.tick();
+    assert_eq!(
+        s.players[&uid(1)].hp, hp_before,
+        "an unwounded foe nobody fights forgets who drew on it"
+    );
+}
+
+#[test]
 fn a_shorter_stun_does_not_cut_a_longer_one_short() {
     let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
     s.mob_stuns.insert(mob_id, 4);

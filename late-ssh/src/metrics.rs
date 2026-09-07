@@ -179,6 +179,7 @@ mod inner {
     };
 
     use super::ShareCardKind;
+    use super::XMediaLookup;
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
@@ -1254,6 +1255,7 @@ mod inner {
 #[cfg(not(feature = "otel"))]
 mod inner {
     use super::ShareCardKind;
+    use super::XMediaLookup;
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
