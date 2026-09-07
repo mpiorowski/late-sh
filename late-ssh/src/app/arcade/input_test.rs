@@ -137,13 +137,16 @@ async fn le_word_s_types_a_letter_until_the_round_ends_then_copies_the_card() {
     assert!(handle_key(&mut app, b's'));
     let card = app.pending_clipboard.take().expect("card copied");
     assert!(card.starts_with("late.sh Le Word #"), "{card}");
-    assert!(card.contains("· 2/6\n🟨🟨⬛🟨⬛\n🟩🟩🟩🟩🟩\nssh late.sh"), "{card}");
+    assert!(
+        card.contains("· 2/6\n🟨🟨⬛🟨⬛\n🟩🟩🟩🟩🟩\nssh late.sh"),
+        "{card}"
+    );
     assert_eq!(app.le_word_state.current_guess, "");
     assert!(app.is_playing_game);
 }
 
 #[tokio::test]
-async fn lobby_s_copies_the_day_card_and_shift_s_needs_a_room() {
+async fn lobby_s_copies_the_day_card() {
     use crate::test_helpers::{make_app, new_test_db};
     use late_core::test_utils::create_test_user;
 
@@ -156,11 +159,8 @@ async fn lobby_s_copies_the_day_card_and_shift_s_needs_a_room() {
     assert!(handle_key(&mut app, b's'));
     let card = app.pending_clipboard.take().expect("day card copied");
     assert!(card.starts_with("late.sh Daily #"), "{card}");
-    assert!(card.contains("· 0/7\n⬛⬛⬛⬛⬛⬛⬛\nssh late.sh"), "{card}");
-
-    // No room selected in a fresh app: posting refuses instead of vanishing.
-    assert!(handle_key(&mut app, b'S'));
-    assert!(app.pending_clipboard.is_none());
-    let banner = app.banner.take().expect("refusal banner");
-    assert!(banner.message.contains("Open a room first"), "{}", banner.message);
+    assert!(
+        card.contains("· 0/7\n⬛⬛⬛⬛⬛⬛⬛\nssh late.sh"),
+        "{card}"
+    );
 }

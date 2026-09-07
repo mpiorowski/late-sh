@@ -21,10 +21,7 @@ fn card_is_the_picture_in_half_blocks_under_a_sized_header() {
         card,
         ShareCard {
             title: "late.sh Nonograms #2 · easy 4×4".to_string(),
-            rows: vec![
-                Row::Text("▄▀▀▄".to_string()),
-                Row::Text("▀██▀".to_string()),
-            ],
+            rows: vec![Row::Text("▄▀▀▄".to_string()), Row::Text("▀██▀".to_string()),],
         }
     );
 }

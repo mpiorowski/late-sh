@@ -313,13 +313,15 @@ leaderboard snapshot. Cheap, but it is the third thing, not the first.
 
 ### B.5 Order of work
 
-1. The grammar, the renderer, `s` and `S`, and the Le Word card. One game,
-   both surfaces, the loop proven. Built 2026-09-07.
+1. The grammar, the renderer, `s`, and the Le Word card. Built 2026-09-07.
 2. The other six dailies and the day card. Built 2026-09-07, session-local
    histories for Sudoku, Minesweeper, Rubik's, and Sliding Puzzle included;
    the ASCII format is rendered and tested but not yet wired to a setting.
-   Still open from this step: clickable posted cards, and the finishers'
-   cards on the result panel, which needs the card persisted per win.
+   Posting a card into a room (`S`) was built and pulled the same day: from
+   the arcade there is no composer room to target, so it only ever refused.
+   It comes back once a card posted into chat can be clicked, with #lounge
+   as the target. Also still open: the finishers' cards on the result
+   panel, which needs the card persisted per win.
 3. Lobby daily match cards, PGN copy.
 4. Roguelike tombstones from `door_runs`.
 5. Artboard gallery copy for everyone.

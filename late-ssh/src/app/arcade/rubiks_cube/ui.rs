@@ -36,18 +36,20 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ),
             ("view", state.view_label(), theme::TEXT_BRIGHT()),
         ]),
-        keys: keys_line(vec![
-            ("u/d/l/r/f/b", "turn"),
-            ("Shift", "inverse"),
-            ("s/0", "reset daily"),
-            ("v/arrows", "rotate view"),
-            ("Esc", "exit"),
-        ]
-        .into_iter()
-        .chain(crate::app::arcade::ui::share_hints(
-            super::share::from_state(state).is_some(),
-        ))
-        .collect()),
+        keys: keys_line(
+            vec![
+                ("u/d/l/r/f/b", "turn"),
+                ("Shift", "inverse"),
+                ("0", "reset daily"),
+                ("v/arrows", "rotate view"),
+                ("Esc", "exit"),
+            ]
+            .into_iter()
+            .chain(crate::app::arcade::ui::share_hints(
+                super::share::from_state(state).is_some(),
+            ))
+            .collect(),
+        ),
         tip: Some(tip_line(if state.reset_pending() {
             "Press reset again to reset today's cube.".to_string()
         } else {

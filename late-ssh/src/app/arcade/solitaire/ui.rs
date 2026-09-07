@@ -37,23 +37,25 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("stock", state.stock.len().to_string(), theme::TEXT_BRIGHT()),
             ("sel", state.selection_label(), theme::TEXT_BRIGHT()),
         ]),
-        keys: keys_line(vec![
-            ("h/j/k/l", "move"),
-            ("Space", "select/place"),
-            ("a/f", "auto"),
-            ("u", "undo"),
-            ("d/p/n", "new"),
-            ("[ ]", "draw"),
-            ("r", "reset"),
-            ("g", "reroll"),
-            ("`", "dashboard"),
-            ("Esc", "exit"),
-        ]
-        .into_iter()
-        .chain(crate::app::arcade::ui::share_hints(
-            super::share::from_state(state).is_some(),
-        ))
-        .collect()),
+        keys: keys_line(
+            vec![
+                ("h/j/k/l", "move"),
+                ("Space", "select/place"),
+                ("a/f", "auto"),
+                ("u", "undo"),
+                ("d/p/n", "new"),
+                ("[ ]", "draw"),
+                ("r", "reset"),
+                ("g", "reroll"),
+                ("`", "dashboard"),
+                ("Esc", "exit"),
+            ]
+            .into_iter()
+            .chain(crate::app::arcade::ui::share_hints(
+                super::share::from_state(state).is_some(),
+            ))
+            .collect(),
+        ),
         tip: Some(tip_line(match state.reset_pending {
             Some(kind) => kind.confirm_tip(),
             None => "Pick a face-down card to grab the visible stack; pick a column to place it.",

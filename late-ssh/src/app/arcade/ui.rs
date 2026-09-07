@@ -231,10 +231,10 @@ pub fn status_line(segments: Vec<(&'static str, String, Color)>) -> Line<'static
 }
 
 /// The share hint a finished daily adds to its key line: `s` copies the
-/// card, `S` posts it to the room. Empty while the board is still open.
+/// card. Empty while the board is still open.
 pub fn share_hints(card_ready: bool) -> Vec<(&'static str, &'static str)> {
     if card_ready {
-        vec![("s", "share"), ("S", "post")]
+        vec![("s", "share")]
     } else {
         Vec::new()
     }
@@ -456,7 +456,21 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            "s copies your day card, S posts it to the room.",
+            " s ",
+            Style::default()
+                .fg(theme::BG_SELECTION())
+                .bg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            "Share your day card",
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            ": copies a spoiler-free score for today's dailies. Every finished puzzle has one too.",
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ]));

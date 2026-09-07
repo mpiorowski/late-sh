@@ -709,9 +709,9 @@ pub fn box_is_complete(grid: &Grid, index: usize) -> bool {
     let top = (index / 3) * 3;
     let left = (index % 3) * 3;
     let mut seen = [false; 10];
-    for r in top..top + 3 {
-        for c in left..left + 3 {
-            let v = grid[r][c] as usize;
+    for row in &grid[top..top + 3] {
+        for &value in &row[left..left + 3] {
+            let v = value as usize;
             if v == 0 || v > 9 || seen[v] {
                 return false;
             }

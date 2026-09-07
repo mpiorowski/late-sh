@@ -70,22 +70,24 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
                 theme::TEXT_BRIGHT(),
             ),
         ]),
-        keys: keys_line(vec![
-            ("h/j/k/l", "move"),
-            ("Space", "fill"),
-            ("x", "mark"),
-            ("0", "clear"),
-            ("d/p/n", "daily/pers/new"),
-            ("[ ]", "diff"),
-            ("r", "reset"),
-            ("`", "dashboard"),
-            ("Esc", "exit"),
-        ]
-        .into_iter()
-        .chain(crate::app::arcade::ui::share_hints(
-            super::share::from_state(state).is_some(),
-        ))
-        .collect()),
+        keys: keys_line(
+            vec![
+                ("h/j/k/l", "move"),
+                ("Space", "fill"),
+                ("x", "mark"),
+                ("0", "clear"),
+                ("d/p/n", "daily/pers/new"),
+                ("[ ]", "diff"),
+                ("r", "reset"),
+                ("`", "dashboard"),
+                ("Esc", "exit"),
+            ]
+            .into_iter()
+            .chain(crate::app::arcade::ui::share_hints(
+                super::share::from_state(state).is_some(),
+            ))
+            .collect(),
+        ),
         tip: state
             .reset_pending
             .map(|kind| crate::app::arcade::ui::tip_line(kind.confirm_tip())),

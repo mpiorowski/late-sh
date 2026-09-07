@@ -51,22 +51,24 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
                 theme::AMBER(),
             ),
         ]),
-        keys: keys_line(vec![
-            ("h/j/k/l", "move"),
-            ("Space", "reveal/chord"),
-            ("f", "flag"),
-            ("d/p/n", "daily/pers/new"),
-            ("[ ]", "diff"),
-            ("o", "cell style"),
-            ("{ }", "scroll"),
-            ("`", "dashboard"),
-            ("Esc", "exit"),
-        ]
-        .into_iter()
-        .chain(crate::app::arcade::ui::share_hints(
-            super::share::from_state(state).is_some(),
-        ))
-        .collect()),
+        keys: keys_line(
+            vec![
+                ("h/j/k/l", "move"),
+                ("Space", "reveal/chord"),
+                ("f", "flag"),
+                ("d/p/n", "daily/pers/new"),
+                ("[ ]", "diff"),
+                ("o", "cell style"),
+                ("{ }", "scroll"),
+                ("`", "dashboard"),
+                ("Esc", "exit"),
+            ]
+            .into_iter()
+            .chain(crate::app::arcade::ui::share_hints(
+                super::share::from_state(state).is_some(),
+            ))
+            .collect(),
+        ),
         tip: Some(tip_line(if state.reset_pending {
             "Press again to reset"
         } else {

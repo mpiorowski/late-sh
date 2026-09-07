@@ -29,7 +29,10 @@ fn renders_header_rows_and_footer_in_both_formats() {
 #[test]
 fn puzzle_number_is_one_based_from_the_epoch() {
     assert_eq!(puzzle_number(DAY_EPOCH, DAY_EPOCH), 1);
-    assert_eq!(puzzle_number(epoch(DailyPuzzle::LeWord), day(2026, 6, 19)), 2);
+    assert_eq!(
+        puzzle_number(epoch(DailyPuzzle::LeWord), day(2026, 6, 19)),
+        2
+    );
     assert_eq!(puzzle_number(DAY_EPOCH, day(2026, 9, 7)), 150);
 }
 

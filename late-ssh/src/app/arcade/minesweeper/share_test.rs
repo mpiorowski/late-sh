@@ -31,7 +31,16 @@ fn cleared_card_shows_the_last_ten_clicks() {
 
 #[test]
 fn a_lost_field_reads_boom_and_a_restored_board_has_no_strip() {
-    let card = card(NaiveDate::from_ymd_opt(2026, 4, 12).unwrap(), "hard", 40, 0, &[]);
-    assert_eq!(card.title, "late.sh Minesweeper #2 · hard · boom · 0/3 lives");
+    let card = card(
+        NaiveDate::from_ymd_opt(2026, 4, 12).unwrap(),
+        "hard",
+        40,
+        0,
+        &[],
+    );
+    assert_eq!(
+        card.title,
+        "late.sh Minesweeper #2 · hard · boom · 0/3 lives"
+    );
     assert_eq!(card.rows, vec![Row::Text("💣 40 mines".to_string())]);
 }

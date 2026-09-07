@@ -36,7 +36,10 @@ fn a_restored_board_with_no_visits_is_all_white() {
         80,
         &[0; 16],
     );
-    assert_eq!(card.title, "late.sh Sliding Puzzle #1 · medium 4×4 · 80 moves");
+    assert_eq!(
+        card.title,
+        "late.sh Sliding Puzzle #1 · medium 4×4 · 80 moves"
+    );
     assert_eq!(card.rows.len(), 4);
     assert!(
         card.rows

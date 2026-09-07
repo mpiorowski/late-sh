@@ -59,20 +59,22 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ),
             ("reward", "250".to_string(), theme::TEXT_BRIGHT()),
         ]),
-        keys: keys_line(vec![
-            ("a-z", "type"),
-            ("Backspace", "delete"),
-            ("Enter", "guess"),
-            ("?", "help"),
-            ("!", "rules"),
-            ("`", "dashboard"),
-            ("Esc", "exit"),
-        ]
-        .into_iter()
-        .chain(crate::app::arcade::ui::share_hints(
-            super::share::from_state(state).is_some(),
-        ))
-        .collect()),
+        keys: keys_line(
+            vec![
+                ("a-z", "type"),
+                ("Backspace", "delete"),
+                ("Enter", "guess"),
+                ("?", "help"),
+                ("!", "rules"),
+                ("`", "dashboard"),
+                ("Esc", "exit"),
+            ]
+            .into_iter()
+            .chain(crate::app::arcade::ui::share_hints(
+                super::share::from_state(state).is_some(),
+            ))
+            .collect(),
+        ),
         tip: Some(tip_line(state.message.clone())),
     };
 

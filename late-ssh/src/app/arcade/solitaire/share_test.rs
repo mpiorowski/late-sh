@@ -13,7 +13,12 @@ fn card_draws_one_bar_per_foundation() {
         (Some(Suit::Diamonds), 13),
         (Some(Suit::Clubs), 13),
     ];
-    let card = card(NaiveDate::from_ymd_opt(2026, 4, 11).unwrap(), 3, 520, &piles);
+    let card = card(
+        NaiveDate::from_ymd_opt(2026, 4, 11).unwrap(),
+        3,
+        520,
+        &piles,
+    );
     assert_eq!(
         card,
         ShareCard {

@@ -17,7 +17,11 @@ pub fn from_state(state: &State) -> Option<ShareCard> {
     if !state.is_solved() || !state.has_started() {
         return None;
     }
-    Some(card(state.puzzle_date(), state.user_moves(), state.move_log()))
+    Some(card(
+        state.puzzle_date(),
+        state.user_moves(),
+        state.move_log(),
+    ))
 }
 
 /// `moves` is the full count; `faces` is this session's turn log, which is

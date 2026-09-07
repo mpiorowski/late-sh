@@ -5,8 +5,8 @@
 //!
 //! This module owns the grammar (the card struct, the closed glyph set, the
 //! renderer, the puzzle numbering) and the day card. Each daily builds its
-//! own card in a pure `share.rs` beside its `state.rs`; copying, posting,
-//! banners, and telemetry stay in `arcade/input.rs`.
+//! own card in a pure `share.rs` beside its `state.rs`; copying, the
+//! banner, and telemetry stay in `arcade/input.rs`.
 
 use chrono::NaiveDate;
 use late_core::models::leaderboard::DailyPuzzle;
@@ -101,13 +101,6 @@ pub enum ShareCardKind {
     Day,
 }
 
-/// Where a card went.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ShareSurface {
-    Clipboard,
-    Room,
-}
-
 /// Render a card as the text the player pastes.
 pub fn render(card: &ShareCard, format: ShareFormat) -> String {
     let mut out = String::new();
@@ -179,7 +172,13 @@ pub const DAY_CARD_ORDER: [DailyPuzzle; 7] = [
 pub fn day_card(day: NaiveDate, won: impl Fn(DailyPuzzle) -> bool, streak_days: i32) -> ShareCard {
     let marks: Vec<Glyph> = DAY_CARD_ORDER
         .iter()
-        .map(|puzzle| if won(*puzzle) { Glyph::Green } else { Glyph::Dark })
+        .map(|puzzle| {
+            if won(*puzzle) {
+                Glyph::Green
+            } else {
+                Glyph::Dark
+            }
+        })
         .collect();
     let won_count = marks.iter().filter(|g| **g == Glyph::Green).count();
     let number = puzzle_number(DAY_EPOCH, day);

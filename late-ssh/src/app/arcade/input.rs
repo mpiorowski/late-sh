@@ -1,4 +1,4 @@
-use crate::app::arcade::share::{self, ShareCard, ShareCardKind, ShareFormat, ShareSurface};
+use crate::app::arcade::share::{self, ShareCard, ShareCardKind, ShareFormat};
 use crate::app::common::primitives::{Banner, Screen};
 use crate::app::help_modal::data::HelpTopic;
 use ratatui::layout::Rect;
@@ -50,13 +50,12 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         if byte == b'`' && crate::app::workspace::arcade::active_daily_stop(app).is_some() {
             return crate::app::workspace::cycle::cycle_game_workspace(app);
         }
-        // A finished daily offers its share card on `s` (copy) and `S`
-        // (post to the room). Only then: while a board is open the byte is
-        // the game's, a Le Word letter or the cube's reset.
-        if let Some(surface) = share_surface(byte)
+        // A finished daily offers its share card on `s`. Only then: while a
+        // board is open the byte is the game's (a Le Word letter).
+        if byte == b's'
             && let Some((kind, card)) = active_daily_card(app)
         {
-            share_card(app, kind, &card, surface);
+            share_card(app, kind, &card);
             return true;
         }
         if app.game_selection == GAME_SELECTION_2048 {
@@ -151,9 +150,9 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
     }
 
     // Lobby mode
-    if let Some(surface) = share_surface(byte) {
+    if byte == b's' {
         let card = day_card(app);
-        share_card(app, ShareCardKind::Day, &card, surface);
+        share_card(app, ShareCardKind::Day, &card);
         return true;
     }
     match byte {
@@ -187,14 +186,6 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
             true
         }
         _ => false,
-    }
-}
-
-fn share_surface(byte: u8) -> Option<ShareSurface> {
-    match byte {
-        b's' => Some(ShareSurface::Clipboard),
-        b'S' => Some(ShareSurface::Room),
-        _ => None,
     }
 }
 
@@ -241,26 +232,12 @@ pub(crate) fn day_card(app: &App) -> ShareCard {
     )
 }
 
-/// Copy or post a rendered card, then count it. The one place a card
-/// leaves the session, so the banner and the metric live here.
-fn share_card(app: &mut App, kind: ShareCardKind, card: &ShareCard, surface: ShareSurface) {
-    let text = share::render(card, ShareFormat::Emoji);
-    match surface {
-        ShareSurface::Clipboard => {
-            app.pending_clipboard = Some(text);
-            app.banner = Some(Banner::success("Card copied. Paste it anywhere."));
-        }
-        ShareSurface::Room => match app.chat.post_to_composer_room(text) {
-            Some(slug) => {
-                app.banner = Some(Banner::success(&format!("Card posted to #{slug}")));
-            }
-            None => {
-                app.banner = Some(Banner::error("Open a room first, then press S"));
-                return;
-            }
-        },
-    }
-    crate::metrics::record_share_card(kind, surface);
+/// Copy a rendered card to the clipboard, then count it. The one place a
+/// card leaves the session, so the banner and the metric live here.
+fn share_card(app: &mut App, kind: ShareCardKind, card: &ShareCard) {
+    app.pending_clipboard = Some(share::render(card, ShareFormat::Emoji));
+    app.banner = Some(Banner::success("Card copied. Paste it anywhere."));
+    crate::metrics::record_share_card(kind);
 }
 
 fn open_global_help(app: &mut App) {

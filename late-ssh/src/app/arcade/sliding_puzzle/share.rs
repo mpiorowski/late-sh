@@ -27,10 +27,18 @@ pub fn from_state(state: &State) -> Option<ShareCard> {
 /// `visits` is per cell, row-major, `dimension * dimension` long. Heat is
 /// relative to the most-visited cell: never visited white, then yellow,
 /// orange, red by thirds of that maximum.
-pub fn card(puzzle_date: NaiveDate, difficulty: Difficulty, moves: u32, visits: &[u32]) -> ShareCard {
+pub fn card(
+    puzzle_date: NaiveDate,
+    difficulty: Difficulty,
+    moves: u32,
+    visits: &[u32],
+) -> ShareCard {
     let number = share::puzzle_number(share::epoch(DailyPuzzle::SlidingPuzzle), puzzle_date);
     let dimension = board_dimension(difficulty);
-    let result = format!("{} {dimension}×{dimension} · {moves} moves", difficulty.key());
+    let result = format!(
+        "{} {dimension}×{dimension} · {moves} moves",
+        difficulty.key()
+    );
     let max = visits.iter().copied().max().unwrap_or(0);
     let rows = visits
         .chunks(dimension)
