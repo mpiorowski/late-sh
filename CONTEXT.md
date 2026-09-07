@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-09-07 (cleanup: every idea and roadmap item moved to `PLAN.md` Backlog, history removed; this file describes the present only)
+- Last updated: 2026-09-08 (X posts shared to News are built from the post's own public metadata instead of AI search: `extract_tweet` parses author, text, and date out of `publish.x.com/oembed` and takes the thumbnail and sensitivity flag from fxtwitter, with no AI in the path at all; `late-ssh/src/app/chat/news/svc.rs`, `late-ssh/src/app/chat/CONTEXT.md` §News. Ideas and roadmap live in `PLAN.md` Backlog; this file describes the present only.)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 

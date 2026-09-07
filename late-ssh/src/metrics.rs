@@ -5,6 +5,7 @@ use late_core::models::media_queue_item::SongQueueReward;
 
 use crate::app::activity::event::ActivityGame;
 use crate::app::arcade::share::ShareCardKind;
+use crate::app::chat::news::svc::XMediaLookup;
 use crate::app::chat::svc::GildRefusal;
 use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
@@ -597,6 +598,18 @@ mod inner {
         })
     }
 
+    fn news_x_media_lookups_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_news_x_media_lookups_total")
+                .with_description(
+                    "fxtwitter lookups behind X shares, the only NSFW gate on that path",
+                )
+                .build()
+        })
+    }
+
     fn news_share_chips_paid_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -885,6 +898,23 @@ mod inner {
             &[KeyValue::new("reward", news_share_reward_label(reward))],
         );
         news_share_chips_paid_total().add(reward.chips() as u64, &[]);
+    }
+
+    /// `unavailable` is a share the gate rejected without a verdict; a run of
+    /// them is an fxtwitter outage.
+    fn news_x_media_lookup_label(lookup: XMediaLookup) -> &'static str {
+        match lookup {
+            XMediaLookup::Clean => "clean",
+            XMediaLookup::Sensitive => "sensitive",
+            XMediaLookup::Unavailable => "unavailable",
+        }
+    }
+
+    pub fn record_news_x_media_lookup(lookup: XMediaLookup) {
+        news_x_media_lookups_total().add(
+            1,
+            &[KeyValue::new("outcome", news_x_media_lookup_label(lookup))],
+        );
     }
 
     /// Same shape as the News share: one counter for the submissions and one
@@ -1253,6 +1283,7 @@ mod inner {
     pub fn record_share_card(_kind: ShareCardKind) {}
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
+    pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_gild_bought(_tier: GildTier) {}
     pub fn record_gild_refused(_refusal: GildRefusal) {}
