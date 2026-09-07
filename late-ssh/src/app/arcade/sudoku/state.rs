@@ -449,11 +449,11 @@ impl State {
         self.push_undo();
 
         self.grid[r][c] = val;
+        self.sync_box_finish_ranks();
 
         if val != 0 {
             // A placed value settles the cell, so its pencil marks are done.
             self.notes[r][c] = 0;
-            self.note_finished_boxes();
             self.check_win();
         }
         self.store_active_snapshot();
@@ -477,12 +477,15 @@ impl State {
     }
 
     /// Stamp every box that just became complete (nine distinct digits)
-    /// with the next finish rank, so the share card can colour the order.
-    fn note_finished_boxes(&mut self) {
+    /// with the next finish rank, so the share card can colour the order,
+    /// and drop the rank of any box a clear or overwrite broke open again.
+    fn sync_box_finish_ranks(&mut self) {
         let next = self.box_finish_rank.iter().copied().max().unwrap_or(0) + 1;
         for (index, rank) in self.box_finish_rank.iter_mut().enumerate() {
-            if *rank == 0 && box_is_complete(&self.grid, index) {
-                *rank = next;
+            match (*rank, box_is_complete(&self.grid, index)) {
+                (0, true) => *rank = next,
+                (_, false) => *rank = 0,
+                (_, true) => {}
             }
         }
     }

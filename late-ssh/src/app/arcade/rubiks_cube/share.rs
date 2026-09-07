@@ -5,16 +5,21 @@
 use chrono::NaiveDate;
 use late_core::models::leaderboard::DailyPuzzle;
 
-use crate::app::arcade::share::{self, Glyph, ShareCard};
+use crate::app::arcade::share::{self, Glyph, MAX_ROW_GLYPHS, ShareCard};
 
 use super::state::{Face, State};
 
-/// Turns per ribbon row.
-pub const RIBBON_WIDTH: usize = 12;
+/// Turns per ribbon row: the widest a glyph row may be.
+pub const RIBBON_WIDTH: usize = MAX_ROW_GLYPHS;
+
+/// Whether today's cube has been turned and is solved.
+pub fn is_ready(state: &State) -> bool {
+    state.has_started() && state.is_solved()
+}
 
 /// The card for a solved daily cube, or `None` while it is still scrambled.
 pub fn from_state(state: &State) -> Option<ShareCard> {
-    if !state.is_solved() || !state.has_started() {
+    if !is_ready(state) {
         return None;
     }
     Some(card(

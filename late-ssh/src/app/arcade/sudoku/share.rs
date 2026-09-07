@@ -9,10 +9,15 @@ use crate::app::arcade::share::{self, Glyph, Row, ShareCard};
 
 use super::state::{Mode, State};
 
+/// Whether a daily grid is finished. Personal boards never get a card.
+pub fn is_ready(state: &State) -> bool {
+    state.mode == Mode::Daily && state.is_game_over
+}
+
 /// The card for a finished daily, or `None` on a personal board or while
 /// the grid is still open.
 pub fn from_state(state: &State) -> Option<ShareCard> {
-    if state.mode != Mode::Daily || !state.is_game_over {
+    if !is_ready(state) {
         return None;
     }
     Some(card(

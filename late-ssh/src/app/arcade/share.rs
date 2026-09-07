@@ -1,7 +1,8 @@
-//! Share cards: the spoiler-free result a player pastes wherever they
-//! already talk. Every card has the same shape, a `late.sh <Game> #<n>`
-//! header, at most eight body rows, and the footer `ssh late.sh`, never a
-//! URL, because the command is the brand and the filter at once.
+//! Share cards: the result a player pastes wherever they already talk.
+//! Every card has the same shape, a `late.sh <Game> #<n>` header, at most
+//! ten body rows, and the footer `ssh late.sh`, never a URL, because the
+//! command is the brand and the filter at once. Every card but one gives
+//! nothing away; the Nonogram card is the finished picture by choice.
 //!
 //! This module owns the grammar (the card struct, the closed glyph set, the
 //! renderer, the puzzle numbering) and the day card. Each daily builds its
@@ -14,11 +15,14 @@ use late_core::models::leaderboard::DailyPuzzle;
 /// The footer of every card. Never a URL.
 pub const FOOTER: &str = "ssh late.sh";
 
-/// The widest a glyph row may be, so a card fits a phone screenshot.
+/// The widest a glyph row may be, so a card fits a phone screenshot. Text
+/// rows (a half-block picture, a stat line) are narrower per character and
+/// are not bound by it.
 pub const MAX_ROW_GLYPHS: usize = 12;
 
-/// The most body rows a card may carry.
-pub const MAX_ROWS: usize = 8;
+/// The most body rows a card may carry: the hard Nonogram's 20x20 picture
+/// packs into exactly this many half-block rows.
+pub const MAX_ROWS: usize = 10;
 
 /// How a card is written out. Emoji renders on every social network; ASCII
 /// is for people who post in monospace.

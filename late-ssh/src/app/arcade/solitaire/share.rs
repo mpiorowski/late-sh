@@ -9,10 +9,15 @@ use crate::app::arcade::share::{self, Row, ShareCard};
 
 use super::state::{Mode, State, Suit};
 
+/// Whether a daily deal is won. Personal deals never get a card.
+pub fn is_ready(state: &State) -> bool {
+    state.mode == Mode::Daily && state.is_game_over
+}
+
 /// The card for a won daily deal, or `None` on a personal deal or while
 /// the deal is still open.
 pub fn from_state(state: &State) -> Option<ShareCard> {
-    if state.mode != Mode::Daily || !state.is_game_over {
+    if !is_ready(state) {
         return None;
     }
     let piles: Vec<(Option<Suit>, usize)> = state

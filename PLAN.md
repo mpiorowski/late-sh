@@ -178,9 +178,9 @@ ssh late.sh
 - Header: `late.sh <Game> #<n> · <result>`. The number is days since that
   game's first daily, so two people's cards from the same day match. The
   epochs live in one constant table.
-- Body: at most 8 rows, no spoilers. A card must fit in a phone screenshot
-  next to the header and footer. Two exceptions, where the art is the card:
-  Artboard pieces and the bonsai.
+- Body: at most 10 rows, no spoilers. A card must fit in a phone screenshot
+  next to the header and footer. Three exceptions, where the art is the
+  card: the Nonogram picture, Artboard pieces and the bonsai.
 - Footer: always `ssh late.sh`, never a URL. The command is the brand and the
   filter at once. Someone who knows what to do with it is in the tavern in
   thirty seconds; someone who does not asks, and a friend explaining beats

@@ -12,10 +12,16 @@ use super::state::{Click, MAX_LIVES, Mode, State};
 /// How many of the latest clicks the strip shows.
 pub const STRIP_CLICKS: usize = 10;
 
+/// Whether a daily field is finished, cleared or boomed. Personal boards
+/// never get a card.
+pub fn is_ready(state: &State) -> bool {
+    state.mode == Mode::Daily && state.is_game_over
+}
+
 /// The card for a finished daily, or `None` on a personal board or while
 /// the field is still open.
 pub fn from_state(state: &State) -> Option<ShareCard> {
-    if state.mode != Mode::Daily || !state.is_game_over {
+    if !is_ready(state) {
         return None;
     }
     Some(card(

@@ -55,9 +55,9 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         keys: keys_line(
             control_hints
                 .into_iter()
-                .chain(crate::app::arcade::ui::share_hints(
-                    super::share::from_state(state).is_some(),
-                ))
+                .chain(crate::app::arcade::ui::share_hints(super::share::is_ready(
+                    state,
+                )))
                 .collect(),
         ),
         tip: Some(tip_line(state.message().to_string())),

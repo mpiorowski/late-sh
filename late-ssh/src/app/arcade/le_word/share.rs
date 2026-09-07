@@ -8,9 +8,14 @@ use crate::app::arcade::share::{self, Glyph, Row, ShareCard};
 
 use super::state::{LetterScore, MAX_GUESSES, State, WORD_LEN};
 
+/// Whether the round is over, won or lost. Only then is there a card.
+pub fn is_ready(state: &State) -> bool {
+    state.is_game_over
+}
+
 /// The card for a finished daily, or `None` while the round is still open.
 pub fn from_state(state: &State) -> Option<ShareCard> {
-    if !state.is_game_over {
+    if !is_ready(state) {
         return None;
     }
     let scores: Vec<[LetterScore; WORD_LEN]> = state

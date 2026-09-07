@@ -332,9 +332,12 @@ impl State {
                 return false;
             }
             snapshot.moves = snapshot.moves.saturating_add(1);
-            if let Some(blank) = snapshot.tiles.iter().position(|tile| *tile == 0) {
-                snapshot.blank_visits[blank] = snapshot.blank_visits[blank].saturating_add(1);
-            }
+            let blank = snapshot
+                .tiles
+                .iter()
+                .position(|tile| *tile == 0)
+                .expect("a sliding puzzle board always has a blank tile");
+            snapshot.blank_visits[blank] = snapshot.blank_visits[blank].saturating_add(1);
             let solved = snapshot.tiles == solved_board(difficulty);
             if solved {
                 snapshot.win_reported = true;

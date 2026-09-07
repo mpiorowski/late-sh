@@ -10,10 +10,16 @@ use crate::app::arcade::share::{self, Glyph, Row, ShareCard};
 
 use super::state::{Mode, State, board_dimension};
 
+/// Whether a daily board has been moved and is solved. Personal boards
+/// never get a card.
+pub fn is_ready(state: &State) -> bool {
+    state.mode == Mode::Daily && state.has_started() && state.is_solved()
+}
+
 /// The card for a solved daily board, or `None` on a personal board or
 /// while the tiles are still scrambled.
 pub fn from_state(state: &State) -> Option<ShareCard> {
-    if state.mode != Mode::Daily || !state.is_solved() || !state.has_started() {
+    if !is_ready(state) {
         return None;
     }
     Some(card(
