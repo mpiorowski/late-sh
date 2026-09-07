@@ -757,10 +757,21 @@ fn fleeing_costs_a_parting_blow_and_the_foe_recovers() {
         hp_before - 10,
         "the foe strikes at a fleeing back (naked Warrior, no armor)"
     );
+    assert_eq!(
+        s.mobs[&mob_id].hp,
+        200,
+        "the foe keeps its wounds while the grace runs"
+    );
+    // The flight took the player out of the room, so the clock runs.
+    for _ in 1..MOB_RESET_TICKS {
+        s.tick();
+    }
+    assert_eq!(s.mobs[&mob_id].hp, 200, "still inside the grace");
+    s.tick();
     let m = &s.mobs[&mob_id];
     assert_eq!(
         m.hp, m.spawn.max_hp,
-        "a foe left with nobody fighting it recovers on the spot"
+        "a foe nobody came back for recovers once the grace is out"
     );
 }
 
@@ -785,6 +796,13 @@ fn a_stunned_foe_cannot_strike_at_a_fleeing_back() {
         hp_before,
         "a reeling foe gets no blow"
     );
+    assert!(
+        s.mob_stuns.contains_key(&mob_id),
+        "the stun still stands while the grace runs"
+    );
+    for _ in 0..MOB_RESET_TICKS {
+        s.tick();
+    }
     let m = &s.mobs[&mob_id];
     assert_eq!(m.hp, m.spawn.max_hp);
     assert!(
@@ -792,6 +810,66 @@ fn a_stunned_foe_cannot_strike_at_a_fleeing_back() {
         "the stun does not outlive the fight it was cast in"
     );
     assert!(!s.mob_dots.contains_key(&mob_id), "nor do the wounds");
+}
+
+#[test]
+fn a_boss_keeps_its_wounds_while_you_fight_the_add_it_summoned() {
+    let (mut s, mob_id) = engaged_with(MobBehavior::Summoner);
+    s.tick(); // the summoner calls an add into the fight
+    let add_id = *s
+        .mobs
+        .keys()
+        .find(|id| **id >= SUMMON_ID_START)
+        .expect("an add joined the fight");
+    let wounded = s.mobs[&mob_id].hp;
+    assert!(wounded < s.mobs[&mob_id].spawn.max_hp, "the boss is wounded");
+    // The player turns on the add: the lock moves, but the fight has not ended.
+    s.engage_mob(uid(1), add_id);
+    for _ in 0..MOB_RESET_TICKS + 1 {
+        s.tick();
+    }
+    assert_eq!(
+        s.mobs[&mob_id].hp, wounded,
+        "a foe whose own add you are killing keeps its wounds"
+    );
+}
+
+#[test]
+fn a_foe_you_turned_from_keeps_swinging_while_you_stand_in_its_room() {
+    let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
+    s.mobs.get_mut(&mob_id).unwrap().spawn.damage = 10;
+    // Drop the lock but stand your ground: no flee, no exit, still its room.
+    s.players.get_mut(&uid(1)).unwrap().target = None;
+    let hp_before = s.players[&uid(1)].hp;
+    s.tick();
+    assert!(
+        s.players[&uid(1)].hp < hp_before,
+        "a foe you wounded keeps hitting you while you stand in its room"
+    );
+    for _ in 0..MOB_RESET_TICKS + 1 {
+        s.tick();
+    }
+    assert_eq!(
+        s.mobs[&mob_id].hp, 200,
+        "and it never sheds its wounds while you are standing there"
+    );
+}
+
+#[test]
+fn stepping_out_of_the_room_starts_the_recovery_clock() {
+    let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
+    s.players.get_mut(&uid(1)).unwrap().target = None;
+    s.players.get_mut(&uid(1)).unwrap().room = 2002;
+    for _ in 1..MOB_RESET_TICKS {
+        s.tick();
+    }
+    assert_eq!(s.mobs[&mob_id].hp, 200, "a grace to duck out and come back");
+    s.tick();
+    assert_eq!(
+        s.mobs[&mob_id].hp,
+        s.mobs[&mob_id].spawn.max_hp,
+        "then the foe recovers in full"
+    );
 }
 
 #[test]
@@ -813,9 +891,9 @@ fn a_shorter_stun_does_not_cut_a_longer_one_short() {
 #[test]
 fn a_wounded_foe_nobody_fights_recovers_after_a_few_ticks() {
     let (mut s, mob_id) = engaged_with(MobBehavior::Sentinel);
-    // The attacker is simply gone mid-fight (death, disconnect): no flee, the
-    // lock just vanishes.
-    s.players.get_mut(&uid(1)).unwrap().target = None;
+    // The attacker is simply gone mid-fight (a disconnect): no flee, the
+    // fighter just vanishes out of the room.
+    s.leave(uid(1));
     s.mob_stuns.insert(mob_id, 5);
     for _ in 1..MOB_RESET_TICKS {
         s.tick();
