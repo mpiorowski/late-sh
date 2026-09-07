@@ -50,12 +50,6 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
             state.apply_relative_move(Face::Back, true);
             true
         }
-        b's' | b'S' => {
-            if state.request_reset() {
-                state.reset();
-            }
-            true
-        }
         b'0' => {
             if state.request_reset() {
                 state.reset();

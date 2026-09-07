@@ -248,7 +248,7 @@ fn build_segments(state: &ProfileModalState, width: u16) -> (Vec<Segment>, Optio
     let mut lines = section_lines("chips", width_usize);
     lines.push(ledger::summary_line(
         state.chip_balance(),
-        state.chips_earned_month(),
+        state.chips_month(),
     ));
     lines.push(ledger::off_board_note());
     lines.push(Line::from(""));
@@ -484,30 +484,13 @@ fn late_fetch_lines(
     if let Some(time) = timezone_current_time(Utc::now(), profile.timezone.as_deref()) {
         lines.push(row("local", vec![Span::styled(time, value)]));
     }
-    let mut chips = Vec::new();
-    match state.chip_balance() {
-        Some(balance) => chips.push(Span::styled(ledger::thousands(balance), bright)),
-        None => chips.push(Span::styled("…".to_string(), dim)),
-    }
-    let earned = state.chips_earned_month();
-    let earned_style = match earned.signum() {
-        1 => Style::default().fg(theme::SUCCESS()),
-        -1 => Style::default().fg(theme::ERROR()),
-        _ => dim,
+    // Balance only; the month's earned and net figures head the chips
+    // section below.
+    let chips = match state.chip_balance() {
+        Some(balance) => Span::styled(ledger::thousands(balance), bright),
+        None => Span::styled("…".to_string(), dim),
     };
-    chips.push(Span::styled(
-        "  ·  ",
-        Style::default().fg(theme::BORDER_DIM()),
-    ));
-    chips.push(Span::styled(
-        format!(
-            "{}{} this month",
-            if earned > 0 { "+" } else { "" },
-            ledger::thousands(earned)
-        ),
-        earned_style,
-    ));
-    lines.push(row("chips", chips));
+    lines.push(row("chips", vec![chips]));
 
     let gilds = gild_spans(state.gild_counts());
     if !gilds.is_empty() {

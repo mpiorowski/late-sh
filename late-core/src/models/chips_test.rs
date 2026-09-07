@@ -178,11 +178,9 @@ fn constants() {
 /// so a new variant cannot silently alias an existing ledger reason.
 #[test]
 fn earning_exclusions_and_reason_uniqueness() {
-    // One rule: everything counts, on both sides, except the two house
-    // tables and gifts (decided 2026-09-06). So neither folding a poker
-    // table to one seat nor funnelling gifts can buy a place; gilds, the
-    // pot, spends, Super Snake, the bonsai drip, and the stipend all count.
-    // Admin grants are not here because they never reach the ledger.
+    // Top Chips ranks what a player earned: every credit except the two
+    // house tables, gifts, and the starting stipend (decided 2026-09-07). Spending is a debit and a debit never counts,
+    // so buying a beer or a pot ticket cannot cost anyone their place.
     assert_eq!(
         ChipMove::excluded_earning_reasons(),
         vec![
@@ -195,8 +193,26 @@ fn earning_exclusions_and_reason_uniqueness() {
             "floor_restore",
             "chip_gift_sent",
             "chip_gift_received",
+            "initial_balance",
+            "chip_gild_sent",
+            "chip_crown_taken",
+            "pot_ticket",
+            "round_purchase",
+            "drink_purchase",
+            "shop_purchase",
+            "ssnake_arena_lost",
         ]
     );
+    // The board is earnings-only: nothing that leaves a balance may count,
+    // whatever it was spent on.
+    for mv in ChipMove::ALL {
+        if mv.counts_as_earnings() {
+            assert!(
+                matches!(mv.direction(), ChipDirection::Credit),
+                "{mv:?} counts for Top Chips but is not a credit"
+            );
+        }
+    }
     let reasons: HashSet<&str> = ChipMove::ALL.iter().map(|mv| mv.reason()).collect();
     assert_eq!(reasons.len(), ChipMove::ALL.len());
 }

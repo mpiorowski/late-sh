@@ -526,9 +526,10 @@ session. `late-core/src/models/chat_message_gild.rs` owns the table
   `ChipMove::GildReceived`; the buyer pays the full price as
   `ChipMove::GildSent` (floor-guarded like a gift). The last third has no
   ledger row at all: the burn *is* the gap between the two reasons.
-  Both reasons count on Top Chips (since 2026-09-06): a gild is paid for
-  a message other people rated, the way the gallery prize is paid for
-  applause, so it is earned in a way a gift is not.
+  `GildReceived` counts on Top Chips: a gild is paid for a message other
+  people rated, the way the gallery prize is paid for applause, and the
+  burned third means it cannot funnel chips for free the way a gift can.
+  `GildSent` does not: Top Chips ranks earnings and a debit never counts.
 - **Guards** (`ChatService::gild_message`, one closed `GildRefusal` enum with
   the wording): message gone, not a member, not a public room (so never a DM
   and never a private room), a game room (`kind = 'game'`: arcade tables,
@@ -612,10 +613,9 @@ its own domain; only the command and the glyph are chat's.
 - **Burn.** `ChipMove::CrownTaken` is a floor-guarded debit with
   `source_ref` = the reign id, and there is no matching credit reason
   anywhere. The whole price leaves the money supply, so the burn is the
-  absence of a credit rather than a transfer to a house wallet. It is
-  `counts_as_earnings = true` like `ShopPurchase` (since 2026-09-06): a
-  take is a debit on the Top Chips board like any other spend. Only the
-  house tables and gifts are out (pinned by
+  absence of a credit rather than a transfer to a house wallet. Like
+  `ShopPurchase` it is `counts_as_earnings = false`: Top Chips ranks
+  earnings and a debit never counts (pinned by
   `chips_test::earning_exclusions_and_reason_uniqueness`).
 - **Guards** (`CrownService::take`, one closed `CrownRefusal` enum with the
   wording): you already wear it, and the chip floor. That is all: there is
@@ -847,6 +847,9 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 
 - Backed by persisted `articles`.
 - `ArticleService::process_url` extracts title/summary/image, stores an article, and posts a compact `---NEWS---` announcement into `#lounge`.
+- **Three extraction paths, picked by URL shape in `do_process_url`.** YouTube (`is_youtube_url`): oEmbed pins title/author/thumbnail, then the AI writes only the summary against that verified identity, so the video can never be misidentified; an AI failure degrades to `youtube_fallback_summary`. X posts (`is_tweet_url`): **no AI at all**, see below. Everything else: `extract_via_ai`, Gemini with Google Search grounding, which works because those pages are server-rendered, indexed, and carry real `og:` tags.
+- **X posts carry their own metadata, so nothing about them is guessed.** `extract_tweet` reads `publish.x.com/oembed` and parses the author, the post's own text, and the date straight out of the returned `<blockquote>` (oEmbed has no plain-text field for the text; `tweet_text_from_oembed_html` turns `<br>` into the author's line breaks, unwraps `<a>` to its text, and drops X's own `pic.twitter.com/...` media shortlinks). A post's words *are* the content, so there is nothing to research or summarize and the AI never sees the URL. This is not a preference: x.com serves no `og:` tags even to `Twitterbot`, and Search has next to nothing indexed against a bare status URL, so the AI path invented titles for these links. Only `/status/<id>` URLs take this path; a profile, search, or list URL has no post to resolve and stays on the generic AI path.
+- oEmbed carries neither an image nor a sensitivity flag, so `fetch_tweet_media` gets both from **fxtwitter** (`api.fxtwitter.com/i/status/<id>`), the one third-party dependency in the pipeline, isolated in that single function. It sends an explicit `User-Agent` because fxtwitter answers `401` without one and `reqwest` sends none by default. Its `possibly_sensitive` is the **only NSFW gate on the X path**, so the lookup **fails closed**: any error, non-2xx status, or body without a post rejects the share with "X could not confirm this post is safe to share right now" rather than posting it unscreened. A successful lookup with no image still posts, falling back to `procedural_ascii_art`. `metrics::record_news_x_media_lookup` labels `late_ssh_news_x_media_lookups_total` by the closed `XMediaLookup` outcome (`clean` / `sensitive` / `unavailable`); a run of `unavailable` is what an fxtwitter outage looks like.
 - Publishing pays the sharer `NEWS_SHARE_REWARD_CHIPS` (500) as `ChipMove::NewsShared`. `Article::create_shared` (`late-core/src/models/article.rs`) is the only path a user-facing share may take, so the News composer and an RSS `s` share pay exactly the same. Chips are minted, not moved, and count toward Top Chips.
 - The reward is capped at one per URL per user and at `NEWS_SHARE_MAX_PAID_PER_DAY` (3) paid shares per UTC day, and the `chip_ledger` row is what enforces both, keyed on `(user_id, url)` and counted by `created_at` date like pot tickets (hence `source_ref` holds the URL, not an article id; migration 163 indexes the lookup). The `articles` row cannot be the record of payment: deleting a story frees its URL, so paying on insert alone would let one player share, delete, and re-share the same link forever. `articles.url` is unique, so while a story is live only its first sharer was paid.
 - A repeat or capped share still succeeds and still posts to `#lounge`; it just mints nothing. `Article::create_shared` returns a closed `NewsShareReward` (`Paid` / `RepeatUrl` / `DailyCapReached`) that rides `ArticleEvent::Created` and `FeedEvent::EntryShared`, so `news::state::news_share_banner` says what the ledger did ("+500 chips" / "Already paid for this link" / "Today's 3 paid shares are used up") and `metrics::record_news_shared` labels `late_ssh_news_shares_total` by the same outcome. An RSS entry marked shared because its link was already in News carries `reward: None` and raises no second banner over "Already shared.".
@@ -1196,7 +1199,7 @@ Test gaps:
 - Dedicated notification-service DB-backed tests for mention creation/list/mark-read.
 - Direct input-handler tests for News/Showcase/Work/Notifications/Discover.
 - Direct `ChatState` synthetic-panel tests.
-- Full News process success path is hard to cover because extraction depends on AI/search/network behavior.
+- Full News process success path is hard to cover because extraction depends on AI/search/network behavior. The X post path is the exception: its parsing is pure, and `news/svc_internal_test.rs` drives it from `OEMBED_HTML`, a byte-for-byte copy of a real `publish.x.com/oembed` response, so the card's text, date, handle, and title are pinned against the actual payload shape rather than a hand-written approximation of it.
 
 ---
 

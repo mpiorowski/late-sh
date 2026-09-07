@@ -110,7 +110,7 @@ pub(crate) const GAME_SELECTION_SNAKE: usize = 7;
 pub(crate) const GAME_SELECTION_TRAFFIC: usize = 8;
 pub(crate) const GAME_SELECTION_RUBIKS_CUBE: usize = 9;
 pub(crate) const GAME_SELECTION_SLIDING_PUZZLE: usize = 10;
-pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
+pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_LE_WORD;
 
 /// Rail modes in force: this device's stored layout when its key has one, else
 /// the account default. Free-standing so `App::new` can seed the settings draft

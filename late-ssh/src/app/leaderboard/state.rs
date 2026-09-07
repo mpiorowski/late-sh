@@ -109,7 +109,7 @@ impl Board {
             Self::DoorWins(DoorGame::Brogue) => "games escaped or mastered".to_string(),
             Self::DoorDepth(DoorGame::Brogue) => "deepest dungeon depth ever reached".to_string(),
             Self::DoorScore(DoorGame::Brogue) => "best final score".to_string(),
-            Self::TopChips => "monthly net chip delta, shop spend ignored".to_string(),
+            Self::TopChips => "monthly chips earned, spending never counts".to_string(),
             Self::ArcadeWins => format!(
                 "daily puzzle points: easy {} · medium {} · hard {}",
                 Difficulty::Easy.points(),
