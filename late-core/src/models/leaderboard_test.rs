@@ -541,8 +541,12 @@ async fn top_chips_counts_earnings_and_never_spending() {
     let apply = |user_id, mv, amount| UserChips::apply(&**client, user_id, mv, amount, "lb-test");
     // Balances big enough that every move below is affordable; the stipend
     // row `ensure` writes on the way in is not an earning either.
-    UserChips::ensure(&client, spender.id).await.expect("spender chips");
-    UserChips::ensure(&client, saver.id).await.expect("saver chips");
+    UserChips::ensure(&client, spender.id)
+        .await
+        .expect("spender chips");
+    UserChips::ensure(&client, saver.id)
+        .await
+        .expect("saver chips");
     client
         .execute(
             "UPDATE user_chips SET balance = 100000 WHERE user_id = ANY($1)",
@@ -552,25 +556,75 @@ async fn top_chips_counts_earnings_and_never_spending() {
         .expect("fund accounts");
 
     // Spender: 3,200 earned, 12,300 spent, plus every excluded credit.
-    apply(spender.id, ChipMove::DailyPuzzleWin, 500).await.expect("puzzle win").expect("affordable");
-    apply(spender.id, ChipMove::QuestReward, 750).await.expect("quest reward").expect("affordable");
-    apply(spender.id, ChipMove::GildReceived, 750).await.expect("gild received").expect("affordable");
-    apply(spender.id, ChipMove::PotWon, 1_000).await.expect("pot won").expect("affordable");
-    apply(spender.id, ChipMove::PotTicket, 1_000).await.expect("pot ticket").expect("affordable");
-    apply(spender.id, ChipMove::ShopPurchase, 8_000).await.expect("shop").expect("affordable");
-    apply(spender.id, ChipMove::RoundPurchase, 1_600).await.expect("round").expect("affordable");
-    apply(spender.id, ChipMove::DrinkPurchase, 100).await.expect("drink").expect("affordable");
-    apply(spender.id, ChipMove::GildSent, 500).await.expect("gild sent").expect("affordable");
-    apply(spender.id, ChipMove::CrownTaken, 1_000).await.expect("crown").expect("affordable");
-    apply(spender.id, ChipMove::SsnakeArenaLost, 100).await.expect("arena lost").expect("affordable");
-    apply(spender.id, ChipMove::PokerPayout, 5_000).await.expect("poker payout").expect("affordable");
-    apply(spender.id, ChipMove::BlackjackPayout, 5_000).await.expect("blackjack payout").expect("affordable");
-    apply(spender.id, ChipMove::GiftReceived, 5_000).await.expect("gift received").expect("affordable");
-    apply(spender.id, ChipMove::BonsaiWatered, 200).await.expect("bonsai").expect("affordable");
+    apply(spender.id, ChipMove::DailyPuzzleWin, 500)
+        .await
+        .expect("puzzle win")
+        .expect("affordable");
+    apply(spender.id, ChipMove::QuestReward, 750)
+        .await
+        .expect("quest reward")
+        .expect("affordable");
+    apply(spender.id, ChipMove::GildReceived, 750)
+        .await
+        .expect("gild received")
+        .expect("affordable");
+    apply(spender.id, ChipMove::PotWon, 1_000)
+        .await
+        .expect("pot won")
+        .expect("affordable");
+    apply(spender.id, ChipMove::PotTicket, 1_000)
+        .await
+        .expect("pot ticket")
+        .expect("affordable");
+    apply(spender.id, ChipMove::ShopPurchase, 8_000)
+        .await
+        .expect("shop")
+        .expect("affordable");
+    apply(spender.id, ChipMove::RoundPurchase, 1_600)
+        .await
+        .expect("round")
+        .expect("affordable");
+    apply(spender.id, ChipMove::DrinkPurchase, 100)
+        .await
+        .expect("drink")
+        .expect("affordable");
+    apply(spender.id, ChipMove::GildSent, 500)
+        .await
+        .expect("gild sent")
+        .expect("affordable");
+    apply(spender.id, ChipMove::CrownTaken, 1_000)
+        .await
+        .expect("crown")
+        .expect("affordable");
+    apply(spender.id, ChipMove::SsnakeArenaLost, 100)
+        .await
+        .expect("arena lost")
+        .expect("affordable");
+    apply(spender.id, ChipMove::PokerPayout, 5_000)
+        .await
+        .expect("poker payout")
+        .expect("affordable");
+    apply(spender.id, ChipMove::BlackjackPayout, 5_000)
+        .await
+        .expect("blackjack payout")
+        .expect("affordable");
+    apply(spender.id, ChipMove::GiftReceived, 5_000)
+        .await
+        .expect("gift received")
+        .expect("affordable");
+    apply(spender.id, ChipMove::BonsaiWatered, 200)
+        .await
+        .expect("bonsai")
+        .expect("affordable");
     // Saver: 2,000 earned, nothing spent.
-    apply(saver.id, ChipMove::DailyPuzzleWin, 2_000).await.expect("saver win").expect("affordable");
+    apply(saver.id, ChipMove::DailyPuzzleWin, 2_000)
+        .await
+        .expect("saver win")
+        .expect("affordable");
 
-    let data = fetch_leaderboard_data(&client).await.expect("fetch leaderboard");
+    let data = fetch_leaderboard_data(&client)
+        .await
+        .expect("fetch leaderboard");
     let board = &data.monthly_chip_earners;
     let spender_row = entry_for(board, spender.id);
     assert_eq!(spender_row.value, 3_200, "spending must not subtract");
@@ -579,8 +633,13 @@ async fn top_chips_counts_earnings_and_never_spending() {
         spender_row.rank < entry_for(board, saver.id).rank,
         "the bigger earner ranks first however much they spent"
     );
-    let month = UserChips::month_figures(&client, spender.id).await.expect("month figures");
-    assert_eq!(month.earned, 3_200, "the profile figure is the board figure");
+    let month = UserChips::month_figures(&client, spender.id)
+        .await
+        .expect("month figures");
+    assert_eq!(
+        month.earned, 3_200,
+        "the profile figure is the board figure"
+    );
     // 1,000 stipend + 18,200 credited - 12,300 spent.
     assert_eq!(month.net, 6_900, "the net is every row");
 }
