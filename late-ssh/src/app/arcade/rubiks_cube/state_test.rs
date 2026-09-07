@@ -13,6 +13,7 @@ fn solved_state() -> State {
         user_id: Uuid::now_v7(),
         stickers: solved_stickers(),
         user_moves: 0,
+        move_log: Vec::new(),
         view: CubeView::default(),
         puzzle_date: NaiveDate::from_ymd_opt(2026, 6, 18).unwrap(),
         solved_reported: true,

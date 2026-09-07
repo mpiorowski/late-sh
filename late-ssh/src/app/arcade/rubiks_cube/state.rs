@@ -51,6 +51,9 @@ pub struct State {
     user_id: Uuid,
     stickers: [[Sticker; 9]; 6],
     user_moves: u32,
+    /// Session-local: the face of every turn since the scramble, for the
+    /// share card's ribbon. Never saved.
+    move_log: Vec<Face>,
     view: CubeView,
     puzzle_date: NaiveDate,
     solved_reported: bool,
@@ -84,6 +87,7 @@ impl State {
             user_id,
             stickers: solved_stickers(),
             user_moves: 0,
+            move_log: Vec::new(),
             view: CubeView::default(),
             puzzle_date,
             solved_reported: false,
@@ -98,6 +102,19 @@ impl State {
 
     pub fn stickers(&self) -> &[[Sticker; 9]; 6] {
         &self.stickers
+    }
+
+    pub fn puzzle_date(&self) -> NaiveDate {
+        self.puzzle_date
+    }
+
+    pub fn user_moves(&self) -> u32 {
+        self.user_moves
+    }
+
+    /// This session's turns since the scramble, oldest first.
+    pub fn move_log(&self) -> &[Face] {
+        &self.move_log
     }
 
     pub fn has_started(&self) -> bool {
@@ -179,6 +196,7 @@ impl State {
     fn apply_daily_scramble(&mut self) {
         self.stickers = solved_stickers();
         self.user_moves = 0;
+        self.move_log.clear();
         for cube_move in daily_scramble(self.puzzle_date) {
             self.apply_move_internal(cube_move);
         }
@@ -215,6 +233,7 @@ impl State {
         self.clear_reset_pending();
         self.apply_move_internal(cube_move);
         self.user_moves = self.user_moves.saturating_add(1);
+        self.move_log.push(cube_move.face);
         self.message = if self.is_solved() {
             self.record_solved();
             "Solved.".to_string()

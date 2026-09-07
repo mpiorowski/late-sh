@@ -230,6 +230,16 @@ pub fn status_line(segments: Vec<(&'static str, String, Color)>) -> Line<'static
     Line::from(spans)
 }
 
+/// The share hint a finished daily adds to its key line: `s` copies the
+/// card, `S` posts it to the room. Empty while the board is still open.
+pub fn share_hints(card_ready: bool) -> Vec<(&'static str, &'static str)> {
+    if card_ready {
+        vec![("s", "share"), ("S", "post")]
+    } else {
+        Vec::new()
+    }
+}
+
 pub fn keys_line(hints: Vec<(&'static str, &'static str)>) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     for (i, (key, desc)) in hints.into_iter().enumerate() {
@@ -440,6 +450,13 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
         Span::raw("  "),
         Span::styled(
             "Win once per UTC day for chips. Replay for practice and leaderboard.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            "s copies your day card, S posts it to the room.",
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ]));

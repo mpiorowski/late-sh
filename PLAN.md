@@ -151,11 +151,20 @@ another row in the §7 debt table.
 
 ## B. The share loop
 
-### B.1 Share cards
+A card is a few lines of text a player pastes wherever they already talk. It
+gives nothing away, it fits in a phone screenshot, and its last line is a
+shell command. That is the whole mechanic. Wordle grew on it and nothing
+else; we have twenty-odd games that can each emit one.
 
-Every daily emits a spoiler-free result card, copied to the clipboard through
-the existing OSC 52 path (`App.pending_clipboard`, the same one bonsai `s`
-uses). Key `s` on any daily's result panel.
+Two surfaces, one key each. `s` copies the card to the clipboard. `S` posts
+the same card into the room you are in. The second one matters more than the
+first for a while: thirty people are already in chat, and a card posted into
+#lounge turns the room into the group chat that Wordle only ever borrowed.
+Nobody has to leave the tavern for the loop to close.
+
+### B.1 The card grammar
+
+Every card, every game, same shape:
 
 ```
 late.sh Le Word #214 · 4/6
@@ -166,21 +175,115 @@ late.sh Le Word #214 · 4/6
 ssh late.sh
 ```
 
-- Le Word: the guess grid. Nonogram: the solved picture in block glyphs.
-  Sudoku, Minesweeper, Solitaire, Rubik's Cube, Sliding Puzzle: difficulty,
-  time or lives, and a small motif each (OPEN per game; a card must fit in a
-  phone screenshot, at most 8 rows).
-- Puzzle number is days since each game's first daily, so two people's cards
-  from the same day match.
-- Two formats per card, one keypress each: `s` emoji (renders on every social
-  network), `S` plain ASCII (`#`, `+`, `.`) for people who post in monospace.
-  OPEN: whether one of these is enough.
-- The card builder is a pure function per game beside its `state.rs`
-  (`share.rs` + `share_test.rs`), whole-state tested against fixed inputs.
-- The footer line is the whole marketing. It always reads `ssh late.sh`, never
-  a URL, because the command is the brand.
+- Header: `late.sh <Game> #<n> · <result>`. The number is days since that
+  game's first daily, so two people's cards from the same day match. The
+  epochs live in one constant table.
+- Body: at most 8 rows, no spoilers. A card must fit in a phone screenshot
+  next to the header and footer. Two exceptions, where the art is the card:
+  Artboard pieces and the bonsai.
+- Footer: always `ssh late.sh`, never a URL. The command is the brand and the
+  filter at once. Someone who knows what to do with it is in the tavern in
+  thirty seconds; someone who does not asks, and a friend explaining beats
+  any landing page. Since the footer cannot be clicked, the web root at
+  `late.sh` must carry the §C strip, so a person who types it into a browser
+  instead of a terminal still finds the door.
+- Format: emoji by default, since it renders on every social network. A
+  plain ASCII variant (`#`, `+`, `.`) for people who post in monospace is a
+  preference in the settings modal, not a second key. Two keys per card is
+  one too many.
+- Copy goes through the existing OSC 52 path (`App.pending_clipboard`, the
+  same one bonsai uses today). Post goes through the room's normal message
+  send; a posted card is a message like any other, so it shows up in
+  backlog, the feed, and search.
+- A card posted into a room is clickable: click it and you are on that
+  puzzle. Cards from the same day form the results thread by themselves.
+- After you finish a daily, the result panel shows the cards of everyone
+  else who finished it today, best first. Wordle never had this; people did
+  it by hand in group chats. We have the data.
 
-### B.2 Challenge links
+Code shape: a pure card builder per game beside its `state.rs` (`share.rs`
++ `share_test.rs`), returning a `ShareCard { title, rows, footer }` and
+whole-state tested against fixed inputs. One central renderer turns a
+`ShareCard` into text in either format. The copy and post actions, the
+banner, and the telemetry call live at the orchestration edge, once, never
+in a game module.
+
+### B.2 The catalogue, in delivery order
+
+**1. Arcade dailies.** Seven cards plus one.
+
+- Le Word: the guess grid. A loss shows all six rows and `X/6`.
+- Nonogram: the finished picture in half-blocks, so a 10x10 is 5 rows. The
+  picture is the solution, and that is accepted: copying a picture by hand
+  into clue-checked cells is more work than solving it, and the picture is
+  the brag.
+- Sudoku: no digits. A 3x3 of coloured squares, one per box, coloured by
+  which third of your solve finished it (green, yellow, red). Every solver
+  gets a different fingerprint on the same puzzle. Plus time.
+- Minesweeper: no board, that spoils the mines. Difficulty, time, and a strip
+  of your last ten clicks as glyphs: safe, flag, boom. A boom at the end
+  tells the story on its own. Click history is session-local, so a board
+  resumed from a save shows the clicks since resume.
+- Solitaire: the four foundation piles as bars out of 13, spade heart diamond
+  club, plus moves. A loss card shows exactly how far you got.
+- Rubik's Cube: the solve as a colour ribbon, one square per face turn
+  coloured by face, wrapping at 12 per row, so a 40-move solve is four rows.
+  Nobody can spoil a cube; this is pure signature. Plus move count.
+- Sliding Puzzle: a heatmap of where the blank tile spent its time, 4 rows
+  for a 4x4, plus moves against par.
+- The day card, from the arcade lobby: one row of seven glyphs, one per
+  daily, filled for each you won today, plus your streak.
+  `late.sh Daily #214 · 7/7 · 🔥 41`. This is the card people will paste
+  every morning, because it is one card for the whole habit, not seven.
+
+**2. Lobby daily matches.** The correspondence roster only (chess, chess960,
+battleship, connect four, reversi, checkers, backgammon, briscola), never the
+house tables. The card is the final position when a match ends, with
+`mat beat kai in 34 moves` as the result. Chess fits in 8 rows exactly with
+piece glyphs; connect four, reversi, checkers, and battleship are 8 rows or
+fewer natively. Backgammon and briscola get a score line and no board. Chess
+and chess960 get a second key that copies the PGN, since the move history is
+already persisted and chess people want exactly that.
+
+**3. Roguelike tombstones.** The NetHack tombstone is the most shared ASCII
+in the genre's history, and the ingest pipeline already lands result, depth,
+turns, and score in `door_runs`. One tombstone shape for DCSS, NetHack, and
+Brogue: name, class, cause of death, dungeon level, runes or the Amulet. A
+win gets a different frame. Because it renders from the row, it also works
+for a run that ended while you were disconnected, from the door landing's
+recent runs. Usurper has a shared world and no run line, so it waits.
+
+**4. Artboard.** A hung piece is already text, so its card is the piece with
+a byline and the applause count, and anyone can copy it from the gallery,
+not only its author. Archive snapshots too. This is the exception to the
+8-row cap, capped at the piece's own size.
+
+**5. Fix the bonsai.** It has `s` today and emits the tree plus an
+`ADMIRE my tree (Day N)` label, with no header and no footer. Bring both
+renderers (`bonsai/state.rs` and `bonsai_v2/state.rs` `share_snippet`) into
+the grammar: `late.sh Bonsai · Day 41` on top, `ssh late.sh` below, the
+label gone, the dynamic tree allowed its full height like an Artboard piece.
+
+**Later, mentioned so nobody re-derives them:**
+
+- High-score arcade run cards at game over, with the rank line pulled from
+  the leaderboard: `Lateris · 48,210 · #3 all-time`. Motifs: 2048's final
+  board as a 4x4 tile heat, Snake's final length drawn as a wrapped green
+  snake, Lateris as a bar per piece kind, Traffic as a coloured square per
+  track grade. The rank is the brag, the motif the fingerprint.
+- Native doors (Dope Wars, Green Dragon, Lateania, Dark Room, and the rest
+  of `DoorGameId`): one generic outcome card over the closed enum, score and
+  detail from `DoorGameEvent::Outcome`.
+- Pet: three lines, face, name, age, mood.
+- Profile `/card`: username, crown if held, streak, chips, badges. The
+  deadchannel thesis in one paste: people want to be seen, and this is the
+  status line they can carry outside.
+- Moment cards: any `ActivityKind` story that names you (pot won, crown
+  taken, boss killed) shareable straight from the feed line.
+- The live run card, the one card allowed a URL (`late.sh/watch/mat`),
+  ships with spectating in §A, not before.
+
+### B.3 Challenge links
 
 `/challenge` today needs both players to be users. Add an invite form:
 
@@ -200,25 +303,41 @@ ssh late.sh
   payout gates, the #lounge result line. A friend brought in by a link is
   playing within minutes of their first `ssh`.
 
-### B.3 Public result surfaces (later)
+A card is a broadcast to everyone; a challenge link is an invite to one
+person, and the only share with somewhere to land.
+
+### B.4 Public result surfaces (later)
 
 `late.sh/daily`: today's champions per daily, no spoilers, updated from the
 leaderboard snapshot. Cheap, but it is the third thing, not the first.
 
-### B.4 Order of work
+### B.5 Order of work
 
-1. Le Word card, both formats, `s` on the result panel. One game, the loop
-   proven.
-2. The remaining dailies, one card module each.
-3. Challenge links: column, command, claim guard, page.
-4. `/daily` page.
+1. The grammar, the renderer, `s` and `S`, and the Le Word card. One game,
+   both surfaces, the loop proven. Built 2026-09-07.
+2. The other six dailies and the day card. Built 2026-09-07, session-local
+   histories for Sudoku, Minesweeper, Rubik's, and Sliding Puzzle included;
+   the ASCII format is rendered and tested but not yet wired to a setting.
+   Still open from this step: clickable posted cards, and the finishers'
+   cards on the result panel, which needs the card persisted per win.
+3. Lobby daily match cards, PGN copy.
+4. Roguelike tombstones from `door_runs`.
+5. Artboard gallery copy for everyone.
+6. Bonsai brought into the grammar.
+7. Challenge links: column, command, claim guard, page.
+8. `/daily` page.
 
-### B.5 Telemetry
+### B.6 What we can and cannot measure
 
-`share_card_copied` (game, format), `challenge_invite_created` (game),
-`challenge_invite_claimed` (game, days since created), `challenge_invite_page_views`
-in late-web.
-
+We cannot see pastes. We can count copies and posts per game and format
+(`share_card_copied`, `share_card_posted`), clicks on posted cards
+(`share_card_opened`), and first connects per day. Challenge links and the
+start page are the only outside surfaces with real view counts
+(`challenge_invite_created`, `challenge_invite_claimed` with days since
+created, `challenge_invite_page_views`), so they are where conversion gets
+measured. Cards prove intent, links prove arrival. If copies stay near zero
+for a week after step 2, the outside half of the loop is dead for this crowd
+and the in-room half still stands on its own.
 ---
 
 ## C. The "how to get in" page, instead of a web terminal
@@ -258,5 +377,124 @@ in under a minute, on their OS.
 2. `run_key`: start-milestone keyed pools, confirm each door's start line.
 3. Bracket cut lines per door.
 4. Bet caps per pool and per day; the refund `ChipMove` for voided pools.
-5. Share card motifs for the non-grid dailies; one format or two.
-6. Invite code expiry.
+5. Invite code expiry.
+6. Sudoku and Minesweeper cards need per-solve histories (box completion
+   order, click log) that the states do not keep today; session-local is
+   enough, but confirm before the card is designed around a saved board.
+
+---
+
+## Backlog
+
+Ideas and parked designs. A `CONTEXT.md` describes what is; this list holds
+what might be, so nothing below is scheduled or promised. When an item is
+picked up it gets a section of its own above, or its own design doc, and
+leaves this list. When an item is rejected for good, it moves to "Not doing"
+with the reason.
+
+### Product loop and measurement
+
+- Nail one addictive loop: join, listen, chat, vote, return tomorrow.
+- Pick a clear ICP: solo devs at night, or remote teams during work hours.
+- More reasons to come back beyond the daily puzzles, chips, and leaderboard
+  that exist: daily room rituals (lo-fi standup, shipped rollup, weekend
+  recap) and timed events (coffee breaks, AMAs, mini coding jams). The
+  deadchannel game (`late-ssh/src/app/deadchannel/GAME.md`) is the current
+  answer to the ritual half.
+- Keep friction near zero: `ssh late.sh`, with late.sh/listen for anyone who
+  only wants the audio.
+- Measure retention early: D1/D7 return, session length, messages per user,
+  votes per session.
+
+### Chat
+
+- Better backlog pagination, moderation polish.
+- Matchmaking from chat: `/play <game>` or `/challenge @user <game>` (the
+  challenge-link form is §B.2 above).
+- Snippet paste into the `/pair` scratchpad.
+- Ambient presence: quiet hours, listening since, typing indicator.
+- Community texture: rotating shoutout board, wall of thanks.
+- Personalization: accent color, favorite vibe, custom tagline.
+- Cozy utilities beyond `/pomodoro`: focus playlists, now-playing shoutouts.
+
+### Games
+
+- Monthly chip leaderboard resets and hall-of-fame surfaces.
+- Strategy multiplayer with a W/L record or a rating, beyond the daily
+  correspondence roster.
+- Nonograms v2: replace random generation with a pixel-art-to-nonogram
+  pipeline, or bulk-curate from webpbn.com.
+- Classic BBS / door-game references for future door work (study, not port
+  targets): Legend of the Red Dragon and LORD II, Arrowbridge / Arrowbridge
+  II, TradeWars 2002, Falcon's Eye, Barren Realms Elite, Solar Realms Elite,
+  Land of Devastation, The Pit, Sinbaud, Bordello, Yankee Trader. Any
+  LORD-like work is the deadchannel game: native late.sh design, never a
+  fragile DOS binary in production.
+- Persistent multiplayer 4X / trading world where every connected session is
+  a participant: parked, not wrong. The most liquidity-hungry genre there is,
+  coordination machinery for a population we do not have; see the graveyard
+  note in `GAME.md`. Open questions if it is ever revived: tick-based or
+  real-time with rate-limited actions, how much happens offline, map
+  topology, win conditions or endless sandbox.
+- `monteslu/retroemu` lobby (libretro cores in WASM rendered as ANSI through
+  chafa-wasm, `https://github.com/monteslu/retroemu`): researched, do not
+  pursue. It has a usable programmatic API (`LibretroHost`, `VideoOutput`,
+  `AudioBridge`, `InputManager`, `SaveManager`) but does not solve the real
+  blocker, legally clean redistributable games. Candidates found: Tobu Tobu
+  Girl DX (GB/GBC, MIT + CC BY 4.0), uCity (GBC, GPLv3+ + CC BY-SA 4.0),
+  Mr.Boom (MIT, 8-player Bomberman-style libretro core), Freedoom via a Doom
+  core, 2048 ports. Only Mr.Boom would change the multiplayer story. A late.sh
+  lobby would need one emulator process per room, controller-port
+  assignment, remote multi-port input (upstream work), frame broadcast, audio
+  reconciliation, ROM licensing, per-room saves, CPU/memory quotas, and abuse
+  controls before a prototype.
+
+### Bonsai
+
+- Seasonal color shifts (real-world date), profile display for visitors,
+  graveyard rendering on the profile.
+- Fancier renderer: port or adapt `cbonsai`
+  (https://github.com/mhzawadi/homebrew-cbonsai) for richer growth animation
+  and branching.
+
+### Widgets
+
+- GitHub notifications widget: read-only PR reviews, mentions, and issue
+  updates via a PAT. A productivity reason for solo devs to keep the terminal
+  open.
+
+### Audio
+
+- Direct radio polish: surface artist/title attribution from the Nightride
+  SSE metadata, and let voting choose between approved Nightride stations.
+- Jazz playlist: the thinnest genre and a removal candidate if never filled.
+  Source targets: HoliznaCC0, Kevin MacLeod, Ketsa.
+- Verified CC0/CC-BY sources, not yet downloaded:
+  - HoliznaCC0: 571 tracks across ~50 albums, all CC0,
+    https://freemusicarchive.org/music/holiznacc0/discography
+  - Ketsa: large catalog (lofi, jazz, soul, ambient, downtempo), CC-BY; the
+    album "CC BY: FREE TO USE FOR ANYTHING" has 70 tracks,
+    https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything
+  - John Bartmann: "Public Domain Soundtrack Music: Album One" (CC0) on
+    Bandcamp
+  - Kevin MacLeod: 359 tracks (CC-BY),
+    https://kevinmacleod.bandcamp.com/album/complete-collection-creative-commons
+  - FMA public domain search (9,000+ tracks):
+    https://freemusicarchive.org/search?adv=1&music-filter-public-domain=1
+- Rejected sources, so nobody re-researches them: Pixabay (custom license,
+  not for a standalone stream), Chad Crouch (CC BY-NC plus commercial split),
+  Blue Dot Sessions (CC BY-NC only), Kai Engel (mixed CC-BY/CC-BY-NC,
+  licensing unstable since July 2025), Classicals.de (terms unclear).
+
+### Artboard
+
+- The web `/gallery` listing hung pieces (today it only shows the archive
+  snapshots).
+
+### Infra
+
+- Stop routing SSH through ingress-nginx: a dedicated TCP LoadBalancer,
+  NodePort, or host proxy for port 22, so HTTP/TLS config reloads (cert
+  renewals are a recurring trigger) cannot drop long-lived SSH sessions. The
+  short-term mitigation, raising `worker-shutdown-timeout`, only delays the
+  disconnect. The risk itself is recorded in `CONTEXT.md` §7.

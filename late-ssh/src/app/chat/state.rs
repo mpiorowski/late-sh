@@ -3423,6 +3423,27 @@ impl ChatState {
         self.open_overlay("Active Users", self.active_user_lines());
     }
 
+    /// Post `body` into the room the composer targets, as this user, the
+    /// way a slash-command reply does. Returns the room's slug for the
+    /// caller's banner, or `None` when no room is selected.
+    pub(crate) fn post_to_composer_room(&mut self, body: String) -> Option<String> {
+        let room_id = self.composer_room_id?;
+        let room_slug = self.room_slug(room_id);
+        let request_id = Uuid::now_v7();
+        self.service
+            .send_message_with_reply_task(super::svc::SendMessageTask {
+                user_id: self.user_id,
+                room_id,
+                room_slug: room_slug.clone(),
+                body,
+                reply_to_message_id: None,
+                request_id,
+                is_admin: self.is_admin,
+            });
+        self.pending_send_notices.push_back(request_id);
+        Some(room_slug.unwrap_or_else(|| "room".to_string()))
+    }
+
     pub fn submit_composer(&mut self, keep_open: bool, _from_dashboard: bool) -> Option<Banner> {
         let body = self.composer.lines().join("\n").trim_end().to_string();
 

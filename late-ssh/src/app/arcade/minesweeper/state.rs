@@ -12,6 +12,14 @@ const CELL_REVEALED: u8 = 1;
 const CELL_FLAGGED: u8 = 2;
 const CELL_MINE_HIT: u8 = 3;
 
+/// One click as the share card tells it. Session-local, never saved.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Click {
+    Safe,
+    Flag,
+    Boom,
+}
+
 pub const MAX_LIVES: u8 = 3;
 
 pub const DIFFICULTIES: [DifficultyConfig; 3] = [
@@ -65,6 +73,7 @@ struct BoardSnapshot {
     player_grid: Vec<Vec<u8>>,
     lives: u8,
     is_game_over: bool,
+    click_log: Vec<Click>,
 }
 
 pub struct State {
@@ -77,6 +86,7 @@ pub struct State {
     player_grid: Vec<Vec<u8>>,
     pub lives: u8,
     pub is_game_over: bool,
+    click_log: Vec<Click>,
     pub use_dot_style: bool,
     pub scroll_offset: u16,
     pub reset_pending: bool,
@@ -125,6 +135,7 @@ impl State {
             player_grid: Vec::new(),
             lives: MAX_LIVES,
             is_game_over: false,
+            click_log: Vec::new(),
             use_dot_style: true,
             scroll_offset: 0,
             reset_pending: false,
@@ -167,6 +178,15 @@ impl State {
 
     pub fn difficulty_key(&self) -> &'static str {
         DIFFICULTIES[self.selected_difficulty].key
+    }
+
+    pub fn daily_date(&self) -> NaiveDate {
+        self.daily_date
+    }
+
+    /// This session's clicks on the active board, oldest first.
+    pub fn click_log(&self) -> &[Click] {
+        &self.click_log
     }
 
     pub fn mine_map(&self) -> &[Vec<bool>] {
@@ -330,7 +350,14 @@ impl State {
         }
         match self.player_grid[row][col] {
             CELL_REVEALED => {
+                let lives_before = self.lives;
+                let revealed_before = self.revealed_count();
                 self.chord_reveal(row, col, &diff);
+                if self.lives < lives_before {
+                    self.click_log.push(Click::Boom);
+                } else if self.revealed_count() > revealed_before {
+                    self.click_log.push(Click::Safe);
+                }
                 self.store_active_snapshot();
                 self.save_async();
                 return;
@@ -346,6 +373,7 @@ impl State {
 
         if self.mine_map[row][col] {
             // Hit a mine
+            self.click_log.push(Click::Boom);
             self.player_grid[row][col] = CELL_MINE_HIT;
             self.lives = self.lives.saturating_sub(1);
             if self.lives == 0 {
@@ -361,6 +389,7 @@ impl State {
             }
         } else {
             flood_reveal(&self.mine_map, &mut self.player_grid, row, col);
+            self.click_log.push(Click::Safe);
             self.check_win();
         }
 
@@ -428,6 +457,9 @@ impl State {
             return;
         }
 
+        if self.player_grid[row][col] == CELL_HIDDEN {
+            self.click_log.push(Click::Flag);
+        }
         self.player_grid[row][col] = match self.player_grid[row][col] {
             CELL_HIDDEN => CELL_FLAGGED,
             CELL_FLAGGED => CELL_HIDDEN,
@@ -475,6 +507,7 @@ impl State {
         self.player_grid = snapshot.player_grid;
         self.lives = snapshot.lives;
         self.is_game_over = snapshot.is_game_over;
+        self.click_log = snapshot.click_log;
         self.cursor = (0, 0);
         self.scroll_offset = 0;
     }
@@ -486,6 +519,7 @@ impl State {
             player_grid: self.player_grid.clone(),
             lives: self.lives,
             is_game_over: self.is_game_over,
+            click_log: self.click_log.clone(),
         };
         let dk = self.difficulty_key().to_string();
         match self.mode {
@@ -568,6 +602,7 @@ fn generate_snapshot(
         player_grid,
         lives: MAX_LIVES,
         is_game_over: false,
+        click_log: Vec::new(),
     }
 }
 
@@ -705,6 +740,7 @@ fn snapshot_from_game(game: &Game, diff: &DifficultyConfig) -> BoardSnapshot {
         player_grid,
         lives: game.lives as u8,
         is_game_over: game.is_game_over,
+        click_log: Vec::new(),
     }
 }
 

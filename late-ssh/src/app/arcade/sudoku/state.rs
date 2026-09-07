@@ -73,6 +73,7 @@ struct BoardSnapshot {
     fixed_mask: Mask,
     notes: Notes,
     is_game_over: bool,
+    box_finish_rank: [u8; 9],
 }
 
 struct DailyGenerationResult {
@@ -92,6 +93,9 @@ pub struct State {
     pub pencil_mode: bool,
     pub cursor: (usize, usize),
     pub is_game_over: bool,
+    /// Session-local, per box: 0 while the box is open, else the order
+    /// (1..=9) in which it was completed. Feeds the share card; never saved.
+    pub box_finish_rank: [u8; 9],
     pub reset_pending: Option<ResetKind>,
     undo_stack: VecDeque<BoardSnapshot>,
     daily_snapshots: HashMap<String, BoardSnapshot>,
@@ -147,6 +151,7 @@ impl State {
             pencil_mode: false,
             cursor: (0, 0),
             is_game_over: false,
+            box_finish_rank: [0; 9],
             reset_pending: None,
             undo_stack: VecDeque::new(),
             daily_snapshots,
@@ -448,6 +453,7 @@ impl State {
         if val != 0 {
             // A placed value settles the cell, so its pencil marks are done.
             self.notes[r][c] = 0;
+            self.note_finished_boxes();
             self.check_win();
         }
         self.store_active_snapshot();
@@ -468,6 +474,21 @@ impl State {
 
     pub fn clear_reset_pending(&mut self) {
         self.reset_pending = None;
+    }
+
+    /// Stamp every box that just became complete (nine distinct digits)
+    /// with the next finish rank, so the share card can colour the order.
+    fn note_finished_boxes(&mut self) {
+        let next = self.box_finish_rank.iter().copied().max().unwrap_or(0) + 1;
+        for (index, rank) in self.box_finish_rank.iter_mut().enumerate() {
+            if *rank == 0 && box_is_complete(&self.grid, index) {
+                *rank = next;
+            }
+        }
+    }
+
+    pub fn daily_date(&self) -> NaiveDate {
+        self.daily_date
     }
 
     fn check_win(&mut self) {
@@ -508,6 +529,7 @@ impl State {
             fixed_mask: self.fixed_mask,
             notes: self.notes,
             is_game_over: self.is_game_over,
+            box_finish_rank: self.box_finish_rank,
         });
     }
 
@@ -517,6 +539,7 @@ impl State {
         self.fixed_mask = snapshot.fixed_mask;
         self.notes = snapshot.notes;
         self.is_game_over = snapshot.is_game_over;
+        self.box_finish_rank = snapshot.box_finish_rank;
         self.cursor = (0, 0);
         self.undo_stack.clear();
     }
@@ -527,6 +550,7 @@ impl State {
         self.fixed_mask = [[false; 9]; 9];
         self.notes = [[0; 9]; 9];
         self.is_game_over = false;
+        self.box_finish_rank = [0; 9];
         self.cursor = (0, 0);
         self.undo_stack.clear();
     }
@@ -542,6 +566,7 @@ impl State {
             fixed_mask: self.fixed_mask,
             notes: self.notes,
             is_game_over: self.is_game_over,
+            box_finish_rank: self.box_finish_rank,
         };
         let dk = self.difficulty_key().to_string();
 
@@ -650,6 +675,7 @@ fn generate_snapshot(mode: Mode, difficulty_key: &str, svc: &SudokuService) -> B
         fixed_mask,
         notes: [[0; 9]; 9],
         is_game_over: false,
+        box_finish_rank: [0; 9],
     }
 }
 
@@ -678,6 +704,23 @@ fn fallback_puzzle_for_difficulty(difficulty_key: &str) -> &'static str {
     }
 }
 
+/// Whether box `index` (0..9, row-major) holds the digits 1..=9 exactly once.
+pub fn box_is_complete(grid: &Grid, index: usize) -> bool {
+    let top = (index / 3) * 3;
+    let left = (index % 3) * 3;
+    let mut seen = [false; 10];
+    for r in top..top + 3 {
+        for c in left..left + 3 {
+            let v = grid[r][c] as usize;
+            if v == 0 || v > 9 || seen[v] {
+                return false;
+            }
+            seen[v] = true;
+        }
+    }
+    true
+}
+
 fn snapshot_from_puzzle(seed: u64, puzzle: &str) -> BoardSnapshot {
     let mut grid = [[0; 9]; 9];
     let mut fixed_mask = [[false; 9]; 9];
@@ -696,6 +739,7 @@ fn snapshot_from_puzzle(seed: u64, puzzle: &str) -> BoardSnapshot {
         fixed_mask,
         notes: [[0; 9]; 9],
         is_game_over: false,
+        box_finish_rank: [0; 9],
     }
 }
 
@@ -766,6 +810,7 @@ fn snapshot_from_game(game: &Game) -> BoardSnapshot {
         fixed_mask,
         notes,
         is_game_over: game.is_game_over,
+        box_finish_rank: [0; 9],
     }
 }
 
