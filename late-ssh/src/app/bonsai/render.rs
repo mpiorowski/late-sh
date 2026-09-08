@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::app::{
-    bonsai_v2::state::{BonsaiV2State, Branch, BranchStatus, CANVAS_HEIGHT, CANVAS_WIDTH},
+    bonsai::state::{BonsaiState, Branch, BranchStatus, CANVAS_HEIGHT, CANVAS_WIDTH},
     common::theme,
 };
 
@@ -45,7 +45,7 @@ enum CellKind {
 pub(crate) fn draw_bonsai_inline(
     frame: &mut Frame,
     area: Rect,
-    state: &BonsaiV2State,
+    state: &BonsaiState,
     wall_tick: usize,
 ) {
     if area.height < 3 || area.width < 10 {
@@ -130,7 +130,7 @@ pub(crate) fn apply_sway(lines: &mut [Line<'static>], wall_tick: usize) {
 /// The tree at its one true size: the whole canvas, pot on the last row,
 /// trunk rooted at the center column. The care modal draws exactly this
 /// block; the preview below is a scaled reading of it.
-pub(crate) fn canvas_lines(state: &BonsaiV2State, show_selection: bool) -> Vec<Line<'static>> {
+pub(crate) fn canvas_lines(state: &BonsaiState, show_selection: bool) -> Vec<Line<'static>> {
     render_tree_lines(state, CANVAS_WIDTH, CANVAS_HEIGHT, show_selection)
 }
 
@@ -146,7 +146,7 @@ pub(crate) fn canvas_lines(state: &BonsaiV2State, show_selection: bool) -> Vec<L
 /// sample keeps that sample's glyph; a cell that gathers several takes
 /// its dominant kind, foliage as density glyphs (`@`, `*`, `#`),
 /// structure as its commonest glyph.
-pub(crate) fn render_preview_lines(state: &BonsaiV2State) -> Vec<Line<'static>> {
+pub(crate) fn render_preview_lines(state: &BonsaiState) -> Vec<Line<'static>> {
     let rendered = render_preview_ascii(state);
     rendered_lines(state, &rendered, false)
 }
@@ -163,13 +163,13 @@ pub(crate) fn center_lines(lines: &mut [Line<'static>], width: usize, block_widt
     }
 }
 
-/// The one Dynamic Bonsai renderer: the graph plotted 1:1 into a
+/// The one bonsai renderer: the graph plotted 1:1 into a
 /// `width` x `height` grid, the pot on the last row and the trunk rooted
 /// at the horizontal center. Nothing is scaled; whatever falls outside
 /// the grid is cut off, which the growth rules make impossible at the
 /// canvas size (`canvas_lines`).
 pub(crate) fn render_tree_lines(
-    state: &BonsaiV2State,
+    state: &BonsaiState,
     width: usize,
     height: usize,
     show_selection: bool,
@@ -179,7 +179,7 @@ pub(crate) fn render_tree_lines(
 }
 
 pub(crate) fn render_ascii(
-    state: &BonsaiV2State,
+    state: &BonsaiState,
     width: usize,
     height: usize,
     show_selection: bool,
@@ -255,7 +255,7 @@ pub(crate) fn render_ascii(
 /// The tree's cells (branches, then leaf pads) plotted into a grid with
 /// the trunk base on the row above the last one, at the center column.
 /// The last row is left for the pot.
-fn plot_tree(state: &BonsaiV2State, width: usize, height: usize) -> Vec<Vec<Option<Cell>>> {
+fn plot_tree(state: &BonsaiState, width: usize, height: usize) -> Vec<Vec<Option<Cell>>> {
     let mut grid = vec![vec![None; width]; height];
     let pot_y = height.saturating_sub(1);
     let origin_x = width / 2;
@@ -290,7 +290,7 @@ fn plot_tree(state: &BonsaiV2State, width: usize, height: usize) -> Vec<Vec<Opti
     grid
 }
 
-fn render_preview_ascii(state: &BonsaiV2State) -> RenderedBonsai {
+fn render_preview_ascii(state: &BonsaiState) -> RenderedBonsai {
     let width = PREVIEW_WIDTH;
     let height = PREVIEW_HEIGHT;
     let tree_height = height - 1;
@@ -377,9 +377,9 @@ fn render_preview_ascii(state: &BonsaiV2State) -> RenderedBonsai {
 /// A row with structure only: trunk, branches, deadwood, no foliage and
 /// nothing mid-pinch.
 fn row_is_bare(row: &[Option<Cell>]) -> bool {
-    row.iter().flatten().all(|cell| {
-        matches!(cell.kind, CellKind::Branch | CellKind::Deadwood)
-    })
+    row.iter()
+        .flatten()
+        .all(|cell| matches!(cell.kind, CellKind::Branch | CellKind::Deadwood))
 }
 
 /// What one preview cell gathered from the true canvas.
@@ -513,7 +513,7 @@ fn rendered_from_grid(grid: Vec<Vec<Option<Cell>>>) -> RenderedBonsai {
 }
 
 fn rendered_lines(
-    state: &BonsaiV2State,
+    state: &BonsaiState,
     rendered: &RenderedBonsai,
     show_selection: bool,
 ) -> Vec<Line<'static>> {
@@ -700,7 +700,7 @@ fn leaf_glyph(seed: i64, branch_id: i32, idx: usize, stress: i32) -> char {
     }
 }
 
-fn color_for_cell(kind: Option<CellKind>, state: &BonsaiV2State) -> ratatui::style::Color {
+fn color_for_cell(kind: Option<CellKind>, state: &BonsaiState) -> ratatui::style::Color {
     match kind {
         Some(CellKind::Pot) => theme::TEXT_DIM(),
         Some(CellKind::Leaf) => {

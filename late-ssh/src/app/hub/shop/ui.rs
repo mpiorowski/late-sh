@@ -241,11 +241,7 @@ fn draw_item_detail(
     let chat_effect_active =
         item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && chat_consumable_active(item, state);
     let effect_active = username_effect_active(item, state);
-    let action = if item.is_dynamic_bonsai() && item.equipped {
-        "dynamic"
-    } else if item.is_dynamic_bonsai() && item.owned {
-        "classic"
-    } else if item.is_username_effect() {
+    let action = if item.is_username_effect() {
         if effect_active {
             "active"
         } else {
@@ -475,21 +471,6 @@ fn draw_item_detail(
             ]));
         }
     }
-    if item.is_dynamic_bonsai() && item.owned {
-        lines.push(Line::from(vec![
-            Span::raw("  mode   "),
-            Span::styled(
-                if item.equipped { "dynamic" } else { "classic" },
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "   Enter toggles care modal",
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-        ]));
-    }
     if item.is_aquarium_fish() {
         if !has_aquarium {
             lines.push(Line::from(vec![
@@ -546,16 +527,6 @@ fn draw_item_detail(
             Span::styled(slot.clone(), Style::default().fg(theme::TEXT_DIM())),
         ]));
     }
-    if item.equipped && item.is_dynamic_bonsai() {
-        lines.push(Line::from(vec![
-            Span::raw("  bonsai "),
-            Span::styled(
-                "w opens dynamic care",
-                Style::default().fg(theme::SUCCESS()),
-            ),
-        ]));
-    }
-
     let preview = aquarium_preview_lines(item, area.width);
     if preview.is_empty() {
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
@@ -628,11 +599,7 @@ fn truncate_display_width(value: &str, max_width: usize) -> String {
 fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &str) {
     let selected = state.selected_item();
     let has_aquarium = state.entitlements().has_aquarium();
-    let enter_label = if selected.is_some_and(|item| item.is_dynamic_bonsai() && item.equipped) {
-        "classic"
-    } else if selected.is_some_and(|item| item.is_dynamic_bonsai() && item.owned) {
-        "dynamic"
-    } else if selected.is_some_and(|item| item.is_aquarium_fish() && !has_aquarium) {
+    let enter_label = if selected.is_some_and(|item| item.is_aquarium_fish() && !has_aquarium) {
         "needs aquarium"
     } else if selected.is_some_and(|item| item.is_aquarium_fish()) {
         "buy one"
@@ -1000,11 +967,7 @@ fn item_row(
     } else {
         Style::default().fg(theme::TEXT_BRIGHT())
     };
-    let status = if item.is_dynamic_bonsai() && item.equipped {
-        "dynamic"
-    } else if item.is_dynamic_bonsai() && item.owned {
-        "classic"
-    } else if item.is_rental() {
+    let status = if item.is_rental() {
         if rental_active(item, state) {
             "active"
         } else if item.is_custom_title() {

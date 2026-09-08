@@ -787,45 +787,20 @@ impl russh::server::Handler for ClientHandler {
             initial_solitaire_games,
             initial_minesweeper_games,
         } = load_arcade_session_preloads(&self.state, user_id).await;
-        let (initial_bonsai_tree, initial_bonsai_care, initial_bonsai_decay_protection) = match self
-            .state
-            .bonsai_service
-            .ensure_tree_with_care(user_id)
-            .await
-        {
-            Ok((tree, care, protection)) => (Some(tree), Some(care), protection),
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load/create bonsai tree");
-                (None, None, None)
-            }
-        };
-        let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
-        let shop_snapshot = match self.state.shop_service.refresh_user(user_id).await {
-            Ok(snapshot) => Some(snapshot),
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to refresh shop snapshot");
-                None
-            }
-        };
-        let initial_bonsai_v2_tree = if shop_snapshot
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.entitlements.has_dynamic_bonsai())
-        {
-            match self
-                .state
-                .bonsai_service
-                .ensure_v2_tree(user_id, initial_bonsai_tree.as_ref())
-                .await
-            {
-                Ok(tree) => Some(tree),
+        let (initial_bonsai_tree, initial_bonsai_decay_protection) =
+            match self.state.bonsai_service.ensure_tree(user_id).await {
+                Ok((tree, protection)) => (Some(tree), protection),
                 Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load/create bonsai v2 tree");
-                    None
+                    tracing::warn!(error = ?e, "failed to load/create bonsai tree");
+                    (None, None)
                 }
-            }
-        } else {
-            None
-        };
+            };
+        let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
+        // Primes the per-user snapshot channel subscribed above; the session
+        // reads everything it needs from that channel.
+        if let Err(e) = self.state.shop_service.refresh_user(user_id).await {
+            tracing::warn!(error = ?e, "failed to refresh shop snapshot");
+        }
         let initial_pet = match self.state.pet_service.ensure_cat(user_id).await {
             Ok(cat) => Some(cat),
             Err(e) => {
@@ -973,8 +948,6 @@ impl russh::server::Handler for ClientHandler {
             username: user.username.clone(),
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,
-            initial_bonsai_care,
-            initial_bonsai_v2_tree,
             initial_bonsai_decay_protection,
             pet_service: self.state.pet_service.clone(),
             initial_pet,

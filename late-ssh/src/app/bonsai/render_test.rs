@@ -1,6 +1,6 @@
 use super::*;
+use crate::app::bonsai::state::BonsaiGraph;
 use crate::app::bonsai::svc::BonsaiService;
-use crate::app::bonsai_v2::state::BonsaiGraph;
 use uuid::Uuid;
 
 fn test_bonsai_service() -> BonsaiService {
@@ -9,8 +9,8 @@ fn test_bonsai_service() -> BonsaiService {
     BonsaiService::new(db, tx)
 }
 
-fn state_with_branches(branches: Vec<Branch>) -> BonsaiV2State {
-    let mut state = BonsaiV2State::fallback(Uuid::nil(), test_bonsai_service(), 42);
+fn state_with_branches(branches: Vec<Branch>) -> BonsaiState {
+    let mut state = BonsaiState::fallback(Uuid::nil(), test_bonsai_service(), 42);
     state.graph = BonsaiGraph {
         version: 1,
         next_id: branches
@@ -94,7 +94,9 @@ fn the_canvas_is_the_one_size_with_the_pot_on_the_last_row() {
     );
     // The trunk roots on the row above the pot, at the center column.
     assert_eq!(
-        rendered.lines[CANVAS_HEIGHT - 2].chars().nth(CANVAS_WIDTH / 2),
+        rendered.lines[CANVAS_HEIGHT - 2]
+            .chars()
+            .nth(CANVAS_WIDTH / 2),
         Some('|')
     );
     assert!(rendered.lines[CANVAS_HEIGHT - 1].contains("[=======]"));
@@ -115,11 +117,16 @@ fn preview_keeps_exact_glyphs_when_the_tree_fits() {
     assert_eq!(rendered.lines.len(), PREVIEW_HEIGHT);
     assert!(rendered.lines[PREVIEW_HEIGHT - 1].contains("[=====]"));
     assert_eq!(
-        rendered.lines[PREVIEW_HEIGHT - 2].chars().nth(PREVIEW_WIDTH / 2),
+        rendered.lines[PREVIEW_HEIGHT - 2]
+            .chars()
+            .nth(PREVIEW_WIDTH / 2),
         Some('|')
     );
     let joined = rendered.lines.join("\n");
-    assert!(joined.contains('\\'), "expected the real diagonal glyph: {joined}");
+    assert!(
+        joined.contains('\\'),
+        "expected the real diagonal glyph: {joined}"
+    );
 }
 
 /// A tree wider than the block is scaled by one factor on both axes, so
@@ -149,7 +156,10 @@ fn preview_scales_a_wide_tree_uniformly() {
         .iter()
         .filter(|line| !line.trim().is_empty())
         .count();
-    assert!(tree_rows <= 4, "expected a squat tree, got {tree_rows} rows");
+    assert!(
+        tree_rows <= 4,
+        "expected a squat tree, got {tree_rows} rows"
+    );
 }
 
 #[test]

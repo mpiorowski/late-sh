@@ -3,13 +3,12 @@ use crate::{
         chips::{ChipMove, UserChips},
         marketplace::{
             AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
-            BONSAI_DECAY_PROTECTION_KIND, BONSAI_DECAY_SHIELD_SKU,
-            CHAT_BADGE_SLOT, CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT,
-            COMPANION_CONSUMABLE_ITEM_KIND, ConsumableUseStatus,
-            FishActiveStatus, MarketplaceItem, PET_COMPANION_SKU, PurchaseStatus,
-            THEMATRIX_ULTIMATE_SKU, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND, UserPurchase,
-            WONDERLAND_ULTIMATE_SKU, adjust_aquarium_fish_active_by_sku, aquarium_is_hungry,
-            consume_aquarium_food_pinch, purchase_durable_item_by_sku,
+            BONSAI_DECAY_PROTECTION_KIND, BONSAI_DECAY_SHIELD_SKU, CHAT_BADGE_SLOT,
+            CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT, COMPANION_CONSUMABLE_ITEM_KIND,
+            ConsumableUseStatus, FishActiveStatus, MarketplaceItem, PET_COMPANION_SKU,
+            PurchaseStatus, THEMATRIX_ULTIMATE_SKU, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND,
+            UserPurchase, WONDERLAND_ULTIMATE_SKU, adjust_aquarium_fish_active_by_sku,
+            aquarium_is_hungry, consume_aquarium_food_pinch, purchase_durable_item_by_sku,
             purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_custom_title,
             purchase_item_by_sku_with_username_effect, rental_duration_secs,
         },
@@ -225,10 +224,7 @@ async fn companion_shop_items_are_ordered_by_care_flow() {
         .filter(|item| {
             matches!(
                 item.sku.as_str(),
-                PET_COMPANION_SKU
-                    | "pet_food"
-                    | AQUARIUM_SKU
-                    | "aquarium_food"
+                PET_COMPANION_SKU | "pet_food" | AQUARIUM_SKU | "aquarium_food"
             )
         })
         .map(|item| item.sku.as_str())
@@ -236,13 +232,7 @@ async fn companion_shop_items_are_ordered_by_care_flow() {
 
     assert_eq!(
         companion_skus,
-        vec![
-           
-            PET_COMPANION_SKU,
-            "pet_food",
-            AQUARIUM_SKU,
-            "aquarium_food",
-        ]
+        vec![PET_COMPANION_SKU, "pet_food", AQUARIUM_SKU, "aquarium_food",]
     );
 }
 

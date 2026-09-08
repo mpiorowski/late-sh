@@ -694,7 +694,7 @@ async fn global_ctrl_g_toggles_lobby_and_slash_shop_opens_shop() {
 }
 
 #[tokio::test]
-async fn global_w_keeps_old_bonsai_without_dynamic_selection() {
+async fn global_w_opens_bonsai_care() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "w-bonsai-mod-it").await;
     let client = test_db.db.get().await.expect("db client");
@@ -713,11 +713,11 @@ async fn global_w_keeps_old_bonsai_without_dynamic_selection() {
     wait_for_render_contains(&mut app, " Home ").await;
 
     app.handle_input(b"w");
-    wait_for_render_contains(&mut app, " Bonsai Care ").await;
+    wait_for_render_contains(&mut app, " Bonsai ").await;
     let frame = render_plain(&mut app);
     assert!(
-        !frame.contains(" Dynamic Bonsai ") && !frame.contains("Branch Graph"),
-        "expected w to keep the old Bonsai care modal; frame={frame:?}"
+        frame.contains("Day 0") && frame.contains("vigor"),
+        "expected w to open the bonsai care modal; frame={frame:?}"
     );
 }
 
@@ -744,7 +744,7 @@ async fn global_ctrl_b_is_ignored_for_all_users() {
         app.handle_input(b"\x02");
         let frame = render_plain(&mut app);
         assert!(
-            !frame.contains(" Dynamic Bonsai ") && !frame.contains("Branch Graph"),
+            !frame.contains(" Bonsai ") && !app.show_bonsai_modal,
             "expected Ctrl+B to stay inert for {label}; frame={frame:?}"
         );
     }
@@ -2490,7 +2490,7 @@ async fn artboard_gallery_hangs_a_framed_piece_from_the_rail() {
         "`v` in a title must not arm the music prefix"
     );
     assert!(
-        !app.show_bonsai_modal && !app.show_bonsai_v2_modal,
+        !app.show_bonsai_modal,
         "`w` in a title must not open the bonsai modal"
     );
     app.handle_input(b"\r");
@@ -2535,7 +2535,7 @@ async fn artboard_gallery_hangs_a_framed_piece_from_the_rail() {
     );
     app.handle_input(b"w");
     assert!(
-        !app.show_bonsai_modal && !app.show_bonsai_v2_modal,
+        !app.show_bonsai_modal,
         "`w` must not open Bonsai Care from the Artboard"
     );
 

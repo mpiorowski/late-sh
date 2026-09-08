@@ -27,8 +27,7 @@ use ratatui::{
 };
 
 use crate::app::{
-    bonsai::{state::stage_for, ui::render_tree_art_lines},
-    bonsai_v2::render::{PREVIEW_WIDTH, apply_sway, center_lines, render_preview_lines},
+    bonsai::render::{PREVIEW_WIDTH, apply_sway, center_lines, render_preview_lines},
     chat::showcase::svc::ShowcaseFeedItem,
     common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
     hub::aquarium::{state::AquariumState, ui as aquarium_ui},
@@ -417,10 +416,9 @@ fn section_lines(label: &str, width: usize) -> Vec<Line<'static>> {
     ]
 }
 
-/// The bonsai as exactly `height` rows, the pot on the last one. A Dynamic
-/// Bonsai is the same fixed preview block the sidebar shows, centered,
-/// swaying on the wall tick; the classic sprite is cropped from the crown
-/// so the pot and trunk stay, and holds still.
+/// The bonsai as exactly `height` rows, the pot on the last one: the same
+/// fixed preview block the sidebar shows, centered, swaying on the wall
+/// tick.
 fn bonsai_block(
     state: &ProfileModalState,
     width: usize,
@@ -430,30 +428,14 @@ fn bonsai_block(
     let dim = Style::default().fg(theme::TEXT_DIM());
     let placeholder = |text: &str| vec![Line::from(Span::styled(text.to_string(), dim)).centered()];
 
-    let mut tree = if state.dynamic_bonsai_selected() {
-        match state.bonsai_v2() {
-            Some(bonsai) => {
-                let mut lines = render_preview_lines(bonsai);
-                apply_sway(&mut lines, wall_tick);
-                center_lines(&mut lines, width, PREVIEW_WIDTH);
-                lines
-            }
-            None => placeholder("Dynamic Bonsai not planted yet"),
+    let mut tree = match state.bonsai() {
+        Some(bonsai) => {
+            let mut lines = render_preview_lines(bonsai);
+            apply_sway(&mut lines, wall_tick);
+            center_lines(&mut lines, width, PREVIEW_WIDTH);
+            lines
         }
-    } else if let Some(tree) = state.bonsai() {
-        let stage = stage_for(tree.is_alive, tree.growth_points);
-        let age_days = (Utc::now().date_naive() - tree.created.date_naive())
-            .num_days()
-            .max(0);
-        let wilting = tree.is_alive
-            && tree
-                .last_watered
-                .map(|last| (Utc::now().date_naive() - last).num_days() >= 2)
-                .unwrap_or(age_days >= 2);
-        // Wall tick 0: the profile tree stays still (sin(0) sway).
-        render_tree_art_lines(stage, tree.seed, wilting, width, 0, None)
-    } else {
-        placeholder("no bonsai yet")
+        None => placeholder("no bonsai yet"),
     };
 
     if tree.len() > height {

@@ -4,7 +4,7 @@ use std::{
 };
 
 use chrono::{DateTime, NaiveDate, Utc};
-use late_core::models::bonsai::{BonsaiV2Tree, BonsaiV2TreeParams};
+use late_core::models::bonsai::{Tree, TreeParams};
 use late_core::models::bonsai_decay_protection::BonsaiDecayProtection;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -19,7 +19,7 @@ const MAX_OPEN_SHOOTS: usize = 4;
 const LEAF_RAMIFICATION_THRESHOLD: u8 = 3;
 const ROOT_BRANCH_ID: i32 = 1;
 
-/// The pot is the care modal. A Dynamic Bonsai lives in one fixed canvas
+/// The pot is the care modal. The bonsai lives in one fixed canvas
 /// that the modal and the share snippet show 1:1, so the whole tree is
 /// always visible where it is tended and nobody wonders why it stopped at
 /// an edge they cannot see. Growth stops at the edge; density does not:
@@ -39,15 +39,15 @@ const TIP_MAX_ABS_X: i16 = (CANVAS_WIDTH as i16) / 2 - PAD_REACH_X;
 const TIP_MAX_Y: i16 = CANVAS_HEIGHT as i16 - 2 - PAD_REACH_Y;
 /// The branch cap. Every branch-adding path checks it independently. A
 /// full tree grows nothing new until something is cut, and the care modal
-/// says so (`BonsaiV2State::is_full`). Raised from 96 when back-budding
+/// says so (`BonsaiState::is_full`). Raised from 96 when back-budding
 /// arrived, since buds add branches the old ceiling never budgeted for.
 pub(crate) const MAX_BRANCHES: usize = 128;
 
 /// Whether the once-per-UTC-day watering rule applies to this press.
 /// `AdminBypass` is a temporary testing aid (2026-09-08): admins can water
-/// Dynamic Bonsai repeatedly to watch growth waves land. The daily chips
-/// are unaffected, since the classic path pays them once per day in the DB.
-/// Remove once the Dynamic renderer has been evaluated.
+/// repeatedly to watch growth waves land. The daily chips are unaffected,
+/// since `Tree::water_day` pays them once per day in the DB. Remove once
+/// the growth rules have settled.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum DailyWaterGate {
     Enforced,
@@ -55,12 +55,12 @@ pub(crate) enum DailyWaterGate {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum BonsaiV2Mode {
+pub(crate) enum BonsaiMode {
     Inspect,
     Wire,
 }
 
-impl BonsaiV2Mode {
+impl BonsaiMode {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Inspect => "inspect",
@@ -213,7 +213,7 @@ impl BonsaiGraph {
 }
 
 #[derive(Clone)]
-pub(crate) struct BonsaiV2State {
+pub(crate) struct BonsaiState {
     pub user_id: Uuid,
     pub svc: BonsaiService,
     pub seed: i64,
@@ -226,24 +226,24 @@ pub(crate) struct BonsaiV2State {
     pub age_days: i64,
     pub graph: BonsaiGraph,
     pub selected_branch_id: Option<i32>,
-    pub mode: BonsaiV2Mode,
+    pub mode: BonsaiMode,
     pub message: Option<String>,
     state_revision: i64,
 
     /// The user's live Bonsai Decay Shield window, if any, consulted by
     /// `simulate_day` so a protected day adds no water stress and costs no
     /// vigor. Loaded at construction time (login, or profile view for
-    /// `view_only`) and refreshed from the shop snapshot on tick; Dynamic
-    /// Bonsai has no in-session re-simulation, so a purchase mid-session
-    /// only takes visible effect from the next construction onward.
+    /// `view_only`) and refreshed from the shop snapshot on tick; there is
+    /// no in-session re-simulation, so a purchase mid-session only takes
+    /// visible effect from the next construction onward.
     pub decay_protection: Option<BonsaiDecayProtection>,
 }
 
-impl BonsaiV2State {
+impl BonsaiState {
     pub(crate) fn new(
         user_id: Uuid,
         svc: BonsaiService,
-        tree: BonsaiV2Tree,
+        tree: Tree,
         decay_protection: Option<BonsaiDecayProtection>,
     ) -> Self {
         let today = BonsaiService::today();
@@ -251,7 +251,7 @@ impl BonsaiV2State {
         let (mut graph, normalized_ids) =
             serde_json::from_value::<BonsaiGraph>(tree.branch_graph.clone())
                 .map(normalize_graph_segments)
-                .unwrap_or_else(|_| (seeded_graph(tree.seed, 0), BTreeMap::new()));
+                .unwrap_or_else(|_| (seeded_graph(tree.seed), BTreeMap::new()));
         let repotted = repot_into_canvas(&mut graph);
         let selected_branch_id = tree
             .selected_branch_id
@@ -271,13 +271,17 @@ impl BonsaiV2State {
             age_days: simulated_age_days(tree.planted_at, tree.last_simulated_date),
             graph,
             selected_branch_id,
-            mode: BonsaiV2Mode::from_str(&tree.mode),
+            mode: BonsaiMode::from_str(&tree.mode),
             message: (repotted > 0).then(|| repot_message(repotted)),
             state_revision: tree.state_revision,
             decay_protection,
         };
         state.ensure_selection();
+        let was_alive = state.is_alive;
         let elapsed_changed = state.apply_elapsed_days(today);
+        if was_alive && !state.is_alive {
+            state.svc.lost_task(user_id, state.age_days as i32);
+        }
         let badge_changed = state.badge_glyph() != persisted_badge_glyph;
         if elapsed_changed || badge_changed || repotted > 0 {
             state.persist();
@@ -292,14 +296,14 @@ impl BonsaiV2State {
     pub(crate) fn view_only(
         user_id: Uuid,
         svc: BonsaiService,
-        tree: BonsaiV2Tree,
+        tree: Tree,
         decay_protection: Option<BonsaiDecayProtection>,
     ) -> Self {
         let today = BonsaiService::today();
         let (mut graph, normalized_ids) =
             serde_json::from_value::<BonsaiGraph>(tree.branch_graph.clone())
                 .map(normalize_graph_segments)
-                .unwrap_or_else(|_| (seeded_graph(tree.seed, 0), BTreeMap::new()));
+                .unwrap_or_else(|_| (seeded_graph(tree.seed), BTreeMap::new()));
         let _ = repot_into_canvas(&mut graph);
         let selected_branch_id = tree
             .selected_branch_id
@@ -319,7 +323,7 @@ impl BonsaiV2State {
             age_days: simulated_age_days(tree.planted_at, tree.last_simulated_date),
             graph,
             selected_branch_id,
-            mode: BonsaiV2Mode::from_str(&tree.mode),
+            mode: BonsaiMode::from_str(&tree.mode),
             message: None,
             state_revision: tree.state_revision,
             decay_protection,
@@ -333,7 +337,7 @@ impl BonsaiV2State {
 
     pub(crate) fn fallback(user_id: Uuid, svc: BonsaiService, seed: i64) -> Self {
         let today = BonsaiService::today();
-        let graph = seeded_graph(seed, 0);
+        let graph = seeded_graph(seed);
         let selected_branch_id = graph.selected_fallback();
         Self {
             user_id,
@@ -348,8 +352,8 @@ impl BonsaiV2State {
             age_days: 0,
             graph,
             selected_branch_id,
-            mode: BonsaiV2Mode::Inspect,
-            message: Some("Dynamic Bonsai is not persisted yet".to_string()),
+            mode: BonsaiMode::Inspect,
+            message: Some("Bonsai is not persisted yet".to_string()),
             state_revision: 0,
             decay_protection: None,
         }
@@ -380,7 +384,7 @@ impl BonsaiV2State {
         self.vigor = (self.vigor + 18).min(100);
         self.grow_once(GrowthCause::Water);
         self.message = Some("Watered: vigor pushed new growth".to_string());
-        self.persist();
+        self.persist_watering();
         true
     }
 
@@ -388,7 +392,7 @@ impl BonsaiV2State {
         let today = BonsaiService::today();
         self.seed = self.seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         self.planted_at = Utc::now();
-        self.graph = seeded_graph(self.seed, 0);
+        self.graph = seeded_graph(self.seed);
         self.selected_branch_id = self.graph.selected_fallback();
         self.last_watered = None;
         self.is_alive = true;
@@ -396,8 +400,8 @@ impl BonsaiV2State {
         self.water_stress = 0;
         self.last_simulated_date = today;
         self.age_days = 0;
-        self.mode = BonsaiV2Mode::Inspect;
-        self.message = Some("New dynamic bonsai planted".to_string());
+        self.mode = BonsaiMode::Inspect;
+        self.message = Some("New bonsai planted".to_string());
         self.persist();
     }
 
@@ -451,7 +455,7 @@ impl BonsaiV2State {
         branch.bend_x = (branch.bend_x + dx).clamp(-3, 3);
         branch.bend_y = (branch.bend_y + dy).clamp(-2, 3);
         let direction = wire_direction_label(branch.bend_x, branch.bend_y);
-        self.mode = BonsaiV2Mode::Wire;
+        self.mode = BonsaiMode::Wire;
         self.message = Some(format!("Wire set: future growth will lean {direction}"));
         self.persist();
     }
@@ -581,11 +585,11 @@ impl BonsaiV2State {
         let rendered = super::render::render_ascii(self, CANVAS_WIDTH, CANVAS_HEIGHT, false);
         let label = if self.is_alive {
             format!(
-                "ADMIRE my Dynamic Bonsai (Day {}, {} cells)",
+                "ADMIRE my Bonsai (Day {}, {} cells)",
                 self.age_days, rendered.occupied_cells
             )
         } else {
-            "ADMIRE my Dynamic Bonsai [RIP]".to_string()
+            "ADMIRE my Bonsai [RIP]".to_string()
         };
         format!(
             "{}\n{}",
@@ -759,10 +763,23 @@ impl BonsaiV2State {
     }
 
     fn persist(&mut self) {
+        let params = self.next_params();
+        self.svc.save_task(params);
+    }
+
+    /// A watering goes through the service's watering path rather than the
+    /// plain save, so the once-per-day chip bonus is paid behind the DB
+    /// gate in the same task as the write.
+    fn persist_watering(&mut self) {
+        let params = self.next_params();
+        self.svc.water_task(params);
+    }
+
+    fn next_params(&mut self) -> TreeParams {
         self.state_revision += 1;
         let branch_graph =
             serde_json::to_value(&self.graph).unwrap_or_else(|_| serde_json::json!({}));
-        self.svc.save_v2_task(BonsaiV2TreeParams {
+        TreeParams {
             user_id: self.user_id,
             seed: self.seed,
             planted_at: self.planted_at,
@@ -776,7 +793,7 @@ impl BonsaiV2State {
             mode: self.mode.as_str().to_string(),
             badge_glyph: self.badge_glyph(),
             state_revision: self.state_revision,
-        });
+        }
     }
 }
 
@@ -793,17 +810,18 @@ enum GrowthCause {
     Water,
 }
 
-pub(crate) fn seeded_graph_value(seed: i64, growth_points: i32) -> serde_json::Value {
-    serde_json::to_value(seeded_graph(seed, growth_points))
-        .unwrap_or_else(|_| serde_json::json!({}))
+/// The graph a fresh tree is planted with: the root segment alone. Every
+/// tree starts here, whether at first login or after a replant.
+pub(crate) fn seeded_graph_value(seed: i64) -> serde_json::Value {
+    serde_json::to_value(seeded_graph(seed)).unwrap_or_else(|_| serde_json::json!({}))
 }
 
-pub(crate) fn seeded_badge_glyph(seed: i64, growth_points: i32, is_alive: bool) -> String {
-    badge_glyph_for_graph(&seeded_graph(seed, growth_points), is_alive, 70, 0)
+pub(crate) fn seeded_badge_glyph(seed: i64) -> String {
+    badge_glyph_for_graph(&seeded_graph(seed), true, 70, 0)
 }
 
-fn seeded_graph(seed: i64, growth_points: i32) -> BonsaiGraph {
-    let mut graph = BonsaiGraph {
+fn seeded_graph(_seed: i64) -> BonsaiGraph {
+    BonsaiGraph {
         version: 1,
         next_id: 2,
         branches: vec![Branch {
@@ -823,21 +841,7 @@ fn seeded_graph(seed: i64, growth_points: i32) -> BonsaiGraph {
             ramification: 0,
             last_pinched_age: None,
         }],
-    };
-
-    let steps = (growth_points / 45).clamp(0, 20);
-    for age_days in 0..steps {
-        let _ = grow_graph_once(
-            &mut graph,
-            seed,
-            age_days as i64,
-            72,
-            0,
-            GrowthCause::Daily,
-            None,
-        );
     }
-    normalize_graph_segments(graph).0
 }
 
 fn normalize_graph_segments(graph: BonsaiGraph) -> (BonsaiGraph, BTreeMap<i32, i32>) {
@@ -1352,9 +1356,9 @@ fn bud_once(
             } else {
                 1
             };
-            let room = graph
-                .branch(id)
-                .map_or(0, |branch| open_run(graph, (branch.end_x, branch.end_y), side));
+            let room = graph.branch(id).map_or(0, |branch| {
+                open_run(graph, (branch.end_x, branch.end_y), side)
+            });
             (id, side, room)
         })
         .collect::<Vec<_>>();
@@ -1389,10 +1393,12 @@ fn tip_can_grow(graph: &BonsaiGraph, seed: i64, tip: &Branch) -> bool {
     if tip_parked(tip) && !matches!(tip.status, BranchStatus::Wired) {
         return false;
     }
-    candidate_steps(graph, seed, tip).into_iter().any(|(dx, dy)| {
-        let target = branch_target(tip, dx, dy);
-        target_in_canvas(target) && growth_target_is_open(graph, tip.id, target)
-    })
+    candidate_steps(graph, seed, tip)
+        .into_iter()
+        .any(|(dx, dy)| {
+            let target = branch_target(tip, dx, dy);
+            target_in_canvas(target) && growth_target_is_open(graph, tip.id, target)
+        })
 }
 
 /// A tip against the ceiling or a side wall. The pot never lets a tip
@@ -1454,7 +1460,10 @@ fn natural_steps(seed: i64, tip: &Branch, order: u8, salt: i32) -> Vec<(i16, i16
     } else {
         1
     };
-    let keep = (if current_dx == 0 { side } else { current_dx }, current_dy.max(0));
+    let keep = (
+        if current_dx == 0 { side } else { current_dx },
+        current_dy.max(0),
+    );
     let level = (side, 0);
     let climb = (side, 1);
     let straight_up = (0, 1);
@@ -1466,25 +1475,25 @@ fn natural_steps(seed: i64, tip: &Branch, order: u8, salt: i32) -> Vec<(i16, i16
         growth_step(tip)
     } else {
         match order {
-        1 => match roll {
-            0..=59 => keep,
-            60..=79 => climb,
-            80..=89 => straight_up,
-            _ => level,
-        },
-        2 | 3 => match roll {
-            0..=44 => keep,
-            45..=64 => level,
-            65..=84 => climb,
-            _ => straight_up,
-        },
-        _ => match roll {
-            0..=34 => keep,
-            35..=64 => level,
-            65..=79 => climb,
-            80..=89 => droop,
-            _ => straight_up,
-        },
+            1 => match roll {
+                0..=59 => keep,
+                60..=79 => climb,
+                80..=89 => straight_up,
+                _ => level,
+            },
+            2 | 3 => match roll {
+                0..=44 => keep,
+                45..=64 => level,
+                65..=84 => climb,
+                _ => straight_up,
+            },
+            _ => match roll {
+                0..=34 => keep,
+                35..=64 => level,
+                65..=79 => climb,
+                80..=89 => droop,
+                _ => straight_up,
+            },
         }
     };
     let mut steps = vec![first];

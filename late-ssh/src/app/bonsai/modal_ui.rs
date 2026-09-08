@@ -7,9 +7,9 @@ use ratatui::{
 };
 
 use crate::app::{
-    bonsai_v2::{
+    bonsai::{
         render::{apply_sway, canvas_lines, center_lines},
-        state::{BonsaiV2State, CANVAS_HEIGHT, CANVAS_WIDTH, branch_label},
+        state::{BonsaiState, CANVAS_HEIGHT, CANVAS_WIDTH, branch_label},
     },
     common::theme,
 };
@@ -19,12 +19,12 @@ use crate::app::{
 const MODAL_WIDTH: u16 = CANVAS_WIDTH as u16 + 12;
 const MODAL_HEIGHT: u16 = CANVAS_HEIGHT as u16 + 7;
 
-pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BonsaiV2State, wall_tick: usize) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BonsaiState, wall_tick: usize) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" Dynamic Bonsai ")
+        .title(" Bonsai ")
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -47,7 +47,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BonsaiV2State, wall_ti
     draw_footer(frame, layout[2]);
 }
 
-fn draw_tree(frame: &mut Frame, area: Rect, state: &BonsaiV2State, wall_tick: usize) {
+fn draw_tree(frame: &mut Frame, area: Rect, state: &BonsaiState, wall_tick: usize) {
     let mut tree_lines = canvas_lines(state, true);
     apply_sway(&mut tree_lines, wall_tick);
     center_lines(&mut tree_lines, area.width as usize, CANVAS_WIDTH);
@@ -63,7 +63,7 @@ fn draw_tree(frame: &mut Frame, area: Rect, state: &BonsaiV2State, wall_tick: us
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn draw_status(frame: &mut Frame, area: Rect, state: &BonsaiV2State) {
+fn draw_status(frame: &mut Frame, area: Rect, state: &BonsaiState) {
     let health_color = health_color(state.water_stress);
     let status = status_label(state);
     let selected = state
@@ -123,7 +123,7 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &BonsaiV2State) {
     frame.render_widget(Paragraph::new(vec![summary, detail]), area);
 }
 
-fn status_label(state: &BonsaiV2State) -> &'static str {
+fn status_label(state: &BonsaiState) -> &'static str {
     if !state.is_alive {
         "rip"
     } else if state.water_stress >= 60 {

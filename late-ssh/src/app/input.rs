@@ -948,11 +948,6 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.show_bonsai_v2_modal {
-        crate::app::bonsai_v2::modal_input::handle_input(app, event);
-        return;
-    }
-
     if app.show_bonsai_modal {
         crate::app::bonsai::modal_input::handle_input(app, event);
         return;
@@ -2158,10 +2153,6 @@ fn dispatch_escape(app: &mut App) {
     {
         return;
     }
-    if app.show_bonsai_v2_modal {
-        crate::app::bonsai_v2::modal_input::handle_escape(app);
-        return;
-    }
     if app.show_bonsai_modal {
         crate::app::bonsai::modal_input::handle_escape(app);
         return;
@@ -3321,7 +3312,6 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
-    app.show_bonsai_v2_modal = false;
     app.show_lobby_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
@@ -3353,7 +3343,6 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
-    app.show_bonsai_v2_modal = false;
     app.show_lobby_modal = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
@@ -3382,7 +3371,6 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
-    app.show_bonsai_v2_modal = false;
     app.show_lobby_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
@@ -3483,7 +3471,7 @@ pub(crate) fn feed_aquarium_globally(app: &mut App) {
     app.banner = Some(app.shop_state.use_aquarium_food());
 }
 
-fn open_bonsai_v2_modal_globally(app: &mut App) {
+fn open_bonsai_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
@@ -3495,7 +3483,6 @@ fn open_bonsai_v2_modal_globally(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
-    app.show_bonsai_v2_modal = false;
     app.show_lobby_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
@@ -3503,7 +3490,7 @@ fn open_bonsai_v2_modal_globally(app: &mut App) {
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
-    app.show_bonsai_v2_modal = true;
+    app.show_bonsai_modal = true;
 }
 
 pub(crate) fn open_daily_modal_globally(app: &mut App) {
@@ -3518,7 +3505,6 @@ pub(crate) fn open_daily_modal_globally(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
-    app.show_bonsai_v2_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
@@ -3849,23 +3835,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.showcase_composing
                 && !ctx.work_composing =>
         {
-            if app.use_bonsai_v2() {
-                open_bonsai_v2_modal_globally(app);
-            } else {
-                app.show_help = false;
-                app.show_profile_modal = false;
-                app.show_sheet_modal = false;
-                app.show_poll_modal = false;
-                app.poll_modal_state.close();
-                app.show_gild_modal = false;
-                app.gild_modal_state.close();
-                app.show_settings = false;
-                app.show_hub_modal = false;
-                app.show_quit_confirm = false;
-                app.show_bonsai_v2_modal = false;
-                app.show_lobby_modal = false;
-                app.show_bonsai_modal = true;
-            }
+            open_bonsai_modal_globally(app);
             true
         }
         b'1' if !artboard_blocks_page_switch => {

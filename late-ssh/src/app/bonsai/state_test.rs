@@ -6,9 +6,9 @@ fn test_bonsai_service() -> BonsaiService {
     BonsaiService::new(db, tx)
 }
 
-fn state_for_graph(graph: BonsaiGraph, selected_branch_id: Option<i32>) -> BonsaiV2State {
+fn state_for_graph(graph: BonsaiGraph, selected_branch_id: Option<i32>) -> BonsaiState {
     let today = BonsaiService::today();
-    BonsaiV2State {
+    BonsaiState {
         user_id: Uuid::nil(),
         svc: test_bonsai_service(),
         seed: 42,
@@ -21,7 +21,7 @@ fn state_for_graph(graph: BonsaiGraph, selected_branch_id: Option<i32>) -> Bonsa
         age_days: 0,
         graph,
         selected_branch_id,
-        mode: BonsaiV2Mode::Inspect,
+        mode: BonsaiMode::Inspect,
         message: None,
         state_revision: 0,
         decay_protection: None,
@@ -29,7 +29,7 @@ fn state_for_graph(graph: BonsaiGraph, selected_branch_id: Option<i32>) -> Bonsa
 }
 
 fn graph_with_two_editable_tips() -> BonsaiGraph {
-    let mut graph = seeded_graph(42, 0);
+    let mut graph = seeded_graph(42);
     graph
         .add_branch(ROOT_BRANCH_ID, -1, 1, 1, 1, 65)
         .expect("left tip");
@@ -40,7 +40,7 @@ fn graph_with_two_editable_tips() -> BonsaiGraph {
 }
 
 fn graph_with_two_isolated_tips() -> BonsaiGraph {
-    let mut graph = seeded_graph(42, 0);
+    let mut graph = seeded_graph(42);
     let left_1 = graph
         .add_branch(ROOT_BRANCH_ID, -1, 1, 1, 1, 65)
         .expect("left child");
@@ -85,18 +85,6 @@ fn test_branch(id: i32, parent_id: Option<i32>, start: (i16, i16), end: (i16, i1
         ramification: 0,
         last_pinched_age: None,
     }
-}
-
-#[test]
-fn seeded_graph_scales_with_legacy_growth() {
-    let small = seeded_graph(42, 0);
-    let larger = seeded_graph(42, 600);
-
-    assert!(larger.branches.len() > small.branches.len());
-    assert_ne!(
-        badge_glyph_for_graph(&small, true, 70, 0),
-        badge_glyph_for_graph(&larger, true, 70, 0)
-    );
 }
 
 #[test]
@@ -150,13 +138,22 @@ fn growth_target_blocks_crossing_branch() {
 
     let grown = grow_tip_once(&mut graph, 2, 42, 75, 0, GrowthCause::Water);
 
-    assert_eq!(grown, None);
-    assert_eq!(graph.branches.len(), 3);
+    // The wired step (0,1) -> (1,2) would cross branch 3, so it is refused;
+    // the tip may still take one of its natural fallbacks instead.
+    let crossing_taken = graph
+        .branches
+        .iter()
+        .any(|branch| (branch.end_x, branch.end_y) == (1, 2));
+    assert!(!crossing_taken);
+    if let Some(new_id) = grown {
+        let new_branch = graph.branch(new_id).expect("grown branch");
+        assert_ne!((new_branch.end_x, new_branch.end_y), (1, 2));
+    }
 }
 
 #[test]
 fn same_source_forks_can_grow_adjacent_cells() {
-    let mut graph = seeded_graph(42, 0);
+    let mut graph = seeded_graph(42);
     let vertical = graph
         .add_branch(ROOT_BRANCH_ID, 0, 1, 1, 1, 65)
         .expect("vertical child");
@@ -170,7 +167,7 @@ fn same_source_forks_can_grow_adjacent_cells() {
 
 #[test]
 fn pruning_finds_descendants_for_clean_removal() {
-    let graph = seeded_graph(42, 200);
+    let graph = graph_with_two_isolated_tips();
     let selected = graph
         .branches
         .iter()
@@ -190,7 +187,7 @@ fn pruning_finds_descendants_for_clean_removal() {
 
 #[test]
 fn seeded_graph_starts_as_one_locked_root_segment() {
-    let graph = seeded_graph(42, 0);
+    let graph = seeded_graph(42);
     assert_eq!(graph.branches.len(), 1);
     assert_eq!(graph.next_id, 2);
     let trunk = graph.branch(ROOT_BRANCH_ID).expect("trunk");
@@ -199,7 +196,7 @@ fn seeded_graph_starts_as_one_locked_root_segment() {
     assert_eq!(trunk.status, BranchStatus::Growing);
 
     let mut state = state_for_graph(graph, Some(ROOT_BRANCH_ID));
-    let rendered = crate::app::bonsai_v2::render::render_ascii(&state, 9, 4, false);
+    let rendered = crate::app::bonsai::render::render_ascii(&state, 9, 4, false);
     assert_eq!(rendered.occupied_cells, 1);
 
     state.prune_selected();
@@ -227,7 +224,7 @@ fn seeded_graph_starts_as_one_locked_root_segment() {
 #[tokio::test]
 async fn respawn_resets_age_anchor_and_advances_revision() {
     let old_planted_at = Utc::now() - chrono::Duration::days(12);
-    let mut state = state_for_graph(seeded_graph(42, 200), None);
+    let mut state = state_for_graph(graph_with_two_isolated_tips(), None);
     state.planted_at = old_planted_at;
     state.age_days = 12;
     state.state_revision = 7;
@@ -241,7 +238,7 @@ async fn respawn_resets_age_anchor_and_advances_revision() {
 
 #[test]
 fn root_growth_ignores_split_marker_and_creates_one_branch() {
-    let mut graph = seeded_graph(42, 0);
+    let mut graph = seeded_graph(42);
     graph.branch_mut(ROOT_BRANCH_ID).unwrap().last_pruned_day = Some(0);
 
     let new_id = grow_tip_once(&mut graph, ROOT_BRANCH_ID, 42, 75, 0, GrowthCause::Water)
@@ -275,9 +272,13 @@ fn pinched_tip_waits_then_needs_pinching() {
 }
 
 #[test]
-fn seeded_graph_uses_one_cell_segments() {
-    let graph = seeded_graph(42, 600);
+fn grown_graphs_use_one_cell_segments() {
+    let mut graph = seeded_graph(42);
+    for age_days in 0..12 {
+        let _ = grow_graph_once(&mut graph, 42, age_days, 90, 0, GrowthCause::Water, None);
+    }
 
+    assert!(graph.branches.len() > 1);
     assert!(graph.branches.iter().all(|branch| branch.length() <= 1));
 }
 
@@ -396,7 +397,7 @@ fn stress_raises_side_shoot_chance() {
 
 #[test]
 fn simulate_day_holds_stress_and_vigor_steady_on_a_protected_day() {
-    let mut state = state_for_graph(seeded_graph(42, 0), None);
+    let mut state = state_for_graph(seeded_graph(42), None);
     state.water_stress = 50;
     state.vigor = 50;
     state.last_watered = None; // would otherwise count as a dry day
@@ -415,7 +416,7 @@ fn simulate_day_holds_stress_and_vigor_steady_on_a_protected_day() {
 
 #[test]
 fn simulate_day_applies_dry_day_penalty_without_protection() {
-    let mut state = state_for_graph(seeded_graph(42, 0), None);
+    let mut state = state_for_graph(seeded_graph(42), None);
     state.water_stress = 50;
     state.vigor = 50;
     state.last_watered = None;
@@ -429,7 +430,7 @@ fn simulate_day_applies_dry_day_penalty_without_protection() {
 
 #[test]
 fn simulate_day_protection_does_not_extend_past_its_window() {
-    let mut state = state_for_graph(seeded_graph(42, 0), None);
+    let mut state = state_for_graph(seeded_graph(42), None);
     state.water_stress = 50;
     state.vigor = 50;
     state.last_watered = None;
@@ -448,7 +449,7 @@ fn simulate_day_protection_does_not_extend_past_its_window() {
 #[test]
 fn simulate_day_still_recovers_on_a_watered_day_under_protection() {
     let today = BonsaiService::today();
-    let mut state = state_for_graph(seeded_graph(42, 0), None);
+    let mut state = state_for_graph(seeded_graph(42), None);
     state.water_stress = 50;
     state.vigor = 50;
     state.last_watered = Some(today);
@@ -467,7 +468,7 @@ fn simulate_day_still_recovers_on_a_watered_day_under_protection() {
 
 #[test]
 fn simulate_day_protection_keeps_an_already_spent_tree_alive() {
-    let mut state = state_for_graph(seeded_graph(42, 0), None);
+    let mut state = state_for_graph(seeded_graph(42), None);
     state.water_stress = 100;
     state.vigor = 0;
     state.last_watered = None;
@@ -485,7 +486,7 @@ fn simulate_day_protection_keeps_an_already_spent_tree_alive() {
 /// refused and leaves the tree exactly as the first left it.
 #[tokio::test]
 async fn a_second_watering_the_same_day_is_refused() {
-    let mut state = state_for_graph(seeded_graph(42, 0), None);
+    let mut state = state_for_graph(seeded_graph(42), None);
     state.vigor = 50;
     state.water_stress = 40;
 
@@ -494,7 +495,7 @@ async fn a_second_watering_the_same_day_is_refused() {
     assert_eq!(state.last_watered, Some(today));
     assert_eq!(state.vigor, 68);
     assert_eq!(state.water_stress, 5);
-    let snapshot = |state: &BonsaiV2State| {
+    let snapshot = |state: &BonsaiState| {
         (
             serde_json::to_value(&state.graph).expect("graph json"),
             state.state_revision,
@@ -513,7 +514,7 @@ async fn a_second_watering_the_same_day_is_refused() {
 /// again and moves the tree, where the enforced gate would refuse it.
 #[tokio::test]
 async fn the_admin_bypass_waters_again_the_same_day() {
-    let mut state = state_for_graph(seeded_graph(42, 0), None);
+    let mut state = state_for_graph(seeded_graph(42), None);
     state.vigor = 50;
     state.water_stress = 40;
 
@@ -549,27 +550,35 @@ fn a_tip_at_its_run_budget_forks_instead_of_extending() {
 /// Nothing grows past the canvas edge, whichever path adds the branch.
 #[test]
 fn growth_never_leaves_the_canvas() {
-    let mut graph = seeded_graph(42, 0);
+    let mut graph = seeded_graph(42);
     for age_days in 0..60 {
         let _ = grow_graph_once(&mut graph, 42, age_days, 90, 0, GrowthCause::Water, None);
     }
 
     assert!(graph.branches.len() > 10);
-    assert!(graph.branches.iter().all(|branch| {
-        branch.end_x.abs() <= TIP_MAX_ABS_X && branch.end_y <= TIP_MAX_Y
-    }));
+    assert!(
+        graph
+            .branches
+            .iter()
+            .all(|branch| { branch.end_x.abs() <= TIP_MAX_ABS_X && branch.end_y <= TIP_MAX_Y })
+    );
 }
 
 /// A tree planted before the fixed canvas is cut back to the pot at load,
 /// downstream branches included, and the trunk is never touched.
 #[test]
 fn repot_cuts_everything_outside_the_canvas() {
-    let mut graph = seeded_graph(42, 0);
+    let mut graph = seeded_graph(42);
     let inside = graph
         .add_branch(ROOT_BRANCH_ID, 1, 1, 1, 1, 65)
         .expect("inside");
-    graph.branches.push(test_branch(50, Some(inside), (1, 1), (12, 3)));
-    graph.branches.push(test_branch(51, Some(50), (12, 3), (12, 4)));
+    let outside_x = TIP_MAX_ABS_X + 7;
+    graph
+        .branches
+        .push(test_branch(50, Some(inside), (1, 1), (outside_x, 3)));
+    graph
+        .branches
+        .push(test_branch(51, Some(50), (outside_x, 3), (outside_x, 4)));
     graph.next_id = 52;
 
     let removed = repot_into_canvas(&mut graph);

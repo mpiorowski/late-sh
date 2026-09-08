@@ -7,7 +7,6 @@ pub mod arcade;
 pub mod artboard;
 pub mod audio;
 pub mod bonsai;
-pub(crate) mod bonsai_v2;
 pub mod chat;
 pub mod clubhouse;
 pub mod common;

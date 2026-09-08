@@ -69,7 +69,10 @@ async fn ensure_plants_once_and_then_returns_the_existing_row() {
         .await
         .expect("ensure again");
     assert_eq!(again.id, tree.id);
-    assert_eq!(again.seed, 1234, "an existing tree is never replanted by ensure");
+    assert_eq!(
+        again.seed, 1234,
+        "an existing tree is never replanted by ensure"
+    );
     assert_eq!(again.badge_glyph, "·");
 }
 

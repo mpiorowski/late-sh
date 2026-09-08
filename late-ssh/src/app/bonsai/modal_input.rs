@@ -1,6 +1,8 @@
 use crate::app::{
-    bonsai::svc::{BonsaiService, WATER_CHIP_BONUS},
-    bonsai_v2::state::DailyWaterGate,
+    bonsai::{
+        state::DailyWaterGate,
+        svc::{BonsaiService, WATER_CHIP_BONUS},
+    },
     input::{MouseEventKind, ParsedInput},
     state::App,
 };
@@ -15,19 +17,19 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
         ParsedInput::Byte(b'w' | b'W') | ParsedInput::Char('w' | 'W') => water(app),
         ParsedInput::Byte(b'x' | b'X') | ParsedInput::Char('x' | 'X') => {
-            app.bonsai_v2_state.prune_selected();
+            app.bonsai_state.prune_selected();
         }
         ParsedInput::Byte(b'p' | b'P') | ParsedInput::Char('p' | 'P') => {
-            app.bonsai_v2_state.pinch_selected();
+            app.bonsai_state.pinch_selected();
         }
         ParsedInput::Byte(b's' | b'S') | ParsedInput::Char('s' | 'S') => {
-            app.bonsai_v2_state.split_selected();
+            app.bonsai_state.split_selected();
         }
         ParsedInput::Byte(b'c' | b'C') | ParsedInput::Char('c' | 'C') => copy_snippet(app),
-        ParsedInput::Byte(b'\t') => app.bonsai_v2_state.cycle_selection(1),
-        ParsedInput::BackTab => app.bonsai_v2_state.cycle_selection(-1),
+        ParsedInput::Byte(b'\t') => app.bonsai_state.cycle_selection(1),
+        ParsedInput::BackTab => app.bonsai_state.cycle_selection(-1),
         ParsedInput::Byte(b'n' | b'N') | ParsedInput::Char('n' | 'N') => {
-            app.bonsai_v2_state.cycle_selection(1);
+            app.bonsai_state.cycle_selection(1);
         }
         ParsedInput::Byte(b'h' | b'H')
         | ParsedInput::Char('h' | 'H')
@@ -42,8 +44,8 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         | ParsedInput::Char('j' | 'J')
         | ParsedInput::Arrow(b'B') => steer(app, 0, -1),
         ParsedInput::Mouse(mouse) => match mouse.kind {
-            MouseEventKind::ScrollUp => app.bonsai_v2_state.cycle_selection(-1),
-            MouseEventKind::ScrollDown => app.bonsai_v2_state.cycle_selection(1),
+            MouseEventKind::ScrollUp => app.bonsai_state.cycle_selection(-1),
+            MouseEventKind::ScrollDown => app.bonsai_state.cycle_selection(1),
             _ => {}
         },
         _ => {}
@@ -55,38 +57,22 @@ pub(crate) fn handle_escape(app: &mut App) {
 }
 
 fn steer(app: &mut App, dx: i8, dy: i8) {
-    app.bonsai_v2_state.bend_selected(dx, dy);
+    app.bonsai_state.bend_selected(dx, dy);
 }
 
 fn water(app: &mut App) {
-    let was_dead = !app.bonsai_state.is_alive || !app.bonsai_v2_state.is_alive;
+    // The first `w` on a dead tree replants; watering starts on the next.
     if !app.bonsai_state.is_alive {
         app.bonsai_state.respawn();
-        app.bonsai_care_state
-            .reset_for_respawn(app.bonsai_state.seed);
-        app.bonsai_state.reset_daily_care_for_respawn(
-            app.bonsai_care_state.date,
-            app.bonsai_care_state.branch_goal as i32,
-        );
-    }
-    if !app.bonsai_v2_state.is_alive {
-        app.bonsai_v2_state.respawn();
-    }
-    if was_dead {
-        app.bonsai_v2_state.message = Some("New dynamic bonsai planted".to_string());
         return;
     }
 
+    // The chips are paid by the service behind the DB's once-per-day gate
+    // (`Tree::water_day`); this only decides what the status row says.
     let earns_chips = app.bonsai_state.last_watered != Some(BonsaiService::today());
-    // Watering Dynamic waters classic too; the daily chips are paid there.
-    let _ = app.bonsai_state.water();
-    let changed = app.bonsai_v2_state.water(daily_water_gate(app));
-    if changed {
-        app.bonsai_v2_state.message = Some(if earns_chips {
-            format!("Watered Dynamic Bonsai (+{WATER_CHIP_BONUS} chips)")
-        } else {
-            "Watered Dynamic Bonsai".to_string()
-        });
+    let changed = app.bonsai_state.water(daily_water_gate(app));
+    if changed && earns_chips {
+        app.bonsai_state.message = Some(format!("Watered (+{WATER_CHIP_BONUS} chips)"));
     }
 }
 
@@ -108,7 +94,7 @@ fn is_close_event(event: &ParsedInput) -> bool {
 }
 
 fn close(app: &mut App) {
-    app.show_bonsai_v2_modal = false;
+    app.show_bonsai_modal = false;
 }
 
 fn open_help(app: &mut App) {
@@ -118,8 +104,8 @@ fn open_help(app: &mut App) {
 }
 
 fn copy_snippet(app: &mut App) {
-    app.pending_clipboard = Some(app.bonsai_v2_state.share_snippet());
+    app.pending_clipboard = Some(app.bonsai_state.share_snippet());
     app.banner = Some(crate::app::common::primitives::Banner::success(
-        "Dynamic Bonsai copied to clipboard!",
+        "Bonsai copied to clipboard!",
     ));
 }

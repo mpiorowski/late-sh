@@ -94,7 +94,7 @@ async fn settle_clean(app: &mut App) {
          one more tick changed={dirty_again} screen={screen_before:?}->{:?}\n\
          chat_epoch {context_epoch_before}->{} app_epoch {app_epoch_before}->{}\n\
          splash={} banner={} outbox={} term_cmds={} clipboard={} image_modal={}\n\
-         settings={} ultimate={} hub={} lobby={} profile={} bonsai={} bonsai2={} poll={} icon={} booth={} search={}",
+         settings={} ultimate={} hub={} lobby={} profile={} bonsai={} poll={} icon={} booth={} search={}",
         CLEAN_SETTLE_WINDOW.as_millis(),
         app.screen,
         app.chat.context_epoch(),
@@ -111,7 +111,6 @@ async fn settle_clean(app: &mut App) {
         app.show_lobby_modal,
         app.show_profile_modal,
         app.show_bonsai_modal,
-        app.show_bonsai_v2_modal,
         app.show_poll_modal,
         app.icon_picker_open,
         app.booth_modal_state.is_open(),

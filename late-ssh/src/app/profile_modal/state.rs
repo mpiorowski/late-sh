@@ -1,7 +1,6 @@
 use std::cell::{Cell, RefCell};
 
 use late_core::models::artboard_piece::GalleryCounts;
-use late_core::models::bonsai::Tree;
 use late_core::models::chat_message_gild::GildCounts;
 use late_core::models::chips::MonthChips;
 use late_core::models::profile::Profile;
@@ -10,8 +9,8 @@ use ratatui::layout::Rect;
 use tokio::sync::watch;
 use uuid::Uuid;
 
+use crate::app::bonsai::state::BonsaiState;
 use crate::app::bonsai::svc::BonsaiService;
-use crate::app::bonsai_v2::state::BonsaiV2State;
 use crate::app::chat::showcase::svc::{ShowcaseFeedItem, ShowcaseService, ShowcaseSnapshot};
 use crate::app::hub::aquarium::state::AquariumState;
 use crate::app::profile::ledger::LedgerRow;
@@ -44,11 +43,9 @@ pub(crate) struct ProfileModalState {
     fallback_name: String,
     profile: Option<Profile>,
     chip_balance: Option<i64>,
-    bonsai: Option<Tree>,
-    /// Read-only Dynamic Bonsai for the viewed user. Built non-persisting, so
-    /// viewing never mutates the owner's tree. Standard 2D render.
-    bonsai_v2: Option<BonsaiV2State>,
-    dynamic_bonsai_selected: bool,
+    /// Read-only bonsai for the viewed user. Built non-persisting, so
+    /// viewing never mutates the owner's tree.
+    bonsai: Option<BonsaiState>,
     aquarium_fish: Vec<(String, usize)>,
     /// Lazily built/ticked for the aquarium panel. Interior mutability so the
     /// immutable `draw` path can animate and rebuild on resize.
@@ -98,8 +95,6 @@ impl ProfileModalState {
             profile: None,
             chip_balance: None,
             bonsai: None,
-            bonsai_v2: None,
-            dynamic_bonsai_selected: false,
             aquarium_fish: Vec::new(),
             aquarium: RefCell::new(None),
             aquarium_area: Cell::new(Rect::default()),
@@ -152,8 +147,6 @@ impl ProfileModalState {
         self.profile = None;
         self.chip_balance = None;
         self.bonsai = None;
-        self.bonsai_v2 = None;
-        self.dynamic_bonsai_selected = false;
         self.aquarium_fish.clear();
         *self.aquarium.get_mut() = None;
         self.profile_awards.clear();
@@ -205,8 +198,6 @@ impl ProfileModalState {
             self.profile = None;
             self.chip_balance = None;
             self.bonsai = None;
-            self.bonsai_v2 = None;
-            self.dynamic_bonsai_selected = false;
             self.profile_awards.clear();
             self.gild_counts = GildCounts::default();
             self.gallery_counts = GalleryCounts::default();
@@ -221,8 +212,6 @@ impl ProfileModalState {
 
         self.profile = snapshot.profile;
         self.chip_balance = snapshot.chip_balance;
-        self.bonsai = snapshot.bonsai;
-        self.dynamic_bonsai_selected = snapshot.dynamic_bonsai_selected;
         self.profile_awards = snapshot.profile_awards;
         self.gild_counts = snapshot.gild_counts;
         self.gallery_counts = snapshot.gallery_counts;
@@ -234,12 +223,8 @@ impl ProfileModalState {
             *self.aquarium.get_mut() = None;
         }
 
-        self.bonsai_v2 = match (
-            self.dynamic_bonsai_selected,
-            self.viewed_user_id,
-            snapshot.bonsai_v2,
-        ) {
-            (true, Some(user_id), Some(tree)) => Some(BonsaiV2State::view_only(
+        self.bonsai = match (self.viewed_user_id, snapshot.bonsai) {
+            (Some(user_id), Some(tree)) => Some(BonsaiState::view_only(
                 user_id,
                 self.bonsai_service.clone(),
                 tree,
@@ -259,16 +244,8 @@ impl ProfileModalState {
             .collect()
     }
 
-    pub(crate) fn bonsai(&self) -> Option<&Tree> {
+    pub(crate) fn bonsai(&self) -> Option<&BonsaiState> {
         self.bonsai.as_ref()
-    }
-
-    pub(crate) fn bonsai_v2(&self) -> Option<&BonsaiV2State> {
-        self.bonsai_v2.as_ref()
-    }
-
-    pub(crate) fn dynamic_bonsai_selected(&self) -> bool {
-        self.dynamic_bonsai_selected
     }
 
     pub(crate) fn aquarium_fish(&self) -> &[(String, usize)] {
