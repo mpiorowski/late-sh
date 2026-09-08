@@ -43,17 +43,6 @@ const TIP_MAX_Y: i16 = CANVAS_HEIGHT as i16 - 2 - PAD_REACH_Y;
 /// arrived, since buds add branches the old ceiling never budgeted for.
 pub(crate) const MAX_BRANCHES: usize = 128;
 
-/// Whether the once-per-UTC-day watering rule applies to this press.
-/// `AdminBypass` is a temporary testing aid (2026-09-08): admins can water
-/// repeatedly to watch growth waves land. The daily chips are unaffected,
-/// since `Tree::water_day` pays them once per day in the DB. Remove once
-/// the growth rules have settled.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum DailyWaterGate {
-    Enforced,
-    AdminBypass,
-}
-
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum BonsaiMode {
     Inspect,
@@ -359,20 +348,14 @@ impl BonsaiState {
         }
     }
 
-    /// Water once per UTC day: a second press the same day is refused,
-    /// unless the caller passes the admin bypass (a testing aid, see
-    /// `DailyWaterGate`).
-    pub(crate) fn water(&mut self, gate: DailyWaterGate) -> bool {
+    /// Water once per UTC day: a second press the same day is refused.
+    pub(crate) fn water(&mut self) -> bool {
         let today = BonsaiService::today();
         if !self.is_alive {
             self.respawn();
             return true;
         }
-        let refused = match gate {
-            DailyWaterGate::Enforced => self.last_watered == Some(today),
-            DailyWaterGate::AdminBypass => false,
-        };
-        if refused {
+        if self.last_watered == Some(today) {
             self.message = Some("Already watered today".to_string());
             return false;
         }

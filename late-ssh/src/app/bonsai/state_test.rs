@@ -490,7 +490,7 @@ async fn a_second_watering_the_same_day_is_refused() {
     state.vigor = 50;
     state.water_stress = 40;
 
-    assert!(state.water(DailyWaterGate::Enforced));
+    assert!(state.water());
     let today = BonsaiService::today();
     assert_eq!(state.last_watered, Some(today));
     assert_eq!(state.vigor, 68);
@@ -505,30 +505,9 @@ async fn a_second_watering_the_same_day_is_refused() {
     };
     let after_first = snapshot(&state);
 
-    assert!(!state.water(DailyWaterGate::Enforced));
+    assert!(!state.water());
     assert_eq!(state.message.as_deref(), Some("Already watered today"));
     assert_eq!(snapshot(&state), after_first);
-}
-
-/// The admin bypass is a testing aid: a second press the same day waters
-/// again and moves the tree, where the enforced gate would refuse it.
-#[tokio::test]
-async fn the_admin_bypass_waters_again_the_same_day() {
-    let mut state = state_for_graph(seeded_graph(42), None);
-    state.vigor = 50;
-    state.water_stress = 40;
-
-    assert!(state.water(DailyWaterGate::Enforced));
-    assert_eq!(state.vigor, 68);
-    assert_eq!(state.water_stress, 5);
-
-    assert!(state.water(DailyWaterGate::AdminBypass));
-    assert_eq!(state.vigor, 86);
-    assert_eq!(state.water_stress, 0);
-    assert_eq!(
-        state.message.as_deref(),
-        Some("Watered: vigor pushed new growth")
-    );
 }
 
 /// A tip at its length budget forks instead of extending, so the tree
