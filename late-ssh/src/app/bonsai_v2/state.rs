@@ -1093,10 +1093,8 @@ fn grow_tip_once(
     // wave asks it to fork again.
     let (order, run) = order_and_run(graph, tip_id);
     let wired = matches!(tip.status, BranchStatus::Wired);
-    if !wired
-        && run >= run_budget(order)
-        && let Some((first_id, _)) = split_tip_once(graph, tip_id, seed)
-    {
+    let at_budget = !wired && run >= run_budget(order);
+    if at_budget && let Some((first_id, _)) = split_tip_once(graph, tip_id, seed) {
         return Some(first_id);
     }
     let (dx, dy) = if order == 0 && !wired {
@@ -1104,6 +1102,15 @@ fn grow_tip_once(
     } else {
         growth_step(&tip)
     };
+    let deflected = !target_in_canvas(branch_target(&tip, dx, dy));
+    // The fall-through past a failed fork is for a tip with a natural step
+    // left. A tip that would need the pot wall to deflect it stops here:
+    // it may slide along the wall for its run budget and no further, or
+    // one ceiling tip crawls the whole width one branch per cell and eats
+    // the cap.
+    if at_budget && deflected {
+        return None;
+    }
     let (dx, dy) = deflect_at_pot(&tip, dx, dy);
     let thickness = tip.thickness.saturating_sub(1).max(1);
     let new_id = graph.add_branch(
@@ -1313,7 +1320,7 @@ fn bud_once(
     if open_shoots >= MAX_OPEN_SHOOTS {
         return Vec::new();
     }
-    let mut sites = graph
+    let sites = graph
         .branches
         .iter()
         .filter(|branch| branch.is_alive() && branch.end_y >= 2)

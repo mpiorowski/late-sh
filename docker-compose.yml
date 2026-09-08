@@ -41,6 +41,8 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 600s
+      start_interval: 5s
 
   service-web:
     build:
@@ -68,6 +70,8 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 600s
+      start_interval: 5s
 
   service-nethack:
     build:
