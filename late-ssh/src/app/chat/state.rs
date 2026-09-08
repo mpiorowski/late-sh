@@ -6217,6 +6217,14 @@ impl ChatState {
                     author_balance,
                     ..
                 } if self.user_id == author_user_id => {
+                    // The author may be in another room, another tab, or away
+                    // from the terminal: the banner alone would be missed, and
+                    // a gild is the one chat event that cost someone money.
+                    self.notifier.push(Notification::gilded(
+                        &buyer_username,
+                        tier.label(),
+                        tier.author_share(),
+                    ));
                     banner = Some(Banner::success(&format!(
                         "@{buyer_username} gilded your message {} (+{} chips, balance {author_balance})",
                         tier.marker(),

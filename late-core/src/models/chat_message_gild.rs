@@ -46,7 +46,7 @@ pub fn parse_gilded_payload(payload: &str) -> Option<(Uuid, Uuid)> {
 pub const GILD_FEED_THRESHOLD: i64 = 3;
 
 /// The three prices a gild can be bought at. Closed on purpose: the tier is
-/// the whole product (a whale spends 100x on the same visible act), and a
+/// the whole product (a whale spends 10x on the same visible act), and a
 /// fourth price would have to answer for its marker, its color, and its split
 /// right here rather than in a config row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -81,14 +81,15 @@ impl GildTier {
         }
     }
 
-    /// What the buyer pays. Decided 2026-08-25: an
-    /// hour, a day, a week of completionist arcade play (~2,000 a day), in
-    /// the 4x-5x steps the rest of the Shop ladder uses.
+    /// What the buyer pays. Decided 2026-08-25, top tier cut 2026-09-08: an
+    /// hour, a day, and two and a half days of completionist arcade play
+    /// (~2,000 a day). Gold is priced to be reachable by a regular player
+    /// within a week rather than to be a whale-only marker.
     pub const fn price(self) -> i64 {
         match self {
             Self::Bronze => 500,
             Self::Silver => 2_000,
-            Self::Gold => 10_000,
+            Self::Gold => 5_000,
         }
     }
 

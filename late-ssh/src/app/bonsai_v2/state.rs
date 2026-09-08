@@ -1597,12 +1597,23 @@ fn growth_tip_order(
         ordered.push(preferred_tip_id);
     }
 
+    // The rest of the wave rotates: the tip that has waited longest since
+    // it appeared grows first, a tip with nowhere to grow is skipped so it
+    // never wastes a slot, and the tiebreak is salted with `next_id`,
+    // which moves every time a branch is added, so two waterings on the
+    // same day never pick the same favourites.
     let mut remaining = tips
         .iter()
         .copied()
         .filter(|id| !ordered.contains(id))
+        .filter(|id| graph.branch(*id).is_some_and(|tip| tip_can_grow(graph, tip)))
         .collect::<Vec<_>>();
-    remaining.sort_by_key(|id| hash_parts(seed, age_days as u64, *id as u64));
+    remaining.sort_by_key(|id| {
+        (
+            std::cmp::Reverse(graph.branch(*id).map_or(0, |tip| tip.age)),
+            hash_parts(seed, graph.next_id as u64 ^ age_days as u64, *id as u64),
+        )
+    });
     ordered.extend(remaining);
     ordered.truncate(budget);
     ordered

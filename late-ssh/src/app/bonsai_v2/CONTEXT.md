@@ -172,7 +172,7 @@ Growth paths:
 - Daily catch-up happens in `BonsaiV2State::new` via `apply_elapsed_days(today)`.
 - Watering grants vigor, reduces stress, and triggers extra growth attempts. There is no passive in-session growth (removed 2026-07-23).
 - Dry elapsed days increase stress, reduce vigor, and can create wild growth or deadwood.
-- Each growth event is a small wave, not a single tip: split-marked tips resolve first, then the selected tip, then a deterministic random spread of other live tips. Water/high vigor grows the broadest wave; stress can narrow it.
+- Each growth event is a small wave, not a single tip: split-marked tips resolve first, then the selected tip, then the other live tips in rotation (`growth_tip_order`): the tip that has waited longest since it appeared (highest `age`) goes first, tips with nowhere to grow (`tip_can_grow`) are skipped so they never waste a slot, and the tiebreak hash is salted with `graph.next_id` so repeated waterings on one day never pick the same favourites. Water/high vigor grows the broadest wave; stress can narrow it.
 
 Per-day rates (`simulate_day`):
 - Dry day: `water_stress += 11` (clamp 0..120), `vigor -= 7` (floor 0).

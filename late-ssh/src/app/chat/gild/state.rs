@@ -50,7 +50,7 @@ impl GildModalState {
         GildTier::ALL[self.selected.min(GildTier::ALL.len() - 1)]
     }
 
-    /// Move the cursor without wrapping: three rows priced 100x apart, and a
+    /// Move the cursor without wrapping: three rows priced 10x apart, and a
     /// wrap from Bronze to Gold is exactly the keystroke nobody wants to
     /// discover after `Enter`.
     pub(crate) fn move_selection(&mut self, delta: isize) {
