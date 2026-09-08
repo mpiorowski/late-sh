@@ -758,8 +758,7 @@ fn fleeing_costs_a_parting_blow_and_the_foe_recovers() {
         "the foe strikes at a fleeing back (naked Warrior, no armor)"
     );
     assert_eq!(
-        s.mobs[&mob_id].hp,
-        200,
+        s.mobs[&mob_id].hp, 200,
         "the foe keeps its wounds while the grace runs"
     );
     // The flight took the player out of the room, so the clock runs.
@@ -822,7 +821,10 @@ fn a_boss_keeps_its_wounds_while_you_fight_the_add_it_summoned() {
         .find(|id| **id >= SUMMON_ID_START)
         .expect("an add joined the fight");
     let wounded = s.mobs[&mob_id].hp;
-    assert!(wounded < s.mobs[&mob_id].spawn.max_hp, "the boss is wounded");
+    assert!(
+        wounded < s.mobs[&mob_id].spawn.max_hp,
+        "the boss is wounded"
+    );
     // The player turns on the add: the lock moves, but the fight has not ended.
     s.engage_mob(uid(1), add_id);
     for _ in 0..MOB_RESET_TICKS + 1 {
@@ -866,8 +868,7 @@ fn stepping_out_of_the_room_starts_the_recovery_clock() {
     assert_eq!(s.mobs[&mob_id].hp, 200, "a grace to duck out and come back");
     s.tick();
     assert_eq!(
-        s.mobs[&mob_id].hp,
-        s.mobs[&mob_id].spawn.max_hp,
+        s.mobs[&mob_id].hp, s.mobs[&mob_id].spawn.max_hp,
         "then the foe recovers in full"
     );
 }
@@ -890,7 +891,8 @@ fn a_fighter_raised_where_they_fell_is_out_of_the_fight() {
     let hp_risen = s.players[&uid(1)].hp;
     s.tick();
     assert_eq!(
-        s.players[&uid(1)].hp, hp_risen,
+        s.players[&uid(1)].hp,
+        hp_risen,
         "falling ended your fight: the foe does not strike a fighter who just rose, untargeted, beside it"
     );
 }
@@ -913,7 +915,8 @@ fn a_full_health_foe_forgets_a_fighter_who_walked_off() {
     let hp_before = s.players[&uid(1)].hp;
     s.tick();
     assert_eq!(
-        s.players[&uid(1)].hp, hp_before,
+        s.players[&uid(1)].hp,
+        hp_before,
         "an unwounded foe nobody fights forgets who drew on it"
     );
 }

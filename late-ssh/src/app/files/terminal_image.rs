@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     hash::{Hash, Hasher},
     io::Cursor,
     sync::Arc,
@@ -16,7 +17,9 @@ const KITTY_CHUNK_BYTES: usize = 4096;
 const KITTY_LATE_IMAGE_ID_MIN: u32 = 0x4C00_0000;
 const KITTY_LATE_IMAGE_ID_MAX: u32 = 0x4CFF_FFFF;
 const KITTY_LATE_Z_INDEX: i32 = -1_024_076_853;
-const MAX_DECODED_IMAGE_PIXELS: u64 = 25_000_000;
+/// Decode ceiling shared by every terminal-image producer. Also bounds
+/// the Sliding Puzzle source raster, which crops from a decoded image.
+pub(crate) const MAX_DECODED_IMAGE_PIXELS: u64 = 25_000_000;
 const TERMINAL_IMAGE_CELL_PIXEL_WIDTH: u32 = 8;
 const TERMINAL_IMAGE_CELL_PIXEL_HEIGHT: u32 = 16;
 const TERMINAL_COMMAND_CHUNK_BYTES: usize = 16 * 1024;
@@ -42,6 +45,7 @@ pub struct TerminalImageData {
     pub display_cols: u16,
     pub display_rows: u16,
     cache_key: u64,
+    opaque: bool,
 }
 
 impl TerminalImageData {
@@ -50,6 +54,16 @@ impl TerminalImageData {
         sixel_bytes: Option<Vec<u8>>,
         display_cols: u16,
         display_rows: u16,
+    ) -> Self {
+        Self::with_opacity(png_bytes, sixel_bytes, display_cols, display_rows, false)
+    }
+
+    fn with_opacity(
+        png_bytes: Vec<u8>,
+        sixel_bytes: Option<Vec<u8>>,
+        display_cols: u16,
+        display_rows: u16,
+        opaque: bool,
     ) -> Self {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         png_bytes.len().hash(&mut hasher);
@@ -64,11 +78,16 @@ impl TerminalImageData {
             display_cols,
             display_rows,
             cache_key: hasher.finish(),
+            opaque,
         }
     }
 
     pub(crate) fn cache_key(&self) -> u64 {
         self.cache_key
+    }
+
+    pub(crate) fn is_opaque(&self) -> bool {
+        self.opaque
     }
 
     pub(crate) fn supports_protocol(&self, protocol: TerminalImageProtocol) -> bool {
@@ -96,6 +115,7 @@ struct TerminalImagePlacementKey {
     cols: u16,
     rows: u16,
     cache_key: u64,
+    opaque: bool,
 }
 
 #[derive(Default)]
@@ -134,6 +154,7 @@ impl TerminalImageFrame {
                 cols: placement.area.width,
                 rows: placement.area.height,
                 cache_key: placement.data.cache_key(),
+                opaque: placement.data.is_opaque(),
             })
             .collect()
     }
@@ -143,62 +164,82 @@ impl TerminalImageFrame {
 pub(crate) struct TerminalImageRenderState {
     protocol: Option<TerminalImageProtocol>,
     placements: Vec<TerminalImagePlacementKey>,
-    /// Last frame's `(image_modal_msg_id, foreground_overlay_open)` snapshot.
-    /// Used by `pre_frame_sixel_wipe_bytes` to detect transitions that
-    /// require erasing prior Sixel pixels before the next ratatui frame.
-    last_intent: SixelIntent,
+    /// Last frame's intent snapshot. Used by
+    /// `pre_frame_persistent_raster_wipe_bytes` to detect transitions that
+    /// require erasing prior iTerm2/Sixel pixels before the next ratatui
+    /// frame.
+    last_intent: PersistentRasterIntent,
+    /// Kitty image ids transmitted since the last cleanup, with the content
+    /// each one carries. Kitty keeps image data server-side, so a cell whose
+    /// image is already there only needs a placement command, not the pixels
+    /// again. Emptied whenever `kitty_cleanup_commands` goes out: those free
+    /// every image in the late.sh id range.
+    kitty_transmitted: HashMap<u32, u64>,
 }
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
-struct SixelIntent {
+struct PersistentRasterIntent {
     image_modal_msg_id: Option<Uuid>,
-    overlay_blocks_sixel: bool,
-    /// Stable per-screen tag (`Screen as u16`). Non-modal Sixel placements
+    overlay_blocks_raster: bool,
+    /// Stable per-screen tag (`Screen as u16`). Non-modal raster placements
     /// like the Lateania landing banner appear and vanish on screen/selection
     /// changes that touch neither flag above, so a screen change is its own
     /// wipe trigger — otherwise those pixels leak onto the next screen.
     screen_tag: u16,
+    /// Generation of a non-modal terminal image such as Sliding Puzzle.
+    /// Changes when its raster disappears or its placement/content changes.
+    non_modal_image_tag: Option<u64>,
 }
 
 impl TerminalImageRenderState {
     /// Returns bytes to emit BEFORE ratatui's frame is drawn, wiping any
-    /// Sixel pixels left over from the previous frame in the cells where
-    /// they were rendered. Required because Sixel — unlike Kitty — has no
-    /// delete-by-id protocol, and on some terminals (WezTerm in particular)
-    /// the Sixel raster layer persists above cell content until the cells
-    /// underneath are written to. By writing spaces over the prior Sixel
-    /// rect first, ratatui's normal cell diff then repaints the area with
-    /// the correct new content (chat messages, modal cells, etc.) and the
-    /// Sixel pixels are gone.
+    /// persistent iTerm2/Sixel pixels left over from the previous frame.
+    /// Neither protocol has Kitty's delete-by-id lifecycle, and their raster
+    /// layers can persist until the covered cells are rewritten. Writing
+    /// spaces over the prior rect before ratatui's normal cell diff lets the
+    /// frame repaint the correct replacement content.
     ///
     /// Only fires on transitions that actually change what should be
-    /// visible — image modal closed, image swapped, overlay opened, or the
-    /// screen changed out from under a non-modal placement — so a
-    /// steady-state image modal does not trigger a wipe + re-emit each
-    /// frame.
-    pub(crate) fn pre_frame_sixel_wipe_bytes(
+    /// visible — image modal closed, image swapped, overlay opened, the
+    /// screen changed out from under a non-modal placement, that non-modal
+    /// placement itself moving or changing content, or the protocol
+    /// switching — so a steady-state image modal does not trigger a wipe +
+    /// re-emit each frame.
+    pub(crate) fn pre_frame_persistent_raster_wipe_bytes(
         &mut self,
         image_modal_msg_id: Option<Uuid>,
-        overlay_blocks_sixel: bool,
+        overlay_blocks_raster: bool,
         screen_tag: u16,
+        non_modal_image_tag: Option<u64>,
+        current_protocol: Option<TerminalImageProtocol>,
     ) -> Vec<u8> {
-        let current_intent = SixelIntent {
+        let current_intent = PersistentRasterIntent {
             image_modal_msg_id,
-            overlay_blocks_sixel,
+            overlay_blocks_raster,
             screen_tag,
+            non_modal_image_tag,
         };
-        let was_sixel = self.protocol == Some(TerminalImageProtocol::Sixel);
-        if !was_sixel || self.placements.is_empty() {
+        let was_persistent_raster = matches!(
+            self.protocol,
+            Some(TerminalImageProtocol::Iterm2 | TerminalImageProtocol::Sixel)
+        );
+        if !was_persistent_raster || self.placements.is_empty() {
             self.last_intent = current_intent;
             return Vec::new();
         }
-        // Sixel was visible last frame. Decide whether the upcoming frame
-        // wants the same image at the same coverage.
+        // A persistent raster was visible last frame. Decide whether the
+        // upcoming frame wants the same image at the same coverage.
         let last = self.last_intent;
         let modal_closed_or_swapped = image_modal_msg_id != last.image_modal_msg_id;
-        let overlay_state_changed = overlay_blocks_sixel != last.overlay_blocks_sixel;
+        let overlay_state_changed = overlay_blocks_raster != last.overlay_blocks_raster;
         let screen_changed = screen_tag != last.screen_tag;
-        let needs_wipe = modal_closed_or_swapped || overlay_state_changed || screen_changed;
+        let non_modal_image_changed = non_modal_image_tag != last.non_modal_image_tag;
+        let protocol_changed = current_protocol != self.protocol;
+        let needs_wipe = modal_closed_or_swapped
+            || overlay_state_changed
+            || screen_changed
+            || non_modal_image_changed
+            || protocol_changed;
         self.last_intent = current_intent;
         if !needs_wipe {
             return Vec::new();
@@ -215,9 +256,8 @@ impl TerminalImageRenderState {
                 out.extend(std::iter::repeat_n(b' ', usize::from(key.cols)));
             }
         }
-        // Force the next build_commands diff to re-emit Sixel from scratch
-        // when the modal is still open (or to settle on "no placements" when
-        // it closed / overlay is blocking).
+        // Force the next build_commands diff to re-emit from scratch when the
+        // image remains visible, or settle on no placements when it does not.
         self.placements.clear();
         out
     }
@@ -226,31 +266,65 @@ impl TerminalImageRenderState {
         &mut self,
         protocol: Option<TerminalImageProtocol>,
         frame: &TerminalImageFrame,
-        suppress_sixel: bool,
+        suppress_persistent_raster: bool,
     ) -> Vec<Vec<u8>> {
         if protocol.is_none() {
             let previous_had_kitty =
                 self.protocol == Some(TerminalImageProtocol::Kitty) && !self.placements.is_empty();
             self.protocol = None;
             self.placements.clear();
+            self.kitty_transmitted.clear();
             if previous_had_kitty {
                 return kitty_cleanup_commands();
             }
             return Vec::new();
         }
 
-        // Sixel under a foreground overlay should stay hidden until the
-        // overlay closes. Treat as if no placements were drawn so we don't
-        // re-emit Sixel commands on top of the overlay's ratatui cells.
-        let sixel_suppressed =
-            suppress_sixel && matches!(protocol, Some(TerminalImageProtocol::Sixel));
-        let keys = if sixel_suppressed {
+        // Persistent non-Kitty rasters under a foreground overlay should stay
+        // hidden until it closes. Treat them as if no placements were drawn
+        // so they are not re-emitted over the overlay's ratatui cells.
+        let persistent_raster_suppressed = suppress_persistent_raster
+            && matches!(
+                protocol,
+                Some(TerminalImageProtocol::Iterm2 | TerminalImageProtocol::Sixel)
+            );
+        let keys = if persistent_raster_suppressed {
             Vec::new()
         } else {
             frame.keys()
         };
         if self.protocol == protocol && self.placements == keys {
             return Vec::new();
+        }
+
+        if self.protocol == protocol
+            && opaque_replacement_has_same_coverage(&self.placements, &keys)
+        {
+            let previous = std::mem::replace(&mut self.placements, keys);
+            let protocol = protocol.expect("opaque replacement requires a protocol");
+            let mut commands = Vec::new();
+            for ((old, new), placement) in
+                previous.iter().zip(&self.placements).zip(&frame.placements)
+            {
+                if old == new {
+                    continue;
+                }
+                match protocol {
+                    TerminalImageProtocol::Kitty => {
+                        let mut replacement =
+                            kitty_image_commands(placement, &mut self.kitty_transmitted).concat();
+                        replacement.extend(kitty_delete_placement_command(old));
+                        commands.push(replacement);
+                    }
+                    TerminalImageProtocol::Iterm2 => {
+                        commands.extend(iterm2_image_commands(placement));
+                    }
+                    TerminalImageProtocol::Sixel => {
+                        commands.extend(sixel_image_commands(placement));
+                    }
+                }
+            }
+            return commands;
         }
 
         let previous_had_kitty =
@@ -265,16 +339,17 @@ impl TerminalImageRenderState {
         let mut commands = Vec::new();
         if previous_had_kitty || protocol == TerminalImageProtocol::Kitty {
             commands.extend(kitty_cleanup_commands());
+            self.kitty_transmitted.clear();
         }
 
-        if sixel_suppressed {
+        if persistent_raster_suppressed {
             return commands;
         }
 
         for placement in &frame.placements {
             match protocol {
                 TerminalImageProtocol::Kitty => {
-                    commands.extend(kitty_image_commands(placement));
+                    commands.extend(kitty_image_commands(placement, &mut self.kitty_transmitted));
                 }
                 TerminalImageProtocol::Iterm2 => {
                     commands.extend(iterm2_image_commands(placement));
@@ -286,6 +361,39 @@ impl TerminalImageRenderState {
         }
         commands
     }
+}
+
+/// Identity of a non-modal raster placement, for the pre-frame wipe's
+/// change detection. Folds where it lands together with what it shows, so
+/// either moving it or changing it counts as a change worth wiping for.
+pub(crate) fn persistent_raster_tag(area: Rect, cache_key: u64) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    area.x.hash(&mut hasher);
+    area.y.hash(&mut hasher);
+    area.width.hash(&mut hasher);
+    area.height.hash(&mut hasher);
+    cache_key.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Whether the upcoming frame can be emitted as an in-place replacement:
+/// same number of images, each covering exactly the cells the previous one
+/// did, and each fully opaque so the new pixels hide the old without a wipe.
+///
+/// On Kitty the replacement deletes the old cell by its (image id, placement
+/// id) pair, never by image id alone, so two cells sharing an image id is not
+/// a hazard here.
+fn opaque_replacement_has_same_coverage(
+    previous: &[TerminalImagePlacementKey],
+    current: &[TerminalImagePlacementKey],
+) -> bool {
+    !previous.is_empty()
+        && previous.len() == current.len()
+        && previous.iter().zip(current).all(|(old, new)| {
+            let same_area =
+                (old.x, old.y, old.cols, old.rows) == (new.x, new.y, new.cols, new.rows);
+            old.opaque && new.opaque && same_area
+        })
 }
 
 pub(crate) async fn fetch_terminal_image(
@@ -336,6 +444,35 @@ pub(crate) fn terminal_image_from_bytes(
         image::imageops::FilterType::Lanczos3,
     );
     let rgba = resized.to_rgba8();
+
+    terminal_image_from_rgba(&rgba, display_cols, display_rows, protocol)
+}
+
+pub(crate) fn terminal_image_pixel_dimensions(display_cols: u16, display_rows: u16) -> (u32, u32) {
+    (
+        u32::from(display_cols)
+            .saturating_mul(TERMINAL_IMAGE_CELL_PIXEL_WIDTH)
+            .max(1),
+        u32::from(display_rows)
+            .saturating_mul(TERMINAL_IMAGE_CELL_PIXEL_HEIGHT)
+            .max(1),
+    )
+}
+
+pub(crate) fn terminal_image_from_rgba(
+    rgba: &RgbaImage,
+    display_cols: u16,
+    display_rows: u16,
+    protocol: TerminalImageProtocol,
+) -> Result<TerminalImageData> {
+    let (pixel_width, pixel_height) = terminal_image_pixel_dimensions(display_cols, display_rows);
+    if rgba.width() != pixel_width || rgba.height() != pixel_height {
+        bail!("terminal image pixels do not match display geometry");
+    }
+    if u64::from(pixel_width) * u64::from(pixel_height) > MAX_DECODED_IMAGE_PIXELS {
+        bail!("terminal image dimensions are too large");
+    }
+    let opaque = rgba.pixels().all(|pixel| pixel.0[3] == u8::MAX);
     let mut png = Vec::new();
     {
         let encoder = PngEncoder::new(Cursor::new(&mut png));
@@ -350,16 +487,17 @@ pub(crate) fn terminal_image_from_bytes(
     }
 
     let sixel = if protocol == TerminalImageProtocol::Sixel {
-        Some(encode_sixel_image(&rgba, pixel_width, pixel_height)?)
+        Some(encode_sixel_image(rgba, pixel_width, pixel_height)?)
     } else {
         None
     };
 
-    Ok(TerminalImageData::new(
+    Ok(TerminalImageData::with_opacity(
         png,
         sixel,
         display_cols,
         display_rows,
+        opaque,
     ))
 }
 
@@ -501,6 +639,17 @@ fn kitty_delete_command(control: impl AsRef<str>) -> Vec<u8> {
     format!("\x1b_G{}\x1b\\", control.as_ref()).into_bytes()
 }
 
+/// Deletes one placement and nothing else: lowercase `d=i` keeps the image
+/// data, so a cell that later shows the same image again only needs a
+/// placement command.
+fn kitty_delete_placement_command(key: &TerminalImagePlacementKey) -> Vec<u8> {
+    kitty_delete_command(format!(
+        "a=d,d=i,i={},p={},q=2",
+        kitty_image_id(key.cache_key),
+        kitty_placement_id(key.message_id)
+    ))
+}
+
 pub(crate) fn kitty_cleanup_commands() -> Vec<Vec<u8>> {
     kitty_cleanup_base_commands()
 }
@@ -518,12 +667,35 @@ fn cursor_to(area: Rect) -> Vec<u8> {
     .into_bytes()
 }
 
-fn kitty_image_commands(placement: &TerminalImagePlacement) -> Vec<Vec<u8>> {
-    let encoded = STANDARD.encode(placement.data.png_bytes.as_slice());
-    let image_id = kitty_image_id(placement.message_id);
+/// Emits one placement. The image id is derived from the pixel content and
+/// the placement id from the message, so the pixels go over the wire once
+/// per cleanup epoch: a later placement of the same content, wherever it
+/// lands, is a placement command of a few dozen bytes. `transmitted` is the
+/// epoch's record of what the terminal already holds; an id it maps to a
+/// different content is treated as absent and transmitted again.
+fn kitty_image_commands(
+    placement: &TerminalImagePlacement,
+    transmitted: &mut HashMap<u32, u64>,
+) -> Vec<Vec<u8>> {
+    let cache_key = placement.data.cache_key();
+    let image_id = kitty_image_id(cache_key);
+    let placement_id = kitty_placement_id(placement.message_id);
     let mut commands = Vec::new();
     commands.push(cursor_to(placement.area));
 
+    if transmitted.get(&image_id) == Some(&cache_key) {
+        commands.push(
+            format!(
+                "\x1b_Ga=p,q=2,i={image_id},p={placement_id},z={},c={},r={},C=1\x1b\\",
+                KITTY_LATE_Z_INDEX, placement.area.width, placement.area.height
+            )
+            .into_bytes(),
+        );
+        return commands;
+    }
+    transmitted.insert(image_id, cache_key);
+
+    let encoded = STANDARD.encode(placement.data.png_bytes.as_slice());
     let mut chunks = encoded.as_bytes().chunks(KITTY_CHUNK_BYTES).peekable();
     let mut first = true;
     while let Some(chunk) = chunks.next() {
@@ -531,7 +703,7 @@ fn kitty_image_commands(placement: &TerminalImagePlacement) -> Vec<Vec<u8>> {
         let control = if first {
             first = false;
             format!(
-                "a=T,f=100,q=2,i={image_id},p=1,z={},c={},r={},C=1,m={more}",
+                "a=T,f=100,q=2,i={image_id},p={placement_id},z={},c={},r={},C=1,m={more}",
                 KITTY_LATE_Z_INDEX, placement.area.width, placement.area.height
             )
         } else {
@@ -546,10 +718,19 @@ fn kitty_image_commands(placement: &TerminalImagePlacement) -> Vec<Vec<u8>> {
     commands
 }
 
-fn kitty_image_id(message_id: Uuid) -> u32 {
+/// Content-addressed: the same pixels always get the same id, folded into the
+/// late.sh-owned 24-bit range.
+fn kitty_image_id(cache_key: u64) -> u32 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    cache_key.hash(&mut hasher);
+    KITTY_LATE_IMAGE_ID_MIN | ((hasher.finish() as u32) & 0x00FF_FFFF)
+}
+
+/// Kitty placement ids are per image and must be non-zero.
+fn kitty_placement_id(message_id: Uuid) -> u32 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     message_id.hash(&mut hasher);
-    KITTY_LATE_IMAGE_ID_MIN | ((hasher.finish() as u32) & 0x00FF_FFFF)
+    (hasher.finish() as u32).max(1)
 }
 
 fn kitty_cleanup_base_commands() -> Vec<Vec<u8>> {

@@ -950,9 +950,7 @@ fn tweet_status_id(url: &str) -> Option<String> {
 fn tweet_title(author_name: &str, headline: &str) -> String {
     match author_name.trim() {
         "" => truncate_for_chat(headline, TWEET_TITLE_MAX_CHARS),
-        author => {
-            truncate_for_chat(&format!("{author} on X: {headline}"), TWEET_TITLE_MAX_CHARS)
-        }
+        author => truncate_for_chat(&format!("{author} on X: {headline}"), TWEET_TITLE_MAX_CHARS),
     }
 }
 

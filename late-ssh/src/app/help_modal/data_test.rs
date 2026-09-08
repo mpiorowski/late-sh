@@ -45,6 +45,14 @@ fn bot_context_includes_hub_guide_facts() {
     assert!(context.contains("Four-seat fixed-stack Texas Hold'em"));
 }
 
+#[test]
+fn sliding_puzzle_guide_documents_the_session_only_image_view() {
+    let arcade = lines_for(HelpTopic::Arcade, false, "").join("\n");
+    assert!(arcade.contains("i toggles numbered and image tiles"));
+    assert!(arcade.contains("session only"));
+    assert!(arcade.contains("same board and rewards"));
+}
+
 /// The Lobby replaced the rooms-era Tables screen: no table creation, no
 /// setup forms, and chess moved to the daily correspondence board. The guide
 /// described the old screen long after it was gone, so pin the new shape.

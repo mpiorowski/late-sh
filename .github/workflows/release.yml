@@ -9,10 +9,21 @@ name: release
 #   v0.27.11-<game>     -> deploy_service (component <game>)
 #   v0.27.11-cli        -> deploy_cli
 #   v0.27.11-infra      -> deploy_infra
+#   v0.27.11-full       -> deploy_service (ssh) THEN deploy_infra
 #
 # An unrecognized suffix deploys ssh, matching the old behavior where the
 # suffix-less deploy workflow claimed everything the named ones did not.
 # Prerelease flags map to the staging environment, releases to production.
+#
+# -full is the one tag that runs two deploys: the ssh image lands first, then
+# the terraform apply. That order is the deploy skew rule (CONTEXT.md 4.5) --
+# a pod template that requires a new env var must never reach a pod running an
+# image that does not read it yet. It is not two ssh restarts: terraform holds
+# ignore_changes on the ssh container image and reaches every secret by
+# secret_key_ref rather than by value, so the apply re-rolls ssh only when the
+# diff genuinely edits its pod template. Use -full when one release carries
+# both code and a manifest change (a new env var, a Grafana dashboard);
+# plain -infra is still right for a manifest-only change.
 #
 # Adding a game: add its name to the case list below, to deploy_service.yml's
 # dispatch choices, and to doors.yml's game list.
@@ -46,7 +57,7 @@ jobs:
         run: |
           suffix="${TAG##*-}"
           case "$suffix" in
-            web|nethack|dopewars|codekeep|dcss|usurper|brogue|bashquest|cli|infra)
+            web|nethack|dopewars|codekeep|dcss|usurper|brogue|bashquest|cli|infra|full)
               component="$suffix"
               ;;
             *)
@@ -66,7 +77,7 @@ jobs:
   service:
     name: deploy_${{ needs.route.outputs.component }}
     needs: route
-    if: ${{ needs.route.outputs.component != 'cli' && needs.route.outputs.component != 'infra' }}
+    if: ${{ needs.route.outputs.component != 'cli' && needs.route.outputs.component != 'infra' && needs.route.outputs.component != 'full' }}
     uses: ./.github/workflows/deploy_service.yml
     permissions:
       contents: read
@@ -93,6 +104,35 @@ jobs:
     name: deploy_infra
     needs: route
     if: ${{ needs.route.outputs.component == 'infra' }}
+    uses: ./.github/workflows/deploy_infra.yml
+    permissions:
+      contents: read
+    secrets: inherit
+    with:
+      release_tag: ${{ github.event.release.tag_name }}
+      environment: ${{ needs.route.outputs.environment }}
+
+  # -full, leg 1: the ssh image, exactly what a plain vX.Y.Z release does.
+  full:
+    name: deploy_full_ssh
+    needs: route
+    if: ${{ needs.route.outputs.component == 'full' }}
+    uses: ./.github/workflows/deploy_service.yml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      component: ssh
+      release_tag: ${{ github.event.release.tag_name }}
+      environment: ${{ needs.route.outputs.environment }}
+
+  # -full, leg 2: the apply, gated on leg 1 so the image is already running.
+  # needs: full is the skew rule; never run these two in parallel.
+  full_infra:
+    name: deploy_full_infra
+    needs: [route, full]
+    if: ${{ needs.route.outputs.component == 'full' }}
     uses: ./.github/workflows/deploy_infra.yml
     permissions:
       contents: read
