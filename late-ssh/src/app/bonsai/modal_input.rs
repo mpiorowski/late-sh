@@ -72,7 +72,8 @@ fn water(app: &mut App) {
     let earns_chips = app.bonsai_state.last_watered != Some(BonsaiService::today());
     let classic_gain = app.bonsai_state.water();
     let dynamic_changed = if dynamic_unlocked && !dynamic_was_dead {
-        app.bonsai_v2_state.water()
+        app.bonsai_v2_state
+            .water(crate::app::bonsai_v2::modal_input::daily_water_gate(app))
     } else {
         false
     };

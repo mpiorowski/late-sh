@@ -8,14 +8,16 @@ use ratatui::{
 
 use crate::app::{
     bonsai_v2::{
-        render::{apply_sway, render_tree_lines},
-        state::{BonsaiV2State, branch_label},
+        render::{apply_sway, canvas_lines, center_lines},
+        state::{BonsaiV2State, CANVAS_HEIGHT, branch_label},
     },
     common::theme,
 };
 
-const MODAL_WIDTH: u16 = 88;
-const MODAL_HEIGHT: u16 = 32;
+/// The modal is a frame around the canvas: one blank row, the tree, one
+/// blank row, two status rows, two footer rows, and the border.
+const MODAL_WIDTH: u16 = 48;
+const MODAL_HEIGHT: u16 = CANVAS_HEIGHT as u16 + 8;
 
 pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BonsaiV2State, wall_tick: usize) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
@@ -36,7 +38,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BonsaiV2State, wall_ti
     let layout = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(2),
-        Constraint::Length(1),
+        Constraint::Length(2),
     ])
     .split(inner);
 
@@ -46,9 +48,13 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BonsaiV2State, wall_ti
 }
 
 fn draw_tree(frame: &mut Frame, area: Rect, state: &BonsaiV2State, wall_tick: usize) {
-    let mut tree_lines = render_tree_lines(state, area.width as usize, area.height as usize, true);
+    let mut tree_lines = canvas_lines(state, true);
     apply_sway(&mut tree_lines, wall_tick);
-    let top_pad = area.height.saturating_sub(tree_lines.len() as u16) as usize;
+    center_lines(&mut tree_lines, area.width as usize);
+    let top_pad = area
+        .height
+        .saturating_sub(tree_lines.len() as u16)
+        .saturating_sub(1) as usize;
     let mut lines = Vec::with_capacity(top_pad + tree_lines.len());
     for _ in 0..top_pad {
         lines.push(Line::from(""));
@@ -83,8 +89,6 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &BonsaiV2State) {
         })
         .unwrap_or_else(|| "no branch selected".to_string());
     let summary = Line::from(vec![
-        strong("Branch Graph"),
-        dot(),
         Span::styled(
             format!("Day {}", state.age_days),
             Style::default().fg(theme::TEXT_DIM()),
@@ -149,7 +153,7 @@ fn normalize_detail_message<'a>(selected: &str, message: &'a str) -> Option<&'a 
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect) {
-    let mut spans = vec![
+    let care = Line::from(vec![
         key("w"),
         text(" water"),
         gap(),
@@ -161,15 +165,15 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
         gap(),
         key("x"),
         text(" cut"),
-        gap(),
+    ])
+    .centered();
+    let rest = Line::from(vec![
         key("p"),
         text(" pinch"),
         gap(),
         key("s"),
         text(" split"),
         gap(),
-    ];
-    spans.extend([
         key("c"),
         text(" copy"),
         gap(),
@@ -178,9 +182,9 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
         gap(),
         key("q"),
         text(" close"),
-    ]);
-    let line = Line::from(spans).centered();
-    frame.render_widget(Paragraph::new(line), area);
+    ])
+    .centered();
+    frame.render_widget(Paragraph::new(vec![care, rest]), area);
 }
 
 fn health_color(stress: i32) -> Color {
@@ -191,15 +195,6 @@ fn health_color(stress: i32) -> Color {
     } else {
         theme::SUCCESS()
     }
-}
-
-fn strong(label: &str) -> Span<'static> {
-    Span::styled(
-        label.to_string(),
-        Style::default()
-            .fg(theme::TEXT_BRIGHT())
-            .add_modifier(Modifier::BOLD),
-    )
 }
 
 fn key(label: &str) -> Span<'static> {
@@ -216,7 +211,7 @@ fn text(label: &str) -> Span<'static> {
 }
 
 fn dot() -> Span<'static> {
-    Span::styled("  ·  ", Style::default().fg(theme::BORDER_DIM()))
+    Span::styled(" · ", Style::default().fg(theme::BORDER_DIM()))
 }
 
 fn gap() -> Span<'static> {

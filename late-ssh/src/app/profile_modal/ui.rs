@@ -28,7 +28,7 @@ use ratatui::{
 
 use crate::app::{
     bonsai::{state::stage_for, ui::render_tree_art_lines},
-    bonsai_v2::render::render_preview_lines,
+    bonsai_v2::render::{canvas_lines, center_lines},
     chat::showcase::svc::ShowcaseFeedItem,
     common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
     hub::aquarium::{state::AquariumState, ui as aquarium_ui},
@@ -409,15 +409,20 @@ fn section_lines(label: &str, width: usize) -> Vec<Line<'static>> {
 }
 
 /// The bonsai as exactly `height` rows, the pot on the last one. A Dynamic
-/// Bonsai is scaled down to fit (never up); the classic sprite is cropped
-/// from the crown so the pot and trunk stay.
+/// Bonsai is its whole canvas, centered, the same block the modal and the
+/// sidebar draw; the classic sprite is cropped from the crown so the pot
+/// and trunk stay.
 fn bonsai_block(state: &ProfileModalState, width: usize, height: usize) -> Vec<Line<'static>> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let placeholder = |text: &str| vec![Line::from(Span::styled(text.to_string(), dim)).centered()];
 
     let mut tree = if state.dynamic_bonsai_selected() {
         match state.bonsai_v2() {
-            Some(bonsai) => render_preview_lines(bonsai, width, height),
+            Some(bonsai) => {
+                let mut lines = canvas_lines(bonsai, false);
+                center_lines(&mut lines, width);
+                lines
+            }
             None => placeholder("Dynamic Bonsai not planted yet"),
         }
     } else if let Some(tree) = state.bonsai() {
@@ -430,7 +435,7 @@ fn bonsai_block(state: &ProfileModalState, width: usize, height: usize) -> Vec<L
                 .last_watered
                 .map(|last| (Utc::now().date_naive() - last).num_days() >= 2)
                 .unwrap_or(age_days >= 2);
-        // Wall tick 0: the profile preview stays still (sin(0) sway).
+        // Wall tick 0: the profile tree stays still (sin(0) sway).
         render_tree_art_lines(stage, tree.seed, wilting, width, 0, None)
     } else {
         placeholder("no bonsai yet")

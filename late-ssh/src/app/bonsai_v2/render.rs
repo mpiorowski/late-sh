@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::app::{
-    bonsai_v2::state::{BonsaiV2State, Branch, BranchStatus},
+    bonsai_v2::state::{BonsaiV2State, Branch, BranchStatus, CANVAS_HEIGHT, CANVAS_WIDTH},
     common::theme,
 };
 
@@ -42,14 +42,15 @@ pub(crate) fn draw_bonsai_inline(
     state: &BonsaiV2State,
     wall_tick: usize,
 ) {
-    if area.height < 3 || area.width < 10 {
+    let footer_height = 1usize;
+    let tree_height = (area.height as usize).saturating_sub(footer_height);
+    if (area.width as usize) < CANVAS_WIDTH || tree_height < CANVAS_HEIGHT {
         return;
     }
 
-    let footer_height = 1usize;
-    let tree_height = (area.height as usize).saturating_sub(footer_height);
-    let mut lines = render_preview_lines(state, area.width as usize, tree_height);
+    let mut lines = canvas_lines(state, false);
     apply_sway(&mut lines, wall_tick);
+    center_lines(&mut lines, area.width as usize);
 
     while lines.len() < tree_height {
         lines.insert(0, Line::from(""));
@@ -96,7 +97,7 @@ pub(crate) fn draw_bonsai_inline(
 /// to finished lines, so any selection highlighting embedded in them
 /// moves with the art. A left shift trims one leading blank; a line with
 /// no leading blank (tree at the edge) just skips that step. A wall_tick
-/// of 0 (static previews) lands on sin(0) and never moves.
+/// of 0 (a static surface) lands on sin(0) and never moves.
 pub(crate) fn apply_sway(lines: &mut [Line<'static>], wall_tick: usize) {
     let count = lines.len();
     if count < 2 {
@@ -117,15 +118,31 @@ pub(crate) fn apply_sway(lines: &mut [Line<'static>], wall_tick: usize) {
     }
 }
 
-pub(crate) fn render_preview_lines(
-    state: &BonsaiV2State,
-    width: usize,
-    height: usize,
-) -> Vec<Line<'static>> {
-    let rendered = render_preview_ascii(state, width, height);
-    rendered_lines(state, &rendered, false)
+/// The tree at its one true size: the whole canvas, pot on the last row,
+/// trunk rooted at the center column. Every surface draws exactly this
+/// block, so the care modal, the sidebar panel, and the profile hero
+/// never disagree.
+pub(crate) fn canvas_lines(state: &BonsaiV2State, show_selection: bool) -> Vec<Line<'static>> {
+    render_tree_lines(state, CANVAS_WIDTH, CANVAS_HEIGHT, show_selection)
 }
 
+/// Lead each line with blanks so a canvas-wide block sits centered in a
+/// wider area. A line already wider than the area is left alone.
+pub(crate) fn center_lines(lines: &mut [Line<'static>], width: usize) {
+    let left = width.saturating_sub(CANVAS_WIDTH) / 2;
+    if left == 0 {
+        return;
+    }
+    for line in lines.iter_mut() {
+        line.spans.insert(0, Span::raw(" ".repeat(left)));
+    }
+}
+
+/// The one Dynamic Bonsai renderer: the graph plotted 1:1 into a
+/// `width` x `height` grid, the pot on the last row and the trunk rooted
+/// at the horizontal center. Nothing is scaled; whatever falls outside
+/// the grid is cut off, which the growth rules make impossible at the
+/// canvas size (`canvas_lines`).
 pub(crate) fn render_tree_lines(
     state: &BonsaiV2State,
     width: usize,
@@ -168,8 +185,11 @@ pub(crate) fn render_ascii(
         );
     }
 
+    // A pad is foliage whether or not a bud has grown out of it, so a
+    // budding pad reads as a shoot poking out of leaves, not as a pad
+    // that vanished.
     for branch in &state.graph.branches {
-        if branch.is_alive() && state.graph.is_tip(branch.id) {
+        if branch.is_alive() {
             plot_leaf_pad(
                 &mut grid,
                 branch,
@@ -230,268 +250,6 @@ pub(crate) fn render_ascii(
     RenderedBonsai {
         lines,
         selected_cells,
-        occupied_cells,
-        cell_kinds,
-    }
-}
-
-fn render_preview_ascii(state: &BonsaiV2State, width: usize, height: usize) -> RenderedBonsai {
-    if width == 0 || height == 0 {
-        return RenderedBonsai {
-            lines: Vec::new(),
-            selected_cells: Vec::new(),
-            occupied_cells: 0,
-            cell_kinds: Vec::new(),
-        };
-    }
-
-    let pot_height = 1usize;
-    let tree_height = height.saturating_sub(pot_height);
-    if tree_height == 0 {
-        return render_pot_only(width, height);
-    }
-
-    let samples = preview_samples(state);
-    if samples.is_empty() {
-        return render_pot_only(width, height);
-    }
-
-    let bounds = preview_bounds(&samples);
-    let horizontal_radius = bounds.max_x.abs().max(bounds.min_x.abs()).max(1) as f32;
-    let world_width = horizontal_radius * 2.0 + 1.0;
-    let world_height = (bounds.max_y - bounds.min_y + 1).max(1) as f32;
-    let scale = (world_width / width.max(1) as f32)
-        .max(world_height / tree_height.max(1) as f32)
-        .max(1.0);
-
-    let mut preview = vec![vec![PreviewCell::default(); width]; tree_height];
-    let origin_x = width.saturating_sub(1) as isize / 2;
-    for sample in samples {
-        let x =
-            (origin_x + (sample.x as f32 / scale).round() as isize).clamp(0, width as isize - 1);
-        let y = ((sample.y - bounds.min_y) as f32 / scale).round() as isize;
-        let row = (tree_height as isize - 1 - y).clamp(0, tree_height as isize - 1);
-        let Some(cell) = preview
-            .get_mut(row as usize)
-            .and_then(|row| row.get_mut(x as usize))
-        else {
-            continue;
-        };
-        cell.add(sample.kind);
-    }
-
-    let mut grid = vec![vec![None; width]; height];
-    for (y, row) in preview.into_iter().enumerate() {
-        for (x, cell) in row.into_iter().enumerate() {
-            if let Some(kind) = cell.dominant_kind() {
-                put(
-                    &mut grid,
-                    x,
-                    y,
-                    Cell {
-                        ch: cell.preview_glyph(kind),
-                        branch_id: None,
-                        kind,
-                    },
-                );
-            }
-        }
-    }
-
-    draw_preview_pot(&mut grid, width, height - 1);
-    rendered_from_grid(grid)
-}
-
-#[derive(Clone, Copy, Default)]
-struct PreviewCell {
-    branch: u16,
-    deadwood: u16,
-    pinched: u16,
-    needs_pinch: u16,
-    leaf: u16,
-}
-
-impl PreviewCell {
-    fn add(&mut self, kind: CellKind) {
-        match kind {
-            CellKind::Branch => self.branch = self.branch.saturating_add(1),
-            CellKind::Deadwood => self.deadwood = self.deadwood.saturating_add(1),
-            CellKind::Pinched => self.pinched = self.pinched.saturating_add(1),
-            CellKind::NeedsPinch => self.needs_pinch = self.needs_pinch.saturating_add(1),
-            CellKind::Leaf => self.leaf = self.leaf.saturating_add(1),
-            CellKind::Pot => {}
-        }
-    }
-
-    fn total(self) -> u16 {
-        self.branch + self.deadwood + self.pinched + self.needs_pinch + self.leaf
-    }
-
-    fn dominant_kind(self) -> Option<CellKind> {
-        let total = self.total();
-        if total == 0 {
-            return None;
-        }
-        if self.leaf >= self.branch
-            && self.leaf >= self.deadwood
-            && self.leaf >= self.pinched
-            && self.leaf >= self.needs_pinch
-        {
-            Some(CellKind::Leaf)
-        } else if self.needs_pinch >= self.branch
-            && self.needs_pinch >= self.deadwood
-            && self.needs_pinch >= self.pinched
-        {
-            Some(CellKind::NeedsPinch)
-        } else if self.pinched >= self.branch && self.pinched >= self.deadwood {
-            Some(CellKind::Pinched)
-        } else if self.deadwood > self.branch {
-            Some(CellKind::Deadwood)
-        } else {
-            Some(CellKind::Branch)
-        }
-    }
-
-    fn preview_glyph(self, kind: CellKind) -> char {
-        match kind {
-            CellKind::Leaf if self.total() >= 5 => '#',
-            CellKind::Leaf if self.total() >= 3 => '*',
-            CellKind::Leaf => '@',
-            CellKind::Deadwood => '\'',
-            CellKind::Pinched => '+',
-            CellKind::NeedsPinch => 'o',
-            CellKind::Branch if self.total() >= 4 => '#',
-            CellKind::Branch if self.total() >= 2 => '*',
-            CellKind::Branch => '|',
-            CellKind::Pot => '=',
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-struct PreviewSample {
-    x: isize,
-    y: isize,
-    kind: CellKind,
-}
-
-#[derive(Clone, Copy)]
-struct PreviewBounds {
-    min_x: isize,
-    max_x: isize,
-    min_y: isize,
-    max_y: isize,
-}
-
-fn preview_samples(state: &BonsaiV2State) -> Vec<PreviewSample> {
-    let mut samples = Vec::new();
-    for branch in &state.graph.branches {
-        if matches!(branch.status, BranchStatus::Cut) {
-            continue;
-        }
-        let kind = match branch.status {
-            BranchStatus::Deadwood => CellKind::Deadwood,
-            BranchStatus::Pinched => CellKind::Pinched,
-            BranchStatus::NeedsPinch => CellKind::NeedsPinch,
-            BranchStatus::LeafPad => CellKind::Leaf,
-            _ => CellKind::Branch,
-        };
-        let mut points = line_points(
-            (branch.start_x as isize, branch.start_y as isize),
-            (branch.end_x as isize, branch.end_y as isize),
-        );
-        if branch.parent_id.is_some() && points.len() > 1 {
-            points.remove(0);
-        }
-        samples.extend(
-            points
-                .into_iter()
-                .map(|(x, y)| PreviewSample { x, y, kind }),
-        );
-
-        if matches!(branch.status, BranchStatus::LeafPad) {
-            samples.extend([(0, 0), (-1, 0), (1, 0), (0, 1), (0, -1)].into_iter().map(
-                |(dx, dy)| PreviewSample {
-                    x: branch.end_x as isize + dx,
-                    y: branch.end_y as isize + dy,
-                    kind: CellKind::Leaf,
-                },
-            ));
-        }
-    }
-    samples
-}
-
-fn preview_bounds(samples: &[PreviewSample]) -> PreviewBounds {
-    let mut bounds = PreviewBounds {
-        min_x: 0,
-        max_x: 0,
-        min_y: 0,
-        max_y: 0,
-    };
-    for sample in samples {
-        bounds.min_x = bounds.min_x.min(sample.x);
-        bounds.max_x = bounds.max_x.max(sample.x);
-        bounds.min_y = bounds.min_y.min(sample.y);
-        bounds.max_y = bounds.max_y.max(sample.y);
-    }
-    bounds
-}
-
-fn render_pot_only(width: usize, height: usize) -> RenderedBonsai {
-    let mut grid = vec![vec![None; width]; height];
-    if height > 0 {
-        draw_preview_pot(&mut grid, width, height - 1);
-    }
-    rendered_from_grid(grid)
-}
-
-fn draw_preview_pot(grid: &mut [Vec<Option<Cell>>], width: usize, y: usize) {
-    let pot = if width >= 9 {
-        "[=====]"
-    } else if width >= 5 {
-        "[=]"
-    } else {
-        "="
-    };
-    let pot_width = pot.chars().count();
-    let pot_x = width.saturating_sub(pot_width) / 2;
-    for (i, ch) in pot.chars().enumerate() {
-        put(
-            grid,
-            pot_x + i,
-            y,
-            Cell {
-                ch,
-                branch_id: None,
-                kind: CellKind::Pot,
-            },
-        );
-    }
-}
-
-fn rendered_from_grid(grid: Vec<Vec<Option<Cell>>>) -> RenderedBonsai {
-    let occupied_cells = grid
-        .iter()
-        .flatten()
-        .filter(|cell| cell.is_some_and(|cell| cell.kind != CellKind::Pot))
-        .count();
-    let cell_kinds = grid
-        .iter()
-        .map(|row| row.iter().map(|cell| cell.map(|cell| cell.kind)).collect())
-        .collect();
-    let lines = grid
-        .into_iter()
-        .map(|row| {
-            row.into_iter()
-                .map(|cell| cell.map_or(' ', |cell| cell.ch))
-                .collect::<String>()
-        })
-        .collect();
-
-    RenderedBonsai {
-        lines,
-        selected_cells: Vec::new(),
         occupied_cells,
         cell_kinds,
     }

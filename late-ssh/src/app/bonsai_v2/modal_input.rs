@@ -1,5 +1,6 @@
 use crate::app::{
     bonsai::svc::{BonsaiService, WATER_CHIP_BONUS},
+    bonsai_v2::state::DailyWaterGate,
     input::{MouseEventKind, ParsedInput},
     state::App,
 };
@@ -79,13 +80,23 @@ fn water(app: &mut App) {
     let earns_chips = app.bonsai_state.last_watered != Some(BonsaiService::today());
     // Watering Dynamic waters classic too; the daily chips are paid there.
     let _ = app.bonsai_state.water();
-    let changed = app.bonsai_v2_state.water();
+    let changed = app.bonsai_v2_state.water(daily_water_gate(app));
     if changed {
         app.bonsai_v2_state.message = Some(if earns_chips {
             format!("Watered Dynamic Bonsai (+{WATER_CHIP_BONUS} chips)")
         } else {
             "Watered Dynamic Bonsai".to_string()
         });
+    }
+}
+
+/// Admins skip the once-per-day rule for now, so growth can be tested
+/// without waiting for tomorrow. See `DailyWaterGate`.
+pub(crate) fn daily_water_gate(app: &App) -> DailyWaterGate {
+    if app.is_admin {
+        DailyWaterGate::AdminBypass
+    } else {
+        DailyWaterGate::Enforced
     }
 }
 

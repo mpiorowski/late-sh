@@ -77,61 +77,28 @@ fn horizontal_child_after_rising_diagonal_uses_upper_horizontal_glyph() {
 }
 
 #[test]
-fn preview_compresses_large_graph_to_requested_size() {
-    let mut trunk = branch(1, None, (0, 0), (0, 80));
-    trunk.thickness = 3;
-    let mut left = branch(2, Some(1), (0, 50), (-80, 100));
-    left.status = BranchStatus::LeafPad;
-    let mut right = branch(3, Some(1), (0, 55), (90, 105));
-    right.status = BranchStatus::LeafPad;
-    let dead = Branch {
-        status: BranchStatus::Deadwood,
-        ..branch(4, Some(1), (0, 35), (65, 85))
-    };
-    let state = state_with_branches(vec![trunk, left, right, dead]);
-
-    let rendered = render_preview_ascii(&state, 18, 9);
-
-    assert_eq!(rendered.lines.len(), 9);
-    assert!(rendered.lines.iter().all(|line| line.chars().count() == 18));
-    assert!(rendered.occupied_cells > 0);
-    assert!(
-        rendered
-            .lines
-            .last()
-            .is_some_and(|line| line.contains("[=====]"))
-    );
-}
-
-#[test]
-fn preview_keeps_trunk_centered_after_left_side_cuts() {
+fn the_canvas_is_the_one_size_with_the_pot_on_the_last_row() {
     let trunk = branch(1, None, (0, 0), (0, 4));
-    let left = branch(2, Some(1), (0, 4), (-7, 8));
+    let mut left = branch(2, Some(1), (0, 4), (-7, 8));
+    left.status = BranchStatus::LeafPad;
     let state = state_with_branches(vec![trunk, left]);
 
-    let rendered = render_preview_ascii(&state, 17, 8);
-    let origin_x = 8;
+    let rendered = render_ascii(&state, CANVAS_WIDTH, CANVAS_HEIGHT, false);
 
+    assert_eq!(rendered.lines.len(), CANVAS_HEIGHT);
     assert!(
         rendered
             .lines
             .iter()
-            .any(|line| line.chars().nth(origin_x) == Some('|')),
-        "expected trunk at preview center: {:?}",
-        rendered.lines
+            .all(|line| line.chars().count() == CANVAS_WIDTH)
     );
-}
-
-#[test]
-fn preview_uses_leaf_glyphs_instead_of_dots() {
-    let mut leaf = branch(1, None, (0, 0), (0, 4));
-    leaf.status = BranchStatus::LeafPad;
-    let state = state_with_branches(vec![leaf]);
-
-    let rendered = render_preview_ascii(&state, 17, 8);
-    let joined = rendered.lines.join("\n");
-
-    assert!(joined.contains('@'), "expected @ leaf glyphs: {joined}");
+    // The trunk roots on the row above the pot, at the center column.
+    assert_eq!(
+        rendered.lines[CANVAS_HEIGHT - 2].chars().nth(CANVAS_WIDTH / 2),
+        Some('|')
+    );
+    assert!(rendered.lines[CANVAS_HEIGHT - 1].contains("[=======]"));
+    assert!(rendered.selected_cells.is_empty());
 }
 
 #[test]

@@ -489,7 +489,7 @@ async fn a_second_watering_the_same_day_is_refused() {
     state.vigor = 50;
     state.water_stress = 40;
 
-    assert!(state.water());
+    assert!(state.water(DailyWaterGate::Enforced));
     let today = BonsaiService::today();
     assert_eq!(state.last_watered, Some(today));
     assert_eq!(state.vigor, 68);
@@ -504,7 +504,76 @@ async fn a_second_watering_the_same_day_is_refused() {
     };
     let after_first = snapshot(&state);
 
-    assert!(!state.water());
+    assert!(!state.water(DailyWaterGate::Enforced));
     assert_eq!(state.message.as_deref(), Some("Already watered today"));
     assert_eq!(snapshot(&state), after_first);
+}
+
+/// The admin bypass is a testing aid: a second press the same day waters
+/// again and moves the tree, where the enforced gate would refuse it.
+#[tokio::test]
+async fn the_admin_bypass_waters_again_the_same_day() {
+    let mut state = state_for_graph(seeded_graph(42, 0), None);
+    state.vigor = 50;
+    state.water_stress = 40;
+
+    assert!(state.water(DailyWaterGate::Enforced));
+    assert_eq!(state.vigor, 68);
+    assert_eq!(state.water_stress, 5);
+
+    assert!(state.water(DailyWaterGate::AdminBypass));
+    assert_eq!(state.vigor, 86);
+    assert_eq!(state.water_stress, 0);
+    assert_eq!(
+        state.message.as_deref(),
+        Some("Watered: vigor pushed new growth")
+    );
+}
+
+/// The pot is a fixed canvas: a tip at its length budget forks instead of
+/// extending, so the tree gains density rather than height.
+#[test]
+fn a_tip_at_its_run_budget_forks_instead_of_extending() {
+    let mut graph = graph_with_two_isolated_tips();
+    let tip_id = first_editable_tip(&graph);
+    assert_eq!(order_and_run(&graph, tip_id), (1, 3));
+
+    grow_tip_once(&mut graph, tip_id, 42, 75, 0, GrowthCause::Water).expect("fork");
+
+    assert_eq!(graph.child_ids(tip_id).len(), 2);
+}
+
+/// Nothing grows past the canvas edge, whichever path adds the branch.
+#[test]
+fn growth_never_leaves_the_canvas() {
+    let mut graph = seeded_graph(42, 0);
+    for age_days in 0..60 {
+        let _ = grow_graph_once(&mut graph, 42, age_days, 90, 0, GrowthCause::Water, None);
+    }
+
+    assert!(graph.branches.len() > 10);
+    assert!(graph.branches.iter().all(|branch| {
+        branch.end_x.abs() <= TIP_MAX_ABS_X && branch.end_y <= TIP_MAX_Y
+    }));
+}
+
+/// A tree planted before the fixed canvas is cut back to the pot at load,
+/// downstream branches included, and the trunk is never touched.
+#[test]
+fn repot_cuts_everything_outside_the_canvas() {
+    let mut graph = seeded_graph(42, 0);
+    let inside = graph
+        .add_branch(ROOT_BRANCH_ID, 1, 1, 1, 1, 65)
+        .expect("inside");
+    graph.branches.push(test_branch(50, Some(inside), (1, 1), (12, 3)));
+    graph.branches.push(test_branch(51, Some(50), (12, 3), (12, 4)));
+    graph.next_id = 52;
+
+    let removed = repot_into_canvas(&mut graph);
+
+    assert_eq!(removed, 2);
+    assert!(graph.branch(ROOT_BRANCH_ID).is_some());
+    assert!(graph.branch(inside).is_some());
+    assert!(graph.branch(50).is_none());
+    assert!(graph.branch(51).is_none());
 }

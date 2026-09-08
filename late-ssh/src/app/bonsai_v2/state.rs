@@ -11,12 +11,43 @@ use uuid::Uuid;
 
 use crate::app::bonsai::svc::BonsaiService;
 
-const MAX_BRANCHES: usize = 96;
 const MAX_GROWTH_WAVE_TIPS: usize = 6;
 const LEAF_RAMIFICATION_THRESHOLD: u8 = 3;
-const SPLIT_MAX_ABS_X: i16 = 30;
-const SPLIT_MAX_Y: i16 = 28;
 const ROOT_BRANCH_ID: i32 = 1;
+
+/// The pot. A Dynamic Bonsai lives in one fixed canvas that every surface
+/// (care modal, sidebar panel, profile hero, share snippet) shows 1:1, so
+/// the tree is never scaled or cropped anywhere. Growth stops at the edge;
+/// density does not: forks, buds, and pads keep filling the box. The size
+/// is the sidebar panel's: 21 columns, 12 tree rows over the pot row.
+pub(crate) const CANVAS_WIDTH: usize = 21;
+pub(crate) const CANVAS_HEIGHT: usize = 13;
+/// A leaf pad reaches this far sideways and up from its tip, so tips stop
+/// short of the canvas edge by that much and pads never leave the box.
+const PAD_REACH_X: i16 = 2;
+const PAD_REACH_Y: i16 = 1;
+const TIP_MAX_ABS_X: i16 = (CANVAS_WIDTH as i16) / 2 - PAD_REACH_X;
+/// Graph y=0 is the trunk base on the row above the pot, so the tallest
+/// tip row is the canvas height minus the pot row, the base row, and the
+/// pad's reach.
+const TIP_MAX_Y: i16 = CANVAS_HEIGHT as i16 - 2 - PAD_REACH_Y;
+/// The branch cap is the pot itself: one segment per tip cell plus the
+/// root, so the only way a tree stops growing is a pot with no open cell
+/// left, and a cut always opens one. Every branch-adding path still
+/// checks it, as the last line of defense behind the openness check.
+const MAX_BRANCHES: usize =
+    (2 * TIP_MAX_ABS_X as usize + 1) * TIP_MAX_Y as usize + 1;
+
+/// Whether the once-per-UTC-day watering rule applies to this press.
+/// `AdminBypass` is a temporary testing aid (2026-09-08): admins can water
+/// Dynamic Bonsai repeatedly to watch growth waves land. The daily chips
+/// are unaffected, since the classic path pays them once per day in the DB.
+/// Remove once the Dynamic renderer has been evaluated.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum DailyWaterGate {
+    Enforced,
+    AdminBypass,
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum BonsaiV2Mode {
@@ -212,10 +243,11 @@ impl BonsaiV2State {
     ) -> Self {
         let today = BonsaiService::today();
         let persisted_badge_glyph = tree.badge_glyph.clone();
-        let (graph, normalized_ids) =
+        let (mut graph, normalized_ids) =
             serde_json::from_value::<BonsaiGraph>(tree.branch_graph.clone())
                 .map(normalize_graph_segments)
                 .unwrap_or_else(|_| (seeded_graph(tree.seed, 0), BTreeMap::new()));
+        let repotted = repot_into_canvas(&mut graph);
         let selected_branch_id = tree
             .selected_branch_id
             .and_then(|id| normalized_ids.get(&id).copied())
@@ -235,14 +267,14 @@ impl BonsaiV2State {
             graph,
             selected_branch_id,
             mode: BonsaiV2Mode::from_str(&tree.mode),
-            message: None,
+            message: (repotted > 0).then(|| repot_message(repotted)),
             state_revision: tree.state_revision,
             decay_protection,
         };
         state.ensure_selection();
         let elapsed_changed = state.apply_elapsed_days(today);
         let badge_changed = state.badge_glyph() != persisted_badge_glyph;
-        if elapsed_changed || badge_changed {
+        if elapsed_changed || badge_changed || repotted > 0 {
             state.persist();
         }
         state
@@ -259,10 +291,11 @@ impl BonsaiV2State {
         decay_protection: Option<BonsaiDecayProtection>,
     ) -> Self {
         let today = BonsaiService::today();
-        let (graph, normalized_ids) =
+        let (mut graph, normalized_ids) =
             serde_json::from_value::<BonsaiGraph>(tree.branch_graph.clone())
                 .map(normalize_graph_segments)
                 .unwrap_or_else(|_| (seeded_graph(tree.seed, 0), BTreeMap::new()));
+        let _ = repot_into_canvas(&mut graph);
         let selected_branch_id = tree
             .selected_branch_id
             .and_then(|id| normalized_ids.get(&id).copied())
@@ -317,14 +350,20 @@ impl BonsaiV2State {
         }
     }
 
-    /// Water once per UTC day: a second press the same day is refused.
-    pub(crate) fn water(&mut self) -> bool {
+    /// Water once per UTC day: a second press the same day is refused,
+    /// unless the caller passes the admin bypass (a testing aid, see
+    /// `DailyWaterGate`).
+    pub(crate) fn water(&mut self, gate: DailyWaterGate) -> bool {
         let today = BonsaiService::today();
         if !self.is_alive {
             self.respawn();
             return true;
         }
-        if self.last_watered == Some(today) {
+        let refused = match gate {
+            DailyWaterGate::Enforced => self.last_watered == Some(today),
+            DailyWaterGate::AdminBypass => false,
+        };
+        if refused {
             self.message = Some("Already watered today".to_string());
             return false;
         }
@@ -534,7 +573,7 @@ impl BonsaiV2State {
     }
 
     pub(crate) fn share_snippet(&self) -> String {
-        let rendered = super::render::render_ascii(self, 72, 24, false);
+        let rendered = super::render::render_ascii(self, CANVAS_WIDTH, CANVAS_HEIGHT, false);
         let label = if self.is_alive {
             format!(
                 "ADMIRE my Dynamic Bonsai (Day {}, {} cells)",
@@ -936,6 +975,33 @@ fn grow_graph_once(
         .filter(|branch| branch.is_tip_candidate() && !child_ids.contains(&branch.id))
         .map(|branch| branch.id)
         .collect::<Vec<_>>();
+    let grown = grow_tips_once(
+        graph,
+        &tips,
+        seed,
+        age_days,
+        vigor,
+        water_stress,
+        cause,
+        preferred_tip_id,
+    );
+    // Budding runs whether or not any tip grew: a tree whose every end
+    // has been pinched into a pad has no tips at all, and the buds are
+    // what keep it alive as a game.
+    bud_once(graph, seed, age_days, vigor, water_stress, cause);
+    grown
+}
+
+fn grow_tips_once(
+    graph: &mut BonsaiGraph,
+    tips: &[i32],
+    seed: i64,
+    age_days: i64,
+    vigor: i32,
+    water_stress: i32,
+    cause: GrowthCause,
+    preferred_tip_id: Option<i32>,
+) -> Vec<(i32, i32)> {
     if tips.is_empty() {
         return Vec::new();
     }
@@ -950,7 +1016,7 @@ fn grow_graph_once(
     let budget = growth_wave_budget(cause, vigor, water_stress, tips.len())
         .max(split_pending_tip_count)
         .min(tips.len());
-    let tip_ids = growth_tip_order(graph, &tips, seed, age_days, preferred_tip_id, budget);
+    let tip_ids = growth_tip_order(graph, tips, seed, age_days, preferred_tip_id, budget);
     let mut grown = Vec::new();
     for tip_id in tip_ids {
         if graph.branches.len() >= MAX_BRANCHES {
@@ -1003,7 +1069,23 @@ fn grow_tip_once(
         }
     }
 
-    let (dx, dy) = growth_step(&tip);
+    // A wire is the player's explicit direction, so a wired tip extends
+    // where it was told to. Everything else grows on a length budget:
+    // once a run of single-file segments reaches its order's budget the
+    // tip forks instead of extending, and if no fork is open it is done.
+    // That is what keeps the tree inside its pot and turns growth into
+    // density rather than height.
+    let (order, run) = order_and_run(graph, tip_id);
+    let wired =
+        matches!(tip.status, BranchStatus::Wired) || tip.bend_x != 0 || tip.bend_y != 0;
+    if !wired && run >= run_budget(order) {
+        return split_tip_once(graph, tip_id, seed).map(|(first_id, _)| first_id);
+    }
+    let (dx, dy) = if order == 0 && !wired {
+        trunk_step(seed, run)
+    } else {
+        growth_step(&tip)
+    };
     let thickness = tip.thickness.saturating_sub(1).max(1);
     let new_id = graph.add_branch(
         tip_id,
@@ -1048,12 +1130,8 @@ fn split_tip_once(graph: &mut BonsaiGraph, tip_id: i32, seed: i64) -> Option<(i3
     if !matches!(tip.status, BranchStatus::Growing | BranchStatus::Wired) || !graph.is_tip(tip_id) {
         return None;
     }
-    let first_left = hash_parts(seed, tip_id as u64, graph.next_id as u64).is_multiple_of(2);
-    let candidates = if first_left {
-        [(-1, 1), (1, 1)]
-    } else {
-        [(1, 1), (-1, 1)]
-    };
+    let (order, _) = order_and_run(graph, tip_id);
+    let candidates = split_candidates(seed, tip_id, graph.next_id, order);
     if !split_targets_are_open(graph, tip_id, &tip, candidates) {
         return None;
     }
@@ -1077,11 +1155,190 @@ fn split_targets_are_open(
     }
     targets.into_iter().all(|(dx, dy)| {
         let target = branch_target(tip, dx, dy);
-        target.0.abs() <= SPLIT_MAX_ABS_X
-            && target.1 > 0
-            && target.1 <= SPLIT_MAX_Y
-            && growth_target_is_open(graph, tip_id, target)
+        growth_target_is_open(graph, tip_id, target)
     })
+}
+
+/// The two directions a fork takes. The trunk's first fork always opens
+/// upward on both sides; deeper forks mix a level arm with a rising one,
+/// so the crown spreads sideways instead of stacking up.
+fn split_candidates(seed: i64, tip_id: i32, next_id: i32, order: u8) -> [(i16, i16); 2] {
+    let roll = hash_parts(seed, tip_id as u64, next_id as u64);
+    let pair: [(i16, i16); 2] = match order {
+        0 => [(-1, 1), (1, 1)],
+        _ => match (roll / 2) % 3 {
+            0 => [(-1, 1), (1, 1)],
+            1 => [(-1, 0), (1, 1)],
+            _ => [(-1, 1), (1, 0)],
+        },
+    };
+    if roll.is_multiple_of(2) {
+        pair
+    } else {
+        [pair[1], pair[0]]
+    }
+}
+
+/// Where a segment sits in the tree: `order` counts the forks between it
+/// and the trunk base (the trunk is order 0), `run` counts the single-file
+/// segments since the last fork, this one included. The zero-length root
+/// segment is not a cell and does not count.
+fn order_and_run(graph: &BonsaiGraph, id: i32) -> (u8, u8) {
+    let mut order = 0u8;
+    let mut run = 0u8;
+    let mut counting_run = true;
+    let mut current = graph.branch(id);
+    let mut remaining_hops = graph.branches.len();
+    while let Some(branch) = current
+        && remaining_hops > 0
+    {
+        remaining_hops -= 1;
+        if counting_run && branch.length() > 0 {
+            run = run.saturating_add(1);
+        }
+        let Some(parent_id) = branch.parent_id else {
+            break;
+        };
+        let live_children = graph
+            .branches
+            .iter()
+            .filter(|candidate| candidate.parent_id == Some(parent_id) && candidate.is_alive())
+            .count();
+        if live_children >= 2 {
+            counting_run = false;
+            order = order.saturating_add(1);
+        }
+        current = graph.branch(parent_id);
+    }
+    (order, run)
+}
+
+/// How many single-file cells a run may reach before it must fork. Each
+/// division roughly halves what comes after it, the way ramification
+/// works on a real bonsai, and the sum fits the canvas: trunk 3, first
+/// arms 3, then 2, 2, and 1 from there on.
+fn run_budget(order: u8) -> u8 {
+    match order {
+        0 | 1 => 3,
+        2 | 3 => 2,
+        _ => 1,
+    }
+}
+
+/// The trunk's own movement: straight out of the pot, one lean to the
+/// seed's side, then straight again, so it forks at three cells with a
+/// slight S rather than as a post.
+fn trunk_step(seed: i64, run: u8) -> (i16, i16) {
+    let side: i16 = if hash_parts(seed, 3, 3).is_multiple_of(2) {
+        -1
+    } else {
+        1
+    };
+    match run {
+        1 => (side, 1),
+        _ => (0, 1),
+    }
+}
+
+/// Back-budding: a live segment behind the tips throws a new shoot from
+/// its end, so foliage can form at every height instead of only where the
+/// tree stopped growing. Two kinds of node bud: an interior segment with
+/// exactly one live child (the bud leans away from that child, and no
+/// node ever holds more than a fork), and a leaf pad with no shoot yet
+/// (the pad keeps its foliage; the shoot pokes out of it and wants
+/// pinching, which is the loop that keeps a finished-looking tree in
+/// play). Watering buds up to two sites, a plain day one on a coin flip,
+/// a dry day none; a weak or thirsty tree does not bud.
+fn bud_once(
+    graph: &mut BonsaiGraph,
+    seed: i64,
+    age_days: i64,
+    vigor: i32,
+    water_stress: i32,
+    cause: GrowthCause,
+) -> Vec<i32> {
+    let attempts: usize = match cause {
+        GrowthCause::Water => 2,
+        GrowthCause::Daily if hash_parts(seed, age_days as u64, 13) % 100 < 50 => 1,
+        GrowthCause::Daily | GrowthCause::DryDay => 0,
+    };
+    if attempts == 0 || vigor < 40 || water_stress >= 60 {
+        return Vec::new();
+    }
+    let mut sites = graph
+        .branches
+        .iter()
+        .filter(|branch| branch.is_alive() && branch.end_y >= 2)
+        .filter_map(|branch| {
+            let children = graph
+                .branches
+                .iter()
+                .filter(|candidate| candidate.parent_id == Some(branch.id) && candidate.is_alive())
+                .collect::<Vec<_>>();
+            match (branch.status, children.as_slice()) {
+                (BranchStatus::LeafPad, []) => Some((branch.id, 0)),
+                (_, [child]) => Some((branch.id, (child.end_x - branch.end_x).signum())),
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    sites.sort_by_key(|(id, _)| hash_parts(seed, age_days as u64, *id as u64));
+
+    let mut budded = Vec::new();
+    for (site_id, child_dx) in sites {
+        if budded.len() >= attempts || graph.branches.len() >= MAX_BRANCHES {
+            break;
+        }
+        let side = if child_dx != 0 {
+            -child_dx
+        } else if hash_parts(seed, site_id as u64, 17).is_multiple_of(2) {
+            -1
+        } else {
+            1
+        };
+        let bud_vigor = (vigor - water_stress / 2).clamp(20, 95) as i16;
+        let bud = [(side, 1), (side, 0), (-side, 1)]
+            .into_iter()
+            .find_map(|(dx, dy)| graph.add_branch(site_id, dx, dy, 1, 1, bud_vigor));
+        if let Some(id) = bud {
+            budded.push(id);
+        }
+    }
+    budded
+}
+
+fn target_in_canvas(target: (i16, i16)) -> bool {
+    target.0.abs() <= TIP_MAX_ABS_X && target.1 >= 1 && target.1 <= TIP_MAX_Y
+}
+
+/// Cuts every branch whose end lies outside the canvas, and everything
+/// downstream of it. Trees planted before the fixed canvas (2026-09-08)
+/// can be larger than the pot; this runs at load, and the tree keeps
+/// growing under the pot's rules from what survived. Returns how many
+/// glyphs were removed.
+fn repot_into_canvas(graph: &mut BonsaiGraph) -> usize {
+    let outside = graph
+        .branches
+        .iter()
+        .filter(|branch| {
+            branch.id != ROOT_BRANCH_ID && !target_in_canvas((branch.end_x, branch.end_y))
+        })
+        .map(|branch| branch.id)
+        .collect::<Vec<_>>();
+    if outside.is_empty() {
+        return 0;
+    }
+    let mut doomed = BTreeSet::new();
+    for id in outside {
+        doomed.insert(id);
+        doomed.extend(descendant_ids(graph, id));
+    }
+    graph.branches.retain(|branch| !doomed.contains(&branch.id));
+    doomed.len()
+}
+
+fn repot_message(removed_count: usize) -> String {
+    format!("Repotted: cut back {removed_count} glyphs to fit the new pot")
 }
 
 fn branch_target(parent: &Branch, dx: i16, dy: i16) -> (i16, i16) {
@@ -1096,7 +1353,7 @@ fn growth_target_is_open(graph: &BonsaiGraph, parent_id: i32, target: (i16, i16)
         return false;
     };
     let source = (parent.end_x, parent.end_y);
-    if target == source {
+    if target == source || !target_in_canvas(target) {
         return false;
     }
 

@@ -1670,7 +1670,7 @@ fn bonsai_help_lines() -> Vec<String> {
         "  Watering grows the widest wave; high vigor widens it; stress narrows it.",
         "  Healthy growth reaches up and stays tidy; dry, stressed growth throws messy sideways shoots.",
         "  It also creeps a little on its own while you stay connected, as long as vigor is high enough.",
-        "  The graph caps at 96 branches total; once a tree reaches that size, growth quietly stops adding new ones, though you can still steer, pinch, cut, and split what's already there.",
+        "  The pot is the limit: the tree lives in a fixed canvas and every cell holds one branch, so growth stops only when there is no open cell left. Cutting frees cells, so a full pot is a tree asking to be pruned, and you can still steer, pinch, cut, and split what's already there.",
         "",
         "When it dies",
         "  Dynamic Bonsai only dies when stress maxes out and vigor hits zero at the same time, so it stays recoverable-but-ugly before then.",
