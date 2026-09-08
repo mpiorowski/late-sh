@@ -5,6 +5,9 @@ use late_core::models::media_queue_item::SongQueueReward;
 
 use crate::app::activity::event::ActivityGame;
 use crate::app::arcade::share::ShareCardKind;
+use crate::app::arcade::sliding_puzzle::image::{
+    SlidingPuzzleImageOutcome, SlidingPuzzleImageStage,
+};
 use crate::app::chat::news::svc::XMediaLookup;
 use crate::app::chat::svc::GildRefusal;
 use crate::app::crown::svc::CrownRefusal;
@@ -187,6 +190,7 @@ mod inner {
         PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
         TranslationResult,
     };
+    use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
 
     fn meter() -> opentelemetry::metrics::Meter {
         global::meter("late-ssh")
@@ -866,6 +870,48 @@ mod inner {
         share_cards_total().add(1, &[KeyValue::new("card", share_card_kind_label(kind))]);
     }
 
+    fn sliding_puzzle_image_stage_label(stage: SlidingPuzzleImageStage) -> &'static str {
+        match stage {
+            SlidingPuzzleImageStage::Preview => "preview",
+            SlidingPuzzleImageStage::Native => "native",
+        }
+    }
+
+    fn sliding_puzzle_image_outcome_label(outcome: SlidingPuzzleImageOutcome) -> &'static str {
+        match outcome {
+            SlidingPuzzleImageOutcome::Rendered => "rendered",
+            SlidingPuzzleImageOutcome::Cached => "cached",
+            SlidingPuzzleImageOutcome::Failed => "failed",
+        }
+    }
+
+    fn sliding_puzzle_images_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_sliding_puzzle_images_total")
+                .with_description(
+                    "Sliding Puzzle image stages finished; a run of failed is the artwork CDN refusing us",
+                )
+                .build()
+        })
+    }
+
+    /// One Sliding Puzzle image stage (Chafa preview or native cell set)
+    /// finished, from the cache or the encoder, or failed.
+    pub fn record_sliding_puzzle_image(
+        stage: SlidingPuzzleImageStage,
+        outcome: SlidingPuzzleImageOutcome,
+    ) {
+        sliding_puzzle_images_total().add(
+            1,
+            &[
+                KeyValue::new("stage", sliding_puzzle_image_stage_label(stage)),
+                KeyValue::new("outcome", sliding_puzzle_image_outcome_label(outcome)),
+            ],
+        );
+    }
+
     fn daily_win_payout_label(payout: DailyWinPayout) -> &'static str {
         match payout {
             DailyWinPayout::Paid => "paid",
@@ -1263,6 +1309,7 @@ mod inner {
         PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
         TranslationResult,
     };
+    use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
 
     pub fn record_ssh_connection() {}
     pub fn record_ssh_connection_rejected(_reason: SshRejectReason) {}
@@ -1283,6 +1330,11 @@ mod inner {
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}
     pub fn record_share_card(_kind: ShareCardKind) {}
+    pub fn record_sliding_puzzle_image(
+        _stage: SlidingPuzzleImageStage,
+        _outcome: SlidingPuzzleImageOutcome,
+    ) {
+    }
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}

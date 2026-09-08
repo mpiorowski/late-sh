@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     hash::{Hash, Hasher},
     path::Path,
-    sync::Arc,
+    sync::{Arc, LazyLock, Mutex},
 };
 
 use anyhow::{Context, Result, bail};
@@ -75,6 +75,24 @@ pub enum TileView {
     Image,
 }
 
+/// Which half of the image pipeline a result belongs to. `Preview` is the
+/// Chafa cell art every terminal can show; `Native` is the Kitty/iTerm2/Sixel
+/// cell set.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SlidingPuzzleImageStage {
+    Preview,
+    Native,
+}
+
+/// How one stage of an image request ended. `Cached` came out of the
+/// process-wide cache without a download or an encode.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SlidingPuzzleImageOutcome {
+    Rendered,
+    Cached,
+    Failed,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ImageStatus {
     Numbered,
@@ -107,7 +125,7 @@ type ImageResult = (
     Result<(InlineImagePreview, Arc<Vec<u8>>), String>,
 );
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct NativeImageRequestKey {
     artwork: ImageRequestKey,
     protocol: TerminalImageProtocol,
@@ -179,6 +197,64 @@ type NativeImageResult = (
     NativeImageRequestKey,
     Result<(NativePuzzleImageSet, Arc<Vec<u8>>), String>,
 );
+
+/// Entries per map before the whole map is dropped. The key space is small
+/// (three sources, three board sizes, six tile heights, three protocols, a
+/// few backgrounds), so this is a safety net against a pathological
+/// terminal, not a working set limit; a miss only re-encodes.
+const PROCESS_CACHE_CAP: usize = 128;
+
+/// Finished work shared by every session in the process. A session's own
+/// caches are released the moment it leaves the board, so without this a
+/// trip to the lobby and back meant another download and another encode of
+/// exactly the same bytes, and N players meant N downloads of the same
+/// artwork. Everything here is immutable once inserted, so a hit is a clone
+/// of Arc-backed data.
+#[derive(Default)]
+struct ProcessImageCache {
+    source_bytes: HashMap<usize, Arc<Vec<u8>>>,
+    previews: HashMap<ImageRequestKey, (InlineImagePreview, Arc<Vec<u8>>)>,
+    native: HashMap<NativeImageRequestKey, (NativePuzzleImageSet, Arc<Vec<u8>>)>,
+}
+
+static PROCESS_IMAGE_CACHE: LazyLock<Mutex<ProcessImageCache>> =
+    LazyLock::new(|| Mutex::new(ProcessImageCache::default()));
+
+fn process_cache() -> std::sync::MutexGuard<'static, ProcessImageCache> {
+    match PROCESS_IMAGE_CACHE.lock() {
+        Ok(guard) => guard,
+        // The maps only ever hold finished values, so a panic mid-insert
+        // cannot leave a half-written entry behind.
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn bounded_insert<K: Eq + Hash, V>(map: &mut HashMap<K, V>, key: K, value: V) {
+    if map.len() >= PROCESS_CACHE_CAP {
+        map.clear();
+    }
+    map.insert(key, value);
+}
+
+// The lookups return owned values so the guard never lives across an await
+// inside the spawned tasks.
+fn cached_preview(key: ImageRequestKey) -> Option<(InlineImagePreview, Arc<Vec<u8>>)> {
+    process_cache().previews.get(&key).cloned()
+}
+
+fn remember_preview(key: ImageRequestKey, rendered: &(InlineImagePreview, Arc<Vec<u8>>)) {
+    let mut cache = process_cache();
+    bounded_insert(&mut cache.previews, key, rendered.clone());
+}
+
+fn cached_native(key: &NativeImageRequestKey) -> Option<(NativePuzzleImageSet, Arc<Vec<u8>>)> {
+    process_cache().native.get(key).cloned()
+}
+
+fn remember_native(key: &NativeImageRequestKey, rendered: &(NativePuzzleImageSet, Arc<Vec<u8>>)) {
+    let mut cache = process_cache();
+    bounded_insert(&mut cache.native, key.clone(), rendered.clone());
+}
 
 /// Session-local render caches for the image view. Both halves — the Chafa
 /// preview and the native cell set — hold exactly one result: whatever the
@@ -306,9 +382,23 @@ impl ImageTiles {
             let source = placeholder_image_url(seed).to_string();
             let cached_bytes = self.source_bytes.get(&key.source_index).cloned();
             tokio::spawn(async move {
-                let result = render_preview_request(key, source, cached_bytes)
-                    .await
-                    .map_err(|error| error.to_string());
+                let stage = SlidingPuzzleImageStage::Preview;
+                let result = match cached_preview(key) {
+                    Some(hit) => {
+                        crate::metrics::record_sliding_puzzle_image(
+                            stage,
+                            SlidingPuzzleImageOutcome::Cached,
+                        );
+                        Ok(hit)
+                    }
+                    None => {
+                        let rendered = render_preview_request(key, source, cached_bytes).await;
+                        if let Ok(rendered) = &rendered {
+                            remember_preview(key, rendered);
+                        }
+                        finish_stage(stage, key, rendered)
+                    }
+                };
                 let _ = result_tx.send((key, result)).await;
             });
         }
@@ -512,9 +602,23 @@ impl ImageTiles {
         let result_tx = self.native_result_tx.clone();
         let cached_bytes = self.source_bytes.get(&key.artwork.source_index).cloned();
         tokio::spawn(async move {
-            let result = render_native_request(key.clone(), cached_bytes)
-                .await
-                .map_err(|error| error.to_string());
+            let stage = SlidingPuzzleImageStage::Native;
+            let result = match cached_native(&key) {
+                Some(hit) => {
+                    crate::metrics::record_sliding_puzzle_image(
+                        stage,
+                        SlidingPuzzleImageOutcome::Cached,
+                    );
+                    Ok(hit)
+                }
+                None => {
+                    let rendered = render_native_request(key.clone(), cached_bytes).await;
+                    if let Ok(rendered) = &rendered {
+                        remember_native(&key, rendered);
+                    }
+                    finish_stage(stage, key.artwork, rendered)
+                }
+            };
             let _ = result_tx.send((key, result)).await;
         });
     }
@@ -572,6 +676,55 @@ impl ImageTiles {
     }
 }
 
+/// The one place a rendered (not cached) stage reports how it ended. Nothing
+/// upstream sees these results except as a tip line, so the log and the
+/// metric live here: a run of `Failed` with the same source is the CDN
+/// refusing us, and nobody would otherwise know.
+fn finish_stage<T>(
+    stage: SlidingPuzzleImageStage,
+    key: ImageRequestKey,
+    result: Result<T>,
+) -> Result<T, String> {
+    match result {
+        Ok(value) => {
+            crate::metrics::record_sliding_puzzle_image(stage, SlidingPuzzleImageOutcome::Rendered);
+            Ok(value)
+        }
+        Err(error) => {
+            tracing::warn!(
+                error = ?error,
+                stage = ?stage,
+                source_index = key.source_index,
+                dimension = key.dimension,
+                tile_width = key.geometry.width,
+                tile_height = key.geometry.height,
+                "sliding puzzle image stage failed"
+            );
+            crate::metrics::record_sliding_puzzle_image(stage, SlidingPuzzleImageOutcome::Failed);
+            Err(error.to_string())
+        }
+    }
+}
+
+/// Source bytes for `source_index`: the session's own copy first, then the
+/// process-wide one another session may have downloaded.
+fn known_source_bytes(
+    source_index: usize,
+    session_bytes: Option<Arc<Vec<u8>>>,
+) -> Option<Arc<Vec<u8>>> {
+    match session_bytes {
+        Some(bytes) => Some(bytes),
+        None => process_cache().source_bytes.get(&source_index).cloned(),
+    }
+}
+
+fn remember_source_bytes(source_index: usize, bytes: &Arc<Vec<u8>>) {
+    let mut cache = process_cache();
+    if !cache.source_bytes.contains_key(&source_index) {
+        bounded_insert(&mut cache.source_bytes, source_index, Arc::clone(bytes));
+    }
+}
+
 /// Renders the Chafa cell preview for `key`, reusing already-downloaded
 /// source bytes when the session has them. The bytes come back with the
 /// preview so the caller can seed its cache: the same artwork is re-rendered
@@ -582,13 +735,15 @@ async fn render_preview_request(
     source: String,
     cached_bytes: Option<Arc<Vec<u8>>>,
 ) -> Result<(InlineImagePreview, Arc<Vec<u8>>)> {
-    render_preview_from_directory(
+    let (preview, bytes) = render_preview_from_directory(
         key,
         source,
         Path::new(LOCAL_ARTWORK_DIRECTORY),
-        cached_bytes,
+        known_source_bytes(key.source_index, cached_bytes),
     )
-    .await
+    .await?;
+    remember_source_bytes(key.source_index, &bytes);
+    Ok((preview, bytes))
 }
 
 async fn render_preview_from_directory(
@@ -615,16 +770,18 @@ async fn render_native_request(
     key: NativeImageRequestKey,
     cached_bytes: Option<Arc<Vec<u8>>>,
 ) -> Result<(NativePuzzleImageSet, Arc<Vec<u8>>)> {
-    let bytes = match cached_bytes {
+    let source_index = key.artwork.source_index;
+    let bytes = match known_source_bytes(source_index, cached_bytes) {
         Some(bytes) => bytes,
         None => Arc::new(
             load_artwork_bytes_from_directory(
-                PLACEHOLDER_IMAGE_URLS[key.artwork.source_index].to_string(),
+                PLACEHOLDER_IMAGE_URLS[source_index].to_string(),
                 Path::new(LOCAL_ARTWORK_DIRECTORY),
             )
             .await?,
         ),
     };
+    remember_source_bytes(source_index, &bytes);
     let render_bytes = Arc::clone(&bytes);
     let images = tokio::task::spawn_blocking(move || {
         render_terminal_puzzle_tiles(

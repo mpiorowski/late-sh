@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     hash::{Hash, Hasher},
     io::Cursor,
     sync::Arc,
@@ -168,6 +169,12 @@ pub(crate) struct TerminalImageRenderState {
     /// require erasing prior iTerm2/Sixel pixels before the next ratatui
     /// frame.
     last_intent: PersistentRasterIntent,
+    /// Kitty image ids transmitted since the last cleanup, with the content
+    /// each one carries. Kitty keeps image data server-side, so a cell whose
+    /// image is already there only needs a placement command, not the pixels
+    /// again. Emptied whenever `kitty_cleanup_commands` goes out: those free
+    /// every image in the late.sh id range.
+    kitty_transmitted: HashMap<u32, u64>,
 }
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
@@ -266,6 +273,7 @@ impl TerminalImageRenderState {
                 self.protocol == Some(TerminalImageProtocol::Kitty) && !self.placements.is_empty();
             self.protocol = None;
             self.placements.clear();
+            self.kitty_transmitted.clear();
             if previous_had_kitty {
                 return kitty_cleanup_commands();
             }
@@ -290,7 +298,7 @@ impl TerminalImageRenderState {
         }
 
         if self.protocol == protocol
-            && opaque_replacement_has_same_coverage(&self.placements, &keys, protocol)
+            && opaque_replacement_has_same_coverage(&self.placements, &keys)
         {
             let previous = std::mem::replace(&mut self.placements, keys);
             let protocol = protocol.expect("opaque replacement requires a protocol");
@@ -303,8 +311,9 @@ impl TerminalImageRenderState {
                 }
                 match protocol {
                     TerminalImageProtocol::Kitty => {
-                        let mut replacement = kitty_image_commands(placement).concat();
-                        replacement.extend(kitty_delete_image_command(old.message_id));
+                        let mut replacement =
+                            kitty_image_commands(placement, &mut self.kitty_transmitted).concat();
+                        replacement.extend(kitty_delete_placement_command(old));
                         commands.push(replacement);
                     }
                     TerminalImageProtocol::Iterm2 => {
@@ -330,6 +339,7 @@ impl TerminalImageRenderState {
         let mut commands = Vec::new();
         if previous_had_kitty || protocol == TerminalImageProtocol::Kitty {
             commands.extend(kitty_cleanup_commands());
+            self.kitty_transmitted.clear();
         }
 
         if persistent_raster_suppressed {
@@ -339,7 +349,7 @@ impl TerminalImageRenderState {
         for placement in &frame.placements {
             match protocol {
                 TerminalImageProtocol::Kitty => {
-                    commands.extend(kitty_image_commands(placement));
+                    commands.extend(kitty_image_commands(placement, &mut self.kitty_transmitted));
                 }
                 TerminalImageProtocol::Iterm2 => {
                     commands.extend(iterm2_image_commands(placement));
@@ -370,26 +380,19 @@ pub(crate) fn persistent_raster_tag(area: Rect, cache_key: u64) -> u64 {
 /// same number of images, each covering exactly the cells the previous one
 /// did, and each fully opaque so the new pixels hide the old without a wipe.
 ///
-/// Kitty additionally needs every changed cell to land on a *different* image
-/// id, because the replacement is followed by a delete of the old id. Ids are
-/// a 24-bit fold of the message UUID, so two distinct UUIDs can collide — and
-/// on a collision the delete would erase the image just transmitted. Compare
-/// the derived ids rather than the UUIDs so those cells take the full
-/// re-emit path instead.
+/// On Kitty the replacement deletes the old cell by its (image id, placement
+/// id) pair, never by image id alone, so two cells sharing an image id is not
+/// a hazard here.
 fn opaque_replacement_has_same_coverage(
     previous: &[TerminalImagePlacementKey],
     current: &[TerminalImagePlacementKey],
-    protocol: Option<TerminalImageProtocol>,
 ) -> bool {
     !previous.is_empty()
         && previous.len() == current.len()
         && previous.iter().zip(current).all(|(old, new)| {
             let same_area =
                 (old.x, old.y, old.cols, old.rows) == (new.x, new.y, new.cols, new.rows);
-            let kitty_id_rotates = protocol != Some(TerminalImageProtocol::Kitty)
-                || old == new
-                || kitty_image_id(old.message_id) != kitty_image_id(new.message_id);
-            old.opaque && new.opaque && same_area && kitty_id_rotates
+            old.opaque && new.opaque && same_area
         })
 }
 
@@ -636,8 +639,15 @@ fn kitty_delete_command(control: impl AsRef<str>) -> Vec<u8> {
     format!("\x1b_G{}\x1b\\", control.as_ref()).into_bytes()
 }
 
-fn kitty_delete_image_command(message_id: Uuid) -> Vec<u8> {
-    kitty_delete_command(format!("a=d,d=I,i={},q=2", kitty_image_id(message_id)))
+/// Deletes one placement and nothing else: lowercase `d=i` keeps the image
+/// data, so a cell that later shows the same image again only needs a
+/// placement command.
+fn kitty_delete_placement_command(key: &TerminalImagePlacementKey) -> Vec<u8> {
+    kitty_delete_command(format!(
+        "a=d,d=i,i={},p={},q=2",
+        kitty_image_id(key.cache_key),
+        kitty_placement_id(key.message_id)
+    ))
 }
 
 pub(crate) fn kitty_cleanup_commands() -> Vec<Vec<u8>> {
@@ -657,12 +667,35 @@ fn cursor_to(area: Rect) -> Vec<u8> {
     .into_bytes()
 }
 
-fn kitty_image_commands(placement: &TerminalImagePlacement) -> Vec<Vec<u8>> {
-    let encoded = STANDARD.encode(placement.data.png_bytes.as_slice());
-    let image_id = kitty_image_id(placement.message_id);
+/// Emits one placement. The image id is derived from the pixel content and
+/// the placement id from the message, so the pixels go over the wire once
+/// per cleanup epoch: a later placement of the same content, wherever it
+/// lands, is a placement command of a few dozen bytes. `transmitted` is the
+/// epoch's record of what the terminal already holds; an id it maps to a
+/// different content is treated as absent and transmitted again.
+fn kitty_image_commands(
+    placement: &TerminalImagePlacement,
+    transmitted: &mut HashMap<u32, u64>,
+) -> Vec<Vec<u8>> {
+    let cache_key = placement.data.cache_key();
+    let image_id = kitty_image_id(cache_key);
+    let placement_id = kitty_placement_id(placement.message_id);
     let mut commands = Vec::new();
     commands.push(cursor_to(placement.area));
 
+    if transmitted.get(&image_id) == Some(&cache_key) {
+        commands.push(
+            format!(
+                "\x1b_Ga=p,q=2,i={image_id},p={placement_id},z={},c={},r={},C=1\x1b\\",
+                KITTY_LATE_Z_INDEX, placement.area.width, placement.area.height
+            )
+            .into_bytes(),
+        );
+        return commands;
+    }
+    transmitted.insert(image_id, cache_key);
+
+    let encoded = STANDARD.encode(placement.data.png_bytes.as_slice());
     let mut chunks = encoded.as_bytes().chunks(KITTY_CHUNK_BYTES).peekable();
     let mut first = true;
     while let Some(chunk) = chunks.next() {
@@ -670,7 +703,7 @@ fn kitty_image_commands(placement: &TerminalImagePlacement) -> Vec<Vec<u8>> {
         let control = if first {
             first = false;
             format!(
-                "a=T,f=100,q=2,i={image_id},p=1,z={},c={},r={},C=1,m={more}",
+                "a=T,f=100,q=2,i={image_id},p={placement_id},z={},c={},r={},C=1,m={more}",
                 KITTY_LATE_Z_INDEX, placement.area.width, placement.area.height
             )
         } else {
@@ -685,10 +718,19 @@ fn kitty_image_commands(placement: &TerminalImagePlacement) -> Vec<Vec<u8>> {
     commands
 }
 
-fn kitty_image_id(message_id: Uuid) -> u32 {
+/// Content-addressed: the same pixels always get the same id, folded into the
+/// late.sh-owned 24-bit range.
+fn kitty_image_id(cache_key: u64) -> u32 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    cache_key.hash(&mut hasher);
+    KITTY_LATE_IMAGE_ID_MIN | ((hasher.finish() as u32) & 0x00FF_FFFF)
+}
+
+/// Kitty placement ids are per image and must be non-zero.
+fn kitty_placement_id(message_id: Uuid) -> u32 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     message_id.hash(&mut hasher);
-    KITTY_LATE_IMAGE_ID_MIN | ((hasher.finish() as u32) & 0x00FF_FFFF)
+    (hasher.finish() as u32).max(1)
 }
 
 fn kitty_cleanup_base_commands() -> Vec<Vec<u8>> {

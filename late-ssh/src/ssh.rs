@@ -1683,6 +1683,19 @@ async fn render_once(
                 if drops.is_multiple_of(ctx.frame_drop_log_every) {
                     tracing::debug!(drops, "frame drops (handle busy)");
                 }
+                // A dropped command is most often one chunk of an image
+                // transmission, and the placement diff already believes that
+                // image is on screen: nothing would ever resend it. Treat it
+                // like a dropped frame, so the next frame re-emits every
+                // raster from a clean slate, and abandon the rest of this
+                // batch rather than piling more chunks onto a busy handle.
+                // The output-budget guard in the render loop keeps a link
+                // that stays busy from turning this retry into a flood.
+                let mut app = app.lock().await;
+                app.force_full_repaint();
+                ctx.signal.dirty.store(true, Ordering::Release);
+                wake_hint = crate::app::tick::HOT_TICK;
+                break;
             }
         }
     }

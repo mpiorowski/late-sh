@@ -16,7 +16,7 @@ Local paths are canonicalized and must remain inside this directory. Missing fil
 
 **Use square artwork.** The native Kitty/iTerm2/Sixel renderer resizes exactly and accepts any aspect ratio, but the Chafa fallback fits by aspect ratio and will reject a non-square source with "image preview has unexpected dimensions" — so a non-square image works on capable terminals and shows numbered tiles everywhere else.
 
-Replacing an image at the same path does not invalidate an already rendered session cache. Restart `service-ssh`, then reconnect; failed requests can also be retried by pressing `i` twice.
+Replacing an image at the same path does not invalidate an already rendered result: finished previews and cell sets live in a process-wide cache shared by every session. Restart `service-ssh`, then reconnect; failed requests can also be retried by pressing `i` twice.
 
 This path is for trusted curated/local artwork, not arbitrary paths submitted by SSH users. Production user submissions should use managed object storage plus moderation metadata.
 

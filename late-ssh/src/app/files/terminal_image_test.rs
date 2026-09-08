@@ -336,7 +336,7 @@ fn kitty_opaque_cell_replacement_is_installed_before_targeted_cleanup() {
     );
     let mut state = TerminalImageRenderState::default();
     let mut frame = TerminalImageFrame::default();
-    frame.push(old);
+    frame.push(old.clone());
     state.build_commands(Some(TerminalImageProtocol::Kitty), &frame, false);
 
     frame.clear();
@@ -345,10 +345,14 @@ fn kitty_opaque_cell_replacement_is_installed_before_targeted_cleanup() {
     let stream = commands.concat();
     let text = String::from_utf8_lossy(&stream);
     let transmit = text.find("a=T").expect("new image transmission");
-    let targeted_delete = format!("a=d,d=I,i={}", kitty_image_id(old_id));
+    let targeted_delete = format!(
+        "a=d,d=i,i={},p={}",
+        kitty_image_id(old.data.cache_key()),
+        kitty_placement_id(old_id)
+    );
     let delete = text
         .find(&targeted_delete)
-        .expect("old image targeted delete");
+        .expect("old placement targeted delete");
 
     assert!(
         transmit < delete,
@@ -361,6 +365,80 @@ fn kitty_opaque_cell_replacement_is_installed_before_targeted_cleanup() {
     assert!(
         !text.contains("a=d,d=R"),
         "must not clear the shared image-id range"
+    );
+}
+
+/// A sliding move swaps a tile and the gap. Both images already live in the
+/// terminal from the first frame, so the move must be two placement commands
+/// and two placement deletes, with no pixels on the wire.
+#[test]
+fn kitty_move_places_already_transmitted_images_without_resending_pixels() {
+    let tile = opaque_test_data(Rgba([255, 0, 0, 255]), TerminalImageProtocol::Kitty);
+    let gap = opaque_test_data(Rgba([0, 0, 0, 255]), TerminalImageProtocol::Kitty);
+    let cell = |destination: u128, data: &TerminalImageData| {
+        placement(
+            Uuid::from_u128((destination << 64) ^ u128::from(data.cache_key())),
+            destination as u16,
+            data.clone(),
+        )
+    };
+    let mut state = TerminalImageRenderState::default();
+    let mut frame = TerminalImageFrame::default();
+    frame.push(cell(0, &tile));
+    frame.push(cell(1, &gap));
+    let first = state
+        .build_commands(Some(TerminalImageProtocol::Kitty), &frame, false)
+        .concat();
+    let first = String::from_utf8_lossy(&first);
+    assert_eq!(
+        first.matches("a=T").count(),
+        2,
+        "first frame transmits both"
+    );
+
+    frame.clear();
+    frame.push(cell(0, &gap));
+    frame.push(cell(1, &tile));
+    let commands = state.build_commands(Some(TerminalImageProtocol::Kitty), &frame, false);
+    let stream = commands.concat();
+    let text = String::from_utf8_lossy(&stream);
+
+    assert_eq!(commands.len(), 2, "one replacement per changed cell");
+    assert!(!text.contains("a=T"), "no pixels retransmitted: {text}");
+    assert_eq!(text.matches("a=p,").count(), 2, "one placement per cell");
+    assert_eq!(text.matches("a=d,d=i,").count(), 2, "one delete per cell");
+    assert!(!text.contains("a=d,d=Z") && !text.contains("a=d,d=R"));
+    assert!(
+        stream.len() < 400,
+        "a move is a few dozen bytes per cell, got {}",
+        stream.len()
+    );
+}
+
+/// The cleanup commands free every image in the late.sh id range, so the
+/// transmitted record must not outlive them: the next frame after a cleanup
+/// has to send pixels again.
+#[test]
+fn kitty_cleanup_forgets_transmitted_images() {
+    let tile = opaque_test_data(Rgba([255, 0, 0, 255]), TerminalImageProtocol::Kitty);
+    let mut state = TerminalImageRenderState::default();
+    let mut frame = TerminalImageFrame::default();
+    frame.push(placement(Uuid::from_u128(1), 0, tile.clone()));
+    state.build_commands(Some(TerminalImageProtocol::Kitty), &frame, false);
+
+    // A frame without the image takes the full path and cleans up.
+    let empty = TerminalImageFrame::default();
+    let cleanup = state
+        .build_commands(Some(TerminalImageProtocol::Kitty), &empty, false)
+        .concat();
+    assert!(String::from_utf8_lossy(&cleanup).contains("a=d,d=R"));
+
+    let again = state
+        .build_commands(Some(TerminalImageProtocol::Kitty), &frame, false)
+        .concat();
+    assert!(
+        String::from_utf8_lossy(&again).contains("a=T"),
+        "pixels must be transmitted again after a cleanup"
     );
 }
 

@@ -836,6 +836,46 @@ fn sliding_puzzle_release_discards_a_result_that_lands_after_the_board_closes() 
     );
 }
 
+/// The process-wide cache is what turns N players into one download: a
+/// session with no bytes of its own reads what another session fetched, and
+/// a session that has its own copy never consults the shared one.
+#[test]
+fn sliding_puzzle_source_bytes_are_shared_across_sessions() {
+    // An index no other test uses; the cache is process-wide.
+    let source_index = 9_001;
+    assert!(known_source_bytes(source_index, None).is_none());
+
+    let downloaded = Arc::new(square_png());
+    remember_source_bytes(source_index, &downloaded);
+    let shared = known_source_bytes(source_index, None).expect("another session's download");
+    assert!(Arc::ptr_eq(&shared, &downloaded));
+
+    let own = Arc::new(tiled_png());
+    let chosen = known_source_bytes(source_index, Some(Arc::clone(&own))).expect("own bytes");
+    assert!(Arc::ptr_eq(&chosen, &own), "a session's own copy wins");
+
+    // The first download is the one that is kept.
+    remember_source_bytes(source_index, &own);
+    let kept = known_source_bytes(source_index, None).expect("still cached");
+    assert!(Arc::ptr_eq(&kept, &downloaded));
+}
+
+#[test]
+fn sliding_puzzle_process_cache_drops_everything_at_the_cap() {
+    let mut map: HashMap<usize, u8> = HashMap::new();
+    for index in 0..PROCESS_CACHE_CAP {
+        bounded_insert(&mut map, index, 0);
+    }
+    assert_eq!(map.len(), PROCESS_CACHE_CAP);
+    bounded_insert(&mut map, PROCESS_CACHE_CAP, 1);
+    assert_eq!(
+        map.len(),
+        1,
+        "the cap empties the map rather than growing past it"
+    );
+    assert_eq!(map.get(&PROCESS_CACHE_CAP), Some(&1));
+}
+
 #[test]
 fn sliding_puzzle_new_render_key_marks_the_frame_dirty() {
     let settings = InlineImageRenderSettings::default();
