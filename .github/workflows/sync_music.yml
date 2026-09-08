@@ -1,0 +1,70 @@
+name: sync_music
+
+# Pushes the music library from R2 onto the liquidsoap PVC. Manual only.
+#
+# This ran as a second job inside deploy_infra until it was split out: every
+# infra apply wiped and re-copied every genre directory, so the radio's files
+# were briefly gone on a deploy that had nothing to do with music. Terraform
+# never manages the library (it lives on the PVC, not in git), so the sync has
+# no reason to be coupled to an apply. Playlists, licenses, and source URLs
+# ship through infra/liquidsoap/ like any other config.
+#
+# Run it after changing what is in the bucket, not after changing manifests.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment whose cluster to sync"
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+
+permissions:
+  contents: read
+
+jobs:
+  sync_music:
+    name: sync_music_from_r2
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: sync-music-${{ inputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: sync_music_from_r2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_ENDPOINT: ${{ vars.S3_ENDPOINT }}
+          MUSIC_BUCKET: ${{ vars.MUSIC_BUCKET }}
+        run: |
+          aws s3 sync "s3://${MUSIC_BUCKET}/" ./music/ \
+            --endpoint-url "${S3_ENDPOINT}"
+
+          POD=$(kubectl get pod -l app=liquidsoap -o jsonpath='{.items[0].metadata.name}')
+          for genre in music/*/; do
+            genre_name=$(basename "${genre}")
+            kubectl exec "${POD}" -- mkdir -p "/music/${genre_name}"
+            kubectl exec "${POD}" -- find "/music/${genre_name}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+            kubectl cp "${genre}/." "${POD}:/music/${genre_name}/"
+          done
+
+      - name: verify_music_sync
+        run: |
+          POD=$(kubectl get pod -l app=liquidsoap -o jsonpath='{.items[0].metadata.name}')
+          echo "Music files on pod:"
+          kubectl exec "${POD}" -- find /music -name "*.mp3" | wc -l
+          kubectl exec "${POD}" -- du -sh /music/
