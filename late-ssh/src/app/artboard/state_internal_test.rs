@@ -1,4 +1,6 @@
 use super::*;
+use crate::app::artboard::color_picker::Channel;
+use crate::app::artboard::gallery::svc::GalleryService;
 use crate::app::artboard::provenance::ArtboardProvenance;
 use crate::app::artboard::svc::{ArtboardSnapshotService, DartboardService, DartboardSnapshot};
 use dartboard_core::{CanvasOp, CellValue, RgbColor};
@@ -17,6 +19,8 @@ fn test_state() -> State {
     let mut state = State::new(
         svc,
         ArtboardSnapshotService::disabled(),
+        GalleryService::disabled(),
+        uuid::Uuid::nil(),
         "painter".to_string(),
         shared_provenance,
     );
@@ -87,6 +91,79 @@ fn paint_color_cycles_and_typed_glyphs_use_selection() {
         state.snapshot.canvas.fg(Pos { x: 0, y: 0 }),
         Some(PAINT_PALETTE[2])
     );
+}
+
+#[test]
+fn color_picker_applies_on_enter_and_typed_glyphs_use_it() {
+    let mut state = test_state();
+    state.open_color_picker();
+    assert_eq!(
+        state.color_picker().map(|picker| picker.color),
+        Some(PAINT_PALETTE[1])
+    );
+    for ch in "123456".chars() {
+        state.color_picker_mut().unwrap().type_hex(ch);
+    }
+    state.apply_color_picker();
+    assert!(!state.is_color_picker_open());
+    assert_eq!(state.active_paint_color(), RgbColor::new(0x12, 0x34, 0x56));
+    assert_eq!(state.active_paint_palette_index(), None);
+
+    state.type_char('C', (80, 24));
+    assert_eq!(
+        state.snapshot.canvas.fg(Pos { x: 0, y: 0 }),
+        Some(RgbColor::new(0x12, 0x34, 0x56))
+    );
+
+    // Cycling from a custom colour lands on the presets again.
+    state.cycle_paint_color(1);
+    assert_eq!(state.active_paint_palette_index(), Some(2));
+}
+
+#[test]
+fn color_picker_closed_without_enter_keeps_the_paint_color() {
+    let mut state = test_state();
+    state.select_palette_color(4);
+    state.open_color_picker();
+    state
+        .color_picker_mut()
+        .unwrap()
+        .set_channel(Channel::Red, 0);
+    state.close_color_picker();
+    assert_eq!(state.active_paint_color(), PAINT_PALETTE[4]);
+}
+
+#[test]
+fn double_click_sampling_takes_the_glyphs_color() {
+    let mut state = test_state();
+    state.select_palette_color(3);
+    state.type_char('A', (80, 24));
+    state.select_palette_color(7);
+
+    assert!(state.activate_temp_glyph_brush_at(Pos { x: 0, y: 0 }));
+    assert_eq!(state.active_paint_color(), PAINT_PALETTE[3]);
+    assert_eq!(state.brush_mode(), BrushMode::Glyph('A'));
+}
+
+#[test]
+fn alt_k_samples_the_color_under_the_cursor_or_says_there_is_none() {
+    let mut state = test_state();
+    state.select_palette_color(3);
+    state.type_char('A', (80, 24));
+    state.select_palette_color(7);
+
+    // The cursor moved on to a blank cell: nothing to take.
+    assert!(!state.sample_color_at_cursor());
+    assert_eq!(state.active_paint_color(), PAINT_PALETTE[7]);
+    assert_eq!(
+        state.private_notice.as_deref(),
+        Some("No color under the cursor.")
+    );
+
+    state.move_left((80, 24));
+    assert!(state.sample_color_at_cursor());
+    assert_eq!(state.active_paint_color(), PAINT_PALETTE[3]);
+    assert!(state.is_in_normal_brush_mode());
 }
 
 #[test]

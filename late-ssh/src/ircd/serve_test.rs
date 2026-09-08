@@ -713,6 +713,7 @@ async fn profile_username_change_projects_to_live_irc_session() {
             keep_composer_focused: false,
             start_with_music_muted: false,
             land_on_home: false,
+            paper_at_login: true,
             show_flag_fallback: false,
             show_pet_strip: true,
             translate_to: late_core::models::message_translation::TranslateLang::En,

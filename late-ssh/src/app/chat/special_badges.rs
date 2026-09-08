@@ -1,11 +1,13 @@
 //! Hardcoded per-username badges rendered next to the bonsai glyph in chat
 //! author labels. Small allowlist; edit and redeploy to change. Each user can
 //! have multiple badges; keep arrays in canonical render order:
-//! moderator, developer, artist.
+//! moderator, developer, artist, dj.
 
 const MODERATOR: &str = "🛡️";
-const ARTIST: &str = "🎨";
+const ARTIST: &str = "🖌️";
 const DEVELOPER: &str = "🔨️";
+/// DJ / music guy that keeps the YT booth going.
+const DJ: &str = "🎛️";
 
 const SPECIAL_BADGES: &[(&str, &[&str])] = &[
     ("mevanlc", &[MODERATOR, DEVELOPER]),
@@ -15,6 +17,7 @@ const SPECIAL_BADGES: &[(&str, &[&str])] = &[
     ("odd", &[MODERATOR, DEVELOPER]),
     ("tasmania", &[MODERATOR, DEVELOPER]),
     ("cws", &[MODERATOR]),
+    ("fellshard", &[DJ]),
 ];
 
 pub(crate) fn special_badges(username: &str) -> &'static [&'static str] {

@@ -1,6 +1,6 @@
 //! Screening for text a player writes.
 //!
-//! Two screens live here. The Shop's custom title (SHOP.md phase 1b): 20
+//! Two screens live here. The Shop's custom title: 20
 //! characters the buyer types and then wears after their name in every
 //! message they send. And the profile bio, for first contact's eligibility
 //! gate (GAME.md, "the static chooses the invested"): does it read as a real

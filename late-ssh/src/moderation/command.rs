@@ -77,6 +77,16 @@ pub(crate) enum ModCommand {
         source: ArtboardCurateSource,
         reason: String,
     },
+    /// Take a gallery piece down. `id_prefix` is at least the first eight
+    /// characters of the piece id, as the piece view prints it.
+    ArtboardRemovePiece {
+        id_prefix: String,
+        reason: String,
+    },
+    /// The gallery's kill switch (`app_flags.artboard_gallery_enabled`).
+    ArtboardGallery {
+        enabled: bool,
+    },
     Audio {
         action: AudioAction,
         username: String,
@@ -728,13 +738,44 @@ fn required_slow_scope(value: &str, usage: &str) -> Result<SlowScope> {
 }
 
 fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    const USAGE: &str = "usage: artboard <restore|curate|remove|gallery> ...";
     let Some(first) = parts.first().copied() else {
-        anyhow::bail!("usage: artboard <restore|curate> ...");
+        anyhow::bail!(USAGE);
     };
     match first {
         "restore" => parse_artboard_restore_mod_command(&parts[1..]),
         "curate" => parse_artboard_curate_mod_command(&parts[1..]),
-        _ => anyhow::bail!("usage: artboard <restore|curate> ..."),
+        "remove" => parse_artboard_remove_mod_command(&parts[1..]),
+        "gallery" => parse_artboard_gallery_mod_command(&parts[1..]),
+        _ => anyhow::bail!(USAGE),
+    }
+}
+
+fn parse_artboard_remove_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    const USAGE: &str = "usage: artboard remove <piece-id-prefix> [reason...]";
+    let Some(id_prefix) = parts.first().copied() else {
+        anyhow::bail!(USAGE);
+    };
+    if id_prefix.chars().count() < late_core::models::artboard_piece::PIECE_ID_PREFIX_MIN_CHARS
+        || !id_prefix
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() || ch == '-')
+    {
+        anyhow::bail!(USAGE);
+    }
+    let reason = parts.get(1..).unwrap_or_default().join(" ");
+    Ok(ModCommand::ArtboardRemovePiece {
+        id_prefix: id_prefix.to_ascii_lowercase(),
+        reason,
+    })
+}
+
+fn parse_artboard_gallery_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    const USAGE: &str = "usage: artboard gallery <on|off>";
+    match parts {
+        ["on"] => Ok(ModCommand::ArtboardGallery { enabled: true }),
+        ["off"] => Ok(ModCommand::ArtboardGallery { enabled: false }),
+        _ => anyhow::bail!(USAGE),
     }
 }
 
@@ -976,6 +1017,8 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "view   <@user|#room|bans|slows|audit|artboard|help> [pagenumber]",
             "artboard curate <live|YYYY-MM-DD> [reason...]",
             "artboard restore [YYYY-MM-DD] [reason...]",
+            "artboard remove <piece-id-prefix> [reason...]",
+            "artboard gallery <on|off>",
             "",
             "--- bans, etc. ---",
             "kick   <server|voice|stream|#room> @name [reason...]",
@@ -1178,8 +1221,17 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
         "artboard" => &[
             "artboard curate <live|YYYY-MM-DD> [reason...]",
             "artboard restore [YYYY-MM-DD] [reason...]",
-            "Curates live or daily Artboard snapshots, or restores live Artboard from daily snapshots.",
-            "Subtopics: help artboard curate, help artboard restore.",
+            "artboard remove <piece-id-prefix> [reason...]",
+            "artboard gallery <on|off>",
+            "Curates live or daily Artboard snapshots, restores live Artboard from daily snapshots,",
+            "takes a gallery piece down (copied work, etc.), or flips the gallery's switch (admin).",
+            "Subtopics: help artboard curate, help artboard restore, help artboard remove.",
+        ],
+        "artboard remove" => &[
+            "artboard remove <piece-id-prefix> [reason...]",
+            "Takes a gallery piece down for good, applause included. The first 13 characters of",
+            "the id are printed under the piece in the gallery's full-frame view (Enter on a piece);",
+            "at least 8 are needed, and the prefix must match exactly one piece.",
         ],
         "artboard curate" => &[
             "artboard curate <live|YYYY-MM-DD> [reason...]",

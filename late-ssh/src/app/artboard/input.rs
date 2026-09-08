@@ -4,8 +4,11 @@ use dartboard_editor::{
 
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
 
+use super::color_picker::{COARSE_STEP, ColorPicker, Edge, PickerRow};
 use super::state::State;
-use super::ui::{SwatchHit, help_tab_hit, info_hit, swatch_hit};
+use super::ui::{
+    ColorPickerHit, SwatchHit, color_picker_hit, help_tab_hit, info_hit, palette_hit, swatch_hit,
+};
 
 pub enum InputAction {
     Ignored,
@@ -18,6 +21,9 @@ pub fn handle_byte(state: &mut State, screen_size: (u16, u16), byte: u8) -> Inpu
     state.set_viewport_for_screen(screen_size);
     if state.is_glyph_picker_open() {
         return handle_picker_byte(state, screen_size, byte);
+    }
+    if state.is_color_picker_open() {
+        return handle_color_picker_byte(state, byte);
     }
     if byte == 0x1C {
         state.toggle_ownership_overlay();
@@ -45,6 +51,11 @@ pub fn handle_byte(state: &mut State, screen_size: (u16, u16), byte: u8) -> Inpu
         // Ctrl+] / Ctrl+5 / raw GS — open the glyph picker.
         0x1D => {
             state.open_glyph_picker();
+            InputAction::Handled
+        }
+        // Ctrl+K opens the paint colour picker.
+        0x0B => {
+            state.open_color_picker();
             InputAction::Handled
         }
         0x1B => handle_app_key(
@@ -88,7 +99,7 @@ pub fn handle_byte(state: &mut State, screen_size: (u16, u16), byte: u8) -> Inpu
 
 fn handle_help_byte(state: &mut State, byte: u8) -> InputAction {
     match byte {
-        0x1B | b'q' | b'Q' | b'?' => state.close_help(),
+        0x1B | b'q' | b'Q' => state.close_help(),
         b'\t' => state.select_next_help_tab(),
         b'j' | b'J' => state.scroll_help(1),
         b'k' | b'K' => state.scroll_help(-1),
@@ -123,6 +134,89 @@ fn handle_picker_byte(state: &mut State, screen_size: (u16, u16), byte: u8) -> I
                 return InputAction::Ignored;
             }
         }
+    }
+    InputAction::Handled
+}
+
+fn color_picker(state: &mut State) -> &mut ColorPicker {
+    state
+        .color_picker_mut()
+        .expect("the colour picker routes take keys only while it is open")
+}
+
+fn handle_color_picker_byte(state: &mut State, byte: u8) -> InputAction {
+    match byte {
+        // Esc, or Ctrl+K again, closes without applying.
+        0x1B | 0x0B => state.close_color_picker(),
+        b'\r' => state.apply_color_picker(),
+        0x7f => color_picker(state).hex_backspace(),
+        // Ctrl+U / Ctrl+Y step the presets here too.
+        0x15 => {
+            let picker = color_picker(state);
+            picker.row = PickerRow::Presets;
+            picker.adjust(-1);
+        }
+        0x19 => {
+            let picker = color_picker(state);
+            picker.row = PickerRow::Presets;
+            picker.adjust(1);
+        }
+        _ => {
+            if !color_picker(state).type_hex(byte as char) {
+                return InputAction::Ignored;
+            }
+        }
+    }
+    InputAction::Handled
+}
+
+fn handle_color_picker_arrow(state: &mut State, key: u8) -> bool {
+    let picker = color_picker(state);
+    match key {
+        b'A' => picker.move_row(-1),
+        b'B' => picker.move_row(1),
+        b'C' => picker.adjust(1),
+        b'D' => picker.adjust(-1),
+        _ => return false,
+    }
+    true
+}
+
+fn handle_color_picker_event(
+    state: &mut State,
+    screen_size: (u16, u16),
+    event: &ParsedInput,
+) -> InputAction {
+    match event {
+        ParsedInput::ShiftArrow(b'C') => color_picker(state).adjust(COARSE_STEP),
+        ParsedInput::ShiftArrow(b'D') => color_picker(state).adjust(-COARSE_STEP),
+        ParsedInput::Home => color_picker(state).jump(Edge::Min),
+        ParsedInput::End => color_picker(state).jump(Edge::Max),
+        // The eyedropper feeds the working colour while the picker is up.
+        ParsedInput::AltK => {
+            if let Some(fg) = state.snapshot.canvas.fg(state.cursor()) {
+                color_picker(state).set_color(fg);
+            }
+        }
+        ParsedInput::Mouse(mouse) => {
+            if matches!(mouse.kind, MouseEventKind::Down)
+                && matches!(mouse.button, Some(MouseButton::Left))
+            {
+                match color_picker_hit(screen_size, state, mouse.x, mouse.y) {
+                    Some(ColorPickerHit::Channel(channel, value)) => {
+                        let picker = color_picker(state);
+                        picker.row = PickerRow::Channel(channel);
+                        picker.set_channel(channel, value);
+                    }
+                    Some(ColorPickerHit::Preset(index)) => {
+                        color_picker(state).select_preset(index);
+                    }
+                    None => {}
+                }
+            }
+            // The modal owns the mouse while it is up.
+        }
+        _ => return InputAction::Ignored,
     }
     InputAction::Handled
 }
@@ -252,6 +346,9 @@ pub fn handle_arrow(state: &mut State, screen_size: (u16, u16), key: u8) -> bool
     if state.is_glyph_picker_open() {
         return handle_picker_arrow(state, key);
     }
+    if state.is_color_picker_open() {
+        return handle_color_picker_arrow(state, key);
+    }
     if state.is_help_open() {
         return handle_help_arrow(state, key);
     }
@@ -287,6 +384,9 @@ pub(crate) fn handle_event(
     state.set_viewport_for_screen(screen_size);
     if state.is_glyph_picker_open() {
         return handle_picker_event(state, screen_size, event);
+    }
+    if state.is_color_picker_open() {
+        return handle_color_picker_event(state, screen_size, event);
     }
     if state.is_help_open() {
         return handle_help_event(state, screen_size, event);
@@ -354,6 +454,10 @@ pub(crate) fn handle_event(
             jump_to_edge(state, screen_size, *key);
             InputAction::Handled
         }
+        ParsedInput::AltK => {
+            state.sample_color_at_cursor();
+            InputAction::Handled
+        }
         ParsedInput::CtrlShiftArrow(key) => handle_app_key(
             state,
             AppKey {
@@ -383,9 +487,7 @@ fn handle_help_event(
     event: &ParsedInput,
 ) -> InputAction {
     match event {
-        ParsedInput::Char('q' | 'Q' | '?') | ParsedInput::Byte(0x1B | b'q' | b'Q' | b'?') => {
-            state.close_help()
-        }
+        ParsedInput::Char('q' | 'Q') | ParsedInput::Byte(0x1B | b'q' | b'Q') => state.close_help(),
         ParsedInput::BackTab => state.select_prev_help_tab(),
         ParsedInput::Home => state.reset_help_scroll(),
         ParsedInput::PageUp => state.scroll_help(-5),
@@ -470,6 +572,17 @@ fn handle_mouse(state: &mut State, screen_size: (u16, u16), mouse: &MouseEvent) 
         return InputAction::Handled;
     }
 
+    if let Some(index) = palette_hit(screen_size, state, mouse.x, mouse.y) {
+        state.clear_pending_canvas_click();
+        state.clear_hover();
+        if matches!(mouse.kind, MouseEventKind::Down)
+            && matches!(mouse.button, Some(MouseButton::Left))
+        {
+            state.select_palette_color(index);
+        }
+        return InputAction::Handled;
+    }
+
     if info_hit(screen_size, state, mouse.x, mouse.y) {
         state.clear_pending_canvas_click();
         state.clear_hover();
@@ -523,7 +636,7 @@ fn handle_shared_pointer(state: &mut State, mouse: &MouseEvent) -> InputAction {
     }
 }
 
-fn app_pointer_event_from_mouse(mouse: &MouseEvent) -> Option<AppPointerEvent> {
+pub(crate) fn app_pointer_event_from_mouse(mouse: &MouseEvent) -> Option<AppPointerEvent> {
     let column = mouse.x.checked_sub(1)?;
     let row = mouse.y.checked_sub(1)?;
     let kind = match mouse.kind {

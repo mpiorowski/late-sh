@@ -51,7 +51,9 @@ struct Intensity {
     /// only effect that changes a word's letters rather than their order, so
     /// it stays rare and only turns up once a patron is properly drunk.
     slur_percent: u32,
-    /// Chance in 100 that the whole message picks up a single `*hic*`.
+    /// Chance in 100 that the whole message picks up a single `*hic*`. One
+    /// roll however drunk the patron is: two stammers in one line is the joke
+    /// repeating itself inside a single breath.
     hiccup_percent: u32,
 }
 
@@ -76,13 +78,13 @@ fn intensity_for(level: u8) -> Option<Intensity> {
             word_percent: 60,
             depth: Depth::Two,
             slur_percent: 15,
-            hiccup_percent: 0,
+            hiccup_percent: 10,
         }),
         _ => Some(Intensity {
             word_percent: 85,
             depth: Depth::Shuffle,
             slur_percent: 30,
-            hiccup_percent: 25,
+            hiccup_percent: 33,
         }),
     }
 }

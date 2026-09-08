@@ -5,6 +5,9 @@ pub mod arcade_handle;
 mod arcade_handle_test;
 pub mod artboard;
 pub mod artboard_ban;
+pub mod artboard_piece;
+#[cfg(test)]
+mod artboard_piece_test;
 #[cfg(test)]
 mod artboard_test;
 pub mod article;
@@ -51,6 +54,8 @@ pub mod darkroom_save;
 pub mod darkroom_veteran;
 #[cfg(test)]
 mod darkroom_veteran_test;
+pub mod deadchannel_name_hit;
+pub mod deadchannel_runner;
 pub mod door_log_cursor;
 pub mod door_milestone;
 pub mod door_rc;
@@ -110,6 +115,7 @@ pub mod nonogram;
 pub mod notification;
 #[cfg(test)]
 mod notification_test;
+pub mod paper;
 pub mod pet;
 #[cfg(test)]
 mod pet_test;

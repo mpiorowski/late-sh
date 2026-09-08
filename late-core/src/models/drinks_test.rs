@@ -158,7 +158,7 @@ async fn deduct_for_drink_respects_the_floor_and_writes_the_ledger() {
         user.id,
         ChipMove::DrinkPurchase,
         950,
-        Some("top shelf"),
+        "top shelf",
     )
     .await
     .expect("attempt");
@@ -170,7 +170,7 @@ async fn deduct_for_drink_respects_the_floor_and_writes_the_ledger() {
         user.id,
         ChipMove::DrinkPurchase,
         900,
-        Some("Segfault Sour"),
+        "Segfault Sour",
     )
     .await
     .expect("attempt")
@@ -208,7 +208,7 @@ async fn drink_purchase_composes_into_one_transaction() {
         user.id,
         ChipMove::DrinkPurchase,
         400,
-        Some("Bash Old Fashioned"),
+        "Bash Old Fashioned",
     )
     .await
     .expect("debit")

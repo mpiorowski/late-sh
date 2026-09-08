@@ -178,7 +178,7 @@ pub(crate) fn bot_app_context() -> String {
         - @bartender pours drinks for Late Chips: mention him (or press t at the bar) to order. There is no fixed menu; he invents each drink's name and prices it 100-1000 chips, never more than the patron can spend while keeping a 100-chip floor untouched. A brand-new patron's first-ever drink is free. He only ever pours for the patron who mentioned him: he never charges a drink onto someone else, and points anyone who wants to buy another user a round or a drink at \"/gift @user <n>\" instead, since gifted chips do not carry the drunk-text effect onto someone who did not choose to drink.\n\
         - Drinking builds a buzz that levels up: 0 sober, 1 tipsy, 2 buzzed, 3 sloshed, 4 wasted. Every non-sober level prints its word beside the name. Once wasted, the bartender cuts a patron off to water or coffee instead of more drinks.\n\
         - The buzz sobers up on its own over time, no action needed, whether the patron is online or not: it decays 334 points an hour, so reaching wasted wears off in about six hours and even a maxed-out binge is fully sober again half a day later.\n\
-        - A buzz also comes out in your typing, in public rooms only (never DMs or private rooms). Letters inside a word get shuffled, more of them the drunker you are, but the first and last letter of every word stay put so it always stays readable. Tipsy is the odd stumbled word; wasted is most of the sentence, plus the occasional *hic*. Handles, room slugs, links, and code in backticks are never touched. The slurring is saved with the message, so it does not clear up when you sober up later.\n\
+        - A buzz also comes out in your typing, in public rooms only (never DMs or private rooms). Letters inside a word get shuffled, more of them the drunker you are, but the first and last letter of every word stay put so it always stays readable. Tipsy is the odd stumbled word; wasted is most of the sentence, plus a *hic* dropped mid-sentence in about a third of messages (and once in a while at sloshed). Handles, room slugs, links, and code in backticks are never touched. The slurring is saved with the message, so it does not clear up when you sober up later.\n\
         - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Clubhouse (0), Home (1), The Arcade (2), Games (3), Artboard (4), Profiles (5), and Leaderboards (6).\n\
         - Users constantly ask how to see their mentions. The answer: Mentions is an entry in the Home (page 1) room rail, so press 1 and pick Mentions there; or click the \"N unread mentions\" counter in the top-right corner of the frame; or press Ctrl+/ and type mentions. The unread count lives in the top border, selecting Mentions marks it read, and Enter previews a mention with its surrounding messages (Enter again jumps to it).\n\
         - Users miss their DMs the same way. A DM carrying unread messages is lifted out of the DM list at the bottom of the Home (page 1) room rail into an \"unread dms\" group directly under core, with its unread count beside it; once read it drops back into \"dms\" as soon as the user moves to another room. Favorited DMs stay in favorites instead, and a DM whose peer is ignored appears nowhere. Ctrl+/ also lists DMs unread-first, and /dm @user opens one.\n\
@@ -473,7 +473,7 @@ fn chips_help_lines() -> Vec<String> {
             thousands(GildTier::Gold.author_share())),
         "  The marker stays on the message forever. There is no un-gild, and you cannot gild yourself or a bot.".to_string(),
         "  One gild per message per buyer. Buying a higher tier later raises it at that tier's full price; it never goes down.".to_string(),
-        "  Gilds received do NOT count toward Top Chips: the board ranks what you earned, not what you were tipped.".to_string(),
+        "  A gild you receive counts toward Top Chips: a third burns on the way, so it cannot funnel chips for free. The chips you spend gilding do not count, like any other spend.".to_string(),
         "".to_string(),
         "7. Sharing news".to_string(),
         format!("  Publishing a link to News pays {NEWS_SHARE_REWARD_CHIPS} chips."),
@@ -520,7 +520,7 @@ fn chips_help_lines() -> Vec<String> {
         "  The holder takes 80% of everything the tickets paid in; the other fifth is destroyed.".to_string(),
         "  Nobody in the pot means nobody is paid: it rolls, and a fresh pot opens either way.".to_string(),
         "  The winner is announced in #lounge, so you can read it when you get back.".to_string(),
-        "  Neither the tickets you buy nor the pot you win counts toward Top Chips.".to_string(),
+        "  The pot you win counts toward Top Chips; the tickets you buy, like any other spend, do not.".to_string(),
         "".to_string(),
         "12. Gifts".to_string(),
         "  /gift @user <n>    send chips to someone, with an optional note after the amount".to_string(),
@@ -546,7 +546,7 @@ fn chips_help_lines() -> Vec<String> {
         "  The crown (/crown take), which burns the whole price.".to_string(),
         format!("  Pot tickets (/pot buy N) at {} chips each, of which a fifth is burned at the draw.", thousands(POT_TICKET_PRICE)),
         "  Burn milestones and the two ultimate spells (1,000,000 each), the top of the Shop.".to_string(),
-        "  Monthly Top Chips ranks net chip delta, so Shop and crown spending never lower your rank; betting losses do.".to_string(),
+        "  Monthly Top Chips counts what you earned: dailies, quests, doors, the arena, prizes, the pot, gilds received. Table bets and wins, gifts, the starting chips, and every kind of spending stay off it.".to_string(),
     ]
 }
 
@@ -570,6 +570,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /tea               post a tea cup",
         "  /ultimate          open owned Ultimate Spells",
         "  /profile [@user]   open your profile, or another user's profile",
+        "  /chips [@user]     the same profile, scrolled to the chip ledger",
         "  /exit              open quit confirm",
         "  /public #room      open/create opt-in public room",
         "  /join #room        same as /public",
@@ -611,6 +612,12 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /summary           AI catch-up of this public room, the last day or since your last read",
         "  /summary 6h        catch up on exactly that window instead (also /summary 90m)",
         "                     (up to 2 days back; one per room every 10 minutes)",
+        "  /paper             The Late Edition: graybeard's daily paper, one column per",
+        "                     public room that talked yesterday (5+ messages), rooms you",
+        "                     are not in, what we were reading; pops once a day at login",
+        "                     (after the announcements and, on a first visit, the tour)",
+        "                     (Ctrl+O Tweaks → Daily paper at login turns the pop off)",
+        "                     admins: /paper on|off, outside on|off, print, preview, reset",
         "",
         "Global chat keys",
         "  Ctrl+O             open your settings modal anywhere",
@@ -874,8 +881,10 @@ fn social_help_lines() -> Vec<String> {
         "Read-only profile modal",
         "  p                 open selected chat author's profile card",
         "  /profile [@user]  open your own profile card, or another user's",
+        "  /chips [@user]    the same card, scrolled to the chip ledger",
         "  j / k, arrows     scroll",
         "  PageUp/PageDown   page",
+        "  g / G             top / bottom",
         "  Esc / q           close",
     ]
     .into_iter()
@@ -939,11 +948,16 @@ fn directory_help_lines() -> Vec<String> {
         "Read-only profile modal",
         "  p                 open selected chat author's profile card",
         "  /profile [@user]  open your own profile card, or another user's",
+        "  /chips [@user]    the same card, scrolled to the chip ledger",
         "  j / k, arrows     scroll profile modal",
         "  PageUp/PageDown   page profile modal",
+        "  g / G             top / bottom of the profile modal",
         "  Esc / q           close profile modal",
-        "  Profiles show username, country, timezone/current time, chips, markdown bio,",
-        "  bonsai, late.fetch fields, and the user's showcases when available.",
+        "  One scrolling column on every screen: the bonsai beside the late.fetch",
+        "  grid (country, local time, chips and this month's Top Chips figure, gilds,",
+        "  gallery, created, ide, os, terminal, theme, langs), then the markdown bio,",
+        "  showcases, every badge, the aquarium, and the chip ledger: the newest",
+        "  ledger rows with what each paid for, rows the board ignores marked off.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -960,6 +974,8 @@ fn arcade_help_lines() -> Vec<String> {
         "  Enter             play selected game",
         "  Esc / q           leave current game",
         "  `                 in a daily puzzle: hop games waiting on you (boards, tables, dailies, live dungeons)",
+        "  s                 in the lobby: copy your day card (one square per daily won today, plus your streak)",
+        "  s                 on a finished daily: copy that puzzle's share card, ready to paste anywhere",
         "",
         "Notes",
         "  Game-specific controls appear inside the Arcade page.",
@@ -977,6 +993,8 @@ fn arcade_help_lines() -> Vec<String> {
         "  [SN]      Snake",
         "  [CRWN]    The Crown, to whoever wore it when the month ended.",
         "            It is the one monthly badge with no rank digit: the crown has one holder.",
+        "  [ART]     Artboard Gallery: your most applauded piece of the month. Top 3 by best piece,",
+        "            3 applause to count, and the one ranked badge that pays: 20,000 / 10,000 / 5,000 chips.",
         "  The door badges are one-off feats, shown with no rank digit. The badge lands the first",
         "  time; the chips land again on the gate shown here. Full guide on the Leaderboards page.",
         "  [LMG]     Lateania Archdemon             10,000 chips  per character, 7-day gap",
@@ -1117,7 +1135,7 @@ fn overview_lines() -> Vec<String> {
         "  2 The Arcade      daily puzzles, endless games, quests at the top",
         "  3 Games           door games: Lateania, NetHack, DCSS, Brogue, Usurper,",
         "                    Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels",
-        "  4 Artboard        shared persistent ASCII canvas",
+        "  4 Artboard        shared persistent ASCII canvas, and the gallery: frame your work, hang it, applaud others",
         "  5 Profiles        the people, one row each: their projects and work cards",
         "  6 Leaderboards    every board, monthly and all-time",
         "",
@@ -1156,6 +1174,8 @@ fn overview_lines() -> Vec<String> {
         "  v then x          cycle audio source: Icecast → YouTube → Radio",
         "  v then s          skip-vote the current YouTube track",
         "  v then 1..5       select stream/station in the active source",
+        "  w, m, + / - and the v music prefix are off on the Artboard: that page",
+        "  spends those letters itself (v applauds a gallery piece)",
         "",
         "Home",
         "  click top bar     jump screens",
@@ -1800,7 +1820,7 @@ Music Booth (v then v)
     Enter           queue selected track fresh
     d               delete selected track (staff)
 
-  Bringing a track pays you 200 chips, whether you submit a URL or queue one from History, repeats included: at most 5 a day (UTC), and past that it still queues, it just pays nothing.
+  Bringing a track pays you 100 chips, whether you submit a URL or queue one from History, repeats included: at most 5 a day (UTC), and past that it still queues, it just pays nothing.
   The queue is ordered by score, so upvotes pull tracks toward the front. You can't vote on the track that's already playing, but you can skip-vote it.
   History keeps up to 200 unique played tracks, most recently played first, so whatever is playing right now sits at the top. There are no history votes. Requeued history tracks start with 0 live queue votes.
 

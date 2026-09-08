@@ -128,6 +128,7 @@ pub struct State {
     pub ai_service: AiService,
     pub translation_service: crate::app::ai::translate::TranslationService,
     pub summary_service: crate::app::ai::summary::SummaryService,
+    pub paper_service: crate::app::paper::svc::PaperService,
     pub audio_service: AudioService,
     pub voice_service: VoiceService,
     pub stream_service: crate::app::stream::svc::StreamService,
@@ -163,6 +164,8 @@ pub struct State {
     pub house_registry: crate::app::lobby::house::registry::HouseTableRegistry,
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: SharedArtboardProvenance,
+    /// The Artboard gallery: listings, hanging, applause, the splash piece.
+    pub gallery_service: crate::app::artboard::gallery::svc::GalleryService,
     pub leaderboard_service: LeaderboardService,
     pub quest_service: QuestService,
     pub shop_service: ShopService,
@@ -205,4 +208,8 @@ pub struct State {
     /// switch and fuse), served to every replica over Postgres. See
     /// `app/flags` and the multi-replica rule in the root CONTEXT.md.
     pub app_flags: crate::app::flags::svc::AppFlagService,
+    /// Every runner's look (`deadchannel_runners` rows), served to every
+    /// replica over Postgres so the #deadchannel portraits agree everywhere.
+    /// See `app/deadchannel/runner`.
+    pub runner_looks: crate::app::deadchannel::runner::svc::RunnerLookService,
 }

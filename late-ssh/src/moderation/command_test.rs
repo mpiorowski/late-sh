@@ -456,6 +456,30 @@ fn parses_artboard_curate_command() {
 }
 
 #[test]
+fn parses_artboard_gallery_commands() {
+    assert_eq!(
+        parse_mod_command("artboard remove 0192ABCD-1234 copied from @ann").unwrap(),
+        ModCommand::ArtboardRemovePiece {
+            id_prefix: "0192abcd-1234".to_string(),
+            reason: "copied from @ann".to_string(),
+        }
+    );
+    // Under eight characters, or not hex, never reaches the database.
+    assert!(parse_mod_command("artboard remove 0192").is_err());
+    assert!(parse_mod_command("artboard remove notanid1 reason").is_err());
+    assert!(parse_mod_command("artboard remove").is_err());
+    assert_eq!(
+        parse_mod_command("artboard gallery off").unwrap(),
+        ModCommand::ArtboardGallery { enabled: false }
+    );
+    assert_eq!(
+        parse_mod_command("artboard gallery on").unwrap(),
+        ModCommand::ArtboardGallery { enabled: true }
+    );
+    assert!(parse_mod_command("artboard gallery maybe").is_err());
+}
+
+#[test]
 fn rejects_deferred_server_ip_commands() {
     assert!(parse_mod_command("server ban-ip 203.0.113.10 2h subnet abuse").is_err());
     assert!(parse_mod_command("server unban-ip 2001:db8::1").is_err());
@@ -580,7 +604,9 @@ fn primary_username(command: &ModCommand) -> &str {
         | ModCommand::RenameRoom { .. }
         | ModCommand::RoomVoice { .. }
         | ModCommand::ArtboardRestore { .. }
-        | ModCommand::ArtboardCurate { .. } => {
+        | ModCommand::ArtboardCurate { .. }
+        | ModCommand::ArtboardRemovePiece { .. }
+        | ModCommand::ArtboardGallery { .. } => {
             panic!("command does not have a primary username: {command:?}")
         }
     }

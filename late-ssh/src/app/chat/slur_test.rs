@@ -8,12 +8,25 @@ const CORPUS: &str = "the deploy went through but the migration is still pending
     and nobody wants to touch it before the release window closes tomorrow morning \
     someone should probably check whether the cache warmed up correctly again";
 
+/// Words the patron actually mangled. The hiccup is an inserted word, not a
+/// mangled one, so it comes out before the two lists are lined up: leaving it
+/// in would shift every word after it and read as damage the scrambler never
+/// did.
 fn changed_word_count(original: &str, slurred: &str) -> usize {
+    let spoken = slurred.split_whitespace().filter(|word| *word != "*hic*");
     original
         .split_whitespace()
-        .zip(slurred.split_whitespace())
+        .zip(spoken)
         .filter(|(before, after)| before != after)
         .count()
+}
+
+/// Share of messages in 100 that come out carrying at least one `*hic*`.
+fn hiccup_percent(level: u8) -> usize {
+    let hiccuped = (1..1_000)
+        .filter(|seed| slur(CORPUS, level, *seed).contains("*hic*"))
+        .count();
+    hiccuped * 100 / 999
 }
 
 #[test]
@@ -76,6 +89,38 @@ fn each_drink_reads_harder_than_the_last() {
         tipsy < buzzed && buzzed < sloshed && sloshed < wasted,
         "every drink should read harder: {tipsy} {buzzed} {sloshed} {wasted}"
     );
+}
+
+/// The hiccup is the loudest thing the drink does, and it belongs to the top
+/// of the ladder: it is how a wasted patron reads as wasted rather than merely
+/// clumsy, and it stays an interruption rather than a tic, so a third of their
+/// messages carry one. Sloshed gets it rarely, as a hint of what is coming;
+/// below that it never fires.
+#[test]
+fn only_the_top_of_the_ladder_hiccups() {
+    let [tipsy, buzzed, sloshed, wasted] = [1, 2, 3, DRUNK_MAX_LEVEL].map(hiccup_percent);
+
+    assert_eq!(tipsy, 0, "one drink in should never hiccup");
+    assert_eq!(buzzed, 0, "buzzed should never hiccup");
+    assert!(
+        (5..16).contains(&sloshed),
+        "sloshed should hiccup only once in a while, hit {sloshed}%"
+    );
+    assert!(
+        (27..40).contains(&wasted),
+        "wasted should hiccup in about a third of messages, hit {wasted}%"
+    );
+
+    // One roll at every level, so a single message never stammers twice.
+    let twice = (1..1_000)
+        .filter(|seed| {
+            slur(CORPUS, DRUNK_MAX_LEVEL, *seed)
+                .matches("*hic*")
+                .count()
+                > 1
+        })
+        .count();
+    assert_eq!(twice, 0, "a message should never carry two hiccups");
 }
 
 #[test]

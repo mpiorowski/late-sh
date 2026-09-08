@@ -536,7 +536,7 @@ impl PotService {
             user_id,
             ChipMove::PotTicket,
             price,
-            Some(&pot.id.to_string()),
+            &pot.id.to_string(),
         )
         .await?
         else {
@@ -599,7 +599,7 @@ impl PotService {
                     draw.winner_user_id,
                     ChipMove::PotWon,
                     draw.payout_chips,
-                    Some(&pot.id.to_string()),
+                    &pot.id.to_string(),
                 )
                 .await?;
                 Pot::notify_changed(

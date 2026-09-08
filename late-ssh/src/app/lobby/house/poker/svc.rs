@@ -5,6 +5,7 @@ use std::{
 };
 
 use late_core::MutexRecover;
+use late_core::models::chips::ChipMove;
 use rand_core::{OsRng, RngCore};
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
@@ -451,7 +452,12 @@ impl PokerService {
         tokio::spawn(async move {
             let result = svc
                 .chip_svc
-                .debit_bet(request.user_id, request.amount)
+                .apply_move(
+                    request.user_id,
+                    ChipMove::PokerBet,
+                    request.amount,
+                    &request.hand_id.to_string(),
+                )
                 .await;
             let (settlements, action_countdown_id) = {
                 let mut state = svc.state.lock().await;
@@ -495,11 +501,19 @@ impl PokerService {
             let mut updates = Vec::with_capacity(settlements.len());
             let mut failed = false;
             for settlement in settlements {
+                let hand_ref = settlement.hand_id.to_string();
                 let result = if settlement.credit == 0 {
-                    svc.chip_svc.restore_floor(settlement.user_id).await
+                    svc.chip_svc
+                        .restore_floor(settlement.user_id, &hand_ref)
+                        .await
                 } else {
                     svc.chip_svc
-                        .credit_payout(settlement.user_id, settlement.credit)
+                        .credit_payout(
+                            settlement.user_id,
+                            ChipMove::PokerPayout,
+                            settlement.credit,
+                            &hand_ref,
+                        )
                         .await
                 };
 
@@ -660,6 +674,9 @@ struct SharedState {
     active_seat: Option<usize>,
     phase: PokerPhase,
     hand_number: u64,
+    /// Minted per dealt hand. Every ledger row of the hand (commits, pots,
+    /// floor restores) carries it as `source_ref`.
+    hand_id: Uuid,
     winners: Vec<usize>,
     winning_rank: Option<String>,
     status_message: String,
@@ -712,6 +729,7 @@ impl SharedState {
             active_seat: None,
             phase: PokerPhase::Waiting,
             hand_number: 0,
+            hand_id: Uuid::now_v7(),
             winners: Vec::new(),
             winning_rank: None,
             status_message: "Take a seat. Two players can deal a hand.".to_string(),
@@ -1085,6 +1103,7 @@ impl SharedState {
         self.big_blind_seat = Some(big_blind);
         self.phase = PokerPhase::PostingBlinds;
         self.hand_number = self.hand_number.saturating_add(1);
+        self.hand_id = Uuid::now_v7();
 
         let mut requests = Vec::new();
         if let Some(request) = self.prepare_forced_commit(
@@ -1328,6 +1347,7 @@ impl SharedState {
             user_id: self.seats[index].expect("pending commit requires seated user"),
             seat_index: index,
             amount,
+            hand_id: self.hand_id,
         };
         self.pending_commit[index] = Some(PendingCommit {
             request_id: request.request_id,
@@ -1709,6 +1729,7 @@ impl SharedState {
                 let user_id = self.seats[index]?;
                 (self.committed[index] > 0).then_some(PokerSettlement {
                     user_id,
+                    hand_id: self.hand_id,
                     credit: credits[index],
                 })
             })
@@ -1722,6 +1743,7 @@ impl SharedState {
                 let user_id = self.seats[index]?;
                 (self.committed[index] > 0).then_some(PokerSettlement {
                     user_id,
+                    hand_id: self.hand_id,
                     credit: if index == winner { pot } else { 0 },
                 })
             })
@@ -1963,6 +1985,7 @@ struct CommitRequest {
     user_id: Uuid,
     seat_index: usize,
     amount: i64,
+    hand_id: Uuid,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1992,6 +2015,7 @@ enum ActionOutcome {
 #[derive(Clone, Debug)]
 struct PokerSettlement {
     user_id: Uuid,
+    hand_id: Uuid,
     credit: i64,
 }
 

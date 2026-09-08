@@ -4,8 +4,11 @@ use late_core::models::leaderboard::DoorGame;
 use late_core::models::media_queue_item::SongQueueReward;
 
 use crate::app::activity::event::ActivityGame;
+use crate::app::arcade::share::ShareCardKind;
+use crate::app::chat::news::svc::XMediaLookup;
 use crate::app::chat::svc::GildRefusal;
 use crate::app::crown::svc::CrownRefusal;
+use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::games::chips::svc::RoundRefusal;
 use crate::app::lobby::daily::svc::DailyWinPayout;
 use crate::app::pot::svc::PotRefusal;
@@ -52,6 +55,65 @@ pub enum SummaryResult {
     Failed,
 }
 
+/// How one page of The Late Edition (`app/paper`) came off the press.
+/// `Printed` is the variant that spent a model call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaperPrintResult {
+    Printed,
+    /// Under the message threshold, or nothing to write about; no call.
+    Quiet,
+    /// Another replica held the claim; no call.
+    Lost,
+    Failed,
+}
+
+/// How a request to open the paper resolved. `Login` and `Command` are the
+/// two ways a reader got it; the rest are why they did not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaperOpenResult {
+    Login,
+    Command,
+    /// Nothing printed for today's edition.
+    Empty,
+    /// This account's login pop for the edition was already claimed.
+    AlreadyShown,
+    /// The paper's kill switch is off, or AI is unconfigured here.
+    Unavailable,
+    Failed,
+}
+
+/// How a hang attempt on the Artboard gallery ended. `Hung` is the row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GalleryHangResult {
+    Hung,
+    /// The account's pieces for the UTC day were already up.
+    DailyCap,
+    /// The same cells already hang this month.
+    Duplicate,
+    Failed,
+}
+
+/// How an applause toggle on a gallery piece ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GalleryApplauseResult {
+    Applauded,
+    Withdrawn,
+    OwnPiece,
+    NotFound,
+    Closed,
+    Failed,
+}
+
+/// How a hanger's own take-down resolved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GalleryTakeDownResult {
+    TakenDown,
+    NotFound,
+    NotYours,
+    Closed,
+    Failed,
+}
+
 /// How a five-minute online-time flush resolved. `Failed` means the batch is
 /// retained in memory for retry; a sustained run of failures is accruing time
 /// that dies with the process.
@@ -69,6 +131,8 @@ pub enum FirstContactBeat {
     NameFlicker,
     WhisperDelivered,
     InvitationRequested,
+    /// The invitation accepted: `/join #deadchannel` created the runner.
+    RunnerCreated,
 }
 
 /// How one bio screen (the first-contact eligibility gate's AI leg)
@@ -114,10 +178,14 @@ mod inner {
         metrics::{Counter, UpDownCounter},
     };
 
+    use super::ShareCardKind;
+    use super::XMediaLookup;
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
-        GildRefusal, GildTier, NewsShareReward, OnlineTimeFlushResult, PotRefusal, RenderReason,
-        RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult, TranslationResult,
+        GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
+        GildTier, NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult,
+        PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
+        TranslationResult,
     };
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -531,6 +599,18 @@ mod inner {
         })
     }
 
+    fn news_x_media_lookups_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_news_x_media_lookups_total")
+                .with_description(
+                    "fxtwitter lookups behind X shares, the only NSFW gate on that path",
+                )
+                .build()
+        })
+    }
+
     fn news_share_chips_paid_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -591,12 +671,38 @@ mod inner {
         })
     }
 
+    fn first_contact_gate_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_first_contact_gate_total")
+                .with_description(
+                    "First-contact eligibility gate evaluations at connect (one per session, not per person), by verdict and audience",
+                )
+                .build()
+        })
+    }
+
+    fn first_contact_gate_verdict_label(verdict: GateVerdict) -> &'static str {
+        match verdict {
+            GateVerdict::Passed => "passed",
+            GateVerdict::TooFewHours => "too_few_hours",
+            GateVerdict::TooFewSettings => "too_few_settings",
+            GateVerdict::BioTooShort => "bio_too_short",
+            GateVerdict::BioAiOff => "bio_ai_off",
+            GateVerdict::BioUnscreened => "bio_unscreened",
+            GateVerdict::BioPending => "bio_pending",
+            GateVerdict::BioFailed => "bio_failed",
+        }
+    }
+
     fn first_contact_beat_label(beat: FirstContactBeat) -> &'static str {
         match beat {
             FirstContactBeat::GlitchBurst => "glitch_burst",
             FirstContactBeat::NameFlicker => "name_flicker",
             FirstContactBeat::WhisperDelivered => "whisper_delivered",
             FirstContactBeat::InvitationRequested => "invitation_requested",
+            FirstContactBeat::RunnerCreated => "runner_created",
         }
     }
 
@@ -620,6 +726,19 @@ mod inner {
         first_contact_bio_screens_total().add(
             1,
             &[KeyValue::new("outcome", bio_screen_outcome_label(outcome))],
+        );
+    }
+
+    /// One gate evaluation at connect. `staff` splits admins and
+    /// moderators (haunted while the fuse is unlit) from everyone else.
+    pub fn record_first_contact_gate(verdict: GateVerdict, staff: bool) {
+        let audience = if staff { "staff" } else { "public" };
+        first_contact_gate_total().add(
+            1,
+            &[
+                KeyValue::new("verdict", first_contact_gate_verdict_label(verdict)),
+                KeyValue::new("audience", audience),
+            ],
         );
     }
 
@@ -719,6 +838,34 @@ mod inner {
         game_wins_total().add(1, &[KeyValue::new("game", game_label(game))]);
     }
 
+    fn share_cards_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_share_cards_total")
+                .with_description("Share cards copied to the clipboard")
+                .build()
+        })
+    }
+
+    fn share_card_kind_label(kind: ShareCardKind) -> &'static str {
+        match kind {
+            ShareCardKind::LeWord => "le_word",
+            ShareCardKind::Nonogram => "nonogram",
+            ShareCardKind::Sudoku => "sudoku",
+            ShareCardKind::Minesweeper => "minesweeper",
+            ShareCardKind::Solitaire => "solitaire",
+            ShareCardKind::RubiksCube => "rubiks_cube",
+            ShareCardKind::SlidingPuzzle => "sliding_puzzle",
+            ShareCardKind::Day => "day",
+        }
+    }
+
+    /// One share card copied.
+    pub fn record_share_card(kind: ShareCardKind) {
+        share_cards_total().add(1, &[KeyValue::new("card", share_card_kind_label(kind))]);
+    }
+
     fn daily_win_payout_label(payout: DailyWinPayout) -> &'static str {
         match payout {
             DailyWinPayout::Paid => "paid",
@@ -752,6 +899,23 @@ mod inner {
             &[KeyValue::new("reward", news_share_reward_label(reward))],
         );
         news_share_chips_paid_total().add(reward.chips() as u64, &[]);
+    }
+
+    /// `unavailable` is a share the gate rejected without a verdict; a run of
+    /// them is an fxtwitter outage.
+    fn news_x_media_lookup_label(lookup: XMediaLookup) -> &'static str {
+        match lookup {
+            XMediaLookup::Clean => "clean",
+            XMediaLookup::Sensitive => "sensitive",
+            XMediaLookup::Unavailable => "unavailable",
+        }
+    }
+
+    pub fn record_news_x_media_lookup(lookup: XMediaLookup) {
+        news_x_media_lookups_total().add(
+            1,
+            &[KeyValue::new("outcome", news_x_media_lookup_label(lookup))],
+        );
     }
 
     /// Same shape as the News share: one counter for the submissions and one
@@ -884,6 +1048,147 @@ mod inner {
         chat_summaries_total().add(1, &[KeyValue::new("result", summary_result_label(result))]);
     }
 
+    fn paper_print_result_label(result: PaperPrintResult) -> &'static str {
+        match result {
+            PaperPrintResult::Printed => "printed",
+            PaperPrintResult::Quiet => "quiet",
+            PaperPrintResult::Lost => "lost",
+            PaperPrintResult::Failed => "failed",
+        }
+    }
+
+    fn paper_prints_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_paper_prints_total")
+                .with_description("Daily paper pages (rooms and sections) by print result")
+                .build()
+        })
+    }
+
+    pub fn record_paper_print(result: PaperPrintResult) {
+        paper_prints_total().add(
+            1,
+            &[KeyValue::new("result", paper_print_result_label(result))],
+        );
+    }
+
+    fn paper_open_result_label(result: PaperOpenResult) -> &'static str {
+        match result {
+            PaperOpenResult::Login => "login",
+            PaperOpenResult::Command => "command",
+            PaperOpenResult::Empty => "empty",
+            PaperOpenResult::AlreadyShown => "already_shown",
+            PaperOpenResult::Unavailable => "unavailable",
+            PaperOpenResult::Failed => "failed",
+        }
+    }
+
+    fn paper_opens_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_paper_opens_total")
+                .with_description("Daily paper open requests (login pop and /paper) by resolution")
+                .build()
+        })
+    }
+
+    pub fn record_paper_open(result: PaperOpenResult) {
+        paper_opens_total().add(
+            1,
+            &[KeyValue::new("result", paper_open_result_label(result))],
+        );
+    }
+
+    fn gallery_hang_result_label(result: GalleryHangResult) -> &'static str {
+        match result {
+            GalleryHangResult::Hung => "hung",
+            GalleryHangResult::DailyCap => "daily_cap",
+            GalleryHangResult::Duplicate => "duplicate",
+            GalleryHangResult::Failed => "failed",
+        }
+    }
+
+    fn gallery_hangs_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_artboard_gallery_hangs_total")
+                .with_description("Artboard gallery hang attempts by result")
+                .build()
+        })
+    }
+
+    pub fn record_gallery_hang(result: GalleryHangResult) {
+        gallery_hangs_total().add(
+            1,
+            &[KeyValue::new("result", gallery_hang_result_label(result))],
+        );
+    }
+
+    fn gallery_applause_result_label(result: GalleryApplauseResult) -> &'static str {
+        match result {
+            GalleryApplauseResult::Applauded => "applauded",
+            GalleryApplauseResult::Withdrawn => "withdrawn",
+            GalleryApplauseResult::OwnPiece => "own_piece",
+            GalleryApplauseResult::NotFound => "not_found",
+            GalleryApplauseResult::Closed => "closed",
+            GalleryApplauseResult::Failed => "failed",
+        }
+    }
+
+    fn gallery_take_down_result_label(result: GalleryTakeDownResult) -> &'static str {
+        match result {
+            GalleryTakeDownResult::TakenDown => "taken_down",
+            GalleryTakeDownResult::NotFound => "not_found",
+            GalleryTakeDownResult::NotYours => "not_yours",
+            GalleryTakeDownResult::Closed => "closed",
+            GalleryTakeDownResult::Failed => "failed",
+        }
+    }
+
+    fn gallery_take_downs_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_artboard_gallery_take_downs_total")
+                .with_description("Artboard gallery take-downs by the hanger, by result")
+                .build()
+        })
+    }
+
+    pub fn record_gallery_take_down(result: GalleryTakeDownResult) {
+        gallery_take_downs_total().add(
+            1,
+            &[KeyValue::new(
+                "result",
+                gallery_take_down_result_label(result),
+            )],
+        );
+    }
+
+    fn gallery_applause_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_artboard_gallery_applause_total")
+                .with_description("Artboard gallery applause toggles by result")
+                .build()
+        })
+    }
+
+    pub fn record_gallery_applause(result: GalleryApplauseResult) {
+        gallery_applause_total().add(
+            1,
+            &[KeyValue::new(
+                "result",
+                gallery_applause_result_label(result),
+            )],
+        );
+    }
+
     fn door_ingest_lines_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -949,16 +1254,21 @@ mod inner {
 
 #[cfg(not(feature = "otel"))]
 mod inner {
+    use super::ShareCardKind;
+    use super::XMediaLookup;
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
-        GildRefusal, GildTier, NewsShareReward, OnlineTimeFlushResult, PotRefusal, RenderReason,
-        RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult, TranslationResult,
+        GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
+        GildTier, NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult,
+        PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
+        TranslationResult,
     };
 
     pub fn record_ssh_connection() {}
     pub fn record_ssh_connection_rejected(_reason: SshRejectReason) {}
     pub fn record_first_contact_beat(_beat: FirstContactBeat) {}
     pub fn record_first_contact_bio_screen(_outcome: BioScreenOutcome) {}
+    pub fn record_first_contact_gate(_verdict: GateVerdict, _staff: bool) {}
     pub fn record_render(_reason: RenderReason) {}
     pub fn record_render_skipped_clean() {}
     pub fn add_ssh_session(_delta: i64) {}
@@ -972,8 +1282,10 @@ mod inner {
     pub fn record_chat_message_sent() {}
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}
+    pub fn record_share_card(_kind: ShareCardKind) {}
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
+    pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_gild_bought(_tier: GildTier) {}
     pub fn record_gild_refused(_refusal: GildRefusal) {}
@@ -987,6 +1299,11 @@ mod inner {
     pub fn record_pot_drawn(_payout: i64, _tickets: i64) {}
     pub fn record_chat_translation(_result: TranslationResult) {}
     pub fn record_chat_summary(_result: SummaryResult) {}
+    pub fn record_paper_print(_result: PaperPrintResult) {}
+    pub fn record_paper_open(_result: PaperOpenResult) {}
+    pub fn record_gallery_hang(_result: GalleryHangResult) {}
+    pub fn record_gallery_applause(_result: GalleryApplauseResult) {}
+    pub fn record_gallery_take_down(_result: GalleryTakeDownResult) {}
     pub fn record_door_ingest_line(_game: DoorGame) {}
     pub fn record_door_ingest_session_failure(_game: DoorGame) {}
     pub fn record_online_time_flush(_result: OnlineTimeFlushResult) {}

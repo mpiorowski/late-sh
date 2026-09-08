@@ -130,6 +130,43 @@ fn parse_gift_command_rejects_invalid_amounts_and_junk() {
 }
 
 #[test]
+fn parse_grant_command_takes_a_user_and_an_amount_only() {
+    assert_eq!(
+        parse_grant_command("/grant @alice 500"),
+        Some(GrantParse::Grant {
+            username: "alice".to_string(),
+            amount: 500,
+        })
+    );
+    assert_eq!(
+        parse_grant_command("/grant alice 500"),
+        Some(GrantParse::Grant {
+            username: "alice".to_string(),
+            amount: 500,
+        })
+    );
+    // No note, unlike /gift: a trailing word is a mistake, not a message.
+    assert_eq!(
+        parse_grant_command("/grant @alice 500 for the win"),
+        Some(GrantParse::Invalid)
+    );
+    assert_eq!(parse_grant_command("/grant"), Some(GrantParse::Invalid));
+    assert_eq!(
+        parse_grant_command("/grant @a 0"),
+        Some(GrantParse::Invalid)
+    );
+    assert_eq!(
+        parse_grant_command("/grant @a -5"),
+        Some(GrantParse::Invalid)
+    );
+    assert_eq!(
+        parse_grant_command("/grant @a 10000001"),
+        Some(GrantParse::Invalid)
+    );
+    assert_eq!(parse_grant_command("/granted @a 5"), None);
+}
+
+#[test]
 fn read_cursor_flush_queue_coalesces_room_until_deadline() {
     let room_id = Uuid::from_u128(1);
     let now = Instant::now();
@@ -3190,6 +3227,95 @@ async fn auto_mode_requests_fire_without_a_pending_placeholder() {
 }
 
 #[tokio::test]
+async fn a_name_hit_waits_for_its_message_then_lands() {
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let viewer = late_core::test_utils::create_test_user(&test_db.db, "witness_viewer").await;
+    let author = late_core::test_utils::create_test_user(&test_db.db, "witness_author").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, lounge.id, author.id)
+        .await
+        .expect("join author");
+    let seed = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "seed".to_string(),
+        },
+    )
+    .await
+    .expect("seed message");
+
+    let db = test_db.db.clone();
+    let notifications = crate::app::chat::notifications::svc::NotificationService::new(db.clone());
+    let chat = crate::app::chat::svc::ChatService::new(db.clone(), notifications.clone());
+    let ai = crate::app::ai::svc::AiService::new(false, None);
+    let translation = crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
+    let summary = crate::app::ai::summary::SummaryService::new(db.clone(), ai.clone());
+    let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
+    let (notifier, _outbox) = crate::app::notify::channel();
+    let mut state = ChatState::new(
+        ChatServices {
+            chat: chat.clone(),
+            translation,
+            summary,
+            notifications,
+            articles,
+            feeds: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
+            showcases: crate::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
+            work: crate::app::chat::work::svc::WorkService::new(db.clone()),
+            cyberspace: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+                db,
+                "http://127.0.0.1:1".to_string(),
+            ),
+        },
+        ChatSession {
+            user_id: viewer.id,
+            username: viewer.username.clone(),
+            permissions: crate::authz::Permissions::new(false, false),
+            device_left_at: None,
+        },
+        None,
+        notifier,
+        crate::app::ai::ladder::MentionLadders::new(),
+        None,
+    );
+    load_room_tail(&mut state, lounge.id, seed.id).await;
+
+    // A beat for a message already on screen is handed over at once, and
+    // exactly once.
+    state.note_name_hit(lounge.id, seed.id, 7);
+    assert_eq!(state.take_witnessed_hit_landed(), Some((seed.id, 7)));
+    assert_eq!(state.take_witnessed_hit_landed(), None);
+
+    // A beat heard from another replica before the room delta brought its
+    // message: held, then handed over as the message lands.
+    let incoming = Uuid::now_v7();
+    state.note_name_hit(lounge.id, incoming, 9);
+    assert_eq!(state.take_witnessed_hit_landed(), None);
+    state.push_message(ChatMessage {
+        room_id: lounge.id,
+        user_id: author.id,
+        body: "late to the room".to_string(),
+        ..make_msg(incoming)
+    });
+    assert_eq!(state.take_witnessed_hit_landed(), Some((incoming, 9)));
+
+    // A beat for a room this session does not hold is nobody's business.
+    state.note_name_hit(Uuid::now_v7(), Uuid::now_v7(), 11);
+    assert_eq!(state.take_witnessed_hit_landed(), None);
+    assert!(state.pending_name_hits.is_empty());
+}
+
+#[tokio::test]
 async fn author_shared_translations_show_without_auto_mode_or_t() {
     use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
     use late_core::models::chat_room::ChatRoom;
@@ -3951,4 +4077,65 @@ fn selection_scroll_steps_within_measured_overflow_and_reports_edges() {
     scroll.reset();
     assert_eq!(scroll.rows.get(), 0);
     assert!(!scroll.step(1));
+}
+
+/// The `/members` overlay is built in `drain_events`, which runs during the
+/// session tick, and `theme`'s palette is a thread local `App::render` sets
+/// afterwards. A span styled at build time therefore took whichever session
+/// last rendered on this worker thread. Two overlays over the same members,
+/// built under different ambient themes, must draw the same for one reader.
+#[test]
+fn the_members_overlay_draws_in_the_readers_theme_whoever_built_it() {
+    use crate::app::common::overlay::{Overlay, draw_overlay};
+    use ratatui::{Terminal, backend::TestBackend, style::Color};
+
+    fn members() -> Vec<crate::app::chat::svc::RoomMemberListItem> {
+        vec![
+            crate::app::chat::svc::RoomMemberListItem {
+                user_id: Uuid::from_u128(1),
+                username: Some("alice".to_string()),
+            },
+            crate::app::chat::svc::RoomMemberListItem {
+                user_id: Uuid::from_u128(2),
+                username: Some("bob".to_string()),
+            },
+        ]
+    }
+
+    fn drawn_colors(overlay: &Overlay) -> Vec<Color> {
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| draw_overlay(frame, frame.area(), overlay))
+            .expect("draw");
+        let buffer = terminal.backend().buffer();
+        let mut colors = Vec::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                let cell = &buffer[(x, y)];
+                if cell.symbol().trim().is_empty() {
+                    continue;
+                }
+                colors.push(cell.fg);
+            }
+        }
+        colors
+    }
+
+    theme::set_current_by_id("dracula");
+    let built_on_a_borrowed_thread =
+        Overlay::styled("Members", format_member_overlay_lines(&members(), None));
+    theme::set_current_by_id("late");
+    let built_at_home = Overlay::styled("Members", format_member_overlay_lines(&members(), None));
+
+    // The reader's own render pass, both times.
+    theme::set_current_by_id("late");
+    let borrowed = drawn_colors(&built_on_a_borrowed_thread);
+    theme::set_current_by_id("late");
+    let home = drawn_colors(&built_at_home);
+
+    assert_eq!(
+        borrowed, home,
+        "the member list took its colours from whichever session last rendered on this thread"
+    );
 }

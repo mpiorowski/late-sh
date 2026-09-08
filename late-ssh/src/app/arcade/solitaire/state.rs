@@ -228,6 +228,10 @@ impl State {
         true
     }
 
+    pub fn daily_date(&self) -> NaiveDate {
+        self.daily_date
+    }
+
     pub fn difficulty_key(&self) -> &'static str {
         DIFFICULTIES[self.selected_difficulty]
     }

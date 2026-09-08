@@ -42,7 +42,7 @@
   with zero exceptions. See §4)
 - Status: Active (v1)
 - Parent context: `../../../../CONTEXT.md`
-- Related context: `../voice/CONTEXT.md` (LiveKit grants, the ONE-room audio model), `../../../../late-web/CONTEXT.md` (watch + go-live pages), `STREAM.md` at the repo root (the design seed)
+- Related context: `../voice/CONTEXT.md` (LiveKit grants, the ONE-room audio model), `../../../../late-web/CONTEXT.md` (watch + go-live pages)
 
 ---
 
@@ -84,7 +84,7 @@ Owned by this domain:
   `App::tick_stream` in `app/state.rs`).
 - The `/api/stream/*` routes in `api.rs` and their late-web proxies/pages.
 
-Out of scope (deliberate v1 boundaries, from STREAM.md):
+Out of scope (deliberate v1 boundaries):
 - Viewer talk-back / viewer mics, general browser voice rooms, recording,
   past-streams pages, quality settings, multi-presenter, web-side chat.
 - Routing stream media into the CLI audio path (the stream lives in a page).
@@ -280,7 +280,7 @@ Cross-domain touchpoints:
    delete every ingress the registry does not know, since a restart wipes
    the registry while LiveKit keeps the keys.
 
-## 4. Consent invariants (non-negotiable, from STREAM.md)
+## 4. Consent invariants (non-negotiable)
 
 1. **No server-side client detection.** The *publishing* direction is born
    silent (the human clicks share; the go-live page's room audio starts
@@ -456,8 +456,11 @@ against the anonymous audience.
 ## 7. Known gaps / follow-ups
 
 - Metrics: no `record_stream_*` telemetry yet (streams started, watcher
-  peaks — the experiment metrics in STREAM.md are currently only readable
-  from logs/registry). The `stream ended` line carries the fields a
+  peaks — the experiment's own metrics, streams started per week, peak
+  concurrent watchers per stream, and chat/voice joins during a stream, are
+  currently only readable from logs/registry; the kill condition was nobody
+  streaming for a month, shelving the surface and keeping the token plumbing
+  and web viewer for arena spectators). The `stream ended` line carries the fields a
   teardown-reason counter would want. This is the first thing to build if
   streams get a regular audience: it is the prerequisite for measuring
   anything in the bandwidth note below.
@@ -499,4 +502,4 @@ against the anonymous audience.
   path that comes up and *then* dies is not rescued by TURN without an ICE
   restart; that is what the page's reconnect now covers.
 - The tavern TV prop, arena spectator reuse, and a public `late.sh/live`
-  stay future work (see STREAM.md).
+  stay future work.

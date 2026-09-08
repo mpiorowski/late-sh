@@ -1,7 +1,7 @@
 use crate::app::activity::event::ActivityEvent;
 use crate::app::bonsai::svc::BonsaiService;
 use late_core::models::bonsai::{Grave, Tree};
-use late_core::models::chips::{ChipMove, UserChips};
+use late_core::models::chips::UserChips;
 use late_core::models::marketplace::{
     BONSAI_DECAY_PROTECTION_KIND, BONSAI_DECAY_SHIELD_SKU, purchase_durable_item_by_sku,
 };
@@ -87,7 +87,7 @@ async fn ensure_tree_survives_a_stale_gap_covered_by_a_bonsai_decay_shield() {
     .await
     .expect("age tree");
 
-    UserChips::apply(&**client, user.id, ChipMove::Credit, 2_000, None)
+    UserChips::admin_grant(&**client, user.id, 2_000)
         .await
         .expect("fund chips");
     purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
@@ -136,7 +136,7 @@ async fn ensure_tree_survives_a_gap_spanning_two_stacked_shield_purchases() {
     .await
     .expect("age tree");
 
-    UserChips::apply(&**client, user.id, ChipMove::Credit, 4_000, None)
+    UserChips::admin_grant(&**client, user.id, 4_000)
         .await
         .expect("fund chips");
 
@@ -193,7 +193,7 @@ async fn ensure_tree_still_dies_when_the_shield_only_covers_part_of_the_gap() {
     .await
     .expect("age tree");
 
-    UserChips::apply(&**client, user.id, ChipMove::Credit, 2_000, None)
+    UserChips::admin_grant(&**client, user.id, 2_000)
         .await
         .expect("fund chips");
     // A fresh purchase only protects days from now on: it covers just

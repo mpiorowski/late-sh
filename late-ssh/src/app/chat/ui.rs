@@ -139,6 +139,9 @@ pub struct DashboardChatView<'a> {
     /// Resolved 24h username-effect styles per author (see
     /// `common/username_effect.rs`); fg painted over the bare name only.
     pub name_flair: &'a HashMap<Uuid, ResolvedName>,
+    /// Every runner's look (`app/deadchannel/runner`), for the portrait
+    /// gutter beside messages; consulted only when `room` is #deadchannel.
+    pub runner_looks: &'a HashMap<Uuid, crate::app::deadchannel::runner::state::Look>,
     /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
     /// `tick.rs`); painted as a presence badge after AFK.
     pub peer_pomodoros: &'a HashMap<Uuid, String>,
@@ -1221,6 +1224,10 @@ pub fn draw_dashboard_chat_card(
                 name_flicker: view.name_flicker,
                 translations: view.translations,
                 translation_hidden: view.translation_hidden,
+                runner_looks: view
+                    .room
+                    .filter(|room| super::state::room_shows_portraits(room))
+                    .map(|_| view.runner_looks),
             },
         );
         let visible = visible_chat_rows(
@@ -1314,6 +1321,12 @@ struct ChatRowsContext<'a> {
     name_flicker: Option<(Uuid, u64)>,
     translations: &'a HashMap<Uuid, TranslationDisplay>,
     translation_hidden: &'a HashSet<Uuid>,
+    /// `Some` only while `state::room_shows_portraits` says so for the
+    /// rendered room: the list keeps a portrait gutter on the right of
+    /// every entry and paints each author's face beside their block
+    /// (`app/deadchannel/runner`). The gutter code below is room-agnostic;
+    /// `None` leaves the rows exactly what they were.
+    runner_looks: Option<&'a HashMap<Uuid, crate::app::deadchannel::runner::state::Look>>,
 }
 
 // ── Mouse hit-test types ────────────────────────────────────
@@ -1801,11 +1814,14 @@ fn ensure_chat_rows_cache(
             .flatten();
         let is_system = system_text.is_some();
 
-        if !(first || is_continuation || is_system && prev_was_system) {
+        let separator_row = if first || is_continuation || is_system && prev_was_system {
+            None
+        } else {
             all_rows.push(Line::from(""));
             row_message.push(None);
             row_kind.push(RowKindLite::Blank);
-        }
+            Some(all_rows.len() - 1)
+        };
         first = false;
 
         let left_app_here = ctx.dividers.left_app.filter(|_| {
@@ -1840,11 +1856,28 @@ fn ensure_chat_rows_cache(
             .translations
             .get(&msg.id)
             .filter(|_| !ctx.translation_hidden.contains(&msg.id));
-        let wrapped = wrap_chat_entry_to_lines(
+        // The #deadchannel portrait gutter (`app/deadchannel/runner`): in
+        // the wire every author is a runner, and the message list keeps
+        // `PORTRAIT_GUTTER` cells on the right where the author's face sits
+        // beside their message. Every entry in the room wraps short of the
+        // gutter so the column stays straight; the face itself paints only
+        // on an entry that opens a block (a continuation shares the face
+        // above it, the way it shares the header), never on a system line.
+        let portrait = ctx.runner_looks.and_then(|looks| {
+            (!is_continuation && !is_system)
+                .then(|| looks.get(&msg.user_id))
+                .flatten()
+                .map(crate::app::deadchannel::runner::ui::portrait_spans)
+        });
+        let text_width = match ctx.runner_looks {
+            Some(_) => width.saturating_sub(PORTRAIT_GUTTER).max(1),
+            None => width,
+        };
+        let mut wrapped = wrap_chat_entry_to_lines(
             &msg.body,
             &stamp,
             &prefix,
-            width,
+            text_width,
             author_style,
             author_tint,
             body_style,
@@ -1856,6 +1889,30 @@ fn ensure_chat_rows_cache(
             gild,
             translation,
         );
+        // Where the block's per-message treatments (the mention wash, the
+        // jump highlight) begin: the entry's first row, or the separator
+        // above it once the hood sits there.
+        let mut block_start = row_start;
+        if let Some([hood, eyes, coat]) = portrait {
+            // The blank separator above the block is dead space, so the
+            // hood sits there and the face ends level with the first body
+            // row: a one-line message needs no padded row under it. Only
+            // when the separator is the row directly above (no divider in
+            // between), and only when there is one: the first block in
+            // the list seats all three rows on the entry itself.
+            match separator_row.filter(|index| index + 1 == all_rows.len()) {
+                Some(index) => {
+                    seat_portrait_row(&mut all_rows[index], hood, text_width);
+                    attach_portrait(&mut wrapped.lines, vec![eyes, coat], text_width);
+                    // The hood row is the block's now: it takes the wash
+                    // and the highlight with the rest of the face. Its kind
+                    // stays `Blank`, so a click there still selects nothing.
+                    row_message[index] = Some(msg.id);
+                    block_start = index;
+                }
+                None => attach_portrait(&mut wrapped.lines, vec![hood, eyes, coat], text_width),
+            }
+        }
         let line_count = wrapped.lines.len();
         all_rows.extend(wrapped.lines);
 
@@ -1893,7 +1950,7 @@ fn ensure_chat_rows_cache(
             row_start
         };
         selected_ranges.insert(msg.id, (body_start, all_rows.len()));
-        highlighted_ranges.insert(msg.id, (row_start, all_rows.len()));
+        highlighted_ranges.insert(msg.id, (block_start, all_rows.len()));
 
         prev_user_id = Some(msg.user_id);
         prev_created = Some(msg.created);
@@ -1918,6 +1975,35 @@ fn ensure_chat_rows_cache(
     cache.selected_ranges = selected_ranges;
     cache.highlighted_ranges = highlighted_ranges;
     cache.header_segments = header_segments;
+}
+
+/// Cells the wire reserves on the right of every entry: the portrait plus
+/// one cell of air between it and the text.
+const PORTRAIT_GUTTER: usize = crate::app::deadchannel::runner::state::PORTRAIT_WIDTH + 1;
+
+/// Seat portrait rows in the gutter beside an entry's first rows, one span
+/// per row. An entry shorter than the rows it must carry grows blank body
+/// rows so the face is never cut.
+fn attach_portrait(lines: &mut Vec<Line<'static>>, rows: Vec<Span<'static>>, text_width: usize) {
+    while lines.len() < rows.len() {
+        lines.push(Line::from(""));
+    }
+    for (line, span) in lines.iter_mut().zip(rows) {
+        seat_portrait_row(line, span, text_width);
+    }
+}
+
+/// Right-align one portrait row to `text_width + PORTRAIT_GUTTER`. A row
+/// already wider than the text column keeps its text and gets no face (the
+/// header's stamp can run long on a narrow card).
+fn seat_portrait_row(line: &mut Line<'static>, span: Span<'static>, text_width: usize) {
+    let used = line.width();
+    if used > text_width {
+        return;
+    }
+    line.spans
+        .push(Span::raw(" ".repeat(text_width - used + 1)));
+    line.spans.push(span);
 }
 
 /// Output of `visible_chat_rows`: the painted screen lines and a parallel
@@ -2919,6 +3005,9 @@ pub struct ChatRenderInput<'a> {
     /// Resolved 24h username-effect styles per author (see
     /// `common/username_effect.rs`); fg painted over the bare name only.
     pub name_flair: &'a HashMap<Uuid, ResolvedName>,
+    /// Every runner's look (`app/deadchannel/runner`), for the portrait
+    /// gutter beside messages; consulted only when `room` is #deadchannel.
+    pub runner_looks: &'a HashMap<Uuid, crate::app::deadchannel::runner::state::Look>,
     /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
     /// `tick.rs`); painted as a presence badge after AFK.
     pub peer_pomodoros: &'a HashMap<Uuid, String>,
@@ -3188,6 +3277,9 @@ pub fn draw_embedded_room_chat(
             name_flicker: view.name_flicker,
             translations: view.translations,
             translation_hidden: view.translation_hidden,
+            // Embedded game chats are house tables and daily boards, never
+            // the wire.
+            runner_looks: None,
         },
     );
     let visible = visible_chat_rows(
@@ -4596,7 +4688,7 @@ fn stream_rail_label(stream: &crate::app::stream::registry::LiveStreamView) -> S
 /// Slugs of public topic rooms currently carrying a `room_bump` effect,
 /// sorted alphabetically. These are advertised as read-only text at the top
 /// of the rail (no slot, no selection, no jump key).
-fn bumped_join_room_slugs(
+pub(crate) fn bumped_join_room_slugs(
     active_room_effects: &HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
 ) -> Vec<String> {
     let mut slugs = active_room_effects
@@ -5050,6 +5142,8 @@ fn draw_selected_content(
                     name_flicker: view.name_flicker,
                     translations: view.translations,
                     translation_hidden: view.translation_hidden,
+                    runner_looks: super::state::room_shows_portraits(room)
+                        .then_some(view.runner_looks),
                 },
             );
             let visible = visible_chat_rows(

@@ -1,16 +1,34 @@
+//! The profile modal: one layout for every terminal, a single column that
+//! scrolls.
+//!
+//! The body is composed off-screen into a buffer as tall as the content,
+//! then the visible rows are blitted into the frame. That is what lets the
+//! aquarium (a live widget that paints cells) sit in the middle of a
+//! scrolling text column without a second layout for small screens: every
+//! section takes exactly the rows it needs, and nothing is ever cut.
+//!
+//! Top to bottom: late.fetch (the fact grid in the left half, the bonsai as
+//! the neofetch logo in the right half, the tree scaled to the grid's
+//! height), bio, showcases, badges (all of them, always), the aquarium, and
+//! the chips ledger. The same order on every screen; the only reflow is the
+//! hero stacking when the column is too narrow for two halves.
+
 use chrono::Utc;
 use late_core::models::chat_message_gild::{GildCounts, GildTier};
 use ratatui::{
     Frame,
-    layout::{Constraint, Flex, Layout, Margin, Rect},
+    buffer::Buffer,
+    layout::{Constraint, Flex, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{
+        Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Widget,
+    },
 };
 
 use crate::app::{
     bonsai::{state::stage_for, ui::render_tree_art_lines},
-    bonsai_v2::render::render_tree_lines,
+    bonsai_v2::render::render_preview_lines,
     chat::showcase::svc::ShowcaseFeedItem,
     common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
     hub::aquarium::{state::AquariumState, ui as aquarium_ui},
@@ -18,62 +36,74 @@ use crate::app::{
 };
 
 use super::{
-    badges,
-    state::{ProfileModalState, ProfileTab},
+    badges, ledger,
+    state::{ProfileModalState, ScrollExtent},
 };
 
-/// Big "dashboard" modal: every panel visible at once. Used when the terminal
-/// is large enough (fullscreen / external monitor); otherwise we fall back to
-/// the compact tabbed view, which fits small/windowed laptops.
-const DASH_WIDTH: u16 = 120;
-const DASH_HEIGHT: u16 = 44;
-/// Compact tabbed fallback for terminals too small for the dashboard.
-const TAB_WIDTH: u16 = 96;
-const TAB_HEIGHT: u16 = 34;
-/// Pinned late.fetch card: 2 border rows + 3 grid rows.
-const LATE_FETCH_BOX_HEIGHT: u16 = 5;
+/// The widest the modal gets; past this a text column reads badly.
+const MAX_WIDTH: u16 = 110;
+/// Below this the body cannot hold a row of the chips table.
+const MIN_WIDTH: u16 = 48;
+/// Border, blank, footer, border: the rows around the scrolling body.
+const CHROME_ROWS: u16 = 4;
+/// Left and right breathing room inside the border.
+const SIDE_MARGIN: u16 = 2;
+/// The hero is two equal halves when the body is at least this wide: the
+/// left half has to hold the chips row, the widest fact.
+const HERO_SIDE_BY_SIDE_MIN_WIDTH: u16 = 90;
+/// The hero is never shorter than this: a short fact grid must not squash
+/// the tree, which is the one thing on the card that is a picture.
+const HERO_MIN_HEIGHT: usize = 14;
+/// The reef band: the tallest creature plus the surface and floor rows.
+const AQUARIUM_HEIGHT: u16 = 11;
 
-pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
-    // Show the roomy dashboard when the terminal can hold it; fall back to the
-    // compact tabbed layout on small screens.
-    let dashboard = area.width >= DASH_WIDTH && area.height >= DASH_HEIGHT;
-    let (width, height) = if dashboard {
-        (DASH_WIDTH, DASH_HEIGHT)
-    } else {
-        (TAB_WIDTH, TAB_HEIGHT)
-    };
-    let popup = centered_rect(width, height, area);
-    state.set_popup_area(popup);
-
-    // Two stacked boxes with a blank row between them: the profile box (the
-    // dashboard, or the tabbed fallback) on top, and the always-visible
-    // late.fetch card below it. Key hints live on a free line under both.
-    let regions = Layout::vertical([
-        Constraint::Min(8),                        // profile box
-        Constraint::Length(1),                     // breathing gap between boxes
-        Constraint::Length(LATE_FETCH_BOX_HEIGHT), // late.fetch box
-        Constraint::Length(1),                     // footer hints
-    ])
-    .split(popup);
-
-    // Clear only the boxes and the hint line, never the gap row (regions[1]),
-    // so whatever is behind the modal shows through between the two boxes.
-    frame.render_widget(Clear, regions[0]);
-    frame.render_widget(Clear, regions[2]);
-    frame.render_widget(Clear, regions[3]);
-
-    if dashboard {
-        draw_dashboard(frame, regions[0], state);
-    } else {
-        draw_tabbed(frame, regions[0], state);
-    }
-    draw_late_fetch_box(frame, regions[2], state);
-    draw_footer(frame, regions[3], state, dashboard);
+/// One stretch of the body. Each knows its height, so the column can be
+/// measured before it is painted.
+enum Segment {
+    Text(Vec<Line<'static>>),
+    Hero {
+        art: Vec<Line<'static>>,
+        grid: Vec<Line<'static>>,
+        side_by_side: bool,
+    },
+    Aquarium,
 }
 
-/// Outer `profile · name` frame, shared by both layouts. Returns the inner
-/// content rect, or `None` when there is not enough room to draw anything.
-fn profile_frame(frame: &mut Frame, area: Rect, state: &ProfileModalState) -> Option<Rect> {
+impl Segment {
+    fn height(&self) -> u16 {
+        match self {
+            Segment::Text(lines) => lines.len() as u16,
+            Segment::Hero {
+                art,
+                grid,
+                side_by_side,
+            } => {
+                if *side_by_side {
+                    art.len().max(grid.len()) as u16
+                } else {
+                    (art.len() + 1 + grid.len()) as u16
+                }
+            }
+            Segment::Aquarium => AQUARIUM_HEIGHT,
+        }
+    }
+}
+
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+    let width = area.width.saturating_sub(4).clamp(MIN_WIDTH, MAX_WIDTH);
+    let body_width = width.saturating_sub(2 + SIDE_MARGIN * 2);
+
+    let (segments, chips_top) = build_segments(state, body_width);
+    let content_height: u16 = segments.iter().map(Segment::height).sum();
+
+    // As tall as the terminal allows, but no taller than the content needs:
+    // a short profile is a short card, not a tall box with a gap.
+    let max_height = area.height.saturating_sub(2).max(8);
+    let height = (content_height + CHROME_ROWS).min(max_height);
+    let popup = centered_rect(width, height, area);
+    state.set_popup_area(popup);
+    frame.render_widget(Clear, popup);
+
     let block = Block::default()
         .title(format!(" profile · {} ", header_name(state)))
         .title_style(
@@ -83,168 +113,249 @@ fn profile_frame(frame: &mut Frame, area: Rect, state: &ProfileModalState) -> Op
         )
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height < 6 || inner.width < 24 {
-        return None;
-    }
-    Some(inner)
-}
-
-/// The big layout: no sub-boxes, just labelled sections. The about (bio),
-/// showcases, earned awards, and badge-code legend live in the left
-/// column; bonsai sits on the right, and the aquarium gets the whole bottom
-/// band.
-fn draw_dashboard(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
-    let Some(inner) = profile_frame(frame, area, state) else {
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.height < 3 || inner.width < MIN_WIDTH - 2 {
         return;
-    };
+    }
 
     let rows = Layout::vertical([
-        Constraint::Length(1),  // breathing room below the title border
-        Constraint::Length(1),  // identity glance
-        Constraint::Length(1),  // breathing room
-        Constraint::Min(8),     // top pair: about | bonsai
-        Constraint::Length(12), // aquarium band (heading + reef, fits big fish)
-    ])
-    .split(inner);
-
-    draw_header(frame, rows[1], state);
-
-    let content = Margin {
-        horizontal: 2,
-        vertical: 0,
-    };
-
-    // Top pair — about and bonsai share the same height because they split the
-    // same band.
-    let top = Layout::horizontal([
-        Constraint::Min(40),    // about / bio (gets the slack — content needs room)
-        Constraint::Length(2),  // gutter
-        Constraint::Length(40), // bonsai
-    ])
-    .split(rows[3].inner(content));
-    let about = section(frame, top[0], "about");
-    draw_overview(frame, about, state);
-    let bonsai = section(frame, top[2], "bonsai");
-    draw_bonsai_panel(frame, bonsai, state, false);
-
-    let aquarium = section(frame, rows[4].inner(content), "aquarium");
-    draw_aquarium_tab(frame, aquarium, state);
-}
-
-/// Borderless section heading: a dim label trailed by a rule. Returns the
-/// content rect below the heading row.
-fn section(frame: &mut Frame, area: Rect, label: &str) -> Rect {
-    if area.height == 0 || area.width == 0 {
-        return area;
-    }
-    let used = label.chars().count() + 1;
-    let rule = (area.width as usize).saturating_sub(used);
-    let line = Line::from(vec![
-        Span::styled(
-            label.to_string(),
-            Style::default()
-                .fg(theme::AMBER_DIM())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" "),
-        Span::styled("─".repeat(rule), Style::default().fg(theme::BORDER_DIM())),
-    ]);
-    frame.render_widget(Paragraph::new(line), Rect { height: 1, ..area });
-    Rect {
-        y: area.y + 1,
-        height: area.height - 1,
-        ..area
-    }
-}
-
-/// The compact fallback: glance, a tab strip, and one tab body at a time.
-fn draw_tabbed(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
-    let Some(inner) = profile_frame(frame, area, state) else {
-        return;
-    };
-
-    let layout = Layout::vertical([
         Constraint::Length(1), // breathing room below the title border
-        Constraint::Length(1), // identity glance
-        Constraint::Length(1), // breathing room
-        Constraint::Length(1), // tabs
-        Constraint::Length(1), // breathing room
-        Constraint::Min(3),    // body
+        Constraint::Min(1),    // the scrolling body
+        Constraint::Length(1), // footer hints
     ])
     .split(inner);
+    let viewport = Rect {
+        x: rows[1].x + SIDE_MARGIN,
+        width: body_width,
+        ..rows[1]
+    };
 
-    draw_header(frame, layout[1], state);
-    draw_tabs(frame, layout[3], state);
-
-    let body = layout[5].inner(Margin {
-        horizontal: 2,
-        vertical: 0,
+    state.set_scroll_extent(ScrollExtent {
+        content_height,
+        viewport_height: viewport.height,
+        chips_top,
     });
-    match state.tab() {
-        ProfileTab::Overview => draw_overview(frame, body, state),
-        ProfileTab::Bonsai => draw_bonsai_tab(frame, body, state),
-        ProfileTab::Aquarium => draw_aquarium_tab(frame, body, state),
+    let offset = state.scroll_offset();
+
+    let body = compose(&segments, body_width, content_height, state);
+    blit(frame.buffer_mut(), &body, viewport, offset);
+
+    if content_height > viewport.height {
+        let mut scrollbar_state = ScrollbarState::new(content_height as usize)
+            .viewport_content_length(viewport.height as usize)
+            .position(offset as usize);
+        let track = Rect {
+            x: inner.x + inner.width - 1,
+            ..rows[1]
+        };
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_style(Style::default().fg(theme::BORDER_DIM()))
+                .thumb_style(Style::default().fg(theme::AMBER_DIM())),
+            track,
+            &mut scrollbar_state,
+        );
     }
+
+    draw_footer(frame, rows[2], content_height > viewport.height);
 }
 
-fn draw_tabs(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
-    let selected = state.tab();
-    let active = Style::default()
-        .fg(theme::AMBER_GLOW())
-        .bg(theme::BG_HIGHLIGHT())
-        .add_modifier(Modifier::BOLD);
-    let idle = Style::default().fg(theme::TEXT_DIM());
-
-    let mut spans = vec![Span::raw("  ")];
-    for tab in ProfileTab::ALL {
-        let style = if tab == selected { active } else { idle };
-        spans.push(Span::styled(format!(" {} ", tab.title()), style));
-        spans.push(Span::raw(" "));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
-/// The late.fetch card: its own framed box, holding only the neofetch-style
-/// system grid. Kept visible under every tab so it reads as a fixed identity
-/// footer rather than something you scroll to.
-fn draw_late_fetch_box(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
-    let block = Block::default()
-        .title(" late.fetch ")
-        .title_style(
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        )
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height == 0 || inner.width < 12 {
-        return;
-    }
-
-    let body = inner.inner(Margin {
-        horizontal: 2,
-        vertical: 0,
-    });
+/// Every section in order, plus the body row the chips section starts on.
+fn build_segments(state: &ProfileModalState, width: u16) -> (Vec<Segment>, Option<u16>) {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let text = Style::default().fg(theme::TEXT());
+    let width_usize = width as usize;
 
     let Some(profile) = state.profile() else {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
+        return (
+            vec![Segment::Text(vec![Line::from(Span::styled(
                 "loading…",
-                Style::default().fg(theme::TEXT_DIM()),
-            ))),
-            body,
+                dim,
+            ))])],
+            None,
         );
-        return;
     };
 
-    let lines = late_fetch_lines(profile, body.width as usize);
-    frame.render_widget(Paragraph::new(lines), body);
+    let mut segments = Vec::new();
+
+    // ── late.fetch: the grid as the info column, the bonsai as the logo ──
+    // The tree is fitted to the grid's height, so the hero is exactly as
+    // tall as the facts and never a column of air beside them.
+    let side_by_side = width >= HERO_SIDE_BY_SIDE_MIN_WIDTH;
+    let grid = late_fetch_lines(state, profile);
+    let art_width = if side_by_side { width / 2 } else { width };
+    let art = bonsai_block(state, art_width as usize, grid.len().max(HERO_MIN_HEIGHT));
+    let mut heading = section_lines("late.fetch", width_usize);
+    heading.remove(0); // the row under the border already breathes
+    segments.push(Segment::Text(heading));
+    segments.push(Segment::Hero {
+        art,
+        grid,
+        side_by_side,
+    });
+
+    // ── bio ──
+    let mut lines = section_lines("bio", width_usize);
+    if profile.bio.trim().is_empty() {
+        lines.push(Line::from(Span::styled("Not set", dim)));
+    } else {
+        lines.extend(render_body_to_lines(
+            &profile.bio,
+            width_usize,
+            Span::raw(""),
+            text,
+        ));
+    }
+    segments.push(Segment::Text(lines));
+
+    // ── showcases ──
+    let showcases = state.showcases_for_viewed();
+    if !showcases.is_empty() {
+        let mut lines = section_lines(&format!("showcases ({})", showcases.len()), width_usize);
+        for (index, item) in showcases.iter().enumerate() {
+            if index > 0 {
+                lines.push(Line::from(""));
+            }
+            lines.extend(render_body_to_lines(
+                &showcase_markdown(item),
+                width_usize,
+                Span::raw(""),
+                text,
+            ));
+        }
+        segments.push(Segment::Text(lines));
+    }
+
+    // ── badges: every one, wrapped, never folded ──
+    let badge_lines = badges::badge_lines(state.profile_awards(), width_usize);
+    if !badge_lines.is_empty() {
+        let mut lines = section_lines("badges", width_usize);
+        lines.extend(badge_lines);
+        segments.push(Segment::Text(lines));
+    }
+
+    // ── aquarium ──
+    if !state.aquarium_fish().is_empty() {
+        segments.push(Segment::Text(section_lines("aquarium", width_usize)));
+        segments.push(Segment::Aquarium);
+    }
+
+    // ── chips ──
+    let chips_top = segments.iter().map(Segment::height).sum::<u16>();
+    let mut lines = section_lines("chips", width_usize);
+    lines.push(ledger::summary_line(
+        state.chip_balance(),
+        state.chips_month(),
+    ));
+    lines.push(ledger::off_board_note());
+    lines.push(Line::from(""));
+    if state.chip_ledger().is_empty() {
+        lines.push(Line::from(Span::styled("no chips moved yet", dim)));
+    }
+    for row in state.chip_ledger() {
+        lines.push(ledger::row_line(row, width_usize));
+    }
+    segments.push(Segment::Text(lines));
+
+    (segments, Some(chips_top))
+}
+
+/// Paint every segment into a buffer exactly as tall as the content.
+fn compose(segments: &[Segment], width: u16, height: u16, state: &ProfileModalState) -> Buffer {
+    let mut buf = Buffer::empty(Rect::new(0, 0, width, height.max(1)));
+    let mut y = 0u16;
+    for segment in segments {
+        let segment_height = segment.height();
+        let area = Rect::new(0, y, width, segment_height);
+        match segment {
+            Segment::Text(lines) => {
+                Paragraph::new(lines.clone()).render(area, &mut buf);
+            }
+            Segment::Hero {
+                art,
+                grid,
+                side_by_side,
+            } => {
+                if *side_by_side {
+                    let half = width / 2;
+                    let grid_area = Rect {
+                        width: half,
+                        ..area
+                    };
+                    let art_area = Rect {
+                        x: half,
+                        width: width - half,
+                        ..area
+                    };
+                    Paragraph::new(art.clone()).render(art_area, &mut buf);
+                    Paragraph::new(grid.clone()).render(grid_area, &mut buf);
+                } else {
+                    let art_area = Rect {
+                        height: art.len() as u16,
+                        ..area
+                    };
+                    let grid_area = Rect {
+                        y: area.y + art.len() as u16 + 1,
+                        height: grid.len() as u16,
+                        ..area
+                    };
+                    Paragraph::new(art.clone()).render(art_area, &mut buf);
+                    Paragraph::new(grid.clone()).render(grid_area, &mut buf);
+                }
+            }
+            Segment::Aquarium => draw_aquarium(&mut buf, area, state),
+        }
+        y = y.saturating_add(segment_height);
+    }
+    buf
+}
+
+/// Copy the rows `[offset, offset + viewport.height)` of `body` into the
+/// frame at `viewport`.
+fn blit(frame_buf: &mut Buffer, body: &Buffer, viewport: Rect, offset: u16) {
+    for row in 0..viewport.height {
+        let src_y = offset.saturating_add(row);
+        for x in 0..viewport.width {
+            let Some(src) = body.cell((x, src_y)) else {
+                continue;
+            };
+            if let Some(dst) = frame_buf.cell_mut((viewport.x + x, viewport.y + row)) {
+                *dst = src.clone();
+            }
+        }
+    }
+}
+
+/// The reef paints into its own fixed-size buffer, keyed on the band's
+/// size alone, so scrolling never rebuilds it; the band is then copied into
+/// the body at whatever row it landed on.
+fn draw_aquarium(body: &mut Buffer, area: Rect, state: &ProfileModalState) {
+    let band = Rect::new(0, 0, area.width, area.height);
+    let cell = state.aquarium_cell();
+    let mut slot = cell.borrow_mut();
+    if slot.is_none() || state.aquarium_area().get() != band {
+        state.aquarium_area().set(band);
+        *slot = AquariumState::default_for_area(band)
+            .ok()
+            .map(|mut aquarium| {
+                aquarium.set_active_creatures(state.aquarium_fish());
+                aquarium
+            });
+    }
+
+    let mut reef = Buffer::empty(band);
+    match slot.as_ref() {
+        Some(aquarium) => aquarium_ui::draw_into(&mut reef, band, aquarium),
+        None => Paragraph::new(Line::from(Span::styled(
+            "aquarium unavailable",
+            Style::default().fg(theme::TEXT_DIM()),
+        )))
+        .render(band, &mut reef),
+    }
+    blit(body, &reef, area, 0);
 }
 
 fn header_name(state: &ProfileModalState) -> String {
@@ -261,249 +372,55 @@ fn header_name(state: &ProfileModalState) -> String {
     }
 }
 
-fn draw_header(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
-    let value = Style::default().fg(theme::TEXT_BRIGHT());
-    let dim = Style::default().fg(theme::TEXT_DIM());
-
-    let Some(profile) = state.profile() else {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled("  loading…", dim))),
-            area,
-        );
-        return;
-    };
-
-    let mut spans = vec![
-        Span::raw("  "),
-        Span::styled(country_label(profile.country.as_deref()), value),
-    ];
-    if let Some(time) = timezone_current_time(Utc::now(), profile.timezone.as_deref()) {
-        spans.push(sep());
-        spans.push(Span::styled(format!("{time} local"), value));
-    }
-    if let Some(balance) = state.chip_balance() {
-        spans.push(sep());
-        spans.push(Span::styled(format!("{balance} chips"), value));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
-fn draw_footer(frame: &mut Frame, area: Rect, state: &ProfileModalState, dashboard: bool) {
+fn draw_footer(frame: &mut Frame, area: Rect, scrollable: bool) {
     let key = Style::default().fg(theme::AMBER_DIM());
     let dim = Style::default().fg(theme::TEXT_DIM());
 
     let mut spans = vec![Span::raw("  ")];
-    if dashboard {
+    if scrollable {
         spans.push(Span::styled("↑↓ j/k", key));
-        spans.push(Span::styled(" scroll bio  ", dim));
-    } else {
-        spans.push(Span::styled("Tab/S+Tab", key));
-        spans.push(Span::styled(" switch tabs  ", dim));
-        if matches!(state.tab(), ProfileTab::Overview) {
-            spans.push(Span::styled("↑↓ j/k", key));
-            spans.push(Span::styled(" scroll  ", dim));
-        }
+        spans.push(Span::styled(" scroll  ", dim));
+        spans.push(Span::styled("g/G", key));
+        spans.push(Span::styled(" top/bottom  ", dim));
     }
     spans.push(Span::styled("Esc/q", key));
     spans.push(Span::styled(" close", dim));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_overview(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
-    if state.loading() {
-        render_centered_dim(frame, area, "loading…");
-        return;
-    }
-    let lines = build_overview_lines(state, area.width as usize);
-    frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((state.scroll_offset(), 0)),
-        area,
-    );
-}
-
-fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'static>> {
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    let text = Style::default().fg(theme::TEXT());
-
-    let Some(profile) = state.profile() else {
-        return Vec::new();
-    };
-
-    let mut lines = vec![section_heading("Bio")];
-    if profile.bio.trim().is_empty() {
-        lines.push(Line::from(Span::styled("Not set", dim)));
-    } else {
-        lines.extend(render_body_to_lines(
-            &profile.bio,
-            width,
-            Span::raw(""),
-            text,
-        ));
-    }
-
-    let gild_lines = gild_lines(state.gild_counts());
-    if !gild_lines.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(section_heading("Gilds received"));
-        lines.extend(gild_lines);
-    }
-
-    let showcases = state.showcases_for_viewed();
-    if !showcases.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(section_heading(&format!("Showcases ({})", showcases.len())));
-        for item in showcases {
-            lines.push(Line::from(""));
-            lines.extend(render_body_to_lines(
-                &showcase_markdown(item),
-                width,
-                Span::raw(""),
-                text,
-            ));
-        }
-    }
-
-    let badge_lines = badges::badge_lines(state.profile_awards());
-    if !badge_lines.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(section_heading("Badges"));
-        lines.extend(badge_lines);
-    }
-
-    lines
-}
-
-/// Gilds received, one row per tier that has any, in the tier's own color.
-/// A profile with no gilds shows no section at all: an empty "Gilds received"
-/// heading reads as a scoreboard nobody asked to be on.
-fn gild_lines(counts: GildCounts) -> Vec<Line<'static>> {
-    GildTier::ALL
-        .iter()
-        .filter(|tier| counts.get(**tier) > 0)
-        .map(|tier| {
-            let color = match tier {
-                GildTier::Bronze => theme::BADGE_BRONZE(),
-                GildTier::Silver => theme::BADGE_SILVER(),
-                GildTier::Gold => theme::BADGE_GOLD(),
-            };
-            Line::from(vec![
-                Span::styled(
-                    format!("{:<4}", tier.marker()),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!("{:<8}", tier.label()),
-                    Style::default().fg(theme::TEXT()),
-                ),
-                Span::styled(
-                    format!("x{}", counts.get(*tier)),
-                    Style::default().fg(theme::TEXT_DIM()),
-                ),
-            ])
-        })
-        .collect()
-}
-
-fn late_fetch_lines(
-    profile: &late_core::models::profile::Profile,
-    width: usize,
-) -> Vec<Line<'static>> {
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    let label = Style::default().fg(theme::AMBER_DIM());
-    let value = Style::default().fg(theme::TEXT());
-
-    let theme_id = profile.theme_id.as_deref().unwrap_or(theme::DEFAULT_ID);
-    let created = profile
-        .created_at
-        .as_ref()
-        .map(format_created_at)
-        .unwrap_or_else(|| "unknown".to_string());
-    let ide = profile.ide.clone().unwrap_or_else(|| "not set".to_string());
-    let terminal = profile
-        .terminal
-        .clone()
-        .unwrap_or_else(|| "not set".to_string());
-    let os = profile.os.clone().unwrap_or_else(|| "not set".to_string());
-    let theme_label = theme::label_for_id(theme_id).to_string();
-    let langs = if profile.langs.is_empty() {
-        "not set".to_string()
-    } else {
-        profile.langs.join(", ")
-    };
-
-    let col_w = (width / 2).max(12);
+/// A section heading: a dim label trailed by a rule, with a blank row above
+/// it so sections breathe.
+fn section_lines(label: &str, width: usize) -> Vec<Line<'static>> {
+    let used = label.chars().count() + 1;
+    let rule = width.saturating_sub(used);
     vec![
-        Line::from(format_two_cells(
-            ("created", &created),
-            ("theme", &theme_label),
-            col_w,
-            label,
-            value,
-            dim,
-        )),
-        Line::from(format_two_cells(
-            ("ide", &ide),
-            ("terminal", &terminal),
-            col_w,
-            label,
-            value,
-            dim,
-        )),
-        Line::from(format_two_cells(
-            ("os", &os),
-            ("langs", &langs),
-            col_w,
-            label,
-            value,
-            dim,
-        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                label.to_string(),
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled("─".repeat(rule), Style::default().fg(theme::BORDER_DIM())),
+        ]),
     ]
 }
 
-fn draw_bonsai_tab(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
-    draw_bonsai_panel(frame, area, state, true);
-}
+/// The bonsai as exactly `height` rows, the pot on the last one. A Dynamic
+/// Bonsai is scaled down to fit (never up); the classic sprite is cropped
+/// from the crown so the pot and trunk stay.
+fn bonsai_block(state: &ProfileModalState, width: usize, height: usize) -> Vec<Line<'static>> {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let placeholder = |text: &str| vec![Line::from(Span::styled(text.to_string(), dim)).centered()];
 
-/// Render the bonsai. With `show_caption`, the bottom row carries the age/vigor
-/// line (tabbed view); without it the pot anchors to the bottom edge and the
-/// whole area is tree (dashboard) — one more row to grow into.
-fn draw_bonsai_panel(frame: &mut Frame, area: Rect, state: &ProfileModalState, show_caption: bool) {
-    let (tree_area, caption_area) = if show_caption {
-        let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).split(area);
-        (rows[0], Some(rows[1]))
-    } else {
-        (area, None)
-    };
-
-    if state.dynamic_bonsai_selected() {
-        if let Some(bonsai) = state.bonsai_v2() {
-            let lines = render_tree_lines(
-                bonsai,
-                tree_area.width as usize,
-                tree_area.height as usize,
-                false,
-            );
-            bottom_align(frame, tree_area, lines);
-            if let Some(caption_area) = caption_area {
-                render_caption(
-                    frame,
-                    caption_area,
-                    &format!(
-                        "Dynamic Bonsai · Day {} · vigor {} · stress {}",
-                        bonsai.age_days, bonsai.vigor, bonsai.water_stress
-                    ),
-                    bonsai.is_alive,
-                );
-            }
-            return;
+    let mut tree = if state.dynamic_bonsai_selected() {
+        match state.bonsai_v2() {
+            Some(bonsai) => render_preview_lines(bonsai, width, height),
+            None => placeholder("Dynamic Bonsai not planted yet"),
         }
-        render_centered_dim(frame, area, "Dynamic Bonsai not planted yet");
-        return;
-    }
-
-    if let Some(tree) = state.bonsai() {
+    } else if let Some(tree) = state.bonsai() {
         let stage = stage_for(tree.is_alive, tree.growth_points);
         let age_days = (Utc::now().date_naive() - tree.created.date_naive())
             .num_days()
@@ -514,117 +431,164 @@ fn draw_bonsai_panel(frame: &mut Frame, area: Rect, state: &ProfileModalState, s
                 .map(|last| (Utc::now().date_naive() - last).num_days() >= 2)
                 .unwrap_or(age_days >= 2);
         // Wall tick 0: the profile preview stays still (sin(0) sway).
-        let lines =
-            render_tree_art_lines(stage, tree.seed, wilting, tree_area.width as usize, 0, None);
-        bottom_align(frame, tree_area, lines);
-        if let Some(caption_area) = caption_area {
-            render_caption(
-                frame,
-                caption_area,
-                &format!("{} · {age_days}d", stage.label()),
-                tree.is_alive,
-            );
-        }
-        return;
-    }
-
-    render_centered_dim(frame, area, "no bonsai yet");
-}
-
-fn draw_aquarium_tab(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
-    if state.aquarium_fish().is_empty() {
-        render_centered_dim(frame, area, "No aquarium to show here yet");
-        return;
-    }
-
-    let cell = state.aquarium_cell();
-    let mut slot = cell.borrow_mut();
-    if slot.is_none() || state.aquarium_area().get() != area {
-        state.aquarium_area().set(area);
-        *slot = AquariumState::default_for_area(area)
-            .ok()
-            .map(|mut aquarium| {
-                aquarium.set_active_creatures(state.aquarium_fish());
-                aquarium
-            });
-    }
-
-    if let Some(aquarium) = slot.as_mut() {
-        aquarium_ui::draw(frame, area, aquarium);
+        render_tree_art_lines(stage, tree.seed, wilting, width, 0, None)
     } else {
-        render_centered_dim(frame, area, "aquarium unavailable");
+        placeholder("no bonsai yet")
+    };
+
+    if tree.len() > height {
+        tree.drain(0..tree.len() - height);
     }
+    bottom_pad(tree, height)
 }
 
-fn bottom_align(frame: &mut Frame, area: Rect, mut lines: Vec<Line<'static>>) {
-    let height = area.height as usize;
-    // When the art is taller than the space (big trees in a small panel), drop
-    // the crown rows from the top so the pot and trunk base stay anchored.
-    if lines.len() > height {
-        lines.drain(0..lines.len() - height);
-    }
+/// Pad `lines` with blank rows on top until they are `height` tall.
+fn bottom_pad(mut lines: Vec<Line<'static>>, height: usize) -> Vec<Line<'static>> {
     let top_pad = height.saturating_sub(lines.len());
     let mut out = vec![Line::from(""); top_pad];
     out.append(&mut lines);
-    frame.render_widget(Paragraph::new(out), area);
+    out
 }
 
-fn render_caption(frame: &mut Frame, area: Rect, text: &str, alive: bool) {
-    let style = if alive {
-        Style::default().fg(theme::TEXT_DIM())
-    } else {
-        Style::default().fg(theme::TEXT_FAINT())
+/// The neofetch column: one `key   value` row per fact (the name is already
+/// the modal's title). Unset values are dim rather than absent, so every
+/// profile has the same shape.
+fn late_fetch_lines(
+    state: &ProfileModalState,
+    profile: &late_core::models::profile::Profile,
+) -> Vec<Line<'static>> {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let key = Style::default().fg(theme::AMBER_DIM());
+    let value = Style::default().fg(theme::TEXT());
+    let bright = Style::default().fg(theme::TEXT_BRIGHT());
+
+    let mut lines = Vec::new();
+
+    let row = |label: &str, spans: Vec<Span<'static>>| {
+        let mut out = vec![Span::styled(format!("{label:<10}"), key)];
+        out.extend(spans);
+        Line::from(out)
     };
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(text.to_string(), style)).centered()),
-        area,
-    );
+    let set_or = |text: Option<String>| match text {
+        Some(text) if !text.trim().is_empty() => Span::styled(text, value),
+        _ => Span::styled("not set".to_string(), dim),
+    };
+
+    lines.push(row(
+        "country",
+        vec![Span::styled(
+            country_label(profile.country.as_deref()),
+            value,
+        )],
+    ));
+    if let Some(time) = timezone_current_time(Utc::now(), profile.timezone.as_deref()) {
+        lines.push(row("local", vec![Span::styled(time, value)]));
+    }
+    // Balance only; the month's earned and net figures head the chips
+    // section below.
+    let chips = match state.chip_balance() {
+        Some(balance) => Span::styled(ledger::thousands(balance), bright),
+        None => Span::styled("…".to_string(), dim),
+    };
+    lines.push(row("chips", vec![chips]));
+
+    let gilds = gild_spans(state.gild_counts());
+    if !gilds.is_empty() {
+        lines.push(row("gilds", gilds));
+    }
+    let gallery = state.gallery_counts();
+    if gallery.pieces > 0 {
+        lines.push(row(
+            "gallery",
+            vec![
+                Span::styled(
+                    format!(
+                        "{} {}",
+                        gallery.pieces,
+                        if gallery.pieces == 1 {
+                            "piece"
+                        } else {
+                            "pieces"
+                        }
+                    ),
+                    value,
+                ),
+                Span::styled(format!(" · {} applause", gallery.applause), dim),
+            ],
+        ));
+    }
+
+    if !state.profile_awards().is_empty() {
+        lines.push(row(
+            "badges",
+            vec![Span::styled(
+                state.profile_awards().len().to_string(),
+                value,
+            )],
+        ));
+    }
+    lines.push(row(
+        "created",
+        vec![set_or(
+            profile
+                .created_at
+                .as_ref()
+                .map(|at| at.format("%Y-%m-%d").to_string()),
+        )],
+    ));
+    if let Some(created) = profile.created_at.as_ref() {
+        let days = (Utc::now() - *created).num_days().max(0);
+        let member = match days {
+            0 => "since today".to_string(),
+            1 => "1 day".to_string(),
+            2..=59 => format!("{days} days"),
+            _ => format!("{} months", days / 30),
+        };
+        lines.push(row("member", vec![Span::styled(member, value)]));
+    }
+    lines.push(row("ide", vec![set_or(profile.ide.clone())]));
+    lines.push(row("os", vec![set_or(profile.os.clone())]));
+    lines.push(row("terminal", vec![set_or(profile.terminal.clone())]));
+    let theme_id = profile.theme_id.as_deref().unwrap_or(theme::DEFAULT_ID);
+    lines.push(row(
+        "theme",
+        vec![Span::styled(
+            theme::label_for_id(theme_id).to_string(),
+            value,
+        )],
+    ));
+    lines.push(row(
+        "langs",
+        vec![set_or(
+            (!profile.langs.is_empty()).then(|| profile.langs.join(", ")),
+        )],
+    ));
+    lines
 }
 
-fn render_centered_dim(frame: &mut Frame, area: Rect, text: &str) {
-    let top = (area.height as usize).saturating_sub(1) / 2;
-    let mut lines = vec![Line::from(""); top];
-    lines.push(
-        Line::from(Span::styled(
-            text.to_string(),
-            Style::default().fg(theme::TEXT_DIM()),
-        ))
-        .centered(),
-    );
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
-fn sep() -> Span<'static> {
-    Span::styled("   ·   ", Style::default().fg(theme::BORDER_DIM()))
-}
-
-fn format_two_cells(
-    a: (&str, &str),
-    b: (&str, &str),
-    col_w: usize,
-    label_style: Style,
-    value_style: Style,
-    sep_style: Style,
-) -> Vec<Span<'static>> {
+/// Gilds received as `● x2  ○ x5`, each tier in its own colour. Empty when
+/// there are none: an empty scoreboard reads as one nobody asked to be on.
+fn gild_spans(counts: GildCounts) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
-    for (i, (label, value)) in [a, b].into_iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled("│ ", sep_style));
+    for tier in GildTier::ALL.iter().filter(|tier| counts.get(**tier) > 0) {
+        let color = match tier {
+            GildTier::Bronze => theme::BADGE_BRONZE(),
+            GildTier::Silver => theme::BADGE_SILVER(),
+            GildTier::Gold => theme::BADGE_GOLD(),
+        };
+        if !spans.is_empty() {
+            spans.push(Span::raw("  "));
         }
-        let label_padded = format!("{label:<9} ");
-        let used = label_padded.chars().count() + value.chars().count();
-        let pad = col_w.saturating_sub(used + if i == 0 { 2 } else { 0 });
-        spans.push(Span::styled(label_padded, label_style));
-        spans.push(Span::styled(value.to_string(), value_style));
-        if i == 0 {
-            spans.push(Span::raw(" ".repeat(pad)));
-        }
+        spans.push(Span::styled(
+            tier.marker().to_string(),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            format!(" {} x{}", tier.label(), counts.get(*tier)),
+            Style::default().fg(theme::TEXT()),
+        ));
     }
     spans
-}
-
-fn format_created_at(created_at: &chrono::DateTime<Utc>) -> String {
-    created_at.format("%Y-%m-%d").to_string()
 }
 
 fn showcase_markdown(item: &ShowcaseFeedItem) -> String {
@@ -654,18 +618,6 @@ fn showcase_markdown(item: &ShowcaseFeedItem) -> String {
         }
     }
     out
-}
-
-fn section_heading(title: &str) -> Line<'static> {
-    let dim = Style::default().fg(theme::BORDER());
-    let accent = Style::default()
-        .fg(theme::AMBER())
-        .add_modifier(Modifier::BOLD);
-    Line::from(vec![
-        Span::styled("── ", dim),
-        Span::styled(title.to_string(), accent),
-        Span::styled(" ──", dim),
-    ])
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {

@@ -301,10 +301,30 @@ fn name_flicker_rolls_claims_and_forces() {
         flicker.note_own_message(message, 100, true, true),
         NameRoll::Forced
     );
-    assert_eq!(flicker.corruption(100).map(|(id, _)| id), Some(message));
+    let (hit_id, first_seed) = flicker.corruption(100).expect("the hit shows");
+    assert_eq!(hit_id, message);
+    // One hit is two waves: the same message, a different corruption
+    // seed from the wave edge on, and a repaint edge at that boundary
+    // and at the heal, nowhere else.
+    assert!(!flicker.tick(100 + NAME_WAVE_TICKS - 1));
+    assert_eq!(
+        flicker.corruption(100 + NAME_WAVE_TICKS - 1),
+        Some((message, first_seed))
+    );
+    assert!(flicker.tick(100 + NAME_WAVE_TICKS));
+    let (_, second_seed) = flicker
+        .corruption(100 + NAME_WAVE_TICKS)
+        .expect("the second wave shows");
+    assert_ne!(second_seed, first_seed);
+    assert!(!flicker.tick(100 + NAME_WAVE_TICKS + 1));
     assert!(!flicker.tick(100 + NAME_HOLD_TICKS - 1));
+    assert_eq!(
+        flicker.corruption(100 + NAME_HOLD_TICKS - 1),
+        Some((message, second_seed))
+    );
     assert!(flicker.tick(100 + NAME_HOLD_TICKS));
     assert_eq!(flicker.corruption(100 + NAME_HOLD_TICKS), None);
+    assert!(!flicker.tick(100 + NAME_HOLD_TICKS + 1));
     assert_eq!(flicker.total_hits(), NAME_TOTAL_CAP + 1);
 
     // The kill switch swallows even a forced hit.
@@ -391,26 +411,40 @@ fn the_gate_needs_all_three_legs_and_screens_only_when_useful() {
     );
     assert!(gate.needs_bio_screen());
     assert!(!gate.passes());
+    assert_eq!(gate.verdict(), GateVerdict::BioUnscreened);
 
     // The free legs come before the paid one: short of the hours, or of
-    // the touched settings, the bio is not screened at all.
+    // the touched settings, the bio is not screened at all, and the
+    // verdict names the free leg, not the bio.
     let gate = FirstContactGate::evaluate(now, tenured - 1, &settings(&bio, json!(null)), true);
     assert_eq!(gate.bio, BioStanding::Unscreened);
     assert!(!gate.needs_bio_screen());
+    assert_eq!(gate.verdict(), GateVerdict::TooFewHours);
     let one_setting_unscreened = json!({ "bio": bio, "theme_id": "night" });
     let gate = FirstContactGate::evaluate(now, tenured, &one_setting_unscreened, true);
     assert_eq!(gate.touched_settings, 1);
     assert!(!gate.needs_bio_screen());
+    assert_eq!(gate.verdict(), GateVerdict::TooFewSettings);
 
     // AI off and nothing on record: fail closed, and no screen to claim.
     let gate = FirstContactGate::evaluate(now, tenured, &settings(&bio, json!(null)), false);
     assert_eq!(gate.bio, BioStanding::AiOff);
     assert!(!gate.needs_bio_screen());
+    assert_eq!(gate.verdict(), GateVerdict::BioAiOff);
 
     // Short bios never spend a screen.
     let gate = FirstContactGate::evaluate(now, tenured, &settings("hi", json!(null)), true);
     assert_eq!(gate.bio, BioStanding::TooShort);
     assert!(!gate.needs_bio_screen());
+    assert_eq!(gate.verdict(), GateVerdict::BioTooShort);
+
+    // A screen in flight, and a failed one, each report as themselves.
+    let pending = settings(&bio, screen(&hash, "pending", now));
+    let gate = FirstContactGate::evaluate(now, tenured, &pending, true);
+    assert_eq!(gate.verdict(), GateVerdict::BioPending);
+    let failed = settings(&bio, screen(&hash, "failed", now));
+    let gate = FirstContactGate::evaluate(now, tenured, &failed, true);
+    assert_eq!(gate.verdict(), GateVerdict::BioFailed);
 
     // A pass on the current text opens the leg; a pass is final, even
     // years old and even with AI off now.
@@ -421,6 +455,7 @@ fn the_gate_needs_all_three_legs_and_screens_only_when_useful() {
     let gate = FirstContactGate::evaluate(now, tenured, &passed, false);
     assert_eq!(gate.bio, BioStanding::Passed);
     assert!(gate.passes());
+    assert_eq!(gate.verdict(), GateVerdict::Passed);
     // ...but only with the other two legs.
     assert!(
         // One millisecond short of the last hour is short.
@@ -505,4 +540,36 @@ fn haunt_commands_parse_the_fuse_words() {
     assert_eq!(parse_haunt_command("/haunt live"), Some(None));
     assert_eq!(parse_haunt_command("/haunt on off"), Some(None));
     assert_eq!(parse_haunt_command("/haunted"), None);
+}
+
+#[test]
+fn a_witness_paints_the_same_corruption_the_haunted_does() {
+    // The seed rides the wire, so the room's screens swap the characters
+    // the sender's screen swaps, in the same two waves, even though every
+    // one of them started painting at a different tick.
+    let message = Uuid::now_v7();
+    let mut flicker = NameFlicker::new(9, 0);
+    flicker.force_next();
+    assert_eq!(
+        flicker.note_own_message(message, 100, true, true),
+        NameRoll::Forced
+    );
+    let (_, seed) = flicker.live_hit().expect("the hit is showing");
+
+    // Nine ticks later than the sender: another replica, another eye.
+    let mut witness = Some(ActiveHit::new(message, 109, seed));
+    for wave in 0..NAME_WAVES {
+        let offset = wave * NAME_WAVE_TICKS;
+        assert_eq!(
+            witness
+                .as_ref()
+                .and_then(|hit| hit.corruption(109 + offset)),
+            flicker
+                .corruption(100 + offset)
+                .map(|(_, seed)| (message, seed)),
+            "wave {wave} must corrupt identically on both screens"
+        );
+    }
+    assert!(ActiveHit::tick(&mut witness, 109 + NAME_HOLD_TICKS));
+    assert_eq!(witness, None);
 }

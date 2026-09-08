@@ -22,11 +22,7 @@ use late_core::{
     },
 };
 use rand_core::{OsRng, RngCore};
-use ratatui::{
-    layout::Rect,
-    style::{Modifier, Style},
-    text::{Line, Span},
-};
+use ratatui::layout::Rect;
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
 use uuid::Uuid;
@@ -38,8 +34,7 @@ use crate::app::ai::summary::{
     SummaryBasis, SummaryEvent, SummaryOutcome, SummaryService, SummaryWindow,
 };
 use crate::app::ai::translate::{TranslationEvent, TranslationOutcome, TranslationService};
-use crate::app::common::overlay::Overlay;
-use crate::app::common::theme;
+use crate::app::common::overlay::{Overlay, OverlayInk, OverlayLine, OverlaySpan};
 
 use crate::app::common::{composer, mentions, primitives::Banner};
 use crate::app::help_modal::data::HelpTopic;
@@ -61,8 +56,8 @@ use super::{
     notifications::svc::NotificationService,
     showcase,
     svc::{
-        ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, GildRefusal, ReportKind,
-        RoomMemberListItem,
+        ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, GRANT_MAX_AMOUNT, GildRefusal,
+        ProfileSection, ReportKind, RoomMemberListItem,
     },
     ui_text::{NewsPayload, parse_news_payload, parse_report_payload},
     work,
@@ -665,6 +660,16 @@ pub(crate) fn is_deadchannel_room(room: &ChatRoom) -> bool {
     room.kind == late_core::models::chat_room::DEADCHANNEL_KIND
 }
 
+/// Whether a room's message list keeps the portrait gutter and paints
+/// each author's face beside their block (`ui.rs`, `attach_portrait`).
+/// The gutter itself is room-agnostic; this is the only switch, and today
+/// it is on for #deadchannel alone (GAME.md, "V1's one visible surface").
+/// Widening the faces to other rooms means changing this predicate, not
+/// the renderer.
+pub(crate) fn room_shows_portraits(room: &ChatRoom) -> bool {
+    is_deadchannel_room(room)
+}
+
 /// Payload handed from chat to the app layer (via `take_requested_open_sheet`)
 /// to open the character sheet modal. `editable` is true when the sheet
 /// belongs to the viewer.
@@ -934,7 +939,7 @@ pub struct ChatState {
     /// modal pre-filled with `?query`.
     requested_message_search: Option<String>,
     requested_petname: Option<PetnameRequest>,
-    requested_open_profile: Option<(Uuid, String)>,
+    requested_open_profile: Option<(Uuid, String, ProfileSection)>,
     requested_open_sheet: Option<SheetOpenRequest>,
     requested_quit: bool,
     requested_audio_url: Option<String>,
@@ -950,9 +955,25 @@ pub struct ChatState {
     /// Set by an admin's /haunt; consumed by `deadchannel::haunt::svc`
     /// (which owns the whisper and the kill switch).
     requested_haunt: Option<crate::app::deadchannel::haunt::state::HauntCommand>,
-    /// The just-landed echo of this session's own send, for the stage-2
-    /// name flicker; consumed by `deadchannel::haunt::svc` every tick.
-    own_message_landed: Option<Uuid>,
+    /// Set by `/paper`; consumed by `paper::svc::tick` every tick.
+    requested_paper: Option<crate::app::paper::state::PaperCommand>,
+    /// The just-landed echo of this session's own send, and the room it
+    /// landed in, for the stage-2 name flicker; consumed by
+    /// `deadchannel::haunt::svc` every tick. The room travels with it
+    /// because a won hit is put on the wire for the rest of that room, and
+    /// by then the sender may have tabbed elsewhere.
+    own_message_landed: Option<(Uuid, Uuid)>,
+    /// A stage-2 hit off the wire (`ChatEvent::NameHit`) whose message is
+    /// on screen: the message id and the wave seed. Consumed by
+    /// `deadchannel::haunt::svc` every tick, which paints it.
+    witnessed_hit_landed: Option<(Uuid, u64)>,
+    /// Hits heard before their message reached this session, keyed by
+    /// message id: the seed and when it was heard. Only another replica
+    /// can put a beat here (this replica's own broadcast delivers the
+    /// message before the sender has even claimed the hit); the room delta
+    /// brings the message along and `push_message` promotes the beat. A
+    /// beat whose message never lands ages out at the next insert.
+    pending_name_hits: HashMap<Uuid, (u64, Instant)>,
     /// Set by /watch @user; consumed by `App`.
     requested_watch: Option<String>,
     /// A stream room this session just opened; consumed by `App`, which
@@ -1266,7 +1287,10 @@ impl ChatState {
             requested_crown: None,
             requested_pot: None,
             requested_haunt: None,
+            requested_paper: None,
             own_message_landed: None,
+            witnessed_hit_landed: None,
+            pending_name_hits: HashMap::new(),
             requested_watch: None,
             opened_stream_room: None,
             requested_aquarium_command: None,
@@ -1978,7 +2002,7 @@ impl ChatState {
         self.requested_message_search.take()
     }
 
-    pub fn take_requested_open_profile(&mut self) -> Option<(Uuid, String)> {
+    pub fn take_requested_open_profile(&mut self) -> Option<(Uuid, String, ProfileSection)> {
         self.requested_open_profile.take()
     }
 
@@ -2022,14 +2046,43 @@ impl ChatState {
         self.requested_crown.take()
     }
 
+    pub(crate) fn take_requested_paper(
+        &mut self,
+    ) -> Option<crate::app::paper::state::PaperCommand> {
+        self.requested_paper.take()
+    }
+
     pub(crate) fn take_requested_haunt(
         &mut self,
     ) -> Option<crate::app::deadchannel::haunt::state::HauntCommand> {
         self.requested_haunt.take()
     }
 
-    pub(crate) fn take_own_message_landed(&mut self) -> Option<Uuid> {
+    pub(crate) fn take_own_message_landed(&mut self) -> Option<(Uuid, Uuid)> {
         self.own_message_landed.take()
+    }
+
+    pub(crate) fn take_witnessed_hit_landed(&mut self) -> Option<(Uuid, u64)> {
+        self.witnessed_hit_landed.take()
+    }
+
+    /// A stage-2 beat off the wire. Worth nothing until the message it
+    /// corrupts is here to corrupt: handed straight to the haunting if the
+    /// message is already in the room, held for `push_message` if the room
+    /// delta has not brought it yet, dropped if this session does not hold
+    /// the room at all.
+    fn note_name_hit(&mut self, room_id: Uuid, message_id: Uuid, seed: u64) {
+        if self.find_message_in_room(room_id, message_id).is_some() {
+            self.witnessed_hit_landed = Some((message_id, seed));
+            return;
+        }
+        if !self.rooms.iter().any(|(room, _)| room.id == room_id) {
+            return;
+        }
+        let now = Instant::now();
+        self.pending_name_hits
+            .retain(|_, (_, heard)| now.duration_since(*heard) < NAME_HIT_WAIT);
+        self.pending_name_hits.insert(message_id, (seed, now));
     }
 
     pub(crate) fn take_requested_pot(&mut self) -> Option<PotCommand> {
@@ -3573,6 +3626,22 @@ impl ChatState {
             return None;
         }
 
+        // `/paper` opens The Late Edition for anyone; the switches after it
+        // are admin-only and say so, unlike `/haunt`, which hides.
+        if let Some(parsed) = crate::app::paper::state::parse_paper_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(command) = parsed else {
+                return Some(Banner::error(
+                    "Usage: /paper, or /paper on|off|outside on|outside off|print|preview|reset",
+                ));
+            };
+            if command.admin_only() && !self.is_admin {
+                return Some(Banner::error("Only admins can touch the presses"));
+            }
+            self.requested_paper = Some(command);
+            return None;
+        }
+
         // Admin-only on purpose, and not an error for anyone else: for a
         // non-admin the line falls through and posts as plain text, exactly
         // as if the command did not exist. First contact stays a mystery.
@@ -3654,7 +3723,15 @@ impl ChatState {
             }
         }
 
-        if let Some(target) = parse_user_command(&body, "/profile") {
+        // `/profile [@user]` opens the card at the top; `/chips [@user]` is
+        // the same card scrolled to the ledger, the public chip audit.
+        for (command, section) in [
+            ("/profile", ProfileSection::Top),
+            ("/chips", ProfileSection::Chips),
+        ] {
+            let Some(target) = parse_user_command(&body, command) else {
+                continue;
+            };
             self.clear_composer_after_submit();
             match target {
                 None => {
@@ -3665,11 +3742,14 @@ impl ChatState {
                         .filter(|name| !name.is_empty())
                         .map(ToOwned::to_owned)
                         .unwrap_or_else(|| short_user_id(self.user_id));
-                    self.requested_open_profile = Some((self.user_id, username));
+                    self.requested_open_profile = Some((self.user_id, username, section));
                 }
                 Some(name) => {
-                    self.service
-                        .open_profile_by_username_task(self.user_id, name.to_string());
+                    self.service.open_profile_by_username_task(
+                        self.user_id,
+                        name.to_string(),
+                        section,
+                    );
                 }
             }
             return None;
@@ -3875,6 +3955,25 @@ impl ChatState {
                         .gift_chips_task(self.user_id, username.clone(), amount, message);
                     return Some(Banner::success(&format!(
                         "Sending {amount} chips to @{username}..."
+                    )));
+                }
+            }
+        }
+
+        if let Some(parsed) = parse_grant_command(&body) {
+            self.clear_composer_after_submit();
+            if !self.is_admin {
+                return Some(Banner::error("/grant is admin-only"));
+            }
+            match parsed {
+                GrantParse::Invalid => {
+                    return Some(Banner::error("Usage: /grant @user <amount>"));
+                }
+                GrantParse::Grant { username, amount } => {
+                    self.service
+                        .grant_chips_task(self.user_id, username.clone(), amount);
+                    return Some(Banner::success(&format!(
+                        "Granting {amount} chips to @{username}..."
                     )));
                 }
             }
@@ -5818,8 +5917,9 @@ impl ChatState {
                     user_id,
                     target_user_id,
                     target_username,
+                    section,
                 } if self.user_id == user_id => {
-                    self.requested_open_profile = Some((target_user_id, target_username));
+                    self.requested_open_profile = Some((target_user_id, target_username, section));
                 }
                 ChatEvent::OpenProfileFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&sentence_case(&message)));
@@ -6091,6 +6191,13 @@ impl ChatState {
                     }
                     self.bump_room_version(room_id);
                 }
+                ChatEvent::NameHit {
+                    room_id,
+                    message_id,
+                    seed,
+                } => {
+                    self.note_name_hit(room_id, message_id, seed);
+                }
                 ChatEvent::GildSucceeded {
                     user_id,
                     tier,
@@ -6212,6 +6319,30 @@ impl ChatState {
                     )));
                 }
                 ChatEvent::GiftFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
+                }
+                ChatEvent::GrantSucceeded {
+                    user_id,
+                    recipient_username,
+                    amount,
+                    recipient_balance,
+                    ..
+                } if self.user_id == user_id => {
+                    banner = Some(Banner::success(&format!(
+                        "Granted {amount} chips to @{recipient_username} (balance {recipient_balance})"
+                    )));
+                }
+                ChatEvent::GrantSucceeded {
+                    recipient_id,
+                    amount,
+                    recipient_balance,
+                    ..
+                } if self.user_id == recipient_id => {
+                    banner = Some(Banner::success(&format!(
+                        "The house granted you {amount} chips (balance {recipient_balance})"
+                    )));
+                }
+                ChatEvent::GrantFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
                 ChatEvent::PublicRoomsListed {
@@ -6413,7 +6544,7 @@ impl ChatState {
                 .find(|(room, _)| room.id == room_id)
                 .and_then(|(_, messages)| messages.first());
             if !groups_as_continuation(prev, &message) {
-                self.own_message_landed = Some(message.id);
+                self.own_message_landed = Some((message.id, room_id));
             }
         }
 
@@ -6433,6 +6564,12 @@ impl ChatState {
 
         if messages.iter().any(|existing| existing.id == message.id) {
             return;
+        }
+
+        // A stage-2 beat heard from another replica before this message
+        // got here: the name corrupts as the message arrives.
+        if let Some((seed, _)) = self.pending_name_hits.remove(&message.id) {
+            self.witnessed_hit_landed = Some((message.id, seed));
         }
 
         // Service snapshots are newest-first; keep same order for cheap appends at the front.
@@ -7241,6 +7378,36 @@ pub(crate) enum GiftParse {
     },
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum GrantParse {
+    Invalid,
+    Grant { username: String, amount: i64 },
+}
+
+/// `/grant @user <amount>`, the admin mint. No note: nothing is said to the
+/// recipient beyond the banner, and nothing is written down.
+pub(crate) fn parse_grant_command(input: &str) -> Option<GrantParse> {
+    let rest = input.trim().strip_prefix("/grant")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let mut parts = rest.split_whitespace();
+    let (Some(username), Some(amount), None) = (parts.next(), parts.next(), parts.next()) else {
+        return Some(GrantParse::Invalid);
+    };
+    let username = username.strip_prefix('@').unwrap_or(username).trim();
+    let Ok(amount) = amount.parse::<i64>() else {
+        return Some(GrantParse::Invalid);
+    };
+    if username.is_empty() || amount <= 0 || amount > GRANT_MAX_AMOUNT {
+        return Some(GrantParse::Invalid);
+    }
+    Some(GrantParse::Grant {
+        username: username.to_string(),
+        amount,
+    })
+}
+
 pub(crate) fn parse_gift_command(input: &str) -> Option<GiftParse> {
     let rest = input.trim().strip_prefix("/gift")?;
     if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
@@ -7417,7 +7584,7 @@ fn parse_me_command(input: &str) -> Option<Option<String>> {
 fn format_member_overlay_lines(
     members: &[RoomMemberListItem],
     active_users: Option<&ActiveUsers>,
-) -> Vec<Line<'static>> {
+) -> Vec<OverlayLine> {
     let online_ids = active_users
         .map(|users| users.lock_recover().keys().copied().collect::<HashSet<_>>())
         .unwrap_or_default();
@@ -7437,27 +7604,18 @@ fn format_member_overlay_lines(
 
     rows.into_iter()
         .map(|(online, _, label)| {
-            let (status, status_style, name_style) = if online {
-                (
-                    "[on ]",
-                    Style::default()
-                        .fg(theme::SUCCESS())
-                        .add_modifier(Modifier::BOLD),
-                    Style::default().fg(theme::TEXT()),
-                )
+            // Ink, not colour: the overlay is built here in the tick and
+            // drawn a step later, once `render` has claimed this thread for
+            // the reader's theme (see `common/overlay.rs`).
+            let (status, status_ink, name_ink) = if online {
+                ("[on ]", OverlayInk::Strong, OverlayInk::Body)
             } else {
-                (
-                    "[off]",
-                    Style::default().fg(theme::TEXT_DIM()),
-                    Style::default().fg(theme::TEXT_DIM()),
-                )
+                ("[off]", OverlayInk::Dim, OverlayInk::Dim)
             };
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled(status, status_style),
-                Span::raw(" "),
-                Span::styled(label, name_style),
-            ])
+            vec![
+                OverlaySpan::new(format!(" {status} "), status_ink),
+                OverlaySpan::new(label, name_ink),
+            ]
         })
         .collect()
 }
@@ -8247,6 +8405,13 @@ fn format_cooldown(remaining: Duration) -> String {
 /// The renderer groups consecutive messages from one author within this
 /// window under a single header (`ui.rs`, `is_continuation`).
 pub(crate) const MESSAGE_GROUP_WINDOW_SECS: i64 = 120;
+
+/// How long a stage-2 beat waits for its message. Another replica's
+/// message reaches this session on the chat snapshot's cadence
+/// (`CHAT_REFRESH_INTERVAL`, 10s), so this has to stay comfortably above
+/// it; past it the beat is dropped rather than played late, so somebody
+/// who opens the room a minute afterwards sees a clean name.
+const NAME_HIT_WAIT: Duration = Duration::from_secs(30);
 
 /// Whether `message`, landing at the head of the room's newest-first list,
 /// will render as a grouped continuation of `prev`: same author within the

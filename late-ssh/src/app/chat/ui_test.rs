@@ -265,6 +265,7 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
+        runner_looks: None,
     };
 
     let mut cache = ChatRowsCache::default();
@@ -362,6 +363,7 @@ fn the_crown_glyph_renders_between_the_author_name_and_their_title() {
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
+        runner_looks: None,
     };
 
     let mut cache = ChatRowsCache::default();
@@ -429,6 +431,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
+        runner_looks: None,
     };
 
     theme::set_current_by_id("late");
@@ -491,6 +494,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
+        runner_looks: None,
     };
 
     let base_key = chat_rows_cache_key(&ctx(base_versions), 80);
@@ -585,6 +589,7 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
+        runner_looks: None,
     };
 
     let mut cache = ChatRowsCache::default();
@@ -797,6 +802,7 @@ fn mentions_and_replies_paint_a_background_wash() {
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
+        runner_looks: None,
     };
 
     let width = 60;
@@ -881,6 +887,7 @@ fn background_wash_fills_the_whole_row_width() {
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
+        runner_looks: None,
     };
 
     let width = 60;
@@ -958,6 +965,8 @@ fn chat_view<'a>(
     static NAME_STYLES: OnceLock<HashMap<Uuid, crate::app::common::username_effect::ResolvedName>> =
         OnceLock::new();
     static PEER_POMODOROS: OnceLock<HashMap<Uuid, String>> = OnceLock::new();
+    static RUNNER_LOOKS: OnceLock<HashMap<Uuid, crate::app::deadchannel::runner::state::Look>> =
+        OnceLock::new();
     static ROOM_VERSIONS: OnceLock<HashMap<Uuid, u64>> = OnceLock::new();
     static MESSAGE_GILDS: OnceLock<HashMap<Uuid, ChatMessageGildSummary>> = OnceLock::new();
 
@@ -1049,6 +1058,7 @@ fn chat_view<'a>(
         profile_award_badges,
         drunk_levels: DRUNK_LEVELS.get_or_init(HashMap::new),
         name_flair: NAME_STYLES.get_or_init(HashMap::new),
+        runner_looks: RUNNER_LOOKS.get_or_init(HashMap::new),
         peer_pomodoros: PEER_POMODOROS.get_or_init(HashMap::new),
         name_flicker: None,
         translations: TRANSLATIONS.get_or_init(HashMap::new),
@@ -2958,6 +2968,7 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
             name_flicker: None,
             translations: &translations,
             translation_hidden: &translation_hidden,
+            runner_looks: None,
         };
         let mut cache = ChatRowsCache::default();
         ensure_chat_rows_cache(&mut cache, messages.iter().collect(), 60, ctx);
@@ -3041,4 +3052,191 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
             .iter()
             .any(|row| row == "you left" || row == "new messages")
     );
+}
+
+/// The #deadchannel portrait gutter (`app/deadchannel/runner`): a runner's
+/// face rides the blank separator above their block plus the header and
+/// first body row, the text wraps short of the gutter for every entry in
+/// the room, a continuation shares the face above it, and the first block
+/// in the list (no separator above) seats all three rows on the entry.
+/// A mention's wash covers the hood row too: the face is one block.
+#[test]
+fn the_wire_seats_a_runners_portrait_beside_their_message() {
+    use crate::app::deadchannel::runner::state::Look;
+    use unicode_width::UnicodeWidthStr;
+
+    theme::set_current_by_id("late");
+
+    let room_id = Uuid::from_u128(1);
+    let current_user_id = Uuid::from_u128(2);
+    let runner_id = Uuid::from_u128(3);
+    let civilian_id = Uuid::from_u128(4);
+    let elder_id = Uuid::from_u128(5);
+    let created = Utc::now();
+    let message = |id: u128, user_id: Uuid, body: &str| ChatMessage {
+        id: Uuid::from_u128(id),
+        created: created + chrono::Duration::seconds(id as i64),
+        updated: created + chrono::Duration::seconds(id as i64),
+        reply_to_message_id: None,
+        reply_to_user_id: None,
+        room_id,
+        user_id,
+        body: body.to_string(),
+    };
+    // Newest first, the order the builder walks. Oldest is a runner's
+    // one-liner opening the list, then a civilian, then mira's block.
+    let messages = [
+        message(13, runner_id, "gg"),
+        message(
+            12,
+            runner_id,
+            "dax get in here, the static is thick tonight and it is not waiting @alice",
+        ),
+        message(11, civilian_id, "who took the last hit"),
+        message(10, elder_id, "o7"),
+    ];
+
+    let usernames = HashMap::from([
+        (current_user_id, "alice".to_string()),
+        (runner_id, "mira".to_string()),
+        (civilian_id, "afterglow".to_string()),
+        (elder_id, "dax".to_string()),
+    ]);
+    let look = Look::parse(&serde_json::json!({
+        "hood": {"piece": "hood.cross", "tint": "amber"},
+        "eyes": {"piece": "eyes.gem", "tint": "white"},
+        "coat": {"piece": "coat.heavy", "tint": "static"},
+        "mark": {"glyph": "▚"}
+    }))
+    .expect("parse look");
+    let looks = HashMap::from([(runner_id, look), (elder_id, look)]);
+    let countries = HashMap::new();
+    let bonsai_glyphs = HashMap::new();
+    let chat_badges = HashMap::new();
+    let friend_user_ids = HashSet::new();
+    let afk_user_ids = HashSet::new();
+    let live_user_ids = HashSet::new();
+    let message_reactions = HashMap::new();
+    let message_gilds = HashMap::new();
+    let inline_images = HashMap::new();
+    let profile_award_badges = HashMap::new();
+    let drunk_levels = HashMap::new();
+    let name_flair = HashMap::new();
+    let peer_pomodoros = HashMap::new();
+    let translations = HashMap::new();
+    let translation_hidden = HashSet::new();
+    let username_lookup = UsernameLookup::new(&usernames, None);
+    let ctx = ChatRowsContext {
+        versions: ChatRowsVersions::default(),
+        current_user_id,
+        afk_user_ids: &afk_user_ids,
+        live_user_ids: &live_user_ids,
+        show_flag_fallback: false,
+        usernames: &username_lookup,
+        countries: &countries,
+        friend_user_ids: &friend_user_ids,
+        bonsai_glyphs: &bonsai_glyphs,
+        chat_badges: &chat_badges,
+        profile_award_badges: &profile_award_badges,
+        message_reactions: &message_reactions,
+        message_gilds: &message_gilds,
+        inline_images: &inline_images,
+        dividers: ChatDividers::default(),
+        drunk_levels: &drunk_levels,
+        name_flair: &name_flair,
+        peer_pomodoros: &peer_pomodoros,
+        name_flicker: None,
+        translations: &translations,
+        translation_hidden: &translation_hidden,
+        runner_looks: Some(&looks),
+    };
+
+    let width = 40;
+    let mut cache = ChatRowsCache::default();
+    ensure_chat_rows_cache(&mut cache, messages.iter().collect(), width, ctx);
+
+    let rendered: Vec<String> = cache
+        .all_rows
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect();
+
+    // The list opens with dax's one-liner: no separator above it, so the
+    // face takes the header, the body row, and one padded row under them.
+    assert!(rendered[0].contains("dax"), "{rendered:?}");
+    assert!(rendered[0].ends_with(" ╬═╬ "), "{rendered:?}");
+    assert!(rendered[1].contains("o7"), "{rendered:?}");
+    assert!(rendered[1].ends_with("▐◈ ◈▌"), "{rendered:?}");
+    assert_eq!(rendered[2].trim(), "▟▓▙", "{rendered:?}");
+    // Mira's block sits below the civilian: the hood rides the blank
+    // separator above her header, so the face ends level with her first
+    // body row and nothing is padded under it.
+    let mira = rendered
+        .iter()
+        .position(|row| row.contains("mira"))
+        .expect("mira's header");
+    assert_eq!(rendered[mira - 1].trim(), "╬═╬", "{rendered:?}");
+    assert!(rendered[mira].ends_with("▐◈ ◈▌"), "{rendered:?}");
+    // The mention's margin bar is the row's first cell.
+    assert!(
+        rendered[mira + 1]
+            .trim_start_matches(['│', ' '])
+            .starts_with("dax get"),
+        "{rendered:?}"
+    );
+    assert!(rendered[mira + 1].ends_with(" ▟▓▙ "), "{rendered:?}");
+    assert!(!rendered[mira + 2].contains('▟'), "{rendered:?}");
+    // Mira mentioned alice, so her block washes, hood row included: the
+    // face never tears between the separator and the header.
+    let visible = visible_chat_rows(&cache, None, None, cache.all_rows.len(), None);
+    for index in [mira - 1, mira, mira + 1] {
+        assert_eq!(
+            visible.lines[index].spans[0].style.bg,
+            Some(theme::CHAT_MENTION_BG()),
+            "row {index} of mira's block is not washed: {rendered:?}"
+        );
+    }
+    assert_eq!(
+        visible.lines[mira - 2].spans[0].style.bg,
+        None,
+        "{rendered:?}"
+    );
+    assert!(matches!(visible.hits[mira - 1].kind, ChatRowKind::None));
+    for row in [
+        &rendered[0],
+        &rendered[1],
+        &rendered[2],
+        &rendered[mira - 1],
+        &rendered[mira],
+        &rendered[mira + 1],
+    ] {
+        assert_eq!(row.width(), width, "{row:?}");
+    }
+    // Every row in the room wraps short of the gutter: nothing but a face
+    // ever reaches the last six cells.
+    for row in &rendered {
+        let text = row
+            .trim_end_matches(" ╬═╬ ")
+            .trim_end_matches("▐◈ ◈▌")
+            .trim_end_matches(" ▟▓▙ ")
+            .trim_end();
+        assert!(text.width() <= width - 6, "{row:?} runs into the gutter");
+    }
+    // The continuation ("gg") and the civilian's message carry no face.
+    let gg = rendered
+        .iter()
+        .position(|row| row.contains("gg"))
+        .expect("continuation row");
+    assert!(!rendered[gg].contains('▟'), "{rendered:?}");
+    let civilian = rendered
+        .iter()
+        .position(|row| row.contains("afterglow"))
+        .expect("civilian header");
+    assert!(!rendered[civilian].contains('◈'), "{rendered:?}");
+    assert!(!rendered[civilian + 1].contains('◈'), "{rendered:?}");
 }

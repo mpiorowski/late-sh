@@ -77,7 +77,14 @@ pub fn draw_game(
             ("moves", state.moves().to_string(), theme::SUCCESS()),
             ("reward", reward, reward_color),
         ]),
-        keys: keys_line(control_hints),
+        keys: keys_line(
+            control_hints
+                .into_iter()
+                .chain(crate::app::arcade::ui::share_hints(super::share::is_ready(
+                    state,
+                )))
+                .collect(),
+        ),
         tip: Some(tip_line(tip)),
     };
     let board_area = draw_game_frame(frame, area, "Sliding Puzzle", bottom, show_bottom_bar);

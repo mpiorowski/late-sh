@@ -23,8 +23,8 @@ fn holder(user_id: Uuid, tickets: i64) -> PotTicketHolder {
 }
 
 /// The whole-state assertion for the draw: fixed tickets plus a fixed seed
-/// give one exact result, every field of it. SHOP.md's payout rule (80% to
-/// the winner, the fifth burned) is what the last two fields pin.
+/// give one exact result, every field of it. The payout rule (80% to the
+/// winner, the fifth burned) is what the last two fields pin.
 #[test]
 fn a_seeded_draw_settles_to_one_exact_result() {
     // Ordered by user id, the way `PotTicket::holders` returns them, so the
@@ -385,4 +385,28 @@ async fn a_draw_notifies_every_replica() {
         }
     }
     assert_eq!(seen, 1, "only the committed draw notifies");
+}
+
+#[tokio::test]
+async fn pots_resolve_by_id() {
+    let test_db = test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let tx = client.transaction().await.expect("tx");
+    let pot = Pot::open_in_tx(
+        &tx,
+        Utc::now() + Duration::from_secs(3600),
+        POT_TICKET_PRICE,
+    )
+    .await
+    .expect("pot");
+    tx.commit().await.expect("commit");
+
+    let pots = Pot::find_by_ids(&**client, &[pot.id, Uuid::now_v7()])
+        .await
+        .expect("pots");
+    assert_eq!(pots.len(), 1);
+    assert_eq!(
+        pots.get(&pot.id).map(|found| found.ticket_price),
+        Some(POT_TICKET_PRICE)
+    );
 }

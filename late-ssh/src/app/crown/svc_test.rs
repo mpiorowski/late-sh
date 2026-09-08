@@ -1,6 +1,6 @@
 //! Service integration tests for the crown against a real ephemeral DB.
 //!
-//! The transaction is where every acceptance rule in SHOP.md phase 3 lands:
+//! The transaction is where every rule of the crown lands:
 //! the ladder charges what it says, a refusal never touches the ledger, and
 //! two racing takes settle to one debit.
 
@@ -97,15 +97,9 @@ async fn six_takes_walk_the_ladder_and_burn_every_chip() {
     let mut takers = Vec::new();
     for (index, price) in LADDER.iter().enumerate() {
         let user = create_test_user(&test_db.db, &format!("crown-ladder-{index}")).await;
-        UserChips::apply(
-            &**client,
-            user.id,
-            ChipMove::Credit,
-            price + CHIP_FLOOR,
-            None,
-        )
-        .await
-        .expect("stake the taker");
+        UserChips::admin_grant(&**client, user.id, price + CHIP_FLOOR)
+            .await
+            .expect("stake the taker");
         takers.push(user);
     }
 
@@ -139,7 +133,7 @@ async fn a_self_take_is_refused_uncharged() {
     let client = test_db.db.get().await.expect("db client");
     let service = CrownService::new(test_db.db.clone());
     let holder = create_test_user(&test_db.db, "crown-self-holder").await;
-    UserChips::apply(&**client, holder.id, ChipMove::Credit, 100_000, None)
+    UserChips::admin_grant(&**client, holder.id, 100_000)
         .await
         .expect("stake");
 
@@ -182,9 +176,9 @@ async fn a_take_the_buyer_cannot_afford_changes_nothing() {
     UserChips::apply(
         &**client,
         pauper.id,
-        ChipMove::Bet,
+        ChipMove::BlackjackBet,
         INITIAL_CHIP_BALANCE - CHIP_FLOOR,
-        None,
+        "test-round",
     )
     .await
     .expect("lose the stake");
@@ -221,7 +215,7 @@ async fn the_month_rollover_empties_the_crown_at_the_minimum() {
     let outgoing = create_test_user(&test_db.db, "crown-rollover-outgoing").await;
     let incoming = create_test_user(&test_db.db, "crown-rollover-incoming").await;
     for user in [&outgoing, &incoming] {
-        UserChips::apply(&**client, user.id, ChipMove::Credit, 100_000, None)
+        UserChips::admin_grant(&**client, user.id, 100_000)
             .await
             .expect("stake");
     }
@@ -272,7 +266,7 @@ async fn two_concurrent_takes_both_land_and_walk_the_ladder() {
     let first = create_test_user(&test_db.db, "crown-concurrent-first").await;
     let second = create_test_user(&test_db.db, "crown-concurrent-second").await;
     for user in [&first, &second] {
-        UserChips::apply(&**client, user.id, ChipMove::Credit, 100_000, None)
+        UserChips::admin_grant(&**client, user.id, 100_000)
             .await
             .expect("stake");
     }
@@ -341,7 +335,7 @@ async fn a_listening_replica_learns_the_holder_and_tells_the_deposed() {
     let first = create_test_user(&test_db.db, "crown-replica-first").await;
     let second = create_test_user(&test_db.db, "crown-replica-second").await;
     for user in [&first, &second] {
-        UserChips::apply(&**client, user.id, ChipMove::Credit, 100_000, None)
+        UserChips::admin_grant(&**client, user.id, 100_000)
             .await
             .expect("stake");
     }

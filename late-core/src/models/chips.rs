@@ -1,13 +1,20 @@
 use std::collections::HashMap;
 
 use anyhow::{Result, bail, ensure};
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use tokio_postgres::{Client, GenericClient, Transaction};
 use uuid::Uuid;
 
 pub const CHIP_FLOOR: i64 = 100;
 pub const INITIAL_CHIP_BALANCE: i64 = 1_000;
 pub const CHIP_USER_CHANGED_CHANNEL: &str = "chip_user_changed";
+/// SQL for the start of the current UTC month, the window every monthly
+/// chip figure shares: the Top Chips board, the award snapshot, and the
+/// "earned this month" line on a profile.
+pub const MONTH_TS_FILTER: &str =
+    "date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'";
+/// How many ledger rows a profile shows.
+pub const PROFILE_LEDGER_ROWS: i64 = 40;
 
 pub async fn listen_for_chip_changes(client: &Client) -> Result<()> {
     client
@@ -86,21 +93,54 @@ macro_rules! chip_moves {
 }
 
 chip_moves!(
-    /// Generic game credit: house-table payouts, bonsai watering bonus.
-    Credit,
-    /// Generic wager debit: house-table bets, may drain the balance to zero
-    /// (losing settlements restore the floor afterwards).
-    Bet,
+    /// Retired: the shared house-table payout reason (`chip_credit`) that
+    /// poker and blackjack wrote before each game had its own. Rows with it
+    /// still exist, so the variant stays to keep them off the Top Chips
+    /// board; [`UserChips::apply`] refuses to write it.
+    LegacyTableCredit,
+    /// Retired: the shared house-table wager reason (`chip_debit`). Same
+    /// story as [`ChipMove::LegacyTableCredit`].
+    LegacyTableDebit,
+    /// A blackjack wager, including the double-down top-up. May drain the
+    /// balance to zero (a losing settlement restores the floor afterwards).
+    /// `source_ref` is the round id, shared by every row of that round.
+    BlackjackBet,
+    /// A blackjack settlement that paid something: the stake back on a push,
+    /// or the stake plus winnings. `source_ref` is the round id.
+    BlackjackPayout,
+    /// A poker commit: blinds, calls, raises. Floor 0 like blackjack.
+    /// `source_ref` is the hand id, shared by every row of that hand.
+    PokerBet,
+    /// A poker pot, or a share of a split pot, reaching a seat.
+    /// `source_ref` is the hand id.
+    PokerPayout,
+    /// The flat bonus for the first watering of the day. `source_ref` is
+    /// the UTC date it was paid for, which is also what makes it daily.
+    BonsaiWatered,
     /// Post-settlement top-up back to [`CHIP_FLOOR`]. Has its own write path
     /// ([`UserChips::restore_floor`]), never goes through [`UserChips::apply`].
+    /// `source_ref` is the round or hand id whose settlement emptied the
+    /// balance, so the top-up sits next to the bet that caused it.
     FloorRestore,
+    /// Chips handed to another player with `/gift`. `source_ref` is the
+    /// recipient's user id.
     GiftSent,
+    /// The other side of a gift. `source_ref` is the sender's user id.
     GiftReceived,
+    /// The stipend a brand-new chips row starts with, written once by
+    /// [`UserChips::ensure`] in the same statement that creates the row, so
+    /// a user's ledger always sums to their balance. `source_ref` is the
+    /// user id.
+    InitialBalance,
     /// Chips paid to gild someone else's chat message. Floor-guarded like a
-    /// gift; `source_ref` is the gilded message id.
+    /// gift; `source_ref` is the gild row id (`chat_message_gilds.id`), which
+    /// names one buyer and one author, so either side of the pair resolves
+    /// to exactly the other. Rows written before 2026-09-06 carry the
+    /// gilded message id instead.
     GildSent,
     /// Two thirds of a gild reaching the message's author. The other third
-    /// has no ledger row at all: that gap is the burn.
+    /// has no ledger row at all: that gap is the burn. Same `source_ref` as
+    /// [`ChipMove::GildSent`].
     GildReceived,
     /// Chips paid to take the crown. Floor-guarded, and burned whole: there
     /// is no matching credit anywhere, so every take shrinks the supply by
@@ -119,6 +159,12 @@ chip_moves!(
     /// what caps the reward at one per URL per user, and it has to outlive
     /// the article being deleted (see [`crate::models::article::Article::create_shared`]).
     NewsShared,
+    /// The Artboard gallery's monthly prize: last month's top three by
+    /// their best piece's applause, paid once when the `artboard` profile
+    /// award row is written (`profile_award.rs`). Minted rather than moved;
+    /// `source_ref` is the award row id, which is what makes a re-run of
+    /// the snapshot unable to pay twice.
+    ArtboardPrize,
     /// Queueing a YouTube track, from the booth, a pasted URL, or the history
     /// list. One flat credit, minted rather than moved, for the first few
     /// tracks a person queues each UTC day and nothing after that. The track
@@ -150,7 +196,8 @@ chip_moves!(
     TronWin,
     /// A Super Snake seat that came out ahead, banked when the player stands
     /// up. The arena keeps the running total in memory: one row per visit,
-    /// not one per bite.
+    /// not one per bite. `source_ref` is the visit id, minted when the seat
+    /// is taken.
     SsnakeArenaEarned,
     /// The same, for a seat whose crashes outran its food.
     SsnakeArenaLost,
@@ -179,23 +226,32 @@ pub enum ChipDirection {
     },
     /// Not a delta at all; handled by [`UserChips::restore_floor`].
     Restore,
+    /// A reason nothing writes any more; [`UserChips::apply`] refuses it.
+    Retired,
 }
 
 impl ChipMove {
     /// The persisted `chip_ledger.reason` value.
     pub const fn reason(self) -> &'static str {
         match self {
-            Self::Credit => "chip_credit",
-            Self::Bet => "chip_debit",
+            Self::LegacyTableCredit => "chip_credit",
+            Self::LegacyTableDebit => "chip_debit",
+            Self::BlackjackBet => "blackjack_bet",
+            Self::BlackjackPayout => "blackjack_payout",
+            Self::PokerBet => "poker_bet",
+            Self::PokerPayout => "poker_payout",
+            Self::BonsaiWatered => "bonsai_watered",
             Self::FloorRestore => "floor_restore",
             Self::GiftSent => "chip_gift_sent",
             Self::GiftReceived => "chip_gift_received",
+            Self::InitialBalance => "initial_balance",
             Self::GildSent => "chip_gild_sent",
             Self::GildReceived => "chip_gild_received",
             Self::CrownTaken => "chip_crown_taken",
             Self::PotTicket => "pot_ticket",
             Self::PotWon => "pot_won",
             Self::NewsShared => "news_shared",
+            Self::ArtboardPrize => "artboard_prize",
             Self::SongQueued => "song_queued",
             Self::RoundPurchase => "round_purchase",
             Self::DrinkPurchase => "drink_purchase",
@@ -234,17 +290,18 @@ impl ChipMove {
     /// The persisted `chip_ledger.source_kind` value.
     pub const fn source_kind(self) -> &'static str {
         match self {
-            Self::Credit
-            | Self::Bet
-            | Self::FloorRestore
-            | Self::GiftSent
-            | Self::GiftReceived
-            | Self::SsnakeArenaEarned
-            | Self::SsnakeArenaLost => "user_chips",
-            Self::GildSent | Self::GildReceived => "chat_messages",
+            Self::LegacyTableCredit | Self::LegacyTableDebit => "user_chips",
+            Self::BlackjackBet | Self::BlackjackPayout => "blackjack_rounds",
+            Self::PokerBet | Self::PokerPayout => "poker_hands",
+            Self::FloorRestore => "house_rounds",
+            Self::GiftSent | Self::GiftReceived | Self::InitialBalance => "users",
+            Self::SsnakeArenaEarned | Self::SsnakeArenaLost => "ssnake_visits",
+            Self::BonsaiWatered => "bonsai_daily_care",
+            Self::GildSent | Self::GildReceived => "chat_message_gilds",
             Self::CrownTaken => "crown_reigns",
             Self::PotTicket | Self::PotWon => "pots",
             Self::NewsShared => "articles",
+            Self::ArtboardPrize => "profile_awards",
             Self::SongQueued => "media_queue_items",
             Self::RoundPurchase => "drink_rounds",
             Self::DrinkPurchase => "bartender",
@@ -280,11 +337,16 @@ impl ChipMove {
 
     pub const fn direction(self) -> ChipDirection {
         match self {
-            Self::Credit
+            Self::LegacyTableCredit | Self::LegacyTableDebit => ChipDirection::Retired,
+            Self::BlackjackPayout
+            | Self::PokerPayout
+            | Self::BonsaiWatered
             | Self::GiftReceived
+            | Self::InitialBalance
             | Self::GildReceived
             | Self::PotWon
             | Self::NewsShared
+            | Self::ArtboardPrize
             | Self::SongQueued
             | Self::QuestReward
             | Self::DailyQuestStreakReward
@@ -313,7 +375,7 @@ impl ChipMove {
             | Self::LateaniaFrontierKingDefeat
             | Self::LateaniaSunderingDeepDefeat
             | Self::LateaniaKaethyrAscendantDefeat => ChipDirection::Credit,
-            Self::Bet | Self::ShopPurchase | Self::SsnakeArenaLost => {
+            Self::BlackjackBet | Self::PokerBet | Self::ShopPurchase | Self::SsnakeArenaLost => {
                 ChipDirection::Debit { floor: 0 }
             }
             Self::GiftSent
@@ -326,36 +388,45 @@ impl ChipMove {
         }
     }
 
-    /// Whether the move counts toward the monthly chip-earner leaderboard
-    /// and the permanent monthly award snapshot.
+    /// Whether the move counts toward the monthly Top Chips board and the
+    /// permanent monthly award snapshot.
+    ///
+    /// The board ranks what a player earned, so only credits can count and
+    /// a debit never does: spending (the Shop, the bar, the pot, the crown,
+    /// a gild) costs nobody their place, and an arena visit that ended in
+    /// the red is simply not an earning. Of the credits, three stay out:
+    /// the two house tables, because a table can fold every hand to one
+    /// seat and walk it up the board; gifts, because a group can funnel
+    /// chips into one player at no cost to the board; and the starting
+    /// stipend, which everyone gets once. Gilds received stay in: a gild
+    /// burns a third on the way, so it cannot funnel for free, and it is
+    /// paid for a message other people rated. The pot stays in: the house
+    /// mints it. Admin grants never reach the ledger at all
+    /// ([`UserChips::admin_grant`]), so the board never sees them.
     pub const fn counts_as_earnings(self) -> bool {
         match self {
-            // A gild's credit is a tip, not a standing: Top Chips ranks what
-            // a player earned, and buying an author to the top of the board
-            // would make the board about who has generous friends. The crown
-            // is Shop-like vanity spending: a burn that bought a glyph must
-            // not knock the buyer off the earners board.
-            // The pot is excluded on both sides on purpose: a lottery win
-            // must not top the earners board, and if the win is out then the
-            // ticket has to be out too, or buying in would be a pure
-            // negative on a board the winner cannot climb.
-            // A round is the same vanity burn as the crown, one rung more
-            // generous: buying the bar a drink must not cost the buyer their
-            // place on the earners board.
-            Self::FloorRestore
-            | Self::ShopPurchase
-            | Self::GildReceived
+            Self::LegacyTableCredit
+            | Self::LegacyTableDebit
+            | Self::BlackjackBet
+            | Self::BlackjackPayout
+            | Self::PokerBet
+            | Self::PokerPayout
+            | Self::FloorRestore
+            | Self::GiftSent
+            | Self::GiftReceived
+            | Self::InitialBalance
+            | Self::GildSent
             | Self::CrownTaken
             | Self::PotTicket
-            | Self::PotWon
-            | Self::RoundPurchase => false,
-            Self::Credit
-            | Self::Bet
-            | Self::GiftSent
-            | Self::GildSent
-            | Self::GiftReceived
+            | Self::RoundPurchase
             | Self::DrinkPurchase
+            | Self::ShopPurchase
+            | Self::SsnakeArenaLost => false,
+            Self::BonsaiWatered
+            | Self::GildReceived
+            | Self::PotWon
             | Self::NewsShared
+            | Self::ArtboardPrize
             | Self::SongQueued
             | Self::QuestReward
             | Self::DailyQuestStreakReward
@@ -371,7 +442,6 @@ impl ChipMove {
             | Self::DailyBriscolaWin
             | Self::TronWin
             | Self::SsnakeArenaEarned
-            | Self::SsnakeArenaLost
             | Self::GreendragonDragonSlain
             | Self::DarkroomEscape
             | Self::DarkroomBeaconEscape
@@ -388,6 +458,14 @@ impl ChipMove {
         }
     }
 
+    /// The variant behind a persisted `chip_ledger.reason`, or `None` for a
+    /// reason nothing in the roster ever wrote (seed data, hand-written
+    /// rows). Derived from `ALL`, so a new variant is parseable the moment
+    /// it exists.
+    pub fn from_reason(reason: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|mv| mv.reason() == reason)
+    }
+
     /// The `chip_ledger.reason` values excluded from earnings queries.
     /// Both consumers (monthly leaderboard, monthly award snapshot) build
     /// their exclusion list here, so they can never drift apart.
@@ -398,6 +476,31 @@ impl ChipMove {
             .map(|mv| mv.reason())
             .collect()
     }
+}
+
+/// One `chip_ledger` row as a profile shows it. `reason` stays the persisted
+/// string so a row nothing in the roster wrote still renders, as "other".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChipLedgerEntry {
+    pub delta: i64,
+    pub reason: String,
+    pub source_ref: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl ChipLedgerEntry {
+    pub fn chip_move(&self) -> Option<ChipMove> {
+        ChipMove::from_reason(&self.reason)
+    }
+}
+
+/// A user's chips this UTC month, from [`UserChips::month_figures`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MonthChips {
+    /// The Top Chips sum: counting credits only.
+    pub earned: i64,
+    /// Every row, both sides: what the balance actually did.
+    pub net: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -429,21 +532,51 @@ impl UserChips {
         Ok(row.map(Self::from))
     }
 
-    /// Ensure a chips row exists for the user. Called on SSH login.
+    /// Ensure a chips row exists for the user. Called on SSH login; see
+    /// [`Self::ensure_in`] for the transactional twin.
     pub async fn ensure(client: &Client, user_id: Uuid) -> Result<Self> {
+        Self::ensure_in(client, user_id).await
+    }
+
+    /// [`Self::ensure`] on any client, so the paths that may touch a user
+    /// who has never logged in (gifts, gilds, the Shop, an admin grant) can
+    /// run it inside their own transaction. The first call writes the
+    /// [`ChipMove::InitialBalance`] ledger row in the same statement as the
+    /// row itself; later calls only read.
+    pub async fn ensure_in(client: &impl GenericClient, user_id: Uuid) -> Result<Self> {
         let row = client
-            .query_one(
-                "INSERT INTO user_chips (user_id, balance)
-                 VALUES ($1, $2)
-                 ON CONFLICT (user_id) DO NOTHING
-                 RETURNING *",
-                &[&user_id, &INITIAL_CHIP_BALANCE],
+            .query_opt(
+                "WITH inserted AS (
+                    INSERT INTO user_chips (user_id, balance)
+                    VALUES ($1, $2)
+                    ON CONFLICT (user_id) DO NOTHING
+                    RETURNING *
+                 ),
+                 ledger AS (
+                    INSERT INTO chip_ledger
+                      (user_id, delta, reason, source_kind, source_ref)
+                    SELECT user_id, $2, $3, $4, $5
+                    FROM inserted
+                 )
+                 SELECT * FROM inserted
+                 UNION ALL
+                 SELECT * FROM user_chips
+                 WHERE user_id = $1 AND NOT EXISTS (SELECT 1 FROM inserted)",
+                &[
+                    &user_id,
+                    &INITIAL_CHIP_BALANCE,
+                    &ChipMove::InitialBalance.reason(),
+                    &ChipMove::InitialBalance.source_kind(),
+                    &user_id.to_string(),
+                ],
             )
-            .await;
+            .await?;
         match row {
-            Ok(row) => Ok(Self::from(row)),
-            Err(_) => {
-                // Row already existed, fetch it
+            Some(row) => Ok(Self::from(row)),
+            // A concurrent first insert: `ON CONFLICT` waited for it to
+            // commit, but the fallback branch above read this statement's
+            // pre-wait snapshot and saw no row. A second statement does.
+            None => {
                 let row = client
                     .query_one("SELECT * FROM user_chips WHERE user_id = $1", &[&user_id])
                     .await?;
@@ -458,14 +591,21 @@ impl UserChips {
     /// from [`ChipMove::direction`] and return `None` when the balance
     /// cannot cover the move. The `chip_user_changed` notify comes from the
     /// `user_chips` triggers, never from here.
+    ///
+    /// `source_ref` is required: every ledger row says what it paid for
+    /// (see each [`ChipMove`] variant for what its ref is).
     pub async fn apply(
         client: &impl GenericClient,
         user_id: Uuid,
         mv: ChipMove,
         amount: i64,
-        source_ref: Option<&str>,
+        source_ref: &str,
     ) -> Result<Option<Self>> {
         ensure!(amount > 0, "chip move amount must be positive");
+        ensure!(
+            !source_ref.is_empty(),
+            "chip move source_ref must name its source"
+        );
         match mv.direction() {
             ChipDirection::Credit => {
                 let row = client
@@ -527,10 +667,48 @@ impl UserChips {
             ChipDirection::Restore => {
                 bail!("floor restore has a dedicated write path, use restore_floor")
             }
+            ChipDirection::Retired => {
+                bail!(
+                    "chip move {} is retired and can no longer be written",
+                    mv.reason()
+                )
+            }
         }
     }
 
-    pub async fn restore_floor(client: &Client, user_id: Uuid) -> Result<Self> {
+    /// An admin handing chips to a player with `/grant`. By decision
+    /// (2026-09-06) this is the one balance change with no ledger row: the
+    /// ledger records what players did, and a grant is the house's doing.
+    /// The row is ensured first so a player who has never logged in lands
+    /// on the stipend plus the grant, and the stipend's own row is written
+    /// as usual. The `chip_user_changed` notify still fires from the
+    /// `user_chips` trigger.
+    pub async fn admin_grant(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        amount: i64,
+    ) -> Result<Self> {
+        ensure!(amount > 0, "admin grant amount must be positive");
+        Self::ensure_in(client, user_id).await?;
+        let row = client
+            .query_one(
+                "UPDATE user_chips
+                 SET balance = balance + $2, updated = current_timestamp
+                 WHERE user_id = $1
+                 RETURNING *",
+                &[&user_id, &amount],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
+    /// Top the balance back up to [`CHIP_FLOOR`] after a losing house-table
+    /// settlement. `source_ref` is the round or hand id that emptied it.
+    pub async fn restore_floor(client: &Client, user_id: Uuid, source_ref: &str) -> Result<Self> {
+        ensure!(
+            !source_ref.is_empty(),
+            "floor restore source_ref must name its round"
+        );
         let row = client
             .query_one(
                 "WITH prior AS (
@@ -551,8 +729,8 @@ impl UserChips {
                     SELECT GREATEST($2 - COALESCE((SELECT balance FROM prior), $2), 0)::bigint AS delta
                  ),
                  ledger AS (
-                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
-                    SELECT $1, delta, $3, $4
+                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind, source_ref)
+                    SELECT $1, delta, $3, $4, $5
                     FROM restored
                     WHERE delta > 0
                  )
@@ -563,6 +741,7 @@ impl UserChips {
                     &CHIP_FLOOR,
                     &ChipMove::FloorRestore.reason(),
                     &ChipMove::FloorRestore.source_kind(),
+                    &source_ref,
                 ],
             )
             .await?;
@@ -570,10 +749,11 @@ impl UserChips {
     }
 
     /// Move chips from sender to recipient: a [`ChipMove::GiftSent`] debit
-    /// (floor-guarded) and a [`ChipMove::GiftReceived`] credit. The debit and
-    /// credit are separate statements, so this takes the transaction that
-    /// makes them atomic. Returns `None` when the sender cannot cover the
-    /// gift and keep the floor.
+    /// (floor-guarded) and a [`ChipMove::GiftReceived`] credit, each carrying
+    /// the other party's id as `source_ref`. The debit and credit are
+    /// separate statements, so this takes the transaction that makes them
+    /// atomic. Returns `None` when the sender cannot cover the gift and keep
+    /// the floor.
     pub async fn transfer_gift(
         tx: &Transaction<'_>,
         sender_id: Uuid,
@@ -586,20 +766,28 @@ impl UserChips {
         // Ensure both chip rows exist first, so gifting to a user without a
         // pre-existing row credits on top of the initial balance instead of
         // spuriously failing.
-        tx.execute(
-            "INSERT INTO user_chips (user_id, balance)
-             VALUES ($1, $3), ($2, $3)
-             ON CONFLICT (user_id) DO NOTHING",
-            &[&sender_id, &recipient_id, &INITIAL_CHIP_BALANCE],
-        )
-        .await?;
+        Self::ensure_in(tx, sender_id).await?;
+        Self::ensure_in(tx, recipient_id).await?;
 
-        let Some(sender) = Self::apply(tx, sender_id, ChipMove::GiftSent, amount, None).await?
+        let Some(sender) = Self::apply(
+            tx,
+            sender_id,
+            ChipMove::GiftSent,
+            amount,
+            &recipient_id.to_string(),
+        )
+        .await?
         else {
             return Ok(None);
         };
-        let Some(recipient) =
-            Self::apply(tx, recipient_id, ChipMove::GiftReceived, amount, None).await?
+        let Some(recipient) = Self::apply(
+            tx,
+            recipient_id,
+            ChipMove::GiftReceived,
+            amount,
+            &sender_id.to_string(),
+        )
+        .await?
         else {
             bail!("gift credit returned no row");
         };
@@ -610,16 +798,17 @@ impl UserChips {
     /// the message's author is credited `author_share`, and the difference is
     /// simply never minted. Same shape as [`Self::transfer_gift`] (both
     /// statements, so the caller owns the transaction), with the split.
-    /// `message_id` is the `source_ref` on both ledger rows, so the pair is
-    /// auditable from either side. `None` when the buyer cannot pay and keep
-    /// the floor.
+    /// `gild_id` (the `chat_message_gilds` row the caller just placed or
+    /// raised) is the `source_ref` on both ledger rows, so the pair is
+    /// auditable from either side and each row names exactly one
+    /// counterparty. `None` when the buyer cannot pay and keep the floor.
     pub async fn transfer_gild(
         tx: &Transaction<'_>,
         sender_id: Uuid,
         author_id: Uuid,
         price: i64,
         author_share: i64,
-        message_id: Uuid,
+        gild_id: Uuid,
     ) -> Result<Option<(Self, Self)>> {
         ensure!(price > 0, "gild price must be positive");
         ensure!(
@@ -630,17 +819,12 @@ impl UserChips {
 
         // Both chip rows must exist first, for the same reason gifting needs
         // it: an author with no row yet would otherwise fail the credit.
-        tx.execute(
-            "INSERT INTO user_chips (user_id, balance)
-             VALUES ($1, $3), ($2, $3)
-             ON CONFLICT (user_id) DO NOTHING",
-            &[&sender_id, &author_id, &INITIAL_CHIP_BALANCE],
-        )
-        .await?;
+        Self::ensure_in(tx, sender_id).await?;
+        Self::ensure_in(tx, author_id).await?;
 
-        let source_ref = message_id.to_string();
+        let source_ref = gild_id.to_string();
         let Some(sender) =
-            Self::apply(tx, sender_id, ChipMove::GildSent, price, Some(&source_ref)).await?
+            Self::apply(tx, sender_id, ChipMove::GildSent, price, &source_ref).await?
         else {
             return Ok(None);
         };
@@ -649,13 +833,66 @@ impl UserChips {
             author_id,
             ChipMove::GildReceived,
             author_share,
-            Some(&source_ref),
+            &source_ref,
         )
         .await?
         else {
             bail!("gild credit returned no row");
         };
         Ok(Some((sender, author)))
+    }
+
+    /// A user's newest ledger rows, newest first. Owner-scoped in the query.
+    pub async fn recent_ledger(
+        client: &Client,
+        user_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<ChipLedgerEntry>> {
+        let rows = client
+            .query(
+                "SELECT delta, reason, source_ref, created_at
+                 FROM chip_ledger
+                 WHERE user_id = $1
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT $2",
+                &[&user_id, &limit],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ChipLedgerEntry {
+                delta: row.get("delta"),
+                reason: row.get("reason"),
+                source_ref: row.get("source_ref"),
+                created_at: row.get("created_at"),
+            })
+            .collect())
+    }
+
+    /// This UTC month's two figures in one scan: what the user earned by
+    /// the Top Chips rule ([`ChipMove::counts_as_earnings`], the same sum
+    /// the board ranks, so the profile figure and the board never
+    /// disagree), and the net of every ledger row, which is what actually
+    /// happened to the balance.
+    pub async fn month_figures(client: &Client, user_id: Uuid) -> Result<MonthChips> {
+        let excluded = ChipMove::excluded_earning_reasons();
+        let row = client
+            .query_one(
+                &format!(
+                    "SELECT COALESCE(SUM(delta) FILTER (WHERE reason <> ALL($2)), 0)::bigint
+                              AS earned,
+                            COALESCE(SUM(delta), 0)::bigint AS net
+                     FROM chip_ledger
+                     WHERE user_id = $1
+                       AND created_at >= {MONTH_TS_FILTER}"
+                ),
+                &[&user_id, &excluded],
+            )
+            .await?;
+        Ok(MonthChips {
+            earned: row.get("earned"),
+            net: row.get("net"),
+        })
     }
 
     /// All user chip balances (for per-user lookup in leaderboard refresh).

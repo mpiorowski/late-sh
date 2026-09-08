@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use late_core::models::chips::ChipMove;
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
@@ -498,7 +499,7 @@ impl BlackjackService {
     }
 
     async fn place_bet(&self, user_id: Uuid, amount: i64) -> Result<BetSuccess, BetFailure> {
-        let activity_generation = {
+        let (activity_generation, round_id) = {
             let mut table = self.table.lock().await;
             let Some(seat_index) = table.user_seat_index(user_id) else {
                 return Err(BetFailure::NotSeated);
@@ -517,13 +518,22 @@ impl BlackjackService {
             table.status_message = format!("Seat {} is placing {amount} chips...", seat_index + 1);
             let activity_generation = table.record_activity(user_id);
             self.publish_snapshot_locked(&table);
-            activity_generation
+            (activity_generation, table.round_id)
         };
         if let Some(activity_generation) = activity_generation {
             self.schedule_inactivity_kick(user_id, activity_generation);
         }
 
-        let new_balance = match self.chip_svc.debit_bet(user_id, amount).await {
+        let new_balance = match self
+            .chip_svc
+            .apply_move(
+                user_id,
+                ChipMove::BlackjackBet,
+                amount,
+                &round_id.to_string(),
+            )
+            .await
+        {
             Ok(Some(new_balance)) => new_balance,
             Ok(None) => {
                 let mut table = self.table.lock().await;
@@ -723,7 +733,7 @@ impl BlackjackService {
     }
 
     async fn double_down(&self, user_id: Uuid) -> Result<DoubleDownSuccess, ActionFailure> {
-        let extra_bet = {
+        let (extra_bet, round_id) = {
             let mut table = self.table.lock().await;
             let Some(seat_index) = table.user_seat_index(user_id) else {
                 return Err(ActionFailure::NotSeated);
@@ -734,10 +744,19 @@ impl BlackjackService {
             if let Some(activity_generation) = activity_generation {
                 self.schedule_inactivity_kick(user_id, activity_generation);
             }
-            extra_bet
+            (extra_bet, table.round_id)
         };
 
-        let new_balance = match self.chip_svc.debit_bet(user_id, extra_bet).await {
+        let new_balance = match self
+            .chip_svc
+            .apply_move(
+                user_id,
+                ChipMove::BlackjackBet,
+                extra_bet,
+                &round_id.to_string(),
+            )
+            .await
+        {
             Ok(Some(new_balance)) => new_balance,
             Ok(None) => {
                 let mut table = self.table.lock().await;
@@ -1034,11 +1053,19 @@ impl BlackjackService {
         // player; solo blackjack against the dealer earns chips but no dailies.
         let mut settled_balances = Vec::new();
         for settlement in settlements {
+            let round_ref = settlement.round_id.to_string();
             let new_balance = if settlement.credit == 0 {
-                self.chip_svc.restore_floor(settlement.user_id).await
+                self.chip_svc
+                    .restore_floor(settlement.user_id, &round_ref)
+                    .await
             } else {
                 self.chip_svc
-                    .credit_payout(settlement.user_id, settlement.credit)
+                    .credit_payout(
+                        settlement.user_id,
+                        ChipMove::BlackjackPayout,
+                        settlement.credit,
+                        &round_ref,
+                    )
                     .await
             };
             let new_balance = match new_balance {
@@ -1098,6 +1125,9 @@ struct SharedTableState {
     // before settlements clear bets). Quest credit is only granted when 2+
     // players were dealt in, so solo play against the dealer earns no dailies.
     round_player_count: usize,
+    /// Minted whenever the table returns to betting. Every ledger row of the
+    /// round (bets, payouts, floor restores) carries it as `source_ref`.
+    round_id: Uuid,
 }
 
 #[derive(Clone, Debug)]
@@ -1128,6 +1158,7 @@ enum DeferredLeaveReason {
 #[derive(Clone, Copy, Debug)]
 struct Settlement {
     user_id: Uuid,
+    round_id: Uuid,
     bet: i64,
     outcome: Outcome,
     credit: i64,
@@ -1293,6 +1324,7 @@ impl SharedTableState {
             settled_at: None,
             status_message: "Sit to join, or watch the table.".to_string(),
             round_player_count: 0,
+            round_id: Uuid::now_v7(),
         }
     }
 
@@ -1986,6 +2018,7 @@ impl SharedTableState {
         seat.stood = false;
         Some(Settlement {
             user_id,
+            round_id: self.round_id,
             bet: bet.amount(),
             outcome,
             credit,
@@ -1995,6 +2028,7 @@ impl SharedTableState {
     fn reset_to_betting(&mut self, status: &str) {
         self.dealer_hand.clear();
         self.phase = Phase::Betting;
+        self.round_id = Uuid::now_v7();
         self.settled_at = None;
         self.clear_betting_countdown();
         self.clear_action_countdown();

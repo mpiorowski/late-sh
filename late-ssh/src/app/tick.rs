@@ -83,6 +83,9 @@ impl App {
         // the clock-glitch scheduler, and the `/haunt` drain. Must follow
         // the splash block, which advances the clock it reads.
         changed |= crate::app::deadchannel::haunt::svc::tick(self);
+        // The Late Edition: the login pop once the splash is down, `/paper`,
+        // and the results of both.
+        changed |= crate::app::paper::svc::tick(self);
 
         let mut messages = Vec::new();
         if let Some(rx) = &mut self.session_rx {
@@ -229,8 +232,11 @@ impl App {
             self.chat.pending_chat_screen_switch = false;
             self.set_screen(Screen::Dashboard);
         }
-        if let Some((user_id, username)) = self.chat.take_requested_open_profile() {
+        if let Some((user_id, username, section)) = self.chat.take_requested_open_profile() {
             self.open_profile_modal(user_id, username);
+            if section == crate::app::chat::svc::ProfileSection::Chips {
+                self.profile_modal_state.jump_to_chips();
+            }
             changed = true;
         }
         if let Some(request) = self.chat.take_requested_open_sheet() {
@@ -723,6 +729,13 @@ impl App {
                     self.name_flair = name_flair;
                     self.chat_ctx_epoch += 1;
                 }
+            }
+            // Runner looks (the #deadchannel portraits) ride the same edge:
+            // a pointer bump when the directory changed, and the chat rows
+            // rebuild once for every portrait in view.
+            if self.runner_looks_rx.has_changed().unwrap_or(false) {
+                self.runner_looks = self.runner_looks_rx.borrow_and_update().clone();
+                self.chat_ctx_epoch += 1;
             }
             // The pot resolves on the same edge, and for the same reason:
             // the panel reads owned values, and only a change the viewer can

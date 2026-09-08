@@ -248,10 +248,10 @@ immortal wanderer (`state::Escape`, `Plain` or `WithBeacon`).
   insert — a rankless profile badge. Plain: `darkroom_escape`, migration 143,
   `ADE`, 15,000. Beacon: `darkroom_beacon_escape`, migration 145, `ADB`,
   20,000. Separate claims, so an account can earn both.
-  **The chips repeat** (SHOP.md Phase 6, migration 158): the ending wipes the
+  **The chips repeat** (migration 158): the ending wipes the
   save, so a second escape is the whole arc walked again and it pays again.
   The gate is `Game.run_id`, a uuidv7 stamped on a fresh game and carried in
-  the save blob (a pre-Phase-6 blob deserializes with one of its own rather
+  the save blob (a blob written before migration 158 deserializes with one of its own rather
   than a nil id shared by every old save), passed to `reward_escape` and used
   as the `per_event` key, so a retried grant task pays once and a new run is a
   new event. `Escape::reward_line` is the one place the amounts are written

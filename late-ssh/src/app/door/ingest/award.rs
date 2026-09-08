@@ -1,8 +1,8 @@
 //! Chip payout + profile badge grants for door-game milestones landed by the
 //! log pipe. The shared door-award sink for all three external roguelike
-//! doors (devdocs/PLAN-ROGUELIKE-BOARDS.md): DCSS, NetHack, Brogue.
+//! doors (`app/leaderboard/CONTEXT.md`, the log pipe): DCSS, NetHack, Brogue.
 //!
-//! Chips repeat, badges do not (SHOP.md Phase 6). A win is the same 20+ hours
+//! Chips repeat, badges do not (migration 158). A win is the same 20+ hours
 //! the second time, so it pays the full amount again, gated two ways at once
 //! by `credit_run_cooldown_reward_template`: once per ingested log line, and
 //! at most once per the template's 7-day window per account. The line key is

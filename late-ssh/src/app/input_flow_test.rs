@@ -760,6 +760,10 @@ async fn artboard_view_help_and_active_input_share_one_lifecycle() {
     wait_for_render_contains(&mut app, "Mode       view").await;
     wait_for_render_contains(&mut app, "Cursor     0,0").await;
 
+    // The page lands on the rail; Enter on Board hands the keys to the
+    // board cursor.
+    wait_for_render_contains(&mut app, "rail j/k").await;
+    app.handle_input(b"\r");
     app.handle_input(b"\x1b[C");
     wait_for_render_contains(&mut app, "Cursor     1,0").await;
 
@@ -782,14 +786,19 @@ async fn artboard_view_help_and_active_input_share_one_lifecycle() {
         "q should close local Artboard help"
     );
 
+    // `?` is the global guide here as on every page; Ctrl+P is the
+    // Artboard's own help.
     app.handle_input(b"?");
-    wait_for_render_contains(&mut app, "Artboard Help").await;
+    wait_for_render_contains(&mut app, " Guide ").await;
     assert!(
-        render_plain(&mut app).contains("Artboard Help"),
-        "? in view mode should open local Artboard help"
+        !render_plain(&mut app).contains("Artboard Help"),
+        "? in view mode should open the global guide, not the local help"
     );
-    app.handle_input(b"q");
+    app.handle_input(b"?");
+    assert!(!app.show_help, "? should close the guide");
 
+    // The rail folded away when the board took the keys, so the board's
+    // cell (8, 3) is at screen column 10.
     app.handle_input(b"\x1b[<0;10;5M");
     wait_for_render_contains(&mut app, "Mode       active").await;
     wait_for_render_contains(&mut app, "Cursor     8,3").await;
@@ -2364,4 +2373,176 @@ async fn whisper_holds_the_splash_door_then_releases_and_marks_delivery() {
         "first contact whisper stamp persisted",
     )
     .await;
+}
+
+/// The gallery end to end: paint a block, frame it from the rail, name it,
+/// and find it under Mine. The rail is the only way in, so this is also the
+/// rail's keyboard contract.
+#[tokio::test]
+async fn artboard_archives_time_travel_from_the_rail() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "artboard-archive-it").await;
+    let mut archived = dartboard_core::Canvas::with_size(
+        crate::dartboard::CANVAS_WIDTH,
+        crate::dartboard::CANVAS_HEIGHT,
+    );
+    for x in 0..8 {
+        archived.set(dartboard_core::Pos { x, y: 0 }, 'A');
+    }
+    let client = test_db.db.get().await.expect("db client");
+    late_core::models::artboard::Snapshot::upsert(
+        &client,
+        "daily:2026-04-23",
+        serde_json::to_value(&archived).expect("canvas json"),
+        serde_json::json!({ "cells": [] }),
+    )
+    .await
+    .expect("insert daily snapshot");
+    let mut app = make_app(test_db.db.clone(), user.id, "artboard-archive-flow-it");
+
+    app.handle_input(b"4");
+    wait_for_render_contains(&mut app, "ARCHIVES").await;
+    wait_for_render_contains(&mut app, "Daily").await;
+
+    // Down the rail past Board, four gallery rows, and Hang a piece.
+    for _ in 0..6 {
+        app.handle_input(b"j");
+    }
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "DAILY").await;
+    wait_for_render_contains(&mut app, "2026-04-23").await;
+    // The key under the cursor lands on the board by itself.
+    wait_for_render_contains(&mut app, "Mode       snapshot").await;
+    wait_for_render_contains(&mut app, "AAAAAAAA").await;
+
+    // Tab back to the rail, up to Board, Enter: live again.
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, "archive").await;
+    for _ in 0..6 {
+        app.handle_input(b"k");
+    }
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("AAAAAAAA"),
+        "the live board should be back; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn artboard_gallery_hangs_a_framed_piece_from_the_rail() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "artboard-gallery-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "artboard-gallery-flow-it");
+
+    app.handle_input(b"4");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+    wait_for_render_contains(&mut app, "GALLERY").await;
+    wait_for_render_contains(&mut app, "Hang a piece").await;
+
+    // Paint a 10x4 block: forty glyphs, the floor for a piece.
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Mode       active").await;
+    app.handle_input(b"\x1b[200~##########\n##########\n##########\n##########\x1b[201~");
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+
+    // Esc on the board unfolds the rail; down it to Hang a piece: Board,
+    // four gallery rows, then it.
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "rail j/k").await;
+    for _ in 0..5 {
+        app.handle_input(b"j");
+    }
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Frame your work").await;
+
+    // A frame with nothing in it is refused on the bar, not hung.
+    app.handle_input(b"\r");
+    // The framing bar is one line; wait on the head of the notice.
+    wait_for_render_contains(&mut app, "Select a frame").await;
+
+    // Drag the frame over the block: board (0,0) to (9,3). Framing hands
+    // the keys to the board, so the rail is folded and the board starts at
+    // screen column 2.
+    app.handle_input(b"\x1b[<0;2;2M");
+    app.handle_input(b"\x1b[<32;11;5M");
+    app.handle_input(b"\x1b[<0;11;5m");
+    wait_for_render_contains(&mut app, "frame 10x4").await;
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Hang it in the").await;
+    wait_for_render_contains(&mut app, "100% yours").await;
+
+    // No title, no hang. The title takes every printable key: `m`, `v`,
+    // `w`, `+`, `-`, and the digits are global hotkeys everywhere else and
+    // must not be read as one while a title is being typed.
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Give it a title").await;
+    app.handle_input(b"warm view +1 -2");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("warm view +1 -2"),
+        "every key typed belongs to the title; frame={frame:?}"
+    );
+    assert!(
+        !app.music_prefix_armed,
+        "`v` in a title must not arm the music prefix"
+    );
+    assert!(
+        !app.show_bonsai_modal && !app.show_bonsai_v2_modal,
+        "`w` in a title must not open the bonsai modal"
+    );
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "now hangs").await;
+    wait_for_render_contains(&mut app, "warm view +1 -2").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("Mine"),
+        "the hung piece should open under Mine; frame={frame:?}"
+    );
+
+    // `v` on a listing is the gallery's applause key, not the music prefix.
+    // The preview pane only draws once the listing holds the piece.
+    wait_for_render_contains(&mut app, "by @artboard-gallery-it").await;
+    app.handle_input(b"v");
+    wait_for_render_contains(&mut app, "cannot applaud your own piece").await;
+    assert!(
+        !app.music_prefix_armed,
+        "`v` on the Artboard belongs to the gallery"
+    );
+
+    // `x` asks first; any other key withdraws the question; `x` twice
+    // takes the hanger's own piece down and Mine empties.
+    app.handle_input(b"x");
+    wait_for_render_contains(&mut app, "x again to confirm").await;
+    app.handle_input(b"j");
+    wait_for_render_not_contains(&mut app, "x again to confirm").await;
+    app.handle_input(b"x");
+    wait_for_render_contains(&mut app, "x again to confirm").await;
+    app.handle_input(b"x");
+    wait_for_render_contains(&mut app, "Taken down").await;
+    // The pane is narrow in the test terminal; the head of the empty
+    // listing's line is enough.
+    wait_for_render_contains(&mut app, "you have not hung a piece").await;
+
+    // The letter hotkeys are off the whole page, typing or not.
+    app.banner = None;
+    app.handle_input(b"m");
+    assert!(
+        app.banner.is_none(),
+        "`m` must not reach the paired-client mute from the Artboard"
+    );
+    app.handle_input(b"w");
+    assert!(
+        !app.show_bonsai_modal && !app.show_bonsai_v2_modal,
+        "`w` must not open Bonsai Care from the Artboard"
+    );
+
+    // Back out: list to rail. Esc on the rail is not the page's, so the
+    // digit keys still switch pages from there.
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "rail j/k").await;
+    app.handle_input(b"1");
+    wait_for_render_contains(&mut app, " Home ").await;
 }

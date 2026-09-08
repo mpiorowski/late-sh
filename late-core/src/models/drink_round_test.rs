@@ -333,3 +333,34 @@ async fn an_expired_credit_does_not_block_the_next_round() {
         .expect("a fresh credit");
     assert_eq!(open.round_id, second.round.id);
 }
+
+#[tokio::test]
+async fn rounds_resolve_by_id() {
+    let test_db = test_db().await;
+    let buyer = create_test_user(&test_db.db, "round-buyer").await;
+    let patron = create_test_user(&test_db.db, "round-patron").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let tx = client.transaction().await.expect("tx");
+    let grant = DrinkRound::open(
+        &tx,
+        buyer.id,
+        ROUND_PRICE_PER_PATRON,
+        &[patron.id],
+        ROUND_CREDIT_TTL_HOURS,
+        MAX_OPEN_CREDITS,
+    )
+    .await
+    .expect("round");
+    tx.commit().await.expect("commit");
+
+    let rounds = DrinkRound::find_by_ids(&client, &[grant.round.id, uuid::Uuid::now_v7()])
+        .await
+        .expect("rounds");
+    assert_eq!(rounds.len(), 1);
+    assert_eq!(
+        rounds
+            .get(&grant.round.id)
+            .map(|round| round.price_per_patron),
+        Some(ROUND_PRICE_PER_PATRON)
+    );
+}

@@ -371,6 +371,21 @@ pub async fn create_test_user(db: &Db, username: &str) -> User {
     .expect("create user")
 }
 
+/// Test-only clock control: move every gallery piece back one UTC month,
+/// so the monthly award snapshot (which only ever looks at last month) sees
+/// them as last month's wall.
+pub async fn roll_artboard_pieces_back_a_month(client: &tokio_postgres::Client) {
+    client
+        .execute(
+            "UPDATE artboard_pieces
+             SET period_month = (period_month - INTERVAL '1 month')::date,
+                 created = created - INTERVAL '1 month'",
+            &[],
+        )
+        .await
+        .expect("roll artboard pieces back a month");
+}
+
 /// Test-only clock control: move every crown reign back one UTC month, as if
 /// the month had rolled over under it. The reign stays open on purpose: the
 /// crown emptying at the boundary is a read-time rule with no sweeper behind

@@ -43,18 +43,25 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ),
             ("pencil", pencil_label.to_string(), pencil_color),
         ]),
-        keys: keys_line(vec![
-            ("h/j/k/l", "move"),
-            ("1-9", "place"),
-            ("m", "pencil"),
-            ("u", "undo"),
-            ("0", "clear"),
-            ("d/p/n", "daily/pers/new"),
-            ("[ ]", "diff"),
-            ("r", "reset"),
-            ("`", "dashboard"),
-            ("Esc", "exit"),
-        ]),
+        keys: keys_line(
+            vec![
+                ("h/j/k/l", "move"),
+                ("1-9", "place"),
+                ("m", "pencil"),
+                ("u", "undo"),
+                ("0", "clear"),
+                ("d/p/n", "daily/pers/new"),
+                ("[ ]", "diff"),
+                ("r", "reset"),
+                ("`", "dashboard"),
+                ("Esc", "exit"),
+            ]
+            .into_iter()
+            .chain(crate::app::arcade::ui::share_hints(super::share::is_ready(
+                state,
+            )))
+            .collect(),
+        ),
         tip: state
             .reset_pending
             .map(|kind| crate::app::arcade::ui::tip_line(kind.confirm_tip())),

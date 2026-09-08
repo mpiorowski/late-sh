@@ -4,7 +4,7 @@ use crate::{
     models::chips::ChipMove,
     models::game_payout::{
         GAME_PAYOUT_PERIOD_COOLDOWN, GamePayout, GamePayoutKey, GamePayoutMultiGrant,
-        GamePayoutPeriodGrant,
+        GamePayoutPeriodGrant, GamePayoutSource,
     },
     test_utils::{create_test_user, test_db},
 };
@@ -188,7 +188,7 @@ async fn cooldown_grant_records_claim_and_suppresses_repeat() {
     assert_eq!(row.get::<_, i64>("delta"), 500);
 }
 
-// ---- the multi-key grant (SHOP.md Phase 6) -------------------------------
+// ---- the multi-key grant (migration 158) ---------------------------------
 
 const WEEK: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
@@ -392,4 +392,45 @@ async fn concurrent_multi_grants_settle_to_one_payout() {
     let client = test_db.db.get().await.expect("db client");
     assert_eq!(claim_rows(&client, user.id).await, 2);
     assert_eq!(ledger_rows(&client, user.id).await, (1, 50_000));
+}
+
+/// A ledger row's ref is a claim id; the claim says what game and milestone
+/// the chips were for. Unknown ids resolve to nothing rather than an error.
+#[tokio::test]
+async fn sources_resolve_claim_ids_to_game_and_milestone() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "claim-source").await;
+    let client = test_db.db.get().await.expect("db client");
+    let today = chrono::Utc::now().date_naive();
+    GamePayout::grant_daily(
+        &client,
+        user.id,
+        "minesweeper",
+        "daily_win_hard",
+        today,
+        300,
+        ChipMove::DailyPuzzleWin,
+    )
+    .await
+    .expect("daily payout");
+    let claim_id: uuid::Uuid = client
+        .query_one(
+            "SELECT id FROM game_payout_claims WHERE user_id = $1",
+            &[&user.id],
+        )
+        .await
+        .expect("the claim row")
+        .get("id");
+
+    let sources = GamePayout::sources_for_ids(&client, &[claim_id, uuid::Uuid::now_v7()])
+        .await
+        .expect("sources");
+    assert_eq!(sources.len(), 1);
+    assert_eq!(
+        sources.get(&claim_id),
+        Some(&GamePayoutSource {
+            game: "minesweeper".to_string(),
+            payout_kind: "daily_win_hard".to_string(),
+        })
+    );
 }

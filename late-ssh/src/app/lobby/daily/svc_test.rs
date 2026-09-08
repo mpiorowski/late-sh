@@ -416,8 +416,7 @@ async fn pair_day_cap_pays_one_win_per_opponent_per_posting_day() {
     );
 }
 
-/// The cap is scoped to the roster game (SHOP.md Phase 7, decided
-/// 2026-08-27): a chess win and a chess960 win against the same opponent on
+/// The cap is scoped to the roster game (decided 2026-08-27): a chess win and a chess960 win against the same opponent on
 /// the same posting day are two keys, so both pay. Friends who play several
 /// games together are never touched; a colluding pair runs out of games. If
 /// this goes red because the key became roster-wide, that is a decision

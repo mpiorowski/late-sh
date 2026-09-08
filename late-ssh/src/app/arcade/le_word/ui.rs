@@ -59,15 +59,22 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ),
             ("reward", "250".to_string(), theme::TEXT_BRIGHT()),
         ]),
-        keys: keys_line(vec![
-            ("a-z", "type"),
-            ("Backspace", "delete"),
-            ("Enter", "guess"),
-            ("?", "help"),
-            ("!", "rules"),
-            ("`", "dashboard"),
-            ("Esc", "exit"),
-        ]),
+        keys: keys_line(
+            vec![
+                ("a-z", "type"),
+                ("Backspace", "delete"),
+                ("Enter", "guess"),
+                ("?", "help"),
+                ("!", "rules"),
+                ("`", "dashboard"),
+                ("Esc", "exit"),
+            ]
+            .into_iter()
+            .chain(crate::app::arcade::ui::share_hints(super::share::is_ready(
+                state,
+            )))
+            .collect(),
+        ),
         tip: Some(tip_line(state.message.clone())),
     };
 
@@ -90,7 +97,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             layout.board,
             layout.keyboard,
             "YOU WON!",
-            "Come back tomorrow",
+            "Press s to share your card",
             theme::SUCCESS(),
         );
     } else if state.is_game_over {

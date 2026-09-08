@@ -1,7 +1,8 @@
-//! Earned-award list for the profile overview.
+//! Earned-award list for the profile.
 //!
-//! Profile awards are stored permanently, and the overview shows every one of
-//! them: the badges are the reason to scroll down that far.
+//! Profile awards are stored permanently, and the profile shows every one of
+//! them: wrapped onto as many rows as the width needs, never folded into a
+//! "+N more". The badges are the reason to scroll down that far.
 
 use late_core::models::profile_award::ProfileAward;
 use ratatui::{
@@ -11,27 +12,38 @@ use ratatui::{
 
 use crate::app::common::theme;
 
-pub(crate) fn badge_lines(awards: &[ProfileAward]) -> Vec<Line<'static>> {
-    if awards.is_empty() {
-        return Vec::new();
-    }
-
+pub(crate) fn badge_lines(awards: &[ProfileAward], width: usize) -> Vec<Line<'static>> {
     let badge_style = Style::default()
         .fg(theme::AMBER_GLOW())
         .add_modifier(Modifier::BOLD);
+    const GAP: &str = "  ";
 
-    let mut spans = Vec::new();
+    let mut lines = Vec::new();
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
     for award in awards {
-        if !spans.is_empty() {
-            spans.push(Span::raw("  "));
+        let text = format!("[{} {}]", award.badge(), award.month_label());
+        let text_width = text.chars().count();
+        let needed = if spans.is_empty() {
+            text_width
+        } else {
+            used + GAP.len() + text_width
+        };
+        if !spans.is_empty() && needed > width {
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            used = 0;
         }
-        spans.push(Span::styled(
-            format!("[{} {}]", award.badge(), award.month_label()),
-            badge_style,
-        ));
+        if !spans.is_empty() {
+            spans.push(Span::raw(GAP));
+            used += GAP.len();
+        }
+        spans.push(Span::styled(text, badge_style));
+        used += text_width;
     }
-
-    vec![Line::from(spans)]
+    if !spans.is_empty() {
+        lines.push(Line::from(spans));
+    }
+    lines
 }
 
 /// The full badge guide: what each code means, how it is earned, and whether
@@ -58,8 +70,9 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         Line::from(Span::styled("Monthly awards", heading)),
         Line::from(Span::styled(
             "Snapshotted at month end from last month's totals on the boards to the left. Top 3 only, \
-             rank digit 1-3 (AW1 is that month's #1). Prestige only, no chips of their own. The \
-             crown is the exception: one holder, so no digit.",
+             rank digit 1-3 (AW1 is that month's #1). Prestige only, no chips of their own, with two \
+             exceptions: the crown has one holder, so no digit; and the Artboard gallery pays its \
+             three places 20,000 / 10,000 / 5,000 chips.",
             dim,
         )),
         Line::from(""),
@@ -68,7 +81,7 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "CHIP",
             "Top Chips",
-            "last month's net chip earnings (Top Chips board, shop spend ignored)",
+            "last month's chips earned (Top Chips board; table money, gifts, and spending ignored)",
         ),
         (
             "AW",
@@ -82,6 +95,11 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
             "CRWN",
             "The Crown",
             "wore the crown when last month ended (/crown)",
+        ),
+        (
+            "ART",
+            "Artboard Gallery",
+            "last month's most applauded piece, one per hanger, 3 applause to count (Artboard page, Hang a piece); pays 20,000 / 10,000 / 5,000 chips",
         ),
     ] {
         lines.push(entry_line(item_code, name, source, code, text, dim));

@@ -23,6 +23,8 @@
 //! the cap rather than the schema is what stops a room being bought for
 //! forever.
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use deadpool_postgres::GenericClient;
@@ -237,6 +239,27 @@ impl From<Row> for CashedCredit {
 }
 
 impl DrinkRound {
+    /// The rounds behind a batch of ledger refs, keyed by id: one primary-key
+    /// scan. Ids matching nothing are absent.
+    pub async fn find_by_ids(
+        client: &impl GenericClient,
+        ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Self>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = client
+            .query("SELECT * FROM drink_rounds WHERE id = ANY($1)", &[&ids])
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let round = Self::from(row);
+                (round.id, round)
+            })
+            .collect())
+    }
+
     /// Open a round and grant its credits, returning the patrons it reached.
     ///
     /// `candidates` is who was at the bar; the grant skips anyone already

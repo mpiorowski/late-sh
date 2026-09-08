@@ -421,7 +421,7 @@ pub struct Game {
     /// Unix seconds the sim last settled to. Zero on a fresh save.
     pub last_settled: i64,
     /// This run's identity, which is what the ending's chip payout is keyed
-    /// on (SHOP.md Phase 6: every run that gets out pays, and the run is the
+    /// on (migration 158: every run that gets out pays, and the run is the
     /// gate). The ending wipes the save, so the next run gets a new one. A
     /// blob written before this field existed deserializes with a fresh id
     /// rather than a nil one, which is why the default is `now_v7` and not

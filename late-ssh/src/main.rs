@@ -301,14 +301,36 @@ async fn main() -> anyhow::Result<()> {
         )
         .with_chip_service(chip_service.clone())
         .with_activity(activity_publisher.clone());
-    // Gild markers cross replicas over Postgres, not over this process's
-    // chat broadcast; see `ChatService::start_gild_listener_task`.
-    let _chat_gild_listener_task = chat_service.start_gild_listener_task(config.db.clone());
+    // Gild markers and stage-2 name hits cross replicas over Postgres, not
+    // over this process's chat broadcast; see
+    // `ChatService::start_message_listener_task`.
+    let _chat_message_listener_task = chat_service.start_message_listener_task(config.db.clone());
     // Process-wide switches (the haunt kill switch and fuse) cross replicas
     // over Postgres; the listener seeds this replica on every (re)connect.
     // See `app/flags/svc.rs`.
     let app_flag_service = late_ssh::app::flags::svc::AppFlagService::new(db.clone());
     let _app_flag_listener_task = app_flag_service.start_listener_task(config.db.clone());
+    // The Late Edition's press: every replica sweeps, the rows decide who
+    // prints. See `app/paper/svc.rs`.
+    let paper_service = late_ssh::app::paper::svc::PaperService::new(
+        db.clone(),
+        ai_service.clone(),
+        app_flag_service.subscribe(),
+    );
+    let _paper_sweeper_task = paper_service.start_sweeper_task();
+    // The Artboard gallery: every replica re-reads last month's winner for
+    // the splash; nothing here writes. See `app/artboard/gallery/svc.rs`.
+    let gallery_service = late_ssh::app::artboard::gallery::svc::GalleryService::new(
+        db.clone(),
+        app_flag_service.subscribe(),
+    );
+    let _gallery_splash_task = gallery_service.start_splash_refresh_task();
+    // Runner looks (the #deadchannel portraits) cross replicas the same
+    // way; the listener seeds this replica on every (re)connect. See
+    // `app/deadchannel/runner/svc.rs`.
+    let runner_look_service =
+        late_ssh::app::deadchannel::runner::svc::RunnerLookService::new(db.clone());
+    let _runner_look_listener_task = runner_look_service.start_listener_task(config.db.clone());
     // The crown's glyph crosses replicas over Postgres, not over any
     // in-process broadcast; the listener also seeds this replica's holder on
     // every (re)connect. See `app/crown/svc.rs`.
@@ -372,6 +394,7 @@ async fn main() -> anyhow::Result<()> {
         ai_service: ai_service.clone(),
         translation_service: translation_service.clone(),
         summary_service: summary_service.clone(),
+        paper_service: paper_service.clone(),
         audio_service: audio_service.clone(),
         voice_service,
         stream_service,
@@ -406,6 +429,7 @@ async fn main() -> anyhow::Result<()> {
         chip_service,
         house_registry,
         dartboard_server,
+        gallery_service,
         dartboard_provenance,
         leaderboard_service: leaderboard_service.clone(),
         quest_service,
@@ -434,6 +458,7 @@ async fn main() -> anyhow::Result<()> {
         ws_pair_limiter,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         app_flags: app_flag_service.clone(),
+        runner_looks: runner_look_service.clone(),
     };
 
     let session_shutdown = CancellationToken::new();
@@ -446,10 +471,10 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // The door log pipe: tail each door host's append-only log files over the
-    // stats SSH session and land runs/milestones/badges (PLAN-ROGUELIKE-BOARDS
-    // Phases 1-3). One task per door, gated on the same flag as that door's
-    // client; single-replica by the same assumption as every other
-    // process-global singleton here.
+    // stats SSH session and land runs/milestones/badges (the contract lives
+    // in `app/leaderboard/CONTEXT.md`). One task per door, gated on the same
+    // flag as that door's client; single-replica by the same assumption as
+    // every other process-global singleton here.
     let door_ingest_service = late_ssh::app::door::ingest::svc::DoorIngestService::new(
         db.clone(),
         state.chip_service.clone(),

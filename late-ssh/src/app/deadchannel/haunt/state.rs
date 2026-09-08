@@ -92,6 +92,23 @@ pub(crate) enum BioStanding {
     Failed,
 }
 
+/// What the gate said at connect: passed, or the first leg that failed in
+/// the order bootstrap checks them (the free legs before the paid bio
+/// one). The connect log carries it per person and the
+/// `late_ssh_first_contact_gate_total` counter tallies it, so a threshold
+/// can be tuned against how many it actually turns away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GateVerdict {
+    Passed,
+    TooFewHours,
+    TooFewSettings,
+    BioTooShort,
+    BioAiOff,
+    BioUnscreened,
+    BioPending,
+    BioFailed,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FirstContactGate {
     /// Lifetime connected hours, as last flushed.
@@ -150,17 +167,23 @@ impl FirstContactGate {
 
     /// All three legs hold: the static may choose this person.
     pub(crate) fn passes(&self) -> bool {
-        self.tenure_and_settings_pass() && self.bio_passes()
+        self.verdict() == GateVerdict::Passed
     }
 
-    pub(crate) fn bio_passes(&self) -> bool {
+    pub(crate) fn verdict(&self) -> GateVerdict {
+        if self.active_hours < ACTIVE_MIN_HOURS {
+            return GateVerdict::TooFewHours;
+        }
+        if self.touched_settings < TOUCHED_SETTINGS_MIN {
+            return GateVerdict::TooFewSettings;
+        }
         match self.bio {
-            BioStanding::Passed => true,
-            BioStanding::TooShort
-            | BioStanding::AiOff
-            | BioStanding::Unscreened
-            | BioStanding::Pending
-            | BioStanding::Failed => false,
+            BioStanding::Passed => GateVerdict::Passed,
+            BioStanding::TooShort => GateVerdict::BioTooShort,
+            BioStanding::AiOff => GateVerdict::BioAiOff,
+            BioStanding::Unscreened => GateVerdict::BioUnscreened,
+            BioStanding::Pending => GateVerdict::BioPending,
+            BioStanding::Failed => GateVerdict::BioFailed,
         }
     }
 
@@ -296,6 +319,11 @@ pub(crate) struct HauntState {
     pub(crate) clock_glitch: Option<ClockGlitch>,
     /// Stage 2: the own-name flicker roller.
     pub(crate) name_flicker: Option<NameFlicker>,
+    /// Stage 2 as the rest of the room sees it: somebody else's hit,
+    /// replayed here from the seed that rode the wire. Every session can
+    /// hold one, armed or not: witnessing is not a rung of the ladder, it
+    /// is being in the room when a rung is climbed.
+    pub(crate) witness: Option<ActiveHit>,
     /// Persisted marks, mirrored at session start and kept honest
     /// in-session from every won claim.
     pub(crate) marks: FirstContactMarks,
@@ -350,7 +378,13 @@ impl HauntState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HitStage {
     Glitch,
-    Name { message_id: Uuid },
+    /// The room travels with the claim so the won beat can be put on the
+    /// wire without going back to the chat state for it: by the time the
+    /// row answers, the sender may be looking at another room.
+    Name {
+        message_id: Uuid,
+        room_id: Uuid,
+    },
 }
 
 /// One claim out on the row. An `Err` (or a dropped sender) means the row
@@ -798,17 +832,27 @@ impl ClockGlitch {
 /// In the sender's session only, immediately after their message lands
 /// (the one moment of guaranteed attention), the author label of that
 /// just-landed message renders with two or three characters from the
-/// glyph alphabet, holds ~800ms, heals. The body is never touched: the
-/// escalation over stage 1 is targeting, not content. It only rolls once
+/// glyph alphabet in two waves back to back, each with its own glyphs
+/// (~800ms, then a different corruption for ~800ms more), then heals. The
+/// body is never touched: the escalation over stage 1 is targeting, not
+/// content. It only rolls once
 /// stage 1 has run its course (`stage_open`), and only on a message that
 /// renders its own author header (the landing hook in `chat/state.rs`
 /// skips grouped continuations, whose label never draws). A natural hit
 /// is a claim on the row first (the daily and lifetime caps live there)
 /// and shows on the tick the claim comes back won.
 ///
-/// How long one hit holds, in `App::marquee_tick` units (~800ms): well
-/// past the clock's ~200ms, because stage 2 is meant to be hard to miss.
-const NAME_HOLD_TICKS: usize = 12;
+/// How long one wave of a hit holds, in `App::marquee_tick` units
+/// (~800ms): well past the clock's ~200ms, because stage 2 is meant to be
+/// hard to miss.
+const NAME_WAVE_TICKS: usize = 12;
+/// Waves per hit (decided 2026-09-03): the label corrupts, then corrupts
+/// differently, then heals. Twice the hold of one wave, and the second
+/// wave rolls its own glyphs, so an eye that wrote the first off as a
+/// render hiccup is caught by the change.
+const NAME_WAVES: usize = 2;
+/// How long the whole hit holds.
+const NAME_HOLD_TICKS: usize = NAME_WAVE_TICKS * NAME_WAVES;
 /// Order of one in dozens of sends.
 const NAME_CHANCE_ONE_IN: u64 = 24;
 /// At most one hit per UTC day per person (enforced by the row).
@@ -818,6 +862,14 @@ pub(crate) const NAME_DAILY_CAP: u32 = 1;
 /// one-per-day cap, stages 1 and 2 each spread over two or three days:
 /// the full ladder is roughly a week of slow burn.
 pub(crate) const NAME_TOTAL_CAP: u32 = 3;
+
+/// The wave base for one hit: the session's dice mixed with the tick it
+/// started on, so two hits in one session never swap the same characters.
+/// Travels on the wire, which is what makes every screen in the room
+/// paint the same corruption.
+fn wave_seed(rng: u64, since: usize) -> u64 {
+    rng ^ ((since as u64) << 1 | 1)
+}
 
 /// What a landed own message rolled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -830,12 +882,73 @@ pub(crate) enum NameRoll {
     Forced,
 }
 
+/// The live hit: which message's author label is corrupted, since when,
+/// with which wave base, and which wave the rows were last rebuilt for.
+///
+/// One hit is painted by the person being haunted and by everyone else in
+/// the room, on their own tick clocks and never quite in step (a witness
+/// starts when the message reaches them). The seed is what keeps the
+/// theater identical anyway: it rides the wire, so every screen swaps the
+/// same characters in the same two waves.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ActiveHit {
+    message_id: Uuid,
+    since: usize,
+    seed: u64,
+    painted_wave: usize,
+}
+
+impl ActiveHit {
+    pub(crate) fn new(message_id: Uuid, since: usize, seed: u64) -> Self {
+        Self {
+            message_id,
+            since,
+            seed,
+            painted_wave: 0,
+        }
+    }
+
+    /// Advance one world tick; returns true on a repaint edge: the start of
+    /// the next wave (the caller repaints the label with that wave's
+    /// glyphs) and the heal. `None` back means the hit is over.
+    pub(crate) fn tick(hit: &mut Option<Self>, tick: usize) -> bool {
+        let Some(active) = hit.as_mut() else {
+            return false;
+        };
+        let elapsed = tick.saturating_sub(active.since);
+        if elapsed >= NAME_HOLD_TICKS {
+            *hit = None;
+            return true;
+        }
+        let wave = elapsed / NAME_WAVE_TICKS;
+        if wave == active.painted_wave {
+            return false;
+        }
+        active.painted_wave = wave;
+        true
+    }
+
+    /// The live corruption for the row builder: which message's author
+    /// label, and this wave's seed. Each wave hands out its own, so the
+    /// swapped glyphs change at the wave edge.
+    pub(crate) fn corruption(&self, tick: usize) -> Option<(Uuid, u64)> {
+        let elapsed = tick.saturating_sub(self.since);
+        if elapsed >= NAME_HOLD_TICKS {
+            return None;
+        }
+        let wave = (elapsed / NAME_WAVE_TICKS) as u64;
+        Some((
+            self.message_id,
+            self.seed ^ wave.wrapping_mul(0x9E37_79B9_7F4A_7C15),
+        ))
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct NameFlicker {
     /// xorshift64 state: the per-send dice.
     rng: u64,
-    /// The live hit: which message's author label is corrupted, since when.
-    active: Option<(Uuid, usize)>,
+    active: Option<ActiveHit>,
     /// A claim is out on the row for this message's label.
     claiming: Option<Uuid>,
     /// Lifetime hits, seeded from the persisted counter and refreshed by
@@ -871,7 +984,7 @@ impl NameFlicker {
             return NameRoll::Miss;
         }
         if std::mem::take(&mut self.force_next) {
-            self.active = Some((message_id, tick));
+            self.active = Some(ActiveHit::new(message_id, tick, wave_seed(self.rng, tick)));
             // Saturating: the marks of a test app sit at the ceiling.
             self.total_hits = self.total_hits.saturating_add(1);
             return NameRoll::Forced;
@@ -892,7 +1005,7 @@ impl NameFlicker {
     /// The row granted the hit: corrupt `message_id`'s label from `tick`.
     pub(crate) fn start(&mut self, message_id: Uuid, tick: usize, hits: u32) {
         self.claiming = None;
-        self.active = Some((message_id, tick));
+        self.active = Some(ActiveHit::new(message_id, tick, wave_seed(self.rng, tick)));
         self.total_hits = hits;
     }
 
@@ -908,24 +1021,23 @@ impl NameFlicker {
         self.claiming = None;
     }
 
-    /// Advance one world tick; returns true on the heal edge (the caller
-    /// repaints the healed label).
+    /// Advance one world tick; returns true on a repaint edge: the start
+    /// of the next wave (the caller repaints the label with that wave's
+    /// glyphs) and the heal (the caller repaints the healed label).
     pub(crate) fn tick(&mut self, tick: usize) -> bool {
-        match self.active {
-            Some((_, since)) if tick.saturating_sub(since) >= NAME_HOLD_TICKS => {
-                self.active = None;
-                true
-            }
-            _ => false,
-        }
+        ActiveHit::tick(&mut self.active, tick)
     }
 
     /// The live hit for the row builder: which message's author label to
-    /// corrupt, and the burst seed for the deterministic swap.
+    /// corrupt, and this wave's seed for the deterministic swap.
     pub(crate) fn corruption(&self, tick: usize) -> Option<(Uuid, u64)> {
-        let (message_id, since) = self.active?;
-        (tick.saturating_sub(since) < NAME_HOLD_TICKS)
-            .then_some((message_id, self.rng ^ ((since as u64) << 1 | 1)))
+        self.active.as_ref()?.corruption(tick)
+    }
+
+    /// The live hit's wave base, for the beat the room is told about
+    /// (`svc::publish_name_hit`). `None` while nothing is showing.
+    pub(crate) fn live_hit(&self) -> Option<(Uuid, u64)> {
+        self.active.as_ref().map(|hit| (hit.message_id, hit.seed))
     }
 
     pub(crate) fn total_hits(&self) -> u32 {

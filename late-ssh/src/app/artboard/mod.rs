@@ -1,4 +1,6 @@
+pub mod color_picker;
 pub mod data;
+pub mod gallery;
 pub mod input;
 pub mod page;
 pub mod provenance;
