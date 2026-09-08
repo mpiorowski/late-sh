@@ -11,6 +11,12 @@ use crate::app::{
     common::theme,
 };
 
+/// The preview block: one fixed size for the sidebar and the profile, the
+/// sidebar's width, so both show the same picture of the tree and the
+/// scale is the same in each. Twelve tree rows over the pot row.
+pub(crate) const PREVIEW_WIDTH: usize = 21;
+pub(crate) const PREVIEW_HEIGHT: usize = 13;
+
 #[derive(Debug, Clone)]
 pub(crate) struct RenderedBonsai {
     pub lines: Vec<String>,
@@ -48,8 +54,12 @@ pub(crate) fn draw_bonsai_inline(
 
     let footer_height = 1usize;
     let tree_height = (area.height as usize).saturating_sub(footer_height);
-    let mut lines = render_preview_lines(state, area.width as usize, tree_height);
+    if (area.width as usize) < PREVIEW_WIDTH || tree_height < PREVIEW_HEIGHT {
+        return;
+    }
+    let mut lines = render_preview_lines(state);
     apply_sway(&mut lines, wall_tick);
+    center_lines(&mut lines, area.width as usize, PREVIEW_WIDTH);
 
     while lines.len() < tree_height {
         lines.insert(0, Line::from(""));
@@ -124,29 +134,27 @@ pub(crate) fn canvas_lines(state: &BonsaiV2State, show_selection: bool) -> Vec<L
     render_tree_lines(state, CANVAS_WIDTH, CANVAS_HEIGHT, show_selection)
 }
 
-/// The preview: the true canvas fitted into a `width` x `height` box for
-/// the sidebar and the profile. It never invents anything. When the tree
-/// fits, this is the modal's own glyphs, trimmed. When it does not, bare
-/// rows (trunk and branch only, no foliage) are dropped first, from the
-/// pot upward, so the crown keeps its detail and a long trunk is what
-/// gets shortened; only then is each axis scaled by its own integer
-/// factor, so a wide tree in a tall narrow panel is squeezed sideways and
-/// not flattened. A cell that gathers one sample keeps that sample's
-/// glyph; a cell that gathers several takes its dominant kind, foliage
-/// as density glyphs (`@`, `*`, `#`), structure as its commonest glyph.
-pub(crate) fn render_preview_lines(
-    state: &BonsaiV2State,
-    width: usize,
-    height: usize,
-) -> Vec<Line<'static>> {
-    let rendered = render_preview_ascii(state, width, height);
+/// The preview: the true canvas fitted into the fixed `PREVIEW_WIDTH` x
+/// `PREVIEW_HEIGHT` block for the sidebar and the profile. It never
+/// invents anything. When the tree fits, this is the modal's own glyphs,
+/// trimmed around the trunk. When it does not, one integer scale factor
+/// is applied to both axes, so the block keeps the modal's proportions;
+/// bare rows (trunk and branch only, no foliage) are dropped from the pot
+/// upward only as far as needed to stop the height forcing a larger
+/// factor than the width already does, so a long trunk is what gets
+/// shortened and the crown keeps its detail. A cell that gathers one
+/// sample keeps that sample's glyph; a cell that gathers several takes
+/// its dominant kind, foliage as density glyphs (`@`, `*`, `#`),
+/// structure as its commonest glyph.
+pub(crate) fn render_preview_lines(state: &BonsaiV2State) -> Vec<Line<'static>> {
+    let rendered = render_preview_ascii(state);
     rendered_lines(state, &rendered, false)
 }
 
-/// Lead each line with blanks so the canvas-wide modal block sits centered
-/// in a wider area. A line already wider than the area is left alone.
-pub(crate) fn center_lines(lines: &mut [Line<'static>], width: usize) {
-    let left = width.saturating_sub(CANVAS_WIDTH) / 2;
+/// Lead each line with blanks so a `block_width`-wide block sits centered
+/// in a wider area. A block already wider than the area is left alone.
+pub(crate) fn center_lines(lines: &mut [Line<'static>], width: usize, block_width: usize) {
+    let left = width.saturating_sub(block_width) / 2;
     if left == 0 {
         return;
     }
@@ -282,19 +290,10 @@ fn plot_tree(state: &BonsaiV2State, width: usize, height: usize) -> Vec<Vec<Opti
     grid
 }
 
-fn render_preview_ascii(state: &BonsaiV2State, width: usize, height: usize) -> RenderedBonsai {
-    if width == 0 || height == 0 {
-        return RenderedBonsai {
-            lines: Vec::new(),
-            selected_cells: Vec::new(),
-            occupied_cells: 0,
-            cell_kinds: Vec::new(),
-        };
-    }
+fn render_preview_ascii(state: &BonsaiV2State) -> RenderedBonsai {
+    let width = PREVIEW_WIDTH;
+    let height = PREVIEW_HEIGHT;
     let tree_height = height - 1;
-    if tree_height == 0 {
-        return render_pot_only(width, height);
-    }
 
     let full = plot_tree(state, CANVAS_WIDTH, CANVAS_HEIGHT);
     let origin_x = (CANVAS_WIDTH / 2) as isize;
@@ -305,19 +304,6 @@ fn render_preview_ascii(state: &BonsaiV2State, width: usize, height: usize) -> R
         .collect::<Vec<_>>();
     if rows.is_empty() {
         return render_pot_only(width, height);
-    }
-
-    // Shorten bare structure before scaling anything: the lowest bare row
-    // goes first, but the trunk base (the last occupied row) always stays.
-    while rows.len() > tree_height {
-        let base = rows[rows.len() - 1];
-        let Some(bare_index) = rows
-            .iter()
-            .rposition(|y| *y != base && row_is_bare(&full[*y]))
-        else {
-            break;
-        };
-        rows.remove(bare_index);
     }
 
     let half = rows
@@ -331,8 +317,25 @@ fn render_preview_ascii(state: &BonsaiV2State, width: usize, height: usize) -> R
         })
         .max()
         .unwrap_or(0) as usize;
-    let sx = (2 * half + 1).div_ceil(width).max(1);
-    let sy = rows.len().div_ceil(tree_height).max(1);
+    let width_scale = (2 * half + 1).div_ceil(width).max(1);
+
+    // Shorten bare structure only as far as the width's factor needs:
+    // while the height would force a larger factor, drop the lowest bare
+    // row, the trunk base (the last occupied row) always staying.
+    while rows.len().div_ceil(tree_height) > width_scale {
+        let base = rows[rows.len() - 1];
+        let Some(bare_index) = rows
+            .iter()
+            .rposition(|y| *y != base && row_is_bare(&full[*y]))
+        else {
+            break;
+        };
+        rows.remove(bare_index);
+    }
+
+    // One factor for both axes, so the block keeps the modal's shape.
+    let scale = width_scale.max(rows.len().div_ceil(tree_height).max(1));
+    let (sx, sy) = (scale, scale);
 
     let out_origin = (width / 2) as isize;
     let mut acc = vec![vec![PreviewCell::default(); width]; tree_height];

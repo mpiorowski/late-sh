@@ -48,7 +48,8 @@ const MUSIC_DETAIL_HEIGHT: u16 = 6;
 const MUSIC_QUEUE_HEIGHT: u16 = 3;
 // Bonsai is kept fixed when shown; the preview renderer scales the tree to
 // whatever height it gets.
-const BONSAI_MIN_HEIGHT: u16 = 10;
+/// The Dynamic Bonsai preview block plus its footer row; classic scales to it.
+const BONSAI_MIN_HEIGHT: u16 = crate::app::bonsai_v2::render::PREVIEW_HEIGHT as u16 + 1;
 // Daily games: fixed, stable chrome (see `daily/panel.rs`).
 const DAILY_HEIGHT: u16 = crate::app::lobby::daily::panel::DAILY_PANEL_HEIGHT;
 

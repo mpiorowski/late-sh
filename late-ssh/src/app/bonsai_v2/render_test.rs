@@ -110,19 +110,22 @@ fn preview_keeps_exact_glyphs_when_the_tree_fits() {
     left.status = BranchStatus::LeafPad;
     let state = state_with_branches(vec![trunk, left]);
 
-    let rendered = render_preview_ascii(&state, 21, 10);
+    let rendered = render_preview_ascii(&state);
 
-    assert_eq!(rendered.lines.len(), 10);
-    assert!(rendered.lines[9].contains("[=====]"));
-    assert_eq!(rendered.lines[8].chars().nth(10), Some('|'));
+    assert_eq!(rendered.lines.len(), PREVIEW_HEIGHT);
+    assert!(rendered.lines[PREVIEW_HEIGHT - 1].contains("[=====]"));
+    assert_eq!(
+        rendered.lines[PREVIEW_HEIGHT - 2].chars().nth(PREVIEW_WIDTH / 2),
+        Some('|')
+    );
     let joined = rendered.lines.join("\n");
     assert!(joined.contains('\\'), "expected the real diagonal glyph: {joined}");
 }
 
-/// A tree wider than the box is squeezed sideways only: the crown's rows
-/// survive and the pot stays on the last row.
+/// A tree wider than the block is scaled by one factor on both axes, so
+/// it keeps the modal's proportions, and the pot stays on the last row.
 #[test]
-fn preview_squeezes_a_wide_tree_sideways() {
+fn preview_scales_a_wide_tree_uniformly() {
     let trunk = branch(1, None, (0, 0), (0, 2));
     let mut left = branch(2, Some(1), (0, 2), (-20, 5));
     left.status = BranchStatus::LeafPad;
@@ -130,12 +133,23 @@ fn preview_squeezes_a_wide_tree_sideways() {
     right.status = BranchStatus::LeafPad;
     let state = state_with_branches(vec![trunk, left, right]);
 
-    let rendered = render_preview_ascii(&state, 21, 10);
+    let rendered = render_preview_ascii(&state);
 
-    assert_eq!(rendered.lines.len(), 10);
-    assert!(rendered.lines.iter().all(|line| line.chars().count() == 21));
-    assert!(rendered.lines[9].contains("[=====]"));
+    assert_eq!(rendered.lines.len(), PREVIEW_HEIGHT);
+    assert!(
+        rendered
+            .lines
+            .iter()
+            .all(|line| line.chars().count() == PREVIEW_WIDTH)
+    );
+    assert!(rendered.lines[PREVIEW_HEIGHT - 1].contains("[=====]"));
     assert!(rendered.occupied_cells > 0);
+    // Six tree rows at scale 2 land on three, not stretched to fill twelve.
+    let tree_rows = rendered.lines[..PREVIEW_HEIGHT - 1]
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    assert!(tree_rows <= 4, "expected a squat tree, got {tree_rows} rows");
 }
 
 #[test]

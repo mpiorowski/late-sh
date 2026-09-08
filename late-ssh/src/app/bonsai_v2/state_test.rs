@@ -580,3 +580,27 @@ fn repot_cuts_everything_outside_the_canvas() {
     assert!(graph.branch(50).is_none());
     assert!(graph.branch(51).is_none());
 }
+
+/// A full tree still cycles its pinches: the wave's bookkeeping runs at
+/// the cap even though nothing new can be added.
+#[test]
+fn a_pinch_still_sets_on_a_full_tree() {
+    let mut graph = graph_with_two_editable_tips();
+    let tip_id = first_editable_tip(&graph);
+    graph.branch_mut(tip_id).unwrap().status = BranchStatus::Pinched;
+    while graph.branches.len() < MAX_BRANCHES {
+        let filler = graph.branches.len() as i32 + 100;
+        graph
+            .branches
+            .push(test_branch(filler, None, (30, 20), (30, 20)));
+    }
+
+    let grown = grow_graph_once(&mut graph, 42, 0, 75, 0, GrowthCause::Water, None);
+
+    assert!(grown.is_empty());
+    assert_eq!(graph.branches.len(), MAX_BRANCHES);
+    assert_eq!(
+        graph.branch(tip_id).map(|branch| branch.status),
+        Some(BranchStatus::NeedsPinch)
+    );
+}

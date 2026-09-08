@@ -28,7 +28,7 @@ use ratatui::{
 
 use crate::app::{
     bonsai::{state::stage_for, ui::render_tree_art_lines},
-    bonsai_v2::render::{apply_sway, render_preview_lines},
+    bonsai_v2::render::{PREVIEW_WIDTH, apply_sway, center_lines, render_preview_lines},
     chat::showcase::svc::ShowcaseFeedItem,
     common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
     hub::aquarium::{state::AquariumState, ui as aquarium_ui},
@@ -418,9 +418,9 @@ fn section_lines(label: &str, width: usize) -> Vec<Line<'static>> {
 }
 
 /// The bonsai as exactly `height` rows, the pot on the last one. A Dynamic
-/// Bonsai is the preview of its canvas fitted to the box, swaying on the
-/// wall tick like the sidebar; the classic sprite is cropped from the
-/// crown so the pot and trunk stay, and holds still.
+/// Bonsai is the same fixed preview block the sidebar shows, centered,
+/// swaying on the wall tick; the classic sprite is cropped from the crown
+/// so the pot and trunk stay, and holds still.
 fn bonsai_block(
     state: &ProfileModalState,
     width: usize,
@@ -433,8 +433,9 @@ fn bonsai_block(
     let mut tree = if state.dynamic_bonsai_selected() {
         match state.bonsai_v2() {
             Some(bonsai) => {
-                let mut lines = render_preview_lines(bonsai, width, height);
+                let mut lines = render_preview_lines(bonsai);
                 apply_sway(&mut lines, wall_tick);
+                center_lines(&mut lines, width, PREVIEW_WIDTH);
                 lines
             }
             None => placeholder("Dynamic Bonsai not planted yet"),

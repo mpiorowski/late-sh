@@ -50,7 +50,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BonsaiV2State, wall_ti
 fn draw_tree(frame: &mut Frame, area: Rect, state: &BonsaiV2State, wall_tick: usize) {
     let mut tree_lines = canvas_lines(state, true);
     apply_sway(&mut tree_lines, wall_tick);
-    center_lines(&mut tree_lines, area.width as usize);
+    center_lines(&mut tree_lines, area.width as usize, CANVAS_WIDTH);
     let top_pad = area
         .height
         .saturating_sub(tree_lines.len() as u16)

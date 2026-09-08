@@ -957,9 +957,10 @@ fn grow_graph_once(
     cause: GrowthCause,
     preferred_tip_id: Option<i32>,
 ) -> Vec<(i32, i32)> {
-    if graph.branches.len() >= MAX_BRANCHES {
-        return Vec::new();
-    }
+    // No early return at the branch cap: the wave's bookkeeping (ageing,
+    // a set pinch becoming ready) must run on a full tree too, or pinching
+    // freezes along with growth. Every branch-adding path below checks
+    // the cap itself.
     let live_ids = graph
         .branches
         .iter()
@@ -1097,19 +1098,15 @@ fn grow_tip_once(
     if at_budget && let Some((first_id, _)) = split_tip_once(graph, tip_id, seed) {
         return Some(first_id);
     }
-    // Where the next cell goes. A wired tip goes where it was told; the
-    // trunk follows its own movement; everything else meanders around its
-    // heading (`natural_steps`), first choice first, the rest as fallbacks
-    // when the first cell is taken. A step that would leave the pot is
-    // never taken: the wall parks the tip, and the tree's energy goes to
-    // buds elsewhere instead of crawling along the edge.
-    let steps: Vec<(i16, i16)> = if wired {
-        vec![growth_step(&tip)]
-    } else if order == 0 {
-        vec![trunk_step(seed, run)]
-    } else {
-        natural_steps(seed, &tip, order, graph.next_id)
-    };
+    // Where the next cell goes: `candidate_steps`, the one list the wave
+    // filter and the bud gate also consult, first choice first and the
+    // rest as fallbacks when a cell is taken. A tip against the pot wall
+    // is parked (a wire can still pull it back in), so the tree's energy
+    // goes to buds elsewhere instead of crawling along the edge.
+    if tip_parked(&tip) && !wired {
+        return None;
+    }
+    let steps = candidate_steps(graph, seed, &tip);
     let thickness = tip.thickness.saturating_sub(1).max(1);
     let new_vigor = (vigor - water_stress / 2).clamp(20, 95) as i16;
     let mut new_id = None;
@@ -1318,7 +1315,7 @@ fn bud_once(
             branch.id != ROOT_BRANCH_ID
                 && branch.is_tip_candidate()
                 && graph.is_tip(branch.id)
-                && tip_can_grow(graph, branch)
+                && tip_can_grow(graph, seed, branch)
         })
         .count();
     if open_shoots >= MAX_OPEN_SHOOTS {
@@ -1384,17 +1381,39 @@ fn bud_once(
     budded
 }
 
-/// Whether a tip has at least one open cell it could actually step into:
-/// its own heading, either rising diagonal, or a level step. A tip on
-/// the ceiling cannot, since the pot never lets a tip slide along it.
-fn tip_can_grow(graph: &BonsaiGraph, tip: &Branch) -> bool {
-    if tip.end_y >= TIP_MAX_Y {
+/// Whether a tip has at least one open cell among the steps it would
+/// actually take. This must agree with `grow_tip_once` exactly: a tip the
+/// wave believes can grow but never does would be picked every wave as
+/// the oldest waiting tip and fail every time, starving the rest.
+fn tip_can_grow(graph: &BonsaiGraph, seed: i64, tip: &Branch) -> bool {
+    if tip_parked(tip) && !matches!(tip.status, BranchStatus::Wired) {
         return false;
     }
-    let (dx, dy) = growth_step(tip);
-    [(dx, dy), (-1, 1), (1, 1), (-1, 0), (1, 0)]
-        .into_iter()
-        .any(|(dx, dy)| growth_target_is_open(graph, tip.id, branch_target(tip, dx, dy)))
+    candidate_steps(graph, seed, tip).into_iter().any(|(dx, dy)| {
+        let target = branch_target(tip, dx, dy);
+        target_in_canvas(target) && growth_target_is_open(graph, tip.id, target)
+    })
+}
+
+/// A tip against the ceiling or a side wall. The pot never lets a tip
+/// slide or climb along it; the tip waits there for a pinch, a cut, or a
+/// wire, and does not hold the bud gate.
+fn tip_parked(tip: &Branch) -> bool {
+    tip.end_y >= TIP_MAX_Y || tip.end_x.abs() >= TIP_MAX_ABS_X
+}
+
+/// The steps a tip would take, in order of preference: a wired tip goes
+/// where it was told, the trunk follows its own movement, and every other
+/// tip meanders (`natural_steps`).
+fn candidate_steps(graph: &BonsaiGraph, seed: i64, tip: &Branch) -> Vec<(i16, i16)> {
+    if matches!(tip.status, BranchStatus::Wired) {
+        return vec![growth_step(tip)];
+    }
+    let (order, run) = order_and_run(graph, tip.id);
+    if order == 0 {
+        return vec![trunk_step(seed, run)];
+    }
+    natural_steps(seed, tip, order, graph.next_id)
 }
 
 /// How many empty cells lie level from `from` toward `side` before the
@@ -1469,7 +1488,7 @@ fn natural_steps(seed: i64, tip: &Branch, order: u8, salt: i32) -> Vec<(i16, i16
         }
     };
     let mut steps = vec![first];
-    for candidate in [keep, climb, level, straight_up] {
+    for candidate in [keep, climb, level, straight_up, (-side, 1)] {
         if !steps.contains(&candidate) {
             steps.push(candidate);
         }
@@ -1658,7 +1677,11 @@ fn growth_tip_order(
         .iter()
         .copied()
         .filter(|id| !ordered.contains(id))
-        .filter(|id| graph.branch(*id).is_some_and(|tip| tip_can_grow(graph, tip)))
+        .filter(|id| {
+            graph
+                .branch(*id)
+                .is_some_and(|tip| tip_can_grow(graph, seed, tip))
+        })
         .collect::<Vec<_>>();
     remaining.sort_by_key(|id| {
         (
