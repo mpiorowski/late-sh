@@ -108,7 +108,7 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
         ),
         landing::stat(
             "Escape",
-            "50,000 chips, and the DCW badge the first time",
+            "40,000 chips, and the DCW badge the first time",
             14,
         ),
         Line::from(Span::styled(
