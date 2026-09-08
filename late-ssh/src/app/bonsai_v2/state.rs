@@ -1097,31 +1097,35 @@ fn grow_tip_once(
     if at_budget && let Some((first_id, _)) = split_tip_once(graph, tip_id, seed) {
         return Some(first_id);
     }
-    let (dx, dy) = if order == 0 && !wired {
-        trunk_step(seed, run)
+    // Where the next cell goes. A wired tip goes where it was told; the
+    // trunk follows its own movement; everything else meanders around its
+    // heading (`natural_steps`), first choice first, the rest as fallbacks
+    // when the first cell is taken. A step that would leave the pot is
+    // never taken: the wall parks the tip, and the tree's energy goes to
+    // buds elsewhere instead of crawling along the edge.
+    let steps: Vec<(i16, i16)> = if wired {
+        vec![growth_step(&tip)]
+    } else if order == 0 {
+        vec![trunk_step(seed, run)]
     } else {
-        growth_step(&tip)
+        natural_steps(seed, &tip, order, graph.next_id)
     };
-    let deflected = !target_in_canvas(branch_target(&tip, dx, dy));
-    // The fall-through past a failed fork is for a tip with a natural step
-    // left. A tip that would need the pot wall to deflect it stops here:
-    // it may slide along the wall for its run budget and no further, or
-    // one ceiling tip crawls the whole width one branch per cell and eats
-    // the cap.
-    if at_budget && deflected {
-        return None;
-    }
-    let (dx, dy) = deflect_at_pot(&tip, dx, dy);
     let thickness = tip.thickness.saturating_sub(1).max(1);
-    let new_id = graph.add_branch(
-        tip_id,
-        dx,
-        dy,
-        1,
-        thickness,
-        (vigor - water_stress / 2).clamp(20, 95) as i16,
-    );
-    if let Some(new_id) = new_id
+    let new_vigor = (vigor - water_stress / 2).clamp(20, 95) as i16;
+    let mut new_id = None;
+    for (dx, dy) in steps {
+        if !target_in_canvas(branch_target(&tip, dx, dy)) {
+            continue;
+        }
+        new_id = graph.add_branch(tip_id, dx, dy, 1, thickness, new_vigor);
+        if new_id.is_some() {
+            break;
+        }
+    }
+    // A wire's lean carries one cell past the wired tip and then wears
+    // off, so a steer is a bend in the arm, not a ruler.
+    if wired
+        && let Some(new_id) = new_id
         && let Some(child) = graph.branch_mut(new_id)
     {
         child.bend_x = tip.bend_x;
@@ -1380,12 +1384,15 @@ fn bud_once(
     budded
 }
 
-/// Whether a tip has at least one open cell to grow into, deflection
-/// included: the straight step, the two level steps, and the two rising
-/// diagonals.
+/// Whether a tip has at least one open cell it could actually step into:
+/// its own heading, either rising diagonal, or a level step. A tip on
+/// the ceiling cannot, since the pot never lets a tip slide along it.
 fn tip_can_grow(graph: &BonsaiGraph, tip: &Branch) -> bool {
+    if tip.end_y >= TIP_MAX_Y {
+        return false;
+    }
     let (dx, dy) = growth_step(tip);
-    [(dx, dy), (-1, 0), (1, 0), (-1, 1), (1, 1)]
+    [(dx, dy), (-1, 1), (1, 1), (-1, 0), (1, 0)]
         .into_iter()
         .any(|(dx, dy)| growth_target_is_open(graph, tip.id, branch_target(tip, dx, dy)))
 }
@@ -1410,26 +1417,64 @@ fn open_run(graph: &BonsaiGraph, from: (i16, i16), side: i16) -> u16 {
     }
 }
 
-/// A tip whose step would leave the pot slides along the wall instead:
-/// against the ceiling it steps level, first to its own side and then
-/// the other; against a side wall it turns upward, then level away from
-/// the wall. Only the pot deflects a tip; a neighbouring branch does
-/// not, so the crown stays tidy and a crowded tip simply waits.
-fn deflect_at_pot(tip: &Branch, dx: i16, dy: i16) -> (i16, i16) {
-    let straight = branch_target(tip, dx, dy);
-    if target_in_canvas(straight) {
-        return (dx, dy);
-    }
-    let own_side = if dx != 0 { dx.signum() } else { 1 };
-    let candidates: [(i16, i16); 4] = if straight.1 > TIP_MAX_Y {
-        [(own_side, 0), (-own_side, 0), (-own_side, 1), (dx, 0)]
+/// How a free tip meanders. Its heading is the side its segment already
+/// leans to (a vertical segment picks a side from the seed). Around that
+/// heading it rolls one of: keep going, one notch toward level, one notch
+/// toward up, and at depth sometimes a droop. Young orders mostly climb;
+/// deeper orders drift level and hang, so the crown spreads and pads sit
+/// under the branch they grew from, the way a tree looks rather than a
+/// bundle of rulers. The rolled step comes first; the others follow as
+/// fallbacks so a taken cell costs the wave nothing.
+fn natural_steps(seed: i64, tip: &Branch, order: u8, salt: i32) -> Vec<(i16, i16)> {
+    let current_dx = (tip.end_x - tip.start_x).signum();
+    let current_dy = (tip.end_y - tip.start_y).signum();
+    let side = if current_dx != 0 {
+        current_dx
+    } else if hash_parts(seed, tip.id as u64, 23).is_multiple_of(2) {
+        -1
     } else {
-        [(0, 1), (-own_side, 1), (-own_side, 0), (0, 1)]
+        1
     };
-    candidates
-        .into_iter()
-        .find(|(dx, dy)| target_in_canvas(branch_target(tip, *dx, *dy)))
-        .unwrap_or((dx, dy))
+    let keep = (if current_dx == 0 { side } else { current_dx }, current_dy.max(0));
+    let level = (side, 0);
+    let climb = (side, 1);
+    let straight_up = (0, 1);
+    let droop = (side, -1);
+    let roll = hash_parts(seed, salt as u64, tip.id as u64) % 100;
+    // A lean left by a wire is the heading for this one step.
+    let leaning = tip.bend_x != 0 || tip.bend_y != 0;
+    let first = if leaning {
+        growth_step(tip)
+    } else {
+        match order {
+        1 => match roll {
+            0..=59 => keep,
+            60..=79 => climb,
+            80..=89 => straight_up,
+            _ => level,
+        },
+        2 | 3 => match roll {
+            0..=44 => keep,
+            45..=64 => level,
+            65..=84 => climb,
+            _ => straight_up,
+        },
+        _ => match roll {
+            0..=34 => keep,
+            35..=64 => level,
+            65..=79 => climb,
+            80..=89 => droop,
+            _ => straight_up,
+        },
+        }
+    };
+    let mut steps = vec![first];
+    for candidate in [keep, climb, level, straight_up] {
+        if !steps.contains(&candidate) {
+            steps.push(candidate);
+        }
+    }
+    steps
 }
 
 fn target_in_canvas(target: (i16, i16)) -> bool {
