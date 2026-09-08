@@ -141,10 +141,22 @@ fn is_youtube_url_rejects_invalid_url() {
 
 #[test]
 fn tweet_url_detection_covers_post_shapes_only() {
-    assert_eq!(tweet_status_id("https://twitter.com/user/status/123").as_deref(), Some("123"));
-    assert_eq!(tweet_status_id("https://x.com/user/status/123").as_deref(), Some("123"));
-    assert_eq!(tweet_status_id("https://mobile.twitter.com/user/status/123").as_deref(), Some("123"));
-    assert_eq!(tweet_status_id("https://x.com/i/web/status/123").as_deref(), Some("123"));
+    assert_eq!(
+        tweet_status_id("https://twitter.com/user/status/123").as_deref(),
+        Some("123")
+    );
+    assert_eq!(
+        tweet_status_id("https://x.com/user/status/123").as_deref(),
+        Some("123")
+    );
+    assert_eq!(
+        tweet_status_id("https://mobile.twitter.com/user/status/123").as_deref(),
+        Some("123")
+    );
+    assert_eq!(
+        tweet_status_id("https://x.com/i/web/status/123").as_deref(),
+        Some("123")
+    );
     assert_eq!(tweet_status_id("https://youtube.com/watch?v=abc"), None);
     assert_eq!(tweet_status_id("not a url at all"), None);
 }
@@ -156,7 +168,10 @@ fn non_post_x_urls_stay_off_the_tweet_path() {
     assert_eq!(tweet_status_id("https://x.com/OpenAI"), None);
     assert_eq!(tweet_status_id("https://x.com/search?q=rust"), None);
     assert_eq!(tweet_status_id("https://x.com/i/lists/123"), None);
-    assert_eq!(tweet_status_id("https://x.com/OpenAI/status/not-an-id"), None);
+    assert_eq!(
+        tweet_status_id("https://x.com/OpenAI/status/not-an-id"),
+        None
+    );
 }
 
 #[test]
@@ -195,7 +210,10 @@ fn oembed_html_yields_the_post_date() {
 #[test]
 fn post_text_keeps_authored_links_and_drops_media_shortlinks() {
     let html = "<blockquote><p lang=\"en\">Read <a href=\"https://t.co/x\">example.com/post</a> now <a href=\"https://t.co/y\">pic.x.com/abc</a></p>&mdash; A (@a) <a href=\"https://x.com/a/status/1\">May 1, 2026</a></blockquote>";
-    assert_eq!(tweet_text_from_oembed_html(html), vec!["Read example.com/post now"]);
+    assert_eq!(
+        tweet_text_from_oembed_html(html),
+        vec!["Read example.com/post now"]
+    );
 }
 
 #[test]
