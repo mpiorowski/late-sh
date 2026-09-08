@@ -9,15 +9,15 @@ use ratatui::{
 use crate::app::{
     bonsai_v2::{
         render::{apply_sway, canvas_lines, center_lines},
-        state::{BonsaiV2State, CANVAS_HEIGHT, branch_label},
+        state::{BonsaiV2State, CANVAS_HEIGHT, CANVAS_WIDTH, branch_label},
     },
     common::theme,
 };
 
-/// The modal is a frame around the canvas: one blank row, the tree, one
-/// blank row, two status rows, two footer rows, and the border.
-const MODAL_WIDTH: u16 = 48;
-const MODAL_HEIGHT: u16 = CANVAS_HEIGHT as u16 + 8;
+/// The modal is a frame around the canvas: the tree, one blank row, two
+/// status rows, two footer rows, and the border.
+const MODAL_WIDTH: u16 = CANVAS_WIDTH as u16 + 12;
+const MODAL_HEIGHT: u16 = CANVAS_HEIGHT as u16 + 7;
 
 pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BonsaiV2State, wall_tick: usize) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
@@ -105,8 +105,18 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &BonsaiV2State) {
         ),
         dot(),
         Span::styled(status.to_string(), Style::default().fg(health_color)),
-    ])
-    .centered();
+    ]);
+    let summary = if state.is_full() {
+        let mut spans = summary.spans;
+        spans.push(dot());
+        spans.push(Span::styled(
+            "full: cut to make room",
+            Style::default().fg(theme::AMBER()),
+        ));
+        Line::from(spans).centered()
+    } else {
+        summary.centered()
+    };
 
     let detail = detail_line(&selected, state.message.as_deref());
 

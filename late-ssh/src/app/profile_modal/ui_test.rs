@@ -94,7 +94,7 @@ fn render(state: &ProfileModalState, width: u16, height: u16) -> Vec<String> {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("terminal");
     terminal
-        .draw(|frame| draw(frame, frame.area(), state))
+        .draw(|frame| draw(frame, frame.area(), state, 0))
         .expect("draw");
     let buffer = terminal.backend().buffer();
     (0..buffer.area.height)

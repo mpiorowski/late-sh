@@ -1845,7 +1845,7 @@ impl App {
         }
 
         if ctx.show_profile_modal {
-            profile_modal::ui::draw(frame, inner, ctx.profile_modal_state);
+            profile_modal::ui::draw(frame, inner, ctx.profile_modal_state, ctx.marquee_tick);
         }
 
         if ctx.show_sheet_modal {

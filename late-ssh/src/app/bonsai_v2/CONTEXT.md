@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/bonsai_v2`
-- Last updated: 2026-09-08 (the tree now lives in one fixed canvas, `CANVAS_WIDTH` 21 by `CANVAS_HEIGHT` 13, that the modal, the sidebar panel, the profile hero, and the share snippet all draw 1:1; the compact preview renderer is gone. Growth is bounded by the canvas and shaped by length budgets per branch order (fork over extend), the trunk takes one lean, live interior segments back-bud, and trees from before the canvas are repotted once at load. Admins temporarily bypass the daily watering gate to test it.)
+- Last updated: 2026-09-08 (the care modal is the pot: the tree lives in a fixed `CANVAS_WIDTH` 61 by `CANVAS_HEIGHT` 26 canvas the modal and the share snippet draw 1:1, so the whole tree is always visible where it is tended. Growth is bounded by that canvas and shaped by length budgets per branch order (fork over extend), the trunk takes one lean, interior segments and leaf pads back-bud so a tended tree is never finished, trees from before the canvas are repotted once at load, and the branch cap is 128 with the modal saying "full: cut to make room". The sidebar and the profile draw a rebuilt preview of the canvas (exact glyphs when it fits, bare rows dropped, then per-axis integer scaling) and both sway on the wall tick. Admins temporarily bypass the daily watering gate to test it.)
 - Purpose: local working context for the Dynamic Bonsai branch-graph system.
 - Status: Active prototype, unlocked and selected through the `dynamic_bonsai` shop item.
 - Parent context: `../../../../CONTEXT.md`
@@ -33,7 +33,7 @@ This is not final polish. It is an end-to-end dynamic prototype with real persis
 late-ssh/src/app/bonsai_v2/
 |-- mod.rs              # Module declarations only
 |-- state.rs            # Persistent branch graph, growth simulation, care actions, badge scoring
-|-- render.rs           # The one graph renderer (modal, sidebar, profile) plus the sway
+|-- render.rs           # The graph renderer (modal canvas), the fitted preview (sidebar, profile), the sway
 |-- modal_ui.rs         # Dynamic Bonsai care workbench modal
 |-- modal_input.rs      # Modal key handling and classic Bonsai water/chip compatibility bridge
 `-- CONTEXT.md          # This file
@@ -89,9 +89,10 @@ Session state:
 - Watering is once per UTC day; a second press the same day says "Already watered today" and moves nothing. The +200 chips are paid by the classic watering path (`DailyCare::mark_watered`), once per day. **Temporary (2026-09-08): admins bypass the Dynamic gate** (`DailyWaterGate::AdminBypass`, chosen by `modal_input::daily_water_gate` from `App::is_admin`) so growth waves can be tested without waiting a day. Classic's own gate and the chips are untouched. Remove the bypass once the renderer has been evaluated.
 
 Rendering:
-- There is exactly one renderer, `render_tree_lines` over `render_ascii`, and one size: `canvas_lines` renders the whole `CANVAS_WIDTH` x `CANVAS_HEIGHT` canvas, pot on the last row, trunk rooted at the center column. The modal (with selection highlighting), the sidebar panel (`draw_bonsai_inline`), the profile hero, and the share snippet all draw that block; `center_lines` leads it with blanks inside a wider area. Nothing is scaled or cropped anywhere, because the growth rules keep every tip (and its leaf pad reach) inside the canvas.
-- The sidebar and the modal apply `apply_sway` off the wall tick; the profile passes no sway (a static hero). `BONSAI_MIN_HEIGHT` in the sidebar is the canvas plus the footer row.
-- The care modal is sized to the canvas (48 by 21): the tree, two status rows, a two-row key footer.
+- One plotter, `plot_tree`, puts the graph's cells (branches, then leaf pads, a pad drawn whether or not a shoot has budded out of it) into a grid with the trunk base above the last row at the center column. `render_ascii` adds the pot and is the true render; `canvas_lines` is that at `CANVAS_WIDTH` x `CANVAS_HEIGHT`, which the care modal (with selection highlighting, `center_lines` leading it inside the wider frame) and the share snippet draw 1:1. The growth rules keep every tip (and its leaf pad reach) inside the canvas, so the modal never cuts anything off.
+- The sidebar panel (`draw_bonsai_inline`) and the profile hero draw `render_preview_lines`: the true canvas fitted into their box by `render_preview_ascii`. It never invents anything. When the tree fits, it is the modal's own glyphs, trimmed around the trunk. When it does not, bare rows (structure only, no foliage, nothing mid-pinch) are dropped from the pot upward, the trunk base always kept, so a long trunk is what gets shortened; only then is each axis scaled by its own integer factor (`sx`, `sy`), so a wide tree in the tall narrow sidebar is squeezed sideways, not flattened. A preview cell that gathered one sample keeps that sample's glyph; several samples resolve to the dominant kind, foliage as density glyphs (`@` / `*` / `#` by count), structure as its commonest glyph. The preview pot is narrower (`[=====]`, `[=]`, `=` by width).
+- The modal, the sidebar, and the profile hero all apply `apply_sway` off the wall tick. The profile modal takes `wall_tick` in `draw`, and `tick.rs` marks it changed on the `anim_half` edge and wakes at `ANIM_HALF_TICK` while it shows a Dynamic Bonsai (`ProfileModalState::dynamic_bonsai_selected`).
+- The care modal is sized to the canvas (`CANVAS_WIDTH + 12` by `CANVAS_HEIGHT + 7`): the tree, a blank row, two status rows, a two-row key footer. The status row appends "full: cut to make room" at the branch cap.
 - Profile modals also follow the selected bonsai variant. Dynamic profiles use `BonsaiV2State::view_only`, which applies elapsed-day catch-up in memory for rendering but never persists to the viewed user's row.
 - Child branches do not redraw their parent joint cell; only root segments draw their starting cell. This keeps one-cell graph segments from visually collapsing into uneven long ASCII runs.
 - There is no static stage template in Dynamic Bonsai rendering.
@@ -146,7 +147,7 @@ Important concept: user actions should affect future geometry, not only the curr
 
 Branches are stored as one-cell growth segments. Growth adds a new child segment instead of extending the selected branch endpoint, so selecting/cutting a branch id targets that exact segment and descendants downstream from it.
 
-Branch cap: `MAX_BRANCHES` (`state.rs`) is derived from the canvas, one segment per tip cell plus the root (171 at 21 x 13), so it is never the reason a tree stops: the openness check refuses an occupied cell first, and a full pot is one with no open cell, which any cut reopens. Every branch-adding path still checks the cap independently as the last line of defense: `BonsaiGraph::add_branch`, `grow_tips_once` and `grow_tip_once` before spending a growth-wave slot, the side-shoot spawn, `split_tip_once` (`+2` since a split needs two new branches), `bud_once`, and the graph-normalize/migration path. Deadwood keeps its cells: it is not selectable and not cuttable today, so a tree that took heavy stress damage carries that lost space until it is replanted. The chat badge score is presence-derived from the graph (branch length plus leaf-pad weight, see section 7), so it is bounded by the canvas rather than having a ceiling of its own.
+Branch cap: `MAX_BRANCHES = 128` (`state.rs`, raised from 96 when back-budding arrived). Every branch-adding path checks it independently, defense-in-depth rather than one gate: `BonsaiGraph::add_branch`, `grow_tips_once` and `grow_tip_once` before spending a growth-wave slot, the side-shoot spawn, `split_tip_once` (`+2` since a split needs two new branches), `bud_once`, and the graph-normalize/migration path. At the cap growth silently adds nothing, and the care modal's status row says "full: cut to make room" (`BonsaiV2State::is_full`) so a still tree reads as a prompt, not a bug; steering, pinching, cutting, and splitting still work, and any cut reopens growth. Deadwood keeps its cells: it is not selectable and not cuttable today. The chat badge score is presence-derived from the graph (branch length plus leaf-pad weight, see section 7), so it is bounded by this same cap.
 
 ---
 
@@ -159,7 +160,7 @@ Main state values:
 - `last_watered`: UTC daily watering gate.
 
 The pot (2026-09-08):
-- Every growth target must satisfy `target_in_canvas`: `|x| <= TIP_MAX_ABS_X` (8) and `1 <= y <= TIP_MAX_Y` (10), checked in `growth_target_is_open`, the one choke point every branch-adding path goes through. A leaf pad reaches 2 cells sideways and 1 up, hence the margin inside the 21 x 13 canvas.
+- Every growth target must satisfy `target_in_canvas`: `|x| <= TIP_MAX_ABS_X` (28) and `1 <= y <= TIP_MAX_Y` (23), checked in `growth_target_is_open`, the one choke point every branch-adding path goes through. A leaf pad reaches 2 cells sideways and 1 up, hence the margin inside the 61 x 26 canvas. The canvas is the care modal's tree area, so the restriction is the frame the player is looking at.
 - Length budgets (`run_budget` by `order_and_run`): the trunk and first arms run 3 single-file cells, the next two orders 2, deeper 1. A tip at its budget forks (`split_tip_once`) instead of extending; if no fork is open it is done. A wired tip (status `Wired` or any bend set) always extends where it was told. `split_candidates` opens the trunk's fork upward on both sides and mixes a level arm into deeper forks so the crown spreads sideways.
 - `trunk_step`: the trunk goes straight, leans one cell to the seed's side, then straight, and forks at three cells.
 - Back-budding (`bud_once`, run at the end of every growth wave, including waves with no growing tip at all): two kinds of site at `end_y >= 2`. A live interior segment carrying exactly one live child throws a shoot leaning away from that child. A leaf pad with no shoot yet throws one out of its foliage (the renderer keeps drawing the pad; `plot_leaf_pad` no longer requires the pad to be a tip). Watering buds up to two sites, a plain day one on a coin flip, a dry day none; vigor under 40 or stress 60+ buds nothing. This is what puts foliage at every height and keeps a pinched-out tree in play: pinch the shoot three times and the pad has moved outward by a cell, denser.
@@ -248,7 +249,7 @@ Important invariant: a huge neglected mess should not automatically be prestigio
 - Keep classic Bonsai water/chip compatibility while both systems coexist, or daily rewards will diverge.
 - Badge metadata must stay cheap for chat; use the persisted `badge_glyph`, not per-message graph rendering.
 - The renderer must tolerate narrow/sidebar areas without panics: out-of-grid cells are dropped, never indexed.
-- Every surface shows the whole canvas 1:1. Do not reintroduce a preview renderer, a crop, or a camera; if the tree does not fit, the growth rules are wrong, not the window.
+- The care modal shows the whole canvas 1:1, always; the growth rules guarantee it fits. Small surfaces show the preview, which reads the true canvas and never invents cells: when it must shrink, drop bare rows first, then scale each axis by its own integer factor. No crop, no camera.
 - Unit tests in this module must stay pure logic/rendering tests only. DB/service integration belongs under crate `tests/`.
 
 ---

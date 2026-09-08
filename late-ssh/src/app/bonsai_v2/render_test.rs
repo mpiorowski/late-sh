@@ -101,6 +101,43 @@ fn the_canvas_is_the_one_size_with_the_pot_on_the_last_row() {
     assert!(rendered.selected_cells.is_empty());
 }
 
+/// A tree that fits the preview box is the modal's own glyphs: nothing
+/// merged, nothing invented, the pot on the last row.
+#[test]
+fn preview_keeps_exact_glyphs_when_the_tree_fits() {
+    let trunk = branch(1, None, (0, 0), (0, 3));
+    let mut left = branch(2, Some(1), (0, 3), (-3, 6));
+    left.status = BranchStatus::LeafPad;
+    let state = state_with_branches(vec![trunk, left]);
+
+    let rendered = render_preview_ascii(&state, 21, 10);
+
+    assert_eq!(rendered.lines.len(), 10);
+    assert!(rendered.lines[9].contains("[=====]"));
+    assert_eq!(rendered.lines[8].chars().nth(10), Some('|'));
+    let joined = rendered.lines.join("\n");
+    assert!(joined.contains('\\'), "expected the real diagonal glyph: {joined}");
+}
+
+/// A tree wider than the box is squeezed sideways only: the crown's rows
+/// survive and the pot stays on the last row.
+#[test]
+fn preview_squeezes_a_wide_tree_sideways() {
+    let trunk = branch(1, None, (0, 0), (0, 2));
+    let mut left = branch(2, Some(1), (0, 2), (-20, 5));
+    left.status = BranchStatus::LeafPad;
+    let mut right = branch(3, Some(1), (0, 2), (20, 5));
+    right.status = BranchStatus::LeafPad;
+    let state = state_with_branches(vec![trunk, left, right]);
+
+    let rendered = render_preview_ascii(&state, 21, 10);
+
+    assert_eq!(rendered.lines.len(), 10);
+    assert!(rendered.lines.iter().all(|line| line.chars().count() == 21));
+    assert!(rendered.lines[9].contains("[=====]"));
+    assert!(rendered.occupied_cells > 0);
+}
+
 #[test]
 fn horizontal_run_after_rising_diagonal_keeps_upper_glyph() {
     let mut grid = vec![vec![None; 9]; 5];

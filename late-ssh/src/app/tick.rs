@@ -1057,6 +1057,10 @@ impl App {
         if self.show_profile_modal && anim_quarter {
             changed |= self.profile_modal_state.step_reef();
         }
+        // The profile hero's Dynamic Bonsai sways like the sidebar's.
+        changed |= self.show_profile_modal
+            && anim_half
+            && self.profile_modal_state.dynamic_bonsai_selected();
 
         // Daily boards are event-driven (daily_tick, chat, input); the 1Hz
         // cadence keeps the move-deadline clock honest while on screen.
@@ -1103,6 +1107,7 @@ impl App {
             || self.right_sidebar_visible()
             || self.pet_state.roaming_active()
             || self.last_pet_strip_travel.get().is_some()
+            || (self.show_profile_modal && self.profile_modal_state.dynamic_bonsai_selected())
         {
             return ANIM_HALF_TICK;
         }

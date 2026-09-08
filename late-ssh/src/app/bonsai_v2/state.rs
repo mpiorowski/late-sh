@@ -15,13 +15,14 @@ const MAX_GROWTH_WAVE_TIPS: usize = 6;
 const LEAF_RAMIFICATION_THRESHOLD: u8 = 3;
 const ROOT_BRANCH_ID: i32 = 1;
 
-/// The pot. A Dynamic Bonsai lives in one fixed canvas that every surface
-/// (care modal, sidebar panel, profile hero, share snippet) shows 1:1, so
-/// the tree is never scaled or cropped anywhere. Growth stops at the edge;
-/// density does not: forks, buds, and pads keep filling the box. The size
-/// is the sidebar panel's: 21 columns, 12 tree rows over the pot row.
-pub(crate) const CANVAS_WIDTH: usize = 21;
-pub(crate) const CANVAS_HEIGHT: usize = 13;
+/// The pot is the care modal. A Dynamic Bonsai lives in one fixed canvas
+/// that the modal and the share snippet show 1:1, so the whole tree is
+/// always visible where it is tended and nobody wonders why it stopped at
+/// an edge they cannot see. Growth stops at the edge; density does not:
+/// forks, buds, and pads keep filling the box. Smaller surfaces (sidebar,
+/// profile) draw a scaled preview of this canvas.
+pub(crate) const CANVAS_WIDTH: usize = 61;
+pub(crate) const CANVAS_HEIGHT: usize = 26;
 /// A leaf pad reaches this far sideways and up from its tip, so tips stop
 /// short of the canvas edge by that much and pads never leave the box.
 const PAD_REACH_X: i16 = 2;
@@ -31,12 +32,11 @@ const TIP_MAX_ABS_X: i16 = (CANVAS_WIDTH as i16) / 2 - PAD_REACH_X;
 /// tip row is the canvas height minus the pot row, the base row, and the
 /// pad's reach.
 const TIP_MAX_Y: i16 = CANVAS_HEIGHT as i16 - 2 - PAD_REACH_Y;
-/// The branch cap is the pot itself: one segment per tip cell plus the
-/// root, so the only way a tree stops growing is a pot with no open cell
-/// left, and a cut always opens one. Every branch-adding path still
-/// checks it, as the last line of defense behind the openness check.
-const MAX_BRANCHES: usize =
-    (2 * TIP_MAX_ABS_X as usize + 1) * TIP_MAX_Y as usize + 1;
+/// The branch cap. Every branch-adding path checks it independently. A
+/// full tree grows nothing new until something is cut, and the care modal
+/// says so (`BonsaiV2State::is_full`). Raised from 96 when back-budding
+/// arrived, since buds add branches the old ceiling never budgeted for.
+pub(crate) const MAX_BRANCHES: usize = 128;
 
 /// Whether the once-per-UTC-day watering rule applies to this press.
 /// `AdminBypass` is a temporary testing aid (2026-09-08): admins can water
@@ -592,6 +592,13 @@ impl BonsaiV2State {
                 .join("\n"),
             label
         )
+    }
+
+    /// At the branch cap: no growth wave or bud can add anything until a
+    /// cut frees room. Surfaced in the care modal so a still tree reads as
+    /// "cut me", not as a bug.
+    pub(crate) fn is_full(&self) -> bool {
+        self.graph.branches.len() >= MAX_BRANCHES
     }
 
     pub(crate) fn selected_branch(&self) -> Option<&Branch> {
