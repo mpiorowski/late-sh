@@ -3,7 +3,7 @@
   "uid": "observability",
   "title": "Runtime Observability",
   "timezone": "browser",
-  "version": 15,
+  "version": 16,
   "schemaVersion": 39,
   "style": "dark",
   "tags": [
@@ -1762,7 +1762,7 @@
     {
       "type": "table",
       "title": "Ladder by Runner",
-      "description": "How far each person has been walked, read off the hit lines themselves rather than the arming line, so it never lags a session. An empty cell is a stage not yet reached. Sessions logged before the username field shipped still get a row, just without a name.",
+      "description": "How far each person has been walked, read off the hit lines themselves rather than the arming line, so it never lags a session. An empty cell is a stage not yet reached. The name is a grouping key, not an aggregate: a stats query returns every non-grouped column as a number, so selecting it any other way makes the panel fail to parse. Lines logged before the username field shipped carry no name and are filtered out rather than splitting a person across two rows; they age out on their own at the 7d retention.",
       "datasource": {
         "uid": "victorialogs",
         "type": "victoriametrics-logs-datasource"
@@ -1770,7 +1770,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "_msg:\"first contact\" OR _msg:\"haunt flag\" OR _msg:\"runner created\" OR _msg:\"deadchannel joined\" | stats by (user_id) max(username) runner, max(hits) if (_msg:\"clock glitch burst\") glitch, max(hits) if (_msg:\"name flicker hit\") name, max(hits) if (_msg:\"whisper delivered\") whisper, count() if (_msg:\"invitation requested\") invited, count() if (_msg:\"runner created\") runner_row, count() if (_msg:\"first contact armed\") sessions",
+          "expr": "_msg:\"first contact\" OR _msg:\"haunt flag\" OR _msg:\"runner created\" OR _msg:\"deadchannel joined\" | filter username:* | stats by (user_id, username) max(hits) if (_msg:\"clock glitch burst\") glitch, max(hits) if (_msg:\"name flicker hit\") name, max(hits) if (_msg:\"whisper delivered\") whisper, count() if (_msg:\"invitation requested\") invited, count() if (_msg:\"runner created\") runner_row, count() if (_msg:\"first contact armed\") sessions",
           "queryType": "stats"
         }
       ],
@@ -1782,7 +1782,7 @@
               "Time": true
             },
             "indexByName": {
-              "runner": 0,
+              "username": 0,
               "user_id": 1,
               "glitch": 2,
               "name": 3,
@@ -1792,7 +1792,7 @@
               "sessions": 7
             },
             "renameByName": {
-              "runner": "Runner",
+              "username": "Runner",
               "user_id": "User ID",
               "glitch": "Glitch",
               "name": "Name",
@@ -1838,7 +1838,7 @@
     {
       "type": "table",
       "title": "Gate Legs by Runner",
-      "description": "The three eligibility legs per person, at their highest seen value: lifetime connected hours (needs 168), touched settings keys (needs 2), and bio length (needs 100 before a screen is ever spent).",
+      "description": "The three eligibility legs per person, at their highest seen value: lifetime connected hours (needs 168), touched settings keys (needs 2), and bio length (needs 100 before a screen is ever spent). The name groups the rows rather than being aggregated, for the same parsing reason as the ladder table.",
       "datasource": {
         "uid": "victorialogs",
         "type": "victoriametrics-logs-datasource"
@@ -1846,7 +1846,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "_msg:\"first contact gate evaluated\" | stats by (user_id) max(username) runner, max(active_hours) hours, max(touched_settings) settings, max(bio_chars) bio_chars, count() connects",
+          "expr": "_msg:\"first contact gate evaluated\" | filter username:* | stats by (user_id, username) max(active_hours) hours, max(touched_settings) settings, max(bio_chars) bio_chars, count() connects",
           "queryType": "stats"
         }
       ],
@@ -1858,7 +1858,7 @@
               "Time": true
             },
             "indexByName": {
-              "runner": 0,
+              "username": 0,
               "user_id": 1,
               "hours": 2,
               "settings": 3,
@@ -1866,7 +1866,7 @@
               "connects": 5
             },
             "renameByName": {
-              "runner": "Runner",
+              "username": "Runner",
               "user_id": "User ID",
               "hours": "Active hours",
               "settings": "Settings keys",
@@ -1910,7 +1910,7 @@
     {
       "type": "logs",
       "title": "Haunt Log",
-      "description": "Every deadchannel line in one place, newest first: the gate, arming, each hit, the whisper, the invitation, the admin switches, and the runner's birth. Expand a row for the username, the counters, and the trace id.",
+      "description": "Every deadchannel line in one place, newest first: the gate, arming, each hit, the whisper, the invitation, the admin switches, and the runner's birth. The username is formatted into the message itself because the logs panel renders _msg and nothing else; expand a row for the counters and the trace id.",
       "datasource": {
         "uid": "victorialogs",
         "type": "victoriametrics-logs-datasource"
@@ -1918,7 +1918,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "_msg:\"first contact\" OR _msg:\"haunt flag\" OR _msg:\"runner created\" OR _msg:\"deadchannel joined\"",
+          "expr": "_msg:\"first contact\" OR _msg:\"haunt flag\" OR _msg:\"runner created\" OR _msg:\"deadchannel joined\" | format \"[<username>] <_msg>\" as _msg",
           "queryType": "instant"
         }
       ],
