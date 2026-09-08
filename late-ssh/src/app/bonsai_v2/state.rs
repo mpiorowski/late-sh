@@ -12,6 +12,10 @@ use uuid::Uuid;
 use crate::app::bonsai::svc::BonsaiService;
 
 const MAX_GROWTH_WAVE_TIPS: usize = 6;
+/// Back-budding waits while this many shoots are still open (growing or
+/// wired tips off the trunk). Tend what you have, then the tree offers
+/// more; without the gate a watered tree buds faster than anyone pinches.
+const MAX_OPEN_SHOOTS: usize = 4;
 const LEAF_RAMIFICATION_THRESHOLD: u8 = 3;
 const ROOT_BRANCH_ID: i32 = 1;
 
@@ -20,8 +24,9 @@ const ROOT_BRANCH_ID: i32 = 1;
 /// always visible where it is tended and nobody wonders why it stopped at
 /// an edge they cannot see. Growth stops at the edge; density does not:
 /// forks, buds, and pads keep filling the box. Smaller surfaces (sidebar,
-/// profile) draw a scaled preview of this canvas.
-pub(crate) const CANVAS_WIDTH: usize = 61;
+/// profile) draw a scaled preview of this canvas. Wider than tall, since
+/// a bonsai spreads and a terminal cell is twice as tall as it is wide.
+pub(crate) const CANVAS_WIDTH: usize = 81;
 pub(crate) const CANVAS_HEIGHT: usize = 26;
 /// A leaf pad reaches this far sideways and up from its tip, so tips stop
 /// short of the canvas edge by that much and pads never leave the box.
@@ -1076,23 +1081,30 @@ fn grow_tip_once(
         }
     }
 
-    // A wire is the player's explicit direction, so a wired tip extends
-    // where it was told to. Everything else grows on a length budget:
-    // once a run of single-file segments reaches its order's budget the
-    // tip forks instead of extending, and if no fork is open it is done.
-    // That is what keeps the tree inside its pot and turns growth into
-    // density rather than height.
+    // A wire is the player's explicit direction, so the tip they wired
+    // extends where it was told, once. The segment it grows keeps the
+    // bend as a lean but is an ordinary growing tip again, so a wire
+    // steers a stretch and the tree then resumes its own rules; it never
+    // turns a whole arm into a pole. Everything else grows on a length
+    // budget: once a run of single-file segments reaches its order's
+    // budget the tip forks if it can. A fork that finds no room falls
+    // through to a plain extension, so a crowded crown keeps creeping
+    // toward the canvas edge instead of dying where it stands; the next
+    // wave asks it to fork again.
     let (order, run) = order_and_run(graph, tip_id);
-    let wired =
-        matches!(tip.status, BranchStatus::Wired) || tip.bend_x != 0 || tip.bend_y != 0;
-    if !wired && run >= run_budget(order) {
-        return split_tip_once(graph, tip_id, seed).map(|(first_id, _)| first_id);
+    let wired = matches!(tip.status, BranchStatus::Wired);
+    if !wired
+        && run >= run_budget(order)
+        && let Some((first_id, _)) = split_tip_once(graph, tip_id, seed)
+    {
+        return Some(first_id);
     }
     let (dx, dy) = if order == 0 && !wired {
         trunk_step(seed, run)
     } else {
         growth_step(&tip)
     };
+    let (dx, dy) = deflect_at_pot(&tip, dx, dy);
     let thickness = tip.thickness.saturating_sub(1).max(1);
     let new_id = graph.add_branch(
         tip_id,
@@ -1107,9 +1119,12 @@ fn grow_tip_once(
     {
         child.bend_x = tip.bend_x;
         child.bend_y = tip.bend_y;
-        if matches!(tip.status, BranchStatus::Wired) {
-            child.status = BranchStatus::Wired;
-        }
+    }
+    if wired
+        && new_id.is_some()
+        && let Some(branch) = graph.branch_mut(tip_id)
+    {
+        branch.status = BranchStatus::Growing;
     }
     let continuation_id = new_id?;
 
@@ -1166,17 +1181,26 @@ fn split_targets_are_open(
     })
 }
 
-/// The two directions a fork takes. The trunk's first fork always opens
-/// upward on both sides; deeper forks mix a level arm with a rising one,
-/// so the crown spreads sideways instead of stacking up.
+/// The two directions a fork takes, one arm to each side so the targets
+/// never touch. The trunk's fork mostly opens upward on both sides, with
+/// the odd level arm. Deeper forks draw from the whole vocabulary: both
+/// rising, one level, both level, and now and then one arm drooping, so
+/// a crown is not a ladder of `\ /`.
 fn split_candidates(seed: i64, tip_id: i32, next_id: i32, order: u8) -> [(i16, i16); 2] {
     let roll = hash_parts(seed, tip_id as u64, next_id as u64);
     let pair: [(i16, i16); 2] = match order {
-        0 => [(-1, 1), (1, 1)],
-        _ => match (roll / 2) % 3 {
-            0 => [(-1, 1), (1, 1)],
-            1 => [(-1, 0), (1, 1)],
-            _ => [(-1, 1), (1, 0)],
+        0 => match (roll / 2) % 4 {
+            0 => [(-1, 0), (1, 1)],
+            1 => [(-1, 1), (1, 0)],
+            _ => [(-1, 1), (1, 1)],
+        },
+        _ => match (roll / 2) % 10 {
+            0..=2 => [(-1, 1), (1, 1)],
+            3 | 4 => [(-1, 0), (1, 1)],
+            5 | 6 => [(-1, 1), (1, 0)],
+            7 => [(-1, 0), (1, 0)],
+            8 => [(-1, -1), (1, 1)],
+            _ => [(-1, 1), (1, -1)],
         },
     };
     if roll.is_multiple_of(2) {
@@ -1220,15 +1244,15 @@ fn order_and_run(graph: &BonsaiGraph, id: i32) -> (u8, u8) {
     (order, run)
 }
 
-/// How many single-file cells a run may reach before it must fork. Each
-/// division roughly halves what comes after it, the way ramification
-/// works on a real bonsai, and the sum fits the canvas: trunk 3, first
-/// arms 3, then 2, 2, and 1 from there on.
+/// How many single-file cells a run may reach before it should fork.
+/// Each division shortens what comes after it, the way ramification
+/// works on a real bonsai, and a path of forks can still reach the
+/// canvas edge: trunk 4, first arms 4, then 3, 3, and 2 from there on.
 fn run_budget(order: u8) -> u8 {
     match order {
-        0 | 1 => 3,
-        2 | 3 => 2,
-        _ => 1,
+        0 | 1 => 4,
+        2 | 3 => 3,
+        _ => 2,
     }
 }
 
@@ -1254,8 +1278,9 @@ fn trunk_step(seed: i64, run: u8) -> (i16, i16) {
 /// node ever holds more than a fork), and a leaf pad with no shoot yet
 /// (the pad keeps its foliage; the shoot pokes out of it and wants
 /// pinching, which is the loop that keeps a finished-looking tree in
-/// play). Watering buds up to two sites, a plain day one on a coin flip,
-/// a dry day none; a weak or thirsty tree does not bud.
+/// play). Watering buds one site, a plain day one on a one-in-four roll,
+/// a dry day none; a weak or thirsty tree does not bud, and neither does
+/// one with `MAX_OPEN_SHOOTS` shoots still waiting to be tended.
 fn bud_once(
     graph: &mut BonsaiGraph,
     seed: i64,
@@ -1265,11 +1290,27 @@ fn bud_once(
     cause: GrowthCause,
 ) -> Vec<i32> {
     let attempts: usize = match cause {
-        GrowthCause::Water => 2,
-        GrowthCause::Daily if hash_parts(seed, age_days as u64, 13) % 100 < 50 => 1,
+        GrowthCause::Water => 1,
+        GrowthCause::Daily if hash_parts(seed, age_days as u64, 13) % 100 < 25 => 1,
         GrowthCause::Daily | GrowthCause::DryDay => 0,
     };
     if attempts == 0 || vigor < 40 || water_stress >= 60 {
+        return Vec::new();
+    }
+    // Only a shoot that can still grow somewhere counts as open. A tip
+    // parked against the pot or wedged in the crown is not waiting for
+    // the player, so it must not hold the gate shut.
+    let open_shoots = graph
+        .branches
+        .iter()
+        .filter(|branch| {
+            branch.id != ROOT_BRANCH_ID
+                && branch.is_tip_candidate()
+                && graph.is_tip(branch.id)
+                && tip_can_grow(graph, branch)
+        })
+        .count();
+    if open_shoots >= MAX_OPEN_SHOOTS {
         return Vec::new();
     }
     let mut sites = graph
@@ -1289,20 +1330,38 @@ fn bud_once(
             }
         })
         .collect::<Vec<_>>();
-    sites.sort_by_key(|(id, _)| hash_parts(seed, age_days as u64, *id as u64));
+    // A bud goes where there is room: each site is scored by the empty
+    // run its shoot would face on the side away from its child, and the
+    // roomiest sites bud first. A seeded roll breaks ties so equal sites
+    // do not always resolve to the same branch.
+    let mut sites = sites
+        .into_iter()
+        .map(|(id, child_dx)| {
+            let side = if child_dx != 0 {
+                -child_dx
+            } else if hash_parts(seed, id as u64, 17).is_multiple_of(2) {
+                -1
+            } else {
+                1
+            };
+            let room = graph
+                .branch(id)
+                .map_or(0, |branch| open_run(graph, (branch.end_x, branch.end_y), side));
+            (id, side, room)
+        })
+        .collect::<Vec<_>>();
+    sites.sort_by_key(|(id, _, room)| {
+        (
+            std::cmp::Reverse(*room),
+            hash_parts(seed, age_days as u64, *id as u64),
+        )
+    });
 
     let mut budded = Vec::new();
-    for (site_id, child_dx) in sites {
+    for (site_id, side, _) in sites {
         if budded.len() >= attempts || graph.branches.len() >= MAX_BRANCHES {
             break;
         }
-        let side = if child_dx != 0 {
-            -child_dx
-        } else if hash_parts(seed, site_id as u64, 17).is_multiple_of(2) {
-            -1
-        } else {
-            1
-        };
         let bud_vigor = (vigor - water_stress / 2).clamp(20, 95) as i16;
         let bud = [(side, 1), (side, 0), (-side, 1)]
             .into_iter()
@@ -1312,6 +1371,58 @@ fn bud_once(
         }
     }
     budded
+}
+
+/// Whether a tip has at least one open cell to grow into, deflection
+/// included: the straight step, the two level steps, and the two rising
+/// diagonals.
+fn tip_can_grow(graph: &BonsaiGraph, tip: &Branch) -> bool {
+    let (dx, dy) = growth_step(tip);
+    [(dx, dy), (-1, 0), (1, 0), (-1, 1), (1, 1)]
+        .into_iter()
+        .any(|(dx, dy)| growth_target_is_open(graph, tip.id, branch_target(tip, dx, dy)))
+}
+
+/// How many empty cells lie level from `from` toward `side` before the
+/// first occupied one or the pot wall. The measure of room a bud faces.
+fn open_run(graph: &BonsaiGraph, from: (i16, i16), side: i16) -> u16 {
+    let mut run = 0u16;
+    let mut x = from.0;
+    loop {
+        x += side;
+        let cell = (x, from.1);
+        if !target_in_canvas(cell)
+            || graph
+                .branches
+                .iter()
+                .any(|branch| branch.is_alive() && (branch.end_x, branch.end_y) == cell)
+        {
+            return run;
+        }
+        run += 1;
+    }
+}
+
+/// A tip whose step would leave the pot slides along the wall instead:
+/// against the ceiling it steps level, first to its own side and then
+/// the other; against a side wall it turns upward, then level away from
+/// the wall. Only the pot deflects a tip; a neighbouring branch does
+/// not, so the crown stays tidy and a crowded tip simply waits.
+fn deflect_at_pot(tip: &Branch, dx: i16, dy: i16) -> (i16, i16) {
+    let straight = branch_target(tip, dx, dy);
+    if target_in_canvas(straight) {
+        return (dx, dy);
+    }
+    let own_side = if dx != 0 { dx.signum() } else { 1 };
+    let candidates: [(i16, i16); 4] = if straight.1 > TIP_MAX_Y {
+        [(own_side, 0), (-own_side, 0), (-own_side, 1), (dx, 0)]
+    } else {
+        [(0, 1), (-own_side, 1), (-own_side, 0), (0, 1)]
+    };
+    candidates
+        .into_iter()
+        .find(|(dx, dy)| target_in_canvas(branch_target(tip, *dx, *dy)))
+        .unwrap_or((dx, dy))
 }
 
 fn target_in_canvas(target: (i16, i16)) -> bool {

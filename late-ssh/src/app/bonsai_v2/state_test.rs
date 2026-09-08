@@ -530,17 +530,20 @@ async fn the_admin_bypass_waters_again_the_same_day() {
     );
 }
 
-/// The pot is a fixed canvas: a tip at its length budget forks instead of
-/// extending, so the tree gains density rather than height.
+/// A tip at its length budget forks instead of extending, so the tree
+/// gains density rather than height.
 #[test]
 fn a_tip_at_its_run_budget_forks_instead_of_extending() {
     let mut graph = graph_with_two_isolated_tips();
     let tip_id = first_editable_tip(&graph);
     assert_eq!(order_and_run(&graph, tip_id), (1, 3));
+    let extended = grow_tip_once(&mut graph, tip_id, 42, 75, 0, GrowthCause::Water)
+        .expect("one more cell under budget");
+    assert_eq!(order_and_run(&graph, extended), (1, 4));
 
-    grow_tip_once(&mut graph, tip_id, 42, 75, 0, GrowthCause::Water).expect("fork");
+    grow_tip_once(&mut graph, extended, 42, 75, 0, GrowthCause::Water).expect("fork");
 
-    assert_eq!(graph.child_ids(tip_id).len(), 2);
+    assert_eq!(graph.child_ids(extended).len(), 2);
 }
 
 /// Nothing grows past the canvas edge, whichever path adds the branch.

@@ -1670,7 +1670,7 @@ fn bonsai_help_lines() -> Vec<String> {
         "  Watering grows the widest wave; high vigor widens it; stress narrows it.",
         "  Healthy growth reaches up and stays tidy; dry, stressed growth throws messy sideways shoots.",
         "  The care modal is the pot: the tree never grows past its frame, so what you see there is all of it.",
-        "  Pads bud: a leaf pad throws a shoot out of its foliage, and so do branches behind the tips. Pinch the shoots or they turn into structure. A tended tree is never finished.",
+        "  Pads bud: a leaf pad throws a shoot out of its foliage, and so do branches behind the tips. Pinch the shoots or they turn into structure. A tended tree is never finished, and a tree with four shoots still open waits for you before it offers more.",
         "  The graph caps at 128 branches. A full tree grows nothing new until you cut something, and the modal says so.",
         "",
         "When it dies",
