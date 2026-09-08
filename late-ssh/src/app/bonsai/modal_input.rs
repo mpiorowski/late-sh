@@ -1,8 +1,6 @@
 use crate::app::{
-    bonsai::{
-        care::{CareMode, branch_targets_for},
-        svc::{BonsaiService, WATER_CHIP_BONUS},
-    },
+    bonsai::svc::{BonsaiService, WATER_CHIP_BONUS},
+    bonsai_v2::state::DailyWaterGate,
     input::{MouseEventKind, ParsedInput},
     state::App,
 };
@@ -16,32 +14,36 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
         ParsedInput::Byte(b'w' | b'W') | ParsedInput::Char('w' | 'W') => water(app),
-        ParsedInput::Byte(b'p' | b'P') | ParsedInput::Char('p' | 'P') => prune_tree(app),
-        ParsedInput::Byte(b'x' | b'X') | ParsedInput::Char('x' | 'X') => cut_branch(app),
-        ParsedInput::Byte(b's' | b'S') | ParsedInput::Char('s' | 'S') => copy_snippet(app),
+        ParsedInput::Byte(b'x' | b'X') | ParsedInput::Char('x' | 'X') => {
+            app.bonsai_v2_state.prune_selected();
+        }
+        ParsedInput::Byte(b'p' | b'P') | ParsedInput::Char('p' | 'P') => {
+            app.bonsai_v2_state.pinch_selected();
+        }
+        ParsedInput::Byte(b's' | b'S') | ParsedInput::Char('s' | 'S') => {
+            app.bonsai_v2_state.split_selected();
+        }
+        ParsedInput::Byte(b'c' | b'C') | ParsedInput::Char('c' | 'C') => copy_snippet(app),
+        ParsedInput::Byte(b'\t') => app.bonsai_v2_state.cycle_selection(1),
+        ParsedInput::BackTab => app.bonsai_v2_state.cycle_selection(-1),
+        ParsedInput::Byte(b'n' | b'N') | ParsedInput::Char('n' | 'N') => {
+            app.bonsai_v2_state.cycle_selection(1);
+        }
         ParsedInput::Byte(b'h' | b'H')
         | ParsedInput::Char('h' | 'H')
-        | ParsedInput::Arrow(b'D') => {
-            move_cursor(app, -1, 0);
-        }
+        | ParsedInput::Arrow(b'D') => steer(app, -1, 0),
         ParsedInput::Byte(b'l' | b'L')
         | ParsedInput::Char('l' | 'L')
-        | ParsedInput::Arrow(b'C') => {
-            move_cursor(app, 1, 0);
-        }
+        | ParsedInput::Arrow(b'C') => steer(app, 1, 0),
         ParsedInput::Byte(b'k' | b'K')
         | ParsedInput::Char('k' | 'K')
-        | ParsedInput::Arrow(b'A') => {
-            move_cursor(app, 0, -1);
-        }
+        | ParsedInput::Arrow(b'A') => steer(app, 0, 1),
         ParsedInput::Byte(b'j' | b'J')
         | ParsedInput::Char('j' | 'J')
-        | ParsedInput::Arrow(b'B') => {
-            move_cursor(app, 0, 1);
-        }
+        | ParsedInput::Arrow(b'B') => steer(app, 0, -1),
         ParsedInput::Mouse(mouse) => match mouse.kind {
-            MouseEventKind::ScrollUp => move_cursor(app, 0, -1),
-            MouseEventKind::ScrollDown => move_cursor(app, 0, 1),
+            MouseEventKind::ScrollUp => app.bonsai_v2_state.cycle_selection(-1),
+            MouseEventKind::ScrollDown => app.bonsai_v2_state.cycle_selection(1),
             _ => {}
         },
         _ => {}
@@ -52,7 +54,12 @@ pub(crate) fn handle_escape(app: &mut App) {
     close(app);
 }
 
+fn steer(app: &mut App, dx: i8, dy: i8) {
+    app.bonsai_v2_state.bend_selected(dx, dy);
+}
+
 fn water(app: &mut App) {
+    let was_dead = !app.bonsai_state.is_alive || !app.bonsai_v2_state.is_alive;
     if !app.bonsai_state.is_alive {
         app.bonsai_state.respawn();
         app.bonsai_care_state
@@ -61,122 +68,36 @@ fn water(app: &mut App) {
             app.bonsai_care_state.date,
             app.bonsai_care_state.branch_goal as i32,
         );
-        app.bonsai_care_state.message = Some("New seed planted".to_string());
-        return;
     }
-    let dynamic_unlocked = app.shop_state.has_dynamic_bonsai();
-    let dynamic_was_dead = dynamic_unlocked && !app.bonsai_v2_state.is_alive;
-    if dynamic_was_dead {
+    if !app.bonsai_v2_state.is_alive {
         app.bonsai_v2_state.respawn();
     }
+    if was_dead {
+        app.bonsai_v2_state.message = Some("New dynamic bonsai planted".to_string());
+        return;
+    }
+
     let earns_chips = app.bonsai_state.last_watered != Some(BonsaiService::today());
-    let classic_gain = app.bonsai_state.water();
-    let dynamic_changed = if dynamic_unlocked && !dynamic_was_dead {
-        app.bonsai_v2_state
-            .water(crate::app::bonsai_v2::modal_input::daily_water_gate(app))
-    } else {
-        false
-    };
-    if let Some(gained) = classic_gain {
-        app.bonsai_care_state.mark_watered();
-        let chip_bonus = if earns_chips {
-            format!(", +{WATER_CHIP_BONUS} chips")
+    // Watering Dynamic waters classic too; the daily chips are paid there.
+    let _ = app.bonsai_state.water();
+    let changed = app.bonsai_v2_state.water(daily_water_gate(app));
+    if changed {
+        app.bonsai_v2_state.message = Some(if earns_chips {
+            format!("Watered Dynamic Bonsai (+{WATER_CHIP_BONUS} chips)")
         } else {
-            String::new()
-        };
-        let growth_text = if gained > 0 {
-            format!("+{gained} points")
-        } else {
-            "growth maxed".to_string()
-        };
-        let dynamic_text = if dynamic_was_dead {
-            ", dynamic replanted"
-        } else if dynamic_changed {
-            ", dynamic watered"
-        } else {
-            ""
-        };
-        app.bonsai_care_state.message =
-            Some(format!("Watered: {growth_text}{chip_bonus}{dynamic_text}"));
-    } else {
-        app.bonsai_care_state.watered = true;
-        app.bonsai_care_state.message = Some(if dynamic_was_dead {
-            "Already watered today, dynamic replanted".to_string()
-        } else if dynamic_changed {
-            "Already watered today, dynamic watered".to_string()
-        } else {
-            "Already watered today".to_string()
+            "Watered Dynamic Bonsai".to_string()
         });
     }
 }
 
-fn prune_tree(app: &mut App) {
-    if app.bonsai_state.cut() {
-        app.bonsai_care_state.reset_branch_cuts();
-        app.bonsai_state.reset_daily_branches();
-        app.bonsai_care_state.message = Some("Pruned: -1 stage, new shape".to_string());
-    } else if !app.bonsai_state.is_alive {
-        app.bonsai_care_state.message = Some("Can't prune a dead tree".to_string());
+/// Admins skip the once-per-day rule for now, so growth can be tested
+/// without waiting for tomorrow. See `DailyWaterGate`.
+pub(crate) fn daily_water_gate(app: &App) -> DailyWaterGate {
+    if app.is_admin {
+        DailyWaterGate::AdminBypass
     } else {
-        app.bonsai_care_state.message = Some("Need 100 growth to prune".to_string());
+        DailyWaterGate::Enforced
     }
-}
-
-fn cut_branch(app: &mut App) {
-    enter_prune_mode(app);
-    let targets = current_targets(app);
-    let Some(branch_id) = app.bonsai_care_state.cut_at_cursor(&targets) else {
-        let loss = app.bonsai_state.punish_wrong_cut();
-        if loss > 0 {
-            app.bonsai_care_state.message = Some(format!("Wrong cut: -{loss} points"));
-        } else {
-            app.bonsai_care_state.message = Some("Wrong cut".to_string());
-        }
-        return;
-    };
-    app.bonsai_state.cut_daily_branch(branch_id);
-    if app.bonsai_care_state.all_branches_cut() {
-        app.bonsai_care_state.message = Some("Tree preserved".to_string());
-    }
-}
-
-fn move_cursor(app: &mut App, dx: isize, dy: isize) {
-    enter_prune_mode(app);
-    let (width, height) = current_art_size(app);
-    app.bonsai_care_state.move_cursor(dx, dy, width, height);
-}
-
-fn enter_prune_mode(app: &mut App) {
-    if app.bonsai_care_state.mode == CareMode::Prune {
-        return;
-    }
-    app.bonsai_care_state.mode = CareMode::Prune;
-    let (width, height) = current_art_size(app);
-    app.bonsai_care_state
-        .set_cursor(width.saturating_sub(1) / 2, height.saturating_sub(1));
-}
-
-fn current_targets(app: &App) -> Vec<crate::app::bonsai::care::BranchTarget> {
-    let stage = app.bonsai_state.stage();
-    let art = crate::app::bonsai::ui::tree_ascii(stage, app.bonsai_state.seed, false);
-    branch_targets_for(
-        stage,
-        app.bonsai_state.seed,
-        app.bonsai_care_state.date,
-        &art,
-        app.bonsai_care_state.branch_goal,
-    )
-}
-
-fn current_art_size(app: &App) -> (usize, usize) {
-    let stage = app.bonsai_state.stage();
-    let art = crate::app::bonsai::ui::tree_ascii(stage, app.bonsai_state.seed, false);
-    let width = art
-        .iter()
-        .map(|line| line.chars().count())
-        .max()
-        .unwrap_or(0);
-    (width, art.len())
 }
 
 fn is_close_event(event: &ParsedInput) -> bool {
@@ -187,23 +108,18 @@ fn is_close_event(event: &ParsedInput) -> bool {
 }
 
 fn close(app: &mut App) {
-    app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
 }
 
 fn open_help(app: &mut App) {
-    app.help_modal_state
-        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
     app.help_modal_state
         .open(crate::app::help_modal::data::HelpTopic::Bonsai);
     app.show_help = true;
 }
 
 fn copy_snippet(app: &mut App) {
-    app.pending_clipboard = Some(
-        app.bonsai_state
-            .share_snippet_with_care(&app.bonsai_care_state),
-    );
+    app.pending_clipboard = Some(app.bonsai_v2_state.share_snippet());
     app.banner = Some(crate::app::common::primitives::Banner::success(
-        "Bonsai copied to clipboard!",
+        "Dynamic Bonsai copied to clipboard!",
     ));
 }

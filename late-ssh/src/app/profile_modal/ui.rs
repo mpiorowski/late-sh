@@ -9,7 +9,7 @@
 //!
 //! Top to bottom: late.fetch (the fact grid in the left half, the bonsai as
 //! the neofetch logo in the right half, the tree scaled to the grid's
-//! height), bio, showcases, badges (all of them, always), the aquarium, and
+//! height), bio, the aquarium, showcases, badges (all of them, always), and
 //! the chips ledger. The same order on every screen; the only reflow is the
 //! hero stacking when the column is too narrow for two halves.
 
@@ -220,6 +220,12 @@ fn build_segments(
     }
     segments.push(Segment::Text(lines));
 
+    // ── aquarium ──
+    if !state.aquarium_fish().is_empty() {
+        segments.push(Segment::Text(section_lines("aquarium", width_usize)));
+        segments.push(Segment::Aquarium);
+    }
+
     // ── showcases ──
     let showcases = state.showcases_for_viewed();
     if !showcases.is_empty() {
@@ -244,12 +250,6 @@ fn build_segments(
         let mut lines = section_lines("badges", width_usize);
         lines.extend(badge_lines);
         segments.push(Segment::Text(lines));
-    }
-
-    // ── aquarium ──
-    if !state.aquarium_fish().is_empty() {
-        segments.push(Segment::Text(section_lines("aquarium", width_usize)));
-        segments.push(Segment::Aquarium);
     }
 
     // ── chips ──

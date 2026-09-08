@@ -204,8 +204,7 @@ impl ShopConsumableEffect {
         // passed yet. When one is still live, the new row's `starts_at`
         // carries forward the prior activation instead of resetting to now,
         // so a mid-window rebuy doesn't erase the protection credit for days
-        // already covered by the row it replaces (see
-        // `BonsaiDecayProtection::protected_days_between`). When every prior
+        // already covered by the row it replaces. When every prior
         // row had already lapsed, this is a fresh window starting now: the
         // gap during which the shield was not live must not count as
         // protected.

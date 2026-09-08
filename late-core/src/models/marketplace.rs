@@ -15,8 +15,6 @@ use super::{
 };
 
 pub const PET_COMPANION_SKU: &str = "pet_companion";
-pub const DYNAMIC_BONSAI_SKU: &str = "dynamic_bonsai";
-pub const BONSAI_VARIANT_SLOT: &str = "bonsai_variant";
 pub const BONSAI_CONSUMABLE_ITEM_KIND: &str = "bonsai_consumable";
 pub const BONSAI_DECAY_SHIELD_SKU: &str = "bonsai_decay_shield_two_weeks";
 /// `shop_consumable_effects.effect_kind` for the user-scoped Bonsai Decay
@@ -1083,25 +1081,6 @@ pub async fn active_aquarium_fish_for_user(
                 .map(|creature| (creature, count.max(0) as usize))
         })
         .collect())
-}
-
-/// Whether the user has Dynamic Bonsai equipped in the `bonsai_variant` slot.
-/// Same rule the chat badge uses, exposed for the profile view.
-pub async fn is_dynamic_bonsai_selected(client: &Client, user_id: Uuid) -> Result<bool> {
-    let row = client
-        .query_one(
-            "SELECT EXISTS (
-                 SELECT 1
-                 FROM user_purchases p
-                 JOIN marketplace_items i ON i.id = p.item_id
-                 WHERE p.user_id = $1
-                   AND p.equipped_slot = $2
-                   AND i.sku = $3
-             ) AS selected",
-            &[&user_id, &BONSAI_VARIANT_SLOT, &DYNAMIC_BONSAI_SKU],
-        )
-        .await?;
-    Ok(row.get("selected"))
 }
 
 async fn aquarium_fish_active_quantity_in_tx(
