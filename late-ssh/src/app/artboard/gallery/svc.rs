@@ -148,12 +148,17 @@ impl HangRefusal {
 pub enum GalleryResult {
     Counts(ListingCounts),
     CountsFailed(String),
+    /// `generation` is the section's request counter at the time this
+    /// listing was asked for, so the state can tell a stale answer from
+    /// the one it is waiting on.
     Listed {
         listing: PieceListing,
+        generation: u64,
         pieces: Vec<GalleryPiece>,
     },
     ListFailed {
         listing: PieceListing,
+        generation: u64,
         error: String,
     },
     Hung(Box<GalleryPiece>),
@@ -350,11 +355,13 @@ impl GalleryService {
         &self,
         viewer_id: Uuid,
         listing: PieceListing,
+        generation: u64,
         tx: mpsc::UnboundedSender<GalleryResult>,
     ) {
         let Some(db) = self.db.clone() else {
             let _ = tx.send(GalleryResult::Listed {
                 listing,
+                generation,
                 pieces: Vec::new(),
             });
             return;
@@ -369,7 +376,11 @@ impl GalleryService {
             }
             .await;
             let msg = match result {
-                Ok(pieces) => GalleryResult::Listed { listing, pieces },
+                Ok(pieces) => GalleryResult::Listed {
+                    listing,
+                    generation,
+                    pieces,
+                },
                 Err(error) => {
                     tracing::warn!(
                         error = ?error,
@@ -379,6 +390,7 @@ impl GalleryService {
                     );
                     GalleryResult::ListFailed {
                         listing,
+                        generation,
                         error: "The gallery could not be loaded.".to_string(),
                     }
                 }
