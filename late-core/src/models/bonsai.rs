@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
-use tokio_postgres::Client;
+use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
 crate::user_scoped_model! {
@@ -50,18 +50,23 @@ impl Tree {
     }
 
     /// The daily watering gate: stamps `last_watered` with `today` and
-    /// reports whether this call was the one that moved it. Runs before the
-    /// full state save so the once-per-day chip bonus has one atomic witness
-    /// no matter how many sessions or presses race for it. Deliberately does
-    /// not touch `state_revision`, so the save that follows still lands.
-    pub async fn water_day(client: &Client, user_id: Uuid, today: NaiveDate) -> Result<bool> {
+    /// reports whether this call was the one that moved it. This is the only
+    /// writer of `last_watered` (`save` leaves the column alone), so the
+    /// once-per-day chip bonus has one atomic witness no matter how many
+    /// sessions, presses, or in-flight saves race for it. Takes a
+    /// `GenericClient` so the credit can share its transaction. Deliberately
+    /// does not touch `state_revision`, so the save that follows still lands.
+    pub async fn water_day(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        today: NaiveDate,
+    ) -> Result<bool> {
         let row = client
             .query_opt(
                 "UPDATE bonsai_trees
                  SET last_watered = $2,
                      updated = current_timestamp
                  WHERE user_id = $1
-                   AND is_alive = true
                    AND last_watered IS DISTINCT FROM $2
                  RETURNING user_id",
                 &[&user_id, &today],
@@ -72,17 +77,18 @@ impl Tree {
 
     /// Persist the whole in-memory tree. Stale async writes lose: a row
     /// whose `state_revision` already passed the incoming one is left alone.
+    /// `last_watered` is not written here: `water_day` owns that column, and
+    /// a save landing out of order must never pre-empt or reopen the gate.
     pub async fn save(client: &Client, params: TreeParams) -> Result<()> {
         client
             .execute(
                 "INSERT INTO bonsai_trees
-                    (user_id, seed, last_watered, is_alive, vigor, water_stress,
+                    (user_id, seed, is_alive, vigor, water_stress,
                      last_simulated_date, branch_graph, selected_branch_id, mode, badge_glyph,
                      planted_at, state_revision)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                  ON CONFLICT (user_id) DO UPDATE
                  SET seed = EXCLUDED.seed,
-                     last_watered = EXCLUDED.last_watered,
                      is_alive = EXCLUDED.is_alive,
                      vigor = EXCLUDED.vigor,
                      water_stress = EXCLUDED.water_stress,
@@ -98,7 +104,6 @@ impl Tree {
                 &[
                     &params.user_id,
                     &params.seed,
-                    &params.last_watered,
                     &params.is_alive,
                     &params.vigor,
                     &params.water_stress,
@@ -110,6 +115,26 @@ impl Tree {
                     &params.planted_at,
                     &params.state_revision,
                 ],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// The selection cursor alone. Display state that changes on every Tab
+    /// and wheel notch, so it must not cost a full graph upsert; it bumps no
+    /// revision, and the next real save carries the same value anyway.
+    pub async fn select_branch(
+        client: &Client,
+        user_id: Uuid,
+        selected_branch_id: Option<i32>,
+    ) -> Result<()> {
+        client
+            .execute(
+                "UPDATE bonsai_trees
+                 SET selected_branch_id = $2,
+                     updated = current_timestamp
+                 WHERE user_id = $1",
+                &[&user_id, &selected_branch_id],
             )
             .await?;
         Ok(())

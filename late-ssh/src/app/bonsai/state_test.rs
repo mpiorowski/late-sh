@@ -11,6 +11,7 @@ fn state_for_graph(graph: BonsaiGraph, selected_branch_id: Option<i32>) -> Bonsa
     BonsaiState {
         user_id: Uuid::nil(),
         svc: test_bonsai_service(),
+        persistence: Persistence::Detached,
         seed: 42,
         planted_at: Utc::now(),
         last_watered: None,

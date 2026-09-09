@@ -34,7 +34,11 @@ async fn ensure_tree_plants_a_fresh_seed_for_a_new_user() {
     let (tx, _) = broadcast::channel::<ActivityEvent>(16);
     let svc = BonsaiService::new(test_db.db.clone(), tx);
 
-    let (tree, protection) = svc.ensure_tree(user.id).await.expect("ensure tree");
+    let tree = svc.ensure_tree(user.id).await.expect("ensure tree");
+    let protection = svc
+        .decay_protection(user.id)
+        .await
+        .expect("decay protection");
 
     assert_eq!(tree.user_id, user.id);
     assert_eq!(tree.seed, user.id.as_u128() as i64);
@@ -55,7 +59,7 @@ async fn watering_pays_the_daily_chips_once_and_saves_every_time() {
     let user = create_test_user(&test_db.db, "bonsai-svc-water").await;
     let (tx, mut rx) = broadcast::channel::<ActivityEvent>(16);
     let svc = BonsaiService::new(test_db.db.clone(), tx);
-    let (tree, _) = svc.ensure_tree(user.id).await.expect("ensure tree");
+    let tree = svc.ensure_tree(user.id).await.expect("ensure tree");
     let before = UserChips::ensure(&client, user.id)
         .await
         .expect("chips")
@@ -92,4 +96,63 @@ async fn watering_pays_the_daily_chips_once_and_saves_every_time() {
         rx.try_recv().is_err(),
         "the same-day second watering announces nothing"
     );
+}
+
+// A pinch or a wire pressed right after `w` spawns its own save, which can
+// commit before the watering task runs. That save must not be able to
+// pre-empt the daily chips.
+#[tokio::test]
+async fn an_overtaking_save_does_not_steal_the_watering_chips() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "bonsai-svc-overtaken").await;
+    let (tx, _rx) = broadcast::channel::<ActivityEvent>(16);
+    let svc = BonsaiService::new(test_db.db.clone(), tx);
+    let tree = svc.ensure_tree(user.id).await.expect("ensure tree");
+    let before = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+
+    // The later action's save lands first, carrying today's date.
+    Tree::save(&client, params_for(&tree, 2))
+        .await
+        .expect("overtaking save");
+    svc.water(params_for(&tree, 1)).await.expect("watering");
+
+    let after = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+    assert_eq!(after - before, super::WATER_CHIP_BONUS);
+}
+
+// The first `w` on a dead tree replants through a plain save; the second
+// waters. The watering task must pay even if the replant has not committed.
+#[tokio::test]
+async fn a_replant_that_has_not_landed_does_not_block_the_chips() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "bonsai-svc-replant").await;
+    let (tx, _rx) = broadcast::channel::<ActivityEvent>(16);
+    let svc = BonsaiService::new(test_db.db.clone(), tx);
+    let tree = svc.ensure_tree(user.id).await.expect("ensure tree");
+    let before = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+
+    let mut dead = params_for(&tree, 1);
+    dead.is_alive = false;
+    dead.last_watered = None;
+    Tree::save(&client, dead).await.expect("the tree died");
+
+    // Revision 2 is the replant, still in flight; revision 3 is the watering.
+    svc.water(params_for(&tree, 3)).await.expect("watering");
+
+    let after = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+    assert_eq!(after - before, super::WATER_CHIP_BONUS);
 }

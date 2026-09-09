@@ -1,5 +1,4 @@
 use crate::app::{
-    bonsai::svc::{BonsaiService, WATER_CHIP_BONUS},
     input::{MouseEventKind, ParsedInput},
     state::App,
 };
@@ -64,13 +63,11 @@ fn water(app: &mut App) {
         return;
     }
 
-    // The chips are paid by the service behind the DB's once-per-day gate
-    // (`Tree::water_day`); this only decides what the status row says.
-    let earns_chips = app.bonsai_state.last_watered != Some(BonsaiService::today());
-    let changed = app.bonsai_state.water();
-    if changed && earns_chips {
-        app.bonsai_state.message = Some(format!("Watered (+{WATER_CHIP_BONUS} chips)"));
-    }
+    // The chips are decided by the DB gate in `BonsaiService::water`, not
+    // here: another session may already have watered today. The status row
+    // says "+200 chips" only when the service's `BonsaiWatered` event comes
+    // back (see `tick.rs`).
+    app.bonsai_state.water();
 }
 
 fn is_close_event(event: &ParsedInput) -> bool {

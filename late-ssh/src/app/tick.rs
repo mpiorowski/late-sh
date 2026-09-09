@@ -942,9 +942,22 @@ impl App {
                         }
                         None
                     }
+                    // The session's own watering cleared the DB chip gate:
+                    // this is the one place that may claim the payout, since
+                    // another session or an in-flight save can make the
+                    // in-memory state disagree with the row.
+                    ActivityKind::BonsaiWatered if user_id == self.user_id => {
+                        self.bonsai_state.message = Some(format!(
+                            "Watered (+{} chips)",
+                            crate::app::bonsai::svc::WATER_CHIP_BONUS
+                        ));
+                        changed = true;
+                        None
+                    }
                     // Everything else on the global feed is somebody else's
                     // business: this subscription only exists for the friend
-                    // edges above and the session's own daily wins.
+                    // edges above, the session's own daily wins, and its
+                    // own watering.
                     _ => None,
                 };
                 if let Some(b) = banner {

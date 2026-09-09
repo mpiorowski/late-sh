@@ -98,7 +98,7 @@ async fn concurrent_water_days_grant_the_day_once() {
         handles.push(tokio::spawn(async move {
             let client = db.get().await.expect("db client");
             barrier.wait().await;
-            Tree::water_day(&client, user_id, today)
+            Tree::water_day(&**client, user_id, today)
                 .await
                 .expect("water")
         }));
@@ -122,23 +122,60 @@ async fn concurrent_water_days_grant_the_day_once() {
 }
 
 #[tokio::test]
-async fn a_dead_tree_does_not_take_the_water_day() {
+async fn save_leaves_last_watered_to_the_gate() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
-    let user = create_user(&client, "bonsai-model-dead-water").await;
+    let user = create_user(&client, "bonsai-model-save-gate").await;
     let today = Utc::now().date_naive();
 
     let tree = Tree::ensure(&client, user.id, 5, today, serde_json::json!({}), "·")
         .await
         .expect("ensure");
-    let mut dead = params_from(&tree, 1);
-    dead.is_alive = false;
-    Tree::save(&client, dead).await.expect("save dead");
+    assert!(
+        Tree::water_day(&**client, user.id, today)
+            .await
+            .expect("water")
+    );
 
-    let granted = Tree::water_day(&client, user.id, today)
+    // A full save carrying a stale in-memory date (or none at all) must
+    // not move the gate's column: the gate is its only writer.
+    let mut stale_date = params_from(&tree, 1);
+    stale_date.last_watered = None;
+    Tree::save(&client, stale_date).await.expect("save");
+
+    let stored = Tree::find_by_user_id(&client, user.id)
         .await
-        .expect("water");
-    assert!(!granted);
+        .expect("find")
+        .expect("tree");
+    assert_eq!(stored.state_revision, 1, "the save itself still lands");
+    assert_eq!(stored.last_watered, Some(today));
+}
+
+#[tokio::test]
+async fn select_branch_moves_only_the_cursor() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_user(&client, "bonsai-model-select").await;
+    let today = Utc::now().date_naive();
+
+    let tree = Tree::ensure(&client, user.id, 5, today, serde_json::json!({}), "·")
+        .await
+        .expect("ensure");
+    Tree::select_branch(&client, user.id, Some(7))
+        .await
+        .expect("select");
+
+    let stored = Tree::find_by_user_id(&client, user.id)
+        .await
+        .expect("find")
+        .expect("tree");
+    assert_eq!(stored.selected_branch_id, Some(7));
+    assert_eq!(
+        stored.state_revision, 0,
+        "the cursor never bumps the revision"
+    );
+    assert_eq!(stored.branch_graph, tree.branch_graph);
+    assert_eq!(stored.badge_glyph, tree.badge_glyph);
 }
 
 #[tokio::test]
@@ -185,7 +222,7 @@ async fn watering_is_scoped_to_the_owner() {
     assert_ne!(owner_tree.id, other_tree.id);
 
     assert!(
-        Tree::water_day(&client, owner.id, today)
+        Tree::water_day(&**client, owner.id, today)
             .await
             .expect("water owner tree")
     );

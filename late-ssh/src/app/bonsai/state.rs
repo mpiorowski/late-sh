@@ -201,10 +201,22 @@ impl BonsaiGraph {
     }
 }
 
+/// Whether this state writes to the owner's row. `Live` is the session's
+/// own tree. `Detached` is a profile view of someone else's tree or the
+/// bootstrap fallback after a failed load: every `persist*` call is a no-op,
+/// so a viewer can never write to the viewed row and a fallback can never
+/// overwrite the real one.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum Persistence {
+    Live,
+    Detached,
+}
+
 #[derive(Clone)]
 pub(crate) struct BonsaiState {
     pub user_id: Uuid,
     pub svc: BonsaiService,
+    persistence: Persistence,
     pub seed: i64,
     pub planted_at: DateTime<Utc>,
     pub last_watered: Option<NaiveDate>,
@@ -250,6 +262,7 @@ impl BonsaiState {
         let mut state = Self {
             user_id,
             svc,
+            persistence: Persistence::Live,
             seed: tree.seed,
             planted_at: tree.planted_at,
             last_watered: tree.last_watered,
@@ -280,8 +293,7 @@ impl BonsaiState {
 
     /// Build a read-only state for rendering another user's tree (profile
     /// view). Catches elapsed days up in memory so the silhouette is accurate,
-    /// but never persists, so viewing never mutates the owner's tree. Always
-    /// renders standard 2D.
+    /// but is `Detached`, so viewing can never mutate the owner's tree.
     pub(crate) fn view_only(
         user_id: Uuid,
         svc: BonsaiService,
@@ -302,6 +314,7 @@ impl BonsaiState {
         let mut state = Self {
             user_id,
             svc,
+            persistence: Persistence::Detached,
             seed: tree.seed,
             planted_at: tree.planted_at,
             last_watered: tree.last_watered,
@@ -318,12 +331,14 @@ impl BonsaiState {
             decay_protection,
         };
         state.ensure_selection();
-        // In-memory catch-up only; intentionally no `persist()` so a viewer
-        // never writes to the viewed user's row.
+        // In-memory catch-up only; `Detached` makes every persist a no-op.
         state.apply_elapsed_days(today);
         state
     }
 
+    /// The session's tree when the bootstrap load failed. `Detached`: it
+    /// is never written, so it can never overwrite the real row, and the
+    /// next login plants or loads for real.
     pub(crate) fn fallback(user_id: Uuid, svc: BonsaiService, seed: i64) -> Self {
         let today = BonsaiService::today();
         let graph = seeded_graph(seed);
@@ -331,6 +346,7 @@ impl BonsaiState {
         Self {
             user_id,
             svc,
+            persistence: Persistence::Detached,
             seed,
             planted_at: Utc::now(),
             last_watered: None,
@@ -402,7 +418,7 @@ impl BonsaiState {
         let next = (current as isize + delta).rem_euclid(ids.len() as isize) as usize;
         self.selected_branch_id = Some(ids[next]);
         self.message = None;
-        self.persist();
+        self.persist_selection();
     }
 
     pub(crate) fn bend_selected(&mut self, dx: i8, dy: i8) {
@@ -745,9 +761,15 @@ impl BonsaiState {
         }
     }
 
+    /// The revision advances on every mutation whatever the persistence
+    /// mode, so the state machine reads the same in a profile view or a
+    /// test as in a live session; only the write is skipped when `Detached`.
     fn persist(&mut self) {
         let params = self.next_params();
-        self.svc.save_task(params);
+        match self.persistence {
+            Persistence::Live => self.svc.save_task(params),
+            Persistence::Detached => {}
+        }
     }
 
     /// A watering goes through the service's watering path rather than the
@@ -755,7 +777,22 @@ impl BonsaiState {
     /// gate in the same task as the write.
     fn persist_watering(&mut self) {
         let params = self.next_params();
-        self.svc.water_task(params);
+        match self.persistence {
+            Persistence::Live => self.svc.water_task(params),
+            Persistence::Detached => {}
+        }
+    }
+
+    /// The selection cursor is display state: one column, no revision, no
+    /// graph serialization. Tab and the wheel fire this on every notch.
+    fn persist_selection(&mut self) {
+        match self.persistence {
+            Persistence::Live => {
+                self.svc
+                    .select_branch_task(self.user_id, self.selected_branch_id);
+            }
+            Persistence::Detached => {}
+        }
     }
 
     fn next_params(&mut self) -> TreeParams {
@@ -948,6 +985,30 @@ fn grow_graph_once(
     // a set pinch becoming ready) must run on a full tree too, or pinching
     // freezes along with growth. Every branch-adding path below checks
     // the cap itself.
+    for branch in &mut graph.branches {
+        branch.age = branch.age.saturating_add(1);
+        if matches!(branch.status, BranchStatus::Pinched) {
+            branch.status = BranchStatus::NeedsPinch;
+        }
+    }
+    let grown = grow_tips_once(
+        graph,
+        seed,
+        age_days,
+        vigor,
+        water_stress,
+        cause,
+        preferred_tip_id,
+    );
+    // Budding runs whether or not any tip grew: a tree whose every end
+    // has been pinched into a pad has no tips at all, and the buds are
+    // what keep it alive as a game.
+    bud_once(graph, seed, age_days, vigor, water_stress, cause);
+    grown
+}
+
+/// The live tips with no live child: the ends the wave can extend.
+fn growing_tip_ids(graph: &BonsaiGraph) -> Vec<i32> {
     let live_ids = graph
         .branches
         .iter()
@@ -963,38 +1024,16 @@ fn grow_graph_once(
             child_ids.insert(parent_id);
         }
     }
-    for branch in &mut graph.branches {
-        branch.age = branch.age.saturating_add(1);
-        if matches!(branch.status, BranchStatus::Pinched) {
-            branch.status = BranchStatus::NeedsPinch;
-        }
-    }
-    let tips = graph
+    graph
         .branches
         .iter()
         .filter(|branch| branch.is_tip_candidate() && !child_ids.contains(&branch.id))
         .map(|branch| branch.id)
-        .collect::<Vec<_>>();
-    let grown = grow_tips_once(
-        graph,
-        &tips,
-        seed,
-        age_days,
-        vigor,
-        water_stress,
-        cause,
-        preferred_tip_id,
-    );
-    // Budding runs whether or not any tip grew: a tree whose every end
-    // has been pinched into a pad has no tips at all, and the buds are
-    // what keep it alive as a game.
-    bud_once(graph, seed, age_days, vigor, water_stress, cause);
-    grown
+        .collect()
 }
 
 fn grow_tips_once(
     graph: &mut BonsaiGraph,
-    tips: &[i32],
     seed: i64,
     age_days: i64,
     vigor: i32,
@@ -1002,9 +1041,11 @@ fn grow_tips_once(
     cause: GrowthCause,
     preferred_tip_id: Option<i32>,
 ) -> Vec<(i32, i32)> {
+    let tips = growing_tip_ids(graph);
     if tips.is_empty() {
         return Vec::new();
     }
+    let tips = tips.as_slice();
     let split_pending_tip_count = tips
         .iter()
         .filter(|id| {

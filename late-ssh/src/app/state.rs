@@ -1206,8 +1206,9 @@ impl App {
         let username = config.username.clone();
 
         let initial_bonsai_decay_protection = config.initial_bonsai_decay_protection;
-        // The fallback only exists for a failed load at bootstrap: it is
-        // never persisted, and the next login plants for real.
+        // The fallback only exists for a failed load at bootstrap. It is
+        // built `Detached`, so every persist on it is a no-op and it can
+        // never overwrite the real row; the next login loads for real.
         let bonsai_state = config
             .initial_bonsai_tree
             .map(|tree| {
@@ -2042,7 +2043,6 @@ impl App {
         )));
         if (was_admin || was_moderator) && !permissions.can_access_mod_surface() {
             self.show_mod_modal = false;
-            self.show_bonsai_modal = false;
         }
     }
 

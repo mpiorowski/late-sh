@@ -324,14 +324,21 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_solitaire_games,
         initial_minesweeper_games,
     } = load_arcade_session_preloads(state, user_id).await;
-    let (initial_bonsai_tree, initial_bonsai_decay_protection) =
-        match state.bonsai_service.ensure_tree(user_id).await {
-            Ok((tree, protection)) => (Some(tree), protection),
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load/create bonsai tree");
-                (None, None)
-            }
-        };
+    let initial_bonsai_tree = match state.bonsai_service.ensure_tree(user_id).await {
+        Ok(tree) => Some(tree),
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load/create bonsai tree");
+            None
+        }
+    };
+    let initial_bonsai_decay_protection = match state.bonsai_service.decay_protection(user_id).await
+    {
+        Ok(protection) => protection,
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load bonsai decay protection");
+            None
+        }
+    };
     let shop_snapshot_rx = state.shop_service.subscribe_snapshot(user_id);
     // Primes the per-user snapshot channel subscribed above; the session
     // reads everything it needs from that channel.

@@ -27,27 +27,28 @@ impl BonsaiService {
         Self { db, activity_feed }
     }
 
-    /// Load the user's tree, planting a fresh seed on the first login, plus
-    /// the live Bonsai Decay Shield window so the elapsed-day catch-up can
-    /// honour it.
-    pub async fn ensure_tree(
-        &self,
-        user_id: Uuid,
-    ) -> Result<(Tree, Option<BonsaiDecayProtection>)> {
+    /// Load the user's tree, planting a fresh seed on the first login.
+    pub async fn ensure_tree(&self, user_id: Uuid) -> Result<Tree> {
         let client = self.db.get().await?;
         let today = Self::today();
         let seed = user_id.as_u128() as i64;
         let graph = crate::app::bonsai::state::seeded_graph_value(seed);
         let badge = crate::app::bonsai::state::seeded_badge_glyph(seed);
-        let tree = Tree::ensure(&client, user_id, seed, today, graph, &badge).await?;
-        let protection = BonsaiDecayProtection::for_user(&client, user_id).await?;
-        Ok((tree, protection))
+        Tree::ensure(&client, user_id, seed, today, graph, &badge).await
     }
 
-    /// Persist a watering: the daily gate first, then the full state, then
-    /// the chips if this was the first watering of the UTC day. One task,
-    /// in that order, so the gate can never lose a race against the save
-    /// that stamps the same date.
+    /// The live Bonsai Decay Shield window, so the elapsed-day catch-up can
+    /// honour it. Separate from `ensure_tree` so a failure here degrades to
+    /// "no shield" at bootstrap instead of discarding a tree that loaded.
+    pub async fn decay_protection(&self, user_id: Uuid) -> Result<Option<BonsaiDecayProtection>> {
+        let client = self.db.get().await?;
+        BonsaiDecayProtection::for_user(&client, user_id).await
+    }
+
+    /// Persist a watering. The daily gate and the chip credit commit in one
+    /// transaction, so they succeed or fail together; the full state save
+    /// follows on its own. `Tree::save` never writes `last_watered`, so a
+    /// save from another action landing first cannot pre-empt the gate.
     pub fn water_task(&self, params: TreeParams) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -58,22 +59,26 @@ impl BonsaiService {
     }
 
     async fn water(&self, params: TreeParams) -> Result<()> {
-        let client = self.db.get().await?;
+        let mut client = self.db.get().await?;
         let user_id = params.user_id;
         let today = Self::today();
-        let first_today = Tree::water_day(&client, user_id, today).await?;
+        let tx = client.transaction().await?;
+        let first_today = Tree::water_day(&*tx, user_id, today).await?;
+        if first_today {
+            UserChips::apply(
+                &*tx,
+                user_id,
+                ChipMove::BonsaiWatered,
+                WATER_CHIP_BONUS,
+                &today.to_string(),
+            )
+            .await?;
+        }
+        tx.commit().await?;
         Tree::save(&client, params).await?;
         if !first_today {
             return Ok(());
         }
-        UserChips::apply(
-            &**client,
-            user_id,
-            ChipMove::BonsaiWatered,
-            WATER_CHIP_BONUS,
-            &today.to_string(),
-        )
-        .await?;
         let username = late_core::models::profile::fetch_username(&client, user_id).await;
         let _ = self
             .activity_feed
@@ -93,6 +98,21 @@ impl BonsaiService {
     async fn save(&self, params: TreeParams) -> Result<()> {
         let client = self.db.get().await?;
         Tree::save(&client, params).await
+    }
+
+    /// The selection cursor moved: a one-column write, not a graph save.
+    pub fn select_branch_task(&self, user_id: Uuid, selected_branch_id: Option<i32>) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.select_branch(user_id, selected_branch_id).await {
+                tracing::error!(error = ?e, "failed to save bonsai selection");
+            }
+        });
+    }
+
+    async fn select_branch(&self, user_id: Uuid, selected_branch_id: Option<i32>) -> Result<()> {
+        let client = self.db.get().await?;
+        Tree::select_branch(&client, user_id, selected_branch_id).await
     }
 
     /// The tree died during the elapsed-day catch-up at login. Fire and
