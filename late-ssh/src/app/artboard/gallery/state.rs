@@ -8,11 +8,13 @@ use chrono::{Datelike, NaiveDate, Utc};
 use late_core::models::artboard_piece::{
     ApplauseOutcome, ListingCounts, PIECE_TITLE_MAX_CHARS, PieceListing, TakeDownOutcome,
 };
+use late_core::models::profile_award::gallery_prize_chips;
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::app::artboard::svc::ArtboardSnapshotKind;
+use crate::app::common::primitives::thousands;
 
 use super::frame::FramedPiece;
 use super::svc::{GalleryPiece, GalleryResult, GalleryService, HangRefusal, applause_label};
@@ -38,15 +40,26 @@ impl GallerySection {
         }
     }
 
-    /// The line under the listing's title.
-    pub fn hint(self) -> &'static str {
+    /// The line under the listing's title. The ranking's names each place's
+    /// badge and prize off the award's own table, so the figures on the
+    /// page are the ones the month end pays.
+    pub fn hint(self) -> String {
         match self {
             Self::ThisMonth => {
-                "this month's pieces by applause; top 3 at month end win ART badges and chips"
+                let places = [(1, "1st"), (2, "2nd"), (3, "3rd")]
+                    .into_iter()
+                    .map(|(rank, place)| {
+                        let chips = gallery_prize_chips(rank)
+                            .expect("every podium place pays a gallery prize");
+                        format!("{place} ART{rank} + {} chips", thousands(chips))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("this month's pieces by applause; at month end {places}")
             }
-            Self::Newest => "the newest pieces first, any month",
-            Self::HallOfFame => "each past month's winner",
-            Self::Mine => "everything you have hung",
+            Self::Newest => "the newest pieces first, any month".to_string(),
+            Self::HallOfFame => "each past month's winner".to_string(),
+            Self::Mine => "everything you have hung".to_string(),
         }
     }
 

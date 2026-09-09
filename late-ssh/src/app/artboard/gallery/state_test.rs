@@ -38,6 +38,14 @@ fn the_rail_shrinks_to_board_and_archives_while_the_gallery_is_off() {
 }
 
 #[test]
+fn the_ranking_hint_names_each_place_badge_and_prize() {
+    assert_eq!(
+        GallerySection::ThisMonth.hint(),
+        "this month's pieces by applause; at month end 1st ART1 + 40,000 chips, 2nd ART2 + 15,000 chips, 3rd ART3 + 10,000 chips"
+    );
+}
+
+#[test]
 fn the_page_lands_on_the_rail_and_activation_answers_the_page() {
     let mut gallery = state();
     assert_eq!(gallery.focus(), Focus::Rail);
