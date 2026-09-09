@@ -8,7 +8,13 @@
   several replicas (root CONTEXT.md, multi-replica rule); gated behind
   the `haunt_live` fuse, unlit, so only staff (admins and moderators)
   are haunted today, and only they can finish the ladder and join.
-- Last updated: 2026-09-05 (stage 2 is no longer private: a name hit now
+- Last updated: 2026-09-09 (pacing retuned so the whole ladder fits a
+  week of daily connects, with every haunt kept: the first clock burst
+  of a session comes 5-20 min in and later ones 20-60 min apart, the
+  name roll is 1-in-3 (the daily cap does the spacing), the whisper gap
+  and the invitation delay are both 20 hours so an evening-to-evening
+  connect never slips a day, and the tenure leg of the gate is 8 hours
+  instead of 168. Before that, 2026-09-05: stage 2 is no longer private: a name hit now
   travels to every session in the room, on every replica, over the
   `deadchannel_name_hit` notify on chat's message listener, and each
   witness replays it once the message is on their screen. Before that,
@@ -34,21 +40,24 @@ The game is never announced; it arrives. This domain will grow into the
 whole character layer; what exists today is **first contact**: the
 escalation ladder that onboards a person through haunting instead of a
 tutorial. The chain is the spec, and the ladder never skips a rung
-(counts tuned 2026-09-01): three clock bursts quiet the clock and open
-stage 2, the third name hit arms the stage-3 whisper (it fires on the
-next fresh connect, and once more on a later day: two doors, two
-different lines), and the second delivered whisper schedules the stage-4
-invitation. With the daily caps each of stages 1 and 2 spreads over two
-or three days, and the two doors a day or more apart: the full ladder is
-roughly a week and a half of slow burn.
+(counts tuned 2026-09-01, pacing 2026-09-09): three clock bursts quiet
+the clock and open stage 2, the third name hit arms the stage-3 whisper
+(it fires on the next fresh connect, and once more on a later day: two
+doors, two different lines), and the second delivered whisper schedules
+the stage-4 invitation. The daily caps, not the dice, do the pacing, and
+the ladder is built for a person who connects once a day: day 1 two
+bursts, day 2 the third burst and the first name hit, days 3 and 4 the
+other two, day 5 the first door, day 6 the second, day 7 the DM. The
+day-scale gaps (whisper gap, invitation delay) are 20 hours rather than
+24 so evening-to-evening connects at different times never slip a day.
 
 Who is haunted (GAME.md, "the eligibility gate is a whisper campaign"):
 **stage 1 is universal, stages 2-4 need the gate.** Stage 1 arms for
 staff (admins and moderators) always and for everyone once the `haunt_live` fuse is lit (an
 `app_flags` row, `/haunt live on|off`; unlit today, so nothing fires for
 real users while copy and thresholds await design review). Stages 2-4
-arm when the gate passes: at least `ACTIVE_MIN_HOURS` (168, seven days)
-of lifetime connected time (`user_online_time.total_milliseconds`, the
+arm when the gate passes: at least `ACTIVE_MIN_HOURS` (8) of lifetime
+connected time (`user_online_time.total_milliseconds`, the
 online-time leaderboard's table, one primary-key read at bootstrap;
 account age is not tenure, hours spent here are), at least
 `TOUCHED_SETTINGS_MIN` (2) keys from the
@@ -132,8 +141,9 @@ lines carry no face; every other room renders exactly as before.
    Home/Arcade: the most stable, most-glanced-at element) renders one or
    two time characters from the glyph alphabet for ~200ms
    (`GLITCH_HOLD_TICKS`, spanning the sidebar's ~132ms wake cadence),
-   then heals. Scheduled per session with independent dice: roughly one
-   burst per 40min-3h, at most `GLITCH_DAILY_CAP` (2) per UTC day,
+   then heals. Scheduled per session with independent dice: the first
+   burst 5-20 min after connect (so an hour-long evening sees one), the
+   next 20-60 min later, at most `GLITCH_DAILY_CAP` (2) per UTC day,
    deferred a few minutes whenever the clock is off screen so a burst is
    never spent unseen. A due burst is a `GlitchTick::Due`: the service
    claims it on the row (`claim_first_contact_glitch_burst`, both caps
@@ -146,7 +156,7 @@ lines carry no face; every other room renders exactly as before.
    session the fuse allows, gate or no gate.
 2. **Name flicker (personal, witnessed).** Only once stage 1 has spent its share
    (glitch hits at the cap): on the landing echo of this session's own
-   send (the one moment of guaranteed attention), a ~1-in-24 roll may
+   send (the one moment of guaranteed attention), a 1-in-3 roll may
    corrupt two or three characters of that message's author label for
    ~800ms, then a different two or three for ~800ms more (two waves,
    `NAME_WAVES`, each with its own seed), heavier and longer than the
@@ -184,7 +194,7 @@ lines carry no face; every other room renders exactly as before.
    is unlit only staff are in the audience, so nothing of the haunting
    reaches a real user before `/haunt live on`.
 3. **Whisper (the held door).** Plays `WHISPER_TOTAL_CAP` (2) times per
-   person, at least `WHISPER_GAP_HOURS` (24) apart, each from its own
+   person, at least `WHISPER_GAP_HOURS` (20) apart, each from its own
    line pool: the first door says the static noticed you, the second
    that something is trying to get through. Arms at connect only when
    name hits have reached `NAME_TOTAL_CAP` and
@@ -202,7 +212,7 @@ lines carry no face; every other room renders exactly as before.
    accepts, because claiming at arming would burn a whisper on every
    dropped SSH session). A kill-switch drop or lost session leaves the
    mark unspent.
-4. **Invitation (the whole game is opt-in).** `INVITE_DELAY_DAYS` (2)
+4. **Invitation (the whole game is opt-in).** `INVITE_DELAY_HOURS` (20)
    after the second delivered whisper, the game's first voice - `afterglow`
    (GAME.md reserved the name for something inside the world), a
    bartender-shaped ghost user (fixed fingerprint `afterglow-fp-000`)

@@ -385,12 +385,11 @@ fuse is lit.
 
      Chosen users only (the eligibility gate), never
      before the clock has spent its three bursts (the ladder never
-     skips a rung), rare (order of one in dozens of sends, capped once
-     per UTC day, **three total hits per person**, the third arming the
-     door; with the daily cap, stages 1 and 2 each spread over two or
-     three days, the two doors sit a day or more apart, and the DM
-     waits two days after the second, so the full ladder is roughly a
-     week and a half of slow burn),
+     skips a rung), one in a few sends and capped once per UTC day
+     (the cap paces, the dice only pick the send), **three total hits
+     per person**, the third arming the door; the two doors sit a day
+     apart and the DM comes the day after the second, so for a person
+     who connects daily the full ladder is one week),
      render-layer only, no DB beyond the per-user arming counter,
      kill-switch. Later variety (your name
      in the sidebar, the composer placeholder) rides the same
