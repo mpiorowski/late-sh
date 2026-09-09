@@ -152,18 +152,18 @@ fn tier_roster() {
     );
     assert_eq!(
         GildTier::ALL.iter().map(|t| t.price()).collect::<Vec<_>>(),
-        [500, 2_000, 10_000]
+        [500, 2_000, 5_000]
     );
     assert_eq!(
         GildTier::ALL
             .iter()
             .map(|t| t.author_share())
             .collect::<Vec<_>>(),
-        [333, 1_333, 6_666]
+        [333, 1_333, 3_333]
     );
     assert_eq!(
         GildTier::ALL.iter().map(|t| t.burn()).collect::<Vec<_>>(),
-        [167, 667, 3_334]
+        [167, 667, 1_667]
     );
     assert_eq!(
         GildTier::ALL.iter().map(|t| t.marker()).collect::<Vec<_>>(),

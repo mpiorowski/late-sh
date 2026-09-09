@@ -15,8 +15,6 @@ use super::{
 };
 
 pub const PET_COMPANION_SKU: &str = "pet_companion";
-pub const DYNAMIC_BONSAI_SKU: &str = "dynamic_bonsai";
-pub const BONSAI_VARIANT_SLOT: &str = "bonsai_variant";
 pub const BONSAI_CONSUMABLE_ITEM_KIND: &str = "bonsai_consumable";
 pub const BONSAI_DECAY_SHIELD_SKU: &str = "bonsai_decay_shield_two_weeks";
 /// `shop_consumable_effects.effect_kind` for the user-scoped Bonsai Decay
@@ -163,20 +161,6 @@ impl UserPurchase {
             .await?;
         Ok(rows.into_iter().map(Self::from).collect())
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EquipStatus {
-    Equipped,
-    AlreadyEquipped,
-    NotOwned,
-    NotEquippable,
-}
-
-#[derive(Debug, Clone)]
-pub struct EquipResult {
-    pub status: EquipStatus,
-    pub item: MarketplaceItem,
 }
 
 pub async fn listen_for_shop_changes(client: &Client) -> Result<()> {
@@ -955,102 +939,6 @@ pub async fn aquarium_is_hungry(client: &Client, user_id: Uuid) -> Result<bool> 
     Ok(last_fed.is_none_or(|time| time <= cutoff))
 }
 
-pub async fn equip_owned_item_by_sku(
-    client: &mut Client,
-    user_id: Uuid,
-    sku: &str,
-) -> Result<Option<EquipResult>> {
-    let tx = client.transaction().await?;
-    let Some(row) = tx
-        .query_opt(
-            "SELECT i.*
-             FROM marketplace_items i
-             WHERE i.sku = $1",
-            &[&sku],
-        )
-        .await?
-    else {
-        tx.commit().await?;
-        return Ok(None);
-    };
-    let item = MarketplaceItem::from(row);
-
-    let Some(slot) = item.slot.clone() else {
-        tx.commit().await?;
-        return Ok(Some(EquipResult {
-            status: EquipStatus::NotEquippable,
-            item,
-        }));
-    };
-
-    let Some(purchase_row) = tx
-        .query_opt(
-            "SELECT equipped_slot
-             FROM user_purchases
-             WHERE user_id = $1 AND item_id = $2
-             FOR UPDATE",
-            &[&user_id, &item.id],
-        )
-        .await?
-    else {
-        tx.commit().await?;
-        return Ok(Some(EquipResult {
-            status: EquipStatus::NotOwned,
-            item,
-        }));
-    };
-
-    let already_equipped = purchase_row
-        .get::<_, Option<String>>("equipped_slot")
-        .as_deref()
-        == Some(slot.as_str());
-    if already_equipped {
-        tx.commit().await?;
-        return Ok(Some(EquipResult {
-            status: EquipStatus::AlreadyEquipped,
-            item,
-        }));
-    }
-
-    equip_purchase_in_tx(&tx, user_id, item.id, &slot).await?;
-    let payload = user_id.to_string();
-    tx.execute(
-        "SELECT pg_notify($1, $2)",
-        &[&SHOP_USER_CHANGED_CHANNEL, &payload],
-    )
-    .await?;
-
-    tx.commit().await?;
-    Ok(Some(EquipResult {
-        status: EquipStatus::Equipped,
-        item,
-    }))
-}
-
-pub async fn unequip_slot(client: &mut Client, user_id: Uuid, slot: &str) -> Result<bool> {
-    let tx = client.transaction().await?;
-    let updated = tx
-        .execute(
-            "UPDATE user_purchases
-             SET equipped_slot = NULL, updated = current_timestamp
-             WHERE user_id = $1 AND equipped_slot = $2",
-            &[&user_id, &slot],
-        )
-        .await?;
-
-    if updated > 0 {
-        let payload = user_id.to_string();
-        tx.execute(
-            "SELECT pg_notify($1, $2)",
-            &[&SHOP_USER_CHANGED_CHANNEL, &payload],
-        )
-        .await?;
-    }
-
-    tx.commit().await?;
-    Ok(updated > 0)
-}
-
 /// Active aquarium creatures `(creature_name, count)` a user is currently
 /// displaying. Mirrors `ShopState::active_aquarium_fish` but reads from the
 /// database for an arbitrary user, so profile views can render someone else's
@@ -1083,25 +971,6 @@ pub async fn active_aquarium_fish_for_user(
                 .map(|creature| (creature, count.max(0) as usize))
         })
         .collect())
-}
-
-/// Whether the user has Dynamic Bonsai equipped in the `bonsai_variant` slot.
-/// Same rule the chat badge uses, exposed for the profile view.
-pub async fn is_dynamic_bonsai_selected(client: &Client, user_id: Uuid) -> Result<bool> {
-    let row = client
-        .query_one(
-            "SELECT EXISTS (
-                 SELECT 1
-                 FROM user_purchases p
-                 JOIN marketplace_items i ON i.id = p.item_id
-                 WHERE p.user_id = $1
-                   AND p.equipped_slot = $2
-                   AND i.sku = $3
-             ) AS selected",
-            &[&user_id, &BONSAI_VARIANT_SLOT, &DYNAMIC_BONSAI_SKU],
-        )
-        .await?;
-    Ok(row.get("selected"))
 }
 
 async fn aquarium_fish_active_quantity_in_tx(

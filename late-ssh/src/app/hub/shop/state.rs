@@ -317,17 +317,6 @@ impl ShopState {
         (!badge.is_empty()).then_some(badge)
     }
 
-    pub(crate) fn dynamic_bonsai_enabled(&self) -> bool {
-        self.snapshot
-            .items
-            .iter()
-            .any(|item| item.is_dynamic_bonsai() && item.equipped)
-    }
-
-    pub(crate) fn has_dynamic_bonsai(&self) -> bool {
-        self.snapshot.entitlements.has_dynamic_bonsai()
-    }
-
     pub(crate) fn selected_index(&self) -> usize {
         self.selected_index
     }
@@ -508,17 +497,9 @@ impl ShopState {
             return Some(Banner::success(&format!("{action} {}", item.name)));
         }
         if item.owned {
-            // Dynamic Bonsai is the only thing on sale that still equips a
-            // slot. Badges and flags went all-rental in migration 148, and a
-            // rental fills its slot through an effect row, never an equip.
-            if let Some(slot) = item.slot {
-                if item.equipped {
-                    self.service.unequip_slot_task(self.user_id, slot);
-                    return Some(Banner::success("Using classic Bonsai"));
-                }
-                self.service.equip_item_task(self.user_id, item.sku);
-                return Some(Banner::success("Using Dynamic Bonsai"));
-            }
+            // Nothing on sale equips a slot any more: badges and flags went
+            // all-rental in migration 148, and the bonsai variant unlock was
+            // retired in migration 177.
             return Some(Banner::success(&format!("{} already unlocked", item.name)));
         }
 

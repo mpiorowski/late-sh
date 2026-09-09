@@ -104,7 +104,7 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
         ),
         landing::stat(
             "Ascension",
-            "50,000 chips, and the NHY badge the first time",
+            "40,000 chips, and the NHY badge the first time",
             18,
         ),
         Line::from(Span::styled(

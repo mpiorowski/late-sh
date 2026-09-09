@@ -861,16 +861,10 @@ impl App {
                 .set_active_creatures(&self.shop_state.active_aquarium_fish());
             self.aquarium_state
                 .set_hungry(self.shop_state.aquarium_hungry());
-            if !self.shop_state.dynamic_bonsai_enabled() {
-                self.show_bonsai_v2_modal = false;
-            }
-            // A Bonsai Decay Shield purchase takes effect immediately for the
-            // live in-session death check (`BonsaiState::tick`); Dynamic
-            // Bonsai has no in-session decay simulation to refresh, so this
-            // only matters there from the next login onward.
+            // A Bonsai Decay Shield purchase is picked up here, but the tree
+            // has no in-session decay simulation to refresh, so it only
+            // matters from the next login's elapsed-day catch-up onward.
             self.bonsai_state.decay_protection = self.shop_state.active_bonsai_decay_protection();
-            self.bonsai_v2_state.decay_protection =
-                self.shop_state.active_bonsai_decay_protection();
         }
         if shop_tick.snapshot_changed
             && self.shop_state.is_loaded()
@@ -886,9 +880,6 @@ impl App {
             }
         }
 
-        // Bonsai growth comes from watering only; the tick just watches for
-        // death during a live session.
-        changed |= self.bonsai_state.tick();
         // Pet: state edges (feedback expiry, roam end, day-rollover mood and
         // needs flips) always count; the wander/blink/tail animation only
         // pays frames on ticks where the drawn strip actually differs, and
@@ -915,10 +906,6 @@ impl App {
             self.aquarium_state.tick();
             changed = true;
         }
-        if self.show_bonsai_modal {
-            changed |= self.bonsai_care_state.tick();
-        }
-
         // The activity feed subscription survives the retired sidebar panel
         // for one job: edge-detecting a friend's arrivals — logging in, and
         // going live — for the banner + desktop notification. The public
@@ -955,9 +942,22 @@ impl App {
                         }
                         None
                     }
+                    // The session's own watering cleared the DB chip gate:
+                    // this is the one place that may claim the payout, since
+                    // another session or an in-flight save can make the
+                    // in-memory state disagree with the row.
+                    ActivityKind::BonsaiWatered if user_id == self.user_id => {
+                        self.bonsai_state.message = Some(format!(
+                            "Watered (+{} chips)",
+                            crate::app::bonsai::svc::WATER_CHIP_BONUS
+                        ));
+                        changed = true;
+                        None
+                    }
                     // Everything else on the global feed is somebody else's
                     // business: this subscription only exists for the friend
-                    // edges above and the session's own daily wins.
+                    // edges above, the session's own daily wins, and its
+                    // own watering.
                     _ => None,
                 };
                 if let Some(b) = banner {
@@ -977,8 +977,7 @@ impl App {
         // animating: the bonsai sway holds this edge on its own, and Bonsai
         // is enabled by default. An unpaired session repaints a static eq
         // strip, which the frame diff then drops.
-        changed |=
-            anim_half && (sidebar_visible || self.show_bonsai_modal || self.show_bonsai_v2_modal);
+        changed |= anim_half && (sidebar_visible || self.show_bonsai_modal);
 
         // Sidebar marquees: track rows and the friends row scroll while their
         // text overflows. The marquee moves at most once per
@@ -1057,6 +1056,9 @@ impl App {
         if self.show_profile_modal && anim_quarter {
             changed |= self.profile_modal_state.step_reef();
         }
+        // The profile hero's bonsai sways like the sidebar's.
+        changed |=
+            self.show_profile_modal && anim_half && self.profile_modal_state.bonsai().is_some();
 
         // Daily boards are event-driven (daily_tick, chat, input); the 1Hz
         // cadence keeps the move-deadline clock honest while on screen.
@@ -1087,22 +1089,21 @@ impl App {
             || self.last_input_at.elapsed() < POST_INPUT_HOT_WINDOW
             || self.ultimate_state.has_active_effect()
             || self.screen == Screen::HouseTable
-            || (self.screen == Screen::Arcade && self.is_playing_game)
-            || self.show_bonsai_modal
-            || self.show_bonsai_v2_modal;
+            || (self.screen == Screen::Arcade && self.is_playing_game);
         if hot {
             return HOT_TICK;
         }
         // Slower tiers match the frame edges their surfaces paint on. The
         // pet's clocks are wall-synced (PetState::tick takes marquee_tick),
-        // so roaming and the strip ride the half tier they paint on. Bonsai
-        // modals stay hot: the care watering animation still counts per
-        // tick call. A visible sidebar always carries the eq strip and
-        // bonsai sway.
+        // so roaming and the strip ride the half tier they paint on. The
+        // bonsai care modal and the profile hero sway on the same edge as
+        // the sidebar, which always carries the eq strip and that sway.
         if self.screen == Screen::Clubhouse
             || self.right_sidebar_visible()
             || self.pet_state.roaming_active()
             || self.last_pet_strip_travel.get().is_some()
+            || self.show_bonsai_modal
+            || (self.show_profile_modal && self.profile_modal_state.bonsai().is_some())
         {
             return ANIM_HALF_TICK;
         }

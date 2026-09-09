@@ -371,7 +371,7 @@ async fn a_win_grants_only_its_own_badge() {
     wait_until(
         || {
             let db = db.clone();
-            async move { award_chip_total(&db, user.id).await == 50_000 }
+            async move { award_chip_total(&db, user.id).await == 40_000 }
         },
         "win chips granted",
     )
@@ -523,7 +523,7 @@ async fn a_nethack_ascension_grants_only_its_own_badge() {
     wait_until(
         || {
             let db = db.clone();
-            async move { award_chip_total_for(&db, user.id, "nethack").await == 50_000 }
+            async move { award_chip_total_for(&db, user.id, "nethack").await == 40_000 }
         },
         "ascension chips granted",
     )
@@ -714,7 +714,7 @@ async fn brogue_endings_grant_only_their_own_badge() {
     )
     .await;
 
-    // A later mastery pays its own 50k tier; replays pay nothing more.
+    // A later mastery pays its own 40k tier; replays pay nothing more.
     let mastery = StatsFrame {
         file: brogue_file(),
         next_offset: 600,
@@ -726,7 +726,7 @@ async fn brogue_endings_grant_only_their_own_badge() {
     wait_until(
         || {
             let db = db.clone();
-            async move { award_chip_total_for(&db, user.id, "brogue").await == 70_000 }
+            async move { award_chip_total_for(&db, user.id, "brogue").await == 60_000 }
         },
         "mastery chips granted",
     )

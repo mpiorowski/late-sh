@@ -2,20 +2,20 @@ use anyhow::Result;
 use chrono::NaiveDate;
 use late_core::db::Db;
 use late_core::models::{
-    bonsai::{BonsaiV2Tree, BonsaiV2TreeParams},
-    bonsai::{DailyCare, Grave, Tree},
+    bonsai::{Tree, TreeParams},
     bonsai_decay_protection::BonsaiDecayProtection,
     chips::{ChipMove, UserChips},
 };
-use rand_core::{OsRng, RngCore};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::activity::event::ActivityEvent;
 
-const MISSED_PRUNE_GROWTH_LOSS: i32 = 10;
 pub(crate) const WATER_CHIP_BONUS: i64 = 200;
 
+/// Persistence and side effects for the bonsai. The in-memory
+/// `BonsaiState` owns every rule; this only writes what it is handed and
+/// pays the daily chips exactly once.
 #[derive(Clone)]
 pub struct BonsaiService {
     db: Db,
@@ -27,298 +27,120 @@ impl BonsaiService {
         Self { db, activity_feed }
     }
 
+    /// Load the user's tree, planting a fresh seed on the first login.
     pub async fn ensure_tree(&self, user_id: Uuid) -> Result<Tree> {
-        self.ensure_tree_with_care(user_id)
-            .await
-            .map(|(tree, _care, _protection)| tree)
-    }
-
-    /// Load or create a bonsai tree and today's UTC care row. Handles death
-    /// checks and one-shot missed-care penalties for previous care rows,
-    /// discounted by any live Bonsai Decay Shield window (also returned, so
-    /// the caller can thread the same window into the in-session death
-    /// check and into Dynamic Bonsai's own decay simulation).
-    pub async fn ensure_tree_with_care(
-        &self,
-        user_id: Uuid,
-    ) -> Result<(Tree, DailyCare, Option<BonsaiDecayProtection>)> {
         let client = self.db.get().await?;
-        let today = chrono::Utc::now().date_naive();
-        let protection = BonsaiDecayProtection::for_user(&client, user_id).await?;
-
-        let mut tree = if let Some(mut tree) = Tree::find_by_user_id(&client, user_id).await? {
-            // Check if tree should die (7+ days without watering, minus any
-            // days a live decay shield covered)
-            // If never watered, use created date as the reference point
-            if tree.is_alive {
-                let reference_date = tree
-                    .last_watered
-                    .unwrap_or_else(|| tree.created.date_naive());
-                let days_since = (today - reference_date).num_days();
-                let protected_days = protection
-                    .map(|protection| protection.protected_days_between(reference_date, today))
-                    .unwrap_or(0);
-                if (days_since - protected_days) >= 7 {
-                    let survived = (today - tree.created.date_naive()).num_days().max(0) as i32;
-                    Tree::kill(&client, user_id).await?;
-                    Grave::record(&client, user_id, survived).await?;
-                    tree.is_alive = false;
-
-                    let username =
-                        late_core::models::profile::fetch_username(&client, user_id).await;
-                    let _ = self
-                        .activity_feed
-                        .send(ActivityEvent::bonsai_lost(user_id, username, survived));
-                }
-            }
-            tree
-        } else {
-            // New user: create tree with user-derived seed
-            let seed = user_id.as_u128() as i64;
-            Tree::ensure(&client, user_id, seed).await?
-        };
-
-        if tree.is_alive {
-            self.apply_care_penalties(&client, user_id, today, &mut tree)
-                .await?;
-        }
-
-        let care = DailyCare::ensure(
-            &client,
-            user_id,
-            today,
-            crate::app::bonsai::care::branch_goal_for(
-                crate::app::bonsai::state::stage_for(tree.is_alive, tree.growth_points),
-                tree.seed,
-                today,
-            ) as i32,
-        )
-        .await?;
-        Ok((tree, care, protection))
+        let today = Self::today();
+        let seed = user_id.as_u128() as i64;
+        let graph = crate::app::bonsai::state::seeded_graph_value(seed);
+        let badge = crate::app::bonsai::state::seeded_badge_glyph(seed);
+        Tree::ensure(&client, user_id, seed, today, graph, &badge).await
     }
 
-    pub async fn ensure_v2_tree(
-        &self,
-        user_id: Uuid,
-        legacy_tree: Option<&Tree>,
-    ) -> Result<BonsaiV2Tree> {
+    /// The live Bonsai Decay Shield window, so the elapsed-day catch-up can
+    /// honour it. Separate from `ensure_tree` so a failure here degrades to
+    /// "no shield" at bootstrap instead of discarding a tree that loaded.
+    pub async fn decay_protection(&self, user_id: Uuid) -> Result<Option<BonsaiDecayProtection>> {
         let client = self.db.get().await?;
-        let today = chrono::Utc::now().date_naive();
-        let seed = legacy_tree
-            .map(|tree| tree.seed)
-            .unwrap_or_else(|| user_id.as_u128() as i64);
-        let growth_points = legacy_tree.map(|tree| tree.growth_points).unwrap_or(0);
-        let is_alive = legacy_tree.map(|tree| tree.is_alive).unwrap_or(true);
-        let graph = crate::app::bonsai_v2::state::seeded_graph_value(seed, growth_points);
-        let badge = crate::app::bonsai_v2::state::seeded_badge_glyph(seed, growth_points, is_alive);
-
-        BonsaiV2Tree::ensure(&client, user_id, seed, today, graph, &badge).await
+        BonsaiDecayProtection::for_user(&client, user_id).await
     }
 
-    /// Water the tree once per UTC day.
-    pub fn water_task(&self, user_id: Uuid) {
+    /// Persist a watering. The daily gate and the chip credit commit in one
+    /// transaction, so they succeed or fail together; the full state save
+    /// follows on its own. `Tree::save` never writes `last_watered`, so a
+    /// save from another action landing first cannot pre-empt the gate.
+    pub fn water_task(&self, params: TreeParams) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.water(user_id).await {
+            if let Err(e) = svc.water(params).await {
                 tracing::error!(error = ?e, "failed to water bonsai");
             }
         });
     }
 
-    async fn water(&self, user_id: Uuid) -> Result<bool> {
-        let client = self.db.get().await?;
-        let today = chrono::Utc::now().date_naive();
-
-        if !Tree::water_and_add_growth_if_available(&client, user_id, today).await? {
-            return Ok(false);
+    async fn water(&self, params: TreeParams) -> Result<()> {
+        let mut client = self.db.get().await?;
+        let user_id = params.user_id;
+        let today = Self::today();
+        let tx = client.transaction().await?;
+        let first_today = Tree::water_day(&*tx, user_id, today).await?;
+        if first_today {
+            UserChips::apply(
+                &*tx,
+                user_id,
+                ChipMove::BonsaiWatered,
+                WATER_CHIP_BONUS,
+                &today.to_string(),
+            )
+            .await?;
         }
-        let first_daily_water = DailyCare::mark_watered(&client, user_id, today).await?;
-        if first_daily_water {
-            self.add_water_chip_bonus(user_id, today).await?;
+        tx.commit().await?;
+        Tree::save(&client, params).await?;
+        if !first_today {
+            return Ok(());
         }
-
-        // Broadcast
         let username = late_core::models::profile::fetch_username(&client, user_id).await;
         let _ = self
             .activity_feed
             .send(ActivityEvent::bonsai_watered(user_id, username));
-
-        Ok(true)
-    }
-
-    async fn add_water_chip_bonus(&self, user_id: Uuid, today: chrono::NaiveDate) -> Result<()> {
-        let client = self.db.get().await?;
-        UserChips::apply(
-            &**client,
-            user_id,
-            ChipMove::BonsaiWatered,
-            WATER_CHIP_BONUS,
-            &today.to_string(),
-        )
-        .await?;
         Ok(())
     }
 
-    /// Respawn a dead tree
-    pub fn respawn_task(&self, user_id: Uuid) {
+    pub fn save_task(&self, params: TreeParams) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.respawn(user_id).await {
-                tracing::error!(error = ?e, "failed to respawn bonsai");
+            if let Err(e) = svc.save(params).await {
+                tracing::error!(error = ?e, "failed to save bonsai");
             }
         });
     }
 
-    async fn respawn(&self, user_id: Uuid) -> Result<()> {
+    async fn save(&self, params: TreeParams) -> Result<()> {
         let client = self.db.get().await?;
-        let new_seed = OsRng.next_u64() as i64;
-        Tree::respawn(&client, user_id, new_seed).await?;
+        Tree::save(&client, params).await
+    }
+
+    /// The selection cursor moved: a one-column write, not a graph save.
+    pub fn select_branch_task(&self, user_id: Uuid, selected_branch_id: Option<i32>) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.select_branch(user_id, selected_branch_id).await {
+                tracing::error!(error = ?e, "failed to save bonsai selection");
+            }
+        });
+    }
+
+    async fn select_branch(&self, user_id: Uuid, selected_branch_id: Option<i32>) -> Result<()> {
+        let client = self.db.get().await?;
+        Tree::select_branch(&client, user_id, selected_branch_id).await
+    }
+
+    /// The tree died during the elapsed-day catch-up at login. Fire and
+    /// forget: the event is private (never shipped to #lounge), it only
+    /// feeds the activity stream.
+    pub fn lost_task(&self, user_id: Uuid, survived_days: i32) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.lost(user_id, survived_days).await {
+                tracing::error!(error = ?e, "failed to announce a lost bonsai");
+            }
+        });
+    }
+
+    async fn lost(&self, user_id: Uuid, survived_days: i32) -> Result<()> {
+        let client = self.db.get().await?;
+        let username = late_core::models::profile::fetch_username(&client, user_id).await;
+        let _ =
+            self.activity_feed
+                .send(ActivityEvent::bonsai_lost(user_id, username, survived_days));
         Ok(())
-    }
-
-    /// Cut/prune: change seed and subtract growth cost
-    pub fn cut_task(&self, user_id: Uuid, new_seed: i64, cost: i32) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = svc.cut(user_id, new_seed, cost).await {
-                tracing::error!(error = ?e, "failed to cut bonsai");
-            }
-        });
-    }
-
-    async fn cut(&self, user_id: Uuid, new_seed: i64, cost: i32) -> Result<()> {
-        let client = self.db.get().await?;
-        Tree::cut(&client, user_id, new_seed, cost).await
-    }
-
-    pub fn cut_daily_branch_task(&self, user_id: Uuid, care_date: NaiveDate, branch_id: i32) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = svc.cut_daily_branch(user_id, care_date, branch_id).await {
-                tracing::error!(error = ?e, "failed to cut daily bonsai branch");
-            }
-        });
-    }
-
-    async fn cut_daily_branch(
-        &self,
-        user_id: Uuid,
-        care_date: NaiveDate,
-        branch_id: i32,
-    ) -> Result<()> {
-        let client = self.db.get().await?;
-        DailyCare::add_cut_branch(&client, user_id, care_date, branch_id).await
-    }
-
-    pub fn clear_daily_branches_task(&self, user_id: Uuid, care_date: NaiveDate) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = svc.clear_daily_branches(user_id, care_date).await {
-                tracing::error!(error = ?e, "failed to reset daily bonsai branches");
-            }
-        });
-    }
-
-    async fn clear_daily_branches(&self, user_id: Uuid, care_date: NaiveDate) -> Result<()> {
-        let client = self.db.get().await?;
-        DailyCare::clear_cut_branches(&client, user_id, care_date).await
-    }
-
-    pub fn reset_daily_care_task(&self, user_id: Uuid, care_date: NaiveDate, branch_goal: i32) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = svc.reset_daily_care(user_id, care_date, branch_goal).await {
-                tracing::error!(error = ?e, "failed to reset daily bonsai care");
-            }
-        });
-    }
-
-    async fn reset_daily_care(
-        &self,
-        user_id: Uuid,
-        care_date: NaiveDate,
-        branch_goal: i32,
-    ) -> Result<()> {
-        let client = self.db.get().await?;
-        DailyCare::reset_for_respawn(&client, user_id, care_date, branch_goal).await
-    }
-
-    /// Add connection-time growth (called periodically from tick)
-    pub fn add_growth_task(&self, user_id: Uuid, points: i32) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = svc.add_growth(user_id, points).await {
-                tracing::error!(error = ?e, "failed to add bonsai growth");
-            }
-        });
-    }
-
-    async fn add_growth(&self, user_id: Uuid, points: i32) -> Result<()> {
-        let client = self.db.get().await?;
-        Tree::add_growth(&client, user_id, points).await
-    }
-
-    pub fn lose_growth_task(&self, user_id: Uuid, points: i32) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = svc.lose_growth(user_id, points).await {
-                tracing::error!(error = ?e, "failed to subtract bonsai growth");
-            }
-        });
-    }
-
-    async fn lose_growth(&self, user_id: Uuid, points: i32) -> Result<()> {
-        let client = self.db.get().await?;
-        Tree::lose_growth(&client, user_id, points).await
-    }
-
-    pub fn save_v2_task(&self, params: BonsaiV2TreeParams) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = svc.save_v2(params).await {
-                tracing::error!(error = ?e, "failed to save bonsai v2");
-            }
-        });
-    }
-
-    async fn save_v2(&self, params: BonsaiV2TreeParams) -> Result<()> {
-        let client = self.db.get().await?;
-        BonsaiV2Tree::save(&client, params).await
     }
 
     pub fn today() -> NaiveDate {
         chrono::Utc::now().date_naive()
     }
-
-    async fn apply_care_penalties(
-        &self,
-        client: &tokio_postgres::Client,
-        user_id: Uuid,
-        today: NaiveDate,
-        tree: &mut Tree,
-    ) -> Result<()> {
-        for care in DailyCare::unapplied_before(client, user_id, today).await? {
-            let missed_water = !care.watered && !care.water_penalty_applied;
-            // The Bonsai Decay Shield covers decay only: it keeps a dry spell
-            // from killing the tree, but pruning discipline is still on the
-            // player, so it deliberately has no say here.
-            let missed_prune = (care.cut_branch_ids.len() as i32) < care.branch_goal
-                && !care.prune_penalty_applied;
-
-            if missed_prune {
-                tree.growth_points = tree.growth_points.saturating_sub(MISSED_PRUNE_GROWTH_LOSS);
-                Tree::lose_growth(client, user_id, MISSED_PRUNE_GROWTH_LOSS).await?;
-            }
-
-            DailyCare::mark_penalties_applied(
-                client,
-                user_id,
-                care.care_date,
-                missed_water,
-                missed_prune,
-            )
-            .await?;
-        }
-        Ok(())
-    }
 }
+
+#[cfg(test)]
+#[path = "svc_test.rs"]
+mod svc_test;

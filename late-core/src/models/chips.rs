@@ -296,7 +296,7 @@ impl ChipMove {
             Self::FloorRestore => "house_rounds",
             Self::GiftSent | Self::GiftReceived | Self::InitialBalance => "users",
             Self::SsnakeArenaEarned | Self::SsnakeArenaLost => "ssnake_visits",
-            Self::BonsaiWatered => "bonsai_daily_care",
+            Self::BonsaiWatered => "bonsai_trees",
             Self::GildSent | Self::GildReceived => "chat_message_gilds",
             Self::CrownTaken => "crown_reigns",
             Self::PotTicket | Self::PotWon => "pots",

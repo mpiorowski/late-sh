@@ -257,7 +257,6 @@ struct DrawContext<'a> {
     paired_client: Option<&'a ClientAudioState>,
     sidebar_clock: &'a str,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
-    bonsai_v2: &'a crate::app::bonsai_v2::state::BonsaiV2State,
     cat: &'a crate::app::pet::state::PetState,
     banner: Option<&'a Banner>,
     is_admin: bool,
@@ -290,8 +289,6 @@ struct DrawContext<'a> {
     /// against the pinned rail list, which lives on the pane.
     cyberspace_modal: Option<&'a chat::cyberspace::state::State>,
     show_bonsai_modal: bool,
-    show_bonsai_v2_modal: bool,
-    bonsai_care_state: &'a bonsai::care::BonsaiCareState,
     show_lobby_modal: bool,
     lobby: &'a crate::app::lobby::state::LobbyState,
     daily: &'a crate::app::lobby::daily::state::DailyState,
@@ -1008,7 +1005,6 @@ impl App {
             || self.show_gild_modal
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
-            || self.show_bonsai_v2_modal
             || self.show_lobby_modal
             || login_announcements_visible
             || self.paper.modal_visible()
@@ -1030,7 +1026,6 @@ impl App {
             || self.show_gild_modal
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
-            || self.show_bonsai_v2_modal
             || self.show_lobby_modal
             || login_announcements_visible
             || self.paper.modal_visible()
@@ -1161,7 +1156,6 @@ impl App {
                         paired_client: paired_client.as_ref(),
                         sidebar_clock: &sidebar_clock,
                         bonsai: &self.bonsai_state,
-                        bonsai_v2: &self.bonsai_v2_state,
                         cat: &self.pet_state,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
@@ -1194,8 +1188,6 @@ impl App {
                             .modal_active()
                             .then_some(&self.chat.cyberspace),
                         show_bonsai_modal: self.show_bonsai_modal,
-                        show_bonsai_v2_modal: self.show_bonsai_v2_modal,
-                        bonsai_care_state: &self.bonsai_care_state,
                         show_lobby_modal: self.show_lobby_modal,
                         lobby: &self.lobby,
                         daily: &self.daily,
@@ -1749,8 +1741,6 @@ impl App {
                     now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
                     bonsai: ctx.bonsai,
-                    bonsai_v2: ctx.bonsai_v2,
-                    use_bonsai_v2: ctx.shop_state.dynamic_bonsai_enabled(),
                     clock_text: ctx.sidebar_clock,
                     queue_snapshot: &ctx.booth_snapshot,
                     youtube_source_count: ctx.youtube_source_count,
@@ -1845,7 +1835,7 @@ impl App {
         }
 
         if ctx.show_profile_modal {
-            profile_modal::ui::draw(frame, inner, ctx.profile_modal_state);
+            profile_modal::ui::draw(frame, inner, ctx.profile_modal_state, ctx.marquee_tick);
         }
 
         if ctx.show_sheet_modal {
@@ -1865,17 +1855,7 @@ impl App {
         }
 
         if ctx.show_bonsai_modal {
-            bonsai::modal_ui::draw(
-                frame,
-                inner,
-                ctx.bonsai,
-                ctx.bonsai_care_state,
-                ctx.marquee_tick,
-            );
-        }
-
-        if ctx.show_bonsai_v2_modal {
-            crate::app::bonsai_v2::modal_ui::draw(frame, inner, ctx.bonsai_v2, ctx.marquee_tick);
+            bonsai::modal_ui::draw(frame, inner, ctx.bonsai, ctx.marquee_tick);
         }
 
         if ctx.show_lobby_modal {
@@ -2042,7 +2022,6 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_gild_modal
         || ctx.cyberspace_modal.is_some()
         || ctx.show_bonsai_modal
-        || ctx.show_bonsai_v2_modal
         || ctx.login_announcements.is_some()
         || ctx.paper_modal.is_some()
         || ctx.stream_modal.is_some()

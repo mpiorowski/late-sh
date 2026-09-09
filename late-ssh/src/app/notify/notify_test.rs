@@ -127,3 +127,25 @@ fn stream_alerts_gate_on_their_own_kind() {
     let got = String::from_utf8(outbox.drain(&streams_on).expect("one payload")).expect("utf8");
     assert!(got.contains("@pal is live: render loop"));
 }
+
+// A gild rides the `mentions` opt-in rather than a kind of its own, so the
+// one setting covers both ways a person can single you out in chat.
+#[test]
+fn gild_alerts_gate_on_the_mentions_kind() {
+    let (notifier, mut outbox) = channel();
+    let mentions_off = Profile {
+        notify_kinds: vec!["dms".to_string(), "game_events".to_string()],
+        ..Profile::default()
+    };
+    notifier.push(Notification::gilded("bob", "Gold", 3_333));
+    assert!(outbox.drain(&mentions_off).is_none());
+
+    let mentions_on = Profile {
+        notify_kinds: vec!["mentions".to_string()],
+        ..Profile::default()
+    };
+    notifier.push(Notification::gilded("bob", "Gold", 3_333));
+    let got = String::from_utf8(outbox.drain(&mentions_on).expect("one payload")).expect("utf8");
+    assert!(got.contains("Gold gild received"));
+    assert!(got.contains("@bob gilded your message (+3333 chips)"));
+}

@@ -265,7 +265,7 @@ not only its author. Archive snapshots too. This is the exception to the
 
 **5. Fix the bonsai.** It has `s` today and emits the tree plus an
 `ADMIRE my tree (Day N)` label, with no header and no footer. Bring both
-renderers (`bonsai/state.rs` and `bonsai_v2/state.rs` `share_snippet`) into
+renderer (`bonsai/state.rs` `share_snippet`) into
 the grammar: `late.sh Bonsai · Day 41` on top, `ssh late.sh` below, the
 label gone, the dynamic tree allowed its full height like an Artboard piece.
 

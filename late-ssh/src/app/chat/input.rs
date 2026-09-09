@@ -129,7 +129,6 @@ fn open_mod_modal(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
-    app.show_bonsai_v2_modal = false;
     app.show_poll_modal = false;
     app.poll_modal_state.close();
     app.show_quit_confirm = false;
@@ -146,7 +145,6 @@ fn open_poll_modal(app: &mut App, room_id: Uuid) {
     app.show_profile_modal = false;
     app.show_sheet_modal = false;
     app.show_bonsai_modal = false;
-    app.show_bonsai_v2_modal = false;
     app.show_quit_confirm = false;
     crate::app::input::close_icon_picker(app);
     app.chat.close_overlay();
@@ -167,7 +165,6 @@ fn open_gild_modal(app: &mut App, target: crate::app::chat::gild::state::GildTar
     app.show_poll_modal = false;
     app.poll_modal_state.close();
     app.show_bonsai_modal = false;
-    app.show_bonsai_v2_modal = false;
     app.show_quit_confirm = false;
     crate::app::input::close_icon_picker(app);
     app.chat.close_overlay();

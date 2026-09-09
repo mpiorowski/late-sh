@@ -261,8 +261,6 @@ pub struct SessionConfig {
     pub username: String,
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
-    pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
-    pub initial_bonsai_v2_tree: Option<late_core::models::bonsai::BonsaiV2Tree>,
     pub initial_bonsai_decay_protection:
         Option<late_core::models::bonsai_decay_protection::BonsaiDecayProtection>,
     pub pet_service: crate::app::pet::svc::PetService,
@@ -480,7 +478,6 @@ pub struct App {
     pub(crate) show_poll_modal: bool,
     pub(crate) show_gild_modal: bool,
     pub(crate) show_bonsai_modal: bool,
-    pub(crate) show_bonsai_v2_modal: bool,
     pub(crate) show_lobby_modal: bool,
     pub(crate) show_ultimate_modal: bool,
     /// Edge detector for the cooldown label's ready flip: the countdown is
@@ -686,10 +683,6 @@ pub struct App {
 
     /// Bonsai
     pub(crate) bonsai_state: crate::app::bonsai::state::BonsaiState,
-    pub(crate) bonsai_care_state: crate::app::bonsai::care::BonsaiCareState,
-    pub(crate) bonsai_v2_state: crate::app::bonsai_v2::state::BonsaiV2State,
-    /// Recent input grants Dynamic Bonsai passive-growth credit for a short
-    /// active window. Idle open sessions should not grow the tree.
 
     /// Cat companion
     pub(crate) pet_state: crate::app::pet::state::PetState,
@@ -930,10 +923,6 @@ impl App {
         }
     }
 
-    pub(crate) fn use_bonsai_v2(&self) -> bool {
-        self.shop_state.dynamic_bonsai_enabled()
-    }
-
     /// The rail modes this session renders from: this device's stored layout if
     /// its key has one, else the live account profile. The single read path for
     /// rail visibility, so render, input, and the settings modal can never
@@ -994,7 +983,6 @@ impl App {
         self.show_quit_confirm = false;
         self.show_hub_modal = false;
         self.show_bonsai_modal = false;
-        self.show_bonsai_v2_modal = false;
         self.show_lobby_modal = false;
         // Real sessions land in the clubhouse; the integration suite predates
         // that and drives flows from Home, so tests start there.
@@ -1015,7 +1003,6 @@ impl App {
             && !self.show_poll_modal
             && !self.show_gild_modal
             && !self.show_bonsai_modal
-            && !self.show_bonsai_v2_modal
             && !self.show_lobby_modal
             && !self.show_ultimate_modal
             && !self.icon_picker_open
@@ -1219,51 +1206,13 @@ impl App {
         let username = config.username.clone();
 
         let initial_bonsai_decay_protection = config.initial_bonsai_decay_protection;
-        let bonsai_state = if let Some(tree) = config.initial_bonsai_tree {
-            crate::app::bonsai::state::BonsaiState::new(
-                config.user_id,
-                config.bonsai_service.clone(),
-                tree,
-                initial_bonsai_decay_protection,
-            )
-        } else {
-            // Fallback: create a default dead-ish state (should not happen in practice)
-            crate::app::bonsai::state::BonsaiState::new(
-                config.user_id,
-                config.bonsai_service.clone(),
-                late_core::models::bonsai::Tree {
-                    id: uuid::Uuid::nil(),
-                    created: chrono::Utc::now(),
-                    updated: chrono::Utc::now(),
-                    user_id: config.user_id,
-                    growth_points: 0,
-                    last_watered: None,
-                    seed: config.user_id.as_u128() as i64,
-                    is_alive: true,
-                },
-                initial_bonsai_decay_protection,
-            )
-        };
-        let bonsai_care_state = config
-            .initial_bonsai_care
-            .map(|care| {
-                crate::app::bonsai::care::BonsaiCareState::from_daily(
-                    care,
-                    bonsai_state.seed,
-                    bonsai_state.stage(),
-                )
-            })
-            .unwrap_or_else(|| {
-                crate::app::bonsai::care::BonsaiCareState::fallback(
-                    chrono::Utc::now().date_naive(),
-                    bonsai_state.seed,
-                    bonsai_state.stage(),
-                )
-            });
-        let bonsai_v2_state = config
-            .initial_bonsai_v2_tree
+        // The fallback only exists for a failed load at bootstrap. It is
+        // built `Detached`, so every persist on it is a no-op and it can
+        // never overwrite the real row; the next login loads for real.
+        let bonsai_state = config
+            .initial_bonsai_tree
             .map(|tree| {
-                crate::app::bonsai_v2::state::BonsaiV2State::new(
+                crate::app::bonsai::state::BonsaiState::new(
                     config.user_id,
                     config.bonsai_service.clone(),
                     tree,
@@ -1271,10 +1220,10 @@ impl App {
                 )
             })
             .unwrap_or_else(|| {
-                crate::app::bonsai_v2::state::BonsaiV2State::fallback(
+                crate::app::bonsai::state::BonsaiState::fallback(
                     config.user_id,
                     config.bonsai_service.clone(),
-                    bonsai_state.seed,
+                    config.user_id.as_u128() as i64,
                 )
             });
 
@@ -1381,7 +1330,6 @@ impl App {
             show_poll_modal: false,
             show_gild_modal: false,
             show_bonsai_modal: false,
-            show_bonsai_v2_modal: false,
             show_lobby_modal: false,
             show_ultimate_modal: false,
             ultimate_cooldown_was_running: false,
@@ -1561,8 +1509,6 @@ impl App {
             leaderboard_rx: config.leaderboard_rx,
             session_daily_wins: crate::app::arcade::daily::SessionDailyWins::new(),
             bonsai_state,
-            bonsai_care_state,
-            bonsai_v2_state,
             pet_state,
             quest_state,
             shop_state,
@@ -2097,7 +2043,6 @@ impl App {
         )));
         if (was_admin || was_moderator) && !permissions.can_access_mod_surface() {
             self.show_mod_modal = false;
-            self.show_bonsai_v2_modal = false;
         }
     }
 

@@ -519,7 +519,7 @@ Selection deltas are message-based, not row-based. Positive means older, negativ
 A gild is chips paid to mark someone else's message, permanently. It is a
 purchase, not a reaction: there is no un-gild, and the row outlives every
 session. `late-core/src/models/chat_message_gild.rs` owns the table
-(migration 154) and `GildTier` (Bronze 500 / Silver 2,000 / Gold 10,000);
+(migration 154) and `GildTier` (Bronze 500 / Silver 2,000 / Gold 5,000);
 `chips.rs::UserChips::transfer_gild` owns the money.
 
 - **Split.** The author receives `floor(price * 2 / 3)` as
@@ -555,6 +555,13 @@ session. `late-core/src/models/chat_message_gild.rs` owns the table
   exactly one code path that draws a marker. `GildSucceeded` / `GildFailed`
   ride the in-process broadcast, but they only carry the two banners (buyer
   and author).
+- **Desktop notification.** The author's `GildSucceeded` arm also pushes
+  `Notification::gilded` (`app/notify`), so the OSC 777 / OSC 9 alert fires
+  for someone who is away from the terminal or in another room; the banner
+  alone would be missed. It rides the `mentions` kind rather than a kind of
+  its own: it is the same "a person in chat singled you out" opt-in, and it
+  inherits the outbox cooldown like every other notification. The buyer gets
+  no notification, they are the one who pressed the key.
 - **Rendering.** `message_gilds: HashMap<Uuid, ChatMessageGildSummary>` on
   `ChatState`, loaded with the room tail and patched by the notify. The
   marker leads the message footer, ahead of the reaction chips

@@ -1,221 +1,158 @@
-use crate::app::activity::event::ActivityEvent;
-use crate::app::bonsai::svc::BonsaiService;
-use late_core::models::bonsai::{Grave, Tree};
+use chrono::Utc;
+use late_core::models::bonsai::{Tree, TreeParams};
 use late_core::models::chips::UserChips;
-use late_core::models::marketplace::{
-    BONSAI_DECAY_PROTECTION_KIND, BONSAI_DECAY_SHIELD_SKU, purchase_durable_item_by_sku,
-};
+use late_core::test_utils::create_test_user;
 use tokio::sync::broadcast;
 use tokio::time::{Duration, timeout};
 
+use super::BonsaiService;
+use crate::app::activity::event::{ActivityEvent, ActivityKind};
 use crate::test_helpers::new_test_db;
-use late_core::test_utils::create_test_user;
+
+fn params_for(tree: &Tree, state_revision: i64) -> TreeParams {
+    TreeParams {
+        user_id: tree.user_id,
+        seed: tree.seed,
+        last_watered: Some(Utc::now().date_naive()),
+        is_alive: tree.is_alive,
+        vigor: tree.vigor,
+        water_stress: tree.water_stress,
+        last_simulated_date: tree.last_simulated_date,
+        branch_graph: tree.branch_graph.clone(),
+        selected_branch_id: tree.selected_branch_id,
+        mode: tree.mode.clone(),
+        badge_glyph: tree.badge_glyph.clone(),
+        planted_at: tree.planted_at,
+        state_revision,
+    }
+}
 
 #[tokio::test]
-async fn ensure_tree_creates_default_tree_for_new_user() {
+async fn ensure_tree_plants_a_fresh_seed_for_a_new_user() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "bonsai-svc-new").await;
     let (tx, _) = broadcast::channel::<ActivityEvent>(16);
     let svc = BonsaiService::new(test_db.db.clone(), tx);
 
     let tree = svc.ensure_tree(user.id).await.expect("ensure tree");
+    let protection = svc
+        .decay_protection(user.id)
+        .await
+        .expect("decay protection");
 
     assert_eq!(tree.user_id, user.id);
     assert_eq!(tree.seed, user.id.as_u128() as i64);
-    assert_eq!(tree.growth_points, 0);
     assert_eq!(tree.last_watered, None);
     assert!(tree.is_alive);
-}
-
-#[tokio::test]
-async fn ensure_tree_kills_stale_tree_records_grave_and_emits_activity() {
-    let test_db = new_test_db().await;
-    let client = test_db.db.get().await.expect("db client");
-    let user = create_test_user(&test_db.db, "bonsai-withered").await;
-    Tree::ensure(&client, user.id, 77).await.expect("ensure");
-    Tree::set_recorded_dates(
-        &client,
-        user.id,
-        chrono::Utc::now() - chrono::Duration::days(8),
-        Some(chrono::Utc::now().date_naive() - chrono::Duration::days(8)),
-    )
-    .await
-    .expect("age tree");
-
-    let (tx, mut rx) = broadcast::channel::<ActivityEvent>(16);
-    let svc = BonsaiService::new(test_db.db.clone(), tx);
-
-    let tree = svc.ensure_tree(user.id).await.expect("ensure tree");
-    assert!(!tree.is_alive);
-
-    let persisted = Tree::find_by_user_id(&client, user.id)
-        .await
-        .expect("find tree")
-        .expect("tree");
-    assert!(!persisted.is_alive);
-
-    let graves = Grave::list_by_user(&client, user.id)
-        .await
-        .expect("list graves");
-    assert_eq!(graves.len(), 1);
-    assert!(graves[0].survived_days >= 8);
-
-    let event = timeout(Duration::from_secs(2), rx.recv())
-        .await
-        .expect("event timeout")
-        .expect("event");
-    assert_eq!(event.username, "bonsai-withered");
+    assert_eq!(tree.badge_glyph, "·", "a seed has no presence yet");
+    assert!(protection.is_none());
     assert!(
-        event.action.starts_with("lost their bonsai"),
-        "unexpected action: {}",
-        event.action
+        tree.branch_graph.get("branches").is_some(),
+        "the planted graph is the seeded root, not an empty document"
     );
 }
 
 #[tokio::test]
-async fn ensure_tree_survives_a_stale_gap_covered_by_a_bonsai_decay_shield() {
+async fn watering_pays_the_daily_chips_once_and_saves_every_time() {
     let test_db = new_test_db().await;
-    let mut client = test_db.db.get().await.expect("db client");
-    let user = create_test_user(&test_db.db, "bonsai-shielded").await;
-    Tree::ensure(&client, user.id, 77).await.expect("ensure");
-    Tree::set_recorded_dates(
-        &client,
-        user.id,
-        chrono::Utc::now() - chrono::Duration::days(8),
-        Some(chrono::Utc::now().date_naive() - chrono::Duration::days(8)),
-    )
-    .await
-    .expect("age tree");
-
-    UserChips::admin_grant(&**client, user.id, 2_000)
-        .await
-        .expect("fund chips");
-    purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
-        .await
-        .expect("buy shield")
-        .expect("item available");
-    // Backdate the shield as if it had been active the whole 8-day gap
-    // (a fresh purchase only protects days from now on, so this simulates
-    // "bought before the tree went dry" rather than "rescued after the
-    // fact". See the companion test below for the partial-coverage case.
-    client
-        .execute(
-            "UPDATE shop_consumable_effects
-             SET starts_at = current_timestamp - interval '9 days',
-                 ends_at = current_timestamp + interval '5 days'
-             WHERE user_id = $1 AND effect_kind = $2",
-            &[&user.id, &BONSAI_DECAY_PROTECTION_KIND],
-        )
-        .await
-        .expect("backdate shield");
-
-    let (tx, _rx) = broadcast::channel::<ActivityEvent>(16);
-    let svc = BonsaiService::new(test_db.db.clone(), tx);
-
-    let tree = svc.ensure_tree(user.id).await.expect("ensure tree");
-    assert!(tree.is_alive);
-
-    let graves = Grave::list_by_user(&client, user.id)
-        .await
-        .expect("list graves");
-    assert!(graves.is_empty());
-}
-
-#[tokio::test]
-async fn ensure_tree_survives_a_gap_spanning_two_stacked_shield_purchases() {
-    let test_db = new_test_db().await;
-    let mut client = test_db.db.get().await.expect("db client");
-    let user = create_test_user(&test_db.db, "bonsai-restacked-shield").await;
-    Tree::ensure(&client, user.id, 77).await.expect("ensure");
-    Tree::set_recorded_dates(
-        &client,
-        user.id,
-        chrono::Utc::now() - chrono::Duration::days(15),
-        Some(chrono::Utc::now().date_naive() - chrono::Duration::days(15)),
-    )
-    .await
-    .expect("age tree");
-
-    UserChips::admin_grant(&**client, user.id, 4_000)
-        .await
-        .expect("fund chips");
-
-    // First purchase, backdated to look like it was bought before the dry
-    // spell began and is still live.
-    purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
-        .await
-        .expect("first buy")
-        .expect("item available");
-    client
-        .execute(
-            "UPDATE shop_consumable_effects
-             SET starts_at = current_timestamp - interval '9 days',
-                 ends_at = current_timestamp + interval '5 days'
-             WHERE user_id = $1 AND effect_kind = $2",
-            &[&user.id, &BONSAI_DECAY_PROTECTION_KIND],
-        )
-        .await
-        .expect("backdate first purchase");
-
-    // Rebuy while the first window is still live. If the rebuy reset
-    // starts_at to now instead of carrying the earlier purchase's starts_at
-    // forward, the protection credit for the first 9 days would be lost
-    // and this tree would die below.
-    purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
-        .await
-        .expect("second buy")
-        .expect("item available");
-
-    let (tx, _rx) = broadcast::channel::<ActivityEvent>(16);
-    let svc = BonsaiService::new(test_db.db.clone(), tx);
-
-    let tree = svc.ensure_tree(user.id).await.expect("ensure tree");
-    assert!(tree.is_alive);
-
-    let graves = Grave::list_by_user(&client, user.id)
-        .await
-        .expect("list graves");
-    assert!(graves.is_empty());
-}
-
-#[tokio::test]
-async fn ensure_tree_still_dies_when_the_shield_only_covers_part_of_the_gap() {
-    let test_db = new_test_db().await;
-    let mut client = test_db.db.get().await.expect("db client");
-    let user = create_test_user(&test_db.db, "bonsai-partially-shielded").await;
-    Tree::ensure(&client, user.id, 77).await.expect("ensure");
-    Tree::set_recorded_dates(
-        &client,
-        user.id,
-        chrono::Utc::now() - chrono::Duration::days(8),
-        Some(chrono::Utc::now().date_naive() - chrono::Duration::days(8)),
-    )
-    .await
-    .expect("age tree");
-
-    UserChips::admin_grant(&**client, user.id, 2_000)
-        .await
-        .expect("fund chips");
-    // A fresh purchase only protects days from now on: it covers just
-    // today out of the 8-day-old gap, leaving 7 unprotected dry days,
-    // still enough to kill the tree.
-    purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
-        .await
-        .expect("buy shield")
-        .expect("item available");
-
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "bonsai-svc-water").await;
     let (tx, mut rx) = broadcast::channel::<ActivityEvent>(16);
     let svc = BonsaiService::new(test_db.db.clone(), tx);
-
     let tree = svc.ensure_tree(user.id).await.expect("ensure tree");
-    assert!(!tree.is_alive);
+    let before = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
 
-    let graves = Grave::list_by_user(&client, user.id)
+    let mut first = params_for(&tree, 1);
+    first.badge_glyph = "⚘".to_string();
+    svc.water(first).await.expect("first watering");
+    let mut second = params_for(&tree, 2);
+    second.badge_glyph = "🌱".to_string();
+    svc.water(second).await.expect("second watering");
+
+    let after = UserChips::ensure(&client, user.id)
         .await
-        .expect("list graves");
-    assert_eq!(graves.len(), 1);
-    timeout(Duration::from_secs(2), rx.recv())
+        .expect("chips")
+        .balance;
+    assert_eq!(after - before, super::WATER_CHIP_BONUS);
+
+    let stored = Tree::find_by_user_id(&client, user.id)
         .await
-        .expect("event timeout")
-        .expect("event");
+        .expect("find")
+        .expect("tree");
+    assert_eq!(stored.last_watered, Some(Utc::now().date_naive()));
+    assert_eq!(stored.badge_glyph, "🌱", "the second save still lands");
+    assert_eq!(stored.state_revision, 2);
+
+    let event = timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("activity in time")
+        .expect("activity event");
+    assert_eq!(event.user_id, Some(user.id));
+    assert!(matches!(event.kind, ActivityKind::BonsaiWatered));
+    assert!(
+        rx.try_recv().is_err(),
+        "the same-day second watering announces nothing"
+    );
+}
+
+// A pinch or a wire pressed right after `w` spawns its own save, which can
+// commit before the watering task runs. That save must not be able to
+// pre-empt the daily chips.
+#[tokio::test]
+async fn an_overtaking_save_does_not_steal_the_watering_chips() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "bonsai-svc-overtaken").await;
+    let (tx, _rx) = broadcast::channel::<ActivityEvent>(16);
+    let svc = BonsaiService::new(test_db.db.clone(), tx);
+    let tree = svc.ensure_tree(user.id).await.expect("ensure tree");
+    let before = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+
+    // The later action's save lands first, carrying today's date.
+    Tree::save(&client, params_for(&tree, 2))
+        .await
+        .expect("overtaking save");
+    svc.water(params_for(&tree, 1)).await.expect("watering");
+
+    let after = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+    assert_eq!(after - before, super::WATER_CHIP_BONUS);
+}
+
+// The first `w` on a dead tree replants through a plain save; the second
+// waters. The watering task must pay even if the replant has not committed.
+#[tokio::test]
+async fn a_replant_that_has_not_landed_does_not_block_the_chips() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "bonsai-svc-replant").await;
+    let (tx, _rx) = broadcast::channel::<ActivityEvent>(16);
+    let svc = BonsaiService::new(test_db.db.clone(), tx);
+    let tree = svc.ensure_tree(user.id).await.expect("ensure tree");
+    let before = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+
+    let mut dead = params_for(&tree, 1);
+    dead.is_alive = false;
+    dead.last_watered = None;
+    Tree::save(&client, dead).await.expect("the tree died");
+
+    // Revision 2 is the replant, still in flight; revision 3 is the watering.
+    svc.water(params_for(&tree, 3)).await.expect("watering");
+
+    let after = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+    assert_eq!(after - before, super::WATER_CHIP_BONUS);
 }
