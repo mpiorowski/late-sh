@@ -162,7 +162,7 @@ async fn lobby_s_copies_the_day_card() {
     let card = app.pending_clipboard.take().expect("day card copied");
     assert!(card.starts_with("late.sh Daily #"), "{card}");
     assert!(
-        card.contains("· 0/7\n⬛⬛⬛⬛⬛⬛⬛\nssh late.sh"),
+        card.contains("· 0/7\n⬛⬛⬛⬛⬛⬛⬛\n🔤🧊🧩🔢🎨💣🃏\nssh late.sh"),
         "{card}"
     );
 }
