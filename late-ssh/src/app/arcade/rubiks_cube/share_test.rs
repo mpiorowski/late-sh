@@ -27,7 +27,7 @@ fn card_is_the_scrambled_face_then_the_solved_face() {
     assert_eq!(
         card,
         ShareCard {
-            title: "late.sh Rubik's Cube #1".to_string(),
+            title: "late.sh Rubik's Cube #69".to_string(),
             rows: vec![
                 Row::Glyphs(vec![Glyph::Red, Glyph::Blue, Glyph::Green]),
                 Row::Glyphs(vec![Glyph::Yellow, Glyph::Green, Glyph::White]),

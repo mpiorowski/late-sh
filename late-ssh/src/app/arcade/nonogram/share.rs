@@ -4,7 +4,6 @@
 //! The hard 20x20 is what sets the card's ten-row cap.
 
 use chrono::NaiveDate;
-use late_core::models::leaderboard::DailyPuzzle;
 
 use crate::app::arcade::share::{self, ShareCard};
 
@@ -30,7 +29,7 @@ pub fn from_state(state: &State) -> Option<ShareCard> {
 }
 
 pub fn card(puzzle_date: NaiveDate, difficulty_key: &str, filled: &[Vec<bool>]) -> ShareCard {
-    let number = share::puzzle_number(share::epoch(DailyPuzzle::Nonogram), puzzle_date);
+    let number = share::puzzle_number(puzzle_date);
     let height = filled.len();
     let width = filled.first().map_or(0, Vec::len);
     let result = format!("{difficulty_key} {width}×{height}");

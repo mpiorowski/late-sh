@@ -20,7 +20,7 @@ fn won_card_is_the_guess_grid_with_the_solve_count() {
     assert_eq!(
         card,
         ShareCard {
-            title: "late.sh Le Word #3 · 3/6".to_string(),
+            title: "late.sh Le Word #71 · 3/6".to_string(),
             rows: vec![
                 Row::Glyphs(vec![
                     Glyph::Yellow,
@@ -42,7 +42,7 @@ fn won_card_is_the_guess_grid_with_the_solve_count() {
     );
     assert_eq!(
         render(&card, ShareFormat::Emoji),
-        "late.sh Le Word #3 · 3/6\n🟨🟨⬛🟨⬛\n🟩🟩🟩⬛🟩\n🟩🟩🟩🟩🟩\nssh late.sh"
+        "late.sh Le Word #71 · 3/6\n🟨🟨⬛🟨⬛\n🟩🟩🟩⬛🟩\n🟩🟩🟩🟩🟩\nssh late.sh"
     );
 }
 
@@ -50,6 +50,6 @@ fn won_card_is_the_guess_grid_with_the_solve_count() {
 fn lost_card_reads_x_out_of_six() {
     let scores = vec![[LetterScore::Absent; 5]; 6];
     let card = card(day(2026, 6, 18), &scores, false);
-    assert_eq!(card.title, "late.sh Le Word #1 · X/6");
+    assert_eq!(card.title, "late.sh Le Word #69 · X/6");
     assert_eq!(card.rows.len(), 6);
 }

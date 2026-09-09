@@ -3,7 +3,6 @@
 //! on a win, since Klondike never declares a loss.
 
 use chrono::NaiveDate;
-use late_core::models::leaderboard::DailyPuzzle;
 
 use crate::app::arcade::share::{self, Row, ShareCard};
 
@@ -39,7 +38,7 @@ pub fn card(
     score: usize,
     piles: &[(Option<Suit>, usize)],
 ) -> ShareCard {
-    let number = share::puzzle_number(share::epoch(DailyPuzzle::Solitaire), puzzle_date);
+    let number = share::puzzle_number(puzzle_date);
     let result = format!("draw {draw_count} · {score} pts");
     let rows = piles
         .iter()

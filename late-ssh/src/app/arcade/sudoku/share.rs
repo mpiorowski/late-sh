@@ -3,7 +3,6 @@
 //! one, and the difficulty shows itself in how few clues there were.
 
 use chrono::NaiveDate;
-use late_core::models::leaderboard::DailyPuzzle;
 
 use crate::app::arcade::share::{self, Glyph, Row, ShareCard};
 
@@ -29,7 +28,7 @@ pub fn from_state(state: &State) -> Option<ShareCard> {
 
 /// `given` is true for a clue cell, false for one the player filled.
 pub fn card(puzzle_date: NaiveDate, difficulty_key: &str, given: &Mask) -> ShareCard {
-    let number = share::puzzle_number(share::epoch(DailyPuzzle::Sudoku), puzzle_date);
+    let number = share::puzzle_number(puzzle_date);
     let rows = given
         .iter()
         .map(|row| {

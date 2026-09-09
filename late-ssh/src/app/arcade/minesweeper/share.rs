@@ -3,7 +3,6 @@
 //! tells the story on its own.
 
 use chrono::NaiveDate;
-use late_core::models::leaderboard::DailyPuzzle;
 
 use crate::app::arcade::share::{self, Glyph, Row, ShareCard};
 
@@ -40,7 +39,7 @@ pub fn card(
     lives: u8,
     clicks: &[Click],
 ) -> ShareCard {
-    let number = share::puzzle_number(share::epoch(DailyPuzzle::Minesweeper), puzzle_date);
+    let number = share::puzzle_number(puzzle_date);
     let outcome = if lives == 0 { "boom" } else { "cleared" };
     let result = format!("{difficulty_key} · {outcome} · {lives}/{MAX_LIVES} lives");
     let start = clicks.len().saturating_sub(STRIP_CLICKS);

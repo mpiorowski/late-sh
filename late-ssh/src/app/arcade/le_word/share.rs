@@ -2,7 +2,6 @@
 //! brags about the solve without giving the word away.
 
 use chrono::NaiveDate;
-use late_core::models::leaderboard::DailyPuzzle;
 
 use crate::app::arcade::share::{self, Glyph, Row, ShareCard};
 
@@ -27,7 +26,7 @@ pub fn from_state(state: &State) -> Option<ShareCard> {
 }
 
 pub fn card(puzzle_date: NaiveDate, scores: &[[LetterScore; WORD_LEN]], won: bool) -> ShareCard {
-    let number = share::puzzle_number(share::epoch(DailyPuzzle::LeWord), puzzle_date);
+    let number = share::puzzle_number(puzzle_date);
     let result = if won {
         format!("{}/{MAX_GUESSES}", scores.len())
     } else {

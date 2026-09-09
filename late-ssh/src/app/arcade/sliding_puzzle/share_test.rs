@@ -18,7 +18,7 @@ fn card_is_the_scramble_then_the_solved_stripes() {
     assert_eq!(
         card,
         ShareCard {
-            title: "late.sh Sliding Puzzle #2 · easy 3×3".to_string(),
+            title: "late.sh Sliding Puzzle #143 · easy 3×3".to_string(),
             rows: vec![
                 Row::Glyphs(vec![Glyph::Yellow, Glyph::Red, Glyph::Green]),
                 Row::Glyphs(vec![Glyph::Dark, Glyph::Yellow, Glyph::Red]),
@@ -41,7 +41,7 @@ fn the_hard_board_fills_the_card_exactly() {
         300,
         &scrambled,
     );
-    assert_eq!(card.title, "late.sh Sliding Puzzle #1 · hard 5×5");
+    assert_eq!(card.title, "late.sh Sliding Puzzle #142 · hard 5×5");
     assert_eq!(card.rows.len(), MAX_ROWS);
     assert_eq!(
         card.rows[MAX_ROWS - 1],
