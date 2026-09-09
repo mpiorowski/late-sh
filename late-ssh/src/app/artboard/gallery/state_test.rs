@@ -189,7 +189,7 @@ fn a_listing_asked_for_before_a_take_down_cannot_put_the_piece_back() {
         })
         .unwrap();
     assert!(state.tick());
-    assert_eq!(state.section_pieces(mine), &[piece.clone()]);
+    assert_eq!(state.section_pieces(mine), std::slice::from_ref(&piece));
 
     // A second request (generation 2) is in flight when the take-down
     // lands: the hang handler reloads Mine after every hang.
