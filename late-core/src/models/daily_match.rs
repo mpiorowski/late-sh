@@ -45,6 +45,17 @@ impl DailyMatch {
     pub const RESULT_NO_MOVES: &'static str = "no_moves";
     pub const RESULT_BORNE_OFF: &'static str = "borne_off";
     pub const RESULT_MOST_POINTS: &'static str = "most_points";
+    /// Eight-ball: the eight went down in the called pocket, on the money ball.
+    pub const RESULT_EIGHT_POTTED: &'static str = "eight_potted";
+    /// Eight-ball: the eight went down before the shooter's group was cleared,
+    /// into the wrong pocket, or with a scratch. The opponent wins.
+    pub const RESULT_EARLY_EIGHT: &'static str = "early_eight";
+    /// Nine-ball: the nine went down legally, combination or otherwise.
+    pub const RESULT_NINE_POTTED: &'static str = "nine_potted";
+    /// Snooker: the frame ran out of balls and this player was ahead. Unlike
+    /// the pool results, it names no ball — a frame is won on points, and the
+    /// last black is just the last ball.
+    pub const RESULT_FRAME_WON: &'static str = "frame_won";
 
     pub const GAME_KIND_CHESS: &'static str = "chess";
     pub const GAME_KIND_CHESS960: &'static str = "chess960";
@@ -54,6 +65,9 @@ impl DailyMatch {
     pub const GAME_KIND_CHECKERS: &'static str = "checkers";
     pub const GAME_KIND_BACKGAMMON: &'static str = "backgammon";
     pub const GAME_KIND_BRISCOLA: &'static str = "briscola";
+    pub const GAME_KIND_EIGHTBALL: &'static str = "eightball";
+    pub const GAME_KIND_NINEBALL: &'static str = "nineball";
+    pub const GAME_KIND_SNOOKER: &'static str = "snooker";
 
     /// Open challenges posted by the user plus active matches they play in.
     pub async fn count_active_entries(client: &Client, user_id: Uuid) -> Result<i64> {

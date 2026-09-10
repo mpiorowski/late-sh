@@ -40,6 +40,12 @@ const CHAT_MIN_AREA_HEIGHT: u16 = 27;
 const CHAT_MIN_HEIGHT: u16 = 9;
 const CHAT_MAX_HEIGHT: u16 = 13;
 
+/// Pool's own threshold. The board wants its full 30 rows before chat may take
+/// any: below that the cue panel loses the rows that make the game playable
+/// rather than watchable, and a board that cannot be aimed is worse than a
+/// chat pane that has to be opened deliberately.
+const POOL_CHAT_MIN_AREA_HEIGHT: u16 = 39;
+
 // ── Cell sizing for the grid games ────────────────────────────────────
 //
 // Battleship, reversi, and checkers draw plain character grids; each
@@ -149,7 +155,8 @@ pub(crate) fn draw(
 
     // Match chat rides below the board like the active-room split; the board
     // area shrinks before the game picks its tier so sizing stays honest.
-    let (game_area, spacer_area, chat_area) = split_board_and_chat(area, chat.is_some());
+    let (game_area, spacer_area, chat_area) =
+        split_board_and_chat(area, chat.is_some(), chat_floor(detail));
     draw_match(
         frame,
         game_area,
@@ -167,10 +174,23 @@ pub(crate) fn draw(
     }
 }
 
+/// How tall the whole area must be before this game will share it with chat.
+fn chat_floor(detail: &DailyMatchDetail) -> u16 {
+    if detail.game.kind().is_pool() {
+        POOL_CHAT_MIN_AREA_HEIGHT
+    } else {
+        CHAT_MIN_AREA_HEIGHT
+    }
+}
+
 /// `(board, spacer, chat)`: the chat slab exists only when a chat view does
 /// and the terminal is tall enough to keep the board playable above it.
-fn split_board_and_chat(area: Rect, has_chat: bool) -> (Rect, Option<Rect>, Option<Rect>) {
-    if !has_chat || area.height < CHAT_MIN_AREA_HEIGHT {
+fn split_board_and_chat(
+    area: Rect,
+    has_chat: bool,
+    min_area_height: u16,
+) -> (Rect, Option<Rect>, Option<Rect>) {
+    if !has_chat || area.height < min_area_height {
         return (area, None, None);
     }
     let chat_h = (area.height / 3).clamp(CHAT_MIN_HEIGHT, CHAT_MAX_HEIGHT);
@@ -234,6 +254,12 @@ fn draw_match(
         }
         DailyGameDetail::Briscola(briscola) => {
             super::briscola_ui::draw(frame, area, daily, board, detail, briscola);
+            return;
+        }
+        DailyGameDetail::EightBall(pool)
+        | DailyGameDetail::NineBall(pool)
+        | DailyGameDetail::Snooker(pool) => {
+            super::pool_ui::draw(frame, area, daily, board, detail, pool);
             return;
         }
     };
@@ -483,6 +509,17 @@ pub(super) fn result_banner(
         }
         DailyMatch::RESULT_MOST_POINTS => {
             ("Most points", winner_text(detail.row.winner_user_id), color)
+        }
+        DailyMatch::RESULT_EIGHT_POTTED => {
+            ("Eight ball", winner_text(detail.row.winner_user_id), color)
+        }
+        // The loser potted it, so the heading has to say which way it went —
+        // "eight ball" over a loss reads as a win.
+        DailyMatch::RESULT_EARLY_EIGHT => {
+            ("Early eight", winner_text(detail.row.winner_user_id), color)
+        }
+        DailyMatch::RESULT_NINE_POTTED => {
+            ("Nine ball", winner_text(detail.row.winner_user_id), color)
         }
         DailyMatch::RESULT_TIMEOUT => (
             "Timeout",

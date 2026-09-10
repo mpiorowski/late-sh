@@ -2,7 +2,7 @@
 
 ## Metadata
 - Domain: the Late Lounge tavern, top-level screen `0`, the landing screen for every session
-- Last updated: 2026-08-25 (a rented Shop title now trails the name on the floor label, truncated to `LABEL_MAX` like the name and painted in the dim label style; `put_label_styled` takes the name length so only the name takes a color effect. §3. Previous: the forced tour gained two Enter interludes for the features with no page of their own: the music box on Home after the chat stop, pitching the sources plus the two ways to actually hear sound (late.sh/listen, the `late` CLI), and the lobby box on The Arcade after the arcade stop, carrying the Ctrl+G daily-duel and live-table content the arcade box used to cram in)
+- Last updated: 2026-09-10 (a pool table joined the games corner, directly under the poker table and on the same errand: the poker table opens the Lobby, the pool table opens it on a fresh pool challenge with eight-ball under the cursor — `Interactive::Pool`, `map::POOL_TABLE`, `DailyState::begin_challenge_draft_for`. It displaced the old games-corner table at (148, 26). Note the generator drift called out in §2 before touching the map again.) Previously: 2026-08-25 (a rented Shop title now trails the name on the floor label, truncated to `LABEL_MAX` like the name and painted in the dim label style; `put_label_styled` takes the name length so only the name takes a color effect. §3. Previous: the forced tour gained two Enter interludes for the features with no page of their own: the music box on Home after the chat stop, pitching the sources plus the two ways to actually hear sound (late.sh/listen, the `late` CLI), and the lobby box on The Arcade after the arcade stop, carrying the Ctrl+G daily-duel and live-table content the arcade box used to cram in)
 - Status: Active
 
 ## 1. Summary
@@ -18,7 +18,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
 
 | File | Owns |
 |---|---|
-| `map.rs` | The 184x50 generated floor plan (`MAP` literal, do not hand-edit; re-run `scripts/gen_clubhouse_map.py --write`), collision (`walkable`), `SEATS`/`STANDING_SPOTS`/`DOOR_STACK`, interactive zones, animation cell lists, `DOOR_SIGN`. |
+| `map.rs` | The 184x50 generated floor plan (`MAP` literal, do not hand-edit; re-run `scripts/gen_clubhouse_map.py --write`), collision (`walkable`), `SEATS`/`STANDING_SPOTS`/`DOOR_STACK`, interactive zones, animation cell lists, `DOOR_SIGN`. **The generator's `RUST_TEMPLATE` has drifted behind this file** — it predates `DOOR_STACK`, `BOT_SPOT`, `DOG_HOME`/`DOG_WAYPOINTS`, `BAR_APPROACH` and the `dog` parameter on `nearest_interactive`, so a bare `--write` silently *reverts* all of them. Until it is resynced: author the art in the script, run it to validate, and splice only the `MAP` and `SEATS` blocks into this file. That is how the pool table landed (2026-09-10). |
 | `lobby.rs` | `SharedLobby`, the process-global `Arc<Mutex<..>>` presence map: parked spot assignments, walkers, emotes, the dog-pet event, snapshots. |
 | `state.rs` | Per-session view state: camera target, animation clock, latest `LobbySnapshot`, arrival/departure door events, the `Tutorial` state machine. |
 | `input.rs` | Walking (arrows/hjkl), `i` composer, `w`/`x` emotes, `t` bartender mention, Enter on landmarks/dog, tutorial Enter. Returns `false` for globals. |

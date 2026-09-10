@@ -193,6 +193,9 @@ chip_moves!(
     DailyCheckersWin,
     DailyBackgammonWin,
     DailyBriscolaWin,
+    DailyEightBallWin,
+    DailyNineBallWin,
+    DailySnookerWin,
     TronWin,
     /// A Super Snake seat that came out ahead, banked when the player stands
     /// up. The arena keeps the running total in memory: one row per visit,
@@ -268,6 +271,9 @@ impl ChipMove {
             Self::DailyCheckersWin => "daily_checkers_win",
             Self::DailyBackgammonWin => "daily_backgammon_win",
             Self::DailyBriscolaWin => "daily_briscola_win",
+            Self::DailyEightBallWin => "daily_eightball_win",
+            Self::DailyNineBallWin => "daily_nineball_win",
+            Self::DailySnookerWin => "daily_snooker_win",
             Self::TronWin => "tron_win",
             Self::SsnakeArenaEarned => "ssnake_arena_earned",
             Self::SsnakeArenaLost => "ssnake_arena_lost",
@@ -318,6 +324,9 @@ impl ChipMove {
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
+            | Self::DailyEightBallWin
+            | Self::DailyNineBallWin
+            | Self::DailySnookerWin
             | Self::TronWin
             | Self::GreendragonDragonSlain
             | Self::DarkroomEscape
@@ -360,6 +369,9 @@ impl ChipMove {
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
+            | Self::DailyEightBallWin
+            | Self::DailyNineBallWin
+            | Self::DailySnookerWin
             | Self::TronWin
             | Self::SsnakeArenaEarned
             | Self::GreendragonDragonSlain
@@ -440,6 +452,9 @@ impl ChipMove {
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
+            | Self::DailyEightBallWin
+            | Self::DailyNineBallWin
+            | Self::DailySnookerWin
             | Self::TronWin
             | Self::SsnakeArenaEarned
             | Self::GreendragonDragonSlain

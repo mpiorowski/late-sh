@@ -10,7 +10,9 @@ use late_core::models::{
     reward::{
         DAILY_BACKGAMMON_WIN_REWARD_KEY, DAILY_BATTLESHIP_WIN_REWARD_KEY,
         DAILY_BRISCOLA_WIN_REWARD_KEY, DAILY_CHECKERS_WIN_REWARD_KEY, DAILY_CHESS_WIN_REWARD_KEY,
-        DAILY_CHESS960_WIN_REWARD_KEY, DAILY_CONNECT4_WIN_REWARD_KEY, DAILY_REVERSI_WIN_REWARD_KEY,
+        DAILY_CHESS960_WIN_REWARD_KEY, DAILY_CONNECT4_WIN_REWARD_KEY,
+        DAILY_EIGHTBALL_WIN_REWARD_KEY, DAILY_NINEBALL_WIN_REWARD_KEY,
+        DAILY_REVERSI_WIN_REWARD_KEY, DAILY_SNOOKER_WIN_REWARD_KEY,
     },
 };
 
@@ -24,11 +26,14 @@ pub enum DailyGame {
     Checkers,
     Backgammon,
     Briscola,
+    EightBall,
+    NineBall,
+    Snooker,
 }
 
 impl DailyGame {
     /// Roster order: pickers, help copy, and usage strings follow it.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 11] = [
         Self::Chess,
         Self::Chess960,
         Self::Battleship,
@@ -37,6 +42,9 @@ impl DailyGame {
         Self::Checkers,
         Self::Backgammon,
         Self::Briscola,
+        Self::EightBall,
+        Self::NineBall,
+        Self::Snooker,
     ];
 
     /// The persisted `daily_matches.game_kind` value.
@@ -50,6 +58,9 @@ impl DailyGame {
             Self::Checkers => DailyMatch::GAME_KIND_CHECKERS,
             Self::Backgammon => DailyMatch::GAME_KIND_BACKGAMMON,
             Self::Briscola => DailyMatch::GAME_KIND_BRISCOLA,
+            Self::EightBall => DailyMatch::GAME_KIND_EIGHTBALL,
+            Self::NineBall => DailyMatch::GAME_KIND_NINEBALL,
+            Self::Snooker => DailyMatch::GAME_KIND_SNOOKER,
         }
     }
 
@@ -64,6 +75,9 @@ impl DailyGame {
             Self::Checkers => "checkers",
             Self::Backgammon => "backgammon",
             Self::Briscola => "briscola",
+            Self::EightBall => "8ball",
+            Self::NineBall => "9ball",
+            Self::Snooker => "snooker",
         }
     }
 
@@ -80,6 +94,9 @@ impl DailyGame {
             Self::Checkers => "Checkers",
             Self::Backgammon => "Backgammon",
             Self::Briscola => "Briscola",
+            Self::EightBall => "Eight-Ball",
+            Self::NineBall => "Nine-Ball",
+            Self::Snooker => "Snooker",
         }
     }
 
@@ -95,6 +112,11 @@ impl DailyGame {
             Self::Checkers => 400,
             Self::Backgammon => 400,
             Self::Briscola => 400,
+            Self::EightBall => 400,
+            Self::NineBall => 400,
+            // A frame is the longest match on the roster by a distance, and the
+            // payout says so.
+            Self::Snooker => 700,
         }
     }
 
@@ -108,6 +130,9 @@ impl DailyGame {
             Self::Checkers => DAILY_CHECKERS_WIN_REWARD_KEY,
             Self::Backgammon => DAILY_BACKGAMMON_WIN_REWARD_KEY,
             Self::Briscola => DAILY_BRISCOLA_WIN_REWARD_KEY,
+            Self::EightBall => DAILY_EIGHTBALL_WIN_REWARD_KEY,
+            Self::NineBall => DAILY_NINEBALL_WIN_REWARD_KEY,
+            Self::Snooker => DAILY_SNOOKER_WIN_REWARD_KEY,
         }
     }
 
@@ -121,6 +146,9 @@ impl DailyGame {
             Self::Checkers => ChipMove::DailyCheckersWin,
             Self::Backgammon => ChipMove::DailyBackgammonWin,
             Self::Briscola => ChipMove::DailyBriscolaWin,
+            Self::EightBall => ChipMove::DailyEightBallWin,
+            Self::NineBall => ChipMove::DailyNineBallWin,
+            Self::Snooker => ChipMove::DailySnookerWin,
         }
     }
 
@@ -135,7 +163,21 @@ impl DailyGame {
             Self::Checkers => "one move per day · capture or block to win",
             Self::Backgammon => "one roll per day · bear off all fifteen",
             Self::Briscola => "one card per day · most points wins",
+            Self::EightBall => "one shot per day · potting shoots again",
+            Self::NineBall => "one shot per day · lowest ball first",
+            Self::Snooker => "one shot per day · reds, colours, and a scoreboard",
         }
+    }
+
+    /// Whether this game is played on a pool table.
+    ///
+    /// One answer, asked everywhere the roster needs to know — the chat floor,
+    /// the move-count wording, the claim and the shot channel. Spelling the
+    /// variants out at each site is how snooker shipped with an input layer
+    /// that was switched off: one of the lists had not heard of it, and that
+    /// list happened to be the one gating every key and every click.
+    pub const fn is_pool(self) -> bool {
+        matches!(self, Self::EightBall | Self::NineBall | Self::Snooker)
     }
 
     pub fn from_kind(kind: &str) -> Option<Self> {

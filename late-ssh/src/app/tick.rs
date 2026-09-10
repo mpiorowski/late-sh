@@ -1089,7 +1089,11 @@ impl App {
             || self.screen == Screen::HouseTable
             || (self.screen == Screen::Arcade && self.is_playing_game)
             || self.show_bonsai_modal
-            || self.show_bonsai_v2_modal;
+            || self.show_bonsai_v2_modal
+            // A pool shot is the daily board's only animation: while one is
+            // rolling it wants the same 15fps as a live table, and the moment
+            // it settles the board goes back to being event-driven.
+            || (self.screen == Screen::DailyMatch && self.daily.pool_is_animating());
         if hot {
             return HOT_TICK;
         }
