@@ -16,6 +16,7 @@ use super::{
     },
 };
 use late_core::models::{
+    aquarium_shield::AquariumShield,
     bonsai_decay_protection::BonsaiDecayProtection,
     marketplace::CHAT_CONSUMABLE_ITEM_KIND,
     rental::TITLE_MAX_LEN,
@@ -266,6 +267,10 @@ impl ShopState {
         self.snapshot.active_bonsai_decay_protection
     }
 
+    pub(crate) fn active_aquarium_shield(&self) -> Option<AquariumShield> {
+        self.snapshot.active_aquarium_shield
+    }
+
     pub(crate) fn active_badge_rental(&self) -> Option<&ActiveRental> {
         self.snapshot.active_badge_rental.as_ref()
     }
@@ -443,6 +448,11 @@ impl ShopState {
             self.service
                 .purchase_item_task(self.user_id, item.sku, None, None);
             return Some(Banner::success(&format!("Renting {}", item.name)));
+        }
+        // The shield minds a tank; without one it would take the chips and
+        // mind nothing.
+        if item.is_aquarium_shield() && !self.snapshot.entitlements.has_aquarium() {
+            return Some(Banner::error("Unlock Aquarium before buying a shield"));
         }
         if item.is_consumable() {
             if item.requires_room {

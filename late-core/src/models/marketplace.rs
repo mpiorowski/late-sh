@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use tokio_postgres::Client;
+use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
 use super::{
@@ -28,6 +28,15 @@ pub const BONSAI_DECAY_PROTECTION_DURATION_SECS: i64 = 1_209_600;
 pub const AQUARIUM_SKU: &str = "aquarium";
 pub const AQUARIUM_FISH_ITEM_KIND: &str = "aquarium_fish";
 pub const AQUARIUM_MAX_FISH: i32 = 20;
+pub const AQUARIUM_CONSUMABLE_ITEM_KIND: &str = "aquarium_consumable";
+pub const AQUARIUM_SHIELD_SKU: &str = "aquarium_shield_two_weeks";
+/// `shop_consumable_effects.effect_kind` for the user-scoped Aquarium
+/// Shield: an auto feeder. A calendar day a row of this kind covers counts
+/// as neither fed nor unfed for the tank's care clocks, so nothing starves
+/// and the water stays clean while the owner is away.
+pub const AQUARIUM_SHIELD_KIND: &str = "aquarium_shield";
+/// Default shield window when an item payload omits `duration_secs`: 14 days.
+pub const AQUARIUM_SHIELD_DURATION_SECS: i64 = 1_209_600;
 pub const CHAT_CONSUMABLE_ITEM_KIND: &str = "chat_consumable";
 pub const USERNAME_EFFECT_ITEM_KIND: &str = "username_effect";
 pub const CHAT_BADGE_SLOT: &str = "chat_badge";
@@ -199,6 +208,9 @@ pub struct PurchaseWithEffectResult {
     /// The user-scoped Bonsai Decay Shield row activated (or extended) by
     /// this purchase, when the bought item is a `bonsai_consumable`.
     pub bonsai_decay_protection: Option<ShopConsumableEffect>,
+    /// The user-scoped Aquarium Shield row activated (or extended) by this
+    /// purchase, when the bought item is an `aquarium_consumable`.
+    pub aquarium_shield: Option<ShopConsumableEffect>,
     /// The user-scoped chat badge or flag rental activated by this purchase,
     /// when the bought item is a `badge_rental`.
     pub badge_rental: Option<ShopConsumableEffect>,
@@ -298,6 +310,7 @@ async fn purchase_item_by_sku_inner(
             refresh_all_active_users: false,
             username_effect: None,
             bonsai_decay_protection: None,
+            aquarium_shield: None,
             badge_rental: None,
             title_rental: None,
         });
@@ -341,6 +354,7 @@ async fn purchase_item_by_sku_inner(
                 refresh_all_active_users: false,
                 username_effect: None,
                 bonsai_decay_protection: None,
+                aquarium_shield: None,
                 badge_rental: None,
                 title_rental: None,
             });
@@ -363,6 +377,7 @@ async fn purchase_item_by_sku_inner(
                 refresh_all_active_users: false,
                 username_effect: None,
                 bonsai_decay_protection: None,
+                aquarium_shield: None,
                 badge_rental: None,
                 title_rental: None,
             });
@@ -381,6 +396,7 @@ async fn purchase_item_by_sku_inner(
                 refresh_all_active_users: false,
                 username_effect: None,
                 bonsai_decay_protection: None,
+                aquarium_shield: None,
                 badge_rental: None,
                 title_rental: None,
             });
@@ -399,6 +415,7 @@ async fn purchase_item_by_sku_inner(
                 refresh_all_active_users: false,
                 username_effect: None,
                 bonsai_decay_protection: None,
+                aquarium_shield: None,
                 badge_rental: None,
                 title_rental: None,
             });
@@ -431,6 +448,7 @@ async fn purchase_item_by_sku_inner(
             activate_username_effect_in_tx(&tx, user_id, &item, username_effect).await?;
         let activated_bonsai_decay_protection =
             activate_bonsai_decay_protection_in_tx(&tx, user_id, &item).await?;
+        let activated_aquarium_shield = activate_aquarium_shield_in_tx(&tx, user_id, &item).await?;
         let activated_badge_rental = activate_badge_rental_in_tx(&tx, user_id, &item).await?;
         let activated_title_rental =
             activate_title_rental_in_tx(&tx, user_id, &item, custom_title).await?;
@@ -459,6 +477,7 @@ async fn purchase_item_by_sku_inner(
             refresh_all_active_users,
             username_effect: activated_username_effect,
             bonsai_decay_protection: activated_bonsai_decay_protection,
+            aquarium_shield: activated_aquarium_shield,
             badge_rental: activated_badge_rental,
             title_rental: activated_title_rental,
         });
@@ -477,6 +496,7 @@ async fn purchase_item_by_sku_inner(
             refresh_all_active_users: false,
             username_effect: None,
             bonsai_decay_protection: None,
+            aquarium_shield: None,
             badge_rental: None,
             title_rental: None,
         });
@@ -495,6 +515,7 @@ async fn purchase_item_by_sku_inner(
             refresh_all_active_users: false,
             username_effect: None,
             bonsai_decay_protection: None,
+            aquarium_shield: None,
             badge_rental: None,
             title_rental: None,
         });
@@ -543,6 +564,7 @@ async fn purchase_item_by_sku_inner(
         activate_username_effect_in_tx(&tx, user_id, &item, username_effect).await?;
     let activated_bonsai_decay_protection =
         activate_bonsai_decay_protection_in_tx(&tx, user_id, &item).await?;
+    let activated_aquarium_shield = activate_aquarium_shield_in_tx(&tx, user_id, &item).await?;
     let activated_badge_rental = activate_badge_rental_in_tx(&tx, user_id, &item).await?;
     let activated_title_rental =
         activate_title_rental_in_tx(&tx, user_id, &item, custom_title).await?;
@@ -572,6 +594,7 @@ async fn purchase_item_by_sku_inner(
         refresh_all_active_users,
         username_effect: activated_username_effect,
         bonsai_decay_protection: activated_bonsai_decay_protection,
+        aquarium_shield: activated_aquarium_shield,
         badge_rental: activated_badge_rental,
         title_rental: activated_title_rental,
     })
@@ -744,6 +767,7 @@ fn is_repeatable_purchase_item(item: &MarketplaceItem) -> bool {
             | COMPANION_CONSUMABLE_ITEM_KIND
             | USERNAME_EFFECT_ITEM_KIND
             | BONSAI_CONSUMABLE_ITEM_KIND
+            | AQUARIUM_CONSUMABLE_ITEM_KIND
             | BADGE_RENTAL_ITEM_KIND
             | TITLE_RENTAL_ITEM_KIND
     )
@@ -949,6 +973,154 @@ async fn activate_bonsai_decay_protection_in_tx(
     )
     .await?;
     Ok(Some(effect))
+}
+
+/// Activates the Aquarium Shield bought in this transaction: the Bonsai
+/// Decay Shield's shape, a live window is extended rather than reset.
+async fn activate_aquarium_shield_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+    item: &MarketplaceItem,
+) -> Result<Option<ShopConsumableEffect>> {
+    if item.item_kind != AQUARIUM_CONSUMABLE_ITEM_KIND {
+        return Ok(None);
+    }
+    let duration_secs = item
+        .payload
+        .get("duration_secs")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(AQUARIUM_SHIELD_DURATION_SECS);
+
+    let effect = ShopConsumableEffect::extend_user_effect_in_tx(
+        tx,
+        user_id,
+        AQUARIUM_SHIELD_KIND,
+        &item.sku,
+        duration_secs,
+        item.payload.clone(),
+    )
+    .await?;
+    Ok(Some(effect))
+}
+
+/// Whether the user owns the Aquarium feature.
+pub async fn user_owns_aquarium(client: &impl GenericClient, user_id: Uuid) -> Result<bool> {
+    let row = client
+        .query_opt(
+            "SELECT 1
+             FROM user_purchases p
+             JOIN marketplace_items i ON i.id = p.item_id
+             WHERE p.user_id = $1 AND i.sku = $2",
+            &[&user_id, &AQUARIUM_SKU],
+        )
+        .await?;
+    Ok(row.is_some())
+}
+
+/// One species in a user's tank: what the care rolls (fry, starvation)
+/// weigh and act on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FishStock {
+    pub item_id: Uuid,
+    pub creature: String,
+    pub name: String,
+    pub price_chips: i64,
+    pub quantity: i32,
+    pub active_quantity: i32,
+}
+
+/// Every species with at least one fish swimming in the user's tank, locked
+/// for the transaction. Fish kept in inventory (owned, not active) are not
+/// in the water, so they neither breed nor starve.
+pub async fn swimming_fish_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+) -> Result<Vec<FishStock>> {
+    let rows = tx
+        .query(
+            "SELECT p.item_id, i.payload->>'creature' AS creature, i.name, i.price_chips,
+                    p.quantity, p.active_quantity
+             FROM user_purchases p
+             JOIN marketplace_items i ON i.id = p.item_id
+             WHERE p.user_id = $1
+               AND i.item_kind = $2
+               AND p.active_quantity > 0
+               AND i.payload->>'creature' IS NOT NULL
+             ORDER BY i.sort_order, i.sku
+             FOR UPDATE OF p",
+            &[&user_id, &AQUARIUM_FISH_ITEM_KIND],
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| FishStock {
+            item_id: row.get("item_id"),
+            creature: row.get("creature"),
+            name: row.get("name"),
+            price_chips: row.get("price_chips"),
+            quantity: row.get("quantity"),
+            active_quantity: row.get("active_quantity"),
+        })
+        .collect())
+}
+
+/// A fry of `item_id` hatched: one more owned, and one more swimming when
+/// the tank is under `AQUARIUM_MAX_FISH`. Returns whether it went into the
+/// water (a full tank keeps the fry in inventory).
+pub async fn hatch_aquarium_fry_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+    item_id: Uuid,
+) -> Result<bool> {
+    let swimming = aquarium_fish_active_quantity_in_tx(tx, user_id).await?;
+    let into_water = swimming < AQUARIUM_MAX_FISH;
+    let active_delta: i32 = if into_water { 1 } else { 0 };
+    let updated = tx
+        .execute(
+            "UPDATE user_purchases
+             SET quantity = quantity + 1,
+                 active_quantity = active_quantity + $3,
+                 updated = current_timestamp
+             WHERE user_id = $1 AND item_id = $2",
+            &[&user_id, &item_id, &active_delta],
+        )
+        .await?;
+    if updated != 1 {
+        bail!("fry hatched for a species the user does not own");
+    }
+    Ok(into_water)
+}
+
+/// One swimming fish of `item_id` starved: gone from the water and from the
+/// owned count. A no-op when none of that species is swimming.
+pub async fn starve_aquarium_fish_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+    item_id: Uuid,
+) -> Result<()> {
+    tx.execute(
+        "UPDATE user_purchases
+         SET quantity = quantity - 1,
+             active_quantity = active_quantity - 1,
+             updated = current_timestamp
+         WHERE user_id = $1 AND item_id = $2 AND active_quantity > 0",
+        &[&user_id, &item_id],
+    )
+    .await?;
+    Ok(())
+}
+
+/// Tell every replica this user's purchases changed, so their shop snapshot
+/// (and with it the tank's population) reloads.
+pub async fn notify_user_shop_changed(client: &impl GenericClient, user_id: Uuid) -> Result<()> {
+    let payload = user_id.to_string();
+    client
+        .execute(
+            "SELECT pg_notify($1, $2)",
+            &[&SHOP_USER_CHANGED_CHANNEL, &payload],
+        )
+        .await?;
+    Ok(())
 }
 
 async fn has_reached_daily_purchase_limit(

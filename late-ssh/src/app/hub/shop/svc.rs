@@ -11,11 +11,13 @@ use late_core::{
     MutexRecover,
     db::{Db, DbConfig},
     models::{
+        aquarium_shield::AquariumShield,
         bonsai_decay_protection::BonsaiDecayProtection,
         chat_room::ChatRoom,
         chips::{CHIP_USER_CHANGED_CHANNEL, UserChips, listen_for_chip_changes},
         marketplace::{
-            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
+            AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH,
+            AQUARIUM_SHIELD_SKU, AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
             BONSAI_DECAY_SHIELD_SKU, CHAT_BADGE_SLOT, CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT,
             COMPANION_CONSUMABLE_ITEM_KIND, FishActiveStatus, MarketplaceItem,
             PET_COMPANION_SKU, PurchaseResult, PurchaseStatus, PurchaseWithEffectResult,
@@ -57,6 +59,9 @@ pub struct ShopSnapshot {
     /// The user's live Bonsai Decay Shield window, if any (detail pane shows
     /// the remaining time).
     pub active_bonsai_decay_protection: Option<BonsaiDecayProtection>,
+    /// The user's live Aquarium Shield window, if any (detail pane shows the
+    /// remaining time; the tank reads it for its care clocks).
+    pub active_aquarium_shield: Option<AquariumShield>,
     /// The user's live chat badge rental, flag rental, and title, if any.
     /// The detail panes show what is running and how long is left.
     pub active_badge_rental: Option<ActiveRental>,
@@ -149,6 +154,10 @@ impl ShopCatalogItem {
         self.sku == BONSAI_DECAY_SHIELD_SKU
     }
 
+    pub fn is_aquarium_shield(&self) -> bool {
+        self.sku == AQUARIUM_SHIELD_SKU
+    }
+
     pub fn is_aquarium(&self) -> bool {
         self.sku == AQUARIUM_SKU
     }
@@ -186,6 +195,7 @@ impl ShopCatalogItem {
             CHAT_CONSUMABLE_ITEM_KIND
                 | COMPANION_CONSUMABLE_ITEM_KIND
                 | BONSAI_CONSUMABLE_ITEM_KIND
+                | AQUARIUM_CONSUMABLE_ITEM_KIND
         )
     }
 
@@ -838,6 +848,17 @@ impl ShopService {
                         None => format!("Bought {}", result.item.name),
                     }
                 }
+                PurchaseStatus::Purchased | PurchaseStatus::QuantityAdded
+                    if result.item.item_kind == AQUARIUM_CONSUMABLE_ITEM_KIND =>
+                {
+                    match &purchase.aquarium_shield {
+                        Some(effect) => format!(
+                            "Tank minded until {} (UTC)",
+                            effect.ends_at.date_naive()
+                        ),
+                        None => format!("Bought {}", result.item.name),
+                    }
+                }
                 PurchaseStatus::Purchased if result.item.item_kind == AQUARIUM_FISH_ITEM_KIND => {
                     format!("Bought {} (owned {})", result.item.name, result.quantity)
                 }
@@ -1016,6 +1037,7 @@ impl ShopService {
 
         let active_bonsai_decay_protection =
             BonsaiDecayProtection::for_user(&client, user_id).await?;
+        let active_aquarium_shield = AquariumShield::for_user(&client, user_id).await?;
 
         let mut purchases_by_item = HashMap::with_capacity(purchases.len());
         for purchase in purchases {
@@ -1143,6 +1165,7 @@ impl ShopService {
             active_room_effects,
             active_username_effect,
             active_bonsai_decay_protection,
+            active_aquarium_shield,
             active_badge_rental,
             active_flag_rental,
             active_title,
@@ -1264,7 +1287,10 @@ fn rental_from_effect_row(
 fn is_consumable_kind(item_kind: &str) -> bool {
     matches!(
         item_kind,
-        CHAT_CONSUMABLE_ITEM_KIND | COMPANION_CONSUMABLE_ITEM_KIND | BONSAI_CONSUMABLE_ITEM_KIND
+        CHAT_CONSUMABLE_ITEM_KIND
+            | COMPANION_CONSUMABLE_ITEM_KIND
+            | BONSAI_CONSUMABLE_ITEM_KIND
+            | AQUARIUM_CONSUMABLE_ITEM_KIND
     )
 }
 

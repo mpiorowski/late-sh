@@ -267,7 +267,8 @@ pub struct SessionConfig {
     pub initial_pet: Option<late_core::models::pet::PetCompanion>,
     pub aquarium_service: crate::app::hub::aquarium::svc::AquariumService,
     /// When the account last fed its tank; `None` for a tank never fed.
-    pub initial_aquarium_last_fed: Option<chrono::DateTime<chrono::Utc>>,
+    /// The tank's care at connect, with any starvation already settled.
+    pub initial_aquarium_care: crate::app::hub::aquarium::svc::CareBootstrap,
     pub quest_service: crate::app::hub::dailies::svc::QuestService,
     pub quest_snapshot_rx:
         tokio::sync::watch::Receiver<crate::app::hub::dailies::svc::QuestSnapshot>,
@@ -1282,10 +1283,28 @@ impl App {
         let aquarium_area = aquarium_area_for_terminal(cols, rows);
         let mut aquarium_state =
             crate::app::hub::aquarium::state::AquariumState::default_for_area(aquarium_area)?;
-        aquarium_state.set_active_creatures(&shop_state.active_aquarium_fish());
-        let aquarium_care =
-            crate::app::hub::aquarium::state::AquariumCare::new(config.initial_aquarium_last_fed);
+        let aquarium_care = crate::app::hub::aquarium::state::AquariumCare::new(
+            config.initial_aquarium_care.care,
+            config.initial_aquarium_care.shield,
+        );
+        aquarium_state.set_active_creatures(
+            &shop_state.active_aquarium_fish(),
+            aquarium_care.fry_visible(),
+        );
         aquarium_state.set_hungry(aquarium_care.hungry());
+        aquarium_state.set_murky(aquarium_care.murky());
+        // Fish the login settlement took while the user was away: said once,
+        // on the first screen.
+        let aquarium_loss_banner = match config.initial_aquarium_care.lost.as_slice() {
+            [] => None,
+            [one] => Some(crate::app::common::primitives::Banner::error(&format!(
+                "Your {one} starved while you were away"
+            ))),
+            many => Some(crate::app::common::primitives::Banner::error(&format!(
+                "{} of your fish starved while you were away",
+                many.len()
+            ))),
+        };
 
         let active_users = config.active_users.clone();
         let afk_users = config.afk_users.clone();
@@ -1328,7 +1347,7 @@ impl App {
             running: true,
             size: (cols, rows),
             screen: landing_screen,
-            banner: None,
+            banner: aquarium_loss_banner,
             show_settings: false,
             show_splash: true,
             splash_ticks: 0,

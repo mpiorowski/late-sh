@@ -815,12 +815,12 @@ impl russh::server::Handler for ClientHandler {
                 None
             }
         };
-        let initial_aquarium_last_fed =
-            match self.state.aquarium_service.last_fed(user_id).await {
-                Ok(last_fed) => last_fed,
+        let initial_aquarium_care =
+            match self.state.aquarium_service.bootstrap(user_id).await {
+                Ok(care) => care,
                 Err(e) => {
                     tracing::warn!(error = ?e, "failed to load aquarium care");
-                    None
+                    Default::default()
                 }
             };
 
@@ -967,7 +967,7 @@ impl russh::server::Handler for ClientHandler {
             pet_service: self.state.pet_service.clone(),
             initial_pet,
             aquarium_service: self.state.aquarium_service.clone(),
-            initial_aquarium_last_fed,
+            initial_aquarium_care,
             quest_service: self.state.quest_service.clone(),
             quest_snapshot_rx,
             shop_service: self.state.shop_service.clone(),

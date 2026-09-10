@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
-use tokio_postgres::Client;
+use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -274,6 +274,30 @@ impl ShopConsumableEffect {
                    AND effect_kind = $2
                    AND active = true
                    AND ends_at > current_timestamp
+                 ORDER BY ends_at DESC
+                 LIMIT 1",
+                &[&user_id, &effect_kind],
+            )
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
+    /// The newest user-scoped effect of one kind for one user, live or
+    /// lapsed. For clocks that must still honour a window that has run out
+    /// (the aquarium's starvation count excuses every day its shield
+    /// covered, even after the shield ends).
+    pub async fn latest_user_effect_for_user(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        effect_kind: &str,
+    ) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT *
+                 FROM shop_consumable_effects
+                 WHERE user_id = $1
+                   AND room_id IS NULL
+                   AND effect_kind = $2
                  ORDER BY ends_at DESC
                  LIMIT 1",
                 &[&user_id, &effect_kind],

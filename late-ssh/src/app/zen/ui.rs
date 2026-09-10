@@ -16,6 +16,8 @@ use super::{
     layout::{self, BONSAI_STATUS_ROWS, FLOOR_ROWS},
     state::{BorderKind, TileKind, ZenState},
 };
+use late_core::models::aquarium_care::CARE_DAYS;
+
 use crate::app::{
     audio::viz::{EqState, render_eq},
     bonsai::{
@@ -25,7 +27,7 @@ use crate::app::{
     chat::ui::{EmbeddedRoomChatView, draw_embedded_room_chat},
     common::{primitives::hint_line, theme},
     files::terminal_image::TerminalImageFrame,
-    hub::aquarium::state::AquariumState,
+    hub::aquarium::state::{AquariumCare, AquariumState, CareBar},
     lobby::daily::{panel::draw_daily_compact, state::DailyState},
     pet::ui::{PetView, draw_pet_box},
 };
@@ -38,6 +40,8 @@ pub(crate) struct ZenView<'a> {
     /// account has fish in it or gets the shop caption instead.
     pub aquarium: &'a AquariumState,
     pub aquarium_owned: bool,
+    /// The owner's care: the title bar's fourteen boxes read off it.
+    pub aquarium_care: &'a AquariumCare,
     /// `None` when the account owns no pet.
     pub pet_strip: Option<PetView<'a>>,
     /// The current room, drawn at most once per frame (taken by the first
@@ -95,7 +99,31 @@ pub(crate) fn draw_rice(
             | TileKind::Lobby
             | TileKind::Blank => kind.label().to_string(),
         };
-        let inner = draw_tile_chrome(frame, *rect, &title, focused, &zen.rice.look);
+        // The tank's title carries its care bar: fourteen boxes, green
+        // for the feeding streak or red for the days unfed.
+        let title_tail = match kind {
+            TileKind::Aquarium if view.aquarium_owned => {
+                Some(care_bar_spans(view.aquarium_care.bar()))
+            }
+            TileKind::Aquarium
+            | TileKind::Chat
+            | TileKind::Bonsai
+            | TileKind::Pet
+            | TileKind::Music
+            | TileKind::Clock
+            | TileKind::Visualizer
+            | TileKind::Presence
+            | TileKind::Lobby
+            | TileKind::Blank => None,
+        };
+        let inner = draw_tile_chrome(
+            frame,
+            *rect,
+            &title,
+            title_tail,
+            focused,
+            &zen.rice.look,
+        );
         if inner.width == 0 || inner.height == 0 {
             continue;
         }
@@ -134,6 +162,7 @@ fn draw_tile_chrome(
     frame: &mut Frame,
     rect: Rect,
     title: &str,
+    title_tail: Option<Vec<Span<'static>>>,
     focused: bool,
     look: &super::state::Look,
 ) -> Rect {
@@ -166,7 +195,12 @@ fn draw_tile_chrome(
                 .border_type(border_type)
                 .border_style(ring);
             if look.titles {
-                block = block.title(Span::styled(format!(" {title} "), title_style));
+                let mut spans = vec![Span::styled(format!(" {title} "), title_style)];
+                if let Some(tail) = title_tail {
+                    spans.extend(tail);
+                    spans.push(Span::raw(" "));
+                }
+                block = block.title(Line::from(spans));
             }
             frame.render_widget(block, rect);
             layout::tile_inner(rect, look)
@@ -176,10 +210,15 @@ fn draw_tile_chrome(
                 return rect;
             }
             let marker = if focused { "▌" } else { " " };
-            let line = Line::from(vec![
+            let mut spans = vec![
                 Span::styled(marker, ring),
                 Span::styled(title.to_string(), title_style),
-            ]);
+            ];
+            if let Some(tail) = title_tail {
+                spans.push(Span::raw(" "));
+                spans.extend(tail);
+            }
+            let line = Line::from(spans);
             frame.render_widget(
                 Paragraph::new(line),
                 Rect::new(rect.x, rect.y, rect.width, 1),
@@ -187,6 +226,23 @@ fn draw_tile_chrome(
             layout::tile_inner(rect, look)
         }
     }
+}
+
+/// The care bar: one box per day of the fourteen both clocks run on.
+/// Streak boxes fill green, unfed boxes red, and a minded tank (the
+/// shield's auto feeder) shows all fourteen empty.
+pub(crate) fn care_bar_spans(bar: CareBar) -> Vec<Span<'static>> {
+    let (filled, color) = match bar {
+        CareBar::Streak(days) => (days, theme::SUCCESS()),
+        CareBar::Dry(days) => (days, theme::ERROR()),
+        CareBar::Minded => (0, theme::TEXT_FAINT()),
+    };
+    let filled = filled.min(CARE_DAYS) as usize;
+    let empty = CARE_DAYS as usize - filled;
+    vec![
+        Span::styled("■".repeat(filled), Style::default().fg(color)),
+        Span::styled("□".repeat(empty), Style::default().fg(theme::TEXT_FAINT())),
+    ]
 }
 
 fn draw_rice_hint(frame: &mut Frame, area: Rect, zen: &ZenState) {
@@ -628,3 +684,7 @@ fn draw_centered_note(frame: &mut Frame, area: Rect, rows: &[&str]) {
     padded.append(&mut lines);
     frame.render_widget(Paragraph::new(padded).alignment(Alignment::Center), area);
 }
+
+#[cfg(test)]
+#[path = "ui_test.rs"]
+mod ui_test;

@@ -17,7 +17,8 @@ account in `users.settings.zen_layout` as the JSON `RiceLayout` serializes
 to. Tile kinds are a closed enum: bonsai (the true 81x26 canvas when the
 tile has the room, the preview otherwise), aquarium (the real reef
 simulation, drawn for everyone: unowned it swims empty under a `/shop`
-caption), pet (the strip), chat, music, clock (block digits, online count
+caption; owned, its title carries the care bar, fourteen boxes green for
+the feeding streak or red for the days unfed, see the hub CONTEXT), pet (the strip), chat, music, clock (block digits, online count
 on the date row), visualizer, presence, lobby (the daily games, compact:
 only the running games plus one footer row of count and keys), blank. The look (border style, gap, titles) is
 part of the layout.
@@ -78,6 +79,10 @@ persists.
   uses (`layout.rs`), so the sim and the drawing never disagree on size.
   It steps on the quarter edge whenever the page is up, owned or not
   (`aquarium_tray_visible` in `tick.rs`); only the fish need the unlock.
+- The care bar (`care_bar_spans`, `ui_test.rs`) is the tank's only care
+  readout on the page: `CareBar` comes from `AquariumCare::bar` in
+  `hub/aquarium/state.rs`, the tile only paints it. `draw_tile_chrome`
+  takes the optional span tail for exactly this; no other tile has one.
 - The chat view is built once per frame and taken by the first chat tile;
   a second chat tile shows a note instead.
 - The stored layout is parsed leniently: anything unreadable falls back to

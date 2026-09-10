@@ -446,14 +446,21 @@ fn draw_item_detail(
                 Span::styled("current room", Style::default().fg(theme::TEXT_DIM())),
             ]));
         }
-        if item.is_bonsai_decay_shield() {
-            if let Some(protection) = state.active_bonsai_decay_protection() {
+        if item.is_bonsai_decay_shield() || item.is_aquarium_shield() {
+            let live_until = if item.is_aquarium_shield() {
+                state.active_aquarium_shield().map(|shield| shield.ends_at)
+            } else {
+                state
+                    .active_bonsai_decay_protection()
+                    .map(|protection| protection.ends_at)
+            };
+            if let Some(ends_at) = live_until {
                 lines.push(Line::from(vec![
                     Span::raw("  shield "),
                     Span::styled(
                         format!(
                             "protected, {}",
-                            remaining_label(protection.ends_at, chrono::Utc::now())
+                            remaining_label(ends_at, chrono::Utc::now())
                         ),
                         Style::default()
                             .fg(theme::SUCCESS())
@@ -997,6 +1004,7 @@ fn item_row(
         || item.equipped
         || rental_active(item, state)
         || bonsai_decay_shield_active(item, state)
+        || aquarium_shield_active(item, state)
     {
         Style::default()
             .fg(theme::SUCCESS())
@@ -1090,11 +1098,17 @@ fn consumable_row_status(item: &ShopCatalogItem, state: &ShopState) -> &'static 
         "confirm"
     } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
         "activate"
-    } else if bonsai_decay_shield_active(item, state) {
+    } else if bonsai_decay_shield_active(item, state) || aquarium_shield_active(item, state) {
         "active"
     } else {
         "buy"
     }
+}
+
+/// True while the Aquarium Shield's auto feeder is minding the user's tank;
+/// same shape as the bonsai's, one running window per user.
+fn aquarium_shield_active(item: &ShopCatalogItem, state: &ShopState) -> bool {
+    item.is_aquarium_shield() && state.active_aquarium_shield().is_some()
 }
 
 /// True when the Bonsai Decay Shield is currently protecting the user's

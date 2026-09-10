@@ -1,6 +1,9 @@
 pub mod account_link;
 pub mod app_flag;
 pub mod aquarium_care;
+#[cfg(test)]
+mod aquarium_care_test;
+pub mod aquarium_shield;
 pub mod arcade_handle;
 #[cfg(test)]
 mod arcade_handle_test;

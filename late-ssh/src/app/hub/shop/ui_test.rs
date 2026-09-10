@@ -91,6 +91,7 @@ fn make_state_with_bonsai_protection(protection: Option<BonsaiDecayProtection>) 
         active_room_effects: HashMap::new(),
         active_username_effect: None,
         active_bonsai_decay_protection: protection,
+        active_aquarium_shield: None,
         active_badge_rental: None,
         active_flag_rental: None,
         active_title: None,

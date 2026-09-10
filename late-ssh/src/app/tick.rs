@@ -857,12 +857,18 @@ impl App {
             let equipped_badge = self.shop_state.equipped_chat_badge();
             self.chat
                 .set_chat_badge(self.user_id, equipped_badge.as_deref());
-            self.aquarium_state
-                .set_active_creatures(&self.shop_state.active_aquarium_fish());
+            self.aquarium_state.set_active_creatures(
+                &self.shop_state.active_aquarium_fish(),
+                self.aquarium_care.fry_visible(),
+            );
             // A Bonsai Decay Shield purchase is picked up here, but the tree
             // has no in-session decay simulation to refresh, so it only
             // matters from the next login's elapsed-day catch-up onward.
             self.bonsai_state.decay_protection = self.shop_state.active_bonsai_decay_protection();
+            // An Aquarium Shield purchase takes effect at once: the fish
+            // stop being hungry and the water clears on the next quarter edge.
+            self.aquarium_care
+                .refresh_shield(self.shop_state.active_aquarium_shield());
         }
         if shop_tick.snapshot_changed
             && self.shop_state.is_loaded()
@@ -900,6 +906,7 @@ impl App {
         // Hunger is the day's care read fresh each step, so the UTC
         // rollover sinks the fish without any event.
         self.aquarium_state.set_hungry(self.aquarium_care.hungry());
+        self.aquarium_state.set_murky(self.aquarium_care.murky());
         if anim_quarter && self.aquarium_tray_visible() {
             self.aquarium_state.tick();
             changed = true;
@@ -964,6 +971,29 @@ impl App {
                         Some(crate::app::common::primitives::Banner::success(&format!(
                             "Fed the tank (+{} chips)",
                             crate::app::hub::aquarium::svc::FEED_CHIP_BONUS
+                        )))
+                    }
+                    // The streak's fry: the sim learns which species to draw
+                    // small; the shop snapshot reload brings the new count.
+                    ActivityKind::AquariumFryHatched { creature, swimming }
+                        if user_id == self.user_id =>
+                    {
+                        if *swimming {
+                            self.aquarium_care
+                                .set_fry(creature.clone(), chrono::Utc::now().date_naive());
+                            Some(crate::app::common::primitives::Banner::success(&format!(
+                                "A {creature} fry hatched in the tank"
+                            )))
+                        } else {
+                            Some(crate::app::common::primitives::Banner::success(&format!(
+                                "A {creature} fry hatched, the tank is full so it waits in /shop"
+                            )))
+                        }
+                    }
+                    // A second device of yours connecting settled a death.
+                    ActivityKind::AquariumFishLost { creature } if user_id == self.user_id => {
+                        Some(crate::app::common::primitives::Banner::error(&format!(
+                            "Your {creature} starved while you were away"
                         )))
                     }
                     // Everything else on the global feed is somebody else's

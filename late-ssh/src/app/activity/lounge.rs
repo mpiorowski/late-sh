@@ -204,6 +204,8 @@ fn repeat_key(event: &ActivityEvent) -> String {
         ActivityKind::BonsaiLost { .. } => "bonsai-lost".to_string(),
         ActivityKind::PetFed => "pet-fed".to_string(),
         ActivityKind::AquariumFed => "aquarium-fed".to_string(),
+        ActivityKind::AquariumFryHatched { .. } => "aquarium-fry".to_string(),
+        ActivityKind::AquariumFishLost { .. } => "aquarium-lost".to_string(),
     };
     format!("{user}:{shape}")
 }

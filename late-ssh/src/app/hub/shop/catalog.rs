@@ -1,6 +1,6 @@
 use late_core::models::{
     marketplace::{
-        AQUARIUM_FISH_ITEM_KIND, AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
+        AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
         CHAT_CONSUMABLE_ITEM_KIND, COMPANION_CONSUMABLE_ITEM_KIND, PET_COMPANION_SKU,
         USERNAME_EFFECT_ITEM_KIND,
     },
@@ -54,7 +54,10 @@ impl ShopCategory {
                     || item.item_kind == USERNAME_EFFECT_ITEM_KIND
                     || item.item_kind == TITLE_RENTAL_ITEM_KIND
             }
-            Self::Aquarium => item.item_kind == AQUARIUM_FISH_ITEM_KIND,
+            Self::Aquarium => {
+                item.item_kind == AQUARIUM_FISH_ITEM_KIND
+                    || item.item_kind == AQUARIUM_CONSUMABLE_ITEM_KIND
+            }
             Self::Badges => item.is_chat_badge() && !item.is_flag_badge(),
             Self::Flags => item.is_flag_badge(),
             // The two dearest things the shop sells share a tab: the burn
