@@ -91,7 +91,7 @@ pub struct ChatDividers {
 pub struct DashboardChatView<'a> {
     /// When present, the 3-row pet strip renders between the messages and
     /// the composer (pet entitlement + tweak resolved by the caller).
-    pub pet_strip: Option<crate::app::pet::ui::PetStripView<'a>>,
+    pub pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     /// Recent #lounge system-feed lines (newest first), packed left to
     /// right into the composer-gap row.
     pub activity_ticker: &'a [super::state::ActivityTickerEntry],
@@ -1154,7 +1154,7 @@ pub fn draw_dashboard_chat_card(
         split_chat_pet_strip_and_composer(area, composer_height, pet_strip_height);
     draw_activity_ticker(frame, ticker_area, view.activity_ticker);
     if let Some(pet_strip) = &view.pet_strip {
-        crate::app::pet::ui::draw_pet_strip(frame, pet_strip_area, pet_strip);
+        crate::app::pet::ui::draw_pet_box(frame, pet_strip_area, pet_strip);
     }
     // The Lounge gets the same header block as every other room: voice state
     // and the topic in one place, rather than a bare voice strip.
@@ -2917,7 +2917,7 @@ pub(crate) fn draw_mention_autocomplete(
 pub struct ChatRenderInput<'a> {
     /// When present, the 3-row pet strip renders between the messages and
     /// the composer (pet entitlement + tweak resolved by the caller).
-    pub pet_strip: Option<crate::app::pet::ui::PetStripView<'a>>,
+    pub pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     /// Recent #lounge system-feed lines (newest first), packed left to
     /// right into the composer-gap row.
     pub activity_ticker: &'a [super::state::ActivityTickerEntry],
@@ -5000,7 +5000,7 @@ pub fn draw_chat_center(
         split_chat_pet_strip_and_composer(area, selection_mode.composer_height(), pet_strip_height);
     draw_activity_ticker(frame, ticker_area, view.activity_ticker);
     if let Some(pet_strip) = &view.pet_strip {
-        crate::app::pet::ui::draw_pet_strip(frame, pet_strip_area, pet_strip);
+        crate::app::pet::ui::draw_pet_box(frame, pet_strip_area, pet_strip);
     }
 
     draw_selected_content(frame, messages_area, composer_area, view, terminal_images);

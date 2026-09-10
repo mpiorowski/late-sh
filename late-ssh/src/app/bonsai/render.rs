@@ -294,19 +294,6 @@ fn render_preview_ascii(state: &BonsaiState) -> RenderedBonsai {
     render_fitted_ascii(state, PREVIEW_WIDTH, PREVIEW_HEIGHT)
 }
 
-/// The preview's fit at any block size: 1:1 while the tree fits `width`,
-/// one integer factor on both axes once it does not, pot on the last row.
-/// The Zen room stands the tree on the floor through this at a block far
-/// larger than the sidebar's.
-pub(crate) fn render_fitted_lines(
-    state: &BonsaiState,
-    width: usize,
-    height: usize,
-) -> Vec<Line<'static>> {
-    let rendered = render_fitted_ascii(state, width, height);
-    rendered_lines(state, &rendered, false)
-}
-
 fn render_fitted_ascii(state: &BonsaiState, width: usize, height: usize) -> RenderedBonsai {
     let width = width.max(3);
     let height = height.max(2);

@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::Result;
+use chrono::{DateTime, NaiveDate, Utc};
 use rand::{Rng, rngs::ThreadRng};
 use ratatui::{layout::Rect, style::Color};
 
@@ -17,6 +18,53 @@ use super::{
 
 const FEED_EFFECT_DURATION: Duration = Duration::from_secs(8);
 const HUNGRY_MOTION_DIVISOR: u64 = 4;
+
+/// The owner's care of the tank: one free feeding a day, like the bonsai's
+/// watering. Hunger is derived, never stored: not fed today (UTC) is hungry,
+/// and hungry fish sink to the floor (`nudge_hungry_entity_down`). Lives
+/// beside the simulation rather than inside it because the sim also draws
+/// other people's tanks (the profile modal), which carry no care of yours.
+pub(crate) struct AquariumCare {
+    pub(crate) last_fed: Option<DateTime<Utc>>,
+}
+
+/// Outcome of a feed press. The day's meal is free; the only refusal is a
+/// tank that has already eaten.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CareOutcome {
+    Fed,
+    AlreadyFedToday,
+}
+
+impl AquariumCare {
+    pub(crate) fn new(last_fed: Option<DateTime<Utc>>) -> Self {
+        Self { last_fed }
+    }
+
+    pub(crate) fn fed_today(&self) -> bool {
+        fed_on(self.last_fed, Utc::now().date_naive())
+    }
+
+    /// Whether the fish go hungry right now: nobody fed them today.
+    pub(crate) fn hungry(&self) -> bool {
+        !self.fed_today()
+    }
+
+    /// The day's meal. The service pays the chips behind a DB gate; the
+    /// caller only learns whether this press was the one that fed the tank.
+    pub(crate) fn feed(&mut self) -> CareOutcome {
+        let now = Utc::now();
+        if fed_on(self.last_fed, now.date_naive()) {
+            return CareOutcome::AlreadyFedToday;
+        }
+        self.last_fed = Some(now);
+        CareOutcome::Fed
+    }
+}
+
+fn fed_on(last: Option<DateTime<Utc>>, today: NaiveDate) -> bool {
+    last.is_some_and(|time| time.date_naive() == today)
+}
 
 pub(crate) struct AquariumState {
     pub(crate) definitions: Vec<CreatureDef>,

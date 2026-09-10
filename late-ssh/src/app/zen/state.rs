@@ -2,7 +2,10 @@
 //! and the focus that edits it. Everything here is pure data; persistence is
 //! the orchestration layer's job (`App::persist_zen_layout`).
 
+use ratatui::layout::Rect;
 use serde::{Deserialize, Serialize};
+
+use super::layout;
 
 /// What a tile shows. Closed set: a new kind is a new arm in `ui.rs`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,11 +19,12 @@ pub enum TileKind {
     Clock,
     Visualizer,
     Presence,
+    Lobby,
     Blank,
 }
 
 impl TileKind {
-    pub const ALL: [TileKind; 9] = [
+    pub const ALL: [TileKind; 10] = [
         TileKind::Bonsai,
         TileKind::Aquarium,
         TileKind::Pet,
@@ -29,6 +33,7 @@ impl TileKind {
         TileKind::Clock,
         TileKind::Visualizer,
         TileKind::Presence,
+        TileKind::Lobby,
         TileKind::Blank,
     ];
 
@@ -42,6 +47,7 @@ impl TileKind {
             TileKind::Clock => "clock",
             TileKind::Visualizer => "visualizer",
             TileKind::Presence => "presence",
+            TileKind::Lobby => "lobby",
             TileKind::Blank => "blank",
         }
     }
@@ -77,7 +83,8 @@ impl Dir {
 }
 
 /// The layout tree. Leaves are tiles; splits carry the direction and the
-/// first child's share in percent.
+/// first child's share in per-mille, fine enough that one row or column of
+/// any split a terminal can hold is a distinct value (see `resize_leaf`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "node", rename_all = "snake_case")]
 pub enum Node {
@@ -86,24 +93,26 @@ pub enum Node {
     },
     Split {
         dir: Dir,
-        ratio: u8,
+        share: u16,
         first: Box<Node>,
         second: Box<Node>,
     },
 }
 
-const MIN_RATIO: u8 = 10;
-const MAX_RATIO: u8 = 90;
+/// Per-mille bounds for a split's first child, so a tile can never be
+/// squeezed to nothing.
+pub const MIN_SHARE: u16 = 100;
+pub const MAX_SHARE: u16 = 900;
 
 impl Node {
     pub fn leaf(kind: TileKind) -> Self {
         Node::Leaf { kind }
     }
 
-    pub fn split(dir: Dir, ratio: u8, first: Node, second: Node) -> Self {
+    pub fn split(dir: Dir, share: u16, first: Node, second: Node) -> Self {
         Node::Split {
             dir,
-            ratio: ratio.clamp(MIN_RATIO, MAX_RATIO),
+            share: share.clamp(MIN_SHARE, MAX_SHARE),
             first: Box::new(first),
             second: Box::new(second),
         }
@@ -165,7 +174,7 @@ impl Node {
         let Node::Leaf { kind } = *leaf else {
             return false;
         };
-        *leaf = Node::split(dir, 50, Node::leaf(kind), Node::leaf(new_kind));
+        *leaf = Node::split(dir, 500, Node::leaf(kind), Node::leaf(new_kind));
         true
     }
 
@@ -220,43 +229,63 @@ impl Node {
         })
     }
 
-    /// Grow (positive) or shrink the leaf at `ordinal` along its parent split.
-    /// Grow (positive) or shrink the leaf at `ordinal` along `dir`: the
-    /// nearest ancestor split of that direction moves, the way i3 resizes.
-    /// `false` when no ancestor runs that way (a row of two tiles has no
-    /// height to trade).
-    pub fn resize_leaf(&mut self, ordinal: usize, dir: Dir, delta: i8) -> bool {
+    /// Grow (positive) or shrink the leaf at `ordinal` by `delta_cells`
+    /// along `dir`: the nearest ancestor split of that direction moves, the
+    /// way i3 resizes. The tree is walked with the rects it lays out on
+    /// `area` (the same math the renderer uses), so a press moves the split
+    /// by exactly that many rows or columns on the current terminal, and the
+    /// share written back reproduces that cell count next frame. `false`
+    /// when no ancestor runs that way (a row of two tiles has no height to
+    /// trade).
+    pub fn resize_leaf(
+        &mut self,
+        ordinal: usize,
+        dir: Dir,
+        delta_cells: i16,
+        area: Rect,
+        gap: u16,
+    ) -> bool {
         let mut remaining = ordinal;
-        self.resize_toward(&mut remaining, dir, delta)
+        self.resize_toward(&mut remaining, dir, delta_cells, area, gap)
     }
 
-    fn resize_toward(&mut self, ordinal: &mut usize, dir: Dir, delta: i8) -> bool {
+    fn resize_toward(
+        &mut self,
+        ordinal: &mut usize,
+        dir: Dir,
+        delta_cells: i16,
+        area: Rect,
+        gap: u16,
+    ) -> bool {
         let Node::Split {
             dir: my_dir,
-            ratio,
+            share,
             first,
             second,
         } = self
         else {
             return false;
         };
+        let (first_area, second_area) = layout::split_rect(area, *my_dir, *share, gap);
         let first_count = first.leaf_count();
-        let (child, is_first) = if *ordinal < first_count {
-            (first, true)
+        let (child, child_area, is_first) = if *ordinal < first_count {
+            (first, first_area, true)
         } else {
             *ordinal -= first_count;
-            (second, false)
+            (second, second_area, false)
         };
         // Deeper first: the split nearest the tile is the one that moves.
-        if child.resize_toward(ordinal, dir, delta) {
+        if child.resize_toward(ordinal, dir, delta_cells, child_area, gap) {
             return true;
         }
         if *my_dir != dir {
             return false;
         }
-        let signed = if is_first { delta } else { -delta };
-        let next = (*ratio as i16 + signed as i16).clamp(MIN_RATIO as i16, MAX_RATIO as i16);
-        *ratio = next as u8;
+        let usable = layout::usable_len(area, *my_dir, gap);
+        let signed = if is_first { delta_cells } else { -delta_cells };
+        let target = (layout::first_len(usable, *share) as i32 + signed as i32)
+            .clamp(0, usable as i32) as u16;
+        *share = layout::share_for(usable, target).clamp(MIN_SHARE, MAX_SHARE);
         true
     }
 
@@ -332,30 +361,33 @@ pub struct RiceLayout {
 }
 
 impl Default for RiceLayout {
+    /// The out-of-the-box page, also what `R` resets to: the bonsai at full
+    /// canvas over the live reef on the left, and a rail of clock, music,
+    /// lobby, and the current room's chat on the right.
     fn default() -> Self {
         Self {
             root: Node::split(
                 Dir::Row,
-                62,
+                640,
                 Node::split(
                     Dir::Column,
-                    68,
+                    600,
                     Node::leaf(TileKind::Bonsai),
-                    Node::leaf(TileKind::Chat),
+                    Node::leaf(TileKind::Aquarium),
                 ),
                 Node::split(
                     Dir::Column,
-                    42,
-                    Node::leaf(TileKind::Aquarium),
+                    180,
+                    Node::leaf(TileKind::Clock),
                     Node::split(
                         Dir::Column,
-                        30,
-                        Node::leaf(TileKind::Pet),
+                        170,
+                        Node::leaf(TileKind::Music),
                         Node::split(
                             Dir::Column,
-                            55,
-                            Node::leaf(TileKind::Clock),
-                            Node::leaf(TileKind::Music),
+                            260,
+                            Node::leaf(TileKind::Lobby),
+                            Node::leaf(TileKind::Chat),
                         ),
                     ),
                 ),
@@ -380,16 +412,8 @@ impl RiceLayout {
     }
 }
 
-/// Which face of the page is up: the tiling layout, or the drawn room.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ZenMode {
-    Rice,
-    Room,
-}
-
 /// Session state for the Zen page.
 pub struct ZenState {
-    pub mode: ZenMode,
     pub rice: RiceLayout,
     /// Focused tile, as an ordinal into `rice.root.leaf_kinds()`.
     pub focus: usize,
@@ -400,18 +424,10 @@ pub struct ZenState {
 impl ZenState {
     pub fn new(rice: RiceLayout) -> Self {
         Self {
-            mode: ZenMode::Rice,
             rice,
             focus: 0,
             zoomed: false,
         }
-    }
-
-    pub fn toggle_mode(&mut self) {
-        self.mode = match self.mode {
-            ZenMode::Rice => ZenMode::Room,
-            ZenMode::Room => ZenMode::Rice,
-        };
     }
 
     pub fn leaf_count(&self) -> usize {
@@ -470,8 +486,13 @@ impl ZenState {
         self.rice.root.set_kind(self.focus, next)
     }
 
-    pub fn resize_focused(&mut self, dir: Dir, delta: i8) -> bool {
-        self.rice.root.resize_leaf(self.focus, dir, delta)
+    /// Move the focused tile's edge by `delta_cells` along `dir`, on the
+    /// tiles area the page currently lays out.
+    pub fn resize_focused(&mut self, dir: Dir, delta_cells: i16, tiles_area: Rect) -> bool {
+        let gap = self.rice.look.gap as u16;
+        self.rice
+            .root
+            .resize_leaf(self.focus, dir, delta_cells, tiles_area, gap)
     }
 
     pub fn flip_focused(&mut self) -> bool {
@@ -506,3 +527,7 @@ impl ZenState {
         self.rice.root.leaf_kinds().iter().position(|k| *k == kind)
     }
 }
+
+#[cfg(test)]
+#[path = "state_test.rs"]
+mod state_test;

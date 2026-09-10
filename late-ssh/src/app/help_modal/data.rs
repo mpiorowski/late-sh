@@ -213,8 +213,9 @@ pub(crate) fn bot_app_context() -> String {
 /// in depth, so anything past "which screen / which key" should route there.
 pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
-    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels), 4 Artboard (shared ASCII canvas), 5 Profiles (the people: their projects and open-to-work cards), 6 Leaderboards (every board, monthly and all-time), 7 Zen (Rice: your bonsai, aquarium, pet, the room Home has selected, music, and a clock as tiles you arrange yourself: arrows focus, space picks a tile's kind, S splits, X closes, < > change width and { } height, r flips, z zooms, b g t restyle borders, gaps, and titles, R resets, the layout is saved per account; o swaps to the Room, a drawn night room with the same things placed in it. On both: [ ] walk your rooms, i or Enter chats, w waters, x cuts, p pinches, s splits a branch, n picks the next branch, f feeds and d waters the pet, a feeds the tank).\n\
+    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels), 4 Artboard (shared ASCII canvas), 5 Profiles (the people: their projects and open-to-work cards), 6 Leaderboards (every board, monthly and all-time).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
+    - Ctrl+F opens Zen from anywhere and hands you back with Esc or the same chord: Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: arrows focus, space picks a tile's kind, S splits, X closes, < > change width and { } height, r flips, z zooms, b g t restyle borders, gaps, and titles, R resets, the layout is saved per account; [ ] walk your rooms, i or Enter chats, w waters, x cuts, p pinches, s splits a branch, n picks the next branch, f feeds the pet, a feeds the tank; each first feed of the day pays 100 chips).\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Typing /shop into the composer opens the Shop.\n\
     - Ctrl+/ opens jump search across rooms and DMs; typing ?query searches messages.\n\
     - Home's room rail also holds RSS, News, Cyberspace, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"N unread mentions\" counter in the top-right corner.\n\
@@ -621,10 +622,11 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "Global chat keys",
         "  Ctrl+O             open your settings modal anywhere",
         "  Ctrl+G             open / close the Lobby (daily games + house tables)",
+        "  Ctrl+F             open / close Zen (your bonsai, tank, lobby, chat, and clock as tiles)",
         "  Ctrl+L             redraw the screen if something outside late.sh scribbled on it",
         "  /shop              open the Shop",
         "  /aquarium          toggle the Aquarium in the Lounge after unlocking it in the Shop",
-        "  /aquarium feed     feed your Aquarium with bought Aquarium Food",
+        "  /aquarium feed     feed your Aquarium (free, once a day, +100 chips)",
         "  /pet               toggle the pet strip in the Lounge",
         "  Ctrl+/             jump to a room or DM; type ?query to search messages",
         "  ?                  open this guide; Pair and terminal-specific tabs live here",
@@ -1161,12 +1163,12 @@ fn overview_lines() -> Vec<String> {
         "  Ctrl+L            redraw the screen after outside terminal damage",
         "  /shop             open the Shop",
         "  /aquarium         toggle the Aquarium in the Lounge after unlocking it in the Shop",
-        "  /aquarium feed    feed your Aquarium with bought Aquarium Food",
+        "  /aquarium feed    feed your Aquarium (free, once a day, +100 chips)",
         "  Ctrl+/            jump to a room, DM, or Home entry; ?query searches messages",
         "  ?                 open this guide; Pair and terminal-specific tabs live here",
         "  w                 open Bonsai Care when not composing",
         "  /pet              toggle the pet strip in the Lounge",
-        "  /pet feed/water   pet-strip care after unlocking the companion",
+        "  /pet feed         feed the pet once a day (+100 chips) after unlocking it",
         "  m                 mute paired client",
         "  + / -             paired client volume",
         "  v then v          open the Music Booth (submit + queue + votes)",
@@ -1706,12 +1708,10 @@ fn bonsai_help_lines() -> Vec<String> {
         "  Unlock            Shop companion bought with Late Chips (/shop)",
         "  strip             lives above the Lounge composer once unlocked",
         "  /pet              show or hide the strip",
-        "  /pet feed         spend one pet food, or click the bowl or the pet",
-        "  once fed it strolls the screen for 30 minutes; one meal per day",
-        "  /pet water        water (daily), or click the water bowl",
-        "  pet food is a Shop item; an empty bowl shows ? when you are out",
+        "  /pet feed         the day's meal, free; or click the bowl or the pet",
+        "  the first feed of the UTC day pays 100 chips, like watering the bonsai",
+        "  fed, it roams its whole box happy; unfed, it sits sad on the floor",
         "  /petname [name]   show or set your pet's name",
-        "  3-day care streak keeps it happy",
     ]
     .into_iter()
     .map(str::to_string)

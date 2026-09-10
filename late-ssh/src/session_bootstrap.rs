@@ -359,6 +359,13 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             None
         }
     };
+    let initial_aquarium_last_fed = match state.aquarium_service.last_fed(user_id).await {
+        Ok(last_fed) => last_fed,
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load aquarium care");
+            None
+        }
+    };
     let quest_snapshot_rx = state.quest_service.subscribe_snapshot(user_id);
     if let Err(e) = state.quest_service.refresh_user(user_id).await {
         tracing::warn!(error = ?e, "failed to refresh quest snapshot");
@@ -486,6 +493,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_bonsai_decay_protection,
         pet_service: state.pet_service.clone(),
         initial_pet,
+        aquarium_service: state.aquarium_service.clone(),
+        initial_aquarium_last_fed,
         quest_service: state.quest_service.clone(),
         quest_snapshot_rx,
         shop_service: state.shop_service.clone(),

@@ -859,8 +859,6 @@ impl App {
                 .set_chat_badge(self.user_id, equipped_badge.as_deref());
             self.aquarium_state
                 .set_active_creatures(&self.shop_state.active_aquarium_fish());
-            self.aquarium_state
-                .set_hungry(self.shop_state.aquarium_hungry());
             // A Bonsai Decay Shield purchase is picked up here, but the tree
             // has no in-session decay simulation to refresh, so it only
             // matters from the next login's elapsed-day catch-up onward.
@@ -880,20 +878,17 @@ impl App {
             }
         }
 
-        // Pet: state edges (feedback expiry, roam end, day-rollover mood and
-        // needs flips) always count; the wander/blink/tail animation only
-        // pays frames on ticks where the drawn strip actually differs, and
-        // only while the last frame drew a strip at all (the travel slot is
-        // rewritten every render). Every transition into visibility (screen
-        // switch, settings, entitlements, roam end) dirties a frame through
-        // its own path, which re-records the slot.
+        // Pet: state edges (feedback expiry, the day-rollover mood flip)
+        // always count; the stroll/blink/tail animation only pays frames on
+        // ticks where the drawn box actually differs, and only while the
+        // last frame drew a box at all (the travel slot is rewritten every
+        // render). Every transition into visibility (screen switch,
+        // settings, entitlements) dirties a frame through its own path,
+        // which re-records the slot.
         changed |= self.pet_state.tick(self.marquee_tick);
-        if self.pet_state.roaming_active() {
-            // The full-screen stroll overlay animates continuously.
-            changed |= anim_half;
-        } else if let Some(travel) = self.last_pet_strip_travel.get() {
+        if let Some(travel) = self.last_pet_travel.get() {
             changed |= anim_half
-                && crate::app::pet::ui::strip_frame_changed(
+                && crate::app::pet::ui::frame_changed(
                     self.pet_state.mood(),
                     self.pet_state.animation_ticks(),
                     travel,
@@ -902,6 +897,9 @@ impl App {
         // The aquarium has no clock of its own: one step per quarter edge,
         // and only while the tray is actually on screen (the sim pauses
         // off-screen; the screen switch back forces its catch-up frame).
+        // Hunger is the day's care read fresh each step, so the UTC
+        // rollover sinks the fish without any event.
+        self.aquarium_state.set_hungry(self.aquarium_care.hungry());
         if anim_quarter && self.aquarium_tray_visible() {
             self.aquarium_state.tick();
             changed = true;
@@ -953,6 +951,20 @@ impl App {
                         ));
                         changed = true;
                         None
+                    }
+                    // Same story for the pet and the tank: the DB gate said
+                    // this session's feed was the first of the day.
+                    ActivityKind::PetFed if user_id == self.user_id => {
+                        self.pet_state
+                            .claim_fed_chips(crate::app::pet::svc::FEED_CHIP_BONUS);
+                        changed = true;
+                        None
+                    }
+                    ActivityKind::AquariumFed if user_id == self.user_id => {
+                        Some(crate::app::common::primitives::Banner::success(&format!(
+                            "Fed the tank (+{} chips)",
+                            crate::app::hub::aquarium::svc::FEED_CHIP_BONUS
+                        )))
                     }
                     // Everything else on the global feed is somebody else's
                     // business: this subscription only exists for the friend
@@ -1096,13 +1108,12 @@ impl App {
         }
         // Slower tiers match the frame edges their surfaces paint on. The
         // pet's clocks are wall-synced (PetState::tick takes marquee_tick),
-        // so roaming and the strip ride the half tier they paint on. The
+        // so the pet box rides the half tier it paints on. The
         // bonsai care modal and the profile hero sway on the same edge as
         // the sidebar, which always carries the eq strip and that sway.
         if self.screen == Screen::Clubhouse
             || self.right_sidebar_visible()
-            || self.pet_state.roaming_active()
-            || self.last_pet_strip_travel.get().is_some()
+            || self.last_pet_travel.get().is_some()
             || self.show_bonsai_modal
             || (self.show_profile_modal && self.profile_modal_state.bonsai().is_some())
         {
@@ -1122,9 +1133,10 @@ impl App {
     /// step gate in tick() and the wake cadence, so an aquarium owner
     /// browsing other screens pays no fish frames.
     fn aquarium_tray_visible(&self) -> bool {
-        // The Zen pages draw the tank whenever it is owned, tray setting or not.
+        // The Zen page draws the reef for everyone, owned or not, tray
+        // setting or not: an unowned tank swims empty under a shop caption.
         if self.screen == Screen::Zen {
-            return self.shop_state.entitlements().has_aquarium();
+            return true;
         }
         if !self.show_aquarium_tray || !self.shop_state.entitlements().has_aquarium() {
             return false;

@@ -10,6 +10,8 @@ pub enum ActivityCategory {
     Session,
     Game,
     Bonsai,
+    /// The pet and the aquarium: private daily care, like the bonsai.
+    Companion,
     Quest,
 }
 
@@ -151,6 +153,10 @@ pub enum ActivityKind {
     BonsaiLost {
         survived_days: i32,
     },
+    /// The first pet feeding of the UTC day cleared the DB chip gate.
+    PetFed,
+    /// The first aquarium feeding of the UTC day cleared the DB chip gate.
+    AquariumFed,
 }
 
 impl ActivityKind {
@@ -176,6 +182,7 @@ impl ActivityKind {
             | Self::DailyResult { .. } => ActivityCategory::Game,
             Self::GameScored { .. } => ActivityCategory::Quest,
             Self::BonsaiWatered | Self::BonsaiLost { .. } => ActivityCategory::Bonsai,
+            Self::PetFed | Self::AquariumFed => ActivityCategory::Companion,
         }
     }
 }
@@ -766,6 +773,24 @@ impl ActivityEvent {
             username,
             ActivityKind::BonsaiWatered,
             "watered their bonsai".to_string(),
+        )
+    }
+
+    pub fn pet_fed(user_id: Uuid, username: impl Into<String>) -> Self {
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::PetFed,
+            "fed their pet".to_string(),
+        )
+    }
+
+    pub fn aquarium_fed(user_id: Uuid, username: impl Into<String>) -> Self {
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::AquariumFed,
+            "fed their aquarium".to_string(),
         )
     }
 

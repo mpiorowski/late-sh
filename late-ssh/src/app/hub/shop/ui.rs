@@ -1,6 +1,5 @@
 use late_core::models::marketplace::{
-    AQUARIUM_FOOD_SKU, AQUARIUM_MAX_FISH, BONSAI_CONSUMABLE_ITEM_KIND, CHAT_CONSUMABLE_ITEM_KIND,
-    PET_FOOD_SKU,
+    AQUARIUM_MAX_FISH, BONSAI_CONSUMABLE_ITEM_KIND, CHAT_CONSUMABLE_ITEM_KIND,
 };
 use ratatui::{
     Frame,
@@ -1069,8 +1068,6 @@ fn consumable_action_label(item: &ShopCatalogItem, active: Option<bool>) -> &'st
         "confirm room"
     } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
         "activate now"
-    } else if item.sku == PET_FOOD_SKU || item.sku == AQUARIUM_FOOD_SKU {
-        "buy food"
     } else {
         "buy"
     }
@@ -1079,8 +1076,6 @@ fn consumable_action_label(item: &ShopCatalogItem, active: Option<bool>) -> &'st
 fn consumable_footer_label(item: &ShopCatalogItem) -> &'static str {
     if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
         "activate"
-    } else if item.sku == PET_FOOD_SKU || item.sku == AQUARIUM_FOOD_SKU {
-        "buy food"
     } else {
         "buy"
     }
@@ -1103,9 +1098,8 @@ fn consumable_row_status(item: &ShopCatalogItem, state: &ShopState) -> &'static 
 }
 
 /// True when the Bonsai Decay Shield is currently protecting the user's
-/// bonsai. Purchases of the shield never decrement a per-purchase stock the
-/// way Pet/Aquarium Food does: every purchase collapses into one running
-/// protection window, so this is the only way the shop list row can show
+/// bonsai. Purchases of the shield never decrement a per-purchase stock:
+/// every purchase collapses into one running protection window, so this is the only way the shop list row can show
 /// whether the shield is actually doing anything right now.
 fn bonsai_decay_shield_active(item: &ShopCatalogItem, state: &ShopState) -> bool {
     item.is_bonsai_decay_shield() && state.active_bonsai_decay_protection().is_some()
@@ -1139,10 +1133,6 @@ fn consumable_use_hint(item: &ShopCatalogItem) -> &'static str {
         "Enter activates it on the selected chat room"
     } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
         "Enter activates it immediately"
-    } else if item.sku == AQUARIUM_FOOD_SKU {
-        "/aquarium opens the tray; /aquarium feed spends one"
-    } else if item.sku == PET_FOOD_SKU {
-        "/pet feed spends one and sends the pet strolling"
     } else {
         "Enter buys one"
     }

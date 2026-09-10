@@ -273,7 +273,10 @@ async fn main() -> anyhow::Result<()> {
     );
     let bonsai_service =
         late_ssh::app::bonsai::svc::BonsaiService::new(db.clone(), activity_tx.clone());
-    let pet_service = late_ssh::app::pet::svc::PetService::new(db.clone());
+    let pet_service =
+        late_ssh::app::pet::svc::PetService::new(db.clone(), activity_tx.clone());
+    let aquarium_service =
+        late_ssh::app::AquariumService::new(db.clone(), activity_tx.clone());
     let initial_dartboard = match late_ssh::dartboard::load_persisted_artboard(&db).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -425,6 +428,7 @@ async fn main() -> anyhow::Result<()> {
         daily_service,
         bonsai_service,
         pet_service,
+        aquarium_service,
         nonogram_library,
         chip_service,
         house_registry,

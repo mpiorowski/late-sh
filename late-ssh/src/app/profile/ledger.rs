@@ -186,6 +186,8 @@ const fn pointer(mv: ChipMove) -> Pointer {
         | ChipMove::PokerBet
         | ChipMove::PokerPayout
         | ChipMove::BonsaiWatered
+        | ChipMove::PetFed
+        | ChipMove::AquariumFed
         | ChipMove::FloorRestore
         | ChipMove::InitialBalance
         | ChipMove::SsnakeArenaEarned

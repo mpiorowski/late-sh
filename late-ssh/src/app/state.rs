@@ -265,6 +265,9 @@ pub struct SessionConfig {
         Option<late_core::models::bonsai_decay_protection::BonsaiDecayProtection>,
     pub pet_service: crate::app::pet::svc::PetService,
     pub initial_pet: Option<late_core::models::pet::PetCompanion>,
+    pub aquarium_service: crate::app::hub::aquarium::svc::AquariumService,
+    /// When the account last fed its tank; `None` for a tank never fed.
+    pub initial_aquarium_last_fed: Option<chrono::DateTime<chrono::Utc>>,
     pub quest_service: crate::app::hub::dailies::svc::QuestService,
     pub quest_snapshot_rx:
         tokio::sync::watch::Receiver<crate::app::hub::dailies::svc::QuestSnapshot>,
@@ -492,8 +495,13 @@ pub struct App {
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState,
     pub(crate) aquarium_state: hub::aquarium::state::AquariumState,
-    /// The Zen pages (`7` the Room, `8` Rice): the tiling layout and its focus.
+    /// The owner's daily feeding of the tank; hunger is read off it.
+    pub(crate) aquarium_care: hub::aquarium::state::AquariumCare,
+    pub(crate) aquarium_service: hub::aquarium::svc::AquariumService,
+    /// Zen (`Ctrl+F`): the tiling layout and its focus.
     pub(crate) zen: crate::app::zen::state::ZenState,
+    /// Where `Ctrl+F` was pressed, so Esc or the chord hands the page back.
+    pub(crate) zen_return_screen: Option<Screen>,
     pub(crate) mod_modal_state: mod_modal::state::ModModalState,
     pub(crate) pending_escape: bool,
     pub(crate) pending_escape_started_at: Option<Instant>,
@@ -582,14 +590,13 @@ pub struct App {
     /// friend-online banner; the feed itself now ships to #lounge (see
     /// `activity/lounge.rs`) and has no per-session buffer.
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
-    /// Pet-strip click targets from the last frame: the pet itself (treat),
-    /// the food bowl (feed), and the water bowl (water). Reset each frame.
-    pub(crate) last_pet_strip_pet_rect: std::cell::Cell<Option<Rect>>,
-    pub(crate) last_pet_strip_food_rect: std::cell::Cell<Option<Rect>>,
-    pub(crate) last_pet_strip_water_rect: std::cell::Cell<Option<Rect>>,
-    /// Wander travel width of the pet strip drawn last frame; `None` when the
-    /// strip was not drawn. Gates the strip animation's frame cost in tick.
-    pub(crate) last_pet_strip_travel: std::cell::Cell<Option<usize>>,
+    /// Pet box click targets from the last frame: the pet itself and the
+    /// bowl, both of which feed. Reset each frame.
+    pub(crate) last_pet_rect: std::cell::Cell<Option<Rect>>,
+    pub(crate) last_pet_bowl_rect: std::cell::Cell<Option<Rect>>,
+    /// How far the pet could roam in the box drawn last frame; `None` when
+    /// no box was drawn. Gates the pet animation's frame cost in tick.
+    pub(crate) last_pet_travel: std::cell::Cell<Option<crate::app::pet::ui::PetTravel>>,
     /// Where the top-border "N unread mentions" text was drawn last frame,
     /// for the HUD click hit test; `None` when nothing is unread. Only the
     /// mentions segment is clickable, not the voice/chips text after it.
@@ -1276,7 +1283,9 @@ impl App {
         let mut aquarium_state =
             crate::app::hub::aquarium::state::AquariumState::default_for_area(aquarium_area)?;
         aquarium_state.set_active_creatures(&shop_state.active_aquarium_fish());
-        aquarium_state.set_hungry(shop_state.aquarium_hungry());
+        let aquarium_care =
+            crate::app::hub::aquarium::state::AquariumCare::new(config.initial_aquarium_last_fed);
+        aquarium_state.set_hungry(aquarium_care.hungry());
 
         let active_users = config.active_users.clone();
         let afk_users = config.afk_users.clone();
@@ -1351,9 +1360,12 @@ impl App {
             help_modal_state: help_modal::state::HelpModalState::new(),
             leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState::new(),
             aquarium_state,
+            aquarium_care,
+            aquarium_service: config.aquarium_service,
             zen: crate::app::zen::state::ZenState::new(
                 crate::app::zen::state::RiceLayout::from_json(config.zen_layout.as_ref()),
             ),
+            zen_return_screen: None,
             mod_modal_state: mod_modal::state::ModModalState::new(),
             pending_escape: false,
             pending_escape_started_at: None,
@@ -1415,10 +1427,9 @@ impl App {
             afk_users: afk_users.clone(),
             username_directory: config.username_directory,
             activity_feed_rx: config.activity_feed_rx,
-            last_pet_strip_pet_rect: std::cell::Cell::new(None),
-            last_pet_strip_food_rect: std::cell::Cell::new(None),
-            last_pet_strip_water_rect: std::cell::Cell::new(None),
-            last_pet_strip_travel: std::cell::Cell::new(None),
+            last_pet_rect: std::cell::Cell::new(None),
+            last_pet_bowl_rect: std::cell::Cell::new(None),
+            last_pet_travel: std::cell::Cell::new(None),
             last_mentions_hud_rect: std::cell::Cell::new(None),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             voice: crate::app::voice::state::VoiceState::new(config.voice_service),
@@ -2638,9 +2649,6 @@ impl App {
         let (cols, rows) = self.size;
         let full = Rect::new(0, 0, cols, rows);
         match self.screen {
-            Screen::Zen if self.zen.mode == crate::app::zen::state::ZenMode::Room => {
-                crate::app::zen::room::TANK_WATER
-            }
             Screen::Zen => {
                 let (tiles, _) = zen_layout::rice_areas(full);
                 let zoomed = self.zen.zoomed.then_some(self.zen.focus);

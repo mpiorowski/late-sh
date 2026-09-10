@@ -28,6 +28,9 @@ const CTRL_L: u8 = 0x0C;
 const CTRL_O: u8 = 0x0F;
 const CTRL_T: u8 = 0x14;
 const CTRL_V: u8 = 0x16;
+/// Zen: the one page that is a chord, not a tab, so it is reachable from
+/// anywhere and hands you back where you were.
+const CTRL_F: u8 = 0x06;
 
 #[derive(Clone, Copy)]
 struct InputContext {
@@ -2299,6 +2302,22 @@ fn dispatch_escape(app: &mut App) {
     // editor's own `EditOutcome::Cancel`: a lone Esc never reaches the keymap,
     // it is held as `pending_escape` and lands here via `flush_pending_escape`.
     // The keymap only sees Esc when it arrives mid-chunk with other bytes.
+    // Esc on Zen peels a selected message first, then hands the page back
+    // to wherever Ctrl+F was pressed.
+    if ctx.screen == Screen::Zen {
+        if app.chat.composing {
+            app.chat.reset_composer();
+            return;
+        }
+        if let Some(room_id) = app.zen_chat_room_id()
+            && app.chat.selected_message_body_in_room(room_id).is_some()
+        {
+            app.chat.clear_message_selection();
+            return;
+        }
+        close_zen(app);
+        return;
+    }
     if ctx.screen == Screen::Scratchpad {
         app.set_screen(Screen::Dashboard);
         return;
@@ -2565,7 +2584,6 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
         20 => Some(Screen::Artboard),
         22 => Some(Screen::Profiles),
         24 => Some(Screen::Leaderboard),
-        26 => Some(Screen::Zen),
         _ => None,
     }
 }
@@ -2672,29 +2690,22 @@ fn handle_mouse_scroll_over_screen(
     true
 }
 
-/// Left-clicks on the pet strip's render-recorded targets: the food bowl and
-/// the pet itself both feed, the water bowl waters. The rects are only set on
-/// frames where the strip drew, so this is a no-op wherever the strip is
-/// hidden.
+/// Left-clicks on the pet box's render-recorded targets: the bowl and the
+/// pet itself both feed. The rects are only set on frames where the box
+/// drew, so this is a no-op wherever the box is hidden.
 fn handle_pet_strip_click(app: &mut App, x: u16, y: u16) -> bool {
-    // The strip renders under the global modals; don't let clicks on a
+    // The box renders under the global modals; don't let clicks on a
     // modal that happens to overlap it fall through to the pet.
     if chat_scroll_clicks_blocked(app) {
         return false;
     }
-    if let Some(rect) = app.last_pet_strip_food_rect.get()
+    if let Some(rect) = app.last_pet_bowl_rect.get()
         && rect_contains(rect, x, y)
     {
         pet_feed_globally(app);
         return true;
     }
-    if let Some(rect) = app.last_pet_strip_water_rect.get()
-        && rect_contains(rect, x, y)
-    {
-        pet_water_globally(app);
-        return true;
-    }
-    if let Some(rect) = app.last_pet_strip_pet_rect.get()
+    if let Some(rect) = app.last_pet_rect.get()
         && rect_contains(rect, x, y)
     {
         pet_feed_globally(app);
@@ -3411,8 +3422,8 @@ pub(crate) fn toggle_aquarium_tray_globally(app: &mut App) {
     ));
 }
 
-/// Shared entitlement gate for the pet actions (/pet feed, /pet water and
-/// the pet-strip clicks). Shows the shop nudge and returns false when the
+/// Shared entitlement gate for the pet actions (/pet feed and the pet box
+/// clicks). Shows the shop nudge and returns false when the
 /// pet companion is not unlocked.
 fn pet_available_or_nudge(app: &mut App) -> bool {
     if app.shop_state.entitlements().has_pet_companion() {
@@ -3430,9 +3441,6 @@ pub(crate) fn toggle_pet_strip_globally(app: &mut App) {
         return;
     }
     let shown = app.profile_state.toggle_show_pet_strip();
-    if !shown {
-        app.pet_state.end_roam();
-    }
     app.banner = Some(crate::app::common::primitives::Banner::success(if shown {
         "Pet strip shown"
     } else {
@@ -3440,25 +3448,18 @@ pub(crate) fn toggle_pet_strip_globally(app: &mut App) {
     }));
 }
 
-/// A meal costs one pet food, so an empty pantry opens the Shop rather than
-/// leaving the user staring at a `?` bowl. The strip carries the message in
-/// every case; the modal is the nudge for the one case they can act on.
+/// The day's free meal. The box carries the outcome ("fed!", "already fed
+/// today"); the chips note follows when the service's event comes back.
 pub(crate) fn pet_feed_globally(app: &mut App) {
     if !pet_available_or_nudge(app) {
         return;
     }
-    let outcome = app.pet_state.feed(app.shop_state.pet_food_quantity());
-    if outcome == crate::app::pet::state::FeedOutcome::OutOfFood {
-        open_shop_modal_globally(app);
-    }
+    app.pet_state.feed();
 }
 
-pub(crate) fn pet_water_globally(app: &mut App) {
-    if pet_available_or_nudge(app) {
-        app.pet_state.water();
-    }
-}
-
+/// The tank's free daily meal, from any surface that shows it. Ownership is
+/// the only gate: the flakes are the immediate feedback, the chips banner
+/// follows when the service's event comes back.
 pub(crate) fn feed_aquarium_globally(app: &mut App) {
     clear_prefix_arms(app);
     if !app.shop_state.entitlements().has_aquarium() {
@@ -3467,16 +3468,17 @@ pub(crate) fn feed_aquarium_globally(app: &mut App) {
         ));
         return;
     }
-    if !app.show_aquarium_tray {
-        app.banner = Some(crate::app::common::primitives::Banner::error(
-            "Open the aquarium first (/aquarium)",
-        ));
-        return;
+    match app.aquarium_care.feed() {
+        crate::app::hub::aquarium::state::CareOutcome::Fed => {
+            app.aquarium_state.feed();
+            app.aquarium_service.feed_task(app.user_id);
+        }
+        crate::app::hub::aquarium::state::CareOutcome::AlreadyFedToday => {
+            app.banner = Some(crate::app::common::primitives::Banner::error(
+                "The tank already ate today",
+            ));
+        }
     }
-    if app.shop_state.aquarium_food_quantity() > 0 {
-        app.aquarium_state.feed();
-    }
-    app.banner = Some(app.shop_state.use_aquarium_food());
 }
 
 fn open_bonsai_modal_globally(app: &mut App) {
@@ -3618,8 +3620,49 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
             }
             true
         }
+        CTRL_F => {
+            toggle_zen_globally(app);
+            true
+        }
         _ => false,
     }
+}
+
+/// Zen is a surface, not a place in the tab order: the chord opens it over
+/// whatever page is up and the same chord (or Esc) returns there.
+pub(crate) fn toggle_zen_globally(app: &mut App) {
+    if app.screen == Screen::Zen {
+        close_zen(app);
+    } else {
+        open_zen_globally(app);
+    }
+}
+
+fn open_zen_globally(app: &mut App) {
+    clear_prefix_arms(app);
+    app.show_help = false;
+    app.show_mod_modal = false;
+    app.show_hub_modal = false;
+    app.show_profile_modal = false;
+    app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
+    app.show_gild_modal = false;
+    app.gild_modal_state.close();
+    app.show_bonsai_modal = false;
+    app.show_settings = false;
+    app.show_lobby_modal = false;
+    app.zen_return_screen = Some(app.screen);
+    reset_composers_for_page_change(app);
+    app.set_screen(Screen::Zen);
+    app.chat.clear_message_selection();
+}
+
+pub(crate) fn close_zen(app: &mut App) {
+    let back = app.zen_return_screen.take().unwrap_or(Screen::Dashboard);
+    reset_composers_for_page_change(app);
+    app.set_screen(back);
+    app.chat.clear_message_selection();
 }
 
 fn handle_voice_global_chord(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
@@ -3879,11 +3922,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         b'0' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Clubhouse);
-            true
-        }
-        b'7' if !artboard_blocks_page_switch => {
-            reset_composers_for_page_change(app);
-            app.set_screen(Screen::Zen);
             true
         }
         b'\t' if artboard_rail_takes_tab(app, ctx.screen) => {

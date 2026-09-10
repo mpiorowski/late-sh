@@ -257,7 +257,6 @@ struct DrawContext<'a> {
     paired_client: Option<&'a ClientAudioState>,
     sidebar_clock: &'a str,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
-    cat: &'a crate::app::pet::state::PetState,
     banner: Option<&'a Banner>,
     is_admin: bool,
     is_moderator: bool,
@@ -360,9 +359,7 @@ struct DrawContext<'a> {
     zen_room_label: &'a str,
     zen_track: String,
     zen_date: String,
-    zen_pet_strip: Option<crate::app::pet::ui::PetStripView<'a>>,
-    zen_messages: &'a [late_core::models::chat_message::ChatMessage],
-    zen_composer: Option<chat::ui::ComposerBlockView<'a>>,
+    zen_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
 }
 
 impl App {
@@ -379,10 +376,9 @@ impl App {
         let greendragon_live = HubGame::GreenDragon.live_screen(self).is_some();
         // Clear last-frame mouse hit-test rects so screens that don't draw
         // them this frame can't leave a stale target behind.
-        self.last_pet_strip_pet_rect.set(None);
-        self.last_pet_strip_food_rect.set(None);
-        self.last_pet_strip_water_rect.set(None);
-        self.last_pet_strip_travel.set(None);
+        self.last_pet_rect.set(None);
+        self.last_pet_bowl_rect.set(None);
+        self.last_pet_travel.set(None);
         self.chat.last_composer_rect.set(None);
         // `last_composer_viewport_top` is intentionally NOT reset here: it
         // replays ratatui-textarea's minimal-scroll rule, which needs the
@@ -601,13 +597,11 @@ impl App {
             .as_ref()
             .map(|timer| timer.badge(chrono::Utc::now()));
         let dashboard_view = chat::ui::DashboardChatView {
-            pet_strip: pet_strip_enabled.then(|| crate::app::pet::ui::PetStripView {
+            pet_strip: pet_strip_enabled.then(|| crate::app::pet::ui::PetView {
                 state: &self.pet_state,
-                pet_food_quantity: self.shop_state.pet_food_quantity(),
-                pet_rect_slot: Some(&self.last_pet_strip_pet_rect),
-                food_bowl_rect_slot: Some(&self.last_pet_strip_food_rect),
-                water_bowl_rect_slot: Some(&self.last_pet_strip_water_rect),
-                travel_slot: Some(&self.last_pet_strip_travel),
+                pet_rect_slot: Some(&self.last_pet_rect),
+                bowl_rect_slot: Some(&self.last_pet_bowl_rect),
+                travel_slot: Some(&self.last_pet_travel),
             }),
             activity_ticker: self.chat.activity_ticker(),
             room: dashboard_room,
@@ -1044,31 +1038,12 @@ impl App {
             radio_now_playing.as_deref(),
         );
         let zen_date = zen_date_text(self.profile_state.profile().timezone.as_deref());
-        let zen_messages: &[late_core::models::chat_message::ChatMessage] = zen_room_id
-            .map(|room_id| self.chat.messages_for_room(room_id))
-            .unwrap_or(&[]);
-        let zen_composer = zen_room_id.map(|_| chat::ui::ComposerBlockView {
-            composer: self.chat.composer(),
-            composing: self.chat.composing,
-            selected_message: false,
-            selected_image_message: false,
-            selected_news_message: false,
-            reaction_picker_active: false,
-            reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
-            is_editing: self.chat.edited_message_id.is_some(),
-            mention_active: self.chat.mention_ac.active,
-            mention_matches: &self.chat.mention_ac.matches,
-            mention_selected: self.chat.mention_ac.selected,
-            keep_composer_focused: self.profile_state.profile().keep_composer_focused,
-        });
         let zen_pet_strip = self.shop_state.entitlements().has_pet_companion().then(|| {
-            crate::app::pet::ui::PetStripView {
+            crate::app::pet::ui::PetView {
                 state: &self.pet_state,
-                pet_food_quantity: self.shop_state.pet_food_quantity(),
-                pet_rect_slot: Some(&self.last_pet_strip_pet_rect),
-                food_bowl_rect_slot: Some(&self.last_pet_strip_food_rect),
-                water_bowl_rect_slot: Some(&self.last_pet_strip_water_rect),
-                travel_slot: Some(&self.last_pet_strip_travel),
+                pet_rect_slot: Some(&self.last_pet_rect),
+                bowl_rect_slot: Some(&self.last_pet_bowl_rect),
+                travel_slot: Some(&self.last_pet_travel),
             }
         });
         // The clubhouse has no chat panel: #lounge messages float over their
@@ -1271,7 +1246,6 @@ impl App {
                         paired_client: paired_client.as_ref(),
                         sidebar_clock: &sidebar_clock,
                         bonsai: &self.bonsai_state,
-                        cat: &self.pet_state,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
                         is_moderator: self.is_moderator,
@@ -1367,8 +1341,6 @@ impl App {
                         zen_track,
                         zen_date,
                         zen_pet_strip,
-                        zen_messages,
-                        zen_composer,
                     },
                     &mut terminal_image_frame,
                 );
@@ -1849,20 +1821,9 @@ impl App {
                 let view = crate::app::zen::ui::ZenView {
                     zen: ctx.zen,
                     bonsai: ctx.bonsai,
-                    aquarium: ctx
-                        .shop_state
-                        .entitlements()
-                        .has_aquarium()
-                        .then_some(ctx.aquarium_state),
+                    aquarium: ctx.aquarium_state,
+                    aquarium_owned: ctx.shop_state.entitlements().has_aquarium(),
                     pet_strip: ctx.zen_pet_strip.take(),
-                    pet: ctx
-                        .shop_state
-                        .entitlements()
-                        .has_pet_companion()
-                        .then_some(ctx.cat),
-                    messages: ctx.zen_messages,
-                    usernames: ctx.usernames,
-                    composer: ctx.zen_composer.take(),
                     chat: ctx.zen_chat_view.take(),
                     room_label: ctx.zen_room_label.to_string(),
                     track: ctx.zen_track.clone(),
@@ -1882,13 +1843,11 @@ impl App {
                     friends: ctx.active_friend_names,
                     afk: ctx.afk,
                     mentions_unread: ctx.mentions_unread_count,
+                    daily: ctx.daily,
+                    lobby_glow: ctx.lobby.glow(),
                     wall_tick: ctx.marquee_tick,
                 };
-                if ctx.zen.mode == crate::app::zen::state::ZenMode::Room {
-                    crate::app::zen::room::draw(frame, content_area, view);
-                } else {
-                    crate::app::zen::ui::draw_rice(frame, content_area, view, terminal_images);
-                }
+                crate::app::zen::ui::draw_rice(frame, content_area, view, terminal_images);
             }
             Screen::DailyMatch => crate::app::lobby::daily::board_ui::draw(
                 frame,
@@ -1993,8 +1952,6 @@ impl App {
             frame.render_widget(notif_block, toast_area);
             draw_banner(frame, notif_inner, &banner);
         }
-
-        crate::app::pet::ui::draw_roaming_pet(frame, inner, ctx.cat);
 
         if ctx.show_settings {
             settings_modal::ui::draw(frame, inner, ctx.settings_modal_state);
@@ -2232,7 +2189,6 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Artboard, "4"),
         (Screen::Profiles, "5"),
         (Screen::Leaderboard, "6"),
-        (Screen::Zen, "7"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -2656,6 +2612,7 @@ fn app_frame_help_hint_title(hint_style: HelpHintStyle) -> Line<'static> {
     let hints = [
         ("Settings", ctrl_hint("O", use_caret)),
         ("Lobby", ctrl_hint("G", use_caret)),
+        ("Zen", ctrl_hint("F", use_caret)),
         ("Shop", "/shop"),
         ("Guide", "?"),
         ("Exit", "qq"),
@@ -2679,8 +2636,10 @@ fn ctrl_hint(key: &'static str, use_caret: bool) -> &'static str {
     match (use_caret, key) {
         (true, "O") => "^O",
         (true, "G") => "^G",
+        (true, "F") => "^F",
         (false, "O") => "Ctrl+O",
         (false, "G") => "Ctrl+G",
+        (false, "F") => "Ctrl+F",
         _ => key,
     }
 }

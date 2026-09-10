@@ -815,6 +815,14 @@ impl russh::server::Handler for ClientHandler {
                 None
             }
         };
+        let initial_aquarium_last_fed =
+            match self.state.aquarium_service.last_fed(user_id).await {
+                Ok(last_fed) => last_fed,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load aquarium care");
+                    None
+                }
+            };
 
         // Ensure the user's chip balance row exists.
         let initial_chip_balance = match self.state.chip_service.ensure_chips(user_id).await {
@@ -958,6 +966,8 @@ impl russh::server::Handler for ClientHandler {
             initial_bonsai_decay_protection,
             pet_service: self.state.pet_service.clone(),
             initial_pet,
+            aquarium_service: self.state.aquarium_service.clone(),
+            initial_aquarium_last_fed,
             quest_service: self.state.quest_service.clone(),
             quest_snapshot_rx,
             shop_service: self.state.shop_service.clone(),

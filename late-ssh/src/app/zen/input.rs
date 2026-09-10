@@ -5,36 +5,25 @@
 
 use uuid::Uuid;
 
-use super::state::{Dir, TileKind, ZenMode};
+use super::state::{Dir, TileKind};
 use crate::app::{
-    chat::state::RoomSlot,
-    common::primitives::Banner,
-    input::{MouseEventKind, ParsedInput},
-    state::App,
+    chat::state::RoomSlot, common::primitives::Banner, input::ParsedInput, state::App,
 };
 
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     if handle_common(app, event) {
         return true;
     }
-    match app.zen.mode {
-        ZenMode::Room => handle_room(app, event),
-        ZenMode::Rice => handle_rice(app, event),
-    }
+    handle_rice(app, event)
 }
 
-/// Compose, the room walk, the face toggle, and the care keys: bonsai
+/// Compose, the room walk, and the care keys: bonsai
 /// `w x p s n N`, pet `f d`, tank `a`.
 fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
     let Some(byte) = event_byte(event) else {
         return false;
     };
     match byte {
-        b'o' => {
-            app.zen.toggle_mode();
-            app.sync_aquarium_bounds();
-            true
-        }
         b'[' => {
             cycle_room(app, -1);
             true
@@ -77,49 +66,10 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
             crate::app::input::pet_feed_globally(app);
             true
         }
-        b'd' => {
-            crate::app::input::pet_water_globally(app);
-            true
-        }
         b'a' => {
-            feed_aquarium(app);
+            crate::app::input::feed_aquarium_globally(app);
             true
         }
-        _ => false,
-    }
-}
-
-/// The Room: arrows and hjkl steer the selected branch, the wheel walks
-/// the selection. Nothing else to move here.
-fn handle_room(app: &mut App, event: &ParsedInput) -> bool {
-    match event {
-        ParsedInput::Arrow(b'D') | ParsedInput::Byte(b'h') | ParsedInput::Char('h') => {
-            app.bonsai_state.bend_selected(-1, 0);
-            true
-        }
-        ParsedInput::Arrow(b'C') | ParsedInput::Byte(b'l') | ParsedInput::Char('l') => {
-            app.bonsai_state.bend_selected(1, 0);
-            true
-        }
-        ParsedInput::Arrow(b'A') | ParsedInput::Byte(b'k') | ParsedInput::Char('k') => {
-            app.bonsai_state.bend_selected(0, 1);
-            true
-        }
-        ParsedInput::Arrow(b'B') | ParsedInput::Byte(b'j') | ParsedInput::Char('j') => {
-            app.bonsai_state.bend_selected(0, -1);
-            true
-        }
-        ParsedInput::Mouse(mouse) => match mouse.kind {
-            MouseEventKind::ScrollUp => {
-                app.bonsai_state.cycle_selection(-1);
-                true
-            }
-            MouseEventKind::ScrollDown => {
-                app.bonsai_state.cycle_selection(1);
-                true
-            }
-            _ => false,
-        },
         _ => false,
     }
 }
@@ -171,10 +121,10 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
             }
             app.zen.close_focused()
         }
-        b'<' | b',' => resize_or_explain(app, Dir::Row, -5),
-        b'>' | b'.' => resize_or_explain(app, Dir::Row, 5),
-        b'{' => resize_or_explain(app, Dir::Column, -5),
-        b'}' => resize_or_explain(app, Dir::Column, 5),
+        b'<' | b',' => resize_or_explain(app, Dir::Row, -1),
+        b'>' | b'.' => resize_or_explain(app, Dir::Row, 1),
+        b'{' => resize_or_explain(app, Dir::Column, -1),
+        b'}' => resize_or_explain(app, Dir::Column, 1),
         b'r' => app.zen.flip_focused(),
         b'z' => {
             app.zen.toggle_zoom();
@@ -207,10 +157,13 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
     true
 }
 
-/// Resize along `dir`, or say why nothing moved: a tile with no split of
-/// that direction above it has nothing to trade.
-fn resize_or_explain(app: &mut App, dir: Dir, delta: i8) -> bool {
-    if app.zen.resize_focused(dir, delta) {
+/// Move the focused tile's edge by `delta_cells` along `dir`, or say why
+/// nothing moved: a tile with no split of that direction above it has
+/// nothing to trade.
+fn resize_or_explain(app: &mut App, dir: Dir, delta_cells: i16) -> bool {
+    let (cols, rows) = app.size;
+    let (tiles_area, _) = super::layout::rice_areas(ratatui::layout::Rect::new(0, 0, cols, rows));
+    if app.zen.resize_focused(dir, delta_cells, tiles_area) {
         return true;
     }
     let axis = match dir {
@@ -263,19 +216,6 @@ fn water_bonsai(app: &mut App) {
         return;
     }
     app.bonsai_state.water();
-}
-
-/// Feeding the tank from a Zen page: the tank is on screen here whether or
-/// not the Lounge tray is open, so only ownership and food gate it.
-fn feed_aquarium(app: &mut App) {
-    if !app.shop_state.entitlements().has_aquarium() {
-        app.banner = Some(Banner::error("Unlock Aquarium in Hub Shop"));
-        return;
-    }
-    if app.shop_state.aquarium_food_quantity() > 0 {
-        app.aquarium_state.feed();
-    }
-    app.banner = Some(app.shop_state.use_aquarium_food());
 }
 
 fn event_byte(event: &ParsedInput) -> Option<u8> {

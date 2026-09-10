@@ -5,10 +5,10 @@ use crate::{
             AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
             BONSAI_DECAY_PROTECTION_KIND, BONSAI_DECAY_SHIELD_SKU, CHAT_BADGE_SLOT,
             CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT, COMPANION_CONSUMABLE_ITEM_KIND,
-            ConsumableUseStatus, FishActiveStatus, MarketplaceItem, PET_COMPANION_SKU,
+            FishActiveStatus, MarketplaceItem, PET_COMPANION_SKU,
             PurchaseStatus, THEMATRIX_ULTIMATE_SKU, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND,
             UserPurchase, WONDERLAND_ULTIMATE_SKU, adjust_aquarium_fish_active_by_sku,
-            aquarium_is_hungry, consume_aquarium_food_pinch, purchase_durable_item_by_sku,
+            purchase_durable_item_by_sku,
             purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_custom_title,
             purchase_item_by_sku_with_username_effect, rental_duration_secs,
         },
@@ -41,7 +41,6 @@ const AQUARIUM_BIGBERT_PRICE: i64 = 10_000;
 /// ever sold, and the burn milestones ladder up to half of the new ceiling.
 const ULTIMATE_SPELL_PRICE: i64 = 1_000_000;
 const ROOM_SPARK_PRICE: i64 = 2_000;
-const AQUARIUM_FOOD_PRICE: i64 = 100;
 const BADGE_RENTAL_DAY_PRICE: i64 = 100;
 const BADGE_RENTAL_MONTH_PRICE: i64 = 3_000;
 const CUSTOM_TITLE_DAY_PRICE: i64 = 1_000;
@@ -141,7 +140,7 @@ async fn seeded_catalog_rents_every_badge_and_flag_and_retires_the_permanent_sku
 }
 
 #[tokio::test]
-async fn seeded_catalog_contains_chat_and_companion_consumables() {
+async fn seeded_catalog_contains_chat_consumables_and_retired_the_food() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
@@ -152,26 +151,30 @@ async fn seeded_catalog_contains_chat_and_companion_consumables() {
         .iter()
         .find(|item| item.sku == "chat_room_spark")
         .expect("room spark item");
-    let pet_food = items
-        .iter()
-        .find(|item| item.sku == "pet_food")
-        .expect("pet food item");
-    let aquarium_food = items
-        .iter()
-        .find(|item| item.sku == "aquarium_food")
-        .expect("aquarium food item");
-
     assert_eq!(room_spark.item_kind, CHAT_CONSUMABLE_ITEM_KIND);
     assert_eq!(room_spark.price_chips, ROOM_SPARK_PRICE);
     assert_eq!(room_spark.payload["effect_kind"], "room_spark");
     assert_eq!(room_spark.payload["daily_limit"], true);
-    assert_eq!(pet_food.item_kind, COMPANION_CONSUMABLE_ITEM_KIND);
-    assert_eq!(pet_food.name, "Cat/Dog Food");
-    assert_eq!(pet_food.price_chips, 150);
-    assert_eq!(pet_food.payload["effect_kind"], "pet_food");
-    assert_eq!(aquarium_food.item_kind, COMPANION_CONSUMABLE_ITEM_KIND);
-    assert_eq!(aquarium_food.price_chips, AQUARIUM_FOOD_PRICE);
-    assert_eq!(aquarium_food.payload["effect_kind"], "aquarium_food");
+
+    // Care is free and daily now (migration 178): the food rows stay for
+    // purchase history but nothing on sale is a companion consumable.
+    assert!(
+        items
+            .iter()
+            .all(|item| item.item_kind != COMPANION_CONSUMABLE_ITEM_KIND),
+        "no companion consumable is on sale"
+    );
+    let retired: Vec<bool> = client
+        .query(
+            "SELECT active FROM marketplace_items WHERE sku IN ('pet_food', 'aquarium_food') ORDER BY sku",
+            &[],
+        )
+        .await
+        .expect("food rows")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(retired, vec![false, false]);
 }
 
 #[tokio::test]
@@ -212,7 +215,7 @@ async fn hack_room_is_retired_and_room_bump_leads_the_chat_consumables() {
 }
 
 #[tokio::test]
-async fn companion_shop_items_are_ordered_by_care_flow() {
+async fn companion_shop_items_are_the_two_unlocks() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
@@ -221,90 +224,11 @@ async fn companion_shop_items_are_ordered_by_care_flow() {
         .expect("list items");
     let companion_skus = items
         .iter()
-        .filter(|item| {
-            matches!(
-                item.sku.as_str(),
-                PET_COMPANION_SKU | "pet_food" | AQUARIUM_SKU | "aquarium_food"
-            )
-        })
+        .filter(|item| matches!(item.sku.as_str(), PET_COMPANION_SKU | AQUARIUM_SKU))
         .map(|item| item.sku.as_str())
         .collect::<Vec<_>>();
 
-    assert_eq!(
-        companion_skus,
-        vec![PET_COMPANION_SKU, "pet_food", AQUARIUM_SKU, "aquarium_food",]
-    );
-}
-
-#[tokio::test]
-async fn aquarium_food_purchase_can_be_consumed_from_inventory() {
-    let test_db = test_db().await;
-    let user = create_test_user(&test_db.db, "aquarium-food-use").await;
-    let mut client = test_db.db.get().await.expect("db client");
-    UserChips::admin_grant(&**client, user.id, AQUARIUM_PRICE + AQUARIUM_FOOD_PRICE)
-        .await
-        .expect("fund chips");
-
-    assert!(
-        !aquarium_is_hungry(&client, user.id)
-            .await
-            .expect("hunger without aquarium")
-    );
-
-    purchase_durable_item_by_sku(&mut client, user.id, AQUARIUM_SKU)
-        .await
-        .expect("purchase aquarium")
-        .expect("aquarium item");
-    assert!(
-        aquarium_is_hungry(&client, user.id)
-            .await
-            .expect("fresh aquarium hunger")
-    );
-
-    client
-        .execute(
-            "INSERT INTO user_aquarium_care (user_id, last_fed)
-             VALUES ($1, current_timestamp - interval '25 hours')
-             ON CONFLICT (user_id) DO UPDATE
-             SET last_fed = EXCLUDED.last_fed,
-                 updated = current_timestamp",
-            &[&user.id],
-        )
-        .await
-        .expect("age aquarium feed");
-    assert!(
-        aquarium_is_hungry(&client, user.id)
-            .await
-            .expect("aged aquarium hunger")
-    );
-
-    let out_of_stock = consume_aquarium_food_pinch(&mut client, user.id)
-        .await
-        .expect("consume before purchase");
-    assert_eq!(out_of_stock.status, ConsumableUseStatus::OutOfStock);
-
-    let purchase = purchase_durable_item_by_sku(&mut client, user.id, "aquarium_food")
-        .await
-        .expect("purchase food")
-        .expect("aquarium food item");
-    assert_eq!(purchase.status, PurchaseStatus::Purchased);
-    assert_eq!(purchase.quantity, 1);
-
-    let used = consume_aquarium_food_pinch(&mut client, user.id)
-        .await
-        .expect("consume food");
-    assert_eq!(used.status, ConsumableUseStatus::Used);
-    assert_eq!(used.quantity_remaining, 0);
-    assert!(
-        !aquarium_is_hungry(&client, user.id)
-            .await
-            .expect("fed aquarium hunger")
-    );
-
-    let empty = consume_aquarium_food_pinch(&mut client, user.id)
-        .await
-        .expect("consume after empty");
-    assert_eq!(empty.status, ConsumableUseStatus::OutOfStock);
+    assert_eq!(companion_skus, vec![PET_COMPANION_SKU, AQUARIUM_SKU]);
 }
 
 #[tokio::test]

@@ -22,32 +22,24 @@ use crate::app::{
         render::{PREVIEW_WIDTH, apply_sway, canvas_lines, center_lines, render_preview_lines},
         state::{BonsaiState, CANVAS_HEIGHT, CANVAS_WIDTH},
     },
-    chat::ui::{ComposerBlockView, EmbeddedRoomChatView, draw_embedded_room_chat},
+    chat::ui::{EmbeddedRoomChatView, draw_embedded_room_chat},
     common::{primitives::hint_line, theme},
     files::terminal_image::TerminalImageFrame,
     hub::aquarium::state::AquariumState,
-    pet::{
-        state::PetState,
-        ui::{PetStripView, draw_pet_strip},
-    },
+    lobby::daily::{panel::draw_daily_compact, state::DailyState},
+    pet::ui::{PetView, draw_pet_box},
 };
-use late_core::models::chat_message::ChatMessage;
 
-/// Everything a Zen page reads, assembled once per frame in `render.rs`.
+/// Everything the Zen page reads, assembled once per frame in `render.rs`.
 pub(crate) struct ZenView<'a> {
     pub zen: &'a ZenState,
     pub bonsai: &'a BonsaiState,
-    /// `None` when the account owns no aquarium.
-    pub aquarium: Option<&'a AquariumState>,
+    /// The reef is drawn for everyone; `aquarium_owned` says whether the
+    /// account has fish in it or gets the shop caption instead.
+    pub aquarium: &'a AquariumState,
+    pub aquarium_owned: bool,
     /// `None` when the account owns no pet.
-    pub pet_strip: Option<PetStripView<'a>>,
-    /// The pet itself, for the Room's floor; `None` when not owned.
-    pub pet: Option<&'a PetState>,
-    /// The current room's messages (the Room's monitor shows the tail).
-    pub messages: &'a [ChatMessage],
-    pub usernames: &'a crate::usernames::UsernameLookup<'a>,
-    /// The Room's composer footer; `None` when there is no room to talk in.
-    pub composer: Option<ComposerBlockView<'a>>,
+    pub pet_strip: Option<PetView<'a>>,
     /// The current room, drawn at most once per frame (taken by the first
     /// chat surface that claims it).
     pub chat: Option<EmbeddedRoomChatView<'a>>,
@@ -61,6 +53,10 @@ pub(crate) struct ZenView<'a> {
     pub friends: &'a [String],
     pub afk: Option<&'a str>,
     pub mentions_unread: i64,
+    /// Daily correspondence games for the lobby tile, and whether the lobby
+    /// label glows (your turn somewhere, or a result waiting).
+    pub daily: &'a DailyState,
+    pub lobby_glow: bool,
     pub wall_tick: usize,
 }
 
@@ -85,13 +81,29 @@ pub(crate) fn draw_rice(
         } else {
             idx == zen.focus
         };
-        let inner = draw_tile_chrome(frame, *rect, *kind, focused, &zen.rice.look);
+        // The chat tile names its room in the title, so `[` `]` walking the
+        // rooms shows where you landed without reading the messages.
+        let title = match kind {
+            TileKind::Chat => format!("{} · {}", kind.label(), view.room_label),
+            TileKind::Bonsai
+            | TileKind::Aquarium
+            | TileKind::Pet
+            | TileKind::Music
+            | TileKind::Clock
+            | TileKind::Visualizer
+            | TileKind::Presence
+            | TileKind::Lobby
+            | TileKind::Blank => kind.label().to_string(),
+        };
+        let inner = draw_tile_chrome(frame, *rect, &title, focused, &zen.rice.look);
         if inner.width == 0 || inner.height == 0 {
             continue;
         }
         match kind {
             TileKind::Bonsai => draw_bonsai_tile(frame, inner, view.bonsai, view.wall_tick),
-            TileKind::Aquarium => draw_aquarium_tile(frame, inner, view.aquarium),
+            TileKind::Aquarium => {
+                draw_aquarium_tile(frame, inner, view.aquarium, view.aquarium_owned)
+            }
             TileKind::Pet => draw_pet_tile(frame, inner, view.pet_strip.as_ref()),
             TileKind::Chat => {
                 let label = view.room_label.clone();
@@ -110,6 +122,7 @@ pub(crate) fn draw_rice(
                 draw_visualizer_tile(frame, inner, view.wall_tick, view.eq_state)
             }
             TileKind::Presence => draw_presence_tile(frame, inner, &view),
+            TileKind::Lobby => draw_lobby_tile(frame, inner, view.daily, view.lobby_glow),
             TileKind::Blank => draw_blank_tile(frame, inner, focused),
         }
     }
@@ -120,7 +133,7 @@ pub(crate) fn draw_rice(
 fn draw_tile_chrome(
     frame: &mut Frame,
     rect: Rect,
-    kind: TileKind,
+    title: &str,
     focused: bool,
     look: &super::state::Look,
 ) -> Rect {
@@ -153,7 +166,7 @@ fn draw_tile_chrome(
                 .border_type(border_type)
                 .border_style(ring);
             if look.titles {
-                block = block.title(Span::styled(format!(" {} ", kind.label()), title_style));
+                block = block.title(Span::styled(format!(" {title} "), title_style));
             }
             frame.render_widget(block, rect);
             layout::tile_inner(rect, look)
@@ -165,7 +178,7 @@ fn draw_tile_chrome(
             let marker = if focused { "▌" } else { " " };
             let line = Line::from(vec![
                 Span::styled(marker, ring),
-                Span::styled(kind.label(), title_style),
+                Span::styled(title.to_string(), title_style),
             ]);
             frame.render_widget(
                 Paragraph::new(line),
@@ -195,6 +208,7 @@ fn draw_rice_hint(frame: &mut Frame, area: Rect, zen: &ZenState) {
         ),
     ];
     let hints = hint_line(&[
+        ("Esc", "back"),
         ("←→", "focus"),
         ("space", "kind"),
         ("S", "split"),
@@ -209,7 +223,6 @@ fn draw_rice_hint(frame: &mut Frame, area: Rect, zen: &ZenState) {
         ("R", "reset"),
         ("[]", "room"),
         ("i", "chat"),
-        ("o", "the room"),
     ]);
     spans.extend(hints.spans);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -296,14 +309,34 @@ fn bonsai_status_line(state: &BonsaiState, wide: bool) -> Line<'static> {
     Line::from(spans)
 }
 
-fn draw_aquarium_tile(frame: &mut Frame, area: Rect, state: Option<&AquariumState>) {
-    match state {
-        Some(state) => crate::app::hub::aquarium::ui::draw(frame, area, state),
-        None => draw_centered_note(frame, area, &["no aquarium in this room", "/shop has one"]),
+/// The live reef for everyone; without the shop unlock it swims empty, and
+/// a caption on the floor row says where the fish are.
+fn draw_aquarium_tile(frame: &mut Frame, area: Rect, state: &AquariumState, owned: bool) {
+    crate::app::hub::aquarium::ui::draw(frame, area, state);
+    if owned || area.height < 3 {
+        return;
     }
+    let caption = Line::from(Span::styled(
+        "fish live in /shop",
+        Style::default().fg(theme::TEXT_FAINT()),
+    ))
+    .centered();
+    frame.render_widget(
+        Paragraph::new(caption),
+        Rect::new(area.x, area.bottom() - 1, area.width, 1),
+    );
 }
 
-fn draw_pet_tile(frame: &mut Frame, area: Rect, pet: Option<&PetStripView<'_>>) {
+/// The lobby in a tile, compact: the games running, then one footer row
+/// with the open count and the keys. Top-aligned so a short tile shows the
+/// games first.
+fn draw_lobby_tile(frame: &mut Frame, area: Rect, daily: &DailyState, glow: bool) {
+    draw_daily_compact(frame, area, daily, glow);
+}
+
+/// The pet's box at tile size: a name and mood row on top when there is
+/// room, and the whole rest of the tile to roam.
+fn draw_pet_tile(frame: &mut Frame, area: Rect, pet: Option<&PetView<'_>>) {
     let Some(view) = pet else {
         draw_centered_note(frame, area, &["no pet in this room", "/shop has one"]);
         return;
@@ -311,13 +344,7 @@ fn draw_pet_tile(frame: &mut Frame, area: Rect, pet: Option<&PetStripView<'_>>) 
     if area.height < FLOOR_ROWS {
         return;
     }
-    let strip = Rect::new(
-        area.x,
-        area.bottom().saturating_sub(FLOOR_ROWS),
-        area.width,
-        FLOOR_ROWS,
-    );
-    if area.height >= FLOOR_ROWS + 2 {
+    let box_area = if area.height >= FLOOR_ROWS + 2 {
         let state = view.state;
         let dim = Style::default().fg(theme::TEXT_DIM());
         let name = state.name.clone().unwrap_or_else(|| state.species.clone());
@@ -334,14 +361,15 @@ fn draw_pet_tile(frame: &mut Frame, area: Rect, pet: Option<&PetStripView<'_>>) 
             ),
         ])
         .centered();
-        let above = Rect::new(area.x, area.y, area.width, area.height - FLOOR_ROWS);
-        let pad = above.height.saturating_sub(1) / 2;
         frame.render_widget(
             Paragraph::new(line),
-            Rect::new(above.x, above.y + pad, above.width, 1),
+            Rect::new(area.x, area.y, area.width, 1),
         );
-    }
-    draw_pet_strip(frame, strip, view);
+        Rect::new(area.x, area.y + 1, area.width, area.height - 1)
+    } else {
+        area
+    };
+    draw_pet_box(frame, box_area, view);
 }
 
 fn draw_chat_tile(
@@ -445,7 +473,7 @@ fn draw_clock_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {
         lines.push(Line::from(""));
         lines.push(
             Line::from(Span::styled(
-                format!("{} · {}", view.date, view.clock),
+                format!("{} · {} · {} online", view.date, view.clock, view.online_count),
                 Style::default().fg(theme::TEXT_DIM()),
             ))
             .centered(),

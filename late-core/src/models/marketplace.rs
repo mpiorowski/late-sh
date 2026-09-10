@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -28,14 +28,11 @@ pub const BONSAI_DECAY_PROTECTION_DURATION_SECS: i64 = 1_209_600;
 pub const AQUARIUM_SKU: &str = "aquarium";
 pub const AQUARIUM_FISH_ITEM_KIND: &str = "aquarium_fish";
 pub const AQUARIUM_MAX_FISH: i32 = 20;
-pub const AQUARIUM_FOOD_SKU: &str = "aquarium_food";
-pub const AQUARIUM_HUNGER_AFTER_HOURS: i64 = 24;
 pub const CHAT_CONSUMABLE_ITEM_KIND: &str = "chat_consumable";
 pub const USERNAME_EFFECT_ITEM_KIND: &str = "username_effect";
 pub const CHAT_BADGE_SLOT: &str = "chat_badge";
 pub const CHAT_FLAG_SLOT: &str = "chat_flag";
 pub const COMPANION_CONSUMABLE_ITEM_KIND: &str = "companion_consumable";
-pub const PET_FOOD_SKU: &str = "pet_food";
 pub const ULTIMATE_SPELL_KIND: &str = "ultimate_spell";
 pub const WONDERLAND_ULTIMATE_SKU: &str = "ultimate_wonderland";
 pub const THEMATRIX_ULTIMATE_SKU: &str = "ultimate_thematrix";
@@ -226,21 +223,6 @@ pub struct FishActiveResult {
     pub item: MarketplaceItem,
     pub quantity: i32,
     pub active_quantity: i32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConsumableUseStatus {
-    Used,
-    NotAvailable,
-    NotConsumable,
-    OutOfStock,
-    DailyLimitReached,
-}
-
-#[derive(Debug, Clone)]
-pub struct ConsumableUseResult {
-    pub status: ConsumableUseStatus,
-    pub quantity_remaining: i32,
 }
 
 pub async fn purchase_durable_item_by_sku(
@@ -702,241 +684,6 @@ pub async fn adjust_aquarium_fish_active_by_sku(
         quantity,
         active_quantity: next_active,
     }))
-}
-
-/// Spend one pet food to feed the companion, at most once per UTC day. The
-/// inventory decrement and the `last_fed` stamp share a transaction so a
-/// racing second click is rejected rather than charged.
-pub async fn consume_pet_food(client: &mut Client, user_id: Uuid) -> Result<ConsumableUseResult> {
-    let tx = client.transaction().await?;
-    let Some(item_row) = tx
-        .query_opt(
-            "SELECT *
-             FROM marketplace_items
-             WHERE sku = $1
-             FOR UPDATE",
-            &[&PET_FOOD_SKU],
-        )
-        .await?
-    else {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::NotAvailable,
-            quantity_remaining: 0,
-        });
-    };
-    let item = MarketplaceItem::from(item_row);
-    if item.item_kind != COMPANION_CONSUMABLE_ITEM_KIND
-        || item
-            .payload
-            .get("effect_kind")
-            .and_then(|value| value.as_str())
-            != Some("pet_food")
-    {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::NotConsumable,
-            quantity_remaining: 0,
-        });
-    }
-
-    let Some(purchase_row) = tx
-        .query_opt(
-            "SELECT p.quantity
-             FROM user_purchases p
-             WHERE p.user_id = $1 AND p.item_id = $2
-             FOR UPDATE",
-            &[&user_id, &item.id],
-        )
-        .await?
-    else {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::OutOfStock,
-            quantity_remaining: 0,
-        });
-    };
-    let quantity = purchase_row.get::<_, i32>("quantity");
-    if quantity <= 0 {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::OutOfStock,
-            quantity_remaining: 0,
-        });
-    }
-
-    tx.execute(
-        "INSERT INTO pet_companions (user_id)
-         VALUES ($1)
-         ON CONFLICT (user_id) DO NOTHING",
-        &[&user_id],
-    )
-    .await?;
-    let companion_row = tx
-        .query_one(
-            "SELECT COALESCE(
-                    last_fed >= (date_trunc('day', current_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'),
-                    false
-                ) AS fed_today
-             FROM pet_companions
-             WHERE user_id = $1
-             FOR UPDATE",
-            &[&user_id],
-        )
-        .await?;
-    let fed_today = companion_row.get::<_, bool>("fed_today");
-    if fed_today {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::DailyLimitReached,
-            quantity_remaining: quantity,
-        });
-    }
-
-    let quantity_remaining = quantity - 1;
-    tx.execute(
-        "UPDATE user_purchases
-         SET quantity = $3,
-             active_quantity = LEAST(active_quantity, $3),
-             updated = current_timestamp
-         WHERE user_id = $1 AND item_id = $2",
-        &[&user_id, &item.id, &quantity_remaining],
-    )
-    .await?;
-    tx.execute(
-        "UPDATE pet_companions
-         SET last_fed = current_timestamp, updated = current_timestamp
-         WHERE user_id = $1",
-        &[&user_id],
-    )
-    .await?;
-    let payload = user_id.to_string();
-    tx.execute(
-        "SELECT pg_notify($1, $2)",
-        &[&SHOP_USER_CHANGED_CHANNEL, &payload],
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(ConsumableUseResult {
-        status: ConsumableUseStatus::Used,
-        quantity_remaining,
-    })
-}
-
-pub async fn consume_aquarium_food_pinch(
-    client: &mut Client,
-    user_id: Uuid,
-) -> Result<ConsumableUseResult> {
-    let tx = client.transaction().await?;
-    let Some(item_row) = tx
-        .query_opt(
-            "SELECT *
-             FROM marketplace_items
-             WHERE sku = $1
-             FOR UPDATE",
-            &[&AQUARIUM_FOOD_SKU],
-        )
-        .await?
-    else {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::NotAvailable,
-            quantity_remaining: 0,
-        });
-    };
-    let item = MarketplaceItem::from(item_row);
-    if item.item_kind != COMPANION_CONSUMABLE_ITEM_KIND
-        || item
-            .payload
-            .get("effect_kind")
-            .and_then(|value| value.as_str())
-            != Some("aquarium_food")
-    {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::NotConsumable,
-            quantity_remaining: 0,
-        });
-    }
-
-    let Some(purchase_row) = tx
-        .query_opt(
-            "SELECT p.quantity
-             FROM user_purchases p
-             WHERE p.user_id = $1 AND p.item_id = $2
-             FOR UPDATE",
-            &[&user_id, &item.id],
-        )
-        .await?
-    else {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::OutOfStock,
-            quantity_remaining: 0,
-        });
-    };
-    let quantity = purchase_row.get::<_, i32>("quantity");
-    if quantity <= 0 {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::OutOfStock,
-            quantity_remaining: 0,
-        });
-    }
-
-    let quantity_remaining = quantity - 1;
-    tx.execute(
-        "UPDATE user_purchases
-         SET quantity = $3,
-             active_quantity = LEAST(active_quantity, $3),
-             updated = current_timestamp
-         WHERE user_id = $1 AND item_id = $2",
-        &[&user_id, &item.id, &quantity_remaining],
-    )
-    .await?;
-    tx.execute(
-        "INSERT INTO user_aquarium_care (user_id, last_fed)
-         VALUES ($1, current_timestamp)
-         ON CONFLICT (user_id) DO UPDATE
-         SET last_fed = EXCLUDED.last_fed,
-             updated = current_timestamp",
-        &[&user_id],
-    )
-    .await?;
-    let payload = user_id.to_string();
-    tx.execute(
-        "SELECT pg_notify($1, $2)",
-        &[&SHOP_USER_CHANGED_CHANNEL, &payload],
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(ConsumableUseResult {
-        status: ConsumableUseStatus::Used,
-        quantity_remaining,
-    })
-}
-
-pub async fn aquarium_is_hungry(client: &Client, user_id: Uuid) -> Result<bool> {
-    let cutoff = Utc::now() - Duration::hours(AQUARIUM_HUNGER_AFTER_HOURS);
-    let Some(row) = client
-        .query_opt(
-            "SELECT c.last_fed
-             FROM (
-                 SELECT 1
-                 FROM user_purchases p
-                 JOIN marketplace_items i ON i.id = p.item_id
-                 WHERE p.user_id = $1 AND i.sku = $2
-                 LIMIT 1
-             ) aquarium_purchase
-             LEFT JOIN user_aquarium_care c ON c.user_id = $1",
-            &[&user_id, &AQUARIUM_SKU],
-        )
-        .await?
-    else {
-        return Ok(false);
-    };
-    let last_fed: Option<DateTime<Utc>> = row.get("last_fed");
-    Ok(last_fed.is_none_or(|time| time <= cutoff))
 }
 
 /// Active aquarium creatures `(creature_name, count)` a user is currently

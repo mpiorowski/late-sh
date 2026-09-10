@@ -89,7 +89,6 @@ fn make_state_with_bonsai_protection(protection: Option<BonsaiDecayProtection>) 
         items: vec![bonsai_shield_item()],
         entitlements: ShopEntitlements::default(),
         active_room_effects: HashMap::new(),
-        aquarium_hungry: false,
         active_username_effect: None,
         active_bonsai_decay_protection: protection,
         active_badge_rental: None,
