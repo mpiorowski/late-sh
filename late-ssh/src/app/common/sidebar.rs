@@ -1167,6 +1167,26 @@ pub fn paint_vertical_separator(frame: &mut Frame, x: u16, y: u16, height: u16) 
     }
 }
 
+/// The current track for the saved source, one line: the same text the
+/// dock row shows for that source.
+pub(crate) fn current_track_text(
+    source: AudioSource,
+    now_playing: Option<&NowPlaying>,
+    queue: &QueueSnapshot,
+    station: RadioStation,
+    radio_now_playing: Option<&str>,
+) -> String {
+    match source {
+        AudioSource::Radio => radio_now_playing
+            .map(str::to_string)
+            .unwrap_or_else(|| stations::radio_station_display_name(station).to_string()),
+        AudioSource::Youtube => youtube_track_text(queue),
+        AudioSource::Icecast => now_playing
+            .map(icecast_track_text)
+            .unwrap_or_else(|| "fallback stream".to_string()),
+    }
+}
+
 pub fn sidebar_clock_text(timezone: Option<&str>) -> String {
     crate::app::common::time::timezone_current_time(Utc::now(), timezone)
         .unwrap_or_else(|| Utc::now().format("UTC %H:%M").to_string())

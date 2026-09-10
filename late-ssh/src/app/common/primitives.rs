@@ -76,6 +76,9 @@ pub enum Screen {
     Profiles,
     Leaderboard,
     Clubhouse,
+    /// Zen (`7`): Rice, the tiling layout you arrange yourself, with the
+    /// drawn Room behind a key (`app/zen`).
+    Zen,
     /// Full-screen daily-match board. Entered only from the Daily Games
     /// modal, absent from the Tab cycle; Esc returns to the modal.
     DailyMatch,
@@ -102,7 +105,8 @@ impl Screen {
             Screen::Games => Screen::Artboard,
             Screen::Artboard => Screen::Profiles,
             Screen::Profiles => Screen::Leaderboard,
-            Screen::Leaderboard => Screen::Clubhouse,
+            Screen::Leaderboard => Screen::Zen,
+            Screen::Zen => Screen::Clubhouse,
             Screen::Lateania
             | Screen::Rebels
             | Screen::Nethack
@@ -122,7 +126,8 @@ impl Screen {
 
     pub fn prev(self) -> Self {
         match self {
-            Screen::Clubhouse => Screen::Leaderboard,
+            Screen::Clubhouse => Screen::Zen,
+            Screen::Zen => Screen::Leaderboard,
             Screen::Dashboard => Screen::Clubhouse,
             Screen::Arcade => Screen::Dashboard,
             Screen::Games => Screen::Arcade,
@@ -199,6 +204,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::DailyMatch => "Daily Match",
         Screen::HouseTable => "House Table",
         Screen::Scratchpad => "Scratchpad",
+        Screen::Zen => "Zen",
     };
 
     let current_line = Paragraph::new(Line::from(vec![

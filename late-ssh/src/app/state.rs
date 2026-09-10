@@ -377,6 +377,8 @@ pub struct SessionConfig {
         tokio::sync::watch::Receiver<crate::app::deadchannel::runner::svc::RunnerLooks>,
     /// Whether the aquarium tray was open when the user last toggled it.
     pub show_aquarium_tray: bool,
+    /// The stored Rice layout (`app/zen`), `None` until first edited.
+    pub zen_layout: Option<serde_json::Value>,
     /// Fingerprint of the SSH key this session authenticated with: the only
     /// device identity late.sh has, and what per-device settings key off.
     /// `None` for sessions with no key of their own (ghost bots, tests), which
@@ -490,6 +492,8 @@ pub struct App {
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState,
     pub(crate) aquarium_state: hub::aquarium::state::AquariumState,
+    /// The Zen pages (`7` the Room, `8` Rice): the tiling layout and its focus.
+    pub(crate) zen: crate::app::zen::state::ZenState,
     pub(crate) mod_modal_state: mod_modal::state::ModModalState,
     pub(crate) pending_escape: bool,
     pub(crate) pending_escape_started_at: Option<Instant>,
@@ -634,6 +638,8 @@ pub struct App {
     pub(crate) daily_chat_rows_cache: chat::ui::ChatRowsCache,
     /// House table embedded chat, same reasoning as the daily cache.
     pub(crate) house_chat_rows_cache: chat::ui::ChatRowsCache,
+    /// The Zen pages' current-room chat, its own cache like the others.
+    pub(crate) zen_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) poll_modal_state: chat::polls::state::PollModalState,
     pub(crate) gild_modal_state: chat::gild::state::GildModalState,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
@@ -1022,6 +1028,8 @@ impl App {
             Screen::DailyMatch => self.daily.board_chat_room_id(),
             // The open house table's permanent chat room.
             Screen::HouseTable => self.house.chat_room_id(),
+            // The Zen pages show the selected room, else #lounge.
+            Screen::Zen => self.zen_chat_room_id(),
             _ => None,
         }
     }
@@ -1343,6 +1351,9 @@ impl App {
             help_modal_state: help_modal::state::HelpModalState::new(),
             leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState::new(),
             aquarium_state,
+            zen: crate::app::zen::state::ZenState::new(
+                crate::app::zen::state::RiceLayout::from_json(config.zen_layout.as_ref()),
+            ),
             mod_modal_state: mod_modal::state::ModModalState::new(),
             pending_escape: false,
             pending_escape_started_at: None,
@@ -1465,6 +1476,7 @@ impl App {
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             daily_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             house_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            zen_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             poll_modal_state: chat::polls::state::PollModalState::new(),
             gild_modal_state: chat::gild::state::GildModalState::new(),
             room_search_modal_state:
@@ -2202,6 +2214,8 @@ impl App {
 
         let screen_changed = self.screen != screen;
         self.screen = screen;
+        // The aquarium sim is sized for whichever surface shows it next.
+        self.sync_aquarium_bounds();
 
         // Every top-level move repaints from scratch. ratatui only re-emits
         // cells whose contents changed, and the two layouts rarely disagree
@@ -2366,9 +2380,7 @@ impl App {
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), io::Error> {
         tracing::debug!(cols, rows, "window resized");
         self.size = (cols, rows);
-        let aquarium_area = aquarium_area_for_terminal(cols, rows);
-        self.aquarium_state
-            .handle_resize(aquarium_area.width, aquarium_area.height);
+        self.sync_aquarium_bounds();
         // We can't use `Terminal::resize()` here: since ratatui 0.30.2 its
         // fixed-viewport clear queries `backend.size()`, which reads the
         // controlling tty, impossible on the write-only SSH `SharedBuffer`
@@ -2606,6 +2618,58 @@ impl App {
         self.profile_state
             .service()
             .set_clubhouse_tutorial_done(self.user_id);
+    }
+
+    /// The room the Zen pages show: the selected room when it is a real
+    /// room, else #lounge.
+    pub(crate) fn zen_chat_room_id(&self) -> Option<Uuid> {
+        if !self.chat.synthetic_entry_selected()
+            && let Some(room_id) = self.chat.selected_room_id
+        {
+            return Some(room_id);
+        }
+        self.chat.lounge_room_id()
+    }
+
+    /// The rect the aquarium simulation should fill on the current screen:
+    /// the Lounge tray by default, the tank's slot on the Zen pages.
+    fn aquarium_area_for_screen(&self) -> Rect {
+        use crate::app::zen::{layout as zen_layout, state::TileKind};
+        let (cols, rows) = self.size;
+        let full = Rect::new(0, 0, cols, rows);
+        match self.screen {
+            Screen::Zen if self.zen.mode == crate::app::zen::state::ZenMode::Room => {
+                crate::app::zen::room::TANK_WATER
+            }
+            Screen::Zen => {
+                let (tiles, _) = zen_layout::rice_areas(full);
+                let zoomed = self.zen.zoomed.then_some(self.zen.focus);
+                zen_layout::tile_rects(
+                    &self.zen.rice.root,
+                    tiles,
+                    self.zen.rice.look.gap as u16,
+                    zoomed,
+                )
+                .into_iter()
+                .find(|(kind, _)| *kind == TileKind::Aquarium)
+                .map(|(_, rect)| zen_layout::tile_inner(rect, &self.zen.rice.look))
+                .unwrap_or_else(|| aquarium_area_for_terminal(cols, rows))
+            }
+            _ => aquarium_area_for_terminal(cols, rows),
+        }
+    }
+
+    /// Re-bind the reef to the rect the current screen draws it in.
+    pub(crate) fn sync_aquarium_bounds(&mut self) {
+        let area = self.aquarium_area_for_screen();
+        self.aquarium_state.handle_resize(area.width, area.height);
+    }
+
+    /// Persist the Rice layout after an edit (fire-and-forget).
+    pub(crate) fn persist_zen_layout(&self) {
+        self.profile_state
+            .service()
+            .set_zen_layout(self.user_id, self.zen.rice.to_json());
     }
 
     /// Persist the aquarium tray's open/closed state (fire-and-forget).

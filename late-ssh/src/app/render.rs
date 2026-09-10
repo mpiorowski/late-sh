@@ -353,6 +353,16 @@ struct DrawContext<'a> {
     /// of its inputs (no clock read inside the draw path).
     pomodoro_badge: Option<String>,
     home_selected: bool,
+    /// The Zen pages (`app/zen`): layout state, the current room's chat
+    /// (drawn at most once per frame), and the strings their status rows show.
+    zen: &'a crate::app::zen::state::ZenState,
+    zen_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    zen_room_label: &'a str,
+    zen_track: String,
+    zen_date: String,
+    zen_pet_strip: Option<crate::app::pet::ui::PetStripView<'a>>,
+    zen_messages: &'a [late_core::models::chat_message::ChatMessage],
+    zen_composer: Option<chat::ui::ComposerBlockView<'a>>,
 }
 
 impl App {
@@ -477,6 +487,15 @@ impl App {
         let pet_strip_enabled =
             show_pet_strip_setting && self.shop_state.entitlements().has_pet_companion();
         let screen = self.screen;
+        // The Zen pages' current room: the selected room, else #lounge.
+        let zen_room_id = self.zen_chat_room_id();
+        let zen_room_label = zen_room_id
+            .and_then(|room_id| self.chat.rooms.iter().find(|(room, _)| room.id == room_id))
+            .map(|(room, _)| match room.slug.as_deref() {
+                Some(slug) => format!("#{slug}"),
+                None => "chat".to_string(),
+            })
+            .unwrap_or_else(|| "#lounge".to_string());
         // The icecast rows render the USER'S SELECTED stream's track, not a
         // global single mount.
         let selected_icecast_stream = self.selected_icecast_stream;
@@ -956,6 +975,102 @@ impl App {
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
                     selection_scroll: Some(&self.chat.selection_scroll),
                 });
+        let zen_chat_view = zen_room_id.map(|chat_room_id| chat::ui::EmbeddedRoomChatView {
+            title: zen_room_label.as_str(),
+            messages: self.chat.messages_for_room(chat_room_id),
+            overlay: self.chat.overlay(),
+            image_modal,
+            rows_cache: &mut self.zen_chat_rows_cache,
+            rows_versions: chat::ui::ChatRowsVersions {
+                room_id: Some(chat_room_id),
+                room_version: self.chat.room_version(chat_room_id),
+                chat_ctx_epoch: self.chat.context_epoch(),
+                app_ctx_epoch: self.chat_ctx_epoch,
+            },
+            usernames: chat_usernames,
+            countries: chat_countries,
+            friend_user_ids: self.chat.friend_user_ids(),
+            afk_user_ids: self.afk_user_ids.as_ref(),
+            live_user_ids: &self.chat.live_user_ids,
+            message_reactions,
+            message_gilds,
+            inline_images: &self.chat.inline_image_cache,
+            dividers: crate::app::chat::ui::ChatDividers {
+                afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
+                left_app: self.chat.device_left_at(),
+            },
+            current_user_id: self.user_id,
+            voice_channel_id: self
+                .chat
+                .voice_channels_by_room_id
+                .get(&chat_room_id)
+                .map(|channel| channel.id),
+            voice_snapshot,
+            voice_paired_cli_supports_voice: paired_cli_supports_voice,
+            show_flag_fallback: self.profile_state.profile().show_flag_fallback,
+            selected_message_id: self.chat.selected_message_id,
+            selected_image_message: self
+                .chat
+                .selected_message_has_inline_image_in_room(chat_room_id),
+            highlighted_message_id: self.chat.highlighted_message_id,
+            reaction_picker_active: self.chat.is_reaction_leader_active(),
+            composer: self.chat.composer(),
+            composing: self.chat.composing,
+            mention_matches: &self.chat.mention_ac.matches,
+            mention_selected: self.chat.mention_ac.selected,
+            mention_active: self.chat.mention_ac.active,
+            reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
+            is_editing: self.chat.edited_message_id.is_some(),
+            bonsai_glyphs,
+            chat_badges,
+            profile_award_badges,
+            drunk_levels: &self.drunk_levels,
+            name_flair: &self.name_flair,
+            peer_pomodoros: &self.peer_pomodoros,
+            name_flicker,
+            translations: &self.chat.translations,
+            translation_hidden: &self.chat.translation_hidden,
+            keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+            composer_rect_slot: Some(&self.chat.last_composer_rect),
+            composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
+            chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
+            selection_scroll: Some(&self.chat.selection_scroll),
+        });
+        let zen_track = crate::app::common::sidebar::current_track_text(
+            self.paired_source,
+            now_playing.as_ref(),
+            &self.audio.queue_snapshot(),
+            self.selected_radio_station,
+            radio_now_playing.as_deref(),
+        );
+        let zen_date = zen_date_text(self.profile_state.profile().timezone.as_deref());
+        let zen_messages: &[late_core::models::chat_message::ChatMessage] = zen_room_id
+            .map(|room_id| self.chat.messages_for_room(room_id))
+            .unwrap_or(&[]);
+        let zen_composer = zen_room_id.map(|_| chat::ui::ComposerBlockView {
+            composer: self.chat.composer(),
+            composing: self.chat.composing,
+            selected_message: false,
+            selected_image_message: false,
+            selected_news_message: false,
+            reaction_picker_active: false,
+            reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
+            is_editing: self.chat.edited_message_id.is_some(),
+            mention_active: self.chat.mention_ac.active,
+            mention_matches: &self.chat.mention_ac.matches,
+            mention_selected: self.chat.mention_ac.selected,
+            keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+        });
+        let zen_pet_strip = self.shop_state.entitlements().has_pet_companion().then(|| {
+            crate::app::pet::ui::PetStripView {
+                state: &self.pet_state,
+                pet_food_quantity: self.shop_state.pet_food_quantity(),
+                pet_rect_slot: Some(&self.last_pet_strip_pet_rect),
+                food_bowl_rect_slot: Some(&self.last_pet_strip_food_rect),
+                water_bowl_rect_slot: Some(&self.last_pet_strip_water_rect),
+                travel_slot: Some(&self.last_pet_strip_travel),
+            }
+        });
         // The clubhouse has no chat panel: #lounge messages float over their
         // authors' heads and the shared composer block pins to the bottom.
         // Both are only assembled while that screen is up.
@@ -1246,6 +1361,14 @@ impl App {
                         voice_badge,
                         pomodoro_badge,
                         home_selected,
+                        zen: &self.zen,
+                        zen_chat_view,
+                        zen_room_label: zen_room_label.as_str(),
+                        zen_track,
+                        zen_date,
+                        zen_pet_strip,
+                        zen_messages,
+                        zen_composer,
                     },
                     &mut terminal_image_frame,
                 );
@@ -1425,49 +1548,59 @@ impl App {
             return;
         }
 
-        let title = app_frame_title(screen, &ctx);
-        let title_width = line_width(&title) as u16;
-        let mut block = Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-        match status_hud_title(StatusHudInputs {
-            balance: Some(ctx.chip_balance),
-            unread: ctx.mentions_unread_count,
-            voice_badge: ctx.voice_badge.as_deref(),
-            pomodoro_badge: ctx.pomodoro_badge.as_deref(),
-            pot: Some(ctx.pot).filter(|view| view.open),
-            border_width: area.width,
-            title_width,
-        }) {
-            Some(hud) => {
-                // The right-aligned title's last cell sits just inside the
-                // top-right corner; the mentions segment sits `mentions_offset`
-                // cells into the line, after the pomodoro and voice badges.
-                let total = hud.line.width() as u16;
-                let rect = (hud.mentions_width > 0).then(|| Rect {
-                    x: area
-                        .right()
-                        .saturating_sub(total + 1)
-                        .saturating_add(hud.mentions_offset),
-                    y: area.y,
-                    width: hud.mentions_width,
-                    height: 1,
-                });
-                ctx.mentions_hud_rect.set(rect);
-                block = block.title_top(hud.line);
+        // The Zen pages are full-bleed: no frame, no HUD, no tab bar. Every
+        // other page keeps the app frame.
+        let zen_page = screen == Screen::Zen;
+        let inner = if zen_page {
+            ctx.mentions_hud_rect.set(None);
+            frame.render_widget(Clear, area);
+            area
+        } else {
+            let title = app_frame_title(screen, &ctx);
+            let title_width = line_width(&title) as u16;
+            let mut block = Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+            match status_hud_title(StatusHudInputs {
+                balance: Some(ctx.chip_balance),
+                unread: ctx.mentions_unread_count,
+                voice_badge: ctx.voice_badge.as_deref(),
+                pomodoro_badge: ctx.pomodoro_badge.as_deref(),
+                pot: Some(ctx.pot).filter(|view| view.open),
+                border_width: area.width,
+                title_width,
+            }) {
+                Some(hud) => {
+                    // The right-aligned title's last cell sits just inside the
+                    // top-right corner; the mentions segment sits `mentions_offset`
+                    // cells into the line, after the pomodoro and voice badges.
+                    let total = hud.line.width() as u16;
+                    let rect = (hud.mentions_width > 0).then(|| Rect {
+                        x: area
+                            .right()
+                            .saturating_sub(total + 1)
+                            .saturating_add(hud.mentions_offset),
+                        y: area.y,
+                        width: hud.mentions_width,
+                        height: 1,
+                    });
+                    ctx.mentions_hud_rect.set(rect);
+                    block = block.title_top(hud.line);
+                }
+                None => ctx.mentions_hud_rect.set(None),
             }
-            None => ctx.mentions_hud_rect.set(None),
-        }
-        let (help_hint_title, sponsor_title) = app_frame_bottom_titles(area.width);
-        block = block.title_bottom(help_hint_title);
-        if let Some(sponsor_title) = sponsor_title {
-            block = block.title_bottom(sponsor_title);
-        }
+            let (help_hint_title, sponsor_title) = app_frame_bottom_titles(area.width);
+            block = block.title_bottom(help_hint_title);
+            if let Some(sponsor_title) = sponsor_title {
+                block = block.title_bottom(sponsor_title);
+            }
 
-        let inner = app_frame_inner_area(area);
-        frame.render_widget(block, area);
-        frame.render_widget(Clear, inner);
+            let inner = app_frame_inner_area(area);
+            frame.render_widget(block, area);
+            frame.render_widget(Clear, inner);
+            inner
+        };
 
         // The aquarium tray lives inside the Lounge chat view only: it is
         // carved from the top of the lounge's center column and competes
@@ -1476,8 +1609,11 @@ impl App {
             ctx.show_aquarium_tray && ctx.shop_state.entitlements().has_aquarium();
         let mut aquarium_tray_area = None;
 
-        let (content_area, sidebar_area) =
-            app_content_and_sidebar_areas(inner, ctx.show_right_sidebar);
+        let (content_area, sidebar_area) = if zen_page {
+            (inner, None)
+        } else {
+            app_content_and_sidebar_areas(inner, ctx.show_right_sidebar)
+        };
         let foreground_overlay_open = foreground_terminal_overlay_open(&ctx);
         match screen {
             Screen::Dashboard => {
@@ -1709,6 +1845,51 @@ impl App {
                     composer: ctx.clubhouse_composer.take(),
                 },
             ),
+            Screen::Zen => {
+                let view = crate::app::zen::ui::ZenView {
+                    zen: ctx.zen,
+                    bonsai: ctx.bonsai,
+                    aquarium: ctx
+                        .shop_state
+                        .entitlements()
+                        .has_aquarium()
+                        .then_some(ctx.aquarium_state),
+                    pet_strip: ctx.zen_pet_strip.take(),
+                    pet: ctx
+                        .shop_state
+                        .entitlements()
+                        .has_pet_companion()
+                        .then_some(ctx.cat),
+                    messages: ctx.zen_messages,
+                    usernames: ctx.usernames,
+                    composer: ctx.zen_composer.take(),
+                    chat: ctx.zen_chat_view.take(),
+                    room_label: ctx.zen_room_label.to_string(),
+                    track: ctx.zen_track.clone(),
+                    source_label: match ctx.paired_source {
+                        late_core::models::user::AudioSource::Radio => "radio",
+                        late_core::models::user::AudioSource::Youtube => "youtube",
+                        late_core::models::user::AudioSource::Icecast => "icecast",
+                    },
+                    eq_state: match ctx.paired_client {
+                        None => crate::app::audio::viz::EqState::Unpaired,
+                        Some(client) if client.muted => crate::app::audio::viz::EqState::Muted,
+                        Some(_) => crate::app::audio::viz::EqState::Playing,
+                    },
+                    clock: ctx.sidebar_clock,
+                    date: ctx.zen_date.clone(),
+                    online_count: ctx.online_count,
+                    friends: ctx.active_friend_names,
+                    afk: ctx.afk,
+                    mentions_unread: ctx.mentions_unread_count,
+                    wall_tick: ctx.marquee_tick,
+                };
+                if ctx.zen.mode == crate::app::zen::state::ZenMode::Room {
+                    crate::app::zen::room::draw(frame, content_area, view);
+                } else {
+                    crate::app::zen::ui::draw_rice(frame, content_area, view, terminal_images);
+                }
+            }
             Screen::DailyMatch => crate::app::lobby::daily::board_ui::draw(
                 frame,
                 content_area,
@@ -2051,6 +2232,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Artboard, "4"),
         (Screen::Profiles, "5"),
         (Screen::Leaderboard, "6"),
+        (Screen::Zen, "7"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -2109,6 +2291,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::DailyMatch => "Daily Match",
         Screen::HouseTable => "House Table",
         Screen::Scratchpad => "Scratchpad",
+        Screen::Zen => "Zen",
     };
     spans.push(Span::styled(
         " | ",
@@ -2720,3 +2903,13 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
 #[cfg(test)]
 #[path = "render_test.rs"]
 mod render_test;
+
+/// Today's date in the profile timezone (UTC when unset or unparseable),
+/// for the Zen clock tile.
+fn zen_date_text(timezone: Option<&str>) -> String {
+    let now = chrono::Utc::now();
+    match timezone.and_then(|tz| tz.parse::<chrono_tz::Tz>().ok()) {
+        Some(tz) => now.with_timezone(&tz).format("%A, %-d %B").to_string(),
+        None => now.format("%A, %-d %B").to_string(),
+    }
+}

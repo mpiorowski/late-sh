@@ -79,7 +79,7 @@ impl InputContext {
 fn screen_has_chat_pane(screen: Screen) -> bool {
     matches!(
         screen,
-        Screen::Dashboard | Screen::DailyMatch | Screen::HouseTable
+        Screen::Dashboard | Screen::DailyMatch | Screen::HouseTable | Screen::Zen
     )
 }
 
@@ -1609,6 +1609,10 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return crate::app::clubhouse::input::handle_event(app, event);
     }
 
+    if ctx.screen == Screen::Zen {
+        return crate::app::zen::input::handle_event(app, event);
+    }
+
     if ctx.screen == Screen::Rebels {
         // Running-mode bytes never reach here (intercepted in handle_input), so
         // this only handles the Launcher. Enter launches the game; every other
@@ -2561,6 +2565,7 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
         20 => Some(Screen::Artboard),
         22 => Some(Screen::Profiles),
         24 => Some(Screen::Leaderboard),
+        26 => Some(Screen::Zen),
         _ => None,
     }
 }
@@ -2885,6 +2890,7 @@ fn embedded_chat_room_id(app: &App, screen: Screen) -> Option<Uuid> {
         Screen::Dashboard => app.chat.selected_room_id,
         Screen::DailyMatch => app.daily.board_chat_room_id(),
         Screen::HouseTable => app.house.chat_room_id(),
+        Screen::Zen => app.zen_chat_room_id(),
         _ => None,
     }
 }
@@ -3149,6 +3155,8 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::HouseTable => false,
         // Scratchpad arrows are consumed in handle_dedicated_screen_input.
         Screen::Scratchpad => false,
+        // Zen arrows are consumed in handle_dedicated_screen_input.
+        Screen::Zen => false,
     }
 }
 
@@ -3873,6 +3881,11 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.set_screen(Screen::Clubhouse);
             true
         }
+        b'7' if !artboard_blocks_page_switch => {
+            reset_composers_for_page_change(app);
+            app.set_screen(Screen::Zen);
+            true
+        }
         b'\t' if artboard_rail_takes_tab(app, ctx.screen) => {
             dispatch_screen_key(app, Screen::Artboard, b'\t');
             true
@@ -4014,6 +4027,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::Scratchpad => {
             // Scratchpad keys are handled in handle_dedicated_screen_input.
+        }
+        Screen::Zen => {
+            // Zen keys are handled in handle_dedicated_screen_input.
         }
     }
 }

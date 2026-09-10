@@ -977,7 +977,8 @@ impl App {
         // animating: the bonsai sway holds this edge on its own, and Bonsai
         // is enabled by default. An unpaired session repaints a static eq
         // strip, which the frame diff then drops.
-        changed |= anim_half && (sidebar_visible || self.show_bonsai_modal);
+        changed |=
+            anim_half && (sidebar_visible || self.show_bonsai_modal || self.screen == Screen::Zen);
 
         // Sidebar marquees: track rows and the friends row scroll while their
         // text overflows. The marquee moves at most once per
@@ -1121,6 +1122,10 @@ impl App {
     /// step gate in tick() and the wake cadence, so an aquarium owner
     /// browsing other screens pays no fish frames.
     fn aquarium_tray_visible(&self) -> bool {
+        // The Zen pages draw the tank whenever it is owned, tray setting or not.
+        if self.screen == Screen::Zen {
+            return self.shop_state.entitlements().has_aquarium();
+        }
         if !self.show_aquarium_tray || !self.shop_state.entitlements().has_aquarium() {
             return false;
         }
