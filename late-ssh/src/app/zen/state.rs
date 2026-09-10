@@ -362,8 +362,10 @@ pub struct RiceLayout {
 
 impl Default for RiceLayout {
     /// The out-of-the-box page, also what `R` resets to: the bonsai at full
-    /// canvas over the live reef on the left, and a rail of clock, music,
-    /// lobby, and the current room's chat on the right.
+    /// canvas over the current room's chat on the left, and a rail of
+    /// clock, music, lobby, then the pet over the live reef on the right
+    /// (the pet sits against the tank and watches; unowned, the tile points
+    /// at the shop).
     fn default() -> Self {
         Self {
             root: Node::split(
@@ -373,7 +375,7 @@ impl Default for RiceLayout {
                     Dir::Column,
                     600,
                     Node::leaf(TileKind::Bonsai),
-                    Node::leaf(TileKind::Aquarium),
+                    Node::leaf(TileKind::Chat),
                 ),
                 Node::split(
                     Dir::Column,
@@ -385,9 +387,14 @@ impl Default for RiceLayout {
                         Node::leaf(TileKind::Music),
                         Node::split(
                             Dir::Column,
-                            260,
+                            240,
                             Node::leaf(TileKind::Lobby),
-                            Node::leaf(TileKind::Chat),
+                            Node::split(
+                                Dir::Column,
+                                300,
+                                Node::leaf(TileKind::Pet),
+                                Node::leaf(TileKind::Aquarium),
+                            ),
                         ),
                     ),
                 ),

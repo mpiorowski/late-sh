@@ -722,6 +722,46 @@ async fn global_w_opens_bonsai_care() {
 }
 
 #[tokio::test]
+async fn zen_yields_the_music_chord_and_w_to_bonsai_care() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "zen-chords-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app_with_permissions(
+        test_db.db.clone(),
+        user.id,
+        "zen-chords-flow-it",
+        Permissions::new(false, true),
+    );
+    wait_for_render_contains(&mut app, " Home ").await;
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "Esc back").await;
+    let tiles = app.zen.leaf_count();
+    let source = app.paired_source;
+
+    // `v x` is the global audio-source chord. The page used to claim `x`
+    // (and `X` still closes a tile), so the suffix must reach the chord.
+    app.handle_input(b"v");
+    app.handle_input(b"x");
+    assert_ne!(app.paired_source, source, "v x swaps the audio source on Zen");
+    assert_eq!(app.zen.leaf_count(), tiles, "the chord suffix closes no tile");
+
+    // The bonsai is tended in the same modal as everywhere else.
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, " Bonsai ").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("Day 0") && frame.contains("vigor"),
+        "expected w on Zen to open the bonsai care modal; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
 async fn global_ctrl_b_is_ignored_for_all_users() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "ctrl-b-it").await;

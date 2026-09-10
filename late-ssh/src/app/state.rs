@@ -597,7 +597,7 @@ pub struct App {
     pub(crate) last_pet_bowl_rect: std::cell::Cell<Option<Rect>>,
     /// How far the pet could roam in the box drawn last frame; `None` when
     /// no box was drawn. Gates the pet animation's frame cost in tick.
-    pub(crate) last_pet_travel: std::cell::Cell<Option<crate::app::pet::ui::PetTravel>>,
+    pub(crate) last_pet_travel: std::cell::Cell<Option<crate::app::pet::ui::PetFrameInputs>>,
     /// Where the top-border "N unread mentions" text was drawn last frame,
     /// for the HUD click hit test; `None` when nothing is unread. Only the
     /// mentions segment is clickable, not the voice/chips text after it.

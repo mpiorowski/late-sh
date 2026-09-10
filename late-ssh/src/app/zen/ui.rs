@@ -17,8 +17,10 @@ use super::{
     state::{BorderKind, TileKind, ZenState},
 };
 use late_core::models::aquarium_care::CARE_DAYS;
+use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
 
 use crate::app::{
+    audio::stations::{icecast_stream_display_name, radio_station_display_name},
     audio::viz::{EqState, render_eq},
     bonsai::{
         render::{PREVIEW_WIDTH, apply_sway, canvas_lines, center_lines, render_preview_lines},
@@ -29,7 +31,7 @@ use crate::app::{
     files::terminal_image::TerminalImageFrame,
     hub::aquarium::state::{AquariumCare, AquariumState, CareBar},
     lobby::daily::{panel::draw_daily_compact, state::DailyState},
-    pet::ui::{PetView, draw_pet_box},
+    pet::ui::{PetPose, PetView, WatchSide, draw_pet_box},
 };
 
 /// Everything the Zen page reads, assembled once per frame in `render.rs`.
@@ -49,7 +51,9 @@ pub(crate) struct ZenView<'a> {
     pub chat: Option<EmbeddedRoomChatView<'a>>,
     pub room_label: String,
     pub track: String,
-    pub source_label: &'static str,
+    /// The source and, for the streams that have one, the station it is
+    /// tuned to (`station_text`).
+    pub station: String,
     pub eq_state: EqState,
     pub clock: &'a str,
     pub date: String,
@@ -78,7 +82,19 @@ pub(crate) fn draw_rice(
     let had_chat = view.chat.is_some();
     let zen = view.zen;
     let zoomed = zen.zoomed.then_some(zen.focus);
-    let rects = layout::tile_rects(&zen.rice.root, tiles_area, zen.rice.look.gap as u16, zoomed);
+    let gap = zen.rice.look.gap as u16;
+    let rects = layout::tile_rects(&zen.rice.root, tiles_area, gap, zoomed);
+    // A pet tile sharing an edge with a tank tile: the pet sits against
+    // that edge and watches the fish (zoomed, a lone tile has no neighbour).
+    let watching = rects
+        .iter()
+        .find(|(kind, _)| *kind == TileKind::Pet)
+        .and_then(|(_, pet_rect)| {
+            rects
+                .iter()
+                .filter(|(kind, _)| *kind == TileKind::Aquarium)
+                .find_map(|(_, tank)| layout::neighbour_side(*pet_rect, *tank, gap))
+        });
     for (idx, (kind, rect)) in rects.iter().enumerate() {
         let focused = if zoomed.is_some() {
             true
@@ -132,7 +148,7 @@ pub(crate) fn draw_rice(
             TileKind::Aquarium => {
                 draw_aquarium_tile(frame, inner, view.aquarium, view.aquarium_owned)
             }
-            TileKind::Pet => draw_pet_tile(frame, inner, view.pet_strip.as_ref()),
+            TileKind::Pet => draw_pet_tile(frame, inner, view.pet_strip.as_ref(), watching),
             TileKind::Chat => {
                 let label = view.room_label.clone();
                 draw_chat_tile(
@@ -358,7 +374,7 @@ fn bonsai_status_line(state: &BonsaiState, wide: bool) -> Line<'static> {
     } else if wide {
         spans.push(dot());
         spans.push(Span::styled(
-            "w water · n branch · hjkl steer · x cut · p pinch · s split",
+            "w tend",
             Style::default().fg(theme::TEXT_FAINT()),
         ));
     }
@@ -391,10 +407,20 @@ fn draw_lobby_tile(frame: &mut Frame, area: Rect, daily: &DailyState, glow: bool
 }
 
 /// The pet's box at tile size: a name and mood row on top when there is
-/// room, and the whole rest of the tile to roam.
-fn draw_pet_tile(frame: &mut Frame, area: Rect, pet: Option<&PetView<'_>>) {
+/// room, and the whole rest of the tile to roam. `watching` names the side
+/// a neighbouring tank is on; a fed pet sits there and watches.
+fn draw_pet_tile(
+    frame: &mut Frame,
+    area: Rect,
+    pet: Option<&PetView<'_>>,
+    watching: Option<WatchSide>,
+) {
     let Some(view) = pet else {
-        draw_centered_note(frame, area, &["no pet in this room", "/shop has one"]);
+        draw_centered_note(
+            frame,
+            area,
+            &["no pet yet", "the Pet Companion is in /shop"],
+        );
         return;
     };
     if area.height < FLOOR_ROWS {
@@ -415,6 +441,13 @@ fn draw_pet_tile(frame: &mut Frame, area: Rect, pet: Option<&PetView<'_>>) {
                 format!(" · {} · {}", state.mood().label(), state.age_label()),
                 dim,
             ),
+            Span::styled(
+                match PetPose::for_frame(state.mood(), watching, state.animation_ticks()) {
+                    PetPose::Watch(_) => " · watching the fish",
+                    PetPose::Stroll | PetPose::Sulk => "",
+                },
+                dim,
+            ),
         ])
         .centered();
         frame.render_widget(
@@ -425,7 +458,7 @@ fn draw_pet_tile(frame: &mut Frame, area: Rect, pet: Option<&PetView<'_>>) {
     } else {
         area
     };
-    draw_pet_box(frame, box_area, view);
+    draw_pet_box(frame, box_area, view, watching);
 }
 
 fn draw_chat_tile(
@@ -456,7 +489,9 @@ fn draw_music_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {
     }
     let dim = Style::default().fg(theme::TEXT_DIM());
     let faint = Style::default().fg(theme::TEXT_FAINT());
-    let text_rows: u16 = 2;
+    // Track, station, keys: one row each, the keys row first to go when
+    // the tile is short. The equalizer takes what is left, up to three.
+    let text_rows: u16 = area.height.min(3);
     let eq_rows = area.height.saturating_sub(text_rows).min(3);
     let total = eq_rows + text_rows;
     let top = area.y + area.height.saturating_sub(total) / 2;
@@ -476,13 +511,14 @@ fn draw_music_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {
         ),
     ])
     .centered();
-    let controls = Line::from(vec![
-        Span::styled(view.source_label, dim),
-        Span::styled(" · m mute · -= vol · v+x source", faint),
-    ])
+    let station = Line::from(Span::styled(view.station.clone(), dim)).centered();
+    let controls = Line::from(Span::styled(
+        "m mute · -= vol · v+x source · v1-5 tune",
+        faint,
+    ))
     .centered();
     frame.render_widget(
-        Paragraph::new(vec![track, controls]),
+        Paragraph::new(vec![track, station, controls]),
         Rect::new(
             area.x,
             top + eq_rows,
@@ -490,6 +526,20 @@ fn draw_music_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {
             text_rows.min(area.height),
         ),
     );
+}
+
+/// The player's second row: the source, then the station or stream it is
+/// tuned to. YouTube has no station, so it stays one word.
+pub(crate) fn station_text(
+    source: AudioSource,
+    station: RadioStation,
+    stream: IcecastStream,
+) -> String {
+    match source {
+        AudioSource::Radio => format!("radio · {}", radio_station_display_name(station)),
+        AudioSource::Icecast => format!("icecast · {}", icecast_stream_display_name(stream)),
+        AudioSource::Youtube => "youtube".to_string(),
+    }
 }
 
 fn draw_clock_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {

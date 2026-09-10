@@ -1154,7 +1154,8 @@ pub fn draw_dashboard_chat_card(
         split_chat_pet_strip_and_composer(area, composer_height, pet_strip_height);
     draw_activity_ticker(frame, ticker_area, view.activity_ticker);
     if let Some(pet_strip) = &view.pet_strip {
-        crate::app::pet::ui::draw_pet_box(frame, pet_strip_area, pet_strip);
+        // The Home strip has no tank beside it: nothing to watch.
+        crate::app::pet::ui::draw_pet_box(frame, pet_strip_area, pet_strip, None);
     }
     // The Lounge gets the same header block as every other room: voice state
     // and the topic in one place, rather than a bare voice strip.
@@ -5000,7 +5001,8 @@ pub fn draw_chat_center(
         split_chat_pet_strip_and_composer(area, selection_mode.composer_height(), pet_strip_height);
     draw_activity_ticker(frame, ticker_area, view.activity_ticker);
     if let Some(pet_strip) = &view.pet_strip {
-        crate::app::pet::ui::draw_pet_box(frame, pet_strip_area, pet_strip);
+        // The Home strip has no tank beside it: nothing to watch.
+        crate::app::pet::ui::draw_pet_box(frame, pet_strip_area, pet_strip, None);
     }
 
     draw_selected_content(frame, messages_area, composer_area, view, terminal_images);

@@ -4,6 +4,7 @@
 use ratatui::layout::Rect;
 
 use super::state::{BorderKind, Dir, Look, Node, TileKind};
+use crate::app::pet::ui::WatchSide;
 
 /// One row under the tree for its status line.
 pub const BONSAI_STATUS_ROWS: u16 = 1;
@@ -138,3 +139,29 @@ pub fn tile_inner(rect: Rect, look: &Look) -> Rect {
         ),
     }
 }
+
+/// Which side of `from` the tile `to` sits against, if the two share an
+/// edge: touching across exactly the layout gap, and overlapping along that
+/// edge. Tiles that only meet at a corner, or with another tile between
+/// them, are not neighbours.
+pub fn neighbour_side(from: Rect, to: Rect, gap: u16) -> Option<WatchSide> {
+    let rows_overlap = to.y < from.bottom() && from.y < to.bottom();
+    let cols_overlap = to.x < from.right() && from.x < to.right();
+    if rows_overlap && to.x == from.right() + gap {
+        return Some(WatchSide::Right);
+    }
+    if rows_overlap && from.x == to.right() + gap {
+        return Some(WatchSide::Left);
+    }
+    if cols_overlap && to.y == from.bottom() + gap {
+        return Some(WatchSide::Below);
+    }
+    if cols_overlap && from.y == to.bottom() + gap {
+        return Some(WatchSide::Above);
+    }
+    None
+}
+
+#[cfg(test)]
+#[path = "layout_test.rs"]
+mod layout_test;

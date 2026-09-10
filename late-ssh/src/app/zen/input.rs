@@ -1,24 +1,29 @@
-//! Keys for both Zen pages. Care keys are the same on both (they act on the
-//! things you own, wherever they sit); Rice adds the layout keys. Anything
+//! Keys for the Zen page: the room walk, the pet and tank feeds, and the
+//! layout keys. The bonsai is tended in its care modal, the same one `w`
+//! opens on every other page, so no care key is captured here. Anything
 //! not owned here returns `false` so the global keys (digits, Tab, `q`,
-//! `?`, the `v` music chords) keep working.
+//! `?`, `w`, the `v` music chords) keep working.
 
 use uuid::Uuid;
 
-use super::state::{Dir, TileKind};
+use super::state::Dir;
 use crate::app::{
     chat::state::RoomSlot, common::primitives::Banner, input::ParsedInput, state::App,
 };
 
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
+    // A pressed `v` owns the next key everywhere; the page must not eat the
+    // suffix (`v x` swaps the audio source, `X` here closes a tile).
+    if app.music_prefix_armed {
+        return false;
+    }
     if handle_common(app, event) {
         return true;
     }
     handle_rice(app, event)
 }
 
-/// Compose, the room walk, and the care keys: bonsai
-/// `w x p s n N`, pet `f d`, tank `a`.
+/// Compose, the room walk, and the feeds: pet `f`, tank `a`.
 fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
     let Some(byte) = event_byte(event) else {
         return false;
@@ -38,30 +43,6 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
             }
             true
         }
-        b'w' => {
-            water_bonsai(app);
-            true
-        }
-        b'x' => {
-            app.bonsai_state.prune_selected();
-            true
-        }
-        b'p' => {
-            app.bonsai_state.pinch_selected();
-            true
-        }
-        b's' => {
-            app.bonsai_state.split_selected();
-            true
-        }
-        b'n' => {
-            app.bonsai_state.cycle_selection(1);
-            true
-        }
-        b'N' => {
-            app.bonsai_state.cycle_selection(-1);
-            true
-        }
         b'f' => {
             crate::app::input::pet_feed_globally(app);
             true
@@ -74,8 +55,8 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
     }
 }
 
-/// Rice: arrows move focus, hjkl steer the tree when a bonsai tile has
-/// focus, and the layout keys edit the tree. Every edit persists.
+/// Rice: arrows move focus and the layout keys edit the tree. Every edit
+/// persists.
 fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
     match event {
         ParsedInput::Arrow(b'D') | ParsedInput::Arrow(b'A') => {
@@ -91,24 +72,7 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
     let Some(byte) = event_byte(event) else {
         return false;
     };
-    let bonsai_focused = app.zen.focused_kind() == Some(TileKind::Bonsai);
     let changed = match byte {
-        b'h' if bonsai_focused => {
-            app.bonsai_state.bend_selected(-1, 0);
-            return true;
-        }
-        b'l' if bonsai_focused => {
-            app.bonsai_state.bend_selected(1, 0);
-            return true;
-        }
-        b'k' if bonsai_focused => {
-            app.bonsai_state.bend_selected(0, 1);
-            return true;
-        }
-        b'j' if bonsai_focused => {
-            app.bonsai_state.bend_selected(0, -1);
-            return true;
-        }
         b' ' => app.zen.cycle_focused_kind(true),
         b'S' => {
             let wide = focused_tile_is_wide(app);
@@ -207,15 +171,6 @@ fn cycle_room(app: &mut App, delta: isize) {
     let next = (current as isize + delta).rem_euclid(ids.len() as isize) as usize;
     app.chat.select_room_slot(RoomSlot::Room(ids[next]));
     app.sync_visible_chat_room();
-}
-
-fn water_bonsai(app: &mut App) {
-    // The first `w` on a dead tree replants; watering starts on the next.
-    if !app.bonsai_state.is_alive {
-        app.bonsai_state.respawn();
-        return;
-    }
-    app.bonsai_state.water();
 }
 
 fn event_byte(event: &ParsedInput) -> Option<u8> {

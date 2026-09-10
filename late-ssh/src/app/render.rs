@@ -1830,11 +1830,11 @@ impl App {
                     chat: ctx.zen_chat_view.take(),
                     room_label: ctx.zen_room_label.to_string(),
                     track: ctx.zen_track.clone(),
-                    source_label: match ctx.paired_source {
-                        late_core::models::user::AudioSource::Radio => "radio",
-                        late_core::models::user::AudioSource::Youtube => "youtube",
-                        late_core::models::user::AudioSource::Icecast => "icecast",
-                    },
+                    station: crate::app::zen::ui::station_text(
+                        ctx.paired_source,
+                        ctx.selected_radio_station,
+                        ctx.selected_icecast_stream,
+                    ),
                     eq_state: match ctx.paired_client {
                         None => crate::app::audio::viz::EqState::Unpaired,
                         Some(client) if client.muted => crate::app::audio::viz::EqState::Muted,

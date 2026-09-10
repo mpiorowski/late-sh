@@ -49,7 +49,7 @@ fn one_press_moves_a_row_split_by_exactly_one_column_at_every_width() {
 fn a_deep_column_split_moves_one_row_and_a_row_only_tree_has_no_height() {
     let area = Rect::new(0, 0, 160, 44);
     let mut root = RiceLayout::default().root;
-    // Leaves run bonsai, aquarium, clock, music, lobby, chat. Music sits in
+    // Leaves run bonsai, chat, clock, music, lobby, pet, aquarium. Music sits in
     // a column inside a column inside the rail; only the split directly
     // above it moves, so the clock above and the left column stay put.
     let before = heights(&root, area, 1);
@@ -60,9 +60,9 @@ fn a_deep_column_split_moves_one_row_and_a_row_only_tree_has_no_height() {
     assert_eq!(after[1], before[1]);
     assert_eq!(after[2], before[2], "the clock is untouched");
     assert_eq!(
-        after[4] + after[5] + 1,
-        before[4] + before[5],
-        "lobby and chat give up one row between them"
+        after[4] + after[5] + after[6] + 1,
+        before[4] + before[5] + before[6],
+        "lobby, pet, and the reef give up one row between them"
     );
 
     let mut row_only = Node::split(

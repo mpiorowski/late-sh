@@ -892,12 +892,13 @@ impl App {
         // settings, entitlements) dirties a frame through its own path,
         // which re-records the slot.
         changed |= self.pet_state.tick(self.marquee_tick);
-        if let Some(travel) = self.last_pet_travel.get() {
+        if let Some(inputs) = self.last_pet_travel.get() {
             changed |= anim_half
                 && crate::app::pet::ui::frame_changed(
                     self.pet_state.mood(),
+                    inputs.watching,
                     self.pet_state.animation_ticks(),
-                    travel,
+                    inputs.travel,
                 );
         }
         // The aquarium has no clock of its own: one step per quarter edge,

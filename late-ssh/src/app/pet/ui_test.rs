@@ -4,7 +4,10 @@ use late_core::test_utils::create_test_user;
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 use tokio::sync::broadcast;
 
-use super::{PET_STRIP_HEIGHT, PetTravel, PetView, draw_pet_box, frame_changed};
+use super::{
+    PET_STRIP_HEIGHT, PetPose, PetTravel, PetView, STROLL_TICKS, WATCH_TICKS, WatchSide,
+    draw_pet_box, frame_changed,
+};
 use crate::app::activity::event::ActivityEvent;
 use crate::app::pet::state::{PetMood, PetState};
 use crate::test_helpers::new_test_db;
@@ -16,7 +19,7 @@ fn parked_sad_pet_never_pays_a_frame() {
     // A hungry pet sits on the floor with no blink and a limp tail: the box
     // is fully static, so no tick may report a change.
     for tick in 0..500 {
-        assert!(!frame_changed(PetMood::Sad, tick, WIDE));
+        assert!(!frame_changed(PetMood::Sad, None, tick, WIDE));
     }
 }
 
@@ -24,13 +27,13 @@ fn parked_sad_pet_never_pays_a_frame() {
 fn fed_pet_changes_on_blink_edges_and_skips_still_ticks() {
     // Blink turns on at tick % 64 == 0 and off at tick % 64 == 3; both edges
     // repaint regardless of where the stroll is.
-    assert!(frame_changed(PetMood::Happy, 64, WIDE));
-    assert!(frame_changed(PetMood::Happy, 67, WIDE));
+    assert!(frame_changed(PetMood::Happy, None, 64, WIDE));
+    assert!(frame_changed(PetMood::Happy, None, 67, WIDE));
 
     // The gate only pays for ticks where the art moves: across a whole blink
     // period a strolling pet must have both changed and clean ticks.
     let changed_ticks = (1..=64)
-        .filter(|&tick| frame_changed(PetMood::Happy, tick, WIDE))
+        .filter(|&tick| frame_changed(PetMood::Happy, None, tick, WIDE))
         .count();
     assert!(changed_ticks > 0, "a fed pet animates");
     assert!(changed_ticks < 64, "a fed pet still has clean ticks");
@@ -41,13 +44,75 @@ fn zero_travel_still_blinks() {
     // A box too small to roam still has blink and tail edges.
     assert!(frame_changed(
         PetMood::Happy,
+        None,
         64,
         PetTravel { x: 0, y: 0 }
     ));
 }
 
+#[test]
+fn a_pet_beside_the_tank_strolls_twenty_minutes_and_watches_five() {
+    let glass = Some(WatchSide::Right);
+    let pose = |tick| PetPose::for_frame(PetMood::Happy, glass, tick);
+    assert_eq!(pose(0), PetPose::Stroll);
+    assert_eq!(pose(STROLL_TICKS - 1), PetPose::Stroll);
+    assert_eq!(pose(STROLL_TICKS), PetPose::Watch(WatchSide::Right));
+    assert_eq!(
+        pose(STROLL_TICKS + WATCH_TICKS - 1),
+        PetPose::Watch(WatchSide::Right)
+    );
+    assert_eq!(pose(STROLL_TICKS + WATCH_TICKS), PetPose::Stroll, "and round again");
+    // Roughly the minutes on the label, at the 66ms wall tick.
+    assert_eq!((STROLL_TICKS * 66 + 30_000) / 60_000, 20);
+    assert_eq!((WATCH_TICKS * 66 + 30_000) / 60_000, 5);
+    // Hunger, or no tank beside the tile, and there is no watching at all.
+    assert_eq!(
+        PetPose::for_frame(PetMood::Sad, glass, STROLL_TICKS),
+        PetPose::Sulk
+    );
+    assert_eq!(
+        PetPose::for_frame(PetMood::Happy, None, STROLL_TICKS),
+        PetPose::Stroll
+    );
+}
+
+#[test]
+fn a_watching_pet_holds_still_but_still_blinks_and_gasps() {
+    let glass = Some(WatchSide::Right);
+    let start = STROLL_TICKS;
+    // The walk to the glass repaints, then blink and gasp edges do.
+    assert!(frame_changed(PetMood::Happy, glass, start, WIDE));
+    let first_blink = (start..).find(|t| t % 64 == 0).unwrap();
+    assert!(frame_changed(PetMood::Happy, glass, first_blink, WIDE));
+    let first_gasp = (start + 1..).find(|t| t % 96 == 0).unwrap();
+    assert!(frame_changed(PetMood::Happy, glass, first_gasp, WIDE));
+    assert!(
+        frame_changed(PetMood::Happy, glass, first_gasp + 6, WIDE),
+        "the gasp ends after six ticks"
+    );
+    // No stroll steps: far fewer paid frames than a strolling pet.
+    let window = start + 1..=start + 192;
+    let watching = window
+        .clone()
+        .filter(|&t| frame_changed(PetMood::Happy, glass, t, WIDE))
+        .count();
+    let strolling = window
+        .filter(|&t| frame_changed(PetMood::Happy, None, t, WIDE))
+        .count();
+    assert!(watching > 0 && watching < strolling, "{watching} vs {strolling}");
+}
+
 /// Draw the box at `tick` and report where the pet landed.
 fn pet_rect_at(state: &mut PetState, tick: usize, area: Rect) -> Rect {
+    pet_rect_watching(state, tick, area, None)
+}
+
+fn pet_rect_watching(
+    state: &mut PetState,
+    tick: usize,
+    area: Rect,
+    watching: Option<WatchSide>,
+) -> Rect {
     state.tick(tick);
     let pet_rect = Cell::new(None);
     let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
@@ -62,6 +127,7 @@ fn pet_rect_at(state: &mut PetState, tick: usize, area: Rect) -> Rect {
                     bowl_rect_slot: None,
                     travel_slot: None,
                 },
+                watching,
             );
         })
         .unwrap();
@@ -102,4 +168,16 @@ async fn hungry_pet_sits_on_the_floor_and_a_fed_pet_roams_the_whole_box() {
         right > area.width / 2,
         "the stroll crosses into the right half (reached {right})"
     );
+
+    // With a tank against the right edge the fed pet sits on the floor at
+    // the edge and stays there, whatever the tick.
+    let at_glass = pet_rect_watching(&mut state, STROLL_TICKS + 7, area, Some(WatchSide::Right));
+    assert_eq!(at_glass.y, floor_y, "watching from the floor");
+    assert_eq!(
+        at_glass,
+        pet_rect_watching(&mut state, STROLL_TICKS + 707, area, Some(WatchSide::Right)),
+        "a watching pet does not wander"
+    );
+    let roam_right = area.right() - super::BOWL_ZONE_WIDTH;
+    assert_eq!(at_glass.right(), roam_right, "pressed against the tank's edge");
 }

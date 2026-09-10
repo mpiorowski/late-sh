@@ -161,7 +161,8 @@ fn item_list_rows<'a>(
         ShopCategory::Chat => chat_section_label,
         ShopCategory::Badges => badge_section_label,
         ShopCategory::Ultimates => ultimates_section_label,
-        ShopCategory::Flags | ShopCategory::Companions | ShopCategory::Aquarium => {
+        ShopCategory::Companions => companion_section_label,
+        ShopCategory::Flags => {
             return items
                 .iter()
                 .enumerate()
@@ -203,6 +204,18 @@ fn ultimates_section_label(item: &ShopCatalogItem) -> &'static str {
         "Burn milestones"
     } else {
         "Ultimate spells"
+    }
+}
+
+/// The Companions tab in catalog order: the pet, the bonsai shield, then
+/// the tank, its shield, and the fish.
+fn companion_section_label(item: &ShopCatalogItem) -> &'static str {
+    if item.is_pet_companion() {
+        "Pet"
+    } else if item.is_bonsai_decay_shield() {
+        "Bonsai"
+    } else {
+        "Aquarium"
     }
 }
 
@@ -642,7 +655,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
             Span::styled(" toggle cat/dog", text),
         ]);
     }
-    if state.selected_category() == ShopCategory::Aquarium {
+    if selected.is_some_and(|item| item.is_aquarium_fish()) {
         spans.extend([
             Span::styled("  by ", text),
             Span::styled("github.com/mevanlc/reefs", key),
