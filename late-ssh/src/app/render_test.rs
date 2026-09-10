@@ -363,7 +363,7 @@ fn help_hint_title_lists_exit_last() {
     let help = app_frame_help_hint_title(HelpHintStyle::DottedCtrl);
     assert_eq!(
         line_text(&help),
-        " Settings Ctrl+O · Lobby Ctrl+G · Shop /shop · Guide ? · Exit qq "
+        " Settings Ctrl+O · Lobby Ctrl+G · Zen Ctrl+F · Shop /shop · Guide ? · Exit qq "
     );
 }
 
@@ -374,11 +374,11 @@ fn help_hint_title_compacts_separators_then_ctrl_notation() {
     let caret = app_frame_help_hint_title(HelpHintStyle::SpacedCaret);
     assert_eq!(
         line_text(&spaced),
-        " Settings Ctrl+O  Lobby Ctrl+G  Shop /shop  Guide ?  Exit qq "
+        " Settings Ctrl+O  Lobby Ctrl+G  Zen Ctrl+F  Shop /shop  Guide ?  Exit qq "
     );
     assert_eq!(
         line_text(&caret),
-        " Settings ^O  Lobby ^G  Shop /shop  Guide ?  Exit qq "
+        " Settings ^O  Lobby ^G  Zen ^F  Shop /shop  Guide ?  Exit qq "
     );
 
     let (help, sponsor) = app_frame_bottom_titles((line_width(&dotted) + 2) as u16);

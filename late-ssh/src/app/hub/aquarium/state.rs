@@ -4,19 +4,204 @@ use std::{
 };
 
 use anyhow::Result;
+use chrono::{DateTime, NaiveDate, Utc};
+use late_core::models::{
+    aquarium_care::{self as care_rules, CARE_DAYS, FRY_DAYS, MURKY_AFTER_DAYS},
+    aquarium_shield::AquariumShield,
+};
 use rand::{Rng, rngs::ThreadRng};
 use ratatui::{layout::Rect, style::Color};
 
 use super::{
     config::{AppConfig, Mode},
     creature::{
-        ActivityState, CreatureDef, Entity, PoseIntent, Territory, Variant, tallest_variant_height,
+        ActivityState, CreatureDef, Entity, FRY_CREATURE, PoseIntent, Territory, Variant,
+        tallest_variant_height,
     },
     world::{ReefWorld, WorldBounds, load_world_layer},
 };
 
 const FEED_EFFECT_DURATION: Duration = Duration::from_secs(8);
 const HUNGRY_MOTION_DIVISOR: u64 = 4;
+
+/// The owner's care of the tank, the bonsai's model with stakes. One free
+/// feeding a day; hunger is derived, never stored: not fed today (UTC) is
+/// hungry, and hungry fish sink to the floor (`nudge_hungry_entity_down`).
+/// Fourteen straight fed days hatch a fry, fourteen unfed days starve a fish
+/// (settled by the service at login), seven unfed days turn the water
+/// murky, and the shield's auto feeder takes days off both clocks. Lives
+/// beside the simulation rather than inside it because the sim also draws
+/// other people's tanks (the profile modal), which carry no care of yours.
+pub(crate) struct AquariumCare {
+    pub(crate) last_fed: Option<DateTime<Utc>>,
+    /// Straight fed UTC days, counting the last meal.
+    pub(crate) streak: i32,
+    /// Every shield window the owner bought, live or lapsed: a lapsed one
+    /// still excuses the days it covered.
+    pub(crate) shields: Vec<AquariumShield>,
+    pub(crate) fry: Option<Fry>,
+}
+
+/// A hatchling: drawn as the small sprite for its first `FRY_DAYS`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Fry {
+    pub(crate) creature: String,
+    pub(crate) born: NaiveDate,
+}
+
+/// Outcome of a feed press. The day's meal is free; the only refusal is a
+/// tank that has already eaten.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CareOutcome {
+    Fed,
+    AlreadyFedToday,
+}
+
+/// What the Zen tile's fourteen boxes show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CareBar {
+    /// Fed today: this many boxes green, the way to the next fry (a full bar
+    /// on the day one hatches, one box the day after).
+    Streak(u32),
+    /// Not fed: this many boxes red, the way to the next death. Saturates:
+    /// a tank past its first loss stays full red until somebody feeds it.
+    Dry(u32),
+    /// The shield's auto feeder covers today: nothing counts either way.
+    Minded,
+}
+
+impl AquariumCare {
+    pub(crate) fn new(
+        row: Option<late_core::models::aquarium_care::AquariumCare>,
+        shields: Vec<AquariumShield>,
+    ) -> Self {
+        match row {
+            Some(row) => Self {
+                last_fed: Some(row.last_fed),
+                streak: row.streak,
+                shields,
+                fry: match (row.fry_creature, row.fry_born) {
+                    (Some(creature), Some(born)) => Some(Fry { creature, born }),
+                    (Some(_), None) | (None, Some(_)) | (None, None) => None,
+                },
+            },
+            None => Self {
+                last_fed: None,
+                streak: 0,
+                shields,
+                fry: None,
+            },
+        }
+    }
+
+    /// Whether the shield's auto feeder covers today.
+    pub(crate) fn minded_on(&self, today: NaiveDate) -> bool {
+        self.shields.iter().any(|shield| shield.covers_day(today))
+    }
+
+    /// Whether the fish go hungry right now: nobody fed them today and no
+    /// auto feeder is minding the tank.
+    pub(crate) fn hungry(&self) -> bool {
+        self.hungry_on(Utc::now().date_naive())
+    }
+
+    pub(crate) fn hungry_on(&self, today: NaiveDate) -> bool {
+        !fed_on(self.last_fed, today) && !self.minded_on(today)
+    }
+
+    /// Unfed days on the clock since the last meal, shield days excused.
+    pub(crate) fn dry_days_on(&self, today: NaiveDate) -> u32 {
+        match self.last_fed {
+            Some(last) => care_rules::dry_days(last.date_naive(), today, &self.shields),
+            None => 0,
+        }
+    }
+
+    /// Whether the water has gone murky: a week or more unfed.
+    pub(crate) fn murky(&self) -> bool {
+        self.murky_on(Utc::now().date_naive())
+    }
+
+    pub(crate) fn murky_on(&self, today: NaiveDate) -> bool {
+        self.dry_days_on(today) >= MURKY_AFTER_DAYS
+    }
+
+    pub(crate) fn bar(&self) -> CareBar {
+        self.bar_on(Utc::now().date_naive())
+    }
+
+    pub(crate) fn bar_on(&self, today: NaiveDate) -> CareBar {
+        if fed_on(self.last_fed, today) {
+            let streak = self.streak.max(0) as u32;
+            let shown = if streak == 0 {
+                0
+            } else {
+                (streak - 1) % CARE_DAYS + 1
+            };
+            return CareBar::Streak(shown);
+        }
+        if self.minded_on(today) {
+            return CareBar::Minded;
+        }
+        CareBar::Dry(self.dry_days_on(today).min(CARE_DAYS))
+    }
+
+    /// The fry still small enough to draw as the hatchling sprite, by
+    /// creature name.
+    pub(crate) fn fry_visible(&self) -> Option<&str> {
+        self.fry_visible_on(Utc::now().date_naive())
+    }
+
+    pub(crate) fn fry_visible_on(&self, today: NaiveDate) -> Option<&str> {
+        let fry = self.fry.as_ref()?;
+        let grown = fry
+            .born
+            .checked_add_days(chrono::Days::new(FRY_DAYS as u64))
+            .is_none_or(|grown_on| today >= grown_on);
+        (!grown).then_some(fry.creature.as_str())
+    }
+
+    /// The day's meal. The service pays the chips and hatches any fry behind
+    /// DB gates; the caller only learns whether this press was the one that
+    /// fed the tank. The streak follows the same rule as the row: it
+    /// continues when the last meal was yesterday or only shielded days
+    /// ago, and restarts otherwise.
+    pub(crate) fn feed(&mut self) -> CareOutcome {
+        let now = Utc::now();
+        let today = now.date_naive();
+        if fed_on(self.last_fed, today) {
+            return CareOutcome::AlreadyFedToday;
+        }
+        let continues_from = care_rules::streak_continues_from(today, &self.shields);
+        let continues = self
+            .last_fed
+            .is_some_and(|last| last.date_naive() >= continues_from);
+        self.streak = if continues { self.streak + 1 } else { 1 };
+        self.last_fed = Some(now);
+        CareOutcome::Fed
+    }
+
+    /// A fry hatched into the water (the service's event came back).
+    pub(crate) fn set_fry(&mut self, creature: String, born: NaiveDate) {
+        self.fry = Some(Fry { creature, born });
+    }
+
+    /// A live shield from the shop snapshot joins what we hold: a rebuy
+    /// extends the live window in place (same start, later end), a fresh
+    /// purchase after a lapse is a new one. `None` (no live shield) keeps
+    /// every lapsed window, which the starvation count still needs.
+    pub(crate) fn refresh_shield(&mut self, live: Option<AquariumShield>) {
+        if let Some(live) = live {
+            self.shields
+                .retain(|shield| shield.starts_at != live.starts_at);
+            self.shields.insert(0, live);
+        }
+    }
+}
+
+fn fed_on(last: Option<DateTime<Utc>>, today: NaiveDate) -> bool {
+    last.is_some_and(|time| time.date_naive() == today)
+}
 
 pub(crate) struct AquariumState {
     pub(crate) definitions: Vec<CreatureDef>,
@@ -27,6 +212,7 @@ pub(crate) struct AquariumState {
     pub(crate) mode: RuntimeMode,
     feed_started_at: Option<Instant>,
     hungry: bool,
+    murky: bool,
 }
 
 pub(crate) enum RuntimeMode {
@@ -143,6 +329,7 @@ impl AquariumState {
             mode,
             feed_started_at: None,
             hungry: false,
+            murky: false,
         };
         app.spawn_initial_entities(launch_area, initial_count_scale);
         Ok(app)
@@ -182,26 +369,37 @@ impl AquariumState {
         }
     }
 
-    pub(crate) fn set_active_creatures(&mut self, active_creatures: &[(String, usize)]) {
-        if self.active_creature_counts_match(active_creatures) {
+    /// Put the owner's fish in the water: `active_creatures` is the shop's
+    /// `(creature, count)` list, `fry` the creature whose newest hatchling
+    /// is still small. The fry takes one of its parent species' places and
+    /// swims as the `FRY_CREATURE` sprite in a parent colour. Nothing is
+    /// respawned when the population already matches.
+    pub(crate) fn set_active_creatures(
+        &mut self,
+        active_creatures: &[(String, usize)],
+        fry: Option<&str>,
+    ) {
+        let desired = self.desired_population(active_creatures, fry);
+        if self.population_matches(&desired) {
             return;
         }
 
         let mut rng = rand::thread_rng();
         let mut entities = Vec::new();
         let mut copy_index = 0;
-        for (name, count) in active_creatures {
-            let Some(def_index) = self.definitions.iter().position(|def| def.name == *name) else {
-                continue;
-            };
-            for _ in 0..*count {
-                let entity = match &self.mode {
-                    RuntimeMode::Tank(tank) => {
-                        spawn_tank_entity(&self.definitions, def_index, copy_index, tank, &mut rng)
-                    }
+        for spawn in &desired {
+            for _ in 0..spawn.count {
+                let mut entity = match &self.mode {
+                    RuntimeMode::Tank(tank) => spawn_tank_entity(
+                        &self.definitions,
+                        spawn.def_index,
+                        copy_index,
+                        tank,
+                        &mut rng,
+                    ),
                     RuntimeMode::Reef(reef) => spawn_reef_entity(
                         &self.definitions,
-                        def_index,
+                        spawn.def_index,
                         copy_index,
                         &reef.world,
                         reef.last_area,
@@ -209,6 +407,9 @@ impl AquariumState {
                         &mut rng,
                     ),
                 };
+                if let Some(parent) = spawn.colour_of {
+                    entity.color = entity_color(&self.definitions, parent, copy_index, &mut rng);
+                }
                 entities.push(entity);
                 copy_index += 1;
             }
@@ -216,24 +417,54 @@ impl AquariumState {
         self.entities = entities;
     }
 
-    fn active_creature_counts_match(&self, active_creatures: &[(String, usize)]) -> bool {
-        let mut current = HashMap::new();
-        for entity in &self.entities {
-            let Some(def) = self.definitions.get(entity.def) else {
+    /// The population as definition indices, the fry carved out of its
+    /// parent's count. A fry whose parent is not swimming (sold off, or
+    /// moved to inventory) is not drawn: there is nothing to be small next to.
+    fn desired_population(
+        &self,
+        active_creatures: &[(String, usize)],
+        fry: Option<&str>,
+    ) -> Vec<PopulationSpawn> {
+        let def_index = |name: &str| self.definitions.iter().position(|def| def.name == name);
+        let fry_def = def_index(FRY_CREATURE);
+        let mut spawns = Vec::new();
+        for (name, count) in active_creatures {
+            let Some(index) = def_index(name) else {
                 continue;
             };
-            *current.entry(def.name.as_str()).or_insert(0) += 1;
-        }
-
-        let mut desired = HashMap::new();
-        for (name, count) in active_creatures {
-            if *count == 0 || !self.definitions.iter().any(|def| def.name == *name) {
-                continue;
+            let mut count = *count;
+            if let (Some(fry_index), Some(parent)) = (fry_def, fry)
+                && parent == name
+                && count > 0
+            {
+                count -= 1;
+                spawns.push(PopulationSpawn {
+                    def_index: fry_index,
+                    count: 1,
+                    colour_of: Some(index),
+                });
             }
-            desired.insert(name.as_str(), *count);
+            if count > 0 {
+                spawns.push(PopulationSpawn {
+                    def_index: index,
+                    count,
+                    colour_of: None,
+                });
+            }
         }
+        spawns
+    }
 
-        current == desired
+    fn population_matches(&self, desired: &[PopulationSpawn]) -> bool {
+        let mut current: HashMap<usize, usize> = HashMap::new();
+        for entity in &self.entities {
+            *current.entry(entity.def).or_insert(0) += 1;
+        }
+        let mut wanted: HashMap<usize, usize> = HashMap::new();
+        for spawn in desired {
+            *wanted.entry(spawn.def_index).or_insert(0) += spawn.count;
+        }
+        current == wanted
     }
 
     /// Advance the simulation exactly one step: the aquarium keeps no clock
@@ -331,6 +562,24 @@ impl AquariumState {
     pub(crate) fn set_hungry(&mut self, hungry: bool) {
         self.hungry = hungry;
     }
+
+    /// Murky water (a week unfed): the renderer dims the fish and floats
+    /// algae through the water. The sim itself does not change.
+    pub(crate) fn set_murky(&mut self, murky: bool) {
+        self.murky = murky;
+    }
+
+    pub(crate) fn is_murky(&self) -> bool {
+        self.murky
+    }
+}
+
+/// One line of the population to spawn: `count` of `def_index`, coloured
+/// like `colour_of` when set (the fry wears its parent's colour).
+struct PopulationSpawn {
+    def_index: usize,
+    count: usize,
+    colour_of: Option<usize>,
 }
 
 fn scaled_initial_count(count: usize, scale: f64) -> usize {
@@ -875,3 +1124,7 @@ fn entity_color(
 
     colors[(def_index + copy_index + name_hash) % colors.len()]
 }
+
+#[cfg(test)]
+#[path = "state_test.rs"]
+mod state_test;

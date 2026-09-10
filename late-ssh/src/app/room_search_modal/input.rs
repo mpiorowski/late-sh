@@ -140,7 +140,11 @@ fn close_into_room(app: &mut App, slot: RoomSlot) {
     app.chat.close_news_modal();
     app.chat.select_room_slot(slot);
     app.room_search_modal_state.close();
-    app.set_screen(Screen::Dashboard);
+    // The Zen page shows whatever room Home has selected, so a pick made
+    // there stays there; everywhere else the room opens on Home.
+    if app.screen != Screen::Zen {
+        app.set_screen(Screen::Dashboard);
+    }
     app.sync_visible_chat_room();
 }
 

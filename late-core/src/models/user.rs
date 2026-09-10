@@ -367,6 +367,9 @@ const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
 const RIGHT_SIDEBAR_COMPONENTS_KEY: &str = "right_sidebar_components";
 const SHOW_AQUARIUM_TRAY_KEY: &str = "show_aquarium_tray";
 const SHOW_PET_STRIP_KEY: &str = "show_pet_strip";
+/// The Rice page's tiling layout and look (`late-ssh/src/app/zen`), stored
+/// as the JSON the page itself serializes; absent until first edited.
+const ZEN_LAYOUT_KEY: &str = "zen_layout";
 const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
 const ROOM_LIST_MODE_KEY: &str = "room_list_mode";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
@@ -890,6 +893,23 @@ impl User {
                      updated = current_timestamp
                  WHERE id = $3",
                 &[&SHOW_AQUARIUM_TRAY_KEY, &shown, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    /// Store the Rice page's layout JSON in the settings blob.
+    pub async fn set_zen_layout(client: &Client, user_id: Uuid, layout: &Value) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::jsonb),
+                     updated = current_timestamp
+                 WHERE id = $3",
+                &[&ZEN_LAYOUT_KEY, layout, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -1877,6 +1897,12 @@ pub fn extract_show_pet_strip(settings: &Value) -> bool {
         .get(SHOW_PET_STRIP_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
+}
+
+/// The stored Rice layout, if the account ever edited one. Parsed by the
+/// page, which falls back to its default on anything unreadable.
+pub fn extract_zen_layout(settings: &Value) -> Option<Value> {
+    settings.get(ZEN_LAYOUT_KEY).cloned()
 }
 
 /// True once the user has finished (or skipped) the clubhouse first-visit

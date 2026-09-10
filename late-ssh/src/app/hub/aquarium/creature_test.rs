@@ -13,7 +13,7 @@ fn all_embedded_creatures_parse() {
 
     let names: std::collections::HashSet<String> =
         creatures.iter().map(|c| c.name.clone()).collect();
-    for required in ["anchovy", "clownfish", "pufferfish"] {
+    for required in ["anchovy", "clownfish", "pufferfish", FRY_CREATURE] {
         assert!(
             names.contains(required),
             "new creature `{required}` missing from default sources"

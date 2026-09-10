@@ -359,6 +359,13 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             None
         }
     };
+    let initial_aquarium_care = match state.aquarium_service.bootstrap(user_id).await {
+        Ok(care) => care,
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load aquarium care");
+            Default::default()
+        }
+    };
     let quest_snapshot_rx = state.quest_service.subscribe_snapshot(user_id);
     if let Err(e) = state.quest_service.refresh_user(user_id).await {
         tracing::warn!(error = ?e, "failed to refresh quest snapshot");
@@ -486,6 +493,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_bonsai_decay_protection,
         pet_service: state.pet_service.clone(),
         initial_pet,
+        aquarium_service: state.aquarium_service.clone(),
+        initial_aquarium_care,
         quest_service: state.quest_service.clone(),
         quest_snapshot_rx,
         shop_service: state.shop_service.clone(),
@@ -560,6 +569,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         app_flags: Some(state.app_flags.clone()),
         runner_looks_rx: state.runner_looks.subscribe(),
         show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
+        zen_layout: late_core::models::user::extract_zen_layout(&user.settings),
         afk_users: state.afk_users.clone(),
         username_directory: Some(state.username_directory.clone()),
         flair_directory: Some(state.flair_directory.clone()),

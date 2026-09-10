@@ -153,6 +153,11 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // death after N dry days belongs in the public feed.
         ActivityKind::BonsaiWatered => false,
         ActivityKind::BonsaiLost { .. } => false,
+        // Same for the pet and the tank: the daily feed is the owner's ritual.
+        ActivityKind::PetFed
+        | ActivityKind::AquariumFed
+        | ActivityKind::AquariumFryHatched { .. }
+        | ActivityKind::AquariumFishLost { .. } => false,
     }
 }
 
@@ -225,6 +230,10 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
         | ActivityKind::DailyResult { .. }
         | ActivityKind::BonsaiWatered
         | ActivityKind::BonsaiLost { .. }
+        | ActivityKind::PetFed
+        | ActivityKind::AquariumFed
+        | ActivityKind::AquariumFryHatched { .. }
+        | ActivityKind::AquariumFishLost { .. }
         | ActivityKind::UsernameEffectApplied { .. }
         | ActivityKind::BadgeRented { .. }
         | ActivityKind::TitleApplied { .. }

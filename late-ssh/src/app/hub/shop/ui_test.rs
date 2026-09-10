@@ -89,9 +89,9 @@ fn make_state_with_bonsai_protection(protection: Option<BonsaiDecayProtection>) 
         items: vec![bonsai_shield_item()],
         entitlements: ShopEntitlements::default(),
         active_room_effects: HashMap::new(),
-        aquarium_hungry: false,
         active_username_effect: None,
         active_bonsai_decay_protection: protection,
+        active_aquarium_shield: None,
         active_badge_rental: None,
         active_flag_rental: None,
         active_title: None,
@@ -199,6 +199,40 @@ fn chat_tab_rows_open_each_group_with_a_section_label() {
     assert_eq!(
         row_labels(&rows),
         vec!["0:username_glow_day", "1:chat_room_spark"]
+    );
+}
+
+#[test]
+fn companions_tab_rows_split_pet_bonsai_and_the_tank() {
+    use late_core::models::marketplace::{
+        AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_SHIELD_SKU, AQUARIUM_SKU,
+        PET_COMPANION_SKU,
+    };
+
+    let pet = chat_item(PET_COMPANION_SKU, "feature_unlock");
+    let bonsai_shield = bonsai_shield_item();
+    let tank = chat_item(AQUARIUM_SKU, "feature_unlock");
+    let tank_shield = chat_item(AQUARIUM_SHIELD_SKU, AQUARIUM_CONSUMABLE_ITEM_KIND);
+    let fish = chat_item("mj", AQUARIUM_FISH_ITEM_KIND);
+
+    // Catalog `sort_order` already runs pet, bonsai shield, tank, shield,
+    // fish; every fish and both tank items share the Aquarium section.
+    let rows = item_list_rows(
+        ShopCategory::Companions,
+        &[&pet, &bonsai_shield, &tank, &tank_shield, &fish],
+    );
+    assert_eq!(
+        row_labels(&rows),
+        vec![
+            "[Pet]",
+            "0:pet_companion",
+            "[Bonsai]",
+            "1:bonsai_decay_shield_two_weeks",
+            "[Aquarium]",
+            "2:aquarium",
+            "3:aquarium_shield_two_weeks",
+            "4:mj",
+        ]
     );
 }
 

@@ -48,6 +48,10 @@ const DEFAULT_CREATURE_SOURCES: &[EmbeddedKdl] = &[
         source: include_str!("../../../../assets/aquarium/creatures/anchovy.kdl"),
     },
     EmbeddedKdl {
+        path: "art/creatures/fry.kdl",
+        source: include_str!("../../../../assets/aquarium/creatures/fry.kdl"),
+    },
+    EmbeddedKdl {
         path: "art/creatures/bee.kdl",
         source: include_str!("../../../../assets/aquarium/creatures/bee.kdl"),
     },
@@ -129,6 +133,10 @@ const DEFAULT_CREATURE_SOURCES: &[EmbeddedKdl] = &[
     },
 ];
 
+/// The hatchling's definition (`fry.kdl`): two cells of fish, drawn in its
+/// parent's colour for its first week. Never sold; the shop knows no such
+/// creature, only the population builder does.
+pub(crate) const FRY_CREATURE: &str = "fry";
 pub(crate) const IDLE_ACTION_INTERVAL: u64 = 4;
 pub(crate) const DEFAULT_IDLE_MOVE_CHANCE: f64 = 0.30;
 pub(crate) const DEFAULT_IDLE_TURN_CHANCE: f64 = 0.05;

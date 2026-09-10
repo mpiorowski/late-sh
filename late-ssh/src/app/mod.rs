@@ -56,7 +56,9 @@ mod tick_test;
 pub(crate) mod ultimates;
 pub mod voice;
 pub mod workspace;
+pub mod zen;
 
+pub use hub::aquarium::svc::AquariumService;
 pub use hub::dailies::svc::QuestService;
 pub use hub::shop::svc::ShopService;
 pub use leaderboard::svc::LeaderboardService;

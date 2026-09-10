@@ -291,8 +291,12 @@ fn plot_tree(state: &BonsaiState, width: usize, height: usize) -> Vec<Vec<Option
 }
 
 fn render_preview_ascii(state: &BonsaiState) -> RenderedBonsai {
-    let width = PREVIEW_WIDTH;
-    let height = PREVIEW_HEIGHT;
+    render_fitted_ascii(state, PREVIEW_WIDTH, PREVIEW_HEIGHT)
+}
+
+fn render_fitted_ascii(state: &BonsaiState, width: usize, height: usize) -> RenderedBonsai {
+    let width = width.max(3);
+    let height = height.max(2);
     let tree_height = height - 1;
 
     let full = plot_tree(state, CANVAS_WIDTH, CANVAS_HEIGHT);

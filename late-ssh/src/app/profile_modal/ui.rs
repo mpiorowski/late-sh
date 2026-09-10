@@ -349,7 +349,7 @@ fn draw_aquarium(body: &mut Buffer, area: Rect, state: &ProfileModalState) {
         *slot = AquariumState::default_for_area(band)
             .ok()
             .map(|mut aquarium| {
-                aquarium.set_active_creatures(state.aquarium_fish());
+                aquarium.set_active_creatures(state.aquarium_fish(), None);
                 aquarium
             });
     }

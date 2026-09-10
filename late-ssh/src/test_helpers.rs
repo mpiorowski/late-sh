@@ -278,7 +278,9 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let solitaire_service = SolitaireService::new(db.clone(), activity_tx.clone());
     let minesweeper_service = MinesweeperService::new(db.clone(), activity_tx.clone());
     let bonsai_service = BonsaiService::new(db.clone(), activity_tx.clone());
-    let pet_service = PetService::new(db.clone());
+    let pet_service = PetService::new(db.clone(), activity_tx.clone());
+    let aquarium_service =
+        crate::app::hub::aquarium::svc::AquariumService::new(db.clone(), activity_tx.clone());
     let dartboard_server = crate::dartboard::spawn_server();
     let leaderboard_service = LeaderboardService::new(db.clone());
     let quest_service = QuestService::new(db.clone(), activity_tx.clone());
@@ -345,6 +347,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         minesweeper_service,
         bonsai_service,
         pet_service,
+        aquarium_service,
         nonogram_library: NonogramLibrary::default(),
         chip_service: chip_service.clone(),
         lateania_service: crate::app::door::lateania::svc::LateaniaService::new(
@@ -582,8 +585,13 @@ fn make_app_with_chat_service_and_permissions(
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
         initial_bonsai_decay_protection: None,
-        pet_service: PetService::new(db.clone()),
+        pet_service: PetService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_pet: None,
+        aquarium_service: crate::app::hub::aquarium::svc::AquariumService::new(
+            db.clone(),
+            broadcast::channel::<ActivityEvent>(64).0,
+        ),
+        initial_aquarium_care: Default::default(),
         quest_service,
         quest_snapshot_rx,
         shop_service,
@@ -659,6 +667,7 @@ fn make_app_with_chat_service_and_permissions(
             std::collections::HashMap::new(),
         ),
         show_aquarium_tray: false,
+        zen_layout: None,
         // No SSH key: test apps follow the account default and persist no
         // per-device layout, which is also what ghost bot sessions do.
         key_fingerprint: None,
@@ -823,8 +832,13 @@ pub fn make_app_with_paired_client(
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
         initial_bonsai_decay_protection: None,
-        pet_service: PetService::new(db.clone()),
+        pet_service: PetService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_pet: None,
+        aquarium_service: crate::app::hub::aquarium::svc::AquariumService::new(
+            db.clone(),
+            broadcast::channel::<ActivityEvent>(64).0,
+        ),
+        initial_aquarium_care: Default::default(),
         quest_service,
         quest_snapshot_rx,
         shop_service,
@@ -900,6 +914,7 @@ pub fn make_app_with_paired_client(
             std::collections::HashMap::new(),
         ),
         show_aquarium_tray: false,
+        zen_layout: None,
         // No SSH key: test apps follow the account default and persist no
         // per-device layout, which is also what ghost bot sessions do.
         key_fingerprint: None,

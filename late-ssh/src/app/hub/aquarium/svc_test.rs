@@ -1,0 +1,218 @@
+use late_core::models::aquarium_care::{AquariumCare, CARE_DAYS};
+use late_core::models::chips::UserChips;
+use late_core::models::marketplace::{AQUARIUM_SKU, purchase_durable_item_by_sku};
+use late_core::test_utils::create_test_user;
+use tokio::sync::broadcast;
+use tokio::time::{Duration, timeout};
+use uuid::Uuid;
+
+use super::{AquariumService, FEED_CHIP_BONUS};
+use crate::app::activity::event::{ActivityEvent, ActivityKind};
+use crate::test_helpers::new_test_db;
+
+const AQUARIUM_PRICE: i64 = 10_000;
+const CLOWNFISH_PRICE: i64 = 1_000;
+
+fn service(db: &late_core::db::Db) -> (AquariumService, broadcast::Receiver<ActivityEvent>) {
+    let (tx, rx) = broadcast::channel::<ActivityEvent>(16);
+    (AquariumService::new(db.clone(), tx), rx)
+}
+
+/// A tank with two clownfish swimming, bought the way a player buys them.
+async fn stock_tank(db: &late_core::db::Db, user_id: Uuid) {
+    let mut client = db.get().await.expect("db client");
+    UserChips::admin_grant(&**client, user_id, AQUARIUM_PRICE + CLOWNFISH_PRICE * 2)
+        .await
+        .expect("fund chips");
+    purchase_durable_item_by_sku(&mut client, user_id, AQUARIUM_SKU)
+        .await
+        .expect("aquarium purchase");
+    for _ in 0..2 {
+        purchase_durable_item_by_sku(&mut client, user_id, "aquarium_fish_clownfish")
+            .await
+            .expect("fish purchase");
+    }
+    late_core::models::marketplace::adjust_aquarium_fish_active_by_sku(
+        &mut client,
+        user_id,
+        "aquarium_fish_clownfish",
+        2,
+    )
+    .await
+    .expect("put the fish in the water");
+}
+
+async fn clownfish_counts(db: &late_core::db::Db, user_id: Uuid) -> (i32, i32) {
+    let client = db.get().await.expect("db client");
+    let row = client
+        .query_one(
+            "SELECT p.quantity, p.active_quantity
+             FROM user_purchases p
+             JOIN marketplace_items i ON i.id = p.item_id
+             WHERE p.user_id = $1 AND i.sku = 'aquarium_fish_clownfish'",
+            &[&user_id],
+        )
+        .await
+        .expect("clownfish row");
+    (row.get("quantity"), row.get("active_quantity"))
+}
+
+#[tokio::test]
+async fn feeding_pays_the_daily_chips_once_and_only_a_tank_owner() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "aquarium-svc-feed").await;
+    let (svc, mut rx) = service(&test_db.db);
+    let boot = svc.bootstrap(user.id).await.expect("bootstrap");
+    assert_eq!(boot.care, None, "no tank, no clock");
+    let before = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+
+    // No tank: nothing to feed, nothing paid, no clock started.
+    svc.feed(user.id).await.expect("feed without a tank");
+    let unpaid = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+    assert_eq!(unpaid, before, "a user without a tank earns nothing");
+    assert_eq!(
+        AquariumCare::load(&**client, user.id).await.expect("care"),
+        None,
+        "feeding without a tank starts no clock"
+    );
+    assert!(rx.try_recv().is_err(), "and announces nothing");
+
+    stock_tank(&test_db.db, user.id).await;
+    let before = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+
+    svc.feed(user.id).await.expect("first feed");
+    svc.feed(user.id).await.expect("second feed");
+
+    let after = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+    assert_eq!(after - before, FEED_CHIP_BONUS);
+    let care = AquariumCare::load(&**client, user.id)
+        .await
+        .expect("care")
+        .expect("care row");
+    assert_eq!(care.last_fed.date_naive(), chrono::Utc::now().date_naive());
+    assert_eq!(care.streak, 1);
+
+    let event = timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("activity in time")
+        .expect("activity event");
+    assert_eq!(event.user_id, Some(user.id));
+    assert!(matches!(event.kind, ActivityKind::AquariumFed));
+    assert!(
+        rx.try_recv().is_err(),
+        "the same-day second feed announces nothing"
+    );
+}
+
+#[tokio::test]
+async fn the_fourteenth_straight_feed_hatches_a_fry() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "aquarium-svc-fry").await;
+    stock_tank(&test_db.db, user.id).await;
+    let (svc, mut rx) = service(&test_db.db);
+    let client = test_db.db.get().await.expect("db client");
+    // Thirteen days fed, the last one yesterday: the care row is the table
+    // under test, so it is set up directly.
+    svc.feed(user.id).await.expect("seed the row");
+    client
+        .execute(
+            "UPDATE user_aquarium_care
+             SET last_fed = current_timestamp - interval '1 day', streak = $2
+             WHERE user_id = $1",
+            &[&user.id, &(CARE_DAYS as i32 - 1)],
+        )
+        .await
+        .expect("rewind a day");
+
+    svc.feed(user.id).await.expect("fourteenth feed");
+
+    assert_eq!(clownfish_counts(&test_db.db, user.id).await, (3, 3));
+    let care = AquariumCare::load(&**client, user.id)
+        .await
+        .expect("care")
+        .expect("care row");
+    assert_eq!(care.streak, 14);
+    assert_eq!(care.fry_creature.as_deref(), Some("clownfish"));
+    assert_eq!(care.fry_born, Some(chrono::Utc::now().date_naive()));
+
+    let mut kinds = Vec::new();
+    for _ in 0..3 {
+        let event = timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("activity in time")
+            .expect("activity event");
+        kinds.push(event.kind);
+    }
+    assert!(matches!(kinds[0], ActivityKind::AquariumFed));
+    assert!(matches!(kinds[1], ActivityKind::AquariumFed));
+    assert!(matches!(
+        &kinds[2],
+        ActivityKind::AquariumFryHatched { creature, swimming: true } if creature == "clownfish"
+    ));
+}
+
+#[tokio::test]
+async fn fourteen_unfed_days_starve_one_fish_at_login_and_only_once() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "aquarium-svc-starve").await;
+    stock_tank(&test_db.db, user.id).await;
+    let (svc, mut rx) = service(&test_db.db);
+    let client = test_db.db.get().await.expect("db client");
+
+    // The first connect of a tank owner who never fed starts the clock.
+    let boot = svc.bootstrap(user.id).await.expect("first bootstrap");
+    assert!(boot.lost.is_empty());
+    let care = boot.care.expect("the owner has a clock now");
+    assert_eq!(care.deaths_settled, 0);
+
+    // Two weeks pass without a meal.
+    client
+        .execute(
+            "UPDATE user_aquarium_care
+             SET last_fed = current_timestamp - interval '14 days'
+             WHERE user_id = $1",
+            &[&user.id],
+        )
+        .await
+        .expect("rewind two weeks");
+
+    let boot = svc.bootstrap(user.id).await.expect("second bootstrap");
+    assert_eq!(boot.lost, vec!["clownfish".to_string()]);
+    assert_eq!(boot.care.expect("care").deaths_settled, 1);
+    assert_eq!(clownfish_counts(&test_db.db, user.id).await, (1, 1));
+    let event = timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("activity in time")
+        .expect("activity event");
+    assert!(matches!(
+        &event.kind,
+        ActivityKind::AquariumFishLost { creature } if creature == "clownfish"
+    ));
+
+    // The same day again, another device: settled already, nothing dies.
+    let boot = svc.bootstrap(user.id).await.expect("third bootstrap");
+    assert!(boot.lost.is_empty());
+    assert_eq!(clownfish_counts(&test_db.db, user.id).await, (1, 1));
+    assert!(rx.try_recv().is_err());
+
+    // A meal closes the account: the next death is fourteen days away.
+    svc.feed(user.id).await.expect("feed");
+    let care = AquariumCare::load(&**client, user.id)
+        .await
+        .expect("care")
+        .expect("care row");
+    assert_eq!(care.deaths_settled, 0);
+}

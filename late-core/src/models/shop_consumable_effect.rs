@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
-use tokio_postgres::Client;
+use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -280,6 +280,29 @@ impl ShopConsumableEffect {
             )
             .await?;
         Ok(row.map(Self::from))
+    }
+
+    /// Every user-scoped effect of one kind for one user, live or lapsed,
+    /// newest expiry first. For clocks that must still honour windows that
+    /// have run out (the aquarium's starvation count excuses every day any
+    /// shield covered, even after that shield ends and another is bought).
+    pub async fn user_effects_for_user(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        effect_kind: &str,
+    ) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
+                "SELECT *
+                 FROM shop_consumable_effects
+                 WHERE user_id = $1
+                   AND room_id IS NULL
+                   AND effect_kind = $2
+                 ORDER BY ends_at DESC",
+                &[&user_id, &effect_kind],
+            )
+            .await?;
+        Ok(rows.into_iter().map(Self::from).collect())
     }
 
     /// Every live user-scoped effect of the given kinds for one user, newest

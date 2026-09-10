@@ -225,9 +225,6 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
             crate::app::chat::state::PetCommand::Feed => {
                 crate::app::input::pet_feed_globally(app);
             }
-            crate::app::chat::state::PetCommand::Water => {
-                crate::app::input::pet_water_globally(app);
-            }
         }
     }
     if let Some(topic) = app.chat.take_requested_help_topic() {

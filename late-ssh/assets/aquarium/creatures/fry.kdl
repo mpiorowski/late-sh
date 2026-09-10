@@ -1,0 +1,14 @@
+name "fry"
+title "a fry"
+description "a hatchling: two cells of fish wearing its parent's colour for its first week"
+sauce author=late.sh date=20260910 license=CCBYSA4.0
+
+count 1
+
+left ###"""
+<'
+"""###
+
+right ###"""
+'>
+"""###

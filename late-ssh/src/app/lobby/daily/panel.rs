@@ -61,6 +61,30 @@ pub(crate) fn draw_daily_inline(
     if area.width == 0 || area.height == 0 {
         return;
     }
+    let props = daily_panel_props(state, lobby_glow);
+    let lines = daily_panel_lines(area.width, &props);
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// The Zen tile's shape: only the games actually running, then one footer
+/// row carrying the open count, your entries, and the two keys. No empty
+/// slots, so the tile can be as short as its content. Top-aligned; rows
+/// past the area are dropped, the footer never is.
+pub(crate) fn draw_daily_compact(
+    frame: &mut Frame,
+    area: Rect,
+    state: &DailyState,
+    lobby_glow: bool,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let props = daily_panel_props(state, lobby_glow);
+    let lines = daily_compact_lines(area.width, area.height, &props);
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn daily_panel_props(state: &DailyState, lobby_glow: bool) -> DailyPanelProps {
     let my_matches = state.my_matches();
     let (turn_rows, waiting_rows): (Vec<_>, Vec<_>) =
         my_matches.iter().partition(|item| state.my_turn(item));
@@ -97,15 +121,13 @@ pub(crate) fn draw_daily_inline(
             .map(|item| match_row(item, DailyPanelRowStatus::Waiting)),
     );
     let lobby = state.lobby();
-    let props = DailyPanelProps {
+    DailyPanelProps {
         matches,
         open_count: lobby.len(),
         lobby_glow,
         entry_count: state.entry_count(),
         entry_cap: state.entry_cap(),
-    };
-    let lines = daily_panel_lines(area.width, &props);
-    frame.render_widget(Paragraph::new(lines), area);
+    }
 }
 
 fn daily_panel_lines(width: u16, props: &DailyPanelProps) -> Vec<Line<'static>> {
@@ -119,6 +141,33 @@ fn daily_panel_lines(width: u16, props: &DailyPanelProps) -> Vec<Line<'static>> 
 
     lines.push(status_line(width, props));
     lines.push(hints_line());
+    lines
+}
+
+/// Match rows for as many games as fit above the footer (a quiet lobby says
+/// so in one faint row), then `1 open · 1/10 · ctrl+g · \` toggle`.
+fn daily_compact_lines(width: u16, height: u16, props: &DailyPanelProps) -> Vec<Line<'static>> {
+    let room = (height as usize).saturating_sub(1);
+    let mut lines = Vec::with_capacity(room + 1);
+    if props.matches.is_empty() {
+        if room > 0 {
+            lines.push(Line::from(Span::styled(
+                "  no games running",
+                Style::default().fg(theme::TEXT_FAINT()),
+            )));
+        }
+    } else {
+        for row in props.matches.iter().take(room) {
+            lines.push(match_line(width, row));
+        }
+    }
+    let mut footer = status_line(width, props);
+    footer.spans.push(Span::styled(
+        " · ",
+        Style::default().fg(theme::TEXT_FAINT()),
+    ));
+    footer.spans.extend(hints_line().spans);
+    lines.push(footer);
     lines
 }
 

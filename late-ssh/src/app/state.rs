@@ -265,6 +265,9 @@ pub struct SessionConfig {
         Option<late_core::models::bonsai_decay_protection::BonsaiDecayProtection>,
     pub pet_service: crate::app::pet::svc::PetService,
     pub initial_pet: Option<late_core::models::pet::PetCompanion>,
+    pub aquarium_service: crate::app::hub::aquarium::svc::AquariumService,
+    /// The tank's care at connect, with any starvation already settled.
+    pub initial_aquarium_care: crate::app::hub::aquarium::svc::CareBootstrap,
     pub quest_service: crate::app::hub::dailies::svc::QuestService,
     pub quest_snapshot_rx:
         tokio::sync::watch::Receiver<crate::app::hub::dailies::svc::QuestSnapshot>,
@@ -377,6 +380,8 @@ pub struct SessionConfig {
         tokio::sync::watch::Receiver<crate::app::deadchannel::runner::svc::RunnerLooks>,
     /// Whether the aquarium tray was open when the user last toggled it.
     pub show_aquarium_tray: bool,
+    /// The stored Rice layout (`app/zen`), `None` until first edited.
+    pub zen_layout: Option<serde_json::Value>,
     /// Fingerprint of the SSH key this session authenticated with: the only
     /// device identity late.sh has, and what per-device settings key off.
     /// `None` for sessions with no key of their own (ghost bots, tests), which
@@ -490,6 +495,17 @@ pub struct App {
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState,
     pub(crate) aquarium_state: hub::aquarium::state::AquariumState,
+    /// The owner's daily feeding of the tank; hunger is read off it.
+    pub(crate) aquarium_care: hub::aquarium::state::AquariumCare,
+    pub(crate) aquarium_service: hub::aquarium::svc::AquariumService,
+    /// Zen (`Ctrl+F`): the tiling layout and its focus.
+    pub(crate) zen: crate::app::zen::state::ZenState,
+    /// Where `Ctrl+F` was pressed, so Esc or the chord hands the page back.
+    pub(crate) zen_return_screen: Option<Screen>,
+    /// A layout edit not yet written to `users.settings`. Flushed on tick's
+    /// one-hertz edge and on leaving the page, so a held resize key costs
+    /// one row update rather than one per key repeat.
+    pub(crate) zen_layout_dirty: bool,
     pub(crate) mod_modal_state: mod_modal::state::ModModalState,
     pub(crate) pending_escape: bool,
     pub(crate) pending_escape_started_at: Option<Instant>,
@@ -578,14 +594,13 @@ pub struct App {
     /// friend-online banner; the feed itself now ships to #lounge (see
     /// `activity/lounge.rs`) and has no per-session buffer.
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
-    /// Pet-strip click targets from the last frame: the pet itself (treat),
-    /// the food bowl (feed), and the water bowl (water). Reset each frame.
-    pub(crate) last_pet_strip_pet_rect: std::cell::Cell<Option<Rect>>,
-    pub(crate) last_pet_strip_food_rect: std::cell::Cell<Option<Rect>>,
-    pub(crate) last_pet_strip_water_rect: std::cell::Cell<Option<Rect>>,
-    /// Wander travel width of the pet strip drawn last frame; `None` when the
-    /// strip was not drawn. Gates the strip animation's frame cost in tick.
-    pub(crate) last_pet_strip_travel: std::cell::Cell<Option<usize>>,
+    /// Pet box click targets from the last frame: the pet itself and the
+    /// bowl, both of which feed. Reset each frame.
+    pub(crate) last_pet_rect: std::cell::Cell<Option<Rect>>,
+    pub(crate) last_pet_bowl_rect: std::cell::Cell<Option<Rect>>,
+    /// How far the pet could roam in the box drawn last frame; `None` when
+    /// no box was drawn. Gates the pet animation's frame cost in tick.
+    pub(crate) last_pet_travel: std::cell::Cell<Option<crate::app::pet::ui::PetFrameInputs>>,
     /// Where the top-border "N unread mentions" text was drawn last frame,
     /// for the HUD click hit test; `None` when nothing is unread. Only the
     /// mentions segment is clickable, not the voice/chips text after it.
@@ -634,6 +649,8 @@ pub struct App {
     pub(crate) daily_chat_rows_cache: chat::ui::ChatRowsCache,
     /// House table embedded chat, same reasoning as the daily cache.
     pub(crate) house_chat_rows_cache: chat::ui::ChatRowsCache,
+    /// The Zen pages' current-room chat, its own cache like the others.
+    pub(crate) zen_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) poll_modal_state: chat::polls::state::PollModalState,
     pub(crate) gild_modal_state: chat::gild::state::GildModalState,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
@@ -1022,6 +1039,8 @@ impl App {
             Screen::DailyMatch => self.daily.board_chat_room_id(),
             // The open house table's permanent chat room.
             Screen::HouseTable => self.house.chat_room_id(),
+            // The Zen pages show the selected room, else #lounge.
+            Screen::Zen => self.zen_chat_room_id(),
             _ => None,
         }
     }
@@ -1267,8 +1286,28 @@ impl App {
         let aquarium_area = aquarium_area_for_terminal(cols, rows);
         let mut aquarium_state =
             crate::app::hub::aquarium::state::AquariumState::default_for_area(aquarium_area)?;
-        aquarium_state.set_active_creatures(&shop_state.active_aquarium_fish());
-        aquarium_state.set_hungry(shop_state.aquarium_hungry());
+        let aquarium_care = crate::app::hub::aquarium::state::AquariumCare::new(
+            config.initial_aquarium_care.care,
+            config.initial_aquarium_care.shields,
+        );
+        aquarium_state.set_active_creatures(
+            &shop_state.active_aquarium_fish(),
+            aquarium_care.fry_visible(),
+        );
+        aquarium_state.set_hungry(aquarium_care.hungry());
+        aquarium_state.set_murky(aquarium_care.murky());
+        // Fish the login settlement took while the user was away: said once,
+        // on the first screen.
+        let aquarium_loss_banner = match config.initial_aquarium_care.lost.as_slice() {
+            [] => None,
+            [one] => Some(crate::app::common::primitives::Banner::error(&format!(
+                "Your {one} starved while you were away"
+            ))),
+            many => Some(crate::app::common::primitives::Banner::error(&format!(
+                "{} of your fish starved while you were away",
+                many.len()
+            ))),
+        };
 
         let active_users = config.active_users.clone();
         let afk_users = config.afk_users.clone();
@@ -1311,7 +1350,7 @@ impl App {
             running: true,
             size: (cols, rows),
             screen: landing_screen,
-            banner: None,
+            banner: aquarium_loss_banner,
             show_settings: false,
             show_splash: true,
             splash_ticks: 0,
@@ -1343,6 +1382,13 @@ impl App {
             help_modal_state: help_modal::state::HelpModalState::new(),
             leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState::new(),
             aquarium_state,
+            aquarium_care,
+            aquarium_service: config.aquarium_service,
+            zen: crate::app::zen::state::ZenState::new(
+                crate::app::zen::state::RiceLayout::from_json(config.zen_layout.as_ref()),
+            ),
+            zen_return_screen: None,
+            zen_layout_dirty: false,
             mod_modal_state: mod_modal::state::ModModalState::new(),
             pending_escape: false,
             pending_escape_started_at: None,
@@ -1404,10 +1450,9 @@ impl App {
             afk_users: afk_users.clone(),
             username_directory: config.username_directory,
             activity_feed_rx: config.activity_feed_rx,
-            last_pet_strip_pet_rect: std::cell::Cell::new(None),
-            last_pet_strip_food_rect: std::cell::Cell::new(None),
-            last_pet_strip_water_rect: std::cell::Cell::new(None),
-            last_pet_strip_travel: std::cell::Cell::new(None),
+            last_pet_rect: std::cell::Cell::new(None),
+            last_pet_bowl_rect: std::cell::Cell::new(None),
+            last_pet_travel: std::cell::Cell::new(None),
             last_mentions_hud_rect: std::cell::Cell::new(None),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             voice: crate::app::voice::state::VoiceState::new(config.voice_service),
@@ -1465,6 +1510,7 @@ impl App {
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             daily_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             house_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            zen_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             poll_modal_state: chat::polls::state::PollModalState::new(),
             gild_modal_state: chat::gild::state::GildModalState::new(),
             room_search_modal_state:
@@ -2201,7 +2247,13 @@ impl App {
         }
 
         let screen_changed = self.screen != screen;
+        // Leaving Zen writes any layout edit the debounce still holds.
+        if screen_changed && self.screen == Screen::Zen {
+            self.flush_zen_layout();
+        }
         self.screen = screen;
+        // The aquarium sim is sized for whichever surface shows it next.
+        self.sync_aquarium_bounds();
 
         // Every top-level move repaints from scratch. ratatui only re-emits
         // cells whose contents changed, and the two layouts rarely disagree
@@ -2366,9 +2418,7 @@ impl App {
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), io::Error> {
         tracing::debug!(cols, rows, "window resized");
         self.size = (cols, rows);
-        let aquarium_area = aquarium_area_for_terminal(cols, rows);
-        self.aquarium_state
-            .handle_resize(aquarium_area.width, aquarium_area.height);
+        self.sync_aquarium_bounds();
         // We can't use `Terminal::resize()` here: since ratatui 0.30.2 its
         // fixed-viewport clear queries `backend.size()`, which reads the
         // controlling tty, impossible on the write-only SSH `SharedBuffer`
@@ -2606,6 +2656,66 @@ impl App {
         self.profile_state
             .service()
             .set_clubhouse_tutorial_done(self.user_id);
+    }
+
+    /// The room the Zen pages show: the selected room when it is a real
+    /// room, else #lounge.
+    pub(crate) fn zen_chat_room_id(&self) -> Option<Uuid> {
+        if !self.chat.synthetic_entry_selected()
+            && let Some(room_id) = self.chat.selected_room_id
+        {
+            return Some(room_id);
+        }
+        self.chat.lounge_room_id()
+    }
+
+    /// The rect the aquarium simulation should fill on the current screen:
+    /// the Lounge tray by default, the tank's slot on the Zen pages.
+    fn aquarium_area_for_screen(&self) -> Rect {
+        use crate::app::zen::{layout as zen_layout, state::TileKind};
+        let (cols, rows) = self.size;
+        let full = Rect::new(0, 0, cols, rows);
+        match self.screen {
+            Screen::Zen => {
+                let (tiles, _) = zen_layout::rice_areas(full);
+                let zoomed = self.zen.zoomed.then_some(self.zen.focus);
+                zen_layout::tile_rects(
+                    &self.zen.rice.root,
+                    tiles,
+                    self.zen.rice.look.gap as u16,
+                    zoomed,
+                )
+                .into_iter()
+                .find(|(kind, _)| *kind == TileKind::Aquarium)
+                .map(|(_, rect)| zen_layout::tile_inner(rect, &self.zen.rice.look))
+                .unwrap_or_else(|| aquarium_area_for_terminal(cols, rows))
+            }
+            _ => aquarium_area_for_terminal(cols, rows),
+        }
+    }
+
+    /// Re-bind the reef to the rect the current screen draws it in.
+    pub(crate) fn sync_aquarium_bounds(&mut self) {
+        let area = self.aquarium_area_for_screen();
+        self.aquarium_state.handle_resize(area.width, area.height);
+    }
+
+    /// Note a Zen layout edit. The write itself is debounced: see
+    /// `flush_zen_layout`.
+    pub(crate) fn mark_zen_layout_dirty(&mut self) {
+        self.zen_layout_dirty = true;
+    }
+
+    /// Write the Zen layout if an edit is pending (fire-and-forget). Called
+    /// on tick's one-hertz edge and when the page is left.
+    pub(crate) fn flush_zen_layout(&mut self) {
+        if !self.zen_layout_dirty {
+            return;
+        }
+        self.zen_layout_dirty = false;
+        self.profile_state
+            .service()
+            .set_zen_layout(self.user_id, self.zen.rice.to_json());
     }
 
     /// Persist the aquarium tray's open/closed state (fire-and-forget).
