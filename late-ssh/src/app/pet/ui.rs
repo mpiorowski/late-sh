@@ -26,8 +26,8 @@ pub enum WatchSide {
 }
 
 /// What the pet is doing this frame. The stroll and the watch are wall
-/// clock formulas; the perch is state (`PetState::perch`): the pet parked
-/// where it was petted, or walking after the cursor.
+/// clock formulas; the perch is state (`PetState::perch`): the pet walking
+/// after the cursor, or sitting under it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PetPose {
     Stroll,

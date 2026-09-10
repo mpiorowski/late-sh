@@ -179,7 +179,7 @@ async fn the_pet_walks_after_the_cursor_and_lets_go_when_it_leaves() {
 }
 
 #[tokio::test]
-async fn a_sulking_or_sleeping_pet_does_not_come_and_a_petted_one_stays_put() {
+async fn a_sulking_or_sleeping_pet_does_not_come_and_a_petted_one_is_not_pinned() {
     let mut state = fresh_state("pet-sulks").await;
     let t0 = Instant::now();
     let inside = Some((10 + 20, 20 + 3));
@@ -200,25 +200,19 @@ async fn a_sulking_or_sleeping_pet_does_not_come_and_a_petted_one_stays_put() {
     assert_eq!(state.mood(), PetMood::Asleep);
     assert_eq!(state.perch(), None, "asleep: not coming");
 
-    // Petted with the cursor gone: it purrs where it was and looks ahead.
+    // Petted (the click is a report inside the box), then the cursor
+    // leaves: it purrs, follows while the cursor is there, and strolls the
+    // moment it is gone. Nothing pins a purring pet.
     let later = t0 + SULK_FOR + ASLEEP_AFTER + Duration::from_secs(1);
     state.note_petted(later);
-    assert!(state.tick(tick(6, later, Some(frame((7, 2))), None)));
+    assert!(state.tick(tick(6, later, Some(frame((7, 2))), inside)));
     assert_eq!(state.mood(), PetMood::Purring);
-    assert_eq!(
-        state.perch(),
-        Some(Perch {
-            x: 7,
-            y: 2,
-            look: Look::Ahead
-        })
-    );
-    state.tick(tick(8, later, Some(frame((7, 2))), None));
-    assert_eq!(state.perch().map(|perch| perch.x), Some(7), "still there");
-    // The purr ends and the pet is free again.
+    assert!(state.perch().is_some(), "following the click");
+    assert!(state.tick(tick(8, later, Some(frame((7, 2))), Some((0, 0)))));
+    assert_eq!(state.perch(), None, "cursor gone: back on the stroll");
+    // The purr ends on its own.
     assert!(state.tick(tick(10, later + PURR_FOR, Some(frame((7, 2))), None)));
     assert_eq!(state.mood(), PetMood::Idle);
-    assert_eq!(state.perch(), None);
 }
 
 #[tokio::test]

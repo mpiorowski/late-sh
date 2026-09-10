@@ -80,8 +80,8 @@ pub enum Look {
     Right,
 }
 
-/// The pet off the stroll formula: parked where it was petted, or walking
-/// after the cursor. Cell offsets inside the roam zone.
+/// The pet off the stroll formula: walking after the cursor, or sitting
+/// under it. Cell offsets inside the roam zone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Perch {
     pub x: usize,
@@ -238,10 +238,12 @@ impl PetState {
             (true, Some(frame), Some(cursor)) => cursor_target(frame, cursor),
             (true, _, _) | (false, _, _) => None,
         };
-        let perch = match (target, mood, self.perch, input.frame) {
-            // Walking after the cursor: one cell per animation edge on each
-            // axis, from wherever the pet stood.
-            (Some(target), _, from, Some(frame)) => {
+        // Walking after the cursor: one cell per animation edge on each
+        // axis, from wherever the pet stood. The moment the cursor leaves
+        // the box the stroll takes over again, purring or not: a pet that
+        // holds still where it was petted reads as stuck.
+        let perch = match (target, self.perch, input.frame) {
+            (Some(target), from, Some(frame)) => {
                 let (x, y) = from.map_or(frame.position, |perch| (perch.x, perch.y));
                 // The stroll paints on every second wall tick; the walk
                 // keeps that pace whatever the loop's cadence.
@@ -252,17 +254,7 @@ impl PetState {
                     look: target.look,
                 })
             }
-            // Petted and left alone: it stays where it was petted.
-            (None, PetMood::Purring, Some(perch), _) => Some(Perch {
-                look: Look::Ahead,
-                ..perch
-            }),
-            (None, PetMood::Purring, None, Some(frame)) => Some(Perch {
-                x: frame.position.0,
-                y: frame.position.1,
-                look: Look::Ahead,
-            }),
-            _ => None,
+            (Some(_), _, None) | (None, _, _) => None,
         };
         if perch != self.perch {
             self.perch = perch;

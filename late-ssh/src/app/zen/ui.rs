@@ -17,6 +17,7 @@ use super::{
     state::{BorderKind, TileKind, ZenState},
 };
 use late_core::models::aquarium_care::CARE_DAYS;
+use late_core::models::pet::PetMood;
 use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
 
 use crate::app::{
@@ -462,6 +463,19 @@ fn draw_pet_tile(
                     PetPose::Watch(_) => " · watching the fish",
                     PetPose::At(_) => " · at your cursor",
                     PetPose::Stroll | PetPose::Sulk | PetPose::Sleep => "",
+                },
+                dim,
+            ),
+            // The one thing the owner can do to it, said until they do it.
+            Span::styled(
+                match state.mood() {
+                    PetMood::Purring => "",
+                    PetMood::Proud
+                    | PetMood::Sulking
+                    | PetMood::Chatty
+                    | PetMood::Asleep
+                    | PetMood::Vibing
+                    | PetMood::Idle => " · click to pet",
                 },
                 dim,
             ),
