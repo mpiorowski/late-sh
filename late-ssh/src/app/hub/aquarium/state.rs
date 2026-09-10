@@ -6,7 +6,7 @@ use std::{
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::models::{
-    aquarium_care::{self as care_rules, CARE_DAYS, FRY_DAYS, MURKY_AFTER_DAYS},
+    aquarium_care::{self as care_rules, CARE_DAYS, FRY_DAYS},
     aquarium_shield::AquariumShield,
 };
 use rand::{Rng, rngs::ThreadRng};
@@ -15,8 +15,8 @@ use ratatui::{layout::Rect, style::Color};
 use super::{
     config::{AppConfig, Mode},
     creature::{
-        ActivityState, CreatureDef, Entity, FRY_CREATURE, PoseIntent, Territory, Variant,
-        tallest_variant_height,
+        ActivityState, CreatureDef, Entity, FRY_CREATURE, PoseIntent, SPROUT_CREATURE, Territory,
+        Variant, tallest_variant_height,
     },
     world::{ReefWorld, WorldBounds, load_world_layer},
 };
@@ -28,10 +28,12 @@ const HUNGRY_MOTION_DIVISOR: u64 = 4;
 /// feeding a day; hunger is derived, never stored: not fed today (UTC) is
 /// hungry, and hungry fish sink to the floor (`nudge_hungry_entity_down`).
 /// Fourteen straight fed days hatch a fry, fourteen unfed days starve a fish
-/// (settled by the service at login), seven unfed days turn the water
-/// murky, and the shield's auto feeder takes days off both clocks. Lives
-/// beside the simulation rather than inside it because the sim also draws
-/// other people's tanks (the profile modal), which carry no care of yours.
+/// (settled by the service at login), and the shield's auto feeder takes
+/// days off both clocks. The sprout runs on its own calendar: one comes up
+/// every two weeks whatever the feeding, stands a week to be cut, and roots
+/// as a plant otherwise. Lives beside the simulation rather than inside it
+/// because the sim also draws other people's tanks (the profile modal),
+/// which carry no care of yours.
 pub(crate) struct AquariumCare {
     pub(crate) last_fed: Option<DateTime<Utc>>,
     /// Straight fed UTC days, counting the last meal.
@@ -40,6 +42,10 @@ pub(crate) struct AquariumCare {
     /// still excuses the days it covered.
     pub(crate) shields: Vec<AquariumShield>,
     pub(crate) fry: Option<Fry>,
+    /// The day the sprout on the floor came up; `None` for a bare floor.
+    /// Held until the service says it was cut or rooted, so a long session
+    /// never shows the sprout gone before the plant arrives.
+    pub(crate) sprout: Option<NaiveDate>,
 }
 
 /// A hatchling: drawn as the small sprite for its first `FRY_DAYS`.
@@ -55,6 +61,13 @@ pub(crate) struct Fry {
 pub(crate) enum CareOutcome {
     Fed,
     AlreadyFedToday,
+}
+
+/// Outcome of a cut press: the sprout is gone, or there was none to cut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CutOutcome {
+    Cut,
+    NothingToCut,
 }
 
 /// What the Zen tile's fourteen boxes show.
@@ -84,12 +97,14 @@ impl AquariumCare {
                     (Some(creature), Some(born)) => Some(Fry { creature, born }),
                     (Some(_), None) | (None, Some(_)) | (None, None) => None,
                 },
+                sprout: row.sprout_born,
             },
             None => Self {
                 last_fed: None,
                 streak: 0,
                 shields,
                 fry: None,
+                sprout: None,
             },
         }
     }
@@ -115,15 +130,6 @@ impl AquariumCare {
             Some(last) => care_rules::dry_days(last.date_naive(), today, &self.shields),
             None => 0,
         }
-    }
-
-    /// Whether the water has gone murky: a week or more unfed.
-    pub(crate) fn murky(&self) -> bool {
-        self.murky_on(Utc::now().date_naive())
-    }
-
-    pub(crate) fn murky_on(&self, today: NaiveDate) -> bool {
-        self.dry_days_on(today) >= MURKY_AFTER_DAYS
     }
 
     pub(crate) fn bar(&self) -> CareBar {
@@ -186,6 +192,47 @@ impl AquariumCare {
         self.fry = Some(Fry { creature, born });
     }
 
+    /// The tank was bought in this session: the purchase planted the row
+    /// (`AquariumCare::welcome` in late-core), so the session's care takes
+    /// the same shape without a reconnect: hungry since yesterday, a sprout
+    /// up today.
+    pub(crate) fn welcome_new_tank(&mut self, today: NaiveDate) {
+        let yesterday = today.pred_opt().unwrap_or(today);
+        self.last_fed = Some(
+            yesterday
+                .and_hms_opt(12, 0, 0)
+                .unwrap_or_default()
+                .and_utc(),
+        );
+        self.streak = 0;
+        self.sprout = Some(today);
+    }
+
+    /// Whether a sprout stands on the floor to be drawn.
+    pub(crate) fn sprout_visible(&self) -> bool {
+        self.sprout.is_some()
+    }
+
+    /// A sprout came up (at connect, or the service's event came back).
+    pub(crate) fn set_sprout(&mut self, born: NaiveDate) {
+        self.sprout = Some(born);
+    }
+
+    /// The sprout left the floor: rooted as a plant, or cut on another
+    /// device.
+    pub(crate) fn clear_sprout(&mut self) {
+        self.sprout = None;
+    }
+
+    /// The cut press. The service writes it behind the row's own gate; the
+    /// caller only learns whether there was a sprout to cut.
+    pub(crate) fn cut_sprout(&mut self) -> CutOutcome {
+        match self.sprout.take() {
+            Some(_) => CutOutcome::Cut,
+            None => CutOutcome::NothingToCut,
+        }
+    }
+
     /// A live shield from the shop snapshot joins what we hold: a rebuy
     /// extends the live window in place (same start, later end), a fresh
     /// purchase after a lapse is a new one. `None` (no live shield) keeps
@@ -212,7 +259,6 @@ pub(crate) struct AquariumState {
     pub(crate) mode: RuntimeMode,
     feed_started_at: Option<Instant>,
     hungry: bool,
-    murky: bool,
 }
 
 pub(crate) enum RuntimeMode {
@@ -329,7 +375,6 @@ impl AquariumState {
             mode,
             feed_started_at: None,
             hungry: false,
-            murky: false,
         };
         app.spawn_initial_entities(launch_area, initial_count_scale);
         Ok(app)
@@ -371,15 +416,18 @@ impl AquariumState {
 
     /// Put the owner's fish in the water: `active_creatures` is the shop's
     /// `(creature, count)` list, `fry` the creature whose newest hatchling
-    /// is still small. The fry takes one of its parent species' places and
-    /// swims as the `FRY_CREATURE` sprite in a parent colour. Nothing is
+    /// is still small, `sprout` whether a sprout stands on the floor. The
+    /// fry takes one of its parent species' places and swims as the
+    /// `FRY_CREATURE` sprite in a parent colour; the sprout is one
+    /// `SPROUT_CREATURE` on the floor, on top of the population. Nothing is
     /// respawned when the population already matches.
     pub(crate) fn set_active_creatures(
         &mut self,
         active_creatures: &[(String, usize)],
         fry: Option<&str>,
+        sprout: bool,
     ) {
-        let desired = self.desired_population(active_creatures, fry);
+        let desired = self.desired_population(active_creatures, fry, sprout);
         if self.population_matches(&desired) {
             return;
         }
@@ -424,10 +472,18 @@ impl AquariumState {
         &self,
         active_creatures: &[(String, usize)],
         fry: Option<&str>,
+        sprout: bool,
     ) -> Vec<PopulationSpawn> {
         let def_index = |name: &str| self.definitions.iter().position(|def| def.name == name);
         let fry_def = def_index(FRY_CREATURE);
         let mut spawns = Vec::new();
+        if let (true, Some(sprout_index)) = (sprout, def_index(SPROUT_CREATURE)) {
+            spawns.push(PopulationSpawn {
+                def_index: sprout_index,
+                count: 1,
+                colour_of: None,
+            });
+        }
         for (name, count) in active_creatures {
             let Some(index) = def_index(name) else {
                 continue;
@@ -561,16 +617,6 @@ impl AquariumState {
 
     pub(crate) fn set_hungry(&mut self, hungry: bool) {
         self.hungry = hungry;
-    }
-
-    /// Murky water (a week unfed): the renderer dims the fish and floats
-    /// algae through the water. The sim itself does not change.
-    pub(crate) fn set_murky(&mut self, murky: bool) {
-        self.murky = murky;
-    }
-
-    pub(crate) fn is_murky(&self) -> bool {
-        self.murky
     }
 }
 

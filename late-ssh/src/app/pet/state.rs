@@ -1,87 +1,168 @@
-use chrono::{DateTime, NaiveDate, Utc};
-use late_core::models::pet::{LifeStage, PetCompanion, pet_age_anchor, pet_age_label};
+use std::time::{Duration, Instant};
+
+use chrono::{DateTime, Utc};
+use late_core::models::pet::{
+    LifeStage, PetCompanion, PetMood, PetSpecies, pet_age_anchor, pet_age_label,
+};
+use ratatui::layout::Rect;
 use uuid::Uuid;
 
 use super::svc::PetService;
 
-/// How the pet feels. One need, one flip, on the UTC day like the bonsai:
-/// fed today and it roams its box happy, not yet and it sulks on the floor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PetMood {
-    Happy,
-    Sad,
+/// How long each event mood lasts. A win outlasts a loss on purpose: the
+/// pet is an optimist.
+pub const PURR_FOR: Duration = Duration::from_secs(2 * 60);
+pub const PROUD_FOR: Duration = Duration::from_secs(30 * 60);
+pub const SULK_FOR: Duration = Duration::from_secs(10 * 60);
+pub const CHATTY_FOR: Duration = Duration::from_secs(10 * 60);
+/// No key from the owner for this long and the pet dozes off: well before
+/// the account reads as idle to anyone else.
+pub const ASLEEP_AFTER: Duration = Duration::from_secs(10 * 60);
+
+/// Body width including the tail column, used to keep the pet inside its box.
+pub const PET_WIDTH: usize = 8;
+pub const PET_HEIGHT: usize = 3;
+
+/// What the session has told the pet, as the moment each thing last
+/// happened. Nothing here is persisted: a fresh session starts blank and the
+/// pet wakes up idle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MoodSignals {
+    /// A click on the pet.
+    pub petted: Option<Instant>,
+    /// Any win: a game, a daily match, a boss.
+    pub won: Option<Instant>,
+    /// Any loss: a death in a door game, a lost daily match.
+    pub lost: Option<Instant>,
+    /// A chat message of the owner's landed, in any room or DM.
+    pub spoke: Option<Instant>,
 }
 
-impl PetMood {
-    pub fn label(self) -> &'static str {
-        match self {
-            PetMood::Happy => "happy",
-            PetMood::Sad => "sad",
-        }
-    }
+/// The session facts the tick hands over every time: they are read, not
+/// pushed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ambient {
+    /// The owner's last keystroke or click.
+    pub last_input: Instant,
+    /// A paired client is playing, unmuted.
+    pub music_playing: bool,
+}
 
-    pub fn eyes(self) -> &'static str {
-        match self {
-            PetMood::Happy => "^.^",
-            PetMood::Sad => "T_T",
-        }
+/// The one reading: precedence top to bottom (`PetMood::ALL`). Event moods
+/// hold for their window; sleep beats the music, since a pet dozing beside
+/// a radio is the honest picture of an owner who walked off.
+pub fn mood_at(signals: MoodSignals, ambient: Ambient, now: Instant) -> PetMood {
+    let within = |at: Option<Instant>, window: Duration| {
+        at.is_some_and(|at| now.saturating_duration_since(at) < window)
+    };
+    if within(signals.petted, PURR_FOR) {
+        PetMood::Purring
+    } else if within(signals.won, PROUD_FOR) {
+        PetMood::Proud
+    } else if within(signals.lost, SULK_FOR) {
+        PetMood::Sulking
+    } else if within(signals.spoke, CHATTY_FOR) {
+        PetMood::Chatty
+    } else if now.saturating_duration_since(ambient.last_input) >= ASLEEP_AFTER {
+        PetMood::Asleep
+    } else if ambient.music_playing {
+        PetMood::Vibing
+    } else {
+        PetMood::Idle
     }
 }
 
-/// Outcome of a feed press. The day's meal is free; the only refusal is a
-/// bowl that is already full.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FeedOutcome {
-    Fed,
-    AlreadyFedToday,
+/// Where the pet's eyes point while it walks after the cursor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Look {
+    Left,
+    Ahead,
+    Right,
+}
+
+/// The pet off the stroll formula: parked where it was petted, or walking
+/// after the cursor. Cell offsets inside the roam zone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Perch {
+    pub x: usize,
+    pub y: usize,
+    pub look: Look,
+}
+
+/// What the last draw of the box used, recorded for the tick: how far the
+/// pet can travel, the zone it travels in (so the cursor can be placed in
+/// it), whether a tank is beside it, and where it stood.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PetFrameInputs {
+    pub travel: PetTravel,
+    pub zone: Rect,
+    pub watching: Option<super::ui::WatchSide>,
+    pub position: (usize, usize),
+}
+
+/// How far the pet can travel inside its box, in cells, on each axis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PetTravel {
+    pub x: usize,
+    pub y: usize,
+}
+
+/// Everything one tick reads.
+#[derive(Clone, Copy, Debug)]
+pub struct PetTick {
+    /// The app's shared 66ms wall clock (marquee_tick): the adaptive loop
+    /// ticks sparsely, so a per-call counter would slow the animation with
+    /// the cadence; syncing to the wall clock keeps every speed true.
+    pub wall_tick: usize,
+    pub now: Instant,
+    pub ambient: Ambient,
+    /// The box drawn last frame, `None` when no box was drawn.
+    pub frame: Option<PetFrameInputs>,
+    /// The terminal cursor, 0-based cells, when the terminal reported it.
+    pub cursor: Option<(u16, u16)>,
+    /// Whether a mood change is written to the row (pet owners only; the
+    /// state machine runs for everyone, cheaply).
+    pub persist: bool,
 }
 
 pub struct PetState {
     pub user_id: Uuid,
     pub svc: PetService,
 
-    pub last_fed: Option<DateTime<Utc>>,
-
     /// User-set pet name. `None` until set via the `/petname` chat command.
     pub name: Option<String>,
-
-    /// Species of this pet (e.g. "cat", "dog"). Drives life-stage labels.
-    pub species: String,
-
-    /// When the cat row was first created. Used as a fallback age anchor.
+    pub species: PetSpecies,
+    /// When the row was first created. Used as a fallback age anchor.
     pub created: DateTime<Utc>,
-    /// When the user unlocked the cat companion. Drives the life-stage buckets
-    /// for purchased cats.
+    /// When the user unlocked the companion. Drives the life-stage buckets
+    /// for purchased pets.
     pub adopted_at: Option<DateTime<Utc>>,
 
-    pub action_feedback: Option<String>,
-    feedback_ticks: usize,
+    pub signals: MoodSignals,
+    mood: PetMood,
+    perch: Option<Perch>,
     animation_ticks: usize,
-    /// Mood as of the previous tick, so the day-rollover flip (bowl color,
-    /// pet art, where it stands) reports as a render-visible change.
-    last_visual: Option<PetMood>,
 }
-
-const FEEDBACK_TICKS: usize = 15 * 2;
 
 impl PetState {
     pub fn new(user_id: Uuid, svc: PetService, companion: PetCompanion) -> Self {
+        let species = companion.species();
         Self {
             user_id,
             svc,
-            last_fed: companion.last_fed,
             name: companion.name,
-            species: companion.species,
+            species,
             created: companion.created,
             adopted_at: companion.adopted_at,
-            action_feedback: None,
-            feedback_ticks: 0,
+            signals: MoodSignals::default(),
+            // A session starts awake: the first tick reads the real thing.
+            mood: PetMood::Idle,
+            perch: None,
             animation_ticks: 0,
-            last_visual: None,
         }
     }
 
-    /// Current life stage based on how long the cat has existed.
+    /// Current life stage based on how long the pet has existed.
     pub fn life_stage(&self) -> LifeStage {
         LifeStage::from_age_days(
             (Utc::now() - pet_age_anchor(self.created, self.adopted_at))
@@ -102,87 +183,139 @@ impl PetState {
     }
 
     /// Set the pet species and persist it.
-    pub fn set_species(&mut self, species: String) {
-        self.species = species.clone();
+    pub fn set_species(&mut self, species: PetSpecies) {
+        self.species = species;
         self.svc.set_species_task(self.user_id, species);
     }
 
-    /// Advance the pet's clocks. Returns true on state edges that need a
-    /// frame even when the animation predicate is quiet: feedback expiry and
-    /// the mood flip at the UTC day rollover. Pure animation cadence is the
-    /// box's business (`ui::frame_changed`). `wall_tick` is the app's shared
-    /// 66ms wall clock (marquee_tick): the adaptive loop ticks sparsely, so a
-    /// per-call counter would slow the animation with the cadence; syncing to
-    /// the wall clock keeps every speed true at any wake tier.
-    pub fn tick(&mut self, wall_tick: usize) -> bool {
-        let mut changed = false;
-        let elapsed = wall_tick.saturating_sub(self.animation_ticks);
-        self.animation_ticks = wall_tick;
-
-        if self.action_feedback.is_some() {
-            self.feedback_ticks = self.feedback_ticks.saturating_sub(elapsed);
-            if self.feedback_ticks == 0 {
-                self.action_feedback = None;
-                changed = true;
-            }
-        }
-        let visual = self.mood();
-        if self.last_visual != Some(visual) {
-            self.last_visual = Some(visual);
-            changed = true;
-        }
-        changed
+    pub fn mood(&self) -> PetMood {
+        self.mood
     }
 
-    pub fn mood(&self) -> PetMood {
-        mood_for(self.last_fed, Utc::now().date_naive())
+    pub fn perch(&self) -> Option<Perch> {
+        self.perch
     }
 
     pub fn animation_ticks(&self) -> usize {
         self.animation_ticks
     }
 
-    pub fn fed_today(&self) -> bool {
-        fed_on(self.last_fed, Utc::now().date_naive())
+    pub fn note_petted(&mut self, now: Instant) {
+        self.signals.petted = Some(now);
     }
 
-    /// The day's meal: free, once per UTC day. The service pays the chips
-    /// behind a DB gate; the "+chips" note lands when its event comes back
-    /// (`claim_fed_chips`), never from here, since another session may
-    /// already have fed today.
-    pub fn feed(&mut self) -> FeedOutcome {
-        let now = Utc::now();
-        if fed_on(self.last_fed, now.date_naive()) {
-            self.set_feedback("already fed today");
-            return FeedOutcome::AlreadyFedToday;
+    pub fn note_win(&mut self, now: Instant) {
+        self.signals.won = Some(now);
+    }
+
+    pub fn note_loss(&mut self, now: Instant) {
+        self.signals.lost = Some(now);
+    }
+
+    pub fn note_spoke(&mut self, now: Instant) {
+        self.signals.spoke = Some(now);
+    }
+
+    /// Advance the pet: read the mood, walk after the cursor. Returns true
+    /// on state edges that need a frame even when the animation predicate
+    /// is quiet: a mood change, a step of the walk. Pure animation cadence
+    /// is the box's business (`ui::frame_changed`).
+    pub fn tick(&mut self, input: PetTick) -> bool {
+        let mut changed = false;
+        let elapsed = input.wall_tick.saturating_sub(self.animation_ticks);
+        self.animation_ticks = input.wall_tick;
+
+        let mood = mood_at(self.signals, input.ambient, input.now);
+        if mood != self.mood {
+            self.mood = mood;
+            changed = true;
+            if input.persist {
+                self.svc.set_mood_task(self.user_id, mood);
+            }
         }
-        self.last_fed = Some(now);
-        self.set_feedback("fed!");
-        self.svc.feed_task(self.user_id);
-        FeedOutcome::Fed
-    }
 
-    /// The session's own feeding cleared the DB chip gate.
-    pub fn claim_fed_chips(&mut self, chips: i64) {
-        self.set_feedback(format!("fed! +{chips} chips"));
-    }
-
-    fn set_feedback(&mut self, feedback: impl Into<String>) {
-        self.action_feedback = Some(feedback.into());
-        self.feedback_ticks = FEEDBACK_TICKS;
+        let target = match (mood_follows(mood), input.frame, input.cursor) {
+            (true, Some(frame), Some(cursor)) => cursor_target(frame, cursor),
+            (true, _, _) | (false, _, _) => None,
+        };
+        let perch = match (target, mood, self.perch, input.frame) {
+            // Walking after the cursor: one cell per animation edge on each
+            // axis, from wherever the pet stood.
+            (Some(target), _, from, Some(frame)) => {
+                let (x, y) = from.map_or(frame.position, |perch| (perch.x, perch.y));
+                // The stroll paints on every second wall tick; the walk
+                // keeps that pace whatever the loop's cadence.
+                let cells = elapsed.div_ceil(2);
+                Some(Perch {
+                    x: step_toward(x, target.x, cells),
+                    y: step_toward(y, target.y, cells),
+                    look: target.look,
+                })
+            }
+            // Petted and left alone: it stays where it was petted.
+            (None, PetMood::Purring, Some(perch), _) => Some(Perch {
+                look: Look::Ahead,
+                ..perch
+            }),
+            (None, PetMood::Purring, None, Some(frame)) => Some(Perch {
+                x: frame.position.0,
+                y: frame.position.1,
+                look: Look::Ahead,
+            }),
+            _ => None,
+        };
+        if perch != self.perch {
+            self.perch = perch;
+            changed = true;
+        }
+        changed
     }
 }
 
-fn mood_for(last_fed: Option<DateTime<Utc>>, today: NaiveDate) -> PetMood {
-    if fed_on(last_fed, today) {
-        PetMood::Happy
+/// A sulking or sleeping pet does not come when called.
+fn mood_follows(mood: PetMood) -> bool {
+    match mood {
+        PetMood::Purring | PetMood::Proud | PetMood::Chatty | PetMood::Vibing | PetMood::Idle => {
+            true
+        }
+        PetMood::Sulking | PetMood::Asleep => false,
+    }
+}
+
+/// Where the pet should stand to sit under the cursor, when the cursor is
+/// inside the box the pet was last drawn in; the face lands on the cursor
+/// column and the eyes point at it on the way.
+fn cursor_target(frame: PetFrameInputs, cursor: (u16, u16)) -> Option<Perch> {
+    let zone = frame.zone;
+    let (cx, cy) = cursor;
+    let inside = cx >= zone.x && cx < zone.right() && cy >= zone.y && cy < zone.bottom();
+    if !inside {
+        return None;
+    }
+    // The face is three cells in from the pet's left edge.
+    let x = (usize::from(cx - zone.x))
+        .saturating_sub(3)
+        .min(frame.travel.x);
+    let y = (usize::from(cy - zone.y))
+        .saturating_sub(1)
+        .min(frame.travel.y);
+    let face = frame.position.0 + 3;
+    let look = if usize::from(cx - zone.x) < face {
+        Look::Left
+    } else if usize::from(cx - zone.x) > face + 1 {
+        Look::Right
     } else {
-        PetMood::Sad
-    }
+        Look::Ahead
+    };
+    Some(Perch { x, y, look })
 }
 
-fn fed_on(last: Option<DateTime<Utc>>, today: NaiveDate) -> bool {
-    last.is_some_and(|time| time.date_naive() == today)
+fn step_toward(from: usize, to: usize, cells: usize) -> usize {
+    if from < to {
+        (from + cells).min(to)
+    } else {
+        from.saturating_sub(cells).max(to)
+    }
 }
 
 #[cfg(test)]

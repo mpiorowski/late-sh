@@ -36,7 +36,7 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         ActivityKind::SatDown { .. } => true,
         // Door-game stories: entering a world, felling its bosses.
         ActivityKind::GameStarted { .. } | ActivityKind::BossSlain { .. } => true,
-        ActivityKind::GameEvent { game, .. } => match game {
+        ActivityKind::GameEvent { game, .. } | ActivityKind::GameLost { game, .. } => match game {
             // Door games: their moments are curated at the source
             // (start/descend/die/milestones), so they read as stories. DCSS,
             // NetHack, and Brogue events come from the log pipe (deaths,
@@ -153,11 +153,13 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // death after N dry days belongs in the public feed.
         ActivityKind::BonsaiWatered => false,
         ActivityKind::BonsaiLost { .. } => false,
-        // Same for the pet and the tank: the daily feed is the owner's ritual.
-        ActivityKind::PetFed
-        | ActivityKind::AquariumFed
+        // Same for the tank: the daily feed is the owner's ritual.
+        ActivityKind::AquariumFed
         | ActivityKind::AquariumFryHatched { .. }
-        | ActivityKind::AquariumFishLost { .. } => false,
+        | ActivityKind::AquariumFishLost { .. }
+        | ActivityKind::AquariumSprouted { .. }
+        | ActivityKind::AquariumSproutRooted { .. }
+        | ActivityKind::AquariumSproutCut => false,
     }
 }
 
@@ -225,15 +227,18 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
         | ActivityKind::GameWon { .. }
         | ActivityKind::GameScored { .. }
         | ActivityKind::GameEvent { .. }
+        | ActivityKind::GameLost { .. }
         | ActivityKind::BossSlain { .. }
         | ActivityKind::SatDown { .. }
         | ActivityKind::DailyResult { .. }
         | ActivityKind::BonsaiWatered
         | ActivityKind::BonsaiLost { .. }
-        | ActivityKind::PetFed
         | ActivityKind::AquariumFed
         | ActivityKind::AquariumFryHatched { .. }
         | ActivityKind::AquariumFishLost { .. }
+        | ActivityKind::AquariumSprouted { .. }
+        | ActivityKind::AquariumSproutRooted { .. }
+        | ActivityKind::AquariumSproutCut
         | ActivityKind::UsernameEffectApplied { .. }
         | ActivityKind::BadgeRented { .. }
         | ActivityKind::TitleApplied { .. }

@@ -8,8 +8,8 @@ use crate::app::pet::ui::WatchSide;
 
 /// One row under the tree for its status line.
 pub const BONSAI_STATUS_ROWS: u16 = 1;
-/// The pet box at its smallest: the Home strip's height.
-pub const FLOOR_ROWS: u16 = crate::app::pet::ui::PET_STRIP_HEIGHT;
+/// The pet box at its smallest: its three art rows.
+pub const FLOOR_ROWS: u16 = crate::app::pet::ui::PET_BOX_MIN_ROWS;
 /// The Rice page: one hint row at the bottom, tiles above.
 pub fn rice_areas(area: Rect) -> (Rect, Rect) {
     let hint = Rect::new(

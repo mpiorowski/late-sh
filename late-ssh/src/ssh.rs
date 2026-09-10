@@ -808,10 +808,10 @@ impl russh::server::Handler for ClientHandler {
         if let Err(e) = self.state.shop_service.refresh_user(user_id).await {
             tracing::warn!(error = ?e, "failed to refresh shop snapshot");
         }
-        let initial_pet = match self.state.pet_service.ensure_cat(user_id).await {
-            Ok(cat) => Some(cat),
+        let initial_pet = match self.state.pet_service.ensure_pet(user_id).await {
+            Ok(pet) => Some(pet),
             Err(e) => {
-                tracing::warn!(error = ?e, "failed to load/create cat companion");
+                tracing::warn!(error = ?e, "failed to load/create pet companion");
                 None
             }
         };
@@ -1043,7 +1043,6 @@ impl russh::server::Handler for ClientHandler {
             app_flags_rx: self.state.app_flags.subscribe(),
             app_flags: Some(self.state.app_flags.clone()),
             runner_looks_rx: self.state.runner_looks.subscribe(),
-            show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
             zen_layout: late_core::models::user::extract_zen_layout(&user.settings),
             key_fingerprint,
             key_layout: device.layout,

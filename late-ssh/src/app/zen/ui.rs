@@ -1,6 +1,6 @@
 //! Rendering for both Zen pages. Every widget here is a thin frame around a
 //! renderer another domain already owns (the bonsai canvas, the aquarium
-//! reef, the pet strip, the embedded room chat, the equalizer); what this
+//! reef, the pet box, the embedded room chat, the equalizer); what this
 //! file adds is the composition and the chrome.
 
 use ratatui::{
@@ -138,9 +138,13 @@ pub(crate) fn draw_rice(
         }
         match kind {
             TileKind::Bonsai => draw_bonsai_tile(frame, inner, view.bonsai, view.wall_tick),
-            TileKind::Aquarium => {
-                draw_aquarium_tile(frame, inner, view.aquarium, view.aquarium_owned)
-            }
+            TileKind::Aquarium => draw_aquarium_tile(
+                frame,
+                inner,
+                view.aquarium,
+                view.aquarium_owned,
+                view.aquarium_care.sprout_visible(),
+            ),
             TileKind::Pet => draw_pet_tile(frame, inner, view.pet_strip.as_ref(), watching),
             TileKind::Chat => {
                 let label = view.room_label.clone();
@@ -376,16 +380,26 @@ fn bonsai_status_line(state: &BonsaiState, wide: bool) -> Line<'static> {
 
 /// The live reef for everyone; without the shop unlock it swims empty, and
 /// a caption on the floor row says where the fish are.
-fn draw_aquarium_tile(frame: &mut Frame, area: Rect, state: &AquariumState, owned: bool) {
+/// The tank, with one caption row at the bottom when there is something to
+/// say: the shop for a tank nobody owns, the cut key while a sprout stands.
+fn draw_aquarium_tile(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AquariumState,
+    owned: bool,
+    sprout: bool,
+) {
     crate::app::hub::aquarium::ui::draw(frame, area, state);
-    if owned || area.height < 3 {
+    if area.height < 3 {
         return;
     }
-    let caption = Line::from(Span::styled(
-        "fish live in /shop",
-        Style::default().fg(theme::TEXT_FAINT()),
-    ))
-    .centered();
+    let text = match (owned, sprout) {
+        (false, _) => "fish live in /shop",
+        (true, true) => "a sprout came up · /aq cut, or leave it",
+        (true, false) => return,
+    };
+    let caption =
+        Line::from(Span::styled(text, Style::default().fg(theme::TEXT_FAINT()))).centered();
     frame.render_widget(
         Paragraph::new(caption),
         Rect::new(area.x, area.bottom() - 1, area.width, 1),
@@ -401,7 +415,7 @@ fn draw_lobby_tile(frame: &mut Frame, area: Rect, daily: &DailyState, glow: bool
 
 /// The pet's box at tile size: a name and mood row on top when there is
 /// room, and the whole rest of the tile to roam. `watching` names the side
-/// a neighbouring tank is on; a fed pet sits there and watches.
+/// a neighbouring tank is on; a calm pet sits there and watches.
 fn draw_pet_tile(
     frame: &mut Frame,
     area: Rect,
@@ -422,7 +436,16 @@ fn draw_pet_tile(
     let box_area = if area.height >= FLOOR_ROWS + 2 {
         let state = view.state;
         let dim = Style::default().fg(theme::TEXT_DIM());
-        let name = state.name.clone().unwrap_or_else(|| state.species.clone());
+        let name = state
+            .name
+            .clone()
+            .unwrap_or_else(|| state.species.as_str().to_string());
+        let pose = PetPose::for_frame(
+            state.mood(),
+            watching,
+            state.perch(),
+            state.animation_ticks(),
+        );
         let line = Line::from(vec![
             Span::styled(
                 name,
@@ -431,13 +454,14 @@ fn draw_pet_tile(
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!(" · {} · {}", state.mood().label(), state.age_label()),
+                format!(" · {} · {}", state.mood().as_str(), state.age_label()),
                 dim,
             ),
             Span::styled(
-                match PetPose::for_frame(state.mood(), watching, state.animation_ticks()) {
+                match pose {
                     PetPose::Watch(_) => " · watching the fish",
-                    PetPose::Stroll | PetPose::Sulk => "",
+                    PetPose::At(_) => " · at your cursor",
+                    PetPose::Stroll | PetPose::Sulk | PetPose::Sleep => "",
                 },
                 dim,
             ),

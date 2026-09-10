@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/zen`
-- Last updated: 2026-09-10 (default swapped: chat under the bonsai, the pet over the reef on the rail; a pet tile beside a tank tile watches the fish. The music tile names the tuned station: `station_text` gives "radio · chillsynth" or "icecast · chill", YouTube stays one word. Bonsai care keys left the page: `w` opens the global Bonsai Care modal, and the page yields every key while a `v` chord is armed. Earlier: the drawn Room was built, liked, and cut the same day: Rice covers it. Default reworked: reef live for everyone, lobby tile added. Prototype; the split tree has tests (`state_test.rs`), the drawing does not.)
+- Last updated: 2026-09-10 (the pet is a mood indicator: no feed, no `f` key, no bowl; the tile's top row reads `name · mood · age`, a click on the pet pets it, and the pet walks after the terminal cursor while it is inside the tile; the tank and the pet now live on this page only, the Home tray and the composer strip are gone. Earlier the same day, the tank tile's bottom row points at `/aq cut` while a sprout stands; no page key for it, on purpose; see the hub CONTEXT for the sprout clock. Earlier the same day, default swapped: chat under the bonsai, the pet over the reef on the rail; a pet tile beside a tank tile watches the fish. The music tile names the tuned station: `station_text` gives "radio · chillsynth" or "icecast · chill", YouTube stays one word. Bonsai care keys left the page: `w` opens the global Bonsai Care modal, and the page yields every key while a `v` chord is armed. Earlier: the drawn Room was built, liked, and cut the same day: Rice covers it. Default reworked: reef live for everyone, lobby tile added. Prototype; the split tree has tests (`state_test.rs`), the drawing does not.)
 - Purpose: the full-bleed page that cuts the clubhouse down to the things you keep alive.
 - Status: Experimental. Reached with `Ctrl+F` from any page; a surface over that page, absent from the Tab cycle. Esc or the chord returns to it (`App::zen_return_screen`).
 - Parent context: `../../../../CONTEXT.md`
@@ -18,7 +18,7 @@ to. Tile kinds are a closed enum: bonsai (the true 81x26 canvas when the
 tile has the room, the preview otherwise), aquarium (the real reef
 simulation, drawn for everyone: unowned it swims empty under a `/shop`
 caption; owned, its title carries the care bar, fourteen boxes green for
-the feeding streak or red for the days unfed, see the hub CONTEXT), pet (the strip; when its tile shares an edge with a tank tile and the pet is fed, it strolls for twenty minutes then sits against that edge for five with wide eyes, watching the fish, on the wall clock: `PetPose::for_frame` and `STROLL_TICKS`/`WATCH_TICKS` in `pet/ui.rs`, the side from `layout::neighbour_side`), chat, music (the track, then the source and the station it is tuned to, `v1`..`v5` retune it), clock (block digits, online count
+the feeding streak or red for the days unfed, see the hub CONTEXT), pet (the box from `pet/ui.rs`, the only place the pet is drawn besides the profile portrait; its top row reads `name · mood · age`, the mood inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle); when its tile shares an edge with a tank tile and the pet is calm (idle or vibing) it strolls for twenty minutes then sits against that edge for five with wide eyes, watching the fish, on the wall clock: `PetPose::for_frame` and `STROLL_TICKS`/`WATCH_TICKS`, the side from `layout::neighbour_side`; a click on it pets it, and while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the track, then the source and the station it is tuned to, `v1`..`v5` retune it), clock (block digits, online count
 on the date row), visualizer, presence, lobby (the daily games, compact:
 only the running games plus one footer row of count and keys), blank. The look (border style, gap, titles) is
 part of the layout.
@@ -61,8 +61,11 @@ aquarium stepping and anim edge in `tick.rs`; `extract_zen_layout` /
 ## 3. Keys
 
 When not composing: Esc or `Ctrl+F` leave, `[` `]` walk rooms, `i` / Enter compose in the current
-room; pet `f` feed; aquarium `a` feed (both free, once a day, +100 chips on
-the first feed). The bonsai has no keys of its own here: `w` is the global
+room; aquarium `a` feed (free, once a day, +100 chips on the first feed).
+The pet has no key: it is petted with a left click and reads the rest of
+the session itself. The sprout on the tank floor (the fortnightly bud;
+leave it a week and it roots as a wigglewort) is cut with `/aq cut` from
+the composer, never a page key: dedicated keys accumulate and collide. The bonsai has no keys of its own here: `w` is the global
 Bonsai Care key and opens the same modal it opens on Home, so watering,
 cutting, and steering work exactly as on the chat page. Layout: arrows move focus, `space` cycles the
 focused tile's kind, `S` splits it (row when wide, column when tall), `X`
@@ -103,10 +106,13 @@ leaving the page, so a held resize key costs one row update.
   percent `ratio` field no longer parse and reset to the default.
 - The watching pet is a render-time fact: `draw_rice` finds the pet tile's
   neighbouring tank from the frame's rects and passes the side into
-  `draw_pet_box`, which records it with the travel in `App::last_pet_travel`
-  (`PetFrameInputs`) so the tick-side gate (`pet::ui::frame_changed`)
-  evaluates the same pose. A zoomed tile has no neighbour. A hungry pet
-  sulks whatever is next to it.
+  `draw_pet_box`, which records it with the travel, the box's rect, and
+  where the pet stood in `App::last_pet_frame` (`PetFrameInputs`) so the
+  tick-side gate (`pet::ui::frame_changed`) evaluates the same pose and
+  the walk after the cursor (`PetState::tick`, fed `App::last_mouse` from
+  every mouse report) knows where the cursor is relative to the box. A
+  zoomed tile has no neighbour. A sulking or sleeping pet ignores both the
+  fish and the cursor.
 - Tests cover the split tree (`state_test.rs`), neighbour detection
   (`layout_test.rs`), and the care bar (`ui_test.rs`); the rest of the tile
   drawing is untested.

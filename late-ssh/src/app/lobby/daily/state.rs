@@ -59,6 +59,10 @@ impl ChallengeDraft {
 pub struct DailyTick {
     pub banner: Option<Banner>,
     pub changed: bool,
+    /// A match of this user's finished with the other player winning. The
+    /// activity feed names only the winner, so this is the loser's one
+    /// witness (the pet sulks on it).
+    pub own_loss: bool,
 }
 
 pub struct DailyState {
@@ -79,6 +83,8 @@ pub struct DailyState {
     /// first snapshot update, so a cold-start empty snapshot can't make the
     /// first real snapshot notify for every my-turn match at once.
     turn_notify_seeded: bool,
+    /// Set by a `MatchFinished` this user lost, taken by the next tick.
+    own_loss: bool,
 
     pub board: Option<DailyBoardState>,
 }
@@ -354,6 +360,7 @@ impl DailyState {
             notifier,
             turn_notified_match_ids: HashSet::new(),
             turn_notify_seeded: false,
+            own_loss: false,
             board: None,
         }
     }
@@ -392,7 +399,11 @@ impl DailyState {
         if self.poll_board_load() {
             changed = true;
         }
-        DailyTick { banner, changed }
+        DailyTick {
+            banner,
+            changed,
+            own_loss: std::mem::take(&mut self.own_loss),
+        }
     }
 
     fn apply_event(&mut self, event: DailyEvent) -> Option<Banner> {
@@ -461,6 +472,7 @@ impl DailyState {
                     DailyFinishOutcome::Won { .. } if playing => {
                         // Losers get told too; the lingering result row in the
                         // lobby is the durable copy of this news.
+                        self.own_loss = true;
                         Some(Banner::info(&format!(
                             "Daily {}: you lost the match ({})",
                             game.label(),

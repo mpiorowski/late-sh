@@ -14,7 +14,7 @@ use crate::app::bonsai::svc::BonsaiService;
 use crate::app::chat::showcase::svc::{ShowcaseFeedItem, ShowcaseService, ShowcaseSnapshot};
 use crate::app::hub::aquarium::state::AquariumState;
 use crate::app::profile::ledger::LedgerRow;
-use crate::app::profile::svc::{ProfileService, ProfileSnapshot};
+use crate::app::profile::svc::{ProfilePet, ProfileService, ProfileSnapshot};
 
 /// The vertical extent the last draw measured: how tall the composed body
 /// is, how many rows the viewport showed, and where the chips section
@@ -47,6 +47,8 @@ pub(crate) struct ProfileModalState {
     /// viewing never mutates the owner's tree.
     bonsai: Option<BonsaiState>,
     aquarium_fish: Vec<(String, usize)>,
+    /// The viewed user's pet, owners only, in its last inferred mood.
+    pet: Option<ProfilePet>,
     /// Lazily built/ticked for the aquarium panel. Interior mutability so the
     /// immutable `draw` path can animate and rebuild on resize.
     aquarium: RefCell<Option<AquariumState>>,
@@ -96,6 +98,7 @@ impl ProfileModalState {
             chip_balance: None,
             bonsai: None,
             aquarium_fish: Vec::new(),
+            pet: None,
             aquarium: RefCell::new(None),
             aquarium_area: Cell::new(Rect::default()),
             popup_area: Cell::new(Rect::default()),
@@ -124,6 +127,7 @@ impl ProfileModalState {
         self.chip_ledger.clear();
         self.chips_month = MonthChips::default();
         self.aquarium_fish.clear();
+        self.pet = None;
         *self.aquarium.get_mut() = None;
         let mut snapshot_rx = self.profile_service.subscribe_snapshot(user_id);
         let snapshot = snapshot_rx.borrow().clone();
@@ -148,6 +152,7 @@ impl ProfileModalState {
         self.chip_balance = None;
         self.bonsai = None;
         self.aquarium_fish.clear();
+        self.pet = None;
         *self.aquarium.get_mut() = None;
         self.profile_awards.clear();
         self.gild_counts = GildCounts::default();
@@ -207,6 +212,7 @@ impl ProfileModalState {
                 self.aquarium_fish.clear();
                 *self.aquarium.get_mut() = None;
             }
+            self.pet = None;
             return;
         }
 
@@ -222,6 +228,7 @@ impl ProfileModalState {
             self.aquarium_fish = snapshot.aquarium_fish;
             *self.aquarium.get_mut() = None;
         }
+        self.pet = snapshot.pet;
 
         self.bonsai = match (self.viewed_user_id, snapshot.bonsai) {
             (Some(user_id), Some(tree)) => Some(BonsaiState::view_only(
@@ -250,6 +257,10 @@ impl ProfileModalState {
 
     pub(crate) fn aquarium_fish(&self) -> &[(String, usize)] {
         &self.aquarium_fish
+    }
+
+    pub(crate) fn pet(&self) -> Option<&ProfilePet> {
+        self.pet.as_ref()
     }
 
     pub(crate) fn aquarium_cell(&self) -> &RefCell<Option<AquariumState>> {

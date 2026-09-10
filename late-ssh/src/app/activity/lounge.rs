@@ -157,6 +157,7 @@ fn repeat_key(event: &ActivityEvent) -> String {
             )
         }
         ActivityKind::GameEvent { game, detail } => format!("event:{}:{detail}", game.key()),
+        ActivityKind::GameLost { game, detail } => format!("lost:{}:{detail}", game.key()),
         // Keyed on the full style slug: rebuying the same look inside the
         // window stays quiet, but switching color or style re-announces
         // because the name visibly changed.
@@ -202,10 +203,12 @@ fn repeat_key(event: &ActivityEvent) -> String {
         ActivityKind::GameScored { game, .. } => format!("scored:{}", game.key()),
         ActivityKind::BonsaiWatered => "bonsai-watered".to_string(),
         ActivityKind::BonsaiLost { .. } => "bonsai-lost".to_string(),
-        ActivityKind::PetFed => "pet-fed".to_string(),
         ActivityKind::AquariumFed => "aquarium-fed".to_string(),
         ActivityKind::AquariumFryHatched { .. } => "aquarium-fry".to_string(),
         ActivityKind::AquariumFishLost { .. } => "aquarium-lost".to_string(),
+        ActivityKind::AquariumSprouted { .. } => "aquarium-sprouted".to_string(),
+        ActivityKind::AquariumSproutRooted { .. } => "aquarium-rooted".to_string(),
+        ActivityKind::AquariumSproutCut => "aquarium-cut".to_string(),
     };
     format!("{user}:{shape}")
 }

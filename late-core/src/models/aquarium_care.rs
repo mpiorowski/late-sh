@@ -2,8 +2,10 @@
 //! cost the tank. Hunger is not stored; it is "not fed today (UTC)", read
 //! off `last_fed`. The row also carries the feeding streak (a fry hatches
 //! at `CARE_DAYS` straight fed days), the starvation deaths already settled
-//! since the last meal (one fish per `CARE_DAYS` unfed days), and the fry
-//! still swimming small.
+//! since the last meal (one fish per `CARE_DAYS` unfed days), the fry
+//! still swimming small, and the sprout clock: every `SPROUT_EVERY_DAYS` a
+//! sprout comes up on the floor, and one the owner has not cut within
+//! `SPROUT_DAYS` roots as a plant.
 
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
@@ -15,10 +17,12 @@ use super::{aquarium_shield::AquariumShield, marketplace::FishStock};
 /// Both care clocks run on the same fourteen days: that many straight fed
 /// days hatch a fry, that many unfed days starve a fish.
 pub const CARE_DAYS: u32 = 14;
-/// Unfed days before the water turns murky.
-pub const MURKY_AFTER_DAYS: u32 = 7;
 /// How long a fry swims as a small sprite before it is drawn full size.
 pub const FRY_DAYS: u32 = 7;
+/// Days between one sprout coming up and the next, whatever became of it.
+pub const SPROUT_EVERY_DAYS: u32 = 14;
+/// How long a sprout can be cut before it roots as a plant.
+pub const SPROUT_DAYS: u32 = 7;
 /// The price every breeding and starvation weight is measured against: a
 /// fish at this price weighs 1, a fish at a tenth of it weighs 10.
 pub const WEIGHT_PRICE_CHIPS: i64 = 10_000;
@@ -30,6 +34,11 @@ pub struct AquariumCare {
     pub deaths_settled: i32,
     pub fry_creature: Option<String>,
     pub fry_born: Option<NaiveDate>,
+    /// The day the sprout now on the floor came up; `None` when the floor
+    /// is bare (never sprouted, cut, or rooted).
+    pub sprout_born: Option<NaiveDate>,
+    /// The day the next sprout comes up.
+    pub next_sprout: NaiveDate,
 }
 
 impl From<tokio_postgres::Row> for AquariumCare {
@@ -40,6 +49,8 @@ impl From<tokio_postgres::Row> for AquariumCare {
             deaths_settled: row.get("deaths_settled"),
             fry_creature: row.get("fry_creature"),
             fry_born: row.get("fry_born"),
+            sprout_born: row.get("sprout_born"),
+            next_sprout: row.get("next_sprout"),
         }
     }
 }
@@ -49,7 +60,8 @@ impl AquariumCare {
     pub async fn load(client: &impl GenericClient, user_id: Uuid) -> Result<Option<Self>> {
         let row = client
             .query_opt(
-                "SELECT last_fed, streak, deaths_settled, fry_creature, fry_born
+                "SELECT last_fed, streak, deaths_settled, fry_creature, fry_born,
+                        sprout_born, next_sprout
                  FROM user_aquarium_care
                  WHERE user_id = $1",
                 &[&user_id],
@@ -63,7 +75,8 @@ impl AquariumCare {
     pub async fn lock(client: &impl GenericClient, user_id: Uuid) -> Result<Option<Self>> {
         let row = client
             .query_opt(
-                "SELECT last_fed, streak, deaths_settled, fry_creature, fry_born
+                "SELECT last_fed, streak, deaths_settled, fry_creature, fry_born,
+                        sprout_born, next_sprout
                  FROM user_aquarium_care
                  WHERE user_id = $1
                  FOR UPDATE",
@@ -84,6 +97,23 @@ impl AquariumCare {
                  VALUES ($1, current_timestamp - interval '1 day')
                  ON CONFLICT (user_id) DO NOTHING",
                 &[&user_id],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// A tank just bought comes with its first sprout: the row starts like
+    /// `ensure` (hungry now, the first fish at stake `CARE_DAYS` out) with a
+    /// sprout up today and the next booked `SPROUT_EVERY_DAYS` out. Called
+    /// inside the purchase transaction; an existing row is left alone.
+    pub async fn welcome(client: &impl GenericClient, user_id: Uuid) -> Result<()> {
+        client
+            .execute(
+                "INSERT INTO user_aquarium_care (user_id, last_fed, sprout_born, next_sprout)
+                 VALUES ($1, current_timestamp - interval '1 day', current_date,
+                         current_date + $2::int)
+                 ON CONFLICT (user_id) DO NOTHING",
+                &[&user_id, &(SPROUT_EVERY_DAYS as i32)],
             )
             .await?;
         Ok(())
@@ -160,6 +190,76 @@ impl AquariumCare {
             .await?;
         Ok(())
     }
+
+    /// A sprout comes up when one is due and the floor is bare: it is
+    /// stamped `today` and the next is booked `SPROUT_EVERY_DAYS` out.
+    /// Returns whether this call was the one that raised it.
+    pub async fn sprout_up(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        today: NaiveDate,
+    ) -> Result<bool> {
+        let next = today + chrono::Days::new(SPROUT_EVERY_DAYS as u64);
+        let row = client
+            .query_opt(
+                "UPDATE user_aquarium_care
+                 SET sprout_born = $2, next_sprout = $3, updated = current_timestamp
+                 WHERE user_id = $1 AND sprout_born IS NULL AND next_sprout <= $2
+                 RETURNING 1",
+                &[&user_id, &today, &next],
+            )
+            .await?;
+        Ok(row.is_some())
+    }
+
+    /// The sprout roots: it leaves the care row once it is `SPROUT_DAYS`
+    /// old. Returns whether there was one to root; the caller grows the
+    /// plant in the same transaction.
+    pub async fn root_sprout(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        today: NaiveDate,
+    ) -> Result<bool> {
+        let row = client
+            .query_opt(
+                "UPDATE user_aquarium_care
+                 SET sprout_born = NULL, updated = current_timestamp
+                 WHERE user_id = $1 AND sprout_born IS NOT NULL
+                   AND sprout_born <= $2::date - $3::int
+                 RETURNING 1",
+                &[&user_id, &today, &(SPROUT_DAYS as i32)],
+            )
+            .await?;
+        Ok(row.is_some())
+    }
+
+    /// The owner cuts the sprout: gone, as long as it is still young enough
+    /// to cut. Returns whether this call was the one that cut it (a rooted
+    /// or already cut sprout is nothing to cut).
+    pub async fn cut_sprout(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        today: NaiveDate,
+    ) -> Result<bool> {
+        let row = client
+            .query_opt(
+                "UPDATE user_aquarium_care
+                 SET sprout_born = NULL, updated = current_timestamp
+                 WHERE user_id = $1 AND sprout_born IS NOT NULL
+                   AND sprout_born > $2::date - $3::int
+                 RETURNING 1",
+                &[&user_id, &today, &(SPROUT_DAYS as i32)],
+            )
+            .await?;
+        Ok(row.is_some())
+    }
+}
+
+/// Whether a sprout that came up on `born` has rooted by `today`: it can be
+/// cut for `SPROUT_DAYS`, the day after that it is a plant.
+pub fn sprout_rooted(born: NaiveDate, today: NaiveDate) -> bool {
+    born.checked_add_days(chrono::Days::new(SPROUT_DAYS as u64))
+        .is_none_or(|roots_on| today >= roots_on)
 }
 
 /// Unfed days on the clock: every UTC day after `last_fed` up to and

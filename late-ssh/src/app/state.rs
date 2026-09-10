@@ -125,17 +125,18 @@ fn device_rails_or_profile(
     }
 }
 
-/// Bounds for the aquarium simulation. The tray renders inside the chat
-/// column, so mirror the default Home layout: frame borders (2) plus the
-/// room rail and right sidebar (24 each).
+/// Bounds for the aquarium simulation at launch: a band the size of the
+/// old Home tray (eleven rows inside the chat column: frame borders plus
+/// the room rail and right sidebar, 24 each). The Zen page's tank tile
+/// re-binds the sim to its own rect on its first draw
+/// (`sync_aquarium_bounds`); this only has to be a sane start.
 fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
-    let chat_column = Rect::new(
+    Rect::new(
         1,
         1,
         cols.saturating_sub(2 + 24 + 24).max(20),
-        rows.saturating_sub(2),
-    );
-    crate::app::hub::aquarium::ui::top_tray_area(chat_column)
+        rows.saturating_sub(2).min(11),
+    )
 }
 
 const CURSOR_SHAPE_STEADY_BLOCK: &[u8] = b"\x1b[2 q";
@@ -378,8 +379,6 @@ pub struct SessionConfig {
     /// tick edge into `App::runner_looks` for the #deadchannel portraits.
     pub(crate) runner_looks_rx:
         tokio::sync::watch::Receiver<crate::app::deadchannel::runner::svc::RunnerLooks>,
-    /// Whether the aquarium tray was open when the user last toggled it.
-    pub show_aquarium_tray: bool,
     /// The stored Rice layout (`app/zen`), `None` until first edited.
     pub zen_layout: Option<serde_json::Value>,
     /// Fingerprint of the SSH key this session authenticated with: the only
@@ -477,7 +476,6 @@ pub struct App {
     pub(crate) show_help: bool,
     pub(crate) show_mod_modal: bool,
     pub(crate) show_hub_modal: bool,
-    pub(crate) show_aquarium_tray: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) show_sheet_modal: bool,
     pub(crate) show_poll_modal: bool,
@@ -594,13 +592,16 @@ pub struct App {
     /// friend-online banner; the feed itself now ships to #lounge (see
     /// `activity/lounge.rs`) and has no per-session buffer.
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
-    /// Pet box click targets from the last frame: the pet itself and the
-    /// bowl, both of which feed. Reset each frame.
+    /// The pet's click target from the last frame (a click is a pet). Reset
+    /// each frame.
     pub(crate) last_pet_rect: std::cell::Cell<Option<Rect>>,
-    pub(crate) last_pet_bowl_rect: std::cell::Cell<Option<Rect>>,
-    /// How far the pet could roam in the box drawn last frame; `None` when
-    /// no box was drawn. Gates the pet animation's frame cost in tick.
-    pub(crate) last_pet_travel: std::cell::Cell<Option<crate::app::pet::ui::PetFrameInputs>>,
+    /// The box the pet was drawn in last frame, where it stood, and how far
+    /// it could roam; `None` when no box was drawn. Gates the pet
+    /// animation's frame cost in tick and places the cursor for the walk.
+    pub(crate) last_pet_frame: std::cell::Cell<Option<crate::app::pet::state::PetFrameInputs>>,
+    /// The terminal cursor's last reported cell (0-based), for the pet to
+    /// walk after. `None` until the terminal reports one.
+    pub(crate) last_mouse: Option<(u16, u16)>,
     /// Where the top-border "N unread mentions" text was drawn last frame,
     /// for the HUD click hit test; `None` when nothing is unread. Only the
     /// mentions segment is clickable, not the voice/chips text after it.
@@ -1261,15 +1262,11 @@ impl App {
                     created: chrono::Utc::now(),
                     updated: chrono::Utc::now(),
                     user_id: config.user_id,
-                    last_fed: None,
-                    last_watered: None,
-                    last_played: None,
-                    last_treated: None,
                     adopted_at: None,
                     name: None,
-                    species: "cat".to_string(),
-                    care_streak_days: 0,
-                    care_streak_date: None,
+                    species: late_core::models::pet::PetSpecies::Cat.as_str().to_string(),
+                    mood: late_core::models::pet::PetMood::Asleep.as_str().to_string(),
+                    mood_since: chrono::Utc::now(),
                 },
             )
         };
@@ -1293,13 +1290,27 @@ impl App {
         aquarium_state.set_active_creatures(
             &shop_state.active_aquarium_fish(),
             aquarium_care.fry_visible(),
+            aquarium_care.sprout_visible(),
         );
         aquarium_state.set_hungry(aquarium_care.hungry());
-        aquarium_state.set_murky(aquarium_care.murky());
-        // Fish the login settlement took while the user was away: said once,
-        // on the first screen.
+        // What the login settlement did while the user was away: said once,
+        // on the first screen. A loss outranks the sprout news.
         let aquarium_loss_banner = match config.initial_aquarium_care.lost.as_slice() {
-            [] => None,
+            [] => match (
+                config.initial_aquarium_care.rooted,
+                config.initial_aquarium_care.sprouted,
+            ) {
+                (Some(true), _) => Some(crate::app::common::primitives::Banner::success(
+                    "Your sprout took root: a wigglewort grows in the tank",
+                )),
+                (Some(false), _) => Some(crate::app::common::primitives::Banner::success(
+                    "Your sprout took root: a wigglewort waits in /shop, the tank is full",
+                )),
+                (None, true) => Some(crate::app::common::primitives::Banner::info(
+                    "A sprout came up in your tank: leave it, or /aq cut within the week",
+                )),
+                (None, false) => None,
+            },
             [one] => Some(crate::app::common::primitives::Banner::error(&format!(
                 "Your {one} starved while you were away"
             ))),
@@ -1363,7 +1374,6 @@ impl App {
             show_help: false,
             show_mod_modal: false,
             show_hub_modal: false,
-            show_aquarium_tray: config.show_aquarium_tray,
             show_profile_modal: false,
             show_sheet_modal: false,
             show_poll_modal: false,
@@ -1451,8 +1461,8 @@ impl App {
             username_directory: config.username_directory,
             activity_feed_rx: config.activity_feed_rx,
             last_pet_rect: std::cell::Cell::new(None),
-            last_pet_bowl_rect: std::cell::Cell::new(None),
-            last_pet_travel: std::cell::Cell::new(None),
+            last_pet_frame: std::cell::Cell::new(None),
+            last_mouse: None,
             last_mentions_hud_rect: std::cell::Cell::new(None),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             voice: crate::app::voice::state::VoiceState::new(config.voice_service),
@@ -2694,6 +2704,16 @@ impl App {
         }
     }
 
+    /// Put the owned population back in the water after the care state
+    /// changed (a sprout came or went) without a shop snapshot behind it.
+    pub(crate) fn refresh_aquarium_population(&mut self) {
+        self.aquarium_state.set_active_creatures(
+            &self.shop_state.active_aquarium_fish(),
+            self.aquarium_care.fry_visible(),
+            self.aquarium_care.sprout_visible(),
+        );
+    }
+
     /// Re-bind the reef to the rect the current screen draws it in.
     pub(crate) fn sync_aquarium_bounds(&mut self) {
         let area = self.aquarium_area_for_screen();
@@ -2716,13 +2736,6 @@ impl App {
         self.profile_state
             .service()
             .set_zen_layout(self.user_id, self.zen.rice.to_json());
-    }
-
-    /// Persist the aquarium tray's open/closed state (fire-and-forget).
-    pub(crate) fn persist_show_aquarium_tray(&self) {
-        self.profile_state
-            .service()
-            .set_show_aquarium_tray(self.user_id, self.show_aquarium_tray);
     }
 
     /// Open the profile modal for a user, closing the sheet modal that shares
@@ -3639,6 +3652,14 @@ impl App {
 
 impl Drop for App {
     fn drop(&mut self) {
+        // An owner going offline leaves a sleeping pet on the profile. Only
+        // the owner's session writes the row; another device still up
+        // rewrites it on its next mood change.
+        if self.shop_state.entitlements().has_pet_companion() {
+            self.pet_state
+                .svc
+                .set_mood_task(self.user_id, late_core::models::pet::PetMood::Asleep);
+        }
         // The device mark: when this terminal's keyboard went quiet, not when
         // the connection closed. A terminal parked open overnight and shut in
         // the morning left last night. Keyless sessions (ghost bots, tests)

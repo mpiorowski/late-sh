@@ -28,6 +28,8 @@ pub const BONSAI_DECAY_PROTECTION_DURATION_SECS: i64 = 1_209_600;
 pub const AQUARIUM_SKU: &str = "aquarium";
 pub const AQUARIUM_FISH_ITEM_KIND: &str = "aquarium_fish";
 pub const AQUARIUM_MAX_FISH: i32 = 20;
+/// The plant a sprout roots as when its owner leaves it alone.
+pub const AQUARIUM_SPROUT_ROOTS_AS_SKU: &str = "aquarium_fish_wigglewort";
 pub const AQUARIUM_CONSUMABLE_ITEM_KIND: &str = "aquarium_consumable";
 pub const AQUARIUM_SHIELD_SKU: &str = "aquarium_shield_two_weeks";
 /// `shop_consumable_effects.effect_kind` for the user-scoped Aquarium
@@ -557,6 +559,10 @@ async fn purchase_item_by_sku_inner(
         )
         .await?;
     }
+    // The tank comes with its first sprout on the floor.
+    if item.sku == AQUARIUM_SKU {
+        super::aquarium_care::AquariumCare::welcome(&tx, user_id).await?;
+    }
 
     let refresh_all_active_users =
         activate_chat_consumable_in_tx(&tx, user_id, &item, chat_effect_room_id).await?;
@@ -1003,6 +1009,20 @@ async fn activate_aquarium_shield_in_tx(
     Ok(Some(effect))
 }
 
+/// Whether the user owns the Pet Companion: what puts a pet on a profile.
+pub async fn user_owns_pet_companion(client: &impl GenericClient, user_id: Uuid) -> Result<bool> {
+    let row = client
+        .query_opt(
+            "SELECT 1
+             FROM user_purchases p
+             JOIN marketplace_items i ON i.id = p.item_id
+             WHERE p.user_id = $1 AND i.sku = $2",
+            &[&user_id, &PET_COMPANION_SKU],
+        )
+        .await?;
+    Ok(row.is_some())
+}
+
 /// Whether the user owns the Aquarium feature.
 pub async fn user_owns_aquarium(client: &impl GenericClient, user_id: Uuid) -> Result<bool> {
     let row = client
@@ -1087,6 +1107,47 @@ pub async fn hatch_aquarium_fry_in_tx(
         .await?;
     if updated != 1 {
         bail!("fry hatched for a species the user does not own");
+    }
+    Ok(into_water)
+}
+
+/// A sprout the owner left alone rooted as a plant
+/// (`AQUARIUM_SPROUT_ROOTS_AS_SKU`): one more owned, and one more in the
+/// water when the tank is under `AQUARIUM_MAX_FISH`. Returns whether it went
+/// into the water (a full tank keeps the plant in inventory). A free plant,
+/// so the row's purchase price is zero when this is the first of its kind.
+pub async fn root_aquarium_sprout_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+) -> Result<bool> {
+    let item_id: Uuid = tx
+        .query_one(
+            "SELECT id FROM marketplace_items WHERE sku = $1",
+            &[&AQUARIUM_SPROUT_ROOTS_AS_SKU],
+        )
+        .await?
+        .get("id");
+    let swimming = aquarium_fish_active_quantity_in_tx(tx, user_id).await?;
+    let into_water = swimming < AQUARIUM_MAX_FISH;
+    let active_delta: i32 = if into_water { 1 } else { 0 };
+    let updated = tx
+        .execute(
+            "UPDATE user_purchases
+             SET quantity = quantity + 1,
+                 active_quantity = active_quantity + $3,
+                 updated = current_timestamp
+             WHERE user_id = $1 AND item_id = $2",
+            &[&user_id, &item_id, &active_delta],
+        )
+        .await?;
+    if updated == 0 {
+        tx.execute(
+            "INSERT INTO user_purchases
+                (user_id, item_id, quantity, active_quantity, remaining_uses, equipped_slot, purchased_price_chips)
+             VALUES ($1, $2, 1, $3, NULL, NULL, 0)",
+            &[&user_id, &item_id, &active_delta],
+        )
+        .await?;
     }
     Ok(into_water)
 }

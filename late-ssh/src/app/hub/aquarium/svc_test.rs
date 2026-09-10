@@ -6,7 +6,7 @@ use tokio::sync::broadcast;
 use tokio::time::{Duration, timeout};
 use uuid::Uuid;
 
-use super::{AquariumService, FEED_CHIP_BONUS};
+use super::{AquariumService, CutOutcome, FEED_CHIP_BONUS};
 use crate::app::activity::event::{ActivityEvent, ActivityKind};
 use crate::test_helpers::new_test_db;
 
@@ -43,18 +43,25 @@ async fn stock_tank(db: &late_core::db::Db, user_id: Uuid) {
 }
 
 async fn clownfish_counts(db: &late_core::db::Db, user_id: Uuid) -> (i32, i32) {
+    sku_counts(db, user_id, "aquarium_fish_clownfish")
+        .await
+        .expect("clownfish row")
+}
+
+/// Owned and swimming counts of one SKU, `None` when the user has no row.
+async fn sku_counts(db: &late_core::db::Db, user_id: Uuid, sku: &str) -> Option<(i32, i32)> {
     let client = db.get().await.expect("db client");
-    let row = client
-        .query_one(
+    client
+        .query_opt(
             "SELECT p.quantity, p.active_quantity
              FROM user_purchases p
              JOIN marketplace_items i ON i.id = p.item_id
-             WHERE p.user_id = $1 AND i.sku = 'aquarium_fish_clownfish'",
-            &[&user_id],
+             WHERE p.user_id = $1 AND i.sku = $2",
+            &[&user_id, &sku],
         )
         .await
-        .expect("clownfish row");
-    (row.get("quantity"), row.get("active_quantity"))
+        .expect("purchase row")
+        .map(|row| (row.get("quantity"), row.get("active_quantity")))
 }
 
 #[tokio::test]
@@ -215,4 +222,107 @@ async fn fourteen_unfed_days_starve_one_fish_at_login_and_only_once() {
         .expect("care")
         .expect("care row");
     assert_eq!(care.deaths_settled, 0);
+}
+
+#[tokio::test]
+async fn a_sprout_comes_up_every_two_weeks_and_roots_unless_it_is_cut() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "aquarium-svc-sprout").await;
+    let (svc, mut rx) = service(&test_db.db);
+    let client = test_db.db.get().await.expect("db client");
+
+    // No tank: nothing to cut, no clock.
+    assert_eq!(
+        svc.cut(user.id).await.expect("cut without a tank"),
+        CutOutcome::NoTank
+    );
+    stock_tank(&test_db.db, user.id).await;
+
+    // The purchase planted the first sprout: the first connect finds it up
+    // already (nothing new to announce) with the next booked two weeks out.
+    let today = chrono::Utc::now().date_naive();
+    let boot = svc.bootstrap(user.id).await.expect("first bootstrap");
+    assert!(!boot.sprouted, "up since the purchase, not raised now");
+    assert_eq!(boot.rooted, None);
+    let care = boot.care.expect("care");
+    assert_eq!(care.sprout_born, Some(today));
+    assert_eq!(care.next_sprout, today + chrono::Days::new(14));
+    assert!(rx.try_recv().is_err(), "nothing to announce yet");
+
+    // Cut it: gone, announced once, and a second press finds nothing.
+    assert_eq!(svc.cut(user.id).await.expect("cut"), CutOutcome::Cut);
+    assert_eq!(
+        svc.cut(user.id).await.expect("cut again"),
+        CutOutcome::NothingToCut
+    );
+    let event = timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("activity in time")
+        .expect("activity event");
+    assert!(matches!(event.kind, ActivityKind::AquariumSproutCut));
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+        sku_counts(&test_db.db, user.id, "aquarium_fish_wigglewort").await,
+        None,
+        "a cut sprout grows nothing"
+    );
+
+    // Two weeks pass: the next connect raises the next one.
+    client
+        .execute(
+            "UPDATE user_aquarium_care SET next_sprout = current_date WHERE user_id = $1",
+            &[&user.id],
+        )
+        .await
+        .expect("bring the sprout forward");
+    let boot = svc.bootstrap(user.id).await.expect("second bootstrap");
+    assert!(boot.sprouted);
+    assert_eq!(boot.rooted, None);
+    assert_eq!(boot.care.expect("care").sprout_born, Some(today));
+    let event = timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("activity in time")
+        .expect("activity event");
+    assert!(matches!(event.kind, ActivityKind::AquariumSprouted { born } if born == today));
+
+    // The next one, left alone for a week: it roots as a wigglewort in
+    // the water, and a late cut finds a plant, not a sprout.
+    client
+        .execute(
+            "UPDATE user_aquarium_care
+             SET sprout_born = current_date - 7, next_sprout = current_date + 7
+             WHERE user_id = $1",
+            &[&user.id],
+        )
+        .await
+        .expect("an old sprout");
+    assert_eq!(
+        svc.cut(user.id).await.expect("late cut"),
+        CutOutcome::NothingToCut
+    );
+    let boot = svc.bootstrap(user.id).await.expect("third bootstrap");
+    assert_eq!(boot.rooted, Some(true));
+    assert!(!boot.sprouted, "the next is still a week away");
+    assert_eq!(boot.care.expect("care").sprout_born, None);
+    assert_eq!(
+        sku_counts(&test_db.db, user.id, "aquarium_fish_wigglewort").await,
+        Some((1, 1))
+    );
+    assert_eq!(clownfish_counts(&test_db.db, user.id).await, (2, 2));
+    let event = timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("activity in time")
+        .expect("activity event");
+    assert!(matches!(
+        event.kind,
+        ActivityKind::AquariumSproutRooted { swimming: true }
+    ));
+
+    // Rooting again on the same day finds nothing: settled once.
+    let boot = svc.bootstrap(user.id).await.expect("fourth bootstrap");
+    assert_eq!(boot.rooted, None);
+    assert_eq!(
+        sku_counts(&test_db.db, user.id, "aquarium_fish_wigglewort").await,
+        Some((1, 1))
+    );
 }

@@ -1,7 +1,7 @@
 use crate::{
     models::pet::{
-        LifeStage, PET_NAME_MAX_CHARS, PET_SPECIES_CAT, PET_SPECIES_DOG, PetCompanion,
-        normalize_pet_name, pet_age_anchor, pet_age_days, pet_age_label,
+        LifeStage, PET_NAME_MAX_CHARS, PetCompanion, PetMood, PetSpecies, normalize_pet_name,
+        pet_age_anchor, pet_age_days, pet_age_label,
     },
     test_utils::test_db,
 };
@@ -51,10 +51,26 @@ fn life_stage_clamps_negative_days() {
 
 #[test]
 fn life_stage_label_uses_species() {
-    assert_eq!(LifeStage::Young.label(PET_SPECIES_CAT), "Kitten");
-    assert_eq!(LifeStage::Young.label(PET_SPECIES_DOG), "Puppy");
-    assert_eq!(LifeStage::Senior.label(PET_SPECIES_CAT), "Wise Old Cat");
-    assert_eq!(LifeStage::Senior.label(PET_SPECIES_DOG), "Senior Dog");
+    assert_eq!(LifeStage::Young.label(PetSpecies::Cat), "Kitten");
+    assert_eq!(LifeStage::Young.label(PetSpecies::Dog), "Puppy");
+    assert_eq!(LifeStage::Young.label(PetSpecies::Bird), "Chick");
+    assert_eq!(LifeStage::Senior.label(PetSpecies::Cat), "Wise Old Cat");
+    assert_eq!(LifeStage::Senior.label(PetSpecies::Dog), "Senior Dog");
+    assert_eq!(LifeStage::Senior.label(PetSpecies::Bird), "Old Bird");
+}
+
+#[test]
+fn species_and_mood_round_trip_through_their_column_strings() {
+    for species in PetSpecies::ALL {
+        assert_eq!(PetSpecies::parse(species.as_str()), Some(species));
+    }
+    assert_eq!(PetSpecies::parse("fish"), None);
+    // The Shop's `t` key rings through every species and comes back.
+    assert_eq!(PetSpecies::Cat.next().next().next(), PetSpecies::Cat);
+    for mood in PetMood::ALL {
+        assert_eq!(PetMood::parse(mood.as_str()), Some(mood));
+    }
+    assert_eq!(PetMood::parse("hungry"), None);
 }
 
 #[test]
@@ -102,24 +118,23 @@ fn pet_age_label_formats_typical_durations() {
 }
 
 #[tokio::test]
-async fn ensure_creates_default_companion_for_new_user() {
+async fn ensure_creates_a_sleeping_cat_for_a_new_user() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let user = crate::test_utils::create_test_user(&test_db.db, "cat-model-new").await;
 
-    let cat = PetCompanion::ensure(&client, user.id)
+    let pet = PetCompanion::ensure(&client, user.id)
         .await
         .expect("ensure");
 
-    assert_eq!(cat.user_id, user.id);
-    assert_eq!(cat.last_fed, None);
-    assert_eq!(cat.last_watered, None);
-    assert_eq!(cat.last_played, None);
-    assert_eq!(cat.last_treated, None);
+    assert_eq!(pet.user_id, user.id);
+    assert_eq!(pet.species(), PetSpecies::Cat);
+    assert_eq!(pet.mood(), PetMood::Asleep);
+    assert_eq!(pet.name, None);
 }
 
 #[tokio::test]
-async fn ensure_is_idempotent_and_does_not_reset_care() {
+async fn ensure_is_idempotent_and_keeps_the_mood() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let user = crate::test_utils::create_test_user(&test_db.db, "cat-model-idem").await;
@@ -127,76 +142,85 @@ async fn ensure_is_idempotent_and_does_not_reset_care() {
     let first = PetCompanion::ensure(&client, user.id)
         .await
         .expect("ensure");
-    PetCompanion::touch_fed(&client, user.id)
+    PetCompanion::set_mood(&client, user.id, PetMood::Proud)
         .await
-        .expect("touch fed");
+        .expect("set mood");
     let second = PetCompanion::ensure(&client, user.id)
         .await
         .expect("ensure again");
 
     assert_eq!(first.id, second.id);
-    assert!(
-        second.last_fed.is_some(),
-        "re-ensuring must not wipe an existing feed timestamp"
+    assert_eq!(
+        second.mood(),
+        PetMood::Proud,
+        "re-ensuring must not wipe the inferred mood"
     );
 }
 
 #[tokio::test]
-async fn care_touches_are_scoped_to_the_owner() {
+async fn the_mood_clock_moves_only_when_the_mood_does() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = crate::test_utils::create_test_user(&test_db.db, "cat-model-clock").await;
+    PetCompanion::ensure(&client, user.id)
+        .await
+        .expect("ensure");
+
+    PetCompanion::set_mood(&client, user.id, PetMood::Chatty)
+        .await
+        .expect("chatty");
+    let chatty = PetCompanion::ensure(&client, user.id)
+        .await
+        .expect("reload");
+    PetCompanion::set_mood(&client, user.id, PetMood::Chatty)
+        .await
+        .expect("chatty again");
+    let still_chatty = PetCompanion::ensure(&client, user.id)
+        .await
+        .expect("reload");
+    assert_eq!(still_chatty.mood_since, chatty.mood_since);
+
+    PetCompanion::set_mood(&client, user.id, PetMood::Vibing)
+        .await
+        .expect("vibing");
+    let vibing = PetCompanion::ensure(&client, user.id)
+        .await
+        .expect("reload");
+    assert_eq!(vibing.mood(), PetMood::Vibing);
+    assert!(vibing.mood_since > chatty.mood_since);
+}
+
+#[tokio::test]
+async fn writes_are_scoped_to_the_owner() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let owner = crate::test_utils::create_test_user(&test_db.db, "cat-model-owner").await;
     let other = crate::test_utils::create_test_user(&test_db.db, "cat-model-other").await;
 
-    let owner_cat = PetCompanion::ensure(&client, owner.id)
+    let owner_pet = PetCompanion::ensure(&client, owner.id)
         .await
-        .expect("ensure owner cat");
-    let other_cat = PetCompanion::ensure(&client, other.id)
+        .expect("ensure owner pet");
+    let other_pet = PetCompanion::ensure(&client, other.id)
         .await
-        .expect("ensure other cat");
-    assert_ne!(owner_cat.id, other_cat.id);
+        .expect("ensure other pet");
+    assert_ne!(owner_pet.id, other_pet.id);
 
-    PetCompanion::touch_fed(&client, owner.id)
+    PetCompanion::set_mood(&client, owner.id, PetMood::Sulking)
         .await
-        .expect("feed owner cat");
+        .expect("owner sulks");
+    PetCompanion::set_species(&client, owner.id, PetSpecies::Bird)
+        .await
+        .expect("owner picks the bird");
 
     let other_after = PetCompanion::ensure(&client, other.id)
         .await
-        .expect("reload other cat");
-    assert_eq!(other_after.id, other_cat.id);
-    assert_eq!(
-        other_after.last_fed, None,
-        "feeding one user's cat must not touch another user's row"
-    );
-}
-
-#[tokio::test]
-async fn touch_actions_record_independent_timestamps() {
-    let test_db = test_db().await;
-    let client = test_db.db.get().await.expect("db client");
-    let user = crate::test_utils::create_test_user(&test_db.db, "cat-model-touch").await;
-
-    PetCompanion::ensure(&client, user.id)
+        .expect("reload other pet");
+    assert_eq!(other_after.id, other_pet.id);
+    assert_eq!(other_after.mood(), PetMood::Asleep);
+    assert_eq!(other_after.species(), PetSpecies::Cat);
+    let owner_after = PetCompanion::ensure(&client, owner.id)
         .await
-        .expect("ensure");
-    PetCompanion::touch_fed(&client, user.id)
-        .await
-        .expect("fed");
-    PetCompanion::touch_watered(&client, user.id)
-        .await
-        .expect("watered");
-    PetCompanion::touch_played(&client, user.id)
-        .await
-        .expect("played");
-    PetCompanion::touch_treated(&client, user.id)
-        .await
-        .expect("treated");
-
-    let cat = PetCompanion::ensure(&client, user.id)
-        .await
-        .expect("reload");
-    assert!(cat.last_fed.is_some());
-    assert!(cat.last_watered.is_some());
-    assert!(cat.last_played.is_some());
-    assert!(cat.last_treated.is_some());
+        .expect("reload owner pet");
+    assert_eq!(owner_after.mood(), PetMood::Sulking);
+    assert_eq!(owner_after.species(), PetSpecies::Bird);
 }
