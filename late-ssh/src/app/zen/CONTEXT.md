@@ -22,7 +22,8 @@ on the date row), visualizer, presence, lobby (the daily games, compact:
 only the running games plus one footer row of count and keys), blank. The look (border style, gap, titles) is
 part of the layout.
 
-The default, which `R` also resets to: bonsai over the reef on the left
+The default, which `R` also resets to (rounded borders, no gap, titles on):
+bonsai over the reef on the left
 (64%), and a rail of clock, music, lobby, and the current room's chat on
 the right. Pet and presence are not in it; owners add the pet with `S` and
 `space`.

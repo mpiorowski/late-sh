@@ -347,7 +347,7 @@ impl Default for Look {
     fn default() -> Self {
         Self {
             border: BorderKind::Rounded,
-            gap: 1,
+            gap: 0,
             titles: true,
         }
     }
