@@ -36,9 +36,9 @@ pub(crate) struct AquariumCare {
     pub(crate) last_fed: Option<DateTime<Utc>>,
     /// Straight fed UTC days, counting the last meal.
     pub(crate) streak: i32,
-    /// The newest shield window, live or lapsed: a lapsed one still excuses
-    /// the days it covered.
-    pub(crate) shield: Option<AquariumShield>,
+    /// Every shield window the owner bought, live or lapsed: a lapsed one
+    /// still excuses the days it covered.
+    pub(crate) shields: Vec<AquariumShield>,
     pub(crate) fry: Option<Fry>,
 }
 
@@ -73,13 +73,13 @@ pub(crate) enum CareBar {
 impl AquariumCare {
     pub(crate) fn new(
         row: Option<late_core::models::aquarium_care::AquariumCare>,
-        shield: Option<AquariumShield>,
+        shields: Vec<AquariumShield>,
     ) -> Self {
         match row {
             Some(row) => Self {
                 last_fed: Some(row.last_fed),
                 streak: row.streak,
-                shield,
+                shields,
                 fry: match (row.fry_creature, row.fry_born) {
                     (Some(creature), Some(born)) => Some(Fry { creature, born }),
                     (Some(_), None) | (None, Some(_)) | (None, None) => None,
@@ -88,7 +88,7 @@ impl AquariumCare {
             None => Self {
                 last_fed: None,
                 streak: 0,
-                shield,
+                shields,
                 fry: None,
             },
         }
@@ -96,7 +96,7 @@ impl AquariumCare {
 
     /// Whether the shield's auto feeder covers today.
     pub(crate) fn minded_on(&self, today: NaiveDate) -> bool {
-        self.shield.is_some_and(|shield| shield.covers_day(today))
+        self.shields.iter().any(|shield| shield.covers_day(today))
     }
 
     /// Whether the fish go hungry right now: nobody fed them today and no
@@ -112,7 +112,7 @@ impl AquariumCare {
     /// Unfed days on the clock since the last meal, shield days excused.
     pub(crate) fn dry_days_on(&self, today: NaiveDate) -> u32 {
         match self.last_fed {
-            Some(last) => care_rules::dry_days(last.date_naive(), today, self.shield.as_ref()),
+            Some(last) => care_rules::dry_days(last.date_naive(), today, &self.shields),
             None => 0,
         }
     }
@@ -164,17 +164,19 @@ impl AquariumCare {
     /// The day's meal. The service pays the chips and hatches any fry behind
     /// DB gates; the caller only learns whether this press was the one that
     /// fed the tank. The streak follows the same rule as the row: it
-    /// continues when yesterday was fed and restarts otherwise.
+    /// continues when the last meal was yesterday or only shielded days
+    /// ago, and restarts otherwise.
     pub(crate) fn feed(&mut self) -> CareOutcome {
         let now = Utc::now();
         let today = now.date_naive();
         if fed_on(self.last_fed, today) {
             return CareOutcome::AlreadyFedToday;
         }
-        let fed_yesterday = self
+        let continues_from = care_rules::streak_continues_from(today, &self.shields);
+        let continues = self
             .last_fed
-            .is_some_and(|last| today.pred_opt() == Some(last.date_naive()));
-        self.streak = if fed_yesterday { self.streak + 1 } else { 1 };
+            .is_some_and(|last| last.date_naive() >= continues_from);
+        self.streak = if continues { self.streak + 1 } else { 1 };
         self.last_fed = Some(now);
         CareOutcome::Fed
     }
@@ -184,12 +186,15 @@ impl AquariumCare {
         self.fry = Some(Fry { creature, born });
     }
 
-    /// A live shield from the shop snapshot replaces what we hold; `None`
-    /// (no live shield) keeps the newest lapsed window, which the starvation
-    /// count still needs.
+    /// A live shield from the shop snapshot joins what we hold: a rebuy
+    /// extends the live window in place (same start, later end), a fresh
+    /// purchase after a lapse is a new one. `None` (no live shield) keeps
+    /// every lapsed window, which the starvation count still needs.
     pub(crate) fn refresh_shield(&mut self, live: Option<AquariumShield>) {
         if let Some(live) = live {
-            self.shield = Some(live);
+            self.shields
+                .retain(|shield| shield.starts_at != live.starts_at);
+            self.shields.insert(0, live);
         }
     }
 }

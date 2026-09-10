@@ -19,11 +19,10 @@ use late_core::{
             AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH,
             AQUARIUM_SHIELD_SKU, AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
             BONSAI_DECAY_SHIELD_SKU, CHAT_BADGE_SLOT, CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT,
-            COMPANION_CONSUMABLE_ITEM_KIND, FishActiveStatus, MarketplaceItem,
-            PET_COMPANION_SKU, PurchaseResult, PurchaseStatus, PurchaseWithEffectResult,
-            SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL, ULTIMATE_SPELL_KIND,
-            USERNAME_EFFECT_ITEM_KIND, UserPurchase, adjust_aquarium_fish_active_by_sku,
-            listen_for_shop_changes,
+            COMPANION_CONSUMABLE_ITEM_KIND, FishActiveStatus, MarketplaceItem, PET_COMPANION_SKU,
+            PurchaseResult, PurchaseStatus, PurchaseWithEffectResult, SHOP_CATALOG_CHANGED_CHANNEL,
+            SHOP_USER_CHANGED_CHANNEL, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND,
+            UserPurchase, adjust_aquarium_fish_active_by_sku, listen_for_shop_changes,
             purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_custom_title,
             purchase_item_by_sku_with_username_effect, rental_duration_secs,
         },
@@ -852,10 +851,9 @@ impl ShopService {
                     if result.item.item_kind == AQUARIUM_CONSUMABLE_ITEM_KIND =>
                 {
                     match &purchase.aquarium_shield {
-                        Some(effect) => format!(
-                            "Tank minded until {} (UTC)",
-                            effect.ends_at.date_naive()
-                        ),
+                        Some(effect) => {
+                            format!("Tank minded until {} (UTC)", effect.ends_at.date_naive())
+                        }
                         None => format!("Bought {}", result.item.name),
                     }
                 }

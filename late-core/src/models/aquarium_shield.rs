@@ -18,26 +18,24 @@ pub struct AquariumShield {
 impl AquariumShield {
     /// The live window, if any: what the shop shows and sells against.
     pub async fn for_user(client: &Client, user_id: Uuid) -> Result<Option<Self>> {
-        let effect =
-            ShopConsumableEffect::active_user_effect_for_user(client, user_id, AQUARIUM_SHIELD_KIND)
-                .await?;
-        Ok(effect.map(Self::from_effect))
-    }
-
-    /// The newest window, live or lapsed. The starvation clock needs this
-    /// one: a shield that ran out last week still excuses the days it
-    /// covered, and `for_user` would have forgotten it.
-    pub async fn latest_for_user(
-        client: &impl GenericClient,
-        user_id: Uuid,
-    ) -> Result<Option<Self>> {
-        let effect = ShopConsumableEffect::latest_user_effect_for_user(
+        let effect = ShopConsumableEffect::active_user_effect_for_user(
             client,
             user_id,
             AQUARIUM_SHIELD_KIND,
         )
         .await?;
         Ok(effect.map(Self::from_effect))
+    }
+
+    /// Every window the user ever bought, live or lapsed, newest first. The
+    /// care clocks need all of them: a shield that ran out last week still
+    /// excuses the days it covered, and a rebuy after a lapse is a second
+    /// row rather than an extension of the first.
+    pub async fn all_for_user(client: &impl GenericClient, user_id: Uuid) -> Result<Vec<Self>> {
+        let effects =
+            ShopConsumableEffect::user_effects_for_user(client, user_id, AQUARIUM_SHIELD_KIND)
+                .await?;
+        Ok(effects.into_iter().map(Self::from_effect).collect())
     }
 
     fn from_effect(effect: ShopConsumableEffect) -> Self {

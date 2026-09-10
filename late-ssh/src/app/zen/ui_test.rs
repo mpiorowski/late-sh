@@ -26,16 +26,28 @@ fn the_player_names_the_station_for_the_streams_that_have_one() {
     use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
 
     assert_eq!(
-        station_text(AudioSource::Radio, RadioStation::Datawave, IcecastStream::Chill),
+        station_text(
+            AudioSource::Radio,
+            RadioStation::Datawave,
+            IcecastStream::Chill
+        ),
         "radio · datawave"
     );
     assert_eq!(
-        station_text(AudioSource::Icecast, RadioStation::Datawave, IcecastStream::Classical),
+        station_text(
+            AudioSource::Icecast,
+            RadioStation::Datawave,
+            IcecastStream::Classical
+        ),
         "icecast · classical"
     );
     // YouTube plays the queue, not a station: one word.
     assert_eq!(
-        station_text(AudioSource::Youtube, RadioStation::Datawave, IcecastStream::Classical),
+        station_text(
+            AudioSource::Youtube,
+            RadioStation::Datawave,
+            IcecastStream::Classical
+        ),
         "youtube"
     );
 }

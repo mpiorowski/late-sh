@@ -58,13 +58,33 @@ async fn clownfish_counts(db: &late_core::db::Db, user_id: Uuid) -> (i32, i32) {
 }
 
 #[tokio::test]
-async fn feeding_pays_the_daily_chips_once() {
+async fn feeding_pays_the_daily_chips_once_and_only_a_tank_owner() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let user = create_test_user(&test_db.db, "aquarium-svc-feed").await;
     let (svc, mut rx) = service(&test_db.db);
     let boot = svc.bootstrap(user.id).await.expect("bootstrap");
     assert_eq!(boot.care, None, "no tank, no clock");
+    let before = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+
+    // No tank: nothing to feed, nothing paid, no clock started.
+    svc.feed(user.id).await.expect("feed without a tank");
+    let unpaid = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+    assert_eq!(unpaid, before, "a user without a tank earns nothing");
+    assert_eq!(
+        AquariumCare::load(&**client, user.id).await.expect("care"),
+        None,
+        "feeding without a tank starts no clock"
+    );
+    assert!(rx.try_recv().is_err(), "and announces nothing");
+
+    stock_tank(&test_db.db, user.id).await;
     let before = UserChips::ensure(&client, user.id)
         .await
         .expect("chips")

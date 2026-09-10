@@ -748,8 +748,15 @@ async fn zen_yields_the_music_chord_and_w_to_bonsai_care() {
     // (and `X` still closes a tile), so the suffix must reach the chord.
     app.handle_input(b"v");
     app.handle_input(b"x");
-    assert_ne!(app.paired_source, source, "v x swaps the audio source on Zen");
-    assert_eq!(app.zen.leaf_count(), tiles, "the chord suffix closes no tile");
+    assert_ne!(
+        app.paired_source, source,
+        "v x swaps the audio source on Zen"
+    );
+    assert_eq!(
+        app.zen.leaf_count(),
+        tiles,
+        "the chord suffix closes no tile"
+    );
 
     // The bonsai is tended in the same modal as everywhere else.
     app.handle_input(b"w");

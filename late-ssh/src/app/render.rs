@@ -598,7 +598,7 @@ impl App {
             .as_ref()
             .map(|timer| timer.badge(chrono::Utc::now()));
         let dashboard_view = chat::ui::DashboardChatView {
-            pet_strip: pet_strip_enabled.then(|| crate::app::pet::ui::PetView {
+            pet_strip: pet_strip_enabled.then_some(crate::app::pet::ui::PetView {
                 state: &self.pet_state,
                 pet_rect_slot: Some(&self.last_pet_rect),
                 bowl_rect_slot: Some(&self.last_pet_bowl_rect),
@@ -1039,14 +1039,16 @@ impl App {
             radio_now_playing.as_deref(),
         );
         let zen_date = zen_date_text(self.profile_state.profile().timezone.as_deref());
-        let zen_pet_strip = self.shop_state.entitlements().has_pet_companion().then(|| {
-            crate::app::pet::ui::PetView {
+        let zen_pet_strip = self
+            .shop_state
+            .entitlements()
+            .has_pet_companion()
+            .then_some(crate::app::pet::ui::PetView {
                 state: &self.pet_state,
                 pet_rect_slot: Some(&self.last_pet_rect),
                 bowl_rect_slot: Some(&self.last_pet_bowl_rect),
                 travel_slot: Some(&self.last_pet_travel),
-            }
-        });
+            });
         // The clubhouse has no chat panel: #lounge messages float over their
         // authors' heads and the shared composer block pins to the bottom.
         // Both are only assembled while that screen is up.

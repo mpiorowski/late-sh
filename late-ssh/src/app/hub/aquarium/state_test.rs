@@ -13,7 +13,7 @@ fn fed_on(d: u32, streak: i32) -> AquariumCare {
     AquariumCare {
         last_fed: Some(Utc.with_ymd_and_hms(2026, 9, d, 12, 0, 0).unwrap()),
         streak,
-        shield: None,
+        shields: Vec::new(),
         fry: None,
     }
 }
@@ -30,7 +30,7 @@ fn the_bar_counts_the_streak_in_green_and_the_unfed_days_in_red() {
     assert_eq!(fed_on(1, 5).bar_on(day(15)), CareBar::Dry(14));
     assert_eq!(fed_on(1, 5).bar_on(day(30)), CareBar::Dry(14));
     // A tank never fed has nothing on the clock either way.
-    let never = AquariumCare::new(None, None);
+    let never = AquariumCare::new(None, Vec::new());
     assert_eq!(never.bar_on(day(10)), CareBar::Dry(0));
     assert!(never.hungry_on(day(10)));
 }
@@ -45,10 +45,10 @@ fn murk_sets_in_after_a_week_and_the_shield_holds_it_off() {
     // A shield over the 2nd through the 20th: nothing counts, the fish
     // are minded, the water stays clear, the bar shows the minded state.
     let minded = AquariumCare {
-        shield: Some(AquariumShield {
+        shields: vec![AquariumShield {
             starts_at: Utc.with_ymd_and_hms(2026, 9, 2, 0, 0, 0).unwrap(),
             ends_at: Utc.with_ymd_and_hms(2026, 9, 20, 0, 0, 0).unwrap(),
-        }),
+        }],
         ..fed_on(1, 3)
     };
     assert!(!minded.hungry_on(day(8)));
@@ -64,14 +64,9 @@ fn feeding_runs_the_streak_like_the_row_does() {
     let today = Utc::now().date_naive();
     let yesterday = today.pred_opt().unwrap();
     let mut care = AquariumCare {
-        last_fed: Some(
-            yesterday
-                .and_hms_opt(23, 0, 0)
-                .unwrap()
-                .and_utc(),
-        ),
+        last_fed: Some(yesterday.and_hms_opt(23, 0, 0).unwrap().and_utc()),
         streak: 4,
-        shield: None,
+        shields: Vec::new(),
         fry: None,
     };
     assert_eq!(care.feed(), CareOutcome::Fed);
@@ -90,11 +85,26 @@ fn feeding_runs_the_streak_like_the_row_does() {
                 .and_utc(),
         ),
         streak: 9,
-        shield: None,
+        shields: Vec::new(),
         fry: None,
     };
     assert_eq!(lapsed.feed(), CareOutcome::Fed);
     assert_eq!(lapsed.streak, 1, "a skipped day restarts the streak");
+
+    // The same skipped day under a shield: the auto feeder minded it, so
+    // the streak carries across instead of restarting.
+    let two_days_ago = yesterday.pred_opt().unwrap();
+    let mut minded = AquariumCare {
+        last_fed: Some(two_days_ago.and_hms_opt(12, 0, 0).unwrap().and_utc()),
+        streak: 9,
+        shields: vec![AquariumShield {
+            starts_at: yesterday.and_hms_opt(0, 0, 0).unwrap().and_utc(),
+            ends_at: yesterday.and_hms_opt(23, 0, 0).unwrap().and_utc(),
+        }],
+        fry: None,
+    };
+    assert_eq!(minded.feed(), CareOutcome::Fed);
+    assert_eq!(minded.streak, 10, "a shielded gap keeps the streak");
 }
 
 #[test]
@@ -108,7 +118,11 @@ fn a_fry_is_small_for_a_week() {
     };
     assert_eq!(care.fry_visible_on(day(10)), Some("clownfish"));
     assert_eq!(care.fry_visible_on(day(16)), Some("clownfish"));
-    assert_eq!(care.fry_visible_on(day(17)), None, "grown on the seventh day");
+    assert_eq!(
+        care.fry_visible_on(day(17)),
+        None,
+        "grown on the seventh day"
+    );
 }
 
 #[test]

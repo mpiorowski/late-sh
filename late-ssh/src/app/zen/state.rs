@@ -1,6 +1,6 @@
 //! The Rice layout: a binary split tree of tiles, the look that dresses it,
 //! and the focus that edits it. Everything here is pure data; persistence is
-//! the orchestration layer's job (`App::persist_zen_layout`).
+//! the orchestration layer's job (`App::flush_zen_layout`).
 
 use ratatui::layout::Rect;
 use serde::{Deserialize, Serialize};
@@ -103,6 +103,12 @@ pub enum Node {
 /// squeezed to nothing.
 pub const MIN_SHARE: u16 = 100;
 pub const MAX_SHARE: u16 = 900;
+
+/// Most tiles a layout holds. Each split nests the stored JSON one level
+/// deeper and the settings blob is read back through serde_json, which
+/// stops at 128 levels; the cap keeps a held `S` from writing a layout the
+/// login path can never parse.
+pub const MAX_TILES: usize = 32;
 
 impl Node {
     pub fn leaf(kind: TileKind) -> Self {
@@ -468,8 +474,11 @@ impl ZenState {
 
     /// Split the focused tile; the new tile is blank so the person picks
     /// what goes there. Direction follows the tile's shape: wide splits into
-    /// a row, tall into a column.
+    /// a row, tall into a column. Refused at `MAX_TILES`.
     pub fn split_focused(&mut self, wide: bool) -> bool {
+        if self.leaf_count() >= MAX_TILES {
+            return false;
+        }
         let dir = if wide { Dir::Row } else { Dir::Column };
         let done = self.rice.root.split_leaf(self.focus, dir, TileKind::Blank);
         if done {

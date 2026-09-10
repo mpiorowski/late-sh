@@ -282,28 +282,27 @@ impl ShopConsumableEffect {
         Ok(row.map(Self::from))
     }
 
-    /// The newest user-scoped effect of one kind for one user, live or
-    /// lapsed. For clocks that must still honour a window that has run out
-    /// (the aquarium's starvation count excuses every day its shield
-    /// covered, even after the shield ends).
-    pub async fn latest_user_effect_for_user(
+    /// Every user-scoped effect of one kind for one user, live or lapsed,
+    /// newest expiry first. For clocks that must still honour windows that
+    /// have run out (the aquarium's starvation count excuses every day any
+    /// shield covered, even after that shield ends and another is bought).
+    pub async fn user_effects_for_user(
         client: &impl GenericClient,
         user_id: Uuid,
         effect_kind: &str,
-    ) -> Result<Option<Self>> {
-        let row = client
-            .query_opt(
+    ) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
                 "SELECT *
                  FROM shop_consumable_effects
                  WHERE user_id = $1
                    AND room_id IS NULL
                    AND effect_kind = $2
-                 ORDER BY ends_at DESC
-                 LIMIT 1",
+                 ORDER BY ends_at DESC",
                 &[&user_id, &effect_kind],
             )
             .await?;
-        Ok(row.map(Self::from))
+        Ok(rows.into_iter().map(Self::from).collect())
     }
 
     /// Every live user-scoped effect of the given kinds for one user, newest

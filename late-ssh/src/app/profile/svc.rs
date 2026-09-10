@@ -574,10 +574,9 @@ impl ProfileService {
         );
     }
 
-    /// Fire-and-forget: persist whether the aquarium tray is open so the
-    /// next session starts in the same state. No event on success; a failure
-    /// is only logged (the tray would simply start closed next session).
-    /// Persist the Rice page's layout (fire-and-forget).
+    /// Fire-and-forget: persist the Zen page's layout JSON. A failure is
+    /// only logged (the page would start from its last stored layout next
+    /// session).
     pub fn set_zen_layout(&self, user_id: Uuid, layout: serde_json::Value) {
         let service = self.clone();
         tokio::spawn(
@@ -595,6 +594,9 @@ impl ProfileService {
         );
     }
 
+    /// Fire-and-forget: persist whether the aquarium tray is open so the
+    /// next session starts in the same state. No event on success; a failure
+    /// is only logged (the tray would simply start closed next session).
     pub fn set_show_aquarium_tray(&self, user_id: Uuid, shown: bool) {
         let service = self.clone();
         tokio::spawn(

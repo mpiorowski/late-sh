@@ -6,7 +6,7 @@
 
 use uuid::Uuid;
 
-use super::state::Dir;
+use super::state::{Dir, MAX_TILES};
 use crate::app::{
     chat::state::RoomSlot, common::primitives::Banner, input::ParsedInput, state::App,
 };
@@ -56,7 +56,7 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
 }
 
 /// Rice: arrows move focus and the layout keys edit the tree. Every edit
-/// persists.
+/// marks the layout for the debounced write (`App::flush_zen_layout`).
 fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
     match event {
         ParsedInput::Arrow(b'D') | ParsedInput::Arrow(b'A') => {
@@ -75,6 +75,10 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
     let changed = match byte {
         b' ' => app.zen.cycle_focused_kind(true),
         b'S' => {
+            if app.zen.leaf_count() >= MAX_TILES {
+                app.banner = Some(Banner::info("That is every tile the page holds"));
+                return true;
+            }
             let wide = focused_tile_is_wide(app);
             app.zen.split_focused(wide)
         }
@@ -116,7 +120,7 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
     };
     if changed {
         app.sync_aquarium_bounds();
-        app.persist_zen_layout();
+        app.mark_zen_layout_dirty();
     }
     true
 }

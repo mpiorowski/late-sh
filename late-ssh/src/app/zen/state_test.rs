@@ -88,9 +88,40 @@ fn shares_stay_inside_their_bounds() {
     );
     let before = widths(&root, area, 0);
     assert!(root.resize_leaf(0, Dir::Row, 1, area, 0));
-    assert_eq!(widths(&root, area, 0), before, "already at the widest share");
+    assert_eq!(
+        widths(&root, area, 0),
+        before,
+        "already at the widest share"
+    );
     let Node::Split { share, .. } = root else {
         unreachable!()
     };
     assert_eq!(share, MAX_SHARE);
+}
+
+#[test]
+fn holding_split_stops_at_the_tile_cap_and_the_layout_still_round_trips() {
+    // Every `S` splits the focused tile and moves focus into the new one, so
+    // a held key nests the tree one level deeper per press. The stored JSON
+    // is read back through serde_json, which refuses to parse past 128
+    // nested levels; a layout that deep would lock the account out at
+    // login. The cap keeps the tree far below that and the JSON readable.
+    let mut zen = ZenState::new(RiceLayout::default());
+    let mut accepted = 0;
+    for _ in 0..400 {
+        if zen.split_focused(true) {
+            accepted += 1;
+        }
+    }
+    assert_eq!(zen.leaf_count(), MAX_TILES, "splits stop at the cap");
+    assert_eq!(
+        accepted + RiceLayout::default().root.leaf_count(),
+        MAX_TILES,
+        "every press past the cap is refused"
+    );
+    // Nested inside the settings blob (one more level) it must still parse.
+    let stored = serde_json::json!({ "zen_layout": zen.rice.to_json() });
+    let read_back: RiceLayout = serde_json::from_value(stored["zen_layout"].clone())
+        .expect("a layout built by holding S parses back");
+    assert_eq!(read_back, zen.rice);
 }

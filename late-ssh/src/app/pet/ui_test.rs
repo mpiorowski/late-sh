@@ -61,7 +61,11 @@ fn a_pet_beside_the_tank_strolls_twenty_minutes_and_watches_five() {
         pose(STROLL_TICKS + WATCH_TICKS - 1),
         PetPose::Watch(WatchSide::Right)
     );
-    assert_eq!(pose(STROLL_TICKS + WATCH_TICKS), PetPose::Stroll, "and round again");
+    assert_eq!(
+        pose(STROLL_TICKS + WATCH_TICKS),
+        PetPose::Stroll,
+        "and round again"
+    );
     // Roughly the minutes on the label, at the 66ms wall tick.
     assert_eq!((STROLL_TICKS * 66 + 30_000) / 60_000, 20);
     assert_eq!((WATCH_TICKS * 66 + 30_000) / 60_000, 5);
@@ -99,7 +103,10 @@ fn a_watching_pet_holds_still_but_still_blinks_and_gasps() {
     let strolling = window
         .filter(|&t| frame_changed(PetMood::Happy, None, t, WIDE))
         .count();
-    assert!(watching > 0 && watching < strolling, "{watching} vs {strolling}");
+    assert!(
+        watching > 0 && watching < strolling,
+        "{watching} vs {strolling}"
+    );
 }
 
 /// Draw the box at `tick` and report where the pet landed.
@@ -147,7 +154,10 @@ async fn hungry_pet_sits_on_the_floor_and_a_fed_pet_roams_the_whole_box() {
 
     // Hungry: parked on the floor, and still there a thousand ticks later.
     assert_eq!(pet_rect_at(&mut state, 5, area).y, floor_y);
-    assert_eq!(pet_rect_at(&mut state, 1005, area), pet_rect_at(&mut state, 5, area));
+    assert_eq!(
+        pet_rect_at(&mut state, 1005, area),
+        pet_rect_at(&mut state, 5, area)
+    );
 
     // Fed: over a long stroll the pet reaches the top and the far right of
     // its box, and comes back down to the floor; nothing pins it anywhere.
@@ -160,7 +170,10 @@ async fn hungry_pet_sits_on_the_floor_and_a_fed_pet_roams_the_whole_box() {
         top = top.min(rect.y);
         bottom = bottom.max(rect.y);
         right = right.max(rect.right());
-        assert!(rect.bottom() <= area.bottom(), "the pet stays inside its box");
+        assert!(
+            rect.bottom() <= area.bottom(),
+            "the pet stays inside its box"
+        );
     }
     assert_eq!(top, area.y, "the stroll reaches the top of the box");
     assert_eq!(bottom, floor_y, "the stroll comes back to the floor");
@@ -179,5 +192,9 @@ async fn hungry_pet_sits_on_the_floor_and_a_fed_pet_roams_the_whole_box() {
         "a watching pet does not wander"
     );
     let roam_right = area.right() - super::BOWL_ZONE_WIDTH;
-    assert_eq!(at_glass.right(), roam_right, "pressed against the tank's edge");
+    assert_eq!(
+        at_glass.right(),
+        roam_right,
+        "pressed against the tank's edge"
+    );
 }

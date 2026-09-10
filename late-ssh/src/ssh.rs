@@ -815,14 +815,13 @@ impl russh::server::Handler for ClientHandler {
                 None
             }
         };
-        let initial_aquarium_care =
-            match self.state.aquarium_service.bootstrap(user_id).await {
-                Ok(care) => care,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load aquarium care");
-                    Default::default()
-                }
-            };
+        let initial_aquarium_care = match self.state.aquarium_service.bootstrap(user_id).await {
+            Ok(care) => care,
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to load aquarium care");
+                Default::default()
+            }
+        };
 
         // Ensure the user's chip balance row exists.
         let initial_chip_balance = match self.state.chip_service.ensure_chips(user_id).await {

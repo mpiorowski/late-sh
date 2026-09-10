@@ -36,3 +36,13 @@ ON CONFLICT (sku) DO UPDATE SET
     active = EXCLUDED.active,
     sort_order = EXCLUDED.sort_order,
     updated = current_timestamp;
+
+-- Feeding was cosmetic until now, so an old `last_fed` is the normal state
+-- of a tank, not neglect. The starvation clock starts at deploy for every
+-- existing tank: the last meal is stamped yesterday (the same start a tank
+-- that was never fed gets), so the first fish is at stake fourteen days
+-- from the first connect after this ships, never for days before it.
+UPDATE user_aquarium_care
+SET last_fed = current_timestamp - interval '1 day',
+    deaths_settled = 0,
+    updated = current_timestamp;

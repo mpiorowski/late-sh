@@ -162,9 +162,10 @@ fn daily_compact_lines(width: u16, height: u16, props: &DailyPanelProps) -> Vec<
         }
     }
     let mut footer = status_line(width, props);
-    footer
-        .spans
-        .push(Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT())));
+    footer.spans.push(Span::styled(
+        " · ",
+        Style::default().fg(theme::TEXT_FAINT()),
+    ));
     footer.spans.extend(hints_line().spans);
     lines.push(footer);
     lines

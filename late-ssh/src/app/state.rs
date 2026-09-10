@@ -266,7 +266,6 @@ pub struct SessionConfig {
     pub pet_service: crate::app::pet::svc::PetService,
     pub initial_pet: Option<late_core::models::pet::PetCompanion>,
     pub aquarium_service: crate::app::hub::aquarium::svc::AquariumService,
-    /// When the account last fed its tank; `None` for a tank never fed.
     /// The tank's care at connect, with any starvation already settled.
     pub initial_aquarium_care: crate::app::hub::aquarium::svc::CareBootstrap,
     pub quest_service: crate::app::hub::dailies::svc::QuestService,
@@ -503,6 +502,10 @@ pub struct App {
     pub(crate) zen: crate::app::zen::state::ZenState,
     /// Where `Ctrl+F` was pressed, so Esc or the chord hands the page back.
     pub(crate) zen_return_screen: Option<Screen>,
+    /// A layout edit not yet written to `users.settings`. Flushed on tick's
+    /// one-hertz edge and on leaving the page, so a held resize key costs
+    /// one row update rather than one per key repeat.
+    pub(crate) zen_layout_dirty: bool,
     pub(crate) mod_modal_state: mod_modal::state::ModModalState,
     pub(crate) pending_escape: bool,
     pub(crate) pending_escape_started_at: Option<Instant>,
@@ -1285,7 +1288,7 @@ impl App {
             crate::app::hub::aquarium::state::AquariumState::default_for_area(aquarium_area)?;
         let aquarium_care = crate::app::hub::aquarium::state::AquariumCare::new(
             config.initial_aquarium_care.care,
-            config.initial_aquarium_care.shield,
+            config.initial_aquarium_care.shields,
         );
         aquarium_state.set_active_creatures(
             &shop_state.active_aquarium_fish(),
@@ -1385,6 +1388,7 @@ impl App {
                 crate::app::zen::state::RiceLayout::from_json(config.zen_layout.as_ref()),
             ),
             zen_return_screen: None,
+            zen_layout_dirty: false,
             mod_modal_state: mod_modal::state::ModModalState::new(),
             pending_escape: false,
             pending_escape_started_at: None,
@@ -2243,6 +2247,10 @@ impl App {
         }
 
         let screen_changed = self.screen != screen;
+        // Leaving Zen writes any layout edit the debounce still holds.
+        if screen_changed && self.screen == Screen::Zen {
+            self.flush_zen_layout();
+        }
         self.screen = screen;
         // The aquarium sim is sized for whichever surface shows it next.
         self.sync_aquarium_bounds();
@@ -2692,8 +2700,19 @@ impl App {
         self.aquarium_state.handle_resize(area.width, area.height);
     }
 
-    /// Persist the Rice layout after an edit (fire-and-forget).
-    pub(crate) fn persist_zen_layout(&self) {
+    /// Note a Zen layout edit. The write itself is debounced: see
+    /// `flush_zen_layout`.
+    pub(crate) fn mark_zen_layout_dirty(&mut self) {
+        self.zen_layout_dirty = true;
+    }
+
+    /// Write the Zen layout if an edit is pending (fire-and-forget). Called
+    /// on tick's one-hertz edge and when the page is left.
+    pub(crate) fn flush_zen_layout(&mut self) {
+        if !self.zen_layout_dirty {
+            return;
+        }
+        self.zen_layout_dirty = false;
         self.profile_state
             .service()
             .set_zen_layout(self.user_id, self.zen.rice.to_json());

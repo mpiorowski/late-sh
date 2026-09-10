@@ -159,9 +159,14 @@ pub enum ActivityKind {
     AquariumFed,
     /// Fourteen straight fed days hatched a fry of `creature`; `swimming`
     /// is false when the tank was full and it went to inventory instead.
-    AquariumFryHatched { creature: String, swimming: bool },
+    AquariumFryHatched {
+        creature: String,
+        swimming: bool,
+    },
     /// Fourteen unfed days starved one `creature`, settled at login.
-    AquariumFishLost { creature: String },
+    AquariumFishLost {
+        creature: String,
+    },
 }
 
 impl ActivityKind {
@@ -817,7 +822,11 @@ impl ActivityEvent {
         )
     }
 
-    pub fn aquarium_fish_lost(user_id: Uuid, username: impl Into<String>, creature: String) -> Self {
+    pub fn aquarium_fish_lost(
+        user_id: Uuid,
+        username: impl Into<String>,
+        creature: String,
+    ) -> Self {
         let text = format!("lost a {creature} to a hungry tank");
         Self::new(
             Some(user_id),

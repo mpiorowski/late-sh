@@ -90,15 +90,18 @@ impl AquariumCare {
     }
 
     /// Stamp today's feeding. Returns the new streak when this call was the
-    /// first of the UTC day (the streak continues when yesterday was fed and
-    /// restarts at one otherwise) and `None` when the tank already ate. The
-    /// only witness the daily chip bonus and the fry need, atomic no matter
-    /// how many sessions or presses race for it. A meal also closes the
+    /// first of the UTC day and `None` when the tank already ate. The streak
+    /// continues when the last meal was on or after `continues_from` (see
+    /// [`streak_continues_from`]: yesterday, or earlier when a shield
+    /// covered the days between) and restarts at one otherwise. The only
+    /// witness the daily chip bonus and the fry need, atomic no matter how
+    /// many sessions or presses race for it. A meal also closes the
     /// starvation account: the next death is `CARE_DAYS` away again.
     pub async fn feed_day(
         client: &impl GenericClient,
         user_id: Uuid,
         today: NaiveDate,
+        continues_from: NaiveDate,
     ) -> Result<Option<i32>> {
         let row = client
             .query_opt(
@@ -107,7 +110,7 @@ impl AquariumCare {
                  ON CONFLICT (user_id) DO UPDATE
                  SET last_fed = current_timestamp,
                      streak = CASE
-                         WHEN (user_aquarium_care.last_fed AT TIME ZONE 'UTC')::date = $2::date - 1
+                         WHEN (user_aquarium_care.last_fed AT TIME ZONE 'UTC')::date >= $3::date
                          THEN user_aquarium_care.streak + 1
                          ELSE 1
                      END,
@@ -115,7 +118,7 @@ impl AquariumCare {
                      updated = current_timestamp
                  WHERE (user_aquarium_care.last_fed AT TIME ZONE 'UTC')::date IS DISTINCT FROM $2::date
                  RETURNING streak",
-                &[&user_id, &today],
+                &[&user_id, &today, &continues_from],
             )
             .await?;
         Ok(row.map(|row| row.get("streak")))
@@ -160,8 +163,10 @@ impl AquariumCare {
 }
 
 /// Unfed days on the clock: every UTC day after `last_fed` up to and
-/// including `today`, minus the days the shield's auto feeder covered.
-pub fn dry_days(last_fed: NaiveDate, today: NaiveDate, shield: Option<&AquariumShield>) -> u32 {
+/// including `today`, minus the days any shield window covered. Every
+/// window the owner ever bought counts, live or lapsed: a shield that ran
+/// out months ago still excuses the days it covered.
+pub fn dry_days(last_fed: NaiveDate, today: NaiveDate, shields: &[AquariumShield]) -> u32 {
     if today <= last_fed {
         return 0;
     }
@@ -170,12 +175,33 @@ pub fn dry_days(last_fed: NaiveDate, today: NaiveDate, shield: Option<&AquariumS
     while let Some(current) = day
         && current <= today
     {
-        if !shield.is_some_and(|shield| shield.covers_day(current)) {
+        if !covered(shields, current) {
             count += 1;
         }
         day = current.succ_opt();
     }
     count
+}
+
+/// The day a previous meal must fall on or after for today's meal to
+/// continue the streak: yesterday, pushed back over every day a shield
+/// covered, so a stretch the auto feeder minded neither grows nor breaks
+/// the streak.
+pub fn streak_continues_from(today: NaiveDate, shields: &[AquariumShield]) -> NaiveDate {
+    let mut anchor = today;
+    loop {
+        let Some(previous) = anchor.pred_opt() else {
+            return anchor;
+        };
+        anchor = previous;
+        if !covered(shields, anchor) {
+            return anchor;
+        }
+    }
+}
+
+fn covered(shields: &[AquariumShield], day: NaiveDate) -> bool {
+    shields.iter().any(|shield| shield.covers_day(day))
 }
 
 /// How many fish `dry` unfed days have cost in total: one per `CARE_DAYS`.

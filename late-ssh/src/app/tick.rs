@@ -60,6 +60,11 @@ impl App {
             Some(prev) => self.marquee_tick / 15 != prev,
         };
         self.last_one_hz_index = Some(self.marquee_tick / 15);
+        // A Zen layout edit is written at most once a second (and when the
+        // page is left), whatever the key repeat rate did to it.
+        if one_hz {
+            self.flush_zen_layout();
+        }
         // Shared animation frame edges, both divisors of the one wall
         // clock. Half (132ms, ~7.5fps): pet, bonsai sway, clubhouse
         // ambience. Quarter (264ms, ~3.8fps): aquarium simulation steps,

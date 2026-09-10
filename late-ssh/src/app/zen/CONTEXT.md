@@ -54,7 +54,7 @@ Glue: `Screen::Zen` in `common/primitives.rs`; the frame skip, `ZenView`
 assembly, and `zen_chat_view` in `render.rs`; the digit `7`, the top-bar
 hit test, the picker staying put in `room_search_modal/input.rs`, and the
 dedicated-input hook in `input.rs`; `App::zen`, `App::zen_chat_rows_cache`,
-`sync_aquarium_bounds`, and `persist_zen_layout` in `state.rs`; the
+`sync_aquarium_bounds`, and `mark_zen_layout_dirty` / `flush_zen_layout` in `state.rs`; the
 aquarium stepping and anim edge in `tick.rs`; `extract_zen_layout` /
 `User::set_zen_layout` in `late-core/src/models/user.rs`.
 
@@ -69,8 +69,12 @@ focused tile's kind, `S` splits it (row when wide, column when tall), `X`
 closes it (the last tile stays), `<` `>` trade one column of width and
 `{` `}` one row of height with the nearest split of that direction (i3's
 rule; a banner says so when there is none), `r` flips the parent, `z` zooms, `b` `g` `t` cycle
-border, gap, titles, `R` resets to the default layout. Every layout edit
-persists.
+border, gap, titles, `R` resets to the default layout. `S` is refused at
+`MAX_TILES` (32): each split nests the stored JSON one level deeper and
+serde_json stops reading at 128, so an uncapped held key would write a
+settings row the login path can never parse. Every layout edit marks the
+layout dirty; the write is debounced to tick's one-hertz edge and to
+leaving the page, so a held resize key costs one row update.
 
 ## 4. Gotchas
 

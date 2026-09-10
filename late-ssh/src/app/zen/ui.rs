@@ -132,14 +132,7 @@ pub(crate) fn draw_rice(
             | TileKind::Lobby
             | TileKind::Blank => None,
         };
-        let inner = draw_tile_chrome(
-            frame,
-            *rect,
-            &title,
-            title_tail,
-            focused,
-            &zen.rice.look,
-        );
+        let inner = draw_tile_chrome(frame, *rect, &title, title_tail, focused, &zen.rice.look);
         if inner.width == 0 || inner.height == 0 {
             continue;
         }
@@ -579,7 +572,10 @@ fn draw_clock_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {
         lines.push(Line::from(""));
         lines.push(
             Line::from(Span::styled(
-                format!("{} · {} · {} online", view.date, view.clock, view.online_count),
+                format!(
+                    "{} · {} · {} online",
+                    view.date, view.clock, view.online_count
+                ),
                 Style::default().fg(theme::TEXT_DIM()),
             ))
             .centered(),
