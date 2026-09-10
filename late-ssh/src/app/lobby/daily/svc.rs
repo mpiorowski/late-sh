@@ -24,6 +24,7 @@ use crate::app::games::{
         types::{ChessColor, ChessMoveRecord},
     },
     chips::svc::ChipService,
+    pool_core::{rules::PoolRules, shot::Shot},
 };
 
 use super::{
@@ -33,6 +34,7 @@ use super::{
     checkers::DailyCheckersState,
     connect4::DailyConnect4State,
     games::DailyGame,
+    pool::{DailyPoolState, PoolAimShare},
     reversi::DailyReversiState,
 };
 
@@ -228,6 +230,25 @@ pub enum DailyEvent {
         outcome: DailyFinishOutcome,
         result: String,
     },
+    /// The player at a pool table moved something about the shot they are
+    /// composing: picked a target, walked the aim, set spin, drew the cue.
+    ///
+    /// **The one event on this domain that is not a move.** Everything else
+    /// here reports something durable that happened to a match; this reports
+    /// what somebody is *thinking about*, and it is deliberately not persisted
+    /// or acknowledged. A daily game is otherwise a series of still frames a
+    /// day apart, and watching an opponent line one up is the only moment it
+    /// has the texture of the game it is modelling. Lost events are fine: the
+    /// next one carries the whole state, and the shot itself arrives as a
+    /// `MovePlayed` like everything else.
+    ///
+    /// In-process only, like every other variant here — one broadcast channel
+    /// shared by the sessions on this replica.
+    AimChanged {
+        match_id: Uuid,
+        by_user_id: Uuid,
+        aim: PoolAimShare,
+    },
     Error {
         user_id: Uuid,
         message: String,
@@ -351,6 +372,20 @@ impl DailyService {
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<DailyEvent> {
         self.event_tx.subscribe()
+    }
+
+    /// Tell whoever is watching this table what the shooter is lining up.
+    ///
+    /// Fire and forget, and not a database write: this is presentation, and
+    /// the shot it turns into arrives through `play_pool_shot` like any other
+    /// move. A send that finds no receivers is the normal case — nobody is
+    /// watching most tables most of the time.
+    pub fn publish_aim(&self, match_id: Uuid, by_user_id: Uuid, aim: PoolAimShare) {
+        let _ = self.event_tx.send(DailyEvent::AimChanged {
+            match_id,
+            by_user_id,
+            aim,
+        });
     }
 
     pub fn refresh_task(&self) {
@@ -616,6 +651,19 @@ impl DailyService {
                 let first = state.user_of(0);
                 (serde_json::to_value(state)?, first)
             }
+            // Both pool games share one state type; the ruleset is a field.
+            // `new` flips the coin for seat 0, who breaks — in pool that is
+            // the whole of the opening advantage — and rolls the rack seed.
+            DailyGame::EightBall | DailyGame::NineBall | DailyGame::Snooker => {
+                let rules = match game {
+                    DailyGame::NineBall => PoolRules::NineBall,
+                    DailyGame::Snooker => PoolRules::Snooker,
+                    _ => PoolRules::EightBall,
+                };
+                let state = DailyPoolState::new(rules, challenge.challenger_id, user_id);
+                let first = state.turn_user();
+                (serde_json::to_value(state)?, first)
+            }
         };
         // Usernames for the voice channel label, loaded before the claim
         // transaction opens.
@@ -739,6 +787,11 @@ impl DailyService {
             DailyGame::Backgammon => bail!("backgammon moves use the turn channel"),
             // A briscola "move" is one card; `to` carries its id.
             DailyGame::Briscola => self.play_briscola_card(&client, row, user_id, to).await,
+            // A pool shot is an aim, a tip offset, a speed and sometimes a
+            // placement; none of that survives two usizes.
+            DailyGame::EightBall | DailyGame::NineBall | DailyGame::Snooker => {
+                bail!("pool shots use the shot channel")
+            }
         }
     }
 
@@ -796,6 +849,28 @@ impl DailyService {
         let (row, game) = self.move_prelude(&client, user_id, match_id).await?;
         ensure!(game == DailyGame::Backgammon, "not a backgammon match");
         self.play_backgammon(&client, row, user_id, &hops).await
+    }
+
+    /// Pool shot channel: the whole `Shot` (optional ball-in-hand placement,
+    /// aim, tip offset, stroke speed, called pocket). Like checkers and
+    /// backgammon this cannot ride the two-usize `play_move`, and the server
+    /// re-simulates from the stored rack rather than trusting any client
+    /// result — the physics is the referee.
+    pub fn play_pool_shot_task(&self, user_id: Uuid, match_id: Uuid, shot: Shot) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.play_pool_shot(user_id, match_id, shot).await {
+                tracing::error!(error = ?e, %user_id, %match_id, "failed to play daily pool shot");
+                svc.send_error(user_id, &e);
+            }
+        });
+    }
+
+    pub async fn play_pool_shot(&self, user_id: Uuid, match_id: Uuid, shot: Shot) -> Result<()> {
+        let client = self.db.get().await?;
+        let (row, game) = self.move_prelude(&client, user_id, match_id).await?;
+        ensure!(game.is_pool(), "not a pool match");
+        self.play_pool(&client, row, game, user_id, &shot).await
     }
 
     async fn play_chess_move(
@@ -1372,6 +1447,99 @@ impl DailyService {
         Ok(())
     }
 
+    /// One shot, simulated server-side.
+    ///
+    /// The physics is the referee: the client's aim is re-simulated here from
+    /// the stored rack, so a doctored client can send an illegal *shot* but
+    /// never an illegal *result*. Potting keeps the table, which is what stops
+    /// a rack costing as many days as it has balls — a present player runs out
+    /// in one sitting, and only a miss hands the clock over.
+    async fn play_pool(
+        &self,
+        client: &tokio_postgres::Client,
+        row: DailyMatch,
+        game: DailyGame,
+        user_id: Uuid,
+        shot: &Shot,
+    ) -> Result<()> {
+        let match_id = row.id;
+        let mut state = DailyPoolState::parse(&row.state)?;
+        let seat = state
+            .seat_of(user_id)
+            .ok_or_else(|| anyhow::anyhow!("you are not playing in this match"))?;
+        // The prelude checked the row's turn; the state is the deeper truth,
+        // so a disagreement must fail loudly rather than corrupt the rack.
+        ensure!(state.turn == seat, "not your turn");
+        let base_revision = state.revision as i64;
+        state.revision = state.revision.saturating_add(1);
+        let played = state.apply_shot(seat, shot)?;
+        let label = played.label;
+        let state_value = serde_json::to_value(&state)?;
+
+        // A snooker frame can run out of balls with the scores level, which
+        // neither pool game can do — so the end of the match and the existence
+        // of a winner are two separate questions here.
+        let finished = match (played.finished, played.winner) {
+            (false, _) => None,
+            (true, Some(winner)) => {
+                let result = match game {
+                    // Losing on the eight is its own result: the loser is the
+                    // one who potted it, so "eight potted" would read as a win.
+                    DailyGame::EightBall if winner == seat => DailyMatch::RESULT_EIGHT_POTTED,
+                    DailyGame::EightBall => DailyMatch::RESULT_EARLY_EIGHT,
+                    DailyGame::Snooker => DailyMatch::RESULT_FRAME_WON,
+                    _ => DailyMatch::RESULT_NINE_POTTED,
+                };
+                Some((Some(state.user_of(winner)), result))
+            }
+            (true, None) => Some((None, DailyMatch::RESULT_DRAW)),
+        };
+        match finished {
+            Some((winner, result)) => {
+                let updated = DailyMatch::finish(
+                    client,
+                    match_id,
+                    winner,
+                    result,
+                    &state_value,
+                    base_revision,
+                )
+                .await?;
+                ensure!(updated == 1, "shot was superseded, reload the match");
+                let _ = self.event_tx.send(DailyEvent::MovePlayed {
+                    match_id,
+                    by_user_id: user_id,
+                    label,
+                });
+                self.finish_events(&row, game, winner, result, state.revision)
+                    .await;
+            }
+            None => {
+                // Potting holds the table, so this can point back at the
+                // shooter — and then the deadline simply resets for them.
+                let next_turn = state.turn_user();
+                let updated = DailyMatch::update_state(
+                    client,
+                    match_id,
+                    &state_value,
+                    user_id,
+                    next_turn,
+                    Utc::now() + chrono::Duration::hours(DAILY_MOVE_HOURS),
+                    base_revision,
+                )
+                .await?;
+                ensure!(updated == 1, "shot was superseded, reload the match");
+                let _ = self.event_tx.send(DailyEvent::MovePlayed {
+                    match_id,
+                    by_user_id: user_id,
+                    label,
+                });
+            }
+        }
+        self.publish(client).await?;
+        Ok(())
+    }
+
     /// Game-agnostic: the winner is simply the other player on the row, and
     /// the revision bump happens on the raw state JSON, so resign never needs
     /// to know which game it is quitting.
@@ -1743,6 +1911,14 @@ impl DailyService {
                                 .as_ref()
                                 .map(DailyBriscolaState::move_count)
                                 .unwrap_or(0),
+                        )
+                    }
+                    DailyGame::EightBall | DailyGame::NineBall | DailyGame::Snooker => {
+                        let state = DailyPoolState::parse(&row.state).ok();
+                        (
+                            None,
+                            None,
+                            state.as_ref().map(DailyPoolState::move_count).unwrap_or(0),
                         )
                     }
                 };
