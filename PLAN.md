@@ -175,9 +175,10 @@ late.sh Le Word #214 · 4/6
 ssh late.sh
 ```
 
-- Header: `late.sh <Game> #<n> · <result>`. The number is days since that
-  game's first daily, so two people's cards from the same day match. The
-  epochs live in one constant table.
+- Header: `late.sh <Game> #<n> · <result>`. The number is the day of the
+  Arcade, counted from the first daily ever, and every card of one day
+  carries the same number, so two people's cards from the same day match
+  and a Le Word card and a Sudoku card from the same morning agree.
 - Body: at most 11 rows, no spoilers, no legend. A card must fit in a phone
   screenshot next to the header and footer, and a stranger must be able to
   read it without being told the rule: the body is the puzzle itself (a
@@ -237,7 +238,8 @@ in a game module.
   their home row, so the scramble is a jumble and the solve is clean
   stripes with the gap in the corner. 7 rows for a 3x3, 11 for the 5x5.
 - The day card, from the arcade lobby: one row of seven glyphs, one per
-  daily, filled for each you won today, plus your streak.
+  daily, filled for each you won today, an icon under each so you can tell
+  which is which, plus your streak.
   `late.sh Daily #214 · 7/7 · 🔥 41`. This is the card people will paste
   every morning, because it is one card for the whole habit, not seven.
 
@@ -265,7 +267,7 @@ not only its author. Archive snapshots too. This is the exception to the
 
 **5. Fix the bonsai.** It has `s` today and emits the tree plus an
 `ADMIRE my tree (Day N)` label, with no header and no footer. Bring both
-renderers (`bonsai/state.rs` and `bonsai_v2/state.rs` `share_snippet`) into
+renderer (`bonsai/state.rs` `share_snippet`) into
 the grammar: `late.sh Bonsai · Day 41` on top, `ssh late.sh` below, the
 label gone, the dynamic tree allowed its full height like an Artboard piece.
 

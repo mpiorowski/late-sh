@@ -3,11 +3,14 @@
 //! eleven body rows, and the footer `ssh late.sh`, never a URL, because the
 //! command is the brand and the filter at once. No card needs a legend: a
 //! body is the puzzle itself (a guess grid, a scramble above its solve, the
-//! clues you were given) or plain words. Every card but one gives nothing
-//! away; the Nonogram card is the finished picture by choice.
+//! clues you were given) or plain words. The day card is the one exception
+//! in spirit: its boxes mean nothing on their own, so an icon row beneath
+//! names the daily under each box. Every card but one gives nothing away;
+//! the Nonogram card is the finished picture by choice.
 //!
 //! This module owns the grammar (the card struct, the closed glyph set, the
-//! renderer, the puzzle numbering) and the day card. Each daily builds its
+//! renderer, the numbering: one count of Arcade days shared by every card)
+//! and the day card. Each daily builds its
 //! own card in a pure `share.rs` beside its `state.rs`; copying, the
 //! banner, and telemetry stay in `arcade/input.rs`.
 
@@ -143,26 +146,15 @@ pub fn arrow_row(moves: u32) -> Row {
     Row::Text(format!("⬇️ {moves} moves"))
 }
 
-/// The first day each daily ran. Puzzle numbers count from here so two
-/// people's cards from the same day match. Never move one: every card
-/// already pasted would renumber.
-pub const fn epoch(puzzle: DailyPuzzle) -> NaiveDate {
-    match puzzle {
-        DailyPuzzle::Sudoku
-        | DailyPuzzle::Nonogram
-        | DailyPuzzle::Minesweeper
-        | DailyPuzzle::Solitaire => DAY_EPOCH,
-        DailyPuzzle::LeWord | DailyPuzzle::RubiksCube => date(2026, 6, 18),
-        DailyPuzzle::SlidingPuzzle => date(2026, 8, 30),
-    }
-}
+/// The first day the Arcade ran a daily. Every card counts from here, so
+/// the number is the same across all of one day's cards: it is the day of
+/// the Arcade, not of the game. Never move it: every card already pasted
+/// would renumber.
+pub const ARCADE_EPOCH: NaiveDate = date(2026, 4, 11);
 
-/// The day card counts from the first day any daily ran.
-pub const DAY_EPOCH: NaiveDate = date(2026, 4, 11);
-
-/// Days since `epoch`, one-based: the epoch day is puzzle #1.
-pub fn puzzle_number(epoch: NaiveDate, day: NaiveDate) -> i64 {
-    (day - epoch).num_days() + 1
+/// Days since `ARCADE_EPOCH`, one-based: the epoch day is #1.
+pub fn puzzle_number(day: NaiveDate) -> i64 {
+    (day - ARCADE_EPOCH).num_days() + 1
 }
 
 /// The lobby order of the dailies, which is also the order of the day
@@ -177,8 +169,24 @@ pub const DAY_CARD_ORDER: [DailyPuzzle; 7] = [
     DailyPuzzle::Solitaire,
 ];
 
-/// The day card: one glyph per daily, filled for each won today, plus the
-/// daily-quest streak. `won` answers for each puzzle in `DAY_CARD_ORDER`.
+/// The icon printed under a daily's box on the day card, so a reader can
+/// tell which box is which without a legend. One full-width emoji each, so
+/// the row lines up under the boxes wherever the card is pasted.
+pub const fn icon(puzzle: DailyPuzzle) -> &'static str {
+    match puzzle {
+        DailyPuzzle::LeWord => "🔤",
+        DailyPuzzle::RubiksCube => "🧊",
+        DailyPuzzle::SlidingPuzzle => "🧩",
+        DailyPuzzle::Sudoku => "🔢",
+        DailyPuzzle::Nonogram => "🎨",
+        DailyPuzzle::Minesweeper => "💣",
+        DailyPuzzle::Solitaire => "🃏",
+    }
+}
+
+/// The day card: one glyph per daily, filled for each won today, with each
+/// daily's icon beneath its box, plus the daily-quest streak. `won` answers
+/// for each puzzle in `DAY_CARD_ORDER`.
 pub fn day_card(day: NaiveDate, won: impl Fn(DailyPuzzle) -> bool, streak_days: i32) -> ShareCard {
     let marks: Vec<Glyph> = DAY_CARD_ORDER
         .iter()
@@ -190,8 +198,9 @@ pub fn day_card(day: NaiveDate, won: impl Fn(DailyPuzzle) -> bool, streak_days: 
             }
         })
         .collect();
+    let icons: String = DAY_CARD_ORDER.iter().map(|puzzle| icon(*puzzle)).collect();
     let won_count = marks.iter().filter(|g| **g == Glyph::Green).count();
-    let number = puzzle_number(DAY_EPOCH, day);
+    let number = puzzle_number(day);
     let result = if streak_days > 0 {
         format!("{won_count}/{} · 🔥 {streak_days}", DAY_CARD_ORDER.len())
     } else {
@@ -199,7 +208,7 @@ pub fn day_card(day: NaiveDate, won: impl Fn(DailyPuzzle) -> bool, streak_days: 
     };
     ShareCard {
         title: title("Daily", number, Some(&result)),
-        rows: vec![Row::Glyphs(marks)],
+        rows: vec![Row::Glyphs(marks), Row::Text(icons)],
     }
 }
 

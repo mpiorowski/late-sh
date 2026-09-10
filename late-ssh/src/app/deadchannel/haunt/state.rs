@@ -33,9 +33,12 @@ use uuid::Uuid;
 pub(crate) const VOICE_USERNAME: &str = "afterglow";
 pub(crate) const VOICE_FINGERPRINT: &str = "afterglow-fp-000";
 
-/// Days between the last delivered whisper and the invitation DM ("some
-/// days after the held door"). `/haunt invite` skips the wait for testing.
-pub(crate) const INVITE_DELAY_DAYS: i64 = 2;
+/// Hours between the last delivered whisper and the invitation DM ("the
+/// day after the held door"). Twenty rather than twenty-four so a person
+/// who connects every evening, never at the same minute, is not slipped a
+/// whole day by a two-hour miss (pacing tuned 2026-09-09: the full ladder
+/// fits a week of daily connects). `/haunt invite` skips the wait.
+pub(crate) const INVITE_DELAY_HOURS: i64 = 20;
 
 /// How many times the held door plays per person: the first whisper
 /// notices you, the second says something is trying to get through, and
@@ -44,8 +47,10 @@ pub(crate) const INVITE_DELAY_DAYS: i64 = 2;
 pub(crate) const WHISPER_TOTAL_CAP: u32 = 2;
 /// The least time between two whispers, so the second never lands the
 /// same evening as the first: it waits for a fresh connect on a later
-/// day. Enforced by the row alongside the cap.
-pub(crate) const WHISPER_GAP_HOURS: i64 = 24;
+/// day. Twenty hours, not twenty-four, for the same reason as
+/// [`INVITE_DELAY_HOURS`]: "next evening" must not slip to the one after.
+/// Enforced by the row alongside the cap.
+pub(crate) const WHISPER_GAP_HOURS: i64 = 20;
 
 /// The invitation: a plea, not a pitch, ending with the only instruction
 /// the entire haunting ever gives. Placeholder pool of one until design
@@ -67,8 +72,11 @@ for weeks. we need runners. if you're willing: /join #deadchannel";
 ///
 /// Tenure is connected time, not account age: an account that signed up
 /// a year ago and left is not invested, one that lived here for a week
-/// is. Read from the online-time leaderboard's table.
-pub(crate) const ACTIVE_MIN_HOURS: i64 = 7 * 24;
+/// of evenings is. Read from the online-time leaderboard's table. Eight
+/// hours (was 168, tuned 2026-09-09): the ladder is paced for a week of
+/// daily connects, and a gate an hour-a-day person needs months to pass
+/// would make that pacing moot for everyone but old-timers.
+pub(crate) const ACTIVE_MIN_HOURS: i64 = 8;
 pub(crate) const BIO_MIN_CHARS: usize = 100;
 pub(crate) const TOUCHED_SETTINGS_MIN: usize = 2;
 /// A failed or stranded (pending) bio screen is claimed again after this
@@ -660,9 +668,15 @@ impl WhisperState {
 /// How long one burst holds: 3 ticks (~200ms). One frame at 15fps is too
 /// fast to trust; this survives the sidebar's ~132ms wake cadence.
 const GLITCH_HOLD_TICKS: usize = 3;
-/// Gap between bursts: order of once per hours-long session.
-const GLITCH_GAP_MIN_TICKS: usize = 40 * 60 * 1000 / 66; // ~40 min
-const GLITCH_GAP_MAX_TICKS: usize = 3 * 60 * 60 * 1000 / 66; // ~3 h
+/// The first burst of a session comes early, so an hour-long evening
+/// sees one: the schedule is paced for a person who connects daily, and
+/// a burst that only comes due after the session ends is a day lost.
+const GLITCH_FIRST_MIN_TICKS: usize = 5 * 60 * 1000 / 66; // ~5 min
+const GLITCH_FIRST_MAX_TICKS: usize = 20 * 60 * 1000 / 66; // ~20 min
+/// Gap between bursts after the first: two fit inside an hour, so the
+/// daily cap, not the dice, is what spreads stage 1 over two days.
+const GLITCH_GAP_MIN_TICKS: usize = 20 * 60 * 1000 / 66; // ~20 min
+const GLITCH_GAP_MAX_TICKS: usize = 60 * 60 * 1000 / 66; // ~1 h
 /// When the burst comes due while the clock is off screen, or the row
 /// could not be asked, defer a little instead of spending it invisibly.
 const GLITCH_DEFER_MIN_TICKS: usize = 3 * 60 * 1000 / 66; // ~3 min
@@ -718,7 +732,7 @@ impl ClockGlitch {
             claiming: false,
             total_hits,
         };
-        glitch.next_at = now_tick + glitch.roll(GLITCH_GAP_MIN_TICKS, GLITCH_GAP_MAX_TICKS);
+        glitch.next_at = now_tick + glitch.roll(GLITCH_FIRST_MIN_TICKS, GLITCH_FIRST_MAX_TICKS);
         glitch
     }
 
@@ -853,14 +867,17 @@ const NAME_WAVE_TICKS: usize = 12;
 const NAME_WAVES: usize = 2;
 /// How long the whole hit holds.
 const NAME_HOLD_TICKS: usize = NAME_WAVE_TICKS * NAME_WAVES;
-/// Order of one in dozens of sends.
-const NAME_CHANCE_ONE_IN: u64 = 24;
+/// One in a few sends. The daily cap already spaces hits a day apart;
+/// the dice only pick which send of the evening carries it, so a chance
+/// that let a whole evening pass unspent (it was 1-in-24) was a second
+/// pacing mechanism doing the cap's job badly.
+const NAME_CHANCE_ONE_IN: u64 = 3;
 /// At most one hit per UTC day per person (enforced by the row).
 pub(crate) const NAME_DAILY_CAP: u32 = 1;
 /// The ladder's share of name hits (the persisted counter): the third
 /// hit arms the stage-3 whisper for the next fresh connect. With the
-/// one-per-day cap, stages 1 and 2 each spread over two or three days:
-/// the full ladder is roughly a week of slow burn.
+/// one-per-day cap, stage 2 takes three daily connects, and the whole
+/// ladder a week of them.
 pub(crate) const NAME_TOTAL_CAP: u32 = 3;
 
 /// The wave base for one hit: the session's dice mixed with the tick it

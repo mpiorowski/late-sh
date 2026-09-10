@@ -60,6 +60,11 @@ impl App {
             Some(prev) => self.marquee_tick / 15 != prev,
         };
         self.last_one_hz_index = Some(self.marquee_tick / 15);
+        // A Zen layout edit is written at most once a second (and when the
+        // page is left), whatever the key repeat rate did to it.
+        if one_hz {
+            self.flush_zen_layout();
+        }
         // Shared animation frame edges, both divisors of the one wall
         // clock. Half (132ms, ~7.5fps): pet, bonsai sway, clubhouse
         // ambience. Quarter (264ms, ~3.8fps): aquarium simulation steps,
@@ -857,20 +862,18 @@ impl App {
             let equipped_badge = self.shop_state.equipped_chat_badge();
             self.chat
                 .set_chat_badge(self.user_id, equipped_badge.as_deref());
-            self.aquarium_state
-                .set_active_creatures(&self.shop_state.active_aquarium_fish());
-            self.aquarium_state
-                .set_hungry(self.shop_state.aquarium_hungry());
-            if !self.shop_state.dynamic_bonsai_enabled() {
-                self.show_bonsai_v2_modal = false;
-            }
-            // A Bonsai Decay Shield purchase takes effect immediately for the
-            // live in-session death check (`BonsaiState::tick`); Dynamic
-            // Bonsai has no in-session decay simulation to refresh, so this
-            // only matters there from the next login onward.
+            self.aquarium_state.set_active_creatures(
+                &self.shop_state.active_aquarium_fish(),
+                self.aquarium_care.fry_visible(),
+            );
+            // A Bonsai Decay Shield purchase is picked up here, but the tree
+            // has no in-session decay simulation to refresh, so it only
+            // matters from the next login's elapsed-day catch-up onward.
             self.bonsai_state.decay_protection = self.shop_state.active_bonsai_decay_protection();
-            self.bonsai_v2_state.decay_protection =
-                self.shop_state.active_bonsai_decay_protection();
+            // An Aquarium Shield purchase takes effect at once: the fish
+            // stop being hungry and the water clears on the next quarter edge.
+            self.aquarium_care
+                .refresh_shield(self.shop_state.active_aquarium_shield());
         }
         if shop_tick.snapshot_changed
             && self.shop_state.is_loaded()
@@ -886,39 +889,34 @@ impl App {
             }
         }
 
-        // Bonsai growth comes from watering only; the tick just watches for
-        // death during a live session.
-        changed |= self.bonsai_state.tick();
-        // Pet: state edges (feedback expiry, roam end, day-rollover mood and
-        // needs flips) always count; the wander/blink/tail animation only
-        // pays frames on ticks where the drawn strip actually differs, and
-        // only while the last frame drew a strip at all (the travel slot is
-        // rewritten every render). Every transition into visibility (screen
-        // switch, settings, entitlements, roam end) dirties a frame through
-        // its own path, which re-records the slot.
+        // Pet: state edges (feedback expiry, the day-rollover mood flip)
+        // always count; the stroll/blink/tail animation only pays frames on
+        // ticks where the drawn box actually differs, and only while the
+        // last frame drew a box at all (the travel slot is rewritten every
+        // render). Every transition into visibility (screen switch,
+        // settings, entitlements) dirties a frame through its own path,
+        // which re-records the slot.
         changed |= self.pet_state.tick(self.marquee_tick);
-        if self.pet_state.roaming_active() {
-            // The full-screen stroll overlay animates continuously.
-            changed |= anim_half;
-        } else if let Some(travel) = self.last_pet_strip_travel.get() {
+        if let Some(inputs) = self.last_pet_travel.get() {
             changed |= anim_half
-                && crate::app::pet::ui::strip_frame_changed(
+                && crate::app::pet::ui::frame_changed(
                     self.pet_state.mood(),
+                    inputs.watching,
                     self.pet_state.animation_ticks(),
-                    travel,
+                    inputs.travel,
                 );
         }
         // The aquarium has no clock of its own: one step per quarter edge,
         // and only while the tray is actually on screen (the sim pauses
         // off-screen; the screen switch back forces its catch-up frame).
+        // Hunger is the day's care read fresh each step, so the UTC
+        // rollover sinks the fish without any event.
+        self.aquarium_state.set_hungry(self.aquarium_care.hungry());
+        self.aquarium_state.set_murky(self.aquarium_care.murky());
         if anim_quarter && self.aquarium_tray_visible() {
             self.aquarium_state.tick();
             changed = true;
         }
-        if self.show_bonsai_modal {
-            changed |= self.bonsai_care_state.tick();
-        }
-
         // The activity feed subscription survives the retired sidebar panel
         // for one job: edge-detecting a friend's arrivals — logging in, and
         // going live — for the banner + desktop notification. The public
@@ -955,9 +953,59 @@ impl App {
                         }
                         None
                     }
+                    // The session's own watering cleared the DB chip gate:
+                    // this is the one place that may claim the payout, since
+                    // another session or an in-flight save can make the
+                    // in-memory state disagree with the row.
+                    ActivityKind::BonsaiWatered if user_id == self.user_id => {
+                        self.bonsai_state.message = Some(format!(
+                            "Watered (+{} chips)",
+                            crate::app::bonsai::svc::WATER_CHIP_BONUS
+                        ));
+                        changed = true;
+                        None
+                    }
+                    // Same story for the pet and the tank: the DB gate said
+                    // this session's feed was the first of the day.
+                    ActivityKind::PetFed if user_id == self.user_id => {
+                        self.pet_state
+                            .claim_fed_chips(crate::app::pet::svc::FEED_CHIP_BONUS);
+                        changed = true;
+                        None
+                    }
+                    ActivityKind::AquariumFed if user_id == self.user_id => {
+                        Some(crate::app::common::primitives::Banner::success(&format!(
+                            "Fed the tank (+{} chips)",
+                            crate::app::hub::aquarium::svc::FEED_CHIP_BONUS
+                        )))
+                    }
+                    // The streak's fry: the sim learns which species to draw
+                    // small; the shop snapshot reload brings the new count.
+                    ActivityKind::AquariumFryHatched { creature, swimming }
+                        if user_id == self.user_id =>
+                    {
+                        if *swimming {
+                            self.aquarium_care
+                                .set_fry(creature.clone(), chrono::Utc::now().date_naive());
+                            Some(crate::app::common::primitives::Banner::success(&format!(
+                                "A {creature} fry hatched in the tank"
+                            )))
+                        } else {
+                            Some(crate::app::common::primitives::Banner::success(&format!(
+                                "A {creature} fry hatched, the tank is full so it waits in /shop"
+                            )))
+                        }
+                    }
+                    // A second device of yours connecting settled a death.
+                    ActivityKind::AquariumFishLost { creature } if user_id == self.user_id => {
+                        Some(crate::app::common::primitives::Banner::error(&format!(
+                            "Your {creature} starved while you were away"
+                        )))
+                    }
                     // Everything else on the global feed is somebody else's
                     // business: this subscription only exists for the friend
-                    // edges above and the session's own daily wins.
+                    // edges above, the session's own daily wins, and its
+                    // own watering.
                     _ => None,
                 };
                 if let Some(b) = banner {
@@ -978,7 +1026,7 @@ impl App {
         // is enabled by default. An unpaired session repaints a static eq
         // strip, which the frame diff then drops.
         changed |=
-            anim_half && (sidebar_visible || self.show_bonsai_modal || self.show_bonsai_v2_modal);
+            anim_half && (sidebar_visible || self.show_bonsai_modal || self.screen == Screen::Zen);
 
         // Sidebar marquees: track rows and the friends row scroll while their
         // text overflows. The marquee moves at most once per
@@ -1057,6 +1105,9 @@ impl App {
         if self.show_profile_modal && anim_quarter {
             changed |= self.profile_modal_state.step_reef();
         }
+        // The profile hero's bonsai sways like the sidebar's.
+        changed |=
+            self.show_profile_modal && anim_half && self.profile_modal_state.bonsai().is_some();
 
         // Daily boards are event-driven (daily_tick, chat, input); the 1Hz
         // cadence keeps the move-deadline clock honest while on screen.
@@ -1088,8 +1139,6 @@ impl App {
             || self.ultimate_state.has_active_effect()
             || self.screen == Screen::HouseTable
             || (self.screen == Screen::Arcade && self.is_playing_game)
-            || self.show_bonsai_modal
-            || self.show_bonsai_v2_modal
             // A pool shot is the daily board's only animation: while one is
             // rolling it wants the same 15fps as a live table, and the moment
             // it settles the board goes back to being event-driven.
@@ -1099,14 +1148,14 @@ impl App {
         }
         // Slower tiers match the frame edges their surfaces paint on. The
         // pet's clocks are wall-synced (PetState::tick takes marquee_tick),
-        // so roaming and the strip ride the half tier they paint on. Bonsai
-        // modals stay hot: the care watering animation still counts per
-        // tick call. A visible sidebar always carries the eq strip and
-        // bonsai sway.
+        // so the pet box rides the half tier it paints on. The
+        // bonsai care modal and the profile hero sway on the same edge as
+        // the sidebar, which always carries the eq strip and that sway.
         if self.screen == Screen::Clubhouse
             || self.right_sidebar_visible()
-            || self.pet_state.roaming_active()
-            || self.last_pet_strip_travel.get().is_some()
+            || self.last_pet_travel.get().is_some()
+            || self.show_bonsai_modal
+            || (self.show_profile_modal && self.profile_modal_state.bonsai().is_some())
         {
             return ANIM_HALF_TICK;
         }
@@ -1124,6 +1173,11 @@ impl App {
     /// step gate in tick() and the wake cadence, so an aquarium owner
     /// browsing other screens pays no fish frames.
     fn aquarium_tray_visible(&self) -> bool {
+        // The Zen page draws the reef for everyone, owned or not, tray
+        // setting or not: an unowned tank swims empty under a shop caption.
+        if self.screen == Screen::Zen {
+            return true;
+        }
         if !self.show_aquarium_tray || !self.shop_state.entitlements().has_aquarium() {
             return false;
         }

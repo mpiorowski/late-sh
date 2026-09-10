@@ -357,7 +357,7 @@ User commands:
 - `/binds` opens the Chat help topic.
 - `/cs` (alias `/cyberspace`) opens the Cyberspace `feeds` entry; `/cs post` opens its compose modal, `/cs chat` (alias `/cs rooms`) the chat-room picker that adds rooms as rail entries, `/cs mail` the C-Mail picker that pins conversations the same way, `/cs mail @user` starts (or finds) a conversation, pins it, and walks into it, `/cs link` the account-link modal, `/cs unlink` forgets the link. Parsed in `submit_composer` (`parse_cyberspace_command`), handled inline on `ChatState` (no `take_requested_*` plumbing; `pending_chat_screen_switch` pulls the user to Home).
 - `/aquarium` (alias `/aq`) toggles the Shop-unlocked aquarium tray shown only in the Home Lounge view (carved from the top of the lounge chat column); `/aquarium feed` feeds it. Parsed in `submit_composer`, drained via `take_requested_aquarium_command` in `handle_post_submit_requests`.
-- `/pet` toggles the pet strip (same `show_pet_strip` setting as the settings tweak); `/pet feed` and `/pet water` care for the Pet Companion (same strip actions as clicking the bowls/pet; the pet and the food bowl are both feed targets). The strip renders only in the Home Lounge view. Parsed in `submit_composer`, drained via `take_requested_pet_command`.
+- `/pet` toggles the pet strip (same `show_pet_strip` setting as the settings tweak); `/pet feed` is the day's free meal (same as clicking the bowl or the pet; both are feed targets). There is no water any more: one need, once per UTC day, +100 chips on the first feed, like watering the bonsai. The strip renders only in the Home Lounge view. Parsed in `submit_composer`, drained via `take_requested_pet_command`.
 - `/dm @user` opens/creates a DM.
 - `/exit` opens quit confirm.
 - `/golive [title]` registers this user's "watch me" stream (`/golive stop` ends it) and `/watch @user` opens a live stream. Both are parsed in `submit_composer` (`parse_golive_command` / `parse_user_command`) and drained by `App::tick_stream`, which owns the stream service, the publisher URL modal, and the paired-CLI `open_url` control; the domain contract is `late-ssh/src/app/stream/CONTEXT.md`.
@@ -519,7 +519,7 @@ Selection deltas are message-based, not row-based. Positive means older, negativ
 A gild is chips paid to mark someone else's message, permanently. It is a
 purchase, not a reaction: there is no un-gild, and the row outlives every
 session. `late-core/src/models/chat_message_gild.rs` owns the table
-(migration 154) and `GildTier` (Bronze 500 / Silver 2,000 / Gold 10,000);
+(migration 154) and `GildTier` (Bronze 500 / Silver 2,000 / Gold 5,000);
 `chips.rs::UserChips::transfer_gild` owns the money.
 
 - **Split.** The author receives `floor(price * 2 / 3)` as
@@ -555,6 +555,13 @@ session. `late-core/src/models/chat_message_gild.rs` owns the table
   exactly one code path that draws a marker. `GildSucceeded` / `GildFailed`
   ride the in-process broadcast, but they only carry the two banners (buyer
   and author).
+- **Desktop notification.** The author's `GildSucceeded` arm also pushes
+  `Notification::gilded` (`app/notify`), so the OSC 777 / OSC 9 alert fires
+  for someone who is away from the terminal or in another room; the banner
+  alone would be missed. It rides the `mentions` kind rather than a kind of
+  its own: it is the same "a person in chat singled you out" opt-in, and it
+  inherits the outbox cooldown like every other notification. The buyer gets
+  no notification, they are the one who pressed the key.
 - **Rendering.** `message_gilds: HashMap<Uuid, ChatMessageGildSummary>` on
   `ChatState`, loaded with the room tail and patched by the notify. The
   marker leads the message footer, ahead of the reaction chips

@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde_json::Value;
-use tokio_postgres::Client;
+use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
 use super::{
@@ -15,8 +15,6 @@ use super::{
 };
 
 pub const PET_COMPANION_SKU: &str = "pet_companion";
-pub const DYNAMIC_BONSAI_SKU: &str = "dynamic_bonsai";
-pub const BONSAI_VARIANT_SLOT: &str = "bonsai_variant";
 pub const BONSAI_CONSUMABLE_ITEM_KIND: &str = "bonsai_consumable";
 pub const BONSAI_DECAY_SHIELD_SKU: &str = "bonsai_decay_shield_two_weeks";
 /// `shop_consumable_effects.effect_kind` for the user-scoped Bonsai Decay
@@ -30,14 +28,20 @@ pub const BONSAI_DECAY_PROTECTION_DURATION_SECS: i64 = 1_209_600;
 pub const AQUARIUM_SKU: &str = "aquarium";
 pub const AQUARIUM_FISH_ITEM_KIND: &str = "aquarium_fish";
 pub const AQUARIUM_MAX_FISH: i32 = 20;
-pub const AQUARIUM_FOOD_SKU: &str = "aquarium_food";
-pub const AQUARIUM_HUNGER_AFTER_HOURS: i64 = 24;
+pub const AQUARIUM_CONSUMABLE_ITEM_KIND: &str = "aquarium_consumable";
+pub const AQUARIUM_SHIELD_SKU: &str = "aquarium_shield_two_weeks";
+/// `shop_consumable_effects.effect_kind` for the user-scoped Aquarium
+/// Shield: an auto feeder. A calendar day a row of this kind covers counts
+/// as neither fed nor unfed for the tank's care clocks, so nothing starves
+/// and the water stays clean while the owner is away.
+pub const AQUARIUM_SHIELD_KIND: &str = "aquarium_shield";
+/// Default shield window when an item payload omits `duration_secs`: 14 days.
+pub const AQUARIUM_SHIELD_DURATION_SECS: i64 = 1_209_600;
 pub const CHAT_CONSUMABLE_ITEM_KIND: &str = "chat_consumable";
 pub const USERNAME_EFFECT_ITEM_KIND: &str = "username_effect";
 pub const CHAT_BADGE_SLOT: &str = "chat_badge";
 pub const CHAT_FLAG_SLOT: &str = "chat_flag";
 pub const COMPANION_CONSUMABLE_ITEM_KIND: &str = "companion_consumable";
-pub const PET_FOOD_SKU: &str = "pet_food";
 pub const ULTIMATE_SPELL_KIND: &str = "ultimate_spell";
 pub const WONDERLAND_ULTIMATE_SKU: &str = "ultimate_wonderland";
 pub const THEMATRIX_ULTIMATE_SKU: &str = "ultimate_thematrix";
@@ -165,20 +169,6 @@ impl UserPurchase {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EquipStatus {
-    Equipped,
-    AlreadyEquipped,
-    NotOwned,
-    NotEquippable,
-}
-
-#[derive(Debug, Clone)]
-pub struct EquipResult {
-    pub status: EquipStatus,
-    pub item: MarketplaceItem,
-}
-
 pub async fn listen_for_shop_changes(client: &Client) -> Result<()> {
     client
         .batch_execute(&format!(
@@ -218,6 +208,9 @@ pub struct PurchaseWithEffectResult {
     /// The user-scoped Bonsai Decay Shield row activated (or extended) by
     /// this purchase, when the bought item is a `bonsai_consumable`.
     pub bonsai_decay_protection: Option<ShopConsumableEffect>,
+    /// The user-scoped Aquarium Shield row activated (or extended) by this
+    /// purchase, when the bought item is an `aquarium_consumable`.
+    pub aquarium_shield: Option<ShopConsumableEffect>,
     /// The user-scoped chat badge or flag rental activated by this purchase,
     /// when the bought item is a `badge_rental`.
     pub badge_rental: Option<ShopConsumableEffect>,
@@ -242,21 +235,6 @@ pub struct FishActiveResult {
     pub item: MarketplaceItem,
     pub quantity: i32,
     pub active_quantity: i32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConsumableUseStatus {
-    Used,
-    NotAvailable,
-    NotConsumable,
-    OutOfStock,
-    DailyLimitReached,
-}
-
-#[derive(Debug, Clone)]
-pub struct ConsumableUseResult {
-    pub status: ConsumableUseStatus,
-    pub quantity_remaining: i32,
 }
 
 pub async fn purchase_durable_item_by_sku(
@@ -332,6 +310,7 @@ async fn purchase_item_by_sku_inner(
             refresh_all_active_users: false,
             username_effect: None,
             bonsai_decay_protection: None,
+            aquarium_shield: None,
             badge_rental: None,
             title_rental: None,
         });
@@ -375,6 +354,7 @@ async fn purchase_item_by_sku_inner(
                 refresh_all_active_users: false,
                 username_effect: None,
                 bonsai_decay_protection: None,
+                aquarium_shield: None,
                 badge_rental: None,
                 title_rental: None,
             });
@@ -397,6 +377,7 @@ async fn purchase_item_by_sku_inner(
                 refresh_all_active_users: false,
                 username_effect: None,
                 bonsai_decay_protection: None,
+                aquarium_shield: None,
                 badge_rental: None,
                 title_rental: None,
             });
@@ -415,6 +396,7 @@ async fn purchase_item_by_sku_inner(
                 refresh_all_active_users: false,
                 username_effect: None,
                 bonsai_decay_protection: None,
+                aquarium_shield: None,
                 badge_rental: None,
                 title_rental: None,
             });
@@ -433,6 +415,7 @@ async fn purchase_item_by_sku_inner(
                 refresh_all_active_users: false,
                 username_effect: None,
                 bonsai_decay_protection: None,
+                aquarium_shield: None,
                 badge_rental: None,
                 title_rental: None,
             });
@@ -465,6 +448,7 @@ async fn purchase_item_by_sku_inner(
             activate_username_effect_in_tx(&tx, user_id, &item, username_effect).await?;
         let activated_bonsai_decay_protection =
             activate_bonsai_decay_protection_in_tx(&tx, user_id, &item).await?;
+        let activated_aquarium_shield = activate_aquarium_shield_in_tx(&tx, user_id, &item).await?;
         let activated_badge_rental = activate_badge_rental_in_tx(&tx, user_id, &item).await?;
         let activated_title_rental =
             activate_title_rental_in_tx(&tx, user_id, &item, custom_title).await?;
@@ -493,6 +477,7 @@ async fn purchase_item_by_sku_inner(
             refresh_all_active_users,
             username_effect: activated_username_effect,
             bonsai_decay_protection: activated_bonsai_decay_protection,
+            aquarium_shield: activated_aquarium_shield,
             badge_rental: activated_badge_rental,
             title_rental: activated_title_rental,
         });
@@ -511,6 +496,7 @@ async fn purchase_item_by_sku_inner(
             refresh_all_active_users: false,
             username_effect: None,
             bonsai_decay_protection: None,
+            aquarium_shield: None,
             badge_rental: None,
             title_rental: None,
         });
@@ -529,6 +515,7 @@ async fn purchase_item_by_sku_inner(
             refresh_all_active_users: false,
             username_effect: None,
             bonsai_decay_protection: None,
+            aquarium_shield: None,
             badge_rental: None,
             title_rental: None,
         });
@@ -577,6 +564,7 @@ async fn purchase_item_by_sku_inner(
         activate_username_effect_in_tx(&tx, user_id, &item, username_effect).await?;
     let activated_bonsai_decay_protection =
         activate_bonsai_decay_protection_in_tx(&tx, user_id, &item).await?;
+    let activated_aquarium_shield = activate_aquarium_shield_in_tx(&tx, user_id, &item).await?;
     let activated_badge_rental = activate_badge_rental_in_tx(&tx, user_id, &item).await?;
     let activated_title_rental =
         activate_title_rental_in_tx(&tx, user_id, &item, custom_title).await?;
@@ -606,6 +594,7 @@ async fn purchase_item_by_sku_inner(
         refresh_all_active_users,
         username_effect: activated_username_effect,
         bonsai_decay_protection: activated_bonsai_decay_protection,
+        aquarium_shield: activated_aquarium_shield,
         badge_rental: activated_badge_rental,
         title_rental: activated_title_rental,
     })
@@ -720,337 +709,6 @@ pub async fn adjust_aquarium_fish_active_by_sku(
     }))
 }
 
-/// Spend one pet food to feed the companion, at most once per UTC day. The
-/// inventory decrement and the `last_fed` stamp share a transaction so a
-/// racing second click is rejected rather than charged.
-pub async fn consume_pet_food(client: &mut Client, user_id: Uuid) -> Result<ConsumableUseResult> {
-    let tx = client.transaction().await?;
-    let Some(item_row) = tx
-        .query_opt(
-            "SELECT *
-             FROM marketplace_items
-             WHERE sku = $1
-             FOR UPDATE",
-            &[&PET_FOOD_SKU],
-        )
-        .await?
-    else {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::NotAvailable,
-            quantity_remaining: 0,
-        });
-    };
-    let item = MarketplaceItem::from(item_row);
-    if item.item_kind != COMPANION_CONSUMABLE_ITEM_KIND
-        || item
-            .payload
-            .get("effect_kind")
-            .and_then(|value| value.as_str())
-            != Some("pet_food")
-    {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::NotConsumable,
-            quantity_remaining: 0,
-        });
-    }
-
-    let Some(purchase_row) = tx
-        .query_opt(
-            "SELECT p.quantity
-             FROM user_purchases p
-             WHERE p.user_id = $1 AND p.item_id = $2
-             FOR UPDATE",
-            &[&user_id, &item.id],
-        )
-        .await?
-    else {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::OutOfStock,
-            quantity_remaining: 0,
-        });
-    };
-    let quantity = purchase_row.get::<_, i32>("quantity");
-    if quantity <= 0 {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::OutOfStock,
-            quantity_remaining: 0,
-        });
-    }
-
-    tx.execute(
-        "INSERT INTO pet_companions (user_id)
-         VALUES ($1)
-         ON CONFLICT (user_id) DO NOTHING",
-        &[&user_id],
-    )
-    .await?;
-    let companion_row = tx
-        .query_one(
-            "SELECT COALESCE(
-                    last_fed >= (date_trunc('day', current_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'),
-                    false
-                ) AS fed_today
-             FROM pet_companions
-             WHERE user_id = $1
-             FOR UPDATE",
-            &[&user_id],
-        )
-        .await?;
-    let fed_today = companion_row.get::<_, bool>("fed_today");
-    if fed_today {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::DailyLimitReached,
-            quantity_remaining: quantity,
-        });
-    }
-
-    let quantity_remaining = quantity - 1;
-    tx.execute(
-        "UPDATE user_purchases
-         SET quantity = $3,
-             active_quantity = LEAST(active_quantity, $3),
-             updated = current_timestamp
-         WHERE user_id = $1 AND item_id = $2",
-        &[&user_id, &item.id, &quantity_remaining],
-    )
-    .await?;
-    tx.execute(
-        "UPDATE pet_companions
-         SET last_fed = current_timestamp, updated = current_timestamp
-         WHERE user_id = $1",
-        &[&user_id],
-    )
-    .await?;
-    let payload = user_id.to_string();
-    tx.execute(
-        "SELECT pg_notify($1, $2)",
-        &[&SHOP_USER_CHANGED_CHANNEL, &payload],
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(ConsumableUseResult {
-        status: ConsumableUseStatus::Used,
-        quantity_remaining,
-    })
-}
-
-pub async fn consume_aquarium_food_pinch(
-    client: &mut Client,
-    user_id: Uuid,
-) -> Result<ConsumableUseResult> {
-    let tx = client.transaction().await?;
-    let Some(item_row) = tx
-        .query_opt(
-            "SELECT *
-             FROM marketplace_items
-             WHERE sku = $1
-             FOR UPDATE",
-            &[&AQUARIUM_FOOD_SKU],
-        )
-        .await?
-    else {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::NotAvailable,
-            quantity_remaining: 0,
-        });
-    };
-    let item = MarketplaceItem::from(item_row);
-    if item.item_kind != COMPANION_CONSUMABLE_ITEM_KIND
-        || item
-            .payload
-            .get("effect_kind")
-            .and_then(|value| value.as_str())
-            != Some("aquarium_food")
-    {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::NotConsumable,
-            quantity_remaining: 0,
-        });
-    }
-
-    let Some(purchase_row) = tx
-        .query_opt(
-            "SELECT p.quantity
-             FROM user_purchases p
-             WHERE p.user_id = $1 AND p.item_id = $2
-             FOR UPDATE",
-            &[&user_id, &item.id],
-        )
-        .await?
-    else {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::OutOfStock,
-            quantity_remaining: 0,
-        });
-    };
-    let quantity = purchase_row.get::<_, i32>("quantity");
-    if quantity <= 0 {
-        tx.commit().await?;
-        return Ok(ConsumableUseResult {
-            status: ConsumableUseStatus::OutOfStock,
-            quantity_remaining: 0,
-        });
-    }
-
-    let quantity_remaining = quantity - 1;
-    tx.execute(
-        "UPDATE user_purchases
-         SET quantity = $3,
-             active_quantity = LEAST(active_quantity, $3),
-             updated = current_timestamp
-         WHERE user_id = $1 AND item_id = $2",
-        &[&user_id, &item.id, &quantity_remaining],
-    )
-    .await?;
-    tx.execute(
-        "INSERT INTO user_aquarium_care (user_id, last_fed)
-         VALUES ($1, current_timestamp)
-         ON CONFLICT (user_id) DO UPDATE
-         SET last_fed = EXCLUDED.last_fed,
-             updated = current_timestamp",
-        &[&user_id],
-    )
-    .await?;
-    let payload = user_id.to_string();
-    tx.execute(
-        "SELECT pg_notify($1, $2)",
-        &[&SHOP_USER_CHANGED_CHANNEL, &payload],
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(ConsumableUseResult {
-        status: ConsumableUseStatus::Used,
-        quantity_remaining,
-    })
-}
-
-pub async fn aquarium_is_hungry(client: &Client, user_id: Uuid) -> Result<bool> {
-    let cutoff = Utc::now() - Duration::hours(AQUARIUM_HUNGER_AFTER_HOURS);
-    let Some(row) = client
-        .query_opt(
-            "SELECT c.last_fed
-             FROM (
-                 SELECT 1
-                 FROM user_purchases p
-                 JOIN marketplace_items i ON i.id = p.item_id
-                 WHERE p.user_id = $1 AND i.sku = $2
-                 LIMIT 1
-             ) aquarium_purchase
-             LEFT JOIN user_aquarium_care c ON c.user_id = $1",
-            &[&user_id, &AQUARIUM_SKU],
-        )
-        .await?
-    else {
-        return Ok(false);
-    };
-    let last_fed: Option<DateTime<Utc>> = row.get("last_fed");
-    Ok(last_fed.is_none_or(|time| time <= cutoff))
-}
-
-pub async fn equip_owned_item_by_sku(
-    client: &mut Client,
-    user_id: Uuid,
-    sku: &str,
-) -> Result<Option<EquipResult>> {
-    let tx = client.transaction().await?;
-    let Some(row) = tx
-        .query_opt(
-            "SELECT i.*
-             FROM marketplace_items i
-             WHERE i.sku = $1",
-            &[&sku],
-        )
-        .await?
-    else {
-        tx.commit().await?;
-        return Ok(None);
-    };
-    let item = MarketplaceItem::from(row);
-
-    let Some(slot) = item.slot.clone() else {
-        tx.commit().await?;
-        return Ok(Some(EquipResult {
-            status: EquipStatus::NotEquippable,
-            item,
-        }));
-    };
-
-    let Some(purchase_row) = tx
-        .query_opt(
-            "SELECT equipped_slot
-             FROM user_purchases
-             WHERE user_id = $1 AND item_id = $2
-             FOR UPDATE",
-            &[&user_id, &item.id],
-        )
-        .await?
-    else {
-        tx.commit().await?;
-        return Ok(Some(EquipResult {
-            status: EquipStatus::NotOwned,
-            item,
-        }));
-    };
-
-    let already_equipped = purchase_row
-        .get::<_, Option<String>>("equipped_slot")
-        .as_deref()
-        == Some(slot.as_str());
-    if already_equipped {
-        tx.commit().await?;
-        return Ok(Some(EquipResult {
-            status: EquipStatus::AlreadyEquipped,
-            item,
-        }));
-    }
-
-    equip_purchase_in_tx(&tx, user_id, item.id, &slot).await?;
-    let payload = user_id.to_string();
-    tx.execute(
-        "SELECT pg_notify($1, $2)",
-        &[&SHOP_USER_CHANGED_CHANNEL, &payload],
-    )
-    .await?;
-
-    tx.commit().await?;
-    Ok(Some(EquipResult {
-        status: EquipStatus::Equipped,
-        item,
-    }))
-}
-
-pub async fn unequip_slot(client: &mut Client, user_id: Uuid, slot: &str) -> Result<bool> {
-    let tx = client.transaction().await?;
-    let updated = tx
-        .execute(
-            "UPDATE user_purchases
-             SET equipped_slot = NULL, updated = current_timestamp
-             WHERE user_id = $1 AND equipped_slot = $2",
-            &[&user_id, &slot],
-        )
-        .await?;
-
-    if updated > 0 {
-        let payload = user_id.to_string();
-        tx.execute(
-            "SELECT pg_notify($1, $2)",
-            &[&SHOP_USER_CHANGED_CHANNEL, &payload],
-        )
-        .await?;
-    }
-
-    tx.commit().await?;
-    Ok(updated > 0)
-}
-
 /// Active aquarium creatures `(creature_name, count)` a user is currently
 /// displaying. Mirrors `ShopState::active_aquarium_fish` but reads from the
 /// database for an arbitrary user, so profile views can render someone else's
@@ -1085,25 +743,6 @@ pub async fn active_aquarium_fish_for_user(
         .collect())
 }
 
-/// Whether the user has Dynamic Bonsai equipped in the `bonsai_variant` slot.
-/// Same rule the chat badge uses, exposed for the profile view.
-pub async fn is_dynamic_bonsai_selected(client: &Client, user_id: Uuid) -> Result<bool> {
-    let row = client
-        .query_one(
-            "SELECT EXISTS (
-                 SELECT 1
-                 FROM user_purchases p
-                 JOIN marketplace_items i ON i.id = p.item_id
-                 WHERE p.user_id = $1
-                   AND p.equipped_slot = $2
-                   AND i.sku = $3
-             ) AS selected",
-            &[&user_id, &BONSAI_VARIANT_SLOT, &DYNAMIC_BONSAI_SKU],
-        )
-        .await?;
-    Ok(row.get("selected"))
-}
-
 async fn aquarium_fish_active_quantity_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     user_id: Uuid,
@@ -1128,6 +767,7 @@ fn is_repeatable_purchase_item(item: &MarketplaceItem) -> bool {
             | COMPANION_CONSUMABLE_ITEM_KIND
             | USERNAME_EFFECT_ITEM_KIND
             | BONSAI_CONSUMABLE_ITEM_KIND
+            | AQUARIUM_CONSUMABLE_ITEM_KIND
             | BADGE_RENTAL_ITEM_KIND
             | TITLE_RENTAL_ITEM_KIND
     )
@@ -1333,6 +973,154 @@ async fn activate_bonsai_decay_protection_in_tx(
     )
     .await?;
     Ok(Some(effect))
+}
+
+/// Activates the Aquarium Shield bought in this transaction: the Bonsai
+/// Decay Shield's shape, a live window is extended rather than reset.
+async fn activate_aquarium_shield_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+    item: &MarketplaceItem,
+) -> Result<Option<ShopConsumableEffect>> {
+    if item.item_kind != AQUARIUM_CONSUMABLE_ITEM_KIND {
+        return Ok(None);
+    }
+    let duration_secs = item
+        .payload
+        .get("duration_secs")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(AQUARIUM_SHIELD_DURATION_SECS);
+
+    let effect = ShopConsumableEffect::extend_user_effect_in_tx(
+        tx,
+        user_id,
+        AQUARIUM_SHIELD_KIND,
+        &item.sku,
+        duration_secs,
+        item.payload.clone(),
+    )
+    .await?;
+    Ok(Some(effect))
+}
+
+/// Whether the user owns the Aquarium feature.
+pub async fn user_owns_aquarium(client: &impl GenericClient, user_id: Uuid) -> Result<bool> {
+    let row = client
+        .query_opt(
+            "SELECT 1
+             FROM user_purchases p
+             JOIN marketplace_items i ON i.id = p.item_id
+             WHERE p.user_id = $1 AND i.sku = $2",
+            &[&user_id, &AQUARIUM_SKU],
+        )
+        .await?;
+    Ok(row.is_some())
+}
+
+/// One species in a user's tank: what the care rolls (fry, starvation)
+/// weigh and act on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FishStock {
+    pub item_id: Uuid,
+    pub creature: String,
+    pub name: String,
+    pub price_chips: i64,
+    pub quantity: i32,
+    pub active_quantity: i32,
+}
+
+/// Every species with at least one fish swimming in the user's tank, locked
+/// for the transaction. Fish kept in inventory (owned, not active) are not
+/// in the water, so they neither breed nor starve.
+pub async fn swimming_fish_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+) -> Result<Vec<FishStock>> {
+    let rows = tx
+        .query(
+            "SELECT p.item_id, i.payload->>'creature' AS creature, i.name, i.price_chips,
+                    p.quantity, p.active_quantity
+             FROM user_purchases p
+             JOIN marketplace_items i ON i.id = p.item_id
+             WHERE p.user_id = $1
+               AND i.item_kind = $2
+               AND p.active_quantity > 0
+               AND i.payload->>'creature' IS NOT NULL
+             ORDER BY i.sort_order, i.sku
+             FOR UPDATE OF p",
+            &[&user_id, &AQUARIUM_FISH_ITEM_KIND],
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| FishStock {
+            item_id: row.get("item_id"),
+            creature: row.get("creature"),
+            name: row.get("name"),
+            price_chips: row.get("price_chips"),
+            quantity: row.get("quantity"),
+            active_quantity: row.get("active_quantity"),
+        })
+        .collect())
+}
+
+/// A fry of `item_id` hatched: one more owned, and one more swimming when
+/// the tank is under `AQUARIUM_MAX_FISH`. Returns whether it went into the
+/// water (a full tank keeps the fry in inventory).
+pub async fn hatch_aquarium_fry_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+    item_id: Uuid,
+) -> Result<bool> {
+    let swimming = aquarium_fish_active_quantity_in_tx(tx, user_id).await?;
+    let into_water = swimming < AQUARIUM_MAX_FISH;
+    let active_delta: i32 = if into_water { 1 } else { 0 };
+    let updated = tx
+        .execute(
+            "UPDATE user_purchases
+             SET quantity = quantity + 1,
+                 active_quantity = active_quantity + $3,
+                 updated = current_timestamp
+             WHERE user_id = $1 AND item_id = $2",
+            &[&user_id, &item_id, &active_delta],
+        )
+        .await?;
+    if updated != 1 {
+        bail!("fry hatched for a species the user does not own");
+    }
+    Ok(into_water)
+}
+
+/// One swimming fish of `item_id` starved: gone from the water and from the
+/// owned count. A no-op when none of that species is swimming.
+pub async fn starve_aquarium_fish_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+    item_id: Uuid,
+) -> Result<()> {
+    tx.execute(
+        "UPDATE user_purchases
+         SET quantity = quantity - 1,
+             active_quantity = active_quantity - 1,
+             updated = current_timestamp
+         WHERE user_id = $1 AND item_id = $2 AND active_quantity > 0",
+        &[&user_id, &item_id],
+    )
+    .await?;
+    Ok(())
+}
+
+/// Tell every replica this user's purchases changed, so their shop snapshot
+/// (and with it the tank's population) reloads.
+pub async fn notify_user_shop_changed(client: &impl GenericClient, user_id: Uuid) -> Result<()> {
+    let payload = user_id.to_string();
+    client
+        .execute(
+            "SELECT pg_notify($1, $2)",
+            &[&SHOP_USER_CHANGED_CHANNEL, &payload],
+        )
+        .await?;
+    Ok(())
 }
 
 async fn has_reached_daily_purchase_limit(

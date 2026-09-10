@@ -787,50 +787,39 @@ impl russh::server::Handler for ClientHandler {
             initial_solitaire_games,
             initial_minesweeper_games,
         } = load_arcade_session_preloads(&self.state, user_id).await;
-        let (initial_bonsai_tree, initial_bonsai_care, initial_bonsai_decay_protection) = match self
-            .state
-            .bonsai_service
-            .ensure_tree_with_care(user_id)
-            .await
-        {
-            Ok((tree, care, protection)) => (Some(tree), Some(care), protection),
+        let initial_bonsai_tree = match self.state.bonsai_service.ensure_tree(user_id).await {
+            Ok(tree) => Some(tree),
             Err(e) => {
                 tracing::warn!(error = ?e, "failed to load/create bonsai tree");
-                (None, None, None)
-            }
-        };
-        let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
-        let shop_snapshot = match self.state.shop_service.refresh_user(user_id).await {
-            Ok(snapshot) => Some(snapshot),
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to refresh shop snapshot");
                 None
             }
         };
-        let initial_bonsai_v2_tree = if shop_snapshot
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.entitlements.has_dynamic_bonsai())
-        {
-            match self
-                .state
-                .bonsai_service
-                .ensure_v2_tree(user_id, initial_bonsai_tree.as_ref())
-                .await
-            {
-                Ok(tree) => Some(tree),
+        let initial_bonsai_decay_protection =
+            match self.state.bonsai_service.decay_protection(user_id).await {
+                Ok(protection) => protection,
                 Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load/create bonsai v2 tree");
+                    tracing::warn!(error = ?e, "failed to load bonsai decay protection");
                     None
                 }
-            }
-        } else {
-            None
-        };
+            };
+        let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
+        // Primes the per-user snapshot channel subscribed above; the session
+        // reads everything it needs from that channel.
+        if let Err(e) = self.state.shop_service.refresh_user(user_id).await {
+            tracing::warn!(error = ?e, "failed to refresh shop snapshot");
+        }
         let initial_pet = match self.state.pet_service.ensure_cat(user_id).await {
             Ok(cat) => Some(cat),
             Err(e) => {
                 tracing::warn!(error = ?e, "failed to load/create cat companion");
                 None
+            }
+        };
+        let initial_aquarium_care = match self.state.aquarium_service.bootstrap(user_id).await {
+            Ok(care) => care,
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to load aquarium care");
+                Default::default()
             }
         };
 
@@ -973,11 +962,11 @@ impl russh::server::Handler for ClientHandler {
             username: user.username.clone(),
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,
-            initial_bonsai_care,
-            initial_bonsai_v2_tree,
             initial_bonsai_decay_protection,
             pet_service: self.state.pet_service.clone(),
             initial_pet,
+            aquarium_service: self.state.aquarium_service.clone(),
+            initial_aquarium_care,
             quest_service: self.state.quest_service.clone(),
             quest_snapshot_rx,
             shop_service: self.state.shop_service.clone(),
@@ -1055,6 +1044,7 @@ impl russh::server::Handler for ClientHandler {
             app_flags: Some(self.state.app_flags.clone()),
             runner_looks_rx: self.state.runner_looks.subscribe(),
             show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
+            zen_layout: late_core::models::user::extract_zen_layout(&user.settings),
             key_fingerprint,
             key_layout: device.layout,
             key_left_at: device.left_at,

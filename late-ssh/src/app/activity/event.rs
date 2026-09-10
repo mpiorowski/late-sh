@@ -10,6 +10,8 @@ pub enum ActivityCategory {
     Session,
     Game,
     Bonsai,
+    /// The pet and the aquarium: private daily care, like the bonsai.
+    Companion,
     Quest,
 }
 
@@ -151,6 +153,20 @@ pub enum ActivityKind {
     BonsaiLost {
         survived_days: i32,
     },
+    /// The first pet feeding of the UTC day cleared the DB chip gate.
+    PetFed,
+    /// The first aquarium feeding of the UTC day cleared the DB chip gate.
+    AquariumFed,
+    /// Fourteen straight fed days hatched a fry of `creature`; `swimming`
+    /// is false when the tank was full and it went to inventory instead.
+    AquariumFryHatched {
+        creature: String,
+        swimming: bool,
+    },
+    /// Fourteen unfed days starved one `creature`, settled at login.
+    AquariumFishLost {
+        creature: String,
+    },
 }
 
 impl ActivityKind {
@@ -176,6 +192,10 @@ impl ActivityKind {
             | Self::DailyResult { .. } => ActivityCategory::Game,
             Self::GameScored { .. } => ActivityCategory::Quest,
             Self::BonsaiWatered | Self::BonsaiLost { .. } => ActivityCategory::Bonsai,
+            Self::PetFed
+            | Self::AquariumFed
+            | Self::AquariumFryHatched { .. }
+            | Self::AquariumFishLost { .. } => ActivityCategory::Companion,
         }
     }
 }
@@ -766,6 +786,53 @@ impl ActivityEvent {
             username,
             ActivityKind::BonsaiWatered,
             "watered their bonsai".to_string(),
+        )
+    }
+
+    pub fn pet_fed(user_id: Uuid, username: impl Into<String>) -> Self {
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::PetFed,
+            "fed their pet".to_string(),
+        )
+    }
+
+    pub fn aquarium_fed(user_id: Uuid, username: impl Into<String>) -> Self {
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::AquariumFed,
+            "fed their aquarium".to_string(),
+        )
+    }
+
+    pub fn aquarium_fry_hatched(
+        user_id: Uuid,
+        username: impl Into<String>,
+        creature: String,
+        swimming: bool,
+    ) -> Self {
+        let text = format!("hatched a {creature} fry in their tank");
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::AquariumFryHatched { creature, swimming },
+            text,
+        )
+    }
+
+    pub fn aquarium_fish_lost(
+        user_id: Uuid,
+        username: impl Into<String>,
+        creature: String,
+    ) -> Self {
+        let text = format!("lost a {creature} to a hungry tank");
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::AquariumFishLost { creature },
+            text,
         )
     }
 

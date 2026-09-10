@@ -7,9 +7,7 @@ use std::collections::{BTreeSet, HashMap};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::marketplace::{
-    BONSAI_VARIANT_SLOT, CHAT_BADGE_SLOT, CHAT_FLAG_SLOT, DYNAMIC_BONSAI_SKU,
-};
+use super::marketplace::{CHAT_BADGE_SLOT, CHAT_FLAG_SLOT};
 use super::profile_award::{
     MILESTONE_AWARD_CATEGORIES, PROFILE_AWARD_RANK_LIMIT, top_badge_per_game,
 };
@@ -369,6 +367,9 @@ const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
 const RIGHT_SIDEBAR_COMPONENTS_KEY: &str = "right_sidebar_components";
 const SHOW_AQUARIUM_TRAY_KEY: &str = "show_aquarium_tray";
 const SHOW_PET_STRIP_KEY: &str = "show_pet_strip";
+/// The Rice page's tiling layout and look (`late-ssh/src/app/zen`), stored
+/// as the JSON the page itself serializes; absent until first edited.
+const ZEN_LAYOUT_KEY: &str = "zen_layout";
 const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
 const ROOM_LIST_MODE_KEY: &str = "room_list_mode";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
@@ -591,30 +592,21 @@ impl User {
                         u.username,
                         u.is_admin,
                         u.is_moderator,
-                        t.is_alive,
-                        t.growth_points,
-                        v2.badge_glyph AS bonsai_v2_badge_glyph,
-                        EXISTS (
-                            SELECT 1
-                            FROM user_purchases dynamic_up
-                            JOIN marketplace_items dynamic_bonsai
-                              ON dynamic_bonsai.id = dynamic_up.item_id
-                            WHERE dynamic_up.user_id = u.id
-                              AND dynamic_up.equipped_slot = $3
-                              AND dynamic_bonsai.sku = $4
-                        ) AS dynamic_bonsai_selected,
+                        t.badge_glyph AS bonsai_badge_glyph,
                         flag_rental.payload->>'emoji' AS chat_flag,
                         badge_rental.payload->>'emoji' AS chat_badge,
                         award.badges AS profile_award_badges
                  FROM users u
+                 -- The bonsai badge is precomputed by the tree's owner session
+                 -- (`bonsai_trees.badge_glyph`), never derived per message.
+                 -- No row yet means no glyph: the tree is planted at login.
                  LEFT JOIN bonsai_trees t ON t.user_id = u.id
-                 LEFT JOIN bonsai_v2_trees v2 ON v2.user_id = u.id
                  -- A rental is the only thing that fills these two slots.
                  -- Expiry is read-time: once `ends_at` passes the label goes
                  -- bare, with no background job to run. Migration 165 cleared
-                 -- the last permanent equips, so `equipped_slot` no longer
-                 -- carries a badge or a flag; $2 and $5 are effect kinds here,
-                 -- and `bonsai_variant` above is the only equip slot left.
+                 -- the last permanent equips (and migration 177 the bonsai
+                 -- variant, the last equip of any kind), so `equipped_slot`
+                 -- carries nothing; $2 and $3 are effect kinds here.
                  LEFT JOIN LATERAL (
                     SELECT e.payload
                     FROM shop_consumable_effects e
@@ -631,7 +623,7 @@ impl User {
                     FROM shop_consumable_effects e
                     WHERE e.user_id = u.id
                       AND e.room_id IS NULL
-                      AND e.effect_kind = $5
+                      AND e.effect_kind = $3
                       AND e.active = true
                       AND e.ends_at > current_timestamp
                     ORDER BY e.ends_at DESC
@@ -696,18 +688,16 @@ impl User {
                     ) AS badges
                     FROM profile_awards pa
                     WHERE pa.user_id = u.id
-                      AND pa.rank <= $6
+                      AND pa.rank <= $4
                       AND (
                         pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
-                        OR pa.category = ANY($7)
+                        OR pa.category = ANY($5)
                       )
                  ) award ON true
                  WHERE u.id = ANY($1)",
                 &[
                     &user_ids,
                     &CHAT_BADGE_SLOT,
-                    &BONSAI_VARIANT_SLOT,
-                    &DYNAMIC_BONSAI_SKU,
                     &CHAT_FLAG_SLOT,
                     &PROFILE_AWARD_RANK_LIMIT,
                     &milestone_categories,
@@ -724,10 +714,7 @@ impl User {
                     username: row.get("username"),
                     is_admin: row.get("is_admin"),
                     is_moderator: row.get("is_moderator"),
-                    bonsai_is_alive: row.get("is_alive"),
-                    bonsai_growth_points: row.get("growth_points"),
-                    bonsai_v2_badge_glyph: row.get("bonsai_v2_badge_glyph"),
-                    dynamic_bonsai_selected: row.get("dynamic_bonsai_selected"),
+                    bonsai_badge_glyph: row.get("bonsai_badge_glyph"),
                     chat_flag: row.get("chat_flag"),
                     chat_badge: row.get("chat_badge"),
                     profile_award_badges: chat_profile_award_badges(profile_award_badges),
@@ -906,6 +893,23 @@ impl User {
                      updated = current_timestamp
                  WHERE id = $3",
                 &[&SHOW_AQUARIUM_TRAY_KEY, &shown, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    /// Store the Rice page's layout JSON in the settings blob.
+    pub async fn set_zen_layout(client: &Client, user_id: Uuid, layout: &Value) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::jsonb),
+                     updated = current_timestamp
+                 WHERE id = $3",
+                &[&ZEN_LAYOUT_KEY, layout, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -1566,10 +1570,9 @@ pub struct ChatAuthorMetadata {
     pub username: String,
     pub is_admin: bool,
     pub is_moderator: bool,
-    pub bonsai_is_alive: Option<bool>,
-    pub bonsai_growth_points: Option<i32>,
-    pub bonsai_v2_badge_glyph: Option<String>,
-    pub dynamic_bonsai_selected: bool,
+    /// The precomputed chat glyph from `bonsai_trees.badge_glyph`; `None`
+    /// until the user's first login plants a tree, empty while it is dead.
+    pub bonsai_badge_glyph: Option<String>,
     pub chat_flag: Option<String>,
     pub chat_badge: Option<String>,
     pub profile_award_badges: Option<String>,
@@ -1894,6 +1897,12 @@ pub fn extract_show_pet_strip(settings: &Value) -> bool {
         .get(SHOW_PET_STRIP_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
+}
+
+/// The stored Rice layout, if the account ever edited one. Parsed by the
+/// page, which falls back to its default on anything unreadable.
+pub fn extract_zen_layout(settings: &Value) -> Option<Value> {
+    settings.get(ZEN_LAYOUT_KEY).cloned()
 }
 
 /// True once the user has finished (or skipped) the clubhouse first-visit

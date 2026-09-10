@@ -117,6 +117,12 @@ chip_moves!(
     /// The flat bonus for the first watering of the day. `source_ref` is
     /// the UTC date it was paid for, which is also what makes it daily.
     BonsaiWatered,
+    /// The flat bonus for the first pet feeding of the day. `source_ref` is
+    /// the UTC date it was paid for, which is also what makes it daily.
+    PetFed,
+    /// The flat bonus for the first aquarium feeding of the day. Same
+    /// `source_ref` story as [`ChipMove::PetFed`].
+    AquariumFed,
     /// Post-settlement top-up back to [`CHIP_FLOOR`]. Has its own write path
     /// ([`UserChips::restore_floor`]), never goes through [`UserChips::apply`].
     /// `source_ref` is the round or hand id whose settlement emptied the
@@ -244,6 +250,8 @@ impl ChipMove {
             Self::PokerBet => "poker_bet",
             Self::PokerPayout => "poker_payout",
             Self::BonsaiWatered => "bonsai_watered",
+            Self::PetFed => "pet_fed",
+            Self::AquariumFed => "aquarium_fed",
             Self::FloorRestore => "floor_restore",
             Self::GiftSent => "chip_gift_sent",
             Self::GiftReceived => "chip_gift_received",
@@ -302,7 +310,9 @@ impl ChipMove {
             Self::FloorRestore => "house_rounds",
             Self::GiftSent | Self::GiftReceived | Self::InitialBalance => "users",
             Self::SsnakeArenaEarned | Self::SsnakeArenaLost => "ssnake_visits",
-            Self::BonsaiWatered => "bonsai_daily_care",
+            Self::BonsaiWatered => "bonsai_trees",
+            Self::PetFed => "pet_companions",
+            Self::AquariumFed => "user_aquarium_care",
             Self::GildSent | Self::GildReceived => "chat_message_gilds",
             Self::CrownTaken => "crown_reigns",
             Self::PotTicket | Self::PotWon => "pots",
@@ -350,6 +360,8 @@ impl ChipMove {
             Self::BlackjackPayout
             | Self::PokerPayout
             | Self::BonsaiWatered
+            | Self::PetFed
+            | Self::AquariumFed
             | Self::GiftReceived
             | Self::InitialBalance
             | Self::GildReceived
@@ -435,6 +447,8 @@ impl ChipMove {
             | Self::ShopPurchase
             | Self::SsnakeArenaLost => false,
             Self::BonsaiWatered
+            | Self::PetFed
+            | Self::AquariumFed
             | Self::GildReceived
             | Self::PotWon
             | Self::NewsShared

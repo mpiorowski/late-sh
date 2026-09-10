@@ -5,7 +5,6 @@
 
 use chrono::NaiveDate;
 use late_core::models::chips::Difficulty;
-use late_core::models::leaderboard::DailyPuzzle;
 
 use crate::app::arcade::share::{self, Glyph, Row, ShareCard};
 
@@ -39,7 +38,7 @@ pub fn card(
     moves: u32,
     scrambled: &[u8],
 ) -> ShareCard {
-    let number = share::puzzle_number(share::epoch(DailyPuzzle::SlidingPuzzle), puzzle_date);
+    let number = share::puzzle_number(puzzle_date);
     let dimension = board_dimension(difficulty);
     let result = format!("{} {dimension}×{dimension}", difficulty.key());
     let mut rows = board_rows(scrambled, difficulty);

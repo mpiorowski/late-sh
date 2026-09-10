@@ -22,6 +22,7 @@ use crate::app::chat::showcase::svc::ShowcaseService;
 use crate::app::chat::svc::ChatService;
 use crate::app::chat::work::svc::WorkService;
 use crate::app::games::chips::svc::ChipService;
+use crate::app::hub::aquarium::svc::AquariumService;
 use crate::app::hub::dailies::svc::QuestService;
 use crate::app::hub::shop::svc::ShopService;
 use crate::app::leaderboard::svc::LeaderboardService;
@@ -153,6 +154,7 @@ pub struct State {
     pub minesweeper_service: MinesweeperService,
     pub bonsai_service: BonsaiService,
     pub pet_service: PetService,
+    pub aquarium_service: AquariumService,
     pub nonogram_library: NonogramLibrary,
     pub chip_service: ChipService,
     pub lateania_service: crate::app::door::lateania::svc::LateaniaService,

@@ -40,6 +40,50 @@ fn panel_height_is_stable_across_states() {
 }
 
 #[test]
+fn compact_shape_is_the_live_rows_and_one_footer() {
+    let quiet = props_with(Vec::new(), 2);
+    let texts: Vec<String> = daily_compact_lines(40, 6, &quiet)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert_eq!(texts.len(), 2, "a quiet lobby is one note and the footer");
+    assert_eq!(texts[0].trim_end(), "  no games running");
+    assert_eq!(texts[1].trim_end(), "2 open · 1/4 · ctrl+g · ` toggle");
+
+    let busy = props_with(
+        (0..6)
+            .map(|i| DailyPanelMatchRow {
+                opponent: format!("player{i}"),
+                status: DailyPanelRowStatus::Waiting,
+            })
+            .collect(),
+        0,
+    );
+    let texts: Vec<String> = daily_compact_lines(40, 4, &busy)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert_eq!(texts.len(), 4, "rows past the area drop, the footer stays");
+    assert!(texts[0].starts_with("  player0"));
+    assert!(texts[2].starts_with("  player2"));
+    assert!(texts[3].starts_with("0 open"));
+
+    let one = props_with(
+        vec![DailyPanelMatchRow {
+            opponent: "mira".to_string(),
+            status: DailyPanelRowStatus::YourTurn,
+        }],
+        0,
+    );
+    let texts: Vec<String> = daily_compact_lines(40, 6, &one)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert_eq!(texts.len(), 2, "no empty slots pad a single game");
+    assert!(texts[0].starts_with("► mira"));
+}
+
+#[test]
 fn empty_slots_render_dashes() {
     let props = props_with(
         vec![DailyPanelMatchRow {

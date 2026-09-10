@@ -4,7 +4,6 @@
 //! spoils nothing.
 
 use chrono::NaiveDate;
-use late_core::models::leaderboard::DailyPuzzle;
 
 use crate::app::arcade::share::{self, Glyph, Row, ShareCard};
 
@@ -39,7 +38,7 @@ pub fn card(
     scrambled_front: [Sticker; 9],
     solved_front: Sticker,
 ) -> ShareCard {
-    let number = share::puzzle_number(share::epoch(DailyPuzzle::RubiksCube), puzzle_date);
+    let number = share::puzzle_number(puzzle_date);
     let mut rows: Vec<Row> = scrambled_front
         .chunks(3)
         .map(|row| Row::Glyphs(row.iter().map(|sticker| glyph(*sticker)).collect()))

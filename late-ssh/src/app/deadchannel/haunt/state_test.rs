@@ -170,8 +170,9 @@ fn hard_cap_opens_the_door() {
 #[test]
 fn glitch_asks_when_due_then_starts_on_a_won_claim_and_heals() {
     let mut glitch = ClockGlitch::new(42, 0, 0);
+    // The first burst of a session comes early, inside a short evening.
     let due = glitch.next_at;
-    assert!((GLITCH_GAP_MIN_TICKS..GLITCH_GAP_MAX_TICKS).contains(&due));
+    assert!((GLITCH_FIRST_MIN_TICKS..GLITCH_FIRST_MAX_TICKS).contains(&due));
 
     assert_eq!(glitch.tick(due - 1, true, true), GlitchTick::Idle);
     assert_eq!(glitch.tick(due, true, true), GlitchTick::Due);
@@ -283,7 +284,7 @@ fn name_flicker_waits_for_the_clock_stage() {
 fn roll_until_claim(flicker: &mut NameFlicker) -> usize {
     (0..2_000)
         .find(|tick| flicker.note_own_message(Uuid::now_v7(), *tick, true, true) == NameRoll::Claim)
-        .expect("a 1-in-24 roll should land within 2000 sends")
+        .expect("a 1-in-3 roll should land within 2000 sends")
 }
 
 #[test]

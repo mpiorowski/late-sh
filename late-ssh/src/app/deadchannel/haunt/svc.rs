@@ -15,7 +15,7 @@ use tracing::{Instrument, info_span};
 use super::state::{
     ActiveHit, BIO_RESCREEN_AFTER_HOURS, BioStanding, ClockGlitch, FirstContactGate,
     FirstContactMarks, GLITCH_TOTAL_CAP, GlitchTick, HauntCommand, HauntState, HitStage,
-    INVITE_DELAY_DAYS, NAME_TOTAL_CAP, NameFlicker, NameRoll, PendingClaim, PendingFlagWrite,
+    INVITE_DELAY_HOURS, NAME_TOTAL_CAP, NameFlicker, NameRoll, PendingClaim, PendingFlagWrite,
     WHISPER_GAP_HOURS, WHISPER_TOTAL_CAP, WhisperState, WhisperTick, bio_hash, glitch_caps,
     name_caps,
 };
@@ -510,7 +510,7 @@ fn tick_witness(app: &mut App) -> bool {
     true
 }
 
-/// The stage-4 clock: some days after the last delivered whisper, the
+/// The stage-4 clock: the day after the last delivered whisper, the
 /// game's first voice sends its one persistent DM. Self-serve on purpose (the
 /// chosen one's own session notices), so there is no cross-user sweep;
 /// the conditional settings claim in the send task keeps two devices
@@ -527,7 +527,7 @@ fn tick_invitation(app: &mut App) {
         return;
     };
     let now = chrono::Utc::now();
-    if now - whisper_at < chrono::Duration::days(INVITE_DELAY_DAYS) {
+    if now - whisper_at < chrono::Duration::hours(INVITE_DELAY_HOURS) {
         return;
     }
     send_invitation(app, now);

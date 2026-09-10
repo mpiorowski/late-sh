@@ -99,7 +99,7 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "ART",
             "Artboard Gallery",
-            "last month's most applauded piece, one per hanger, 3 applause to count (Artboard page, Hang a piece); pays 20,000 / 10,000 / 5,000 chips",
+            "last month's most applauded piece, one per hanger, 3 applause to count (Artboard page, Hang a piece); pays 40,000 / 15,000 / 10,000 chips",
         ),
     ] {
         lines.push(entry_line(item_code, name, source, code, text, dim));
@@ -142,7 +142,7 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "NHY",
             "NetHack Ascension",
-            "ascend to demigodhood (50,000 chips per run, 7-day gap)",
+            "ascend to demigodhood (40,000 chips per run, 7-day gap)",
         ),
         (
             "DCO",
@@ -152,7 +152,7 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "DCW",
             "DCSS Escape",
-            "escape the dungeon with the Orb (50,000 chips per run, 7-day gap)",
+            "escape the dungeon with the Orb (40,000 chips per run, 7-day gap)",
         ),
         (
             "BRE",
@@ -162,7 +162,7 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "BRM",
             "Brogue Mastery",
-            "the Dungeons of Doom's super-victory (50,000 chips per run, 7-day gap)",
+            "the Dungeons of Doom's super-victory (40,000 chips per run, 7-day gap)",
         ),
         (
             "GDS",

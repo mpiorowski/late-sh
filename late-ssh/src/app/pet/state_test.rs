@@ -1,203 +1,53 @@
 use super::*;
 use chrono::TimeZone;
+use late_core::test_utils::create_test_user;
+use tokio::sync::broadcast;
+
+use crate::app::activity::event::ActivityEvent;
+use crate::test_helpers::new_test_db;
 
 #[test]
-fn food_is_due_every_two_days_while_water_is_daily() {
+fn mood_flips_on_the_utc_day() {
     let today = NaiveDate::from_ymd_opt(2026, 5, 20).unwrap();
-    let yesterday = Utc.with_ymd_and_hms(2026, 5, 19, 12, 0, 0).unwrap();
-    let two_days = Utc.with_ymd_and_hms(2026, 5, 18, 12, 0, 0).unwrap();
-    let three_days = Utc.with_ymd_and_hms(2026, 5, 17, 12, 0, 0).unwrap();
+    let this_morning = Utc.with_ymd_and_hms(2026, 5, 20, 0, 5, 0).unwrap();
+    let last_night = Utc.with_ymd_and_hms(2026, 5, 19, 23, 55, 0).unwrap();
 
-    assert_eq!(
-        need_after(Some(yesterday), today, FOOD_DUE_AFTER_DAYS),
-        PetNeedStatus::Done
-    );
-    assert_eq!(
-        need_after(Some(two_days), today, FOOD_DUE_AFTER_DAYS),
-        PetNeedStatus::Due
-    );
-    assert_eq!(
-        need_after(Some(three_days), today, FOOD_DUE_AFTER_DAYS),
-        PetNeedStatus::Overdue
-    );
-    assert_eq!(
-        need_after(Some(yesterday), today, DAILY_DUE_AFTER_DAYS),
-        PetNeedStatus::Due
-    );
-    assert_eq!(
-        need_after(Some(two_days), today, DAILY_DUE_AFTER_DAYS),
-        PetNeedStatus::Overdue
-    );
+    assert_eq!(mood_for(Some(this_morning), today), PetMood::Happy);
+    // Fed five minutes before midnight UTC: a new day, a new meal owed.
+    assert_eq!(mood_for(Some(last_night), today), PetMood::Sad);
+    assert_eq!(mood_for(None, today), PetMood::Sad);
 }
 
-#[test]
-fn weighted_needs_drive_mood() {
-    let today = NaiveDate::from_ymd_opt(2026, 5, 20).unwrap();
-    let cared = PetNeeds {
-        food: PetNeedStatus::Done,
-        water: PetNeedStatus::Done,
-    };
-    assert_eq!(
-        mood_for_state(cared, HAPPY_CARE_STREAK_DAYS, Some(today), today),
-        PetMood::Happy
-    );
-    assert_eq!(
-        mood_for_state(cared, HAPPY_CARE_STREAK_DAYS - 1, Some(today), today),
-        PetMood::Content
-    );
-    assert_eq!(
-        mood_for_state(
-            cared,
-            HAPPY_CARE_STREAK_DAYS,
-            Some(today.pred_opt().unwrap()),
-            today
-        ),
-        PetMood::Content
-    );
-
-    // A due water bowl reads thirsty, matching the amber bowl beside it.
-    assert_eq!(
-        mood_for_state(
-            PetNeeds {
-                water: PetNeedStatus::Due,
-                ..cared
-            },
-            HAPPY_CARE_STREAK_DAYS,
-            Some(today),
-            today,
-        ),
-        PetMood::Thirsty
-    );
-    assert_eq!(
-        mood_for_state(
-            PetNeeds {
-                water: PetNeedStatus::Overdue,
-                ..cared
-            },
-            HAPPY_CARE_STREAK_DAYS,
-            Some(today),
-            today,
-        ),
-        PetMood::Thirsty
-    );
-    assert_eq!(
-        mood_for_state(
-            PetNeeds {
-                food: PetNeedStatus::Due,
-                ..cared
-            },
-            HAPPY_CARE_STREAK_DAYS,
-            Some(today),
-            today,
-        ),
-        PetMood::Hungry
-    );
-    // Score 50 sits exactly on the sad bar, so food still leads.
-    assert_eq!(
-        mood_for_state(
-            PetNeeds {
-                food: PetNeedStatus::Due,
-                water: PetNeedStatus::Overdue,
-            },
-            HAPPY_CARE_STREAK_DAYS,
-            Some(today),
-            today,
-        ),
-        PetMood::Hungry
-    );
-    // Overdue food alone (45) is sad on the score, with water fully done.
-    assert_eq!(
-        mood_for_state(
-            PetNeeds {
-                food: PetNeedStatus::Overdue,
-                ..cared
-            },
-            HAPPY_CARE_STREAK_DAYS,
-            Some(today),
-            today,
-        ),
-        PetMood::Sad
-    );
-    assert_eq!(
-        mood_for_state(
-            PetNeeds {
-                food: PetNeedStatus::Overdue,
-                water: PetNeedStatus::Due,
-            },
-            HAPPY_CARE_STREAK_DAYS,
-            Some(today),
-            today,
-        ),
-        PetMood::Sad
-    );
-    assert_eq!(
-        mood_for_state(
-            PetNeeds {
-                food: PetNeedStatus::Overdue,
-                water: PetNeedStatus::Overdue,
-            },
-            HAPPY_CARE_STREAK_DAYS,
-            Some(today),
-            today,
-        ),
-        PetMood::Sad
-    );
+async fn fresh_state(handle: &str) -> PetState {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, handle).await;
+    let (tx, _) = broadcast::channel::<ActivityEvent>(16);
+    let svc = super::super::svc::PetService::new(test_db.db.clone(), tx);
+    let cat = svc.ensure_cat(user.id).await.expect("ensure cat");
+    PetState::new(user.id, svc, cat)
 }
 
-#[test]
-fn completed_care_streak_advances_by_calendar_day() {
-    let today = NaiveDate::from_ymd_opt(2026, 5, 20).unwrap();
-    let yesterday = today.pred_opt().unwrap();
-    let two_days_ago = yesterday.pred_opt().unwrap();
+#[tokio::test]
+async fn one_free_meal_a_day_turns_the_mood_around() {
+    let mut state = fresh_state("cat-daily-meal").await;
+    assert_eq!(state.mood(), PetMood::Sad);
+    assert!(!state.fed_today());
 
-    assert_eq!(next_care_streak_days(0, None, today), 1);
-    assert_eq!(next_care_streak_days(1, Some(today), today), 1);
-    assert_eq!(next_care_streak_days(2, Some(yesterday), today), 3);
-    assert_eq!(next_care_streak_days(8, Some(two_days_ago), today), 1);
-}
+    assert_eq!(state.feed(), FeedOutcome::Fed);
+    assert_eq!(state.mood(), PetMood::Happy);
+    assert!(state.fed_today());
+    assert_eq!(state.action_feedback.as_deref(), Some("fed!"));
 
-#[test]
-fn care_score_weights_food_more_than_water() {
-    let cared = PetNeeds {
-        food: PetNeedStatus::Done,
-        water: PetNeedStatus::Done,
-    };
-    assert_eq!(
-        PetNeeds {
-            water: PetNeedStatus::Due,
-            ..cared
-        }
-        .care_score(),
-        90
-    );
-    assert_eq!(
-        PetNeeds {
-            food: PetNeedStatus::Due,
-            ..cared
-        }
-        .care_score(),
-        75
-    );
-    assert_eq!(
-        PetNeeds {
-            food: PetNeedStatus::Overdue,
-            ..cared
-        }
-        .care_score(),
-        45
-    );
+    assert_eq!(state.feed(), FeedOutcome::AlreadyFedToday);
+    assert_eq!(state.action_feedback.as_deref(), Some("already fed today"));
+
+    state.claim_fed_chips(100);
+    assert_eq!(state.action_feedback.as_deref(), Some("fed! +100 chips"));
 }
 
 #[tokio::test]
 async fn sparse_ticks_expire_feedback_on_the_wall_clock() {
-    use crate::test_helpers::new_test_db;
-    use late_core::test_utils::create_test_user;
-
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "cat-wall-tick").await;
-    let svc = super::super::svc::PetService::new(test_db.db.clone());
-    let cat = svc.ensure_cat(user.id).await.expect("ensure cat");
-    let mut state = PetState::new(user.id, svc, cat);
+    let mut state = fresh_state("cat-wall-tick").await;
 
     state.tick(10);
     state.set_feedback("fed");
@@ -214,23 +64,4 @@ async fn sparse_ticks_expire_feedback_on_the_wall_clock() {
         10 + FEEDBACK_TICKS,
         "animation clock syncs to the wall tick, not the call count"
     );
-}
-
-#[tokio::test]
-async fn end_roam_stops_an_in_progress_stroll() {
-    use crate::test_helpers::new_test_db;
-    use late_core::test_utils::create_test_user;
-
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "cat-end-roam").await;
-    let svc = super::super::svc::PetService::new(test_db.db.clone());
-    let cat = svc.ensure_cat(user.id).await.expect("ensure cat");
-    let mut state = PetState::new(user.id, svc, cat);
-
-    assert_eq!(state.feed(1), FeedOutcome::Fed);
-    assert!(state.roaming_active(), "feeding starts a stroll");
-
-    assert!(state.end_roam(), "an active stroll was cancelled");
-    assert!(!state.roaming_active(), "hiding the strip ends the stroll");
-    assert!(!state.end_roam(), "nothing left to cancel the second time");
 }

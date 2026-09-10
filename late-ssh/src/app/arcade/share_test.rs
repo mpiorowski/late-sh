@@ -27,17 +27,14 @@ fn renders_header_rows_and_footer_in_both_formats() {
 }
 
 #[test]
-fn puzzle_number_is_one_based_from_the_epoch() {
-    assert_eq!(puzzle_number(DAY_EPOCH, DAY_EPOCH), 1);
-    assert_eq!(
-        puzzle_number(epoch(DailyPuzzle::LeWord), day(2026, 6, 19)),
-        2
-    );
-    assert_eq!(puzzle_number(DAY_EPOCH, day(2026, 9, 7)), 150);
+fn puzzle_number_counts_arcade_days_from_the_epoch() {
+    assert_eq!(puzzle_number(ARCADE_EPOCH), 1);
+    assert_eq!(puzzle_number(day(2026, 6, 19)), 70);
+    assert_eq!(puzzle_number(day(2026, 9, 7)), 150);
 }
 
 #[test]
-fn day_card_marks_wins_in_lobby_order_and_shows_the_streak() {
+fn day_card_marks_wins_in_lobby_order_with_an_icon_under_each_box() {
     let card = day_card(
         day(2026, 9, 7),
         |puzzle| matches!(puzzle, DailyPuzzle::LeWord | DailyPuzzle::Sudoku),
@@ -47,22 +44,29 @@ fn day_card_marks_wins_in_lobby_order_and_shows_the_streak() {
         card,
         ShareCard {
             title: "late.sh Daily #150 · 2/7 · 🔥 41".to_string(),
-            rows: vec![Row::Glyphs(vec![
-                Glyph::Green,
-                Glyph::Dark,
-                Glyph::Dark,
-                Glyph::Green,
-                Glyph::Dark,
-                Glyph::Dark,
-                Glyph::Dark,
-            ])],
+            rows: vec![
+                Row::Glyphs(vec![
+                    Glyph::Green,
+                    Glyph::Dark,
+                    Glyph::Dark,
+                    Glyph::Green,
+                    Glyph::Dark,
+                    Glyph::Dark,
+                    Glyph::Dark,
+                ]),
+                Row::Text("🔤🧊🧩🔢🎨💣🃏".to_string()),
+            ],
         }
+    );
+    assert_eq!(
+        render(&card, ShareFormat::Emoji),
+        "late.sh Daily #150 · 2/7 · 🔥 41\n🟩⬛⬛🟩⬛⬛⬛\n🔤🧊🧩🔢🎨💣🃏\nssh late.sh"
     );
 }
 
 #[test]
 fn day_card_without_a_streak_omits_the_flame() {
-    let card = day_card(DAY_EPOCH, |_| true, 0);
+    let card = day_card(ARCADE_EPOCH, |_| true, 0);
     assert_eq!(card.title, "late.sh Daily #1 · 7/7");
 }
 

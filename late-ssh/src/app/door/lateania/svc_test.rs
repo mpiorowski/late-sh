@@ -682,6 +682,10 @@ fn a_draught_needs_a_breath_between_gulps() {
     s.choose_class(uid(1), Class::Warrior);
     {
         let p = s.players.get_mut(&uid(1)).unwrap();
+        // Rolled scores can leave a level-1 Warrior under 41 max hp (a
+        // constitution of 4 caps it at 36), and the test reads the draught's
+        // full 40 back; the defaults keep the ceiling out of the picture.
+        p.scores = super::super::stats::AbilityScores::default();
         p.hp = 1;
         p.inventory = vec![1300, 1300, 1300]; // three Minor Healing Draughts (40)
     }

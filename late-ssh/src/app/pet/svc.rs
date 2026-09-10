@@ -1,18 +1,27 @@
 use anyhow::Result;
-use chrono::NaiveDate;
 use late_core::db::Db;
-use late_core::models::marketplace::{ConsumableUseStatus, consume_pet_food};
-use late_core::models::pet::PetCompanion;
+use late_core::models::{
+    chips::{ChipMove, UserChips},
+    pet::PetCompanion,
+};
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use crate::app::activity::event::ActivityEvent;
+
+pub(crate) const FEED_CHIP_BONUS: i64 = 100;
+
+/// Persistence and side effects for the pet. `PetState` owns every rule;
+/// this writes what it is handed and pays the daily chips exactly once.
 #[derive(Clone)]
 pub struct PetService {
     db: Db,
+    activity_feed: broadcast::Sender<ActivityEvent>,
 }
 
 impl PetService {
-    pub fn new(db: Db) -> Self {
-        Self { db }
+    pub fn new(db: Db, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
+        Self { db, activity_feed }
     }
 
     pub async fn ensure_cat(&self, user_id: Uuid) -> Result<PetCompanion> {
@@ -20,55 +29,42 @@ impl PetService {
         PetCompanion::ensure(&client, user_id).await
     }
 
-    /// One transaction spends a pet food and stamps `last_fed`, so a
-    /// double-click cannot spend two meals for one stamp.
+    /// Persist a feeding. The daily gate and the chip credit commit in one
+    /// transaction, so they succeed or fail together; the activity event
+    /// follows only when the gate said this was the first feed of the day.
     pub fn feed_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            match svc.feed(user_id).await {
-                Ok(ConsumableUseStatus::Used) => {}
-                Ok(status) => {
-                    tracing::warn!(?status, user_id = %user_id, "pet was not fed");
-                }
-                Err(e) => {
-                    tracing::error!(error = ?e, "failed to feed pet");
-                }
+            if let Err(e) = svc.feed(user_id).await {
+                tracing::error!(error = ?e, user_id = %user_id, "failed to feed pet");
             }
         });
     }
 
-    async fn feed(&self, user_id: Uuid) -> Result<ConsumableUseStatus> {
+    async fn feed(&self, user_id: Uuid) -> Result<()> {
         let mut client = self.db.get().await?;
-        let result = consume_pet_food(&mut client, user_id).await?;
-        Ok(result.status)
-    }
-
-    pub fn water_task(&self, user_id: Uuid) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = svc.water(user_id).await {
-                tracing::error!(error = ?e, "failed to water cat");
-            }
-        });
-    }
-
-    async fn water(&self, user_id: Uuid) -> Result<()> {
-        let client = self.db.get().await?;
-        PetCompanion::touch_watered(&client, user_id).await
-    }
-
-    pub fn record_care_completed_task(&self, user_id: Uuid, care_date: NaiveDate) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = svc.record_care_completed(user_id, care_date).await {
-                tracing::error!(error = ?e, "failed to record pet care streak");
-            }
-        });
-    }
-
-    async fn record_care_completed(&self, user_id: Uuid, care_date: NaiveDate) -> Result<()> {
-        let client = self.db.get().await?;
-        PetCompanion::record_care_completed(&client, user_id, care_date).await
+        let today = chrono::Utc::now().date_naive();
+        let tx = client.transaction().await?;
+        let first_today = PetCompanion::feed_day(&*tx, user_id, today).await?;
+        if first_today {
+            UserChips::apply(
+                &*tx,
+                user_id,
+                ChipMove::PetFed,
+                FEED_CHIP_BONUS,
+                &today.to_string(),
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        if !first_today {
+            return Ok(());
+        }
+        let username = late_core::models::profile::fetch_username(&client, user_id).await;
+        let _ = self
+            .activity_feed
+            .send(ActivityEvent::pet_fed(user_id, username));
+        Ok(())
     }
 
     pub fn set_name_task(&self, user_id: Uuid, name: Option<String>) {
@@ -99,3 +95,7 @@ impl PetService {
         PetCompanion::set_species(&client, user_id, species).await
     }
 }
+
+#[cfg(test)]
+#[path = "svc_test.rs"]
+mod svc_test;

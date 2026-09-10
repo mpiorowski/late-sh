@@ -374,14 +374,13 @@ pub(crate) enum AquariumCommand {
 }
 
 /// A pet action requested from the composer (`/pet` toggles the strip;
-/// `/pet feed` and `/pet water` are care). `App` owns the pet state and
+/// `/pet feed` is the day's meal). `App` owns the pet state and
 /// entitlements, so the composer just records the intent and `App` carries
 /// it out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PetCommand {
     Toggle,
     Feed,
-    Water,
 }
 
 /// The two cyberspace rows a room can be entered from, and the one leaving
@@ -982,7 +981,7 @@ pub struct ChatState {
     opened_stream_room: Option<Uuid>,
     /// Set by /aquarium [feed]; consumed by `App` (which owns the tray).
     requested_aquarium_command: Option<AquariumCommand>,
-    /// Set by /pet, /pet feed, /pet water; consumed by `App` (which owns the pet).
+    /// Set by /pet, /pet feed; consumed by `App` (which owns the pet).
     requested_pet_command: Option<PetCommand>,
     requested_poll_room: Option<Uuid>,
     /// Set by /brb command; contains the custom message (empty = no message).
@@ -3791,7 +3790,6 @@ impl ChatState {
         if let Some(command) = match body.trim() {
             "/pet" => Some(PetCommand::Toggle),
             "/pet feed" => Some(PetCommand::Feed),
-            "/pet water" => Some(PetCommand::Water),
             _ => None,
         } {
             self.clear_composer_after_submit();
@@ -6217,6 +6215,14 @@ impl ChatState {
                     author_balance,
                     ..
                 } if self.user_id == author_user_id => {
+                    // The author may be in another room, another tab, or away
+                    // from the terminal: the banner alone would be missed, and
+                    // a gild is the one chat event that cost someone money.
+                    self.notifier.push(Notification::gilded(
+                        &buyer_username,
+                        tier.label(),
+                        tier.author_share(),
+                    ));
                     banner = Some(Banner::success(&format!(
                         "@{buyer_username} gilded your message {} (+{} chips, balance {author_balance})",
                         tier.marker(),

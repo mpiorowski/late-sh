@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
-use tokio_postgres::Client;
+use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
 crate::user_scoped_model! {
@@ -140,6 +140,29 @@ impl PetCompanion {
             )
             .await?;
         Ok(Self::from(row))
+    }
+
+    /// Stamp today's feeding and report whether this call was the first of
+    /// the UTC day. The only witness the daily chip bonus needs, atomic no
+    /// matter how many sessions or clicks race for it. Takes a
+    /// `GenericClient` so the credit can share its transaction.
+    pub async fn feed_day(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        today: NaiveDate,
+    ) -> Result<bool> {
+        let row = client
+            .query_opt(
+                "UPDATE pet_companions
+                 SET last_fed = current_timestamp,
+                     updated = current_timestamp
+                 WHERE user_id = $1
+                   AND (last_fed AT TIME ZONE 'UTC')::date IS DISTINCT FROM $2
+                 RETURNING user_id",
+                &[&user_id, &today],
+            )
+            .await?;
+        Ok(row.is_some())
     }
 
     pub async fn touch_fed(client: &Client, user_id: Uuid) -> Result<()> {

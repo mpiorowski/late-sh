@@ -1,6 +1,5 @@
 use late_core::models::marketplace::{
-    AQUARIUM_FOOD_SKU, AQUARIUM_MAX_FISH, BONSAI_CONSUMABLE_ITEM_KIND, CHAT_CONSUMABLE_ITEM_KIND,
-    PET_FOOD_SKU,
+    AQUARIUM_MAX_FISH, BONSAI_CONSUMABLE_ITEM_KIND, CHAT_CONSUMABLE_ITEM_KIND,
 };
 use ratatui::{
     Frame,
@@ -162,7 +161,8 @@ fn item_list_rows<'a>(
         ShopCategory::Chat => chat_section_label,
         ShopCategory::Badges => badge_section_label,
         ShopCategory::Ultimates => ultimates_section_label,
-        ShopCategory::Flags | ShopCategory::Companions | ShopCategory::Aquarium => {
+        ShopCategory::Companions => companion_section_label,
+        ShopCategory::Flags => {
             return items
                 .iter()
                 .enumerate()
@@ -207,6 +207,18 @@ fn ultimates_section_label(item: &ShopCatalogItem) -> &'static str {
     }
 }
 
+/// The Companions tab in catalog order: the pet, the bonsai shield, then
+/// the tank, its shield, and the fish.
+fn companion_section_label(item: &ShopCatalogItem) -> &'static str {
+    if item.is_pet_companion() {
+        "Pet"
+    } else if item.is_bonsai_decay_shield() {
+        "Bonsai"
+    } else {
+        "Aquarium"
+    }
+}
+
 fn badge_section_label(item: &ShopCatalogItem) -> &'static str {
     match item.badge_tier.as_deref() {
         Some("premium") => "Premium",
@@ -241,11 +253,7 @@ fn draw_item_detail(
     let chat_effect_active =
         item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && chat_consumable_active(item, state);
     let effect_active = username_effect_active(item, state);
-    let action = if item.is_dynamic_bonsai() && item.equipped {
-        "dynamic"
-    } else if item.is_dynamic_bonsai() && item.owned {
-        "classic"
-    } else if item.is_username_effect() {
+    let action = if item.is_username_effect() {
         if effect_active {
             "active"
         } else {
@@ -451,14 +459,21 @@ fn draw_item_detail(
                 Span::styled("current room", Style::default().fg(theme::TEXT_DIM())),
             ]));
         }
-        if item.is_bonsai_decay_shield() {
-            if let Some(protection) = state.active_bonsai_decay_protection() {
+        if item.is_bonsai_decay_shield() || item.is_aquarium_shield() {
+            let live_until = if item.is_aquarium_shield() {
+                state.active_aquarium_shield().map(|shield| shield.ends_at)
+            } else {
+                state
+                    .active_bonsai_decay_protection()
+                    .map(|protection| protection.ends_at)
+            };
+            if let Some(ends_at) = live_until {
                 lines.push(Line::from(vec![
                     Span::raw("  shield "),
                     Span::styled(
                         format!(
                             "protected, {}",
-                            remaining_label(protection.ends_at, chrono::Utc::now())
+                            remaining_label(ends_at, chrono::Utc::now())
                         ),
                         Style::default()
                             .fg(theme::SUCCESS())
@@ -474,21 +489,6 @@ fn draw_item_detail(
                 ),
             ]));
         }
-    }
-    if item.is_dynamic_bonsai() && item.owned {
-        lines.push(Line::from(vec![
-            Span::raw("  mode   "),
-            Span::styled(
-                if item.equipped { "dynamic" } else { "classic" },
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "   Enter toggles care modal",
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-        ]));
     }
     if item.is_aquarium_fish() {
         if !has_aquarium {
@@ -546,16 +546,6 @@ fn draw_item_detail(
             Span::styled(slot.clone(), Style::default().fg(theme::TEXT_DIM())),
         ]));
     }
-    if item.equipped && item.is_dynamic_bonsai() {
-        lines.push(Line::from(vec![
-            Span::raw("  bonsai "),
-            Span::styled(
-                "w opens dynamic care",
-                Style::default().fg(theme::SUCCESS()),
-            ),
-        ]));
-    }
-
     let preview = aquarium_preview_lines(item, area.width);
     if preview.is_empty() {
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
@@ -628,11 +618,7 @@ fn truncate_display_width(value: &str, max_width: usize) -> String {
 fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &str) {
     let selected = state.selected_item();
     let has_aquarium = state.entitlements().has_aquarium();
-    let enter_label = if selected.is_some_and(|item| item.is_dynamic_bonsai() && item.equipped) {
-        "classic"
-    } else if selected.is_some_and(|item| item.is_dynamic_bonsai() && item.owned) {
-        "dynamic"
-    } else if selected.is_some_and(|item| item.is_aquarium_fish() && !has_aquarium) {
+    let enter_label = if selected.is_some_and(|item| item.is_aquarium_fish() && !has_aquarium) {
         "needs aquarium"
     } else if selected.is_some_and(|item| item.is_aquarium_fish()) {
         "buy one"
@@ -669,7 +655,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
             Span::styled(" toggle cat/dog", text),
         ]);
     }
-    if state.selected_category() == ShopCategory::Aquarium {
+    if selected.is_some_and(|item| item.is_aquarium_fish()) {
         spans.extend([
             Span::styled("  by ", text),
             Span::styled("github.com/mevanlc/reefs", key),
@@ -1000,11 +986,7 @@ fn item_row(
     } else {
         Style::default().fg(theme::TEXT_BRIGHT())
     };
-    let status = if item.is_dynamic_bonsai() && item.equipped {
-        "dynamic"
-    } else if item.is_dynamic_bonsai() && item.owned {
-        "classic"
-    } else if item.is_rental() {
+    let status = if item.is_rental() {
         if rental_active(item, state) {
             "active"
         } else if item.is_custom_title() {
@@ -1035,6 +1017,7 @@ fn item_row(
         || item.equipped
         || rental_active(item, state)
         || bonsai_decay_shield_active(item, state)
+        || aquarium_shield_active(item, state)
     {
         Style::default()
             .fg(theme::SUCCESS())
@@ -1106,8 +1089,6 @@ fn consumable_action_label(item: &ShopCatalogItem, active: Option<bool>) -> &'st
         "confirm room"
     } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
         "activate now"
-    } else if item.sku == PET_FOOD_SKU || item.sku == AQUARIUM_FOOD_SKU {
-        "buy food"
     } else {
         "buy"
     }
@@ -1116,8 +1097,6 @@ fn consumable_action_label(item: &ShopCatalogItem, active: Option<bool>) -> &'st
 fn consumable_footer_label(item: &ShopCatalogItem) -> &'static str {
     if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
         "activate"
-    } else if item.sku == PET_FOOD_SKU || item.sku == AQUARIUM_FOOD_SKU {
-        "buy food"
     } else {
         "buy"
     }
@@ -1132,17 +1111,22 @@ fn consumable_row_status(item: &ShopCatalogItem, state: &ShopState) -> &'static 
         "confirm"
     } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
         "activate"
-    } else if bonsai_decay_shield_active(item, state) {
+    } else if bonsai_decay_shield_active(item, state) || aquarium_shield_active(item, state) {
         "active"
     } else {
         "buy"
     }
 }
 
+/// True while the Aquarium Shield's auto feeder is minding the user's tank;
+/// same shape as the bonsai's, one running window per user.
+fn aquarium_shield_active(item: &ShopCatalogItem, state: &ShopState) -> bool {
+    item.is_aquarium_shield() && state.active_aquarium_shield().is_some()
+}
+
 /// True when the Bonsai Decay Shield is currently protecting the user's
-/// bonsai. Purchases of the shield never decrement a per-purchase stock the
-/// way Pet/Aquarium Food does: every purchase collapses into one running
-/// protection window, so this is the only way the shop list row can show
+/// bonsai. Purchases of the shield never decrement a per-purchase stock:
+/// every purchase collapses into one running protection window, so this is the only way the shop list row can show
 /// whether the shield is actually doing anything right now.
 fn bonsai_decay_shield_active(item: &ShopCatalogItem, state: &ShopState) -> bool {
     item.is_bonsai_decay_shield() && state.active_bonsai_decay_protection().is_some()
@@ -1176,10 +1160,6 @@ fn consumable_use_hint(item: &ShopCatalogItem) -> &'static str {
         "Enter activates it on the selected chat room"
     } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
         "Enter activates it immediately"
-    } else if item.sku == AQUARIUM_FOOD_SKU {
-        "/aquarium opens the tray; /aquarium feed spends one"
-    } else if item.sku == PET_FOOD_SKU {
-        "/pet feed spends one and sends the pet strolling"
     } else {
         "Enter buys one"
     }

@@ -38,6 +38,14 @@ fn the_rail_shrinks_to_board_and_archives_while_the_gallery_is_off() {
 }
 
 #[test]
+fn the_ranking_hint_names_each_place_badge_and_prize() {
+    assert_eq!(
+        GallerySection::ThisMonth.hint(),
+        "this month's pieces by applause; at month end 1st ART1 + 40,000 chips, 2nd ART2 + 15,000 chips, 3rd ART3 + 10,000 chips"
+    );
+}
+
+#[test]
 fn the_page_lands_on_the_rail_and_activation_answers_the_page() {
     let mut gallery = state();
     assert_eq!(gallery.focus(), Focus::Rail);
@@ -161,4 +169,63 @@ fn applause_and_take_down_refuse_before_the_round_trip() {
         take_down_refusal(&mine_settled, viewer, this_month),
         Some(CLOSED_MONTH_TAKE_DOWN)
     );
+}
+
+/// Throw away what the disabled service answered at once, so the test
+/// hands the state every result itself.
+fn drain(state: &mut GalleryState) {
+    while state.results_rx.try_recv().is_ok() {}
+}
+
+#[test]
+fn a_listing_asked_for_before_a_take_down_cannot_put_the_piece_back() {
+    let viewer = Uuid::from_u128(1);
+    let this_month = NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
+    let mut state = GalleryState::new(GalleryService::disabled(), viewer);
+    let piece = listed_piece(1, this_month);
+    let mine = GallerySection::Mine;
+
+    // The first request (generation 1) lands with the piece.
+    state.ensure_loaded(mine);
+    drain(&mut state);
+    state
+        .results_tx
+        .send(GalleryResult::Listed {
+            listing: PieceListing::Mine,
+            generation: 1,
+            pieces: vec![piece.clone()],
+        })
+        .unwrap();
+    assert!(state.tick());
+    assert_eq!(state.section_pieces(mine), std::slice::from_ref(&piece));
+
+    // A second request (generation 2) is in flight when the take-down
+    // lands: the hang handler reloads Mine after every hang.
+    state.reload(mine);
+    drain(&mut state);
+    state
+        .results_tx
+        .send(GalleryResult::TakeDown {
+            piece_id: piece.id,
+            outcome: TakeDownOutcome::TakenDown,
+        })
+        .unwrap();
+    assert!(state.tick());
+    assert_eq!(state.section_pieces(mine), &[]);
+    assert_eq!(state.notice(), Some("Taken down. The wall forgets it."));
+    drain(&mut state);
+
+    // The second request's answer ran before the take-down, so it still
+    // carries the piece. It is stale and must not land.
+    state
+        .results_tx
+        .send(GalleryResult::Listed {
+            listing: PieceListing::Mine,
+            generation: 2,
+            pieces: vec![piece.clone()],
+        })
+        .unwrap();
+    state.tick();
+    assert_eq!(state.section_pieces(mine), &[]);
+    assert_eq!(state.section_count(mine), Some(0));
 }

@@ -8,11 +8,13 @@ use chrono::{Datelike, NaiveDate, Utc};
 use late_core::models::artboard_piece::{
     ApplauseOutcome, ListingCounts, PIECE_TITLE_MAX_CHARS, PieceListing, TakeDownOutcome,
 };
+use late_core::models::profile_award::gallery_prize_chips;
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::app::artboard::svc::ArtboardSnapshotKind;
+use crate::app::common::primitives::thousands;
 
 use super::frame::FramedPiece;
 use super::svc::{GalleryPiece, GalleryResult, GalleryService, HangRefusal, applause_label};
@@ -38,15 +40,26 @@ impl GallerySection {
         }
     }
 
-    /// The line under the listing's title.
-    pub fn hint(self) -> &'static str {
+    /// The line under the listing's title. The ranking's names each place's
+    /// badge and prize off the award's own table, so the figures on the
+    /// page are the ones the month end pays.
+    pub fn hint(self) -> String {
         match self {
             Self::ThisMonth => {
-                "this month's pieces by applause; top 3 at month end win ART badges and chips"
+                let places = [(1, "1st"), (2, "2nd"), (3, "3rd")]
+                    .into_iter()
+                    .map(|(rank, place)| {
+                        let chips = gallery_prize_chips(rank)
+                            .expect("every podium place pays a gallery prize");
+                        format!("{place} ART{rank} + {} chips", thousands(chips))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("this month's pieces by applause; at month end {places}")
             }
-            Self::Newest => "the newest pieces first, any month",
-            Self::HallOfFame => "each past month's winner",
-            Self::Mine => "everything you have hung",
+            Self::Newest => "the newest pieces first, any month".to_string(),
+            Self::HallOfFame => "each past month's winner".to_string(),
+            Self::Mine => "everything you have hung".to_string(),
         }
     }
 
@@ -160,6 +173,9 @@ struct SectionState {
     pieces: Vec<GalleryPiece>,
     loaded: bool,
     loading: bool,
+    /// Counts this section's listing requests. Each request carries the
+    /// value it was sent with; only the answer to the latest one lands.
+    generation: u64,
     error: Option<String>,
     selected: usize,
     scroll: usize,
@@ -386,21 +402,32 @@ impl GalleryState {
     // ----- listings -----
 
     fn ensure_loaded(&mut self, section: GallerySection) {
-        let state = &mut self.sections[section.index()];
+        let state = &self.sections[section.index()];
         if state.loaded || state.loading {
             return;
         }
-        state.loading = true;
-        state.error = None;
-        self.service
-            .list_task(self.viewer_id, section.listing(), self.results_tx.clone());
+        self.request(section);
     }
 
+    /// Fetch the section afresh, keeping what it shows until the answer
+    /// lands; an answer still in flight is superseded.
     fn reload(&mut self, section: GallerySection) {
+        self.sections[section.index()].loaded = false;
+        self.request(section);
+    }
+
+    fn request(&mut self, section: GallerySection) {
         let state = &mut self.sections[section.index()];
-        state.loaded = false;
-        state.loading = false;
-        self.ensure_loaded(section);
+        state.generation += 1;
+        state.loading = true;
+        state.error = None;
+        let generation = state.generation;
+        self.service.list_task(
+            self.viewer_id,
+            section.listing(),
+            generation,
+            self.results_tx.clone(),
+        );
     }
 
     pub fn section_pieces(&self, section: GallerySection) -> &[GalleryPiece] {
@@ -640,9 +667,19 @@ impl GalleryState {
                     // The rail shows no number; the listing's own load
                     // reports its error where it is read.
                 }
-                GalleryResult::Listed { listing, pieces } => {
+                GalleryResult::Listed {
+                    listing,
+                    generation,
+                    pieces,
+                } => {
                     let section = GallerySection::from_listing(listing);
                     let state = &mut self.sections[section.index()];
+                    if generation != state.generation {
+                        // The answer to a request that was superseded; a
+                        // newer one is on its way, or the piece it would
+                        // list was taken down since.
+                        continue;
+                    }
                     state.pieces = pieces;
                     state.loaded = true;
                     state.loading = false;
@@ -650,9 +687,16 @@ impl GalleryState {
                     state.selected = state.selected.min(state.pieces.len().saturating_sub(1));
                     state.scroll = state.scroll.min(state.selected);
                 }
-                GalleryResult::ListFailed { listing, error } => {
+                GalleryResult::ListFailed {
+                    listing,
+                    generation,
+                    error,
+                } => {
                     let section = GallerySection::from_listing(listing);
                     let state = &mut self.sections[section.index()];
+                    if generation != state.generation {
+                        continue;
+                    }
                     state.loading = false;
                     state.error = Some(error);
                 }
@@ -754,11 +798,18 @@ impl GalleryState {
     }
 
     /// A piece that is no longer on the wall leaves every listing; a full
-    /// frame on it goes back to its list.
+    /// frame on it goes back to its list. A listing still in flight is
+    /// asked for again, since its answer may have been read before the
+    /// piece came down and would put it back.
     fn drop_piece(&mut self, piece_id: Uuid) {
         for state in &mut self.sections {
             state.pieces.retain(|piece| piece.id != piece_id);
             state.selected = state.selected.min(state.pieces.len().saturating_sub(1));
+        }
+        for section in GallerySection::ALL {
+            if self.sections[section.index()].loading {
+                self.request(section);
+            }
         }
         if self.focus == Focus::Piece {
             self.focus = Focus::List;

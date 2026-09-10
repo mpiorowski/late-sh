@@ -9,7 +9,7 @@
 //!
 //! Top to bottom: late.fetch (the fact grid in the left half, the bonsai as
 //! the neofetch logo in the right half, the tree scaled to the grid's
-//! height), bio, showcases, badges (all of them, always), the aquarium, and
+//! height), bio, the aquarium, showcases, badges (all of them, always), and
 //! the chips ledger. The same order on every screen; the only reflow is the
 //! hero stacking when the column is too narrow for two halves.
 
@@ -27,8 +27,7 @@ use ratatui::{
 };
 
 use crate::app::{
-    bonsai::{state::stage_for, ui::render_tree_art_lines},
-    bonsai_v2::render::render_preview_lines,
+    bonsai::render::{PREVIEW_WIDTH, apply_sway, center_lines, render_preview_lines},
     chat::showcase::svc::ShowcaseFeedItem,
     common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
     hub::aquarium::{state::AquariumState, ui as aquarium_ui},
@@ -89,11 +88,11 @@ impl Segment {
     }
 }
 
-pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState, wall_tick: usize) {
     let width = area.width.saturating_sub(4).clamp(MIN_WIDTH, MAX_WIDTH);
     let body_width = width.saturating_sub(2 + SIDE_MARGIN * 2);
 
-    let (segments, chips_top) = build_segments(state, body_width);
+    let (segments, chips_top) = build_segments(state, body_width, wall_tick);
     let content_height: u16 = segments.iter().map(Segment::height).sum();
 
     // As tall as the terminal allows, but no taller than the content needs:
@@ -164,7 +163,11 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
 }
 
 /// Every section in order, plus the body row the chips section starts on.
-fn build_segments(state: &ProfileModalState, width: u16) -> (Vec<Segment>, Option<u16>) {
+fn build_segments(
+    state: &ProfileModalState,
+    width: u16,
+    wall_tick: usize,
+) -> (Vec<Segment>, Option<u16>) {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let text = Style::default().fg(theme::TEXT());
     let width_usize = width as usize;
@@ -187,7 +190,12 @@ fn build_segments(state: &ProfileModalState, width: u16) -> (Vec<Segment>, Optio
     let side_by_side = width >= HERO_SIDE_BY_SIDE_MIN_WIDTH;
     let grid = late_fetch_lines(state, profile);
     let art_width = if side_by_side { width / 2 } else { width };
-    let art = bonsai_block(state, art_width as usize, grid.len().max(HERO_MIN_HEIGHT));
+    let art = bonsai_block(
+        state,
+        art_width as usize,
+        grid.len().max(HERO_MIN_HEIGHT),
+        wall_tick,
+    );
     let mut heading = section_lines("late.fetch", width_usize);
     heading.remove(0); // the row under the border already breathes
     segments.push(Segment::Text(heading));
@@ -210,6 +218,12 @@ fn build_segments(state: &ProfileModalState, width: u16) -> (Vec<Segment>, Optio
         ));
     }
     segments.push(Segment::Text(lines));
+
+    // ── aquarium ──
+    if !state.aquarium_fish().is_empty() {
+        segments.push(Segment::Text(section_lines("aquarium", width_usize)));
+        segments.push(Segment::Aquarium);
+    }
 
     // ── showcases ──
     let showcases = state.showcases_for_viewed();
@@ -235,12 +249,6 @@ fn build_segments(state: &ProfileModalState, width: u16) -> (Vec<Segment>, Optio
         let mut lines = section_lines("badges", width_usize);
         lines.extend(badge_lines);
         segments.push(Segment::Text(lines));
-    }
-
-    // ── aquarium ──
-    if !state.aquarium_fish().is_empty() {
-        segments.push(Segment::Text(section_lines("aquarium", width_usize)));
-        segments.push(Segment::Aquarium);
     }
 
     // ── chips ──
@@ -341,7 +349,7 @@ fn draw_aquarium(body: &mut Buffer, area: Rect, state: &ProfileModalState) {
         *slot = AquariumState::default_for_area(band)
             .ok()
             .map(|mut aquarium| {
-                aquarium.set_active_creatures(state.aquarium_fish());
+                aquarium.set_active_creatures(state.aquarium_fish(), None);
                 aquarium
             });
     }
@@ -408,32 +416,26 @@ fn section_lines(label: &str, width: usize) -> Vec<Line<'static>> {
     ]
 }
 
-/// The bonsai as exactly `height` rows, the pot on the last one. A Dynamic
-/// Bonsai is scaled down to fit (never up); the classic sprite is cropped
-/// from the crown so the pot and trunk stay.
-fn bonsai_block(state: &ProfileModalState, width: usize, height: usize) -> Vec<Line<'static>> {
+/// The bonsai as exactly `height` rows, the pot on the last one: the same
+/// fixed preview block the sidebar shows, centered, swaying on the wall
+/// tick.
+fn bonsai_block(
+    state: &ProfileModalState,
+    width: usize,
+    height: usize,
+    wall_tick: usize,
+) -> Vec<Line<'static>> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let placeholder = |text: &str| vec![Line::from(Span::styled(text.to_string(), dim)).centered()];
 
-    let mut tree = if state.dynamic_bonsai_selected() {
-        match state.bonsai_v2() {
-            Some(bonsai) => render_preview_lines(bonsai, width, height),
-            None => placeholder("Dynamic Bonsai not planted yet"),
+    let mut tree = match state.bonsai() {
+        Some(bonsai) => {
+            let mut lines = render_preview_lines(bonsai);
+            apply_sway(&mut lines, wall_tick);
+            center_lines(&mut lines, width, PREVIEW_WIDTH);
+            lines
         }
-    } else if let Some(tree) = state.bonsai() {
-        let stage = stage_for(tree.is_alive, tree.growth_points);
-        let age_days = (Utc::now().date_naive() - tree.created.date_naive())
-            .num_days()
-            .max(0);
-        let wilting = tree.is_alive
-            && tree
-                .last_watered
-                .map(|last| (Utc::now().date_naive() - last).num_days() >= 2)
-                .unwrap_or(age_days >= 2);
-        // Wall tick 0: the profile preview stays still (sin(0) sway).
-        render_tree_art_lines(stage, tree.seed, wilting, width, 0, None)
-    } else {
-        placeholder("no bonsai yet")
+        None => placeholder("no bonsai yet"),
     };
 
     if tree.len() > height {

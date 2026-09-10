@@ -16,7 +16,6 @@ use crate::app::audio::{
     viz::{EqState, render_eq},
 };
 use crate::app::bonsai::state::BonsaiState;
-use crate::app::bonsai_v2::state::BonsaiV2State;
 use late_core::models::user::{
     AudioSource, IcecastStream, RadioStation, RightSidebarComponent, RightSidebarComponentSetting,
 };
@@ -48,7 +47,8 @@ const MUSIC_DETAIL_HEIGHT: u16 = 6;
 const MUSIC_QUEUE_HEIGHT: u16 = 3;
 // Bonsai is kept fixed when shown; the preview renderer scales the tree to
 // whatever height it gets.
-const BONSAI_MIN_HEIGHT: u16 = 10;
+/// The bonsai preview block plus its footer row.
+const BONSAI_MIN_HEIGHT: u16 = crate::app::bonsai::render::PREVIEW_HEIGHT as u16 + 1;
 // Daily games: fixed, stable chrome (see `daily/panel.rs`).
 const DAILY_HEIGHT: u16 = crate::app::lobby::daily::panel::DAILY_PANEL_HEIGHT;
 
@@ -63,8 +63,6 @@ pub(crate) struct SidebarProps<'a> {
     pub now_playing: Option<&'a NowPlaying>,
     pub paired_client: Option<&'a ClientAudioState>,
     pub bonsai: &'a BonsaiState,
-    pub bonsai_v2: &'a BonsaiV2State,
-    pub use_bonsai_v2: bool,
     pub clock_text: &'a str,
     /// YouTube queue snapshot — drives the music stage's active panel and
     /// peek strip. Fed from the same watch channel as the booth modal.
@@ -232,21 +230,12 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                 );
             }
             RightSidebarComponent::Bonsai => {
-                if props.use_bonsai_v2 {
-                    crate::app::bonsai_v2::render::draw_bonsai_inline(
-                        frame,
-                        body,
-                        props.bonsai_v2,
-                        props.marquee_tick,
-                    );
-                } else {
-                    crate::app::bonsai::ui::draw_bonsai_inline(
-                        frame,
-                        body,
-                        props.bonsai,
-                        props.marquee_tick,
-                    );
-                }
+                crate::app::bonsai::render::draw_bonsai_inline(
+                    frame,
+                    body,
+                    props.bonsai,
+                    props.marquee_tick,
+                );
             }
             RightSidebarComponent::Daily => {
                 crate::app::lobby::daily::panel::draw_daily_inline(
@@ -1175,6 +1164,26 @@ pub fn paint_vertical_separator(frame: &mut Frame, x: u16, y: u16, height: u16) 
         if let Some(cell) = buf.cell_mut((x, y + dy)) {
             cell.set_symbol("│").set_fg(theme::BORDER_DIM());
         }
+    }
+}
+
+/// The current track for the saved source, one line: the same text the
+/// dock row shows for that source.
+pub(crate) fn current_track_text(
+    source: AudioSource,
+    now_playing: Option<&NowPlaying>,
+    queue: &QueueSnapshot,
+    station: RadioStation,
+    radio_now_playing: Option<&str>,
+) -> String {
+    match source {
+        AudioSource::Radio => radio_now_playing
+            .map(str::to_string)
+            .unwrap_or_else(|| stations::radio_station_display_name(station).to_string()),
+        AudioSource::Youtube => youtube_track_text(queue),
+        AudioSource::Icecast => now_playing
+            .map(icecast_track_text)
+            .unwrap_or_else(|| "fallback stream".to_string()),
     }
 }
 

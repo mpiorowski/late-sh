@@ -62,15 +62,15 @@ impl DoorLineKey {
 pub enum DoorBadge {
     /// DCSS: picked up the Orb of Zot (20k, `DCO`).
     DcssOrb,
-    /// DCSS: escaped with the Orb (50k, `DCW`).
+    /// DCSS: escaped with the Orb (40k, `DCW`).
     DcssWin,
     /// NetHack: acquired the Amulet of Yendor (20k, `NHA`).
     NethackAmulet,
-    /// NetHack: ascended (50k, `NHY`).
+    /// NetHack: ascended (40k, `NHY`).
     NethackAscension,
     /// Brogue: escaped the Dungeons of Doom (20k, `BRE`).
     BrogueEscape,
-    /// Brogue: mastered the Dungeons of Doom, the super-victory (50k, `BRM`).
+    /// Brogue: mastered the Dungeons of Doom, the super-victory (40k, `BRM`).
     BrogueMastery,
 }
 

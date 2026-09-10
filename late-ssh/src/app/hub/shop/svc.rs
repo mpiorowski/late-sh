@@ -11,21 +11,20 @@ use late_core::{
     MutexRecover,
     db::{Db, DbConfig},
     models::{
+        aquarium_shield::AquariumShield,
         bonsai_decay_protection::BonsaiDecayProtection,
         chat_room::ChatRoom,
         chips::{CHIP_USER_CHANGED_CHANNEL, UserChips, listen_for_chip_changes},
         marketplace::{
-            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
-            BONSAI_DECAY_SHIELD_SKU, BONSAI_VARIANT_SLOT, CHAT_BADGE_SLOT,
-            CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT, COMPANION_CONSUMABLE_ITEM_KIND,
-            ConsumableUseStatus, DYNAMIC_BONSAI_SKU, EquipStatus, FishActiveStatus,
-            MarketplaceItem, PET_COMPANION_SKU, PurchaseResult, PurchaseStatus,
-            PurchaseWithEffectResult, SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL,
-            ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND, UserPurchase,
-            adjust_aquarium_fish_active_by_sku, aquarium_is_hungry, consume_aquarium_food_pinch,
-            equip_owned_item_by_sku, listen_for_shop_changes,
+            AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH,
+            AQUARIUM_SHIELD_SKU, AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
+            BONSAI_DECAY_SHIELD_SKU, CHAT_BADGE_SLOT, CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT,
+            COMPANION_CONSUMABLE_ITEM_KIND, FishActiveStatus, MarketplaceItem, PET_COMPANION_SKU,
+            PurchaseResult, PurchaseStatus, PurchaseWithEffectResult, SHOP_CATALOG_CHANGED_CHANNEL,
+            SHOP_USER_CHANGED_CHANNEL, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND,
+            UserPurchase, adjust_aquarium_fish_active_by_sku, listen_for_shop_changes,
             purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_custom_title,
-            purchase_item_by_sku_with_username_effect, rental_duration_secs, unequip_slot,
+            purchase_item_by_sku_with_username_effect, rental_duration_secs,
         },
         milestone::{MILESTONE_BADGE_ITEM_KIND, MilestoneBadge},
         rental::{
@@ -53,13 +52,15 @@ pub struct ShopSnapshot {
     pub items: Vec<ShopCatalogItem>,
     pub entitlements: ShopEntitlements,
     pub active_room_effects: HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
-    pub aquarium_hungry: bool,
     /// The user's live username effect, if any (detail pane shows the style
     /// and remaining time).
     pub active_username_effect: Option<ActiveUsernameEffect>,
     /// The user's live Bonsai Decay Shield window, if any (detail pane shows
     /// the remaining time).
     pub active_bonsai_decay_protection: Option<BonsaiDecayProtection>,
+    /// The user's live Aquarium Shield window, if any (detail pane shows the
+    /// remaining time; the tank reads it for its care clocks).
+    pub active_aquarium_shield: Option<AquariumShield>,
     /// The user's live chat badge rental, flag rental, and title, if any.
     /// The detail panes show what is running and how long is left.
     pub active_badge_rental: Option<ActiveRental>,
@@ -148,12 +149,12 @@ impl ShopCatalogItem {
         self.sku == PET_COMPANION_SKU
     }
 
-    pub fn is_dynamic_bonsai(&self) -> bool {
-        self.sku == DYNAMIC_BONSAI_SKU
-    }
-
     pub fn is_bonsai_decay_shield(&self) -> bool {
         self.sku == BONSAI_DECAY_SHIELD_SKU
+    }
+
+    pub fn is_aquarium_shield(&self) -> bool {
+        self.sku == AQUARIUM_SHIELD_SKU
     }
 
     pub fn is_aquarium(&self) -> bool {
@@ -193,6 +194,7 @@ impl ShopCatalogItem {
             CHAT_CONSUMABLE_ITEM_KIND
                 | COMPANION_CONSUMABLE_ITEM_KIND
                 | BONSAI_CONSUMABLE_ITEM_KIND
+                | AQUARIUM_CONSUMABLE_ITEM_KIND
         )
     }
 
@@ -645,38 +647,6 @@ impl ShopService {
         });
     }
 
-    pub fn equip_item_task(&self, user_id: Uuid, sku: String) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            match svc.equip_item(user_id, &sku).await {
-                Ok(message) => svc.publish_event(ShopEvent::ActionCompleted { user_id, message }),
-                Err(error) => {
-                    tracing::warn!(error = ?error, user_id = %user_id, sku, "shop equip failed");
-                    svc.publish_event(ShopEvent::ActionFailed {
-                        user_id,
-                        message: "Could not equip item".to_string(),
-                    });
-                }
-            }
-        });
-    }
-
-    pub fn unequip_slot_task(&self, user_id: Uuid, slot: String) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            match svc.unequip_slot(user_id, &slot).await {
-                Ok(message) => svc.publish_event(ShopEvent::ActionCompleted { user_id, message }),
-                Err(error) => {
-                    tracing::warn!(error = ?error, user_id = %user_id, slot, "shop unequip failed");
-                    svc.publish_event(ShopEvent::ActionFailed {
-                        user_id,
-                        message: "Could not clear displayed badge".to_string(),
-                    });
-                }
-            }
-        });
-    }
-
     pub fn adjust_aquarium_fish_task(&self, user_id: Uuid, sku: String, delta: i32) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -687,36 +657,6 @@ impl ShopService {
                     svc.publish_event(ShopEvent::ActionFailed {
                         user_id,
                         message: "Could not update aquarium".to_string(),
-                    });
-                }
-            }
-        });
-    }
-
-    pub fn use_aquarium_food_task(&self, user_id: Uuid) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            match svc.use_aquarium_food(user_id).await {
-                Ok(ConsumableUseStatus::Used) => svc.publish_event(ShopEvent::ActionCompleted {
-                    user_id,
-                    message: "Fed the aquarium".to_string(),
-                }),
-                Ok(ConsumableUseStatus::OutOfStock) => svc.publish_event(ShopEvent::ActionFailed {
-                    user_id,
-                    message: "Buy Aquarium Food first".to_string(),
-                }),
-                Ok(status) => {
-                    tracing::warn!(?status, user_id = %user_id, "aquarium food was not consumed");
-                    svc.publish_event(ShopEvent::ActionFailed {
-                        user_id,
-                        message: "Could not feed aquarium".to_string(),
-                    });
-                }
-                Err(error) => {
-                    tracing::warn!(error = ?error, user_id = %user_id, "aquarium food use failed");
-                    svc.publish_event(ShopEvent::ActionFailed {
-                        user_id,
-                        message: "Could not feed aquarium".to_string(),
                     });
                 }
             }
@@ -907,6 +847,16 @@ impl ShopService {
                         None => format!("Bought {}", result.item.name),
                     }
                 }
+                PurchaseStatus::Purchased | PurchaseStatus::QuantityAdded
+                    if result.item.item_kind == AQUARIUM_CONSUMABLE_ITEM_KIND =>
+                {
+                    match &purchase.aquarium_shield {
+                        Some(effect) => {
+                            format!("Tank minded until {} (UTC)", effect.ends_at.date_naive())
+                        }
+                        None => format!("Bought {}", result.item.name),
+                    }
+                }
                 PurchaseStatus::Purchased if result.item.item_kind == AQUARIUM_FISH_ITEM_KIND => {
                     format!("Bought {} (owned {})", result.item.name, result.quantity)
                 }
@@ -983,58 +933,6 @@ impl ShopService {
         Ok(message)
     }
 
-    async fn use_aquarium_food(&self, user_id: Uuid) -> Result<ConsumableUseStatus> {
-        let mut client = self.db.get().await?;
-        let result = consume_aquarium_food_pinch(&mut client, user_id).await?;
-        drop(client);
-        self.refresh_user(user_id).await?;
-        Ok(result.status)
-    }
-
-    async fn equip_item(&self, user_id: Uuid, sku: &str) -> Result<String> {
-        let mut client = self.db.get().await?;
-        let result = equip_owned_item_by_sku(&mut client, user_id, sku).await?;
-        drop(client);
-
-        let message = match result {
-            None => "Item is not available".to_string(),
-            Some(result) => match result.status {
-                EquipStatus::Equipped if result.item.sku == DYNAMIC_BONSAI_SKU => {
-                    "Using Dynamic Bonsai".to_string()
-                }
-                EquipStatus::Equipped => format!("Displaying {}", result.item.name),
-                EquipStatus::AlreadyEquipped if result.item.sku == DYNAMIC_BONSAI_SKU => {
-                    "Dynamic Bonsai already active".to_string()
-                }
-                EquipStatus::AlreadyEquipped => format!("{} already displayed", result.item.name),
-                EquipStatus::NotOwned => format!("You do not own {}", result.item.name),
-                EquipStatus::NotEquippable => format!("{} cannot be displayed", result.item.name),
-            },
-        };
-
-        self.refresh_user(user_id).await?;
-        Ok(message)
-    }
-
-    async fn unequip_slot(&self, user_id: Uuid, slot: &str) -> Result<String> {
-        let mut client = self.db.get().await?;
-        let changed = unequip_slot(&mut client, user_id, slot).await?;
-        drop(client);
-
-        self.refresh_user(user_id).await?;
-        if changed {
-            if slot == BONSAI_VARIANT_SLOT {
-                Ok("Using classic Bonsai".to_string())
-            } else {
-                Ok("Cleared displayed badge".to_string())
-            }
-        } else if slot == BONSAI_VARIANT_SLOT {
-            Ok("Classic Bonsai already active".to_string())
-        } else {
-            Ok("No badge is displayed".to_string())
-        }
-    }
-
     async fn load_snapshot(&self, user_id: Uuid) -> Result<ShopSnapshot> {
         let client = self.db.get().await?;
         let chips = UserChips::ensure(&client, user_id).await?;
@@ -1075,7 +973,6 @@ impl ShopService {
                     ends_at: effect.ends_at,
                 });
         }
-        let aquarium_hungry = aquarium_is_hungry(&client, user_id).await?;
 
         // One query for every user-scoped rental the Shop shows. Rows arrive
         // ordered `ends_at DESC` inside each kind, so the first row of a kind
@@ -1138,6 +1035,7 @@ impl ShopService {
 
         let active_bonsai_decay_protection =
             BonsaiDecayProtection::for_user(&client, user_id).await?;
+        let active_aquarium_shield = AquariumShield::for_user(&client, user_id).await?;
 
         let mut purchases_by_item = HashMap::with_capacity(purchases.len());
         for purchase in purchases {
@@ -1263,9 +1161,9 @@ impl ShopService {
             items: catalog,
             entitlements: ShopEntitlements::from_owned_skus(owned_skus),
             active_room_effects,
-            aquarium_hungry,
             active_username_effect,
             active_bonsai_decay_protection,
+            active_aquarium_shield,
             active_badge_rental,
             active_flag_rental,
             active_title,
@@ -1387,7 +1285,10 @@ fn rental_from_effect_row(
 fn is_consumable_kind(item_kind: &str) -> bool {
     matches!(
         item_kind,
-        CHAT_CONSUMABLE_ITEM_KIND | COMPANION_CONSUMABLE_ITEM_KIND | BONSAI_CONSUMABLE_ITEM_KIND
+        CHAT_CONSUMABLE_ITEM_KIND
+            | COMPANION_CONSUMABLE_ITEM_KIND
+            | BONSAI_CONSUMABLE_ITEM_KIND
+            | AQUARIUM_CONSUMABLE_ITEM_KIND
     )
 }
 

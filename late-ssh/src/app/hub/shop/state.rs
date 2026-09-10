@@ -16,8 +16,9 @@ use super::{
     },
 };
 use late_core::models::{
+    aquarium_shield::AquariumShield,
     bonsai_decay_protection::BonsaiDecayProtection,
-    marketplace::{AQUARIUM_FOOD_SKU, CHAT_CONSUMABLE_ITEM_KIND, PET_FOOD_SKU},
+    marketplace::CHAT_CONSUMABLE_ITEM_KIND,
     rental::TITLE_MAX_LEN,
     username_effect::{GlowColor, GradientPair, UsernameEffect},
 };
@@ -266,26 +267,8 @@ impl ShopState {
         self.snapshot.active_bonsai_decay_protection
     }
 
-    pub(crate) fn pet_food_quantity(&self) -> i32 {
-        self.snapshot
-            .items
-            .iter()
-            .find(|item| item.sku == PET_FOOD_SKU)
-            .map(|item| item.quantity.max(0))
-            .unwrap_or(0)
-    }
-
-    pub(crate) fn aquarium_food_quantity(&self) -> i32 {
-        self.snapshot
-            .items
-            .iter()
-            .find(|item| item.sku == AQUARIUM_FOOD_SKU)
-            .map(|item| item.quantity.max(0))
-            .unwrap_or(0)
-    }
-
-    pub(crate) fn aquarium_hungry(&self) -> bool {
-        self.snapshot.aquarium_hungry
+    pub(crate) fn active_aquarium_shield(&self) -> Option<AquariumShield> {
+        self.snapshot.active_aquarium_shield
     }
 
     pub(crate) fn active_badge_rental(&self) -> Option<&ActiveRental> {
@@ -315,17 +298,6 @@ impl ShopState {
         .collect::<Vec<_>>()
         .join(" ");
         (!badge.is_empty()).then_some(badge)
-    }
-
-    pub(crate) fn dynamic_bonsai_enabled(&self) -> bool {
-        self.snapshot
-            .items
-            .iter()
-            .any(|item| item.is_dynamic_bonsai() && item.equipped)
-    }
-
-    pub(crate) fn has_dynamic_bonsai(&self) -> bool {
-        self.snapshot.entitlements.has_dynamic_bonsai()
     }
 
     pub(crate) fn selected_index(&self) -> usize {
@@ -477,6 +449,11 @@ impl ShopState {
                 .purchase_item_task(self.user_id, item.sku, None, None);
             return Some(Banner::success(&format!("Renting {}", item.name)));
         }
+        // The shield minds a tank; without one it would take the chips and
+        // mind nothing.
+        if item.is_aquarium_shield() && !self.snapshot.entitlements.has_aquarium() {
+            return Some(Banner::error("Unlock Aquarium before buying a shield"));
+        }
         if item.is_consumable() {
             if item.requires_room {
                 let Some(room) = current_room else {
@@ -508,17 +485,9 @@ impl ShopState {
             return Some(Banner::success(&format!("{action} {}", item.name)));
         }
         if item.owned {
-            // Dynamic Bonsai is the only thing on sale that still equips a
-            // slot. Badges and flags went all-rental in migration 148, and a
-            // rental fills its slot through an effect row, never an equip.
-            if let Some(slot) = item.slot {
-                if item.equipped {
-                    self.service.unequip_slot_task(self.user_id, slot);
-                    return Some(Banner::success("Using classic Bonsai"));
-                }
-                self.service.equip_item_task(self.user_id, item.sku);
-                return Some(Banner::success("Using Dynamic Bonsai"));
-            }
+            // Nothing on sale equips a slot any more: badges and flags went
+            // all-rental in migration 148, and the bonsai variant unlock was
+            // retired in migration 177.
             return Some(Banner::success(&format!("{} already unlocked", item.name)));
         }
 
@@ -619,17 +588,6 @@ impl ShopState {
             .adjust_aquarium_fish_task(self.user_id, item.sku, delta);
         let label = if delta > 0 { "Adding" } else { "Removing" };
         Some(Banner::success(&format!("{label} {}", item.name)))
-    }
-
-    pub(crate) fn use_aquarium_food(&mut self) -> Banner {
-        if !self.snapshot.entitlements.has_aquarium() {
-            return Banner::error("Unlock Aquarium before feeding it");
-        }
-        if self.aquarium_food_quantity() <= 0 {
-            return Banner::error("Buy Aquarium Food first");
-        }
-        self.service.use_aquarium_food_task(self.user_id);
-        Banner::success("Feeding aquarium")
     }
 
     fn clamp_selection(&mut self) {

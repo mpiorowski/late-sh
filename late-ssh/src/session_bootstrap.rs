@@ -324,40 +324,27 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_solitaire_games,
         initial_minesweeper_games,
     } = load_arcade_session_preloads(state, user_id).await;
-    let (initial_bonsai_tree, initial_bonsai_care, initial_bonsai_decay_protection) =
-        match state.bonsai_service.ensure_tree_with_care(user_id).await {
-            Ok((tree, care, protection)) => (Some(tree), Some(care), protection),
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load/create bonsai tree");
-                (None, None, None)
-            }
-        };
-    let shop_snapshot_rx = state.shop_service.subscribe_snapshot(user_id);
-    let shop_snapshot = match state.shop_service.refresh_user(user_id).await {
-        Ok(snapshot) => Some(snapshot),
+    let initial_bonsai_tree = match state.bonsai_service.ensure_tree(user_id).await {
+        Ok(tree) => Some(tree),
         Err(e) => {
-            tracing::warn!(error = ?e, "failed to refresh shop snapshot");
+            tracing::warn!(error = ?e, "failed to load/create bonsai tree");
             None
         }
     };
-    let initial_bonsai_v2_tree = if shop_snapshot
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.entitlements.has_dynamic_bonsai())
+    let initial_bonsai_decay_protection = match state.bonsai_service.decay_protection(user_id).await
     {
-        match state
-            .bonsai_service
-            .ensure_v2_tree(user_id, initial_bonsai_tree.as_ref())
-            .await
-        {
-            Ok(tree) => Some(tree),
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load/create bonsai v2 tree");
-                None
-            }
+        Ok(protection) => protection,
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load bonsai decay protection");
+            None
         }
-    } else {
-        None
     };
+    let shop_snapshot_rx = state.shop_service.subscribe_snapshot(user_id);
+    // Primes the per-user snapshot channel subscribed above; the session
+    // reads everything it needs from that channel.
+    if let Err(e) = state.shop_service.refresh_user(user_id).await {
+        tracing::warn!(error = ?e, "failed to refresh shop snapshot");
+    }
     let initial_chip_balance = match state.chip_service.ensure_chips(user_id).await {
         Ok(chips) => chips.balance,
         Err(e) => {
@@ -370,6 +357,13 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         Err(e) => {
             tracing::warn!(error = ?e, "failed to load/create cat companion");
             None
+        }
+    };
+    let initial_aquarium_care = match state.aquarium_service.bootstrap(user_id).await {
+        Ok(care) => care,
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load aquarium care");
+            Default::default()
         }
     };
     let quest_snapshot_rx = state.quest_service.subscribe_snapshot(user_id);
@@ -496,11 +490,11 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         username: user.username.clone(),
         bonsai_service: state.bonsai_service.clone(),
         initial_bonsai_tree,
-        initial_bonsai_care,
-        initial_bonsai_v2_tree,
         initial_bonsai_decay_protection,
         pet_service: state.pet_service.clone(),
         initial_pet,
+        aquarium_service: state.aquarium_service.clone(),
+        initial_aquarium_care,
         quest_service: state.quest_service.clone(),
         quest_snapshot_rx,
         shop_service: state.shop_service.clone(),
@@ -575,6 +569,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         app_flags: Some(state.app_flags.clone()),
         runner_looks_rx: state.runner_looks.subscribe(),
         show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
+        zen_layout: late_core::models::user::extract_zen_layout(&user.settings),
         afk_users: state.afk_users.clone(),
         username_directory: Some(state.username_directory.clone()),
         flair_directory: Some(state.flair_directory.clone()),
