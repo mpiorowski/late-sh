@@ -1,5 +1,3 @@
-use late_core::models::pet::{PET_SPECIES_CAT, PET_SPECIES_DOG};
-
 use crate::app::{
     common::primitives::Banner,
     hub::shop::state::RoomEffectTarget,
@@ -214,18 +212,10 @@ fn toggle_pet_species(app: &mut App) -> Option<Banner> {
     if !item.is_pet_companion() || !item.owned {
         return None;
     }
-    let next = if app.pet_state.species == PET_SPECIES_DOG {
-        PET_SPECIES_CAT
-    } else {
-        PET_SPECIES_DOG
-    };
-    app.pet_state.set_species(next.to_string());
+    let next = app.pet_state.species.next();
+    app.pet_state.set_species(next);
     Some(Banner::success(&format!(
         "Switched companion to {}",
-        if next == PET_SPECIES_DOG {
-            "dog"
-        } else {
-            "cat"
-        }
+        next.as_str()
     )))
 }

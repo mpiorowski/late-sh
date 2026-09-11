@@ -1039,6 +1039,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
             if !app.interaction_mode.mouse_enabled() {
                 return;
             }
+            // Every report says where the cursor is (SGR coordinates are
+            // 1-based); the pet walks after it on the Zen page.
+            if let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) {
+                app.last_mouse = Some((x, y));
+            }
             if handle_mouse_click(app, ctx.screen, mouse) {
                 return;
             }
@@ -2690,25 +2695,19 @@ fn handle_mouse_scroll_over_screen(
     true
 }
 
-/// Left-clicks on the pet box's render-recorded targets: the bowl and the
-/// pet itself both feed. The rects are only set on frames where the box
-/// drew, so this is a no-op wherever the box is hidden.
-fn handle_pet_strip_click(app: &mut App, x: u16, y: u16) -> bool {
+/// A left-click on the pet's render-recorded rect pets it. The rect is only
+/// set on frames where the box drew, so this is a no-op wherever the box is
+/// hidden.
+fn handle_pet_click(app: &mut App, x: u16, y: u16) -> bool {
     // The box renders under the global modals; don't let clicks on a
     // modal that happens to overlap it fall through to the pet.
     if chat_scroll_clicks_blocked(app) {
         return false;
     }
-    if let Some(rect) = app.last_pet_bowl_rect.get()
-        && rect_contains(rect, x, y)
-    {
-        pet_feed_globally(app);
-        return true;
-    }
     if let Some(rect) = app.last_pet_rect.get()
         && rect_contains(rect, x, y)
     {
-        pet_feed_globally(app);
+        pet_the_pet_globally(app);
         return true;
     }
     false
@@ -2732,7 +2731,7 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     if handle_chat_composer_click(app, screen, x, y) {
         return true;
     }
-    if handle_pet_strip_click(app, x, y) {
+    if handle_pet_click(app, x, y) {
         return true;
     }
     if handle_chat_scroll_click(app, screen, x, y) {
@@ -3400,61 +3399,14 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
     app.show_hub_modal = true;
 }
 
-pub(crate) fn toggle_aquarium_tray_globally(app: &mut App) {
-    clear_prefix_arms(app);
-    if !app.shop_state.entitlements().has_aquarium() {
-        app.banner = Some(crate::app::common::primitives::Banner::error(
-            "Unlock Aquarium in Hub Shop",
-        ));
-        open_shop_modal_globally(app);
+/// A click on the pet: it purrs for a bit. The box only draws for owners,
+/// so the click can only land on an unlocked pet; the gate is belt and
+/// braces.
+pub(crate) fn pet_the_pet_globally(app: &mut App) {
+    if !app.shop_state.entitlements().has_pet_companion() {
         return;
     }
-    app.show_aquarium_tray = !app.show_aquarium_tray;
-    app.persist_show_aquarium_tray();
-    // The tray only renders in the Lounge, so the toggle needs feedback
-    // when typed from anywhere else.
-    app.banner = Some(crate::app::common::primitives::Banner::success(
-        if app.show_aquarium_tray {
-            "Aquarium open in the Lounge"
-        } else {
-            "Aquarium hidden (/aquarium to reopen)"
-        },
-    ));
-}
-
-/// Shared entitlement gate for the pet actions (/pet feed and the pet box
-/// clicks). Shows the shop nudge and returns false when the
-/// pet companion is not unlocked.
-fn pet_available_or_nudge(app: &mut App) -> bool {
-    if app.shop_state.entitlements().has_pet_companion() {
-        return true;
-    }
-    app.banner = Some(crate::app::common::primitives::Banner::error(
-        "Unlock Pet Companion in Hub Shop",
-    ));
-    open_shop_modal_globally(app);
-    false
-}
-
-pub(crate) fn toggle_pet_strip_globally(app: &mut App) {
-    if !pet_available_or_nudge(app) {
-        return;
-    }
-    let shown = app.profile_state.toggle_show_pet_strip();
-    app.banner = Some(crate::app::common::primitives::Banner::success(if shown {
-        "Pet strip shown"
-    } else {
-        "Pet strip hidden (/pet to bring it back)"
-    }));
-}
-
-/// The day's free meal. The box carries the outcome ("fed!", "already fed
-/// today"); the chips note follows when the service's event comes back.
-pub(crate) fn pet_feed_globally(app: &mut App) {
-    if !pet_available_or_nudge(app) {
-        return;
-    }
-    app.pet_state.feed();
+    app.pet_state.note_petted(std::time::Instant::now());
 }
 
 /// The tank's free daily meal, from any surface that shows it. Ownership is
@@ -3476,6 +3428,40 @@ pub(crate) fn feed_aquarium_globally(app: &mut App) {
         crate::app::hub::aquarium::state::CareOutcome::AlreadyFedToday => {
             app.banner = Some(crate::app::common::primitives::Banner::error(
                 "The tank already ate today",
+            ));
+        }
+    }
+}
+
+/// Cut the sprout on the tank floor, from any surface that shows it. The
+/// floor clears at once; the service writes it behind the row's own gate.
+pub(crate) fn cut_aquarium_sprout_globally(app: &mut App) {
+    clear_prefix_arms(app);
+    if !app.shop_state.entitlements().has_aquarium() {
+        app.banner = Some(crate::app::common::primitives::Banner::error(
+            "Unlock Aquarium in Hub Shop",
+        ));
+        return;
+    }
+    match app
+        .aquarium_care
+        .cut_sprout(chrono::Utc::now().date_naive())
+    {
+        crate::app::hub::aquarium::state::CutOutcome::Cut => {
+            app.refresh_aquarium_population();
+            app.aquarium_service.cut_task(app.user_id);
+            app.banner = Some(crate::app::common::primitives::Banner::success(
+                "Cut the sprout",
+            ));
+        }
+        crate::app::hub::aquarium::state::CutOutcome::NothingToCut => {
+            app.banner = Some(crate::app::common::primitives::Banner::error(
+                "Nothing to cut: the floor is bare",
+            ));
+        }
+        crate::app::hub::aquarium::state::CutOutcome::Rooted => {
+            app.banner = Some(crate::app::common::primitives::Banner::error(
+                "Too late to cut: the sprout rooted, a wigglewort grows at your next login",
             ));
         }
     }

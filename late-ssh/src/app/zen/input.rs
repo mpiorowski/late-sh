@@ -1,5 +1,5 @@
-//! Keys for the Zen page: the room walk, the pet and tank feeds, and the
-//! layout keys. The bonsai is tended in its care modal, the same one `w`
+//! Keys for the Zen page: the room walk, the tank feed, and the layout
+//! keys. The bonsai is tended in its care modal, the same one `w`
 //! opens on every other page, so no care key is captured here. Anything
 //! not owned here returns `false` so the global keys (digits, Tab, `q`,
 //! `?`, `w`, the `v` music chords) keep working.
@@ -23,7 +23,10 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     handle_rice(app, event)
 }
 
-/// Compose, the room walk, and the feeds: pet `f`, tank `a`.
+/// Compose, the room walk, and the tank feed `a`. The sprout is cut from
+/// the composer (`/aq cut`), on purpose: no page key for it. The pet has
+/// no key at all: it is petted with a click and reads the session for the
+/// rest.
 fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
     let Some(byte) = event_byte(event) else {
         return false;
@@ -41,10 +44,6 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
             if let Some(room_id) = app.zen_chat_room_id() {
                 app.chat.start_composing_in_room(room_id);
             }
-            true
-        }
-        b'f' => {
-            crate::app::input::pet_feed_globally(app);
             true
         }
         b'a' => {

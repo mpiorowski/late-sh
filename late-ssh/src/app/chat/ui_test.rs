@@ -971,7 +971,6 @@ fn chat_view<'a>(
     static MESSAGE_GILDS: OnceLock<HashMap<Uuid, ChatMessageGildSummary>> = OnceLock::new();
 
     ChatRenderInput {
-        pet_strip: None,
         activity_ticker: &[],
         feeds_selected: false,
         feeds_processing: false,

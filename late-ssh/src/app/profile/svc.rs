@@ -12,6 +12,7 @@ use late_core::models::game_payout::GamePayout;
 use late_core::models::irc_token::IrcToken;
 use late_core::models::marketplace;
 use late_core::models::media_queue_item::MediaQueueItem;
+use late_core::models::pet::{PetCompanion, PetMood, PetSpecies, pet_age_anchor, pet_age_label};
 use late_core::models::pot::Pot;
 use late_core::models::profile::{Profile, ProfileParams};
 use late_core::models::profile_award::{
@@ -49,6 +50,15 @@ pub struct ProfileService {
     irc_registry: Option<IrcRegistry>,
 }
 
+/// What a profile shows of a pet: enough to draw it and caption it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfilePet {
+    pub species: PetSpecies,
+    pub mood: PetMood,
+    pub name: Option<String>,
+    pub age: String,
+}
+
 #[derive(Clone, Default)]
 pub struct ProfileSnapshot {
     pub user_id: Option<Uuid>,
@@ -57,6 +67,9 @@ pub struct ProfileSnapshot {
     pub bonsai: Option<Tree>,
     pub bonsai_decay_protection: Option<BonsaiDecayProtection>,
     pub aquarium_fish: Vec<(String, usize)>,
+    /// The Pet Companion, for owners only, in the mood its owner's session
+    /// last left it in.
+    pub pet: Option<ProfilePet>,
     pub profile_awards: Vec<ProfileAward>,
     /// Gilds this profile's owner has received, per tier.
     pub gild_counts: GildCounts,
@@ -234,6 +247,18 @@ impl ProfileService {
         let bonsai = Tree::find_by_user_id(&client, user_id).await?;
         let bonsai_decay_protection = BonsaiDecayProtection::for_user(&client, user_id).await?;
         let aquarium_fish = marketplace::active_aquarium_fish_for_user(&client, user_id).await?;
+        let pet = if marketplace::user_owns_pet_companion(&**client, user_id).await? {
+            PetCompanion::find_by_user_id(&client, user_id)
+                .await?
+                .map(|row| ProfilePet {
+                    species: row.species(),
+                    mood: row.mood(),
+                    name: row.name.clone(),
+                    age: pet_age_label(pet_age_anchor(row.created, row.adopted_at), Utc::now()),
+                })
+        } else {
+            None
+        };
         let profile_awards = list_profile_awards_for_user(&client, user_id).await?;
         let gild_counts = ChatMessageGild::counts_for_author(&client, user_id).await?;
         let gallery_counts = ArtboardPiece::counts_for_user(&client, user_id).await?;
@@ -276,6 +301,7 @@ impl ProfileService {
                 bonsai,
                 bonsai_decay_protection,
                 aquarium_fish,
+                pet,
                 profile_awards,
                 gild_counts,
                 gallery_counts,
@@ -591,26 +617,6 @@ impl ProfileService {
                 }
             }
             .in_current_span(),
-        );
-    }
-
-    /// Fire-and-forget: persist whether the aquarium tray is open so the
-    /// next session starts in the same state. No event on success; a failure
-    /// is only logged (the tray would simply start closed next session).
-    pub fn set_show_aquarium_tray(&self, user_id: Uuid, shown: bool) {
-        let service = self.clone();
-        tokio::spawn(
-            async move {
-                let result = async {
-                    let client = service.db.get().await?;
-                    User::set_show_aquarium_tray(&client, user_id, shown).await
-                }
-                .await;
-                if let Err(e) = result {
-                    tracing::warn!(error = ?e, "failed to persist aquarium tray state");
-                }
-            }
-            .instrument(info_span!("profile.show_aquarium_tray_task", user_id = %user_id)),
         );
     }
 

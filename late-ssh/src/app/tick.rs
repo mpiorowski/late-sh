@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::state::{
     App, GAME_SELECTION_SLIDING_PUZZLE, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS,
@@ -457,6 +457,12 @@ impl App {
             self.banner = Some(b);
             changed = true;
         }
+        if daily_tick.own_win {
+            self.pet_state.note_win(Instant::now());
+        }
+        if daily_tick.own_loss {
+            self.pet_state.note_loss(Instant::now());
+        }
         // Modal cursor, pending claim, and glow follow the daily snapshot.
         self.lobby.sync(&self.daily);
         // The match chat room id only becomes known once the board's row
@@ -862,9 +868,22 @@ impl App {
             let equipped_badge = self.shop_state.equipped_chat_badge();
             self.chat
                 .set_chat_badge(self.user_id, equipped_badge.as_deref());
+            // A tank owned by the shop but with no clock in this session
+            // was bought just now (a connect-time owner always has one from
+            // bootstrap): take the row the purchase planted, sprout and all.
+            if self.shop_state.entitlements().has_aquarium()
+                && self.aquarium_care.last_fed.is_none()
+            {
+                self.aquarium_care
+                    .welcome_new_tank(chrono::Utc::now().date_naive());
+                self.banner = Some(crate::app::common::primitives::Banner::info(
+                    "Your tank came with a sprout: leave it, or /aq cut within the week",
+                ));
+            }
             self.aquarium_state.set_active_creatures(
                 &self.shop_state.active_aquarium_fish(),
                 self.aquarium_care.fry_visible(),
+                self.aquarium_care.sprout_visible(),
             );
             // A Bonsai Decay Shield purchase is picked up here, but the tree
             // has no in-session decay simulation to refresh, so it only
@@ -889,19 +908,34 @@ impl App {
             }
         }
 
-        // Pet: state edges (feedback expiry, the day-rollover mood flip)
-        // always count; the stroll/blink/tail animation only pays frames on
-        // ticks where the drawn box actually differs, and only while the
-        // last frame drew a box at all (the travel slot is rewritten every
-        // render). Every transition into visibility (screen switch,
-        // settings, entitlements) dirties a frame through its own path,
-        // which re-records the slot.
-        changed |= self.pet_state.tick(self.marquee_tick);
-        if let Some(inputs) = self.last_pet_travel.get() {
+        // Pet: the mood is read from the session every tick (a mood change
+        // or a step of the walk after the cursor always counts); the
+        // stroll/blink/tail animation only pays frames on ticks where the
+        // drawn box actually differs, and only while the last frame drew a
+        // box at all (the frame slot is rewritten every render). Every
+        // transition into visibility (screen switch, entitlements) dirties
+        // a frame through its own path, which re-records the slot.
+        let pet_frame = self.last_pet_frame.get();
+        if let Some(at) = self.chat.last_own_send_at() {
+            self.pet_state.note_spoke(at);
+        }
+        changed |= self.pet_state.tick(crate::app::pet::state::PetTick {
+            wall_tick: self.marquee_tick,
+            now: Instant::now(),
+            ambient: crate::app::pet::state::Ambient {
+                last_input: self.last_input_at,
+                music_playing: self.music_playing(),
+            },
+            frame: pet_frame,
+            cursor: self.last_mouse,
+            persist: self.shop_state.entitlements().has_pet_companion(),
+        });
+        if let Some(inputs) = pet_frame {
             changed |= anim_half
                 && crate::app::pet::ui::frame_changed(
                     self.pet_state.mood(),
                     inputs.watching,
+                    self.pet_state.perch(),
                     self.pet_state.animation_ticks(),
                     inputs.travel,
                 );
@@ -912,7 +946,6 @@ impl App {
         // Hunger is the day's care read fresh each step, so the UTC
         // rollover sinks the fish without any event.
         self.aquarium_state.set_hungry(self.aquarium_care.hungry());
-        self.aquarium_state.set_murky(self.aquarium_care.murky());
         if anim_quarter && self.aquarium_tray_visible() {
             self.aquarium_state.tick();
             changed = true;
@@ -921,6 +954,9 @@ impl App {
         // for one job: edge-detecting a friend's arrivals — logging in, and
         // going live — for the banner + desktop notification. The public
         // feed itself ships to #lounge (activity/lounge).
+        // The sprout events change the floor; the population is put back
+        // once after the drain, outside the receiver's borrow.
+        let mut refresh_floor = false;
         if let Some(rx) = &mut self.activity_feed_rx {
             while let Ok(event) = rx.try_recv() {
                 let Some(user_id) = event.user_id else {
@@ -930,13 +966,13 @@ impl App {
                     ActivityKind::UserJoined => {
                         self.chat.note_friend_join(user_id, &event.username)
                     }
-                    ActivityKind::WentLive { title } => {
+                    ActivityKind::WentLive { title, .. } => {
                         self.chat
                             .note_friend_went_live(user_id, &event.username, title.as_deref())
                     }
                     // The session's own daily win: paint the Arcade card now
-                    // rather than on the next leaderboard pass. Score games
-                    // and other players' wins fall through.
+                    // rather than on the next leaderboard pass, and tell the
+                    // pet. Other players' wins fall through.
                     ActivityKind::GameWon {
                         game,
                         detail: Some(difficulty),
@@ -951,6 +987,25 @@ impl App {
                                 difficulty.clone(),
                             );
                         }
+                        self.pet_state.note_win(Instant::now());
+                        None
+                    }
+                    // Any other win of the session's own, and any death: the
+                    // pet's pride and sulk. Daily matches arrive through the
+                    // daily state above, not here: the feed's `DailyResult`
+                    // names only the winner of a win and one player of a
+                    // draw, so it cannot tell pride from a draw or reach the
+                    // loser at all.
+                    ActivityKind::GameWon { .. }
+                    | ActivityKind::GameScored { .. }
+                    | ActivityKind::BossSlain { .. }
+                        if user_id == self.user_id =>
+                    {
+                        self.pet_state.note_win(Instant::now());
+                        None
+                    }
+                    ActivityKind::GameLost { .. } if user_id == self.user_id => {
+                        self.pet_state.note_loss(Instant::now());
                         None
                     }
                     // The session's own watering cleared the DB chip gate:
@@ -965,14 +1020,8 @@ impl App {
                         changed = true;
                         None
                     }
-                    // Same story for the pet and the tank: the DB gate said
-                    // this session's feed was the first of the day.
-                    ActivityKind::PetFed if user_id == self.user_id => {
-                        self.pet_state
-                            .claim_fed_chips(crate::app::pet::svc::FEED_CHIP_BONUS);
-                        changed = true;
-                        None
-                    }
+                    // Same story for the tank: the DB gate said this
+                    // session's feed was the first of the day.
                     ActivityKind::AquariumFed if user_id == self.user_id => {
                         Some(crate::app::common::primitives::Banner::success(&format!(
                             "Fed the tank (+{} chips)",
@@ -1002,6 +1051,33 @@ impl App {
                             "Your {creature} starved while you were away"
                         )))
                     }
+                    // The sprout clock, settled by a connect (this one's
+                    // own news rides `initial_aquarium_care`; the same
+                    // message twice is harmless) or a cut on any device.
+                    // The floor is refreshed below with the population.
+                    ActivityKind::AquariumSprouted { born } if user_id == self.user_id => {
+                        self.aquarium_care.set_sprout(*born);
+                        refresh_floor = true;
+                        Some(crate::app::common::primitives::Banner::info(
+                            "A sprout came up in your tank: leave it, or /aq cut within the week",
+                        ))
+                    }
+                    ActivityKind::AquariumSproutRooted { swimming } if user_id == self.user_id => {
+                        self.aquarium_care.clear_sprout();
+                        refresh_floor = true;
+                        Some(crate::app::common::primitives::Banner::success(
+                            if *swimming {
+                                "Your sprout took root: a wigglewort grows in the tank"
+                            } else {
+                                "Your sprout took root: a wigglewort waits in /shop, the tank is full"
+                            },
+                        ))
+                    }
+                    ActivityKind::AquariumSproutCut if user_id == self.user_id => {
+                        self.aquarium_care.clear_sprout();
+                        refresh_floor = true;
+                        None
+                    }
                     // Everything else on the global feed is somebody else's
                     // business: this subscription only exists for the friend
                     // edges above, the session's own daily wins, and its
@@ -1013,6 +1089,10 @@ impl App {
                     changed = true;
                 }
             }
+        }
+        if refresh_floor {
+            self.refresh_aquarium_population();
+            changed = true;
         }
 
         let sidebar_visible = self.right_sidebar_visible();
@@ -1149,7 +1229,7 @@ impl App {
         // the sidebar, which always carries the eq strip and that sway.
         if self.screen == Screen::Clubhouse
             || self.right_sidebar_visible()
-            || self.last_pet_travel.get().is_some()
+            || self.last_pet_frame.get().is_some()
             || self.show_bonsai_modal
             || (self.show_profile_modal && self.profile_modal_state.bonsai().is_some())
         {
@@ -1163,29 +1243,22 @@ impl App {
         IDLE_TICK
     }
 
-    /// Whether the aquarium tray is actually on screen: entitled, enabled,
-    /// and sitting on the Dashboard Lounge home view. Mirrors render.rs
-    /// (`aquarium_tray_enabled && home_selected`); shared by the tray's
+    /// Whether the reef is actually on screen: the Zen page draws it for
+    /// everyone, owned or not (an unowned tank swims empty under a shop
+    /// caption), and no other page draws it at all. Shared by the sim's
     /// step gate in tick() and the wake cadence, so an aquarium owner
     /// browsing other screens pays no fish frames.
     fn aquarium_tray_visible(&self) -> bool {
-        // The Zen page draws the reef for everyone, owned or not, tray
-        // setting or not: an unowned tank swims empty under a shop caption.
-        if self.screen == Screen::Zen {
-            return true;
+        self.screen == Screen::Zen
+    }
+
+    /// A paired client is playing and unmuted: the same reading the Zen
+    /// page's equalizer paints (`EqState::Playing`), handed to the pet.
+    fn music_playing(&self) -> bool {
+        match self.paired_client_state() {
+            None => false,
+            Some(client) => !client.muted,
         }
-        if !self.show_aquarium_tray || !self.shop_state.entitlements().has_aquarium() {
-            return false;
-        }
-        if self.screen != Screen::Dashboard {
-            return false;
-        }
-        let synthetic_selected = self.chat.synthetic_entry_selected();
-        crate::app::render::dashboard_home_selected(
-            self.chat.lounge_room_id(),
-            self.chat.selected_room_id,
-            synthetic_selected,
-        )
     }
 
     /// Whether the right sidebar draws this frame (the settings draft

@@ -10,7 +10,7 @@ use crate::app::{common::theme, hub::shop::state::ShopState};
 
 pub(crate) struct HubDrawProps<'a> {
     pub shop_state: &'a ShopState,
-    pub pet_species: &'a str,
+    pub pet_species: late_core::models::pet::PetSpecies,
 }
 
 struct HubLayout {

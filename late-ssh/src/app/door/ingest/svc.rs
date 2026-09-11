@@ -264,7 +264,7 @@ impl DoorIngestService {
                 }
                 DoorRunResult::Death => {
                     self.activity
-                        .game_event_task(user_id, ActivityGame::Dcss, death_action(&run));
+                        .game_lost_task(user_id, ActivityGame::Dcss, death_action(&run));
                 }
                 // Walking away is not a story.
                 DoorRunResult::Quit | DoorRunResult::Leaving => {}
@@ -398,7 +398,7 @@ impl DoorIngestService {
                         .game_won_task(user_id, ActivityGame::Nethack, None, None);
                 }
                 DoorRunResult::Death => {
-                    self.activity.game_event_task(
+                    self.activity.game_lost_task(
                         user_id,
                         ActivityGame::Nethack,
                         nethack_death_action(&run),
@@ -542,7 +542,7 @@ impl DoorIngestService {
                     );
                 }
                 DoorRunResult::Death => {
-                    self.activity.game_event_task(
+                    self.activity.game_lost_task(
                         user_id,
                         ActivityGame::Brogue,
                         brogue_death_action(&run),

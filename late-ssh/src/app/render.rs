@@ -270,7 +270,6 @@ struct DrawContext<'a> {
     show_quit_confirm: bool,
     show_mod_modal: bool,
     show_hub_modal: bool,
-    show_aquarium_tray: bool,
     aquarium_state: &'a crate::app::hub::aquarium::state::AquariumState,
     aquarium_care: &'a crate::app::hub::aquarium::state::AquariumCare,
     leaderboard_page: &'a crate::app::leaderboard::state::LeaderboardPageState,
@@ -336,7 +335,7 @@ struct DrawContext<'a> {
     marquee_tick: usize,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
-    pet_species: &'a str,
+    pet_species: late_core::models::pet::PetSpecies,
     news_modal: Option<chat::news::ui::ArticleModalView<'a>>,
     is_draining: bool,
     icon_picker_open: bool,
@@ -378,8 +377,7 @@ impl App {
         // Clear last-frame mouse hit-test rects so screens that don't draw
         // them this frame can't leave a stale target behind.
         self.last_pet_rect.set(None);
-        self.last_pet_bowl_rect.set(None);
-        self.last_pet_travel.set(None);
+        self.last_pet_frame.set(None);
         self.chat.last_composer_rect.set(None);
         // `last_composer_viewport_top` is intentionally NOT reset here: it
         // replays ratatui-textarea's minimal-scroll rule, which needs the
@@ -474,15 +472,6 @@ impl App {
             shell_active_room,
             synthetic_selected,
         );
-        // Pet strip above the composer: pet owners only, with a settings
-        // tweak (draft-aware while the modal is open, like the sidebars).
-        let show_pet_strip_setting = if self.show_settings {
-            self.settings_modal_state.draft().show_pet_strip
-        } else {
-            self.profile_state.profile().show_pet_strip
-        };
-        let pet_strip_enabled =
-            show_pet_strip_setting && self.shop_state.entitlements().has_pet_companion();
         let screen = self.screen;
         // The Zen pages' current room: the selected room, else #lounge.
         let zen_room_id = self.zen_chat_room_id();
@@ -598,12 +587,6 @@ impl App {
             .as_ref()
             .map(|timer| timer.badge(chrono::Utc::now()));
         let dashboard_view = chat::ui::DashboardChatView {
-            pet_strip: pet_strip_enabled.then_some(crate::app::pet::ui::PetView {
-                state: &self.pet_state,
-                pet_rect_slot: Some(&self.last_pet_rect),
-                bowl_rect_slot: Some(&self.last_pet_bowl_rect),
-                travel_slot: Some(&self.last_pet_travel),
-            }),
             activity_ticker: self.chat.activity_ticker(),
             room: dashboard_room,
             messages: dashboard_messages,
@@ -738,9 +721,6 @@ impl App {
             None
         };
         let chat_view = chat::ui::ChatRenderInput {
-            // The pet lives in the Lounge only (DashboardChatView above);
-            // every other room and tab renders without the strip.
-            pet_strip: None,
             activity_ticker: self.chat.activity_ticker(),
             feeds_selected: self.chat.feeds_selected,
             feeds_processing: self.chat.feeds.processing(),
@@ -1046,8 +1026,7 @@ impl App {
             .then_some(crate::app::pet::ui::PetView {
                 state: &self.pet_state,
                 pet_rect_slot: Some(&self.last_pet_rect),
-                bowl_rect_slot: Some(&self.last_pet_bowl_rect),
-                travel_slot: Some(&self.last_pet_travel),
+                frame_slot: Some(&self.last_pet_frame),
             });
         // The clubhouse has no chat panel: #lounge messages float over their
         // authors' heads and the shared composer block pins to the bottom.
@@ -1260,7 +1239,6 @@ impl App {
                         show_quit_confirm: self.show_quit_confirm,
                         show_mod_modal: self.show_mod_modal,
                         show_hub_modal: self.show_hub_modal,
-                        show_aquarium_tray: self.show_aquarium_tray,
                         aquarium_state: &self.aquarium_state,
                         aquarium_care: &self.aquarium_care,
                         leaderboard_page: &self.leaderboard_page,
@@ -1327,7 +1305,7 @@ impl App {
                         marquee_tick: self.marquee_tick,
                         chat_state: &self.chat,
                         user_id: self.user_id,
-                        pet_species: &self.pet_state.species,
+                        pet_species: self.pet_state.species,
                         news_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
                         icon_picker_open: self.icon_picker_open,
@@ -1578,13 +1556,6 @@ impl App {
             inner
         };
 
-        // The aquarium tray lives inside the Lounge chat view only: it is
-        // carved from the top of the lounge's center column and competes
-        // with the chat for space. Every other screen keeps its full area.
-        let aquarium_tray_enabled =
-            ctx.show_aquarium_tray && ctx.shop_state.entitlements().has_aquarium();
-        let mut aquarium_tray_area = None;
-
         let (content_area, sidebar_area) = if zen_page {
             (inner, None)
         } else {
@@ -1604,14 +1575,6 @@ impl App {
                 } else {
                     (None, content_area)
                 };
-                let center_area = if aquarium_tray_enabled && ctx.home_selected {
-                    let (tray, rest) = crate::app::hub::aquarium::ui::carve_top_tray(center_area);
-                    aquarium_tray_area = tray;
-                    rest
-                } else {
-                    center_area
-                };
-
                 if let Some(rail_area) = rail_area {
                     chat::ui::draw_room_list_rail(frame, rail_area, &ctx.chat_view);
                 }
@@ -1903,10 +1866,6 @@ impl App {
                     marquee_tick: ctx.marquee_tick,
                 },
             );
-        }
-
-        if let Some(aquarium_area) = aquarium_tray_area {
-            crate::app::hub::aquarium::ui::draw_top_tray(frame, aquarium_area, ctx.aquarium_state);
         }
 
         if foreground_overlay_open {

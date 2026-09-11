@@ -27,7 +27,9 @@ use super::{
 
 use std::sync::OnceLock;
 
-pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str) {
+use late_core::models::pet::PetSpecies;
+
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: PetSpecies) {
     let sections = Layout::vertical([
         Constraint::Length(1), // heading
         Constraint::Length(1), // breathing
@@ -78,7 +80,7 @@ fn draw_categories(frame: &mut Frame, area: Rect, state: &ShopState) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str) {
+fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: PetSpecies) {
     let columns =
         Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).split(area);
     draw_item_list(frame, columns[0], state);
@@ -244,7 +246,7 @@ fn draw_item_detail(
     state: &ShopState,
     item: Option<&ShopCatalogItem>,
     has_aquarium: bool,
-    pet_species: &str,
+    pet_species: PetSpecies,
 ) {
     let Some(item) = item else {
         return;
@@ -422,13 +424,13 @@ fn draw_item_detail(
         lines.push(Line::from(vec![
             Span::raw("  ascii  "),
             Span::styled(
-                pet_species.to_string(),
+                pet_species.as_str().to_string(),
                 Style::default()
                     .fg(theme::AMBER())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                "   t to toggle cat/dog",
+                "   t for the next: cat, dog, bird",
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]));
@@ -615,7 +617,7 @@ fn truncate_display_width(value: &str, max_width: usize) -> String {
     out
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &str) {
+fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: PetSpecies) {
     let selected = state.selected_item();
     let has_aquarium = state.entitlements().has_aquarium();
     let enter_label = if selected.is_some_and(|item| item.is_aquarium_fish() && !has_aquarium) {
@@ -652,7 +654,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
     if selected.is_some_and(|item| item.is_pet_companion() && item.owned) {
         spans.extend([
             Span::styled("  t", key),
-            Span::styled(" toggle cat/dog", text),
+            Span::styled(" cat/dog/bird", text),
         ]);
     }
     if selected.is_some_and(|item| item.is_aquarium_fish()) {
