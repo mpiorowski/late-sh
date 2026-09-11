@@ -9,7 +9,18 @@ name: deploy_cli
 # identity) whose bundle ships next to it as <binary>.sigstore.json, and
 # sha256sums.txt is uploaded to the GitHub Release as well as to R2. The
 # installers read checksums from GitHub and binaries from R2, so tampering
-# with the bucket alone cannot ship a different binary.
+# with the bucket alone cannot ship a different binary to anyone running a
+# trusted copy of the installer.
+#
+# Two rules keep the provenance honest:
+# - The workflow must run on the release tag itself. The Sigstore identity
+#   and the recorded source commit come from the OIDC token, which carries
+#   the ref the workflow ran on, not the ref checked out. A manual redeploy
+#   is therefore `gh workflow run deploy_cli.yml --ref <tag> -f release_tag=<tag>`;
+#   build_cli refuses any other ref.
+# - A published tag is immutable. The checksum file on the GitHub Release is
+#   uploaded once; a rebuild that produces different bytes fails to publish
+#   and ships under a new tag instead.
 
 on:
   workflow_call:
@@ -25,7 +36,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag to deploy, for example v0.27.11-cli"
+        description: "Release tag to deploy, for example v0.27.11-cli. Dispatch on that same tag: gh workflow run deploy_cli.yml --ref <tag> -f release_tag=<tag>"
         required: true
         type: string
       environment:
@@ -92,6 +103,20 @@ jobs:
             target: x86_64-pc-windows-msvc
             binary_name: late.exe
     steps:
+      # The attestation identity and its source commit are taken from the
+      # OIDC token, which reflects the ref this run started on. Checking out
+      # the tag below only changes the files being built, so a dispatch from
+      # main would sign main's commit as the release. Refuse that.
+      - name: assert_ref_is_release_tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [[ "$GITHUB_REF" != "refs/tags/${RELEASE_TAG}" ]]; then
+            echo "this workflow must run on refs/tags/${RELEASE_TAG}, got ${GITHUB_REF}; redeploy with: gh workflow run deploy_cli.yml --ref ${RELEASE_TAG} -f release_tag=${RELEASE_TAG}" >&2
+            exit 1
+          fi
+
       - name: checkout
         uses: actions/checkout@v5
         with:
@@ -318,14 +343,44 @@ jobs:
       # GitHub Release, not the copy on R2. This runs before any bucket
       # upload so a tag never exists on R2 without its GitHub checksums,
       # which would make every install of it fail closed.
+      #
+      # A published tag is immutable: the checksum asset is written once.
+      # Overwriting it with a rebuild would make every install of the tag
+      # fail closed until the new binaries reach R2, and for good if that
+      # upload never lands. A rebuild that matches (a re-run of failed jobs
+      # reuses the same artifacts) is fine; one that differs ships under a
+      # new tag. To retry a tag on purpose, delete the asset by hand first:
+      # gh release delete-asset <tag> sha256sums.txt
       - name: upload_release_checksums_to_github
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${RELEASE_TAG}" \
-            "publish/releases/${RELEASE_TAG}/sha256sums.txt" \
+          checksums="publish/releases/${RELEASE_TAG}/sha256sums.txt"
+          has_checksums="$(gh release view "${RELEASE_TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --clobber
+            --json assets \
+            --jq '[.assets[].name] | index("sha256sums.txt") != null')"
+          case "$has_checksums" in
+            false)
+              gh release upload "${RELEASE_TAG}" "$checksums" --repo "${GITHUB_REPOSITORY}"
+              ;;
+            true)
+              gh release download "${RELEASE_TAG}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --pattern sha256sums.txt \
+                --output published-sha256sums.txt
+              if cmp -s "$checksums" published-sha256sums.txt; then
+                echo "sha256sums.txt for ${RELEASE_TAG} is already published and matches this build"
+              else
+                echo "sha256sums.txt for ${RELEASE_TAG} is already published and differs from this build; a published tag is immutable, ship the rebuild under a new tag" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "unexpected answer from gh release view: ${has_checksums}" >&2
+              exit 1
+              ;;
+          esac
 
       - name: upload_release_distribution
         run: |

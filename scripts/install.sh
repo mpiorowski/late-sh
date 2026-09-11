@@ -7,7 +7,9 @@ readonly LATE_DEFAULT_BASE_URL="https://cli.late.sh"
 # Checksums are read from the GitHub Release, never from the download host:
 # a binary served by cli.late.sh must match a sha256sums.txt served by
 # GitHub, so swapping files on one origin is not enough to ship a different
-# binary. Every release also carries a Sigstore provenance bundle next to
+# binary. That holds for a trusted copy of this script; the script itself is
+# also served from cli.late.sh, so `curl ... | sh` trusts the host for the
+# installer. Every release also carries a Sigstore provenance bundle next to
 # each binary (<binary>.sigstore.json); see late-cli/README.md to verify it.
 readonly LATE_DEFAULT_CHECKSUM_BASE_URL="https://github.com/mpiorowski/late-sh/releases/download"
 VERBOSE=0

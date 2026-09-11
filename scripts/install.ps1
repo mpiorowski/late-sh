@@ -7,12 +7,19 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+# github.com only speaks TLS 1.2 or newer, and Windows PowerShell 5.1 on
+# older .NET hosts does not offer TLS 1.2 unless asked. Without this the
+# checksum fetch fails with "Could not create SSL/TLS secure channel".
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
 $LateBinName = "late.exe"
 $LateDefaultBaseUrl = "https://cli.late.sh"
 # Checksums are read from the GitHub Release, never from the download host:
 # a binary served by cli.late.sh must match a sha256sums.txt served by
 # GitHub, so swapping files on one origin is not enough to ship a different
-# binary. Every release also carries a Sigstore provenance bundle next to
+# binary. That holds for a trusted copy of this script; the script itself is
+# also served from cli.late.sh, so `irm ... | iex` trusts the host for the
+# installer. Every release also carries a Sigstore provenance bundle next to
 # each binary (<binary>.sigstore.json); see late-cli/README.md to verify it.
 $LateDefaultChecksumBaseUrl = "https://github.com/mpiorowski/late-sh/releases/download"
 
