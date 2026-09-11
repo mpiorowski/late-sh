@@ -394,22 +394,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     // not seen, or the cup. One claim per login, the gallery logs its
     // own failures.
     let splash_piece = state.gallery_service.claim_splash_piece(user_id).await;
-    let initial_announcements = match state.db.get().await {
-        Ok(client) => {
-            match crate::app::announcements::load_login_announcements(&client, user_id).await {
-                Ok(announcements) => announcements,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load login announcements");
-                    None
-                }
-            }
-        }
-        Err(e) => {
-            tracing::warn!(error = ?e, "failed to get db client for login announcements");
-            None
-        }
-    };
-
     let initial_door_rcs = match state.door_rc_service.list(user_id).await {
         Ok(rcs) => rcs,
         Err(e) => {
@@ -577,7 +561,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         crown_service: Some(state.crown_service.clone()),
         pot_service: Some(state.pot_service.clone()),
         activity_feed_rx,
-        initial_announcements,
         user_id,
         permissions,
         artboard_banned: artboard_ban.is_some(),

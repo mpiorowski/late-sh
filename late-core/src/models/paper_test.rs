@@ -85,6 +85,13 @@ async fn candidates_count_the_window_and_skip_settled_rooms() {
         .await
         .expect("private room");
     say(&client, &db, &private, "erin", 9).await;
+    // #announcements prints verbatim at the top of the paper, never as a
+    // column, so it is not a candidate however busy.
+    let announcements = ChatRoom::find_non_dm_by_slug(&client, "announcements")
+        .await
+        .expect("find announcements")
+        .expect("announcements room");
+    say(&client, &db, &announcements, "operator", 7).await;
 
     let candidates = PaperRoomEdition::list_candidates(
         &client,

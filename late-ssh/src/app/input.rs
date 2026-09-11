@@ -731,34 +731,6 @@ fn handle_image_modal_input(app: &mut App, event: &ParsedInput) {
     }
 }
 
-fn handle_login_announcements_input(app: &mut App, event: &ParsedInput) {
-    match event {
-        ParsedInput::Byte(0x1B | b'\r' | b'\n' | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
-            dismiss_login_announcements(app);
-        }
-        ParsedInput::Byte(b'j' | b'J') | ParsedInput::Char('j' | 'J') => {
-            if let Some(announcements) = app.login_announcements.as_mut() {
-                announcements.scroll(1);
-            }
-        }
-        ParsedInput::Byte(b'k' | b'K') | ParsedInput::Char('k' | 'K') => {
-            if let Some(announcements) = app.login_announcements.as_mut() {
-                announcements.scroll(-1);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn dismiss_login_announcements(app: &mut App) {
-    let Some(announcements) = app.login_announcements.take() else {
-        return;
-    };
-    if let Some(read_at) = announcements.latest_displayed_at() {
-        app.chat.mark_room_read_at(announcements.room_id, read_at);
-    }
-}
-
 fn close_image_modal(app: &mut App) {
     let needs_full_repaint = matches!(
         app.terminal_image_protocol,
@@ -811,12 +783,8 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.login_announcements_visible() {
-        handle_login_announcements_input(app, &event);
-        return;
-    }
-    // The Late Edition sits right under the announcements: the operator's
-    // word first, then graybeard's, then everything else.
+    // The Late Edition sits above everything else: it is the first thing
+    // a session sees after the splash and the tour.
     if app.paper.modal_visible() {
         crate::app::paper::input::handle_input(app, &event);
         return;
@@ -827,7 +795,7 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
     // and bearer token), so a stray keystroke while reading them must not
     // take the values off the screen. Esc lands in `dispatch_escape`; every
     // other event is swallowed here. It sits above everything except the
-    // announcements, so nothing else steals the keys either.
+    // paper, so nothing else steals the keys either.
     if app.stream_modal.is_some() {
         return;
     }
@@ -2198,10 +2166,6 @@ fn dispatch_escape(app: &mut App) {
         app.booth_modal_state.close();
         return;
     }
-    if app.login_announcements_visible() {
-        dismiss_login_announcements(app);
-        return;
-    }
     if app.paper.modal_visible() {
         app.paper.close_modal();
         return;
@@ -2923,7 +2887,6 @@ fn chat_scroll_clicks_blocked(app: &App) -> bool {
         || app.show_quit_confirm
         || app.show_bonsai_modal
         || app.show_lobby_modal
-        || app.login_announcements_visible()
         || app.icon_picker_open
 }
 

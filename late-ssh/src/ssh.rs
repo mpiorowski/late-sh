@@ -867,21 +867,6 @@ impl russh::server::Handler for ClientHandler {
             key_fingerprint.as_deref(),
         )
         .await;
-        let initial_announcements = match self.state.db.get().await {
-            Ok(client) => {
-                match crate::app::announcements::load_login_announcements(&client, user_id).await {
-                    Ok(announcements) => announcements,
-                    Err(e) => {
-                        tracing::warn!(error = ?e, "failed to load login announcements");
-                        None
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to get db client for login announcements");
-                None
-            }
-        };
         let initial_door_rcs = match self.state.door_rc_service.list(user_id).await {
             Ok(rcs) => rcs,
             Err(e) => {
@@ -1055,7 +1040,6 @@ impl russh::server::Handler for ClientHandler {
             crown_service: Some(self.state.crown_service.clone()),
             pot_service: Some(self.state.pot_service.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
-            initial_announcements,
             user_id,
             permissions,
             artboard_banned: artboard_ban.is_some(),

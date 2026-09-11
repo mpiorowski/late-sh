@@ -1,8 +1,5 @@
 pub mod activity;
 pub mod ai;
-pub mod announcements;
-#[cfg(test)]
-mod announcements_test;
 pub mod arcade;
 pub mod artboard;
 pub mod audio;

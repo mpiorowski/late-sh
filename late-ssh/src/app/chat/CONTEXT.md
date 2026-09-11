@@ -79,7 +79,6 @@ late-ssh/src/app/chat/           # adjacent _test.rs files, wired with #[cfg(tes
 |-- news/svc_test.rs             # ArticleService DB-backed coverage
 |-- showcase/svc_test.rs         # ShowcaseService DB-backed coverage
 `-- work/svc_test.rs             # WorkService DB-backed coverage
-late-ssh/src/app/announcements_test.rs   # Login #announcements loading/read-cursor behavior
 ```
 
 Core models used by chat live in `late-core/src/models/`:
@@ -181,10 +180,8 @@ System-feed lines: the `#lounge` activity feed (`app/activity/lounge.rs`) posts 
 
 `ChatSnapshot` is summary data. `RoomTailLoaded` is history data. Do not merge those responsibilities back together.
 
-Login announcements:
-- `app::announcements::load_login_announcements` runs during SSH session bootstrap, outside `ChatState`.
-- If public `#announcements` exists, the user is idempotently joined and up to 10 oldest unread messages from other users are loaded from `chat_messages` without marking them read. Dismissing the modal advances `chat_room_members.last_read_at` to `latest_displayed_at()`.
-- The resulting modal is stored on `App`, appears only after splash/settings are gone, consumes input while visible, scrolls with j/k, and closes on Enter/Esc/q.
+Announcements:
+- There is no login `#announcements` modal (removed 2026-09-11). Yesterday's posts print verbatim at the top of The Late Edition (`app/paper`, `ChatMessage::list_public_room_between_with_author`); `#announcements` unread counts behave like any other room's, and the paper never touches `chat_room_members.last_read_at`.
 
 ---
 
@@ -1182,7 +1179,6 @@ Repo-wide rule from root context still applies:
 - LLM agents must not run `cargo test`, `cargo nextest`, or `cargo clippy`; note expected commands for the human owner instead.
 
 Existing DB-backed coverage:
-- `src/app/announcements_test.rs`: login #announcements loading, read cursor behavior, paging.
 - `svc_test.rs`: send, reactions, summaries, room tails, ignored users, discover listing/joining, public room create/fill, delete events, ignore/unignore, message search (membership/game-room/ignored exclusions, room scoping, LIKE-metacharacter escaping, context-window ordering).
 - `news/svc_test.rs`: article snapshots, empty list, author resolution, duplicate URL failure, direct DB inserts appearing after list refresh.
 - `sheet_test.rs`: character sheet model/upsert plus `open_sheet_task`/`save_sheet_task` room-scoped authorization.
@@ -1221,7 +1217,6 @@ Test gaps:
 - DM/private message bodies must not leak to non-members through broadcast handling.
 - Ignore filtering covers all rooms including DMs, and also hides bot replies whose `reply_to_user_id` is ignored. DMs with an ignored peer are hidden from the room rail entirely.
 - `#announcements` admin-only currently depends on the provided `room_slug`; stale/missing slug is a fragile path.
-- Login `#announcements` modal marks `chat_room_members.last_read_at` only when dismissed; do not add a separate announcement-read table unless the room model itself changes.
 - Reaction tasks are async; UI should not assume optimistic success.
 - A gild marker repaints off the Postgres notify, not off `evt_tx`. If `start_message_listener_task` is not running (tests, or a process wired without it) the marker only appears on the next room tail load. Do not "fix" that by broadcasting locally as well: two paths would mean two repaints and a marker that behaves differently on the replica that sold it.
 - Poll create/vote tasks are async; `ChatEvent::PollUpdated` patches the local active-poll map and `ChatSnapshot.active_polls` refreshes authoritative visibility. Successful poll creation spawns a sleep-until-expiry finalizer that atomically claims the expired poll in Postgres, marks it inactive, and posts compact results into the room as the poll creator. `ChatService::start_poll_finalizer_recovery_task` runs a coarse 10-minute recovery scan for expired active polls so restarts/redeploys do not strand result posts; the DB claim is the cross-replica duplicate guard.
