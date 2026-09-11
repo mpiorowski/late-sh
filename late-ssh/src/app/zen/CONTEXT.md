@@ -80,9 +80,14 @@ names a key: the lobby's compact footer lost its key pair to the title.
 
 When not composing: Esc or `Ctrl+F` leave. With a chat tile focused: `[`
 `]` rebind it to the previous or next joined room (a layout edit, saved),
-`i` / Enter compose in its room, `j` `k` select in it (the global chat
-handler's keys, which the page swallows while any other tile is focused,
-so a page of several chats never scrolls one you are not looking at). The
+`i` / Enter compose in its room, `j` `k` select in it, and the message
+actions (`d` `r` `e` `p` `c` `t` `G`, Enter, the reaction leader) act on
+its selection: the page routes them to `handle_message_action_in_room`
+through the same two gates the house table uses (`chat_priority_key`,
+`selected_chat_key`), so `r` still flips the tile while nothing is
+selected. With any other tile focused the chat keys are swallowed, so a
+page of several chats never scrolls one you are not looking at
+(`input_flow_test.rs`). The
 first opening of the page in a session focuses the first chat tile; a left
 click focuses the tile under it and falls through to the pet, composer,
 and message clicks of that tile. Aquarium `a` feed (free, once a day, +100 chips on the first feed).
@@ -96,7 +101,7 @@ focused tile's kind, `S` splits it (row when wide, column when tall), `X`
 closes it (the last tile stays), `<` `>` trade one column of width and
 `{` `}` one row of height with the nearest split of that direction (i3's
 rule; a banner says so when there is none), `r` flips the parent, `z` zooms, `b` `g` `t` cycle
-border, gap, titles, `R` resets to the default layout. `S` is refused at
+border, gap, titles, `R` resets to the default layout, focus on its chat tile. `S` is refused at
 `MAX_TILES` (32): each split nests the stored JSON one level deeper and
 serde_json stops reading at 128, so an uncapped held key would write a
 settings row the login path can never parse. Every layout edit marks the

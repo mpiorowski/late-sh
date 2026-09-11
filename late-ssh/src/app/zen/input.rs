@@ -23,9 +23,9 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
 
 /// The chat keys and the tank feed `a`. The chat keys belong to the
 /// focused chat tile: `[` `]` rebind it to the previous or next joined
-/// room, `i` and Enter write in its room, and `j` `k` (which the global
-/// chat handler owns) select in it; with any other tile focused all of
-/// them are swallowed, so a page of several chats never scrolls one you
+/// room, `i` and Enter write in its room, `j` `k` select in it, and the
+/// message actions act on its selection; with any other tile focused all
+/// of them are swallowed, so a page of several chats never scrolls one you
 /// are not looking at. The sprout is cut from the composer (`/aq cut`), on
 /// purpose: no page key for it. The pet has no key at all: it is petted
 /// with a click and reads the session for the rest.
@@ -34,6 +34,22 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
         return false;
     };
     let chat_focused = app.zen.focused_kind() == Some(TileKind::Chat);
+    // The focused chat tile's message keys, the way the house table routes
+    // them to its embedded chat: `i`, `j` `k`, Ctrl+D/U, and the reaction
+    // leader always; `d` `r` `e` `p` `c` `t` `G` and Enter only while a
+    // message in that room is selected, so `r` flips the tile otherwise.
+    if chat_focused && let Some(room_id) = app.zen_chat_room_id() {
+        if crate::app::chat::input::chat_priority_key(app, byte)
+            && crate::app::chat::input::handle_message_action_in_room(app, room_id, byte)
+        {
+            return true;
+        }
+        if crate::app::chat::input::selected_chat_key(app, room_id, byte)
+            && crate::app::chat::input::handle_message_action_in_room(app, room_id, byte)
+        {
+            return true;
+        }
+    }
     match byte {
         b'[' => {
             if chat_focused {

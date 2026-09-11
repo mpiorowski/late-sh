@@ -189,4 +189,7 @@ fn the_page_holds_ten_chats_and_the_first_opening_lands_on_the_first_one() {
     assert_eq!(fresh.focused_kind(), Some(TileKind::Bonsai));
     // With the bonsai focused the first chat tile is still the active one.
     assert_eq!(fresh.active_chat_index(), Some(0));
+    // A reset lands on the chat tile too.
+    fresh.reset();
+    assert_eq!(fresh.focused_kind(), Some(TileKind::Chat));
 }

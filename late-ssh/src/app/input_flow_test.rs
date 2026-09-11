@@ -2593,3 +2593,69 @@ async fn artboard_gallery_hangs_a_framed_piece_from_the_rail() {
     app.handle_input(b"1");
     wait_for_render_contains(&mut app, " Home ").await;
 }
+
+#[tokio::test]
+async fn zen_chat_keys_belong_to_the_focused_chat_tile() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "zen-jk-viewer").await;
+    let author = create_test_user(&test_db.db, "zen-jk-author").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, lounge.id, author.id)
+        .await
+        .expect("join author");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "zen select target".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-jk-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "zen select target").await;
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "Esc back").await;
+
+    // The first opening lands on the chat tile: `j` selects in its room.
+    assert_eq!(
+        app.zen.focused_kind(),
+        Some(crate::app::zen::state::TileKind::Chat)
+    );
+    app.handle_input(b"j");
+    assert_eq!(
+        app.chat.selected_message_id,
+        Some(message.id),
+        "j on the focused chat tile selects the newest message"
+    );
+
+    // Focus moves off the chat: the selection is dropped and `j` is
+    // swallowed rather than scrolling a chat nobody is looking at.
+    app.handle_input(b"\x1b[D");
+    assert_ne!(
+        app.zen.focused_kind(),
+        Some(crate::app::zen::state::TileKind::Chat)
+    );
+    assert_eq!(app.chat.selected_message_id, None);
+    app.handle_input(b"j");
+    assert_eq!(
+        app.chat.selected_message_id, None,
+        "j with the bonsai focused selects nothing"
+    );
+
+    // `i` on the chat tile composes in its room; elsewhere it does nothing.
+    app.handle_input(b"i");
+    assert!(!app.chat.composing, "i with the bonsai focused composes nothing");
+    app.handle_input(b"\x1b[C");
+    app.handle_input(b"i");
+    assert!(app.chat.composing, "i on the focused chat tile composes");
+}

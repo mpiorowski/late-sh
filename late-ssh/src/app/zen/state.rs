@@ -651,10 +651,12 @@ impl ZenState {
         self.rice.look.titles = !self.rice.look.titles;
     }
 
+    /// Back to the default layout, with the focus on its chat tile so the
+    /// chat keys work at once, as on the first opening.
     pub fn reset(&mut self) {
         self.rice = RiceLayout::default();
-        self.focus = 0;
         self.zoomed = false;
+        self.focus = self.first_tile_of(TileKind::Chat).unwrap_or(0);
     }
 
     /// Ordinal of the first tile of `kind`, for surfaces that can only be
