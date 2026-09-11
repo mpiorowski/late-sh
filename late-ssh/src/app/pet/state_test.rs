@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use late_core::models::pet::{PetMood, PetSpecies};
+use late_core::models::pet::{PetCompanion, PetMood, PetSpecies};
 use late_core::test_utils::create_test_user;
 use ratatui::layout::Rect;
 
@@ -128,6 +128,9 @@ async fn the_pet_walks_after_the_cursor_and_lets_go_when_it_leaves() {
     let mut state = fresh_state("pet-follows").await;
     assert_eq!(state.species, PetSpecies::Cat);
     let now = Instant::now();
+    // The first tick wakes the stored (asleep) pet; after that a quiet
+    // tick has nothing to report.
+    assert!(state.tick(tick(0, now, None, None)), "the wake-up");
     assert!(!state.tick(tick(0, now, None, None)), "nothing to report");
     assert_eq!(state.perch(), None);
 
@@ -227,4 +230,40 @@ async fn a_tank_beside_the_box_rides_the_frame_inputs() {
     };
     state.tick(tick(2, now, Some(beside), None));
     assert_eq!(state.perch(), None);
+}
+
+#[tokio::test]
+async fn an_owner_coming_back_wakes_the_stored_sleeping_pet_on_the_profile() {
+    // The last session wrote `asleep` on its way out. A new session that
+    // is active but quiet (no chat, win, loss, music, or petting) reads
+    // idle, and that has to reach the row: otherwise the profile shows a
+    // sleeping pet for an owner who is right there.
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "pet-wakes").await;
+    let svc = super::super::svc::PetService::new(test_db.db.clone());
+    let stored = svc.ensure_pet(user.id).await.expect("ensure pet");
+    assert_eq!(stored.mood(), PetMood::Asleep);
+    let mut state = PetState::new(user.id, svc, stored);
+
+    let now = Instant::now();
+    let awake_and_quiet = PetTick {
+        persist: true,
+        ..tick(0, now, None, None)
+    };
+    assert!(state.tick(awake_and_quiet), "waking up is a change");
+    assert_eq!(state.mood(), PetMood::Idle);
+
+    let db = test_db.db.clone();
+    crate::test_helpers::wait_until(
+        || async {
+            let client = db.get().await.expect("db client");
+            PetCompanion::ensure(&client, user.id)
+                .await
+                .expect("reload")
+                .mood()
+                == PetMood::Idle
+        },
+        "the row says idle",
+    )
+    .await;
 }

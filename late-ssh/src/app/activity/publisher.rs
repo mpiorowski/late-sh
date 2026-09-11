@@ -254,13 +254,13 @@ impl ActivityPublisher {
         });
     }
 
-    pub fn went_live_task(&self, user_id: Uuid, title: Option<String>) {
+    pub fn went_live_task(&self, user_id: Uuid, title: Option<String>, watch_url: String) {
         let publisher = self.clone();
         tokio::spawn(async move {
             let username = publisher.username_for(user_id).await;
-            let _ = publisher
-                .tx
-                .send(ActivityEvent::went_live(user_id, username, title));
+            let _ = publisher.tx.send(ActivityEvent::went_live(
+                user_id, username, title, watch_url,
+            ));
         });
     }
 

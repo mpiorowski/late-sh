@@ -135,3 +135,30 @@ fn lounge_includes_the_pots_draw_line() {
     // Feed bodies never carry an @.
     assert!(!drawn.action.contains('@'));
 }
+
+/// Going live headlines too: a real #lounge row with the streamer as an
+/// @mention, the title the ticker line already made mention-safe, and the
+/// watch URL, so someone who missed the ticker can still walk in.
+#[test]
+fn lounge_headlines_a_stream_going_live_with_the_title_and_the_watch_url() {
+    let url = "https://late.sh/live/abc".to_string();
+    let titled = ActivityEvent::went_live(
+        Uuid::nil(),
+        "mat",
+        Some("refactoring the render loop with @mira".to_string()),
+        url.clone(),
+    );
+    assert!(lounge_includes(&titled));
+    assert_eq!(
+        lounge_headline(&titled).as_deref(),
+        Some(
+            "\u{1F4FA} @mat is live: refactoring the render loop with mira.\nhttps://late.sh/live/abc"
+        )
+    );
+
+    let untitled = ActivityEvent::went_live(Uuid::nil(), "mat", None, url);
+    assert_eq!(
+        lounge_headline(&untitled).as_deref(),
+        Some("\u{1F4FA} @mat is live.\nhttps://late.sh/live/abc")
+    );
+}

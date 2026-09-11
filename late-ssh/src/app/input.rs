@@ -3443,7 +3443,10 @@ pub(crate) fn cut_aquarium_sprout_globally(app: &mut App) {
         ));
         return;
     }
-    match app.aquarium_care.cut_sprout() {
+    match app
+        .aquarium_care
+        .cut_sprout(chrono::Utc::now().date_naive())
+    {
         crate::app::hub::aquarium::state::CutOutcome::Cut => {
             app.refresh_aquarium_population();
             app.aquarium_service.cut_task(app.user_id);
@@ -3454,6 +3457,11 @@ pub(crate) fn cut_aquarium_sprout_globally(app: &mut App) {
         crate::app::hub::aquarium::state::CutOutcome::NothingToCut => {
             app.banner = Some(crate::app::common::primitives::Banner::error(
                 "Nothing to cut: the floor is bare",
+            ));
+        }
+        crate::app::hub::aquarium::state::CutOutcome::Rooted => {
+            app.banner = Some(crate::app::common::primitives::Banner::error(
+                "Too late to cut: the sprout rooted, a wigglewort grows at your next login",
             ));
         }
     }

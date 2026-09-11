@@ -457,6 +457,9 @@ impl App {
             self.banner = Some(b);
             changed = true;
         }
+        if daily_tick.own_win {
+            self.pet_state.note_win(Instant::now());
+        }
         if daily_tick.own_loss {
             self.pet_state.note_loss(Instant::now());
         }
@@ -963,7 +966,7 @@ impl App {
                     ActivityKind::UserJoined => {
                         self.chat.note_friend_join(user_id, &event.username)
                     }
-                    ActivityKind::WentLive { title } => {
+                    ActivityKind::WentLive { title, .. } => {
                         self.chat
                             .note_friend_went_live(user_id, &event.username, title.as_deref())
                     }
@@ -988,13 +991,14 @@ impl App {
                         None
                     }
                     // Any other win of the session's own, and any death: the
-                    // pet's pride and sulk (a lost daily match arrives
-                    // through the daily state below, since the feed names
-                    // only the winner).
+                    // pet's pride and sulk. Daily matches arrive through the
+                    // daily state above, not here: the feed's `DailyResult`
+                    // names only the winner of a win and one player of a
+                    // draw, so it cannot tell pride from a draw or reach the
+                    // loser at all.
                     ActivityKind::GameWon { .. }
                     | ActivityKind::GameScored { .. }
                     | ActivityKind::BossSlain { .. }
-                    | ActivityKind::DailyResult { .. }
                         if user_id == self.user_id =>
                     {
                         self.pet_state.note_win(Instant::now());

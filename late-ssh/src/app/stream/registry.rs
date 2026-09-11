@@ -260,6 +260,7 @@ pub struct ObsPublisherPoll {
     pub user_id: Uuid,
     pub title: String,
     pub ingress_id: String,
+    pub stream_id: String,
 }
 
 /// Everything the publisher grant endpoint needs to mint a publish ticket.
@@ -502,6 +503,7 @@ impl StreamRegistry {
                     user_id: entry.user_id,
                     title: entry.title.clone(),
                     ingress_id: ingress.ingress_id.clone(),
+                    stream_id: entry.stream_id.clone(),
                 }),
             })
             .collect()

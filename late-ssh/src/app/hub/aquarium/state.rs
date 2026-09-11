@@ -63,11 +63,14 @@ pub(crate) enum CareOutcome {
     AlreadyFedToday,
 }
 
-/// Outcome of a cut press: the sprout is gone, or there was none to cut.
+/// Outcome of a cut press: the sprout is gone, there was none to cut, or
+/// it is past its week and already a plant in the row's eyes (the session
+/// only learns that at the next connect, so it stays drawn).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CutOutcome {
     Cut,
     NothingToCut,
+    Rooted,
 }
 
 /// What the Zen tile's fourteen boxes show.
@@ -224,12 +227,18 @@ impl AquariumCare {
         self.sprout = None;
     }
 
-    /// The cut press. The service writes it behind the row's own gate; the
-    /// caller only learns whether there was a sprout to cut.
-    pub(crate) fn cut_sprout(&mut self) -> CutOutcome {
-        match self.sprout.take() {
-            Some(_) => CutOutcome::Cut,
+    /// The cut press, behind the same week the row's own gate applies
+    /// (`sprout_rooted`): a sprout past it is a plant the next connect will
+    /// grow, so the press is refused and the sprout stays drawn. The
+    /// service writes a cut behind the row's gate as well.
+    pub(crate) fn cut_sprout(&mut self, today: NaiveDate) -> CutOutcome {
+        match self.sprout {
             None => CutOutcome::NothingToCut,
+            Some(born) if care_rules::sprout_rooted(born, today) => CutOutcome::Rooted,
+            Some(_) => {
+                self.sprout = None;
+                CutOutcome::Cut
+            }
         }
     }
 

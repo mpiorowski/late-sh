@@ -144,8 +144,10 @@ pub enum ActivityKind {
     /// stream room is on. Fired on the pending -> live transition only,
     /// never at `/golive` command time, so no line ever points at a black
     /// screen. There is no matching "stream ended" event (noise).
+    /// `watch_url` is the stream's watch page, for the #lounge headline.
     WentLive {
         title: Option<String>,
+        watch_url: String,
     },
     /// A named late.sh user arrived at someone's live stream, through
     /// `/watch @user` or by opening the stream room. `streamer` is the
@@ -771,7 +773,13 @@ impl ActivityEvent {
 
     /// A stream went on air: "mat is live: refactoring the render loop".
     /// The line is the invitation; the room row is where the party moves.
-    pub fn went_live(user_id: Uuid, username: impl Into<String>, title: Option<String>) -> Self {
+    /// `watch_url` rides along for the headline (`lounge_headline`).
+    pub fn went_live(
+        user_id: Uuid,
+        username: impl Into<String>,
+        title: Option<String>,
+        watch_url: String,
+    ) -> Self {
         let action = match feed_safe_title(title.as_deref()) {
             Some(title) => format!("is live: {title}"),
             None => "is live".to_string(),
@@ -779,7 +787,7 @@ impl ActivityEvent {
         Self::new(
             Some(user_id),
             username,
-            ActivityKind::WentLive { title },
+            ActivityKind::WentLive { title, watch_url },
             action,
         )
     }

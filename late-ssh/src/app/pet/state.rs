@@ -24,8 +24,8 @@ pub const PET_WIDTH: usize = 8;
 pub const PET_HEIGHT: usize = 3;
 
 /// What the session has told the pet, as the moment each thing last
-/// happened. Nothing here is persisted: a fresh session starts blank and the
-/// pet wakes up idle.
+/// happened. Nothing here is persisted: a fresh session starts blank, so
+/// the first tick reads idle (or asleep, for a session nobody touches).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MoodSignals {
     /// A click on the pet.
@@ -147,6 +147,7 @@ pub struct PetState {
 impl PetState {
     pub fn new(user_id: Uuid, svc: PetService, companion: PetCompanion) -> Self {
         let species = companion.species();
+        let mood = companion.mood();
         Self {
             user_id,
             svc,
@@ -155,8 +156,11 @@ impl PetState {
             created: companion.created,
             adopted_at: companion.adopted_at,
             signals: MoodSignals::default(),
-            // A session starts awake: the first tick reads the real thing.
-            mood: PetMood::Idle,
+            // The mood the row holds (`asleep` after the last session left):
+            // the first tick reads the real thing and, since it differs,
+            // writes it, so the profile stops saying asleep the moment the
+            // owner is back.
+            mood,
             perch: None,
             animation_ticks: 0,
         }

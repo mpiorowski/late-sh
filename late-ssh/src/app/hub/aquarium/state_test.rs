@@ -62,13 +62,20 @@ fn the_shield_minds_the_tank_and_the_clock_resumes_when_it_lapses() {
 fn the_sprout_stands_until_it_is_cut_and_a_bare_floor_has_nothing_to_cut() {
     let mut care = fed_on(1, 3);
     assert!(!care.sprout_visible());
-    assert_eq!(care.cut_sprout(), CutOutcome::NothingToCut);
+    assert_eq!(care.cut_sprout(day(3)), CutOutcome::NothingToCut);
 
     care.set_sprout(day(3));
     assert!(care.sprout_visible());
-    assert_eq!(care.cut_sprout(), CutOutcome::Cut);
+    assert_eq!(care.cut_sprout(day(9)), CutOutcome::Cut, "the seventh day");
     assert!(!care.sprout_visible());
-    assert_eq!(care.cut_sprout(), CutOutcome::NothingToCut);
+    assert_eq!(care.cut_sprout(day(9)), CutOutcome::NothingToCut);
+
+    // Past its week in a live session: the row would refuse the cut and
+    // root it at the next connect, so the press is refused here too and
+    // the sprout stays drawn until the plant arrives.
+    care.set_sprout(day(3));
+    assert_eq!(care.cut_sprout(day(10)), CutOutcome::Rooted);
+    assert!(care.sprout_visible(), "still drawn: the plant comes at connect");
 
     // Rooted or cut elsewhere: the service's event clears it the same way.
     care.set_sprout(day(3));

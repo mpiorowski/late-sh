@@ -541,7 +541,8 @@ impl StreamService {
         {
             tracing::info!(user_id = %info.user_id, "stream went live");
             let title = Some(info.title).filter(|title| !title.trim().is_empty());
-            self.activity.went_live_task(info.user_id, title);
+            let watch_url = self.watch_url(&info.stream_id);
+            self.activity.went_live_task(info.user_id, title, watch_url);
         }
         outcome
     }
@@ -672,7 +673,8 @@ impl StreamService {
             {
                 tracing::info!(user_id = %poll.user_id, "stream went live via obs");
                 let title = Some(poll.title).filter(|title| !title.trim().is_empty());
-                self.activity.went_live_task(poll.user_id, title);
+                let watch_url = self.watch_url(&poll.stream_id);
+                self.activity.went_live_task(poll.user_id, title, watch_url);
             }
         }
     }

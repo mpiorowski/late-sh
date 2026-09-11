@@ -218,6 +218,14 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
                 thousands(*total_tickets)
             ))
         }
+        // A stream on air is an invitation that outlives the ticker: who,
+        // what they called it (`action` already carries the mention-safe
+        // title), and where to watch, on its own row so the URL is easy to
+        // pick out and copy. The streamer is the one @mention.
+        ActivityKind::WentLive { watch_url, .. } => Some(format!(
+            "\u{1F4FA} @{} {}.\n{watch_url}",
+            event.username, event.action
+        )),
         // No headline: @bartender already says it out loud in the room where
         // it was bought, and everyone it reached is online by definition, so a
         // #lounge row would be the third telling of one drink.
@@ -245,7 +253,6 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
         | ActivityKind::BurnMilestone { .. }
         | ActivityKind::MessageGilded { .. }
         | ActivityKind::CyberspacePosted { .. }
-        | ActivityKind::WentLive { .. }
         | ActivityKind::WatchingStream { .. } => None,
     }
 }
