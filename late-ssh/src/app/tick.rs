@@ -1090,8 +1090,18 @@ impl App {
                     {
                         self.aquarium_care.clear_sprout();
                         refresh_floor = true;
-                        Some(crate::app::common::primitives::Banner::success(
-                            &crate::app::hub::aquarium::svc::rooted_banner(creature, *swimming),
+                        Some(crate::app::hub::aquarium::svc::sprout_fate_banner(
+                            &crate::app::hub::aquarium::svc::SproutFate::Rooted {
+                                creature: creature.clone(),
+                                swimming: *swimming,
+                            },
+                        ))
+                    }
+                    ActivityKind::AquariumSproutWithered if user_id == self.user_id => {
+                        self.aquarium_care.clear_sprout();
+                        refresh_floor = true;
+                        Some(crate::app::hub::aquarium::svc::sprout_fate_banner(
+                            &crate::app::hub::aquarium::svc::SproutFate::Withered,
                         ))
                     }
                     ActivityKind::AquariumSproutCut if user_id == self.user_id => {

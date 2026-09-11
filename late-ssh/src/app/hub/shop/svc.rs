@@ -292,7 +292,8 @@ fn purchase_story(
         PurchaseStatus::AlreadyOwned
         | PurchaseStatus::InsufficientFunds
         | PurchaseStatus::RequiresAquarium
-        | PurchaseStatus::DailyLimitReached => return None,
+        | PurchaseStatus::DailyLimitReached
+        | PurchaseStatus::OwnedCapReached => return None,
     }
     let duration = rental_duration_secs(&result.item);
     match result.item.item_kind.as_str() {
@@ -359,7 +360,8 @@ fn custom_title_outcome(settled: SettledPurchase) -> CustomTitleOutcome {
             PurchaseStatus::AlreadyOwned
             | PurchaseStatus::InsufficientFunds
             | PurchaseStatus::RequiresAquarium
-            | PurchaseStatus::DailyLimitReached,
+            | PurchaseStatus::DailyLimitReached
+            | PurchaseStatus::OwnedCapReached,
         )
         | None => CustomTitleOutcome::Refused(settled.message),
     }
@@ -920,6 +922,20 @@ impl ShopService {
                     )
                 }
                 PurchaseStatus::RequiresAquarium => "Unlock Aquarium first".to_string(),
+                PurchaseStatus::OwnedCapReached => {
+                    match TankStockKind::of(&result.item.item_kind) {
+                        Some(TankStockKind::Plant) => {
+                            format!(
+                                "You already own {AQUARIUM_MAX_PLANTS} plants, in the tank or parked"
+                            )
+                        }
+                        Some(TankStockKind::Fish) | None => {
+                            format!(
+                                "You already own {AQUARIUM_MAX_FISH} fish, in the tank or parked"
+                            )
+                        }
+                    }
+                }
                 PurchaseStatus::DailyLimitReached => {
                     format!("{} is limited to once per day", result.item.name)
                 }

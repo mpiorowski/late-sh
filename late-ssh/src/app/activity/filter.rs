@@ -159,7 +159,8 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         | ActivityKind::AquariumFishLost { .. }
         | ActivityKind::AquariumSprouted { .. }
         | ActivityKind::AquariumSproutRooted { .. }
-        | ActivityKind::AquariumSproutCut => false,
+        | ActivityKind::AquariumSproutCut
+        | ActivityKind::AquariumSproutWithered => false,
     }
 }
 
@@ -247,6 +248,7 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
         | ActivityKind::AquariumSprouted { .. }
         | ActivityKind::AquariumSproutRooted { .. }
         | ActivityKind::AquariumSproutCut
+        | ActivityKind::AquariumSproutWithered
         | ActivityKind::UsernameEffectApplied { .. }
         | ActivityKind::BadgeRented { .. }
         | ActivityKind::TitleApplied { .. }

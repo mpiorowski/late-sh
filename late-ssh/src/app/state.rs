@@ -1302,9 +1302,7 @@ impl App {
                 &config.initial_aquarium_care.rooted,
                 config.initial_aquarium_care.sprouted,
             ) {
-                (Some(plant), _) => Some(crate::app::common::primitives::Banner::success(
-                    &crate::app::hub::aquarium::svc::rooted_banner(&plant.creature, plant.swimming),
-                )),
+                (Some(fate), _) => Some(crate::app::hub::aquarium::svc::sprout_fate_banner(fate)),
                 (None, true) => Some(crate::app::common::primitives::Banner::info(
                     "A sprout came up in your tank: cut it in /shop within the week, or leave it to root",
                 )),

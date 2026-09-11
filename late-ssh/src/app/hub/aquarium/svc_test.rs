@@ -1,14 +1,15 @@
 use late_core::models::aquarium_care::{AquariumCare, CARE_DAYS};
 use late_core::models::chips::UserChips;
 use late_core::models::marketplace::{
-    AQUARIUM_PLANT_ITEM_KIND, AQUARIUM_SKU, purchase_durable_item_by_sku,
+    AQUARIUM_MAX_FISH, AQUARIUM_MAX_PLANTS, AQUARIUM_PLANT_ITEM_KIND, AQUARIUM_SKU,
+    purchase_durable_item_by_sku,
 };
 use late_core::test_utils::create_test_user;
 use tokio::sync::broadcast;
 use tokio::time::{Duration, timeout};
 use uuid::Uuid;
 
-use super::{AquariumService, CutOutcome, FEED_CHIP_BONUS};
+use super::{AquariumService, CutOutcome, FEED_CHIP_BONUS, SproutFate};
 use crate::app::activity::event::{ActivityEvent, ActivityKind};
 use crate::test_helpers::new_test_db;
 
@@ -338,23 +339,19 @@ async fn a_sprout_comes_up_every_two_weeks_and_roots_unless_it_is_cut() {
         CutOutcome::NothingToCut
     );
     let boot = svc.bootstrap(user.id).await.expect("third bootstrap");
-    let rooted = boot.rooted.expect("the sprout rooted");
-    assert!(rooted.swimming);
+    let Some(SproutFate::Rooted { creature, swimming }) = boot.rooted else {
+        panic!("the sprout rooted, got {:?}", boot.rooted);
+    };
+    assert!(swimming);
     assert!(
-        ["seatuft", "wigglewort"].contains(&rooted.creature.as_str()),
-        "roots as a catalog plant, got {}",
-        rooted.creature
+        ["seatuft", "wigglewort"].contains(&creature.as_str()),
+        "roots as a catalog plant, got {creature}"
     );
     assert!(!boot.sprouted, "the next is still a week away");
     assert_eq!(boot.care.expect("care").sprout_born, None);
     assert_eq!(plant_counts(&test_db.db, user.id).await, (1, 1));
     assert_eq!(
-        sku_counts(
-            &test_db.db,
-            user.id,
-            &format!("aquarium_plant_{}", rooted.creature)
-        )
-        .await,
+        sku_counts(&test_db.db, user.id, &format!("aquarium_plant_{creature}")).await,
         Some((1, 1))
     );
     assert_eq!(clownfish_counts(&test_db.db, user.id).await, (2, 2));
@@ -364,11 +361,117 @@ async fn a_sprout_comes_up_every_two_weeks_and_roots_unless_it_is_cut() {
         .expect("activity event");
     assert!(matches!(
         &event.kind,
-        ActivityKind::AquariumSproutRooted { creature, swimming: true } if *creature == rooted.creature
+        ActivityKind::AquariumSproutRooted { creature: rooted, swimming: true } if *rooted == creature
     ));
 
     // Rooting again on the same day finds nothing: settled once.
     let boot = svc.bootstrap(user.id).await.expect("fourth bootstrap");
     assert_eq!(boot.rooted, None);
     assert_eq!(plant_counts(&test_db.db, user.id).await, (1, 1));
+}
+
+/// The owned caps stop what the tank grows on its own: at twenty plants a
+/// sprout left alone withers instead of rooting, and at twenty fish the
+/// fourteenth feed pays its chips but hatches nothing.
+#[tokio::test]
+async fn at_twenty_owned_a_sprout_withers_and_no_fry_is_born() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "aquarium-svc-owned-cap").await;
+    stock_tank(&test_db.db, user.id).await;
+    let (svc, mut rx) = service(&test_db.db);
+    let mut client = test_db.db.get().await.expect("db client");
+    let seatuft_price = 1_000;
+    UserChips::admin_grant(
+        &**client,
+        user.id,
+        seatuft_price * AQUARIUM_MAX_PLANTS as i64
+            + CLOWNFISH_PRICE * (AQUARIUM_MAX_FISH as i64 - 3),
+    )
+    .await
+    .expect("fund chips");
+    for _ in 0..AQUARIUM_MAX_PLANTS {
+        purchase_durable_item_by_sku(&mut client, user.id, "aquarium_plant_seatuft")
+            .await
+            .expect("plant purchase");
+    }
+    // The fry and two clownfish are three; seventeen more make twenty.
+    for _ in 0..AQUARIUM_MAX_FISH - 3 {
+        purchase_durable_item_by_sku(&mut client, user.id, "aquarium_fish_clownfish")
+            .await
+            .expect("fish purchase");
+    }
+    assert_eq!(plant_counts(&test_db.db, user.id).await, (20, 0));
+    assert_eq!(clownfish_counts(&test_db.db, user.id).await, (19, 2));
+
+    // A sprout past its week finds no room and withers.
+    client
+        .execute(
+            "UPDATE user_aquarium_care
+             SET sprout_born = current_date - 7, next_sprout = current_date + 7
+             WHERE user_id = $1",
+            &[&user.id],
+        )
+        .await
+        .expect("an old sprout");
+    let boot = svc.bootstrap(user.id).await.expect("bootstrap");
+    assert_eq!(boot.rooted, Some(SproutFate::Withered));
+    assert_eq!(
+        boot.care.expect("care").sprout_born,
+        None,
+        "the floor is bare"
+    );
+    assert_eq!(plant_counts(&test_db.db, user.id).await, (20, 0));
+    let event = timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("activity in time")
+        .expect("activity event");
+    assert!(matches!(event.kind, ActivityKind::AquariumSproutWithered));
+
+    // The fourteenth straight feed: chips paid, streak counted, no fry.
+    svc.feed(user.id).await.expect("seed the row");
+    client
+        .execute(
+            "UPDATE user_aquarium_care
+             SET last_fed = current_timestamp - interval '1 day', streak = $2
+             WHERE user_id = $1",
+            &[&user.id, &(CARE_DAYS as i32 - 1)],
+        )
+        .await
+        .expect("rewind a day");
+    let before = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+    svc.feed(user.id).await.expect("fourteenth feed");
+    let care = AquariumCare::load(&**client, user.id)
+        .await
+        .expect("care")
+        .expect("care row");
+    assert_eq!(care.streak, 14);
+    assert_eq!(
+        care.fry_creature.as_deref(),
+        Some("fry"),
+        "still the welcome fry"
+    );
+    assert_eq!(clownfish_counts(&test_db.db, user.id).await, (19, 2));
+    assert_eq!(
+        UserChips::ensure(&client, user.id)
+            .await
+            .expect("chips")
+            .balance,
+        before + FEED_CHIP_BONUS
+    );
+    for _ in 0..2 {
+        let event = timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("activity in time")
+            .expect("activity event");
+        assert!(matches!(event.kind, ActivityKind::AquariumFed));
+    }
+    assert!(
+        timeout(Duration::from_millis(200), rx.recv())
+            .await
+            .is_err(),
+        "no hatch event follows"
+    );
 }

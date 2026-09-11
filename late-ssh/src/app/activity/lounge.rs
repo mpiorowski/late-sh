@@ -209,6 +209,7 @@ fn repeat_key(event: &ActivityEvent) -> String {
         ActivityKind::AquariumSprouted { .. } => "aquarium-sprouted".to_string(),
         ActivityKind::AquariumSproutRooted { .. } => "aquarium-rooted".to_string(),
         ActivityKind::AquariumSproutCut => "aquarium-cut".to_string(),
+        ActivityKind::AquariumSproutWithered => "aquarium-withered".to_string(),
     };
     format!("{user}:{shape}")
 }

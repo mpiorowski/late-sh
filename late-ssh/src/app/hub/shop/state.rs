@@ -18,7 +18,7 @@ use super::{
 use late_core::models::{
     aquarium_shield::AquariumShield,
     bonsai_decay_protection::BonsaiDecayProtection,
-    marketplace::CHAT_CONSUMABLE_ITEM_KIND,
+    marketplace::{CHAT_CONSUMABLE_ITEM_KIND, TankStockKind},
     rental::TITLE_MAX_LEN,
     username_effect::{GlowColor, GradientPair, UsernameEffect},
 };
@@ -226,6 +226,17 @@ impl ShopState {
             ShopCategory::Badges | ShopCategory::Flags | ShopCategory::Ultimates => 0,
         });
         items
+    }
+
+    /// How many of one kind the user owns, in the water and parked: what
+    /// the kind's cap counts (`TankStockKind::cap`).
+    pub(crate) fn owned_tank_stock(&self, kind: TankStockKind) -> i32 {
+        self.snapshot
+            .items
+            .iter()
+            .filter(|item| item.tank_stock_kind() == Some(kind))
+            .map(|item| item.quantity.max(0))
+            .sum()
     }
 
     /// Every creature in the water, fish and plants alike, as the tank

@@ -5,36 +5,38 @@ use late_core::models::{
     aquarium_care::{self as care_rules, AquariumCare},
     aquarium_shield::AquariumShield,
     chips::{ChipMove, UserChips},
-    marketplace,
+    marketplace::{self, TankSpawn},
 };
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::app::activity::event::ActivityEvent;
+use crate::app::{activity::event::ActivityEvent, common::primitives::Banner};
 
 pub(crate) const FEED_CHIP_BONUS: i64 = 100;
 
 /// What a session learns about its tank at connect: the care row (`None`
 /// for a user with no tank), every shield window ever bought, the fish the
-/// starvation settlement took just now, and what the sprout clock did: a
-/// sprout that rooted while the owner was away, and whether a new one came
-/// up.
+/// starvation settlement took just now, and what the sprout clock did: what
+/// became of a sprout that passed its week while the owner was away, and
+/// whether a new one came up.
 #[derive(Debug, Clone, Default)]
 pub struct CareBootstrap {
     pub care: Option<AquariumCare>,
     pub shields: Vec<AquariumShield>,
     pub lost: Vec<String>,
-    pub rooted: Option<RootedPlant>,
+    pub rooted: Option<SproutFate>,
     pub sprouted: bool,
 }
 
-/// What a sprout left alone became: the plant's creature, and whether it
-/// went into the water (`false`: the floor was full, it waits in the
-/// Shop's inventory).
+/// What a sprout left alone became once its week was up.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RootedPlant {
-    pub creature: String,
-    pub swimming: bool,
+pub enum SproutFate {
+    /// It rooted as the plant `creature`, in the water, or parked in the
+    /// Shop's inventory when the floor was full (`swimming` false).
+    Rooted { creature: String, swimming: bool },
+    /// It withered: the owner already owns the cap of plants, in the water
+    /// and parked together, so nothing grew.
+    Withered,
 }
 
 /// What a feed press came to once the DB had its say.
@@ -198,32 +200,49 @@ impl AquariumService {
         Ok(())
     }
 
-    /// The sprout clock's news on the activity feed: the rooting (which
-    /// plant, and whether it went into the water) and the new sprout.
+    /// The sprout clock's news on the activity feed: what became of the
+    /// sprout (which plant, and whether it went into the water, or that it
+    /// withered) and the new sprout.
     fn announce_sprout_clock(
         &self,
         user_id: Uuid,
         username: &str,
-        rooted: Option<&RootedPlant>,
+        rooted: Option<&SproutFate>,
         sprouted: bool,
         today: NaiveDate,
     ) {
-        if let Some(plant) = rooted {
-            tracing::info!(
-                user_id = %user_id,
-                username = %username,
-                creature = %plant.creature,
-                swimming = plant.swimming,
-                "aquarium sprout rooted"
-            );
-            let _ = self
-                .activity_feed
-                .send(ActivityEvent::aquarium_sprout_rooted(
-                    user_id,
-                    username.to_string(),
-                    plant.creature.clone(),
-                    plant.swimming,
-                ));
+        match rooted {
+            Some(SproutFate::Rooted { creature, swimming }) => {
+                tracing::info!(
+                    user_id = %user_id,
+                    username = %username,
+                    creature = %creature,
+                    swimming,
+                    "aquarium sprout rooted"
+                );
+                let _ = self
+                    .activity_feed
+                    .send(ActivityEvent::aquarium_sprout_rooted(
+                        user_id,
+                        username.to_string(),
+                        creature.clone(),
+                        *swimming,
+                    ));
+            }
+            Some(SproutFate::Withered) => {
+                tracing::info!(
+                    user_id = %user_id,
+                    username = %username,
+                    "aquarium sprout withered, the owner has the cap of plants"
+                );
+                let _ = self
+                    .activity_feed
+                    .send(ActivityEvent::aquarium_sprout_withered(
+                        user_id,
+                        username.to_string(),
+                    ));
+            }
+            None => {}
         }
         if sprouted {
             let _ = self.activity_feed.send(ActivityEvent::aquarium_sprouted(
@@ -320,19 +339,34 @@ impl AquariumService {
         )
         .await?;
         let mut hatched: Option<(String, bool)> = None;
+        let mut no_room = false;
         if care_rules::hatches_fry(streak) {
             let stock = marketplace::swimming_fish_in_tx(&tx, user_id).await?;
             if let Some(parent) = care_rules::pick_by_weight(&stock, rand::random()) {
-                let swimming =
-                    marketplace::hatch_aquarium_fry_in_tx(&tx, user_id, parent.item_id).await?;
-                if swimming {
-                    AquariumCare::set_fry(&*tx, user_id, &parent.creature, today).await?;
+                match marketplace::hatch_aquarium_fry_in_tx(&tx, user_id, parent.item_id).await? {
+                    TankSpawn::Swimming => {
+                        AquariumCare::set_fry(&*tx, user_id, &parent.creature, today).await?;
+                        marketplace::notify_user_shop_changed(&*tx, user_id).await?;
+                        hatched = Some((parent.creature.clone(), true));
+                    }
+                    TankSpawn::Parked => {
+                        marketplace::notify_user_shop_changed(&*tx, user_id).await?;
+                        hatched = Some((parent.creature.clone(), false));
+                    }
+                    TankSpawn::NoRoom => {
+                        no_room = true;
+                    }
                 }
-                marketplace::notify_user_shop_changed(&*tx, user_id).await?;
-                hatched = Some((parent.creature.clone(), swimming));
             }
         }
         tx.commit().await?;
+        if no_room {
+            tracing::info!(
+                user_id = %user_id,
+                streak,
+                "aquarium fry not born, the owner has the cap of fish"
+            );
+        }
 
         let username = late_core::models::profile::fetch_username(&client, user_id).await;
         let _ = self
@@ -355,13 +389,26 @@ impl AquariumService {
     }
 }
 
-/// The one line both the connect and the live event say when a sprout
-/// roots: which plant, and whether it is in the water or waiting.
-pub(crate) fn rooted_banner(creature: &str, swimming: bool) -> String {
-    if swimming {
-        format!("Your sprout took root: a {creature} grows in the tank")
-    } else {
-        format!("Your sprout took root: a {creature} waits in /shop, the floor is full")
+/// The one banner both the connect and the live event show for what
+/// became of a sprout: which plant and where it is, or that it withered.
+pub(crate) fn sprout_fate_banner(fate: &SproutFate) -> Banner {
+    match fate {
+        SproutFate::Rooted {
+            creature,
+            swimming: true,
+        } => Banner::success(&format!(
+            "Your sprout took root: a {creature} grows in the tank"
+        )),
+        SproutFate::Rooted {
+            creature,
+            swimming: false,
+        } => Banner::success(&format!(
+            "Your sprout took root: a {creature} waits in /shop, the floor is full"
+        )),
+        SproutFate::Withered => Banner::info(&format!(
+            "Your sprout withered: you already own {} plants",
+            marketplace::AQUARIUM_MAX_PLANTS
+        )),
     }
 }
 
@@ -371,27 +418,41 @@ mod svc_test;
 
 /// The sprout clock inside a transaction: a sprout past its week roots as
 /// one of the catalog's plants, any of them as likely as the next
-/// (`pick_plant_evenly`), then a due sprout comes up on the bare floor
-/// (`true`). The row's own gates make both idempotent. A catalog with no
-/// plants is a deploy mistake, not a bare floor: the sprout has already
-/// left the row, so it fails loudly.
+/// (`pick_plant_evenly`), or withers when the owner has the cap of plants
+/// already; then a due sprout comes up on the bare floor (`true`). The
+/// row's own gates make both idempotent. A catalog with no plants is a
+/// deploy mistake, not a bare floor: the sprout has already left the row,
+/// so it fails loudly.
 async fn settle_sprout_clock_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     user_id: Uuid,
     today: NaiveDate,
-) -> Result<(Option<RootedPlant>, bool)> {
+) -> Result<(Option<SproutFate>, bool)> {
     let mut rooted = None;
     if AquariumCare::root_sprout(&*tx, user_id, today).await? {
         let plants = marketplace::catalog_plants_in_tx(tx).await?;
         let Some(plant) = care_rules::pick_plant_evenly(&plants, rand::random()) else {
             bail!("the catalog sells no plant for the sprout to root as");
         };
-        let swimming = marketplace::root_aquarium_sprout_in_tx(tx, user_id, plant.item_id).await?;
-        marketplace::notify_user_shop_changed(&*tx, user_id).await?;
-        rooted = Some(RootedPlant {
-            creature: plant.creature.clone(),
-            swimming,
-        });
+        rooted = Some(
+            match marketplace::root_aquarium_sprout_in_tx(tx, user_id, plant.item_id).await? {
+                TankSpawn::Swimming => {
+                    marketplace::notify_user_shop_changed(&*tx, user_id).await?;
+                    SproutFate::Rooted {
+                        creature: plant.creature.clone(),
+                        swimming: true,
+                    }
+                }
+                TankSpawn::Parked => {
+                    marketplace::notify_user_shop_changed(&*tx, user_id).await?;
+                    SproutFate::Rooted {
+                        creature: plant.creature.clone(),
+                        swimming: false,
+                    }
+                }
+                TankSpawn::NoRoom => SproutFate::Withered,
+            },
+        );
     }
     let sprouted = AquariumCare::sprout_up(&*tx, user_id, today).await?;
     Ok((rooted, sprouted))

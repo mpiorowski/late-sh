@@ -187,6 +187,9 @@ pub enum ActivityKind {
     },
     /// The owner cut the sprout.
     AquariumSproutCut,
+    /// A sprout left a week withered: the owner already owns the cap of
+    /// plants, so nothing grew. Settled at login or on the day edge.
+    AquariumSproutWithered,
 }
 
 impl ActivityKind {
@@ -218,7 +221,8 @@ impl ActivityKind {
             | Self::AquariumFishLost { .. }
             | Self::AquariumSprouted { .. }
             | Self::AquariumSproutRooted { .. }
-            | Self::AquariumSproutCut => ActivityCategory::Companion,
+            | Self::AquariumSproutCut
+            | Self::AquariumSproutWithered => ActivityCategory::Companion,
         }
     }
 }
@@ -907,6 +911,15 @@ impl ActivityEvent {
             username,
             ActivityKind::AquariumSproutCut,
             "cut a sprout in their tank".to_string(),
+        )
+    }
+
+    pub fn aquarium_sprout_withered(user_id: Uuid, username: impl Into<String>) -> Self {
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::AquariumSproutWithered,
+            "let a sprout wither in their full tank".to_string(),
         )
     }
 

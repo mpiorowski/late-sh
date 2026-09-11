@@ -541,7 +541,15 @@ fn draw_item_detail(
     }
     if item.is_sprout() {
         let dim = Style::default().fg(theme::TEXT_DIM());
+        let plants_full =
+            state.owned_tank_stock(TankStockKind::Plant) >= TankStockKind::Plant.cap();
         let floor = match sprout {
+            SproutStatus::Standing { .. } | SproutStatus::Rooting if plants_full => {
+                format!(
+                    "it will wither: you already own {} plants",
+                    TankStockKind::Plant.cap()
+                )
+            }
             SproutStatus::Standing { days_to_root: 1 } => {
                 "last day to cut it; tomorrow it roots as one of the plants".to_string()
             }
@@ -604,10 +612,13 @@ fn draw_item_detail(
             Span::raw("  tank   "),
             Span::styled(
                 match kind {
-                    TankStockKind::Fish => format!("max {} fish active", kind.cap()),
-                    TankStockKind::Plant => {
-                        format!("max {} plants active; plants never die", kind.cap())
+                    TankStockKind::Fish => {
+                        format!("max {} fish, in the tank or parked", kind.cap())
                     }
+                    TankStockKind::Plant => format!(
+                        "max {} plants, in the tank or parked; plants never die",
+                        kind.cap()
+                    ),
                 },
                 Style::default().fg(theme::TEXT_DIM()),
             ),
@@ -615,10 +626,16 @@ fn draw_item_detail(
         if item.is_welcome_fish() && has_aquarium {
             let dim = Style::default().fg(theme::TEXT_DIM());
             let fed_days = care.fed_days_to_next_fry_on(today);
+            let fish_full =
+                state.owned_tank_stock(TankStockKind::Fish) >= TankStockKind::Fish.cap();
             lines.push(Line::from(vec![
                 Span::raw("  next   "),
                 Span::styled(
                     match fed_days {
+                        _ if fish_full => format!(
+                            "no room for a fry: you already own {} fish",
+                            TankStockKind::Fish.cap()
+                        ),
                         1 => "a fry hatches at the next meal".to_string(),
                         days => format!("a fry hatches after {days} more straight fed days"),
                     },
