@@ -170,13 +170,9 @@ pub(crate) fn draw_rice(
         }
         match kind {
             TileKind::Bonsai => draw_bonsai_tile(frame, inner, view.bonsai, view.wall_tick),
-            TileKind::Aquarium => draw_aquarium_tile(
-                frame,
-                inner,
-                view.aquarium,
-                view.aquarium_owned,
-                view.aquarium_care.sprout_visible(),
-            ),
+            TileKind::Aquarium => {
+                draw_aquarium_tile(frame, inner, view.aquarium, view.aquarium_owned)
+            }
             TileKind::Pet => draw_pet_tile(frame, inner, view.pet_strip.as_ref(), watching),
             TileKind::Chat => draw_chat_tile(frame, inner, chat_tile, terminal_images),
             TileKind::Music => draw_music_tile(frame, inner, &view),
@@ -444,32 +440,15 @@ fn bonsai_status_line(state: &BonsaiState) -> Line<'static> {
     Line::from(spans)
 }
 
-/// The live reef for everyone; without the shop unlock it swims empty, and
-/// a caption on the floor row says where the fish are.
-/// The tank, with one caption row at the bottom when there is something to
-/// say: the shop for a tank nobody owns, the cut key while a sprout stands.
-fn draw_aquarium_tile(
-    frame: &mut Frame,
-    area: Rect,
-    state: &AquariumState,
-    owned: bool,
-    sprout: bool,
-) {
-    crate::app::hub::aquarium::ui::draw(frame, area, state);
-    if area.height < 3 {
+/// The tank. Without the shop unlock the tile reads like the pet's, a
+/// centered note pointing at the shop; owned, it is the live reef, nothing
+/// else: the sprout on its floor is tended on its Shop row.
+fn draw_aquarium_tile(frame: &mut Frame, area: Rect, state: &AquariumState, owned: bool) {
+    if !owned {
+        draw_centered_note(frame, area, &["no tank yet", "the Aquarium is in /shop"]);
         return;
     }
-    let text = match (owned, sprout) {
-        (false, _) => "fish live in /shop",
-        (true, true) => "a sprout came up · /aq cut, or leave it",
-        (true, false) => return,
-    };
-    let caption =
-        Line::from(Span::styled(text, Style::default().fg(theme::TEXT_FAINT()))).centered();
-    frame.render_widget(
-        Paragraph::new(caption),
-        Rect::new(area.x, area.bottom() - 1, area.width, 1),
-    );
+    crate::app::hub::aquarium::ui::draw(frame, area, state);
 }
 
 /// The lobby in a tile, compact: the games running, then one footer row

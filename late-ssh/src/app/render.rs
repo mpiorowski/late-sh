@@ -1972,6 +1972,7 @@ impl App {
                 crate::app::hub::ui::HubDrawProps {
                     shop_state: ctx.shop_state,
                     pet_species: ctx.pet_species,
+                    aquarium_care: ctx.aquarium_care,
                 },
             );
         }

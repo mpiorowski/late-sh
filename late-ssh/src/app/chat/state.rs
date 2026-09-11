@@ -365,13 +365,12 @@ fn parse_pot_command(body: &str) -> Option<Option<PotCommand>> {
 }
 
 /// An aquarium control requested from the composer (`/aquarium`,
-/// `/aquarium feed`, `/aquarium cut`). `App` owns the tray state and
+/// `/aquarium feed`). `App` owns the tray state and
 /// entitlements, so the composer just records the intent and `App` carries
 /// it out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AquariumCommand {
     Feed,
-    Cut,
 }
 
 /// The two cyberspace rows a room can be entered from, and the one leaving
@@ -3774,13 +3773,12 @@ impl ChatState {
         if matches!(body.trim(), "/aquarium" | "/aq") {
             self.clear_composer_after_submit();
             return Some(Banner::info(
-                "The tank lives on the Zen page (Ctrl+F): /aquarium feed, /aquarium cut",
+                "The tank lives on the Zen page (Ctrl+F): /aquarium feed; its sprout is cut in /shop",
             ));
         }
 
         if let Some(command) = match body.trim() {
             "/aquarium feed" | "/aq feed" => Some(AquariumCommand::Feed),
-            "/aquarium cut" | "/aq cut" => Some(AquariumCommand::Cut),
             _ => None,
         } {
             self.clear_composer_after_submit();

@@ -143,6 +143,17 @@ impl App {
         if one_hz && crate::app::arcade::daily::refresh_daily_games(self) {
             changed = true;
         }
+        // The tank's sprout clock rides the same edge: a session up across
+        // midnight asks the service once when a sprout has rooted or the
+        // next is due, and the event clears or plants the floor.
+        if one_hz
+            && self.shop_state.entitlements().has_aquarium()
+            && self
+                .aquarium_care
+                .take_sprout_settlement_on(chrono::Utc::now().date_naive())
+        {
+            self.aquarium_service.settle_sprout_clock_task(self.user_id);
+        }
         if self.screen == Screen::Clubhouse && anim_half {
             // Only cosmetic ambience animates on the tick counter (jukebox
             // EQ, emote arms, fire/candles/stars); walker positions are
@@ -882,10 +893,10 @@ impl App {
                     .next()
                     .map(|(creature, _)| creature);
                 let welcome = match &fry {
-                    Some(creature) => format!(
-                        "Your tank came with a {creature} fry and a sprout: leave the sprout, or /aq cut within the week"
+                    Some(_) => String::from(
+                        "Your tank came with a fry and a sprout: cut the sprout in /shop within the week, or leave it to root"
                     ),
-                    None => "Your tank came with a sprout: leave it, or /aq cut within the week"
+                    None => "Your tank came with a sprout: cut it in /shop within the week, or leave it to root"
                         .to_string(),
                 };
                 self.aquarium_care
@@ -1071,7 +1082,7 @@ impl App {
                         self.aquarium_care.set_sprout(*born);
                         refresh_floor = true;
                         Some(crate::app::common::primitives::Banner::info(
-                            "A sprout came up in your tank: leave it, or /aq cut within the week",
+                            "A sprout came up in your tank: cut it in /shop within the week, or leave it to root",
                         ))
                     }
                     ActivityKind::AquariumSproutRooted { swimming } if user_id == self.user_id => {

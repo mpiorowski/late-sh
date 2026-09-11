@@ -26,8 +26,8 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
 /// room, `i` and Enter write in its room, `j` `k` select in it, and the
 /// message actions act on its selection; with any other tile focused all
 /// of them are swallowed, so a page of several chats never scrolls one you
-/// are not looking at. The sprout is cut from the composer (`/aq cut`), on
-/// purpose: no page key for it. The pet has no key at all: it is petted
+/// are not looking at. The sprout is cut on its Shop row, on purpose: no
+/// page key for it. The pet has no key at all: it is petted
 /// with a click and reads the session for the rest.
 fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
     let Some(byte) = event_byte(event) else {

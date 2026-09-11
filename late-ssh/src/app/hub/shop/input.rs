@@ -1,5 +1,6 @@
 use crate::app::{
     common::primitives::Banner,
+    hub::aquarium::state::CutOutcome,
     hub::shop::state::RoomEffectTarget,
     input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput},
     state::App,
@@ -141,6 +142,12 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
             true
         }
         ParsedInput::Byte(b'+' | b'=') | ParsedInput::Char('+' | '=') => {
+            if app.shop_state.selected_item().is_some_and(|item| item.is_sprout()) {
+                app.banner = Some(Banner::error(
+                    "Sprouts come up on their own, every 14 days; - cuts the one on the floor",
+                ));
+                return true;
+            }
             if let Some(banner) = app.shop_state.adjust_selected_aquarium_fish(1) {
                 app.banner = Some(banner);
                 return true;
@@ -148,6 +155,10 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
             false
         }
         ParsedInput::Byte(b'-' | b'_') | ParsedInput::Char('-' | '_') => {
+            if app.shop_state.selected_item().is_some_and(|item| item.is_sprout()) {
+                cut_sprout(app);
+                return true;
+            }
             if let Some(banner) = app.shop_state.adjust_selected_aquarium_fish(-1) {
                 app.banner = Some(banner);
                 return true;
@@ -218,4 +229,32 @@ fn toggle_pet_species(app: &mut App) -> Option<Banner> {
         "Switched companion to {}",
         next.as_str()
     )))
+}
+
+/// `-` on the Sprout row: cut the sprout on the tank floor. The floor
+/// clears at once; the service writes it behind the row's own gate (still
+/// standing, still within its week).
+fn cut_sprout(app: &mut App) {
+    if !app.shop_state.entitlements().has_aquarium() {
+        app.banner = Some(Banner::error("Unlock Aquarium first"));
+        return;
+    }
+    match app
+        .aquarium_care
+        .cut_sprout(chrono::Utc::now().date_naive())
+    {
+        CutOutcome::Cut => {
+            app.refresh_aquarium_population();
+            app.aquarium_service.cut_task(app.user_id);
+            app.banner = Some(Banner::success("Cut the sprout"));
+        }
+        CutOutcome::NothingToCut => {
+            app.banner = Some(Banner::error("Nothing to cut: the floor is bare"));
+        }
+        CutOutcome::Rooted => {
+            app.banner = Some(Banner::error(
+                "Too late to cut: the sprout has rooted, the wigglewort is on its way",
+            ));
+        }
+    }
 }

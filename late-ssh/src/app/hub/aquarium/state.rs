@@ -6,7 +6,7 @@ use std::{
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::models::{
-    aquarium_care::{self as care_rules, CARE_DAYS, FRY_DAYS},
+    aquarium_care::{self as care_rules, CARE_DAYS, FRY_DAYS, SPROUT_DAYS, SPROUT_EVERY_DAYS},
     aquarium_shield::AquariumShield,
 };
 use rand::{Rng, rngs::ThreadRng};
@@ -46,6 +46,27 @@ pub(crate) struct AquariumCare {
     /// Held until the service says it was cut or rooted, so a long session
     /// never shows the sprout gone before the plant arrives.
     pub(crate) sprout: Option<NaiveDate>,
+    /// The day the next sprout comes up, from the row; `None` before the
+    /// first connect with a tank.
+    pub(crate) next_sprout: Option<NaiveDate>,
+    /// The last UTC day this session asked the service to settle the
+    /// sprout clock (`take_sprout_settlement_on`), so the day edge asks
+    /// once and waits for the event.
+    pub(crate) settlement_asked: Option<NaiveDate>,
+}
+
+/// The sprout row in the Shop, read off the care state for a day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SproutStatus {
+    /// A sprout stands and can still be cut for this many more days
+    /// (one on its last day).
+    Standing { days_to_root: u32 },
+    /// Past its week and still drawn: the service has not settled the
+    /// rooting yet (the day edge asks for it).
+    Rooting,
+    /// A bare floor; the next sprout comes up in this many days (zero:
+    /// today, pending the service), `None` before the first connect.
+    Bare { days_to_next: Option<u32> },
 }
 
 /// A hatchling: drawn as the small sprite for its first `FRY_DAYS`.
@@ -64,8 +85,8 @@ pub(crate) enum CareOutcome {
 }
 
 /// Outcome of a cut press: the sprout is gone, there was none to cut, or
-/// it is past its week and already a plant in the row's eyes (the session
-/// only learns that at the next connect, so it stays drawn).
+/// it is past its week and already a plant in the row's eyes (the day
+/// edge asks the service to root it; it stays drawn until the event).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CutOutcome {
     Cut,
@@ -101,6 +122,8 @@ impl AquariumCare {
                     (Some(_), None) | (None, Some(_)) | (None, None) => None,
                 },
                 sprout: row.sprout_born,
+                next_sprout: Some(row.next_sprout),
+                settlement_asked: None,
             },
             None => Self {
                 last_fed: None,
@@ -108,6 +131,8 @@ impl AquariumCare {
                 shields,
                 fry: None,
                 sprout: None,
+                next_sprout: None,
+                settlement_asked: None,
             },
         }
     }
@@ -170,6 +195,72 @@ impl AquariumCare {
         (!grown).then_some(fry.creature.as_str())
     }
 
+    /// The newest hatchling that is still small and will grow into its
+    /// parent's full sprite: its species and the days until it does. The
+    /// welcome fry is its own species and never grows, so it is not here.
+    pub(crate) fn fry_growing_on(&self, today: NaiveDate) -> Option<(&str, u32)> {
+        let creature = self.fry_visible_on(today)?;
+        if creature == crate::app::hub::aquarium::creature::FRY_CREATURE {
+            return None;
+        }
+        let born = self.fry.as_ref()?.born;
+        let elapsed = today.signed_duration_since(born).num_days().max(0) as u32;
+        Some((creature, FRY_DAYS.saturating_sub(elapsed).max(1)))
+    }
+
+    /// How many more straight fed days until a fry hatches, counting from
+    /// today's meal if it has not been given yet. The streak restarts when
+    /// yesterday went unfed and unshielded, the row's rule (`feed`).
+    pub(crate) fn fed_days_to_next_fry_on(&self, today: NaiveDate) -> u32 {
+        let streak = if fed_on(self.last_fed, today) {
+            self.streak.max(0) as u32
+        } else {
+            let continues_from = care_rules::streak_continues_from(today, &self.shields);
+            let continues = self
+                .last_fed
+                .is_some_and(|last| last.date_naive() >= continues_from);
+            if continues { self.streak.max(0) as u32 } else { 0 }
+        };
+        CARE_DAYS - streak % CARE_DAYS
+    }
+
+    /// What the Shop's sprout row shows for a day.
+    pub(crate) fn sprout_status_on(&self, today: NaiveDate) -> SproutStatus {
+        match self.sprout {
+            Some(born) if care_rules::sprout_rooted(born, today) => SproutStatus::Rooting,
+            Some(born) => {
+                let elapsed = today.signed_duration_since(born).num_days().max(0) as u32;
+                SproutStatus::Standing {
+                    days_to_root: SPROUT_DAYS.saturating_sub(elapsed).max(1),
+                }
+            }
+            None => SproutStatus::Bare {
+                days_to_next: self
+                    .next_sprout
+                    .map(|next| next.signed_duration_since(today).num_days().max(0) as u32),
+            },
+        }
+    }
+
+    /// Whether the sprout clock has something for the service to settle
+    /// today (a sprout past its week, or a bare floor whose next sprout is
+    /// due) that this session has not asked about yet. Asking is stamped,
+    /// so the day edge sends one request and the event does the rest.
+    pub(crate) fn take_sprout_settlement_on(&mut self, today: NaiveDate) -> bool {
+        if self.settlement_asked == Some(today) {
+            return false;
+        }
+        let due = match self.sprout_status_on(today) {
+            SproutStatus::Rooting => true,
+            SproutStatus::Bare { days_to_next } => days_to_next == Some(0),
+            SproutStatus::Standing { .. } => false,
+        };
+        if due {
+            self.settlement_asked = Some(today);
+        }
+        due
+    }
+
     /// The day's meal. The service pays the chips and hatches any fry behind
     /// DB gates; the caller only learns whether this press was the one that
     /// fed the tank. The streak follows the same rule as the row: it
@@ -208,7 +299,7 @@ impl AquariumCare {
                 .and_utc(),
         );
         self.streak = 0;
-        self.sprout = Some(today);
+        self.set_sprout(today);
         self.fry = fry.map(|creature| Fry {
             creature,
             born: today,
@@ -220,9 +311,11 @@ impl AquariumCare {
         self.sprout.is_some()
     }
 
-    /// A sprout came up (at connect, or the service's event came back).
+    /// A sprout came up (at connect, or the service's event came back). It
+    /// books the next one fourteen days out, as the row does.
     pub(crate) fn set_sprout(&mut self, born: NaiveDate) {
         self.sprout = Some(born);
+        self.next_sprout = born.checked_add_days(chrono::Days::new(SPROUT_EVERY_DAYS as u64));
     }
 
     /// The sprout left the floor: rooted as a plant, or cut on another
@@ -232,9 +325,9 @@ impl AquariumCare {
     }
 
     /// The cut press, behind the same week the row's own gate applies
-    /// (`sprout_rooted`): a sprout past it is a plant the next connect will
-    /// grow, so the press is refused and the sprout stays drawn. The
-    /// service writes a cut behind the row's gate as well.
+    /// (`sprout_rooted`): a sprout past it is a plant the service roots on
+    /// the day edge or at connect, so the press is refused and the sprout
+    /// stays drawn. The service writes a cut behind the row's gate as well.
     pub(crate) fn cut_sprout(&mut self, today: NaiveDate) -> CutOutcome {
         match self.sprout {
             None => CutOutcome::NothingToCut,

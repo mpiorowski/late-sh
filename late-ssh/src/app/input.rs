@@ -3438,40 +3438,6 @@ pub(crate) fn feed_aquarium_globally(app: &mut App) {
     }
 }
 
-/// Cut the sprout on the tank floor, from any surface that shows it. The
-/// floor clears at once; the service writes it behind the row's own gate.
-pub(crate) fn cut_aquarium_sprout_globally(app: &mut App) {
-    clear_prefix_arms(app);
-    if !app.shop_state.entitlements().has_aquarium() {
-        app.banner = Some(crate::app::common::primitives::Banner::error(
-            "Unlock Aquarium in Hub Shop",
-        ));
-        return;
-    }
-    match app
-        .aquarium_care
-        .cut_sprout(chrono::Utc::now().date_naive())
-    {
-        crate::app::hub::aquarium::state::CutOutcome::Cut => {
-            app.refresh_aquarium_population();
-            app.aquarium_service.cut_task(app.user_id);
-            app.banner = Some(crate::app::common::primitives::Banner::success(
-                "Cut the sprout",
-            ));
-        }
-        crate::app::hub::aquarium::state::CutOutcome::NothingToCut => {
-            app.banner = Some(crate::app::common::primitives::Banner::error(
-                "Nothing to cut: the floor is bare",
-            ));
-        }
-        crate::app::hub::aquarium::state::CutOutcome::Rooted => {
-            app.banner = Some(crate::app::common::primitives::Banner::error(
-                "Too late to cut: the sprout rooted, a wigglewort grows at your next login",
-            ));
-        }
-    }
-}
-
 fn open_bonsai_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;

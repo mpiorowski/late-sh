@@ -13,8 +13,12 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use late_core::models::rental::{TITLE_MAX_LEN, duration_label, duration_tag};
 use late_core::models::username_effect::UsernameEffect;
 
+use chrono::{NaiveDate, Utc};
+
 use crate::app::{
     common::theme,
+    common::markdown::wrap_plain_line,
+    hub::aquarium::state::{AquariumCare, SproutStatus},
     common::username_effect::{resolve, styled_name_spans},
     hub::aquarium::creature::{CreatureDef, load_default_creatures},
 };
@@ -29,7 +33,13 @@ use std::sync::OnceLock;
 
 use late_core::models::pet::PetSpecies;
 
-pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: PetSpecies) {
+pub(crate) fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    state: &ShopState,
+    pet_species: PetSpecies,
+    care: &AquariumCare,
+) {
     let sections = Layout::vertical([
         Constraint::Length(1), // heading
         Constraint::Length(1), // breathing
@@ -42,7 +52,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species
 
     frame.render_widget(Paragraph::new(section_heading("Shop")), sections[0]);
     draw_categories(frame, sections[2], state);
-    draw_body(frame, sections[4], state, pet_species);
+    draw_body(frame, sections[4], state, pet_species, care);
     draw_footer(frame, sections[5], state, pet_species);
     if let Some(pending) = state.pending_room_effect() {
         draw_room_effect_confirm(frame, area, pending);
@@ -80,10 +90,17 @@ fn draw_categories(frame: &mut Frame, area: Rect, state: &ShopState) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: PetSpecies) {
+fn draw_body(
+    frame: &mut Frame,
+    area: Rect,
+    state: &ShopState,
+    pet_species: PetSpecies,
+    care: &AquariumCare,
+) {
     let columns =
         Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).split(area);
-    draw_item_list(frame, columns[0], state);
+    let today = Utc::now().date_naive();
+    draw_item_list(frame, columns[0], state, care.sprout_status_on(today));
     draw_item_detail(
         frame,
         columns[1],
@@ -91,10 +108,12 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: PetS
         state.selected_item(),
         state.entitlements().has_aquarium(),
         pet_species,
+        care,
+        today,
     );
 }
 
-fn draw_item_list(frame: &mut Frame, area: Rect, state: &ShopState) {
+fn draw_item_list(frame: &mut Frame, area: Rect, state: &ShopState, sprout: SproutStatus) {
     let items = state.visible_items();
     if items.is_empty() {
         state.set_item_rects(Vec::new());
@@ -128,7 +147,7 @@ fn draw_item_list(frame: &mut Frame, area: Rect, state: &ShopState) {
         .map(|row| match row {
             ItemListRow::Section(label) => section_row(label),
             ItemListRow::Item { index, item } => {
-                item_row(category, *index == state.selected_index(), item, state)
+                item_row(category, *index == state.selected_index(), item, state, sprout)
             }
         })
         .collect::<Vec<_>>();
@@ -240,6 +259,7 @@ fn visible_window_start(selected_index: usize, item_count: usize, height: usize)
         .min(item_count.saturating_sub(height))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_item_detail(
     frame: &mut Frame,
     area: Rect,
@@ -247,10 +267,13 @@ fn draw_item_detail(
     item: Option<&ShopCatalogItem>,
     has_aquarium: bool,
     pet_species: PetSpecies,
+    care: &AquariumCare,
+    today: NaiveDate,
 ) {
     let Some(item) = item else {
         return;
     };
+    let sprout = care.sprout_status_on(today);
 
     let chat_effect_active =
         item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && chat_consumable_active(item, state);
@@ -277,6 +300,14 @@ fn draw_item_detail(
         }
     } else if item.is_consumable() {
         consumable_action_label(item, Some(chat_consumable_active(item, state)))
+    } else if item.is_sprout() {
+        match sprout {
+            SproutStatus::Standing { .. } => "on the floor",
+            SproutStatus::Rooting => "rooting",
+            SproutStatus::Bare { .. } => "bare floor",
+        }
+    } else if item.is_welcome_fish() {
+        "with the tank"
     } else if item.is_aquarium_fish() && !has_aquarium {
         "needs aquarium"
     } else if item.is_aquarium_fish() {
@@ -295,11 +326,14 @@ fn draw_item_detail(
     let status = if chat_effect_active
         || rental_active(item, state)
         || (item.owned && !item.is_consumable() && !item.is_rental())
+        || (item.is_sprout() && matches!(sprout, SproutStatus::Standing { .. }))
     {
         Style::default()
             .fg(theme::SUCCESS())
             .add_modifier(Modifier::BOLD)
-    } else if (item.is_aquarium_fish() && !has_aquarium)
+    } else if item.is_welcome_fish()
+        || item.is_sprout()
+        || (item.is_aquarium_fish() && !has_aquarium)
         || (item.is_custom_title() && !state.custom_titles_available())
     {
         Style::default()
@@ -309,28 +343,46 @@ fn draw_item_detail(
         Style::default().fg(theme::AMBER())
     };
 
-    let mut lines = vec![
-        section_heading(&item_detail_title(item)),
-        Line::from(""),
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                item.description.clone(),
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-        ]),
+    // The description wraps to the pane: the fish detail is drawn without
+    // paragraph wrapping (its art sits under a fixed-height info block),
+    // so the rows are wrapped here and counted.
+    let description_width = area.width.saturating_sub(2).max(1) as usize;
+    let mut lines = vec![section_heading(&item_detail_title(item)), Line::from("")];
+    lines.extend(
+        wrap_plain_line(&item.description, description_width)
+            .into_iter()
+            .map(|row| {
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(row, Style::default().fg(theme::TEXT_DIM())),
+                ])
+            }),
+    );
+    lines.extend([
         Line::from(""),
         Line::from(vec![
             Span::raw("  price  "),
-            Span::styled(
-                format!("{} chips", item.price_chips),
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
+            if item.is_sprout() {
+                Span::styled(
+                    "grows on its own",
+                    Style::default().fg(theme::TEXT_DIM()),
+                )
+            } else if item.is_welcome_fish() {
+                Span::styled(
+                    "free with the tank",
+                    Style::default().fg(theme::TEXT_DIM()),
+                )
+            } else {
+                Span::styled(
+                    format!("{} chips", item.price_chips),
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::BOLD),
+                )
+            },
         ]),
         Line::from(vec![Span::raw("  state  "), Span::styled(action, status)]),
-    ];
+    ]);
     if item.owned
         && item.quantity > 0
         && item.item_kind != CHAT_CONSUMABLE_ITEM_KIND
@@ -492,7 +544,41 @@ fn draw_item_detail(
             ]));
         }
     }
-    if item.is_aquarium_fish() {
+    if item.is_sprout() {
+        let dim = Style::default().fg(theme::TEXT_DIM());
+        let floor = match sprout {
+            SproutStatus::Standing { days_to_root: 1 } => {
+                "last day to cut it; tomorrow it roots as a wigglewort".to_string()
+            }
+            SproutStatus::Standing { days_to_root } => {
+                format!("{days_to_root} days to cut it, then it roots as a wigglewort")
+            }
+            SproutStatus::Rooting => "rooting as a wigglewort, one moment".to_string(),
+            SproutStatus::Bare {
+                days_to_next: Some(0),
+            } => "the next sprout comes up today".to_string(),
+            SproutStatus::Bare {
+                days_to_next: Some(1),
+            } => "the next sprout comes up tomorrow".to_string(),
+            SproutStatus::Bare {
+                days_to_next: Some(days),
+            } => format!("the next sprout comes up in {days} days"),
+            SproutStatus::Bare { days_to_next: None } => {
+                "one comes up every 14 days".to_string()
+            }
+        };
+        lines.push(Line::from(vec![
+            Span::raw("  floor  "),
+            Span::styled(floor, dim),
+        ]));
+        lines.push(Line::from(vec![
+            Span::raw("  keys   "),
+            Span::styled(
+                "- cuts the sprout; nothing to buy or add, it comes up on its own",
+                dim,
+            ),
+        ]));
+    } else if item.is_aquarium_fish() {
         if !has_aquarium {
             lines.push(Line::from(vec![
                 Span::raw("  unlock "),
@@ -528,12 +614,40 @@ fn draw_item_detail(
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]));
+        if item.is_welcome_fish() && has_aquarium {
+            let dim = Style::default().fg(theme::TEXT_DIM());
+            let fed_days = care.fed_days_to_next_fry_on(today);
+            lines.push(Line::from(vec![
+                Span::raw("  next   "),
+                Span::styled(
+                    match fed_days {
+                        1 => "a fry hatches at the next meal".to_string(),
+                        days => format!("a fry hatches after {days} more straight fed days"),
+                    },
+                    dim,
+                ),
+            ]));
+            if let Some((creature, days)) = care.fry_growing_on(today) {
+                lines.push(Line::from(vec![
+                    Span::raw("  small  "),
+                    Span::styled(
+                        match days {
+                            1 => format!("the {creature} fry grows up tomorrow"),
+                            days => format!("the {creature} fry grows up in {days} days"),
+                        },
+                        dim,
+                    ),
+                ]));
+            }
+        }
+        let keys = if item.is_welcome_fish() {
+            "+/- adds/removes your fry from the tank; fry only breed, one per streak"
+        } else {
+            "Enter buys another; +/- adds/removes owned fish from the tray"
+        };
         lines.push(Line::from(vec![
             Span::raw("  keys   "),
-            Span::styled(
-                "Enter buys another; +/- adds/removes owned fish from the tray",
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
+            Span::styled(keys, Style::default().fg(theme::TEXT_DIM())),
         ]));
     }
     if let Some(uses) = item.remaining_uses {
@@ -620,7 +734,11 @@ fn truncate_display_width(value: &str, max_width: usize) -> String {
 fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: PetSpecies) {
     let selected = state.selected_item();
     let has_aquarium = state.entitlements().has_aquarium();
-    let enter_label = if selected.is_some_and(|item| item.is_aquarium_fish() && !has_aquarium) {
+    let enter_label = if selected.is_some_and(|item| item.is_sprout()) {
+        "grows on its own"
+    } else if selected.is_some_and(|item| item.is_welcome_fish()) {
+        "with the tank"
+    } else if selected.is_some_and(|item| item.is_aquarium_fish() && !has_aquarium) {
         "needs aquarium"
     } else if selected.is_some_and(|item| item.is_aquarium_fish()) {
         "buy one"
@@ -648,7 +766,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: P
         Span::styled("Enter", key),
         Span::styled(format!(" {enter_label}"), text),
     ];
-    if selected.is_some_and(|item| item.is_aquarium_fish() && has_aquarium) {
+    if selected.is_some_and(|item| item.is_sprout() && has_aquarium) {
+        spans.extend([Span::styled("  -", key), Span::styled(" cut", text)]);
+    } else if selected.is_some_and(|item| item.is_aquarium_fish() && has_aquarium) {
         spans.extend([Span::styled("  +/-", key), Span::styled(" active", text)]);
     }
     if selected.is_some_and(|item| item.is_pet_companion() && item.owned) {
@@ -979,6 +1099,7 @@ fn item_row(
     selected: bool,
     item: &ShopCatalogItem,
     state: &ShopState,
+    sprout: SproutStatus,
 ) -> Line<'static> {
     let marker = if selected { ">" } else { " " };
     let name_style = if selected {
@@ -1003,6 +1124,12 @@ fn item_row(
         }
     } else if item.is_consumable() {
         consumable_row_status(item, state)
+    } else if item.is_sprout() {
+        match sprout {
+            SproutStatus::Standing { .. } => "up",
+            SproutStatus::Rooting => "rooting",
+            SproutStatus::Bare { .. } => "bare",
+        }
     } else if item.is_aquarium_fish() && item.quantity > 0 {
         "owned"
     } else if item.is_aquarium_fish() {
@@ -1024,6 +1151,13 @@ fn item_row(
         Style::default()
             .fg(theme::SUCCESS())
             .add_modifier(Modifier::BOLD)
+    } else if item.is_sprout() {
+        match sprout {
+            SproutStatus::Standing { .. } => Style::default().fg(theme::SUCCESS()),
+            SproutStatus::Rooting | SproutStatus::Bare { .. } => {
+                Style::default().fg(theme::TEXT_FAINT())
+            }
+        }
     } else if item.is_consumable() || item.is_rental() {
         Style::default().fg(theme::AMBER())
     } else if item.owned || (item.is_aquarium_fish() && item.quantity > 0) {
@@ -1050,7 +1184,9 @@ fn item_row(
         Span::styled(pad_display_width(&display_name, 22), name_style),
         Span::styled(status, status_style),
         Span::styled(
-            if item.is_aquarium_fish() {
+            if item.is_sprout() {
+                String::new()
+            } else if item.is_aquarium_fish() {
                 format!(" {}/{}", item.active_quantity, item.quantity)
             } else if item.is_consumable()
                 && item.item_kind != CHAT_CONSUMABLE_ITEM_KIND

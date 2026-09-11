@@ -3,7 +3,9 @@ use crate::{
         aquarium_care::AquariumCare,
         chips::{ChipMove, UserChips},
         marketplace::{
-            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
+            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, AQUARIUM_SPROUT_SKU,
+            AQUARIUM_WELCOME_FISH_SKU,
+            BONSAI_CONSUMABLE_ITEM_KIND,
             BONSAI_DECAY_PROTECTION_KIND, BONSAI_DECAY_SHIELD_SKU, CHAT_BADGE_SLOT,
             CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT, COMPANION_CONSUMABLE_ITEM_KIND,
             FishActiveStatus, MarketplaceItem, PET_COMPANION_SKU, PurchaseStatus,
@@ -249,9 +251,13 @@ async fn seeded_aquarium_fish_are_sorted_and_priced_by_size() {
         .map(|item| item.sku.as_str())
         .collect::<Vec<_>>();
 
+    // The welcome fry and the sprout row lead the list (migration 182),
+    // then the sizes.
     assert_eq!(
         skus,
         vec![
+            "aquarium_fish_fry",
+            "aquarium_sprout",
             "aquarium_fish_mj",
             "aquarium_fish_seahorse",
             "aquarium_fish_finnegan",
@@ -394,10 +400,10 @@ async fn buying_the_tank_comes_with_a_free_fry_and_a_sprout() {
         .expect("aquarium purchase")
         .expect("aquarium item");
 
-    // One fish of the cheapest tier, swimming, at no price.
+    // One fry, swimming, at no price.
     let fish = client
         .query(
-            "SELECT i.payload->>'creature' AS creature, i.price_chips,
+            "SELECT i.sku, i.payload->>'creature' AS creature, i.price_chips,
                     p.quantity, p.active_quantity, p.purchased_price_chips
              FROM user_purchases p
              JOIN marketplace_items i ON i.id = p.item_id
@@ -407,7 +413,9 @@ async fn buying_the_tank_comes_with_a_free_fry_and_a_sprout() {
         .await
         .expect("fish rows");
     assert_eq!(fish.len(), 1, "exactly one welcome fish");
+    assert_eq!(fish[0].get::<_, String>("sku"), AQUARIUM_WELCOME_FISH_SKU);
     let creature: String = fish[0].get("creature");
+    assert_eq!(creature, "fry");
     assert_eq!(fish[0].get::<_, i64>("price_chips"), AQUARIUM_FISH_PRICE);
     assert_eq!(fish[0].get::<_, i32>("quantity"), 1);
     assert_eq!(fish[0].get::<_, i32>("active_quantity"), 1);
@@ -429,6 +437,75 @@ async fn buying_the_tank_comes_with_a_free_fry_and_a_sprout() {
         .expect("chips row")
         .expect("the buyer has a chips row");
     assert_eq!(chips.balance, before - AQUARIUM_PRICE);
+}
+
+#[tokio::test]
+async fn the_welcome_fish_and_the_sprout_are_listed_but_never_sold() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "aquarium-fry-not-for-sale").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let before = UserChips::admin_grant(&**client, user.id, AQUARIUM_PRICE + AQUARIUM_FISH_PRICE)
+        .await
+        .expect("fund chips")
+        .balance;
+    purchase_durable_item_by_sku(&mut client, user.id, AQUARIUM_SKU)
+        .await
+        .expect("aquarium purchase");
+
+    // The shop lists it with the other fish, so its art and its count show.
+    let listed = MarketplaceItem::list_visible(&client)
+        .await
+        .expect("catalog")
+        .into_iter()
+        .any(|item| item.sku == AQUARIUM_WELCOME_FISH_SKU);
+    assert!(listed, "the fry is in the visible catalog");
+
+    // Buying one is refused, and nothing is charged.
+    let refused = purchase_durable_item_by_sku(&mut client, user.id, AQUARIUM_WELCOME_FISH_SKU)
+        .await
+        .expect_err("the fry is not for sale");
+    assert!(
+        refused.to_string().contains("not for sale"),
+        "unexpected refusal: {refused}"
+    );
+    let chips = UserChips::find(&client, user.id)
+        .await
+        .expect("chips row")
+        .expect("the buyer has a chips row");
+    assert_eq!(chips.balance, before - AQUARIUM_PRICE);
+    let owned: i32 = client
+        .query_one(
+            "SELECT p.quantity
+             FROM user_purchases p
+             JOIN marketplace_items i ON i.id = p.item_id
+             WHERE p.user_id = $1 AND i.sku = $2",
+            &[&user.id, &AQUARIUM_WELCOME_FISH_SKU],
+        )
+        .await
+        .expect("fry row")
+        .get("quantity");
+    assert_eq!(owned, 1, "still just the welcome fry");
+
+    // The sprout row is listed the same way and refused the same way.
+    let refused = purchase_durable_item_by_sku(&mut client, user.id, AQUARIUM_SPROUT_SKU)
+        .await
+        .expect_err("the sprout is not for sale");
+    assert!(
+        refused.to_string().contains("not for sale"),
+        "unexpected refusal: {refused}"
+    );
+    let sprout_rows: i64 = client
+        .query_one(
+            "SELECT count(*)
+             FROM user_purchases p
+             JOIN marketplace_items i ON i.id = p.item_id
+             WHERE p.user_id = $1 AND i.sku = $2",
+            &[&user.id, &AQUARIUM_SPROUT_SKU],
+        )
+        .await
+        .expect("sprout rows")
+        .get(0);
+    assert_eq!(sprout_rows, 0, "the sprout never has a purchase row");
 }
 
 #[tokio::test]

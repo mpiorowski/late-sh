@@ -1309,7 +1309,7 @@ impl App {
                     "Your sprout took root: a wigglewort waits in /shop, the tank is full",
                 )),
                 (None, true) => Some(crate::app::common::primitives::Banner::info(
-                    "A sprout came up in your tank: leave it, or /aq cut within the week",
+                    "A sprout came up in your tank: cut it in /shop within the week, or leave it to root",
                 )),
                 (None, false) => None,
             },
@@ -1760,7 +1760,8 @@ impl App {
         self.lateania_state = None;
         // Refresh the landing's slot list so a level/class change from the
         // adventure just left shows up without needing to leave the screen.
-        self.lateania_service.character_slots_task(self.user_id);
+        self.lateania_service
+            .character_slots_task(self.user_id, self.repaint_signal.clone());
     }
 
     /// A backtick detach hopped out of the Lateania world recently enough
@@ -2291,7 +2292,8 @@ impl App {
         if self.screen == Screen::Lateania {
             // Refresh the character-select landing's slot list; the landing
             // itself only shows once an explicit Enter joins a slot.
-            self.lateania_service.character_slots_task(self.user_id);
+            self.lateania_service
+                .character_slots_task(self.user_id, self.repaint_signal.clone());
         }
         if self.screen == Screen::Rebels {
             self.enter_rebels();

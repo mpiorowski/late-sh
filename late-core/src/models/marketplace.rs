@@ -30,6 +30,14 @@ pub const AQUARIUM_FISH_ITEM_KIND: &str = "aquarium_fish";
 pub const AQUARIUM_MAX_FISH: i32 = 20;
 /// The plant a sprout roots as when its owner leaves it alone.
 pub const AQUARIUM_SPROUT_ROOTS_AS_SKU: &str = "aquarium_fish_wigglewort";
+/// The fish every tank comes with (migration 182): the fry, its own
+/// catalog row so the shop shows the hatchling sprite that swims; listed,
+/// never sold; `is_welcome_fish` reads the same fact off the payload.
+pub const AQUARIUM_WELCOME_FISH_SKU: &str = "aquarium_fish_fry";
+/// The Shop's row for the sprout on the tank floor (migration 182): listed
+/// so the tank is tended in one place, never sold, never a purchase row;
+/// its state lives on the care row.
+pub const AQUARIUM_SPROUT_SKU: &str = "aquarium_sprout";
 pub const AQUARIUM_CONSUMABLE_ITEM_KIND: &str = "aquarium_consumable";
 pub const AQUARIUM_SHIELD_SKU: &str = "aquarium_shield_two_weeks";
 /// `shop_consumable_effects.effect_kind` for the user-scoped Aquarium
@@ -318,6 +326,9 @@ async fn purchase_item_by_sku_inner(
         });
     };
     let item = MarketplaceItem::from(item_row);
+    if is_listed_only(&item.payload) {
+        bail!("{} is shown in the shop but not for sale", item.sku);
+    }
     let is_aquarium_fish = item.item_kind == AQUARIUM_FISH_ITEM_KIND;
     let is_repeatable = is_repeatable_purchase_item(&item);
     let balance = lock_user_chips_in_tx(&tx, user_id).await?;
@@ -767,6 +778,23 @@ async fn aquarium_fish_active_quantity_in_tx(
     Ok(row.get("total"))
 }
 
+/// A catalog fish the shop shows but never sells: the one the tank comes
+/// with (`payload.welcome`, `AQUARIUM_WELCOME_FISH_SKU`).
+pub fn is_welcome_fish(payload: &Value) -> bool {
+    payload.get("welcome").and_then(Value::as_bool) == Some(true)
+}
+
+/// The Shop's sprout row (`payload.sprout`, `AQUARIUM_SPROUT_SKU`).
+pub fn is_sprout_row(payload: &Value) -> bool {
+    payload.get("sprout").and_then(Value::as_bool) == Some(true)
+}
+
+/// A catalog item the Shop lists but the purchase path refuses: the
+/// welcome fry and the sprout row.
+pub fn is_listed_only(payload: &Value) -> bool {
+    is_welcome_fish(payload) || is_sprout_row(payload)
+}
+
 fn is_repeatable_purchase_item(item: &MarketplaceItem) -> bool {
     matches!(
         item.item_kind.as_str(),
@@ -1113,12 +1141,11 @@ pub async fn hatch_aquarium_fry_in_tx(
     Ok(into_water)
 }
 
-/// The tank's welcome fish: a fry of the cheapest species in the catalog
-/// (the first by catalog order at the lowest price), owned and swimming
-/// from the purchase at no price, and stamped on the care row so every
-/// session draws it small for its first week. Returns the creature. Called
-/// inside the purchase transaction of a tank nobody owned, so the buyer has
-/// no fish rows yet.
+/// The tank's welcome fish: one fry (`AQUARIUM_WELCOME_FISH_SKU`, the
+/// hatchling row the shop never sells), owned and swimming from the
+/// purchase at no price, and stamped on the care row as today's fry.
+/// Returns the creature. Called inside the purchase transaction of a tank
+/// nobody owned, so the buyer has no fish rows yet.
 pub async fn welcome_aquarium_fry_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     user_id: Uuid,
@@ -1127,12 +1154,8 @@ pub async fn welcome_aquarium_fry_in_tx(
         .query_one(
             "SELECT id, payload->>'creature' AS creature
              FROM marketplace_items
-             WHERE item_kind = $1
-               AND active
-               AND payload->>'creature' IS NOT NULL
-             ORDER BY price_chips, sort_order, sku
-             LIMIT 1",
-            &[&AQUARIUM_FISH_ITEM_KIND],
+             WHERE sku = $1 AND active",
+            &[&AQUARIUM_WELCOME_FISH_SKU],
         )
         .await?;
     let item_id: Uuid = row.get("id");

@@ -79,6 +79,8 @@ fn bonsai_shield_item() -> ShopCatalogItem {
         rental_duration_secs: None,
         badge_slot: None,
         custom_title: false,
+        welcome_fish: false,
+        sprout: false,
     }
 }
 
@@ -121,7 +123,13 @@ fn consumable_row_status_reads_active_while_the_shield_is_live() {
 fn item_row_hides_the_lifetime_purchase_count_as_stock_for_the_bonsai_shield() {
     let item = bonsai_shield_item();
     let state = make_state_with_bonsai_protection(None);
-    let line = item_row(ShopCategory::Companions, false, &item, &state);
+    let line = item_row(
+        ShopCategory::Companions,
+        false,
+        &item,
+        &state,
+        SproutStatus::Bare { days_to_next: None },
+    );
     let text: String = line
         .spans
         .iter()
@@ -166,11 +174,15 @@ fn chat_tab_rows_open_each_group_with_a_section_label() {
     let title_day = ShopCatalogItem {
         rental_duration_secs: Some(RENTAL_DAY_SECS),
         custom_title: true,
+        welcome_fish: false,
+        sprout: false,
         ..chat_item("title_custom_day", TITLE_RENTAL_ITEM_KIND)
     };
     let title_month = ShopCatalogItem {
         rental_duration_secs: Some(RENTAL_MONTH_SECS),
         custom_title: true,
+        welcome_fish: false,
+        sprout: false,
         ..chat_item("title_custom_month", TITLE_RENTAL_ITEM_KIND)
     };
     let spark = chat_item("chat_room_spark", CHAT_CONSUMABLE_ITEM_KIND);
@@ -245,9 +257,17 @@ fn title_rows_tell_the_two_tiers_apart_with_the_duration_tag() {
         name: "Your Own Title".to_string(),
         rental_duration_secs: Some(RENTAL_MONTH_SECS),
         custom_title: true,
+        welcome_fish: false,
+        sprout: false,
         ..chat_item("title_custom_month", TITLE_RENTAL_ITEM_KIND)
     };
-    let line = item_row(ShopCategory::Chat, false, &title, &state);
+    let line = item_row(
+        ShopCategory::Chat,
+        false,
+        &title,
+        &state,
+        SproutStatus::Bare { days_to_next: None },
+    );
     let text: String = line
         .spans
         .iter()

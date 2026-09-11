@@ -212,9 +212,6 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
             crate::app::chat::state::AquariumCommand::Feed => {
                 crate::app::input::feed_aquarium_globally(app);
             }
-            crate::app::chat::state::AquariumCommand::Cut => {
-                crate::app::input::cut_aquarium_sprout_globally(app);
-            }
         }
     }
     if let Some(topic) = app.chat.take_requested_help_topic() {

@@ -419,6 +419,14 @@ impl ShopState {
             });
             return Some(Banner::success("Pick a style"));
         }
+        if item.is_sprout() {
+            return Some(Banner::error(
+                "Sprouts come up on their own, every 14 days; - cuts the one on the floor",
+            ));
+        }
+        if item.is_welcome_fish() {
+            return Some(Banner::error("Fry are not for sale, they only breed: one with the tank, one per fourteen-day streak"));
+        }
         if item.is_aquarium_fish() {
             if !self.snapshot.entitlements.has_aquarium() {
                 return Some(Banner::error("Unlock Aquarium before buying fish"));

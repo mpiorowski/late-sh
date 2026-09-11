@@ -118,13 +118,7 @@ impl AquariumService {
                 marketplace::notify_user_shop_changed(&*tx, user_id).await?;
             }
         }
-        let mut rooted = None;
-        if AquariumCare::root_sprout(&*tx, user_id, today).await? {
-            let swimming = marketplace::root_aquarium_sprout_in_tx(&tx, user_id).await?;
-            marketplace::notify_user_shop_changed(&*tx, user_id).await?;
-            rooted = Some(swimming);
-        }
-        let sprouted = AquariumCare::sprout_up(&*tx, user_id, today).await?;
+        let (rooted, sprouted) = settle_sprout_clock_in_tx(&tx, user_id, today).await?;
         tx.commit().await?;
 
         if !lost.is_empty() || rooted.is_some() || sprouted {
@@ -143,26 +137,7 @@ impl AquariumService {
                     creature.clone(),
                 ));
             }
-            if let Some(swimming) = rooted {
-                tracing::info!(
-                    user_id = %user_id,
-                    username = %username,
-                    swimming,
-                    "aquarium sprout rooted"
-                );
-                let _ = self
-                    .activity_feed
-                    .send(ActivityEvent::aquarium_sprout_rooted(
-                        user_id,
-                        username.clone(),
-                        swimming,
-                    ));
-            }
-            if sprouted {
-                let _ = self
-                    .activity_feed
-                    .send(ActivityEvent::aquarium_sprouted(user_id, username, today));
-            }
+            self.announce_sprout_clock(user_id, &username, rooted, sprouted, today);
         }
         Ok(CareBootstrap {
             care: Some(AquariumCare {
@@ -181,6 +156,70 @@ impl AquariumService {
             rooted,
             sprouted,
         })
+    }
+
+    /// The sprout clock on the UTC day edge, for a session that stays up
+    /// across it: a sprout past its week roots, a due sprout comes up, and
+    /// the events tell every session of the owner's, this one included. The
+    /// connect does the same inside the bootstrap; a session asks once per
+    /// day (`state::AquariumCare::take_sprout_settlement_on`).
+    pub fn settle_sprout_clock_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.settle_sprout_clock(user_id).await {
+                tracing::error!(error = ?e, user_id = %user_id, "failed to settle aquarium sprout clock");
+            }
+        });
+    }
+
+    async fn settle_sprout_clock(&self, user_id: Uuid) -> Result<()> {
+        let mut client = self.db.get().await?;
+        if !marketplace::user_owns_aquarium(&**client, user_id).await? {
+            return Ok(());
+        }
+        let today = Utc::now().date_naive();
+        let tx = client.transaction().await?;
+        let (rooted, sprouted) = settle_sprout_clock_in_tx(&tx, user_id, today).await?;
+        tx.commit().await?;
+        if rooted.is_some() || sprouted {
+            let username = late_core::models::profile::fetch_username(&client, user_id).await;
+            self.announce_sprout_clock(user_id, &username, rooted, sprouted, today);
+        }
+        Ok(())
+    }
+
+    /// The sprout clock's news on the activity feed: the rooting (with
+    /// whether the plant went into the water) and the new sprout.
+    fn announce_sprout_clock(
+        &self,
+        user_id: Uuid,
+        username: &str,
+        rooted: Option<bool>,
+        sprouted: bool,
+        today: NaiveDate,
+    ) {
+        if let Some(swimming) = rooted {
+            tracing::info!(
+                user_id = %user_id,
+                username = %username,
+                swimming,
+                "aquarium sprout rooted"
+            );
+            let _ = self
+                .activity_feed
+                .send(ActivityEvent::aquarium_sprout_rooted(
+                    user_id,
+                    username.to_string(),
+                    swimming,
+                ));
+        }
+        if sprouted {
+            let _ = self.activity_feed.send(ActivityEvent::aquarium_sprouted(
+                user_id,
+                username.to_string(),
+                today,
+            ));
+        }
     }
 
     /// Persist a cut. The ownership check and the sprout's own gate (still
@@ -307,3 +346,21 @@ impl AquariumService {
 #[cfg(test)]
 #[path = "svc_test.rs"]
 mod svc_test;
+
+/// The sprout clock inside a transaction: a sprout past its week roots as
+/// a wigglewort (`Some(swimming)`), then a due sprout comes up on the bare
+/// floor (`true`). The row's own gates make both idempotent.
+async fn settle_sprout_clock_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+    today: NaiveDate,
+) -> Result<(Option<bool>, bool)> {
+    let mut rooted = None;
+    if AquariumCare::root_sprout(&*tx, user_id, today).await? {
+        let swimming = marketplace::root_aquarium_sprout_in_tx(tx, user_id).await?;
+        marketplace::notify_user_shop_changed(&*tx, user_id).await?;
+        rooted = Some(swimming);
+    }
+    let sprouted = AquariumCare::sprout_up(&*tx, user_id, today).await?;
+    Ok((rooted, sprouted))
+}

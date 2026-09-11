@@ -100,10 +100,7 @@ const fn room(command: RoomScopedCommand) -> Command {
 /// so a long one silently truncates on an 80-col terminal.
 const COMMANDS: &[Command] = &[
     global("active", "list users online right now"),
-    global(
-        "aquarium",
-        "tend the tank (/aquarium feed feeds it, /aquarium cut cuts the sprout)",
-    ),
+    global("aquarium", "feed the tank (/aquarium feed, free, daily)"),
     global("ban", "ban from your room (/ban @user [7d] [reason])"),
     global("binds", "open the chat guide (same as ?)"),
     global("brb", "go AFK and mute audio (/brb back in 5)"),

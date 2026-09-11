@@ -22,7 +22,8 @@ use late_core::{
             COMPANION_CONSUMABLE_ITEM_KIND, FishActiveStatus, MarketplaceItem, PET_COMPANION_SKU,
             PurchaseResult, PurchaseStatus, PurchaseWithEffectResult, SHOP_CATALOG_CHANGED_CHANNEL,
             SHOP_USER_CHANGED_CHANNEL, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND,
-            UserPurchase, adjust_aquarium_fish_active_by_sku, listen_for_shop_changes,
+            UserPurchase, adjust_aquarium_fish_active_by_sku, is_sprout_row, is_welcome_fish,
+            listen_for_shop_changes,
             purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_custom_title,
             purchase_item_by_sku_with_username_effect, rental_duration_secs,
         },
@@ -142,6 +143,12 @@ pub struct ShopCatalogItem {
     /// Whether this title rental sells a text the buyer writes rather than one
     /// the catalog carries.
     pub custom_title: bool,
+    /// The fish the tank comes with (`payload.welcome`): listed with its
+    /// art and its count, never sold.
+    pub welcome_fish: bool,
+    /// The sprout row (`payload.sprout`): the bud on the tank floor, read
+    /// off the care state, never a purchase.
+    pub sprout: bool,
 }
 
 impl ShopCatalogItem {
@@ -163,6 +170,16 @@ impl ShopCatalogItem {
 
     pub fn is_aquarium_fish(&self) -> bool {
         self.item_kind == AQUARIUM_FISH_ITEM_KIND
+    }
+
+    /// The fry: the one fish the shop shows but never sells.
+    pub fn is_welcome_fish(&self) -> bool {
+        self.welcome_fish
+    }
+
+    /// The sprout row: shown with the floor's state, cut with `-`.
+    pub fn is_sprout(&self) -> bool {
+        self.sprout
     }
 
     pub fn is_chat_badge(&self) -> bool {
@@ -1125,6 +1142,9 @@ impl ShopService {
                 };
                 let custom_title =
                     item_kind == TITLE_RENTAL_ITEM_KIND && is_custom_title(&item.payload);
+                let welcome_fish =
+                    item_kind == AQUARIUM_FISH_ITEM_KIND && is_welcome_fish(&item.payload);
+                let sprout = item_kind == AQUARIUM_FISH_ITEM_KIND && is_sprout_row(&item.payload);
                 ShopCatalogItem {
                     sku: item.sku,
                     item_kind,
@@ -1151,6 +1171,8 @@ impl ShopService {
                     rental_duration_secs,
                     badge_slot,
                     custom_title,
+                    welcome_fish,
+                    sprout,
                 }
             })
             .collect();
