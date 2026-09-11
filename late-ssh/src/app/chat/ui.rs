@@ -4670,20 +4670,17 @@ fn stream_on_air_view(
     crate::app::voice::ui::OnAirView { live: stream.live }
 }
 
-/// The rail row label for one stream: `▶ #mat-live · title · 3 watching`.
-/// A pending stream (registered, no media yet) shows `starting…` instead of
-/// the count; the watch count only means something once frames flow.
+/// The rail row label for one stream: `▶ mat [3]`, the bracket being the
+/// watcher count (zero included). The title lives in the room's stream
+/// header, not here: the row already carries the unread badge on its right,
+/// and a second bare number would read as the same thing. A pending stream
+/// (registered, no media yet) shows `…` instead of the count; the watch count
+/// only means something once frames flow.
 fn stream_rail_label(stream: &crate::app::stream::registry::LiveStreamView) -> String {
-    let mut label = format!("▶ {}-live", stream.username);
-    if !stream.title.trim().is_empty() {
-        label.push_str(&format!(" · {}", stream.title.trim()));
+    match stream.live {
+        true => format!("▶ {} [{}]", stream.username, stream.watching),
+        false => format!("▶ {} …", stream.username),
     }
-    if !stream.live {
-        label.push_str(" · starting…");
-    } else if stream.watching > 0 {
-        label.push_str(&format!(" · {} watching", stream.watching));
-    }
-    label
 }
 
 /// Slugs of public topic rooms currently carrying a `room_bump` effect,

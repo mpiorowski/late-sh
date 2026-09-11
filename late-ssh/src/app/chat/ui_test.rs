@@ -2774,6 +2774,24 @@ fn live_stream(title: &str, watch_url: &str) -> crate::app::stream::registry::Li
     }
 }
 
+/// The rail row carries only the streamer and the watcher count in brackets:
+/// the unread badge already sits on the right as a bare number, so the count
+/// must not read as a second one, and the title stays in the stream header.
+#[test]
+fn stream_rail_label_is_the_username_and_a_bracketed_watcher_count() {
+    let mut stream = live_stream("bug hunt", "https://late.sh/live/abc");
+    assert_eq!(super::stream_rail_label(&stream), "▶ mat [3]");
+
+    // Zero watchers still shows the bracket, so the slot never jumps around.
+    stream.watching = 0;
+    assert_eq!(super::stream_rail_label(&stream), "▶ mat [0]");
+
+    // Pending: no media yet, so no count to stand behind.
+    stream.live = false;
+    stream.watching = 2;
+    assert_eq!(super::stream_rail_label(&stream), "▶ mat …");
+}
+
 /// A real stream id is 16 random bytes in base64url (`registry::capability_id`),
 /// so `watch: <url>` plus its trailing cell runs 51 columns, wider than the
 /// slack an ordinary chat pane has left over. The link is the point of the
