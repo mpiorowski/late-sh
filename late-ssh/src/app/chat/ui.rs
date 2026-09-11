@@ -4205,6 +4205,10 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     let mut hit_slots: Vec<Option<RoomSlot>> = Vec::new();
     let mut selected_row_index = None;
     let inner_width = width.saturating_sub(3) as usize; // 2 left gutter + 1 right margin
+    // Cells a row label may use: the jump-key prefix (`k ` or two blanks)
+    // when room-jump is active, plus four for the badge and its gap.
+    let key_width = if view.room_jump_active { 2 } else { 0 };
+    let label_max = inner_width.saturating_sub(key_width + 4);
     let order = visual_order_for_rooms(RoomVisualOrderInput {
         rooms: view.chat_rooms,
         user_id: view.current_user_id,
@@ -4288,8 +4292,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         } else {
             String::new()
         };
-        let key_width = UnicodeWidthStr::width(key_prefix.as_str());
-        let label_max = inner_width.saturating_sub(key_width + 4);
         let display_label = if UnicodeWidthStr::width(label.as_str()) > label_max && label_max > 1 {
             let mut s = String::new();
             let mut w = 0usize;
@@ -4350,7 +4352,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     let push_slot =
         |slot: RoomSlot, push_row: &mut dyn FnMut(Line<'static>, Option<RoomSlot>, bool)| {
             let active = cozy_slot_selected(view, slot);
-            let (label, unread) = room_slot_label_and_unread(view, slot);
+            let (label, unread) = room_slot_label_and_unread(view, slot, label_max);
             let badge = room_slot_badge(view, slot, unread);
             push_row(
                 item_row(
@@ -4587,19 +4589,24 @@ fn room_slot_badge(view: &ChatRoomListView<'_>, slot: RoomSlot, unread: i64) -> 
     }
 }
 
-fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (String, i64) {
+fn room_slot_label_and_unread(
+    view: &ChatRoomListView<'_>,
+    slot: RoomSlot,
+    label_max: usize,
+) -> (String, i64) {
     match slot {
         RoomSlot::Room(room_id) => {
-            // A stream row carries the show, not the room: streamer, title,
-            // and the watcher count. It also renders before this user is a
-            // member (the room may be missing from `chat_rooms` entirely).
+            // A stream row carries the show, not the room: the streamer and
+            // the bracketed watcher count; the title lives in the room's
+            // stream header. It also renders before this user is a member
+            // (the room may be missing from `chat_rooms` entirely).
             if let Some(stream) = view
                 .live_streams
                 .iter()
                 .find(|stream| stream.room_id == room_id)
             {
                 let unread = view.unread_counts.get(&room_id).copied().unwrap_or(0);
-                return (stream_rail_label(stream), unread);
+                return (stream_rail_label(stream, label_max), unread);
             }
             let Some((room, _)) = view.chat_rooms.iter().find(|(room, _)| room.id == room_id)
             else {
@@ -4660,13 +4667,26 @@ fn stream_on_air_view(
 /// watcher count (zero included). The title lives in the room's stream
 /// header, not here: the row already carries the unread badge on its right,
 /// and a second bare number would read as the same thing. A pending stream
-/// (registered, no media yet) shows `…` instead of the count; the watch count
-/// only means something once frames flow.
-fn stream_rail_label(stream: &crate::app::stream::registry::LiveStreamView) -> String {
-    match stream.live {
-        true => format!("▶ {} [{}]", stream.username, stream.watching),
-        false => format!("▶ {} …", stream.username),
-    }
+/// (registered, no media yet) shows `[…]` in the count's slot; the watch
+/// count only means something once frames flow.
+///
+/// The label fits `max_width` by shortening the username, never the bracket:
+/// the row renderer clips labels from the right, which would drop the count
+/// first and end the row in the same `…` a pending stream shows. A username
+/// can run 32 characters while the rail leaves the label 17 cells or fewer,
+/// so a long name is the ordinary case, not a corner.
+fn stream_rail_label(
+    stream: &crate::app::stream::registry::LiveStreamView,
+    max_width: usize,
+) -> String {
+    let count = match stream.live {
+        true => format!("[{}]", stream.watching),
+        false => "[…]".to_string(),
+    };
+    // `▶ ` before the name, one space before the count.
+    let name_budget = max_width.saturating_sub(3 + UnicodeWidthStr::width(count.as_str()));
+    let name = truncate_cells(&stream.username, name_budget);
+    format!("▶ {name} {count}")
 }
 
 /// Slugs of public topic rooms currently carrying a `room_bump` effect,

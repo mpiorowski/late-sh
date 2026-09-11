@@ -2778,17 +2778,47 @@ fn live_stream(title: &str, watch_url: &str) -> crate::app::stream::registry::Li
 /// must not read as a second one, and the title stays in the stream header.
 #[test]
 fn stream_rail_label_is_the_username_and_a_bracketed_watcher_count() {
+    // The 24-column rail leaves a label 17 cells with jump keys hidden.
+    const LABEL_MAX: usize = 17;
     let mut stream = live_stream("bug hunt", "https://late.sh/live/abc");
-    assert_eq!(super::stream_rail_label(&stream), "▶ mat [3]");
+    assert_eq!(super::stream_rail_label(&stream, LABEL_MAX), "▶ mat [3]");
 
     // Zero watchers still shows the bracket, so the slot never jumps around.
     stream.watching = 0;
-    assert_eq!(super::stream_rail_label(&stream), "▶ mat [0]");
+    assert_eq!(super::stream_rail_label(&stream, LABEL_MAX), "▶ mat [0]");
 
-    // Pending: no media yet, so no count to stand behind.
+    // Pending: no media yet, so no count to stand behind. The marker keeps
+    // the bracket so it cannot pass for a clipped row.
     stream.live = false;
     stream.watching = 2;
-    assert_eq!(super::stream_rail_label(&stream), "▶ mat …");
+    assert_eq!(super::stream_rail_label(&stream, LABEL_MAX), "▶ mat […]");
+}
+
+/// A username can run 32 characters against a 17-cell label budget. The
+/// row renderer clips from the right, which would eat the count first and
+/// leave a live stream ending in the pending `…`. So the name is what
+/// shortens, and the bracket is always the last thing on the row.
+#[test]
+fn stream_rail_label_shortens_the_username_and_keeps_the_watcher_count() {
+    const LABEL_MAX: usize = 17;
+    let mut stream = live_stream("bug hunt", "https://late.sh/live/abc");
+    stream.username = "averyverylongstreamername".to_string();
+    stream.watching = 12;
+
+    let label = super::stream_rail_label(&stream, LABEL_MAX);
+    assert_eq!(label, "▶ averyvery… [12]");
+    assert_eq!(UnicodeWidthStr::width(label.as_str()), LABEL_MAX);
+
+    // Two cells fewer while jump keys are shown: still the whole bracket.
+    let label = super::stream_rail_label(&stream, LABEL_MAX - 2);
+    assert_eq!(label, "▶ averyve… [12]");
+
+    // Pending with a long name still reads as pending, not as clipped.
+    stream.live = false;
+    assert_eq!(
+        super::stream_rail_label(&stream, LABEL_MAX),
+        "▶ averyveryl… […]"
+    );
 }
 
 /// A real stream id is 16 random bytes in base64url (`registry::capability_id`),
