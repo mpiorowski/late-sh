@@ -559,9 +559,11 @@ async fn purchase_item_by_sku_inner(
         )
         .await?;
     }
-    // The tank comes with its first sprout on the floor.
+    // The tank comes with its first sprout on the floor and a fry in the
+    // water, so it is never bought empty.
     if item.sku == AQUARIUM_SKU {
         super::aquarium_care::AquariumCare::welcome(&tx, user_id).await?;
+        welcome_aquarium_fry_in_tx(&tx, user_id).await?;
     }
 
     let refresh_all_active_users =
@@ -1109,6 +1111,42 @@ pub async fn hatch_aquarium_fry_in_tx(
         bail!("fry hatched for a species the user does not own");
     }
     Ok(into_water)
+}
+
+/// The tank's welcome fish: a fry of the cheapest species in the catalog
+/// (the first by catalog order at the lowest price), owned and swimming
+/// from the purchase at no price, and stamped on the care row so every
+/// session draws it small for its first week. Returns the creature. Called
+/// inside the purchase transaction of a tank nobody owned, so the buyer has
+/// no fish rows yet.
+pub async fn welcome_aquarium_fry_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+) -> Result<String> {
+    let row = tx
+        .query_one(
+            "SELECT id, payload->>'creature' AS creature
+             FROM marketplace_items
+             WHERE item_kind = $1
+               AND active
+               AND payload->>'creature' IS NOT NULL
+             ORDER BY price_chips, sort_order, sku
+             LIMIT 1",
+            &[&AQUARIUM_FISH_ITEM_KIND],
+        )
+        .await?;
+    let item_id: Uuid = row.get("id");
+    let creature: String = row.get("creature");
+    tx.execute(
+        "INSERT INTO user_purchases
+            (user_id, item_id, quantity, active_quantity, remaining_uses, equipped_slot, purchased_price_chips)
+         VALUES ($1, $2, 1, 1, NULL, NULL, 0)",
+        &[&user_id, &item_id],
+    )
+    .await?;
+    super::aquarium_care::AquariumCare::set_fry(tx, user_id, &creature, Utc::now().date_naive())
+        .await?;
+    Ok(creature)
 }
 
 /// A sprout the owner left alone rooted as a plant

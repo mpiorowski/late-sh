@@ -870,15 +870,27 @@ impl App {
                 .set_chat_badge(self.user_id, equipped_badge.as_deref());
             // A tank owned by the shop but with no clock in this session
             // was bought just now (a connect-time owner always has one from
-            // bootstrap): take the row the purchase planted, sprout and all.
+            // bootstrap): take the row the purchase planted, sprout and
+            // fry. The fry is the one fish the snapshot says is swimming.
             if self.shop_state.entitlements().has_aquarium()
                 && self.aquarium_care.last_fed.is_none()
             {
+                let fry = self
+                    .shop_state
+                    .active_aquarium_fish()
+                    .into_iter()
+                    .next()
+                    .map(|(creature, _)| creature);
+                let welcome = match &fry {
+                    Some(creature) => format!(
+                        "Your tank came with a {creature} fry and a sprout: leave the sprout, or /aq cut within the week"
+                    ),
+                    None => "Your tank came with a sprout: leave it, or /aq cut within the week"
+                        .to_string(),
+                };
                 self.aquarium_care
-                    .welcome_new_tank(chrono::Utc::now().date_naive());
-                self.banner = Some(crate::app::common::primitives::Banner::info(
-                    "Your tank came with a sprout: leave it, or /aq cut within the week",
-                ));
+                    .welcome_new_tank(chrono::Utc::now().date_naive(), fry);
+                self.banner = Some(crate::app::common::primitives::Banner::info(&welcome));
             }
             self.aquarium_state.set_active_creatures(
                 &self.shop_state.active_aquarium_fish(),

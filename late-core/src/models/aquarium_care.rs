@@ -105,7 +105,9 @@ impl AquariumCare {
     /// A tank just bought comes with its first sprout: the row starts like
     /// `ensure` (hungry now, the first fish at stake `CARE_DAYS` out) with a
     /// sprout up today and the next booked `SPROUT_EVERY_DAYS` out. Called
-    /// inside the purchase transaction; an existing row is left alone.
+    /// inside the purchase transaction, before the welcome fry is stamped
+    /// (`marketplace::welcome_aquarium_fry_in_tx`); an existing row is left
+    /// alone.
     pub async fn welcome(client: &impl GenericClient, user_id: Uuid) -> Result<()> {
         client
             .execute(

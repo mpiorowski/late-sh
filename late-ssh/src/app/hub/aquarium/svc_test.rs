@@ -27,6 +27,22 @@ async fn stock_tank(db: &late_core::db::Db, user_id: Uuid) {
     purchase_durable_item_by_sku(&mut client, user_id, AQUARIUM_SKU)
         .await
         .expect("aquarium purchase");
+    // The tank came with a welcome fry; park it in inventory so only the
+    // clownfish swim and every roll below lands on them.
+    let welcome = AquariumCare::load(&**client, user_id)
+        .await
+        .expect("care")
+        .expect("the purchase planted a care row")
+        .fry_creature
+        .expect("the purchase stamped a welcome fry");
+    late_core::models::marketplace::adjust_aquarium_fish_active_by_sku(
+        &mut client,
+        user_id,
+        &format!("aquarium_fish_{welcome}"),
+        -1,
+    )
+    .await
+    .expect("park the welcome fry");
     for _ in 0..2 {
         purchase_durable_item_by_sku(&mut client, user_id, "aquarium_fish_clownfish")
             .await

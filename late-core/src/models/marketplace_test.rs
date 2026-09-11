@@ -1,5 +1,6 @@
 use crate::{
     models::{
+        aquarium_care::AquariumCare,
         chips::{ChipMove, UserChips},
         marketplace::{
             AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
@@ -359,7 +360,9 @@ async fn aquarium_fish_are_repeatable_and_active_count_is_owned_count_bound() {
     assert_eq!(above_twenty.quantity, AQUARIUM_MAX_FISH + 1);
     assert_eq!(above_twenty.active_quantity, 1);
 
-    for _ in 1..AQUARIUM_MAX_FISH {
+    // The welcome fry holds one of the twenty places, so the seahorses
+    // fill the other nineteen.
+    for _ in 1..AQUARIUM_MAX_FISH - 1 {
         let increase =
             adjust_aquarium_fish_active_by_sku(&mut client, user.id, "aquarium_fish_seahorse", 1)
                 .await
@@ -373,7 +376,59 @@ async fn aquarium_fish_are_repeatable_and_active_count_is_owned_count_bound() {
             .expect("active cap")
             .expect("seahorse exists");
     assert_eq!(full.status, FishActiveStatus::TankFull);
-    assert_eq!(full.active_quantity, AQUARIUM_MAX_FISH);
+    assert_eq!(full.active_quantity, AQUARIUM_MAX_FISH - 1);
+}
+
+#[tokio::test]
+async fn buying_the_tank_comes_with_a_free_fry_and_a_sprout() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "aquarium-welcome-fry").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let before = UserChips::admin_grant(&**client, user.id, AQUARIUM_PRICE)
+        .await
+        .expect("fund chips")
+        .balance;
+
+    purchase_durable_item_by_sku(&mut client, user.id, AQUARIUM_SKU)
+        .await
+        .expect("aquarium purchase")
+        .expect("aquarium item");
+
+    // One fish of the cheapest tier, swimming, at no price.
+    let fish = client
+        .query(
+            "SELECT i.payload->>'creature' AS creature, i.price_chips,
+                    p.quantity, p.active_quantity, p.purchased_price_chips
+             FROM user_purchases p
+             JOIN marketplace_items i ON i.id = p.item_id
+             WHERE p.user_id = $1 AND i.item_kind = $2",
+            &[&user.id, &AQUARIUM_FISH_ITEM_KIND],
+        )
+        .await
+        .expect("fish rows");
+    assert_eq!(fish.len(), 1, "exactly one welcome fish");
+    let creature: String = fish[0].get("creature");
+    assert_eq!(fish[0].get::<_, i64>("price_chips"), AQUARIUM_FISH_PRICE);
+    assert_eq!(fish[0].get::<_, i32>("quantity"), 1);
+    assert_eq!(fish[0].get::<_, i32>("active_quantity"), 1);
+    assert_eq!(fish[0].get::<_, i64>("purchased_price_chips"), 0);
+
+    // The care row draws it as a fry from today, beside the sprout.
+    let today = chrono::Utc::now().date_naive();
+    let care = AquariumCare::load(&**client, user.id)
+        .await
+        .expect("care row")
+        .expect("the purchase planted a care row");
+    assert_eq!(care.fry_creature, Some(creature));
+    assert_eq!(care.fry_born, Some(today));
+    assert_eq!(care.sprout_born, Some(today));
+
+    // Nothing but the tank was paid for.
+    let chips = UserChips::find(&client, user.id)
+        .await
+        .expect("chips row")
+        .expect("the buyer has a chips row");
+    assert_eq!(chips.balance, before - AQUARIUM_PRICE);
 }
 
 #[tokio::test]

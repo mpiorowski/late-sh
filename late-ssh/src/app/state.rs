@@ -651,7 +651,9 @@ pub struct App {
     /// House table embedded chat, same reasoning as the daily cache.
     pub(crate) house_chat_rows_cache: chat::ui::ChatRowsCache,
     /// The Zen pages' current-room chat, its own cache like the others.
-    pub(crate) zen_chat_rows_cache: chat::ui::ChatRowsCache,
+    /// One rows cache per chat tile, in layout order; sized to the tiles
+    /// each frame.
+    pub(crate) zen_chat_rows_caches: Vec<chat::ui::ChatRowsCache>,
     pub(crate) poll_modal_state: chat::polls::state::PollModalState,
     pub(crate) gild_modal_state: chat::gild::state::GildModalState,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
@@ -1520,7 +1522,7 @@ impl App {
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             daily_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             house_chat_rows_cache: chat::ui::ChatRowsCache::default(),
-            zen_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            zen_chat_rows_caches: Vec::new(),
             poll_modal_state: chat::polls::state::PollModalState::new(),
             gild_modal_state: chat::gild::state::GildModalState::new(),
             room_search_modal_state:
@@ -2670,7 +2672,38 @@ impl App {
 
     /// The room the Zen pages show: the selected room when it is a real
     /// room, else #lounge.
+    /// The Zen page's active chat room: the focused chat tile's, else the
+    /// first chat tile's, else (no chat tile) the current room. This is the
+    /// room the composer, the message keys, the mouse, and the read marking
+    /// act on.
     pub(crate) fn zen_chat_room_id(&self) -> Option<Uuid> {
+        match self.zen.active_chat_index() {
+            Some(index) => self.zen_chat_rooms()[index],
+            None => self.zen_current_room_id(),
+        }
+    }
+
+    /// Every chat tile's room in layout order, resolved: a tile bound to a
+    /// room the account has since left shows the current room instead.
+    pub(crate) fn zen_chat_rooms(&self) -> Vec<Option<Uuid>> {
+        self.zen
+            .chat_tiles()
+            .into_iter()
+            .map(|(_, bound)| self.zen_room_or_current(bound))
+            .collect()
+    }
+
+    fn zen_room_or_current(&self, bound: Option<Uuid>) -> Option<Uuid> {
+        if let Some(room_id) = bound
+            && self.chat.rooms.iter().any(|(room, _)| room.id == room_id)
+        {
+            return Some(room_id);
+        }
+        self.zen_current_room_id()
+    }
+
+    /// The current room: Home's selection when it is a real room, else #lounge.
+    fn zen_current_room_id(&self) -> Option<Uuid> {
         if !self.chat.synthetic_entry_selected()
             && let Some(room_id) = self.chat.selected_room_id
         {

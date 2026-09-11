@@ -3132,6 +3132,10 @@ pub struct EmbeddedRoomChatView<'a> {
     pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
+    /// Whether the composer block is drawn under the messages. Off for a
+    /// view that only watches a room (a Zen chat tile that is not the
+    /// focused one); the messages then take the whole area.
+    pub composer_shown: bool,
     pub composing: bool,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
@@ -3196,7 +3200,11 @@ pub fn draw_embedded_room_chat(
             composer_text_width,
         ));
     let composer_height = total_composer_lines.min(4) as u16 + 2;
-    let (mut messages_area, composer_area) = split_chat_and_composer(area, composer_height);
+    let (mut messages_area, composer_area) = if view.composer_shown {
+        split_chat_and_composer(area, composer_height)
+    } else {
+        (area, Rect::new(area.x, area.bottom(), area.width, 0))
+    };
 
     // A voice channel shows the compact voice strip at the top of the chat
     // panel; text-only views render unchanged.
@@ -3293,6 +3301,9 @@ pub fn draw_embedded_room_chat(
         draw_image_modal(frame, messages_text_area, image_modal, terminal_images);
     }
 
+    if !view.composer_shown {
+        return;
+    }
     draw_composer_block(
         frame,
         composer_area,

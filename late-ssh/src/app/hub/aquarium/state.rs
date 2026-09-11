@@ -73,13 +73,13 @@ pub(crate) enum CutOutcome {
     Rooted,
 }
 
-/// What the Zen tile's fourteen boxes show.
+/// What the Zen tile's fourteen dots show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CareBar {
-    /// Fed today: this many boxes green, the way to the next fry (a full bar
+    /// Fed today: this many dots green, the way to the next fry (a full bar
     /// on the day one hatches, one box the day after).
     Streak(u32),
-    /// Not fed: this many boxes red, the way to the next death. Saturates:
+    /// Not fed: this many dots red, the way to the next death. Saturates:
     /// a tank past its first loss stays full red until somebody feeds it.
     Dry(u32),
     /// The shield's auto feeder covers today: nothing counts either way.
@@ -199,7 +199,7 @@ impl AquariumCare {
     /// (`AquariumCare::welcome` in late-core), so the session's care takes
     /// the same shape without a reconnect: hungry since yesterday, a sprout
     /// up today.
-    pub(crate) fn welcome_new_tank(&mut self, today: NaiveDate) {
+    pub(crate) fn welcome_new_tank(&mut self, today: NaiveDate, fry: Option<String>) {
         let yesterday = today.pred_opt().unwrap_or(today);
         self.last_fed = Some(
             yesterday
@@ -209,6 +209,10 @@ impl AquariumCare {
         );
         self.streak = 0;
         self.sprout = Some(today);
+        self.fry = fry.map(|creature| Fry {
+            creature,
+            born: today,
+        });
     }
 
     /// Whether a sprout stands on the floor to be drawn.
