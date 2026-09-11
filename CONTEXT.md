@@ -551,7 +551,8 @@ late-sh/
 │   └── static/                 # Tailwind output/source
 └── infra/
     ├── icecast/icecast.xml     # Icecast config
-    └── liquidsoap/             # Radio config + local fallback playlists
+    ├── liquidsoap/             # Radio config + local fallback playlists
+    └── minecraft.tf            # Paper + GriefPrevention on node hostPort 25565, whitelist-only (see infra/README.md)
 ```
 
 ---
