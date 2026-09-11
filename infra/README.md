@@ -127,6 +127,7 @@ kubectl cp -n default ./music/. "$POD":/music/ -c liquidsoap
 | Icecast | `icecast-sv` | 8000 | Audio streaming server |
 | Liquidsoap | none (dials out to `icecast-sv`) | - | Playlist encoder |
 | LiveKit | `livekit-sv` | 7880 (WSS/API), 7881 TCP, 7882 UDP, 3478 UDP, 5349 TCP | Voice-room SFU, ICE/TURN media |
+| Minecraft | none (hostPort) | 25565 TCP on the node | Paper server with GriefPrevention, whitelist-only |
 | PostgreSQL | `postgres-rw` | 5432 | CloudNativePG cluster |
 | Monitoring | OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, VictoriaTraces, Grafana | various | Full observability stack |
 
@@ -141,6 +142,33 @@ On a fresh cluster, the `livekit` pod may wait for cert-manager to create the
 `livekit-tls` secret used by embedded TURN/TLS. If it sits in
 `ContainerCreating`, check certificate issuance before treating the rollout as
 failed.
+
+### Minecraft
+
+`infra/minecraft.tf` runs a Paper server on the node's port 25565 as a pod
+hostPort, deliberately not through the ingress-nginx TCP map: nginx reloads
+drop long-lived TCP sessions, which would kick every player on each
+cert-manager renewal. Players connect to `late.sh` (client default port).
+The world lives on the `minecraft-data` PVC (`local-path`, `prevent_destroy`);
+`worldborder set 6000` at startup caps its disk growth on the shared node disk.
+
+Access is online-mode plus an enforced whitelist. `MINECRAFT_WHITELIST` and
+`MINECRAFT_OPS` seed the lists on every boot. Day-to-day changes go through
+rcon inside the pod and persist across restarts alongside the seeded names:
+
+```bash
+kubectl exec -n default deploy/minecraft -- rcon-cli whitelist add <name>
+kubectl exec -n default deploy/minecraft -- rcon-cli whitelist remove <name>
+kubectl exec -n default deploy/minecraft -- rcon-cli op <name>
+kubectl exec -n default deploy/minecraft -- rcon-cli list
+kubectl logs -n default deploy/minecraft --tail=200
+```
+
+Bumping the game version (`minecraft_version` in `defaults.tf`) is a one-way
+world upgrade and changes the client version every player needs; back up the
+PVC first. GriefPrevention resolves from Modrinth at boot for the pinned
+version, so a version bump can fail startup if the plugin has no matching
+release yet; the pod log says so.
 
 ## Configuration Parameters
 
@@ -204,6 +232,16 @@ always accepts PROXY headers, so the old accept-side toggle is gone.
 | `LIVEKIT_TURN_ENABLED` | Enable embedded TURN/STUN, default `true` |
 | `LIVEKIT_TURN_UDP_PORT` | TURN/STUN UDP port, default `3478` |
 | `LIVEKIT_TURN_TLS_PORT` | TURN/TLS TCP port, default `5349` |
+
+### Minecraft
+
+| Variable | Description |
+|----------|-------------|
+| `MINECRAFT_WHITELIST` | Comma-separated usernames allowed to join, seeded on every boot. Empty seeds nobody; add names via rcon-cli |
+| `MINECRAFT_OPS` | Comma-separated usernames granted operator, seeded on every boot |
+
+Image, game version, heap, and port are locals in `defaults.tf`, not
+variables: a version bump is a reviewed diff.
 
 ### S3 Storage
 
