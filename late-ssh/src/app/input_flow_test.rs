@@ -693,6 +693,46 @@ async fn global_ctrl_g_toggles_lobby_and_slash_shop_opens_shop() {
     );
 }
 
+/// `/lobby`, `/zen`, and `/guide` are the typed fallbacks for Ctrl+G, Ctrl+F,
+/// and `?`, for terminals that swallow the chords.
+#[tokio::test]
+async fn slash_lobby_zen_and_guide_mirror_their_keys() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "slash-nav-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "slash-nav-flow-it");
+    wait_for_render_contains(&mut app, " Home ").await;
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    app.handle_input(b"i/lobby\r");
+    wait_for_render_contains(&mut app, "house tables").await;
+    app.handle_input(b"\x07");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("house tables"),
+        "expected Ctrl+G to close the lobby /lobby opened; frame={frame:?}"
+    );
+
+    app.handle_input(b"i/guide\r");
+    wait_for_render_contains(&mut app, " Guide ").await;
+    app.handle_input(b"?");
+    assert!(!app.show_help, "? should close the guide /guide opened");
+
+    app.handle_input(b"i/zen\r");
+    assert_eq!(app.screen, Screen::Zen);
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Dashboard);
+}
+
 #[tokio::test]
 async fn global_w_opens_bonsai_care() {
     let test_db = new_test_db().await;

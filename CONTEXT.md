@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-09-11 (The login `#announcements` modal is gone; yesterday's announcements print verbatim at the top of The Late Edition, above the AI columns, and an announcement alone makes a paper: `late-ssh/src/app/paper/CONTEXT.md`. Earlier, 2026-09-08: X posts shared to News are built from the post's own public metadata instead of AI search: `extract_tweet` parses author, text, and date out of `publish.x.com/oembed` and takes the thumbnail and sensitivity flag from fxtwitter, with no AI in the path at all; `late-ssh/src/app/chat/news/svc.rs`, `late-ssh/src/app/chat/CONTEXT.md` §News. Sliding Puzzle's session-only image-tile view pre-encodes opaque native Kitty/iTerm2/Sixel cells once per source/geometry/protocol. A legal move replaces only the moved tile and gap in place — new Kitty placements are installed before targeted old-image deletion — so input never waits for whole-board recomposition, and Chafa remains initial-loading/unsupported-terminal fallback only. The pre-frame wipe that keeps iTerm2/Sixel pixels from leaking now covers non-modal rasters too, so its vocabulary is `pre_frame_persistent_raster_wipe_bytes` rather than Sixel-specific. Ideas and roadmap live in `PLAN.md` Backlog; this file describes the present only.)
+- Last updated: 2026-09-11 (The global chords have typed composer fallbacks for terminals that swallow them: `/lobby` (Ctrl+G), `/zen` (Ctrl+F), `/redraw` (Ctrl+L), `/guide` (?), alongside the existing `/settings` (Ctrl+O); each runs the same function as its key. See §Keyboard shortcuts. Ideas and roadmap live in `PLAN.md` Backlog; this file describes the present only.)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -1179,7 +1179,7 @@ One global overlay owns general app help plus the Pair, terminal FAQ, and Hub Gu
 
 - Module: `late-ssh/src/app/help_modal/`.
 - State flag on `App`: `show_help` paired with `help_modal_state`.
-- Opening: global `?` in `app/input.rs`; `/binds` opens Chat, `/music` opens Music, Bonsai `?` opens Bonsai. `?` is the only help key; `Ctrl+L` is the force-repaint chord (see the shortcuts table).
+- Opening: global `?` in `app/input.rs` (`open_guide_globally`, also behind `/guide`); `/binds` opens Chat, `/music` opens Music, Bonsai `?` opens Bonsai. `?` is the only help key; `Ctrl+L` is the force-repaint chord (see the shortcuts table).
 - Outer frame: `app/render.rs::app_frame_help_hint_title()` advertises `Settings Ctrl+O`, `Lobby Ctrl+G`, `Shop /shop`, and `Guide ?`.
 - Topics include Pair, Overview, Chat, Social, Directory, News, Arcade, Lobby, Lateania, Copy, Links, Images, Selection, Notifications, CLI YouTube, Economy, Bonsai, Settings, Architecture.
 - Footer keys: `Tab/S+Tab` switch topics, `j/k`/arrows scroll, `Esc/q/?` close.
@@ -1249,6 +1249,8 @@ Content invariants worth preserving when editing `data.rs`:
 | `Esc` | Scratchpad | Leave the pairing (notifies the partner) and return to Home |
 | `Ctrl+O` | Reserved global, except active Artboard editing | Open the settings modal from anywhere, including active Arcade games |
 | `Ctrl+G` | Reserved global, except active Artboard editing | Toggle the Lobby modal (daily correspondence games + house tables) from anywhere; the only key for it (bare `g` is unbound, and `Ctrl+Q` is unbound because many terminals intercept it) |
+| `Ctrl+F` | Reserved global, except active Artboard editing | Toggle Zen over the current page; Esc also returns |
+| `/settings` / `/lobby` / `/zen` / `/redraw` / `/guide` | Chat composer | Typed fallbacks for `Ctrl+O` / `Ctrl+G` / `Ctrl+F` / `Ctrl+L` / `?`, for terminals and multiplexers that swallow the chord. Each runs the same function as its key (`open_settings_modal`, `toggle_lobby_globally`, `toggle_zen_globally`, `App::force_full_repaint`, `open_guide_globally`), so the toggles close too |
 | `/shop` | Chat composer | Open the Shop modal. The Shop has no global chord; the locked pet/aquarium nudges open the same modal programmatically |
 | `Tab` / `Shift+Tab` | Settings modal | Switch tabs: Settings, Bio, Themes, RSS, Account, and hidden Special when available |
 | `↑` / `↓` / `j` / `k` | Settings modal | Move within the active tab. Settings rows include Username, IDE, Terminal, OS, Langs, Theme, Background, Text Brightness, Right sidebar, Room list, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format |

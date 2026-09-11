@@ -923,6 +923,10 @@ pub struct ChatState {
     requested_room_info_modal: Option<RoomInfoRequest>,
     requested_settings_modal: bool,
     requested_shop_modal: bool,
+    requested_lobby_toggle: bool,
+    requested_zen_toggle: bool,
+    requested_guide: bool,
+    requested_redraw: bool,
     requested_mod_modal: bool,
     requested_ultimate_modal: bool,
     requested_pair: Option<PairRequest>,
@@ -1264,6 +1268,10 @@ impl ChatState {
             requested_room_info_modal: None,
             requested_settings_modal: false,
             requested_shop_modal: false,
+            requested_lobby_toggle: false,
+            requested_zen_toggle: false,
+            requested_guide: false,
+            requested_redraw: false,
             requested_mod_modal: false,
             requested_ultimate_modal: false,
             requested_pair: None,
@@ -1954,6 +1962,22 @@ impl ChatState {
 
     pub fn take_requested_shop_modal(&mut self) -> bool {
         std::mem::take(&mut self.requested_shop_modal)
+    }
+
+    pub fn take_requested_lobby_toggle(&mut self) -> bool {
+        std::mem::take(&mut self.requested_lobby_toggle)
+    }
+
+    pub fn take_requested_zen_toggle(&mut self) -> bool {
+        std::mem::take(&mut self.requested_zen_toggle)
+    }
+
+    pub fn take_requested_guide(&mut self) -> bool {
+        std::mem::take(&mut self.requested_guide)
+    }
+
+    pub fn take_requested_redraw(&mut self) -> bool {
+        std::mem::take(&mut self.requested_redraw)
     }
 
     pub fn take_requested_room_info_modal(&mut self) -> Option<RoomInfoRequest> {
@@ -3433,6 +3457,33 @@ impl ChatState {
         if body.trim() == "/shop" {
             self.clear_composer_after_submit();
             self.requested_shop_modal = true;
+            return None;
+        }
+
+        // Typed fallbacks for the global chords (Ctrl+G, Ctrl+F, Ctrl+L, ?), for
+        // terminals and multiplexers that swallow those keys. Each one runs
+        // exactly what its key runs.
+        if body.trim() == "/lobby" {
+            self.clear_composer_after_submit();
+            self.requested_lobby_toggle = true;
+            return None;
+        }
+
+        if body.trim() == "/zen" {
+            self.clear_composer_after_submit();
+            self.requested_zen_toggle = true;
+            return None;
+        }
+
+        if body.trim() == "/guide" {
+            self.clear_composer_after_submit();
+            self.requested_guide = true;
+            return None;
+        }
+
+        if body.trim() == "/redraw" {
+            self.clear_composer_after_submit();
+            self.requested_redraw = true;
             return None;
         }
 

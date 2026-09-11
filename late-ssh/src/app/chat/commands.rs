@@ -116,6 +116,7 @@ const COMMANDS: &[Command] = &[
     global("friends", "list friends"),
     global("gift", "send chips (/gift @user 50 [note])"),
     global("golive", "stream your screen (/golive <title>; stop)"),
+    global("guide", "open the guide (same as ?)"),
     global("history", "browse this room's full history"),
     global("icons", "open icon picker"),
     global("ignore", "mute a user (/ignore @user; bare lists)"),
@@ -124,6 +125,7 @@ const COMMANDS: &[Command] = &[
     global("kick", "remove a user from your room (/kick @user)"),
     global("leave", "leave room"),
     global("list", "list public rooms"),
+    global("lobby", "open/close the Lobby (same as Ctrl+G)"),
     global("me", "send an action line (/me waves)"),
     global("members", "room members"),
     global("pair", "shared coding scratchpad; both run /pair @user"),
@@ -136,7 +138,8 @@ const COMMANDS: &[Command] = &[
     global("private", "create a private room (/private #room)"),
     global("profile", "view a profile (/profile @user; bare = you)"),
     global("public", "open/create a public room (/public #room)"),
-    global("roll", "roll dice (/roll 3d6 2d20; default d20)"),
+    global("redraw", "repaint the screen (same as Ctrl+L)"),
+    global("roll","roll dice (/roll 3d6 2d20; default d20)"),
     global("roominfo", "set this room's topic and rules"),
     global("rules", "show this room's rules"),
     global("search", "search messages (?query in Ctrl+/)"),
@@ -150,6 +153,7 @@ const COMMANDS: &[Command] = &[
     global("unignore", "unmute a user (/unignore @user)"),
     global("upload", "upload an image by url (/upload <url>)"),
     global("watch", "open someone's live stream (/watch @user)"),
+    global("zen", "open/close Zen (same as Ctrl+F)"),
     room(RoomScopedCommand::Sheet),
 ];
 

@@ -3533,13 +3533,7 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
         CTRL_G => {
             // The Lobby owns the friendlier chord: Ctrl+Q is intercepted by
             // some terminals and the Lobby is the surface people live in.
-            // Toggle: the daily surface is built for fast in-and-out, so the
-            // same chord that opens it closes it.
-            if app.show_lobby_modal {
-                app.show_lobby_modal = false;
-            } else {
-                open_daily_modal_globally(app);
-            }
+            toggle_lobby_globally(app);
             true
         }
         CTRL_F => {
@@ -3575,6 +3569,34 @@ fn focus_zen_tile_at(app: &mut App, x: u16, y: u16) {
     }
     app.zen.focus = ordinal;
     crate::app::zen::input::focus_moved(app);
+}
+
+/// Toggle: the daily surface is built for fast in-and-out, so the same chord
+/// (or `/lobby`) that opens it closes it.
+pub(crate) fn toggle_lobby_globally(app: &mut App) {
+    if app.show_lobby_modal {
+        app.show_lobby_modal = false;
+    } else {
+        open_daily_modal_globally(app);
+    }
+}
+
+/// The global guide, opened on the topic that fits the current page. Shared
+/// by `?` and `/guide`.
+pub(crate) fn open_guide_globally(app: &mut App) {
+    app.help_modal_state
+        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
+    let topic = if app.screen == Screen::Lateania {
+        HelpTopic::Lateania
+    } else if app.screen == Screen::Profiles {
+        HelpTopic::Profiles
+    } else if app.screen == Screen::Zen {
+        HelpTopic::Zen
+    } else {
+        HelpTopic::Pair
+    };
+    app.help_modal_state.open(topic);
+    app.show_help = true;
 }
 
 /// Zen is a surface, not a place in the tab order: the chord opens it over
@@ -3650,19 +3672,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     let chat_message_shortcut =
         ctx.screen == Screen::Dashboard && app.chat.selected_message_id.is_some();
     if guide_shortcut && !chat_message_shortcut {
-        app.help_modal_state
-            .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
-        let topic = if ctx.screen == Screen::Lateania {
-            HelpTopic::Lateania
-        } else if ctx.screen == Screen::Profiles {
-            HelpTopic::Profiles
-        } else if ctx.screen == Screen::Zen {
-            HelpTopic::Zen
-        } else {
-            HelpTopic::Pair
-        };
-        app.help_modal_state.open(topic);
-        app.show_help = true;
+        open_guide_globally(app);
         return true;
     }
 

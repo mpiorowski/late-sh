@@ -223,6 +223,18 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_shop_modal() {
         crate::app::input::open_shop_modal_globally(app);
     }
+    if app.chat.take_requested_lobby_toggle() {
+        crate::app::input::toggle_lobby_globally(app);
+    }
+    if app.chat.take_requested_zen_toggle() {
+        crate::app::input::toggle_zen_globally(app);
+    }
+    if app.chat.take_requested_guide() {
+        crate::app::input::open_guide_globally(app);
+    }
+    if app.chat.take_requested_redraw() {
+        app.force_full_repaint();
+    }
     if let Some(request) = app.chat.take_requested_room_info_modal() {
         use crate::app::chat::state::RoomInfoRequest;
         match request {
