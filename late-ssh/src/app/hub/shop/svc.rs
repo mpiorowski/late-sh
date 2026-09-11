@@ -17,15 +17,16 @@ use late_core::{
         chips::{CHIP_USER_CHANGED_CHANNEL, UserChips, listen_for_chip_changes},
         marketplace::{
             AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH,
-            AQUARIUM_SHIELD_SKU, AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
-            BONSAI_DECAY_SHIELD_SKU, CHAT_BADGE_SLOT, CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT,
-            COMPANION_CONSUMABLE_ITEM_KIND, FishActiveStatus, MarketplaceItem, PET_COMPANION_SKU,
-            PurchaseResult, PurchaseStatus, PurchaseWithEffectResult, SHOP_CATALOG_CHANGED_CHANNEL,
-            SHOP_USER_CHANGED_CHANNEL, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND,
-            UserPurchase, adjust_aquarium_fish_active_by_sku, is_sprout_row, is_welcome_fish,
-            listen_for_shop_changes,
-            purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_custom_title,
-            purchase_item_by_sku_with_username_effect, rental_duration_secs,
+            AQUARIUM_MAX_PLANTS, AQUARIUM_PLANT_ITEM_KIND, AQUARIUM_SHIELD_SKU, AQUARIUM_SKU,
+            BONSAI_CONSUMABLE_ITEM_KIND, BONSAI_DECAY_SHIELD_SKU, CHAT_BADGE_SLOT,
+            CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT, COMPANION_CONSUMABLE_ITEM_KIND,
+            MarketplaceItem, PET_COMPANION_SKU, PurchaseResult, PurchaseStatus,
+            PurchaseWithEffectResult, SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL,
+            TankActiveStatus, TankStockKind, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND,
+            UserPurchase, adjust_aquarium_active_by_sku, is_sprout_row, is_welcome_fish,
+            listen_for_shop_changes, purchase_item_by_sku_with_chat_effect,
+            purchase_item_by_sku_with_custom_title, purchase_item_by_sku_with_username_effect,
+            rental_duration_secs,
         },
         milestone::{MILESTONE_BADGE_ITEM_KIND, MilestoneBadge},
         rental::{
@@ -170,6 +171,20 @@ impl ShopCatalogItem {
 
     pub fn is_aquarium_fish(&self) -> bool {
         self.item_kind == AQUARIUM_FISH_ITEM_KIND
+    }
+
+    pub fn is_aquarium_plant(&self) -> bool {
+        self.item_kind == AQUARIUM_PLANT_ITEM_KIND
+    }
+
+    /// A fish or a plant: bought for the tank, moved in and out of the
+    /// water with `+` and `-`, each kind against its own cap.
+    pub fn is_tank_stock(&self) -> bool {
+        self.tank_stock_kind().is_some()
+    }
+
+    pub fn tank_stock_kind(&self) -> Option<TankStockKind> {
+        TankStockKind::of(&self.item_kind)
     }
 
     /// The fry: the one fish the shop shows but never sells.
@@ -664,10 +679,10 @@ impl ShopService {
         });
     }
 
-    pub fn adjust_aquarium_fish_task(&self, user_id: Uuid, sku: String, delta: i32) {
+    pub fn adjust_aquarium_active_task(&self, user_id: Uuid, sku: String, delta: i32) {
         let svc = self.clone();
         tokio::spawn(async move {
-            match svc.adjust_aquarium_fish(user_id, &sku, delta).await {
+            match svc.adjust_aquarium_active(user_id, &sku, delta).await {
                 Ok(message) => svc.publish_event(ShopEvent::ActionCompleted { user_id, message }),
                 Err(error) => {
                     tracing::warn!(error = ?error, user_id = %user_id, sku, delta, "aquarium fish adjust failed");
@@ -874,7 +889,9 @@ impl ShopService {
                         None => format!("Bought {}", result.item.name),
                     }
                 }
-                PurchaseStatus::Purchased if result.item.item_kind == AQUARIUM_FISH_ITEM_KIND => {
+                PurchaseStatus::Purchased
+                    if TankStockKind::of(&result.item.item_kind).is_some() =>
+                {
                     format!("Bought {} (owned {})", result.item.name, result.quantity)
                 }
                 PurchaseStatus::Purchased if result.item.item_kind == CHAT_CONSUMABLE_ITEM_KIND => {
@@ -920,29 +937,36 @@ impl ShopService {
         Ok(SettledPurchase { status, message })
     }
 
-    async fn adjust_aquarium_fish(&self, user_id: Uuid, sku: &str, delta: i32) -> Result<String> {
+    async fn adjust_aquarium_active(&self, user_id: Uuid, sku: &str, delta: i32) -> Result<String> {
         let mut client = self.db.get().await?;
-        let result = adjust_aquarium_fish_active_by_sku(&mut client, user_id, sku, delta).await?;
+        let result = adjust_aquarium_active_by_sku(&mut client, user_id, sku, delta).await?;
         drop(client);
 
         let message = match result {
-            None => "Fish is not available".to_string(),
+            None => "That is not in the catalog".to_string(),
             Some(result) => match result.status {
-                FishActiveStatus::Changed => {
+                TankActiveStatus::Changed => {
                     format!(
                         "{} active {}/{}",
                         result.item.name, result.active_quantity, result.quantity
                     )
                 }
-                FishActiveStatus::NotOwned => format!("Buy {} first", result.item.name),
-                FishActiveStatus::NotFish => "That item is not a fish".to_string(),
-                FishActiveStatus::AtZero => format!("No active {} to remove", result.item.name),
-                FishActiveStatus::AtOwnedQuantity => {
+                TankActiveStatus::NotOwned => format!("Buy {} first", result.item.name),
+                TankActiveStatus::NotTankStock => {
+                    "That item is neither a fish nor a plant".to_string()
+                }
+                TankActiveStatus::AtZero => format!("No active {} to remove", result.item.name),
+                TankActiveStatus::AtOwnedQuantity => {
                     format!("All owned {} are active", result.item.name)
                 }
-                FishActiveStatus::TankFull => {
-                    format!("Aquarium has {AQUARIUM_MAX_FISH} active fish")
-                }
+                TankActiveStatus::TankFull => match TankStockKind::of(&result.item.item_kind) {
+                    Some(TankStockKind::Plant) => {
+                        format!("Aquarium has {AQUARIUM_MAX_PLANTS} active plants")
+                    }
+                    Some(TankStockKind::Fish) | None => {
+                        format!("Aquarium has {AQUARIUM_MAX_FISH} active fish")
+                    }
+                },
             },
         };
 
@@ -1144,7 +1168,7 @@ impl ShopService {
                     item_kind == TITLE_RENTAL_ITEM_KIND && is_custom_title(&item.payload);
                 let welcome_fish =
                     item_kind == AQUARIUM_FISH_ITEM_KIND && is_welcome_fish(&item.payload);
-                let sprout = item_kind == AQUARIUM_FISH_ITEM_KIND && is_sprout_row(&item.payload);
+                let sprout = item_kind == AQUARIUM_PLANT_ITEM_KIND && is_sprout_row(&item.payload);
                 ShopCatalogItem {
                     sku: item.sku,
                     item_kind,

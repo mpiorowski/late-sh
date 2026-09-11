@@ -217,21 +217,20 @@ fn chat_tab_rows_open_each_group_with_a_section_label() {
 #[test]
 fn companions_tab_rows_split_pet_bonsai_and_the_tank() {
     use late_core::models::marketplace::{
-        AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_SHIELD_SKU, AQUARIUM_SKU,
-        PET_COMPANION_SKU,
+        AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_PLANT_ITEM_KIND,
+        AQUARIUM_SHIELD_SKU, AQUARIUM_SKU, PET_COMPANION_SKU,
     };
 
     let pet = chat_item(PET_COMPANION_SKU, "feature_unlock");
     let bonsai_shield = bonsai_shield_item();
     let tank = chat_item(AQUARIUM_SKU, "feature_unlock");
     let tank_shield = chat_item(AQUARIUM_SHIELD_SKU, AQUARIUM_CONSUMABLE_ITEM_KIND);
-    let fish = chat_item("mj", AQUARIUM_FISH_ITEM_KIND);
 
-    // Catalog `sort_order` already runs pet, bonsai shield, tank, shield,
-    // fish; every fish and both tank items share the Aquarium section.
+    // Catalog `sort_order` already runs pet, bonsai shield, tank, shield;
+    // both tank items share the Aquarium section.
     let rows = item_list_rows(
         ShopCategory::Companions,
-        &[&pet, &bonsai_shield, &tank, &tank_shield, &fish],
+        &[&pet, &bonsai_shield, &tank, &tank_shield],
     );
     assert_eq!(
         row_labels(&rows),
@@ -243,8 +242,28 @@ fn companions_tab_rows_split_pet_bonsai_and_the_tank() {
             "[Aquarium]",
             "2:aquarium",
             "3:aquarium_shield_two_weeks",
-            "4:mj",
         ]
+    );
+
+    // The tank's stock has tabs of its own, flat lists: the fish are the
+    // Fish tab, the plants (the sprout row among them) the Plants tab, and
+    // the Companions tab does not list either.
+    let fish = chat_item("aquarium_fish_mj", AQUARIUM_FISH_ITEM_KIND);
+    let plant = chat_item("aquarium_plant_seatuft", AQUARIUM_PLANT_ITEM_KIND);
+    let sprout = ShopCatalogItem {
+        sprout: true,
+        ..chat_item("aquarium_sprout", AQUARIUM_PLANT_ITEM_KIND)
+    };
+    assert!(ShopCategory::Fish.matches_item(&fish));
+    assert!(!ShopCategory::Fish.matches_item(&plant));
+    assert!(ShopCategory::Plants.matches_item(&plant));
+    assert!(ShopCategory::Plants.matches_item(&sprout));
+    assert!(!ShopCategory::Plants.matches_item(&fish));
+    assert!(!ShopCategory::Companions.matches_item(&fish));
+    assert!(!ShopCategory::Companions.matches_item(&plant));
+    assert_eq!(
+        row_labels(&item_list_rows(ShopCategory::Plants, &[&sprout, &plant])),
+        vec!["0:aquarium_sprout", "1:aquarium_plant_seatuft"]
     );
 }
 

@@ -17,15 +17,24 @@ pub(crate) const FEED_CHIP_BONUS: i64 = 100;
 /// What a session learns about its tank at connect: the care row (`None`
 /// for a user with no tank), every shield window ever bought, the fish the
 /// starvation settlement took just now, and what the sprout clock did: a
-/// sprout that rooted while the owner was away (`Some(swimming)`), and
-/// whether a new one came up.
+/// sprout that rooted while the owner was away, and whether a new one came
+/// up.
 #[derive(Debug, Clone, Default)]
 pub struct CareBootstrap {
     pub care: Option<AquariumCare>,
     pub shields: Vec<AquariumShield>,
     pub lost: Vec<String>,
-    pub rooted: Option<bool>,
+    pub rooted: Option<RootedPlant>,
     pub sprouted: bool,
+}
+
+/// What a sprout left alone became: the plant's creature, and whether it
+/// went into the water (`false`: the floor was full, it waits in the
+/// Shop's inventory).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RootedPlant {
+    pub creature: String,
+    pub swimming: bool,
 }
 
 /// What a feed press came to once the DB had its say.
@@ -72,10 +81,11 @@ impl AquariumService {
     /// not settled yet cost one swimming fish, picked by weight (cheap fish
     /// first, a Bigbert rarely). The row is locked for the transaction, so
     /// two devices or two replicas connecting at once take turns and the
-    /// second finds nothing left to settle. The sprout clock settles in the
-    /// same transaction: a sprout past its week roots as a plant, then a
-    /// due sprout comes up on the bare floor. Users without a tank only get
-    /// the read.
+    /// second finds nothing left to settle. Only fish starve: the plants
+    /// are another item kind and never in the roll. The sprout clock
+    /// settles in the same transaction: a sprout past its week roots as
+    /// one of the catalog's plants, then a due sprout comes up on the bare
+    /// floor. Users without a tank only get the read.
     pub async fn bootstrap(&self, user_id: Uuid) -> Result<CareBootstrap> {
         let mut client = self.db.get().await?;
         if !marketplace::user_owns_aquarium(&**client, user_id).await? {
@@ -137,7 +147,7 @@ impl AquariumService {
                     creature.clone(),
                 ));
             }
-            self.announce_sprout_clock(user_id, &username, rooted, sprouted, today);
+            self.announce_sprout_clock(user_id, &username, rooted.as_ref(), sprouted, today);
         }
         Ok(CareBootstrap {
             care: Some(AquariumCare {
@@ -183,26 +193,27 @@ impl AquariumService {
         tx.commit().await?;
         if rooted.is_some() || sprouted {
             let username = late_core::models::profile::fetch_username(&client, user_id).await;
-            self.announce_sprout_clock(user_id, &username, rooted, sprouted, today);
+            self.announce_sprout_clock(user_id, &username, rooted.as_ref(), sprouted, today);
         }
         Ok(())
     }
 
-    /// The sprout clock's news on the activity feed: the rooting (with
-    /// whether the plant went into the water) and the new sprout.
+    /// The sprout clock's news on the activity feed: the rooting (which
+    /// plant, and whether it went into the water) and the new sprout.
     fn announce_sprout_clock(
         &self,
         user_id: Uuid,
         username: &str,
-        rooted: Option<bool>,
+        rooted: Option<&RootedPlant>,
         sprouted: bool,
         today: NaiveDate,
     ) {
-        if let Some(swimming) = rooted {
+        if let Some(plant) = rooted {
             tracing::info!(
                 user_id = %user_id,
                 username = %username,
-                swimming,
+                creature = %plant.creature,
+                swimming = plant.swimming,
                 "aquarium sprout rooted"
             );
             let _ = self
@@ -210,7 +221,8 @@ impl AquariumService {
                 .send(ActivityEvent::aquarium_sprout_rooted(
                     user_id,
                     username.to_string(),
-                    swimming,
+                    plant.creature.clone(),
+                    plant.swimming,
                 ));
         }
         if sprouted {
@@ -343,23 +355,43 @@ impl AquariumService {
     }
 }
 
+/// The one line both the connect and the live event say when a sprout
+/// roots: which plant, and whether it is in the water or waiting.
+pub(crate) fn rooted_banner(creature: &str, swimming: bool) -> String {
+    if swimming {
+        format!("Your sprout took root: a {creature} grows in the tank")
+    } else {
+        format!("Your sprout took root: a {creature} waits in /shop, the floor is full")
+    }
+}
+
 #[cfg(test)]
 #[path = "svc_test.rs"]
 mod svc_test;
 
 /// The sprout clock inside a transaction: a sprout past its week roots as
-/// a wigglewort (`Some(swimming)`), then a due sprout comes up on the bare
-/// floor (`true`). The row's own gates make both idempotent.
+/// one of the catalog's plants, any of them as likely as the next
+/// (`pick_plant_evenly`), then a due sprout comes up on the bare floor
+/// (`true`). The row's own gates make both idempotent. A catalog with no
+/// plants is a deploy mistake, not a bare floor: the sprout has already
+/// left the row, so it fails loudly.
 async fn settle_sprout_clock_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     user_id: Uuid,
     today: NaiveDate,
-) -> Result<(Option<bool>, bool)> {
+) -> Result<(Option<RootedPlant>, bool)> {
     let mut rooted = None;
     if AquariumCare::root_sprout(&*tx, user_id, today).await? {
-        let swimming = marketplace::root_aquarium_sprout_in_tx(tx, user_id).await?;
+        let plants = marketplace::catalog_plants_in_tx(tx).await?;
+        let Some(plant) = care_rules::pick_plant_evenly(&plants, rand::random()) else {
+            bail!("the catalog sells no plant for the sprout to root as");
+        };
+        let swimming = marketplace::root_aquarium_sprout_in_tx(tx, user_id, plant.item_id).await?;
         marketplace::notify_user_shop_changed(&*tx, user_id).await?;
-        rooted = Some(swimming);
+        rooted = Some(RootedPlant {
+            creature: plant.creature.clone(),
+            swimming,
+        });
     }
     let sprouted = AquariumCare::sprout_up(&*tx, user_id, today).await?;
     Ok((rooted, sprouted))

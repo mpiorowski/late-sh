@@ -5,14 +5,19 @@
 //! since the last meal (one fish per `CARE_DAYS` unfed days), the fry
 //! still swimming small, and the sprout clock: every `SPROUT_EVERY_DAYS` a
 //! sprout comes up on the floor, and one the owner has not cut within
-//! `SPROUT_DAYS` roots as a plant.
+//! `SPROUT_DAYS` roots as a plant. The two clocks never touch each other's
+//! stock: feeding breeds and starves fish only, the sprouts grow plants
+//! only, and plants never die.
 
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
-use super::{aquarium_shield::AquariumShield, marketplace::FishStock};
+use super::{
+    aquarium_shield::AquariumShield,
+    marketplace::{FishStock, PlantSpecies},
+};
 
 /// Both care clocks run on the same fourteen days: that many straight fed
 /// days hatch a fry, that many unfed days starve a fish.
@@ -344,4 +349,16 @@ pub fn pick_by_weight(stock: &[FishStock], roll: u64) -> Option<&FishStock> {
 
 fn species_weight(fish: &FishStock) -> u64 {
     fish_weight(fish.price_chips) * fish.active_quantity.max(0) as u64
+}
+
+/// The plant a rooting sprout becomes: any of the catalog's plants, each
+/// as likely as the next (a sprout is not bred from anything the owner
+/// has, so there is nothing to weigh). `roll` is any random number; the
+/// same roll against the same catalog always picks the same plant. `None`
+/// for a catalog with no plants.
+pub fn pick_plant_evenly(plants: &[PlantSpecies], roll: u64) -> Option<&PlantSpecies> {
+    if plants.is_empty() {
+        return None;
+    }
+    plants.get((roll % plants.len() as u64) as usize)
 }

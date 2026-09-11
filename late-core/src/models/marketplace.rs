@@ -27,9 +27,12 @@ pub const BONSAI_DECAY_PROTECTION_KIND: &str = "bonsai_decay_protection";
 pub const BONSAI_DECAY_PROTECTION_DURATION_SECS: i64 = 1_209_600;
 pub const AQUARIUM_SKU: &str = "aquarium";
 pub const AQUARIUM_FISH_ITEM_KIND: &str = "aquarium_fish";
+/// The tank's plants (migration 183): bought like fish and capped apart
+/// from them, and what a sprout roots as. They never starve and never
+/// parent a fry; only the fish kind is in the care rolls.
+pub const AQUARIUM_PLANT_ITEM_KIND: &str = "aquarium_plant";
 pub const AQUARIUM_MAX_FISH: i32 = 20;
-/// The plant a sprout roots as when its owner leaves it alone.
-pub const AQUARIUM_SPROUT_ROOTS_AS_SKU: &str = "aquarium_fish_wigglewort";
+pub const AQUARIUM_MAX_PLANTS: i32 = 20;
 /// The fish every tank comes with (migration 182): the fry, its own
 /// catalog row so the shop shows the hatchling sprite that swims; listed,
 /// never sold; `is_welcome_fish` reads the same fact off the payload.
@@ -38,6 +41,42 @@ pub const AQUARIUM_WELCOME_FISH_SKU: &str = "aquarium_fish_fry";
 /// so the tank is tended in one place, never sold, never a purchase row;
 /// its state lives on the care row.
 pub const AQUARIUM_SPROUT_SKU: &str = "aquarium_sprout";
+
+/// The two kinds of stock a tank holds, each with its own active cap:
+/// what `adjust_aquarium_active_by_sku` and the growth paths count
+/// against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TankStockKind {
+    Fish,
+    Plant,
+}
+
+impl TankStockKind {
+    /// The kind an item kind names, `None` for anything that is not tank
+    /// stock.
+    pub fn of(item_kind: &str) -> Option<Self> {
+        match item_kind {
+            AQUARIUM_FISH_ITEM_KIND => Some(Self::Fish),
+            AQUARIUM_PLANT_ITEM_KIND => Some(Self::Plant),
+            _ => None,
+        }
+    }
+
+    pub fn item_kind(self) -> &'static str {
+        match self {
+            Self::Fish => AQUARIUM_FISH_ITEM_KIND,
+            Self::Plant => AQUARIUM_PLANT_ITEM_KIND,
+        }
+    }
+
+    /// How many of this kind can be in the water at once.
+    pub fn cap(self) -> i32 {
+        match self {
+            Self::Fish => AQUARIUM_MAX_FISH,
+            Self::Plant => AQUARIUM_MAX_PLANTS,
+        }
+    }
+}
 pub const AQUARIUM_CONSUMABLE_ITEM_KIND: &str = "aquarium_consumable";
 pub const AQUARIUM_SHIELD_SKU: &str = "aquarium_shield_two_weeks";
 /// `shop_consumable_effects.effect_kind` for the user-scoped Aquarium
@@ -230,18 +269,19 @@ pub struct PurchaseWithEffectResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FishActiveStatus {
+pub enum TankActiveStatus {
     Changed,
     NotOwned,
-    NotFish,
+    /// The sku is neither a fish nor a plant.
+    NotTankStock,
     AtZero,
     AtOwnedQuantity,
     TankFull,
 }
 
 #[derive(Debug, Clone)]
-pub struct FishActiveResult {
-    pub status: FishActiveStatus,
+pub struct TankActiveResult {
+    pub status: TankActiveStatus,
     pub item: MarketplaceItem,
     pub quantity: i32,
     pub active_quantity: i32,
@@ -329,7 +369,7 @@ async fn purchase_item_by_sku_inner(
     if is_listed_only(&item.payload) {
         bail!("{} is shown in the shop but not for sale", item.sku);
     }
-    let is_aquarium_fish = item.item_kind == AQUARIUM_FISH_ITEM_KIND;
+    let is_tank_stock = TankStockKind::of(&item.item_kind).is_some();
     let is_repeatable = is_repeatable_purchase_item(&item);
     let balance = lock_user_chips_in_tx(&tx, user_id).await?;
 
@@ -343,7 +383,7 @@ async fn purchase_item_by_sku_inner(
         )
         .await?;
 
-    if is_aquarium_fish {
+    if is_tank_stock {
         let aquarium_owned = tx
             .query_opt(
                 "SELECT 1
@@ -619,12 +659,15 @@ async fn purchase_item_by_sku_inner(
     })
 }
 
-pub async fn adjust_aquarium_fish_active_by_sku(
+/// Move one of the user's fish or plants between the water and the
+/// inventory: `delta` is +1 or -1 on the sku's active count, bounded by
+/// the owned count and the kind's cap (`TankStockKind::cap`).
+pub async fn adjust_aquarium_active_by_sku(
     client: &mut Client,
     user_id: Uuid,
     sku: &str,
     delta: i32,
-) -> Result<Option<FishActiveResult>> {
+) -> Result<Option<TankActiveResult>> {
     let tx = client.transaction().await?;
     let Some(item_row) = tx
         .query_opt(
@@ -639,15 +682,15 @@ pub async fn adjust_aquarium_fish_active_by_sku(
         return Ok(None);
     };
     let item = MarketplaceItem::from(item_row);
-    if item.item_kind != AQUARIUM_FISH_ITEM_KIND {
+    let Some(kind) = TankStockKind::of(&item.item_kind) else {
         tx.commit().await?;
-        return Ok(Some(FishActiveResult {
-            status: FishActiveStatus::NotFish,
+        return Ok(Some(TankActiveResult {
+            status: TankActiveStatus::NotTankStock,
             item,
             quantity: 0,
             active_quantity: 0,
         }));
-    }
+    };
     let _balance = lock_user_chips_in_tx(&tx, user_id).await?;
 
     let Some(purchase_row) = tx
@@ -661,8 +704,8 @@ pub async fn adjust_aquarium_fish_active_by_sku(
         .await?
     else {
         tx.commit().await?;
-        return Ok(Some(FishActiveResult {
-            status: FishActiveStatus::NotOwned,
+        return Ok(Some(TankActiveResult {
+            status: TankActiveStatus::NotOwned,
             item,
             quantity: 0,
             active_quantity: 0,
@@ -673,8 +716,8 @@ pub async fn adjust_aquarium_fish_active_by_sku(
     let active_quantity = purchase_row.get::<_, i32>("active_quantity");
     if delta < 0 && active_quantity == 0 {
         tx.commit().await?;
-        return Ok(Some(FishActiveResult {
-            status: FishActiveStatus::AtZero,
+        return Ok(Some(TankActiveResult {
+            status: TankActiveStatus::AtZero,
             item,
             quantity,
             active_quantity,
@@ -682,8 +725,8 @@ pub async fn adjust_aquarium_fish_active_by_sku(
     }
     if delta > 0 && active_quantity >= quantity {
         tx.commit().await?;
-        return Ok(Some(FishActiveResult {
-            status: FishActiveStatus::AtOwnedQuantity,
+        return Ok(Some(TankActiveResult {
+            status: TankActiveStatus::AtOwnedQuantity,
             item,
             quantity,
             active_quantity,
@@ -691,14 +734,14 @@ pub async fn adjust_aquarium_fish_active_by_sku(
     }
     let next_active = active_quantity.saturating_add(delta).clamp(0, quantity);
     if delta > 0 {
-        let current_total = aquarium_fish_active_quantity_in_tx(&tx, user_id).await?;
+        let current_total = aquarium_active_quantity_in_tx(&tx, user_id, kind).await?;
         let projected_total = current_total
             .saturating_sub(active_quantity)
             .saturating_add(next_active);
-        if projected_total > AQUARIUM_MAX_FISH {
+        if projected_total > kind.cap() {
             tx.commit().await?;
-            return Ok(Some(FishActiveResult {
-                status: FishActiveStatus::TankFull,
+            return Ok(Some(TankActiveResult {
+                status: TankActiveStatus::TankFull,
                 item,
                 quantity,
                 active_quantity,
@@ -720,8 +763,8 @@ pub async fn adjust_aquarium_fish_active_by_sku(
     )
     .await?;
     tx.commit().await?;
-    Ok(Some(FishActiveResult {
-        status: FishActiveStatus::Changed,
+    Ok(Some(TankActiveResult {
+        status: TankActiveStatus::Changed,
         item,
         quantity,
         active_quantity: next_active,
@@ -729,10 +772,10 @@ pub async fn adjust_aquarium_fish_active_by_sku(
 }
 
 /// Active aquarium creatures `(creature_name, count)` a user is currently
-/// displaying. Mirrors `ShopState::active_aquarium_fish` but reads from the
-/// database for an arbitrary user, so profile views can render someone else's
-/// tank.
-pub async fn active_aquarium_fish_for_user(
+/// displaying, fish and plants alike. Mirrors
+/// `ShopState::active_aquarium_creatures` but reads from the database for
+/// an arbitrary user, so profile views can render someone else's tank.
+pub async fn active_aquarium_creatures_for_user(
     client: &Client,
     user_id: Uuid,
 ) -> Result<Vec<(String, usize)>> {
@@ -743,11 +786,15 @@ pub async fn active_aquarium_fish_for_user(
              FROM user_purchases p
              JOIN marketplace_items i ON i.id = p.item_id
              WHERE p.user_id = $1
-               AND i.item_kind = $2
+               AND i.item_kind IN ($2, $3)
                AND p.active_quantity > 0
                AND i.payload->>'creature' IS NOT NULL
              ORDER BY creature",
-            &[&user_id, &AQUARIUM_FISH_ITEM_KIND],
+            &[
+                &user_id,
+                &AQUARIUM_FISH_ITEM_KIND,
+                &AQUARIUM_PLANT_ITEM_KIND,
+            ],
         )
         .await?;
     Ok(rows
@@ -762,9 +809,11 @@ pub async fn active_aquarium_fish_for_user(
         .collect())
 }
 
-async fn aquarium_fish_active_quantity_in_tx(
+/// How many of one kind are in the user's water, for the kind's cap.
+async fn aquarium_active_quantity_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     user_id: Uuid,
+    kind: TankStockKind,
 ) -> Result<i32> {
     let row = tx
         .query_one(
@@ -772,7 +821,7 @@ async fn aquarium_fish_active_quantity_in_tx(
              FROM user_purchases p
              JOIN marketplace_items i ON i.id = p.item_id
              WHERE p.user_id = $1 AND i.item_kind = $2",
-            &[&user_id, &AQUARIUM_FISH_ITEM_KIND],
+            &[&user_id, &kind.item_kind()],
         )
         .await?;
     Ok(row.get("total"))
@@ -799,6 +848,7 @@ fn is_repeatable_purchase_item(item: &MarketplaceItem) -> bool {
     matches!(
         item.item_kind.as_str(),
         AQUARIUM_FISH_ITEM_KIND
+            | AQUARIUM_PLANT_ITEM_KIND
             | CHAT_CONSUMABLE_ITEM_KIND
             | COMPANION_CONSUMABLE_ITEM_KIND
             | USERNAME_EFFECT_ITEM_KIND
@@ -1081,7 +1131,9 @@ pub struct FishStock {
 
 /// Every species with at least one fish swimming in the user's tank, locked
 /// for the transaction. Fish kept in inventory (owned, not active) are not
-/// in the water, so they neither breed nor starve.
+/// in the water, so they neither breed nor starve. Plants are another item
+/// kind and never in this list: nothing roots from a fish or starves a
+/// plant.
 pub async fn swimming_fish_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     user_id: Uuid,
@@ -1122,7 +1174,7 @@ pub async fn hatch_aquarium_fry_in_tx(
     user_id: Uuid,
     item_id: Uuid,
 ) -> Result<bool> {
-    let swimming = aquarium_fish_active_quantity_in_tx(tx, user_id).await?;
+    let swimming = aquarium_active_quantity_in_tx(tx, user_id, TankStockKind::Fish).await?;
     let into_water = swimming < AQUARIUM_MAX_FISH;
     let active_delta: i32 = if into_water { 1 } else { 0 };
     let updated = tx
@@ -1139,6 +1191,41 @@ pub async fn hatch_aquarium_fry_in_tx(
         bail!("fry hatched for a species the user does not own");
     }
     Ok(into_water)
+}
+
+/// One plant the catalog sells: what a rooting sprout can become.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlantSpecies {
+    pub item_id: Uuid,
+    pub creature: String,
+    pub name: String,
+}
+
+/// Every plant on sale, in catalog order: the sprout row is not one (it
+/// has no creature of its own to grow), and neither is a retired plant.
+pub async fn catalog_plants_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+) -> Result<Vec<PlantSpecies>> {
+    let rows = tx
+        .query(
+            "SELECT id, payload->>'creature' AS creature, name
+             FROM marketplace_items
+             WHERE item_kind = $1
+               AND active
+               AND payload->>'creature' IS NOT NULL
+               AND COALESCE((payload->>'sprout')::bool, false) = false
+             ORDER BY sort_order, sku",
+            &[&AQUARIUM_PLANT_ITEM_KIND],
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| PlantSpecies {
+            item_id: row.get("id"),
+            creature: row.get("creature"),
+            name: row.get("name"),
+        })
+        .collect())
 }
 
 /// The tank's welcome fish: one fry (`AQUARIUM_WELCOME_FISH_SKU`, the
@@ -1172,24 +1259,18 @@ pub async fn welcome_aquarium_fry_in_tx(
     Ok(creature)
 }
 
-/// A sprout the owner left alone rooted as a plant
-/// (`AQUARIUM_SPROUT_ROOTS_AS_SKU`): one more owned, and one more in the
-/// water when the tank is under `AQUARIUM_MAX_FISH`. Returns whether it went
-/// into the water (a full tank keeps the plant in inventory). A free plant,
-/// so the row's purchase price is zero when this is the first of its kind.
+/// A sprout the owner left alone rooted as the plant `item_id` (one of
+/// `catalog_plants_in_tx`): one more owned, and one more in the water when
+/// the tank is under `AQUARIUM_MAX_PLANTS`. Returns whether it went into
+/// the water (a full floor keeps the plant in inventory). A free plant, so
+/// the row's purchase price is zero when this is the first of its kind.
 pub async fn root_aquarium_sprout_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     user_id: Uuid,
+    item_id: Uuid,
 ) -> Result<bool> {
-    let item_id: Uuid = tx
-        .query_one(
-            "SELECT id FROM marketplace_items WHERE sku = $1",
-            &[&AQUARIUM_SPROUT_ROOTS_AS_SKU],
-        )
-        .await?
-        .get("id");
-    let swimming = aquarium_fish_active_quantity_in_tx(tx, user_id).await?;
-    let into_water = swimming < AQUARIUM_MAX_FISH;
+    let planted = aquarium_active_quantity_in_tx(tx, user_id, TankStockKind::Plant).await?;
+    let into_water = planted < AQUARIUM_MAX_PLANTS;
     let active_delta: i32 = if into_water { 1 } else { 0 };
     let updated = tx
         .execute(

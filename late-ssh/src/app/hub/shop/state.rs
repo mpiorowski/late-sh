@@ -222,7 +222,9 @@ impl ShopState {
         items
     }
 
-    pub(crate) fn active_aquarium_fish(&self) -> Vec<(String, usize)> {
+    /// Every creature in the water, fish and plants alike, as the tank
+    /// draws them: `(creature, active count)`.
+    pub(crate) fn active_aquarium_creatures(&self) -> Vec<(String, usize)> {
         if !self.snapshot.entitlements.has_aquarium() {
             return Vec::new();
         }
@@ -425,11 +427,15 @@ impl ShopState {
             ));
         }
         if item.is_welcome_fish() {
-            return Some(Banner::error("Fry are not for sale, they only breed: one with the tank, one per fourteen-day streak"));
+            return Some(Banner::error(
+                "Fry are not for sale, they only breed: one with the tank, one per fourteen-day streak",
+            ));
         }
-        if item.is_aquarium_fish() {
+        if item.is_tank_stock() {
             if !self.snapshot.entitlements.has_aquarium() {
-                return Some(Banner::error("Unlock Aquarium before buying fish"));
+                return Some(Banner::error(
+                    "Unlock Aquarium before buying fish or plants",
+                ));
             }
             self.service
                 .purchase_item_task(self.user_id, item.sku, current_room_id, None);
@@ -584,16 +590,17 @@ impl ShopState {
         Some(Banner::success("Cancelled custom title"))
     }
 
-    pub(crate) fn adjust_selected_aquarium_fish(&mut self, delta: i32) -> Option<Banner> {
+    /// `+` / `-` on a fish or a plant: one copy into or out of the water.
+    pub(crate) fn adjust_selected_tank_stock(&mut self, delta: i32) -> Option<Banner> {
         let item = self.selected_item()?.clone();
-        if !item.is_aquarium_fish() {
+        if !item.is_tank_stock() {
             return None;
         }
         if !self.snapshot.entitlements.has_aquarium() {
-            return Some(Banner::error("Unlock Aquarium before managing fish"));
+            return Some(Banner::error("Unlock Aquarium before managing the tank"));
         }
         self.service
-            .adjust_aquarium_fish_task(self.user_id, item.sku, delta);
+            .adjust_aquarium_active_task(self.user_id, item.sku, delta);
         let label = if delta > 0 { "Adding" } else { "Removing" };
         Some(Banner::success(&format!("{label} {}", item.name)))
     }

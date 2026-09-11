@@ -178,9 +178,11 @@ pub enum ActivityKind {
     AquariumSprouted {
         born: chrono::NaiveDate,
     },
-    /// A sprout left a week rooted as a plant, settled at login;
-    /// `swimming` is false when the tank was full and it went to inventory.
+    /// A sprout left a week rooted as the plant `creature`, settled at
+    /// login or on the day edge; `swimming` is false when the floor was
+    /// full and it went to inventory.
     AquariumSproutRooted {
+        creature: String,
         swimming: bool,
     },
     /// The owner cut the sprout.
@@ -888,12 +890,13 @@ impl ActivityEvent {
     pub fn aquarium_sprout_rooted(
         user_id: Uuid,
         username: impl Into<String>,
+        creature: String,
         swimming: bool,
     ) -> Self {
         Self::new(
             Some(user_id),
             username,
-            ActivityKind::AquariumSproutRooted { swimming },
+            ActivityKind::AquariumSproutRooted { creature, swimming },
             "let a sprout root in their tank".to_string(),
         )
     }

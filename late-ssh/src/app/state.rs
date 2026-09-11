@@ -1290,7 +1290,7 @@ impl App {
             config.initial_aquarium_care.shields,
         );
         aquarium_state.set_active_creatures(
-            &shop_state.active_aquarium_fish(),
+            &shop_state.active_aquarium_creatures(),
             aquarium_care.fry_visible(),
             aquarium_care.sprout_visible(),
         );
@@ -1299,14 +1299,11 @@ impl App {
         // on the first screen. A loss outranks the sprout news.
         let aquarium_loss_banner = match config.initial_aquarium_care.lost.as_slice() {
             [] => match (
-                config.initial_aquarium_care.rooted,
+                &config.initial_aquarium_care.rooted,
                 config.initial_aquarium_care.sprouted,
             ) {
-                (Some(true), _) => Some(crate::app::common::primitives::Banner::success(
-                    "Your sprout took root: a wigglewort grows in the tank",
-                )),
-                (Some(false), _) => Some(crate::app::common::primitives::Banner::success(
-                    "Your sprout took root: a wigglewort waits in /shop, the tank is full",
+                (Some(plant), _) => Some(crate::app::common::primitives::Banner::success(
+                    &crate::app::hub::aquarium::svc::rooted_banner(&plant.creature, plant.swimming),
                 )),
                 (None, true) => Some(crate::app::common::primitives::Banner::info(
                     "A sprout came up in your tank: cut it in /shop within the week, or leave it to root",
@@ -2743,7 +2740,7 @@ impl App {
     /// changed (a sprout came or went) without a shop snapshot behind it.
     pub(crate) fn refresh_aquarium_population(&mut self) {
         self.aquarium_state.set_active_creatures(
-            &self.shop_state.active_aquarium_fish(),
+            &self.shop_state.active_aquarium_creatures(),
             self.aquarium_care.fry_visible(),
             self.aquarium_care.sprout_visible(),
         );

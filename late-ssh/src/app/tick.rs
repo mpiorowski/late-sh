@@ -888,7 +888,7 @@ impl App {
             {
                 let fry = self
                     .shop_state
-                    .active_aquarium_fish()
+                    .active_aquarium_creatures()
                     .into_iter()
                     .next()
                     .map(|(creature, _)| creature);
@@ -904,7 +904,7 @@ impl App {
                 self.banner = Some(crate::app::common::primitives::Banner::info(&welcome));
             }
             self.aquarium_state.set_active_creatures(
-                &self.shop_state.active_aquarium_fish(),
+                &self.shop_state.active_aquarium_creatures(),
                 self.aquarium_care.fry_visible(),
                 self.aquarium_care.sprout_visible(),
             );
@@ -1085,15 +1085,13 @@ impl App {
                             "A sprout came up in your tank: cut it in /shop within the week, or leave it to root",
                         ))
                     }
-                    ActivityKind::AquariumSproutRooted { swimming } if user_id == self.user_id => {
+                    ActivityKind::AquariumSproutRooted { creature, swimming }
+                        if user_id == self.user_id =>
+                    {
                         self.aquarium_care.clear_sprout();
                         refresh_floor = true;
                         Some(crate::app::common::primitives::Banner::success(
-                            if *swimming {
-                                "Your sprout took root: a wigglewort grows in the tank"
-                            } else {
-                                "Your sprout took root: a wigglewort waits in /shop, the tank is full"
-                            },
+                            &crate::app::hub::aquarium::svc::rooted_banner(creature, *swimming),
                         ))
                     }
                     ActivityKind::AquariumSproutCut if user_id == self.user_id => {

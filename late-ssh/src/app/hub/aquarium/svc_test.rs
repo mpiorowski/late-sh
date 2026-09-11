@@ -1,6 +1,8 @@
 use late_core::models::aquarium_care::{AquariumCare, CARE_DAYS};
 use late_core::models::chips::UserChips;
-use late_core::models::marketplace::{AQUARIUM_SKU, purchase_durable_item_by_sku};
+use late_core::models::marketplace::{
+    AQUARIUM_PLANT_ITEM_KIND, AQUARIUM_SKU, purchase_durable_item_by_sku,
+};
 use late_core::test_utils::create_test_user;
 use tokio::sync::broadcast;
 use tokio::time::{Duration, timeout};
@@ -35,7 +37,7 @@ async fn stock_tank(db: &late_core::db::Db, user_id: Uuid) {
         .expect("the purchase planted a care row")
         .fry_creature
         .expect("the purchase stamped a welcome fry");
-    late_core::models::marketplace::adjust_aquarium_fish_active_by_sku(
+    late_core::models::marketplace::adjust_aquarium_active_by_sku(
         &mut client,
         user_id,
         &format!("aquarium_fish_{welcome}"),
@@ -48,7 +50,7 @@ async fn stock_tank(db: &late_core::db::Db, user_id: Uuid) {
             .await
             .expect("fish purchase");
     }
-    late_core::models::marketplace::adjust_aquarium_fish_active_by_sku(
+    late_core::models::marketplace::adjust_aquarium_active_by_sku(
         &mut client,
         user_id,
         "aquarium_fish_clownfish",
@@ -56,6 +58,24 @@ async fn stock_tank(db: &late_core::db::Db, user_id: Uuid) {
     )
     .await
     .expect("put the fish in the water");
+}
+
+/// Every plant the user owns, summed over the species: `(owned, in the
+/// water)`. What a rooting sprout adds to, whichever plant it picked.
+async fn plant_counts(db: &late_core::db::Db, user_id: Uuid) -> (i32, i32) {
+    let client = db.get().await.expect("db client");
+    let row = client
+        .query_one(
+            "SELECT COALESCE(SUM(p.quantity), 0)::INT AS quantity,
+                    COALESCE(SUM(p.active_quantity), 0)::INT AS active_quantity
+             FROM user_purchases p
+             JOIN marketplace_items i ON i.id = p.item_id
+             WHERE p.user_id = $1 AND i.item_kind = $2",
+            &[&user_id, &AQUARIUM_PLANT_ITEM_KIND],
+        )
+        .await
+        .expect("plant rows");
+    (row.get("quantity"), row.get("active_quantity"))
 }
 
 async fn clownfish_counts(db: &late_core::db::Db, user_id: Uuid) -> (i32, i32) {
@@ -278,8 +298,8 @@ async fn a_sprout_comes_up_every_two_weeks_and_roots_unless_it_is_cut() {
     assert!(matches!(event.kind, ActivityKind::AquariumSproutCut));
     assert!(rx.try_recv().is_err());
     assert_eq!(
-        sku_counts(&test_db.db, user.id, "aquarium_fish_wigglewort").await,
-        None,
+        plant_counts(&test_db.db, user.id).await,
+        (0, 0),
         "a cut sprout grows nothing"
     );
 
@@ -301,8 +321,9 @@ async fn a_sprout_comes_up_every_two_weeks_and_roots_unless_it_is_cut() {
         .expect("activity event");
     assert!(matches!(event.kind, ActivityKind::AquariumSprouted { born } if born == today));
 
-    // The next one, left alone for a week: it roots as a wigglewort in
-    // the water, and a late cut finds a plant, not a sprout.
+    // The next one, left alone for a week: it roots as one of the
+    // catalog's plants, in the water, and a late cut finds a plant, not a
+    // sprout. The fish are untouched: a plant takes a plant place.
     client
         .execute(
             "UPDATE user_aquarium_care
@@ -317,11 +338,23 @@ async fn a_sprout_comes_up_every_two_weeks_and_roots_unless_it_is_cut() {
         CutOutcome::NothingToCut
     );
     let boot = svc.bootstrap(user.id).await.expect("third bootstrap");
-    assert_eq!(boot.rooted, Some(true));
+    let rooted = boot.rooted.expect("the sprout rooted");
+    assert!(rooted.swimming);
+    assert!(
+        ["seatuft", "wigglewort"].contains(&rooted.creature.as_str()),
+        "roots as a catalog plant, got {}",
+        rooted.creature
+    );
     assert!(!boot.sprouted, "the next is still a week away");
     assert_eq!(boot.care.expect("care").sprout_born, None);
+    assert_eq!(plant_counts(&test_db.db, user.id).await, (1, 1));
     assert_eq!(
-        sku_counts(&test_db.db, user.id, "aquarium_fish_wigglewort").await,
+        sku_counts(
+            &test_db.db,
+            user.id,
+            &format!("aquarium_plant_{}", rooted.creature)
+        )
+        .await,
         Some((1, 1))
     );
     assert_eq!(clownfish_counts(&test_db.db, user.id).await, (2, 2));
@@ -330,15 +363,12 @@ async fn a_sprout_comes_up_every_two_weeks_and_roots_unless_it_is_cut() {
         .expect("activity in time")
         .expect("activity event");
     assert!(matches!(
-        event.kind,
-        ActivityKind::AquariumSproutRooted { swimming: true }
+        &event.kind,
+        ActivityKind::AquariumSproutRooted { creature, swimming: true } if *creature == rooted.creature
     ));
 
     // Rooting again on the same day finds nothing: settled once.
     let boot = svc.bootstrap(user.id).await.expect("fourth bootstrap");
     assert_eq!(boot.rooted, None);
-    assert_eq!(
-        sku_counts(&test_db.db, user.id, "aquarium_fish_wigglewort").await,
-        Some((1, 1))
-    );
+    assert_eq!(plant_counts(&test_db.db, user.id).await, (1, 1));
 }

@@ -1,8 +1,8 @@
 use late_core::models::{
     marketplace::{
-        AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_SKU,
-        BONSAI_CONSUMABLE_ITEM_KIND, CHAT_CONSUMABLE_ITEM_KIND, COMPANION_CONSUMABLE_ITEM_KIND,
-        PET_COMPANION_SKU, USERNAME_EFFECT_ITEM_KIND,
+        AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_PLANT_ITEM_KIND,
+        AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND, CHAT_CONSUMABLE_ITEM_KIND,
+        COMPANION_CONSUMABLE_ITEM_KIND, PET_COMPANION_SKU, USERNAME_EFFECT_ITEM_KIND,
     },
     rental::TITLE_RENTAL_ITEM_KIND,
 };
@@ -12,6 +12,8 @@ use super::svc::ShopCatalogItem;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShopCategory {
     Companions,
+    Fish,
+    Plants,
     Chat,
     Badges,
     Flags,
@@ -20,18 +22,23 @@ pub(crate) enum ShopCategory {
 
 impl ShopCategory {
     /// Tab order. The name-adjacent tabs lead (Chat, then the badge and flag
-    /// rentals it stacks with), the unlocks and the burn tier follow.
-    pub(crate) const ALL: [Self; 5] = [
+    /// rentals it stacks with), then the unlocks, the tank's two kinds of
+    /// stock, and the burn tier.
+    pub(crate) const ALL: [Self; 7] = [
         Self::Chat,
         Self::Badges,
         Self::Flags,
         Self::Companions,
+        Self::Fish,
+        Self::Plants,
         Self::Ultimates,
     ];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Companions => "Companions",
+            Self::Fish => "Fish",
+            Self::Plants => "Plants",
             Self::Chat => "Chat",
             Self::Badges => "Badges",
             Self::Flags => "Flags",
@@ -42,15 +49,18 @@ impl ShopCategory {
     pub(crate) fn matches_item(self, item: &ShopCatalogItem) -> bool {
         match self {
             // Everything you keep alive, in one tab: the pet, the bonsai
-            // shield, and the tank with its fish and shield. Section rows
-            // split the three.
+            // shield, and the tank with its shield. Section rows split the
+            // three; the tank's stock has tabs of its own.
             Self::Companions => {
                 item.item_kind == "feature_unlock"
                     || item.item_kind == COMPANION_CONSUMABLE_ITEM_KIND
                     || item.item_kind == BONSAI_CONSUMABLE_ITEM_KIND
-                    || item.item_kind == AQUARIUM_FISH_ITEM_KIND
                     || item.item_kind == AQUARIUM_CONSUMABLE_ITEM_KIND
             }
+            // The fish, led by the fry the tank comes with; the plants, led
+            // by the sprout on the floor. Two kinds, two caps, two clocks.
+            Self::Fish => item.item_kind == AQUARIUM_FISH_ITEM_KIND,
+            Self::Plants => item.item_kind == AQUARIUM_PLANT_ITEM_KIND,
             Self::Chat => {
                 item.item_kind == CHAT_CONSUMABLE_ITEM_KIND
                     || item.item_kind == USERNAME_EFFECT_ITEM_KIND

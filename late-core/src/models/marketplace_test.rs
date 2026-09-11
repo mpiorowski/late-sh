@@ -3,17 +3,15 @@ use crate::{
         aquarium_care::AquariumCare,
         chips::{ChipMove, UserChips},
         marketplace::{
-            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, AQUARIUM_SPROUT_SKU,
-            AQUARIUM_WELCOME_FISH_SKU,
-            BONSAI_CONSUMABLE_ITEM_KIND,
+            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_PLANT_ITEM_KIND, AQUARIUM_SKU,
+            AQUARIUM_SPROUT_SKU, AQUARIUM_WELCOME_FISH_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
             BONSAI_DECAY_PROTECTION_KIND, BONSAI_DECAY_SHIELD_SKU, CHAT_BADGE_SLOT,
             CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT, COMPANION_CONSUMABLE_ITEM_KIND,
-            FishActiveStatus, MarketplaceItem, PET_COMPANION_SKU, PurchaseStatus,
-            THEMATRIX_ULTIMATE_SKU, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND, UserPurchase,
-            WONDERLAND_ULTIMATE_SKU, adjust_aquarium_fish_active_by_sku,
-            purchase_durable_item_by_sku, purchase_item_by_sku_with_chat_effect,
-            purchase_item_by_sku_with_custom_title, purchase_item_by_sku_with_username_effect,
-            rental_duration_secs,
+            MarketplaceItem, PET_COMPANION_SKU, PurchaseStatus, THEMATRIX_ULTIMATE_SKU,
+            TankActiveStatus, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND, UserPurchase,
+            WONDERLAND_ULTIMATE_SKU, adjust_aquarium_active_by_sku, purchase_durable_item_by_sku,
+            purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_custom_title,
+            purchase_item_by_sku_with_username_effect, rental_duration_secs,
         },
         pet::PetCompanion,
         rental::{
@@ -251,13 +249,12 @@ async fn seeded_aquarium_fish_are_sorted_and_priced_by_size() {
         .map(|item| item.sku.as_str())
         .collect::<Vec<_>>();
 
-    // The welcome fry and the sprout row lead the list (migration 182),
-    // then the sizes.
+    // The welcome fry leads the fish (migration 182), then the sizes; the
+    // wigglewort is a plant since migration 183 and not in this list.
     assert_eq!(
         skus,
         vec![
             "aquarium_fish_fry",
-            "aquarium_sprout",
             "aquarium_fish_mj",
             "aquarium_fish_seahorse",
             "aquarium_fish_finnegan",
@@ -272,7 +269,6 @@ async fn seeded_aquarium_fish_are_sorted_and_priced_by_size() {
             "aquarium_fish_pufferfish",
             "aquarium_fish_floata",
             "aquarium_fish_squeeb",
-            "aquarium_fish_wigglewort",
             "aquarium_fish_rugbert",
             "aquarium_fish_squigs",
             "aquarium_fish_jellybean",
@@ -294,6 +290,22 @@ async fn seeded_aquarium_fish_are_sorted_and_priced_by_size() {
         .iter()
         .find(|item| item.sku == "aquarium_fish_bigbert")
         .expect("bigbert");
+
+    // The plants: the sprout row first, then the two the sprout can root
+    // as, by price.
+    let plants = items
+        .iter()
+        .filter(|item| item.item_kind == AQUARIUM_PLANT_ITEM_KIND)
+        .map(|item| item.sku.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        plants,
+        vec![
+            "aquarium_sprout",
+            "aquarium_plant_seatuft",
+            "aquarium_plant_wigglewort",
+        ]
+    );
 
     assert_eq!(seahorse.price_chips, AQUARIUM_FISH_PRICE);
     assert_eq!(seahorse.payload["size"], "small");
@@ -338,18 +350,17 @@ async fn aquarium_fish_are_repeatable_and_active_count_is_owned_count_bound() {
     assert_eq!(second.active_quantity, 0);
 
     let empty_decrease =
-        adjust_aquarium_fish_active_by_sku(&mut client, user.id, "aquarium_fish_seahorse", -1)
+        adjust_aquarium_active_by_sku(&mut client, user.id, "aquarium_fish_seahorse", -1)
             .await
             .expect("decrease empty active fish")
             .expect("seahorse exists");
-    assert_eq!(empty_decrease.status, FishActiveStatus::AtZero);
+    assert_eq!(empty_decrease.status, TankActiveStatus::AtZero);
 
-    let increase =
-        adjust_aquarium_fish_active_by_sku(&mut client, user.id, "aquarium_fish_seahorse", 1)
-            .await
-            .expect("increase active fish")
-            .expect("seahorse exists");
-    assert_eq!(increase.status, FishActiveStatus::Changed);
+    let increase = adjust_aquarium_active_by_sku(&mut client, user.id, "aquarium_fish_seahorse", 1)
+        .await
+        .expect("increase active fish")
+        .expect("seahorse exists");
+    assert_eq!(increase.status, TankActiveStatus::Changed);
     assert_eq!(increase.active_quantity, 1);
 
     for _ in 0..(AQUARIUM_MAX_FISH - 2) {
@@ -370,18 +381,17 @@ async fn aquarium_fish_are_repeatable_and_active_count_is_owned_count_bound() {
     // fill the other nineteen.
     for _ in 1..AQUARIUM_MAX_FISH - 1 {
         let increase =
-            adjust_aquarium_fish_active_by_sku(&mut client, user.id, "aquarium_fish_seahorse", 1)
+            adjust_aquarium_active_by_sku(&mut client, user.id, "aquarium_fish_seahorse", 1)
                 .await
                 .expect("activate owned fish")
                 .expect("seahorse exists");
-        assert_eq!(increase.status, FishActiveStatus::Changed);
+        assert_eq!(increase.status, TankActiveStatus::Changed);
     }
-    let full =
-        adjust_aquarium_fish_active_by_sku(&mut client, user.id, "aquarium_fish_seahorse", 1)
-            .await
-            .expect("active cap")
-            .expect("seahorse exists");
-    assert_eq!(full.status, FishActiveStatus::TankFull);
+    let full = adjust_aquarium_active_by_sku(&mut client, user.id, "aquarium_fish_seahorse", 1)
+        .await
+        .expect("active cap")
+        .expect("seahorse exists");
+    assert_eq!(full.status, TankActiveStatus::TankFull);
     assert_eq!(full.active_quantity, AQUARIUM_MAX_FISH - 1);
 }
 
@@ -539,19 +549,92 @@ async fn aquarium_active_adjustment_rejects_projected_total_over_cap() {
     }
 
     for _ in 0..AQUARIUM_MAX_FISH - 1 {
-        adjust_aquarium_fish_active_by_sku(&mut client, user.id, "aquarium_fish_seahorse", 1)
+        adjust_aquarium_active_by_sku(&mut client, user.id, "aquarium_fish_seahorse", 1)
             .await
             .expect("activate seahorse")
             .expect("seahorse exists");
     }
-    let too_many =
-        adjust_aquarium_fish_active_by_sku(&mut client, user.id, "aquarium_fish_tiger", 2)
-            .await
-            .expect("activate tiger")
-            .expect("tiger exists");
+    let too_many = adjust_aquarium_active_by_sku(&mut client, user.id, "aquarium_fish_tiger", 2)
+        .await
+        .expect("activate tiger")
+        .expect("tiger exists");
 
-    assert_eq!(too_many.status, FishActiveStatus::TankFull);
+    assert_eq!(too_many.status, TankActiveStatus::TankFull);
     assert_eq!(too_many.active_quantity, 0);
+}
+
+/// The plants are tank stock like the fish, bought behind the same tank
+/// gate and parked with the same `+`/`-`, but they fill a cap of their
+/// own: a floor full of fish still has room for every plant.
+#[tokio::test]
+async fn plants_are_tank_stock_with_a_cap_apart_from_the_fish() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "aquarium-plant-cap").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    UserChips::admin_grant(
+        &**client,
+        user.id,
+        AQUARIUM_PRICE + AQUARIUM_FISH_PRICE * AQUARIUM_MAX_FISH as i64 + AQUARIUM_FISH_PRICE * 2,
+    )
+    .await
+    .expect("fund chips");
+
+    // No tank, no plant: the same gate the fish have.
+    let refused = purchase_durable_item_by_sku(&mut client, user.id, "aquarium_plant_seatuft")
+        .await
+        .expect("plant purchase")
+        .expect("plant item");
+    assert_eq!(refused.status, PurchaseStatus::RequiresAquarium);
+
+    // The tank comes with one fry swimming; fill the other nineteen fish
+    // places, then the fish cap refuses one more.
+    purchase_durable_item_by_sku(&mut client, user.id, AQUARIUM_SKU)
+        .await
+        .expect("aquarium purchase")
+        .expect("aquarium item");
+    for _ in 0..AQUARIUM_MAX_FISH - 1 {
+        purchase_durable_item_by_sku(&mut client, user.id, "aquarium_fish_seahorse")
+            .await
+            .expect("seahorse purchase")
+            .expect("seahorse item");
+    }
+    for _ in 0..AQUARIUM_MAX_FISH - 1 {
+        adjust_aquarium_active_by_sku(&mut client, user.id, "aquarium_fish_seahorse", 1)
+            .await
+            .expect("activate seahorse")
+            .expect("seahorse exists");
+    }
+    purchase_durable_item_by_sku(&mut client, user.id, "aquarium_fish_tiger")
+        .await
+        .expect("tiger purchase")
+        .expect("tiger item");
+    let fish_full = adjust_aquarium_active_by_sku(&mut client, user.id, "aquarium_fish_tiger", 1)
+        .await
+        .expect("activate tiger")
+        .expect("tiger exists");
+    assert_eq!(fish_full.status, TankActiveStatus::TankFull);
+
+    // A plant is bought into the inventory like a fish, and `+` still puts
+    // it in the water: its cap is its own.
+    let bought = purchase_durable_item_by_sku(&mut client, user.id, "aquarium_plant_seatuft")
+        .await
+        .expect("plant purchase")
+        .expect("plant item");
+    assert_eq!(bought.status, PurchaseStatus::Purchased);
+    assert_eq!(bought.item.item_kind, AQUARIUM_PLANT_ITEM_KIND);
+    assert_eq!((bought.quantity, bought.active_quantity), (1, 0));
+    let planted = adjust_aquarium_active_by_sku(&mut client, user.id, "aquarium_plant_seatuft", 1)
+        .await
+        .expect("plant it")
+        .expect("plant exists");
+    assert_eq!(planted.status, TankActiveStatus::Changed);
+    assert_eq!(planted.active_quantity, 1);
+    let parked = adjust_aquarium_active_by_sku(&mut client, user.id, "aquarium_plant_seatuft", -1)
+        .await
+        .expect("park the plant")
+        .expect("plant exists");
+    assert_eq!(parked.status, TankActiveStatus::Changed);
+    assert_eq!(parked.active_quantity, 0);
 }
 
 #[tokio::test]
