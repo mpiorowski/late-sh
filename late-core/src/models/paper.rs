@@ -221,6 +221,14 @@ impl PaperEdition {
                 .iter()
                 .any(|section| section.status == PaperStatus::Ready)
     }
+
+    /// True once the sweeper has reached this edition: at least one row,
+    /// quiet, printing, and failed ones included. Every sweep settles the
+    /// reading section, so an edition with no rows at all has simply not
+    /// been swept yet.
+    pub fn is_swept(&self) -> bool {
+        !self.rooms.is_empty() || !self.sections.is_empty()
+    }
 }
 
 pub struct PaperRoomEdition;

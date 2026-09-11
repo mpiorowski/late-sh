@@ -856,7 +856,7 @@ impl PaperService {
         let edition = PaperEdition::load(&client, today).await?;
         // The announcements are a plain read, no claim and no press: the
         // operator's posts in the window, word for word. A day with an
-        // announcement and no column is still a paper, and pops.
+        // announcement and no column is still a paper.
         let (floor, ceiling) = edition_window(today);
         let announcements = read_announcements(&client, floor, ceiling).await?;
         if !edition.has_print() && announcements.is_empty() {
@@ -895,6 +895,14 @@ impl PaperService {
         };
         match trigger {
             PaperTrigger::Login => {
+                // An announcement alone pops only once the sweeper has been
+                // by. Before that the columns are still coming, and a reader
+                // in just after midnight would spend the day's one stamp on
+                // a paper with nothing under the announcement and no footer
+                // to say so. `/paper` answers regardless.
+                if !issue.edition.has_print() && !issue.edition.is_swept() {
+                    return Ok(Opened::Empty);
+                }
                 if User::claim_paper_shown(&client, user_id, today).await? {
                     Ok(Opened::Ready(issue))
                 } else {

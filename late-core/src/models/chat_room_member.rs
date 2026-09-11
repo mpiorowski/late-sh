@@ -172,13 +172,11 @@ impl ChatRoomMember {
         let count = client
             .execute(
                 // Auto-joined rooms start "read" so new users aren't flooded
-                // with unread badges - EXCEPT #announcements, which is joined
-                // with a NULL cursor so the login splash surfaces the recent
-                // announcements the user has never seen.
+                // with unread badges. #announcements included: the daily
+                // paper prints yesterday's posts, so nothing needs the badge
+                // to point at the room's whole history.
                 "INSERT INTO chat_room_members (room_id, user_id, last_read_at)
-                 SELECT id, $1,
-                        CASE WHEN slug = 'announcements' THEN NULL
-                             ELSE current_timestamp END
+                 SELECT id, $1, current_timestamp
                  FROM chat_rooms
                  WHERE visibility = 'public' AND auto_join = true
                    AND NOT EXISTS (

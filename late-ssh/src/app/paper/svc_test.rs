@@ -4,7 +4,7 @@ use chrono::{TimeZone, Utc};
 use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
 use late_core::models::chat_room::ChatRoom;
 use late_core::models::chat_room_member::ChatRoomMember;
-use late_core::models::paper::PaperRoomEdition;
+use late_core::models::paper::{PaperRoomEdition, PaperSectionKind, PaperSectionRow};
 use late_core::test_utils::create_test_user;
 
 use super::svc::{
@@ -177,9 +177,19 @@ async fn the_newsstand_answers_unavailable_empty_and_ready_and_claims_the_login_
     assert!(matches!(outcome, PaperOutcome::Empty));
 
     // One announcement and no column is still a paper: the post prints
-    // whole, with no threshold and no press behind it.
+    // whole, with no threshold and no press behind it. `/paper` answers
+    // at once. The login pop waits until the sweeper has left rows, so a
+    // reader in just after midnight does not spend the day's stamp on a
+    // paper whose columns are still coming.
     let operator = create_test_user(&test_db.db, "paper-operator").await;
     post_announcement(&test_db.db, operator.id, "maintenance tonight at 22:00 UTC").await;
+    let early = create_test_user(&test_db.db, "paper-early-bird").await;
+    service.request(early.id, PaperTrigger::Login);
+    let (_, _, outcome) = wait_open(&mut rx).await;
+    assert!(
+        matches!(outcome, PaperOutcome::Empty),
+        "an unswept edition must not pop on an announcement alone, got {outcome:?}"
+    );
     service.request(user.id, PaperTrigger::Command);
     let (_, _, outcome) = wait_open(&mut rx).await;
     let PaperOutcome::Ready(issue) = outcome else {
@@ -193,6 +203,40 @@ async fn the_newsstand_answers_unavailable_empty_and_ready_and_claims_the_login_
             .map(|post| (post.author.as_str(), post.body.as_str()))
             .collect::<Vec<_>>(),
         vec![("paper-operator", "maintenance tonight at 22:00 UTC")]
+    );
+    // The sweeper settles a section as quiet: rows exist, nothing is
+    // ready, and the announcement alone now pops at login, once.
+    {
+        let client = test_db.db.get().await.expect("db client");
+        let today = edition_for(Utc::now());
+        assert!(
+            PaperSectionRow::claim_printing(
+                &client,
+                today,
+                PaperSectionKind::Reading,
+                Utc::now(),
+                PAPER_MAX_ATTEMPTS
+            )
+            .await
+            .expect("claim reading")
+        );
+        PaperSectionRow::finish(&client, today, PaperSectionKind::Reading, None)
+            .await
+            .expect("settle reading quiet");
+    }
+    service.request(early.id, PaperTrigger::Login);
+    let (_, _, outcome) = wait_open(&mut rx).await;
+    let PaperOutcome::Ready(issue) = outcome else {
+        panic!("expected the announcement to pop over a swept edition, got {outcome:?}");
+    };
+    assert!(!issue.edition.has_print());
+    assert_eq!(issue.announcements.len(), 1);
+    service.request(early.id, PaperTrigger::Login);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), rx.recv())
+            .await
+            .is_err(),
+        "the announcement-only pop spends the stamp like any other"
     );
 
     // A printed page: the login pop is won once per account per edition,

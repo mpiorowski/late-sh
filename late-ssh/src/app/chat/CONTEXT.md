@@ -181,7 +181,7 @@ System-feed lines: the `#lounge` activity feed (`app/activity/lounge.rs`) posts 
 `ChatSnapshot` is summary data. `RoomTailLoaded` is history data. Do not merge those responsibilities back together.
 
 Announcements:
-- There is no login `#announcements` modal (removed 2026-09-11). Yesterday's posts print verbatim at the top of The Late Edition (`app/paper`, `ChatMessage::list_public_room_between_with_author`); `#announcements` unread counts behave like any other room's, and the paper never touches `chat_room_members.last_read_at`.
+- There is no login `#announcements` modal (removed 2026-09-11). Yesterday's posts print verbatim at the top of The Late Edition (`app/paper`, `ChatMessage::list_public_room_between_with_author`); `#announcements` unread counts behave like any other room's (auto-join starts it read, the same as every other room, since 2026-09-11), and the paper never touches `chat_room_members.last_read_at`.
 
 ---
 
