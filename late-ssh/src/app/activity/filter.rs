@@ -156,6 +156,7 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // Same for the tank: the daily feed is the owner's ritual.
         ActivityKind::AquariumFed
         | ActivityKind::AquariumFryHatched { .. }
+        | ActivityKind::AquariumFryNoRoom
         | ActivityKind::AquariumFishLost { .. }
         | ActivityKind::AquariumSprouted { .. }
         | ActivityKind::AquariumSproutRooted { .. }
@@ -244,6 +245,7 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
         | ActivityKind::BonsaiLost { .. }
         | ActivityKind::AquariumFed
         | ActivityKind::AquariumFryHatched { .. }
+        | ActivityKind::AquariumFryNoRoom
         | ActivityKind::AquariumFishLost { .. }
         | ActivityKind::AquariumSprouted { .. }
         | ActivityKind::AquariumSproutRooted { .. }

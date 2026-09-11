@@ -85,7 +85,14 @@ pub(crate) fn draw_rice(
         return;
     }
     let (tiles_area, hint_area) = layout::rice_areas(area);
-    let mut chats = std::mem::take(&mut view.chats).into_iter();
+    // One frame per chat tile in layout order. Zoomed, the one tile drawn
+    // is the focused one, so it takes the active chat's frame, not the
+    // first.
+    let mut chats: Vec<Option<ZenChatTile<'_>>> = std::mem::take(&mut view.chats)
+        .into_iter()
+        .map(Some)
+        .collect();
+    let mut next_chat = 0usize;
     let zen = view.zen;
     let zoomed = zen.zoomed.then_some(zen.focus);
     let gap = zen.rice.look.gap as u16;
@@ -111,7 +118,14 @@ pub(crate) fn draw_rice(
         // its room in the title, so `[` `]` walking the rooms shows where
         // you landed without reading the messages.
         let chat_tile = match kind {
-            TileKind::Chat => chats.next(),
+            TileKind::Chat => {
+                let index = match zoomed {
+                    Some(_) => zen.active_chat_index().unwrap_or(next_chat),
+                    None => next_chat,
+                };
+                next_chat += 1;
+                chats.get_mut(index).and_then(Option::take)
+            }
             TileKind::Bonsai
             | TileKind::Aquarium
             | TileKind::Pet

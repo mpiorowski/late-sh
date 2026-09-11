@@ -164,12 +164,14 @@ pub enum ActivityKind {
     },
     /// The first aquarium feeding of the UTC day cleared the DB chip gate.
     AquariumFed,
-    /// Fourteen straight fed days hatched a fry of `creature`; `swimming`
-    /// is false when the tank was full and it went to inventory instead.
+    /// Fourteen straight fed days hatched a fry of `creature`, swimming
+    /// from the start.
     AquariumFryHatched {
         creature: String,
-        swimming: bool,
     },
+    /// Fourteen straight fed days hatched nothing: the owner already owns
+    /// the cap of fish, in the water and parked together.
+    AquariumFryNoRoom,
     /// Fourteen unfed days starved one `creature`, settled at login.
     AquariumFishLost {
         creature: String,
@@ -178,12 +180,10 @@ pub enum ActivityKind {
     AquariumSprouted {
         born: chrono::NaiveDate,
     },
-    /// A sprout left a week rooted as the plant `creature`, settled at
-    /// login or on the day edge; `swimming` is false when the floor was
-    /// full and it went to inventory.
+    /// A sprout left a week rooted as the plant `creature`, in the water,
+    /// settled at login or on the day edge.
     AquariumSproutRooted {
         creature: String,
-        swimming: bool,
     },
     /// The owner cut the sprout.
     AquariumSproutCut,
@@ -218,6 +218,7 @@ impl ActivityKind {
             Self::BonsaiWatered | Self::BonsaiLost { .. } => ActivityCategory::Bonsai,
             Self::AquariumFed
             | Self::AquariumFryHatched { .. }
+            | Self::AquariumFryNoRoom
             | Self::AquariumFishLost { .. }
             | Self::AquariumSprouted { .. }
             | Self::AquariumSproutRooted { .. }
@@ -853,14 +854,22 @@ impl ActivityEvent {
         user_id: Uuid,
         username: impl Into<String>,
         creature: String,
-        swimming: bool,
     ) -> Self {
         let text = format!("hatched a {creature} fry in their tank");
         Self::new(
             Some(user_id),
             username,
-            ActivityKind::AquariumFryHatched { creature, swimming },
+            ActivityKind::AquariumFryHatched { creature },
             text,
+        )
+    }
+
+    pub fn aquarium_fry_no_room(user_id: Uuid, username: impl Into<String>) -> Self {
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::AquariumFryNoRoom,
+            "kept a streak going with no room for a fry".to_string(),
         )
     }
 
@@ -895,12 +904,11 @@ impl ActivityEvent {
         user_id: Uuid,
         username: impl Into<String>,
         creature: String,
-        swimming: bool,
     ) -> Self {
         Self::new(
             Some(user_id),
             username,
-            ActivityKind::AquariumSproutRooted { creature, swimming },
+            ActivityKind::AquariumSproutRooted { creature },
             "let a sprout root in their tank".to_string(),
         )
     }

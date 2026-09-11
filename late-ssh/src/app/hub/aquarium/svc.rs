@@ -31,9 +31,8 @@ pub struct CareBootstrap {
 /// What a sprout left alone became once its week was up.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SproutFate {
-    /// It rooted as the plant `creature`, in the water, or parked in the
-    /// Shop's inventory when the floor was full (`swimming` false).
-    Rooted { creature: String, swimming: bool },
+    /// It rooted as the plant `creature`, in the water.
+    Rooted { creature: String },
     /// It withered: the owner already owns the cap of plants, in the water
     /// and parked together, so nothing grew.
     Withered,
@@ -161,6 +160,13 @@ impl AquariumService {
                 } else {
                     care.sprout_born
                 },
+                // The row booked the next one when it raised this one; the
+                // session's clock reads both dates.
+                next_sprout: if sprouted {
+                    today + chrono::Days::new(care_rules::SPROUT_EVERY_DAYS as u64)
+                } else {
+                    care.next_sprout
+                },
                 ..care
             }),
             shields,
@@ -201,8 +207,7 @@ impl AquariumService {
     }
 
     /// The sprout clock's news on the activity feed: what became of the
-    /// sprout (which plant, and whether it went into the water, or that it
-    /// withered) and the new sprout.
+    /// sprout (which plant, or that it withered) and the new sprout.
     fn announce_sprout_clock(
         &self,
         user_id: Uuid,
@@ -212,12 +217,11 @@ impl AquariumService {
         today: NaiveDate,
     ) {
         match rooted {
-            Some(SproutFate::Rooted { creature, swimming }) => {
+            Some(SproutFate::Rooted { creature }) => {
                 tracing::info!(
                     user_id = %user_id,
                     username = %username,
                     creature = %creature,
-                    swimming,
                     "aquarium sprout rooted"
                 );
                 let _ = self
@@ -226,7 +230,6 @@ impl AquariumService {
                         user_id,
                         username.to_string(),
                         creature.clone(),
-                        *swimming,
                     ));
             }
             Some(SproutFate::Withered) => {
@@ -338,72 +341,64 @@ impl AquariumService {
             &today.to_string(),
         )
         .await?;
-        let mut hatched: Option<(String, bool)> = None;
-        let mut no_room = false;
+        // The streak's fry: the parent picked and where the hatch ended up,
+        // `None` on a day the streak did not come round.
+        let mut hatch: Option<(String, TankSpawn)> = None;
         if care_rules::hatches_fry(streak) {
             let stock = marketplace::swimming_fish_in_tx(&tx, user_id).await?;
             if let Some(parent) = care_rules::pick_by_weight(&stock, rand::random()) {
-                match marketplace::hatch_aquarium_fry_in_tx(&tx, user_id, parent.item_id).await? {
-                    TankSpawn::Swimming => {
-                        AquariumCare::set_fry(&*tx, user_id, &parent.creature, today).await?;
-                        marketplace::notify_user_shop_changed(&*tx, user_id).await?;
-                        hatched = Some((parent.creature.clone(), true));
-                    }
-                    TankSpawn::Parked => {
-                        marketplace::notify_user_shop_changed(&*tx, user_id).await?;
-                        hatched = Some((parent.creature.clone(), false));
-                    }
-                    TankSpawn::NoRoom => {
-                        no_room = true;
-                    }
+                let spawn =
+                    marketplace::hatch_aquarium_fry_in_tx(&tx, user_id, parent.item_id).await?;
+                if spawn == TankSpawn::Swimming {
+                    AquariumCare::set_fry(&*tx, user_id, &parent.creature, today).await?;
+                    marketplace::notify_user_shop_changed(&*tx, user_id).await?;
                 }
+                hatch = Some((parent.creature.clone(), spawn));
             }
         }
         tx.commit().await?;
-        if no_room {
-            tracing::info!(
-                user_id = %user_id,
-                streak,
-                "aquarium fry not born, the owner has the cap of fish"
-            );
-        }
 
         let username = late_core::models::profile::fetch_username(&client, user_id).await;
         let _ = self
             .activity_feed
             .send(ActivityEvent::aquarium_fed(user_id, username.clone()));
-        if let Some((creature, swimming)) = hatched {
-            tracing::info!(
-                user_id = %user_id,
-                username = %username,
-                creature = %creature,
-                streak,
-                swimming,
-                "aquarium fry hatched"
-            );
-            let _ = self.activity_feed.send(ActivityEvent::aquarium_fry_hatched(
-                user_id, username, creature, swimming,
-            ));
+        match hatch {
+            Some((creature, TankSpawn::Swimming)) => {
+                tracing::info!(
+                    user_id = %user_id,
+                    username = %username,
+                    creature = %creature,
+                    streak,
+                    "aquarium fry hatched"
+                );
+                let _ = self.activity_feed.send(ActivityEvent::aquarium_fry_hatched(
+                    user_id, username, creature,
+                ));
+            }
+            // Said out loud, so a full tank never looks like a broken streak.
+            Some((_, TankSpawn::NoRoom)) => {
+                tracing::info!(
+                    user_id = %user_id,
+                    username = %username,
+                    streak,
+                    "aquarium fry not born, the owner has the cap of fish"
+                );
+                let _ = self
+                    .activity_feed
+                    .send(ActivityEvent::aquarium_fry_no_room(user_id, username));
+            }
+            None => {}
         }
         Ok(FeedOutcome::Fed)
     }
 }
 
 /// The one banner both the connect and the live event show for what
-/// became of a sprout: which plant and where it is, or that it withered.
+/// became of a sprout: which plant, or that it withered.
 pub(crate) fn sprout_fate_banner(fate: &SproutFate) -> Banner {
     match fate {
-        SproutFate::Rooted {
-            creature,
-            swimming: true,
-        } => Banner::success(&format!(
+        SproutFate::Rooted { creature } => Banner::success(&format!(
             "Your sprout took root: a {creature} grows in the tank"
-        )),
-        SproutFate::Rooted {
-            creature,
-            swimming: false,
-        } => Banner::success(&format!(
-            "Your sprout took root: a {creature} waits in /shop, the floor is full"
         )),
         SproutFate::Withered => Banner::info(&format!(
             "Your sprout withered: you already own {} plants",
@@ -440,14 +435,6 @@ async fn settle_sprout_clock_in_tx(
                     marketplace::notify_user_shop_changed(&*tx, user_id).await?;
                     SproutFate::Rooted {
                         creature: plant.creature.clone(),
-                        swimming: true,
-                    }
-                }
-                TankSpawn::Parked => {
-                    marketplace::notify_user_shop_changed(&*tx, user_id).await?;
-                    SproutFate::Rooted {
-                        creature: plant.creature.clone(),
-                        swimming: false,
                     }
                 }
                 TankSpawn::NoRoom => SproutFate::Withered,

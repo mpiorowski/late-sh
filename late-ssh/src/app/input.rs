@@ -2729,8 +2729,10 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         return true;
     }
     // A click on a Zen tile focuses it, then falls through so the pet, the
-    // composer, and the messages of that tile still take the click.
-    if screen == Screen::Zen {
+    // composer, and the messages of that tile still take the click. A
+    // modal over the page takes the click itself, the same guard the pet
+    // click uses.
+    if screen == Screen::Zen && !chat_scroll_clicks_blocked(app) {
         focus_zen_tile_at(app, x, y);
     }
     if handle_chat_composer_click(app, screen, x, y) {

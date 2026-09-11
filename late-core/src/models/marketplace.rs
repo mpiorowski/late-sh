@@ -1218,21 +1218,19 @@ pub async fn swimming_fish_in_tx(
 }
 
 /// Where something the tank grew on its own (a fry, a rooting sprout)
-/// ended up.
+/// ended up. The owned cap and the water's cap are one number
+/// (`TankStockKind::cap`), so whatever is born has room in the water.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TankSpawn {
     /// Owned and in the water.
     Swimming,
-    /// Owned, parked in the inventory: the water was full of its kind.
-    Parked,
     /// Not born at all: the user already owns the cap of its kind, in the
     /// water and parked together. Nothing was written.
     NoRoom,
 }
 
-/// A fry of `item_id` hatched: one more owned, and one more swimming when
-/// the water is under `AQUARIUM_MAX_FISH`; nothing at all when the owned
-/// fish are at the cap already.
+/// A fry of `item_id` hatched: one more owned and swimming; nothing at all
+/// when the owned fish are at `AQUARIUM_MAX_FISH` already.
 pub async fn hatch_aquarium_fry_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     user_id: Uuid,
@@ -1241,27 +1239,20 @@ pub async fn hatch_aquarium_fry_in_tx(
     if aquarium_owned_quantity_in_tx(tx, user_id, TankStockKind::Fish).await? >= AQUARIUM_MAX_FISH {
         return Ok(TankSpawn::NoRoom);
     }
-    let swimming = aquarium_active_quantity_in_tx(tx, user_id, TankStockKind::Fish).await?;
-    let into_water = swimming < AQUARIUM_MAX_FISH;
-    let active_delta: i32 = if into_water { 1 } else { 0 };
     let updated = tx
         .execute(
             "UPDATE user_purchases
              SET quantity = quantity + 1,
-                 active_quantity = active_quantity + $3,
+                 active_quantity = active_quantity + 1,
                  updated = current_timestamp
              WHERE user_id = $1 AND item_id = $2",
-            &[&user_id, &item_id, &active_delta],
+            &[&user_id, &item_id],
         )
         .await?;
     if updated != 1 {
         bail!("fry hatched for a species the user does not own");
     }
-    Ok(if into_water {
-        TankSpawn::Swimming
-    } else {
-        TankSpawn::Parked
-    })
+    Ok(TankSpawn::Swimming)
 }
 
 /// One plant the catalog sells: what a rooting sprout can become.
@@ -1331,10 +1322,10 @@ pub async fn welcome_aquarium_fry_in_tx(
 }
 
 /// A sprout the owner left alone rooted as the plant `item_id` (one of
-/// `catalog_plants_in_tx`): one more owned, and one more in the water when
-/// the floor is under `AQUARIUM_MAX_PLANTS`; nothing at all when the owned
-/// plants are at the cap already (the sprout withers). A free plant, so the
-/// row's purchase price is zero when this is the first of its kind.
+/// `catalog_plants_in_tx`): one more owned and in the water; nothing at all
+/// when the owned plants are at `AQUARIUM_MAX_PLANTS` already (the sprout
+/// withers). A free plant, so the row's purchase price is zero when this
+/// is the first of its kind.
 pub async fn root_aquarium_sprout_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     user_id: Uuid,
@@ -1345,33 +1336,26 @@ pub async fn root_aquarium_sprout_in_tx(
     {
         return Ok(TankSpawn::NoRoom);
     }
-    let planted = aquarium_active_quantity_in_tx(tx, user_id, TankStockKind::Plant).await?;
-    let into_water = planted < AQUARIUM_MAX_PLANTS;
-    let active_delta: i32 = if into_water { 1 } else { 0 };
     let updated = tx
         .execute(
             "UPDATE user_purchases
              SET quantity = quantity + 1,
-                 active_quantity = active_quantity + $3,
+                 active_quantity = active_quantity + 1,
                  updated = current_timestamp
              WHERE user_id = $1 AND item_id = $2",
-            &[&user_id, &item_id, &active_delta],
+            &[&user_id, &item_id],
         )
         .await?;
     if updated == 0 {
         tx.execute(
             "INSERT INTO user_purchases
                 (user_id, item_id, quantity, active_quantity, remaining_uses, equipped_slot, purchased_price_chips)
-             VALUES ($1, $2, 1, $3, NULL, NULL, 0)",
-            &[&user_id, &item_id, &active_delta],
+             VALUES ($1, $2, 1, 1, NULL, NULL, 0)",
+            &[&user_id, &item_id],
         )
         .await?;
     }
-    Ok(if into_water {
-        TankSpawn::Swimming
-    } else {
-        TankSpawn::Parked
-    })
+    Ok(TankSpawn::Swimming)
 }
 
 /// One swimming fish of `item_id` starved: gone from the water and from the

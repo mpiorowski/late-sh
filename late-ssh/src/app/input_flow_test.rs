@@ -2659,3 +2659,90 @@ async fn zen_chat_keys_belong_to_the_focused_chat_tile() {
     app.handle_input(b"i");
     assert!(app.chat.composing, "i on the focused chat tile composes");
 }
+
+#[tokio::test]
+async fn zen_a_draft_stays_in_its_room_when_the_focus_moves_and_zoom_shows_the_focused_chat() {
+    use crate::app::zen::state::TileKind;
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "zen-draft-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    let quiet = ChatRoom::get_or_create_public_room(&client, "zen-quiet")
+        .await
+        .expect("second room");
+    ChatRoomMember::join(&client, quiet.id, viewer.id)
+        .await
+        .expect("join second room");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-draft-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "zen-quiet").await;
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "Esc back").await;
+
+    // A second chat tile beside the default one, bound to the second room;
+    // the first keeps the current room, #lounge.
+    let first = app
+        .zen
+        .first_tile_of(TileKind::Chat)
+        .expect("the default has a chat");
+    assert_eq!(app.zen.focus, first);
+    assert!(app.zen.split_focused(true));
+    let second = app.zen.focus;
+    assert!(app.zen.rice.root.set_kind(second, TileKind::Chat));
+    assert!(app.zen.bind_focused_chat_room(Some(quiet.id)));
+
+    // A draft written in the second tile, then a click on the first: the
+    // draft is closed rather than carried under #lounge, where Enter would
+    // have posted it to the room it was written for.
+    app.handle_input(b"i");
+    app.handle_input(b"secret");
+    assert!(app.chat.composing);
+    assert_eq!(app.chat.composer_room_id(), Some(quiet.id));
+    let (cols, rows) = app.size;
+    let (tiles_area, _) =
+        crate::app::zen::layout::rice_areas(ratatui::layout::Rect::new(0, 0, cols, rows));
+    let rects = crate::app::zen::layout::tile_rects(
+        &app.zen.rice.root,
+        tiles_area,
+        app.zen.rice.look.gap as u16,
+        None,
+    );
+    let (_, rect) = rects[first];
+    let click = format!(
+        "\x1b[<0;{};{}M",
+        rect.x + rect.width / 2 + 1,
+        rect.y + rect.height / 2 + 1
+    );
+    app.handle_input(click.as_bytes());
+    assert_eq!(app.zen.focus, first, "the click focused the first chat tile");
+    assert!(
+        !app.chat.composing,
+        "the draft written for the second room is closed, not shown under #lounge"
+    );
+    assert_eq!(app.chat.composer_room_id(), None);
+    app.handle_input(b"i");
+    assert_eq!(
+        app.chat.composer_room_id(),
+        Some(lounge.id),
+        "a new draft belongs to the focused tile's room"
+    );
+    app.chat.reset_composer();
+
+    // Zoom the second tile: the one pane on show is its room.
+    app.handle_input(b"\x1b[C");
+    assert_eq!(app.zen.focus, second);
+    app.handle_input(b"z");
+    assert!(app.zen.zoomed);
+    let rendered = strip_ansi(&render_plain(&mut app));
+    assert!(
+        rendered.contains("#zen-quiet"),
+        "the zoomed pane is the focused tile's room, not the first chat's:\n{rendered}"
+    );
+}

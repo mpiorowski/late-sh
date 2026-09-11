@@ -204,7 +204,7 @@ async fn the_fourteenth_straight_feed_hatches_a_fry() {
     assert!(matches!(kinds[1], ActivityKind::AquariumFed));
     assert!(matches!(
         &kinds[2],
-        ActivityKind::AquariumFryHatched { creature, swimming: true } if creature == "clownfish"
+        ActivityKind::AquariumFryHatched { creature } if creature == "clownfish"
     ));
 }
 
@@ -315,7 +315,13 @@ async fn a_sprout_comes_up_every_two_weeks_and_roots_unless_it_is_cut() {
     let boot = svc.bootstrap(user.id).await.expect("second bootstrap");
     assert!(boot.sprouted);
     assert_eq!(boot.rooted, None);
-    assert_eq!(boot.care.expect("care").sprout_born, Some(today));
+    let care = boot.care.expect("care");
+    assert_eq!(care.sprout_born, Some(today));
+    assert_eq!(
+        care.next_sprout,
+        today + chrono::Days::new(14),
+        "the connect that raised the sprout hands over the next date it booked"
+    );
     let event = timeout(Duration::from_secs(2), rx.recv())
         .await
         .expect("activity in time")
@@ -339,10 +345,9 @@ async fn a_sprout_comes_up_every_two_weeks_and_roots_unless_it_is_cut() {
         CutOutcome::NothingToCut
     );
     let boot = svc.bootstrap(user.id).await.expect("third bootstrap");
-    let Some(SproutFate::Rooted { creature, swimming }) = boot.rooted else {
+    let Some(SproutFate::Rooted { creature }) = boot.rooted else {
         panic!("the sprout rooted, got {:?}", boot.rooted);
     };
-    assert!(swimming);
     assert!(
         ["seatuft", "wigglewort"].contains(&creature.as_str()),
         "roots as a catalog plant, got {creature}"
@@ -361,7 +366,7 @@ async fn a_sprout_comes_up_every_two_weeks_and_roots_unless_it_is_cut() {
         .expect("activity event");
     assert!(matches!(
         &event.kind,
-        ActivityKind::AquariumSproutRooted { creature: rooted, swimming: true } if *rooted == creature
+        ActivityKind::AquariumSproutRooted { creature: rooted } if *rooted == creature
     ));
 
     // Rooting again on the same day finds nothing: settled once.
@@ -468,10 +473,16 @@ async fn at_twenty_owned_a_sprout_withers_and_no_fry_is_born() {
             .expect("activity event");
         assert!(matches!(event.kind, ActivityKind::AquariumFed));
     }
+    // No hatch, and the owner is told why: the day never looks like a
+    // broken streak.
+    let event = timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("activity in time")
+        .expect("activity event");
     assert!(
-        timeout(Duration::from_millis(200), rx.recv())
-            .await
-            .is_err(),
-        "no hatch event follows"
+        matches!(event.kind, ActivityKind::AquariumFryNoRoom),
+        "the full tank is announced, got {:?}",
+        event.kind
     );
+    assert!(rx.try_recv().is_err(), "no hatch event follows");
 }

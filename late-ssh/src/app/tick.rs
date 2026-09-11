@@ -1053,20 +1053,20 @@ impl App {
                     }
                     // The streak's fry: the sim learns which species to draw
                     // small; the shop snapshot reload brings the new count.
-                    ActivityKind::AquariumFryHatched { creature, swimming }
-                        if user_id == self.user_id =>
-                    {
-                        if *swimming {
-                            self.aquarium_care
-                                .set_fry(creature.clone(), chrono::Utc::now().date_naive());
-                            Some(crate::app::common::primitives::Banner::success(&format!(
-                                "A {creature} fry hatched in the tank"
-                            )))
-                        } else {
-                            Some(crate::app::common::primitives::Banner::success(&format!(
-                                "A {creature} fry hatched, the tank is full so it waits in /shop"
-                            )))
-                        }
+                    ActivityKind::AquariumFryHatched { creature } if user_id == self.user_id => {
+                        self.aquarium_care
+                            .set_fry(creature.clone(), chrono::Utc::now().date_naive());
+                        Some(crate::app::common::primitives::Banner::success(&format!(
+                            "A {creature} fry hatched in the tank"
+                        )))
+                    }
+                    // The streak came round with no room for a fry: said
+                    // once, so a full tank never looks like a broken streak.
+                    ActivityKind::AquariumFryNoRoom if user_id == self.user_id => {
+                        Some(crate::app::common::primitives::Banner::info(&format!(
+                            "Your streak hatched no fry: you already own {} fish",
+                            late_core::models::marketplace::AQUARIUM_MAX_FISH
+                        )))
                     }
                     // A second device of yours connecting settled a death.
                     ActivityKind::AquariumFishLost { creature } if user_id == self.user_id => {
@@ -1085,15 +1085,12 @@ impl App {
                             "A sprout came up in your tank: cut it in /shop within the week, or leave it to root",
                         ))
                     }
-                    ActivityKind::AquariumSproutRooted { creature, swimming }
-                        if user_id == self.user_id =>
-                    {
+                    ActivityKind::AquariumSproutRooted { creature } if user_id == self.user_id => {
                         self.aquarium_care.clear_sprout();
                         refresh_floor = true;
                         Some(crate::app::hub::aquarium::svc::sprout_fate_banner(
                             &crate::app::hub::aquarium::svc::SproutFate::Rooted {
                                 creature: creature.clone(),
-                                swimming: *swimming,
                             },
                         ))
                     }

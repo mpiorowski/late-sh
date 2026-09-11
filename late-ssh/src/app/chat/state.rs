@@ -3232,6 +3232,11 @@ impl ChatState {
         composer::set_themed_textarea_cursor_visible(&mut self.composer, false);
     }
 
+    /// The room an open draft was started in: where every submit goes.
+    pub(crate) fn composer_room_id(&self) -> Option<Uuid> {
+        self.composer_room_id
+    }
+
     pub fn reset_composer(&mut self) {
         self.composer = new_chat_textarea();
         self.composing = false;

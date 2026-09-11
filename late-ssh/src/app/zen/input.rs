@@ -154,9 +154,15 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
 
 /// The focus landed somewhere else: the chat that reads as visible (marked
 /// read, tail kept fresh) is the focused chat tile's, and a selection or a
-/// draft belongs to the tile it was made in.
+/// draft belongs to the tile it was made in. A draft written for another
+/// room is closed: every submit goes to the room the composer was opened
+/// in, and the active tile now draws the composer under its own label, so
+/// the two must never differ.
 pub(crate) fn focus_moved(app: &mut App) {
     app.chat.clear_message_selection();
+    if app.chat.composing && app.chat.composer_room_id() != app.zen_chat_room_id() {
+        app.chat.reset_composer();
+    }
     app.sync_visible_chat_room();
 }
 

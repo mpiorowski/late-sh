@@ -45,7 +45,13 @@ a chat-pane screen in `app/input.rs` (`screen_has_chat_pane`,
 keeps its tail fresh), so the composer, message actions, and chat clicks
 work the same as on Home. The other chat tiles are read-only views of
 their rooms: messages stream in, nothing is marked read until the tile is
-focused, and the composer strip is not drawn (`composer_shown`).
+focused, and the composer strip is not drawn (`composer_shown`). A draft
+never follows the focus: every submit goes to the room the composer was
+opened in, so when the focus lands where the active chat's room differs
+from the draft's, `zen::input::focus_moved` closes the draft rather than
+drawing it under another room's label (`input_flow_test.rs`). Zoomed, the
+one pane drawn takes the active chat's frame, not the first chat tile's
+(`draw_rice`).
 
 ## 2. File map
 
@@ -89,8 +95,9 @@ selected. With any other tile focused the chat keys are swallowed, so a
 page of several chats never scrolls one you are not looking at
 (`input_flow_test.rs`). The
 first opening of the page in a session focuses the first chat tile; a left
-click focuses the tile under it and falls through to the pet, composer,
-and message clicks of that tile. Aquarium `a` feed (free, once a day, +100 chips on the first feed).
+click focuses the tile under it (not through a modal, the same guard as
+the pet click) and falls through to the pet, composer, and message clicks
+of that tile. Aquarium `a` feed (free, once a day, +100 chips on the first feed).
 The pet has no key: it is petted with a left click and reads the rest of
 the session itself. The sprout on the tank floor (the fortnightly bud;
 leave it a week and it roots as a plant) is cut on its Shop row
