@@ -2905,3 +2905,57 @@ async fn slash_pet_and_slash_aquarium_toggle_the_lounge_strip_and_tray() {
     wait_for_render_contains(&mut app, "Aquarium open in the Lounge").await;
     assert!(app.show_aquarium_tray, "/aq reopened the tray");
 }
+
+#[tokio::test]
+async fn zen_every_chat_tile_keeps_its_composer_whatever_is_focused() {
+    use crate::app::zen::state::TileKind;
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "zen-composer-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    let quiet = ChatRoom::get_or_create_public_room(&client, "zen-comp")
+        .await
+        .expect("second room");
+    ChatRoomMember::join(&client, quiet.id, viewer.id)
+        .await
+        .expect("join second room");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-composer-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "Esc back").await;
+
+    let first = app
+        .zen
+        .first_tile_of(TileKind::Chat)
+        .expect("the default has a chat");
+    assert!(app.zen.split_focused(true));
+    let second = app.zen.focus;
+    assert!(app.zen.rice.root.set_kind(second, TileKind::Chat));
+    assert!(app.zen.bind_focused_chat_room(Some(quiet.id)));
+
+    // Both tiles carry a composer, and walking the focus moves nothing:
+    // an input box that comes and goes is the layout jumping under you.
+    let frame = render_plain(&mut app);
+    assert_eq!(
+        frame.matches("Compose").count(),
+        2,
+        "both chat tiles draw a composer; frame={frame:?}"
+    );
+
+    app.zen.focus = first;
+    crate::app::zen::input::focus_moved(&mut app);
+    let frame = render_plain(&mut app);
+    assert_eq!(
+        frame.matches("Compose").count(),
+        2,
+        "the composers stay put when the focus walks; frame={frame:?}"
+    );
+}
