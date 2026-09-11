@@ -4846,7 +4846,9 @@ async fn slot_list_refreshes_wake_the_render_loop_when_they_land() {
         "a landed slot refresh must wake the render loop, or the landing stays stale"
     );
 
-    signal.dirty.store(false, std::sync::atomic::Ordering::Release);
+    signal
+        .dirty
+        .store(false, std::sync::atomic::Ordering::Release);
     svc.delete_character_task(user, 1, Some(signal.clone()));
     crate::test_helpers::wait_until(
         || async { !svc.character_slots(user)[1].occupied },

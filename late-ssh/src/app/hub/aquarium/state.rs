@@ -219,7 +219,11 @@ impl AquariumCare {
             let continues = self
                 .last_fed
                 .is_some_and(|last| last.date_naive() >= continues_from);
-            if continues { self.streak.max(0) as u32 } else { 0 }
+            if continues {
+                self.streak.max(0) as u32
+            } else {
+                0
+            }
         };
         CARE_DAYS - streak % CARE_DAYS
     }

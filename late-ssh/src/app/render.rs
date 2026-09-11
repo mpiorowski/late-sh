@@ -480,9 +480,7 @@ impl App {
             .iter()
             .map(|room_id| {
                 room_id
-                    .and_then(|room_id| {
-                        self.chat.rooms.iter().find(|(room, _)| room.id == room_id)
-                    })
+                    .and_then(|room_id| self.chat.rooms.iter().find(|(room, _)| room.id == room_id))
                     .map(|(room, _)| match room.slug.as_deref() {
                         Some(slug) => format!("#{slug}"),
                         None => "chat".to_string(),

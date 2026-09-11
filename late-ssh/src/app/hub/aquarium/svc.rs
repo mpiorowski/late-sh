@@ -424,7 +424,7 @@ async fn settle_sprout_clock_in_tx(
     today: NaiveDate,
 ) -> Result<(Option<SproutFate>, bool)> {
     let mut rooted = None;
-    if AquariumCare::root_sprout(&*tx, user_id, today).await? {
+    if AquariumCare::root_sprout(tx, user_id, today).await? {
         let plants = marketplace::catalog_plants_in_tx(tx).await?;
         let Some(plant) = care_rules::pick_plant_evenly(&plants, rand::random()) else {
             bail!("the catalog sells no plant for the sprout to root as");
@@ -432,7 +432,7 @@ async fn settle_sprout_clock_in_tx(
         rooted = Some(
             match marketplace::root_aquarium_sprout_in_tx(tx, user_id, plant.item_id).await? {
                 TankSpawn::Swimming => {
-                    marketplace::notify_user_shop_changed(&*tx, user_id).await?;
+                    marketplace::notify_user_shop_changed(tx, user_id).await?;
                     SproutFate::Rooted {
                         creature: plant.creature.clone(),
                     }
@@ -441,6 +441,6 @@ async fn settle_sprout_clock_in_tx(
             },
         );
     }
-    let sprouted = AquariumCare::sprout_up(&*tx, user_id, today).await?;
+    let sprouted = AquariumCare::sprout_up(tx, user_id, today).await?;
     Ok((rooted, sprouted))
 }
