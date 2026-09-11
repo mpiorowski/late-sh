@@ -1064,7 +1064,7 @@ async fn join_public_room_task_only_adds_requesting_user() {
 }
 
 #[tokio::test]
-async fn open_public_room_task_joins_only_creator_and_disables_auto_join() {
+async fn open_public_room_task_joins_only_creator_and_defaults_to_opt_in() {
     let test_db = new_test_db().await;
     let service = ChatService::new(
         test_db.db.clone(),
@@ -1124,6 +1124,50 @@ async fn open_public_room_task_joins_only_creator_and_disables_auto_join() {
         .expect("auto-join future user");
     assert!(
         !ChatRoomMember::is_member(&client, room_id, future_user.id)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn open_public_room_task_preserves_auto_join_for_future_users() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+    let opener = create_test_user(&test_db.db, "core-room-opener").await;
+    let core = ChatRoom::ensure_permanent(&client, "puzzle-art")
+        .await
+        .expect("core room");
+    let auto = ChatRoom::ensure_auto_join(&client, "auto-join-regression")
+        .await
+        .expect("auto-join room");
+
+    for room in [core, auto] {
+        service.open_public_room_task(opener.id, room.slug.clone().expect("slug"));
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event timeout")
+            .expect("event");
+        assert!(matches!(event, ChatEvent::RoomJoined { room_id, .. } if room_id == room.id));
+        let reopened = ChatRoom::get(&client, room.id).await.unwrap().unwrap();
+        assert!(reopened.auto_join, "opening must preserve auto-join");
+        assert_eq!(reopened.permanent, room.permanent);
+    }
+
+    let newcomer = create_test_user(&test_db.db, "core-room-newcomer").await;
+    ChatRoomMember::auto_join_public_rooms(&client, newcomer.id)
+        .await
+        .expect("auto-join");
+    let puzzle_art = ChatRoom::find_topic_room(&client, "public", "puzzle-art")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        ChatRoomMember::is_member(&client, puzzle_art.id, newcomer.id)
             .await
             .unwrap()
     );
@@ -5202,6 +5246,181 @@ async fn first_contact_invitation_claim_survives_a_failed_send() {
         late_core::models::user::extract_first_contact_invited_at(&target_row.settings).is_none(),
         "a failed invitation must leave the claim untaken"
     );
+}
+
+#[tokio::test]
+async fn puzzle_art_submission_rules_use_database_room_slug_and_report_storage_errors() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "puzzle-submit-rules").await;
+    let client = test_db.db.get().await.unwrap();
+    let room = ChatRoom::find_public_non_dm_by_slug(&client, "puzzle-art")
+        .await
+        .unwrap()
+        .unwrap();
+    ChatRoomMember::join(&client, room.id, user.id)
+        .await
+        .unwrap();
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    for (body, expected) in [
+        ("hello everyone", "Post one image URL"),
+        ("https://example.invalid/a.png", "storage is disabled"),
+    ] {
+        let request = Uuid::now_v7();
+        // Even a staff send with a spoofed slug must pass the room's validation.
+        service.send_message_task(
+            user.id,
+            room.id,
+            Some("lounge".into()),
+            body.into(),
+            request,
+            true,
+        );
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        match event {
+            ChatEvent::SendFailed {
+                request_id,
+                message,
+                ..
+            } => {
+                assert_eq!(request_id, request);
+                assert!(message.contains(expected), "{message}");
+            }
+            _ => panic!("expected a useful submission error"),
+        }
+    }
+    assert!(
+        ChatMessage::list_recent(&client, room.id, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn puzzle_art_edit_error_explains_how_to_replace_a_submission() {
+    use late_core::models::sliding_puzzle_artwork::{Artwork, Submission};
+
+    let test_db = new_test_db().await;
+    let artist = create_test_user(&test_db.db, "puzzle-edit-error").await;
+    let mut client = test_db.db.get().await.unwrap();
+    let room = ChatRoom::find_public_non_dm_by_slug(&client, "puzzle-art")
+        .await
+        .unwrap()
+        .unwrap();
+    ChatRoomMember::join(&client, room.id, artist.id)
+        .await
+        .unwrap();
+    let tx = client.transaction().await.unwrap();
+    let submission = Artwork::submit(
+        &tx,
+        room.id,
+        artist.id,
+        &Submission {
+            source_url: "https://example.com/original.png".into(),
+            image_url: "https://files.example.com/art.png".into(),
+            sha256: "d".repeat(64),
+            title: "Night garden".into(),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let request_id = Uuid::now_v7();
+    service.edit_message_task(
+        artist.id,
+        submission.id,
+        "Changed title".into(),
+        request_id,
+        Permissions::default(),
+    );
+    match timeout(Duration::from_secs(2), events.recv())
+        .await
+        .unwrap()
+        .unwrap()
+    {
+        ChatEvent::EditFailed {
+            request_id: actual,
+            message,
+            ..
+        } => {
+            assert_eq!(actual, request_id);
+            assert_eq!(
+                message,
+                "Submissions cannot be edited. Delete and resubmit to change the image or title."
+            );
+        }
+        _ => panic!("expected an actionable artwork edit error"),
+    }
+}
+
+#[tokio::test]
+async fn private_puzzle_art_room_accepts_ordinary_messages() {
+    let test_db = new_test_db().await;
+    let owner = create_test_user(&test_db.db, "private-puzzle-art").await;
+    let client = test_db.db.get().await.unwrap();
+    let room = ChatRoom::create_private_room(&client, "puzzle-art", owner.id)
+        .await
+        .unwrap();
+    ChatRoomMember::join(&client, room.id, owner.id)
+        .await
+        .unwrap();
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    for body in [
+        "Discussing our artwork",
+        "https://example.invalid/sketch.png",
+    ] {
+        let request_id = Uuid::now_v7();
+        service.send_message_task(
+            owner.id,
+            room.id,
+            room.slug.clone(),
+            body.into(),
+            request_id,
+            false,
+        );
+        timeout(Duration::from_secs(2), async {
+            loop {
+                match events.recv().await.unwrap() {
+                    ChatEvent::SendSucceeded {
+                        request_id: actual, ..
+                    } if actual == request_id => break,
+                    ChatEvent::SendFailed { message, .. } => {
+                        panic!("private message rejected: {message}")
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .expect("message sent");
+    }
+    let messages = ChatMessage::list_recent(&client, room.id, 10)
+        .await
+        .unwrap();
+    assert_eq!(messages.len(), 2);
+    for message in messages {
+        assert!(
+            !late_core::models::sliding_puzzle_artwork::Artwork::is_submission(&client, message.id)
+                .await
+                .unwrap()
+        );
+    }
 }
 
 mod grant {

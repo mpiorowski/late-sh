@@ -290,6 +290,20 @@ pub async fn load_device_state(
     DeviceState { layout, left_at }
 }
 
+pub async fn load_sliding_puzzle_image_mode(
+    state: &State,
+    user: &late_core::models::user::User,
+) -> bool {
+    state
+        .sliding_puzzle_service
+        .load_image_mode(user.id)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(error = ?error, "could not refresh Sliding Puzzle image preference");
+            late_core::models::user::extract_sliding_puzzle_image_mode(&user.settings)
+        })
+}
+
 pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs) -> SessionConfig {
     let SessionBootstrapInputs {
         user,
@@ -324,6 +338,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_solitaire_games,
         initial_minesweeper_games,
     } = load_arcade_session_preloads(state, user_id).await;
+    let initial_sliding_puzzle_image_mode = load_sliding_puzzle_image_mode(state, &user).await;
     let initial_bonsai_tree = match state.bonsai_service.ensure_tree(user_id).await {
         Ok(tree) => Some(tree),
         Err(e) => {
@@ -457,6 +472,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_rubiks_cube_game,
         sliding_puzzle_service: state.sliding_puzzle_service.clone(),
         initial_sliding_puzzle_games,
+        initial_sliding_puzzle_image_mode,
         initial_tetris_game,
         initial_snake_game,
         initial_tetris_high_score,

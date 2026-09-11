@@ -19,7 +19,7 @@ pub(crate) fn image_png_bytes() -> Result<Vec<u8>> {
     let mut clipboard = arboard::Clipboard::new().context("failed to access system clipboard")?;
     let image = clipboard
         .get_image()
-        .context("clipboard does not contain an image; on Wayland, `wl-paste -l` should list an image MIME type like image/png")?;
+        .context("could not read an image from the clipboard; open the image and choose Copy Image, then retry /paste-image. Copying a file or its path is not enough")?;
     let pixel_count = image
         .width
         .checked_mul(image.height)

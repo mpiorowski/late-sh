@@ -365,6 +365,7 @@ const TEXT_BRIGHTNESS_ADJUSTMENT_KEY: &str = "text_brightness_adjustment";
 const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
 const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
 const RIGHT_SIDEBAR_COMPONENTS_KEY: &str = "right_sidebar_components";
+const SLIDING_PUZZLE_IMAGE_MODE_KEY: &str = "sliding_puzzle_image_mode";
 /// The Rice page's tiling layout and look (`late-ssh/src/app/zen`), stored
 /// as the JSON the page itself serializes; absent until first edited.
 const ZEN_LAYOUT_KEY: &str = "zen_layout";
@@ -891,6 +892,24 @@ impl User {
                      updated = current_timestamp
                  WHERE id = $3",
                 &[&ZEN_LAYOUT_KEY, layout, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    pub async fn set_sliding_puzzle_image_mode(
+        client: &Client,
+        user_id: Uuid,
+        enabled: bool,
+    ) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users SET settings = settings || jsonb_build_object($1::text, $2::bool),
+             updated = current_timestamp WHERE id = $3",
+                &[&SLIDING_PUZZLE_IMAGE_MODE_KEY, &enabled, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -1849,6 +1868,14 @@ pub fn extract_land_on_home(settings: &Value) -> bool {
         .get(LAND_ON_HOME_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+/// Images are the default until a user explicitly selects numbered tiles.
+pub fn extract_sliding_puzzle_image_mode(settings: &Value) -> bool {
+    settings
+        .get(SLIDING_PUZZLE_IMAGE_MODE_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
 }
 
 /// Tweak: open The Late Edition (the daily paper) once a day at login.

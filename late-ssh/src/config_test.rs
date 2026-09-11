@@ -78,9 +78,15 @@ fn dev_files_with_both_credentials_uses_the_prod_bucket() {
 }
 
 #[test]
-fn dev_files_without_credentials_disables_uploads() {
-    let files = crate::config::dev_files(None, None).expect("must accept");
-    assert!(files.is_none());
+fn dev_files_without_credentials_uses_local_storage() {
+    let files = crate::config::dev_files(None, None)
+        .expect("must accept")
+        .expect("local storage");
+    assert_eq!(
+        files.local_directory.as_deref(),
+        Some(std::path::Path::new("tmp/uploads"))
+    );
+    assert_eq!(files.public_base_url, "http://localhost:4001/api/dev-files");
 }
 
 #[test]

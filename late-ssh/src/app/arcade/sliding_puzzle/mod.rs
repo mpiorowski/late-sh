@@ -1,3 +1,6 @@
+pub mod artwork;
+#[cfg(test)]
+mod artwork_test;
 pub mod image;
 pub mod input;
 pub mod share;

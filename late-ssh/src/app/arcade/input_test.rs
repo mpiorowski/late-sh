@@ -91,7 +91,7 @@ async fn sliding_puzzle_left_click_moves_an_adjacent_tile_into_the_gap() {
             crate::app::arcade::sliding_puzzle::ui::hit_test(
                 area,
                 difficulty,
-                crate::app::arcade::sliding_puzzle::image::TileView::Numbered,
+                app.sliding_puzzle_state.tile_view(),
                 x,
                 y,
             ) == Some(7)

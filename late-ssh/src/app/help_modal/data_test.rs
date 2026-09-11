@@ -46,10 +46,12 @@ fn bot_context_includes_hub_guide_facts() {
 }
 
 #[test]
-fn sliding_puzzle_guide_documents_the_session_only_image_view() {
+fn sliding_puzzle_guide_documents_saved_image_preference_and_fallback() {
     let arcade = lines_for(HelpTopic::Arcade, false, "").join("\n");
     assert!(arcade.contains("i toggles numbered and image tiles"));
-    assert!(arcade.contains("session only"));
+    assert!(arcade.contains("image tiles are the default"));
+    assert!(arcade.contains("saved per user"));
+    assert!(arcade.contains("falls back to numbered tiles without changing your preference"));
     assert!(arcade.contains("same board and rewards"));
 }
 

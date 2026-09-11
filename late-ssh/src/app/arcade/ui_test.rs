@@ -68,7 +68,7 @@ async fn sliding_puzzle_card_renders_rewards_and_launches() {
     assert!(app.is_playing_game);
     let launched = render_plain(&mut app);
     assert!(
-        launched.contains("Slide a tile into the gap: direction key or click."),
+        launched.contains("Loading art; numbered fallback remains playable."),
         "{launched}"
     );
 
@@ -100,7 +100,6 @@ async fn sliding_puzzle_card_renders_rewards_and_launches() {
     assert!(narrow.contains("│24│"), "{narrow}");
     assert!(!narrow.contains("Terminal too small"), "{narrow}");
 
-    app.handle_input(b"i");
     app.reset_render();
     let loading_image = strip_ansi(&String::from_utf8_lossy(
         &app.render().expect("render loading image view"),
@@ -123,6 +122,23 @@ async fn sliding_puzzle_card_renders_rewards_and_launches() {
         "{failed_image}"
     );
     assert!(failed_image.contains("│24│"), "{failed_image}");
+
+    // Failure changes the display, not the game: the numbered fallback can
+    // still be played, and retrying must retain the resulting progress.
+    let blank = app
+        .sliding_puzzle_state
+        .board()
+        .iter()
+        .position(|&tile| tile == 0)
+        .unwrap();
+    let adjacent = if blank % 5 == 0 { blank + 1 } else { blank - 1 };
+    let moves = app.sliding_puzzle_state.moves();
+    assert!(app.sliding_puzzle_state.move_tile(adjacent));
+    assert_eq!(app.sliding_puzzle_state.moves(), moves + 1);
+    let board_after_move = app.sliding_puzzle_state.board().to_vec();
+    app.handle_input(b"ii");
+    assert_eq!(app.sliding_puzzle_state.board(), board_after_move);
+    assert_eq!(app.sliding_puzzle_state.moves(), moves + 1);
 
     let dimension = 5;
     let geometry = crate::app::arcade::sliding_puzzle::image::MIN_IMAGE_TILE_GEOMETRY;

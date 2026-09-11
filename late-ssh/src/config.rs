@@ -76,11 +76,12 @@ pub const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 /// Shared by the SSH and IRC accept paths.
 pub const PROXY_HEADER_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// S3/R2 object storage for image uploads. `Config.files` is `None` when the
-/// environment has no upload storage; every feature that uploads checks that
-/// instead of probing env vars.
+/// Image storage: local disk in development, S3/R2 in production.
+/// Features check `Config.files` instead of probing environment variables.
 #[derive(Clone, Debug)]
 pub struct FilesConfig {
+    /// Local development storage, served by the API instead of S3.
+    pub local_directory: Option<PathBuf>,
     pub endpoint: String,
     pub bucket: String,
     pub public_base_url: String,
@@ -183,6 +184,7 @@ fn optional(key: &str) -> Option<String> {
 /// both R2 credentials, so local uploads land in the same bucket prod serves.
 fn prod_files(access_key_id: String, secret_access_key: String) -> FilesConfig {
     FilesConfig {
+        local_directory: None,
         endpoint: "https://8ecfba101ed3834cf19fd86e68fc325b.r2.cloudflarestorage.com".to_string(),
         bucket: "late-sh-r-files".to_string(),
         public_base_url: "https://files.late.sh".to_string(),
@@ -207,8 +209,8 @@ pub(crate) fn dev_ai(api_key: Option<String>) -> AiConfig {
     }
 }
 
-/// Dev opt-in for uploads: both credentials present enables the prod bucket,
-/// both absent disables uploads, a half-set pair is a startup error.
+/// Dev uploads use local disk by default. Explicit credentials retain the
+/// existing R2 opt-in; a half-set pair is a startup error.
 pub(crate) fn dev_files(
     access_key_id: Option<String>,
     secret_access_key: Option<String>,
@@ -217,7 +219,15 @@ pub(crate) fn dev_files(
         (Some(access_key_id), Some(secret_access_key)) => {
             Ok(Some(prod_files(access_key_id, secret_access_key)))
         }
-        (None, None) => Ok(None),
+        (None, None) => Ok(Some(FilesConfig {
+            local_directory: Some(PathBuf::from("tmp/uploads")),
+            public_base_url: "http://localhost:4001/api/dev-files".to_string(),
+            endpoint: String::new(),
+            bucket: String::new(),
+            region: String::new(),
+            access_key_id: String::new(),
+            secret_access_key: String::new(),
+        })),
         (Some(_), None) => {
             anyhow::bail!(
                 "LATE_FILES_S3_ACCESS_KEY_ID is set without LATE_FILES_S3_SECRET_ACCESS_KEY"

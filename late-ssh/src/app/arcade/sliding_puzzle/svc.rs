@@ -23,6 +23,7 @@ pub(crate) const LOAD_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 pub struct SlidingPuzzleService {
+    pub(crate) dev_art_preview: bool,
     db: Db,
     activity_feed: broadcast::Sender<ActivityEvent>,
     game_save_tx: Arc<OnceLock<mpsc::UnboundedSender<GameSaveCommand>>>,
@@ -30,6 +31,10 @@ pub struct SlidingPuzzleService {
 
 enum GameSaveCommand {
     Save(GameParams),
+    SaveImageMode {
+        user_id: Uuid,
+        enabled: bool,
+    },
     Complete {
         params: GameParams,
         difficulty: Difficulty,
@@ -42,14 +47,91 @@ enum GameSaveCommand {
 impl SlidingPuzzleService {
     pub fn new(db: Db, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
         Self {
+            dev_art_preview: false,
             db,
             activity_feed,
             game_save_tx: Arc::new(OnceLock::new()),
         }
     }
 
+    pub fn with_dev_art_preview(mut self, enabled: bool) -> Self {
+        self.dev_art_preview = enabled;
+        self
+    }
+
+    /// Preview tomorrow's approved pool locally without changing the shared
+    /// daily assignment, its availability dates, or any player's saved board.
+    pub(crate) async fn next_preview_artwork(
+        &self,
+        current_id: Option<Uuid>,
+    ) -> Result<late_core::models::sliding_puzzle_artwork::Artwork> {
+        anyhow::ensure!(
+            self.dev_art_preview,
+            "art preview is only available in development"
+        );
+        let client = self.db.get().await?;
+        let row = client
+            .query_one(
+                "SELECT id, title, credit, image_url, embedded_key
+             FROM sliding_puzzle_artworks
+             WHERE active AND approved_at IS NOT NULL
+             ORDER BY CASE WHEN (created, id) >
+                 (SELECT created, id FROM sliding_puzzle_artworks WHERE id = $1)
+                 THEN 0 ELSE 1 END, created, id
+             LIMIT 1",
+                &[&current_id],
+            )
+            .await?;
+        Ok(row.into())
+    }
+
+    pub(crate) async fn daily_artwork(
+        &self,
+        date: NaiveDate,
+    ) -> Result<late_core::models::sliding_puzzle_artwork::Artwork> {
+        let mut client = self.db.get().await?;
+        let tx = client.transaction().await?;
+        let artwork =
+            late_core::models::sliding_puzzle_artwork::Artwork::assign_daily(&tx, date).await?;
+        if let Some(key) = &artwork.embedded_key {
+            anyhow::ensure!(
+                super::artwork::embedded_index(key).is_some(),
+                "unknown embedded artwork"
+            );
+        } else {
+            anyhow::ensure!(artwork.image_url.is_some(), "community artwork has no URL");
+        }
+        tx.commit().await?;
+        Ok(artwork)
+    }
+
     pub fn today(&self) -> NaiveDate {
         chrono::Utc::now().date_naive()
+    }
+
+    pub async fn load_image_mode(&self, user_id: Uuid) -> Result<bool> {
+        // Read after prior toggles settle, including an immediate reconnect.
+        tokio::time::timeout(LOAD_FLUSH_TIMEOUT, self.flush_game_saves())
+            .await
+            .context("timed out waiting for puzzle preference saves")??;
+        let client = self.db.get().await?;
+        let user = late_core::models::user::User::get(&client, user_id)
+            .await?
+            .context("user not found")?;
+        Ok(late_core::models::user::extract_sliding_puzzle_image_mode(
+            &user.settings,
+        ))
+    }
+
+    pub(crate) fn save_image_mode_task(&self, user_id: Uuid, enabled: bool) {
+        // The existing FIFO keeps quick i/i toggles from finishing backwards.
+        if self
+            .game_save_sender()
+            .send(GameSaveCommand::SaveImageMode { user_id, enabled })
+            .is_err()
+        {
+            tracing::error!("failed to enqueue Sliding Puzzle image preference");
+        }
     }
 
     pub async fn load_games(&self, user_id: Uuid) -> Result<Vec<Game>> {
@@ -161,6 +243,19 @@ async fn run_game_save_worker(
 ) {
     while let Some(command) = save_rx.recv().await {
         match command {
+            GameSaveCommand::SaveImageMode { user_id, enabled } => {
+                let result = async {
+                    let client = db.get().await?;
+                    late_core::models::user::User::set_sliding_puzzle_image_mode(
+                        &client, user_id, enabled,
+                    )
+                    .await
+                }
+                .await;
+                if let Err(error) = result {
+                    tracing::error!(error = ?error, "failed to save Sliding Puzzle image preference");
+                }
+            }
             GameSaveCommand::Save(params) => {
                 if let Err(error) = save_game(&db, params).await {
                     tracing::error!(error = ?error, "failed to save Sliding Puzzle game state");

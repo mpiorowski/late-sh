@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     hash::{Hash, Hasher},
-    path::Path,
     sync::{Arc, LazyLock, Mutex},
 };
 
@@ -9,8 +8,9 @@ use anyhow::{Context, Result, bail};
 use image::{GenericImageView, Rgba, RgbaImage};
 use late_core::models::chips::Difficulty;
 use ratatui::{layout::Rect, text::Line};
-use reqwest::Url;
 use tokio::sync::mpsc;
+
+use super::artwork::ArtworkSource;
 
 use crate::app::files::{
     inline_image::{InlineImagePreview, InlineImageRenderSettings, render_image_bytes},
@@ -22,6 +22,9 @@ use crate::app::files::{
 
 const MIN_IMAGE_TILE_HEIGHT: u16 = 3;
 const MAX_IMAGE_TILE_HEIGHT: u16 = 8;
+// Room for the three personal originals and one daily image. Development
+// previews may visit an arbitrarily large community pool in one session.
+const MAX_CACHED_SOURCES: usize = 4;
 const NATIVE_LABEL_AMBER: Rgba<u8> = Rgba([184, 122, 43, 255]);
 const NATIVE_LABEL_SHADOW: Rgba<u8> = Rgba([18, 12, 7, 255]);
 const NATIVE_GAP_BORDER: Rgba<u8> = Rgba([104, 72, 30, 255]);
@@ -61,17 +64,11 @@ const SOLVED_GLYPHS: [[u8; 7]; 6] = [
         0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
     ],
 ];
-const LOCAL_ARTWORK_DIRECTORY: &str = "artwork/sliding-puzzle";
-const PLACEHOLDER_IMAGE_URLS: [&str; 3] = [
-    "https://fastly.picsum.photos/id/1025/800/800.jpg?hmac=fvdRIVjOccpJuvVsTr3FHnSAeges_Igqa46__zj3Q7U",
-    "https://fastly.picsum.photos/id/1039/800/800.jpg?hmac=_yLp1ssgvLOd-kNxo1vwmJtEzWlhT2aIDVZOFfHT8YE",
-    "https://fastly.picsum.photos/id/1069/800/800.jpg?hmac=hvhA2h_VdqmbXPVnRHgToGg8yVCUig4945-OXQNbJd8",
-];
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum TileView {
-    #[default]
     Numbered,
+    #[default]
     Image,
 }
 
@@ -114,7 +111,7 @@ pub(crate) const MIN_IMAGE_TILE_GEOMETRY: ImageTileGeometry = ImageTileGeometry 
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ImageRequestKey {
-    source_index: usize,
+    source: ArtworkSource,
     dimension: usize,
     geometry: ImageTileGeometry,
     settings: InlineImageRenderSettings,
@@ -212,7 +209,7 @@ const PROCESS_CACHE_CAP: usize = 128;
 /// of Arc-backed data.
 #[derive(Default)]
 struct ProcessImageCache {
-    source_bytes: HashMap<usize, Arc<Vec<u8>>>,
+    source_bytes: HashMap<ArtworkSource, Arc<Vec<u8>>>,
     previews: HashMap<ImageRequestKey, (InlineImagePreview, Arc<Vec<u8>>)>,
     native: HashMap<NativeImageRequestKey, (NativePuzzleImageSet, Arc<Vec<u8>>)>,
 }
@@ -273,7 +270,8 @@ pub(crate) struct ImageTiles {
     native_render: Option<(NativeImageRequestKey, NativePuzzleImageSet)>,
     native_in_flight: Option<NativeImageRequestKey>,
     native_failure: Option<NativeImageRequestKey>,
-    source_bytes: HashMap<usize, Arc<Vec<u8>>>,
+    source_bytes: HashMap<ArtworkSource, Arc<Vec<u8>>>,
+    pub(crate) source_url: Option<String>,
     native_result_tx: mpsc::Sender<NativeImageResult>,
     native_result_rx: mpsc::Receiver<NativeImageResult>,
 }
@@ -283,7 +281,7 @@ impl ImageTiles {
         let (result_tx, result_rx) = mpsc::channel(1);
         let (native_result_tx, native_result_rx) = mpsc::channel(1);
         Self {
-            view: TileView::Numbered,
+            view: TileView::default(),
             active_request: None,
             preview: None,
             in_flight: None,
@@ -295,6 +293,7 @@ impl ImageTiles {
             native_in_flight: None,
             native_failure: None,
             source_bytes: HashMap::new(),
+            source_url: None,
             native_result_tx,
             native_result_rx,
         }
@@ -304,7 +303,7 @@ impl ImageTiles {
         self.view
     }
 
-    /// Drops every cached raster and source download. Called when the board
+    /// Drops all cached rasters and source bytes. Called when the board
     /// stops being the open screen: a session that played once would otherwise
     /// hold a couple of megabytes of decoded tiles until it disconnects, and
     /// `poll` — the only thing that can evict them — no longer runs.
@@ -334,7 +333,7 @@ impl ImageTiles {
         held
     }
 
-    pub(crate) fn toggle(&mut self, seed: u64, difficulty: Difficulty) {
+    pub(crate) fn toggle(&mut self, artwork_key: ArtworkSource, difficulty: Difficulty) {
         self.view = match self.view {
             TileView::Numbered => {
                 // Switching back on re-arms a failed request for this exact
@@ -343,11 +342,10 @@ impl ImageTiles {
                 // two presses inside one 66ms tick never let `poll` observe
                 // the Numbered view, so a native failure cleared only on a
                 // key transition would stick for the rest of the session.
-                let source_index = image_source_index(seed);
+                let source = artwork_key;
                 let dimension = super::state::board_dimension(difficulty);
-                let matches_artwork = |key: &ImageRequestKey| {
-                    key.source_index == source_index && key.dimension == dimension
-                };
+                let matches_artwork =
+                    |key: &ImageRequestKey| key.source == source && key.dimension == dimension;
                 self.failure = self.failure.filter(|key| !matches_artwork(key));
                 self.native_failure = self
                     .native_failure
@@ -361,13 +359,13 @@ impl ImageTiles {
 
     pub(crate) fn poll(
         &mut self,
-        seed: u64,
+        artwork_key: ArtworkSource,
         difficulty: Difficulty,
         geometry: ImageTileGeometry,
         settings: InlineImageRenderSettings,
         protocol: Option<TerminalImageProtocol>,
     ) -> bool {
-        let key = image_request_key(seed, difficulty, geometry, settings);
+        let key = image_request_key(artwork_key, difficulty, geometry, settings);
         let mut changed = self.sync_request(key);
 
         while let Ok((result_key, result)) = self.result_rx.try_recv() {
@@ -379,8 +377,8 @@ impl ImageTiles {
 
         if tokio::runtime::Handle::try_current().is_ok() && self.claim_preview_request(key) {
             let result_tx = self.result_tx.clone();
-            let source = placeholder_image_url(seed).to_string();
-            let cached_bytes = self.source_bytes.get(&key.source_index).cloned();
+            let cached_bytes = self.source_bytes.get(&key.source).cloned();
+            let source_url = self.source_url.clone();
             tokio::spawn(async move {
                 let stage = SlidingPuzzleImageStage::Preview;
                 let result = match cached_preview(key) {
@@ -392,7 +390,7 @@ impl ImageTiles {
                         Ok(hit)
                     }
                     None => {
-                        let rendered = render_preview_request(key, source, cached_bytes).await;
+                        let rendered = render_preview_request(key, cached_bytes, source_url).await;
                         if let Ok(rendered) = &rendered {
                             remember_preview(key, rendered);
                         }
@@ -404,8 +402,8 @@ impl ImageTiles {
         }
 
         // Wait for the preview attempt to settle before starting the native
-        // encode, so the two never race for the same download — but settle
-        // means *finished*, not *succeeded*. The Chafa path fits by aspect
+        // encode so it can reuse the cached source bytes. Settled means
+        // finished, not succeeded. The Chafa path fits by aspect
         // ratio and rejects a source that is not square; the native path
         // resizes exactly and does not care, so a preview failure must not
         // take the full-resolution renderer down with it.
@@ -429,13 +427,16 @@ impl ImageTiles {
         changed
     }
 
-    pub(crate) fn status_for(&self, seed: u64, difficulty: Difficulty) -> ImageStatus {
+    pub(crate) fn status_for(
+        &self,
+        artwork_key: ArtworkSource,
+        difficulty: Difficulty,
+    ) -> ImageStatus {
         if self.view == TileView::Numbered {
             return ImageStatus::Numbered;
         }
         let Some(key) = self.active_request.filter(|key| {
-            key.source_index == image_source_index(seed)
-                && key.dimension == super::state::board_dimension(difficulty)
+            key.source == artwork_key && key.dimension == super::state::board_dimension(difficulty)
         }) else {
             return ImageStatus::Loading;
         };
@@ -469,12 +470,11 @@ impl ImageTiles {
 
     pub(crate) fn preview_for(
         &self,
-        seed: u64,
+        artwork_key: ArtworkSource,
         difficulty: Difficulty,
     ) -> Option<&InlineImagePreview> {
         let key = self.active_request.filter(|key| {
-            key.source_index == image_source_index(seed)
-                && key.dimension == super::state::board_dimension(difficulty)
+            key.source == artwork_key && key.dimension == super::state::board_dimension(difficulty)
         })?;
         self.preview
             .as_ref()
@@ -484,14 +484,14 @@ impl ImageTiles {
 
     pub(crate) fn native_tiles_for(
         &self,
-        seed: u64,
+        artwork_key: ArtworkSource,
         difficulty: Difficulty,
     ) -> Option<&NativePuzzleImageSet> {
         if self.view != TileView::Image {
             return None;
         }
         let active = self.native_active_request.as_ref()?;
-        if active.artwork.source_index != image_source_index(seed)
+        if active.artwork.source != artwork_key
             || active.artwork.dimension != super::state::board_dimension(difficulty)
         {
             return None;
@@ -539,10 +539,18 @@ impl ImageTiles {
             // Kept even when the preview itself is stale: the request that
             // superseded it wants the same artwork at a different size, and
             // should not go back to the network for it.
-            self.source_bytes.insert(key.source_index, bytes);
+            self.cache_source(key.source, bytes);
             preview
         });
         self.apply_preview(key, result)
+    }
+
+    fn cache_source(&mut self, source: ArtworkSource, bytes: Arc<Vec<u8>>) {
+        if self.source_bytes.len() >= MAX_CACHED_SOURCES && !self.source_bytes.contains_key(&source)
+        {
+            self.source_bytes.clear();
+        }
+        self.source_bytes.insert(source, bytes);
     }
 
     fn apply_preview(
@@ -600,7 +608,8 @@ impl ImageTiles {
         }
         self.native_in_flight = Some(key.clone());
         let result_tx = self.native_result_tx.clone();
-        let cached_bytes = self.source_bytes.get(&key.artwork.source_index).cloned();
+        let cached_bytes = self.source_bytes.get(&key.artwork.source).cloned();
+        let source_url = self.source_url.clone();
         tokio::spawn(async move {
             let stage = SlidingPuzzleImageStage::Native;
             let result = match cached_native(&key) {
@@ -612,7 +621,8 @@ impl ImageTiles {
                     Ok(hit)
                 }
                 None => {
-                    let rendered = render_native_request(key.clone(), cached_bytes).await;
+                    let rendered =
+                        render_native_request(key.clone(), cached_bytes, source_url).await;
                     if let Ok(rendered) = &rendered {
                         remember_native(&key, rendered);
                     }
@@ -632,7 +642,7 @@ impl ImageTiles {
             self.native_in_flight = None;
         }
         let result = result.map(|(images, bytes)| {
-            self.source_bytes.insert(key.artwork.source_index, bytes);
+            self.cache_source(key.artwork.source, bytes);
             images
         });
         if self.native_active_request.as_ref() != Some(&key) {
@@ -654,9 +664,19 @@ impl ImageTiles {
     #[cfg(test)]
     pub(crate) fn apply_active_result_for_test(
         &mut self,
+        source: ArtworkSource,
+        difficulty: Difficulty,
         result: Result<InlineImagePreview, String>,
     ) {
-        let key = self.active_request.expect("active image request");
+        let key = self.active_request.unwrap_or_else(|| {
+            image_request_key(
+                source,
+                difficulty,
+                MIN_IMAGE_TILE_GEOMETRY,
+                InlineImageRenderSettings::default(),
+            )
+        });
+        self.active_request = Some(key);
         self.apply_preview(key, result);
     }
 
@@ -694,7 +714,7 @@ fn finish_stage<T>(
             tracing::warn!(
                 error = ?error,
                 stage = ?stage,
-                source_index = key.source_index,
+                source = ?key.source,
                 dimension = key.dimension,
                 tile_width = key.geometry.width,
                 tile_height = key.geometry.height,
@@ -706,56 +726,42 @@ fn finish_stage<T>(
     }
 }
 
-/// Source bytes for `source_index`: the session's own copy first, then the
+/// Source bytes for `source`: the session's own copy first, then the
 /// process-wide one another session may have downloaded.
 fn known_source_bytes(
-    source_index: usize,
+    source: ArtworkSource,
     session_bytes: Option<Arc<Vec<u8>>>,
 ) -> Option<Arc<Vec<u8>>> {
     match session_bytes {
         Some(bytes) => Some(bytes),
-        None => process_cache().source_bytes.get(&source_index).cloned(),
+        None => process_cache().source_bytes.get(&source).cloned(),
     }
 }
 
-fn remember_source_bytes(source_index: usize, bytes: &Arc<Vec<u8>>) {
+fn remember_source_bytes(source: ArtworkSource, bytes: &Arc<Vec<u8>>) {
     let mut cache = process_cache();
-    if !cache.source_bytes.contains_key(&source_index) {
-        bounded_insert(&mut cache.source_bytes, source_index, Arc::clone(bytes));
+    if !cache.source_bytes.contains_key(&source) {
+        bounded_insert(&mut cache.source_bytes, source, Arc::clone(bytes));
     }
 }
 
 /// Renders the Chafa cell preview for `key`, reusing already-downloaded
 /// source bytes when the session has them. The bytes come back with the
-/// preview so the caller can seed its cache: the same artwork is re-rendered
+/// preview so the caller can populate its cache: the same artwork is re-rendered
 /// at a new size on every resize and difficulty change, and only the size
 /// changes.
 async fn render_preview_request(
     key: ImageRequestKey,
-    source: String,
     cached_bytes: Option<Arc<Vec<u8>>>,
+    source_url: Option<String>,
 ) -> Result<(InlineImagePreview, Arc<Vec<u8>>)> {
-    let (preview, bytes) = render_preview_from_directory(
-        key,
-        source,
-        Path::new(LOCAL_ARTWORK_DIRECTORY),
-        known_source_bytes(key.source_index, cached_bytes),
+    let bytes = artwork_bytes(
+        key.source,
+        known_source_bytes(key.source, cached_bytes),
+        source_url,
     )
     .await?;
-    remember_source_bytes(key.source_index, &bytes);
-    Ok((preview, bytes))
-}
-
-async fn render_preview_from_directory(
-    key: ImageRequestKey,
-    source: String,
-    artwork_directory: &Path,
-    cached_bytes: Option<Arc<Vec<u8>>>,
-) -> Result<(InlineImagePreview, Arc<Vec<u8>>)> {
-    let bytes = match cached_bytes {
-        Some(bytes) => bytes,
-        None => Arc::new(load_artwork_bytes_from_directory(source, artwork_directory).await?),
-    };
+    remember_source_bytes(key.source, &bytes);
     let max_width = key.dimension as u32 * u32::from(key.geometry.width);
     let max_height = key.dimension as u32 * u32::from(key.geometry.height);
     let preview =
@@ -769,19 +775,15 @@ async fn render_preview_from_directory(
 async fn render_native_request(
     key: NativeImageRequestKey,
     cached_bytes: Option<Arc<Vec<u8>>>,
+    source_url: Option<String>,
 ) -> Result<(NativePuzzleImageSet, Arc<Vec<u8>>)> {
-    let source_index = key.artwork.source_index;
-    let bytes = match known_source_bytes(source_index, cached_bytes) {
-        Some(bytes) => bytes,
-        None => Arc::new(
-            load_artwork_bytes_from_directory(
-                PLACEHOLDER_IMAGE_URLS[source_index].to_string(),
-                Path::new(LOCAL_ARTWORK_DIRECTORY),
-            )
-            .await?,
-        ),
-    };
-    remember_source_bytes(source_index, &bytes);
+    let bytes = artwork_bytes(
+        key.artwork.source,
+        known_source_bytes(key.artwork.source, cached_bytes),
+        source_url,
+    )
+    .await?;
+    remember_source_bytes(key.artwork.source, &bytes);
     let render_bytes = Arc::clone(&bytes);
     let images = tokio::task::spawn_blocking(move || {
         render_terminal_puzzle_tiles(
@@ -797,80 +799,37 @@ async fn render_native_request(
     Ok((images, bytes))
 }
 
-async fn load_artwork_bytes_from_directory(
-    source: String,
-    artwork_directory: &Path,
-) -> Result<Vec<u8>> {
-    if let Some(bytes) =
-        read_local_image_bytes(&source, artwork_directory, crate::config::MAX_IMAGE_BYTES).await?
-    {
+async fn artwork_bytes(
+    source: ArtworkSource,
+    cached_bytes: Option<Arc<Vec<u8>>>,
+    source_url: Option<String>,
+) -> Result<Arc<Vec<u8>>> {
+    if let Some(bytes) = cached_bytes {
         return Ok(bytes);
     }
-    crate::app::files::image_upload::download_url_bytes(
-        &source,
-        std::time::Duration::from_secs(15),
-        crate::config::MAX_IMAGE_BYTES,
-    )
-    .await
-}
-
-async fn read_local_image_bytes(
-    raw_url: &str,
-    artwork_directory: &Path,
-    max_bytes: usize,
-) -> Result<Option<Vec<u8>>> {
-    let url = Url::parse(raw_url).context("invalid image source URL")?;
-    if url.scheme() != "file" {
-        return Ok(None);
-    }
-    if url.host_str().is_some() {
-        bail!("local image file URL must not include a host");
-    }
-
-    let path = url
-        .to_file_path()
-        .map_err(|()| anyhow::anyhow!("invalid local image file URL"))?;
-    let artwork_directory = tokio::fs::canonicalize(artwork_directory)
-        .await
-        .context("local artwork directory is unavailable")?;
-    let path = tokio::fs::canonicalize(path)
-        .await
-        .context("local artwork file is unavailable")?;
-    if !path.starts_with(&artwork_directory) {
-        bail!("local image file is outside the artwork directory");
-    }
-
-    let metadata = tokio::fs::metadata(&path)
-        .await
-        .context("failed to inspect local artwork file")?;
-    if !metadata.is_file() {
-        bail!("local image source is not a regular file");
-    }
-    if metadata.len() > max_bytes as u64 {
-        bail!("image is too large (max {max_bytes} bytes)");
-    }
-
-    let bytes = tokio::fs::read(path)
-        .await
-        .context("failed to read local artwork file")?;
-    if bytes.len() > max_bytes {
-        bail!("image is too large (max {max_bytes} bytes)");
-    }
-    Ok(Some(bytes))
-}
-
-fn placeholder_image_url(seed: u64) -> &'static str {
-    PLACEHOLDER_IMAGE_URLS[image_source_index(seed)]
+    let bytes = match source {
+        ArtworkSource::Embedded(index) => super::artwork::BUILTINS[index].bytes.to_vec(),
+        ArtworkSource::Community(_) => {
+            let url = source_url.context("community artwork URL is missing")?;
+            crate::app::files::image_upload::download_url_bytes(
+                &url,
+                std::time::Duration::from_secs(15),
+                crate::config::MAX_IMAGE_BYTES,
+            )
+            .await?
+        }
+    };
+    Ok(Arc::new(bytes))
 }
 
 fn image_request_key(
-    seed: u64,
+    artwork_key: ArtworkSource,
     difficulty: Difficulty,
     geometry: ImageTileGeometry,
     settings: InlineImageRenderSettings,
 ) -> ImageRequestKey {
     ImageRequestKey {
-        source_index: image_source_index(seed),
+        source: artwork_key,
         dimension: super::state::board_dimension(difficulty),
         geometry,
         settings,
@@ -1153,10 +1112,6 @@ pub(crate) fn tile_fragment(
             .map(|line| Line::from(line.spans[column_start..column_end].to_vec()))
             .collect(),
     )
-}
-
-fn image_source_index(seed: u64) -> usize {
-    (seed % PLACEHOLDER_IMAGE_URLS.len() as u64) as usize
 }
 
 fn valid_preview(preview: &[Line<'static>], dimension: usize, geometry: ImageTileGeometry) -> bool {

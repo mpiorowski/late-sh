@@ -14,6 +14,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
         b'p' | b'P' => state.show_personal(),
         b'd' | b'D' => state.show_daily(),
         b'i' | b'I' => state.toggle_tile_view(),
+        b'a' | b'A' if state.can_preview_art() => state.next_preview_art(),
         b'[' => state.prev_difficulty(),
         b']' => state.next_difficulty(),
         b'r' | b'R' | b'0' => {
