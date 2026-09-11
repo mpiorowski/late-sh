@@ -223,3 +223,42 @@ async fn service_loads_upserted_slots_and_publishes_only_the_first_same_day_win(
         .expect("win exists");
     assert_eq!(best.moves, 8, "same-day replay keeps the lower move count");
 }
+
+#[tokio::test]
+async fn sliding_puzzle_image_preference_survives_reconnect_and_keeps_last_toggle() {
+    use super::{image::TileView, state::State};
+    use late_core::models::user::User;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "puzzle-view-owner").await;
+    let other = create_test_user(&test_db.db, "puzzle-view-other").await;
+    let (activity, _) = broadcast::channel(8);
+    let service = SlidingPuzzleService::new(test_db.db.clone(), activity);
+    let client = test_db.db.get().await.unwrap();
+    client.execute("UPDATE users SET settings = settings || '{\"unrelated\": \"retained\"}'::jsonb WHERE id = $1", &[&user.id]).await.unwrap();
+    assert!(service.load_image_mode(user.id).await.unwrap());
+
+    let mut state = State::new(user.id, service.clone(), vec![]);
+    // Save every user choice in order, even when several occur in one tick.
+    state.toggle_tile_view();
+    state.toggle_tile_view();
+    state.toggle_tile_view();
+    let image_mode = service.load_image_mode(user.id).await.unwrap();
+    assert!(!image_mode);
+    assert!(service.load_image_mode(other.id).await.unwrap());
+    let mut restored = State::new(user.id, service.clone(), vec![]).with_image_mode(image_mode);
+    assert_eq!(restored.tile_view(), TileView::Numbered);
+    restored.show_personal();
+    assert_eq!(restored.tile_view(), TileView::Numbered);
+    restored.show_daily();
+    restored.toggle_tile_view();
+    restored.apply_image_result_for_test(Err("image unavailable".into()));
+    assert!(
+        service.load_image_mode(user.id).await.unwrap(),
+        "fallback must preserve the image preference"
+    );
+    assert_eq!(
+        User::get(&client, user.id).await.unwrap().unwrap().settings["unrelated"],
+        "retained"
+    );
+}

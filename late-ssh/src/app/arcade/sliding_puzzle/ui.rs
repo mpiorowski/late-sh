@@ -40,7 +40,7 @@ pub fn draw_game(
         Some(chips) => (format!("{chips} chips"), theme::AMBER_GLOW()),
         None => ("none".to_string(), theme::TEXT_DIM()),
     };
-    let control_hints = if area.width >= FULL_CONTROL_HINTS_WIDTH {
+    let mut control_hints = if area.width >= FULL_CONTROL_HINTS_WIDTH {
         vec![
             ("click/hjkl/↕↔", "move"),
             ("i", "art"),
@@ -59,12 +59,16 @@ pub fn draw_game(
             ("q", "exit"),
         ]
     };
+    if state.can_preview_art() {
+        control_hints.insert(2, ("a", "next art (dev)"));
+    }
     let tip = match state.image_status() {
         ImageStatus::Loading => "Loading art; numbered fallback remains playable.".to_string(),
         ImageStatus::Failed if area.width >= FULL_CONTROL_HINTS_WIDTH => {
             "Art unavailable; numbered fallback active. Press i twice to retry.".to_string()
         }
         ImageStatus::Failed => "Art unavailable; i twice to retry.".to_string(),
+        ImageStatus::Ready if !state.reset_pending() => state.artwork_credit(),
         ImageStatus::Numbered | ImageStatus::Ready => state.message().to_string(),
     };
     let bottom = GameBottomBar {

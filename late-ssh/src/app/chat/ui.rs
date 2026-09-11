@@ -3605,7 +3605,13 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
     };
 
     push_row(section_divider("Core"), None, false);
-    let core_order = ["lounge", "announcements", "suggestions", "bugs"];
+    let core_order = [
+        "lounge",
+        "announcements",
+        "suggestions",
+        "bugs",
+        "puzzle-art",
+    ];
     for slug in &core_order {
         if let Some((room, _)) = chat_rooms
             .iter()
@@ -4398,7 +4404,13 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         push_row(blank(), None, false);
     }
 
-    let core_order = ["lounge", "announcements", "suggestions", "bugs"];
+    let core_order = [
+        "lounge",
+        "announcements",
+        "suggestions",
+        "bugs",
+        "puzzle-art",
+    ];
     let core_collapsed = collapsed_set.contains(&RoomSection::Core);
     push_row(section_header(RoomSection::Core), None, false);
     if !core_collapsed {

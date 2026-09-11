@@ -282,6 +282,7 @@ pub struct ChatService {
     irc_registry: Option<IrcRegistry>,
     moderation_infra: ModerationInfra,
     chip_service: Option<ChipService>,
+    files: Option<crate::config::FilesConfig>,
     /// Pre-warms the English translation cache for authors who opted into
     /// "Translate my messages to English" (send and edit paths). `None` only
     /// in tests that never exercise sending.
@@ -375,7 +376,9 @@ pub struct RoomMemberListItem {
 
 fn send_error_message(error: &anyhow::Error) -> String {
     let error = error.to_string();
-    if error.contains("not a member") {
+    if let Some(message) = error.strip_prefix("puzzle-art:") {
+        message.to_string()
+    } else if error.contains("not a member") {
         "You are not a member of this room.".to_string()
     } else if error.contains("banned from this room") {
         "You are banned from this room.".to_string()
@@ -881,6 +884,10 @@ pub enum ChatEvent {
         user_id: Uuid,
         message: String,
     },
+    PuzzleArtApproved {
+        user_id: Uuid,
+        message: String,
+    },
     SendSucceeded {
         user_id: Uuid,
         request_id: Uuid,
@@ -1163,6 +1170,7 @@ impl ChatService {
             irc_registry: None,
             moderation_infra: ModerationInfra::default(),
             chip_service: None,
+            files: None,
             translation_svc: None,
             gift_cooldowns: Arc::new(Mutex::new(HashMap::new())),
             gild_cooldowns: Arc::new(Mutex::new(HashMap::new())),
@@ -1196,6 +1204,11 @@ impl ChatService {
         let mut service = Self::new(db, notification_svc);
         service.active_users = Some(active_users);
         service
+    }
+
+    pub fn with_files(mut self, files: Option<crate::config::FilesConfig>) -> Self {
+        self.files = files;
+        self
     }
 
     pub fn with_session_registry(mut self, session_registry: SessionRegistry) -> Self {
@@ -3236,7 +3249,7 @@ impl ChatService {
             anyhow::bail!("announcements is admin-only");
         }
 
-        let client = self.db.get().await?;
+        let mut client = self.db.get().await?;
         let is_member = ChatRoomMember::is_member(&client, room_id, user_id).await?;
         if !is_member {
             anyhow::bail!("user is not a member of room");
@@ -3304,23 +3317,46 @@ impl ChatService {
             ChatRoomMember::join(&client, room_id, user_b).await?;
         }
 
-        // Last thing before the row is written, so every check above (report
-        // markers, link cooldown, slow mode) judged the sober text, and the
-        // mention task below sees the same body the room will.
-        let body = self.slurred_body(&client, user_id, &room, body).await?;
-
-        let message = ChatMessageParams {
-            room_id,
-            user_id,
-            body: body.clone(),
+        let is_art_submission = room.slug.as_deref()
+            == Some(late_core::models::sliding_puzzle_artwork::SUBMISSION_ROOM)
+            && room.kind == "topic"
+            && room.visibility == "public"
+            && reply_to_message_id.is_none();
+        let chat = if is_art_submission {
+            // Release the connection while downloading and normalizing an image.
+            drop(client);
+            let submission = super::puzzle_art::prepare(self.files.as_ref(), body)
+                .await
+                .map_err(|error| anyhow::anyhow!("puzzle-art:{error}"))?;
+            client = self.db.get().await?;
+            if RoomBan::is_active_for_room_and_user(&client, room_id, user_id).await? {
+                anyhow::bail!("user is banned from this room");
+            }
+            let tx = client.transaction().await?;
+            let chat = late_core::models::sliding_puzzle_artwork::Artwork::submit(
+                &tx,
+                room_id,
+                user_id,
+                &submission,
+            )
+            .await?;
+            tx.commit().await?;
+            chat
+        } else {
+            let body = self.slurred_body(&client, user_id, &room, body).await?;
+            ChatMessage::create_with_reply_targets(
+                &client,
+                ChatMessageParams {
+                    room_id,
+                    user_id,
+                    body,
+                },
+                reply_to_message_id,
+                reply_to_user_id,
+            )
+            .await?
         };
-        let chat = ChatMessage::create_with_reply_targets(
-            &client,
-            message,
-            reply_to_message_id,
-            reply_to_user_id,
-        )
-        .await?;
+        let body = chat.body.clone();
         ChatRoom::touch_updated(&client, room_id).await?;
         ChatRoomMember::mark_read_now(&client, room_id, user_id).await?;
         let target_user_ids = ChatRoom::get_target_user_ids(&client, room_id).await?;
@@ -3417,11 +3453,14 @@ impl ChatService {
                     .await
                 {
                     Err(e) => {
-                        let message = if e.to_string().contains("Cannot edit") {
+                        let error = e.to_string();
+                        let message = if let Some(message) = error.strip_prefix("puzzle-art:") {
+                            message
+                        } else if error.contains("Cannot edit") {
                             "You can only edit your own messages."
-                        } else if e.to_string().contains("empty") {
+                        } else if error.contains("empty") {
                             "Edited message cannot be empty."
-                        } else if e.to_string().starts_with("report-only:") {
+                        } else if error.starts_with("report-only:") {
                             "Reports here must keep their marker; edit the text after it."
                         } else {
                             "Could not edit message. Please try again."
@@ -3473,6 +3512,14 @@ impl ChatService {
             target_tier_for_user_id(&client, existing.user_id).await?
         };
         ensure_message_permission(permissions, is_owner, Caps::EDIT_OTHER_MESSAGE, target_tier)?;
+
+        if late_core::models::sliding_puzzle_artwork::Artwork::is_submission(&client, message_id)
+            .await?
+        {
+            anyhow::bail!(
+                "puzzle-art:Submissions cannot be edited. Delete and resubmit to change the image or title."
+            );
+        }
 
         // Report-only rooms: a regular user's only messages there are their own
         // report cards, and an edit must not strip the marker — otherwise
@@ -3568,6 +3615,31 @@ impl ChatService {
         }
 
         let delta = ChatMessageReaction::toggle(&client, message_id, user_id, icon).await?;
+        if delta.action != ChatMessageReactionAction::Unreact && icon.starts_with('👍') {
+            // The trigger already committed approval with the reaction. This
+            // lookup is only a receipt; failing to display it cannot undo the vote.
+            match late_core::models::sliding_puzzle_artwork::Artwork::approval_for_message(
+                &client, message_id, user_id,
+            )
+            .await
+            {
+                Ok(Some((title, date))) => {
+                    self.send_user_event(
+                        user_id,
+                        ChatEvent::PuzzleArtApproved {
+                            user_id,
+                            message: format!(
+                                "{title} is in the puzzle pool, eligible from {date} UTC."
+                            ),
+                        },
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(error = ?error, "could not load artwork approval receipt")
+                }
+                _ => {}
+            }
+        }
         self.emit_message_reaction_events(&client, &message, user_id, delta)
             .await?;
         Ok(())
@@ -4854,7 +4926,8 @@ impl ChatService {
             .await?
             .is_some();
         let room = ChatRoom::get_or_create_public_room(&client, slug).await?;
-        ChatRoom::set_auto_join(&client, room.id, false).await?;
+        // New public rooms already default to opt-in. Opening an existing
+        // room must preserve the maintainer's auto-join setting.
         if !existed {
             ChatRoom::set_creator(&client, room.id, user_id).await?;
         }

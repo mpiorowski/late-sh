@@ -1,13 +1,17 @@
 use chrono::{NaiveDate, Utc};
+use late_core::models::sliding_puzzle_artwork::Artwork;
 use late_core::models::{
     chips::Difficulty,
     sliding_puzzle::{Game, GameParams},
 };
 use rand_core::{OsRng, RngCore};
 use ratatui::layout::Rect;
+use std::time::{Duration, Instant};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use super::{
+    artwork,
     image::{ImageStatus, ImageTiles, NativePuzzleImageSet, TileView, image_tile_geometry},
     svc::SlidingPuzzleService,
 };
@@ -82,12 +86,23 @@ pub struct State {
     reset_pending: Option<ResetAction>,
     message: String,
     image_tiles: ImageTiles,
+    daily_artwork: Option<Artwork>,
+    daily_artwork_rx: Option<oneshot::Receiver<anyhow::Result<Artwork>>>,
+    artwork_retry_after: Option<Instant>,
     svc: SlidingPuzzleService,
 }
 
 impl State {
     pub fn new(user_id: Uuid, svc: SlidingPuzzleService, saved_games: Vec<Game>) -> Self {
         Self::new_for_date(user_id, svc, Utc::now().date_naive(), saved_games)
+    }
+
+    pub(crate) fn with_image_mode(mut self, enabled: bool) -> Self {
+        if !enabled {
+            self.image_tiles
+                .toggle(self.artwork_source(), self.difficulty());
+        }
+        self
     }
 
     pub(crate) fn new_for_date(
@@ -132,6 +147,9 @@ impl State {
             reset_pending: None,
             message: "Slide a tile into the gap: direction key or click.".to_string(),
             image_tiles: ImageTiles::new(),
+            daily_artwork: None,
+            daily_artwork_rx: None,
+            artwork_retry_after: None,
             svc,
         }
     }
@@ -158,14 +176,125 @@ impl State {
         self.image_tiles.view()
     }
 
+    // Embedded artwork for personal boards and the loading placeholder. The
+    // daily source itself comes from the database assignment in artwork_source.
+    pub(crate) fn artwork_key(&self) -> u64 {
+        match self.mode {
+            Mode::Daily => self
+                .daily_artwork
+                .as_ref()
+                .and_then(|art| art.embedded_key.as_deref())
+                .and_then(artwork::embedded_index)
+                .unwrap_or(0) as u64,
+            Mode::Personal => self.active_snapshot().seed,
+        }
+    }
+
+    fn artwork_source(&self) -> artwork::ArtworkSource {
+        if self.mode == Mode::Daily
+            && let Some(art) = &self.daily_artwork
+        {
+            return match art.embedded_key.as_deref() {
+                Some(key) => artwork::ArtworkSource::Embedded(
+                    artwork::embedded_index(key).expect("validated embedded artwork"),
+                ),
+                None => artwork::ArtworkSource::Community(art.id),
+            };
+        }
+        artwork::ArtworkSource::embedded(self.artwork_key())
+    }
+
+    pub(crate) fn artwork_credit(&self) -> String {
+        if self.mode == Mode::Daily
+            && let Some(art) = &self.daily_artwork
+        {
+            return format!("{} · {}", art.title, art.credit);
+        }
+        let art = artwork::for_key(self.artwork_key());
+        format!("{} · {}", art.title, art.credit)
+    }
+
+    fn poll_daily_artwork(&mut self) -> bool {
+        let mut changed = false;
+        if let Some(rx) = &mut self.daily_artwork_rx {
+            match rx.try_recv() {
+                Ok(Ok(art)) => {
+                    self.daily_artwork = Some(art);
+                    self.daily_artwork_rx = None;
+                    self.artwork_retry_after = None;
+                    self.message = self.artwork_credit();
+                    changed = true;
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(error = ?error, "could not load daily puzzle artwork");
+                    self.daily_artwork_rx = None;
+                    self.artwork_retry_after = Some(Instant::now() + Duration::from_secs(30));
+                    changed = true;
+                }
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    self.daily_artwork_rx = None;
+                    self.artwork_retry_after = Some(Instant::now() + Duration::from_secs(30));
+                    changed = true;
+                }
+                Err(oneshot::error::TryRecvError::Empty) => {}
+            }
+        }
+        if self.daily_artwork.is_none()
+            && self.daily_artwork_rx.is_none()
+            && self
+                .artwork_retry_after
+                .is_none_or(|retry| Instant::now() >= retry)
+            && tokio::runtime::Handle::try_current().is_ok()
+        {
+            let (tx, rx) = oneshot::channel();
+            let svc = self.svc.clone();
+            let date = self.puzzle_date;
+            tokio::spawn(async move {
+                let _ = tx.send(svc.daily_artwork(date).await);
+            });
+            self.daily_artwork_rx = Some(rx);
+        }
+        changed
+    }
+
+    pub(crate) fn can_preview_art(&self) -> bool {
+        self.svc.dev_art_preview
+    }
+
+    pub(crate) fn next_preview_art(&mut self) {
+        if !self.can_preview_art() || self.daily_artwork_rx.is_some() {
+            return;
+        }
+        self.show_daily();
+        if self.tile_view() == TileView::Numbered {
+            // A dev preview is temporary, not a saved display preference.
+            self.image_tiles
+                .toggle(self.artwork_source(), self.difficulty());
+        }
+        let current_id = self.daily_artwork.as_ref().map(|art| art.id);
+        let svc = self.svc.clone();
+        let (tx, rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let _ = tx.send(svc.next_preview_artwork(current_id).await);
+        });
+        self.daily_artwork_rx = Some(rx);
+    }
+
     pub fn toggle_tile_view(&mut self) {
         self.reset_pending = None;
-        let seed = self.active_snapshot().seed;
+        let artwork_key = self.artwork_source();
         let difficulty = self.difficulty();
-        self.image_tiles.toggle(seed, difficulty);
+        self.image_tiles.toggle(artwork_key, difficulty);
+        if tokio::runtime::Handle::try_current().is_ok() {
+            self.svc
+                .save_image_mode_task(self.user_id, self.tile_view() == TileView::Image);
+        }
         self.message = match self.tile_view() {
             TileView::Numbered => "Numbered tile view.".to_string(),
-            TileView::Image => "Image tile view selected.".to_string(),
+            TileView::Image => {
+                self.artwork_retry_after = None;
+                self.artwork_credit()
+            }
         };
     }
 
@@ -175,13 +304,29 @@ impl State {
         board_area: Rect,
         protocol: Option<TerminalImageProtocol>,
     ) -> bool {
-        let seed = self.active_snapshot().seed;
+        let mut changed = false;
+        if self.mode == Mode::Daily && self.tile_view() == TileView::Image {
+            changed |= self.poll_daily_artwork();
+            if self.daily_artwork.is_none() {
+                return changed;
+            }
+        }
+        self.image_tiles.source_url = if self.mode == Mode::Daily {
+            self.daily_artwork
+                .as_ref()
+                .and_then(|art| art.image_url.clone())
+        } else {
+            None
+        };
+        let artwork_key = self.artwork_source();
         let difficulty = self.difficulty();
         let Some(geometry) = image_tile_geometry(board_area, difficulty) else {
-            return false;
+            return changed;
         };
-        self.image_tiles
-            .poll(seed, difficulty, geometry, settings, protocol)
+        changed
+            | self
+                .image_tiles
+                .poll(artwork_key, difficulty, geometry, settings, protocol)
     }
 
     /// Frees the session's image caches once this board is no longer the open
@@ -191,18 +336,34 @@ impl State {
     }
 
     pub(crate) fn image_status(&self) -> ImageStatus {
+        if self.mode == Mode::Daily
+            && self.tile_view() == TileView::Image
+            && self.daily_artwork.is_none()
+        {
+            return if self.artwork_retry_after.is_some() {
+                ImageStatus::Failed
+            } else {
+                ImageStatus::Loading
+            };
+        }
         self.image_tiles
-            .status_for(self.active_snapshot().seed, self.difficulty())
+            .status_for(self.artwork_source(), self.difficulty())
     }
 
     pub(crate) fn image_preview(&self) -> Option<&InlineImagePreview> {
+        if self.mode == Mode::Daily && self.daily_artwork.is_none() {
+            return None;
+        }
         self.image_tiles
-            .preview_for(self.active_snapshot().seed, self.difficulty())
+            .preview_for(self.artwork_source(), self.difficulty())
     }
 
     pub(crate) fn display_native_tiles(&self) -> Option<&NativePuzzleImageSet> {
+        if self.mode == Mode::Daily && self.daily_artwork.is_none() {
+            return None;
+        }
         self.image_tiles
-            .native_tiles_for(self.active_snapshot().seed, self.difficulty())
+            .native_tiles_for(self.artwork_source(), self.difficulty())
     }
 
     pub fn reward_chips(&self) -> Option<i64> {
@@ -273,6 +434,9 @@ impl State {
             return false;
         }
         self.puzzle_date = today;
+        self.daily_artwork = None;
+        self.daily_artwork_rx = None;
+        self.artwork_retry_after = None;
         self.daily_snapshots = DIFFICULTIES
             .map(|difficulty| fresh_snapshot(difficulty, daily_seed(today, difficulty)));
         self.clear_reset_pending();
@@ -494,7 +658,24 @@ impl State {
         &mut self,
         result: Result<InlineImagePreview, String>,
     ) {
-        self.image_tiles.apply_active_result_for_test(result);
+        if self.daily_artwork.is_none() {
+            let index = (self.artwork_key() % artwork::BUILTINS.len() as u64) as usize;
+            let art = &artwork::BUILTINS[index];
+            self.daily_artwork = Some(Artwork {
+                id: Uuid::nil(),
+                title: art.title.into(),
+                credit: art.credit.into(),
+                image_url: None,
+                embedded_key: Some(
+                    ["night-terminal", "rooftop-garden", "night-train"][index].into(),
+                ),
+            });
+        }
+        self.image_tiles.apply_active_result_for_test(
+            self.artwork_source(),
+            self.difficulty(),
+            result,
+        );
     }
 
     fn request_action(&mut self, action: ResetAction, message: &str) -> bool {

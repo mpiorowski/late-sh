@@ -1,4 +1,18 @@
-use std::{io::Cursor, path::PathBuf};
+fn request_key(
+    seed: u64,
+    difficulty: Difficulty,
+    geometry: ImageTileGeometry,
+    settings: InlineImageRenderSettings,
+) -> ImageRequestKey {
+    image_request_key(
+        ArtworkSource::embedded(seed),
+        difficulty,
+        geometry,
+        settings,
+    )
+}
+
+use std::io::Cursor;
 
 use image::{DynamicImage, ImageFormat};
 use ratatui::{
@@ -7,28 +21,23 @@ use ratatui::{
 };
 
 use super::*;
-use crate::config::MAX_IMAGE_BYTES;
 
-struct TemporaryArtworkDirectory(PathBuf);
-
-impl TemporaryArtworkDirectory {
-    fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "late-sh-sliding-puzzle-artwork-{}",
-            uuid::Uuid::now_v7()
-        ));
-        std::fs::create_dir_all(&path).expect("create temporary artwork directory");
-        Self(path)
-    }
-
-    fn path(&self) -> &std::path::Path {
-        &self.0
-    }
-}
-
-impl Drop for TemporaryArtworkDirectory {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+#[test]
+fn sliding_puzzle_community_image_sources_stay_bounded_while_cycling_art() {
+    let mut images = ImageTiles::new();
+    let bytes = Arc::new(square_png());
+    for _ in 0..MAX_CACHED_SOURCES * 3 {
+        let key = image_request_key(
+            ArtworkSource::Community(uuid::Uuid::now_v7()),
+            Difficulty::Easy,
+            MIN_IMAGE_TILE_GEOMETRY,
+            InlineImageRenderSettings::default(),
+        );
+        images.sync_request(key);
+        images.apply_result(key, Ok((synthetic_preview(3), bytes.clone())));
+        assert!(images.source_bytes.len() <= MAX_CACHED_SOURCES);
+        assert!(images.source_bytes.contains_key(&key.source));
+        assert!(images.has_preview(key));
     }
 }
 
@@ -100,15 +109,6 @@ fn synthetic_preview_with_geometry(
 }
 
 #[test]
-fn sliding_puzzle_image_source_is_deterministic_from_snapshot_seed() {
-    assert_eq!(placeholder_image_url(0), PLACEHOLDER_IMAGE_URLS[0]);
-    assert_eq!(placeholder_image_url(1), PLACEHOLDER_IMAGE_URLS[1]);
-    assert_eq!(placeholder_image_url(2), PLACEHOLDER_IMAGE_URLS[2]);
-    assert_eq!(placeholder_image_url(3), PLACEHOLDER_IMAGE_URLS[0]);
-    assert_eq!(placeholder_image_url(4), PLACEHOLDER_IMAGE_URLS[1]);
-}
-
-#[test]
 fn sliding_puzzle_image_tiles_use_the_largest_safe_terminal_geometry() {
     let wide_board = Rect::new(0, 0, 94, 25);
     assert_eq!(
@@ -156,7 +156,7 @@ fn sliding_puzzle_image_tiles_use_the_largest_safe_terminal_geometry() {
 #[test]
 fn sliding_puzzle_image_request_key_tracks_terminal_geometry() {
     let settings = InlineImageRenderSettings::default();
-    let compact = image_request_key(
+    let compact = request_key(
         7,
         Difficulty::Hard,
         ImageTileGeometry {
@@ -165,7 +165,7 @@ fn sliding_puzzle_image_request_key_tracks_terminal_geometry() {
         },
         settings,
     );
-    let expanded = image_request_key(
+    let expanded = request_key(
         7,
         Difficulty::Hard,
         ImageTileGeometry {
@@ -317,38 +317,42 @@ fn sliding_puzzle_solved_native_cells_carry_a_completion_banner() {
 }
 
 #[tokio::test]
-async fn sliding_puzzle_local_file_url_renders_without_network_access() {
-    let artwork = TemporaryArtworkDirectory::new();
-    let path = artwork.path().join("local.png");
-    std::fs::write(&path, square_png()).expect("write local artwork");
-    let source = reqwest::Url::from_file_path(&path)
-        .expect("local artwork URL")
-        .to_string();
-
-    let key = image_request_key(
-        0,
-        Difficulty::Easy,
-        MIN_IMAGE_TILE_GEOMETRY,
-        InlineImageRenderSettings::default(),
-    );
-    let (preview, bytes) = render_preview_from_directory(key, source, artwork.path(), None)
+async fn sliding_puzzle_embedded_artwork_renders_without_network_access() {
+    for source_index in 0..super::super::artwork::BUILTINS.len() {
+        let key = request_key(
+            source_index as u64,
+            Difficulty::Easy,
+            MIN_IMAGE_TILE_GEOMETRY,
+            InlineImageRenderSettings::default(),
+        );
+        let (preview, bytes) = render_preview_request(key, None, None)
+            .await
+            .expect("render embedded artwork");
+        assert_eq!(preview.len(), 9);
+        assert!(preview.iter().all(|line| line.spans.len() == 18));
+        assert_eq!(
+            bytes.as_slice(),
+            super::super::artwork::BUILTINS[source_index].bytes
+        );
+        let (native, reused) = render_native_request(
+            NativeImageRequestKey {
+                artwork: key,
+                protocol: crate::app::files::terminal_image::TerminalImageProtocol::Kitty,
+            },
+            Some(Arc::clone(&bytes)),
+            None,
+        )
         .await
-        .expect("render local artwork");
-
-    assert_eq!(preview.len(), 9);
-    assert!(preview.iter().all(|line| line.spans.len() == 18));
-    // The bytes come back so the session can render the next size without
-    // going to the source again.
-    assert_eq!(bytes.as_slice(), square_png());
+        .expect("render native embedded artwork");
+        assert!(native.is_opaque());
+        assert!(Arc::ptr_eq(&bytes, &reused));
+    }
 }
 
 #[tokio::test]
 async fn sliding_puzzle_resize_rerenders_from_cached_source_bytes() {
-    // The source is never written to disk, so reaching for it would fail.
-    // Only the cached bytes can satisfy this request.
-    let missing = std::env::temp_dir().join(format!("late-sh-absent-{}", uuid::Uuid::now_v7()));
     let cached = Arc::new(square_png());
-    let wider = image_request_key(
+    let wider = request_key(
         0,
         Difficulty::Easy,
         ImageTileGeometry {
@@ -357,16 +361,9 @@ async fn sliding_puzzle_resize_rerenders_from_cached_source_bytes() {
         },
         InlineImageRenderSettings::default(),
     );
-
-    let (preview, bytes) = render_preview_from_directory(
-        wider,
-        "https://example.invalid/unreachable.png".to_string(),
-        &missing,
-        Some(Arc::clone(&cached)),
-    )
-    .await
-    .expect("re-render from cached bytes");
-
+    let (preview, bytes) = render_preview_request(wider, Some(Arc::clone(&cached)), None)
+        .await
+        .expect("re-render from cached bytes");
     assert_eq!(preview.len(), 12);
     assert!(preview.iter().all(|line| line.spans.len() == 24));
     assert!(Arc::ptr_eq(&bytes, &cached));
@@ -375,8 +372,8 @@ async fn sliding_puzzle_resize_rerenders_from_cached_source_bytes() {
 #[test]
 fn sliding_puzzle_a_stale_preview_still_seeds_the_source_cache() {
     let settings = InlineImageRenderSettings::default();
-    let initial = image_request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
-    let resized = image_request_key(
+    let initial = request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
+    let resized = request_key(
         7,
         Difficulty::Easy,
         ImageTileGeometry {
@@ -386,124 +383,13 @@ fn sliding_puzzle_a_stale_preview_still_seeds_the_source_cache() {
         settings,
     );
     let mut images = ImageTiles::new();
-    images.toggle(7, Difficulty::Easy);
     images.sync_request(initial);
     images.sync_request(resized);
 
     // The in-flight request was superseded by a resize. Its preview is now
-    // useless, but its download is exactly what the new size needs.
+    // useless, but its source bytes is exactly what the new size needs.
     assert!(!images.apply_result(initial, Ok((synthetic_preview(3), Arc::new(square_png())))));
-    assert!(images.source_bytes.contains_key(&initial.source_index));
-}
-
-#[tokio::test]
-async fn sliding_puzzle_local_file_url_cannot_escape_the_artwork_directory() {
-    let parent = TemporaryArtworkDirectory::new();
-    let artwork = parent.path().join("artwork");
-    std::fs::create_dir(&artwork).expect("create artwork root");
-    let outside = parent.path().join("outside.png");
-    std::fs::write(&outside, square_png()).expect("write outside image");
-    let source = reqwest::Url::from_file_path(&outside)
-        .expect("outside file URL")
-        .to_string();
-
-    let error = read_local_image_bytes(&source, &artwork, MAX_IMAGE_BYTES)
-        .await
-        .expect_err("outside image must be rejected");
-
-    assert!(error.to_string().contains("outside the artwork directory"));
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn sliding_puzzle_local_file_url_rejects_symlink_escape() {
-    let parent = TemporaryArtworkDirectory::new();
-    let artwork = parent.path().join("artwork");
-    std::fs::create_dir(&artwork).expect("create artwork root");
-    let outside = parent.path().join("outside.png");
-    std::fs::write(&outside, square_png()).expect("write outside image");
-    let link = artwork.join("linked.png");
-    std::os::unix::fs::symlink(&outside, &link).expect("create escaping symlink");
-    let source = reqwest::Url::from_file_path(&link)
-        .expect("symlink file URL")
-        .to_string();
-
-    let error = read_local_image_bytes(&source, &artwork, MAX_IMAGE_BYTES)
-        .await
-        .expect_err("escaping symlink must be rejected");
-
-    assert!(error.to_string().contains("outside the artwork directory"));
-}
-
-#[tokio::test]
-async fn sliding_puzzle_local_file_url_respects_the_image_size_limit() {
-    let artwork = TemporaryArtworkDirectory::new();
-    let path = artwork.path().join("large.png");
-    std::fs::write(&path, [0_u8; 5]).expect("write oversized fixture");
-    let source = reqwest::Url::from_file_path(&path)
-        .expect("oversized file URL")
-        .to_string();
-
-    let error = read_local_image_bytes(&source, artwork.path(), 4)
-        .await
-        .expect_err("oversized image must be rejected");
-
-    assert!(error.to_string().contains("image is too large"));
-}
-
-#[tokio::test]
-async fn sliding_puzzle_http_url_still_uses_the_remote_loader() {
-    let missing_artwork_directory =
-        std::env::temp_dir().join(format!("late-sh-missing-artwork-{}", uuid::Uuid::now_v7()));
-
-    let bytes = read_local_image_bytes(
-        "https://example.com/art.png",
-        &missing_artwork_directory,
-        MAX_IMAGE_BYTES,
-    )
-    .await
-    .expect("classify remote URL");
-
-    assert!(bytes.is_none());
-}
-
-#[tokio::test]
-async fn sliding_puzzle_missing_local_file_fails_without_network_access() {
-    let artwork = TemporaryArtworkDirectory::new();
-    let missing = artwork.path().join("missing.png");
-    let source = reqwest::Url::from_file_path(&missing)
-        .expect("missing file URL")
-        .to_string();
-
-    let error = read_local_image_bytes(&source, artwork.path(), MAX_IMAGE_BYTES)
-        .await
-        .expect_err("missing file must fail");
-
-    assert!(
-        error
-            .to_string()
-            .contains("local artwork file is unavailable")
-    );
-}
-
-#[tokio::test]
-async fn sliding_puzzle_non_image_local_file_fails_decode() {
-    let artwork = TemporaryArtworkDirectory::new();
-    let path = artwork.path().join("not-an-image.txt");
-    std::fs::write(&path, b"not an image").expect("write invalid image fixture");
-    let source = reqwest::Url::from_file_path(&path)
-        .expect("invalid image file URL")
-        .to_string();
-    let bytes = read_local_image_bytes(&source, artwork.path(), MAX_IMAGE_BYTES)
-        .await
-        .expect("read invalid image fixture")
-        .expect("file URL returns bytes");
-
-    let error = render_image_bytes(bytes, 18, 9, InlineImageRenderSettings::default())
-        .await
-        .expect_err("invalid image data must fail decode");
-
-    assert!(error.to_string().contains("failed to decode image"));
+    assert!(images.source_bytes.contains_key(&initial.source));
 }
 
 #[test]
@@ -547,51 +433,63 @@ fn sliding_puzzle_stale_results_are_ignored_and_failure_rearms_after_view_toggle
         background_rgb: Some(0x112233),
         ..settings
     };
-    let current = image_request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
-    let stale = image_request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, stale_settings);
+    let current = request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
+    let stale = request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, stale_settings);
     let mut images = ImageTiles::new();
-
-    images.toggle(7, Difficulty::Easy);
     assert!(images.sync_request(current));
     assert!(!images.sync_request(current));
-    assert_eq!(images.status_for(7, Difficulty::Easy), ImageStatus::Loading);
+    assert_eq!(
+        images.status_for(ArtworkSource::embedded(7), Difficulty::Easy),
+        ImageStatus::Loading
+    );
 
     assert!(!images.apply_preview(stale, Ok(synthetic_preview(3))));
-    assert_eq!(images.status_for(7, Difficulty::Easy), ImageStatus::Loading);
+    assert_eq!(
+        images.status_for(ArtworkSource::embedded(7), Difficulty::Easy),
+        ImageStatus::Loading
+    );
 
     assert!(images.apply_preview(current, Err("source unavailable".to_string())));
-    assert_eq!(images.status_for(7, Difficulty::Easy), ImageStatus::Failed);
+    assert_eq!(
+        images.status_for(ArtworkSource::embedded(7), Difficulty::Easy),
+        ImageStatus::Failed
+    );
     assert!(!images.should_request(current));
 
-    images.toggle(7, Difficulty::Easy);
-    images.toggle(7, Difficulty::Easy);
+    images.toggle(ArtworkSource::embedded(7), Difficulty::Easy);
+    images.toggle(ArtworkSource::embedded(7), Difficulty::Easy);
     assert!(!images.sync_request(current));
-    assert_eq!(images.status_for(7, Difficulty::Easy), ImageStatus::Loading);
+    assert_eq!(
+        images.status_for(ArtworkSource::embedded(7), Difficulty::Easy),
+        ImageStatus::Loading
+    );
     assert!(images.should_request(current));
 }
 
 #[test]
 fn sliding_puzzle_successful_preview_is_cached_by_request_key() {
     let settings = InlineImageRenderSettings::default();
-    let key = image_request_key(11, Difficulty::Medium, MIN_IMAGE_TILE_GEOMETRY, settings);
+    let key = request_key(11, Difficulty::Medium, MIN_IMAGE_TILE_GEOMETRY, settings);
     let mut images = ImageTiles::new();
-
-    images.toggle(11, Difficulty::Medium);
     assert!(images.sync_request(key));
     assert!(images.apply_preview(key, Ok(synthetic_preview(4))));
     assert_eq!(
-        images.status_for(11, Difficulty::Medium),
+        images.status_for(ArtworkSource::embedded(11), Difficulty::Medium),
         ImageStatus::Ready
     );
-    assert!(images.preview_for(11, Difficulty::Medium).is_some());
+    assert!(
+        images
+            .preview_for(ArtworkSource::embedded(11), Difficulty::Medium)
+            .is_some()
+    );
     assert!(!images.should_request(key));
 }
 
 #[test]
 fn sliding_puzzle_preview_work_is_serialized() {
     let settings = InlineImageRenderSettings::default();
-    let initial = image_request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
-    let resized = image_request_key(
+    let initial = request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
+    let resized = request_key(
         7,
         Difficulty::Easy,
         ImageTileGeometry {
@@ -601,8 +499,6 @@ fn sliding_puzzle_preview_work_is_serialized() {
         settings,
     );
     let mut images = ImageTiles::new();
-
-    images.toggle(7, Difficulty::Easy);
     images.sync_request(initial);
     assert!(images.claim_preview_request(initial));
 
@@ -616,8 +512,8 @@ fn sliding_puzzle_preview_work_is_serialized() {
 #[test]
 fn sliding_puzzle_preview_cache_evicts_superseded_requests() {
     let settings = InlineImageRenderSettings::default();
-    let initial = image_request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
-    let resized = image_request_key(
+    let initial = request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
+    let resized = request_key(
         7,
         Difficulty::Easy,
         ImageTileGeometry {
@@ -627,21 +523,23 @@ fn sliding_puzzle_preview_cache_evicts_superseded_requests() {
         settings,
     );
     let mut images = ImageTiles::new();
-
-    images.toggle(7, Difficulty::Easy);
     images.sync_request(initial);
     assert!(images.apply_preview(initial, Ok(synthetic_preview(3))));
     images.sync_request(resized);
     assert!(images.apply_preview(resized, Ok(synthetic_preview_with_geometry(3, 8, 4))));
 
     images.sync_request(initial);
-    assert!(images.preview_for(7, Difficulty::Easy).is_none());
+    assert!(
+        images
+            .preview_for(ArtworkSource::embedded(7), Difficulty::Easy)
+            .is_none()
+    );
 }
 
 #[test]
 fn sliding_puzzle_prepared_native_tiles_are_reused_across_board_changes() {
     let settings = InlineImageRenderSettings::default();
-    let artwork = image_request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
+    let artwork = request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
     let board = vec![1, 2, 3, 4, 5, 6, 7, 0, 8];
     let replacement = vec![1, 2, 3, 0, 5, 6, 4, 7, 8];
     let native_tiles = render_terminal_puzzle_tiles(
@@ -653,13 +551,11 @@ fn sliding_puzzle_prepared_native_tiles_are_reused_across_board_changes() {
     )
     .expect("render native puzzle tiles");
     let mut images = ImageTiles::new();
-
-    images.toggle(7, Difficulty::Easy);
     images.sync_request(artwork);
     images.apply_preview(artwork, Ok(synthetic_preview(3)));
     images.set_native_tiles_for_test(artwork, native_tiles);
     let prepared = images
-        .native_tiles_for(7, Difficulty::Easy)
+        .native_tiles_for(ArtworkSource::embedded(7), Difficulty::Easy)
         .expect("prepared native tiles");
     let before = prepared
         .cache_key_for_board(&board)
@@ -672,29 +568,31 @@ fn sliding_puzzle_prepared_native_tiles_are_reused_across_board_changes() {
     assert!(prepared.cell_image(&board, 0).is_some());
     assert!(prepared.cell_image(&replacement, 0).is_some());
     assert!(!images.poll(
-        7,
+        ArtworkSource::embedded(7),
         Difficulty::Easy,
         MIN_IMAGE_TILE_GEOMETRY,
         settings,
         Some(TerminalImageProtocol::Kitty),
     ));
-    assert!(images.native_tiles_for(7, Difficulty::Easy).is_some());
+    assert!(
+        images
+            .native_tiles_for(ArtworkSource::embedded(7), Difficulty::Easy)
+            .is_some()
+    );
 }
 
 #[test]
 fn sliding_puzzle_retry_rearms_the_selected_request_before_poll_synchronizes_it() {
     let settings = InlineImageRenderSettings::default();
-    let failed = image_request_key(8, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
-    let other = image_request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
+    let failed = request_key(8, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
+    let other = request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
     let mut images = ImageTiles::new();
-
-    images.toggle(8, Difficulty::Easy);
     assert!(images.sync_request(failed));
     assert!(images.apply_preview(failed, Err("source unavailable".to_string())));
-    images.toggle(8, Difficulty::Easy);
+    images.toggle(ArtworkSource::embedded(8), Difficulty::Easy);
 
     assert!(images.sync_request(other));
-    images.toggle(8, Difficulty::Easy);
+    images.toggle(ArtworkSource::embedded(8), Difficulty::Easy);
     assert!(images.sync_request(failed));
     assert!(images.should_request(failed));
 }
@@ -702,35 +600,40 @@ fn sliding_puzzle_retry_rearms_the_selected_request_before_poll_synchronizes_it(
 #[test]
 fn sliding_puzzle_prepared_native_tiles_survive_a_view_toggle() {
     let settings = InlineImageRenderSettings::default();
-    let artwork = image_request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
+    let artwork = request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
     let mut images = ImageTiles::new();
-    images.toggle(7, Difficulty::Easy);
     images.sync_request(artwork);
     images.apply_preview(artwork, Ok(synthetic_preview(3)));
     images.set_native_tiles_for_test(artwork, tiled_tiles());
 
     // Off and back on. Re-encoding costs one blocking job per board cell, so
     // the prepared set has to outlive the request that produced it.
-    images.toggle(7, Difficulty::Easy);
+    images.toggle(ArtworkSource::embedded(7), Difficulty::Easy);
     images.poll(
-        7,
-        Difficulty::Easy,
-        MIN_IMAGE_TILE_GEOMETRY,
-        settings,
-        Some(TerminalImageProtocol::Kitty),
-    );
-    assert!(images.native_tiles_for(7, Difficulty::Easy).is_none());
-
-    images.toggle(7, Difficulty::Easy);
-    images.poll(
-        7,
+        ArtworkSource::embedded(7),
         Difficulty::Easy,
         MIN_IMAGE_TILE_GEOMETRY,
         settings,
         Some(TerminalImageProtocol::Kitty),
     );
     assert!(
-        images.native_tiles_for(7, Difficulty::Easy).is_some(),
+        images
+            .native_tiles_for(ArtworkSource::embedded(7), Difficulty::Easy)
+            .is_none()
+    );
+
+    images.toggle(ArtworkSource::embedded(7), Difficulty::Easy);
+    images.poll(
+        ArtworkSource::embedded(7),
+        Difficulty::Easy,
+        MIN_IMAGE_TILE_GEOMETRY,
+        settings,
+        Some(TerminalImageProtocol::Kitty),
+    );
+    assert!(
+        images
+            .native_tiles_for(ArtworkSource::embedded(7), Difficulty::Easy)
+            .is_some(),
         "toggling the view must not throw the encoded board away"
     );
 }
@@ -738,9 +641,8 @@ fn sliding_puzzle_prepared_native_tiles_survive_a_view_toggle() {
 #[test]
 fn sliding_puzzle_native_render_survives_a_failed_chafa_preview() {
     let settings = InlineImageRenderSettings::default();
-    let key = image_request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
+    let key = request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
     let mut images = ImageTiles::new();
-    images.toggle(7, Difficulty::Easy);
     images.sync_request(key);
 
     // The Chafa path fits by aspect ratio and rejects non-square sources; the
@@ -751,16 +653,22 @@ fn sliding_puzzle_native_render_survives_a_failed_chafa_preview() {
     );
     images.set_native_tiles_for_test(key, tiled_tiles());
 
-    assert!(images.native_tiles_for(7, Difficulty::Easy).is_some());
-    assert_eq!(images.status_for(7, Difficulty::Easy), ImageStatus::Ready);
+    assert!(
+        images
+            .native_tiles_for(ArtworkSource::embedded(7), Difficulty::Easy)
+            .is_some()
+    );
+    assert_eq!(
+        images.status_for(ArtworkSource::embedded(7), Difficulty::Easy),
+        ImageStatus::Ready
+    );
 }
 
 #[test]
 fn sliding_puzzle_double_tapping_the_view_key_rearms_a_native_failure() {
     let settings = InlineImageRenderSettings::default();
-    let artwork = image_request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
+    let artwork = request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
     let mut images = ImageTiles::new();
-    images.toggle(7, Difficulty::Easy);
     images.sync_request(artwork);
     images.apply_preview(artwork, Ok(synthetic_preview(3)));
     images.apply_native_result(
@@ -773,8 +681,8 @@ fn sliding_puzzle_double_tapping_the_view_key_rearms_a_native_failure() {
 
     // Both presses land inside one 66ms tick, so `poll` never observes the
     // numbered view. `toggle` has to re-arm the retry by itself.
-    images.toggle(7, Difficulty::Easy);
-    images.toggle(7, Difficulty::Easy);
+    images.toggle(ArtworkSource::embedded(7), Difficulty::Easy);
+    images.toggle(ArtworkSource::embedded(7), Difficulty::Easy);
 
     assert!(images.native_failure.is_none());
 }
@@ -782,9 +690,8 @@ fn sliding_puzzle_double_tapping_the_view_key_rearms_a_native_failure() {
 #[test]
 fn sliding_puzzle_release_frees_every_cached_raster() {
     let settings = InlineImageRenderSettings::default();
-    let key = image_request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
+    let key = request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
     let mut images = ImageTiles::new();
-    images.toggle(7, Difficulty::Easy);
     images.sync_request(key);
     images.apply_result(key, Ok((synthetic_preview(3), Arc::new(tiled_png()))));
     images.set_native_tiles_for_test(key, tiled_tiles());
@@ -808,9 +715,8 @@ fn sliding_puzzle_release_frees_every_cached_raster() {
 #[test]
 fn sliding_puzzle_release_discards_a_result_that_lands_after_the_board_closes() {
     let settings = InlineImageRenderSettings::default();
-    let key = image_request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
+    let key = request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
     let mut images = ImageTiles::new();
-    images.toggle(7, Difficulty::Easy);
     images.sync_request(key);
     assert!(images.claim_preview_request(key), "request is in flight");
 
@@ -841,8 +747,8 @@ fn sliding_puzzle_release_discards_a_result_that_lands_after_the_board_closes() 
 /// a session that has its own copy never consults the shared one.
 #[test]
 fn sliding_puzzle_source_bytes_are_shared_across_sessions() {
-    // An index no other test uses; the cache is process-wide.
-    let source_index = 9_001;
+    // A community artwork no other test uses; the cache is process-wide.
+    let source_index = ArtworkSource::Community(uuid::Uuid::now_v7());
     assert!(known_source_bytes(source_index, None).is_none());
 
     let downloaded = Arc::new(square_png());
@@ -879,8 +785,8 @@ fn sliding_puzzle_process_cache_drops_everything_at_the_cap() {
 #[test]
 fn sliding_puzzle_new_render_key_marks_the_frame_dirty() {
     let settings = InlineImageRenderSettings::default();
-    let initial = image_request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
-    let changed = image_request_key(
+    let initial = request_key(7, Difficulty::Easy, MIN_IMAGE_TILE_GEOMETRY, settings);
+    let changed = request_key(
         7,
         Difficulty::Easy,
         MIN_IMAGE_TILE_GEOMETRY,

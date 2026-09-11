@@ -147,6 +147,9 @@ pub mod shop_consumable_effect;
 pub mod showcase;
 pub mod showcase_feed_read;
 pub mod sliding_puzzle;
+pub mod sliding_puzzle_artwork;
+#[cfg(test)]
+mod sliding_puzzle_artwork_test;
 #[cfg(test)]
 mod sliding_puzzle_test;
 pub mod snake;

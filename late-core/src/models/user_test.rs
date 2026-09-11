@@ -4,6 +4,27 @@ use serde_json::json;
 use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
+#[test]
+fn sliding_puzzle_image_preference_defaults_to_images_unless_explicitly_disabled() {
+    use super::user::extract_sliding_puzzle_image_mode;
+
+    for (settings, expected) in [
+        (json!({}), true),
+        (json!(null), true),
+        (json!({"sliding_puzzle_image_mode": null}), true),
+        (json!({"sliding_puzzle_image_mode": "false"}), true),
+        (json!({"sliding_puzzle_image_mode": 0}), true),
+        (json!({"sliding_puzzle_image_mode": true}), true),
+        (json!({"sliding_puzzle_image_mode": false}), false),
+    ] {
+        assert_eq!(
+            extract_sliding_puzzle_image_mode(&settings),
+            expected,
+            "{settings}"
+        );
+    }
+}
+
 async fn setup_db() -> (deadpool_postgres::Client, TestDb) {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("failed to get connection");

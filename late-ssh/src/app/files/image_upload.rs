@@ -58,6 +58,9 @@ pub(crate) async fn download_url_bytes(
     timeout: Duration,
     max_bytes: usize,
 ) -> Result<Vec<u8>> {
+    if let Some(result) = super::local::read_url(raw_url, max_bytes).await {
+        return result;
+    }
     let validated = validate_download_url(raw_url).await?;
     let resp = send_validated_get(&validated, timeout).await?;
     if resp.status().is_redirection() {
@@ -152,6 +155,16 @@ pub async fn upload_image_bytes(files: &FilesConfig, data: Vec<u8>, mime: &str) 
     Ok(public_url(config, &key))
 }
 
+/// Content-addressed puzzle assets are copied once and never overwritten
+/// with different pixels, including when two submissions race.
+pub(crate) async fn upload_puzzle_artwork(files: &FilesConfig, png: Vec<u8>) -> Result<String> {
+    ensure_upload_size(png.len(), MAX_IMAGE_BYTES)?;
+    let digest = format!("{:x}", Sha256::digest(&png));
+    let key = format!("puzzle-art/{digest}.png");
+    put_object(files, &key, png, "image/png", Utc::now()).await?;
+    Ok(public_url(files, &key))
+}
+
 async fn put_object(
     config: &FilesConfig,
     key: &str,
@@ -159,6 +172,9 @@ async fn put_object(
     mime: &str,
     now: chrono::DateTime<Utc>,
 ) -> Result<()> {
+    if let Some(directory) = &config.local_directory {
+        return super::local::write(directory, key, &data).await;
+    }
     let upload_url = format!(
         "{}/{}/{}",
         config.endpoint.trim_end_matches('/'),

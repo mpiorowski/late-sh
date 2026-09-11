@@ -6221,6 +6221,9 @@ impl ChatState {
                         tier.author_share()
                     )));
                 }
+                ChatEvent::PuzzleArtApproved { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::success(&message));
+                }
                 ChatEvent::GildFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
@@ -7055,7 +7058,13 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
 
     // Core: permanent rooms, hardcoded order
     let core_collapsed = collapsed_sections.contains(&RoomSection::Core);
-    let core_order = ["lounge", "announcements", "suggestions", "bugs"];
+    let core_order = [
+        "lounge",
+        "announcements",
+        "suggestions",
+        "bugs",
+        "puzzle-art",
+    ];
     for slug in &core_order {
         if let Some((room, _)) = rooms
             .iter()

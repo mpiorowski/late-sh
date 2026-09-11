@@ -787,6 +787,8 @@ impl russh::server::Handler for ClientHandler {
             initial_solitaire_games,
             initial_minesweeper_games,
         } = load_arcade_session_preloads(&self.state, user_id).await;
+        let initial_sliding_puzzle_image_mode =
+            crate::session_bootstrap::load_sliding_puzzle_image_mode(&self.state, user).await;
         let initial_bonsai_tree = match self.state.bonsai_service.ensure_tree(user_id).await {
             Ok(tree) => Some(tree),
             Err(e) => {
@@ -927,6 +929,7 @@ impl russh::server::Handler for ClientHandler {
             initial_rubiks_cube_game,
             sliding_puzzle_service: self.state.sliding_puzzle_service.clone(),
             initial_sliding_puzzle_games,
+            initial_sliding_puzzle_image_mode,
             initial_tetris_game,
             initial_snake_game,
             initial_tetris_high_score,
@@ -1714,7 +1717,7 @@ async fn ensure_user(state: &State, fingerprint: &str) -> Result<(User, bool)> {
     tracing::debug!(fingerprint, "ensuring user exists");
     let client = state.db.get().await?;
     let row = User::find_by_fingerprint(&client, fingerprint).await?;
-    let (user, is_new_user) = match row {
+    let (mut user, is_new_user) = match row {
         Some(row) => {
             if let Err(e) = User::update_last_seen(&mut row.clone(), &client).await {
                 tracing::warn!(error = ?e, "failed to update last_seen for user");
@@ -1789,6 +1792,12 @@ async fn ensure_user(state: &State, fingerprint: &str) -> Result<(User, bool)> {
         }
     };
 
+    // Dev's force_admin must also apply to database-backed moderation (for
+    // example approving puzzle artwork), not just the session's UI controls.
+    if state.config.env != crate::config::Env::Prod && state.config.force_admin && !user.is_admin {
+        User::set_admin(&client, user.id, true).await?;
+        user.is_admin = true;
+    }
     Ok((user, is_new_user))
 }
 

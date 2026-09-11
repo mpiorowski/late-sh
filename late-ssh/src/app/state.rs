@@ -225,6 +225,7 @@ pub struct SessionConfig {
     pub initial_rubiks_cube_game: Option<late_core::models::rubiks_cube::Game>,
     pub sliding_puzzle_service: crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleService,
     pub initial_sliding_puzzle_games: Vec<late_core::models::sliding_puzzle::Game>,
+    pub initial_sliding_puzzle_image_mode: bool,
     pub initial_tetris_game: Option<late_core::models::tetris::Game>,
     pub initial_snake_game: Option<late_core::models::snake::Game>,
     pub initial_tetris_high_score: Option<late_core::models::tetris::HighScore>,
@@ -1183,7 +1184,8 @@ impl App {
             config.user_id,
             config.sliding_puzzle_service.clone(),
             config.initial_sliding_puzzle_games,
-        );
+        )
+        .with_image_mode(config.initial_sliding_puzzle_image_mode);
         let le_word_state = crate::app::arcade::le_word::state::State::new(
             config.user_id,
             config.le_word_service.clone(),

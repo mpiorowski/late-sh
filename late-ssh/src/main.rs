@@ -114,6 +114,7 @@ async fn main() -> anyhow::Result<()> {
     // Load configuration from environment
     let config = Config::load().context("failed to load configuration")?;
     config.log_startup();
+    late_ssh::app::files::local::configure(config.env, config.files.as_ref())?;
 
     // Init database connection pool
     let db = Db::new(&config.db).context("failed to initialize database")?;
@@ -177,7 +178,8 @@ async fn main() -> anyhow::Result<()> {
     .with_session_registry(session_registry.clone())
     .with_irc_registry(irc_registry.clone())
     .with_force_admin(config.force_admin)
-    .with_translation_service(translation_service.clone());
+    .with_translation_service(translation_service.clone())
+    .with_files(config.files.clone());
     let _poll_finalizer_recovery_task = chat_service.start_poll_finalizer_recovery_task();
     // Same reservation move as the `system` user below: creating the game's
     // voice row at boot lets the unique username index hold the name.
@@ -219,7 +221,8 @@ async fn main() -> anyhow::Result<()> {
         late_ssh::app::arcade::sliding_puzzle::svc::SlidingPuzzleService::new(
             db.clone(),
             activity_tx.clone(),
-        );
+        )
+        .with_dev_art_preview(config.env != late_ssh::config::Env::Prod);
     let le_word_service =
         late_ssh::app::arcade::le_word::svc::LeWordService::new(db.clone(), activity_tx.clone());
     let chip_service = late_ssh::app::games::chips::svc::ChipService::new(db.clone());

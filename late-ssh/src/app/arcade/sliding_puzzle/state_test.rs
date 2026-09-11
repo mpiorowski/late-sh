@@ -543,3 +543,67 @@ fn stale_saved_rows_regenerate_today_deterministically() {
     assert_eq!(state.moves(), 0);
     assert!(!state.is_solved());
 }
+
+#[test]
+fn personal_artwork_survives_restore_on_another_date() {
+    let user_id = Uuid::now_v7();
+    let seed = 0x5eed;
+    let saved = personal_game(
+        user_id,
+        Difficulty::Easy,
+        seed,
+        generate_scramble(Difficulty::Easy, seed)
+            .tiles
+            .into_iter()
+            .map(i32::from)
+            .collect(),
+        0,
+    );
+    for date in [
+        NaiveDate::from_ymd_opt(2026, 9, 11).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 9, 12).unwrap(),
+    ] {
+        let mut state = State::new_for_date(user_id, service(), date, vec![saved.clone()]);
+        state.open_daily(0);
+        state.show_personal();
+        assert_eq!(state.artwork_key(), seed);
+    }
+}
+
+#[tokio::test]
+async fn daily_artwork_loads_from_the_shared_assignment_and_survives_difficulty_changes() {
+    let test_db = new_test_db().await;
+    let (activity, _) = broadcast::channel(8);
+    let service = SlidingPuzzleService::new(test_db.db.clone(), activity);
+    let date = Utc::now().date_naive();
+    let client = test_db.db.get().await.unwrap();
+    client
+        .execute("UPDATE sliding_puzzle_artworks SET active = false", &[])
+        .await
+        .unwrap();
+    client.execute("INSERT INTO sliding_puzzle_artworks (title, credit, image_url, sha256, approved_at, available_from) VALUES ('Community Night', 'artist', 'https://example.invalid/art.png', $1, now(), $2)", &[&"d".repeat(64), &date]).await.unwrap();
+    let expected = service.daily_artwork(date).await.unwrap();
+    let mut state = State::new_for_date(Uuid::now_v7(), service, date, vec![]);
+    assert_eq!(state.tile_view(), super::image::TileView::Image);
+    let settings = crate::app::files::inline_image::InlineImageRenderSettings::default();
+    for _ in 0..100 {
+        // Insufficient geometry deliberately stops rendering after selection.
+        state.poll_image_tiles(settings, ratatui::layout::Rect::default(), None);
+        if state.artwork_credit() == format!("{} · {}", expected.title, expected.credit) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    for difficulty in 0..3 {
+        state.open_daily(difficulty);
+        assert_eq!(
+            state.artwork_credit(),
+            format!("{} · {}", expected.title, expected.credit)
+        );
+    }
+    state.show_personal();
+    let personal = state.artwork_key();
+    state.show_daily();
+    state.show_personal();
+    assert_eq!(state.artwork_key(), personal);
+}

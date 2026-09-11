@@ -7,6 +7,72 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::time::sleep;
 
 #[tokio::test]
+async fn dev_files_endpoint_serves_uploaded_images_only_in_development() {
+    use crate::app::files::local;
+    use crate::config::Env;
+
+    let test_db = new_test_db().await;
+    let directory = std::env::temp_dir().join(format!("late-dev-files-{}", uuid::Uuid::now_v7()));
+    let key = format!("puzzle-art/{}.png", "a".repeat(64));
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(2, 2)
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .unwrap();
+    let bytes = encoded.into_inner();
+    local::write(&directory, &key, &bytes).await.unwrap();
+    assert!(
+        local::read_key(&directory, &key, bytes.len() - 1)
+            .await
+            .is_err()
+    );
+    assert!(
+        local::read_key(&directory, "../server_key", 1024)
+            .await
+            .is_err()
+    );
+
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .unwrap();
+    for env in [Env::Dev, Env::Prod] {
+        let mut config = test_config(test_db.db.config().clone());
+        config.env = env;
+        config.files = crate::config::dev_files(None, None).unwrap();
+        config.files.as_mut().unwrap().local_directory = Some(directory.clone());
+        let state = test_app_state(test_db.db.clone(), config);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let api_task =
+            tokio::spawn(async move { run_api_server_with_listener(listener, state, None).await });
+        let response = http
+            .get(format!("http://{addr}/api/dev-files/{key}"))
+            .send()
+            .await
+            .unwrap();
+        if env == Env::Dev {
+            assert_eq!(response.status(), 200);
+            assert_eq!(response.headers()["content-type"], "image/png");
+            assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+            assert_eq!(response.bytes().await.unwrap().as_ref(), bytes.as_slice());
+        } else {
+            assert_eq!(response.status(), 404);
+        }
+        let missing = http
+            .get(format!(
+                "http://{addr}/api/dev-files/puzzle-art/{}.png",
+                "b".repeat(64)
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), 404);
+        api_task.abort();
+    }
+    tokio::fs::remove_dir_all(directory).await.unwrap();
+}
+
+#[tokio::test]
 async fn ws_pair_endpoint_rate_limits_repeated_attempts_from_same_ip() {
     let test_db = new_test_db().await;
     let mut config = test_config(test_db.db.config().clone());

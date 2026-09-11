@@ -197,6 +197,7 @@ pub async fn run_api_server_with_listener(
     // are not subject to CORS.
     let app = Router::new()
         .route("/api/health", get(get_health))
+        .route("/api/dev-files/{*key}", get(get_dev_file))
         .route("/api/now-playing", get(get_now_playing))
         .route("/api/radio-meta", get(get_radio_meta))
         .route("/api/listen", get(get_listen))
@@ -236,6 +237,39 @@ pub async fn run_api_server_with_listener(
 #[derive(Deserialize)]
 struct NowPlayingParams {
     mount: Option<String>,
+}
+
+async fn get_dev_file(
+    Path(key): Path<String>,
+    AxumState(state): AxumState<State>,
+) -> axum::response::Response {
+    use crate::app::files::{image_upload::detect_image_mime, local};
+    let directory = state
+        .config
+        .files
+        .as_ref()
+        .and_then(|files| files.local_directory.as_deref());
+    if state.config.env == crate::config::Env::Prod {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(directory) = directory else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match local::read_key(directory, &key, crate::config::MAX_IMAGE_BYTES).await {
+        Ok(bytes) => {
+            let mime = detect_image_mime(&bytes).unwrap_or("application/octet-stream");
+            (
+                [
+                    ("content-type", mime),
+                    ("x-content-type-options", "nosniff"),
+                    ("cache-control", "public, max-age=3600"),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 async fn get_now_playing(
