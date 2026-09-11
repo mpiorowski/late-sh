@@ -79,7 +79,6 @@ late-ssh/src/app/chat/           # adjacent _test.rs files, wired with #[cfg(tes
 |-- news/svc_test.rs             # ArticleService DB-backed coverage
 |-- showcase/svc_test.rs         # ShowcaseService DB-backed coverage
 `-- work/svc_test.rs             # WorkService DB-backed coverage
-late-ssh/src/app/announcements_test.rs   # Login #announcements loading/read-cursor behavior
 ```
 
 Core models used by chat live in `late-core/src/models/`:
@@ -181,10 +180,8 @@ System-feed lines: the `#lounge` activity feed (`app/activity/lounge.rs`) posts 
 
 `ChatSnapshot` is summary data. `RoomTailLoaded` is history data. Do not merge those responsibilities back together.
 
-Login announcements:
-- `app::announcements::load_login_announcements` runs during SSH session bootstrap, outside `ChatState`.
-- If public `#announcements` exists, the user is idempotently joined and up to 10 oldest unread messages from other users are loaded from `chat_messages` without marking them read. Dismissing the modal advances `chat_room_members.last_read_at` to `latest_displayed_at()`.
-- The resulting modal is stored on `App`, appears only after splash/settings are gone, consumes input while visible, scrolls with j/k, and closes on Enter/Esc/q.
+Announcements:
+- There is no login `#announcements` modal (removed 2026-09-11). Yesterday's posts print verbatim at the top of The Late Edition (`app/paper`, `ChatMessage::list_public_room_between_with_author`); `#announcements` unread counts behave like any other room's (auto-join starts it read, the same as every other room, since 2026-09-11), and the paper never touches `chat_room_members.last_read_at`.
 
 ---
 
@@ -253,7 +250,7 @@ Notifications:
 Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by cozy room-rail rendering in `ui.rs`. The base navigation order is:
 1. Favorite real rooms in `users.settings.favorite_room_ids` order.
 2. Core permanent rooms plus synthetic updates: `lounge`, `announcements`, `suggestions`, `bugs`, Notifications/Mentions, News, RSS when available, the permanent `#voice` room (matched by slug, directly above Discover), the haunted `#deadchannel` once this user was invited in (matched by `kind='deadchannel'` via `is_deadchannel_room`, the last room in Core and excluded from Channels and the compact list's Public group), and Discover / `+ browse rooms` last. Collapsing Core hides these synthetic update entries too (Discover included). A `#voice` room that is not permanent shows nowhere: Core requires `permanent` and Channels excludes slug `voice`, so promote it with `/create-room voice`.
-2b. The `stream` section (`RoomSection::Stream`, shortcut `s`), directly under Core and above Cyberspace/Channels: one `▶ {user}-live · title · N watching` row per registered "watch me" stream, fed by `ChatState::live_streams` (copied from the stream registry watch in `App::tick_stream`). The section exists only while somebody is streaming. Stream rooms are `kind='game'` so they can never leak into Channels; opening one the user never joined triggers the lazy public game-room join from `select_room_slot`. The stream header block (title, watcher count, watch-URL nudge), the `▶LIVE` author presence badge, and the ON AIR voice-strip state ride the same copy; the domain contract is `late-ssh/src/app/stream/CONTEXT.md`.
+2b. The `stream` section (`RoomSection::Stream`, shortcut `s`), directly under Core and above Cyberspace/Channels: one `▶ {user} [N]` row per registered "watch me" stream (N = watchers, zero included; `▶ {user} […]` while pending; no title, since the bracket keeps the count apart from the unread badge on the right; a long username is what shortens, the bracket always stays, so a live row can never end in the pending `…`), fed by `ChatState::live_streams` (copied from the stream registry watch in `App::tick_stream`). The section exists only while somebody is streaming. Stream rooms are `kind='game'` so they can never leak into Channels; opening one the user never joined triggers the lazy public game-room join from `select_room_slot`. The stream header block (title, watcher count, watch-URL nudge), the `▶LIVE` author presence badge, and the ON AIR voice-strip state ride the same copy; the domain contract is `late-ssh/src/app/stream/CONTEXT.md`.
 3. Unread DMs, under an `unread dms` header. At the bottom of the rail DMs were going unnoticed, so any DM with unread messages is promoted here, sorted the same way as the DMs section below. Three rules keep it stable: favorited DMs stay in Favorites (they are already in `pushed_rooms` when the group is built), an ignored peer's DM is promoted nowhere, and the group ignores the DMs collapse toggle, which makes collapsing DMs a way to fold the read ones away without losing the ones waiting on a reply. The header is plain text like the `bumped` strip: no collapse toggle, no `RoomSection` variant, no section shortcut.
 4. Other non-DM chat-list rooms/channels, excluding favorites.
 5. DMs, sorted by unread status, then snapshot latest-message activity, then peer display name. Do not derive this order from lazily loaded room tails.
@@ -356,7 +353,7 @@ User commands:
 - `/friend @user` privately marks a user as a friend; `/unfriend @user` removes the mark; `/friends` lists marked users.
 - `/binds` opens the Chat help topic.
 - `/cs` (alias `/cyberspace`) opens the Cyberspace `feeds` entry; `/cs post` opens its compose modal, `/cs chat` (alias `/cs rooms`) the chat-room picker that adds rooms as rail entries, `/cs mail` the C-Mail picker that pins conversations the same way, `/cs mail @user` starts (or finds) a conversation, pins it, and walks into it, `/cs link` the account-link modal, `/cs unlink` forgets the link. Parsed in `submit_composer` (`parse_cyberspace_command`), handled inline on `ChatState` (no `take_requested_*` plumbing; `pending_chat_screen_switch` pulls the user to Home).
-- `/aquarium feed` and `/aquarium cut` (alias `/aq`) tend the Shop-unlocked tank, which lives on the Zen page only (the Home tray is gone, 2026-09-10); bare `/aquarium` answers with a usage banner. Parsed in `submit_composer`, drained via `take_requested_aquarium_command` in `handle_post_submit_requests`.
+- `/aquarium feed` (alias `/aq feed`) feeds the Shop-unlocked tank, which lives on the Zen page only (the sprout is cut on its Shop row since 2026-09-11, `/aquarium cut` is gone; the Home tray is gone, 2026-09-10); bare `/aquarium` answers with a usage banner. Parsed in `submit_composer`, drained via `take_requested_aquarium_command` in `handle_post_submit_requests`.
 - There is no `/pet` command any more: the pet is fed by nothing and toggled by nothing. `ChatState::last_own_send_at` (stamped on `SendSucceeded`) is the pet's "chatty" signal, read by the tick; `/petname` stays.
 - `/dm @user` opens/creates a DM.
 - `/exit` opens quit confirm.
@@ -1182,7 +1179,6 @@ Repo-wide rule from root context still applies:
 - LLM agents must not run `cargo test`, `cargo nextest`, or `cargo clippy`; note expected commands for the human owner instead.
 
 Existing DB-backed coverage:
-- `src/app/announcements_test.rs`: login #announcements loading, read cursor behavior, paging.
 - `svc_test.rs`: send, reactions, summaries, room tails, ignored users, discover listing/joining, public room create/fill, delete events, ignore/unignore, message search (membership/game-room/ignored exclusions, room scoping, LIKE-metacharacter escaping, context-window ordering).
 - `news/svc_test.rs`: article snapshots, empty list, author resolution, duplicate URL failure, direct DB inserts appearing after list refresh.
 - `sheet_test.rs`: character sheet model/upsert plus `open_sheet_task`/`save_sheet_task` room-scoped authorization.
@@ -1221,7 +1217,6 @@ Test gaps:
 - DM/private message bodies must not leak to non-members through broadcast handling.
 - Ignore filtering covers all rooms including DMs, and also hides bot replies whose `reply_to_user_id` is ignored. DMs with an ignored peer are hidden from the room rail entirely.
 - `#announcements` admin-only currently depends on the provided `room_slug`; stale/missing slug is a fragile path.
-- Login `#announcements` modal marks `chat_room_members.last_read_at` only when dismissed; do not add a separate announcement-read table unless the room model itself changes.
 - Reaction tasks are async; UI should not assume optimistic success.
 - A gild marker repaints off the Postgres notify, not off `evt_tx`. If `start_message_listener_task` is not running (tests, or a process wired without it) the marker only appears on the next room tail load. Do not "fix" that by broadcasting locally as well: two paths would mean two repaints and a marker that behaves differently on the replica that sold it.
 - Poll create/vote tasks are async; `ChatEvent::PollUpdated` patches the local active-poll map and `ChatSnapshot.active_polls` refreshes authoritative visibility. Successful poll creation spawns a sleep-until-expiry finalizer that atomically claims the expired poll in Postgres, marks it inactive, and posts compact results into the room as the poll creator. `ChatService::start_poll_finalizer_recovery_task` runs a coarse 10-minute recovery scan for expired active polls so restarts/redeploys do not strand result posts; the DB claim is the cross-replica duplicate guard.

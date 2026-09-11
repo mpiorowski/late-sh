@@ -164,12 +164,14 @@ pub enum ActivityKind {
     },
     /// The first aquarium feeding of the UTC day cleared the DB chip gate.
     AquariumFed,
-    /// Fourteen straight fed days hatched a fry of `creature`; `swimming`
-    /// is false when the tank was full and it went to inventory instead.
+    /// Fourteen straight fed days hatched a fry of `creature`, swimming
+    /// from the start.
     AquariumFryHatched {
         creature: String,
-        swimming: bool,
     },
+    /// Fourteen straight fed days hatched nothing: the owner already owns
+    /// the cap of fish, in the water and parked together.
+    AquariumFryNoRoom,
     /// Fourteen unfed days starved one `creature`, settled at login.
     AquariumFishLost {
         creature: String,
@@ -178,13 +180,16 @@ pub enum ActivityKind {
     AquariumSprouted {
         born: chrono::NaiveDate,
     },
-    /// A sprout left a week rooted as a plant, settled at login;
-    /// `swimming` is false when the tank was full and it went to inventory.
+    /// A sprout left a week rooted as the plant `creature`, in the water,
+    /// settled at login or on the day edge.
     AquariumSproutRooted {
-        swimming: bool,
+        creature: String,
     },
     /// The owner cut the sprout.
     AquariumSproutCut,
+    /// A sprout left a week withered: the owner already owns the cap of
+    /// plants, so nothing grew. Settled at login or on the day edge.
+    AquariumSproutWithered,
 }
 
 impl ActivityKind {
@@ -213,10 +218,12 @@ impl ActivityKind {
             Self::BonsaiWatered | Self::BonsaiLost { .. } => ActivityCategory::Bonsai,
             Self::AquariumFed
             | Self::AquariumFryHatched { .. }
+            | Self::AquariumFryNoRoom
             | Self::AquariumFishLost { .. }
             | Self::AquariumSprouted { .. }
             | Self::AquariumSproutRooted { .. }
-            | Self::AquariumSproutCut => ActivityCategory::Companion,
+            | Self::AquariumSproutCut
+            | Self::AquariumSproutWithered => ActivityCategory::Companion,
         }
     }
 }
@@ -847,14 +854,22 @@ impl ActivityEvent {
         user_id: Uuid,
         username: impl Into<String>,
         creature: String,
-        swimming: bool,
     ) -> Self {
         let text = format!("hatched a {creature} fry in their tank");
         Self::new(
             Some(user_id),
             username,
-            ActivityKind::AquariumFryHatched { creature, swimming },
+            ActivityKind::AquariumFryHatched { creature },
             text,
+        )
+    }
+
+    pub fn aquarium_fry_no_room(user_id: Uuid, username: impl Into<String>) -> Self {
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::AquariumFryNoRoom,
+            "kept a streak going with no room for a fry".to_string(),
         )
     }
 
@@ -888,12 +903,12 @@ impl ActivityEvent {
     pub fn aquarium_sprout_rooted(
         user_id: Uuid,
         username: impl Into<String>,
-        swimming: bool,
+        creature: String,
     ) -> Self {
         Self::new(
             Some(user_id),
             username,
-            ActivityKind::AquariumSproutRooted { swimming },
+            ActivityKind::AquariumSproutRooted { creature },
             "let a sprout root in their tank".to_string(),
         )
     }
@@ -904,6 +919,15 @@ impl ActivityEvent {
             username,
             ActivityKind::AquariumSproutCut,
             "cut a sprout in their tank".to_string(),
+        )
+    }
+
+    pub fn aquarium_sprout_withered(user_id: Uuid, username: impl Into<String>) -> Self {
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::AquariumSproutWithered,
+            "let a sprout wither in their full tank".to_string(),
         )
     }
 

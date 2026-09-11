@@ -161,12 +161,9 @@ fn daily_compact_lines(width: u16, height: u16, props: &DailyPanelProps) -> Vec<
             lines.push(match_line(width, row));
         }
     }
-    let mut footer = status_line(width, props);
-    footer.spans.push(Span::styled(
-        " · ",
-        Style::default().fg(theme::TEXT_FAINT()),
-    ));
-    footer.spans.extend(hints_line().spans);
+    // Indented like the rows above it; the keys are on the tile's title.
+    let mut footer = status_line(width.saturating_sub(2), props);
+    footer.spans.insert(0, Span::raw("  "));
     lines.push(footer);
     lines
 }
@@ -253,7 +250,7 @@ fn status_line(width: u16, props: &DailyPanelProps) -> Line<'static> {
 /// `ctrl+g · \` toggle` — the two keys that front the Lobby: `ctrl+g` opens
 /// the modal, and the backtick toggles you through the games waiting on you
 /// (boards on your move, seated tables, unfinished dailies) and back to chat.
-/// Constant chrome, both keys always shown.
+/// Constant chrome of the sidebar panel; the Zen tile names them on its title.
 fn hints_line() -> Line<'static> {
     let key_style = Style::default()
         .fg(theme::AMBER_DIM())

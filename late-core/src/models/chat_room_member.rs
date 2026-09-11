@@ -103,45 +103,6 @@ impl ChatRoomMember {
         Ok(count)
     }
 
-    /// Advance the member's read cursor to `read_at`, never moving it
-    /// backwards. Returns 0 if the user is not a member of the room.
-    pub async fn mark_read_at(
-        client: &Client,
-        room_id: Uuid,
-        user_id: Uuid,
-        read_at: DateTime<Utc>,
-    ) -> Result<u64> {
-        let count = client
-            .execute(
-                "UPDATE chat_room_members
-                 SET last_read_at = GREATEST(
-                    COALESCE(last_read_at, '-infinity'::timestamptz),
-                    $3
-                 )
-                 WHERE room_id = $1 AND user_id = $2",
-                &[&room_id, &user_id, &read_at],
-            )
-            .await?;
-        Ok(count)
-    }
-
-    /// The member's read cursor, `None` if never read or not a member.
-    pub async fn last_read_at(
-        client: &Client,
-        room_id: Uuid,
-        user_id: Uuid,
-    ) -> Result<Option<DateTime<Utc>>> {
-        let row = client
-            .query_opt(
-                "SELECT last_read_at
-                 FROM chat_room_members
-                 WHERE room_id = $1 AND user_id = $2",
-                &[&room_id, &user_id],
-            )
-            .await?;
-        Ok(row.and_then(|row| row.get("last_read_at")))
-    }
-
     pub async fn is_member(client: &Client, room_id: Uuid, user_id: Uuid) -> Result<bool> {
         let row = client
             .query_one(
@@ -211,13 +172,11 @@ impl ChatRoomMember {
         let count = client
             .execute(
                 // Auto-joined rooms start "read" so new users aren't flooded
-                // with unread badges - EXCEPT #announcements, which is joined
-                // with a NULL cursor so the login splash surfaces the recent
-                // announcements the user has never seen.
+                // with unread badges. #announcements included: the daily
+                // paper prints yesterday's posts, so nothing needs the badge
+                // to point at the room's whole history.
                 "INSERT INTO chat_room_members (room_id, user_id, last_read_at)
-                 SELECT id, $1,
-                        CASE WHEN slug = 'announcements' THEN NULL
-                             ELSE current_timestamp END
+                 SELECT id, $1, current_timestamp
                  FROM chat_rooms
                  WHERE visibility = 'public' AND auto_join = true
                    AND NOT EXISTS (

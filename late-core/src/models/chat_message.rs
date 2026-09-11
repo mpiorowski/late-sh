@@ -165,42 +165,48 @@ impl ChatMessage {
         Ok(row.map(|row| row.get("created")))
     }
 
-    /// Unread messages authored by other users in a room the user is a member
-    /// of, newest first, capped at `limit`. Unread is relative to the member's
-    /// `last_read_at`. Used by the login announcements splash.
-    pub async fn list_unread_for_member(
+    /// One public room's messages inside `[floor, ceiling)` with the
+    /// author's username resolved, oldest first, the newest `limit` of
+    /// them. Used by the daily paper's ANNOUNCEMENTS column, which prints
+    /// yesterday's `#announcements` posts verbatim: no viewer and no ignore
+    /// list, since the column reads the same to everyone, only the
+    /// public-room line.
+    pub async fn list_public_room_between_with_author(
         client: &Client,
         room_id: Uuid,
-        user_id: Uuid,
+        floor: DateTime<Utc>,
+        ceiling: DateTime<Utc>,
         limit: i64,
-    ) -> Result<Vec<UnreadRoomMessage>> {
+    ) -> Result<Vec<AuthoredRoomMessage>> {
         let rows = client
             .query(
                 "SELECT msg.id,
                         msg.created,
                         msg.body,
                         u.username AS author
-                 FROM chat_room_members member
-                 JOIN chat_messages msg ON msg.room_id = member.room_id
+                 FROM chat_messages msg
                  JOIN users u ON u.id = msg.user_id
-                 WHERE member.room_id = $1
-                   AND member.user_id = $2
-                   AND msg.user_id <> $2
-                   AND msg.created > COALESCE(member.last_read_at, '-infinity'::timestamptz)
+                 JOIN chat_rooms room ON room.id = msg.room_id
+                 WHERE msg.room_id = $1
+                   AND room.visibility = 'public'
+                   AND msg.created >= $2
+                   AND msg.created < $3
                  ORDER BY msg.created DESC, msg.id DESC
-                 LIMIT $3",
-                &[&room_id, &user_id, &limit],
+                 LIMIT $4",
+                &[&room_id, &floor, &ceiling, &limit],
             )
             .await?;
-        Ok(rows
+        let mut page: Vec<AuthoredRoomMessage> = rows
             .into_iter()
-            .map(|row| UnreadRoomMessage {
+            .map(|row| AuthoredRoomMessage {
                 id: row.get("id"),
                 created: row.get("created"),
                 author: row.get("author"),
                 body: row.get("body"),
             })
-            .collect())
+            .collect();
+        page.reverse();
+        Ok(page)
     }
 
     /// One keyset-paginated page of a room's history, always returned oldest
@@ -675,10 +681,10 @@ impl ChatMessage {
     }
 }
 
-/// A message shown on the login announcements splash: the fields the splash
-/// renders, with the author's username resolved.
+/// A message with its author's username resolved: what the daily paper
+/// prints in its ANNOUNCEMENTS column.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UnreadRoomMessage {
+pub struct AuthoredRoomMessage {
     pub id: Uuid,
     pub created: DateTime<Utc>,
     pub author: String,

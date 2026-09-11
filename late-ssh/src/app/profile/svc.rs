@@ -246,7 +246,8 @@ impl ProfileService {
         let profile = Profile::load_with_chip_balance(&client, user_id).await?;
         let bonsai = Tree::find_by_user_id(&client, user_id).await?;
         let bonsai_decay_protection = BonsaiDecayProtection::for_user(&client, user_id).await?;
-        let aquarium_fish = marketplace::active_aquarium_fish_for_user(&client, user_id).await?;
+        let aquarium_fish =
+            marketplace::active_aquarium_creatures_for_user(&client, user_id).await?;
         let pet = if marketplace::user_owns_pet_companion(&**client, user_id).await? {
             PetCompanion::find_by_user_id(&client, user_id)
                 .await?

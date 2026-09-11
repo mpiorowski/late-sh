@@ -410,7 +410,6 @@ pub struct SessionConfig {
     /// say so.
     pub pot_service: Option<crate::app::pot::svc::PotService>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
-    pub initial_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub user_id: Uuid,
     pub permissions: Permissions,
     pub artboard_banned: bool,
@@ -487,7 +486,6 @@ pub struct App {
     /// minute-granularity (rides the per-minute global frame), so only the
     /// running -> ready transition needs its own one-shot frame.
     pub(crate) ultimate_cooldown_was_running: bool,
-    pub(crate) login_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     /// The Late Edition: its modal, the login pop, and the `/paper` drain.
     pub(crate) paper: crate::app::paper::state::PaperState,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
@@ -651,7 +649,9 @@ pub struct App {
     /// House table embedded chat, same reasoning as the daily cache.
     pub(crate) house_chat_rows_cache: chat::ui::ChatRowsCache,
     /// The Zen pages' current-room chat, its own cache like the others.
-    pub(crate) zen_chat_rows_cache: chat::ui::ChatRowsCache,
+    /// One rows cache per chat tile, in layout order; sized to the tiles
+    /// each frame.
+    pub(crate) zen_chat_rows_caches: Vec<chat::ui::ChatRowsCache>,
     pub(crate) poll_modal_state: chat::polls::state::PollModalState,
     pub(crate) gild_modal_state: chat::gild::state::GildModalState,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
@@ -1008,28 +1008,6 @@ impl App {
         self.sync_visible_chat_room();
     }
 
-    pub(crate) fn login_announcements_visible(&self) -> bool {
-        self.login_announcements.is_some()
-            && !self.show_splash
-            && !self.show_settings
-            && !self.show_quit_confirm
-            && !self.show_help
-            && !self.show_mod_modal
-            && !self.show_hub_modal
-            && !self.show_profile_modal
-            && !self.show_sheet_modal
-            && !self.show_poll_modal
-            && !self.show_gild_modal
-            && !self.show_bonsai_modal
-            && !self.show_lobby_modal
-            && !self.show_ultimate_modal
-            && !self.icon_picker_open
-            && !self.room_search_modal_state.is_open()
-            && !self.booth_modal_state.is_open()
-            && !self.chat.has_news_modal()
-            && !self.chat.has_image_modal()
-    }
-
     fn current_visible_chat_room_id(&self) -> Option<Uuid> {
         match self.screen {
             Screen::Dashboard => self.chat.selected_room_id,
@@ -1288,7 +1266,7 @@ impl App {
             config.initial_aquarium_care.shields,
         );
         aquarium_state.set_active_creatures(
-            &shop_state.active_aquarium_fish(),
+            &shop_state.active_aquarium_creatures(),
             aquarium_care.fry_visible(),
             aquarium_care.sprout_visible(),
         );
@@ -1297,17 +1275,12 @@ impl App {
         // on the first screen. A loss outranks the sprout news.
         let aquarium_loss_banner = match config.initial_aquarium_care.lost.as_slice() {
             [] => match (
-                config.initial_aquarium_care.rooted,
+                &config.initial_aquarium_care.rooted,
                 config.initial_aquarium_care.sprouted,
             ) {
-                (Some(true), _) => Some(crate::app::common::primitives::Banner::success(
-                    "Your sprout took root: a wigglewort grows in the tank",
-                )),
-                (Some(false), _) => Some(crate::app::common::primitives::Banner::success(
-                    "Your sprout took root: a wigglewort waits in /shop, the tank is full",
-                )),
+                (Some(fate), _) => Some(crate::app::hub::aquarium::svc::sprout_fate_banner(fate)),
                 (None, true) => Some(crate::app::common::primitives::Banner::info(
-                    "A sprout came up in your tank: leave it, or /aq cut within the week",
+                    "A sprout came up in your tank: cut it in /shop within the week, or leave it to root",
                 )),
                 (None, false) => None,
             },
@@ -1382,7 +1355,6 @@ impl App {
             show_lobby_modal: false,
             show_ultimate_modal: false,
             ultimate_cooldown_was_running: false,
-            login_announcements: config.initial_announcements,
             // Newcomers get it too: after the tour, it is the best answer
             // to "is anyone here?" and doubles as the room directory.
             paper: crate::app::paper::state::PaperState::new(
@@ -1520,7 +1492,7 @@ impl App {
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             daily_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             house_chat_rows_cache: chat::ui::ChatRowsCache::default(),
-            zen_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            zen_chat_rows_caches: Vec::new(),
             poll_modal_state: chat::polls::state::PollModalState::new(),
             gild_modal_state: chat::gild::state::GildModalState::new(),
             room_search_modal_state:
@@ -1758,7 +1730,8 @@ impl App {
         self.lateania_state = None;
         // Refresh the landing's slot list so a level/class change from the
         // adventure just left shows up without needing to leave the screen.
-        self.lateania_service.character_slots_task(self.user_id);
+        self.lateania_service
+            .character_slots_task(self.user_id, self.repaint_signal.clone());
     }
 
     /// A backtick detach hopped out of the Lateania world recently enough
@@ -2289,7 +2262,8 @@ impl App {
         if self.screen == Screen::Lateania {
             // Refresh the character-select landing's slot list; the landing
             // itself only shows once an explicit Enter joins a slot.
-            self.lateania_service.character_slots_task(self.user_id);
+            self.lateania_service
+                .character_slots_task(self.user_id, self.repaint_signal.clone());
         }
         if self.screen == Screen::Rebels {
             self.enter_rebels();
@@ -2670,7 +2644,38 @@ impl App {
 
     /// The room the Zen pages show: the selected room when it is a real
     /// room, else #lounge.
+    /// The Zen page's active chat room: the focused chat tile's, else the
+    /// first chat tile's, else (no chat tile) the current room. This is the
+    /// room the composer, the message keys, the mouse, and the read marking
+    /// act on.
     pub(crate) fn zen_chat_room_id(&self) -> Option<Uuid> {
+        match self.zen.active_chat_index() {
+            Some(index) => self.zen_chat_rooms()[index],
+            None => self.zen_current_room_id(),
+        }
+    }
+
+    /// Every chat tile's room in layout order, resolved: a tile bound to a
+    /// room the account has since left shows the current room instead.
+    pub(crate) fn zen_chat_rooms(&self) -> Vec<Option<Uuid>> {
+        self.zen
+            .chat_tiles()
+            .into_iter()
+            .map(|(_, bound)| self.zen_room_or_current(bound))
+            .collect()
+    }
+
+    fn zen_room_or_current(&self, bound: Option<Uuid>) -> Option<Uuid> {
+        if let Some(room_id) = bound
+            && self.chat.rooms.iter().any(|(room, _)| room.id == room_id)
+        {
+            return Some(room_id);
+        }
+        self.zen_current_room_id()
+    }
+
+    /// The current room: Home's selection when it is a real room, else #lounge.
+    fn zen_current_room_id(&self) -> Option<Uuid> {
         if !self.chat.synthetic_entry_selected()
             && let Some(room_id) = self.chat.selected_room_id
         {
@@ -2708,7 +2713,7 @@ impl App {
     /// changed (a sprout came or went) without a shop snapshot behind it.
     pub(crate) fn refresh_aquarium_population(&mut self) {
         self.aquarium_state.set_active_creatures(
-            &self.shop_state.active_aquarium_fish(),
+            &self.shop_state.active_aquarium_creatures(),
             self.aquarium_care.fry_visible(),
             self.aquarium_care.sprout_visible(),
         );

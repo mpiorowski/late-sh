@@ -1,5 +1,4 @@
-//! The Late Edition's modal: a centered box over whatever screen is up,
-//! same shape as the login announcements.
+//! The Late Edition's modal: a centered box over whatever screen is up.
 
 use ratatui::{
     Frame,

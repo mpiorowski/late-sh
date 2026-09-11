@@ -1,4 +1,5 @@
-use super::{care_bar_spans, station_text};
+use super::{care_bar_spans, hint_line_fitting, station_text};
+use crate::app::common::primitives::hint_line;
 use crate::app::hub::aquarium::state::CareBar;
 use late_core::models::aquarium_care::CARE_DAYS;
 
@@ -10,15 +11,15 @@ fn glyphs(bar: CareBar) -> String {
 }
 
 #[test]
-fn the_care_bar_is_always_fourteen_boxes() {
+fn the_care_bar_is_always_fourteen_dots() {
     // Five fed days: five full, nine empty.
-    assert_eq!(glyphs(CareBar::Streak(5)), "■■■■■□□□□□□□□□");
+    assert_eq!(glyphs(CareBar::Streak(5)), "●●●●●○○○○○○○○○");
     // Two unfed days: two full (red), the rest empty.
-    assert_eq!(glyphs(CareBar::Dry(2)), "■■□□□□□□□□□□□□");
+    assert_eq!(glyphs(CareBar::Dry(2)), "●●○○○○○○○○○○○○");
     // A minded tank shows nothing filled.
-    assert_eq!(glyphs(CareBar::Minded), "□".repeat(CARE_DAYS as usize));
+    assert_eq!(glyphs(CareBar::Minded), "○".repeat(CARE_DAYS as usize));
     // Nothing past fourteen ever widens the title.
-    assert_eq!(glyphs(CareBar::Dry(40)), "■".repeat(CARE_DAYS as usize));
+    assert_eq!(glyphs(CareBar::Dry(40)), "●".repeat(CARE_DAYS as usize));
 }
 
 #[test]
@@ -50,4 +51,16 @@ fn the_player_names_the_station_for_the_streams_that_have_one() {
         ),
         "youtube"
     );
+}
+
+#[test]
+fn the_footer_drops_whole_hints_instead_of_cutting_one_in_half() {
+    let hints = [("←→", "focus"), ("space", "kind"), ("S", "split")];
+    let full = hint_line_fitting(&hints, 200);
+    assert_eq!(full.width(), hint_line(&hints).width());
+    // Room for the first two hints and part of the third: the third goes.
+    let two = hint_line(&hints[..2]).width();
+    let narrow = hint_line_fitting(&hints, two + 4);
+    assert_eq!(narrow.width(), two);
+    assert_eq!(hint_line_fitting(&hints, 3).width(), hint_line(&[]).width());
 }

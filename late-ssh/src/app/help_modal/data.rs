@@ -36,13 +36,14 @@ pub enum HelpTopic {
     Chips,
     Economy,
     Bonsai,
+    Zen,
     Settings,
     Voice,
     Streaming,
 }
 
 impl HelpTopic {
-    pub const ALL: [HelpTopic; 23] = [
+    pub const ALL: [HelpTopic; 24] = [
         HelpTopic::Pair,
         HelpTopic::Overview,
         HelpTopic::Chat,
@@ -62,6 +63,7 @@ impl HelpTopic {
         HelpTopic::Chips,
         HelpTopic::Economy,
         HelpTopic::Bonsai,
+        HelpTopic::Zen,
         HelpTopic::Settings,
         HelpTopic::Voice,
         HelpTopic::Streaming,
@@ -90,6 +92,7 @@ impl HelpTopic {
             HelpTopic::Chips => "Chips",
             HelpTopic::Economy => "Economy",
             HelpTopic::Bonsai => "Bonsai",
+            HelpTopic::Zen => "Zen",
             HelpTopic::Settings => "Settings",
             HelpTopic::Voice => "Voice",
             HelpTopic::Streaming => "Streaming",
@@ -117,10 +120,11 @@ impl HelpTopic {
             HelpTopic::Chips => 16,
             HelpTopic::Economy => 17,
             HelpTopic::Bonsai => 18,
-            HelpTopic::Settings => 19,
-            HelpTopic::Voice => 20,
-            HelpTopic::Streaming => 21,
-            HelpTopic::Architecture => 22,
+            HelpTopic::Zen => 19,
+            HelpTopic::Settings => 20,
+            HelpTopic::Voice => 21,
+            HelpTopic::Streaming => 22,
+            HelpTopic::Architecture => 23,
         }
     }
 }
@@ -163,6 +167,7 @@ pub(crate) fn lines_for(
         HelpTopic::Chips => chips_help_lines(),
         HelpTopic::Economy => economy_lines(),
         HelpTopic::Bonsai => bonsai_help_lines(),
+        HelpTopic::Zen => zen_help_lines(),
         HelpTopic::Settings => settings_help_lines(),
         HelpTopic::Voice => voice_help_lines(),
         HelpTopic::Streaming => streaming_help_lines(),
@@ -215,7 +220,7 @@ pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
     - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels), 4 Artboard (shared ASCII canvas), 5 Profiles (the people: their projects and open-to-work cards), 6 Leaderboards (every board, monthly and all-time).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
-    - Ctrl+F opens Zen from anywhere and hands you back with Esc or the same chord: Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: arrows focus, space picks a tile's kind, S splits, X closes, < > change width and { } height, r flips, z zooms, b g t restyle borders, gaps, and titles, R resets, the layout is saved per account; [ ] walk your rooms, i or Enter chats, w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it, and it reads the rest of your session itself).\n\
+    - Ctrl+F opens Zen from anywhere and hands you back with Esc or the same chord: Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: arrows focus, space picks a tile's kind, S splits, X closes, < > change width and { } height, r flips, z zooms, b g t restyle borders, gaps, and titles, R resets, ? opens the Zen guide, the layout is saved per account; each tile names its own keys on the right of its title; up to ten chat tiles each bound to a room ([ ] rebind the focused one, i or Enter write in it, j k select in it; the focused chat is the active one, the others watch), w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it, and it reads the rest of your session itself).\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Typing /shop into the composer opens the Shop.\n\
     - Ctrl+/ opens jump search across rooms and DMs; typing ?query searches messages.\n\
     - Home's room rail also holds RSS, News, Cyberspace, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"N unread mentions\" counter in the top-right corner.\n\
@@ -612,10 +617,10 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /summary           AI catch-up of this public room, the last day or since your last read",
         "  /summary 6h        catch up on exactly that window instead (also /summary 90m)",
         "                     (up to 2 days back; one per room every 10 minutes)",
-        "  /paper             The Late Edition: graybeard's daily paper, one column per",
-        "                     public room that talked yesterday (5+ messages), rooms you",
-        "                     are not in, what we were reading; pops once a day at login",
-        "                     (after the announcements and, on a first visit, the tour)",
+        "  /paper             The Late Edition: yesterday's #announcements word for word,",
+        "                     then graybeard's column per public room that talked (5+",
+        "                     messages), rooms you are not in, what we were reading; pops",
+        "                     once a day at login (after the tour, on a first visit)",
         "                     (Ctrl+O Tweaks → Daily paper at login turns the pop off)",
         "                     admins: /paper on|off, outside on|off, print, preview, reset",
         "",
@@ -626,7 +631,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  Ctrl+L             redraw the screen if something outside late.sh scribbled on it",
         "  /shop              open the Shop",
         "  /aquarium feed     feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the tank lives on the Zen page (Ctrl+F)",
-        "  /aquarium cut      cut the sprout on the tank floor; one comes up every 14 days and roots as a wigglewort after 7 if you leave it",
+        "  Sprout             comes up on the tank floor every 14 days, fed or not; cut it on its Shop row (Companions, -) within 7 days, or it roots as a plant; plants never die",
         "  Ctrl+/             jump to a room or DM; type ?query to search messages",
         "  ?                  open this guide; Pair and terminal-specific tabs live here",
         "",
@@ -1162,7 +1167,7 @@ fn overview_lines() -> Vec<String> {
         "  Ctrl+L            redraw the screen after outside terminal damage",
         "  /shop             open the Shop",
         "  /aquarium feed    feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the tank lives on the Zen page (Ctrl+F)",
-        "  /aquarium cut     cut the sprout on the tank floor; one comes up every 14 days and roots as a wigglewort after 7 if you leave it",
+        "  Sprout            comes up on the tank floor every 14 days, fed or not; cut it on its Shop row (Companions, -) within 7 days, or it roots as a plant; plants never die",
         "  Ctrl+/            jump to a room, DM, or Home entry; ?query searches messages",
         "  ?                 open this guide; Pair and terminal-specific tabs live here",
         "  w                 open Bonsai Care when not composing",
@@ -1329,6 +1334,52 @@ fn news_help_lines() -> Vec<String> {
         .map(str::to_string),
     );
     lines
+}
+
+fn zen_help_lines() -> Vec<String> {
+    [
+        "Zen",
+        "",
+        "Zen is the clubhouse cut down to the things you keep alive: your bonsai, the reef, the pet, your rooms' chat, music, a clock, and the lobby, as tiles you arrange yourself. Ctrl+F opens it from any page and Esc or the same chord hands you back. The layout is saved per account, the rooms your chat tiles are bound to included.",
+        "",
+        "Each tile names its own keys on the right of its title (t hides the titles). The footer shows the keys you use most; the full list is here.",
+        "",
+        "Focus and tiles",
+        "  ←↓↑→              move focus",
+        "  space             cycle the focused tile's kind",
+        "  S                 split the focused tile (side by side when wide, stacked when tall)",
+        "  X                 close the focused tile (the last one stays)",
+        "  z                 zoom the focused tile, z again to unzoom",
+        "  < >               trade one column of width with the nearest side-by-side split",
+        "  { }               trade one row of height with the nearest stacked split",
+        "  r                 flip the focused tile's parent split",
+        "  R                 reset to the default layout",
+        "",
+        "Look",
+        "  b                 cycle the border style",
+        "  g                 cycle the gap between tiles",
+        "  t                 show or hide the titles",
+        "",
+        "Chat tiles",
+        "  A page holds up to ten chat tiles, each bound to a room. The focused one is the active chat: it has the composer and the selection, and reading it marks the room read. The others watch their rooms and keep their unread counts until you focus them. Opening the page for the first time focuses the first chat tile; a click focuses any tile.",
+        "  [ ]               bind the focused chat tile to the previous or next joined room",
+        "  i / Enter         write in the focused chat tile's room",
+        "  j / k             select messages in the focused chat tile",
+        "",
+        "Tiles",
+        "  w                 open Bonsai Care, as on every page",
+        "  a                 feed the tank (free, once a day, +100 chips)",
+        "  m  - =  v x  v1-5 mute, volume, audio source, and station, as everywhere",
+        "  click             pet the pet; it reads the rest of your session itself",
+        "  sprout            no page key: its Shop row (/shop, Companions) cuts it with - within the week",
+        "",
+        "Leaving",
+        "  Esc / Ctrl+F      back to the page you came from",
+        "  ?                 open this guide",
+    ]
+    .iter()
+    .map(|line| line.to_string())
+    .collect()
 }
 
 fn settings_help_lines() -> Vec<String> {
