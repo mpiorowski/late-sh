@@ -3,6 +3,13 @@ name: deploy_cli
 # Builds the late CLI for every shipped platform and publishes the release
 # distribution to R2. Called by release.yml for -cli releases;
 # workflow_dispatch is the manual lever.
+#
+# Supply-chain shape: every binary gets a Sigstore build-provenance
+# attestation (actions/attest, keyless, signed by this workflow's OIDC
+# identity) whose bundle ships next to it as <binary>.sigstore.json, and
+# sha256sums.txt is uploaded to the GitHub Release as well as to R2. The
+# installers read checksums from GitHub and binaries from R2, so tampering
+# with the bucket alone cannot ship a different binary.
 
 on:
   workflow_call:
@@ -37,6 +44,8 @@ jobs:
   ci:
     name: ci
     uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
     with:
       package: late-cli
       source_ref: ${{ inputs.release_tag }}
@@ -45,6 +54,11 @@ jobs:
     name: build_late_cli_${{ matrix.target }}
     needs: ci
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     strategy:
       fail-fast: false
       matrix:
@@ -174,6 +188,35 @@ jobs:
             cp "target/${{ matrix.target }}/release/late-webview" "dist/${{ matrix.target }}/late-webview"
           fi
 
+      # Keyless Sigstore provenance for each staged binary. One attestation
+      # per file keeps every bundle single-subject, which is what
+      # `cosign verify-blob-attestation --bundle` expects.
+      - name: attest_cli_provenance
+        id: attest_cli
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/${{ matrix.target }}/${{ matrix.binary_name }}
+
+      - name: attest_webview_helper_provenance
+        if: matrix.webview_helper == true
+        id: attest_webview
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/${{ matrix.target }}/late-webview
+
+      - name: stage_provenance_bundles
+        shell: bash
+        env:
+          CLI_BUNDLE: ${{ steps.attest_cli.outputs.bundle-path }}
+          WEBVIEW_BUNDLE: ${{ steps.attest_webview.outputs.bundle-path }}
+        run: |
+          test -n "$CLI_BUNDLE"
+          cp "$CLI_BUNDLE" "dist/${{ matrix.target }}/${{ matrix.binary_name }}.sigstore.json"
+          if [[ "${{ matrix.webview_helper }}" == "true" ]]; then
+            test -n "$WEBVIEW_BUNDLE"
+            cp "$WEBVIEW_BUNDLE" "dist/${{ matrix.target }}/late-webview.sigstore.json"
+          fi
+
       - name: upload_cli_artifact
         uses: actions/upload-artifact@v6
         with:
@@ -186,6 +229,9 @@ jobs:
     needs: build_cli
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    # contents: write is for `gh release upload` of sha256sums.txt only.
+    permissions:
+      contents: write
     concurrency:
       group: deploy-cli-${{ inputs.environment }}
       cancel-in-progress: false
@@ -232,6 +278,10 @@ jobs:
                 main_binary_found=1
               fi
               cp "$source_file" "publish/releases/${RELEASE_TAG}/${target}/${binary_name}"
+              # Every published binary ships with its provenance bundle; a
+              # missing one is a build bug, not something to publish around.
+              test -f "${source_file}.sigstore.json"
+              cp "${source_file}.sigstore.json" "publish/releases/${RELEASE_TAG}/${target}/${binary_name}.sigstore.json"
             done
             test "$main_binary_found" -eq 1
           done
@@ -263,6 +313,19 @@ jobs:
             printf '%s\n' "${RELEASE_TAG}" > publish/VERSION
             cp "publish/releases/${RELEASE_TAG}/sha256sums.txt" publish/latest/sha256sums.txt
           fi
+
+      # The installers verify binaries against the checksum file on the
+      # GitHub Release, not the copy on R2. This runs before any bucket
+      # upload so a tag never exists on R2 without its GitHub checksums,
+      # which would make every install of it fail closed.
+      - name: upload_release_checksums_to_github
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${RELEASE_TAG}" \
+            "publish/releases/${RELEASE_TAG}/sha256sums.txt" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber
 
       - name: upload_release_distribution
         run: |
