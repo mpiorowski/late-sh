@@ -128,6 +128,14 @@ const DEFAULT_CREATURE_SOURCES: &[EmbeddedKdl] = &[
         source: include_str!("../../../../assets/aquarium/creatures/wigglewort.kdl"),
     },
     EmbeddedKdl {
+        path: "art/creatures/sprout.kdl",
+        source: include_str!("../../../../assets/aquarium/creatures/sprout.kdl"),
+    },
+    EmbeddedKdl {
+        path: "art/creatures/seatuft.kdl",
+        source: include_str!("../../../../assets/aquarium/creatures/seatuft.kdl"),
+    },
+    EmbeddedKdl {
         path: "art/creatures/wingfish.kdl",
         source: include_str!("../../../../assets/aquarium/creatures/wingfish.kdl"),
     },
@@ -137,6 +145,9 @@ const DEFAULT_CREATURE_SOURCES: &[EmbeddedKdl] = &[
 /// parent's colour for its first week. Never sold; the shop knows no such
 /// creature, only the population builder does.
 pub(crate) const FRY_CREATURE: &str = "fry";
+/// The bud that comes up on the floor every two weeks; cut or rooted, it
+/// is never sold.
+pub(crate) const SPROUT_CREATURE: &str = "sprout";
 pub(crate) const IDLE_ACTION_INTERVAL: u64 = 4;
 pub(crate) const DEFAULT_IDLE_MOVE_CHANCE: f64 = 0.30;
 pub(crate) const DEFAULT_IDLE_TURN_CHANCE: f64 = 0.05;

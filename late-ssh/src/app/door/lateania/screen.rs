@@ -181,8 +181,11 @@ fn handle_delete_confirm_key(app: &mut App, byte: u8) -> bool {
             // would silently start a fresh character there.
             app.lateania_detached_at = None;
             app.leave_lateania();
-            app.lateania_service
-                .delete_character_task(app.user_id, slot);
+            app.lateania_service.delete_character_task(
+                app.user_id,
+                slot,
+                app.repaint_signal.clone(),
+            );
             app.banner = Some(Banner::success(&format!(
                 "Slot {} reset. Enter to start a new character there.",
                 slot + 1

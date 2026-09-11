@@ -2,8 +2,8 @@ use chrono::{NaiveDate, TimeZone, Utc};
 use late_core::models::aquarium_shield::AquariumShield;
 use ratatui::layout::Rect;
 
-use super::{AquariumCare, AquariumState, CareBar, CareOutcome, Fry};
-use crate::app::hub::aquarium::creature::FRY_CREATURE;
+use super::{AquariumCare, AquariumState, CareBar, CareOutcome, CutOutcome, Fry, SproutStatus};
+use crate::app::hub::aquarium::creature::{FRY_CREATURE, SPROUT_CREATURE};
 
 fn day(d: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 9, d).unwrap()
@@ -15,6 +15,9 @@ fn fed_on(d: u32, streak: i32) -> AquariumCare {
         streak,
         shields: Vec::new(),
         fry: None,
+        sprout: None,
+        next_sprout: None,
+        settlement_asked: None,
     }
 }
 
@@ -36,14 +39,13 @@ fn the_bar_counts_the_streak_in_green_and_the_unfed_days_in_red() {
 }
 
 #[test]
-fn murk_sets_in_after_a_week_and_the_shield_holds_it_off() {
+fn the_shield_minds_the_tank_and_the_clock_resumes_when_it_lapses() {
     let care = fed_on(1, 3);
-    assert!(!care.murky_on(day(7)), "six unfed days: still clear");
-    assert!(care.murky_on(day(8)), "seven unfed days: murky");
     assert!(care.hungry_on(day(8)));
+    assert_eq!(care.bar_on(day(8)), CareBar::Dry(7));
 
     // A shield over the 2nd through the 20th: nothing counts, the fish
-    // are minded, the water stays clear, the bar shows the minded state.
+    // are minded, the bar shows the minded state.
     let minded = AquariumCare {
         shields: vec![AquariumShield {
             starts_at: Utc.with_ymd_and_hms(2026, 9, 2, 0, 0, 0).unwrap(),
@@ -52,11 +54,50 @@ fn murk_sets_in_after_a_week_and_the_shield_holds_it_off() {
         ..fed_on(1, 3)
     };
     assert!(!minded.hungry_on(day(8)));
-    assert!(!minded.murky_on(day(8)));
     assert_eq!(minded.bar_on(day(8)), CareBar::Minded);
     // The day after the shield lapses the clock resumes from one.
     assert!(minded.hungry_on(day(21)));
     assert_eq!(minded.bar_on(day(21)), CareBar::Dry(1));
+}
+
+#[test]
+fn the_sprout_stands_until_it_is_cut_and_a_bare_floor_has_nothing_to_cut() {
+    let mut care = fed_on(1, 3);
+    assert!(!care.sprout_visible());
+    assert_eq!(care.cut_sprout(day(3)), CutOutcome::NothingToCut);
+
+    care.set_sprout(day(3));
+    assert!(care.sprout_visible());
+    assert_eq!(care.cut_sprout(day(9)), CutOutcome::Cut, "the seventh day");
+    assert!(!care.sprout_visible());
+    assert_eq!(care.cut_sprout(day(9)), CutOutcome::NothingToCut);
+
+    // Past its week in a live session: the row would refuse the cut and
+    // root it at the next connect, so the press is refused here too and
+    // the sprout stays drawn until the plant arrives.
+    care.set_sprout(day(3));
+    assert_eq!(care.cut_sprout(day(10)), CutOutcome::Rooted);
+    assert!(
+        care.sprout_visible(),
+        "still drawn: the plant comes at connect"
+    );
+
+    // Rooted or cut elsewhere: the service's event clears it the same way.
+    care.set_sprout(day(3));
+    care.clear_sprout();
+    assert!(!care.sprout_visible());
+
+    // A tank bought this session takes the row the purchase planted:
+    // hungry since yesterday, the sprout up today.
+    let mut bought = AquariumCare::new(None, Vec::new());
+    assert_eq!(bought.last_fed, None);
+    bought.welcome_new_tank(day(10), Some("seahorse".to_string()));
+    assert!(bought.sprout_visible());
+    assert!(bought.hungry_on(day(10)));
+    assert_eq!(bought.bar_on(day(10)), CareBar::Dry(1));
+    // The welcome fry swims small for its first week, then it is grown.
+    assert_eq!(bought.fry_visible_on(day(16)), Some("seahorse"));
+    assert_eq!(bought.fry_visible_on(day(17)), None);
 }
 
 #[test]
@@ -68,6 +109,9 @@ fn feeding_runs_the_streak_like_the_row_does() {
         streak: 4,
         shields: Vec::new(),
         fry: None,
+        sprout: None,
+        next_sprout: None,
+        settlement_asked: None,
     };
     assert_eq!(care.feed(), CareOutcome::Fed);
     assert_eq!(care.streak, 5, "yesterday was fed: the streak continues");
@@ -87,6 +131,9 @@ fn feeding_runs_the_streak_like_the_row_does() {
         streak: 9,
         shields: Vec::new(),
         fry: None,
+        sprout: None,
+        next_sprout: None,
+        settlement_asked: None,
     };
     assert_eq!(lapsed.feed(), CareOutcome::Fed);
     assert_eq!(lapsed.streak, 1, "a skipped day restarts the streak");
@@ -102,6 +149,9 @@ fn feeding_runs_the_streak_like_the_row_does() {
             ends_at: yesterday.and_hms_opt(23, 0, 0).unwrap().and_utc(),
         }],
         fry: None,
+        sprout: None,
+        next_sprout: None,
+        settlement_asked: None,
     };
     assert_eq!(minded.feed(), CareOutcome::Fed);
     assert_eq!(minded.streak, 10, "a shielded gap keeps the streak");
@@ -129,7 +179,7 @@ fn a_fry_is_small_for_a_week() {
 fn the_fry_takes_one_of_its_parents_places_in_the_water() {
     let mut sim = AquariumState::default_for_area(Rect::new(0, 0, 100, 20)).expect("sim");
     let fish = vec![("clownfish".to_string(), 3), ("anchovy".to_string(), 2)];
-    sim.set_active_creatures(&fish, Some("clownfish"));
+    sim.set_active_creatures(&fish, Some("clownfish"), false);
 
     let name_of = |sim: &AquariumState, def: usize| sim.definitions[def].name.clone();
     let count = |sim: &AquariumState, name: &str| {
@@ -144,17 +194,126 @@ fn the_fry_takes_one_of_its_parents_places_in_the_water() {
 
     // The same population again respawns nothing.
     let before: Vec<(i32, i32)> = sim.entities.iter().map(|e| (e.x, e.y)).collect();
-    sim.set_active_creatures(&fish, Some("clownfish"));
+    sim.set_active_creatures(&fish, Some("clownfish"), false);
     let after: Vec<(i32, i32)> = sim.entities.iter().map(|e| (e.x, e.y)).collect();
     assert_eq!(before, after);
 
     // The fry grew up: three full clownfish, no hatchling.
-    sim.set_active_creatures(&fish, None);
+    sim.set_active_creatures(&fish, None, false);
     assert_eq!(count(&sim, FRY_CREATURE), 0);
     assert_eq!(count(&sim, "clownfish"), 3);
 
     // A fry whose parent species left the water is not drawn.
-    sim.set_active_creatures(&[("anchovy".to_string(), 2)], Some("clownfish"));
+    sim.set_active_creatures(&[("anchovy".to_string(), 2)], Some("clownfish"), false);
     assert_eq!(count(&sim, FRY_CREATURE), 0);
     assert_eq!(sim.entities.len(), 2);
+}
+
+#[test]
+fn the_sprout_is_one_more_body_on_the_floor_and_leaves_with_the_flag() {
+    let mut sim = AquariumState::default_for_area(Rect::new(0, 0, 100, 20)).expect("sim");
+    let fish = vec![("clownfish".to_string(), 2)];
+    let count = |sim: &AquariumState, name: &str| {
+        sim.entities
+            .iter()
+            .filter(|entity| sim.definitions[entity.def].name == name)
+            .count()
+    };
+
+    sim.set_active_creatures(&fish, None, true);
+    assert_eq!(count(&sim, SPROUT_CREATURE), 1);
+    assert_eq!(
+        count(&sim, "clownfish"),
+        2,
+        "the sprout takes no fish's place"
+    );
+    assert_eq!(sim.entities.len(), 3);
+
+    // Cut, or rooted: the sprout goes and the fish stay put.
+    let fish_before: Vec<(i32, i32)> = sim
+        .entities
+        .iter()
+        .filter(|entity| sim.definitions[entity.def].name == "clownfish")
+        .map(|e| (e.x, e.y))
+        .collect();
+    sim.set_active_creatures(&fish, None, false);
+    assert_eq!(count(&sim, SPROUT_CREATURE), 0);
+    assert_eq!(sim.entities.len(), 2);
+    let _ = fish_before;
+
+    // An empty tank still shows its sprout: plants come up whether or not
+    // there are fish.
+    sim.set_active_creatures(&[], None, true);
+    assert_eq!(sim.entities.len(), 1);
+    assert_eq!(count(&sim, SPROUT_CREATURE), 1);
+}
+
+#[test]
+fn the_shop_reads_the_sprout_clock_off_the_care_state() {
+    // Up on the 1st: six more days to cut on the 2nd, one on the 7th,
+    // rooting from the 8th until the service says so.
+    let mut care = fed_on(1, 1);
+    care.set_sprout(day(1));
+    assert_eq!(care.next_sprout, Some(day(15)));
+    assert_eq!(
+        care.sprout_status_on(day(2)),
+        SproutStatus::Standing { days_to_root: 6 }
+    );
+    assert_eq!(
+        care.sprout_status_on(day(7)),
+        SproutStatus::Standing { days_to_root: 1 }
+    );
+    assert_eq!(care.sprout_status_on(day(8)), SproutStatus::Rooting);
+    // Cut on the 3rd: bare, the next one still on the 15th.
+    assert_eq!(care.cut_sprout(day(3)), CutOutcome::Cut);
+    assert_eq!(
+        care.sprout_status_on(day(3)),
+        SproutStatus::Bare {
+            days_to_next: Some(12)
+        }
+    );
+    // A session that never connected with a tank knows no clock.
+    let never = AquariumCare::new(None, Vec::new());
+    assert_eq!(
+        never.sprout_status_on(day(3)),
+        SproutStatus::Bare { days_to_next: None }
+    );
+}
+
+#[test]
+fn the_day_edge_asks_the_service_once_when_the_sprout_clock_is_due() {
+    let mut care = fed_on(1, 1);
+    care.set_sprout(day(1));
+    // Standing: nothing to settle.
+    assert!(!care.take_sprout_settlement_on(day(5)));
+    // Rooted on the 8th: ask once, then wait for the event.
+    assert!(care.take_sprout_settlement_on(day(8)));
+    assert!(!care.take_sprout_settlement_on(day(8)));
+    // The event came: bare floor, next due on the 15th, asked that day.
+    care.clear_sprout();
+    assert!(!care.take_sprout_settlement_on(day(9)));
+    assert!(care.take_sprout_settlement_on(day(15)));
+    assert!(!care.take_sprout_settlement_on(day(15)));
+}
+
+#[test]
+fn the_fry_row_counts_fed_days_to_the_next_hatch_and_the_growing_one() {
+    // Fed today, three running: eleven more meals.
+    assert_eq!(fed_on(10, 3).fed_days_to_next_fry_on(day(10)), 11);
+    // Fed yesterday, the streak still alive: today's meal is the fourth.
+    assert_eq!(fed_on(9, 3).fed_days_to_next_fry_on(day(10)), 11);
+    // Two days unfed: the streak is gone, fourteen from today's meal.
+    assert_eq!(fed_on(8, 3).fed_days_to_next_fry_on(day(10)), 14);
+    // The day a fry hatches the bar is full and the next needs fourteen.
+    assert_eq!(fed_on(10, 14).fed_days_to_next_fry_on(day(10)), 14);
+    assert_eq!(AquariumCare::new(None, Vec::new()).fed_days_to_next_fry_on(day(10)), 14);
+
+    // A streak fry grows into its parent; the welcome fry never does.
+    let mut care = fed_on(10, 14);
+    care.set_fry("seahorse".to_string(), day(10));
+    assert_eq!(care.fry_growing_on(day(10)), Some(("seahorse", 7)));
+    assert_eq!(care.fry_growing_on(day(16)), Some(("seahorse", 1)));
+    assert_eq!(care.fry_growing_on(day(17)), None);
+    care.set_fry(FRY_CREATURE.to_string(), day(10));
+    assert_eq!(care.fry_growing_on(day(10)), None);
 }

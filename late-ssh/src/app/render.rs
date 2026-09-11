@@ -270,7 +270,6 @@ struct DrawContext<'a> {
     show_quit_confirm: bool,
     show_mod_modal: bool,
     show_hub_modal: bool,
-    show_aquarium_tray: bool,
     aquarium_state: &'a crate::app::hub::aquarium::state::AquariumState,
     aquarium_care: &'a crate::app::hub::aquarium::state::AquariumCare,
     leaderboard_page: &'a crate::app::leaderboard::state::LeaderboardPageState,
@@ -336,7 +335,7 @@ struct DrawContext<'a> {
     marquee_tick: usize,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
-    pet_species: &'a str,
+    pet_species: late_core::models::pet::PetSpecies,
     news_modal: Option<chat::news::ui::ArticleModalView<'a>>,
     is_draining: bool,
     icon_picker_open: bool,
@@ -356,8 +355,7 @@ struct DrawContext<'a> {
     /// The Zen pages (`app/zen`): layout state, the current room's chat
     /// (drawn at most once per frame), and the strings their status rows show.
     zen: &'a crate::app::zen::state::ZenState,
-    zen_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
-    zen_room_label: &'a str,
+    zen_chat_tiles: Vec<crate::app::zen::ui::ZenChatTile<'a>>,
     zen_track: String,
     zen_date: String,
     zen_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
@@ -378,8 +376,7 @@ impl App {
         // Clear last-frame mouse hit-test rects so screens that don't draw
         // them this frame can't leave a stale target behind.
         self.last_pet_rect.set(None);
-        self.last_pet_bowl_rect.set(None);
-        self.last_pet_travel.set(None);
+        self.last_pet_frame.set(None);
         self.chat.last_composer_rect.set(None);
         // `last_composer_viewport_top` is intentionally NOT reset here: it
         // replays ratatui-textarea's minimal-scroll rule, which needs the
@@ -474,25 +471,29 @@ impl App {
             shell_active_room,
             synthetic_selected,
         );
-        // Pet strip above the composer: pet owners only, with a settings
-        // tweak (draft-aware while the modal is open, like the sidebars).
-        let show_pet_strip_setting = if self.show_settings {
-            self.settings_modal_state.draft().show_pet_strip
-        } else {
-            self.profile_state.profile().show_pet_strip
-        };
-        let pet_strip_enabled =
-            show_pet_strip_setting && self.shop_state.entitlements().has_pet_companion();
         let screen = self.screen;
-        // The Zen pages' current room: the selected room, else #lounge.
-        let zen_room_id = self.zen_chat_room_id();
-        let zen_room_label = zen_room_id
-            .and_then(|room_id| self.chat.rooms.iter().find(|(room, _)| room.id == room_id))
-            .map(|(room, _)| match room.slug.as_deref() {
-                Some(slug) => format!("#{slug}"),
-                None => "chat".to_string(),
+        // The Zen page's chat tiles: each one's room (resolved, so a room
+        // the account left reads as the current room) and its label. The
+        // active tile is the one the keys, the mouse, and the read marking
+        // act on; the others only watch.
+        let zen_chat_rooms = self.zen_chat_rooms();
+        let zen_active_chat = self.zen.active_chat_index();
+        let zen_room_labels: Vec<String> = zen_chat_rooms
+            .iter()
+            .map(|room_id| {
+                room_id
+                    .and_then(|room_id| {
+                        self.chat.rooms.iter().find(|(room, _)| room.id == room_id)
+                    })
+                    .map(|(room, _)| match room.slug.as_deref() {
+                        Some(slug) => format!("#{slug}"),
+                        None => "chat".to_string(),
+                    })
+                    .unwrap_or_else(|| "#lounge".to_string())
             })
-            .unwrap_or_else(|| "#lounge".to_string());
+            .collect();
+        self.zen_chat_rows_caches
+            .resize_with(zen_chat_rooms.len(), Default::default);
         // The icecast rows render the USER'S SELECTED stream's track, not a
         // global single mount.
         let selected_icecast_stream = self.selected_icecast_stream;
@@ -598,12 +599,6 @@ impl App {
             .as_ref()
             .map(|timer| timer.badge(chrono::Utc::now()));
         let dashboard_view = chat::ui::DashboardChatView {
-            pet_strip: pet_strip_enabled.then_some(crate::app::pet::ui::PetView {
-                state: &self.pet_state,
-                pet_rect_slot: Some(&self.last_pet_rect),
-                bowl_rect_slot: Some(&self.last_pet_bowl_rect),
-                travel_slot: Some(&self.last_pet_travel),
-            }),
             activity_ticker: self.chat.activity_ticker(),
             room: dashboard_room,
             messages: dashboard_messages,
@@ -738,9 +733,6 @@ impl App {
             None
         };
         let chat_view = chat::ui::ChatRenderInput {
-            // The pet lives in the Lounge only (DashboardChatView above);
-            // every other room and tab renders without the strip.
-            pet_strip: None,
             activity_ticker: self.chat.activity_ticker(),
             feeds_selected: self.chat.feeds_selected,
             feeds_processing: self.chat.feeds.processing(),
@@ -885,6 +877,7 @@ impl App {
                     highlighted_message_id: self.chat.highlighted_message_id,
                     reaction_picker_active: self.chat.is_reaction_leader_active(),
                     composer: self.chat.composer(),
+                    composer_shown: true,
                     composing: self.chat.composing,
                     mention_matches: &self.chat.mention_ac.matches,
                     mention_selected: self.chat.mention_ac.selected,
@@ -949,6 +942,7 @@ impl App {
                     highlighted_message_id: self.chat.highlighted_message_id,
                     reaction_picker_active: self.chat.is_reaction_leader_active(),
                     composer: self.chat.composer(),
+                    composer_shown: true,
                     composing: self.chat.composing,
                     mention_matches: &self.chat.mention_ac.matches,
                     mention_selected: self.chat.mention_ac.selected,
@@ -970,67 +964,95 @@ impl App {
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
                     selection_scroll: Some(&self.chat.selection_scroll),
                 });
-        let zen_chat_view = zen_room_id.map(|chat_room_id| chat::ui::EmbeddedRoomChatView {
-            title: zen_room_label.as_str(),
-            messages: self.chat.messages_for_room(chat_room_id),
-            overlay: self.chat.overlay(),
-            image_modal,
-            rows_cache: &mut self.zen_chat_rows_cache,
-            rows_versions: chat::ui::ChatRowsVersions {
-                room_id: Some(chat_room_id),
-                room_version: self.chat.room_version(chat_room_id),
-                chat_ctx_epoch: self.chat.context_epoch(),
-                app_ctx_epoch: self.chat_ctx_epoch,
-            },
-            usernames: chat_usernames,
-            countries: chat_countries,
-            friend_user_ids: self.chat.friend_user_ids(),
-            afk_user_ids: self.afk_user_ids.as_ref(),
-            live_user_ids: &self.chat.live_user_ids,
-            message_reactions,
-            message_gilds,
-            inline_images: &self.chat.inline_image_cache,
-            dividers: crate::app::chat::ui::ChatDividers {
-                afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
-                left_app: self.chat.device_left_at(),
-            },
-            current_user_id: self.user_id,
-            voice_channel_id: self
-                .chat
-                .voice_channels_by_room_id
-                .get(&chat_room_id)
-                .map(|channel| channel.id),
-            voice_snapshot,
-            voice_paired_cli_supports_voice: paired_cli_supports_voice,
-            show_flag_fallback: self.profile_state.profile().show_flag_fallback,
-            selected_message_id: self.chat.selected_message_id,
-            selected_image_message: self
-                .chat
-                .selected_message_has_inline_image_in_room(chat_room_id),
-            highlighted_message_id: self.chat.highlighted_message_id,
-            reaction_picker_active: self.chat.is_reaction_leader_active(),
-            composer: self.chat.composer(),
-            composing: self.chat.composing,
-            mention_matches: &self.chat.mention_ac.matches,
-            mention_selected: self.chat.mention_ac.selected,
-            mention_active: self.chat.mention_ac.active,
-            reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
-            is_editing: self.chat.edited_message_id.is_some(),
-            bonsai_glyphs,
-            chat_badges,
-            profile_award_badges,
-            drunk_levels: &self.drunk_levels,
-            name_flair: &self.name_flair,
-            peer_pomodoros: &self.peer_pomodoros,
-            name_flicker,
-            translations: &self.chat.translations,
-            translation_hidden: &self.chat.translation_hidden,
-            keep_composer_focused: self.profile_state.profile().keep_composer_focused,
-            composer_rect_slot: Some(&self.chat.last_composer_rect),
-            composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
-            chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
-            selection_scroll: Some(&self.chat.selection_scroll),
-        });
+        let zen_chat_tiles: Vec<crate::app::zen::ui::ZenChatTile<'_>> = zen_chat_rooms
+            .iter()
+            .zip(zen_room_labels.iter())
+            .zip(self.zen_chat_rows_caches.iter_mut())
+            .enumerate()
+            .map(|(index, ((room_id, label), rows_cache))| {
+                let active = Some(index) == zen_active_chat;
+                let view = room_id.map(|chat_room_id| chat::ui::EmbeddedRoomChatView {
+                    title: label.as_str(),
+                    messages: self.chat.messages_for_room(chat_room_id),
+                    overlay: if active { self.chat.overlay() } else { None },
+                    image_modal: if active { image_modal } else { None },
+                    rows_cache,
+                    rows_versions: chat::ui::ChatRowsVersions {
+                        room_id: Some(chat_room_id),
+                        room_version: self.chat.room_version(chat_room_id),
+                        chat_ctx_epoch: self.chat.context_epoch(),
+                        app_ctx_epoch: self.chat_ctx_epoch,
+                    },
+                    usernames: chat_usernames,
+                    countries: chat_countries,
+                    friend_user_ids: self.chat.friend_user_ids(),
+                    afk_user_ids: self.afk_user_ids.as_ref(),
+                    live_user_ids: &self.chat.live_user_ids,
+                    message_reactions,
+                    message_gilds,
+                    inline_images: &self.chat.inline_image_cache,
+                    dividers: crate::app::chat::ui::ChatDividers {
+                        afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
+                        left_app: self.chat.device_left_at(),
+                    },
+                    current_user_id: self.user_id,
+                    voice_channel_id: self
+                        .chat
+                        .voice_channels_by_room_id
+                        .get(&chat_room_id)
+                        .map(|channel| channel.id),
+                    voice_snapshot,
+                    voice_paired_cli_supports_voice: paired_cli_supports_voice,
+                    show_flag_fallback: self.profile_state.profile().show_flag_fallback,
+                    selected_message_id: if active {
+                        self.chat.selected_message_id
+                    } else {
+                        None
+                    },
+                    selected_image_message: active
+                        && self
+                            .chat
+                            .selected_message_has_inline_image_in_room(chat_room_id),
+                    highlighted_message_id: if active {
+                        self.chat.highlighted_message_id
+                    } else {
+                        None
+                    },
+                    reaction_picker_active: active && self.chat.is_reaction_leader_active(),
+                    composer: self.chat.composer(),
+                    composer_shown: active,
+                    composing: active && self.chat.composing,
+                    mention_matches: &self.chat.mention_ac.matches,
+                    mention_selected: self.chat.mention_ac.selected,
+                    mention_active: active && self.chat.mention_ac.active,
+                    reply_author: if active {
+                        self.chat.reply_target().map(|reply| reply.author.as_str())
+                    } else {
+                        None
+                    },
+                    is_editing: active && self.chat.edited_message_id.is_some(),
+                    bonsai_glyphs,
+                    chat_badges,
+                    profile_award_badges,
+                    drunk_levels: &self.drunk_levels,
+                    name_flair: &self.name_flair,
+                    peer_pomodoros: &self.peer_pomodoros,
+                    name_flicker,
+                    translations: &self.chat.translations,
+                    translation_hidden: &self.chat.translation_hidden,
+                    keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+                    composer_rect_slot: active.then_some(&self.chat.last_composer_rect),
+                    composer_viewport_top_slot: active
+                        .then_some(&self.chat.last_composer_viewport_top),
+                    chat_hit_slot: active.then_some(&self.chat.last_chat_hit_layout),
+                    selection_scroll: active.then_some(&self.chat.selection_scroll),
+                });
+                crate::app::zen::ui::ZenChatTile {
+                    label: label.clone(),
+                    view,
+                }
+            })
+            .collect();
         let zen_track = crate::app::common::sidebar::current_track_text(
             self.paired_source,
             now_playing.as_ref(),
@@ -1046,8 +1068,7 @@ impl App {
             .then_some(crate::app::pet::ui::PetView {
                 state: &self.pet_state,
                 pet_rect_slot: Some(&self.last_pet_rect),
-                bowl_rect_slot: Some(&self.last_pet_bowl_rect),
-                travel_slot: Some(&self.last_pet_travel),
+                frame_slot: Some(&self.last_pet_frame),
             });
         // The clubhouse has no chat panel: #lounge messages float over their
         // authors' heads and the shared composer block pins to the bottom.
@@ -1260,7 +1281,6 @@ impl App {
                         show_quit_confirm: self.show_quit_confirm,
                         show_mod_modal: self.show_mod_modal,
                         show_hub_modal: self.show_hub_modal,
-                        show_aquarium_tray: self.show_aquarium_tray,
                         aquarium_state: &self.aquarium_state,
                         aquarium_care: &self.aquarium_care,
                         leaderboard_page: &self.leaderboard_page,
@@ -1327,7 +1347,7 @@ impl App {
                         marquee_tick: self.marquee_tick,
                         chat_state: &self.chat,
                         user_id: self.user_id,
-                        pet_species: &self.pet_state.species,
+                        pet_species: self.pet_state.species,
                         news_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
                         icon_picker_open: self.icon_picker_open,
@@ -1340,8 +1360,7 @@ impl App {
                         pomodoro_badge,
                         home_selected,
                         zen: &self.zen,
-                        zen_chat_view,
-                        zen_room_label: zen_room_label.as_str(),
+                        zen_chat_tiles,
                         zen_track,
                         zen_date,
                         zen_pet_strip,
@@ -1578,13 +1597,6 @@ impl App {
             inner
         };
 
-        // The aquarium tray lives inside the Lounge chat view only: it is
-        // carved from the top of the lounge's center column and competes
-        // with the chat for space. Every other screen keeps its full area.
-        let aquarium_tray_enabled =
-            ctx.show_aquarium_tray && ctx.shop_state.entitlements().has_aquarium();
-        let mut aquarium_tray_area = None;
-
         let (content_area, sidebar_area) = if zen_page {
             (inner, None)
         } else {
@@ -1604,14 +1616,6 @@ impl App {
                 } else {
                     (None, content_area)
                 };
-                let center_area = if aquarium_tray_enabled && ctx.home_selected {
-                    let (tray, rest) = crate::app::hub::aquarium::ui::carve_top_tray(center_area);
-                    aquarium_tray_area = tray;
-                    rest
-                } else {
-                    center_area
-                };
-
                 if let Some(rail_area) = rail_area {
                     chat::ui::draw_room_list_rail(frame, rail_area, &ctx.chat_view);
                 }
@@ -1829,8 +1833,7 @@ impl App {
                     aquarium_owned: ctx.shop_state.entitlements().has_aquarium(),
                     aquarium_care: ctx.aquarium_care,
                     pet_strip: ctx.zen_pet_strip.take(),
-                    chat: ctx.zen_chat_view.take(),
-                    room_label: ctx.zen_room_label.to_string(),
+                    chats: std::mem::take(&mut ctx.zen_chat_tiles),
                     track: ctx.zen_track.clone(),
                     station: crate::app::zen::ui::station_text(
                         ctx.paired_source,
@@ -1905,10 +1908,6 @@ impl App {
             );
         }
 
-        if let Some(aquarium_area) = aquarium_tray_area {
-            crate::app::hub::aquarium::ui::draw_top_tray(frame, aquarium_area, ctx.aquarium_state);
-        }
-
         if foreground_overlay_open {
             terminal_images.clear();
         }
@@ -1973,6 +1972,7 @@ impl App {
                 crate::app::hub::ui::HubDrawProps {
                     shop_state: ctx.shop_state,
                     pet_species: ctx.pet_species,
+                    aquarium_care: ctx.aquarium_care,
                 },
             );
         }

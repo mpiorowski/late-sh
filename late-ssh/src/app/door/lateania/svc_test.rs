@@ -4802,6 +4802,63 @@ async fn a_second_session_picking_another_slot_cannot_overwrite_the_live_charact
     );
 }
 
+#[tokio::test]
+async fn slot_list_refreshes_wake_the_render_loop_when_they_land() {
+    // The landing draws the cached slot list, and the render loop only paints
+    // on input or a reported change. A refresh that lands silently leaves the
+    // landing showing five empty slots (or a character just deleted) until the
+    // player happens to press a key.
+    let db = crate::test_helpers::new_test_db().await;
+    let client = db.db.get().await.expect("db client");
+    let user = late_core::models::user::User::create(
+        &client,
+        late_core::models::user::UserParams {
+            fingerprint: "slot-wake-fp".to_string(),
+            username: "slotwaker".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("test account")
+    .id;
+    let app = crate::test_helpers::make_app(db.db.clone(), user, "slot-wake");
+    let svc = app.lateania_service.clone();
+    let signal = Arc::new(crate::render_signal::RenderSignal::new());
+
+    // A saved Mage in slot 1, so the refresh has something to change.
+    join_and_wait(&svc, user, uid(21), 1).await;
+    class_up_and_wait(&svc, user, Class::Mage).await;
+    svc.leave_task(user, uid(21));
+    crate::test_helpers::wait_until(
+        || async { saved_class(&db.db, user, 1).await == Some(Class::Mage.as_key().to_string()) },
+        "the Mage's logout save reaches slot 1",
+    )
+    .await;
+
+    svc.character_slots_task(user, Some(signal.clone()));
+    crate::test_helpers::wait_until(
+        || async { svc.character_slots(user)[1].occupied },
+        "the refreshed slot list shows the saved Mage",
+    )
+    .await;
+    assert!(
+        signal.dirty.load(std::sync::atomic::Ordering::Acquire),
+        "a landed slot refresh must wake the render loop, or the landing stays stale"
+    );
+
+    signal.dirty.store(false, std::sync::atomic::Ordering::Release);
+    svc.delete_character_task(user, 1, Some(signal.clone()));
+    crate::test_helpers::wait_until(
+        || async { !svc.character_slots(user)[1].occupied },
+        "the post-delete refresh empties slot 1",
+    )
+    .await;
+    assert!(
+        signal.dirty.load(std::sync::atomic::Ordering::Acquire),
+        "a delete's refresh must wake the render loop, or the deleted character lingers"
+    );
+}
+
 #[test]
 fn starter_chain_walks_a_new_player_to_the_first_gate() {
     let mut s = world();

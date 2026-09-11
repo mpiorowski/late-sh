@@ -1039,6 +1039,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
             if !app.interaction_mode.mouse_enabled() {
                 return;
             }
+            // Every report says where the cursor is (SGR coordinates are
+            // 1-based); the pet walks after it on the Zen page.
+            if let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) {
+                app.last_mouse = Some((x, y));
+            }
             if handle_mouse_click(app, ctx.screen, mouse) {
                 return;
             }
@@ -2690,25 +2695,19 @@ fn handle_mouse_scroll_over_screen(
     true
 }
 
-/// Left-clicks on the pet box's render-recorded targets: the bowl and the
-/// pet itself both feed. The rects are only set on frames where the box
-/// drew, so this is a no-op wherever the box is hidden.
-fn handle_pet_strip_click(app: &mut App, x: u16, y: u16) -> bool {
+/// A left-click on the pet's render-recorded rect pets it. The rect is only
+/// set on frames where the box drew, so this is a no-op wherever the box is
+/// hidden.
+fn handle_pet_click(app: &mut App, x: u16, y: u16) -> bool {
     // The box renders under the global modals; don't let clicks on a
     // modal that happens to overlap it fall through to the pet.
     if chat_scroll_clicks_blocked(app) {
         return false;
     }
-    if let Some(rect) = app.last_pet_bowl_rect.get()
-        && rect_contains(rect, x, y)
-    {
-        pet_feed_globally(app);
-        return true;
-    }
     if let Some(rect) = app.last_pet_rect.get()
         && rect_contains(rect, x, y)
     {
-        pet_feed_globally(app);
+        pet_the_pet_globally(app);
         return true;
     }
     false
@@ -2729,10 +2728,17 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         select_screen_from_topbar(app, screen, target);
         return true;
     }
+    // A click on a Zen tile focuses it, then falls through so the pet, the
+    // composer, and the messages of that tile still take the click. A
+    // modal over the page takes the click itself, the same guard the pet
+    // click uses.
+    if screen == Screen::Zen && !chat_scroll_clicks_blocked(app) {
+        focus_zen_tile_at(app, x, y);
+    }
     if handle_chat_composer_click(app, screen, x, y) {
         return true;
     }
-    if handle_pet_strip_click(app, x, y) {
+    if handle_pet_click(app, x, y) {
         return true;
     }
     if handle_chat_scroll_click(app, screen, x, y) {
@@ -3400,61 +3406,14 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
     app.show_hub_modal = true;
 }
 
-pub(crate) fn toggle_aquarium_tray_globally(app: &mut App) {
-    clear_prefix_arms(app);
-    if !app.shop_state.entitlements().has_aquarium() {
-        app.banner = Some(crate::app::common::primitives::Banner::error(
-            "Unlock Aquarium in Hub Shop",
-        ));
-        open_shop_modal_globally(app);
+/// A click on the pet: it purrs for a bit. The box only draws for owners,
+/// so the click can only land on an unlocked pet; the gate is belt and
+/// braces.
+pub(crate) fn pet_the_pet_globally(app: &mut App) {
+    if !app.shop_state.entitlements().has_pet_companion() {
         return;
     }
-    app.show_aquarium_tray = !app.show_aquarium_tray;
-    app.persist_show_aquarium_tray();
-    // The tray only renders in the Lounge, so the toggle needs feedback
-    // when typed from anywhere else.
-    app.banner = Some(crate::app::common::primitives::Banner::success(
-        if app.show_aquarium_tray {
-            "Aquarium open in the Lounge"
-        } else {
-            "Aquarium hidden (/aquarium to reopen)"
-        },
-    ));
-}
-
-/// Shared entitlement gate for the pet actions (/pet feed and the pet box
-/// clicks). Shows the shop nudge and returns false when the
-/// pet companion is not unlocked.
-fn pet_available_or_nudge(app: &mut App) -> bool {
-    if app.shop_state.entitlements().has_pet_companion() {
-        return true;
-    }
-    app.banner = Some(crate::app::common::primitives::Banner::error(
-        "Unlock Pet Companion in Hub Shop",
-    ));
-    open_shop_modal_globally(app);
-    false
-}
-
-pub(crate) fn toggle_pet_strip_globally(app: &mut App) {
-    if !pet_available_or_nudge(app) {
-        return;
-    }
-    let shown = app.profile_state.toggle_show_pet_strip();
-    app.banner = Some(crate::app::common::primitives::Banner::success(if shown {
-        "Pet strip shown"
-    } else {
-        "Pet strip hidden (/pet to bring it back)"
-    }));
-}
-
-/// The day's free meal. The box carries the outcome ("fed!", "already fed
-/// today"); the chips note follows when the service's event comes back.
-pub(crate) fn pet_feed_globally(app: &mut App) {
-    if !pet_available_or_nudge(app) {
-        return;
-    }
-    app.pet_state.feed();
+    app.pet_state.note_petted(std::time::Instant::now());
 }
 
 /// The tank's free daily meal, from any surface that shows it. Ownership is
@@ -3628,6 +3587,33 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
     }
 }
 
+/// Move the Zen focus to the tile under a click. Nothing happens on the
+/// footer, on a gap, or on the tile already focused.
+fn focus_zen_tile_at(app: &mut App, x: u16, y: u16) {
+    use crate::app::zen::layout as zen_layout;
+    let (cols, rows) = app.size;
+    let (tiles_area, _) = zen_layout::rice_areas(Rect::new(0, 0, cols, rows));
+    let zoomed = app.zen.zoomed.then_some(app.zen.focus);
+    let rects = zen_layout::tile_rects(
+        &app.zen.rice.root,
+        tiles_area,
+        app.zen.rice.look.gap as u16,
+        zoomed,
+    );
+    let hit = rects
+        .iter()
+        .position(|(_, rect)| rect_contains(*rect, x, y));
+    let Some(ordinal) = hit else {
+        return;
+    };
+    // Zoomed, the one rect on show is the focused tile whatever its index.
+    if zoomed.is_some() || ordinal == app.zen.focus {
+        return;
+    }
+    app.zen.focus = ordinal;
+    crate::app::zen::input::focus_moved(app);
+}
+
 /// Zen is a surface, not a place in the tab order: the chord opens it over
 /// whatever page is up and the same chord (or Esc) returns there.
 pub(crate) fn toggle_zen_globally(app: &mut App) {
@@ -3654,6 +3640,9 @@ fn open_zen_globally(app: &mut App) {
     app.show_lobby_modal = false;
     app.zen_return_screen = Some(app.screen);
     reset_composers_for_page_change(app);
+    // The first opening this session lands on the first chat tile, so the
+    // chat keys work before anyone reads the footer.
+    app.zen.note_opened();
     app.set_screen(Screen::Zen);
     app.chat.clear_message_selection();
 }
@@ -3704,6 +3693,8 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             HelpTopic::Lateania
         } else if ctx.screen == Screen::Profiles {
             HelpTopic::Profiles
+        } else if ctx.screen == Screen::Zen {
+            HelpTopic::Zen
         } else {
             HelpTopic::Pair
         };

@@ -36,7 +36,7 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         ActivityKind::SatDown { .. } => true,
         // Door-game stories: entering a world, felling its bosses.
         ActivityKind::GameStarted { .. } | ActivityKind::BossSlain { .. } => true,
-        ActivityKind::GameEvent { game, .. } => match game {
+        ActivityKind::GameEvent { game, .. } | ActivityKind::GameLost { game, .. } => match game {
             // Door games: their moments are curated at the source
             // (start/descend/die/milestones), so they read as stories. DCSS,
             // NetHack, and Brogue events come from the log pipe (deaths,
@@ -153,11 +153,15 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // death after N dry days belongs in the public feed.
         ActivityKind::BonsaiWatered => false,
         ActivityKind::BonsaiLost { .. } => false,
-        // Same for the pet and the tank: the daily feed is the owner's ritual.
-        ActivityKind::PetFed
-        | ActivityKind::AquariumFed
+        // Same for the tank: the daily feed is the owner's ritual.
+        ActivityKind::AquariumFed
         | ActivityKind::AquariumFryHatched { .. }
-        | ActivityKind::AquariumFishLost { .. } => false,
+        | ActivityKind::AquariumFryNoRoom
+        | ActivityKind::AquariumFishLost { .. }
+        | ActivityKind::AquariumSprouted { .. }
+        | ActivityKind::AquariumSproutRooted { .. }
+        | ActivityKind::AquariumSproutCut
+        | ActivityKind::AquariumSproutWithered => false,
     }
 }
 
@@ -216,6 +220,14 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
                 thousands(*total_tickets)
             ))
         }
+        // A stream on air is an invitation that outlives the ticker: who,
+        // what they called it (`action` already carries the mention-safe
+        // title), and where to watch, on its own row so the URL is easy to
+        // pick out and copy. The streamer is the one @mention.
+        ActivityKind::WentLive { watch_url, .. } => Some(format!(
+            "\u{1F4FA} @{} {}.\n{watch_url}",
+            event.username, event.action
+        )),
         // No headline: @bartender already says it out loud in the room where
         // it was bought, and everyone it reached is online by definition, so a
         // #lounge row would be the third telling of one drink.
@@ -225,22 +237,26 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
         | ActivityKind::GameWon { .. }
         | ActivityKind::GameScored { .. }
         | ActivityKind::GameEvent { .. }
+        | ActivityKind::GameLost { .. }
         | ActivityKind::BossSlain { .. }
         | ActivityKind::SatDown { .. }
         | ActivityKind::DailyResult { .. }
         | ActivityKind::BonsaiWatered
         | ActivityKind::BonsaiLost { .. }
-        | ActivityKind::PetFed
         | ActivityKind::AquariumFed
         | ActivityKind::AquariumFryHatched { .. }
+        | ActivityKind::AquariumFryNoRoom
         | ActivityKind::AquariumFishLost { .. }
+        | ActivityKind::AquariumSprouted { .. }
+        | ActivityKind::AquariumSproutRooted { .. }
+        | ActivityKind::AquariumSproutCut
+        | ActivityKind::AquariumSproutWithered
         | ActivityKind::UsernameEffectApplied { .. }
         | ActivityKind::BadgeRented { .. }
         | ActivityKind::TitleApplied { .. }
         | ActivityKind::BurnMilestone { .. }
         | ActivityKind::MessageGilded { .. }
         | ActivityKind::CyberspacePosted { .. }
-        | ActivityKind::WentLive { .. }
         | ActivityKind::WatchingStream { .. } => None,
     }
 }

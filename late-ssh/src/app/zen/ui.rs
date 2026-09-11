@@ -1,6 +1,6 @@
 //! Rendering for both Zen pages. Every widget here is a thin frame around a
 //! renderer another domain already owns (the bonsai canvas, the aquarium
-//! reef, the pet strip, the embedded room chat, the equalizer); what this
+//! reef, the pet box, the embedded room chat, the equalizer); what this
 //! file adds is the composition and the chrome.
 
 use ratatui::{
@@ -34,6 +34,14 @@ use crate::app::{
     pet::ui::{PetPose, PetView, WatchSide, draw_pet_box},
 };
 
+/// A chat tile's frame: its room's label and its view (`None` when the
+/// account has no room at all). The active tile's view carries the
+/// composer and the selection; the others only watch (`render.rs`).
+pub(crate) struct ZenChatTile<'a> {
+    pub label: String,
+    pub view: Option<EmbeddedRoomChatView<'a>>,
+}
+
 /// Everything the Zen page reads, assembled once per frame in `render.rs`.
 pub(crate) struct ZenView<'a> {
     pub zen: &'a ZenState,
@@ -42,14 +50,12 @@ pub(crate) struct ZenView<'a> {
     /// account has fish in it or gets the shop caption instead.
     pub aquarium: &'a AquariumState,
     pub aquarium_owned: bool,
-    /// The owner's care: the title bar's fourteen boxes read off it.
+    /// The owner's care: the title bar's fourteen dots read off it.
     pub aquarium_care: &'a AquariumCare,
     /// `None` when the account owns no pet.
     pub pet_strip: Option<PetView<'a>>,
-    /// The current room, drawn at most once per frame (taken by the first
-    /// chat surface that claims it).
-    pub chat: Option<EmbeddedRoomChatView<'a>>,
-    pub room_label: String,
+    /// One entry per chat tile, in layout order.
+    pub chats: Vec<ZenChatTile<'a>>,
     pub track: String,
     /// The source and, for the streams that have one, the station it is
     /// tuned to (`station_text`).
@@ -79,7 +85,14 @@ pub(crate) fn draw_rice(
         return;
     }
     let (tiles_area, hint_area) = layout::rice_areas(area);
-    let had_chat = view.chat.is_some();
+    // One frame per chat tile in layout order. Zoomed, the one tile drawn
+    // is the focused one, so it takes the active chat's frame, not the
+    // first.
+    let mut chats: Vec<Option<ZenChatTile<'_>>> = std::mem::take(&mut view.chats)
+        .into_iter()
+        .map(Some)
+        .collect();
+    let mut next_chat = 0usize;
     let zen = view.zen;
     let zoomed = zen.zoomed.then_some(zen.focus);
     let gap = zen.rice.look.gap as u16;
@@ -101,10 +114,18 @@ pub(crate) fn draw_rice(
         } else {
             idx == zen.focus
         };
-        // The chat tile names its room in the title, so `[` `]` walking the
-        // rooms shows where you landed without reading the messages.
-        let title = match kind {
-            TileKind::Chat => format!("{} · {}", kind.label(), view.room_label),
+        // Each chat tile takes the next frame in layout order and names
+        // its room in the title, so `[` `]` walking the rooms shows where
+        // you landed without reading the messages.
+        let chat_tile = match kind {
+            TileKind::Chat => {
+                let index = match zoomed {
+                    Some(_) => zen.active_chat_index().unwrap_or(next_chat),
+                    None => next_chat,
+                };
+                next_chat += 1;
+                chats.get_mut(index).and_then(Option::take)
+            }
             TileKind::Bonsai
             | TileKind::Aquarium
             | TileKind::Pet
@@ -113,9 +134,25 @@ pub(crate) fn draw_rice(
             | TileKind::Visualizer
             | TileKind::Presence
             | TileKind::Lobby
-            | TileKind::Blank => kind.label().to_string(),
+            | TileKind::Blank => None,
         };
-        // The tank's title carries its care bar: fourteen boxes, green
+        let title = match (kind, &chat_tile) {
+            (TileKind::Chat, Some(tile)) => format!("{} · {}", kind.label(), tile.label),
+            (TileKind::Chat, None) => kind.label().to_string(),
+            (
+                TileKind::Bonsai
+                | TileKind::Aquarium
+                | TileKind::Pet
+                | TileKind::Music
+                | TileKind::Clock
+                | TileKind::Visualizer
+                | TileKind::Presence
+                | TileKind::Lobby
+                | TileKind::Blank,
+                _,
+            ) => kind.label().to_string(),
+        };
+        // The tank's title carries its care bar: fourteen dots, green
         // for the feeding streak or red for the days unfed.
         let title_tail = match kind {
             TileKind::Aquarium if view.aquarium_owned => {
@@ -132,7 +169,16 @@ pub(crate) fn draw_rice(
             | TileKind::Lobby
             | TileKind::Blank => None,
         };
-        let inner = draw_tile_chrome(frame, *rect, &title, title_tail, focused, &zen.rice.look);
+        let keys = tile_keys(*kind, &view);
+        let inner = draw_tile_chrome(
+            frame,
+            *rect,
+            &title,
+            title_tail,
+            keys,
+            focused,
+            &zen.rice.look,
+        );
         if inner.width == 0 || inner.height == 0 {
             continue;
         }
@@ -142,17 +188,7 @@ pub(crate) fn draw_rice(
                 draw_aquarium_tile(frame, inner, view.aquarium, view.aquarium_owned)
             }
             TileKind::Pet => draw_pet_tile(frame, inner, view.pet_strip.as_ref(), watching),
-            TileKind::Chat => {
-                let label = view.room_label.clone();
-                draw_chat_tile(
-                    frame,
-                    inner,
-                    view.chat.take(),
-                    had_chat,
-                    &label,
-                    terminal_images,
-                );
-            }
+            TileKind::Chat => draw_chat_tile(frame, inner, chat_tile, terminal_images),
             TileKind::Music => draw_music_tile(frame, inner, &view),
             TileKind::Clock => draw_clock_tile(frame, inner, &view),
             TileKind::Visualizer => {
@@ -166,12 +202,33 @@ pub(crate) fn draw_rice(
     draw_rice_hint(frame, hint_area, zen);
 }
 
-/// Border, title, and focus ring per the look; returns the tile's inner area.
+/// The keys a tile answers to, named on the right of its title so the
+/// page explains itself in one place per tile; `t` hides the titles and
+/// the keys with them. The layout keys are the footer's.
+fn tile_keys(kind: TileKind, view: &ZenView<'_>) -> &'static [(&'static str, &'static str)] {
+    match kind {
+        TileKind::Bonsai => &[("w", "tend")],
+        TileKind::Aquarium if view.aquarium_owned => &[("a", "feed")],
+        TileKind::Aquarium => &[],
+        TileKind::Pet if view.pet_strip.is_some() => &[("click", "pet")],
+        TileKind::Pet => &[],
+        TileKind::Chat => &[("[ ]", "room"), ("i", "write")],
+        TileKind::Music => &[("m", "mute"), ("-=", "vol"), ("v x", "source"), ("v1-5", "tune")],
+        TileKind::Lobby => &[("ctrl+g", "open"), ("`", "toggle")],
+        TileKind::Clock | TileKind::Visualizer | TileKind::Presence => &[],
+        TileKind::Blank => &[],
+    }
+}
+
+/// Border, title, keys, and focus ring per the look; returns the tile's
+/// inner area. The keys sit on the right of the title row when there is
+/// room for them after the title and its tail.
 fn draw_tile_chrome(
     frame: &mut Frame,
     rect: Rect,
     title: &str,
     title_tail: Option<Vec<Span<'static>>>,
+    keys: &[(&str, &str)],
     focused: bool,
     look: &super::state::Look,
 ) -> Rect {
@@ -209,7 +266,18 @@ fn draw_tile_chrome(
                     spans.extend(tail);
                     spans.push(Span::raw(" "));
                 }
-                block = block.title(Line::from(spans));
+                let left = Line::from(spans);
+                // The corners take two cells; the keys need a cell of
+                // border on each side of them to read as a second title.
+                // Styled like the footer: the key amber, the word dim.
+                let room = (rect.width as usize).saturating_sub(2 + left.width());
+                let mut right = hint_line(keys);
+                right.spans.push(Span::raw(" "));
+                if !keys.is_empty() && right.width() <= room {
+                    block = block.title(left).title(right.right_aligned());
+                } else {
+                    block = block.title(left);
+                }
             }
             frame.render_widget(block, rect);
             layout::tile_inner(rect, look)
@@ -227,9 +295,16 @@ fn draw_tile_chrome(
                 spans.push(Span::raw(" "));
                 spans.extend(tail);
             }
-            let line = Line::from(spans);
+            let left = Line::from(spans);
+            let room = (rect.width as usize).saturating_sub(left.width());
+            let mut line_spans = left.spans;
+            let right = hint_line(keys);
+            if !keys.is_empty() && right.width() + 1 <= room {
+                line_spans.push(Span::raw(" ".repeat(room - right.width())));
+                line_spans.extend(right.spans);
+            }
             frame.render_widget(
-                Paragraph::new(line),
+                Paragraph::new(Line::from(line_spans)),
                 Rect::new(rect.x, rect.y, rect.width, 1),
             );
             layout::tile_inner(rect, look)
@@ -237,8 +312,8 @@ fn draw_tile_chrome(
     }
 }
 
-/// The care bar: one box per day of the fourteen both clocks run on.
-/// Streak boxes fill green, unfed boxes red, and a minded tank (the
+/// The care bar: one dot per day of the fourteen both clocks run on.
+/// Streak dots fill green, unfed dots red, and a minded tank (the
 /// shield's auto feeder) shows all fourteen empty.
 pub(crate) fn care_bar_spans(bar: CareBar) -> Vec<Span<'static>> {
     let (filled, color) = match bar {
@@ -249,8 +324,8 @@ pub(crate) fn care_bar_spans(bar: CareBar) -> Vec<Span<'static>> {
     let filled = filled.min(CARE_DAYS) as usize;
     let empty = CARE_DAYS as usize - filled;
     vec![
-        Span::styled("■".repeat(filled), Style::default().fg(color)),
-        Span::styled("□".repeat(empty), Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled("●".repeat(filled), Style::default().fg(color)),
+        Span::styled("○".repeat(empty), Style::default().fg(theme::TEXT_FAINT())),
     ]
 }
 
@@ -272,25 +347,36 @@ fn draw_rice_hint(frame: &mut Frame, area: Rect, zen: &ZenState) {
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ];
-    let hints = hint_line(&[
-        ("Esc", "back"),
-        ("←→", "focus"),
-        ("space", "kind"),
-        ("S", "split"),
-        ("X", "close"),
-        ("<>", "width"),
-        ("{}", "height"),
-        ("r", "flip"),
-        ("z", "zoom"),
-        ("b", "border"),
-        ("g", "gap"),
-        ("t", "titles"),
-        ("R", "reset"),
-        ("[]", "room"),
-        ("i", "chat"),
-    ]);
+    // The layout keys, the way out and the guide first, then by how often
+    // they are used; the tail is dropped hint by hint on a narrow terminal
+    // so nothing is cut in half. The tiles name their own keys.
+    let head_width: usize = spans.iter().map(Span::width).sum();
+    let hints = hint_line_fitting(
+        &[
+            ("Esc", "back"),
+            ("?", "keys"),
+            ("←→", "focus"),
+            ("space", "kind"),
+            ("S", "split"),
+            ("X", "close"),
+            ("z", "zoom"),
+            ("<>{}", "resize"),
+            ("r", "flip"),
+            ("R", "reset"),
+        ],
+        (area.width as usize).saturating_sub(head_width),
+    );
     spans.extend(hints.spans);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// `hint_line` with as many leading hints as fit in `width` cells.
+fn hint_line_fitting(hints: &[(&str, &str)], width: usize) -> Line<'static> {
+    let mut keep = hints.len();
+    while keep > 0 && hint_line(&hints[..keep]).width() > width {
+        keep -= 1;
+    }
+    hint_line(&hints[..keep])
 }
 
 /// The tree at its true size when the tile has the room, the preview
@@ -326,12 +412,12 @@ fn draw_bonsai_tile(frame: &mut Frame, area: Rect, state: &BonsaiState, wall_tic
 
     let status_area = Rect::new(area.x, tree_area.bottom(), area.width, BONSAI_STATUS_ROWS);
     frame.render_widget(
-        Paragraph::new(bonsai_status_line(state, area.width >= 100)).centered(),
+        Paragraph::new(bonsai_status_line(state)).centered(),
         status_area,
     );
 }
 
-fn bonsai_status_line(state: &BonsaiState, wide: bool) -> Line<'static> {
+fn bonsai_status_line(state: &BonsaiState) -> Line<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let dot = || Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT()));
     let (label, color) = if !state.is_alive {
@@ -364,32 +450,19 @@ fn bonsai_status_line(state: &BonsaiState, wide: bool) -> Line<'static> {
             message.to_string(),
             Style::default().fg(theme::AMBER()),
         ));
-    } else if wide {
-        spans.push(dot());
-        spans.push(Span::styled(
-            "w tend",
-            Style::default().fg(theme::TEXT_FAINT()),
-        ));
     }
     Line::from(spans)
 }
 
-/// The live reef for everyone; without the shop unlock it swims empty, and
-/// a caption on the floor row says where the fish are.
+/// The tank. Without the shop unlock the tile reads like the pet's, a
+/// centered note pointing at the shop; owned, it is the live reef, nothing
+/// else: the sprout on its floor is tended on its Shop row.
 fn draw_aquarium_tile(frame: &mut Frame, area: Rect, state: &AquariumState, owned: bool) {
-    crate::app::hub::aquarium::ui::draw(frame, area, state);
-    if owned || area.height < 3 {
+    if !owned {
+        draw_centered_note(frame, area, &["no tank yet", "the Aquarium is in /shop"]);
         return;
     }
-    let caption = Line::from(Span::styled(
-        "fish live in /shop",
-        Style::default().fg(theme::TEXT_FAINT()),
-    ))
-    .centered();
-    frame.render_widget(
-        Paragraph::new(caption),
-        Rect::new(area.x, area.bottom() - 1, area.width, 1),
-    );
+    crate::app::hub::aquarium::ui::draw(frame, area, state);
 }
 
 /// The lobby in a tile, compact: the games running, then one footer row
@@ -401,7 +474,7 @@ fn draw_lobby_tile(frame: &mut Frame, area: Rect, daily: &DailyState, glow: bool
 
 /// The pet's box at tile size: a name and mood row on top when there is
 /// room, and the whole rest of the tile to roam. `watching` names the side
-/// a neighbouring tank is on; a fed pet sits there and watches.
+/// a neighbouring tank is on; a calm pet sits there and watches.
 fn draw_pet_tile(
     frame: &mut Frame,
     area: Rect,
@@ -422,7 +495,16 @@ fn draw_pet_tile(
     let box_area = if area.height >= FLOOR_ROWS + 2 {
         let state = view.state;
         let dim = Style::default().fg(theme::TEXT_DIM());
-        let name = state.name.clone().unwrap_or_else(|| state.species.clone());
+        let name = state
+            .name
+            .clone()
+            .unwrap_or_else(|| state.species.as_str().to_string());
+        let pose = PetPose::for_frame(
+            state.mood(),
+            watching,
+            state.perch(),
+            state.animation_ticks(),
+        );
         let line = Line::from(vec![
             Span::styled(
                 name,
@@ -430,14 +512,12 @@ fn draw_pet_tile(
                     .fg(theme::AMBER_GLOW())
                     .add_modifier(Modifier::BOLD),
             ),
+            Span::styled(format!(" · {}", state.mood().as_str()), dim),
             Span::styled(
-                format!(" · {} · {}", state.mood().label(), state.age_label()),
-                dim,
-            ),
-            Span::styled(
-                match PetPose::for_frame(state.mood(), watching, state.animation_ticks()) {
+                match pose {
                     PetPose::Watch(_) => " · watching the fish",
-                    PetPose::Stroll | PetPose::Sulk => "",
+                    PetPose::At(_) => " · at your cursor",
+                    PetPose::Stroll | PetPose::Sulk | PetPose::Sleep => "",
                 },
                 dim,
             ),
@@ -454,25 +534,28 @@ fn draw_pet_tile(
     draw_pet_box(frame, box_area, view, watching);
 }
 
+/// A chat tile: its room's messages, with the composer on the active tile
+/// only. `None` is a tile past the frames built this frame, which cannot
+/// happen (one frame per chat tile) but is drawn as an empty note rather
+/// than crashed on.
 fn draw_chat_tile(
     frame: &mut Frame,
     area: Rect,
-    chat: Option<EmbeddedRoomChatView<'_>>,
-    had_chat: bool,
-    room_label: &str,
+    tile: Option<ZenChatTile<'_>>,
     terminal_images: &mut TerminalImageFrame,
 ) {
-    match chat {
-        Some(view) => {
+    match tile {
+        Some(ZenChatTile {
+            view: Some(view), ..
+        }) => {
             if area.height < 4 || area.width < 20 {
                 return;
             }
             draw_embedded_room_chat(frame, area, view, terminal_images);
         }
-        None if had_chat => {
-            draw_centered_note(frame, area, &[room_label, "chat already has a tile"])
+        Some(ZenChatTile { view: None, .. }) | None => {
+            draw_centered_note(frame, area, &["no room open", "1 opens Home to pick one"])
         }
-        None => draw_centered_note(frame, area, &["no room open", "1 opens Home to pick one"]),
     }
 }
 
@@ -481,10 +564,10 @@ fn draw_music_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {
         return;
     }
     let dim = Style::default().fg(theme::TEXT_DIM());
-    let faint = Style::default().fg(theme::TEXT_FAINT());
-    // Track, station, keys: one row each, the keys row first to go when
-    // the tile is short. The equalizer takes what is left, up to three.
-    let text_rows: u16 = area.height.min(3);
+    // Track and station, one row each, the station first to go when the
+    // tile is short. The equalizer takes what is left, up to three. The
+    // keys are on the title.
+    let text_rows: u16 = area.height.min(2);
     let eq_rows = area.height.saturating_sub(text_rows).min(3);
     let total = eq_rows + text_rows;
     let top = area.y + area.height.saturating_sub(total) / 2;
@@ -505,13 +588,8 @@ fn draw_music_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {
     ])
     .centered();
     let station = Line::from(Span::styled(view.station.clone(), dim)).centered();
-    let controls = Line::from(Span::styled(
-        "m mute · -= vol · v+x source · v1-5 tune",
-        faint,
-    ))
-    .centered();
     frame.render_widget(
-        Paragraph::new(vec![track, station, controls]),
+        Paragraph::new(vec![track, station]),
         Rect::new(
             area.x,
             top + eq_rows,
@@ -572,10 +650,7 @@ fn draw_clock_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {
         lines.push(Line::from(""));
         lines.push(
             Line::from(Span::styled(
-                format!(
-                    "{} · {} · {} online",
-                    view.date, view.clock, view.online_count
-                ),
+                format!("{} · {} online", view.date, view.online_count),
                 Style::default().fg(theme::TEXT_DIM()),
             ))
             .centered(),

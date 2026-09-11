@@ -1,15 +1,13 @@
-//! Keys for the Zen page: the room walk, the pet and tank feeds, and the
-//! layout keys. The bonsai is tended in its care modal, the same one `w`
-//! opens on every other page, so no care key is captured here. Anything
-//! not owned here returns `false` so the global keys (digits, Tab, `q`,
-//! `?`, `w`, the `v` music chords) keep working.
+//! Keys for the Zen page: the chat keys of the focused chat tile, the tank
+//! feed, and the layout keys. The bonsai is tended in its care modal, the
+//! same one `w` opens on every other page, so no care key is captured
+//! here. Anything not owned here returns `false` so the global keys
+//! (digits, Tab, `q`, `?`, `w`, the `v` music chords) keep working.
 
 use uuid::Uuid;
 
-use super::state::{Dir, MAX_TILES};
-use crate::app::{
-    chat::state::RoomSlot, common::primitives::Banner, input::ParsedInput, state::App,
-};
+use super::state::{Dir, MAX_TILES, TileKind};
+use crate::app::{common::primitives::Banner, input::ParsedInput, state::App};
 
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     // A pressed `v` owns the next key everywhere; the page must not eat the
@@ -23,30 +21,56 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     handle_rice(app, event)
 }
 
-/// Compose, the room walk, and the feeds: pet `f`, tank `a`.
+/// The chat keys and the tank feed `a`. The chat keys belong to the
+/// focused chat tile: `[` `]` rebind it to the previous or next joined
+/// room, `i` and Enter write in its room, `j` `k` select in it, and the
+/// message actions act on its selection; with any other tile focused all
+/// of them are swallowed, so a page of several chats never scrolls one you
+/// are not looking at. The sprout is cut on its Shop row, on purpose: no
+/// page key for it. The pet has no key at all: it is petted
+/// with a click and reads the session for the rest.
 fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
     let Some(byte) = event_byte(event) else {
         return false;
     };
+    let chat_focused = app.zen.focused_kind() == Some(TileKind::Chat);
+    // The focused chat tile's message keys, the way the house table routes
+    // them to its embedded chat: `i`, `j` `k`, Ctrl+D/U, and the reaction
+    // leader always; `d` `r` `e` `p` `c` `t` `G` and Enter only while a
+    // message in that room is selected, so `r` flips the tile otherwise.
+    if chat_focused && let Some(room_id) = app.zen_chat_room_id() {
+        if crate::app::chat::input::chat_priority_key(app, byte)
+            && crate::app::chat::input::handle_message_action_in_room(app, room_id, byte)
+        {
+            return true;
+        }
+        if crate::app::chat::input::selected_chat_key(app, room_id, byte)
+            && crate::app::chat::input::handle_message_action_in_room(app, room_id, byte)
+        {
+            return true;
+        }
+    }
     match byte {
         b'[' => {
-            cycle_room(app, -1);
+            if chat_focused {
+                cycle_room(app, -1);
+            }
             true
         }
         b']' => {
-            cycle_room(app, 1);
+            if chat_focused {
+                cycle_room(app, 1);
+            }
             true
         }
         b'i' | b'\r' | b'\n' => {
-            if let Some(room_id) = app.zen_chat_room_id() {
+            if chat_focused && let Some(room_id) = app.zen_chat_room_id() {
                 app.chat.start_composing_in_room(room_id);
             }
             true
         }
-        b'f' => {
-            crate::app::input::pet_feed_globally(app);
-            true
-        }
+        // Swallowed unless a chat is focused; then the global handler selects.
+        b'j' | b'J' | b'k' | b'K' => !chat_focused,
         b'a' => {
             crate::app::input::feed_aquarium_globally(app);
             true
@@ -61,10 +85,12 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
     match event {
         ParsedInput::Arrow(b'D') | ParsedInput::Arrow(b'A') => {
             app.zen.focus_prev();
+            focus_moved(app);
             return true;
         }
         ParsedInput::Arrow(b'C') | ParsedInput::Arrow(b'B') => {
             app.zen.focus_next();
+            focus_moved(app);
             return true;
         }
         _ => {}
@@ -120,9 +146,24 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
     };
     if changed {
         app.sync_aquarium_bounds();
+        app.sync_visible_chat_room();
         app.mark_zen_layout_dirty();
     }
     true
+}
+
+/// The focus landed somewhere else: the chat that reads as visible (marked
+/// read, tail kept fresh) is the focused chat tile's, and a selection or a
+/// draft belongs to the tile it was made in. A draft written for another
+/// room is closed: every submit goes to the room the composer was opened
+/// in, and the active tile now draws the composer under its own label, so
+/// the two must never differ.
+pub(crate) fn focus_moved(app: &mut App) {
+    app.chat.clear_message_selection();
+    if app.chat.composing && app.chat.composer_room_id() != app.zen_chat_room_id() {
+        app.chat.reset_composer();
+    }
+    app.sync_visible_chat_room();
 }
 
 /// Move the focused tile's edge by `delta_cells` along `dir`, or say why
@@ -161,8 +202,8 @@ fn focused_tile_is_wide(app: &App) -> bool {
         .unwrap_or(true)
 }
 
-/// Walk the joined rooms in rail order; the pick lands in Home's selection,
-/// which is what this page shows.
+/// Walk the joined rooms in rail order and bind the focused chat tile to
+/// the one landed on; the binding is part of the layout, so it is saved.
 fn cycle_room(app: &mut App, delta: isize) {
     let ids: Vec<Uuid> = app.chat.rooms.iter().map(|(room, _)| room.id).collect();
     if ids.is_empty() {
@@ -173,8 +214,12 @@ fn cycle_room(app: &mut App, delta: isize) {
         .and_then(|id| ids.iter().position(|room_id| *room_id == id))
         .unwrap_or(0);
     let next = (current as isize + delta).rem_euclid(ids.len() as isize) as usize;
-    app.chat.select_room_slot(RoomSlot::Room(ids[next]));
-    app.sync_visible_chat_room();
+    if app.zen.bind_focused_chat_room(Some(ids[next])) {
+        app.chat.reset_composer();
+        app.chat.clear_message_selection();
+        app.sync_visible_chat_room();
+        app.mark_zen_layout_dirty();
+    }
 }
 
 fn event_byte(event: &ParsedInput) -> Option<u8> {

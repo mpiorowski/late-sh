@@ -209,21 +209,8 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     }
     if let Some(command) = app.chat.take_requested_aquarium_command() {
         match command {
-            crate::app::chat::state::AquariumCommand::Toggle => {
-                crate::app::input::toggle_aquarium_tray_globally(app);
-            }
             crate::app::chat::state::AquariumCommand::Feed => {
                 crate::app::input::feed_aquarium_globally(app);
-            }
-        }
-    }
-    if let Some(command) = app.chat.take_requested_pet_command() {
-        match command {
-            crate::app::chat::state::PetCommand::Toggle => {
-                crate::app::input::toggle_pet_strip_globally(app);
-            }
-            crate::app::chat::state::PetCommand::Feed => {
-                crate::app::input::pet_feed_globally(app);
             }
         }
     }
