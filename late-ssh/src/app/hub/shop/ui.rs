@@ -24,7 +24,7 @@ use crate::app::{
 };
 
 use super::{
-    catalog::ShopCategory,
+    catalog::{CompanionSection, ShopCategory},
     state::{PendingCustomTitle, PendingRoomEffect, PendingUsernameEffect, ShopState},
     svc::ShopCatalogItem,
 };
@@ -187,7 +187,7 @@ fn item_list_rows<'a>(
         ShopCategory::Badges => badge_section_label,
         ShopCategory::Ultimates => ultimates_section_label,
         ShopCategory::Companions => companion_section_label,
-        ShopCategory::Flags | ShopCategory::Fish | ShopCategory::Plants => {
+        ShopCategory::Flags => {
             return items
                 .iter()
                 .enumerate()
@@ -232,16 +232,11 @@ fn ultimates_section_label(item: &ShopCatalogItem) -> &'static str {
     }
 }
 
-/// The Companions tab in catalog order: the pet, the bonsai shield, then
-/// the tank and its shield (the fish and the plants have tabs of their own).
+/// The Companions tab in `CompanionSection` order: the pet, the bonsai
+/// shield, the tank and its shield, what the tank grows on its own, the
+/// plants, then the fish.
 fn companion_section_label(item: &ShopCatalogItem) -> &'static str {
-    if item.is_pet_companion() {
-        "Pet"
-    } else if item.is_bonsai_decay_shield() {
-        "Bonsai"
-    } else {
-        "Aquarium"
-    }
+    CompanionSection::of(item).label()
 }
 
 fn badge_section_label(item: &ShopCatalogItem) -> &'static str {

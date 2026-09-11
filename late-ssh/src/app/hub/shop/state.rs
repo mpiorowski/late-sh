@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::app::common::primitives::Banner;
 
 use super::{
-    catalog::ShopCategory,
+    catalog::{CompanionSection, ShopCategory},
     entitlements::ShopEntitlements,
     svc::{
         ActiveChatRoomEffect, ActiveRental, ActiveUsernameEffect, ShopCatalogItem, ShopEvent,
@@ -211,13 +211,19 @@ impl ShopState {
             .iter()
             .filter(|item| category.matches_item(item))
             .collect();
-        // On the Chat tab the name-adjacent rentals lead: username effects
-        // first, then titles, then the room consumables. Stable, so catalog
-        // order holds inside each group.
-        items.sort_by_key(|item| match item {
-            item if item.is_username_effect() => 0,
-            item if item.is_title_rental() => 1,
-            _ => 2,
+        // Two tabs order their sections themselves, stable, so catalog
+        // order holds inside each group. Chat: the name-adjacent rentals
+        // lead, username effects first, then titles, then the room
+        // consumables. Companions: `CompanionSection` order, the tank's
+        // growth and plants between the tank and its fish.
+        items.sort_by_key(|item| match category {
+            ShopCategory::Chat => match item {
+                item if item.is_username_effect() => 0,
+                item if item.is_title_rental() => 1,
+                _ => 2,
+            },
+            ShopCategory::Companions => CompanionSection::of(item) as usize,
+            ShopCategory::Badges | ShopCategory::Flags | ShopCategory::Ultimates => 0,
         });
         items
     }

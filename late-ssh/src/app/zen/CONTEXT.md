@@ -94,7 +94,7 @@ and message clicks of that tile. Aquarium `a` feed (free, once a day, +100 chips
 The pet has no key: it is petted with a left click and reads the rest of
 the session itself. The sprout on the tank floor (the fortnightly bud;
 leave it a week and it roots as a plant) is cut on its Shop row
-(`-`, Plants), never a page key: dedicated keys accumulate and
+(`-`, Companions), never a page key: dedicated keys accumulate and
 collide, and the tile draws no caption for it either (2026-09-11). The bonsai has no keys of its own here: `w` is the global
 Bonsai Care key and opens the same modal it opens on Home, so watering,
 cutting, and steering work exactly as on the chat page. Layout: arrows move focus, `space` cycles the

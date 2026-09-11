@@ -4,9 +4,10 @@
 -- item kind, aquarium_plant: bought like fish, active-capped apart from
 -- them (marketplace::AQUARIUM_MAX_PLANTS), and what a sprout roots as
 -- (one of the catalog's plants, picked evenly). Plants never starve and
--- never parent a fry; fish never root. The Shop shows the two kinds on
--- their own tabs, Fish and Plants. Purchase rows key on the item id, so
--- every wigglewort anyone owns or rooted follows the row.
+-- never parent a fry; fish never root. The Shop's Companions tab lists
+-- them under section rows of their own, the plants before the fish.
+-- Purchase rows key on the item id, so every wigglewort anyone owns or
+-- rooted follows the row.
 UPDATE marketplace_items
 SET sku = 'aquarium_plant_wigglewort',
     item_kind = 'aquarium_plant',
