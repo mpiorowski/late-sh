@@ -2692,17 +2692,19 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         select_screen_from_topbar(app, screen, target);
         return true;
     }
-    // A click on a Zen tile focuses it, then falls through so the pet, the
-    // composer, and the messages of that tile still take the click. A
-    // modal over the page takes the click itself, the same guard the pet
-    // click uses.
+    // Petting the pet is a passing gesture, not a move: it takes the click
+    // before the Zen focus, so a click on the pet leaves the keys with the
+    // chat tile the page opened on.
+    if handle_pet_click(app, x, y) {
+        return true;
+    }
+    // A click on a Zen tile focuses it, then falls through so the composer
+    // and the messages of that tile still take the click. A modal over the
+    // page takes the click itself, the same guard the pet click uses.
     if screen == Screen::Zen && !chat_scroll_clicks_blocked(app) {
         focus_zen_tile_at(app, x, y);
     }
     if handle_chat_composer_click(app, screen, x, y) {
-        return true;
-    }
-    if handle_pet_click(app, x, y) {
         return true;
     }
     if handle_chat_scroll_click(app, screen, x, y) {
@@ -3367,6 +3369,48 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
     app.show_hub_modal = true;
+}
+
+/// The Lounge tray's toggle (`/aquarium`). Locked users get the shop nudge
+/// instead; the tray only renders in the Lounge, so the toggle banners its
+/// new state for anyone who typed it from somewhere else.
+pub(crate) fn toggle_aquarium_tray_globally(app: &mut App) {
+    clear_prefix_arms(app);
+    if !app.shop_state.entitlements().has_aquarium() {
+        app.banner = Some(crate::app::common::primitives::Banner::error(
+            "Unlock Aquarium in Hub Shop",
+        ));
+        open_shop_modal_globally(app);
+        return;
+    }
+    app.show_aquarium_tray = !app.show_aquarium_tray;
+    app.persist_show_aquarium_tray();
+    app.banner = Some(crate::app::common::primitives::Banner::success(
+        if app.show_aquarium_tray {
+            "Aquarium open in the Lounge"
+        } else {
+            "Aquarium hidden (/aquarium to reopen)"
+        },
+    ));
+}
+
+/// The pet strip's toggle (`/pet`). Locked users get the shop nudge; the
+/// strip only renders in the Lounge, so the toggle banners its new state.
+pub(crate) fn toggle_pet_strip_globally(app: &mut App) {
+    clear_prefix_arms(app);
+    if !app.shop_state.entitlements().has_pet_companion() {
+        app.banner = Some(crate::app::common::primitives::Banner::error(
+            "Unlock Pet Companion in Hub Shop",
+        ));
+        open_shop_modal_globally(app);
+        return;
+    }
+    let shown = app.profile_state.toggle_show_pet_strip();
+    app.banner = Some(crate::app::common::primitives::Banner::success(if shown {
+        "Pet strip shown in the Lounge"
+    } else {
+        "Pet strip hidden (/pet to bring it back)"
+    }));
 }
 
 /// A click on the pet: it purrs for a bit. The box only draws for owners,

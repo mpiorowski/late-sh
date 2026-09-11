@@ -89,6 +89,9 @@ pub struct ChatDividers {
 // ── Dashboard chat card ─────────────────────────────────────
 
 pub struct DashboardChatView<'a> {
+    /// When present, the 3-row pet strip renders between the messages and
+    /// the composer (pet entitlement + tweak resolved by the caller).
+    pub pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     /// Recent #lounge system-feed lines (newest first), packed left to
     /// right into the composer-gap row.
     pub activity_ticker: &'a [super::state::ActivityTickerEntry],
@@ -590,14 +593,29 @@ fn split_chat_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect) {
 /// then the one-row activity ticker hugging the composer. Returns
 /// `(messages, ticker, composer)`.
 fn split_chat_ticker_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect, Rect) {
+    let (messages, ticker, _, composer) =
+        split_chat_pet_strip_and_composer(area, composer_height, 0);
+    (messages, ticker, composer)
+}
+
+/// The same layout with the Lounge's pet strip between the breather and the
+/// ticker (0 rows when the pet is absent, which collapses to exactly the
+/// layout above, so the chrome never moves). Returns
+/// `(messages, ticker, pet_strip, composer)`.
+fn split_chat_pet_strip_and_composer(
+    area: Rect,
+    composer_height: u16,
+    pet_strip_height: u16,
+) -> (Rect, Rect, Rect, Rect) {
     let layout = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(CHAT_COMPOSER_GAP_HEIGHT.saturating_sub(1)),
+        Constraint::Length(pet_strip_height),
         Constraint::Length(1),
         Constraint::Length(composer_height),
     ])
     .split(area);
-    (layout[0], layout[2], layout[3])
+    (layout[0], layout[3], layout[2], layout[4])
 }
 
 /// The one-row #lounge activity ticker rendered in the composer gap. The
@@ -1105,6 +1123,10 @@ pub(crate) fn truncate_cells(text: &str, max_width: usize) -> String {
     out
 }
 
+/// Rows the Lounge chat card needs before another surface may take space above
+/// it. The aquarium tray checks this before carving its strip off the top.
+pub(crate) const MIN_CHAT_HEIGHT_WITH_LOUNGE: u16 = 10;
+
 pub fn draw_dashboard_chat_card(
     frame: &mut Frame,
     area: Rect,
@@ -1132,9 +1154,18 @@ pub fn draw_dashboard_chat_card(
         ));
     let visible_composer_lines = total_composer_lines.min(5);
     let composer_height = visible_composer_lines as u16 + 2;
-    let (mut messages_area, ticker_area, composer_area) =
-        split_chat_ticker_and_composer(area, composer_height);
+    let pet_strip_height = if view.pet_strip.is_some() {
+        crate::app::pet::ui::PET_BOX_MIN_ROWS
+    } else {
+        0
+    };
+    let (mut messages_area, ticker_area, pet_strip_area, composer_area) =
+        split_chat_pet_strip_and_composer(area, composer_height, pet_strip_height);
     draw_activity_ticker(frame, ticker_area, view.activity_ticker);
+    if let Some(pet_strip) = &view.pet_strip {
+        // The Home strip has no tank beside it: nothing to watch.
+        crate::app::pet::ui::draw_pet_box(frame, pet_strip_area, pet_strip, None);
+    }
     // The Lounge gets the same header block as every other room: voice state
     // and the topic in one place, rather than a bare voice strip.
     let room_stream = view.room.and_then(|room| {

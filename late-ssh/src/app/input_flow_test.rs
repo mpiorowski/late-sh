@@ -2805,3 +2805,103 @@ async fn zen_a_draft_stays_in_its_room_when_the_focus_moves_and_zoom_shows_the_f
         "the zoomed pane is the focused tile's room, not the first chat's:\n{rendered}"
     );
 }
+
+#[tokio::test]
+async fn zen_petting_the_pet_leaves_the_focus_on_the_chat() {
+    use crate::app::hub::shop::{
+        entitlements::ShopEntitlements, state::ShopState, svc::ShopSnapshot,
+    };
+    use crate::app::zen::state::TileKind;
+    use late_core::models::marketplace::PET_COMPANION_SKU;
+    use late_core::models::pet::PetMood;
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "zen-pet-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-pet-flow-it");
+    app.shop_state = ShopState::for_test_snapshot(ShopSnapshot {
+        entitlements: ShopEntitlements::from_owned_skus([PET_COMPANION_SKU.to_string()]),
+        ..Default::default()
+    });
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "Esc back").await;
+
+    let chat = app
+        .zen
+        .first_tile_of(TileKind::Chat)
+        .expect("the default has a chat");
+    assert_eq!(app.zen.focus, chat, "the page opens on its chat tile");
+
+    // The pet sits on the rail, in a tile of its own. Petting it is a
+    // passing gesture: the keys stay with the chat.
+    let pet = app.last_pet_rect.get().expect("the pet drew on its tile");
+    let click = format!("\x1b[<0;{};{}M", pet.x + 1, pet.y + 1);
+    app.handle_input(click.as_bytes());
+    assert_eq!(
+        app.zen.focus, chat,
+        "petting the pet leaves the focus on the chat tile"
+    );
+    render_plain(&mut app);
+    assert_eq!(
+        app.pet_state.mood(),
+        PetMood::Purring,
+        "the click landed on the pet"
+    );
+}
+
+#[tokio::test]
+async fn slash_pet_and_slash_aquarium_toggle_the_lounge_strip_and_tray() {
+    use crate::app::hub::shop::{
+        entitlements::ShopEntitlements, state::ShopState, svc::ShopSnapshot,
+    };
+    use late_core::models::marketplace::{AQUARIUM_SKU, PET_COMPANION_SKU};
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "lounge-companions").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "lounge-companions-it");
+    app.shop_state = ShopState::for_test_snapshot(ShopSnapshot {
+        entitlements: ShopEntitlements::from_owned_skus([
+            PET_COMPANION_SKU.to_string(),
+            AQUARIUM_SKU.to_string(),
+        ]),
+        ..Default::default()
+    });
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    // Both surfaces start open for an owner, and their commands close them.
+    assert!(app.show_aquarium_tray);
+    assert!(app.profile_state.profile().show_pet_strip);
+
+    app.handle_input(b"i/aquarium\r");
+    wait_for_render_contains(&mut app, "Aquarium hidden").await;
+    assert!(!app.show_aquarium_tray, "/aq closed the tray");
+
+    app.handle_input(b"i/pet\r");
+    wait_for_render_contains(&mut app, "Pet strip hidden").await;
+    assert!(
+        !app.profile_state.profile().show_pet_strip,
+        "/pet closed the strip"
+    );
+
+    app.handle_input(b"i/aquarium\r");
+    wait_for_render_contains(&mut app, "Aquarium open in the Lounge").await;
+    assert!(app.show_aquarium_tray, "/aq reopened the tray");
+}

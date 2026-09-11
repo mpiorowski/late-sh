@@ -13,10 +13,10 @@ use super::user::{
     extract_langs, extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format,
     extract_notify_kinds, extract_os, extract_paper_at_login, extract_right_sidebar_components,
     extract_right_sidebar_mode, extract_room_list_mode, extract_show_flag_fallback,
-    extract_show_right_sidebar, extract_show_room_list_sidebar, extract_start_with_music_muted,
-    extract_terminal, extract_text_brightness_adjustment, extract_theme_id, extract_timezone,
-    extract_translate_mine_to_en, extract_translate_to, normalize_right_sidebar_components,
-    normalize_text_brightness_adjustment,
+    extract_show_pet_strip, extract_show_right_sidebar, extract_show_room_list_sidebar,
+    extract_start_with_music_muted, extract_terminal, extract_text_brightness_adjustment,
+    extract_theme_id, extract_timezone, extract_translate_mine_to_en, extract_translate_to,
+    normalize_right_sidebar_components, normalize_text_brightness_adjustment,
 };
 
 #[derive(Clone, Debug)]
@@ -60,6 +60,8 @@ pub struct Profile {
     pub paper_at_login: bool,
     /// Tweak: show text labels instead of flag emoji in the shop Flags tab.
     pub show_flag_fallback: bool,
+    /// Tweak: show the pet strip above the chat composer (pet owners only).
+    pub show_pet_strip: bool,
     /// Target language for chat message translation (`t` and auto mode).
     pub translate_to: TranslateLang,
     /// Tweak: auto-translate foreign-script messages in the viewed room.
@@ -108,6 +110,7 @@ impl Default for Profile {
             land_on_home: false,
             paper_at_login: true,
             show_flag_fallback: false,
+            show_pet_strip: true,
             translate_to: TranslateLang::En,
             auto_translate: false,
             translate_mine_to_en: false,
@@ -144,6 +147,7 @@ pub struct ProfileParams {
     pub land_on_home: bool,
     pub paper_at_login: bool,
     pub show_flag_fallback: bool,
+    pub show_pet_strip: bool,
     pub translate_to: TranslateLang,
     pub auto_translate: bool,
     pub translate_mine_to_en: bool,
@@ -298,14 +302,15 @@ impl Profile {
                          'start_with_music_muted', $23::bool,
                          'show_flag_fallback', $24::bool,
                          'land_on_home', $25::bool,
-                         'translate_to', $26::text,
-                         'auto_translate', $27::bool,
-                         'translate_mine_to_en', $28::bool,
-                         'favorite_theme_ids', $29::jsonb,
-                         'paper_at_login', $30::bool
+                         'show_pet_strip', $26::bool,
+                         'translate_to', $27::text,
+                         'auto_translate', $28::bool,
+                         'translate_mine_to_en', $29::bool,
+                         'favorite_theme_ids', $30::jsonb,
+                         'paper_at_login', $31::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $31
+                 WHERE id = $32
                  RETURNING *",
                 &[
                     &params.username,
@@ -333,6 +338,7 @@ impl Profile {
                     &params.start_with_music_muted,
                     &params.show_flag_fallback,
                     &params.land_on_home,
+                    &params.show_pet_strip,
                     &params.translate_to.as_str(),
                     &params.auto_translate,
                     &params.translate_mine_to_en,
@@ -374,6 +380,7 @@ impl Profile {
             land_on_home: extract_land_on_home(&user.settings),
             paper_at_login: extract_paper_at_login(&user.settings),
             show_flag_fallback: extract_show_flag_fallback(&user.settings),
+            show_pet_strip: extract_show_pet_strip(&user.settings),
             translate_to: extract_translate_to(&user.settings),
             auto_translate: extract_auto_translate(&user.settings),
             translate_mine_to_en: extract_translate_mine_to_en(&user.settings),

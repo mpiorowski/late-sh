@@ -1273,11 +1273,25 @@ impl App {
 
     /// Whether the reef is actually on screen: the Zen page draws it for
     /// everyone, owned or not (an unowned tank swims empty under a shop
-    /// caption), and no other page draws it at all. Shared by the sim's
-    /// step gate in tick() and the wake cadence, so an aquarium owner
-    /// browsing other screens pays no fish frames.
+    /// caption), and the Home Lounge draws the tray for an owner who has it
+    /// open. Mirrors render.rs; shared by the sim's step gate in tick() and
+    /// the wake cadence, so an aquarium owner browsing other screens pays no
+    /// fish frames.
     fn aquarium_tray_visible(&self) -> bool {
-        self.screen == Screen::Zen
+        if self.screen == Screen::Zen {
+            return true;
+        }
+        if !self.show_aquarium_tray || !self.shop_state.entitlements().has_aquarium() {
+            return false;
+        }
+        if self.screen != Screen::Dashboard {
+            return false;
+        }
+        crate::app::render::dashboard_home_selected(
+            self.chat.lounge_room_id(),
+            self.chat.selected_room_id,
+            self.chat.synthetic_entry_selected(),
+        )
     }
 
     /// A paired client is playing and unmuted: the same reading the Zen

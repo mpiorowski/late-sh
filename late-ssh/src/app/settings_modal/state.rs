@@ -106,6 +106,7 @@ pub(crate) enum TweakRow {
     TextBrightness,
     RightSidebar,
     RoomListSidebar,
+    PetStrip,
     // Compose / Display / Startup groups. There is deliberately no music-mute
     // row: mute and volume are owned by `m` and `+`/`-`, persisted per device,
     // and a second control here would be a second source of truth for them.
@@ -118,11 +119,12 @@ pub(crate) enum TweakRow {
 }
 
 impl TweakRow {
-    pub(crate) const ALL: [TweakRow; 9] = [
+    pub(crate) const ALL: [TweakRow; 10] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
         TweakRow::RoomListSidebar,
+        TweakRow::PetStrip,
         TweakRow::ComposerKeepFocused,
         TweakRow::FlagFallback,
         TweakRow::LandOnHome,
@@ -842,6 +844,9 @@ impl SettingsModalState {
             }
             TweakRow::RoomListSidebar => {
                 self.device_rails.0 = self.device_rails.0.cycle(true);
+            }
+            TweakRow::PetStrip => {
+                self.draft.show_pet_strip ^= true;
             }
             TweakRow::ComposerKeepFocused => {
                 self.draft.keep_composer_focused ^= true;
@@ -2209,6 +2214,7 @@ impl SettingsModalState {
                 land_on_home: self.draft.land_on_home,
                 paper_at_login: self.draft.paper_at_login,
                 show_flag_fallback: self.draft.show_flag_fallback,
+                show_pet_strip: self.draft.show_pet_strip,
                 translate_to: self.draft.translate_to,
                 auto_translate: self.draft.auto_translate,
                 translate_mine_to_en: self.draft.translate_mine_to_en,

@@ -3,7 +3,10 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-09-05 (stage 2 of the haunting is witnessed by the
+- Last updated: 2026-09-11 (`/aquarium` (alias `/aq`) toggles the Lounge
+  tank tray again and `/pet` the pet strip above the composer; the pet still
+  has nothing to feed.) Previously 2026-09-05 (stage 2 of the haunting is
+  witnessed by the
   room: `ChatEvent::NameHit` comes off the `deadchannel_name_hit` Postgres
   notify on the same listener as the gild markers, now
   `ChatService::start_message_listener_task`; `push_message` promotes a
@@ -353,8 +356,8 @@ User commands:
 - `/friend @user` privately marks a user as a friend; `/unfriend @user` removes the mark; `/friends` lists marked users.
 - `/binds` opens the Chat help topic.
 - `/cs` (alias `/cyberspace`) opens the Cyberspace `feeds` entry; `/cs post` opens its compose modal, `/cs chat` (alias `/cs rooms`) the chat-room picker that adds rooms as rail entries, `/cs mail` the C-Mail picker that pins conversations the same way, `/cs mail @user` starts (or finds) a conversation, pins it, and walks into it, `/cs link` the account-link modal, `/cs unlink` forgets the link. Parsed in `submit_composer` (`parse_cyberspace_command`), handled inline on `ChatState` (no `take_requested_*` plumbing; `pending_chat_screen_switch` pulls the user to Home).
-- `/aquarium feed` (alias `/aq feed`) feeds the Shop-unlocked tank, which lives on the Zen page only (the sprout is cut on its Shop row since 2026-09-11, `/aquarium cut` is gone; the Home tray is gone, 2026-09-10); bare `/aquarium` answers with a usage banner. Parsed in `submit_composer`, drained via `take_requested_aquarium_command` in `handle_post_submit_requests`.
-- There is no `/pet` command any more: the pet is fed by nothing and toggled by nothing. `ChatState::last_own_send_at` (stamped on `SendSucceeded`) is the pet's "chatty" signal, read by the tick; `/petname` stays.
+- `/aquarium` (alias `/aq`) toggles the Shop-unlocked tank's tray in the Home Lounge and `/aquarium feed` (alias `/aq feed`) feeds it; the tank also lives on the Zen page, and its sprout is cut on its Shop row (`/aquarium cut` is gone, 2026-09-11). Parsed in `submit_composer`, drained via `take_requested_aquarium_command` in `handle_post_submit_requests`.
+- `/pet` toggles the pet strip above the Lounge composer (pet owners only, the same `show_pet_strip` setting as the Tweaks row). There is nothing to feed: the pet is a mood indicator, and `ChatState::last_own_send_at` (stamped on `SendSucceeded`) is its "chatty" signal, read by the tick; `/petname` stays. Drained via `take_requested_pet_command`.
 - `/dm @user` opens/creates a DM.
 - `/exit` opens quit confirm.
 - `/golive [title]` registers this user's "watch me" stream (`/golive stop` ends it) and `/watch @user` opens a live stream. Both are parsed in `submit_composer` (`parse_golive_command` / `parse_user_command`) and drained by `App::tick_stream`, which owns the stream service, the publisher URL modal, and the paired-CLI `open_url` control; the domain contract is `late-ssh/src/app/stream/CONTEXT.md`.

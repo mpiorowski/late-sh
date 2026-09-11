@@ -97,6 +97,15 @@ impl ProfileState {
         true
     }
 
+    /// Toggle the pet companion strip (the /pet command; same setting as the
+    /// "Pet companion strip" tweak in settings). Persists and returns the new
+    /// visibility.
+    pub fn toggle_show_pet_strip(&mut self) -> bool {
+        self.profile.show_pet_strip = !self.profile.show_pet_strip;
+        self.save_profile();
+        self.profile.show_pet_strip
+    }
+
     /// Store the home rail layout for one device (one SSH key). Fire and
     /// forget, like every other profile write; the caller already applied the
     /// change to session state. Deliberately does *not* touch the account
@@ -211,6 +220,7 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         land_on_home: profile.land_on_home,
         paper_at_login: profile.paper_at_login,
         show_flag_fallback: profile.show_flag_fallback,
+        show_pet_strip: profile.show_pet_strip,
         translate_to: profile.translate_to,
         auto_translate: profile.auto_translate,
         translate_mine_to_en: profile.translate_mine_to_en,

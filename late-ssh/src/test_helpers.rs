@@ -666,6 +666,7 @@ fn make_app_with_chat_service_and_permissions(
         runner_looks_rx: crate::app::deadchannel::runner::svc::fixed_looks_rx(
             std::collections::HashMap::new(),
         ),
+        show_aquarium_tray: true,
         zen_layout: None,
         // No SSH key: test apps follow the account default and persist no
         // per-device layout, which is also what ghost bot sessions do.
@@ -911,6 +912,7 @@ pub fn make_app_with_paired_client(
         runner_looks_rx: crate::app::deadchannel::runner::svc::fixed_looks_rx(
             std::collections::HashMap::new(),
         ),
+        show_aquarium_tray: true,
         zen_layout: None,
         // No SSH key: test apps follow the account default and persist no
         // per-device layout, which is also what ghost bot sessions do.

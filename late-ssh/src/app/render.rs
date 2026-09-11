@@ -270,6 +270,7 @@ struct DrawContext<'a> {
     show_quit_confirm: bool,
     show_mod_modal: bool,
     show_hub_modal: bool,
+    show_aquarium_tray: bool,
     aquarium_state: &'a crate::app::hub::aquarium::state::AquariumState,
     aquarium_care: &'a crate::app::hub::aquarium::state::AquariumCare,
     leaderboard_page: &'a crate::app::leaderboard::state::LeaderboardPageState,
@@ -469,6 +470,16 @@ impl App {
             shell_active_room,
             synthetic_selected,
         );
+        // Pet strip above the Lounge composer: pet owners only, with a
+        // settings tweak (draft-aware while the modal is open, like the
+        // sidebars).
+        let show_pet_strip_setting = if self.show_settings {
+            self.settings_modal_state.draft().show_pet_strip
+        } else {
+            self.profile_state.profile().show_pet_strip
+        };
+        let pet_strip_enabled =
+            show_pet_strip_setting && self.shop_state.entitlements().has_pet_companion();
         let screen = self.screen;
         // The Zen page's chat tiles: each one's room (resolved, so a room
         // the account left reads as the current room) and its label. The
@@ -595,6 +606,11 @@ impl App {
             .as_ref()
             .map(|timer| timer.badge(chrono::Utc::now()));
         let dashboard_view = chat::ui::DashboardChatView {
+            pet_strip: pet_strip_enabled.then_some(crate::app::pet::ui::PetView {
+                state: &self.pet_state,
+                pet_rect_slot: Some(&self.last_pet_rect),
+                frame_slot: Some(&self.last_pet_frame),
+            }),
             activity_ticker: self.chat.activity_ticker(),
             room: dashboard_room,
             messages: dashboard_messages,
@@ -1275,6 +1291,7 @@ impl App {
                         show_quit_confirm: self.show_quit_confirm,
                         show_mod_modal: self.show_mod_modal,
                         show_hub_modal: self.show_hub_modal,
+                        show_aquarium_tray: self.show_aquarium_tray,
                         aquarium_state: &self.aquarium_state,
                         aquarium_care: &self.aquarium_care,
                         leaderboard_page: &self.leaderboard_page,
@@ -1586,6 +1603,13 @@ impl App {
             inner
         };
 
+        // The aquarium tray lives inside the Lounge chat view only: it is
+        // carved from the top of the lounge's center column and competes
+        // with the chat for space. Every other screen keeps its full area.
+        let aquarium_tray_enabled =
+            ctx.show_aquarium_tray && ctx.shop_state.entitlements().has_aquarium();
+        let mut aquarium_tray_area = None;
+
         let (content_area, sidebar_area) = if zen_page {
             (inner, None)
         } else {
@@ -1605,6 +1629,14 @@ impl App {
                 } else {
                     (None, content_area)
                 };
+                let center_area = if aquarium_tray_enabled && ctx.home_selected {
+                    let (tray, rest) = crate::app::hub::aquarium::ui::carve_top_tray(center_area);
+                    aquarium_tray_area = tray;
+                    rest
+                } else {
+                    center_area
+                };
+
                 if let Some(rail_area) = rail_area {
                     chat::ui::draw_room_list_rail(frame, rail_area, &ctx.chat_view);
                 }
@@ -1895,6 +1927,10 @@ impl App {
                     marquee_tick: ctx.marquee_tick,
                 },
             );
+        }
+
+        if let Some(aquarium_area) = aquarium_tray_area {
+            crate::app::hub::aquarium::ui::draw_top_tray(frame, aquarium_area, ctx.aquarium_state);
         }
 
         if foreground_overlay_open {
