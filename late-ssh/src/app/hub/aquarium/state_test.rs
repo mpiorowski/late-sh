@@ -306,7 +306,10 @@ fn the_fry_row_counts_fed_days_to_the_next_hatch_and_the_growing_one() {
     assert_eq!(fed_on(8, 3).fed_days_to_next_fry_on(day(10)), 14);
     // The day a fry hatches the bar is full and the next needs fourteen.
     assert_eq!(fed_on(10, 14).fed_days_to_next_fry_on(day(10)), 14);
-    assert_eq!(AquariumCare::new(None, Vec::new()).fed_days_to_next_fry_on(day(10)), 14);
+    assert_eq!(
+        AquariumCare::new(None, Vec::new()).fed_days_to_next_fry_on(day(10)),
+        14
+    );
 
     // A streak fry grows into its parent; the welcome fry never does.
     let mut care = fed_on(10, 14);

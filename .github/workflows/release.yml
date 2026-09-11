@@ -93,8 +93,14 @@ jobs:
     needs: route
     if: ${{ needs.route.outputs.component == 'cli' }}
     uses: ./.github/workflows/deploy_cli.yml
+    # contents: write for the checksum upload to the release; id-token,
+    # attestations, and artifact-metadata for the Sigstore provenance step.
+    # deploy_cli.yml narrows these per job.
     permissions:
-      contents: read
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     secrets: inherit
     with:
       release_tag: ${{ github.event.release.tag_name }}

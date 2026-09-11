@@ -2654,7 +2654,10 @@ async fn zen_chat_keys_belong_to_the_focused_chat_tile() {
 
     // `i` on the chat tile composes in its room; elsewhere it does nothing.
     app.handle_input(b"i");
-    assert!(!app.chat.composing, "i with the bonsai focused composes nothing");
+    assert!(
+        !app.chat.composing,
+        "i with the bonsai focused composes nothing"
+    );
     app.handle_input(b"\x1b[C");
     app.handle_input(b"i");
     assert!(app.chat.composing, "i on the focused chat tile composes");
@@ -2721,7 +2724,10 @@ async fn zen_a_draft_stays_in_its_room_when_the_focus_moves_and_zoom_shows_the_f
         rect.y + rect.height / 2 + 1
     );
     app.handle_input(click.as_bytes());
-    assert_eq!(app.zen.focus, first, "the click focused the first chat tile");
+    assert_eq!(
+        app.zen.focus, first,
+        "the click focused the first chat tile"
+    );
     assert!(
         !app.chat.composing,
         "the draft written for the second room is closed, not shown under #lounge"

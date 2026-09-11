@@ -130,10 +130,15 @@ fn holding_split_stops_at_the_tile_cap_and_the_layout_still_round_trips() {
 #[test]
 fn a_chat_tile_keeps_its_room_through_the_stored_json_and_old_layouts_still_read() {
     let mut zen = ZenState::new(RiceLayout::default());
-    let chat = zen.first_tile_of(TileKind::Chat).expect("the default has a chat");
+    let chat = zen
+        .first_tile_of(TileKind::Chat)
+        .expect("the default has a chat");
     let room = Uuid::now_v7();
     // Only a focused chat tile takes a room.
-    assert!(!zen.bind_focused_chat_room(Some(room)), "bonsai has no room");
+    assert!(
+        !zen.bind_focused_chat_room(Some(room)),
+        "bonsai has no room"
+    );
     zen.focus = chat;
     assert!(zen.bind_focused_chat_room(Some(room)));
     assert_eq!(zen.focused_chat_room(), Some(Some(room)));
@@ -169,7 +174,11 @@ fn the_page_holds_ten_chats_and_the_first_opening_lands_on_the_first_one() {
         zen.rice.root.set_kind(zen.focus, TileKind::Pet);
         zen.cycle_focused_kind(true);
     }
-    assert_eq!(zen.chat_tile_count(), MAX_CHAT_TILES, "chat is skipped past the cap");
+    assert_eq!(
+        zen.chat_tile_count(),
+        MAX_CHAT_TILES,
+        "chat is skipped past the cap"
+    );
     assert_eq!(zen.focused_kind(), Some(TileKind::Music));
     // A tile that already is a chat can leave and come back.
     zen.focus = zen.first_tile_of(TileKind::Chat).expect("chats");

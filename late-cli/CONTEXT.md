@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh (plus the sibling `late-webview` helper crate)
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-08-26 (Pair-WS reconnect no longer unmutes a paired session or gives up on pairing: releasing the startup mute is gated on the server never having seen the session, a connection that held 60s clears the failure count, and the loop backs off to a 60s retry instead of parking forever. See §6 "Pairing behavior" and §7. Previous entry: macOS native voice is back: `build.rs` passes `-ObjC` when linking the `late` binary on darwin, which is what the vendored `webrtc-sys` patch was working around, plus the microphone `Info.plist` section; `default.nix` now predeclares the mac WebRTC archives too; see §9 "macOS voice link requirements")
+- Last updated: 2026-09-11 (Release supply chain: every published binary carries a keyless Sigstore build-provenance bundle (`<binary>.sigstore.json`, `actions/attest`), `sha256sums.txt` is uploaded once to the GitHub Release (published tags are immutable), the build refuses to run off the release tag, and both installers resolve `latest` to a tag, read checksums from GitHub, and fail closed. See §9 "Supply chain".)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -420,6 +420,7 @@ Public installers:
 Installer defaults:
 - `scripts/install.sh` and `scripts/install.ps1` default to `https://cli.late.sh`
 - `LATE_INSTALL_BASE_URL` overrides distribution host
+- `LATE_INSTALL_CHECKSUM_BASE_URL` overrides where `sha256sums.txt` is read from; default is the GitHub Release assets, `https://github.com/mpiorowski/late-sh/releases/download`
 - `LATE_INSTALL_VERSION` selects a specific version instead of `latest`
 - `LATE_INSTALL_DIR` overrides install directory
 - Shell installer detects WSL, Termux, and Git Bash/MSYS/Cygwin; Termux receives the Android build and Windows shell environments receive the Windows `late.exe` build
@@ -427,16 +428,28 @@ Installer defaults:
 - PowerShell installer places `late.exe` under `%LOCALAPPDATA%\Programs\late` unless overridden and prints a PATH hint when needed
 - PowerShell installer uses environment-based architecture detection instead of `RuntimeInformation.OSArchitecture` so older Windows PowerShell/.NET hosts can run it
 - PowerShell installer passes `-UseBasicParsing` on download requests for Windows PowerShell 5.1 compatibility.
-- Checksum verification runs when checksum download succeeds; checksum download failure is warning-only
+- Checksum verification is mandatory and fails closed (see "Supply chain" below)
+
+### Supply chain
+
+- `latest` is only a pointer. Both installers resolve it by reading `{base}/latest/VERSION`, validate the tag against `^[A-Za-z0-9][A-Za-z0-9._-]*$` (it is interpolated into URL paths on two hosts, so a tampered pointer must not be able to walk to another GitHub path), then fetch every file from `releases/<tag>/`. Nothing is installed from `latest/<target>/`.
+- `sha256sums.txt` is read from the GitHub Release assets (`{LATE_INSTALL_CHECKSUM_BASE_URL}/<tag>/sha256sums.txt`), not from the distribution bucket. A binary from R2 must match a checksum from GitHub, so a compromised bucket or bucket credential alone cannot swap the binary under a trusted copy of the installer. Two residual attacks from a bucket alone: a downgrade, pointing `latest/VERSION` at an older genuine tag; and replacing the installer itself, since `install.sh`, `install.ps1`, and `index.html` are served from the same bucket and `curl ... | sh` trusts it for the script. The second is closed only by running the installer from a checkout or verifying the provenance bundle by hand.
+- Verification is fail-closed in both installers: unreachable checksum file, missing entry, no SHA-256 tool, or mismatch abort the install. The `late-webview` helper, when its download succeeds, is verified the same way. `install.ps1` enables TLS 1.2 on `ServicePointManager` first, because github.com refuses older TLS and Windows PowerShell 5.1 on older .NET hosts does not offer 1.2 by default.
+- Releases published before the GitHub checksum upload existed have no `sha256sums.txt` on their Release and cannot be installed through `LATE_INSTALL_VERSION` unless the file is backfilled by hand with `gh release upload`. Rollout: before the first `-cli` release after this landed, backfill the tag `latest/VERSION` currently points at (and any tag users are likely to pin), so a CDN-cached pointer cannot make the new installer fail closed against a tag without checksums.
+- Every binary carries a keyless Sigstore build-provenance attestation from `actions/attest`, published next to it as `<binary>.sigstore.json` (R2 only; bundles are self-verifying, so their origin does not matter). One attestation per file keeps bundles single-subject for `cosign verify-blob-attestation --bundle`. The certificate identity is always `deploy_cli.yml@refs/tags/<tag>`: Sigstore takes the identity from `job_workflow_ref`, which for a reusable workflow is the called file, and `release.yml` only appears in the build-config extension. Verification commands live in `README.md` "Verifying downloads".
+- The build must run on the release tag. The OIDC token carries the ref the workflow started on, not the ref checked out, so a dispatch from `main` would sign `main`'s commit as the release. `build_cli` fails first thing unless `GITHUB_REF` is `refs/tags/<release_tag>`; a manual redeploy is `gh workflow run deploy_cli.yml --ref <tag> -f release_tag=<tag>`. The release event already runs on the tag.
+- A published tag is immutable. `publish_cli` uploads `sha256sums.txt` to the Release only when the Release has none; if one exists and matches the build it is left alone (a re-run of failed jobs reuses the same artifacts), and if it differs the job fails so the rebuild ships under a new tag. There is no `rust-toolchain` pin, so a rebuild on a newer runner image will generally differ. To retry a tag on purpose, `gh release delete-asset <tag> sha256sums.txt` first. Manual dispatch also requires the GitHub Release to exist, since the checksum asset lives on it.
+- Permissions: `build_cli` holds `id-token`, `attestations`, and `artifact-metadata` write for attestation; `publish_cli` holds `contents: write` only for `gh release upload` of the checksum file. `release.yml` grants the union to the `cli` job and `deploy_cli.yml` narrows per job. The checksum upload runs before any bucket upload so a tag never exists on R2 without its GitHub checksums.
 
 Release workflow:
 - `.github/workflows/deploy_cli.yml` builds `late-cli` release artifacts
-- `deploy_cli.yml` triggers on published `*-cli` GitHub Releases and also supports manual `workflow_dispatch` with `release_tag` and `environment` inputs. Manual dispatch checks out the requested tag through the shared `source_ref` path and is the recovery path when GitHub misses a release event.
+- `deploy_cli.yml` triggers on published `*-cli` GitHub Releases and also supports manual `workflow_dispatch` with `release_tag` and `environment` inputs. Manual dispatch is the recovery path when GitHub misses a release event; it must be dispatched on the tag itself (`gh workflow run deploy_cli.yml --ref <tag> -f release_tag=<tag>`), see "Supply chain".
 - Linux CI/release jobs install `libwebkit2gtk-4.1-dev` to build the `late-webview` helper crate. `late-cli` itself no longer needs WebKitGTK dev packages on Linux (`cargo build -p late-cli` works without them).
 - Linux glibc release artifacts are two binaries per target: `late` plus the `late-webview` helper, uploaded and checksummed together; `install.sh` installs both into the same directory (helper download is warning-only so older releases still install). Android/Termux, macOS, and Windows remain single-binary.
 - Desktop release artifacts include native LiveKit voice media on Linux, macOS, and Windows. Keep Windows MSVC release builds on the static CRT (`crt-static`/`/MT`) because LiveKit's bundled WebRTC objects are built that way. macOS release builds depend on the two `build.rs` darwin link args (see "macOS voice link requirements" below).
 - Publishes versioned releases plus `latest`
 - Publishes `install.sh` and `install.ps1` at the distribution root
+- Uploads `sha256sums.txt` to the GitHub Release and `<binary>.sigstore.json` provenance bundles next to every binary on R2 (see "Supply chain")
 
 Version stamping:
 - The release tag is the single source of truth for the CLI version. `deploy_cli.yml`'s `build_cli` job exports `LATE_CLI_VERSION=<tag>`, and `late-cli/build.rs` embeds it via `cargo:rustc-env` so the binary version matches the published `VERSION` file (`publish/VERSION`, `publish/latest/VERSION`) byte-for-byte. Local/dev and CI test builds fall back to the `Cargo.toml` version, so nothing needs to be set for `cargo build`.

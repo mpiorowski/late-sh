@@ -213,7 +213,12 @@ fn tile_keys(kind: TileKind, view: &ZenView<'_>) -> &'static [(&'static str, &'s
         TileKind::Pet if view.pet_strip.is_some() => &[("click", "pet")],
         TileKind::Pet => &[],
         TileKind::Chat => &[("[ ]", "room"), ("i", "write")],
-        TileKind::Music => &[("m", "mute"), ("-=", "vol"), ("v x", "source"), ("v1-5", "tune")],
+        TileKind::Music => &[
+            ("m", "mute"),
+            ("-=", "vol"),
+            ("v x", "source"),
+            ("v1-5", "tune"),
+        ],
         TileKind::Lobby => &[("ctrl+g", "open"), ("`", "toggle")],
         TileKind::Clock | TileKind::Visualizer | TileKind::Presence => &[],
         TileKind::Blank => &[],
@@ -299,7 +304,7 @@ fn draw_tile_chrome(
             let room = (rect.width as usize).saturating_sub(left.width());
             let mut line_spans = left.spans;
             let right = hint_line(keys);
-            if !keys.is_empty() && right.width() + 1 <= room {
+            if !keys.is_empty() && right.width() < room {
                 line_spans.push(Span::raw(" ".repeat(room - right.width())));
                 line_spans.extend(right.spans);
             }

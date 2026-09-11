@@ -3,6 +3,24 @@ name: deploy_cli
 # Builds the late CLI for every shipped platform and publishes the release
 # distribution to R2. Called by release.yml for -cli releases;
 # workflow_dispatch is the manual lever.
+#
+# Supply-chain shape: every binary gets a Sigstore build-provenance
+# attestation (actions/attest, keyless, signed by this workflow's OIDC
+# identity) whose bundle ships next to it as <binary>.sigstore.json, and
+# sha256sums.txt is uploaded to the GitHub Release as well as to R2. The
+# installers read checksums from GitHub and binaries from R2, so tampering
+# with the bucket alone cannot ship a different binary to anyone running a
+# trusted copy of the installer.
+#
+# Two rules keep the provenance honest:
+# - The workflow must run on the release tag itself. The Sigstore identity
+#   and the recorded source commit come from the OIDC token, which carries
+#   the ref the workflow ran on, not the ref checked out. A manual redeploy
+#   is therefore `gh workflow run deploy_cli.yml --ref <tag> -f release_tag=<tag>`;
+#   build_cli refuses any other ref.
+# - A published tag is immutable. The checksum file on the GitHub Release is
+#   uploaded once; a rebuild that produces different bytes fails to publish
+#   and ships under a new tag instead.
 
 on:
   workflow_call:
@@ -18,7 +36,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag to deploy, for example v0.27.11-cli"
+        description: "Release tag to deploy, for example v0.27.11-cli. Dispatch on that same tag: gh workflow run deploy_cli.yml --ref <tag> -f release_tag=<tag>"
         required: true
         type: string
       environment:
@@ -37,6 +55,8 @@ jobs:
   ci:
     name: ci
     uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
     with:
       package: late-cli
       source_ref: ${{ inputs.release_tag }}
@@ -45,6 +65,11 @@ jobs:
     name: build_late_cli_${{ matrix.target }}
     needs: ci
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     strategy:
       fail-fast: false
       matrix:
@@ -78,6 +103,20 @@ jobs:
             target: x86_64-pc-windows-msvc
             binary_name: late.exe
     steps:
+      # The attestation identity and its source commit are taken from the
+      # OIDC token, which reflects the ref this run started on. Checking out
+      # the tag below only changes the files being built, so a dispatch from
+      # main would sign main's commit as the release. Refuse that.
+      - name: assert_ref_is_release_tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [[ "$GITHUB_REF" != "refs/tags/${RELEASE_TAG}" ]]; then
+            echo "this workflow must run on refs/tags/${RELEASE_TAG}, got ${GITHUB_REF}; redeploy with: gh workflow run deploy_cli.yml --ref ${RELEASE_TAG} -f release_tag=${RELEASE_TAG}" >&2
+            exit 1
+          fi
+
       - name: checkout
         uses: actions/checkout@v5
         with:
@@ -174,6 +213,35 @@ jobs:
             cp "target/${{ matrix.target }}/release/late-webview" "dist/${{ matrix.target }}/late-webview"
           fi
 
+      # Keyless Sigstore provenance for each staged binary. One attestation
+      # per file keeps every bundle single-subject, which is what
+      # `cosign verify-blob-attestation --bundle` expects.
+      - name: attest_cli_provenance
+        id: attest_cli
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/${{ matrix.target }}/${{ matrix.binary_name }}
+
+      - name: attest_webview_helper_provenance
+        if: matrix.webview_helper == true
+        id: attest_webview
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/${{ matrix.target }}/late-webview
+
+      - name: stage_provenance_bundles
+        shell: bash
+        env:
+          CLI_BUNDLE: ${{ steps.attest_cli.outputs.bundle-path }}
+          WEBVIEW_BUNDLE: ${{ steps.attest_webview.outputs.bundle-path }}
+        run: |
+          test -n "$CLI_BUNDLE"
+          cp "$CLI_BUNDLE" "dist/${{ matrix.target }}/${{ matrix.binary_name }}.sigstore.json"
+          if [[ "${{ matrix.webview_helper }}" == "true" ]]; then
+            test -n "$WEBVIEW_BUNDLE"
+            cp "$WEBVIEW_BUNDLE" "dist/${{ matrix.target }}/late-webview.sigstore.json"
+          fi
+
       - name: upload_cli_artifact
         uses: actions/upload-artifact@v6
         with:
@@ -186,6 +254,9 @@ jobs:
     needs: build_cli
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    # contents: write is for `gh release upload` of sha256sums.txt only.
+    permissions:
+      contents: write
     concurrency:
       group: deploy-cli-${{ inputs.environment }}
       cancel-in-progress: false
@@ -232,6 +303,10 @@ jobs:
                 main_binary_found=1
               fi
               cp "$source_file" "publish/releases/${RELEASE_TAG}/${target}/${binary_name}"
+              # Every published binary ships with its provenance bundle; a
+              # missing one is a build bug, not something to publish around.
+              test -f "${source_file}.sigstore.json"
+              cp "${source_file}.sigstore.json" "publish/releases/${RELEASE_TAG}/${target}/${binary_name}.sigstore.json"
             done
             test "$main_binary_found" -eq 1
           done
@@ -263,6 +338,49 @@ jobs:
             printf '%s\n' "${RELEASE_TAG}" > publish/VERSION
             cp "publish/releases/${RELEASE_TAG}/sha256sums.txt" publish/latest/sha256sums.txt
           fi
+
+      # The installers verify binaries against the checksum file on the
+      # GitHub Release, not the copy on R2. This runs before any bucket
+      # upload so a tag never exists on R2 without its GitHub checksums,
+      # which would make every install of it fail closed.
+      #
+      # A published tag is immutable: the checksum asset is written once.
+      # Overwriting it with a rebuild would make every install of the tag
+      # fail closed until the new binaries reach R2, and for good if that
+      # upload never lands. A rebuild that matches (a re-run of failed jobs
+      # reuses the same artifacts) is fine; one that differs ships under a
+      # new tag. To retry a tag on purpose, delete the asset by hand first:
+      # gh release delete-asset <tag> sha256sums.txt
+      - name: upload_release_checksums_to_github
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          checksums="publish/releases/${RELEASE_TAG}/sha256sums.txt"
+          has_checksums="$(gh release view "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json assets \
+            --jq '[.assets[].name] | index("sha256sums.txt") != null')"
+          case "$has_checksums" in
+            false)
+              gh release upload "${RELEASE_TAG}" "$checksums" --repo "${GITHUB_REPOSITORY}"
+              ;;
+            true)
+              gh release download "${RELEASE_TAG}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --pattern sha256sums.txt \
+                --output published-sha256sums.txt
+              if cmp -s "$checksums" published-sha256sums.txt; then
+                echo "sha256sums.txt for ${RELEASE_TAG} is already published and matches this build"
+              else
+                echo "sha256sums.txt for ${RELEASE_TAG} is already published and differs from this build; a published tag is immutable, ship the rebuild under a new tag" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "unexpected answer from gh release view: ${has_checksums}" >&2
+              exit 1
+              ;;
+          esac
 
       - name: upload_release_distribution
         run: |
