@@ -16,6 +16,9 @@ use chrono::{DateTime, NaiveDate, Utc};
 use tokio_postgres::{Client, Row};
 use uuid::Uuid;
 
+/// The room the paper prints verbatim at the top instead of as a column.
+pub const ANNOUNCEMENTS_SLUG: &str = "announcements";
+
 /// Where a page is in its life. Stored as text, parsed on read, and never
 /// defaulted: an unknown status in the table is a bug worth a crash.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -218,6 +221,14 @@ impl PaperEdition {
                 .iter()
                 .any(|section| section.status == PaperStatus::Ready)
     }
+
+    /// True once the sweeper has reached this edition: at least one row,
+    /// quiet, printing, and failed ones included. Every sweep settles the
+    /// reading section, so an edition with no rows at all has simply not
+    /// been swept yet.
+    pub fn is_swept(&self) -> bool {
+        !self.rooms.is_empty() || !self.sections.is_empty()
+    }
 }
 
 pub struct PaperRoomEdition;
@@ -228,7 +239,8 @@ impl PaperRoomEdition {
     /// `printing` claim older than `stale_before`, or a `failed` row with
     /// fewer than `max_attempts` claims. Public lounge, topic, and language
     /// rooms only; DMs, game rooms, and the haunted channel never reach the
-    /// paper.
+    /// paper. `#announcements` is skipped too: the paper prints its
+    /// messages verbatim at the top, never as a column.
     pub async fn list_candidates(
         client: &Client,
         edition: NaiveDate,
@@ -253,6 +265,7 @@ impl PaperRoomEdition {
                  WHERE r.visibility = 'public'
                    AND r.kind IN ('lounge', 'topic', 'language')
                    AND COALESCE(r.slug, r.language_code) IS NOT NULL
+                   AND r.slug IS DISTINCT FROM $6
                    AND msg.created >= $2
                    AND msg.created < $3
                    AND COALESCE((author.settings->>'system')::boolean, false) = false
@@ -266,7 +279,14 @@ impl PaperRoomEdition {
                    )
                  GROUP BY r.id, label
                  ORDER BY message_count DESC, label ASC",
-                &[&edition, &floor, &ceiling, &stale_before, &max_attempts],
+                &[
+                    &edition,
+                    &floor,
+                    &ceiling,
+                    &stale_before,
+                    &max_attempts,
+                    &ANNOUNCEMENTS_SLUG,
+                ],
             )
             .await?;
         Ok(rows

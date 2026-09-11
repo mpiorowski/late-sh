@@ -33,18 +33,20 @@ use late_core::models::app_flag::{AppFlag, AppFlags};
 use late_core::models::artboard_piece::ArtboardPiece;
 use late_core::models::article::Article;
 use late_core::models::chat_message::ChatMessage;
+use late_core::models::chat_room::ChatRoom;
 use late_core::models::paper::{
-    PaperCandidate, PaperEdition, PaperRoomEdition, PaperRoomPage, PaperSection, PaperSectionKind,
-    PaperSectionRow, PaperStatus,
+    ANNOUNCEMENTS_SLUG, PaperCandidate, PaperEdition, PaperRoomEdition, PaperRoomPage,
+    PaperSection, PaperSectionKind, PaperSectionRow, PaperStatus,
 };
 use late_core::models::user::User;
 use tokio::sync::{broadcast, oneshot, watch};
+use tokio_postgres::Client;
 use tracing::Instrument;
 use uuid::Uuid;
 
 use super::state::{
-    PAPER_WALL_PIECES, PaperCommand, PaperLayout, PaperModal, PaperState, PaperWall,
-    PendingFlagWrite,
+    PAPER_ANNOUNCEMENTS_LIMIT, PAPER_WALL_PIECES, PaperAnnouncement, PaperCommand, PaperLayout,
+    PaperModal, PaperState, PaperWall, PendingFlagWrite,
 };
 use crate::app::ai::ghost::GRAYBEARD_PERSONA;
 use crate::app::ai::svc::AiService;
@@ -150,9 +152,12 @@ pub enum PressOutcome {
         edition: NaiveDate,
         tally: PrintTally,
     },
-    /// The preview edition, for the admin's own modal.
+    /// The preview edition, for the admin's own modal: the columns over
+    /// today so far, plus today's announcements so far. No wall: the
+    /// pieces are yesterday's rows, and a preview has no yesterday.
     Previewed {
         edition: PaperEdition,
+        announcements: Vec<PaperAnnouncement>,
         tally: PrintTally,
     },
     /// Today's rows are gone and the caller's login stamp is off.
@@ -192,10 +197,21 @@ impl PrintTally {
     }
 }
 
+/// Today's paper as the newsstand hands it over: the edition's rows plus
+/// the pages read at open time with no claim, since they are rows
+/// already (yesterday's announcements verbatim, the wall).
+#[derive(Clone, Debug)]
+pub struct PaperIssue {
+    pub edition: PaperEdition,
+    pub announcements: Vec<PaperAnnouncement>,
+    pub wall: Vec<PaperWall>,
+}
+
 #[derive(Clone, Debug)]
 pub enum PaperOutcome {
-    Ready(PaperEdition, Vec<PaperWall>),
-    /// Nothing printed for today's edition yet.
+    Ready(PaperIssue),
+    /// Nothing printed for today's edition yet, and no announcement
+    /// either.
     Empty,
     /// The kill switch is off.
     Unavailable,
@@ -732,7 +748,21 @@ impl PaperService {
                                     flags.paper_outside_enabled,
                                 )
                                 .await;
-                            PressOutcome::Previewed { edition, tally }
+                            match service.preview_announcements(today_start, now).await {
+                                Ok(announcements) => PressOutcome::Previewed {
+                                    edition,
+                                    announcements,
+                                    tally,
+                                },
+                                Err(error) => {
+                                    tracing::error!(
+                                        error = ?error,
+                                        %user_id,
+                                        "failed to read today's announcements for the preview"
+                                    );
+                                    PressOutcome::Failed
+                                }
+                            }
                         }
                     }
                 };
@@ -766,6 +796,16 @@ impl PaperService {
         );
     }
 
+    /// Today's announcements so far, for `/paper preview`.
+    async fn preview_announcements(
+        &self,
+        floor: DateTime<Utc>,
+        ceiling: DateTime<Utc>,
+    ) -> anyhow::Result<Vec<PaperAnnouncement>> {
+        let client = self.db.get().await?;
+        read_announcements(&client, floor, ceiling).await
+    }
+
     async fn reset(&self, user_id: Uuid) -> anyhow::Result<()> {
         let today = edition_for(Utc::now());
         let client = self.db.get().await?;
@@ -784,12 +824,12 @@ impl PaperService {
             return Some(PaperOutcome::Unavailable);
         }
         match self.open(user_id, trigger).await {
-            Ok(Opened::Ready(edition, wall)) => {
+            Ok(Opened::Ready(issue)) => {
                 metrics::record_paper_open(match trigger {
                     PaperTrigger::Login => PaperOpenResult::Login,
                     PaperTrigger::Command => PaperOpenResult::Command,
                 });
-                Some(PaperOutcome::Ready(edition, wall))
+                Some(PaperOutcome::Ready(issue))
             }
             Ok(Opened::Empty) => {
                 metrics::record_paper_open(PaperOpenResult::Empty);
@@ -814,10 +854,15 @@ impl PaperService {
         let today = edition_for(Utc::now());
         let client = self.db.get().await?;
         let edition = PaperEdition::load(&client, today).await?;
-        if !edition.has_print() {
+        // The announcements are a plain read, no claim and no press: the
+        // operator's posts in the window, word for word. A day with an
+        // announcement and no column is still a paper.
+        let (floor, ceiling) = edition_window(today);
+        let announcements = read_announcements(&client, floor, ceiling).await?;
+        if !edition.has_print() && announcements.is_empty() {
             return Ok(Opened::Empty);
         }
-        // The wall is a plain read, no claim: the pieces are rows already,
+        // The wall is a plain read too: the pieces are rows already,
         // printed in their own colours. A decode failure loses that piece,
         // not the column. The gallery's kill switch drops the column: a
         // piece that has to come down fast must not keep printing at every
@@ -843,17 +888,59 @@ impl PaperService {
                 })
                 .collect()
         };
+        let issue = PaperIssue {
+            edition,
+            announcements,
+            wall,
+        };
         match trigger {
             PaperTrigger::Login => {
+                // An announcement alone pops only once the sweeper has been
+                // by. Before that the columns are still coming, and a reader
+                // in just after midnight would spend the day's one stamp on
+                // a paper with nothing under the announcement and no footer
+                // to say so. `/paper` answers regardless.
+                if !issue.edition.has_print() && !issue.edition.is_swept() {
+                    return Ok(Opened::Empty);
+                }
                 if User::claim_paper_shown(&client, user_id, today).await? {
-                    Ok(Opened::Ready(edition, wall))
+                    Ok(Opened::Ready(issue))
                 } else {
                     Ok(Opened::AlreadyShown)
                 }
             }
-            PaperTrigger::Command => Ok(Opened::Ready(edition, wall)),
+            PaperTrigger::Command => Ok(Opened::Ready(issue)),
         }
     }
+}
+
+/// Every `#announcements` post inside `[floor, ceiling)`, oldest first,
+/// as the paper prints them. No room, no announcements: an install that
+/// dropped the room still gets its paper.
+async fn read_announcements(
+    client: &Client,
+    floor: DateTime<Utc>,
+    ceiling: DateTime<Utc>,
+) -> anyhow::Result<Vec<PaperAnnouncement>> {
+    let Some(room) = ChatRoom::find_public_non_dm_by_slug(client, ANNOUNCEMENTS_SLUG).await? else {
+        return Ok(Vec::new());
+    };
+    let posts = ChatMessage::list_public_room_between_with_author(
+        client,
+        room.id,
+        floor,
+        ceiling,
+        PAPER_ANNOUNCEMENTS_LIMIT,
+    )
+    .await?;
+    Ok(posts
+        .into_iter()
+        .map(|post| PaperAnnouncement {
+            author: post.author,
+            posted_at: post.created,
+            body: post.body,
+        })
+        .collect())
 }
 
 /// The sections an edition prints, in page order.
@@ -949,7 +1036,7 @@ fn note_section_print(
 /// What the newsstand found, before the orchestration layer maps it to
 /// a metric and an outcome.
 enum Opened {
-    Ready(PaperEdition, Vec<PaperWall>),
+    Ready(PaperIssue),
     Empty,
     /// The login claim lost to another device or replica.
     AlreadyShown,
@@ -1118,11 +1205,9 @@ pub(crate) fn tick(app: &mut App) -> bool {
     let mut changed = false;
 
     // The pop is the last thing in a session's opening sequence: after
-    // the splash, after the announcements (the operator's word before
-    // graybeard's), and after a newcomer's tour, which captures keys and
+    // the splash, and after a newcomer's tour, which captures keys and
     // must not end up under a modal.
-    let opening_done =
-        !app.show_splash && !app.login_announcements_visible() && app.clubhouse.tutorial_settled();
+    let opening_done = !app.show_splash && app.clubhouse.tutorial_settled();
     if app.paper.login_pop_pending && opening_done {
         app.paper.login_pop_pending = false;
         app.paper.awaiting = Some(PaperTrigger::Login);
@@ -1181,9 +1266,20 @@ fn drain_events(app: &mut App) -> bool {
                     PressOutcome::Printed { edition, tally } => {
                         Banner::success(&tally.banner_line(edition))
                     }
-                    PressOutcome::Previewed { edition, tally } => {
+                    PressOutcome::Previewed {
+                        edition,
+                        announcements,
+                        tally,
+                    } => {
                         let line = tally.banner_line(edition.edition);
-                        app.paper.modal = Some(edition_modal(app, &edition, &[]));
+                        app.paper.modal = Some(edition_modal(
+                            app,
+                            &PaperIssue {
+                                edition,
+                                announcements,
+                                wall: Vec::new(),
+                            },
+                        ));
                         Banner::success(&format!("Preview, not printed. {line}"))
                     }
                     PressOutcome::Reset => Banner::success(
@@ -1201,13 +1297,13 @@ fn drain_events(app: &mut App) -> bool {
 }
 
 /// The newsstand's answer: a ready edition becomes the modal (or waits
-/// behind the announcements), everything else banners or stays silent
+/// behind a newcomer's tour), everything else banners or stays silent
 /// depending on who asked.
 fn open_paper(app: &mut App, trigger: PaperTrigger, outcome: PaperOutcome) {
     match (trigger, outcome) {
-        (_, PaperOutcome::Ready(edition, wall)) => {
-            let modal = edition_modal(app, &edition, &wall);
-            if app.login_announcements_visible() || !app.clubhouse.tutorial_settled() {
+        (_, PaperOutcome::Ready(issue)) => {
+            let modal = edition_modal(app, &issue);
+            if !app.clubhouse.tutorial_settled() {
                 app.paper.pending_modal = Some(modal);
             } else {
                 app.paper.modal = Some(modal);
@@ -1234,9 +1330,9 @@ fn open_paper(app: &mut App, trigger: PaperTrigger, outcome: PaperOutcome) {
     }
 }
 
-/// An edition laid out for this session: the reader's rail order,
+/// An issue laid out for this session: the reader's rail order,
 /// memberships, and shop bumps.
-fn edition_modal(app: &App, edition: &PaperEdition, wall: &[PaperWall]) -> PaperModal {
+fn edition_modal(app: &App, issue: &PaperIssue) -> PaperModal {
     let rail_order: Vec<Uuid> = app
         .chat
         .visual_order()
@@ -1250,8 +1346,9 @@ fn edition_modal(app: &App, edition: &PaperEdition, wall: &[PaperWall]) -> Paper
     let bumped_labels =
         crate::app::chat::ui::bumped_join_room_slugs(app.shop_state.active_room_effects());
     PaperModal::edition(PaperLayout {
-        edition,
-        wall,
+        edition: &issue.edition,
+        announcements: &issue.announcements,
+        wall: &issue.wall,
         rail_order: &rail_order,
         member_room_ids: &member_room_ids,
         bumped_labels: &bumped_labels,
@@ -1365,7 +1462,7 @@ fn tick_flag_writes(app: &mut App) -> bool {
 impl PaperState {
     /// Built at session start. The login pop is armed for every reader
     /// with the tweak on, newcomers included; `tick` holds it until the
-    /// opening sequence (splash, announcements, tour) is over.
+    /// opening sequence (splash, tour) is over.
     pub(crate) fn new(service: PaperService, pop_at_login: bool) -> Self {
         let rx = service.subscribe();
         Self {

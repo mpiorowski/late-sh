@@ -1,14 +1,14 @@
 use std::collections::HashSet;
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, TimeZone, Utc};
 use late_core::models::paper::{
     PaperEdition, PaperRoomPage, PaperSection, PaperSectionKind, PaperStatus,
 };
 use uuid::Uuid;
 
 use super::{
-    PAPER_ELSEWHERE_LIMIT, PaperCommand, PaperInk, PaperLayout, PaperLine, PaperWall, lay_out,
-    parse_paper_command,
+    PAPER_ELSEWHERE_LIMIT, PaperAnnouncement, PaperCommand, PaperInk, PaperLayout, PaperLine,
+    PaperWall, lay_out, parse_paper_command,
 };
 use crate::app::artboard::gallery::ui::PaintRun;
 
@@ -99,8 +99,23 @@ fn the_paper_follows_the_rail_then_elsewhere_then_the_back_pages() {
         Uuid::from_u128(10),
     ];
     let bumped = vec!["dnd".to_string()];
+    // The operator posted twice on the covered day; both print whole,
+    // oldest first, before anything graybeard wrote.
+    let announcements = [
+        PaperAnnouncement {
+            author: "mat".to_string(),
+            posted_at: Utc.with_ymd_and_hms(2026, 9, 2, 9, 5, 0).unwrap(),
+            body: "maintenance tonight at 22:00 UTC\nexpect ten minutes down".to_string(),
+        },
+        PaperAnnouncement {
+            author: "mat".to_string(),
+            posted_at: Utc.with_ymd_and_hms(2026, 9, 2, 23, 40, 0).unwrap(),
+            body: "back up, thanks for waiting".to_string(),
+        },
+    ];
 
     let lines = plain(&lay_out(PaperLayout {
+        announcements: &announcements,
         wall: &[],
         edition: &edition,
         rail_order: &rail_order,
@@ -112,6 +127,15 @@ fn the_paper_follows_the_rail_then_elsewhere_then_the_back_pages() {
         lines,
         vec![
             "by @graybeard · covers Wed Sep 2 (UTC) · he read it all so you would not have to",
+            "",
+            "ANNOUNCEMENTS",
+            "",
+            "@mat · 09:05",
+            "maintenance tonight at 22:00 UTC",
+            "expect ten minutes down",
+            "",
+            "@mat · 23:40",
+            "back up, thanks for waiting",
             "",
             "YOUR ROOMS",
             "",
@@ -156,6 +180,7 @@ fn a_member_room_missing_from_the_rail_still_gets_its_column() {
     };
     let member_room_ids: HashSet<Uuid> = [Uuid::from_u128(1)].into_iter().collect();
     let lines = plain(&lay_out(PaperLayout {
+        announcements: &[],
         wall: &[],
         edition: &edition,
         rail_order: &[],
@@ -258,6 +283,7 @@ fn the_wall_prints_every_piece_in_colour_most_applauded_first() {
         wall_piece("late", 0, 30),
     ];
     let laid = lay_out(PaperLayout {
+        announcements: &[],
         wall: &wall,
         edition: &edition,
         rail_order: &[],
@@ -317,6 +343,7 @@ fn an_empty_wall_prints_no_column() {
         sections: Vec::new(),
     };
     let lines = plain(&lay_out(PaperLayout {
+        announcements: &[],
         wall: &[],
         edition: &edition,
         rail_order: &[],

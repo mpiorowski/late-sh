@@ -410,7 +410,6 @@ pub struct SessionConfig {
     /// say so.
     pub pot_service: Option<crate::app::pot::svc::PotService>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
-    pub initial_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub user_id: Uuid,
     pub permissions: Permissions,
     pub artboard_banned: bool,
@@ -487,7 +486,6 @@ pub struct App {
     /// minute-granularity (rides the per-minute global frame), so only the
     /// running -> ready transition needs its own one-shot frame.
     pub(crate) ultimate_cooldown_was_running: bool,
-    pub(crate) login_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     /// The Late Edition: its modal, the login pop, and the `/paper` drain.
     pub(crate) paper: crate::app::paper::state::PaperState,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
@@ -1010,28 +1008,6 @@ impl App {
         self.sync_visible_chat_room();
     }
 
-    pub(crate) fn login_announcements_visible(&self) -> bool {
-        self.login_announcements.is_some()
-            && !self.show_splash
-            && !self.show_settings
-            && !self.show_quit_confirm
-            && !self.show_help
-            && !self.show_mod_modal
-            && !self.show_hub_modal
-            && !self.show_profile_modal
-            && !self.show_sheet_modal
-            && !self.show_poll_modal
-            && !self.show_gild_modal
-            && !self.show_bonsai_modal
-            && !self.show_lobby_modal
-            && !self.show_ultimate_modal
-            && !self.icon_picker_open
-            && !self.room_search_modal_state.is_open()
-            && !self.booth_modal_state.is_open()
-            && !self.chat.has_news_modal()
-            && !self.chat.has_image_modal()
-    }
-
     fn current_visible_chat_room_id(&self) -> Option<Uuid> {
         match self.screen {
             Screen::Dashboard => self.chat.selected_room_id,
@@ -1379,7 +1355,6 @@ impl App {
             show_lobby_modal: false,
             show_ultimate_modal: false,
             ultimate_cooldown_was_running: false,
-            login_announcements: config.initial_announcements,
             // Newcomers get it too: after the tour, it is the best answer
             // to "is anyone here?" and doubles as the room directory.
             paper: crate::app::paper::state::PaperState::new(

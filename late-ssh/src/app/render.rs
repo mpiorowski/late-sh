@@ -15,7 +15,7 @@ use late_core::models::leaderboard::LeaderboardData;
 use late_core::models::user::{RightSidebarComponentSetting, RightSidebarMode, RoomListMode};
 
 use super::{
-    announcements, artboard,
+    artboard,
     audio::client_state::ClientAudioState,
     bonsai, chat,
     common::{
@@ -294,7 +294,6 @@ struct DrawContext<'a> {
     /// The pot as this viewer sees it, resolved on the ~1s tick. Feeds the
     /// border HUD segment; there is no pot panel in the sidebar.
     pot: &'a crate::app::pot::state::PotView,
-    login_announcements: Option<&'a announcements::LoginAnnouncements>,
     paper_modal: Option<&'a crate::app::paper::state::PaperModal>,
     stream_modal: Option<&'a crate::app::state::StreamModal>,
     show_help: bool,
@@ -433,7 +432,6 @@ impl App {
         }
 
         let area = Rect::new(0, 0, self.size.0, self.size.1);
-        let login_announcements_visible = self.login_announcements_visible();
         // Rail visibility: the settings draft previews live while its modal is
         // open, otherwise the session's modes (this device's stored layout, else
         // the account default). `Auto` resolves against the live width, so a
@@ -1120,7 +1118,6 @@ impl App {
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
             || self.show_lobby_modal
-            || login_announcements_visible
             || self.paper.modal_visible()
             || self.show_help
             || self.show_ultimate_modal
@@ -1141,7 +1138,6 @@ impl App {
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
             || self.show_lobby_modal
-            || login_announcements_visible
             || self.paper.modal_visible()
             || self.show_help
             || self.show_ultimate_modal
@@ -1305,11 +1301,6 @@ impl App {
                         lobby: &self.lobby,
                         daily: &self.daily,
                         pot: &self.pot_view,
-                        login_announcements: if login_announcements_visible {
-                            self.login_announcements.as_ref()
-                        } else {
-                            None
-                        },
                         paper_modal: self.paper.modal.as_ref(),
                         stream_modal: self.stream_modal.as_ref(),
                         show_help: self.show_help,
@@ -2063,9 +2054,6 @@ impl App {
             );
         }
 
-        if let Some(modal) = ctx.login_announcements {
-            announcements::draw(frame, inner, modal);
-        }
         if let Some(modal) = ctx.paper_modal {
             crate::app::paper::ui::draw(frame, inner, modal);
         }
@@ -2165,7 +2153,6 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_gild_modal
         || ctx.cyberspace_modal.is_some()
         || ctx.show_bonsai_modal
-        || ctx.login_announcements.is_some()
         || ctx.paper_modal.is_some()
         || ctx.stream_modal.is_some()
         || ctx.show_help
