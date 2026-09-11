@@ -731,6 +731,19 @@ async fn slash_lobby_zen_and_guide_mirror_their_keys() {
     assert_eq!(app.screen, Screen::Zen);
     app.handle_input(b"\x06");
     assert_eq!(app.screen, Screen::Dashboard);
+
+    // /redraw re-emits every cell, the way Ctrl+L does: the frame after it
+    // carries more than a settled diff.
+    let _ = app.render().expect("render");
+    let settled = strip_ansi(&String::from_utf8_lossy(&app.render().expect("render")));
+    app.handle_input(b"i/redraw\r");
+    let repainted = strip_ansi(&String::from_utf8_lossy(&app.render().expect("render")));
+    assert!(
+        repainted.contains("lounge") && repainted.len() > settled.len(),
+        "expected /redraw to repaint the whole screen; settled={} bytes, repainted={} bytes",
+        settled.len(),
+        repainted.len()
+    );
 }
 
 #[tokio::test]
