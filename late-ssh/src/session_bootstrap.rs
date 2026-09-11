@@ -352,10 +352,10 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             0
         }
     };
-    let initial_pet = match state.pet_service.ensure_cat(user_id).await {
-        Ok(cat) => Some(cat),
+    let initial_pet = match state.pet_service.ensure_pet(user_id).await {
+        Ok(pet) => Some(pet),
         Err(e) => {
-            tracing::warn!(error = ?e, "failed to load/create cat companion");
+            tracing::warn!(error = ?e, "failed to load/create pet companion");
             None
         }
     };
@@ -552,7 +552,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         app_flags_rx: state.app_flags.subscribe(),
         app_flags: Some(state.app_flags.clone()),
         runner_looks_rx: state.runner_looks.subscribe(),
-        show_aquarium_tray: late_core::models::user::extract_show_aquarium_tray(&user.settings),
         zen_layout: late_core::models::user::extract_zen_layout(&user.settings),
         afk_users: state.afk_users.clone(),
         username_directory: Some(state.username_directory.clone()),

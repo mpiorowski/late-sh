@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::hub::shop::catalog::CompanionSection;
 
 use crate::app::hub::shop::entitlements::ShopEntitlements;
 use crate::app::hub::shop::svc::ShopSnapshot;
@@ -79,6 +80,8 @@ fn bonsai_shield_item() -> ShopCatalogItem {
         rental_duration_secs: None,
         badge_slot: None,
         custom_title: false,
+        welcome_fish: false,
+        sprout: false,
     }
 }
 
@@ -121,7 +124,13 @@ fn consumable_row_status_reads_active_while_the_shield_is_live() {
 fn item_row_hides_the_lifetime_purchase_count_as_stock_for_the_bonsai_shield() {
     let item = bonsai_shield_item();
     let state = make_state_with_bonsai_protection(None);
-    let line = item_row(ShopCategory::Companions, false, &item, &state);
+    let line = item_row(
+        ShopCategory::Companions,
+        false,
+        &item,
+        &state,
+        SproutStatus::Bare { days_to_next: None },
+    );
     let text: String = line
         .spans
         .iter()
@@ -166,11 +175,15 @@ fn chat_tab_rows_open_each_group_with_a_section_label() {
     let title_day = ShopCatalogItem {
         rental_duration_secs: Some(RENTAL_DAY_SECS),
         custom_title: true,
+        welcome_fish: false,
+        sprout: false,
         ..chat_item("title_custom_day", TITLE_RENTAL_ITEM_KIND)
     };
     let title_month = ShopCatalogItem {
         rental_duration_secs: Some(RENTAL_MONTH_SECS),
         custom_title: true,
+        welcome_fish: false,
+        sprout: false,
         ..chat_item("title_custom_month", TITLE_RENTAL_ITEM_KIND)
     };
     let spark = chat_item("chat_room_spark", CHAT_CONSUMABLE_ITEM_KIND);
@@ -203,24 +216,44 @@ fn chat_tab_rows_open_each_group_with_a_section_label() {
 }
 
 #[test]
-fn companions_tab_rows_split_pet_bonsai_and_the_tank() {
+fn companions_tab_rows_split_pet_bonsai_the_tank_its_growth_plants_and_fish() {
     use late_core::models::marketplace::{
-        AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_SHIELD_SKU, AQUARIUM_SKU,
-        PET_COMPANION_SKU,
+        AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_PLANT_ITEM_KIND,
+        AQUARIUM_SHIELD_SKU, AQUARIUM_SKU, PET_COMPANION_SKU,
     };
 
     let pet = chat_item(PET_COMPANION_SKU, "feature_unlock");
     let bonsai_shield = bonsai_shield_item();
     let tank = chat_item(AQUARIUM_SKU, "feature_unlock");
     let tank_shield = chat_item(AQUARIUM_SHIELD_SKU, AQUARIUM_CONSUMABLE_ITEM_KIND);
-    let fish = chat_item("mj", AQUARIUM_FISH_ITEM_KIND);
+    let fry = ShopCatalogItem {
+        welcome_fish: true,
+        ..chat_item("aquarium_fish_fry", AQUARIUM_FISH_ITEM_KIND)
+    };
+    let sprout = ShopCatalogItem {
+        sprout: true,
+        ..chat_item("aquarium_sprout", AQUARIUM_PLANT_ITEM_KIND)
+    };
+    let plant = chat_item("aquarium_plant_seatuft", AQUARIUM_PLANT_ITEM_KIND);
+    let fish = chat_item("aquarium_fish_mj", AQUARIUM_FISH_ITEM_KIND);
 
-    // Catalog `sort_order` already runs pet, bonsai shield, tank, shield,
-    // fish; every fish and both tank items share the Aquarium section.
-    let rows = item_list_rows(
-        ShopCategory::Companions,
-        &[&pet, &bonsai_shield, &tank, &tank_shield, &fish],
-    );
+    // The tab lists its items in `CompanionSection` order (the state sorts
+    // them so before the rows are built, stable): catalog `sort_order`
+    // runs the fry before the fish and the fish before the sprout and the
+    // plants; the sort moves the tank's growth and its plants in between
+    // the tank and the fish.
+    let mut items = vec![
+        &pet,
+        &bonsai_shield,
+        &tank,
+        &tank_shield,
+        &fry,
+        &fish,
+        &sprout,
+        &plant,
+    ];
+    items.sort_by_key(|item| CompanionSection::of(item));
+    let rows = item_list_rows(ShopCategory::Companions, &items);
     assert_eq!(
         row_labels(&rows),
         vec![
@@ -231,9 +264,18 @@ fn companions_tab_rows_split_pet_bonsai_and_the_tank() {
             "[Aquarium]",
             "2:aquarium",
             "3:aquarium_shield_two_weeks",
-            "4:mj",
+            "[Growing]",
+            "4:aquarium_fish_fry",
+            "5:aquarium_sprout",
+            "[Plants]",
+            "6:aquarium_plant_seatuft",
+            "[Fish]",
+            "7:aquarium_fish_mj",
         ]
     );
+    for item in [&fish, &plant, &sprout, &fry] {
+        assert!(ShopCategory::Companions.matches_item(item), "{}", item.sku);
+    }
 }
 
 #[test]
@@ -245,9 +287,17 @@ fn title_rows_tell_the_two_tiers_apart_with_the_duration_tag() {
         name: "Your Own Title".to_string(),
         rental_duration_secs: Some(RENTAL_MONTH_SECS),
         custom_title: true,
+        welcome_fish: false,
+        sprout: false,
         ..chat_item("title_custom_month", TITLE_RENTAL_ITEM_KIND)
     };
-    let line = item_row(ShopCategory::Chat, false, &title, &state);
+    let line = item_row(
+        ShopCategory::Chat,
+        false,
+        &title,
+        &state,
+        SproutStatus::Bare { days_to_next: None },
+    );
     let text: String = line
         .spans
         .iter()

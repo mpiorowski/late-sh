@@ -31,6 +31,7 @@ use crate::app::{
     chat::showcase::svc::ShowcaseFeedItem,
     common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
     hub::aquarium::{state::AquariumState, ui as aquarium_ui},
+    pet::ui::portrait_lines as pet_portrait_lines,
     settings_modal::data::country_label,
 };
 
@@ -219,6 +220,28 @@ fn build_segments(
     }
     segments.push(Segment::Text(lines));
 
+    // ── pet ──
+    // The mood is the one the owner's session last wrote: a readout of
+    // how their night is going, honest because they never set it.
+    if let Some(pet) = state.pet() {
+        let mut lines = section_lines("pet", width_usize);
+        lines.extend(pet_portrait_lines(pet.species, pet.mood, wall_tick));
+        let name = pet
+            .name
+            .clone()
+            .unwrap_or_else(|| pet.species.as_str().to_string());
+        lines.push(Line::from(vec![
+            Span::styled(
+                name,
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!(" · {} · {}", pet.mood.as_str(), pet.age), dim),
+        ]));
+        segments.push(Segment::Text(lines));
+    }
+
     // ── aquarium ──
     if !state.aquarium_fish().is_empty() {
         segments.push(Segment::Text(section_lines("aquarium", width_usize)));
@@ -349,7 +372,7 @@ fn draw_aquarium(body: &mut Buffer, area: Rect, state: &ProfileModalState) {
         *slot = AquariumState::default_for_area(band)
             .ok()
             .map(|mut aquarium| {
-                aquarium.set_active_creatures(state.aquarium_fish(), None);
+                aquarium.set_active_creatures(state.aquarium_fish(), None, false);
                 aquarium
             });
     }

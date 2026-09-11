@@ -7,17 +7,19 @@ use super::event::ActivityEvent;
 // title would mint a real mention notification from a system-authored line.
 #[test]
 fn went_live_strips_mentions_from_the_title() {
+    let url = || "https://late.sh/live/abc".to_string();
     let event = ActivityEvent::went_live(
         Uuid::now_v7(),
         "mat",
         Some("come hang @alice @bob".to_string()),
+        url(),
     );
     assert_eq!(event.action, "is live: come hang alice bob");
 
-    let event = ActivityEvent::went_live(Uuid::now_v7(), "mat", Some("@@@".to_string()));
+    let event = ActivityEvent::went_live(Uuid::now_v7(), "mat", Some("@@@".to_string()), url());
     assert_eq!(event.action, "is live");
 
-    let event = ActivityEvent::went_live(Uuid::now_v7(), "mat", None);
+    let event = ActivityEvent::went_live(Uuid::now_v7(), "mat", None, url());
     assert_eq!(event.action, "is live");
 }
 

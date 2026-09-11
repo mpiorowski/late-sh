@@ -59,6 +59,14 @@ impl ChallengeDraft {
 pub struct DailyTick {
     pub banner: Option<Banner>,
     pub changed: bool,
+    /// A match of this user's finished with this user winning. The activity
+    /// feed's `DailyResult` names a player for draws too, so the pet's pride
+    /// reads this instead of the feed.
+    pub own_win: bool,
+    /// A match of this user's finished with the other player winning. The
+    /// activity feed names only the winner, so this is the loser's one
+    /// witness (the pet sulks on it).
+    pub own_loss: bool,
 }
 
 pub struct DailyState {
@@ -79,6 +87,10 @@ pub struct DailyState {
     /// first snapshot update, so a cold-start empty snapshot can't make the
     /// first real snapshot notify for every my-turn match at once.
     turn_notify_seeded: bool,
+    /// Set by a `MatchFinished` this user won or lost, taken by the next
+    /// tick. A draw sets neither.
+    own_win: bool,
+    own_loss: bool,
 
     pub board: Option<DailyBoardState>,
 }
@@ -354,6 +366,8 @@ impl DailyState {
             notifier,
             turn_notified_match_ids: HashSet::new(),
             turn_notify_seeded: false,
+            own_win: false,
+            own_loss: false,
             board: None,
         }
     }
@@ -392,7 +406,12 @@ impl DailyState {
         if self.poll_board_load() {
             changed = true;
         }
-        DailyTick { banner, changed }
+        DailyTick {
+            banner,
+            changed,
+            own_win: std::mem::take(&mut self.own_win),
+            own_loss: std::mem::take(&mut self.own_loss),
+        }
     }
 
     fn apply_event(&mut self, event: DailyEvent) -> Option<Banner> {
@@ -435,6 +454,7 @@ impl DailyState {
                 let playing = challenger_id == self.user_id || opponent_id == Some(self.user_id);
                 match outcome {
                     DailyFinishOutcome::Won { user_id, payout } if user_id == self.user_id => {
+                        self.own_win = true;
                         // The payout was settled before this event was sent,
                         // so the banner reports what the chips did.
                         Some(match payout {
@@ -461,6 +481,7 @@ impl DailyState {
                     DailyFinishOutcome::Won { .. } if playing => {
                         // Losers get told too; the lingering result row in the
                         // lobby is the durable copy of this news.
+                        self.own_loss = true;
                         Some(Banner::info(&format!(
                             "Daily {}: you lost the match ({})",
                             game.label(),

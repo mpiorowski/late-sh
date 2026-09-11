@@ -89,9 +89,6 @@ pub struct ChatDividers {
 // ── Dashboard chat card ─────────────────────────────────────
 
 pub struct DashboardChatView<'a> {
-    /// When present, the 3-row pet strip renders between the messages and
-    /// the composer (pet entitlement + tweak resolved by the caller).
-    pub pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     /// Recent #lounge system-feed lines (newest first), packed left to
     /// right into the composer-gap row.
     pub activity_ticker: &'a [super::state::ActivityTickerEntry],
@@ -585,28 +582,22 @@ pub(crate) fn composer_placeholder_lines(view: &ComposerBlockView<'_>, width: us
 }
 
 fn split_chat_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect) {
-    let (messages, _, _, composer) = split_chat_pet_strip_and_composer(area, composer_height, 0);
+    let (messages, _, composer) = split_chat_ticker_and_composer(area, composer_height);
     (messages, composer)
 }
 
 /// Vertical layout for a chat surface: messages fill, then a blank breather,
-/// then an optional pet strip (0 rows when absent), then the one-row activity
-/// ticker hugging the composer. With the pet absent this collapses to the same
-/// two-row gap (blank + ticker) as before, so the chrome never moves.
-fn split_chat_pet_strip_and_composer(
-    area: Rect,
-    composer_height: u16,
-    pet_strip_height: u16,
-) -> (Rect, Rect, Rect, Rect) {
+/// then the one-row activity ticker hugging the composer. Returns
+/// `(messages, ticker, composer)`.
+fn split_chat_ticker_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect, Rect) {
     let layout = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(CHAT_COMPOSER_GAP_HEIGHT.saturating_sub(1)),
-        Constraint::Length(pet_strip_height),
         Constraint::Length(1),
         Constraint::Length(composer_height),
     ])
     .split(area);
-    (layout[0], layout[3], layout[2], layout[4])
+    (layout[0], layout[2], layout[3])
 }
 
 /// The one-row #lounge activity ticker rendered in the composer gap. The
@@ -1114,10 +1105,6 @@ pub(crate) fn truncate_cells(text: &str, max_width: usize) -> String {
     out
 }
 
-/// Rows the Lounge chat card needs before another surface may take space above
-/// it. The aquarium tray checks this before carving its strip off the top.
-pub(crate) const MIN_CHAT_HEIGHT_WITH_LOUNGE: u16 = 10;
-
 pub fn draw_dashboard_chat_card(
     frame: &mut Frame,
     area: Rect,
@@ -1145,18 +1132,9 @@ pub fn draw_dashboard_chat_card(
         ));
     let visible_composer_lines = total_composer_lines.min(5);
     let composer_height = visible_composer_lines as u16 + 2;
-    let pet_strip_height = if view.pet_strip.is_some() {
-        crate::app::pet::ui::PET_STRIP_HEIGHT
-    } else {
-        0
-    };
-    let (mut messages_area, ticker_area, pet_strip_area, composer_area) =
-        split_chat_pet_strip_and_composer(area, composer_height, pet_strip_height);
+    let (mut messages_area, ticker_area, composer_area) =
+        split_chat_ticker_and_composer(area, composer_height);
     draw_activity_ticker(frame, ticker_area, view.activity_ticker);
-    if let Some(pet_strip) = &view.pet_strip {
-        // The Home strip has no tank beside it: nothing to watch.
-        crate::app::pet::ui::draw_pet_box(frame, pet_strip_area, pet_strip, None);
-    }
     // The Lounge gets the same header block as every other room: voice state
     // and the topic in one place, rather than a bare voice strip.
     let room_stream = view.room.and_then(|room| {
@@ -2916,9 +2894,6 @@ pub(crate) fn draw_mention_autocomplete(
 // ── Main chat screen ────────────────────────────────────────
 
 pub struct ChatRenderInput<'a> {
-    /// When present, the 3-row pet strip renders between the messages and
-    /// the composer (pet entitlement + tweak resolved by the caller).
-    pub pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     /// Recent #lounge system-feed lines (newest first), packed left to
     /// right into the composer-gap row.
     pub activity_ticker: &'a [super::state::ActivityTickerEntry],
@@ -3157,6 +3132,10 @@ pub struct EmbeddedRoomChatView<'a> {
     pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
+    /// Whether the composer block is drawn under the messages. Off for a
+    /// view that only watches a room (a Zen chat tile that is not the
+    /// focused one); the messages then take the whole area.
+    pub composer_shown: bool,
     pub composing: bool,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
@@ -3221,7 +3200,11 @@ pub fn draw_embedded_room_chat(
             composer_text_width,
         ));
     let composer_height = total_composer_lines.min(4) as u16 + 2;
-    let (mut messages_area, composer_area) = split_chat_and_composer(area, composer_height);
+    let (mut messages_area, composer_area) = if view.composer_shown {
+        split_chat_and_composer(area, composer_height)
+    } else {
+        (area, Rect::new(area.x, area.bottom(), area.width, 0))
+    };
 
     // A voice channel shows the compact voice strip at the top of the chat
     // panel; text-only views render unchanged.
@@ -3318,6 +3301,9 @@ pub fn draw_embedded_room_chat(
         draw_image_modal(frame, messages_text_area, image_modal, terminal_images);
     }
 
+    if !view.composer_shown {
+        return;
+    }
     draw_composer_block(
         frame,
         composer_area,
@@ -4219,6 +4205,10 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     let mut hit_slots: Vec<Option<RoomSlot>> = Vec::new();
     let mut selected_row_index = None;
     let inner_width = width.saturating_sub(3) as usize; // 2 left gutter + 1 right margin
+    // Cells a row label may use: the jump-key prefix (`k ` or two blanks)
+    // when room-jump is active, plus four for the badge and its gap.
+    let key_width = if view.room_jump_active { 2 } else { 0 };
+    let label_max = inner_width.saturating_sub(key_width + 4);
     let order = visual_order_for_rooms(RoomVisualOrderInput {
         rooms: view.chat_rooms,
         user_id: view.current_user_id,
@@ -4302,8 +4292,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         } else {
             String::new()
         };
-        let key_width = UnicodeWidthStr::width(key_prefix.as_str());
-        let label_max = inner_width.saturating_sub(key_width + 4);
         let display_label = if UnicodeWidthStr::width(label.as_str()) > label_max && label_max > 1 {
             let mut s = String::new();
             let mut w = 0usize;
@@ -4364,7 +4352,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     let push_slot =
         |slot: RoomSlot, push_row: &mut dyn FnMut(Line<'static>, Option<RoomSlot>, bool)| {
             let active = cozy_slot_selected(view, slot);
-            let (label, unread) = room_slot_label_and_unread(view, slot);
+            let (label, unread) = room_slot_label_and_unread(view, slot, label_max);
             let badge = room_slot_badge(view, slot, unread);
             push_row(
                 item_row(
@@ -4601,19 +4589,24 @@ fn room_slot_badge(view: &ChatRoomListView<'_>, slot: RoomSlot, unread: i64) -> 
     }
 }
 
-fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (String, i64) {
+fn room_slot_label_and_unread(
+    view: &ChatRoomListView<'_>,
+    slot: RoomSlot,
+    label_max: usize,
+) -> (String, i64) {
     match slot {
         RoomSlot::Room(room_id) => {
-            // A stream row carries the show, not the room: streamer, title,
-            // and the watcher count. It also renders before this user is a
-            // member (the room may be missing from `chat_rooms` entirely).
+            // A stream row carries the show, not the room: the streamer and
+            // the bracketed watcher count; the title lives in the room's
+            // stream header. It also renders before this user is a member
+            // (the room may be missing from `chat_rooms` entirely).
             if let Some(stream) = view
                 .live_streams
                 .iter()
                 .find(|stream| stream.room_id == room_id)
             {
                 let unread = view.unread_counts.get(&room_id).copied().unwrap_or(0);
-                return (stream_rail_label(stream), unread);
+                return (stream_rail_label(stream, label_max), unread);
             }
             let Some((room, _)) = view.chat_rooms.iter().find(|(room, _)| room.id == room_id)
             else {
@@ -4670,20 +4663,30 @@ fn stream_on_air_view(
     crate::app::voice::ui::OnAirView { live: stream.live }
 }
 
-/// The rail row label for one stream: `▶ #mat-live · title · 3 watching`.
-/// A pending stream (registered, no media yet) shows `starting…` instead of
-/// the count; the watch count only means something once frames flow.
-fn stream_rail_label(stream: &crate::app::stream::registry::LiveStreamView) -> String {
-    let mut label = format!("▶ {}-live", stream.username);
-    if !stream.title.trim().is_empty() {
-        label.push_str(&format!(" · {}", stream.title.trim()));
-    }
-    if !stream.live {
-        label.push_str(" · starting…");
-    } else if stream.watching > 0 {
-        label.push_str(&format!(" · {} watching", stream.watching));
-    }
-    label
+/// The rail row label for one stream: `▶ mat [3]`, the bracket being the
+/// watcher count (zero included). The title lives in the room's stream
+/// header, not here: the row already carries the unread badge on its right,
+/// and a second bare number would read as the same thing. A pending stream
+/// (registered, no media yet) shows `[…]` in the count's slot; the watch
+/// count only means something once frames flow.
+///
+/// The label fits `max_width` by shortening the username, never the bracket:
+/// the row renderer clips labels from the right, which would drop the count
+/// first and end the row in the same `…` a pending stream shows. A username
+/// can run 32 characters while the rail leaves the label 17 cells or fewer,
+/// so a long name is the ordinary case, not a corner.
+fn stream_rail_label(
+    stream: &crate::app::stream::registry::LiveStreamView,
+    max_width: usize,
+) -> String {
+    let count = match stream.live {
+        true => format!("[{}]", stream.watching),
+        false => "[…]".to_string(),
+    };
+    // `▶ ` before the name, one space before the count.
+    let name_budget = max_width.saturating_sub(3 + UnicodeWidthStr::width(count.as_str()));
+    let name = truncate_cells(&stream.username, name_budget);
+    format!("▶ {name} {count}")
 }
 
 /// Slugs of public topic rooms currently carrying a `room_bump` effect,
@@ -4992,18 +4995,9 @@ pub fn draw_chat_center(
     }
 
     let selection_mode = chat_selection_mode(&view, area);
-    let pet_strip_height = if view.pet_strip.is_some() {
-        crate::app::pet::ui::PET_STRIP_HEIGHT
-    } else {
-        0
-    };
-    let (messages_area, ticker_area, pet_strip_area, composer_area) =
-        split_chat_pet_strip_and_composer(area, selection_mode.composer_height(), pet_strip_height);
+    let (messages_area, ticker_area, composer_area) =
+        split_chat_ticker_and_composer(area, selection_mode.composer_height());
     draw_activity_ticker(frame, ticker_area, view.activity_ticker);
-    if let Some(pet_strip) = &view.pet_strip {
-        // The Home strip has no tank beside it: nothing to watch.
-        crate::app::pet::ui::draw_pet_box(frame, pet_strip_area, pet_strip, None);
-    }
 
     draw_selected_content(frame, messages_area, composer_area, view, terminal_images);
 }

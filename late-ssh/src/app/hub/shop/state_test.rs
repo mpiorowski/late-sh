@@ -124,6 +124,8 @@ fn glow_item() -> ShopCatalogItem {
         rental_duration_secs: Some(RENTAL_DAY_SECS),
         badge_slot: None,
         custom_title: false,
+        welcome_fish: false,
+        sprout: false,
     }
 }
 
@@ -228,6 +230,8 @@ fn custom_title_item() -> ShopCatalogItem {
         username_effect_variant: None,
         rental_duration_secs: Some(RENTAL_DAY_SECS),
         custom_title: true,
+        welcome_fish: false,
+        sprout: false,
         ..glow_item()
     }
 }

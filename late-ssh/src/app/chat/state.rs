@@ -365,21 +365,11 @@ fn parse_pot_command(body: &str) -> Option<Option<PotCommand>> {
 }
 
 /// An aquarium control requested from the composer (`/aquarium`,
-/// `/aquarium feed`). `App` owns the tray state and entitlements, so the
-/// composer just records the intent and `App` carries it out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AquariumCommand {
-    Toggle,
-    Feed,
-}
-
-/// A pet action requested from the composer (`/pet` toggles the strip;
-/// `/pet feed` is the day's meal). `App` owns the pet state and
+/// `/aquarium feed`). `App` owns the tray state and
 /// entitlements, so the composer just records the intent and `App` carries
 /// it out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PetCommand {
-    Toggle,
+pub(crate) enum AquariumCommand {
     Feed,
 }
 
@@ -827,6 +817,10 @@ pub struct ChatState {
     /// center, and embedded Rooms chat.
     pub(crate) last_chat_hit_layout: Cell<Option<super::ui::ChatHitLayout>>,
     pending_send_notices: VecDeque<Uuid>,
+    /// When a message of this user's last landed, in any room or DM: the
+    /// pet's "chatty" signal. Commands never count, only sends that
+    /// succeeded.
+    last_own_send_at: Option<std::time::Instant>,
     pub(crate) pending_chat_screen_switch: bool,
     pub(crate) mention_ac: MentionAutocomplete,
     pub(crate) all_usernames: Arc<Vec<String>>,
@@ -981,8 +975,6 @@ pub struct ChatState {
     opened_stream_room: Option<Uuid>,
     /// Set by /aquarium [feed]; consumed by `App` (which owns the tray).
     requested_aquarium_command: Option<AquariumCommand>,
-    /// Set by /pet, /pet feed; consumed by `App` (which owns the pet).
-    requested_pet_command: Option<PetCommand>,
     requested_poll_room: Option<Uuid>,
     /// Set by /brb command; contains the custom message (empty = no message).
     requested_brb: Option<String>,
@@ -1211,6 +1203,7 @@ impl ChatState {
             last_composer_click: None,
             last_chat_hit_layout: Cell::new(None),
             pending_send_notices: VecDeque::new(),
+            last_own_send_at: None,
             pending_chat_screen_switch: false,
             mention_ac: MentionAutocomplete::default(),
             all_usernames: Arc::new(Vec::new()),
@@ -1293,7 +1286,6 @@ impl ChatState {
             requested_watch: None,
             opened_stream_room: None,
             requested_aquarium_command: None,
-            requested_pet_command: None,
             requested_audio_url: None,
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
@@ -2124,8 +2116,9 @@ impl ChatState {
         self.requested_aquarium_command.take()
     }
 
-    pub(crate) fn take_requested_pet_command(&mut self) -> Option<PetCommand> {
-        self.requested_pet_command.take()
+    /// When a message of this user's last landed (`SendSucceeded`).
+    pub(crate) fn last_own_send_at(&self) -> Option<std::time::Instant> {
+        self.last_own_send_at
     }
 
     pub fn take_requested_poll_room(&mut self) -> Option<Uuid> {
@@ -3234,6 +3227,11 @@ impl ChatState {
         composer::set_themed_textarea_cursor_visible(&mut self.composer, false);
     }
 
+    /// The room an open draft was started in: where every submit goes.
+    pub(crate) fn composer_room_id(&self) -> Option<Uuid> {
+        self.composer_room_id
+    }
+
     pub fn reset_composer(&mut self) {
         self.composer = new_chat_textarea();
         self.composing = false;
@@ -3772,23 +3770,19 @@ impl ChatState {
             return None;
         }
 
+        if matches!(body.trim(), "/aquarium" | "/aq") {
+            self.clear_composer_after_submit();
+            return Some(Banner::info(
+                "The tank lives on the Zen page (Ctrl+F): /aquarium feed; its sprout is cut in /shop",
+            ));
+        }
+
         if let Some(command) = match body.trim() {
-            "/aquarium" | "/aq" => Some(AquariumCommand::Toggle),
             "/aquarium feed" | "/aq feed" => Some(AquariumCommand::Feed),
             _ => None,
         } {
             self.clear_composer_after_submit();
             self.requested_aquarium_command = Some(command);
-            return None;
-        }
-
-        if let Some(command) = match body.trim() {
-            "/pet" => Some(PetCommand::Toggle),
-            "/pet feed" => Some(PetCommand::Feed),
-            _ => None,
-        } {
-            self.clear_composer_after_submit();
-            self.requested_pet_command = Some(command);
             return None;
         }
 
@@ -5787,6 +5781,7 @@ impl ChatState {
                     request_id,
                 } if self.user_id == user_id => {
                     self.pending_send_notices.retain(|id| *id != request_id);
+                    self.last_own_send_at = Some(std::time::Instant::now());
                     banner = Some(Banner::success("Message sent"));
                 }
                 ChatEvent::DeltaSynced {
