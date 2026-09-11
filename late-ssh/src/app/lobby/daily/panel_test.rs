@@ -48,7 +48,7 @@ fn compact_shape_is_the_live_rows_and_one_footer() {
         .collect();
     assert_eq!(texts.len(), 2, "a quiet lobby is one note and the footer");
     assert_eq!(texts[0].trim_end(), "  no games running");
-    assert_eq!(texts[1].trim_end(), "2 open · 1/4 · ctrl+g · ` toggle");
+    assert_eq!(texts[1].trim_end(), "  2 open · 1/4");
 
     let busy = props_with(
         (0..6)
@@ -66,7 +66,7 @@ fn compact_shape_is_the_live_rows_and_one_footer() {
     assert_eq!(texts.len(), 4, "rows past the area drop, the footer stays");
     assert!(texts[0].starts_with("  player0"));
     assert!(texts[2].starts_with("  player2"));
-    assert!(texts[3].starts_with("0 open"));
+    assert!(texts[3].starts_with("  0 open"));
 
     let one = props_with(
         vec![DailyPanelMatchRow {

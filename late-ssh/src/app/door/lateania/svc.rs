@@ -45,6 +45,7 @@ use crate::app::{
     activity::{event::ActivityGame, publisher::ActivityPublisher},
     games::chips::svc::ChipService,
 };
+use crate::render_signal::RenderSignal;
 
 use super::abilities::{Ability, AbilityEffect, learned_at, unlocked_for};
 use super::appearance;
@@ -1372,8 +1373,11 @@ impl LateaniaService {
     }
 
     /// Refresh the cached slot summaries for the landing. Safe to call often;
-    /// it's a handful of small-blob reads, not the world lock.
-    pub fn character_slots_task(&self, user_id: Uuid) {
+    /// it's a handful of small-blob reads, not the world lock. The render loop
+    /// only paints on input or a reported change, so the task wakes it once
+    /// the list lands; without that the landing shows the stale list (five
+    /// empty slots, or a character just deleted) until the next keypress.
+    pub fn character_slots_task(&self, user_id: Uuid, repaint: Option<Arc<RenderSignal>>) {
         let svc = self.clone();
         tokio::spawn(async move {
             let Ok(client) = svc.db.get().await else {
@@ -1397,6 +1401,9 @@ impl LateaniaService {
                 })
                 .collect();
             svc.slot_summaries.lock_recover().insert(user_id, summaries);
+            if let Some(sig) = &repaint {
+                sig.wake();
+            }
         });
     }
 
@@ -2059,7 +2066,12 @@ impl LateaniaService {
     /// its sessions/in-memory player) when that slot is the one actually
     /// being played right now - deleting an idle slot from the landing must
     /// never disturb a session mid-adventure on a different one.
-    pub fn delete_character_task(&self, user_id: Uuid, slot: i16) {
+    pub fn delete_character_task(
+        &self,
+        user_id: Uuid,
+        slot: i16,
+        repaint: Option<Arc<RenderSignal>>,
+    ) {
         let svc = self.clone();
         tokio::spawn(async move {
             svc.begin_character_reset(user_id, slot);
@@ -2088,7 +2100,7 @@ impl LateaniaService {
                 }
             }
             svc.prepared_saves.lock_recover().remove(&(user_id, slot));
-            svc.character_slots_task(user_id);
+            svc.character_slots_task(user_id, repaint);
             svc.finish_character_reset(user_id, slot);
         });
     }

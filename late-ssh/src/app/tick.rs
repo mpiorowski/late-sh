@@ -143,6 +143,17 @@ impl App {
         if one_hz && crate::app::arcade::daily::refresh_daily_games(self) {
             changed = true;
         }
+        // The tank's sprout clock rides the same edge: a session up across
+        // midnight asks the service once when a sprout has rooted or the
+        // next is due, and the event clears or plants the floor.
+        if one_hz
+            && self.shop_state.entitlements().has_aquarium()
+            && self
+                .aquarium_care
+                .take_sprout_settlement_on(chrono::Utc::now().date_naive())
+        {
+            self.aquarium_service.settle_sprout_clock_task(self.user_id);
+        }
         if self.screen == Screen::Clubhouse && anim_half {
             // Only cosmetic ambience animates on the tick counter (jukebox
             // EQ, emote arms, fire/candles/stars); walker positions are
@@ -870,18 +881,30 @@ impl App {
                 .set_chat_badge(self.user_id, equipped_badge.as_deref());
             // A tank owned by the shop but with no clock in this session
             // was bought just now (a connect-time owner always has one from
-            // bootstrap): take the row the purchase planted, sprout and all.
+            // bootstrap): take the row the purchase planted, sprout and
+            // fry. The fry is the one fish the snapshot says is swimming.
             if self.shop_state.entitlements().has_aquarium()
                 && self.aquarium_care.last_fed.is_none()
             {
+                let fry = self
+                    .shop_state
+                    .active_aquarium_creatures()
+                    .into_iter()
+                    .next()
+                    .map(|(creature, _)| creature);
+                let welcome = match &fry {
+                    Some(_) => String::from(
+                        "Your tank came with a fry and a sprout: cut the sprout in /shop within the week, or leave it to root"
+                    ),
+                    None => "Your tank came with a sprout: cut it in /shop within the week, or leave it to root"
+                        .to_string(),
+                };
                 self.aquarium_care
-                    .welcome_new_tank(chrono::Utc::now().date_naive());
-                self.banner = Some(crate::app::common::primitives::Banner::info(
-                    "Your tank came with a sprout: leave it, or /aq cut within the week",
-                ));
+                    .welcome_new_tank(chrono::Utc::now().date_naive(), fry);
+                self.banner = Some(crate::app::common::primitives::Banner::info(&welcome));
             }
             self.aquarium_state.set_active_creatures(
-                &self.shop_state.active_aquarium_fish(),
+                &self.shop_state.active_aquarium_creatures(),
                 self.aquarium_care.fry_visible(),
                 self.aquarium_care.sprout_visible(),
             );
@@ -1030,20 +1053,20 @@ impl App {
                     }
                     // The streak's fry: the sim learns which species to draw
                     // small; the shop snapshot reload brings the new count.
-                    ActivityKind::AquariumFryHatched { creature, swimming }
-                        if user_id == self.user_id =>
-                    {
-                        if *swimming {
-                            self.aquarium_care
-                                .set_fry(creature.clone(), chrono::Utc::now().date_naive());
-                            Some(crate::app::common::primitives::Banner::success(&format!(
-                                "A {creature} fry hatched in the tank"
-                            )))
-                        } else {
-                            Some(crate::app::common::primitives::Banner::success(&format!(
-                                "A {creature} fry hatched, the tank is full so it waits in /shop"
-                            )))
-                        }
+                    ActivityKind::AquariumFryHatched { creature } if user_id == self.user_id => {
+                        self.aquarium_care
+                            .set_fry(creature.clone(), chrono::Utc::now().date_naive());
+                        Some(crate::app::common::primitives::Banner::success(&format!(
+                            "A {creature} fry hatched in the tank"
+                        )))
+                    }
+                    // The streak came round with no room for a fry: said
+                    // once, so a full tank never looks like a broken streak.
+                    ActivityKind::AquariumFryNoRoom if user_id == self.user_id => {
+                        Some(crate::app::common::primitives::Banner::info(&format!(
+                            "Your streak hatched no fry: you already own {} fish",
+                            late_core::models::marketplace::AQUARIUM_MAX_FISH
+                        )))
                     }
                     // A second device of yours connecting settled a death.
                     ActivityKind::AquariumFishLost { creature } if user_id == self.user_id => {
@@ -1059,18 +1082,23 @@ impl App {
                         self.aquarium_care.set_sprout(*born);
                         refresh_floor = true;
                         Some(crate::app::common::primitives::Banner::info(
-                            "A sprout came up in your tank: leave it, or /aq cut within the week",
+                            "A sprout came up in your tank: cut it in /shop within the week, or leave it to root",
                         ))
                     }
-                    ActivityKind::AquariumSproutRooted { swimming } if user_id == self.user_id => {
+                    ActivityKind::AquariumSproutRooted { creature } if user_id == self.user_id => {
                         self.aquarium_care.clear_sprout();
                         refresh_floor = true;
-                        Some(crate::app::common::primitives::Banner::success(
-                            if *swimming {
-                                "Your sprout took root: a wigglewort grows in the tank"
-                            } else {
-                                "Your sprout took root: a wigglewort waits in /shop, the tank is full"
+                        Some(crate::app::hub::aquarium::svc::sprout_fate_banner(
+                            &crate::app::hub::aquarium::svc::SproutFate::Rooted {
+                                creature: creature.clone(),
                             },
+                        ))
+                    }
+                    ActivityKind::AquariumSproutWithered if user_id == self.user_id => {
+                        self.aquarium_care.clear_sprout();
+                        refresh_floor = true;
+                        Some(crate::app::hub::aquarium::svc::sprout_fate_banner(
+                            &crate::app::hub::aquarium::svc::SproutFate::Withered,
                         ))
                     }
                     ActivityKind::AquariumSproutCut if user_id == self.user_id => {

@@ -43,7 +43,7 @@ pub fn tile_rects(
 
 fn collect_rects(node: &Node, area: Rect, gap: u16, out: &mut Vec<(TileKind, Rect)>) {
     match node {
-        Node::Leaf { kind } => out.push((*kind, area)),
+        Node::Leaf { kind, .. } => out.push((*kind, area)),
         Node::Split {
             dir,
             share,

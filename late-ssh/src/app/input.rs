@@ -2728,6 +2728,13 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         select_screen_from_topbar(app, screen, target);
         return true;
     }
+    // A click on a Zen tile focuses it, then falls through so the pet, the
+    // composer, and the messages of that tile still take the click. A
+    // modal over the page takes the click itself, the same guard the pet
+    // click uses.
+    if screen == Screen::Zen && !chat_scroll_clicks_blocked(app) {
+        focus_zen_tile_at(app, x, y);
+    }
     if handle_chat_composer_click(app, screen, x, y) {
         return true;
     }
@@ -3433,40 +3440,6 @@ pub(crate) fn feed_aquarium_globally(app: &mut App) {
     }
 }
 
-/// Cut the sprout on the tank floor, from any surface that shows it. The
-/// floor clears at once; the service writes it behind the row's own gate.
-pub(crate) fn cut_aquarium_sprout_globally(app: &mut App) {
-    clear_prefix_arms(app);
-    if !app.shop_state.entitlements().has_aquarium() {
-        app.banner = Some(crate::app::common::primitives::Banner::error(
-            "Unlock Aquarium in Hub Shop",
-        ));
-        return;
-    }
-    match app
-        .aquarium_care
-        .cut_sprout(chrono::Utc::now().date_naive())
-    {
-        crate::app::hub::aquarium::state::CutOutcome::Cut => {
-            app.refresh_aquarium_population();
-            app.aquarium_service.cut_task(app.user_id);
-            app.banner = Some(crate::app::common::primitives::Banner::success(
-                "Cut the sprout",
-            ));
-        }
-        crate::app::hub::aquarium::state::CutOutcome::NothingToCut => {
-            app.banner = Some(crate::app::common::primitives::Banner::error(
-                "Nothing to cut: the floor is bare",
-            ));
-        }
-        crate::app::hub::aquarium::state::CutOutcome::Rooted => {
-            app.banner = Some(crate::app::common::primitives::Banner::error(
-                "Too late to cut: the sprout rooted, a wigglewort grows at your next login",
-            ));
-        }
-    }
-}
-
 fn open_bonsai_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
@@ -3614,6 +3587,33 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
     }
 }
 
+/// Move the Zen focus to the tile under a click. Nothing happens on the
+/// footer, on a gap, or on the tile already focused.
+fn focus_zen_tile_at(app: &mut App, x: u16, y: u16) {
+    use crate::app::zen::layout as zen_layout;
+    let (cols, rows) = app.size;
+    let (tiles_area, _) = zen_layout::rice_areas(Rect::new(0, 0, cols, rows));
+    let zoomed = app.zen.zoomed.then_some(app.zen.focus);
+    let rects = zen_layout::tile_rects(
+        &app.zen.rice.root,
+        tiles_area,
+        app.zen.rice.look.gap as u16,
+        zoomed,
+    );
+    let hit = rects
+        .iter()
+        .position(|(_, rect)| rect_contains(*rect, x, y));
+    let Some(ordinal) = hit else {
+        return;
+    };
+    // Zoomed, the one rect on show is the focused tile whatever its index.
+    if zoomed.is_some() || ordinal == app.zen.focus {
+        return;
+    }
+    app.zen.focus = ordinal;
+    crate::app::zen::input::focus_moved(app);
+}
+
 /// Zen is a surface, not a place in the tab order: the chord opens it over
 /// whatever page is up and the same chord (or Esc) returns there.
 pub(crate) fn toggle_zen_globally(app: &mut App) {
@@ -3640,6 +3640,9 @@ fn open_zen_globally(app: &mut App) {
     app.show_lobby_modal = false;
     app.zen_return_screen = Some(app.screen);
     reset_composers_for_page_change(app);
+    // The first opening this session lands on the first chat tile, so the
+    // chat keys work before anyone reads the footer.
+    app.zen.note_opened();
     app.set_screen(Screen::Zen);
     app.chat.clear_message_selection();
 }
@@ -3690,6 +3693,8 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             HelpTopic::Lateania
         } else if ctx.screen == Screen::Profiles {
             HelpTopic::Profiles
+        } else if ctx.screen == Screen::Zen {
+            HelpTopic::Zen
         } else {
             HelpTopic::Pair
         };
