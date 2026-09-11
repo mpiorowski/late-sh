@@ -89,7 +89,10 @@ async fn a_finished_match_tells_the_pet_win_or_loss_and_a_draw_tells_it_nothing(
     // A draw is neither a win nor a loss, for either seat.
     state.apply_event(finished(me.id, them.id, DailyFinishOutcome::Draw));
     let tick = state.tick();
-    assert!(!tick.own_win && !tick.own_loss, "a draw tells the pet nothing");
+    assert!(
+        !tick.own_win && !tick.own_loss,
+        "a draw tells the pet nothing"
+    );
 
     // Somebody else's match is not my news.
     let other = Uuid::from_u128(99);

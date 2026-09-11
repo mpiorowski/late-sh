@@ -75,7 +75,10 @@ fn the_sprout_stands_until_it_is_cut_and_a_bare_floor_has_nothing_to_cut() {
     // the sprout stays drawn until the plant arrives.
     care.set_sprout(day(3));
     assert_eq!(care.cut_sprout(day(10)), CutOutcome::Rooted);
-    assert!(care.sprout_visible(), "still drawn: the plant comes at connect");
+    assert!(
+        care.sprout_visible(),
+        "still drawn: the plant comes at connect"
+    );
 
     // Rooted or cut elsewhere: the service's event clears it the same way.
     care.set_sprout(day(3));
