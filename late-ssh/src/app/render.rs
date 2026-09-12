@@ -1897,7 +1897,6 @@ impl App {
                     selected_icecast_stream: ctx.selected_icecast_stream,
                     selected_radio_station: ctx.selected_radio_station,
                     radio_now_playing: ctx.radio_now_playing,
-                    status: ctx.status,
                     daily: ctx.daily,
                     lobby_glow: ctx.lobby.glow(),
                     online_count: ctx.online_count,
