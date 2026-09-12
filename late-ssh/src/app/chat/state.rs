@@ -365,7 +365,7 @@ fn parse_pot_command(body: &str) -> Option<Option<PotCommand>> {
 }
 
 /// An aquarium control requested from the composer (`/aquarium`,
-/// `/aquarium feed`). `App` owns the tray state and
+/// `/aquarium feed`). `App` owns the tank state and
 /// entitlements, so the composer just records the intent and `App` carries
 /// it out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -977,7 +977,7 @@ pub struct ChatState {
     /// tells the stream service a named viewer showed up. Recorded here
     /// rather than acted on inline because `App` owns the stream service.
     opened_stream_room: Option<Uuid>,
-    /// Set by /aquarium [feed]; consumed by `App` (which owns the tray).
+    /// Set by /aquarium [feed]; consumed by `App` (which owns the tank).
     requested_aquarium_command: Option<AquariumCommand>,
     requested_poll_room: Option<Uuid>,
     /// Set by /brb command; contains the custom message (empty = no message).

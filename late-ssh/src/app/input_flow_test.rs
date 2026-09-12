@@ -2648,6 +2648,45 @@ async fn artboard_gallery_hangs_a_framed_piece_from_the_rail() {
 }
 
 #[tokio::test]
+async fn zen_tab_cycles_tile_focus_instead_of_switching_pages() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "zen-tab-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "zen-tab-flow-it");
+    wait_for_render_contains(&mut app, " Home ").await;
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "Esc back").await;
+    let tiles = app.zen.leaf_count();
+    let start = app.zen.focus;
+
+    // Tab walks the tiles in layout order and stays on the page: Zen is
+    // not in the page cycle, so the global Tab would drop back to Home.
+    app.handle_input(b"\t");
+    assert_eq!(app.screen, Screen::Zen, "Tab on Zen stays on Zen");
+    assert_eq!(app.zen.focus, (start + 1) % tiles, "Tab focuses the next tile");
+
+    // Shift+Tab walks back.
+    app.handle_input(b"\x1b[Z");
+    assert_eq!(app.screen, Screen::Zen, "Shift+Tab on Zen stays on Zen");
+    assert_eq!(app.zen.focus, start, "Shift+Tab focuses the previous tile");
+
+    // Tab wraps past the last tile to the first.
+    for _ in 0..tiles {
+        app.handle_input(b"\t");
+    }
+    assert_eq!(app.zen.focus, start, "Tab wraps around the tiles");
+    assert_eq!(app.screen, Screen::Zen);
+}
+
+#[tokio::test]
 async fn zen_chat_keys_belong_to_the_focused_chat_tile() {
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "zen-jk-viewer").await;

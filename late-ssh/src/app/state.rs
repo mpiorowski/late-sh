@@ -2685,7 +2685,7 @@ impl App {
     }
 
     /// The rect the aquarium simulation should fill on the current screen:
-    /// the Lounge tray by default, the tank's slot on the Zen pages.
+    /// the tank tile's inner rect on Zen, the launch band elsewhere.
     fn aquarium_area_for_screen(&self) -> Rect {
         use crate::app::zen::{layout as zen_layout, state::TileKind};
         let (cols, rows) = self.size;
