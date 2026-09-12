@@ -431,7 +431,7 @@ fn draw_rice_hint(frame: &mut Frame, area: Rect, zen: &ZenState) {
     let head_width: usize = spans.iter().map(Span::width).sum();
     let hints = hint_line_fitting(
         &[
-            ("Esc", "back"),
+            ("Ctrl+F", "back"),
             ("?", "keys"),
             ("Tab ←→", "focus"),
             ("space", "kind"),

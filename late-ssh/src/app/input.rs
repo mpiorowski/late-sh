@@ -2277,8 +2277,9 @@ fn dispatch_escape(app: &mut App) {
     // editor's own `EditOutcome::Cancel`: a lone Esc never reaches the keymap,
     // it is held as `pending_escape` and lands here via `flush_pending_escape`.
     // The keymap only sees Esc when it arrives mid-chunk with other bytes.
-    // Esc on Zen peels a selected message first, then hands the page back
-    // to wherever Ctrl+F was pressed.
+    // Esc on Zen peels the tile picker, the composer, or a selected message,
+    // and otherwise does nothing: only Ctrl+F (or `/zen`) leaves the page,
+    // so a stray Esc never throws away the layout you sat down in.
     if ctx.screen == Screen::Zen {
         if app.zen.kind_picker.is_some() {
             app.zen.close_kind_picker();
@@ -2292,9 +2293,7 @@ fn dispatch_escape(app: &mut App) {
             && app.chat.selected_message_body_in_room(room_id).is_some()
         {
             app.chat.clear_message_selection();
-            return;
         }
-        close_zen(app);
         return;
     }
     if ctx.screen == Screen::Scratchpad {
@@ -3519,12 +3518,17 @@ fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
             // the tour to the next stop.
             app.set_screen(screen);
         }
+        // The Zen stop teaches the chord itself, so it runs the same toggle
+        // Ctrl+F runs anywhere (modals closed, return page remembered).
+        TourStep::Zen if byte == CTRL_F => {
+            toggle_zen_globally(app);
+        }
         TourStep::Enter if matches!(byte, b'\r' | b'\n') => {
             if app.clubhouse.tutorial_advance() {
                 app.persist_clubhouse_tutorial_done();
             }
         }
-        TourStep::Page(..) | TourStep::Enter => match byte {
+        TourStep::Page(..) | TourStep::Zen | TourStep::Enter => match byte {
             // The way out is always open.
             b'q' | b'Q' => trigger_global_quit(app),
             _ => {}
@@ -3628,7 +3632,7 @@ pub(crate) fn open_guide_globally(app: &mut App) {
 }
 
 /// Zen is a surface, not a place in the tab order: the chord opens it over
-/// whatever page is up and the same chord (or Esc) returns there.
+/// whatever page is up and the same chord returns there. Esc never leaves.
 pub(crate) fn toggle_zen_globally(app: &mut App) {
     if app.screen == Screen::Zen {
         close_zen(app);
@@ -3660,9 +3664,15 @@ fn open_zen_globally(app: &mut App) {
     app.chat.clear_message_selection();
 }
 
-pub(crate) fn close_zen(app: &mut App) {
-    let back = app.zen_return_screen.take().unwrap_or(Screen::Dashboard);
-    app.zen.close_kind_picker();
+/// Hands the page back to wherever Ctrl+F was pressed. A session that
+/// landed on Zen has nowhere to go back to, so it walks into the Clubhouse,
+/// the front door. `set_screen` closes the tile picker and forgets the
+/// return page.
+fn close_zen(app: &mut App) {
+    let back = match app.zen_return_screen {
+        Some(screen) => screen,
+        None => Screen::Clubhouse,
+    };
     reset_composers_for_page_change(app);
     app.set_screen(back);
     app.chat.clear_message_selection();

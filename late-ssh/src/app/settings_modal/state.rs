@@ -111,7 +111,7 @@ pub(crate) enum TweakRow {
     // and a second control here would be a second source of truth for them.
     ComposerKeepFocused,
     FlagFallback,
-    LandOnHome,
+    LandingPage,
     PaperAtLogin,
     // Input group.
     InteractionMode,
@@ -125,7 +125,7 @@ impl TweakRow {
         TweakRow::RoomListSidebar,
         TweakRow::ComposerKeepFocused,
         TweakRow::FlagFallback,
-        TweakRow::LandOnHome,
+        TweakRow::LandingPage,
         TweakRow::PaperAtLogin,
         TweakRow::InteractionMode,
     ];
@@ -849,8 +849,8 @@ impl SettingsModalState {
             TweakRow::FlagFallback => {
                 self.draft.show_flag_fallback ^= true;
             }
-            TweakRow::LandOnHome => {
-                self.draft.land_on_home ^= true;
+            TweakRow::LandingPage => {
+                self.draft.landing_page = self.draft.landing_page.cycle(true);
             }
             TweakRow::PaperAtLogin => {
                 self.draft.paper_at_login ^= true;
@@ -867,6 +867,10 @@ impl SettingsModalState {
     pub(crate) fn cycle_selected_tweak(&mut self, forward: bool) {
         match self.selected_tweak_row() {
             TweakRow::TextBrightness => self.cycle_text_brightness_adjustment(forward),
+            TweakRow::LandingPage => {
+                self.draft.landing_page = self.draft.landing_page.cycle(forward);
+                self.save();
+            }
             _ => self.toggle_selected_tweak(),
         }
     }
@@ -2206,7 +2210,7 @@ impl SettingsModalState {
                 room_list_mode: self.draft.room_list_mode,
                 keep_composer_focused: self.draft.keep_composer_focused,
                 start_with_music_muted: self.draft.start_with_music_muted,
-                land_on_home: self.draft.land_on_home,
+                landing_page: self.draft.landing_page,
                 paper_at_login: self.draft.paper_at_login,
                 show_flag_fallback: self.draft.show_flag_fallback,
                 translate_to: self.draft.translate_to,

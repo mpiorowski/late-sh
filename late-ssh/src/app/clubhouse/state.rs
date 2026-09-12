@@ -93,7 +93,8 @@ struct BannerEntry {
 /// current box names (`State::tutorial_forced_step`) and the quit keys. The
 /// route walks every top-level page in number order with two Enter
 /// interludes for the features that have no page of their own (the music on
-/// Home, the Ctrl+G lobby on The Arcade), ends back in the tavern, and
+/// Home, the Ctrl+G lobby on The Arcade), takes the Ctrl+F chord into Zen
+/// from the last page, ends back in the tavern, and
 /// `Done` is persisted once on the homecoming Enter. The bartender is
 /// deliberately absent from the route: his comped welcome pour stays a
 /// hidden treasure for whoever walks up to the glowing bar after the
@@ -122,19 +123,22 @@ pub enum Tutorial {
     VisitArtboard,
     /// On the Profiles page: people and their projects, then `6`.
     VisitDirectory,
-    /// On the Leaderboards: the last stop, then `0` home.
+    /// On the Leaderboards: the last page, then `Ctrl+F` into Zen.
     VisitLeaderboard,
+    /// On Zen: the tiling page and its chord, then `0` home.
+    VisitZen,
     /// Back in the tavern: the send-off box, Enter sets them free.
     Homecoming,
     Done,
 }
 
 /// The one input the forced tour accepts right now: a page digit and the
-/// screen it leads to, or Enter (the mid-route interlude boxes and the
-/// homecoming box).
+/// screen it leads to, the Ctrl+F chord into Zen, or Enter (the mid-route
+/// interlude boxes and the homecoming box).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TourStep {
     Page(u8, Screen),
+    Zen,
     Enter,
 }
 
@@ -492,7 +496,8 @@ impl State {
             (Tutorial::VisitGames, Screen::Artboard) => Tutorial::VisitArtboard,
             (Tutorial::VisitArtboard, Screen::Profiles) => Tutorial::VisitDirectory,
             (Tutorial::VisitDirectory, Screen::Leaderboard) => Tutorial::VisitLeaderboard,
-            (Tutorial::VisitLeaderboard, Screen::Clubhouse) => Tutorial::Homecoming,
+            (Tutorial::VisitLeaderboard, Screen::Zen) => Tutorial::VisitZen,
+            (Tutorial::VisitZen, Screen::Clubhouse) => Tutorial::Homecoming,
             (stage, _) => stage,
         };
     }
@@ -520,7 +525,8 @@ impl State {
             Tutorial::VisitGames => Some(TourStep::Page(b'4', Screen::Artboard)),
             Tutorial::VisitArtboard => Some(TourStep::Page(b'5', Screen::Profiles)),
             Tutorial::VisitDirectory => Some(TourStep::Page(b'6', Screen::Leaderboard)),
-            Tutorial::VisitLeaderboard => Some(TourStep::Page(b'0', Screen::Clubhouse)),
+            Tutorial::VisitLeaderboard => Some(TourStep::Zen),
+            Tutorial::VisitZen => Some(TourStep::Page(b'0', Screen::Clubhouse)),
             Tutorial::Homecoming => Some(TourStep::Enter),
         }
     }

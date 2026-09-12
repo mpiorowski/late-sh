@@ -793,7 +793,7 @@ async fn zen_yields_the_music_chord_and_w_to_bonsai_care() {
     );
     wait_for_render_contains(&mut app, " Home ").await;
     app.handle_input(b"\x06");
-    wait_for_render_contains(&mut app, "Esc back").await;
+    wait_for_render_contains(&mut app, "Ctrl+F back").await;
     let tiles = app.zen.leaf_count();
     let source = app.paired_source;
 
@@ -2132,8 +2132,8 @@ async fn forced_tour_gates_input_until_each_named_key() {
     assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
 
     // The gate swallows everything but the named key: no page hopping, no
-    // Tab, no help modal, no reserved chords, no composer.
-    for bytes in [&b"2"[..], b"\t", b"?", b"\x0f", b"\x07", b"i"] {
+    // Tab, no help modal, no reserved chords (Zen's included), no composer.
+    for bytes in [&b"2"[..], b"\t", b"?", b"\x0f", b"\x07", b"\x06", b"i"] {
         app.handle_input(bytes);
     }
     assert_eq!(app.screen, Screen::Clubhouse);
@@ -2141,7 +2141,8 @@ async fn forced_tour_gates_input_until_each_named_key() {
     assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
 
     // The named keys walk the route in order, nothing else moves it. The
-    // two Enter interludes (the music, the lobby) stay on their page.
+    // two Enter interludes (the music, the lobby) stay on their page, and
+    // the last page hands over to Zen through its own chord.
     for (bytes, screen) in [
         (&b"1"[..], Screen::Dashboard),
         (b"\r", Screen::Dashboard),
@@ -2150,7 +2151,11 @@ async fn forced_tour_gates_input_until_each_named_key() {
         (b"3", Screen::Games),
         (b"4", Screen::Artboard),
         (b"5", Screen::Profiles),
+        (b"0", Screen::Profiles),
         (b"6", Screen::Leaderboard),
+        (b"0", Screen::Leaderboard),
+        (b"\x06", Screen::Zen),
+        (b"\x06", Screen::Zen),
         (b"0", Screen::Clubhouse),
     ] {
         app.handle_input(bytes);
@@ -2663,7 +2668,7 @@ async fn zen_tab_cycles_tile_focus_instead_of_switching_pages() {
     let mut app = make_app(test_db.db.clone(), user.id, "zen-tab-flow-it");
     wait_for_render_contains(&mut app, " Home ").await;
     app.handle_input(b"\x06");
-    wait_for_render_contains(&mut app, "Esc back").await;
+    wait_for_render_contains(&mut app, "Ctrl+F back").await;
     let tiles = app.zen.leaf_count();
     let start = app.zen.focus;
 
@@ -2688,6 +2693,89 @@ async fn zen_tab_cycles_tile_focus_instead_of_switching_pages() {
     }
     assert_eq!(app.zen.focus, start, "Tab wraps around the tiles");
     assert_eq!(app.screen, Screen::Zen);
+}
+
+#[tokio::test]
+async fn landing_page_tweak_picks_the_first_screen_except_for_new_users() {
+    use crate::app::common::primitives::Screen;
+    use crate::test_helpers::SessionWorld;
+    use late_core::models::user::LandingPage;
+
+    let test_db = new_test_db().await;
+    for (idx, (page, is_new_user, expected)) in [
+        (LandingPage::Clubhouse, false, Screen::Clubhouse),
+        (LandingPage::Home, false, Screen::Dashboard),
+        (LandingPage::Zen, false, Screen::Zen),
+        // A first session always starts in the tavern, where the tour runs.
+        (LandingPage::Zen, true, Screen::Clubhouse),
+        (LandingPage::Home, true, Screen::Clubhouse),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let user = create_test_user(&test_db.db, &format!("landing-it-{idx}")).await;
+        let app = make_app_in_world(
+            test_db.db.clone(),
+            user.id,
+            &format!("landing-flow-it-{idx}"),
+            SessionWorld {
+                landing_page: Some(page),
+                is_new_user,
+                ..SessionWorld::default()
+            },
+        );
+        assert_eq!(
+            app.screen, expected,
+            "landing {page:?}, new user {is_new_user}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn zen_is_left_only_by_ctrl_f_which_returns_where_it_was_opened() {
+    use crate::app::common::primitives::Screen;
+    use crate::test_helpers::SessionWorld;
+    use late_core::models::user::LandingPage;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "zen-leave-it").await;
+    let mut app = make_app_in_world(
+        test_db.db.clone(),
+        user.id,
+        "zen-leave-flow-it",
+        SessionWorld {
+            landing_page: Some(LandingPage::Zen),
+            ..SessionWorld::default()
+        },
+    );
+    assert_eq!(app.screen, Screen::Zen);
+
+    // Landed on Zen: there is no page to hand back, so the chord walks
+    // into the tavern.
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Clubhouse);
+
+    // Opened from The Arcade, a lone Esc stays on the page.
+    app.handle_input(b"2");
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Zen);
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.pending_escape, "esc flushes on zen").await;
+    assert_eq!(app.screen, Screen::Zen, "Esc never leaves Zen");
+
+    // The chord hands the page back to where it was opened.
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Arcade);
+
+    // Leaving by a digit forgets the return page: a later chord on Zen
+    // must not jump back to The Arcade.
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Zen);
+    app.handle_input(b"1");
+    assert_eq!(app.screen, Screen::Dashboard);
+    app.set_screen(Screen::Zen);
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Clubhouse);
 }
 
 #[tokio::test]
@@ -2720,7 +2808,7 @@ async fn zen_chat_keys_belong_to_the_focused_chat_tile() {
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "zen select target").await;
     app.handle_input(b"\x06");
-    wait_for_render_contains(&mut app, "Esc back").await;
+    wait_for_render_contains(&mut app, "Ctrl+F back").await;
 
     // The first opening lands on the chat tile: `j` selects in its room.
     assert_eq!(
@@ -2783,7 +2871,7 @@ async fn zen_a_draft_stays_in_its_room_when_the_focus_moves_and_zoom_shows_the_f
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "zen-quiet").await;
     app.handle_input(b"\x06");
-    wait_for_render_contains(&mut app, "Esc back").await;
+    wait_for_render_contains(&mut app, "Ctrl+F back").await;
 
     // A second chat tile beside the default one, bound to the second room;
     // the first keeps the current room, #lounge.
@@ -2876,7 +2964,7 @@ async fn zen_petting_the_pet_leaves_the_focus_on_the_chat() {
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "lounge").await;
     app.handle_input(b"\x06");
-    wait_for_render_contains(&mut app, "Esc back").await;
+    wait_for_render_contains(&mut app, "Ctrl+F back").await;
 
     let chat = app
         .zen
@@ -2925,7 +3013,7 @@ async fn zen_every_chat_tile_keeps_its_composer_whatever_is_focused() {
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "lounge").await;
     app.handle_input(b"\x06");
-    wait_for_render_contains(&mut app, "Esc back").await;
+    wait_for_render_contains(&mut app, "Ctrl+F back").await;
 
     let first = app
         .zen
@@ -2994,7 +3082,7 @@ async fn zen_room_picker_binds_the_focused_chat_tile_and_slash_picker_opens_it()
     wait_for_render_contains(&mut app, "zen-picked").await;
     let home_selection = app.chat.selected_room_id;
     app.handle_input(b"\x06");
-    wait_for_render_contains(&mut app, "Esc back").await;
+    wait_for_render_contains(&mut app, "Ctrl+F back").await;
     assert_eq!(app.zen.focused_kind(), Some(TileKind::Chat));
     assert_eq!(
         app.zen.focused_chat_room(),
@@ -3059,7 +3147,7 @@ async fn zen_space_opens_a_tile_picker_that_owns_the_keys_until_a_pick_or_esc() 
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, " Home ").await;
     app.handle_input(b"\x06");
-    wait_for_render_contains(&mut app, "Esc back").await;
+    wait_for_render_contains(&mut app, "Ctrl+F back").await;
     assert_eq!(app.zen.focused_kind(), Some(TileKind::Chat));
     let tiles = app.zen.leaf_count();
 

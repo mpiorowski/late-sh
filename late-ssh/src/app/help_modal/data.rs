@@ -220,7 +220,7 @@ pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
     - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels), 4 Artboard (shared ASCII canvas), 5 Profiles (the people: their projects and open-to-work cards), 6 Leaderboards (every board, monthly and all-time).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
-    - Ctrl+F opens Zen from anywhere and hands you back with Esc or the same chord: Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: Tab and the arrows focus, space opens the tile picker for a tile, S splits, X closes, < > change width and { } height, r flips, z zooms, b g t restyle borders, gaps, and titles, R resets, ? opens the Zen guide, the layout is saved per account; each tile names its own keys on the right of its title; up to ten chat tiles each bound to a room ([ ] rebind the focused one, Ctrl+/ or /picker picks its room from the list, i or Enter write in it, j k select in it; the focused chat is the active one, the others watch), w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it, and it reads the rest of your session itself).\n\
+    - Ctrl+F opens Zen from anywhere and the same chord hands you back (Esc does not leave it): Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: Tab and the arrows focus, space opens the tile picker for a tile, S splits, X closes, < > change width and { } height, r flips, z zooms, b g t restyle borders, gaps, and titles, R resets, ? opens the Zen guide, the layout is saved per account; each tile names its own keys on the right of its title; up to ten chat tiles each bound to a room ([ ] rebind the focused one, Ctrl+/ or /picker picks its room from the list, i or Enter write in it, j k select in it; the focused chat is the active one, the others watch), w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it, and it reads the rest of your session itself).\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Typing /shop into the composer opens the Shop. When a terminal swallows a chord, the composer has a typed fallback that does the same thing: /settings (Ctrl+O), /lobby (Ctrl+G), /zen (Ctrl+F), /redraw (Ctrl+L), /guide (?).\n\
     - Ctrl+/ opens jump search across rooms and DMs (/picker types it); typing ?query searches messages.\n\
     - Home's room rail also holds RSS, News, Cyberspace, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"N unread mentions\" counter in the top-right corner.\n\
@@ -1352,7 +1352,7 @@ fn zen_help_lines() -> Vec<String> {
     [
         "Zen",
         "",
-        "Zen is the clubhouse cut down to the things you keep alive: your bonsai, the reef, the pet, your rooms' chat, music, a clock, and the lobby, as tiles you arrange yourself. Ctrl+F opens it from any page and Esc or the same chord hands you back. The layout is saved per account, the rooms your chat tiles are bound to included.",
+        "Zen is the clubhouse cut down to the things you keep alive: your bonsai, the reef, the pet, your rooms' chat, music, a clock, and the lobby, as tiles you arrange yourself. Ctrl+F opens it from any page and the same chord hands you back; Esc stays on the page. The layout is saved per account, the rooms your chat tiles are bound to included.",
         "",
         "Each tile names its own keys on the right of its title (t hides the titles). The footer shows the keys you use most; the full list is here.",
         "",
@@ -1388,7 +1388,8 @@ fn zen_help_lines() -> Vec<String> {
         "  sprout            no page key: its Shop row (/shop, Companions) cuts it with - within the week",
         "",
         "Leaving",
-        "  Esc / Ctrl+F      back to the page you came from",
+        "  Ctrl+F / /zen     back to the page you came from (the Clubhouse if you landed here)",
+        "  Esc               closes the tile picker, the composer, or a selection; never leaves",
         "  ?                 open this guide",
     ]
     .iter()
@@ -1480,7 +1481,7 @@ fn settings_help_lines() -> Vec<String> {
         "    Chat flag text fallback       show text/boxed-letter labels instead of flag emoji in chat badges and Shop Flags"
             .to_string(),
         "  Startup".to_string(),
-        "    Land on Home page             land on Home (page 1) instead of the Clubhouse (page 0) when a session starts"
+        "    Land on                       where a session starts: Clubhouse (default), Home, or Zen; first sessions always start in the Clubhouse"
             .to_string(),
         "".to_string(),
         "RSS tab".to_string(),

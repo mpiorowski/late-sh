@@ -712,7 +712,7 @@ async fn profile_username_change_projects_to_live_irc_session() {
             room_list_mode: late_core::models::user::RoomListMode::On,
             keep_composer_focused: false,
             start_with_music_muted: false,
-            land_on_home: false,
+            landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
             show_flag_fallback: false,
             translate_to: late_core::models::message_translation::TranslateLang::En,

@@ -93,8 +93,8 @@ fn tutorial_tours_every_page_then_comes_home() {
     assert_eq!((state.player_x, state.player_y), map::SPAWN);
 
     // Every stop forces exactly one input: a page digit whose screen
-    // advances the route, or Enter on the two mid-route interlude boxes
-    // (the music on Home, the lobby on The Arcade).
+    // advances the route, Enter on the two mid-route interlude boxes (the
+    // music on Home, the lobby on The Arcade), or the Ctrl+F chord into Zen.
     for (step, next_stage) in [
         (TourStep::Page(b'1', Screen::Dashboard), Tutorial::VisitChat),
         (TourStep::Enter, Tutorial::VisitMusic),
@@ -113,6 +113,7 @@ fn tutorial_tours_every_page_then_comes_home() {
             TourStep::Page(b'6', Screen::Leaderboard),
             Tutorial::VisitLeaderboard,
         ),
+        (TourStep::Zen, Tutorial::VisitZen),
         (
             TourStep::Page(b'0', Screen::Clubhouse),
             Tutorial::Homecoming,
@@ -130,6 +131,11 @@ fn tutorial_tours_every_page_then_comes_home() {
                 };
                 state.tutorial_screen_entered(wrong);
                 state.tutorial_screen_entered(screen);
+            }
+            TourStep::Zen => {
+                // The tavern is not the way into Zen: the stop waits for it.
+                state.tutorial_screen_entered(Screen::Clubhouse);
+                state.tutorial_screen_entered(Screen::Zen);
             }
             // The interludes advance without finishing the tour.
             TourStep::Enter => assert!(!state.tutorial_advance()),
@@ -160,6 +166,7 @@ fn bar_glows_after_homecoming_until_the_pour_is_claimed() {
         Screen::Artboard,
         Screen::Profiles,
         Screen::Leaderboard,
+        Screen::Zen,
         Screen::Clubhouse,
     ] {
         state.tutorial_screen_entered(screen);
