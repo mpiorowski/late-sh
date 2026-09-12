@@ -196,8 +196,8 @@ struct DrawContext<'a> {
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
     /// Players currently in the Lateania world (for the landing/hub card).
     lateania_online: usize,
-    /// This account's character slots, for the character-select landing.
-    lateania_slots: Vec<crate::app::door::lateania::svc::SlotSummary>,
+    /// This account's character list, for the character-select landing.
+    lateania_slots: crate::app::door::lateania::svc::SlotList,
     lateania_slot_cursor: usize,
     /// Door liveness pips, all six precomputed through
     /// `HubGame::live_screen` (the one definition the backtick cycle also

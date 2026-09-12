@@ -59,10 +59,10 @@ impl PetPose {
         match (mood, watching) {
             (PetMood::Sulking, _) => PetPose::Sulk,
             (PetMood::Asleep, _) => PetPose::Sleep,
-            // Something on its mind: it paces rather than watches.
-            (PetMood::Purring | PetMood::Proud | PetMood::Chatty, _) => PetPose::Stroll,
-            (PetMood::Vibing | PetMood::Idle, None) => PetPose::Stroll,
-            (PetMood::Vibing | PetMood::Idle, Some(side)) => {
+            // Wound up: it paces rather than watches.
+            (PetMood::Purring | PetMood::Proud, _) => PetPose::Stroll,
+            (PetMood::Chatty | PetMood::Vibing | PetMood::Idle, None) => PetPose::Stroll,
+            (PetMood::Chatty | PetMood::Vibing | PetMood::Idle, Some(side)) => {
                 if tick % (STROLL_TICKS + WATCH_TICKS) >= STROLL_TICKS {
                     PetPose::Watch(side)
                 } else {

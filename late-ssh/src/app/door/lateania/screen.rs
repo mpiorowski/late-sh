@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
 };
@@ -16,7 +16,7 @@ use crate::app::{
 };
 use crate::usernames::UsernameLookup;
 
-use super::svc::{CHARACTER_SLOTS, SlotSummary};
+use super::svc::{CHARACTER_SLOTS, SlotList};
 
 pub const GAME: LateaniaDoorGame = LateaniaDoorGame;
 
@@ -70,8 +70,8 @@ pub struct LateaniaScreenView<'a> {
     pub usernames: &'a UsernameLookup<'a>,
     /// Players currently in the Lateania world, shown on the landing.
     pub online: usize,
-    /// This account's character slots, for the landing's select list.
-    pub slots: &'a [SlotSummary],
+    /// This account's character list, for the landing's select list.
+    pub slots: &'a SlotList,
     /// Highlighted slot on the landing.
     pub slot_cursor: usize,
 }
@@ -123,7 +123,11 @@ fn handle_key(app: &mut App, byte: u8) -> bool {
             true
         }
         b'd' | b'D' => {
-            app.door_delete_confirm = true;
+            // A list still being read cannot say whether the highlighted slot
+            // holds a character, and `d` deletes one for good.
+            if let SlotList::Ready(_) = app.lateania_service.character_slots(app.user_id) {
+                app.door_delete_confirm = true;
+            }
             true
         }
         _ => false,
@@ -234,15 +238,15 @@ pub fn draw_landing(
     area: Rect,
     delete_confirm: bool,
     online: usize,
-    slots: &[SlotSummary],
+    slots: &SlotList,
     slot_cursor: usize,
 ) {
     draw_launch_copy(frame, area, delete_confirm, online, slots, slot_cursor);
 }
 
 /// One row of the character-select list: the highlighted slot gets a `>`
-/// marker and bright text; an empty slot reads as an invitation to start one.
-fn slot_row(slot: &SlotSummary, highlighted: bool) -> Line<'static> {
+/// marker and bright text.
+fn slot_row(slot: i16, desc: String, desc_color: Color, highlighted: bool) -> Line<'static> {
     let marker_color = if highlighted {
         theme::SUCCESS()
     } else {
@@ -255,30 +259,52 @@ fn slot_row(slot: &SlotSummary, highlighted: bool) -> Line<'static> {
     } else {
         Style::default().fg(marker_color)
     };
-    let desc = if slot.occupied {
-        match slot.class {
-            Some(class) => format!("{}, Lv {}", class.name(), slot.level),
-            None => format!("Lv {} - no class chosen yet", slot.level),
-        }
-    } else {
-        "empty - start a new character".to_string()
-    };
-    let desc_color = if slot.occupied {
-        theme::TEXT_BRIGHT()
-    } else {
-        theme::TEXT_FAINT()
-    };
     Line::from(vec![
         Span::styled(
-            format!(
-                "{} {}. ",
-                if highlighted { ">" } else { " " },
-                slot.slot + 1
-            ),
+            format!("{} {}. ", if highlighted { ">" } else { " " }, slot + 1),
             marker_style,
         ),
         Span::styled(desc, Style::default().fg(desc_color)),
     ])
+}
+
+/// The character-select rows. A saved character reads as itself, an empty slot
+/// as an invitation to start one, and a list still being read says so: those
+/// last two used to look identical, so the landing invited you to start a new
+/// character over one it had not heard about yet.
+fn slot_rows(slots: &SlotList, slot_cursor: usize) -> Vec<Line<'static>> {
+    match slots {
+        SlotList::Loading => (0..CHARACTER_SLOTS)
+            .map(|slot| {
+                slot_row(
+                    slot,
+                    "loading".to_string(),
+                    theme::TEXT_FAINT(),
+                    slot as usize == slot_cursor,
+                )
+            })
+            .collect(),
+        SlotList::Ready(rows) => rows
+            .iter()
+            .map(|row| {
+                let (desc, color) = match (row.occupied, row.class) {
+                    (false, _) => (
+                        "empty - start a new character".to_string(),
+                        theme::TEXT_FAINT(),
+                    ),
+                    (true, Some(class)) => (
+                        format!("{}, Lv {}", class.name(), row.level),
+                        theme::TEXT_BRIGHT(),
+                    ),
+                    (true, None) => (
+                        format!("Lv {} - no class chosen yet", row.level),
+                        theme::TEXT_BRIGHT(),
+                    ),
+                };
+                slot_row(row.slot, desc, color, row.slot as usize == slot_cursor)
+            })
+            .collect(),
+    }
 }
 
 fn draw_launch_copy(
@@ -286,7 +312,7 @@ fn draw_launch_copy(
     area: Rect,
     delete_confirm: bool,
     online: usize,
-    slots: &[SlotSummary],
+    slots: &SlotList,
     slot_cursor: usize,
 ) {
     let inner = Layout::default()
@@ -347,9 +373,7 @@ fn draw_launch_copy(
     )));
     lines.push(Line::raw(""));
     lines.push(landing::heading("Choose Your Character"));
-    for slot in slots {
-        lines.push(slot_row(slot, slot.slot as usize == slot_cursor));
-    }
+    lines.extend(slot_rows(slots, slot_cursor));
     lines.push(Line::raw(""));
     lines.push(landing::hint("j/k or up/down", "highlight a slot", 19));
     lines.push(landing::action(

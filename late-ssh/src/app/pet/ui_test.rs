@@ -82,15 +82,28 @@ fn a_calm_pet_beside_the_tank_strolls_twenty_minutes_and_watches_five() {
     // Roughly the minutes on the label, at the 66ms wall tick.
     assert_eq!((STROLL_TICKS * 66 + 30_000) / 60_000, 20);
     assert_eq!((WATCH_TICKS * 66 + 30_000) / 60_000, 5);
-    // Vibing watches too; a pet with something on its mind paces instead,
-    // a sulking one sulks, a sleeping one sleeps, and no tank means no
-    // watching at all.
+    // Vibing and chatty watch too; a wound up pet paces instead, a sulking
+    // one sulks, a sleeping one sleeps, and no tank means no watching at
+    // all.
     assert_eq!(
         PetPose::for_frame(PetMood::Vibing, glass, None, STROLL_TICKS),
         PetPose::Watch(WatchSide::Right)
     );
     assert_eq!(
+        PetPose::for_frame(PetMood::Chatty, glass, None, STROLL_TICKS),
+        PetPose::Watch(WatchSide::Right)
+    );
+    assert_eq!(
+        PetPose::for_frame(PetMood::Chatty, glass, None, STROLL_TICKS - 1),
+        PetPose::Stroll,
+        "and it keeps the same twenty/five cycle"
+    );
+    assert_eq!(
         PetPose::for_frame(PetMood::Proud, glass, None, STROLL_TICKS),
+        PetPose::Stroll
+    );
+    assert_eq!(
+        PetPose::for_frame(PetMood::Purring, glass, None, STROLL_TICKS),
         PetPose::Stroll
     );
     assert_eq!(

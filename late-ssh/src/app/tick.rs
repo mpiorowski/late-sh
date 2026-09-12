@@ -523,6 +523,18 @@ impl App {
             let lateania_changed = state.tick();
             changed |= lateania_changed && self.screen == Screen::Lateania;
         }
+        // The character-select list changes from tasks with no session of
+        // their own: a logout save, a delete, another connection's character.
+        // Only the two screens that draw it pay for the comparison, and a
+        // change there is worth a frame, so a new character appears within one
+        // idle tick instead of on the next keypress.
+        if matches!(self.screen, Screen::Lateania | Screen::Games) {
+            let slots = self.lateania_service.character_slots(self.user_id);
+            if slots != self.lateania_slots_seen {
+                self.lateania_slots_seen = slots;
+                changed = true;
+            }
+        }
         if let Some(state) = self.rebels_state.as_mut() {
             state.tick();
         }

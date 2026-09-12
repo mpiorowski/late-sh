@@ -712,6 +712,11 @@ pub struct App {
     /// Highlighted row on the Lateania character-select landing (0-based
     /// slot index). Also which slot a confirmed `d` delete targets.
     pub(crate) lateania_slot_cursor: usize,
+    /// The character-select list as of the last tick. The landing is the one
+    /// Lateania screen with no session state object to drain, so this is where
+    /// a change made elsewhere (a logout save, a delete, another connection)
+    /// is noticed and paid for with a frame.
+    pub(crate) lateania_slots_seen: crate::app::door::lateania::svc::SlotList,
     pub(crate) lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub(crate) greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
     pub(crate) darkroom_service: crate::app::door::darkroom::svc::DarkroomService,
@@ -1555,6 +1560,7 @@ impl App {
             is_playing_game: false,
             door_delete_confirm: false,
             lateania_slot_cursor: 0,
+            lateania_slots_seen: crate::app::door::lateania::svc::SlotList::Loading,
             games_hub_state: crate::app::door::hub::state::State::default(),
             lateania_service: config.lateania_service,
             greendragon_service: config.greendragon_service,
@@ -1734,11 +1740,11 @@ impl App {
     }
 
     pub(crate) fn leave_lateania(&mut self) {
+        // Dropping the state runs its `leave_task`, and that save writes the
+        // landing's row for this character itself. Reading the list here (as
+        // this used to) only raced the save: the query won every time, so a
+        // character created this session read as an empty slot.
         self.lateania_state = None;
-        // Refresh the landing's slot list so a level/class change from the
-        // adventure just left shows up without needing to leave the screen.
-        self.lateania_service
-            .character_slots_task(self.user_id, self.repaint_signal.clone());
     }
 
     /// A backtick detach hopped out of the Lateania world recently enough
@@ -2266,11 +2272,13 @@ impl App {
         if self.screen == Screen::Artboard {
             self.enter_dartboard();
         }
-        if self.screen == Screen::Lateania {
-            // Refresh the character-select landing's slot list; the landing
-            // itself only shows once an explicit Enter joins a slot.
+        // The Games hub draws this account's character list on the Lateania
+        // card and the landing draws it in full: read it from the database the
+        // first time either is opened (and retry there if that read failed).
+        // Every change after that rides the write that made it.
+        if matches!(self.screen, Screen::Lateania | Screen::Games) {
             self.lateania_service
-                .character_slots_task(self.user_id, self.repaint_signal.clone());
+                .fill_slots_task(self.user_id, self.repaint_signal.clone());
         }
         if self.screen == Screen::Rebels {
             self.enter_rebels();

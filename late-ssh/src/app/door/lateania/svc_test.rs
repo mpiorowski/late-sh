@@ -4802,12 +4802,21 @@ async fn a_second_session_picking_another_slot_cannot_overwrite_the_live_charact
     );
 }
 
+/// The row the landing would draw for one slot, or `None` while the account's
+/// list is still being read.
+fn landing_row(svc: &LateaniaService, user_id: Uuid, slot: i16) -> Option<SlotSummary> {
+    match svc.character_slots(user_id) {
+        SlotList::Loading => None,
+        SlotList::Ready(rows) => Some(rows[slot as usize]),
+    }
+}
+
 #[tokio::test]
-async fn slot_list_refreshes_wake_the_render_loop_when_they_land() {
-    // The landing draws the cached slot list, and the render loop only paints
-    // on input or a reported change. A refresh that lands silently leaves the
-    // landing showing five empty slots (or a character just deleted) until the
-    // player happens to press a key.
+async fn slot_list_changes_wake_the_render_loop_when_they_land() {
+    // The landing draws the service's list, and the render loop only paints on
+    // input or a reported change. `App::tick` notices a changed list within
+    // one idle tick; these wakes are what make the first read and a delete
+    // land on screen immediately rather than half a tick later.
     let db = crate::test_helpers::new_test_db().await;
     let client = db.db.get().await.expect("db client");
     let user = late_core::models::user::User::create(
@@ -4835,10 +4844,10 @@ async fn slot_list_refreshes_wake_the_render_loop_when_they_land() {
     )
     .await;
 
-    svc.character_slots_task(user, Some(signal.clone()));
+    svc.fill_slots_task(user, Some(signal.clone()));
     crate::test_helpers::wait_until(
-        || async { svc.character_slots(user)[1].occupied },
-        "the refreshed slot list shows the saved Mage",
+        || async { landing_row(&svc, user, 1).is_some_and(|row| row.occupied) },
+        "the first read of the slot list shows the saved Mage",
     )
     .await;
     assert!(
@@ -4851,13 +4860,165 @@ async fn slot_list_refreshes_wake_the_render_loop_when_they_land() {
         .store(false, std::sync::atomic::Ordering::Release);
     svc.delete_character_task(user, 1, Some(signal.clone()));
     crate::test_helpers::wait_until(
-        || async { !svc.character_slots(user)[1].occupied },
-        "the post-delete refresh empties slot 1",
+        || async { landing_row(&svc, user, 1).is_some_and(|row| !row.occupied) },
+        "the delete empties slot 1 on the landing",
     )
     .await;
     assert!(
         signal.dirty.load(std::sync::atomic::Ordering::Acquire),
-        "a delete's refresh must wake the render loop, or the deleted character lingers"
+        "a delete must wake the render loop, or the deleted character lingers"
+    );
+}
+
+#[tokio::test]
+async fn a_logout_save_puts_a_new_character_on_the_landing() {
+    // The bug this pins: the landing's list was refreshed by a query fired
+    // alongside the logout save, so it read the database from before that save
+    // and a character created during the session read as "empty - start a new
+    // character" (while Enter on that same row happily played him, since the
+    // join loads the slot straight from the database). The list is written by
+    // the save itself now, so nothing has to re-read it to see the character.
+    let db = crate::test_helpers::new_test_db().await;
+    let client = db.db.get().await.expect("db client");
+    let user = late_core::models::user::User::create(
+        &client,
+        late_core::models::user::UserParams {
+            fingerprint: "slot-writethrough-fp".to_string(),
+            username: "slotwriter".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("test account")
+    .id;
+    let app = crate::test_helpers::make_app(db.db.clone(), user, "slot-writethrough");
+    let svc = app.lateania_service.clone();
+
+    // The one database read this account gets: the list as it looks before the
+    // character exists.
+    svc.fill_slots_task(user, None);
+    crate::test_helpers::wait_until(
+        || async { landing_row(&svc, user, 2).is_some() },
+        "the account's slot list is read once",
+    )
+    .await;
+
+    join_and_wait(&svc, user, uid(61), 2).await;
+    class_up_and_wait(&svc, user, Class::Runemaster).await;
+    svc.leave_task(user, uid(61));
+
+    // Asserted with nothing left to paper over it: no staged save and nobody
+    // in the world, so the row can only be the one the save wrote.
+    crate::test_helpers::wait_until(
+        || async {
+            svc.prepared_saves.lock_recover().is_empty()
+                && !svc.is_user_present(user)
+                && landing_row(&svc, user, 2)
+                    .is_some_and(|row| row.occupied && row.class == Some(Class::Runemaster))
+        },
+        "the logout save puts the new Runemaster on the landing",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_character_in_the_world_is_never_an_empty_slot_on_the_landing() {
+    // A character's first database row is written by its logout save or the
+    // autosave a minute in, whichever comes first, so for a while the only
+    // place it exists is the world. The landing reads the live character off
+    // the world snapshot for exactly that reason.
+    let db = crate::test_helpers::new_test_db().await;
+    let client = db.db.get().await.expect("db client");
+    let user = late_core::models::user::User::create(
+        &client,
+        late_core::models::user::UserParams {
+            fingerprint: "slot-live-fp".to_string(),
+            username: "slotliver".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("test account")
+    .id;
+    let app = crate::test_helpers::make_app(db.db.clone(), user, "slot-live");
+    let svc = app.lateania_service.clone();
+
+    svc.fill_slots_task(user, None);
+    crate::test_helpers::wait_until(
+        || async { landing_row(&svc, user, 3).is_some() },
+        "the account's slot list is read once",
+    )
+    .await;
+
+    join_and_wait(&svc, user, uid(71), 3).await;
+    class_up_and_wait(&svc, user, Class::Mage).await;
+
+    assert!(
+        saved_class(&db.db, user, 3).await.is_none(),
+        "nothing has been written for this character yet"
+    );
+    let row = landing_row(&svc, user, 3).expect("the slot list has been read");
+    assert!(
+        row.occupied,
+        "a character standing in the world is not an empty slot"
+    );
+    assert_eq!(
+        row.class,
+        Some(Class::Mage),
+        "and the row is the character that is actually live"
+    );
+}
+
+#[tokio::test]
+async fn a_database_read_never_replaces_a_known_slot_list() {
+    // The rule the whole design rests on: the list is read once, and every
+    // change after that rides the write that made it. A read still free to
+    // overwrite a known list could land after a save and walk its row
+    // backwards, which is how the old refresh-on-leave lost characters.
+    let db = crate::test_helpers::new_test_db().await;
+    let client = db.db.get().await.expect("db client");
+    let user = late_core::models::user::User::create(
+        &client,
+        late_core::models::user::UserParams {
+            fingerprint: "slot-onceread-fp".to_string(),
+            username: "slotreader".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("test account")
+    .id;
+    let app = crate::test_helpers::make_app(db.db.clone(), user, "slot-onceread");
+    let svc = app.lateania_service.clone();
+
+    join_and_wait(&svc, user, uid(81), 1).await;
+    class_up_and_wait(&svc, user, Class::Mage).await;
+    svc.leave_task(user, uid(81));
+    crate::test_helpers::wait_until(
+        || async { saved_class(&db.db, user, 1).await == Some(Class::Mage.as_key().to_string()) },
+        "the Mage's logout save reaches slot 1",
+    )
+    .await;
+    svc.fill_slots_task(user, None);
+    crate::test_helpers::wait_until(
+        || async { landing_row(&svc, user, 1).is_some_and(|row| row.occupied) },
+        "the first read of the slot list shows the saved Mage",
+    )
+    .await;
+
+    // Drop the row behind the service's back: any further read would see an
+    // empty slot 1 and, if it were allowed to publish, empty the landing.
+    MudCharacter::delete_slot(&client, user, 1)
+        .await
+        .expect("the row is deleted");
+    svc.fill_slots_task(user, None);
+    assert!(
+        saved_class(&db.db, user, 1).await.is_none(),
+        "the row really is gone, so a read would have something to get wrong"
+    );
+    assert!(
+        landing_row(&svc, user, 1).is_some_and(|row| row.occupied),
+        "a known slot list is never replaced by a database read"
     );
 }
 
