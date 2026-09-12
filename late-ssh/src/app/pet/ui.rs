@@ -25,13 +25,46 @@ pub enum WatchSide {
     Below,
 }
 
+/// What the pet goes to look at. The tank moves on its own and the pet
+/// reacts to it; the bonsai does not, so it gets a quieter beat.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WatchTarget {
+    Tank,
+    Bonsai,
+}
+
+/// What the pet's box touches on the Zen page, with the side each one is
+/// on. The pet spends one watch window of the round on each, so with both
+/// beside it the fish and the tree alternate; with one, that one takes
+/// both windows, and its time at the glass never depends on what else the
+/// page happens to hold.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Neighbours {
+    pub tank: Option<WatchSide>,
+    pub bonsai: Option<WatchSide>,
+}
+
+impl Neighbours {
+    /// What this watch window is spent on: `second` is the second of the
+    /// two windows in a round.
+    fn target(self, second: bool) -> Option<(WatchTarget, WatchSide)> {
+        match (self.tank, self.bonsai, second) {
+            (None, None, _) => None,
+            (Some(side), None, _) => Some((WatchTarget::Tank, side)),
+            (None, Some(side), _) => Some((WatchTarget::Bonsai, side)),
+            (Some(side), Some(_), false) => Some((WatchTarget::Tank, side)),
+            (Some(_), Some(side), true) => Some((WatchTarget::Bonsai, side)),
+        }
+    }
+}
+
 /// What the pet is doing this frame. The stroll and the watch are wall
 /// clock formulas; the perch is state (`PetState::perch`): the pet walking
 /// after the cursor, or sitting under it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PetPose {
     Stroll,
-    Watch(WatchSide),
+    Watch(WatchTarget, WatchSide),
     /// Sulking: parked mid floor, turned away.
     Sulk,
     /// Asleep: curled mid floor.
@@ -41,32 +74,36 @@ pub enum PetPose {
 
 /// Wall ticks in a minute: the shared animation clock runs at 66ms.
 const TICKS_PER_MINUTE: usize = 60_000 / 66;
-/// A calm pet beside a tank gets bored of the glass: it strolls for twenty
-/// minutes, then watches for five, and round again on the wall clock.
+/// A calm pet beside a tank or a bonsai gets bored of it: it strolls for
+/// twenty minutes, then watches for five, and round again on the wall
+/// clock.
 pub const STROLL_TICKS: usize = 20 * TICKS_PER_MINUTE;
 pub const WATCH_TICKS: usize = 5 * TICKS_PER_MINUTE;
+/// One leg of the round: a stroll and the watch that ends it. A round is
+/// two legs, so a pet with both neighbours visits each once an hour or so.
+pub const LEG_TICKS: usize = STROLL_TICKS + WATCH_TICKS;
 
 impl PetPose {
     pub fn for_frame(
         mood: PetMood,
-        watching: Option<WatchSide>,
+        neighbours: Neighbours,
         perch: Option<Perch>,
         tick: usize,
     ) -> Self {
         if let Some(perch) = perch {
             return PetPose::At(perch);
         }
-        match (mood, watching) {
-            (PetMood::Sulking, _) => PetPose::Sulk,
-            (PetMood::Asleep, _) => PetPose::Sleep,
+        match mood {
+            PetMood::Sulking => PetPose::Sulk,
+            PetMood::Asleep => PetPose::Sleep,
             // Wound up: it paces rather than watches.
-            (PetMood::Purring | PetMood::Proud, _) => PetPose::Stroll,
-            (PetMood::Chatty | PetMood::Vibing | PetMood::Idle, None) => PetPose::Stroll,
-            (PetMood::Chatty | PetMood::Vibing | PetMood::Idle, Some(side)) => {
-                if tick % (STROLL_TICKS + WATCH_TICKS) >= STROLL_TICKS {
-                    PetPose::Watch(side)
-                } else {
-                    PetPose::Stroll
+            PetMood::Purring | PetMood::Proud => PetPose::Stroll,
+            PetMood::Chatty | PetMood::Vibing | PetMood::Idle => {
+                let phase = tick % (2 * LEG_TICKS);
+                let window = phase % LEG_TICKS >= STROLL_TICKS;
+                match (window, neighbours.target(phase >= LEG_TICKS)) {
+                    (true, Some((target, side))) => PetPose::Watch(target, side),
+                    (true, None) | (false, _) => PetPose::Stroll,
                 }
             }
         }
@@ -82,14 +119,10 @@ pub struct PetView<'a> {
     pub frame_slot: Option<&'a Cell<Option<PetFrameInputs>>>,
 }
 
-/// The pet's box: the whole of `area` is its floor and its sky. `watching`
-/// is the side the tank is on when a tank tile touches this box.
-pub fn draw_pet_box(
-    frame: &mut Frame,
-    area: Rect,
-    view: &PetView<'_>,
-    watching: Option<WatchSide>,
-) {
+/// The pet's box: the whole of `area` is its floor and its sky.
+/// `neighbours` is the side of each tile it can go and watch, when one
+/// touches this box.
+pub fn draw_pet_box(frame: &mut Frame, area: Rect, view: &PetView<'_>, neighbours: Neighbours) {
     if area.height < PET_BOX_MIN_ROWS || area.width < PET_WIDTH as u16 + 2 {
         return;
     }
@@ -100,7 +133,7 @@ pub fn draw_pet_box(
     };
     let pose = PetPose::for_frame(
         state.mood(),
-        watching,
+        neighbours,
         state.perch(),
         state.animation_ticks(),
     );
@@ -113,7 +146,7 @@ pub fn draw_pet_box(
         slot.set(Some(PetFrameInputs {
             travel,
             zone: area,
-            watching,
+            neighbours,
             position: art.position,
         }));
     }
@@ -198,7 +231,7 @@ fn species_rows(species: PetSpecies, eyes: &str, mouth: char) -> (String, String
 }
 
 /// What the mouth says this frame. The mood mouths are the pet's own; the
-/// watch mouths are the fish's doing.
+/// watch mouths belong to whatever it is looking at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mouth {
     Mood(PetMood),
@@ -206,6 +239,8 @@ enum Mouth {
     Hush,
     /// A fish just swam past.
     Gasp,
+    /// Leaning in to smell the leaves.
+    Sniff,
 }
 
 /// Every tick-dependent piece of the pet's art, computed once so the draw
@@ -247,9 +282,9 @@ impl PetArt {
                 tail,
                 mouth: Mouth::Mood(mood),
             },
-            PetPose::Watch(_) => {
-                // Wide eyes on the glass; every so often a fish swims past
-                // and the pet gasps at it for a few ticks.
+            // Wide eyes on the glass; every so often a fish swims past
+            // and the pet gasps at it for a few ticks.
+            PetPose::Watch(WatchTarget::Tank, _) => {
                 let gasp = tick % 96 < 6;
                 PetArt {
                     position,
@@ -262,6 +297,24 @@ impl PetArt {
                     },
                     tail,
                     mouth: if gasp { Mouth::Gasp } else { Mouth::Hush },
+                }
+            }
+            // Nothing darts about in a tree: the same rapt eyes on a
+            // slower beat, and the pet leans in for a smell of the leaves
+            // instead of gasping at them.
+            PetPose::Watch(WatchTarget::Bonsai, _) => {
+                let sniff = tick % 240 < 12;
+                PetArt {
+                    position,
+                    eyes: if sniff {
+                        "^.^"
+                    } else if blink {
+                        "-.-"
+                    } else {
+                        "o.o"
+                    },
+                    tail,
+                    mouth: if sniff { Mouth::Sniff } else { Mouth::Hush },
                 }
             }
         }
@@ -281,29 +334,30 @@ fn pet_position(pose: PetPose, tick: usize, travel: PetTravel) -> (usize, usize)
             stroll_axis(tick, travel.x, 60, 0),
             stroll_axis(tick, travel.y, 90, 17),
         ),
-        PetPose::Watch(WatchSide::Left) => (0, travel.y),
-        PetPose::Watch(WatchSide::Right) => (travel.x, travel.y),
-        PetPose::Watch(WatchSide::Above) => (travel.x / 2, 0),
-        PetPose::Watch(WatchSide::Below) => (travel.x / 2, travel.y),
+        PetPose::Watch(_, WatchSide::Left) => (0, travel.y),
+        PetPose::Watch(_, WatchSide::Right) => (travel.x, travel.y),
+        PetPose::Watch(_, WatchSide::Above) => (travel.x / 2, 0),
+        PetPose::Watch(_, WatchSide::Below) => (travel.x / 2, travel.y),
         PetPose::At(perch) => (perch.x.min(travel.x), perch.y.min(travel.y)),
     }
 }
 
 /// True when the pet art drawn at `tick` differs from the art at `tick - 1`
-/// for the given mood, neighbour, perch, and travel: a stroll step, a blink,
-/// a tail flick, a gasp edge, or the walk to and from the glass. It compares
-/// the same `PetArt` the draw uses, so the render gate only pays frames on
-/// ticks where the box actually changes; a sleeping pet is fully static.
+/// for the given mood, neighbours, perch, and travel: a stroll step, a
+/// blink, a tail flick, a gasp or sniff edge, or the walk to and from the
+/// glass. It compares the same `PetArt` the draw uses, so the render gate
+/// only pays frames on ticks where the box actually changes; a sleeping pet
+/// is fully static.
 pub fn frame_changed(
     mood: PetMood,
-    watching: Option<WatchSide>,
+    neighbours: Neighbours,
     perch: Option<Perch>,
     tick: usize,
     travel: PetTravel,
 ) -> bool {
     let prev = tick.wrapping_sub(1);
-    let now = PetPose::for_frame(mood, watching, perch, tick);
-    let before = PetPose::for_frame(mood, watching, perch, prev);
+    let now = PetPose::for_frame(mood, neighbours, perch, tick);
+    let before = PetPose::for_frame(mood, neighbours, perch, prev);
     PetArt::at(mood, now, tick, travel) != PetArt::at(mood, before, prev, travel)
 }
 
@@ -340,7 +394,7 @@ fn pet_activity(mood: PetMood, pose: PetPose) -> u8 {
         PetPose::Sleep => 0,
         // Sulking: still, but awake enough to blink.
         PetPose::Sulk => 1,
-        PetPose::Watch(_) => 1,
+        PetPose::Watch(..) => 1,
         PetPose::Stroll | PetPose::At(_) => match mood {
             PetMood::Proud => 3,
             PetMood::Purring | PetMood::Chatty | PetMood::Vibing => 2,
@@ -395,6 +449,7 @@ fn mouth(mouth: Mouth, species: PetSpecies) -> char {
         (_, Mouth::Mood(PetMood::Idle)) => '.',
         (_, Mouth::Hush) => '.',
         (_, Mouth::Gasp) => 'o',
+        (_, Mouth::Sniff) => 'v',
     }
 }
 

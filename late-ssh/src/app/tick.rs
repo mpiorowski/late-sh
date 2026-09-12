@@ -966,7 +966,7 @@ impl App {
             changed |= anim_half
                 && crate::app::pet::ui::frame_changed(
                     self.pet_state.mood(),
-                    inputs.watching,
+                    inputs.neighbours,
                     self.pet_state.perch(),
                     self.pet_state.animation_ticks(),
                     inputs.travel,
