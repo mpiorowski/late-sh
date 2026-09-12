@@ -41,18 +41,22 @@ room the account has left shows the current room). The `Ctrl+/` picker
 (or `/picker`) while the page is up stays on the page: with a chat tile
 focused, a room pick rebinds that tile the way `[` `]` do
 (`zen::input::bind_focused_chat_to_room`, called from
-`room_search_modal/input.rs`); any other pick, or one with no chat tile
-focused, moves Home's selection as before. The page counts as
+`room_search_modal/input.rs`); a `?query` message jump lands in the same
+path, so it rebinds the tile to the hit's room (saved) and selects the
+message there; any other pick, or one with no chat tile focused, moves
+Home's selection as before. The page counts as
 a chat-pane screen in `app/input.rs` (`screen_has_chat_pane`,
 `embedded_chat_room_id`) and reports the active room as the visible one
 (`current_visible_chat_room_id` in `state.rs`, which marks it read and
 keeps its tail fresh), so the composer, message actions, and chat clicks
 work the same as on Home. The other chat tiles are read-only views of
 their rooms: messages stream in and nothing is marked read until the tile
-is focused, but every tile draws its own composer strip: `composer_shown`
-is always true (2026-09-12), because an input box that appears and
-disappears as the focus walks moves every row under the reader. Only the
-active tile's composer is live; the others are handed an empty `TextArea`
+is focused, but every tile draws its own composer strip (2026-09-12),
+because an input box that appears and disappears as the focus walks moves
+every row under the reader. Only the active tile's composer is live; the
+others are inert (`composer_inert` on the chat view, `inert` on
+`ComposerBlockView`): titled "watching", a hint to focus the tile instead
+of the chat keys, and handed an empty `TextArea`
 (`idle_composer` in `render.rs`), so they never grow with someone else's
 draft. A draft
 never follows the focus: every submit goes to the room the composer was

@@ -1373,7 +1373,7 @@ fn zen_help_lines() -> Vec<String> {
         "Chat tiles",
         "  A page holds up to ten chat tiles, each bound to a room. The focused one is the active chat: it has the composer and the selection, and reading it marks the room read. The others watch their rooms and keep their unread counts until you focus them. Opening the page for the first time focuses the first chat tile; a click focuses any tile.",
         "  [ ]               bind the focused chat tile to the previous or next joined room",
-        "  Ctrl+/            pick the focused chat tile's room from the picker (/picker too)",
+        "  Ctrl+/            pick the focused chat tile's room from the picker (/picker too); a ?query message jump rebinds it the same way",
         "  i / Enter         write in the focused chat tile's room",
         "  j / k             select messages in the focused chat tile",
         "",

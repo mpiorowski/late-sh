@@ -3298,6 +3298,7 @@ fn clear_prefix_arms(app: &mut App) {
 /// swallow the chord (Ctrl+/ and Ctrl+_ are one byte, and some keep it).
 pub(crate) fn open_room_search_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
+    app.zen.close_kind_picker();
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
@@ -3642,6 +3643,7 @@ fn open_zen_globally(app: &mut App) {
 
 pub(crate) fn close_zen(app: &mut App) {
     let back = app.zen_return_screen.take().unwrap_or(Screen::Dashboard);
+    app.zen.close_kind_picker();
     reset_composers_for_page_change(app);
     app.set_screen(back);
     app.chat.clear_message_selection();

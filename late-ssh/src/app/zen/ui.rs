@@ -210,8 +210,10 @@ fn draw_kind_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
     let Some(selected) = zen.kind_picker else {
         return;
     };
-    let height = (TileKind::ALL.len() as u16 + 3).min(area.height);
-    let width = 30u16.min(area.width);
+    // Every kind, a blank, the hint, and the two border rows; wide enough
+    // for the full hint, which `hint_line_fitting` trims on a narrow page.
+    let height = (TileKind::ALL.len() as u16 + 4).min(area.height);
+    let width = 36u16.min(area.width);
     if height < 4 || width < 12 {
         return;
     }
@@ -273,11 +275,10 @@ fn draw_kind_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
         })
         .collect();
     lines.push(Line::from(""));
-    lines.push(hint_line(&[
-        ("jk", "move"),
-        ("enter", "pick"),
-        ("esc", "close"),
-    ]));
+    lines.push(hint_line_fitting(
+        &[("jk", "move"), ("enter", "pick"), ("esc", "close")],
+        inner.width as usize,
+    ));
     frame.render_widget(Paragraph::new(lines), inner);
 }
 

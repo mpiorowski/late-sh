@@ -2938,19 +2938,32 @@ async fn zen_every_chat_tile_keeps_its_composer_whatever_is_focused() {
 
     // Both tiles carry a composer, and walking the focus moves nothing:
     // an input box that comes and goes is the layout jumping under you.
+    // The focused tile's strip is live, the other's says it only watches
+    // (its keys act on the focused tile, so it must not name them).
     let frame = render_plain(&mut app);
     assert_eq!(
-        frame.matches("Compose").count(),
-        2,
-        "both chat tiles draw a composer; frame={frame:?}"
+        (
+            frame.matches("Compose").count(),
+            frame.matches("watching").count()
+        ),
+        (1, 1),
+        "both chat tiles draw a composer, one live and one watching; frame={frame:?}"
+    );
+    assert_eq!(
+        frame.matches("j/k select").count(),
+        1,
+        "only the live composer names the chat keys; frame={frame:?}"
     );
 
     app.zen.focus = first;
     crate::app::zen::input::focus_moved(&mut app);
     let frame = render_plain(&mut app);
     assert_eq!(
-        frame.matches("Compose").count(),
-        2,
+        (
+            frame.matches("Compose").count(),
+            frame.matches("watching").count()
+        ),
+        (1, 1),
         "the composers stay put when the focus walks; frame={frame:?}"
     );
 }
@@ -3057,6 +3070,10 @@ async fn zen_space_opens_a_tile_picker_that_owns_the_keys_until_a_pick_or_esc() 
     assert!(
         frame.contains(" tile ") && frame.contains("current") && frame.contains("visualizer"),
         "the picker lists every kind and marks the current one; frame={frame:?}"
+    );
+    assert!(
+        frame.contains("jk move") && frame.contains("enter pick") && frame.contains("esc close"),
+        "the picker names its keys; frame={frame:?}"
     );
 
     // The picker owns the keys: `S` splits nothing and `q` quits nothing.

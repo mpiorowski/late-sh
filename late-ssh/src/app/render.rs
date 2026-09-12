@@ -873,7 +873,7 @@ impl App {
                     highlighted_message_id: self.chat.highlighted_message_id,
                     reaction_picker_active: self.chat.is_reaction_leader_active(),
                     composer: self.chat.composer(),
-                    composer_shown: true,
+                    composer_inert: false,
                     composing: self.chat.composing,
                     mention_matches: &self.chat.mention_ac.matches,
                     mention_selected: self.chat.mention_ac.selected,
@@ -938,7 +938,7 @@ impl App {
                     highlighted_message_id: self.chat.highlighted_message_id,
                     reaction_picker_active: self.chat.is_reaction_leader_active(),
                     composer: self.chat.composer(),
-                    composer_shown: true,
+                    composer_inert: false,
                     composing: self.chat.composing,
                     mention_matches: &self.chat.mention_ac.matches,
                     mention_selected: self.chat.mention_ac.selected,
@@ -1025,7 +1025,7 @@ impl App {
                     } else {
                         &idle_composer
                     },
-                    composer_shown: true,
+                    composer_inert: !active,
                     composing: active && self.chat.composing,
                     mention_matches: &self.chat.mention_ac.matches,
                     mention_selected: self.chat.mention_ac.selected,
@@ -1100,6 +1100,7 @@ impl App {
             mention_matches: &self.chat.mention_ac.matches,
             mention_selected: self.chat.mention_ac.selected,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+            inert: false,
         });
         let mut terminal_image_frame = TerminalImageFrame::default();
 
