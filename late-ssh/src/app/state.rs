@@ -131,13 +131,12 @@ fn device_rails_or_profile(
 /// re-binds the sim to its own rect on its first draw
 /// (`sync_aquarium_bounds`); this only has to be a sane start.
 fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
-    let chat_column = Rect::new(
+    Rect::new(
         1,
         1,
         cols.saturating_sub(2 + 24 + 24).max(20),
-        rows.saturating_sub(2),
-    );
-    crate::app::hub::aquarium::ui::top_tray_area(chat_column)
+        rows.saturating_sub(2).min(11),
+    )
 }
 
 const CURSOR_SHAPE_STEADY_BLOCK: &[u8] = b"\x1b[2 q";
@@ -380,8 +379,6 @@ pub struct SessionConfig {
     /// tick edge into `App::runner_looks` for the #deadchannel portraits.
     pub(crate) runner_looks_rx:
         tokio::sync::watch::Receiver<crate::app::deadchannel::runner::svc::RunnerLooks>,
-    /// Whether the aquarium tray was open when the user last toggled it.
-    pub show_aquarium_tray: bool,
     /// The stored Rice layout (`app/zen`), `None` until first edited.
     pub zen_layout: Option<serde_json::Value>,
     /// Fingerprint of the SSH key this session authenticated with: the only
@@ -478,7 +475,6 @@ pub struct App {
     pub(crate) show_help: bool,
     pub(crate) show_mod_modal: bool,
     pub(crate) show_hub_modal: bool,
-    pub(crate) show_aquarium_tray: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) show_sheet_modal: bool,
     pub(crate) show_poll_modal: bool,
@@ -1351,7 +1347,6 @@ impl App {
             show_help: false,
             show_mod_modal: false,
             show_hub_modal: false,
-            show_aquarium_tray: config.show_aquarium_tray,
             show_profile_modal: false,
             show_sheet_modal: false,
             show_poll_modal: false,
@@ -2690,7 +2685,7 @@ impl App {
     }
 
     /// The rect the aquarium simulation should fill on the current screen:
-    /// the Lounge tray by default, the tank's slot on the Zen pages.
+    /// the tank tile's inner rect on Zen, the launch band elsewhere.
     fn aquarium_area_for_screen(&self) -> Rect {
         use crate::app::zen::{layout as zen_layout, state::TileKind};
         let (cols, rows) = self.size;
@@ -2728,13 +2723,6 @@ impl App {
     pub(crate) fn sync_aquarium_bounds(&mut self) {
         let area = self.aquarium_area_for_screen();
         self.aquarium_state.handle_resize(area.width, area.height);
-    }
-
-    /// Persist the aquarium tray's open/closed state (fire-and-forget).
-    pub(crate) fn persist_show_aquarium_tray(&self) {
-        self.profile_state
-            .service()
-            .set_show_aquarium_tray(self.user_id, self.show_aquarium_tray);
     }
 
     /// Note a Zen layout edit. The write itself is debounced: see

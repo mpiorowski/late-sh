@@ -1,8 +1,10 @@
 //! Keys for the Zen page: the chat keys of the focused chat tile, the tank
 //! feed, and the layout keys. The bonsai is tended in its care modal, the
 //! same one `w` opens on every other page, so no care key is captured
-//! here. Anything not owned here returns `false` so the global keys
-//! (digits, Tab, `q`, `?`, `w`, the `v` music chords) keep working.
+//! here. Tab and Shift+Tab are the page's: they walk the tile focus, since
+//! Zen is not in the page cycle and the global Tab would drop back to Home.
+//! Anything not owned here returns `false` so the global keys (digits,
+//! `q`, `?`, `w`, the `v` music chords) keep working.
 
 use uuid::Uuid;
 
@@ -79,11 +81,12 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
     }
 }
 
-/// Rice: arrows move focus and the layout keys edit the tree. Every edit
-/// marks the layout for the debounced write (`App::flush_zen_layout`).
+/// Rice: arrows, Tab, and Shift+Tab move focus and the layout keys edit
+/// the tree. Every edit marks the layout for the debounced write
+/// (`App::flush_zen_layout`).
 fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
     match event {
-        ParsedInput::Arrow(b'D') | ParsedInput::Arrow(b'A') => {
+        ParsedInput::Arrow(b'D') | ParsedInput::Arrow(b'A') | ParsedInput::BackTab => {
             app.zen.focus_prev();
             focus_moved(app);
             return true;
@@ -99,6 +102,11 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
         return false;
     };
     let changed = match byte {
+        b'\t' => {
+            app.zen.focus_next();
+            focus_moved(app);
+            return true;
+        }
         b' ' => app.zen.cycle_focused_kind(true),
         b'S' => {
             if app.zen.leaf_count() >= MAX_TILES {

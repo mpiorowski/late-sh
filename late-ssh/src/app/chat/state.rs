@@ -364,22 +364,13 @@ fn parse_pot_command(body: &str) -> Option<Option<PotCommand>> {
     )
 }
 
-/// An aquarium control requested from the composer (`/aquarium` toggles the
-/// Lounge tray; `/aquarium feed` feeds the tank). `App` owns the tray state
-/// and entitlements, so the composer just records the intent and `App`
-/// carries it out.
+/// An aquarium control requested from the composer (`/aquarium`,
+/// `/aquarium feed`). `App` owns the tank state and
+/// entitlements, so the composer just records the intent and `App` carries
+/// it out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AquariumCommand {
-    Toggle,
     Feed,
-}
-
-/// A pet action requested from the composer (`/pet` toggles the strip).
-/// There is nothing to feed: the pet is a mood indicator. `App` owns the
-/// pet state and entitlements, so the composer just records the intent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PetCommand {
-    Toggle,
 }
 
 /// The two cyberspace rows a room can be entered from, and the one leaving
@@ -986,10 +977,8 @@ pub struct ChatState {
     /// tells the stream service a named viewer showed up. Recorded here
     /// rather than acted on inline because `App` owns the stream service.
     opened_stream_room: Option<Uuid>,
-    /// Set by /aquarium [feed]; consumed by `App` (which owns the tray).
+    /// Set by /aquarium [feed]; consumed by `App` (which owns the tank).
     requested_aquarium_command: Option<AquariumCommand>,
-    /// Set by /pet; consumed by `App` (which owns the pet).
-    requested_pet_command: Option<PetCommand>,
     requested_poll_room: Option<Uuid>,
     /// Set by /brb command; contains the custom message (empty = no message).
     requested_brb: Option<String>,
@@ -1305,7 +1294,6 @@ impl ChatState {
             requested_watch: None,
             opened_stream_room: None,
             requested_aquarium_command: None,
-            requested_pet_command: None,
             requested_audio_url: None,
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
@@ -2150,10 +2138,6 @@ impl ChatState {
 
     pub(crate) fn take_requested_aquarium_command(&mut self) -> Option<AquariumCommand> {
         self.requested_aquarium_command.take()
-    }
-
-    pub(crate) fn take_requested_pet_command(&mut self) -> Option<PetCommand> {
-        self.requested_pet_command.take()
     }
 
     /// When a message of this user's last landed (`SendSucceeded`).
@@ -3837,19 +3821,19 @@ impl ChatState {
             return None;
         }
 
+        if matches!(body.trim(), "/aquarium" | "/aq") {
+            self.clear_composer_after_submit();
+            return Some(Banner::info(
+                "The tank lives on the Zen page (Ctrl+F): /aquarium feed; its sprout is cut in /shop",
+            ));
+        }
+
         if let Some(command) = match body.trim() {
-            "/aquarium" | "/aq" => Some(AquariumCommand::Toggle),
             "/aquarium feed" | "/aq feed" => Some(AquariumCommand::Feed),
             _ => None,
         } {
             self.clear_composer_after_submit();
             self.requested_aquarium_command = Some(command);
-            return None;
-        }
-
-        if body.trim() == "/pet" {
-            self.clear_composer_after_submit();
-            self.requested_pet_command = Some(PetCommand::Toggle);
             return None;
         }
 

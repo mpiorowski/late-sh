@@ -778,7 +778,6 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Constraint::Length(1),                // text brightness row
         Constraint::Length(1),                // right sidebar row
         Constraint::Length(1),                // room list row
-        Constraint::Length(1),                // pet strip row
         Constraint::Length(1),                // breathing
         Constraint::Length(1),                // Compose subsection heading
         Constraint::Length(1),                // composer keep-focused row
@@ -840,18 +839,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         )),
         sections[4],
     );
-    frame.render_widget(
-        Paragraph::new(tweak_row_line(
-            state,
-            TweakRow::PetStrip,
-            width,
-            "Pet companion strip",
-            toggle_span(state.draft().show_pet_strip),
-        )),
-        sections[5],
-    );
-
-    frame.render_widget(Paragraph::new(section_heading("Compose")), sections[7]);
+    frame.render_widget(Paragraph::new(section_heading("Compose")), sections[6]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -860,10 +848,10 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Send and keep open on Enter",
             toggle_span(state.draft().keep_composer_focused),
         )),
-        sections[8],
+        sections[7],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Display")), sections[10]);
+    frame.render_widget(Paragraph::new(section_heading("Display")), sections[9]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -872,10 +860,10 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Chat flag text fallback",
             toggle_span(state.draft().show_flag_fallback),
         )),
-        sections[11],
+        sections[10],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Startup")), sections[13]);
+    frame.render_widget(Paragraph::new(section_heading("Startup")), sections[12]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -884,7 +872,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Land on Home page",
             toggle_span(state.draft().land_on_home),
         )),
-        sections[14],
+        sections[13],
     );
     frame.render_widget(
         Paragraph::new(tweak_row_line(
@@ -894,10 +882,10 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Daily paper at login",
             toggle_span(state.draft().paper_at_login),
         )),
-        sections[15],
+        sections[14],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Input")), sections[17]);
+    frame.render_widget(Paragraph::new(section_heading("Input")), sections[16]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -906,7 +894,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Interaction mode",
             interaction_mode_span(state.interaction_mode()),
         )),
-        sections[18],
+        sections[17],
     );
 
     if gem_strip_height > 0 {
@@ -914,7 +902,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         // border so it doesn't crowd the dialog frame.
         const PAD_X: u16 = 2;
         const PAD_BOTTOM: u16 = 1;
-        let strip = sections[19];
+        let strip = sections[18];
         let pad_x = PAD_X.min(strip.width / 2);
         let pad_bottom = PAD_BOTTOM.min(strip.height);
         let gem_area = Rect::new(

@@ -220,7 +220,7 @@ pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
     - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels), 4 Artboard (shared ASCII canvas), 5 Profiles (the people: their projects and open-to-work cards), 6 Leaderboards (every board, monthly and all-time).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
-    - Ctrl+F opens Zen from anywhere and hands you back with Esc or the same chord: Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: arrows focus, space picks a tile's kind, S splits, X closes, < > change width and { } height, r flips, z zooms, b g t restyle borders, gaps, and titles, R resets, ? opens the Zen guide, the layout is saved per account; each tile names its own keys on the right of its title; up to ten chat tiles each bound to a room ([ ] rebind the focused one, i or Enter write in it, j k select in it; the focused chat is the active one, the others watch), w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it, and it reads the rest of your session itself).\n\
+    - Ctrl+F opens Zen from anywhere and hands you back with Esc or the same chord: Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: Tab and the arrows focus, space picks a tile's kind, S splits, X closes, < > change width and { } height, r flips, z zooms, b g t restyle borders, gaps, and titles, R resets, ? opens the Zen guide, the layout is saved per account; each tile names its own keys on the right of its title; up to ten chat tiles each bound to a room ([ ] rebind the focused one, i or Enter write in it, j k select in it; the focused chat is the active one, the others watch), w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it, and it reads the rest of your session itself).\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Typing /shop into the composer opens the Shop. When a terminal swallows a chord, the composer has a typed fallback that does the same thing: /settings (Ctrl+O), /lobby (Ctrl+G), /zen (Ctrl+F), /redraw (Ctrl+L), /guide (?).\n\
     - Ctrl+/ opens jump search across rooms and DMs; typing ?query searches messages.\n\
     - Home's room rail also holds RSS, News, Cyberspace, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"N unread mentions\" counter in the top-right corner.\n\
@@ -634,9 +634,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  Ctrl+F             open / close Zen (your bonsai, tank, lobby, chat, and clock as tiles)",
         "  Ctrl+L             redraw the screen if something outside late.sh scribbled on it",
         "  /shop              open the Shop",
-        "  /aquarium          toggle the Aquarium tray in the Lounge after unlocking it in the Shop",
-        "  /aquarium feed     feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the tank also lives on the Zen page (Ctrl+F)",
-        "  /pet               toggle the pet strip in the Lounge",
+        "  /aquarium feed     feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the tank lives on the Zen page (Ctrl+F)",
         "  Sprout             comes up on the tank floor every 14 days, fed or not; cut it on its Shop row (Companions, -) within 7 days, or it roots as a plant; plants never die",
         "  Ctrl+/             jump to a room or DM; type ?query to search messages",
         "  ?                  open this guide; Pair and terminal-specific tabs live here",
@@ -1176,9 +1174,7 @@ fn overview_lines() -> Vec<String> {
         "  /zen /redraw      and ?, for terminals that swallow those keys",
         "  /guide",
         "  /shop             open the Shop",
-        "  /aquarium         toggle the Aquarium tray in the Lounge after unlocking it in the Shop",
-        "  /aquarium feed    feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the tank also lives on the Zen page (Ctrl+F)",
-        "  /pet              toggle the pet strip in the Lounge",
+        "  /aquarium feed    feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the tank lives on the Zen page (Ctrl+F)",
         "  Sprout            comes up on the tank floor every 14 days, fed or not; cut it on its Shop row (Companions, -) within 7 days, or it roots as a plant; plants never die",
         "  Ctrl+/            jump to a room, DM, or Home entry; ?query searches messages",
         "  ?                 open this guide; Pair and terminal-specific tabs live here",
@@ -1357,6 +1353,7 @@ fn zen_help_lines() -> Vec<String> {
         "Each tile names its own keys on the right of its title (t hides the titles). The footer shows the keys you use most; the full list is here.",
         "",
         "Focus and tiles",
+        "  Tab / Shift+Tab   focus the next or previous tile",
         "  ←↓↑→              move focus",
         "  space             cycle the focused tile's kind",
         "  S                 split the focused tile (side by side when wide, stacked when tall)",
@@ -1422,7 +1419,7 @@ fn settings_help_lines() -> Vec<String> {
         "  country via picker, with Unicode flag rendering".to_string(),
         "  timezone via picker".to_string(),
         "  IDE, terminal, OS, and languages for profile/late.fetch surfaces".to_string(),
-        "  Tweaks: terminal background sync, text brightness, right sidebar mode, room list, pet strip, composer send behavior, music mute-on-start, chat flag fallback, land on Home"
+        "  Tweaks: terminal background sync, text brightness, right sidebar mode, room list, composer send behavior, music mute-on-start, chat flag fallback, land on Home"
             .to_string(),
         "  private RSS/Atom subscriptions".to_string(),
         "  IRC access token for external IRC clients".to_string(),
@@ -1765,7 +1762,6 @@ fn bonsai_help_lines() -> Vec<String> {
         "Pet Companion",
         "  Unlock            Shop companion bought with Late Chips (/shop); t there picks cat, dog, or bird",
         "  tile              lives on the Zen page (Ctrl+F) once unlocked, beside the tank if you put it there",
-        "  strip             sits above the Lounge composer too; /pet shows or hides it",
         "  nothing to feed   it reads your session: a win makes it proud for half an hour, a loss makes it sulk for ten minutes,",
         "                    a message you send makes it chatty, music makes it vibe, ten quiet minutes and it sleeps",
         "  click it          and it purrs for a couple of minutes; move the cursor in its tile and it walks after it",

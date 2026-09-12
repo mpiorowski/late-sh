@@ -4,7 +4,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, Clear, Paragraph, Widget},
+    widgets::{Block, Borders, Paragraph, Widget},
 };
 
 use crate::app::common::theme;
@@ -14,46 +14,6 @@ use super::{
     state::{AquariumState, RuntimeMode, TankState, WaterBand},
     world::ReefWorld,
 };
-
-// Sized to exactly fit the tallest creature (Big Bert, 9 art rows) plus the
-// 1-row surface and floor.
-const TOP_TRAY_HEIGHT: u16 = 11;
-
-pub(crate) fn top_tray_area(area: Rect) -> Rect {
-    let height = TOP_TRAY_HEIGHT.min(area.height);
-    Rect::new(area.x, area.y, area.width, height)
-}
-
-/// Split `area` into the top aquarium tray and the remaining content below.
-/// Returns no tray when the lounge below would drop under its minimum: the
-/// tray is only reachable through the `/aquarium` composer command, so a tray
-/// that eats the composer would lock the user out of hiding it again.
-pub(crate) fn carve_top_tray(area: Rect) -> (Option<Rect>, Rect) {
-    if area.height < TOP_TRAY_HEIGHT + crate::app::chat::ui::MIN_CHAT_HEIGHT_WITH_LOUNGE {
-        return (None, area);
-    }
-    let tray = top_tray_area(area);
-    let rest = Rect::new(
-        area.x,
-        area.y + tray.height,
-        area.width,
-        area.height.saturating_sub(tray.height),
-    );
-    (Some(tray), rest)
-}
-
-pub(crate) fn draw_top_tray(frame: &mut Frame<'_>, area: Rect, state: &AquariumState) {
-    if area.height == 0 || area.width == 0 {
-        return;
-    }
-
-    frame.render_widget(Clear, area);
-    frame.render_widget(
-        Block::new().style(Style::new().bg(theme::BG_CANVAS())),
-        area,
-    );
-    draw(frame, area, state);
-}
 
 pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, app: &AquariumState) {
     draw_into(frame.buffer_mut(), area, app);
@@ -499,7 +459,3 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
         height.min(area.height),
     )
 }
-
-#[cfg(test)]
-#[path = "ui_test.rs"]
-mod ui_test;

@@ -3371,48 +3371,6 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
     app.show_hub_modal = true;
 }
 
-/// The Lounge tray's toggle (`/aquarium`). Locked users get the shop nudge
-/// instead; the tray only renders in the Lounge, so the toggle banners its
-/// new state for anyone who typed it from somewhere else.
-pub(crate) fn toggle_aquarium_tray_globally(app: &mut App) {
-    clear_prefix_arms(app);
-    if !app.shop_state.entitlements().has_aquarium() {
-        app.banner = Some(crate::app::common::primitives::Banner::error(
-            "Unlock Aquarium in Hub Shop",
-        ));
-        open_shop_modal_globally(app);
-        return;
-    }
-    app.show_aquarium_tray = !app.show_aquarium_tray;
-    app.persist_show_aquarium_tray();
-    app.banner = Some(crate::app::common::primitives::Banner::success(
-        if app.show_aquarium_tray {
-            "Aquarium open in the Lounge"
-        } else {
-            "Aquarium hidden (/aquarium to reopen)"
-        },
-    ));
-}
-
-/// The pet strip's toggle (`/pet`). Locked users get the shop nudge; the
-/// strip only renders in the Lounge, so the toggle banners its new state.
-pub(crate) fn toggle_pet_strip_globally(app: &mut App) {
-    clear_prefix_arms(app);
-    if !app.shop_state.entitlements().has_pet_companion() {
-        app.banner = Some(crate::app::common::primitives::Banner::error(
-            "Unlock Pet Companion in Hub Shop",
-        ));
-        open_shop_modal_globally(app);
-        return;
-    }
-    let shown = app.profile_state.toggle_show_pet_strip();
-    app.banner = Some(crate::app::common::primitives::Banner::success(if shown {
-        "Pet strip shown in the Lounge"
-    } else {
-        "Pet strip hidden (/pet to bring it back)"
-    }));
-}
-
 /// A click on the pet: it purrs for a bit. The box only draws for owners,
 /// so the click can only land on an unlocked pet; the gate is belt and
 /// braces.

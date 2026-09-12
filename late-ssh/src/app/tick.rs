@@ -16,8 +16,8 @@ pub(crate) const HOT_TICK: Duration = Duration::from_millis(66);
 /// Half-rate cadence (~7.5fps): Clubhouse ambience, riding the shared
 /// `anim_half` /2 edge in tick().
 pub(crate) const ANIM_HALF_TICK: Duration = Duration::from_millis(132);
-/// Quarter-rate cadence (~3.8fps): the aquarium surfaces (tray +
-/// profile-modal reef), stepping on the `anim_quarter` /4 edge in tick().
+/// Quarter-rate cadence (~3.8fps): the aquarium surfaces (the Zen tank
+/// tile + profile-modal reef), stepping on the `anim_quarter` /4 edge in tick().
 pub(crate) const ANIM_QUARTER_TICK: Duration = Duration::from_millis(264);
 /// Idle floor: nothing visible animates, ticks only drain service channels.
 /// Worst-case latency for an unprompted event (a chat message arriving
@@ -964,12 +964,12 @@ impl App {
                 );
         }
         // The aquarium has no clock of its own: one step per quarter edge,
-        // and only while the tray is actually on screen (the sim pauses
+        // and only while the Zen page is actually up (the sim pauses
         // off-screen; the screen switch back forces its catch-up frame).
         // Hunger is the day's care read fresh each step, so the UTC
         // rollover sinks the fish without any event.
         self.aquarium_state.set_hungry(self.aquarium_care.hungry());
-        if anim_quarter && self.aquarium_tray_visible() {
+        if anim_quarter && self.aquarium_visible() {
             self.aquarium_state.tick();
             changed = true;
         }
@@ -1263,7 +1263,7 @@ impl App {
         {
             return ANIM_HALF_TICK;
         }
-        if self.aquarium_tray_visible()
+        if self.aquarium_visible()
             || (self.show_profile_modal && self.profile_modal_state.aquarium_animating())
         {
             return ANIM_QUARTER_TICK;
@@ -1273,25 +1273,11 @@ impl App {
 
     /// Whether the reef is actually on screen: the Zen page draws it for
     /// everyone, owned or not (an unowned tank swims empty under a shop
-    /// caption), and the Home Lounge draws the tray for an owner who has it
-    /// open. Mirrors render.rs; shared by the sim's step gate in tick() and
-    /// the wake cadence, so an aquarium owner browsing other screens pays no
-    /// fish frames.
-    fn aquarium_tray_visible(&self) -> bool {
-        if self.screen == Screen::Zen {
-            return true;
-        }
-        if !self.show_aquarium_tray || !self.shop_state.entitlements().has_aquarium() {
-            return false;
-        }
-        if self.screen != Screen::Dashboard {
-            return false;
-        }
-        crate::app::render::dashboard_home_selected(
-            self.chat.lounge_room_id(),
-            self.chat.selected_room_id,
-            self.chat.synthetic_entry_selected(),
-        )
+    /// caption), and no other page draws it at all. Shared by the sim's
+    /// step gate in tick() and the wake cadence, so an aquarium owner
+    /// browsing other screens pays no fish frames.
+    fn aquarium_visible(&self) -> bool {
+        self.screen == Screen::Zen
     }
 
     /// A paired client is playing and unmuted: the same reading the Zen

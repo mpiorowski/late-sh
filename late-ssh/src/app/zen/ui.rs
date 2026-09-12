@@ -360,7 +360,7 @@ fn draw_rice_hint(frame: &mut Frame, area: Rect, zen: &ZenState) {
         &[
             ("Esc", "back"),
             ("?", "keys"),
-            ("←→", "focus"),
+            ("Tab ←→", "focus"),
             ("space", "kind"),
             ("S", "split"),
             ("X", "close"),

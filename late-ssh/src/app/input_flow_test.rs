@@ -2648,6 +2648,45 @@ async fn artboard_gallery_hangs_a_framed_piece_from_the_rail() {
 }
 
 #[tokio::test]
+async fn zen_tab_cycles_tile_focus_instead_of_switching_pages() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "zen-tab-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "zen-tab-flow-it");
+    wait_for_render_contains(&mut app, " Home ").await;
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "Esc back").await;
+    let tiles = app.zen.leaf_count();
+    let start = app.zen.focus;
+
+    // Tab walks the tiles in layout order and stays on the page: Zen is
+    // not in the page cycle, so the global Tab would drop back to Home.
+    app.handle_input(b"\t");
+    assert_eq!(app.screen, Screen::Zen, "Tab on Zen stays on Zen");
+    assert_eq!(app.zen.focus, (start + 1) % tiles, "Tab focuses the next tile");
+
+    // Shift+Tab walks back.
+    app.handle_input(b"\x1b[Z");
+    assert_eq!(app.screen, Screen::Zen, "Shift+Tab on Zen stays on Zen");
+    assert_eq!(app.zen.focus, start, "Shift+Tab focuses the previous tile");
+
+    // Tab wraps past the last tile to the first.
+    for _ in 0..tiles {
+        app.handle_input(b"\t");
+    }
+    assert_eq!(app.zen.focus, start, "Tab wraps around the tiles");
+    assert_eq!(app.screen, Screen::Zen);
+}
+
+#[tokio::test]
 async fn zen_chat_keys_belong_to_the_focused_chat_tile() {
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "zen-jk-viewer").await;
@@ -2856,54 +2895,6 @@ async fn zen_petting_the_pet_leaves_the_focus_on_the_chat() {
         PetMood::Purring,
         "the click landed on the pet"
     );
-}
-
-#[tokio::test]
-async fn slash_pet_and_slash_aquarium_toggle_the_lounge_strip_and_tray() {
-    use crate::app::hub::shop::{
-        entitlements::ShopEntitlements, state::ShopState, svc::ShopSnapshot,
-    };
-    use late_core::models::marketplace::{AQUARIUM_SKU, PET_COMPANION_SKU};
-
-    let test_db = new_test_db().await;
-    let viewer = create_test_user(&test_db.db, "lounge-companions").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    ChatRoomMember::join(&client, lounge.id, viewer.id)
-        .await
-        .expect("join lounge");
-
-    let mut app = make_app(test_db.db.clone(), viewer.id, "lounge-companions-it");
-    app.shop_state = ShopState::for_test_snapshot(ShopSnapshot {
-        entitlements: ShopEntitlements::from_owned_skus([
-            PET_COMPANION_SKU.to_string(),
-            AQUARIUM_SKU.to_string(),
-        ]),
-        ..Default::default()
-    });
-    app.resize(160, 40).expect("resize test terminal");
-    wait_for_render_contains(&mut app, "lounge").await;
-
-    // Both surfaces start open for an owner, and their commands close them.
-    assert!(app.show_aquarium_tray);
-    assert!(app.profile_state.profile().show_pet_strip);
-
-    app.handle_input(b"i/aquarium\r");
-    wait_for_render_contains(&mut app, "Aquarium hidden").await;
-    assert!(!app.show_aquarium_tray, "/aq closed the tray");
-
-    app.handle_input(b"i/pet\r");
-    wait_for_render_contains(&mut app, "Pet strip hidden").await;
-    assert!(
-        !app.profile_state.profile().show_pet_strip,
-        "/pet closed the strip"
-    );
-
-    app.handle_input(b"i/aquarium\r");
-    wait_for_render_contains(&mut app, "Aquarium open in the Lounge").await;
-    assert!(app.show_aquarium_tray, "/aq reopened the tray");
 }
 
 #[tokio::test]
