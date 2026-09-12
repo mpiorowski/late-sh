@@ -3944,9 +3944,7 @@ impl ChatState {
                     return None;
                 }
                 _ => {
-                    return Some(Banner::error(
-                        "/brb takes no message, it sets /status away",
-                    ));
+                    return Some(Banner::error("/brb takes no message, it sets /status away"));
                 }
             }
         }
