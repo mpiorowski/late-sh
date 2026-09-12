@@ -553,12 +553,7 @@ fn draw_lobby_tile(frame: &mut Frame, area: Rect, daily: &DailyState, glow: bool
 /// The pet's box at tile size: a name and mood row on top when there is
 /// room, and the whole rest of the tile to roam. `neighbours` names the
 /// side a tank and a bonsai are on; a calm pet goes and watches them.
-fn draw_pet_tile(
-    frame: &mut Frame,
-    area: Rect,
-    pet: Option<&PetView<'_>>,
-    neighbours: Neighbours,
-) {
+fn draw_pet_tile(frame: &mut Frame, area: Rect, pet: Option<&PetView<'_>>, neighbours: Neighbours) {
     let Some(view) = pet else {
         draw_centered_note(
             frame,
