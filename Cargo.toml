@@ -96,6 +96,7 @@ ringbuf = "0.4.8"
 rstest = "0.26.1"
 rumenx-sudoku = "1.0.0"
 russh = "0.61.1"
+rustfft = "6.4.1"
 rustls = { version = "0.23.40", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2.2"
 sha2 = "0.10"

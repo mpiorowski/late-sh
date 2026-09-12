@@ -30,6 +30,7 @@ rand_core.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
 ringbuf.workspace = true
 russh.workspace = true
+rustfft.workspace = true
 rustls.workspace = true
 shlex.workspace = true
 symphonia = { workspace = true, features = ["mp3"] }

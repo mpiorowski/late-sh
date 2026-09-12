@@ -29,7 +29,109 @@ fn render_eq_state(wall_tick: usize, state: EqState) -> String {
 }
 
 fn render_eq_at(wall_tick: usize) -> String {
-    render_eq_state(wall_tick, EqState::Playing)
+    render_eq_state(wall_tick, EqState::Ambient)
+}
+
+fn viz_frame(bands: [f32; 8]) -> VizFrame {
+    VizFrame {
+        bands,
+        rms: 0.5,
+        track_pos_ms: 0,
+    }
+}
+
+fn assert_bands_near(actual: LiveBands, expected: LiveBands) {
+    let pairs = actual
+        .levels
+        .iter()
+        .zip(expected.levels)
+        .chain(actual.peaks.iter().zip(expected.peaks));
+    for (got, want) in pairs {
+        assert!(
+            (got - want).abs() < 1e-5,
+            "got {actual:?}, want {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn spectrum_eases_levels_and_lets_peaks_fall() {
+    // Drive a run of three frames, loud bass then loud treble then silence,
+    // and check the whole smoothed state after each: rising bands attack,
+    // falling bands release, caps hold above their bands and fall slowly.
+    let start = Instant::now();
+    let bass = viz_frame([1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+    let treble = viz_frame([0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
+    let silence = viz_frame([0.0; 8]);
+
+    let first = Spectrum::next(None, &bass, start);
+    assert_bands_near(
+        first.bands(),
+        LiveBands {
+            levels: [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+            peaks: [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+        },
+    );
+
+    let second = Spectrum::next(Some(first), &treble, start);
+    assert_bands_near(
+        second.bands(),
+        LiveBands {
+            levels: [0.7, 0.7, 0.7, 0.7, 0.6, 0.6, 0.6, 0.6],
+            peaks: [0.96, 0.96, 0.96, 0.96, 0.6, 0.6, 0.6, 0.6],
+        },
+    );
+
+    let third = Spectrum::next(Some(second), &silence, start);
+    assert_bands_near(
+        third.bands(),
+        LiveBands {
+            levels: [0.49, 0.49, 0.49, 0.49, 0.42, 0.42, 0.42, 0.42],
+            peaks: [0.92, 0.92, 0.92, 0.92, 0.56, 0.56, 0.56, 0.56],
+        },
+    );
+}
+
+#[test]
+fn hostile_frames_land_inside_the_band() {
+    // Frames come off the network: NaN, infinities and out-of-range values
+    // must not reach the renderer's level math.
+    let frame = viz_frame([f32::NAN, f32::INFINITY, -3.0, 7.0, 0.5, 0.0, 1.0, -0.0]);
+    let spectrum = Spectrum::next(None, &frame, Instant::now());
+    assert_bands_near(
+        spectrum.bands(),
+        LiveBands {
+            levels: [0.0, 0.0, 0.0, 1.0, 0.5, 0.0, 1.0, 0.0],
+            peaks: [0.0, 0.0, 0.0, 1.0, 0.5, 0.0, 1.0, 0.0],
+        },
+    );
+}
+
+#[test]
+fn spectrum_goes_stale_once_the_client_stops_sending() {
+    let start = Instant::now();
+    let spectrum = Spectrum::next(None, &viz_frame([0.5; 8]), start);
+    assert!(!spectrum.is_stale(start + Duration::from_millis(700)));
+    assert!(spectrum.is_stale(start + Duration::from_millis(800)));
+}
+
+#[test]
+fn live_bars_draw_the_spectrum_not_the_wall_clock() {
+    // Loud bass, silent treble: the left bars fill the strip, the right bars
+    // keep only their base pixel, and the frame ignores the wall tick.
+    let bands = [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+    let live = EqState::Live(LiveBands {
+        levels: bands,
+        peaks: bands,
+    });
+    let rendered = render_eq_state(6, live);
+    let rows: Vec<Vec<char>> = rendered.lines().map(|row| row.chars().collect()).collect();
+    assert_eq!(rows[0][0], '█', "loud bass bar reaches the top row");
+    assert_eq!(rows[2][0], '█', "loud bass bar fills its base");
+    let last_bar = TEST_WIDTH as usize - BAR_STRIDE;
+    assert_eq!(rows[0][last_bar], ' ', "silent treble bar stays low");
+    assert_eq!(rows[2][last_bar], '▁', "silent treble bar keeps its base");
+    assert_eq!(rendered, render_eq_state(20, live));
 }
 
 #[test]

@@ -323,6 +323,9 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
             }
             Ok(ws) => {
                 let established = Instant::now();
+                // Subscribed per session so a reconnect starts from live
+                // frames instead of flushing a backlog from the outage.
+                let mut viz_frames = audio.analyzer_tx.subscribe();
                 let session = run_pair_session(
                     ws,
                     &client,
@@ -332,6 +335,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
                         voice: &mut voice,
                         desktop_media: &mut desktop_media,
                         desktop_commands: &mut desktop_commands,
+                        viz_frames: &mut viz_frames,
                     },
                 )
                 .await;

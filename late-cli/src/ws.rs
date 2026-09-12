@@ -20,11 +20,12 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tokio::time::interval;
+use tokio::{sync::broadcast, time::interval};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, info, warn};
 
 use super::{
+    audio::VizSample,
     clipboard,
     mpris::{DesktopCommand, DesktopMedia, IcecastTrack, MediaSource, RadioTrack, YoutubeTrack},
     voice::VoiceRuntimeState,
@@ -638,12 +639,14 @@ impl Drop for WebviewPlaybackController {
 }
 
 /// Mutable client-side runtime driven by the pair websocket loop: the webview
-/// helper, voice state, and the desktop media surface with its command feed.
+/// helper, voice state, the desktop media surface with its command feed, and
+/// the playback analyzer's spectrum frames.
 pub(super) struct PairRuntime<'a> {
     pub(super) webview: &'a mut WebviewPlaybackController,
     pub(super) voice: &'a mut VoiceRuntimeState,
     pub(super) desktop_media: &'a mut DesktopMedia,
     pub(super) desktop_commands: &'a mut tokio::sync::mpsc::Receiver<DesktopCommand>,
+    pub(super) viz_frames: &'a mut broadcast::Receiver<VizSample>,
 }
 
 /// How long a pair connection has to hold before the retry loop treats it as
@@ -847,6 +850,26 @@ async fn pair_session_loop(
             // what lets a widget press mute YouTube too.
             Some(command) = runtime.desktop_commands.recv() => {
                 send_desktop_command(ws, command).await?;
+            }
+            // The spectrum of what this CLI just played, for the TUI's
+            // equalizer. Lagging only means the socket was slower than the
+            // analyzer; the next frame supersedes the skipped ones.
+            recv = runtime.viz_frames.recv() => {
+                match recv {
+                    Ok(frame) => {
+                        let payload = json!({
+                            "event": "viz",
+                            "position_ms": playback_position_ms(playback.played_samples, playback.sample_rate),
+                            "bands": frame.bands,
+                            "rms": frame.rms,
+                        });
+                        ws.send(Message::Text(payload.to_string().into())).await?;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => {
+                        unreachable!("the audio runtime holds the analyzer sender for the whole pair loop")
+                    }
+                }
             }
             _ = voice_state_heartbeat.tick(), if runtime.voice.joined => {
                 send_voice_state(ws, runtime.voice).await?;

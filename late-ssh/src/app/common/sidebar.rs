@@ -62,6 +62,8 @@ pub(crate) struct SidebarProps<'a> {
     pub components: &'a [RightSidebarComponentSetting],
     pub now_playing: Option<&'a NowPlaying>,
     pub paired_client: Option<&'a ClientAudioState>,
+    /// What the music stage's equalizer draws (`viz::eq_state`).
+    pub eq_state: EqState,
     pub bonsai: &'a BonsaiState,
     pub clock_text: &'a str,
     /// YouTube queue snapshot — drives the music stage's active panel and
@@ -224,6 +226,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                         radio_source_count: props.radio_source_count,
                         marquee_tick: props.marquee_tick,
                     },
+                    props.eq_state,
                 );
             }
             RightSidebarComponent::Bonsai => {
@@ -527,9 +530,10 @@ struct MusicStageProps<'a> {
     marquee_tick: usize,
 }
 
-/// Music stage: a small ambient equalizer strip pinned on top, then the
-/// fixed dock and fixed detail area. Rows 0-2 the eq band (borderless,
-/// dancing only while a client is paired and unmuted), rows 3-4 volume, rows 5-10 a
+/// Music stage: a small equalizer strip pinned on top, then the fixed dock
+/// and fixed detail area. Rows 0-2 the eq band (borderless, moving only
+/// while a client is paired and unmuted: the client's live spectrum when it
+/// sends one, the ambient band otherwise), rows 3-4 volume, rows 5-10 a
 /// three-source dock in order radio → youtube → icecast (title bar +
 /// now-playing line per source; radio leads because it is the default
 /// source for new users), row 11 a labeled rule naming the active source,
@@ -549,18 +553,18 @@ struct MusicStageProps<'a> {
 /// frame, before the browser has finished pairing. `v+x` cycles sources
 /// in dock order (radio → youtube → icecast), so the amber `▌` accent
 /// walks down the dock as the user cycles.
-fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) {
+fn draw_music_stage(
+    frame: &mut Frame,
+    area: Rect,
+    props: &MusicStageProps<'_>,
+    eq_state: EqState,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
 
     let [viz_area, dock_area] =
         Layout::vertical([Constraint::Length(MUSIC_VIZ_HEIGHT), Constraint::Fill(1)]).areas(area);
-    let eq_state = match props.paired_client {
-        None => EqState::Unpaired,
-        Some(client) if client.muted => EqState::Muted,
-        Some(_) => EqState::Playing,
-    };
     render_eq(frame, viz_area, props.marquee_tick, eq_state);
 
     let lines = music_stage_lines(dock_area.width, props);

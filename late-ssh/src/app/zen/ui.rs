@@ -21,7 +21,7 @@ use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
 
 use crate::app::{
     audio::stations::{icecast_stream_display_name, radio_station_display_name},
-    audio::viz::{EqState, render_eq},
+    audio::viz::{EqState, render_eq, spectrum_unit},
     bonsai::{
         render::{PREVIEW_WIDTH, apply_sway, canvas_lines, center_lines, render_preview_lines},
         state::{BonsaiState, CANVAS_HEIGHT, CANVAS_WIDTH},
@@ -773,17 +773,27 @@ fn draw_visualizer_tile(frame: &mut Frame, area: Rect, wall_tick: usize, eq_stat
     if area.width < 2 || area.height == 0 {
         return;
     }
-    if eq_state != EqState::Playing {
-        render_eq(frame, area, wall_tick, eq_state);
-        return;
-    }
+    let live = match eq_state {
+        EqState::Live(live) => Some(live),
+        EqState::Ambient => None,
+        EqState::Muted | EqState::Unpaired => {
+            render_eq(frame, area, wall_tick, eq_state);
+            return;
+        }
+    };
     let anim_frame = wall_tick / 2;
     let width = area.width as usize;
     let height = area.height as usize;
     let bars = width.div_ceil(2);
     let subcells = height * 8;
     let levels: Vec<usize> = (0..bars)
-        .map(|b| ((bar_unit(b, bars, anim_frame) * subcells as f32) as usize).clamp(1, subcells))
+        .map(|b| {
+            let unit = match &live {
+                Some(live) => spectrum_unit(&live.levels, b, bars),
+                None => bar_unit(b, bars, anim_frame),
+            };
+            ((unit * subcells as f32).round() as usize).clamp(1, subcells)
+        })
         .collect();
     let mut lines = Vec::with_capacity(height);
     for row in 0..height {

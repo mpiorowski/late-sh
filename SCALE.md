@@ -430,7 +430,6 @@ Gating the `anim_half` sidebar edge on a paired client is NOT the knob, and woul
 - [ ] Artboard screen rides the 500 ms floor; remote strokes lag up to 0.5 s. Bump its tier while on-screen if it feels laggy.
 - [ ] Push wakes for chat's targeted mpsc would cut the ≤500 ms idle chat latency to instant; needs the sender side to hold the RenderSignal.
 - [ ] Load governor (raise the idle floor when node CPU is high) not built.
-- [ ] Viz pipeline removal: `SessionMessage::Viz` frames are dropped on arrival, but the WS/CLI/late-core pipeline still produces and ships them; remove end to end.
 
 ### Revert knobs
 

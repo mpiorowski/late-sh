@@ -99,10 +99,11 @@ impl App {
             }
         }
         // Heartbeats are a liveness no-op (matched below); a heartbeat-only
-        // drain must not pay a frame. Viz frames are dropped outright: the
-        // eq is synthetic and the pipeline removal is a tracked follow-up
-        // (SCALE.md), the variant survives only so old CLIs still
-        // sending frames keep a working socket.
+        // drain must not pay a frame. Viz frames only update the eq's
+        // spectrum: the eq repaints on the anim_half edge it already pays
+        // while visible, so ~15 frames a second never buy extra paints.
+        let now = Instant::now();
+        self.audio.expire_spectrum(now);
         if messages
             .iter()
             .any(|m| !matches!(m, SessionMessage::Heartbeat | SessionMessage::Viz(_)))
@@ -337,7 +338,7 @@ impl App {
         for msg in messages {
             match msg {
                 SessionMessage::Heartbeat => {}
-                SessionMessage::Viz(_) => {}
+                SessionMessage::Viz(frame) => self.audio.apply_viz_frame(&frame, now),
                 SessionMessage::ClipboardImage { data } => {
                     let Some(upload) = self.chat.take_pending_clipboard_image_upload() else {
                         tracing::warn!("ignoring unsolicited paired clipboard image");
@@ -1290,7 +1291,8 @@ impl App {
     }
 
     /// A paired client is playing and unmuted: the same reading the Zen
-    /// page's equalizer paints (`EqState::Playing`), handed to the pet.
+    /// page's equalizer paints as moving (`EqState::Live` or `Ambient`),
+    /// handed to the pet.
     fn music_playing(&self) -> bool {
         match self.paired_client_state() {
             None => false,

@@ -1,4 +1,5 @@
-use crate::app::common::theme;
+use crate::app::{audio::client_state::ClientAudioState, common::theme};
+use late_core::audio::VizFrame;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -6,6 +7,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
+use std::time::{Duration, Instant};
 
 /// Rows the equalizer band is drawn at; the music stage pins this height
 /// and a taller area centers the band vertically.
@@ -22,6 +24,20 @@ const BLOCKS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇',
 /// Paid frames a peak cap hangs before falling back onto its bar: the cap
 /// is the max bar level over this trailing window, so it needs no state.
 const CAP_HOLD_FRAMES: usize = 6;
+
+/// A spectrum the client stopped refreshing for this long no longer
+/// describes what is playing: the client muted, switched to YouTube,
+/// dropped its pair socket, or never analyzes at all. The strip falls back
+/// to the ambient band. The CLI sends at ~15 Hz, so this is ~11 frames.
+const SPECTRUM_STALE_AFTER: Duration = Duration::from_millis(750);
+/// Share of the gap to a louder band closed in one client frame: a hit
+/// lands almost at once.
+const BAND_ATTACK: f32 = 0.6;
+/// Share of the gap to a quieter band closed in one client frame: decays
+/// ease down instead of flickering.
+const BAND_RELEASE: f32 = 0.3;
+/// How far a peak cap falls per client frame, as a share of the full band.
+const PEAK_FALL: f32 = 0.04;
 
 /// Deterministic per-bar phase in [0, τ): an integer hash spread over the
 /// circle so neighbouring bars never move in lockstep.
@@ -56,11 +72,104 @@ fn cap_level(bar: usize, bars: usize, anim_frame: usize) -> u16 {
         .unwrap_or(1)
 }
 
+/// The smoothed spectrum the eq draws, each value in 0..=1: the eight
+/// analyzer bands low to high, and a falling peak cap per band that never
+/// sits below its band.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct LiveBands {
+    pub(crate) levels: [f32; 8],
+    pub(crate) peaks: [f32; 8],
+}
+
+/// The paired client's spectrum as this session last heard it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Spectrum {
+    bands: LiveBands,
+    received_at: Instant,
+}
+
+impl Spectrum {
+    /// Folds one client frame in. The first frame of a run lands as-is;
+    /// later ones ease toward the new bands and let the caps fall.
+    pub(crate) fn next(current: Option<Spectrum>, frame: &VizFrame, now: Instant) -> Spectrum {
+        let targets = frame.bands.map(band_target);
+        let bands = match current {
+            None => LiveBands {
+                levels: targets,
+                peaks: targets,
+            },
+            Some(spectrum) => {
+                let levels: [f32; 8] = std::array::from_fn(|i| {
+                    smooth(spectrum.bands.levels[i], targets[i])
+                });
+                let peaks = std::array::from_fn(|i| {
+                    levels[i].max(spectrum.bands.peaks[i] - PEAK_FALL)
+                });
+                LiveBands { levels, peaks }
+            }
+        };
+        Spectrum {
+            bands,
+            received_at: now,
+        }
+    }
+
+    pub(crate) fn is_stale(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.received_at) > SPECTRUM_STALE_AFTER
+    }
+
+    pub(crate) fn bands(&self) -> LiveBands {
+        self.bands
+    }
+}
+
+/// A client band as a drawable target. Frames come off the network, so a
+/// non-finite or out-of-range value lands at the nearest edge of 0..=1.
+fn band_target(band: f32) -> f32 {
+    match band.is_finite() {
+        true => band.clamp(0.0, 1.0),
+        false => 0.0,
+    }
+}
+
+fn smooth(current: f32, target: f32) -> f32 {
+    let rate = match target > current {
+        true => BAND_ATTACK,
+        false => BAND_RELEASE,
+    };
+    current + (target - current) * rate
+}
+
+/// The spectrum's height under one bar, in 0..=1: the eight bands
+/// stretched across however many bars the width holds, interpolated
+/// between neighbours so a wide strip slopes instead of stepping.
+pub(crate) fn spectrum_unit(bands: &[f32; 8], bar: usize, bars: usize) -> f32 {
+    let last = bands.len() - 1;
+    let position = match bars {
+        0 | 1 => 0.0,
+        _ => bar as f32 * last as f32 / (bars - 1) as f32,
+    };
+    let low = (position.floor() as usize).min(last);
+    let high = (low + 1).min(last);
+    let t = position - low as f32;
+    bands[low] + (bands[high] - bands[low]) * t
+}
+
+/// A 0..=1 height as a bar level; every bar keeps its base pixel so a quiet
+/// passage still reads as a meter, not as an empty strip.
+fn unit_level(unit: f32) -> u16 {
+    ((unit * MAX_LEVEL as f32).round() as u16).clamp(1, MAX_LEVEL)
+}
+
 /// What the equalizer strip should be saying about this session's audio.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum EqState {
-    /// A client is paired and unmuted: the band dances.
-    Playing,
+    /// A client is paired, unmuted, and streaming the spectrum of what it
+    /// plays: the bars are the music.
+    Live(LiveBands),
+    /// A client is paired and unmuted but sends no spectrum (YouTube, or a
+    /// CLI without the analyzer): the band dances on the wall clock.
+    Ambient,
     /// A client is paired and muted: a steady flat line, the meter at rest.
     Muted,
     /// Nothing is paired, so this session has no audio surface at all. A
@@ -69,18 +178,31 @@ pub(crate) enum EqState {
     Unpaired,
 }
 
-/// Ambient equalizer for the sidebar's music stage. No audio data and no
-/// stored state: bar heights are synthesized from the `wall_tick`-derived
-/// paid frame (the app's marquee_tick), so the same tick renders the same
-/// frame at any loop cadence. Heights step once per anim_half `/2` edge,
-/// which is exactly the edge tick() pays a frame on; sub-edge ticks render
-/// identically.
+/// The one reading of pairing, mute, and spectrum every eq surface draws.
+pub(crate) fn eq_state(
+    paired_client: Option<&ClientAudioState>,
+    live_bands: Option<LiveBands>,
+) -> EqState {
+    match (paired_client, live_bands) {
+        (None, _) => EqState::Unpaired,
+        (Some(client), _) if client.muted => EqState::Muted,
+        (Some(_), Some(bands)) => EqState::Live(bands),
+        (Some(_), None) => EqState::Ambient,
+    }
+}
+
+/// Equalizer for the sidebar's music stage. A live spectrum draws as-is;
+/// the ambient band has no stored state and is synthesized from the
+/// `wall_tick`-derived paid frame (the app's marquee_tick), so the same
+/// tick renders the same frame at any loop cadence. Both step once per
+/// anim_half `/2` edge, which is exactly the edge tick() pays a frame on.
 pub(crate) fn render_eq(frame: &mut Frame, area: Rect, wall_tick: usize, state: EqState) {
     if area.height == 0 || area.width == 0 {
         return;
     }
     let width = area.width as usize;
     let anim_frame = wall_tick / 2;
+    let bars = width.div_ceil(BAR_STRIDE);
 
     let mut lines = Vec::with_capacity(area.height as usize);
     // Center the band in whatever height the stage gives us; a shorter
@@ -89,8 +211,19 @@ pub(crate) fn render_eq(frame: &mut Frame, area: Rect, wall_tick: usize, state: 
         lines.push(Line::from(""));
     }
 
-    match state {
-        EqState::Playing => {}
+    let (levels, caps): (Vec<u16>, Vec<u16>) = match state {
+        EqState::Live(live) => (
+            (0..bars)
+                .map(|b| unit_level(spectrum_unit(&live.levels, b, bars)))
+                .collect(),
+            (0..bars)
+                .map(|b| unit_level(spectrum_unit(&live.peaks, b, bars)))
+                .collect(),
+        ),
+        EqState::Ambient => (
+            (0..bars).map(|b| bar_level(b, bars, anim_frame)).collect(),
+            (0..bars).map(|b| cap_level(b, bars, anim_frame)).collect(),
+        ),
         EqState::Muted => {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -121,11 +254,7 @@ pub(crate) fn render_eq(frame: &mut Frame, area: Rect, wall_tick: usize, state: 
             frame.render_widget(Paragraph::new(lines), area);
             return;
         }
-    }
-
-    let bars = width.div_ceil(BAR_STRIDE);
-    let levels: Vec<u16> = (0..bars).map(|b| bar_level(b, bars, anim_frame)).collect();
-    let caps: Vec<u16> = (0..bars).map(|b| cap_level(b, bars, anim_frame)).collect();
+    };
 
     // Vertical gradient: bar heads glow, the base sits in embers. Caps
     // glow wherever they float so a falling peak stays visible.

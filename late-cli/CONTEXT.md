@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh (plus the sibling `late-webview` helper crate)
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-09-11 (Release supply chain: every published binary carries a keyless Sigstore build-provenance bundle (`<binary>.sigstore.json`, `actions/attest`), `sha256sums.txt` is uploaded once to the GitHub Release (published tags are immutable), the build refuses to run off the release tag, and both installers resolve `latest` to a tag, read checksums from GitHub, and fail closed. See §9 "Supply chain".)
+- Last updated: 2026-09-12 (The playback analyzer is back: `src/audio/analyzer.rs` turns audible output into 8-band `viz` frames at ~15 Hz again, and the TUI equalizer draws them for Icecast and radio. Frames flow only while samples are audible, so muted and YouTube-selected CLIs send none. See §7. Previous entry: Release supply chain: every published binary carries a keyless Sigstore build-provenance bundle (`<binary>.sigstore.json`, `actions/attest`), `sha256sums.txt` is uploaded once to the GitHub Release (published tags are immutable), the build refuses to run off the release tag, and both installers resolve `latest` to a tag, read checksums from GitHub, and fail closed. See §9 "Supply chain".)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -351,11 +351,11 @@ Audio path:
 3. Prefer the stream's native `44.1 kHz` when supported.
 4. If the device requires another rate, such as `48 kHz`, resample locally with streaming linear resampling.
 5. Decode frames into a lock-free SPSC playback ring buffer.
-6. The output callback applies mute/volume and records post-mute/post-volume samples into the played ring.
-7. The analyzer reads from the played ring and broadcasts `VizSample { bands: [f32; 8], rms }`.
+6. The output callback applies mute/volume and pushes post-volume mono samples into the played ring, but only while output is audible (not muted, native source selected).
+7. The analyzer thread (`src/audio/analyzer.rs`) reads the played ring and, on each tick that played new samples, broadcasts `VizSample { bands: [f32; 8], rms }`. Each pair session subscribes fresh and sends frames as `viz` events.
 
 Critical audio invariant:
-- The analyzer must follow audible output, not raw decoded samples. Muting or lowering volume should visibly affect the TUI visualizer.
+- The analyzer must follow audible output, not raw decoded samples. Lowering volume shrinks the bars. Silence sends nothing at all: a muted CLI, a YouTube-selected CLI, or an underrun produces no frames, so the TUI's spectrum goes stale and falls back on its own (muted shows the flat line, YouTube the ambient band). Never push zeros for silence; a stream of empty frames would pin the TUI on flat live bars during YouTube playback.
 - The CPAL output callback must not take a mutex or allocate per output frame. Keep decoder-to-output transport on a lock-free SPSC ring and map channels directly into the callback buffer.
 - Reuse Symphonia `SampleBuffer` storage across decoded packets; do not allocate a fresh conversion buffer per packet.
 
@@ -382,7 +382,7 @@ Audio and stream resiliency:
 - Startup stream probing and the decoder thread's first stream open each retry 3 times with a short 750ms delay before aborting startup. This covers rare Icecast/network timing blips where the first CLI launch says "failed to create audio decoder" but immediately joining again works.
 - Decoder recovery re-probes `SymphoniaStreamDecoder` in place after stream failures, sleeps 2s between reconnects, and gives up after 10 consecutive failures.
 - CPAL output stream errors mark `icecast_output_available=false`; the pair WebSocket sends an updated `client_state` so the server knows this CLI is not producing audio.
-- `viz` frames are a legacy pair-WS payload. Nothing renders them: the sidebar equalizer is synthesized from the wall tick (see `late-ssh/src/app/audio/CONTEXT.md` §10).
+- `viz` frames drive the TUI equalizer's live spectrum for Icecast and radio (see `late-ssh/src/app/audio/CONTEXT.md` §10). CLIs released between the analyzer's removal (2026-07-23) and its return send none and keep the ambient band.
 
 ---
 

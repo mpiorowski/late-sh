@@ -256,6 +256,7 @@ struct DrawContext<'a> {
     leaderboard: &'a Arc<LeaderboardData>,
     now_playing: Option<&'a NowPlaying>,
     paired_client: Option<&'a ClientAudioState>,
+    eq_state: crate::app::audio::viz::EqState,
     sidebar_clock: &'a str,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
     banner: Option<&'a Banner>,
@@ -508,6 +509,8 @@ impl App {
                 .map(|meta| format!("{} - {}", meta.artist, meta.title))
         });
         let paired_client = self.paired_client_state();
+        let eq_state =
+            crate::app::audio::viz::eq_state(paired_client.as_ref(), self.audio.live_bands());
         let paired_cli_supports_voice = self.paired_cli_supports_voice();
         let banner = self.active_banner().cloned();
         // First contact, stage 1 (`app/deadchannel/haunt`): a live glitch
@@ -1271,6 +1274,7 @@ impl App {
                         leaderboard: &self.leaderboard,
                         now_playing: now_playing.as_ref(),
                         paired_client: paired_client.as_ref(),
+                        eq_state,
                         sidebar_clock: &sidebar_clock,
                         bonsai: &self.bonsai_state,
                         banner: banner.as_ref(),
@@ -1839,11 +1843,7 @@ impl App {
                         ctx.selected_radio_station,
                         ctx.selected_icecast_stream,
                     ),
-                    eq_state: match ctx.paired_client {
-                        None => crate::app::audio::viz::EqState::Unpaired,
-                        Some(client) if client.muted => crate::app::audio::viz::EqState::Muted,
-                        Some(_) => crate::app::audio::viz::EqState::Playing,
-                    },
+                    eq_state: ctx.eq_state,
                     clock: ctx.sidebar_clock,
                     date: ctx.zen_date.clone(),
                     online_count: ctx.online_count,
@@ -1887,6 +1887,7 @@ impl App {
                     components: &ctx.right_sidebar_components,
                     now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
+                    eq_state: ctx.eq_state,
                     bonsai: ctx.bonsai,
                     clock_text: ctx.sidebar_clock,
                     queue_snapshot: &ctx.booth_snapshot,
