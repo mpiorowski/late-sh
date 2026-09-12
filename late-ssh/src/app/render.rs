@@ -873,7 +873,7 @@ impl App {
                     highlighted_message_id: self.chat.highlighted_message_id,
                     reaction_picker_active: self.chat.is_reaction_leader_active(),
                     composer: self.chat.composer(),
-                    composer_shown: true,
+                    composer_inert: false,
                     composing: self.chat.composing,
                     mention_matches: &self.chat.mention_ac.matches,
                     mention_selected: self.chat.mention_ac.selected,
@@ -938,7 +938,7 @@ impl App {
                     highlighted_message_id: self.chat.highlighted_message_id,
                     reaction_picker_active: self.chat.is_reaction_leader_active(),
                     composer: self.chat.composer(),
-                    composer_shown: true,
+                    composer_inert: false,
                     composing: self.chat.composing,
                     mention_matches: &self.chat.mention_ac.matches,
                     mention_selected: self.chat.mention_ac.selected,
@@ -960,6 +960,11 @@ impl App {
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
                     selection_scroll: Some(&self.chat.selection_scroll),
                 });
+        // Every chat tile draws a composer, focused or not: an input box
+        // that appears and disappears as the focus walks moves every row
+        // under the reader. Only the active tile's composer is live, so the
+        // rest measure this empty one and keep a fixed height.
+        let idle_composer = ratatui_textarea::TextArea::default();
         let zen_chat_tiles: Vec<crate::app::zen::ui::ZenChatTile<'_>> = zen_chat_rooms
             .iter()
             .zip(zen_room_labels.iter())
@@ -1015,8 +1020,12 @@ impl App {
                         None
                     },
                     reaction_picker_active: active && self.chat.is_reaction_leader_active(),
-                    composer: self.chat.composer(),
-                    composer_shown: active,
+                    composer: if active {
+                        self.chat.composer()
+                    } else {
+                        &idle_composer
+                    },
+                    composer_inert: !active,
                     composing: active && self.chat.composing,
                     mention_matches: &self.chat.mention_ac.matches,
                     mention_selected: self.chat.mention_ac.selected,
@@ -1091,6 +1100,7 @@ impl App {
             mention_matches: &self.chat.mention_ac.matches,
             mention_selected: self.chat.mention_ac.selected,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+            inert: false,
         });
         let mut terminal_image_frame = TerminalImageFrame::default();
 

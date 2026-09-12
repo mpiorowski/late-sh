@@ -2671,7 +2671,11 @@ async fn zen_tab_cycles_tile_focus_instead_of_switching_pages() {
     // not in the page cycle, so the global Tab would drop back to Home.
     app.handle_input(b"\t");
     assert_eq!(app.screen, Screen::Zen, "Tab on Zen stays on Zen");
-    assert_eq!(app.zen.focus, (start + 1) % tiles, "Tab focuses the next tile");
+    assert_eq!(
+        app.zen.focus,
+        (start + 1) % tiles,
+        "Tab focuses the next tile"
+    );
 
     // Shift+Tab walks back.
     app.handle_input(b"\x1b[Z");
@@ -2842,5 +2846,268 @@ async fn zen_a_draft_stays_in_its_room_when_the_focus_moves_and_zoom_shows_the_f
     assert!(
         rendered.contains("#zen-quiet"),
         "the zoomed pane is the focused tile's room, not the first chat's:\n{rendered}"
+    );
+}
+
+#[tokio::test]
+async fn zen_petting_the_pet_leaves_the_focus_on_the_chat() {
+    use crate::app::hub::shop::{
+        entitlements::ShopEntitlements, state::ShopState, svc::ShopSnapshot,
+    };
+    use crate::app::zen::state::TileKind;
+    use late_core::models::marketplace::PET_COMPANION_SKU;
+    use late_core::models::pet::PetMood;
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "zen-pet-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-pet-flow-it");
+    app.shop_state = ShopState::for_test_snapshot(ShopSnapshot {
+        entitlements: ShopEntitlements::from_owned_skus([PET_COMPANION_SKU.to_string()]),
+        ..Default::default()
+    });
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "Esc back").await;
+
+    let chat = app
+        .zen
+        .first_tile_of(TileKind::Chat)
+        .expect("the default has a chat");
+    assert_eq!(app.zen.focus, chat, "the page opens on its chat tile");
+
+    // The pet sits on the rail, in a tile of its own. Petting it is a
+    // passing gesture: the keys stay with the chat.
+    let pet = app.last_pet_rect.get().expect("the pet drew on its tile");
+    let click = format!("\x1b[<0;{};{}M", pet.x + 1, pet.y + 1);
+    app.handle_input(click.as_bytes());
+    assert_eq!(
+        app.zen.focus, chat,
+        "petting the pet leaves the focus on the chat tile"
+    );
+    render_plain(&mut app);
+    assert_eq!(
+        app.pet_state.mood(),
+        PetMood::Purring,
+        "the click landed on the pet"
+    );
+}
+
+#[tokio::test]
+async fn zen_every_chat_tile_keeps_its_composer_whatever_is_focused() {
+    use crate::app::zen::state::TileKind;
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "zen-composer-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    let quiet = ChatRoom::get_or_create_public_room(&client, "zen-comp")
+        .await
+        .expect("second room");
+    ChatRoomMember::join(&client, quiet.id, viewer.id)
+        .await
+        .expect("join second room");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-composer-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "Esc back").await;
+
+    let first = app
+        .zen
+        .first_tile_of(TileKind::Chat)
+        .expect("the default has a chat");
+    assert!(app.zen.split_focused(true));
+    let second = app.zen.focus;
+    assert!(app.zen.rice.root.set_kind(second, TileKind::Chat));
+    assert!(app.zen.bind_focused_chat_room(Some(quiet.id)));
+
+    // Both tiles carry a composer, and walking the focus moves nothing:
+    // an input box that comes and goes is the layout jumping under you.
+    // The focused tile's strip is live, the other's says it only watches
+    // (its keys act on the focused tile, so it must not name them).
+    let frame = render_plain(&mut app);
+    assert_eq!(
+        (
+            frame.matches("Compose").count(),
+            frame.matches("watching").count()
+        ),
+        (1, 1),
+        "both chat tiles draw a composer, one live and one watching; frame={frame:?}"
+    );
+    assert_eq!(
+        frame.matches("j/k select").count(),
+        1,
+        "only the live composer names the chat keys; frame={frame:?}"
+    );
+
+    app.zen.focus = first;
+    crate::app::zen::input::focus_moved(&mut app);
+    let frame = render_plain(&mut app);
+    assert_eq!(
+        (
+            frame.matches("Compose").count(),
+            frame.matches("watching").count()
+        ),
+        (1, 1),
+        "the composers stay put when the focus walks; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn zen_room_picker_binds_the_focused_chat_tile_and_slash_picker_opens_it() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::zen::state::TileKind;
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "zen-picker-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    let quiet = ChatRoom::get_or_create_public_room(&client, "zen-picked")
+        .await
+        .expect("second room");
+    ChatRoomMember::join(&client, quiet.id, viewer.id)
+        .await
+        .expect("join second room");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-picker-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "zen-picked").await;
+    let home_selection = app.chat.selected_room_id;
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "Esc back").await;
+    assert_eq!(app.zen.focused_kind(), Some(TileKind::Chat));
+    assert_eq!(
+        app.zen.focused_chat_room(),
+        Some(None),
+        "the default chat tile follows Home's selection"
+    );
+
+    // `/picker` from the tile's composer opens the same modal as Ctrl+/.
+    app.handle_input(b"i/picker\r");
+    assert!(
+        app.room_search_modal_state.is_open(),
+        "/picker opens the room picker"
+    );
+
+    // A room picked with a chat tile focused binds that tile, like [ ]:
+    // the page stays up and Home's selection is untouched.
+    app.handle_input(b"zen-picked\r");
+    assert!(
+        !app.room_search_modal_state.is_open(),
+        "the pick closes the picker"
+    );
+    assert_eq!(app.screen, Screen::Zen, "the pick stays on Zen");
+    assert_eq!(
+        app.zen.focused_chat_room(),
+        Some(Some(quiet.id)),
+        "the focused chat tile is bound to the picked room"
+    );
+    assert_eq!(app.zen_chat_room_id(), Some(quiet.id));
+    assert_eq!(
+        app.chat.selected_room_id, home_selection,
+        "Home's selection does not move"
+    );
+
+    // With no chat tile focused the pick moves Home's selection as before.
+    app.handle_input(b"\x1b[D");
+    assert_ne!(app.zen.focused_kind(), Some(TileKind::Chat));
+    app.handle_input(b"\x1f");
+    assert!(
+        app.room_search_modal_state.is_open(),
+        "Ctrl+/ opens the picker"
+    );
+    app.handle_input(b"zen-picked\r");
+    assert_eq!(app.screen, Screen::Zen);
+    assert_eq!(app.chat.selected_room_id, Some(quiet.id));
+}
+
+#[tokio::test]
+async fn zen_space_opens_a_tile_picker_that_owns_the_keys_until_a_pick_or_esc() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::zen::state::TileKind;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "zen-picker-tiles").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "zen-tile-picker-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, " Home ").await;
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "Esc back").await;
+    assert_eq!(app.zen.focused_kind(), Some(TileKind::Chat));
+    let tiles = app.zen.leaf_count();
+
+    // Space opens the list on the tile's own kind, and names it.
+    app.handle_input(b" ");
+    assert_eq!(app.zen.kind_picker_selection(), Some(TileKind::Chat));
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains(" tile ") && frame.contains("current") && frame.contains("visualizer"),
+        "the picker lists every kind and marks the current one; frame={frame:?}"
+    );
+    assert!(
+        frame.contains("jk move") && frame.contains("enter pick") && frame.contains("esc close"),
+        "the picker names its keys; frame={frame:?}"
+    );
+
+    // The picker owns the keys: `S` splits nothing and `q` quits nothing.
+    app.handle_input(b"S");
+    app.handle_input(b"q");
+    assert_eq!(
+        app.zen.leaf_count(),
+        tiles,
+        "S under the picker splits nothing"
+    );
+    assert!(!app.show_quit_confirm, "q under the picker quits nothing");
+    assert!(app.zen.kind_picker.is_some());
+
+    // One row down and Enter: the tile is a clock, the picker is gone.
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    assert!(app.zen.kind_picker.is_none(), "a pick closes the picker");
+    assert_eq!(app.zen.focused_kind(), Some(TileKind::Clock));
+    assert_eq!(app.screen, Screen::Zen);
+
+    // Esc closes it without a change and stays on the page.
+    app.handle_input(b" ");
+    app.handle_input(b"k");
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| app.zen.kind_picker.is_none(),
+        "esc closes the tile picker",
+    )
+    .await;
+    assert_eq!(app.zen.focused_kind(), Some(TileKind::Clock));
+    assert_eq!(
+        app.screen,
+        Screen::Zen,
+        "Esc under the picker does not leave Zen"
     );
 }

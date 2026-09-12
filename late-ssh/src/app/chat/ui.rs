@@ -194,6 +194,10 @@ pub(crate) struct ComposerBlockView<'a> {
     /// When true, Enter sends without closing the composer and Alt+S is a
     /// no-op. Drives the title-hint tier swap.
     pub keep_composer_focused: bool,
+    /// A composer that takes no keys: a Zen chat tile that is not the
+    /// focused one keeps its strip so the rows never jump, but `i`, `j`,
+    /// and `k` act on the focused tile, so it must not advertise them.
+    pub inert: bool,
 }
 
 /// Pick the longest tier whose display width fits inside a titled `Block`
@@ -235,6 +239,9 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
 }
 
 fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> String {
+    if view.inert {
+        return pick_title_that_fits(block_width, &[" watching ", ""]).to_string();
+    }
     if !view.composing {
         return pick_title_that_fits(
             block_width,
@@ -440,6 +447,13 @@ fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'stat
 
 fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Paragraph<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());
+
+    if view.inert {
+        return Paragraph::new(Line::from(Span::styled(
+            "Tab or a click focuses this tile · i writes",
+            dim,
+        )));
+    }
 
     if view.composing {
         return Paragraph::new(Line::from(vec![
@@ -1126,6 +1140,7 @@ pub fn draw_dashboard_chat_card(
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
+                inert: false,
             },
             composer_text_width,
         ));
@@ -1262,6 +1277,7 @@ pub fn draw_dashboard_chat_card(
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
             keep_composer_focused: view.keep_composer_focused,
+            inert: false,
         },
     );
     record_composer_mouse_target(
@@ -3131,10 +3147,10 @@ pub struct EmbeddedRoomChatView<'a> {
     pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
-    /// Whether the composer block is drawn under the messages. Off for a
-    /// view that only watches a room (a Zen chat tile that is not the
-    /// focused one); the messages then take the whole area.
-    pub composer_shown: bool,
+    /// The composer strip is drawn but takes no keys: a Zen chat tile that
+    /// is not the focused one. It keeps its strip so the rows never jump
+    /// and says so instead of naming keys that act on the focused tile.
+    pub composer_inert: bool,
     pub composing: bool,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
@@ -3195,15 +3211,12 @@ pub fn draw_embedded_room_chat(
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
+                inert: view.composer_inert,
             },
             composer_text_width,
         ));
     let composer_height = total_composer_lines.min(4) as u16 + 2;
-    let (mut messages_area, composer_area) = if view.composer_shown {
-        split_chat_and_composer(area, composer_height)
-    } else {
-        (area, Rect::new(area.x, area.bottom(), area.width, 0))
-    };
+    let (mut messages_area, composer_area) = split_chat_and_composer(area, composer_height);
 
     // A voice channel shows the compact voice strip at the top of the chat
     // panel; text-only views render unchanged.
@@ -3300,9 +3313,6 @@ pub fn draw_embedded_room_chat(
         draw_image_modal(frame, messages_text_area, image_modal, terminal_images);
     }
 
-    if !view.composer_shown {
-        return;
-    }
     draw_composer_block(
         frame,
         composer_area,
@@ -3319,6 +3329,7 @@ pub fn draw_embedded_room_chat(
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
             keep_composer_focused: view.keep_composer_focused,
+            inert: view.composer_inert,
         },
     );
     record_composer_mouse_target(
@@ -3428,6 +3439,7 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
                         mention_matches: view.mention_matches,
                         mention_selected: view.mention_selected,
                         keep_composer_focused: view.keep_composer_focused,
+                        inert: false,
                     },
                     composer_text_width,
                 ),
@@ -5392,6 +5404,7 @@ fn draw_selected_content(
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
+                inert: false,
             },
         );
         record_composer_mouse_target(

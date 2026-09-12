@@ -132,6 +132,7 @@ const COMMANDS: &[Command] = &[
     global("paper", "The Late Edition, graybeard's daily paper"),
     global("paste-image", "upload image from CLI clipboard"),
     global("petname", "name your pet (/petname Mochi; bare shows)"),
+    global("picker", "open the room picker (same as Ctrl+/)"),
     global("poll", "start a Home room poll (2-3 options)"),
     global("pomodoro", "focus countdown (/pomodoro 50 deep work; stop)"),
     global("pot", "the weekly pot (/pot; /pot buy N for tickets)"),

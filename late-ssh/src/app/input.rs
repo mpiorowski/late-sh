@@ -2274,6 +2274,10 @@ fn dispatch_escape(app: &mut App) {
     // Esc on Zen peels a selected message first, then hands the page back
     // to wherever Ctrl+F was pressed.
     if ctx.screen == Screen::Zen {
+        if app.zen.kind_picker.is_some() {
+            app.zen.close_kind_picker();
+            return;
+        }
         if app.chat.composing {
             app.chat.reset_composer();
             return;
@@ -2692,17 +2696,19 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         select_screen_from_topbar(app, screen, target);
         return true;
     }
-    // A click on a Zen tile focuses it, then falls through so the pet, the
-    // composer, and the messages of that tile still take the click. A
-    // modal over the page takes the click itself, the same guard the pet
-    // click uses.
+    // Petting the pet is a passing gesture, not a move: it takes the click
+    // before the Zen focus, so a click on the pet leaves the keys with the
+    // chat tile the page opened on.
+    if handle_pet_click(app, x, y) {
+        return true;
+    }
+    // A click on a Zen tile focuses it, then falls through so the composer
+    // and the messages of that tile still take the click. A modal over the
+    // page takes the click itself, the same guard the pet click uses.
     if screen == Screen::Zen && !chat_scroll_clicks_blocked(app) {
         focus_zen_tile_at(app, x, y);
     }
     if handle_chat_composer_click(app, screen, x, y) {
-        return true;
-    }
-    if handle_pet_click(app, x, y) {
         return true;
     }
     if handle_chat_scroll_click(app, screen, x, y) {
@@ -3288,8 +3294,11 @@ fn clear_prefix_arms(app: &mut App) {
     app.room_section_prefix_armed = false;
 }
 
-fn open_room_search_modal_globally(app: &mut App) {
+/// The `Ctrl+/` room picker, also behind `/picker` for terminals that
+/// swallow the chord (Ctrl+/ and Ctrl+_ are one byte, and some keep it).
+pub(crate) fn open_room_search_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
+    app.zen.close_kind_picker();
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
@@ -3634,6 +3643,7 @@ fn open_zen_globally(app: &mut App) {
 
 pub(crate) fn close_zen(app: &mut App) {
     let back = app.zen_return_screen.take().unwrap_or(Screen::Dashboard);
+    app.zen.close_kind_picker();
     reset_composers_for_page_change(app);
     app.set_screen(back);
     app.chat.clear_message_selection();
