@@ -2274,6 +2274,10 @@ fn dispatch_escape(app: &mut App) {
     // Esc on Zen peels a selected message first, then hands the page back
     // to wherever Ctrl+F was pressed.
     if ctx.screen == Screen::Zen {
+        if app.zen.kind_picker.is_some() {
+            app.zen.close_kind_picker();
+            return;
+        }
         if app.chat.composing {
             app.chat.reset_composer();
             return;

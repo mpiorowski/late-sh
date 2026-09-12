@@ -2671,7 +2671,11 @@ async fn zen_tab_cycles_tile_focus_instead_of_switching_pages() {
     // not in the page cycle, so the global Tab would drop back to Home.
     app.handle_input(b"\t");
     assert_eq!(app.screen, Screen::Zen, "Tab on Zen stays on Zen");
-    assert_eq!(app.zen.focus, (start + 1) % tiles, "Tab focuses the next tile");
+    assert_eq!(
+        app.zen.focus,
+        (start + 1) % tiles,
+        "Tab focuses the next tile"
+    );
 
     // Shift+Tab walks back.
     app.handle_input(b"\x1b[Z");
@@ -2995,7 +2999,10 @@ async fn zen_room_picker_binds_the_focused_chat_tile_and_slash_picker_opens_it()
     // A room picked with a chat tile focused binds that tile, like [ ]:
     // the page stays up and Home's selection is untouched.
     app.handle_input(b"zen-picked\r");
-    assert!(!app.room_search_modal_state.is_open(), "the pick closes the picker");
+    assert!(
+        !app.room_search_modal_state.is_open(),
+        "the pick closes the picker"
+    );
     assert_eq!(app.screen, Screen::Zen, "the pick stays on Zen");
     assert_eq!(
         app.zen.focused_chat_room(),
@@ -3012,8 +3019,78 @@ async fn zen_room_picker_binds_the_focused_chat_tile_and_slash_picker_opens_it()
     app.handle_input(b"\x1b[D");
     assert_ne!(app.zen.focused_kind(), Some(TileKind::Chat));
     app.handle_input(b"\x1f");
-    assert!(app.room_search_modal_state.is_open(), "Ctrl+/ opens the picker");
+    assert!(
+        app.room_search_modal_state.is_open(),
+        "Ctrl+/ opens the picker"
+    );
     app.handle_input(b"zen-picked\r");
     assert_eq!(app.screen, Screen::Zen);
     assert_eq!(app.chat.selected_room_id, Some(quiet.id));
+}
+
+#[tokio::test]
+async fn zen_space_opens_a_tile_picker_that_owns_the_keys_until_a_pick_or_esc() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::zen::state::TileKind;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "zen-picker-tiles").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "zen-tile-picker-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, " Home ").await;
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "Esc back").await;
+    assert_eq!(app.zen.focused_kind(), Some(TileKind::Chat));
+    let tiles = app.zen.leaf_count();
+
+    // Space opens the list on the tile's own kind, and names it.
+    app.handle_input(b" ");
+    assert_eq!(app.zen.kind_picker_selection(), Some(TileKind::Chat));
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains(" tile ") && frame.contains("current") && frame.contains("visualizer"),
+        "the picker lists every kind and marks the current one; frame={frame:?}"
+    );
+
+    // The picker owns the keys: `S` splits nothing and `q` quits nothing.
+    app.handle_input(b"S");
+    app.handle_input(b"q");
+    assert_eq!(
+        app.zen.leaf_count(),
+        tiles,
+        "S under the picker splits nothing"
+    );
+    assert!(!app.show_quit_confirm, "q under the picker quits nothing");
+    assert!(app.zen.kind_picker.is_some());
+
+    // One row down and Enter: the tile is music, the picker is gone.
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    assert!(app.zen.kind_picker.is_none(), "a pick closes the picker");
+    assert_eq!(app.zen.focused_kind(), Some(TileKind::Music));
+    assert_eq!(app.screen, Screen::Zen);
+
+    // Esc closes it without a change and stays on the page.
+    app.handle_input(b" ");
+    app.handle_input(b"k");
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| app.zen.kind_picker.is_none(),
+        "esc closes the tile picker",
+    )
+    .await;
+    assert_eq!(app.zen.focused_kind(), Some(TileKind::Music));
+    assert_eq!(
+        app.screen,
+        Screen::Zen,
+        "Esc under the picker does not leave Zen"
+    );
 }

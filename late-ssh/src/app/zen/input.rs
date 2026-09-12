@@ -8,7 +8,7 @@
 
 use uuid::Uuid;
 
-use super::state::{Dir, MAX_TILES, TileKind};
+use super::state::{Dir, KindPick, MAX_TILES, TileKind};
 use crate::app::{common::primitives::Banner, input::ParsedInput, state::App};
 
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
@@ -16,6 +16,12 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     // suffix (`v x` swaps the audio source, `X` here closes a tile).
     if app.music_prefix_armed {
         return false;
+    }
+    // The tile picker owns every key while it is up (Esc closes it in
+    // `dispatch_escape`), so nothing under it moves.
+    if app.zen.kind_picker.is_some() {
+        handle_kind_picker(app, event);
+        return true;
     }
     if handle_common(app, event) {
         return true;
@@ -107,7 +113,10 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
             focus_moved(app);
             return true;
         }
-        b' ' => app.zen.cycle_focused_kind(true),
+        b' ' => {
+            app.zen.open_kind_picker();
+            return true;
+        }
         b'S' => {
             if app.zen.leaf_count() >= MAX_TILES {
                 app.banner = Some(Banner::info("That is every tile the page holds"));
@@ -158,6 +167,29 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
         app.mark_zen_layout_dirty();
     }
     true
+}
+
+/// The tile picker: `j` `k` and the arrows move, Enter or `space` picks,
+/// everything else is swallowed. A refused row (Chat past the cap) says
+/// so in a banner and leaves the picker up.
+fn handle_kind_picker(app: &mut App, event: &ParsedInput) {
+    let byte = event_byte(event);
+    match (event, byte) {
+        (ParsedInput::Arrow(b'A'), _) | (_, Some(b'k')) => app.zen.move_kind_picker(-1),
+        (ParsedInput::Arrow(b'B'), _) | (_, Some(b'j')) => app.zen.move_kind_picker(1),
+        (_, Some(b'\r' | b'\n' | b' ')) => match app.zen.pick_kind() {
+            KindPick::Changed => {
+                app.sync_aquarium_bounds();
+                app.sync_visible_chat_room();
+                app.mark_zen_layout_dirty();
+            }
+            KindPick::Unchanged => {}
+            KindPick::ChatFull => {
+                app.banner = Some(Banner::info("That is every chat tile the page holds"));
+            }
+        },
+        _ => {}
+    }
 }
 
 /// The focus landed somewhere else: the chat that reads as visible (marked

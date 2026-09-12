@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
 
 use super::{
@@ -200,6 +200,85 @@ pub(crate) fn draw_rice(
         }
     }
     draw_rice_hint(frame, hint_area, zen);
+    draw_kind_picker(frame, area, zen);
+}
+
+/// The tile picker `space` opens: one row per kind, centered over the
+/// page, the picker's row marked, the tile's current kind named, and a
+/// row the page refuses (Chat past the cap) drawn faint.
+fn draw_kind_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
+    let Some(selected) = zen.kind_picker else {
+        return;
+    };
+    let height = (TileKind::ALL.len() as u16 + 3).min(area.height);
+    let width = 30u16.min(area.width);
+    if height < 4 || width < 12 {
+        return;
+    }
+    let popup = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" tile ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let current = zen.focused_kind();
+    let mut lines: Vec<Line<'static>> = TileKind::ALL
+        .iter()
+        .enumerate()
+        .map(|(index, kind)| {
+            let picked = index == selected;
+            let allowed = zen.kind_allowed(*kind);
+            let label_style = if !allowed {
+                Style::default().fg(theme::TEXT_FAINT())
+            } else if picked {
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::TEXT())
+            };
+            let mut spans = vec![
+                Span::styled(
+                    if picked { "▌ " } else { "  " },
+                    Style::default().fg(theme::AMBER()),
+                ),
+                Span::styled(format!("{:<12}", kind.label()), label_style),
+            ];
+            if current == Some(*kind) {
+                spans.push(Span::styled(
+                    "current",
+                    Style::default().fg(theme::TEXT_DIM()),
+                ));
+            } else if !allowed {
+                spans.push(Span::styled(
+                    "full",
+                    Style::default().fg(theme::TEXT_FAINT()),
+                ));
+            }
+            Line::from(spans)
+        })
+        .collect();
+    lines.push(Line::from(""));
+    lines.push(hint_line(&[
+        ("jk", "move"),
+        ("enter", "pick"),
+        ("esc", "close"),
+    ]));
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// The keys a tile answers to, named on the right of its title so the

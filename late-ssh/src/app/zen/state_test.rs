@@ -157,36 +157,74 @@ fn a_chat_tile_keeps_its_room_through_the_stored_json_and_old_layouts_still_read
     assert_eq!(old.root.leaf_rooms(), vec![None]);
 
     // Leaving chat forgets the room, so coming back lands on the current one.
-    zen.cycle_focused_kind(true);
-    zen.cycle_focused_kind(false);
+    zen.open_kind_picker();
+    zen.move_kind_picker(1);
+    assert_eq!(zen.pick_kind(), KindPick::Changed);
+    assert_eq!(zen.focused_kind(), Some(TileKind::Music));
+    zen.open_kind_picker();
+    zen.move_kind_picker(-1);
+    assert_eq!(zen.pick_kind(), KindPick::Changed);
+    assert_eq!(zen.focused_kind(), Some(TileKind::Chat));
     assert_eq!(zen.focused_chat_room(), Some(None));
 }
 
 #[test]
 fn the_page_holds_ten_chats_and_the_first_opening_lands_on_the_first_one() {
     let mut zen = ZenState::new(RiceLayout::default());
-    // Split the bonsai again and again; each new tile is set to Pet, whose
-    // next kind is Chat, and cycled forward: Chat until the cap, then the
-    // cycle skips to Music.
+    // Split the bonsai again and again and pick Chat for each new tile in
+    // the picker (the tile is set to Pet first, the row before Chat, so
+    // one move down lands on it): Chat until the cap, then the row is
+    // refused, the picker stays up, and the next row down is Music.
     zen.focus = 0;
     for _ in 0..MAX_CHAT_TILES + 2 {
         assert!(zen.split_focused(true));
         zen.rice.root.set_kind(zen.focus, TileKind::Pet);
-        zen.cycle_focused_kind(true);
+        zen.open_kind_picker();
+        assert_eq!(zen.kind_picker_selection(), Some(TileKind::Pet));
+        zen.move_kind_picker(1);
+        assert_eq!(zen.kind_picker_selection(), Some(TileKind::Chat));
+        match zen.pick_kind() {
+            KindPick::Changed => assert!(zen.kind_picker.is_none(), "a pick closes the picker"),
+            KindPick::Unchanged => panic!("a new tile picked as chat must change"),
+            KindPick::ChatFull => {
+                assert!(
+                    zen.kind_picker.is_some(),
+                    "a refused row keeps the picker up"
+                );
+                assert!(!zen.kind_allowed(TileKind::Chat));
+                zen.move_kind_picker(1);
+                assert_eq!(zen.pick_kind(), KindPick::Changed);
+            }
+        }
     }
     assert_eq!(
         zen.chat_tile_count(),
         MAX_CHAT_TILES,
-        "chat is skipped past the cap"
+        "chat is refused past the cap"
     );
     assert_eq!(zen.focused_kind(), Some(TileKind::Music));
-    // A tile that already is a chat can leave and come back.
+    // A tile that already is a chat can leave and come back: it counts
+    // itself out of the cap.
     zen.focus = zen.first_tile_of(TileKind::Chat).expect("chats");
-    zen.cycle_focused_kind(false);
+    assert!(zen.kind_allowed(TileKind::Chat));
+    zen.open_kind_picker();
+    zen.move_kind_picker(-1);
+    assert_eq!(zen.pick_kind(), KindPick::Changed);
     assert_ne!(zen.focused_kind(), Some(TileKind::Chat));
-    zen.cycle_focused_kind(true);
+    zen.open_kind_picker();
+    zen.move_kind_picker(1);
+    assert_eq!(zen.pick_kind(), KindPick::Changed);
     assert_eq!(zen.focused_kind(), Some(TileKind::Chat));
     assert_eq!(zen.chat_tile_count(), MAX_CHAT_TILES);
+    // Picking the tile's own kind closes the picker and changes nothing.
+    zen.open_kind_picker();
+    assert_eq!(zen.pick_kind(), KindPick::Unchanged);
+    assert!(zen.kind_picker.is_none());
+    // The list wraps at both ends.
+    zen.open_kind_picker();
+    zen.move_kind_picker(-(TileKind::ALL.len() as isize));
+    assert_eq!(zen.kind_picker_selection(), Some(TileKind::Chat));
+    zen.close_kind_picker();
 
     // The first opening focuses the first chat tile; later ones keep focus.
     let mut fresh = ZenState::new(RiceLayout::default());

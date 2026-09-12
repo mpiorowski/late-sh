@@ -52,16 +52,6 @@ impl TileKind {
             TileKind::Blank => "blank",
         }
     }
-
-    pub fn next(self) -> Self {
-        let idx = Self::ALL.iter().position(|k| *k == self).unwrap_or(0);
-        Self::ALL[(idx + 1) % Self::ALL.len()]
-    }
-
-    pub fn prev(self) -> Self {
-        let idx = Self::ALL.iter().position(|k| *k == self).unwrap_or(0);
-        Self::ALL[(idx + Self::ALL.len() - 1) % Self::ALL.len()]
-    }
 }
 
 /// How a split lays its two children out.
@@ -470,6 +460,18 @@ impl RiceLayout {
     }
 }
 
+/// What Enter in the tile picker did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KindPick {
+    /// The focused tile is the picked kind now; the layout is dirty.
+    Changed,
+    /// The picker closed and the tile is as it was (its own kind picked).
+    Unchanged,
+    /// Chat was picked with the page already holding `MAX_CHAT_TILES`
+    /// chats; the picker stays open.
+    ChatFull,
+}
+
 /// Session state for the Zen page.
 pub struct ZenState {
     pub rice: RiceLayout,
@@ -477,6 +479,9 @@ pub struct ZenState {
     pub focus: usize,
     /// The focused tile takes the whole page while set.
     pub zoomed: bool,
+    /// The tile picker `space` opens over the focused tile: the selected
+    /// row, an index into `TileKind::ALL`, while it is open.
+    pub kind_picker: Option<usize>,
     /// Whether the page has been opened this session; the first opening
     /// lands the focus on the first chat tile so the chat keys work at once.
     opened: bool,
@@ -488,6 +493,7 @@ impl ZenState {
             rice,
             focus: 0,
             zoomed: false,
+            kind_picker: None,
             opened: false,
         }
     }
@@ -607,19 +613,64 @@ impl ZenState {
         done
     }
 
-    /// Cycle the focused tile's kind. Chat is skipped once the page holds
-    /// `MAX_CHAT_TILES` of them (a tile that already is a chat still counts
-    /// itself out, so it can leave and come back).
-    pub fn cycle_focused_kind(&mut self, forward: bool) -> bool {
+    /// Open the tile picker on the focused tile's own kind, so Enter with
+    /// no move changes nothing.
+    pub fn open_kind_picker(&mut self) {
         let Some(kind) = self.focused_kind() else {
-            return false;
+            return;
         };
-        let mut next = if forward { kind.next() } else { kind.prev() };
-        let others = self.chat_tile_count() - usize::from(kind == TileKind::Chat);
-        if next == TileKind::Chat && others >= MAX_CHAT_TILES {
-            next = if forward { next.next() } else { next.prev() };
+        self.kind_picker = TileKind::ALL.iter().position(|k| *k == kind);
+    }
+
+    pub fn close_kind_picker(&mut self) {
+        self.kind_picker = None;
+    }
+
+    /// Move the picker's row by `delta`, wrapping at both ends.
+    pub fn move_kind_picker(&mut self, delta: isize) {
+        let Some(selected) = self.kind_picker else {
+            return;
+        };
+        let len = TileKind::ALL.len() as isize;
+        self.kind_picker = Some((selected as isize + delta).rem_euclid(len) as usize);
+    }
+
+    /// The kind under the picker's row, while it is open.
+    pub fn kind_picker_selection(&self) -> Option<TileKind> {
+        self.kind_picker.map(|index| TileKind::ALL[index])
+    }
+
+    /// Whether the focused tile may become `kind`. Chat is refused once
+    /// the page holds `MAX_CHAT_TILES` of them (a tile that already is a
+    /// chat counts itself out, so it can leave and come back).
+    pub fn kind_allowed(&self, kind: TileKind) -> bool {
+        if kind != TileKind::Chat {
+            return true;
         }
-        self.rice.root.set_kind(self.focus, next)
+        let others =
+            self.chat_tile_count() - usize::from(self.focused_kind() == Some(TileKind::Chat));
+        others < MAX_CHAT_TILES
+    }
+
+    /// Set the focused tile to the picker's row and close the picker.
+    /// A refused row (`kind_allowed`) keeps the picker open and changes
+    /// nothing; the tile's own kind closes it and changes nothing.
+    pub fn pick_kind(&mut self) -> KindPick {
+        let Some(kind) = self.kind_picker_selection() else {
+            return KindPick::Unchanged;
+        };
+        if !self.kind_allowed(kind) {
+            return KindPick::ChatFull;
+        }
+        self.kind_picker = None;
+        if self.focused_kind() == Some(kind) {
+            return KindPick::Unchanged;
+        }
+        if self.rice.root.set_kind(self.focus, kind) {
+            KindPick::Changed
+        } else {
+            KindPick::Unchanged
+        }
     }
 
     /// Move the focused tile's edge by `delta_cells` along `dir`, on the
