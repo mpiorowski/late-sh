@@ -6,8 +6,8 @@ use late_core::test_utils::create_test_user;
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 
 use super::{
-    PET_BOX_MIN_ROWS, PetPose, PetView, STROLL_TICKS, WATCH_TICKS, WatchSide, draw_pet_box,
-    frame_changed,
+    LEG_TICKS, Neighbours, PET_BOX_MIN_ROWS, PetPose, PetView, STROLL_TICKS, WATCH_TICKS,
+    WatchSide, WatchTarget, draw_pet_box, frame_changed,
 };
 use crate::app::pet::state::{
     Ambient, Look, PET_WIDTH, Perch, PetFrameInputs, PetState, PetTick, PetTravel,
@@ -15,13 +15,23 @@ use crate::app::pet::state::{
 use crate::test_helpers::new_test_db;
 
 const WIDE: PetTravel = PetTravel { x: 40, y: 0 };
+/// A box with nothing beside it.
+const ALONE: Neighbours = Neighbours {
+    tank: None,
+    bonsai: None,
+};
+/// A tank against the right edge and nothing else.
+const GLASS: Neighbours = Neighbours {
+    tank: Some(WatchSide::Right),
+    bonsai: None,
+};
 
 #[test]
 fn a_sleeping_pet_never_pays_a_frame() {
     // Asleep: curled on the floor, no blink, a limp tail: the box is fully
     // static, so no tick may report a change.
     for tick in 0..500 {
-        assert!(!frame_changed(PetMood::Asleep, None, None, tick, WIDE));
+        assert!(!frame_changed(PetMood::Asleep, ALONE, None, tick, WIDE));
     }
 }
 
@@ -29,13 +39,13 @@ fn a_sleeping_pet_never_pays_a_frame() {
 fn an_awake_pet_changes_on_blink_edges_and_skips_still_ticks() {
     // Blink turns on at tick % 64 == 0 and off at tick % 64 == 3; both edges
     // repaint regardless of where the stroll is.
-    assert!(frame_changed(PetMood::Idle, None, None, 64, WIDE));
-    assert!(frame_changed(PetMood::Idle, None, None, 67, WIDE));
+    assert!(frame_changed(PetMood::Idle, ALONE, None, 64, WIDE));
+    assert!(frame_changed(PetMood::Idle, ALONE, None, 67, WIDE));
 
     // The gate only pays for ticks where the art moves: across a whole blink
     // period a strolling pet must have both changed and clean ticks.
     let changed_ticks = (1..=64)
-        .filter(|&tick| frame_changed(PetMood::Idle, None, None, tick, WIDE))
+        .filter(|&tick| frame_changed(PetMood::Idle, ALONE, None, tick, WIDE))
         .count();
     assert!(changed_ticks > 0, "an awake pet animates");
     assert!(changed_ticks < 64, "an awake pet still has clean ticks");
@@ -43,7 +53,7 @@ fn an_awake_pet_changes_on_blink_edges_and_skips_still_ticks() {
     // Sulking: parked, but awake, so the blink edges and one slow tail
     // flick still repaint and nothing else does.
     let sulk_ticks = (1..=64)
-        .filter(|&tick| frame_changed(PetMood::Sulking, None, None, tick, WIDE))
+        .filter(|&tick| frame_changed(PetMood::Sulking, ALONE, None, tick, WIDE))
         .count();
     assert_eq!(
         sulk_ticks, 4,
@@ -56,7 +66,7 @@ fn zero_travel_still_blinks() {
     // A box too small to roam still has blink and tail edges.
     assert!(frame_changed(
         PetMood::Idle,
-        None,
+        ALONE,
         None,
         64,
         PetTravel { x: 0, y: 0 }
@@ -65,20 +75,22 @@ fn zero_travel_still_blinks() {
 
 #[test]
 fn a_calm_pet_beside_the_tank_strolls_twenty_minutes_and_watches_five() {
-    let glass = Some(WatchSide::Right);
-    let pose = |tick| PetPose::for_frame(PetMood::Idle, glass, None, tick);
+    let watch_tank = PetPose::Watch(WatchTarget::Tank, WatchSide::Right);
+    let pose = |tick| PetPose::for_frame(PetMood::Idle, GLASS, None, tick);
     assert_eq!(pose(0), PetPose::Stroll);
     assert_eq!(pose(STROLL_TICKS - 1), PetPose::Stroll);
-    assert_eq!(pose(STROLL_TICKS), PetPose::Watch(WatchSide::Right));
-    assert_eq!(
-        pose(STROLL_TICKS + WATCH_TICKS - 1),
-        PetPose::Watch(WatchSide::Right)
-    );
+    assert_eq!(pose(STROLL_TICKS), watch_tank);
+    assert_eq!(pose(STROLL_TICKS + WATCH_TICKS - 1), watch_tank);
     assert_eq!(
         pose(STROLL_TICKS + WATCH_TICKS),
         PetPose::Stroll,
         "and round again"
     );
+    // The tank is all it has, so it takes the second window of the round
+    // too: five minutes at the glass in every twenty-five, whatever else
+    // the page holds.
+    assert_eq!(pose(LEG_TICKS + STROLL_TICKS), watch_tank);
+    assert_eq!(pose(2 * LEG_TICKS + STROLL_TICKS), watch_tank);
     // Roughly the minutes on the label, at the 66ms wall tick.
     assert_eq!((STROLL_TICKS * 66 + 30_000) / 60_000, 20);
     assert_eq!((WATCH_TICKS * 66 + 30_000) / 60_000, 5);
@@ -86,36 +98,36 @@ fn a_calm_pet_beside_the_tank_strolls_twenty_minutes_and_watches_five() {
     // one sulks, a sleeping one sleeps, and no tank means no watching at
     // all.
     assert_eq!(
-        PetPose::for_frame(PetMood::Vibing, glass, None, STROLL_TICKS),
-        PetPose::Watch(WatchSide::Right)
+        PetPose::for_frame(PetMood::Vibing, GLASS, None, STROLL_TICKS),
+        watch_tank
     );
     assert_eq!(
-        PetPose::for_frame(PetMood::Chatty, glass, None, STROLL_TICKS),
-        PetPose::Watch(WatchSide::Right)
+        PetPose::for_frame(PetMood::Chatty, GLASS, None, STROLL_TICKS),
+        watch_tank
     );
     assert_eq!(
-        PetPose::for_frame(PetMood::Chatty, glass, None, STROLL_TICKS - 1),
+        PetPose::for_frame(PetMood::Chatty, GLASS, None, STROLL_TICKS - 1),
         PetPose::Stroll,
         "and it keeps the same twenty/five cycle"
     );
     assert_eq!(
-        PetPose::for_frame(PetMood::Proud, glass, None, STROLL_TICKS),
+        PetPose::for_frame(PetMood::Proud, GLASS, None, STROLL_TICKS),
         PetPose::Stroll
     );
     assert_eq!(
-        PetPose::for_frame(PetMood::Purring, glass, None, STROLL_TICKS),
+        PetPose::for_frame(PetMood::Purring, GLASS, None, STROLL_TICKS),
         PetPose::Stroll
     );
     assert_eq!(
-        PetPose::for_frame(PetMood::Sulking, glass, None, STROLL_TICKS),
+        PetPose::for_frame(PetMood::Sulking, GLASS, None, STROLL_TICKS),
         PetPose::Sulk
     );
     assert_eq!(
-        PetPose::for_frame(PetMood::Asleep, glass, None, STROLL_TICKS),
+        PetPose::for_frame(PetMood::Asleep, GLASS, None, STROLL_TICKS),
         PetPose::Sleep
     );
     assert_eq!(
-        PetPose::for_frame(PetMood::Idle, None, None, STROLL_TICKS),
+        PetPose::for_frame(PetMood::Idle, ALONE, None, STROLL_TICKS),
         PetPose::Stroll
     );
     // A perch overrides everything: the pet is where the state put it.
@@ -125,33 +137,95 @@ fn a_calm_pet_beside_the_tank_strolls_twenty_minutes_and_watches_five() {
         look: Look::Left,
     };
     assert_eq!(
-        PetPose::for_frame(PetMood::Idle, glass, Some(perch), STROLL_TICKS),
+        PetPose::for_frame(PetMood::Idle, GLASS, Some(perch), STROLL_TICKS),
         PetPose::At(perch)
     );
 }
 
 #[test]
+fn a_pet_between_the_tank_and_the_bonsai_alternates_them() {
+    // Both beside it: the round is two legs, the tank on the first watch
+    // window and the bonsai on the second, so each gets five minutes in
+    // fifty and neither is ever watched twice running.
+    let between = Neighbours {
+        tank: Some(WatchSide::Below),
+        bonsai: Some(WatchSide::Left),
+    };
+    let pose = |tick| PetPose::for_frame(PetMood::Idle, between, None, tick);
+    assert_eq!(pose(0), PetPose::Stroll);
+    assert_eq!(
+        pose(STROLL_TICKS),
+        PetPose::Watch(WatchTarget::Tank, WatchSide::Below)
+    );
+    assert_eq!(pose(LEG_TICKS), PetPose::Stroll, "off for another stroll");
+    assert_eq!(
+        pose(LEG_TICKS + STROLL_TICKS),
+        PetPose::Watch(WatchTarget::Bonsai, WatchSide::Left)
+    );
+    assert_eq!(
+        pose(2 * LEG_TICKS + STROLL_TICKS),
+        PetPose::Watch(WatchTarget::Tank, WatchSide::Below),
+        "and round again from the top"
+    );
+    // A bonsai on its own takes both windows, the way a tank on its own
+    // does.
+    let tree = Neighbours {
+        tank: None,
+        bonsai: Some(WatchSide::Above),
+    };
+    let watch_tree = PetPose::Watch(WatchTarget::Bonsai, WatchSide::Above);
+    assert_eq!(
+        PetPose::for_frame(PetMood::Idle, tree, None, STROLL_TICKS),
+        watch_tree
+    );
+    assert_eq!(
+        PetPose::for_frame(PetMood::Idle, tree, None, LEG_TICKS + STROLL_TICKS),
+        watch_tree
+    );
+}
+
+#[test]
+fn the_bonsai_gets_a_quieter_beat_than_the_tank() {
+    // Watching either one holds the pet still, but the tank's gasp is the
+    // fish's doing: a tree gives it less to react to, so it pays fewer
+    // frames over the same window.
+    let tree = Neighbours {
+        tank: None,
+        bonsai: Some(WatchSide::Right),
+    };
+    let window = STROLL_TICKS + 1..=STROLL_TICKS + 480;
+    let at_tree = window
+        .clone()
+        .filter(|&t| frame_changed(PetMood::Idle, tree, None, t, WIDE))
+        .count();
+    let at_glass = window
+        .filter(|&t| frame_changed(PetMood::Idle, GLASS, None, t, WIDE))
+        .count();
+    assert!(at_tree > 0, "it still blinks and sniffs");
+    assert!(at_tree < at_glass, "{at_tree} vs {at_glass}");
+}
+
+#[test]
 fn a_watching_pet_holds_still_but_still_blinks_and_gasps() {
-    let glass = Some(WatchSide::Right);
     let start = STROLL_TICKS;
     // The walk to the glass repaints, then blink and gasp edges do.
-    assert!(frame_changed(PetMood::Idle, glass, None, start, WIDE));
+    assert!(frame_changed(PetMood::Idle, GLASS, None, start, WIDE));
     let first_blink = (start..).find(|t| t % 64 == 0).unwrap();
-    assert!(frame_changed(PetMood::Idle, glass, None, first_blink, WIDE));
+    assert!(frame_changed(PetMood::Idle, GLASS, None, first_blink, WIDE));
     let first_gasp = (start + 1..).find(|t| t % 96 == 0).unwrap();
-    assert!(frame_changed(PetMood::Idle, glass, None, first_gasp, WIDE));
+    assert!(frame_changed(PetMood::Idle, GLASS, None, first_gasp, WIDE));
     assert!(
-        frame_changed(PetMood::Idle, glass, None, first_gasp + 6, WIDE),
+        frame_changed(PetMood::Idle, GLASS, None, first_gasp + 6, WIDE),
         "the gasp ends after six ticks"
     );
     // No stroll steps: far fewer paid frames than a strolling pet.
     let window = start + 1..=start + 192;
     let watching = window
         .clone()
-        .filter(|&t| frame_changed(PetMood::Idle, glass, None, t, WIDE))
+        .filter(|&t| frame_changed(PetMood::Idle, GLASS, None, t, WIDE))
         .count();
     let strolling = window
-        .filter(|&t| frame_changed(PetMood::Idle, None, None, t, WIDE))
+        .filter(|&t| frame_changed(PetMood::Idle, ALONE, None, t, WIDE))
         .count();
     assert!(
         watching > 0 && watching < strolling,
@@ -165,7 +239,7 @@ fn draw_at(
     state: &mut PetState,
     tick: usize,
     area: Rect,
-    watching: Option<WatchSide>,
+    neighbours: Neighbours,
 ) -> (Rect, PetFrameInputs) {
     let now = Instant::now();
     state.tick(PetTick {
@@ -192,7 +266,7 @@ fn draw_at(
                     pet_rect_slot: Some(&pet_rect),
                     frame_slot: Some(&frame_slot),
                 },
-                watching,
+                neighbours,
             );
         })
         .unwrap();
@@ -219,7 +293,7 @@ async fn an_awake_pet_roams_the_whole_box_and_a_watching_one_sits_at_the_glass()
     let mut bottom = 0;
     let mut right = 0;
     for tick in (0..6000).step_by(7) {
-        let (rect, frame) = draw_at(&mut state, tick, area, None);
+        let (rect, frame) = draw_at(&mut state, tick, area, ALONE);
         top = top.min(rect.y);
         bottom = bottom.max(rect.y);
         right = right.max(rect.right());
@@ -250,11 +324,11 @@ async fn an_awake_pet_roams_the_whole_box_and_a_watching_one_sits_at_the_glass()
 
     // With a tank against the right edge the calm pet sits on the floor at
     // the edge and stays there, whatever the tick.
-    let (at_glass, _) = draw_at(&mut state, STROLL_TICKS + 7, area, Some(WatchSide::Right));
+    let (at_glass, _) = draw_at(&mut state, STROLL_TICKS + 7, area, GLASS);
     assert_eq!(at_glass.y, floor_y, "watching from the floor");
     assert_eq!(
         at_glass,
-        draw_at(&mut state, STROLL_TICKS + 707, area, Some(WatchSide::Right)).0,
+        draw_at(&mut state, STROLL_TICKS + 707, area, GLASS).0,
         "a watching pet does not wander"
     );
     assert_eq!(
@@ -274,7 +348,7 @@ async fn every_species_draws_inside_the_same_eight_columns() {
     let area = Rect::new(0, 0, 20, 3);
     for species in PetSpecies::ALL {
         state.species = species;
-        let (rect, _) = draw_at(&mut state, 3, area, None);
+        let (rect, _) = draw_at(&mut state, 3, area, ALONE);
         assert_eq!(rect.width, PET_WIDTH as u16, "{species:?}");
         assert_eq!(rect.height, PET_BOX_MIN_ROWS, "{species:?}");
     }

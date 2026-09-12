@@ -8,7 +8,7 @@ use super::{
     ASLEEP_AFTER, Ambient, CHATTY_FOR, Look, MoodSignals, PROUD_FOR, PURR_FOR, Perch,
     PetFrameInputs, PetState, PetTick, PetTravel, SULK_FOR, mood_at,
 };
-use crate::app::pet::ui::WatchSide;
+use crate::app::pet::ui::{Neighbours, WatchSide};
 use crate::test_helpers::new_test_db;
 
 fn awake(at: Instant) -> Ambient {
@@ -102,7 +102,7 @@ fn frame(position: (usize, usize)) -> PetFrameInputs {
     PetFrameInputs {
         travel: PetTravel { x: 40, y: 5 },
         zone: Rect::new(10, 20, 48, 8),
-        watching: None,
+        neighbours: Neighbours::default(),
         position,
     }
 }
@@ -225,7 +225,10 @@ async fn a_tank_beside_the_box_rides_the_frame_inputs() {
     let mut state = fresh_state("pet-frame").await;
     let now = Instant::now();
     let beside = PetFrameInputs {
-        watching: Some(WatchSide::Right),
+        neighbours: Neighbours {
+            tank: Some(WatchSide::Right),
+            bonsai: None,
+        },
         ..frame((3, 3))
     };
     state.tick(tick(2, now, Some(beside), None));

@@ -31,7 +31,7 @@ use crate::app::{
     files::terminal_image::TerminalImageFrame,
     hub::aquarium::state::{AquariumCare, AquariumState, CareBar},
     lobby::daily::{panel::draw_daily_compact, state::DailyState},
-    pet::ui::{PetPose, PetView, WatchSide, draw_pet_box},
+    pet::ui::{Neighbours, PetPose, PetView, WatchTarget, draw_pet_box},
 };
 
 /// A chat tile's frame: its room's label and its view (`None` when the
@@ -97,17 +97,24 @@ pub(crate) fn draw_rice(
     let zoomed = zen.zoomed.then_some(zen.focus);
     let gap = zen.rice.look.gap as u16;
     let rects = layout::tile_rects(&zen.rice.root, tiles_area, gap, zoomed);
-    // A pet tile sharing an edge with a tank tile: the pet sits against
-    // that edge and watches the fish (zoomed, a lone tile has no neighbour).
-    let watching = rects
-        .iter()
-        .find(|(kind, _)| *kind == TileKind::Pet)
-        .and_then(|(_, pet_rect)| {
-            rects
-                .iter()
-                .filter(|(kind, _)| *kind == TileKind::Aquarium)
-                .find_map(|(_, tank)| layout::neighbour_side(*pet_rect, *tank, gap))
-        });
+    // A pet tile sharing an edge with a tank or a bonsai tile: the pet
+    // goes and sits against that edge to watch, and alternates when it
+    // touches both (zoomed, a lone tile has no neighbour at all).
+    let neighbours = match rects.iter().find(|(kind, _)| *kind == TileKind::Pet) {
+        None => Neighbours::default(),
+        Some((_, pet_rect)) => {
+            let side_of = |want: TileKind| {
+                rects
+                    .iter()
+                    .filter(|(kind, _)| *kind == want)
+                    .find_map(|(_, other)| layout::neighbour_side(*pet_rect, *other, gap))
+            };
+            Neighbours {
+                tank: side_of(TileKind::Aquarium),
+                bonsai: side_of(TileKind::Bonsai),
+            }
+        }
+    };
     for (idx, (kind, rect)) in rects.iter().enumerate() {
         let focused = if zoomed.is_some() {
             true
@@ -187,7 +194,7 @@ pub(crate) fn draw_rice(
             TileKind::Aquarium => {
                 draw_aquarium_tile(frame, inner, view.aquarium, view.aquarium_owned)
             }
-            TileKind::Pet => draw_pet_tile(frame, inner, view.pet_strip.as_ref(), watching),
+            TileKind::Pet => draw_pet_tile(frame, inner, view.pet_strip.as_ref(), neighbours),
             TileKind::Chat => draw_chat_tile(frame, inner, chat_tile, terminal_images),
             TileKind::Music => draw_music_tile(frame, inner, &view),
             TileKind::Clock => draw_clock_tile(frame, inner, &view),
@@ -558,13 +565,13 @@ fn draw_lobby_tile(frame: &mut Frame, area: Rect, daily: &DailyState, glow: bool
 }
 
 /// The pet's box at tile size: a name and mood row on top when there is
-/// room, and the whole rest of the tile to roam. `watching` names the side
-/// a neighbouring tank is on; a calm pet sits there and watches.
+/// room, and the whole rest of the tile to roam. `neighbours` names the
+/// side a tank and a bonsai are on; a calm pet goes and watches them.
 fn draw_pet_tile(
     frame: &mut Frame,
     area: Rect,
     pet: Option<&PetView<'_>>,
-    watching: Option<WatchSide>,
+    neighbours: Neighbours,
 ) {
     let Some(view) = pet else {
         draw_centered_note(
@@ -586,7 +593,7 @@ fn draw_pet_tile(
             .unwrap_or_else(|| state.species.as_str().to_string());
         let pose = PetPose::for_frame(
             state.mood(),
-            watching,
+            neighbours,
             state.perch(),
             state.animation_ticks(),
         );
@@ -600,7 +607,8 @@ fn draw_pet_tile(
             Span::styled(format!(" · {}", state.mood().as_str()), dim),
             Span::styled(
                 match pose {
-                    PetPose::Watch(_) => " · watching the fish",
+                    PetPose::Watch(WatchTarget::Tank, _) => " · watching the fish",
+                    PetPose::Watch(WatchTarget::Bonsai, _) => " · watching the tree",
                     PetPose::At(_) => " · at your cursor",
                     PetPose::Stroll | PetPose::Sulk | PetPose::Sleep => "",
                 },
@@ -616,7 +624,7 @@ fn draw_pet_tile(
     } else {
         area
     };
-    draw_pet_box(frame, box_area, view, watching);
+    draw_pet_box(frame, box_area, view, neighbours);
 }
 
 /// A chat tile: its room's messages, with the composer on the active tile
