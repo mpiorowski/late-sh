@@ -100,21 +100,7 @@ pub(crate) fn draw_rice(
     // A pet tile sharing an edge with a tank or a bonsai tile: the pet
     // goes and sits against that edge to watch, and alternates when it
     // touches both (zoomed, a lone tile has no neighbour at all).
-    let neighbours = match rects.iter().find(|(kind, _)| *kind == TileKind::Pet) {
-        None => Neighbours::default(),
-        Some((_, pet_rect)) => {
-            let side_of = |want: TileKind| {
-                rects
-                    .iter()
-                    .filter(|(kind, _)| *kind == want)
-                    .find_map(|(_, other)| layout::neighbour_side(*pet_rect, *other, gap))
-            };
-            Neighbours {
-                tank: side_of(TileKind::Aquarium),
-                bonsai: side_of(TileKind::Bonsai),
-            }
-        }
-    };
+    let neighbours = layout::pet_neighbours(&rects, gap);
     for (idx, (kind, rect)) in rects.iter().enumerate() {
         let focused = if zoomed.is_some() {
             true

@@ -31,7 +31,7 @@ The default, which `R` also resets to (rounded borders, no gap, titles on):
 bonsai over the current room's chat on the left (64%), and a rail of
 clock, music, lobby, then the pet over the reef on the right, so the pet
 has the tank below it and the bonsai's edge to its left, and alternates
-between them. Without a Pet Companion the tile says
+between them (pinned by `layout_test.rs`). Without a Pet Companion the tile says
 so and points at `/shop`. Presence is not in it.
 
 The active chat is `App::zen_chat_room_id`: the focused chat tile's
@@ -73,7 +73,7 @@ one pane drawn takes the active chat's frame, not the first chat tile's
 late-ssh/src/app/zen/
 |-- mod.rs        # module declarations only
 |-- state.rs      # TileKind, Node (split tree), Look, RiceLayout (serde), ZenState + edits
-|-- layout.rs     # pure rect math: rice_areas, tile_rects, tile_inner, neighbour_side
+|-- layout.rs     # pure rect math: rice_areas, tile_rects, tile_inner, neighbour_side, pet_neighbours
 |-- ui.rs         # ZenView, draw_rice, the tile widgets
 |-- input.rs      # feed keys, room walk, focus and layout keys
 `-- bigclock.rs   # block digit font for the clock tile
@@ -167,7 +167,7 @@ leaving the page, so a held resize key costs one row update.
   writes back the share that reproduces it. Layouts saved with the earlier
   percent `ratio` field no longer parse and reset to the default.
 - The watching pet is a render-time fact: `draw_rice` finds the pet tile's
-  neighbouring tank and bonsai from the frame's rects and passes both sides
+  neighbouring tank and bonsai from the frame's rects (`layout::pet_neighbours`) and passes both sides
   into `draw_pet_box`, which records them with the travel, the box's rect,
   and where the pet stood in `App::last_pet_frame` (`PetFrameInputs`) so the
   tick-side gate (`pet::ui::frame_changed`) evaluates the same pose and
