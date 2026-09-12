@@ -3070,11 +3070,11 @@ async fn zen_space_opens_a_tile_picker_that_owns_the_keys_until_a_pick_or_esc() 
     assert!(!app.show_quit_confirm, "q under the picker quits nothing");
     assert!(app.zen.kind_picker.is_some());
 
-    // One row down and Enter: the tile is music, the picker is gone.
+    // One row down and Enter: the tile is a clock, the picker is gone.
     app.handle_input(b"j");
     app.handle_input(b"\r");
     assert!(app.zen.kind_picker.is_none(), "a pick closes the picker");
-    assert_eq!(app.zen.focused_kind(), Some(TileKind::Music));
+    assert_eq!(app.zen.focused_kind(), Some(TileKind::Clock));
     assert_eq!(app.screen, Screen::Zen);
 
     // Esc closes it without a change and stays on the page.
@@ -3087,7 +3087,7 @@ async fn zen_space_opens_a_tile_picker_that_owns_the_keys_until_a_pick_or_esc() 
         "esc closes the tile picker",
     )
     .await;
-    assert_eq!(app.zen.focused_kind(), Some(TileKind::Music));
+    assert_eq!(app.zen.focused_kind(), Some(TileKind::Clock));
     assert_eq!(
         app.screen,
         Screen::Zen,

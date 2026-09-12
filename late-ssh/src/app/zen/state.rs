@@ -25,17 +25,18 @@ pub enum TileKind {
 }
 
 impl TileKind {
+    /// Every kind, alphabetical by label: the tile picker's rows.
     pub const ALL: [TileKind; 10] = [
-        TileKind::Bonsai,
         TileKind::Aquarium,
-        TileKind::Pet,
-        TileKind::Chat,
-        TileKind::Music,
-        TileKind::Clock,
-        TileKind::Visualizer,
-        TileKind::Presence,
-        TileKind::Lobby,
         TileKind::Blank,
+        TileKind::Bonsai,
+        TileKind::Chat,
+        TileKind::Clock,
+        TileKind::Lobby,
+        TileKind::Music,
+        TileKind::Pet,
+        TileKind::Presence,
+        TileKind::Visualizer,
     ];
 
     pub fn label(self) -> &'static str {

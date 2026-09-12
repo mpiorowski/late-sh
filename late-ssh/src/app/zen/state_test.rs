@@ -160,7 +160,7 @@ fn a_chat_tile_keeps_its_room_through_the_stored_json_and_old_layouts_still_read
     zen.open_kind_picker();
     zen.move_kind_picker(1);
     assert_eq!(zen.pick_kind(), KindPick::Changed);
-    assert_eq!(zen.focused_kind(), Some(TileKind::Music));
+    assert_eq!(zen.focused_kind(), Some(TileKind::Clock));
     zen.open_kind_picker();
     zen.move_kind_picker(-1);
     assert_eq!(zen.pick_kind(), KindPick::Changed);
@@ -172,15 +172,15 @@ fn a_chat_tile_keeps_its_room_through_the_stored_json_and_old_layouts_still_read
 fn the_page_holds_ten_chats_and_the_first_opening_lands_on_the_first_one() {
     let mut zen = ZenState::new(RiceLayout::default());
     // Split the bonsai again and again and pick Chat for each new tile in
-    // the picker (the tile is set to Pet first, the row before Chat, so
+    // the picker (the tile is set to Bonsai first, the row before Chat, so
     // one move down lands on it): Chat until the cap, then the row is
-    // refused, the picker stays up, and the next row down is Music.
+    // refused, the picker stays up, and the next row down is Clock.
     zen.focus = 0;
     for _ in 0..MAX_CHAT_TILES + 2 {
         assert!(zen.split_focused(true));
-        zen.rice.root.set_kind(zen.focus, TileKind::Pet);
+        zen.rice.root.set_kind(zen.focus, TileKind::Bonsai);
         zen.open_kind_picker();
-        assert_eq!(zen.kind_picker_selection(), Some(TileKind::Pet));
+        assert_eq!(zen.kind_picker_selection(), Some(TileKind::Bonsai));
         zen.move_kind_picker(1);
         assert_eq!(zen.kind_picker_selection(), Some(TileKind::Chat));
         match zen.pick_kind() {
@@ -202,7 +202,7 @@ fn the_page_holds_ten_chats_and_the_first_opening_lands_on_the_first_one() {
         MAX_CHAT_TILES,
         "chat is refused past the cap"
     );
-    assert_eq!(zen.focused_kind(), Some(TileKind::Music));
+    assert_eq!(zen.focused_kind(), Some(TileKind::Clock));
     // A tile that already is a chat can leave and come back: it counts
     // itself out of the cap.
     zen.focus = zen.first_tile_of(TileKind::Chat).expect("chats");

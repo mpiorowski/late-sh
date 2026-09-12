@@ -117,7 +117,7 @@ collide, and the tile draws no caption for it either (2026-09-11). The bonsai ha
 Bonsai Care key and opens the same modal it opens on Home, so watering,
 cutting, and steering work exactly as on the chat page. Layout: arrows and Tab / Shift+Tab move focus (the page owns Tab; it is not the page switch here), `space` opens the tile
 picker over the focused tile (`ZenState::kind_picker`: one row per
-`TileKind`, `j` `k` and the arrows move, Enter or `space` picks, Esc
+`TileKind`, alphabetical (`TileKind::ALL`), `j` `k` and the arrows move, Enter or `space` picks, Esc
 closes; the picker owns every key while it is up, and a refused row
 stays up with a banner), `S` splits it (row when wide, column when tall), `X`
 closes it (the last tile stays), `<` `>` trade one column of width and
