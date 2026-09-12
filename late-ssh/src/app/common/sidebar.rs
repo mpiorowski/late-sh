@@ -92,8 +92,8 @@ pub(crate) struct SidebarProps<'a> {
     /// Nightride metadata SSE; the dock row falls back to the station
     /// display name while this is absent.
     pub radio_now_playing: Option<&'a str>,
-    /// AFK message from /brb; None = not AFK.
-    pub afk: Option<&'a str>,
+    /// This session's `/status`; `None` when nothing is set.
+    pub status: Option<crate::app::common::status::Status>,
     /// Daily correspondence games: my matches, lobby activity, glow.
     pub daily: &'a crate::app::lobby::daily::state::DailyState,
     /// Unseen-challenge glow for the panel's status row.
@@ -173,12 +173,12 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
 
     let mut i = 0usize;
 
-    // Core block: presence + clock, then friends (or the AFK indicator).
+    // Core block: presence + clock, then friends (or the status row).
     draw_core_block(
         frame,
         inset(layout[i]),
         props.clock_text,
-        props.afk,
+        props.status,
         props.online_count,
         props.active_friend_names,
         props.marquee_tick,
@@ -316,7 +316,7 @@ fn draw_core_block(
     frame: &mut Frame,
     area: Rect,
     clock_text: &str,
-    afk: Option<&str>,
+    status: Option<crate::app::common::status::Status>,
     online_count: usize,
     active_friend_names: &[String],
     tick: usize,
@@ -375,17 +375,16 @@ fn draw_core_block(
         return;
     }
 
-    // Row 1 — AFK wins the row while away; otherwise connected friends.
+    // Row 1 — a set status wins the row; otherwise connected friends.
     // Blank when neither: the reserved row is what keeps chrome stable.
-    if let Some(msg) = afk {
-        let label = if msg.is_empty() {
-            "away".to_string()
-        } else {
-            format!("away · {msg}")
-        };
+    if let Some(status) = status {
+        let label = status.word().to_string();
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("🌙 ", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(
+                    format!("{} ", status.glyph()),
+                    Style::default().fg(theme::AMBER_DIM()),
+                ),
                 Span::styled(
                     label,
                     Style::default()

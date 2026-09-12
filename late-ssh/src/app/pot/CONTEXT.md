@@ -135,7 +135,7 @@ own balance (`... | pot 84,200 · 3h12m | 1500 chips`). It reads the same
 `App.pot_view` `/pot` does, so it costs no query and repaints on the same
 ~1s edge. The HUD is painted over the left title, so under a tight border it
 degrades: countdown first (`pot 84,200`), then the whole badge, and it yields
-before the pomodoro badge does because it is ambient and `/pot` still answers.
+before the status badge does because it is ambient and `/pot` still answers.
 Absent before the first refresh and in a process with no pot service.
 
 ## 8. Feed lines

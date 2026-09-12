@@ -120,19 +120,22 @@ impl App {
         }
         // A countdown reaching zero is not urgent to the millisecond, so this
         // rides the existing 1Hz edge rather than checking every tick. A
-        // running timer dirties every one of those edges because the HUD badge
-        // counts down in seconds; an idle session (no timer) still settles.
-        if one_hz && let Some(pomodoro) = &self.pomodoro {
-            let finished = chrono::Utc::now() >= pomodoro.ends_at;
-            let label = pomodoro.label.clone();
-            if finished {
-                self.pomodoro = None;
-                self.publish_pomodoro();
+        // running countdown dirties every one of those edges because the HUD
+        // badge counts down in seconds; an open-ended status has nothing to
+        // count and is cleared by a chat message instead, so it never dirties
+        // anything here and an idle session still settles.
+        if one_hz
+            && let Some(status) = self.status
+            && !status.clears_on_post()
+        {
+            if status.is_expired(chrono::Utc::now()) {
+                let word = status.status.word();
+                self.set_status(None);
                 self.banner = Some(crate::app::common::primitives::Banner::success(&format!(
-                    "{label} done!"
+                    "{word} done!"
                 )));
                 self.notifier
-                    .push(crate::app::notify::Notification::pomodoro_done(&label));
+                    .push(crate::app::notify::Notification::status_done(word));
             }
             changed = true;
         }
@@ -775,17 +778,17 @@ impl App {
                     changed = true;
                 }
             }
-            // Peer countdowns resolve on the same edge, and only the minute
+            // Peer statuses resolve on the same edge, and only the minute
             // rollovers survive the comparison: a badge that reads the same
             // must not bump the epoch, or every second would invalidate every
             // cached chat row for the whole room.
-            if let Some(directory) = &self.pomodoro_directory {
-                let peer_pomodoros = crate::app::common::pomodoro::resolve_all(
-                    &crate::app::common::pomodoro::snapshot(directory),
+            if let Some(directory) = &self.status_directory {
+                let peer_statuses = crate::app::common::status::resolve_all(
+                    &crate::app::common::status::snapshot(directory),
                     chrono::Utc::now(),
                 );
-                if self.peer_pomodoros != peer_pomodoros {
-                    self.peer_pomodoros = peer_pomodoros;
+                if self.peer_statuses != peer_statuses {
+                    self.peer_statuses = peer_statuses;
                     self.chat_ctx_epoch += 1;
                 }
             }
@@ -819,12 +822,6 @@ impl App {
                 };
             if directory_changed {
                 self.last_username_directory = username_directory_snapshot;
-                self.chat_ctx_epoch += 1;
-            }
-            // AFK set: same Arc-swap-on-change contract as the directory.
-            let afk_user_ids = crate::state::afk_users_snapshot(&self.afk_users);
-            if !std::sync::Arc::ptr_eq(&afk_user_ids, &self.afk_user_ids) {
-                self.afk_user_ids = afk_user_ids;
                 self.chat_ctx_epoch += 1;
             }
             // Sidebar clock shows minutes; repaint on rollover.

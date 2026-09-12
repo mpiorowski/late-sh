@@ -243,42 +243,42 @@ fn set_marquee_transition(app: &mut App, previous: usize, next: usize) {
     app.last_one_hz_index = Some(next / 15);
 }
 
-/// The `/pomodoro` countdown lives entirely on the tick's 1Hz edge: a running
-/// timer keeps paying frames (the HUD badge counts down in seconds), and the
-/// edge that finds it expired clears it, banners, and queues the desktop
+/// A `/status` countdown lives entirely on the tick's 1Hz edge: a running one
+/// keeps paying frames (the HUD badge counts down in seconds), and the edge
+/// that finds it expired clears it, banners, and queues the desktop
 /// notification. Forcing `last_one_hz_index` to `None` fires the edge on the
 /// next tick so the test does not sleep out a real wall-clock second.
 #[tokio::test]
-async fn pomodoro_paints_while_running_then_fires_once_on_expiry() {
-    let (_test_db, mut app) = chat_compose_app("tick-gate-pomodoro").await;
+async fn status_countdown_paints_while_running_then_fires_once_on_expiry() {
+    let (_test_db, mut app) = chat_compose_app("tick-gate-status").await;
     hide_sidebar(&mut app);
 
     settle_clean(&mut app).await;
 
-    app.pomodoro = Some(crate::app::common::pomodoro::PomodoroTimer {
-        label: "deep work".to_string(),
-        ends_at: chrono::Utc::now() + chrono::Duration::minutes(25),
+    app.status = Some(crate::app::common::status::SessionStatus {
+        status: crate::app::common::status::Status::Focus,
+        ends_at: Some(chrono::Utc::now() + chrono::Duration::minutes(25)),
     });
     app.last_one_hz_index = None;
     assert!(app.tick(), "a running countdown repaints on the 1Hz edge");
     assert!(
-        app.pomodoro.is_some(),
+        app.status.is_some(),
         "an unexpired countdown must survive the edge"
     );
     app.banner = None;
     drain_frame(&mut app);
 
-    app.pomodoro = Some(crate::app::common::pomodoro::PomodoroTimer {
-        label: "deep work".to_string(),
-        ends_at: chrono::Utc::now() - chrono::Duration::seconds(1),
+    app.status = Some(crate::app::common::status::SessionStatus {
+        status: crate::app::common::status::Status::Focus,
+        ends_at: Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
     });
     app.last_one_hz_index = None;
     assert!(app.tick(), "expiry dirties the tick");
-    assert!(app.pomodoro.is_none(), "expiry clears the timer");
-    let banner = app.banner.take().expect("expiry banners the label");
+    assert!(app.status.is_none(), "expiry clears the status");
+    let banner = app.banner.take().expect("expiry banners the status");
     assert!(
-        banner.message.contains("deep work"),
-        "banner should name the finished timer: {}",
+        banner.message.contains("focus"),
+        "banner should name the finished status: {}",
         banner.message
     );
     assert!(
@@ -293,35 +293,59 @@ async fn pomodoro_paints_while_running_then_fires_once_on_expiry() {
     assert!(app.banner.is_none(), "expiry must not re-fire");
 }
 
-/// Peer countdowns resolve on the same 1Hz edge as name styles: the owned
-/// `peer_pomodoros` map follows the shared directory, and the chat context
-/// epoch bumps only when a badge string actually changes (minute rollovers),
-/// never on the seconds in between.
+/// An open-ended status is the other half of the rule: nothing on the clock
+/// retires it, so the 1Hz edge must leave it alone however long it sits.
 #[tokio::test]
-async fn pomodoro_peer_badges_resolve_on_the_shared_edge() {
-    let (_test_db, mut app) = chat_compose_app("tick-pomodoro-peers").await;
+async fn open_ended_status_never_expires_on_the_edge() {
+    let (_test_db, mut app) = chat_compose_app("tick-status-open").await;
     hide_sidebar(&mut app);
     settle_clean(&mut app).await;
 
-    let directory = crate::app::common::pomodoro::new_directory();
-    app.pomodoro_directory = Some(directory.clone());
+    app.status = Some(crate::app::common::status::SessionStatus {
+        status: crate::app::common::status::Status::Away,
+        ends_at: None,
+    });
+    app.last_one_hz_index = None;
+    app.tick();
+    assert!(
+        app.status.is_some(),
+        "only a chat message clears an open-ended status"
+    );
+    assert!(
+        app.banner.is_none(),
+        "and it never banners the way a countdown does"
+    );
+}
+
+/// Peer statuses resolve on the same 1Hz edge as name styles: the owned
+/// `peer_statuses` map follows the shared directory, and the chat context
+/// epoch bumps only when a badge string actually changes (minute rollovers),
+/// never on the seconds in between.
+#[tokio::test]
+async fn status_peer_badges_resolve_on_the_shared_edge() {
+    let (_test_db, mut app) = chat_compose_app("tick-status-peers").await;
+    hide_sidebar(&mut app);
+    settle_clean(&mut app).await;
+
+    let directory = crate::app::common::status::new_directory();
+    app.status_directory = Some(directory.clone());
     let peer = uuid::Uuid::from_u128(0x9e);
-    crate::app::common::pomodoro::set_user(
+    crate::app::common::status::set_user(
         &directory,
         peer,
-        Some(&crate::app::common::pomodoro::PomodoroTimer {
-            label: "their secret label".to_string(),
-            ends_at: chrono::Utc::now() + chrono::Duration::minutes(25),
+        Some(crate::app::common::status::SessionStatus {
+            status: crate::app::common::status::Status::Focus,
+            ends_at: Some(chrono::Utc::now() + chrono::Duration::minutes(25)),
         }),
     );
 
     app.last_one_hz_index = None;
     app.tick();
     let badge = app
-        .peer_pomodoros
+        .peer_statuses
         .get(&peer)
         .expect("the edge resolves the peer's countdown");
-    assert_eq!(badge, "🍅25m");
+    assert_eq!(badge, "🍅 25m focus");
     let epoch_after_first = app.chat_ctx_epoch;
 
     // Same minute on the next edge: the badge string is unchanged, so the
@@ -333,13 +357,13 @@ async fn pomodoro_peer_badges_resolve_on_the_shared_edge() {
         "an unchanged badge must not invalidate chat rows"
     );
 
-    // The peer stopping (or disconnecting) clears the entry; the next edge
+    // The peer clearing (or disconnecting) drops the entry; the next edge
     // drops the badge and that IS a row-visible change.
-    crate::app::common::pomodoro::set_user(&directory, peer, None);
+    crate::app::common::status::set_user(&directory, peer, None);
     app.last_one_hz_index = None;
     app.tick();
     assert!(
-        app.peer_pomodoros.is_empty(),
+        app.peer_statuses.is_empty(),
         "a cleared entry loses its badge"
     );
     assert!(
@@ -349,30 +373,30 @@ async fn pomodoro_peer_badges_resolve_on_the_shared_edge() {
 }
 
 /// This session's own expiry retires its directory entry along with the
-/// timer, through the same publish path `/pomodoro stop` uses.
+/// status, through the same publish path `/status off` uses.
 #[tokio::test]
-async fn pomodoro_expiry_retires_the_shared_directory_entry() {
-    let (_test_db, mut app) = chat_compose_app("tick-pomodoro-retire").await;
+async fn status_expiry_retires_the_shared_directory_entry() {
+    let (_test_db, mut app) = chat_compose_app("tick-status-retire").await;
     hide_sidebar(&mut app);
     settle_clean(&mut app).await;
 
-    let directory = crate::app::common::pomodoro::new_directory();
-    app.pomodoro_directory = Some(directory.clone());
-    app.pomodoro = Some(crate::app::common::pomodoro::PomodoroTimer {
-        label: "deep work".to_string(),
-        ends_at: chrono::Utc::now() - chrono::Duration::seconds(1),
+    let directory = crate::app::common::status::new_directory();
+    app.status_directory = Some(directory.clone());
+    app.status = Some(crate::app::common::status::SessionStatus {
+        status: crate::app::common::status::Status::Focus,
+        ends_at: Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
     });
-    app.publish_pomodoro();
+    app.publish_status();
     assert!(
-        crate::app::common::pomodoro::snapshot(&directory).contains_key(&app.user_id),
-        "a running timer is published"
+        crate::app::common::status::snapshot(&directory).contains_key(&app.user_id),
+        "a running countdown is published"
     );
 
     app.last_one_hz_index = None;
     app.tick();
-    assert!(app.pomodoro.is_none(), "expiry clears the timer");
+    assert!(app.status.is_none(), "expiry clears the status");
     assert!(
-        crate::app::common::pomodoro::snapshot(&directory).is_empty(),
+        crate::app::common::status::snapshot(&directory).is_empty(),
         "expiry retires the shared entry so peers stop painting the badge"
     );
 }

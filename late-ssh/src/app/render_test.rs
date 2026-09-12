@@ -24,13 +24,13 @@ fn hud(
     balance: Option<i64>,
     unread: i64,
     voice_badge: Option<&str>,
-    pomodoro_badge: Option<&str>,
+    status_badge: Option<&str>,
 ) -> Option<StatusHud> {
     status_hud_title(StatusHudInputs {
         balance,
         unread,
         voice_badge,
-        pomodoro_badge,
+        status_badge,
         pot: None,
         border_width: WIDE_HUD_BORDER,
         title_width: 0,
@@ -234,12 +234,12 @@ fn status_hud_title_renders_balance_right_of_mentions() {
     );
 }
 
-/// The pomodoro badge shows the HUD on its own, and leads every other
+/// The status badge shows the HUD on its own, and leads every other
 /// segment, so a running countdown always sits at the left end of the HUD.
 #[test]
-fn status_hud_title_renders_pomodoro_left_of_every_other_segment() {
+fn status_hud_title_renders_status_left_of_every_other_segment() {
     let only = hud(None, 0, None, Some("24:59 deep work"))
-        .expect("a running pomodoro alone should render the HUD");
+        .expect("a running status alone should render the HUD");
     assert_eq!(line_text(&only.line), " 24:59 deep work ");
     assert_eq!(only.mentions_width, 0);
 
@@ -247,24 +247,24 @@ fn status_hud_title_renders_pomodoro_left_of_every_other_segment() {
         Some(1_500),
         2,
         Some(" mic #lounge [muted] "),
-        Some("05:00 Pomodoro"),
+        Some("05:00 building"),
     )
     .expect("every segment should render");
     assert_eq!(
         line_text(&combined.line),
-        " 05:00 Pomodoro | mic #lounge [muted] | 2 unread mentions | 1500 chips "
+        " 05:00 building | mic #lounge [muted] | 2 unread mentions | 1500 chips "
     );
     assert_eq!(combined.mentions_width, " 2 unread mentions ".len() as u16);
     // The two badges ahead of it push the clickable mentions rect right.
     assert_eq!(
         combined.mentions_offset,
-        " 05:00 Pomodoro | mic #lounge [muted] |".len() as u16
+        " 05:00 building | mic #lounge [muted] |".len() as u16
     );
 }
 
 /// The pot sits right before the chips, so the prize reads against the
 /// viewer's own balance, and it is the first segment the border sheds:
-/// countdown first, then the whole badge, before the pomodoro gives up its
+/// countdown first, then the whole badge, before the status gives up its
 /// label.
 #[test]
 fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
@@ -280,17 +280,17 @@ fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
             balance: Some(1_500),
             unread: 2,
             voice_badge: Some(" mic #lounge [muted] "),
-            pomodoro_badge: Some("05:00 Pomodoro"),
+            status_badge: Some("05:00 building"),
             pot: Some(&pot),
             border_width,
             title_width: 0,
         })
         .map(|hud| line_text(&hud.line))
     };
-    let full = " 05:00 Pomodoro | mic #lounge [muted] | 2 unread mentions | pot 84,200 · 3h12m | 1500 chips ";
+    let full = " 05:00 building | mic #lounge [muted] | 2 unread mentions | pot 84,200 · 3h12m | 1500 chips ";
     let without_clock =
-        " 05:00 Pomodoro | mic #lounge [muted] | 2 unread mentions | pot 84,200 | 1500 chips ";
-    let without_pot = " 05:00 Pomodoro | mic #lounge [muted] | 2 unread mentions | 1500 chips ";
+        " 05:00 building | mic #lounge [muted] | 2 unread mentions | pot 84,200 | 1500 chips ";
+    let without_pot = " 05:00 building | mic #lounge [muted] | 2 unread mentions | 1500 chips ";
     let width = |text: &str| text.chars().count() as u16 + 2;
 
     assert_eq!(with_pot(WIDE_HUD_BORDER).as_deref(), Some(full));
@@ -302,7 +302,7 @@ fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
     assert_eq!(
         with_pot(width(without_clock) - 1).as_deref(),
         Some(without_pot),
-        "too tight for the size drops the pot before the pomodoro label"
+        "too tight for the size drops the pot before the status word"
     );
 
     // Alone with the chips it still reads pot first, balance last, and a
@@ -311,7 +311,7 @@ fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
         balance: Some(1_500),
         unread: 0,
         voice_badge: None,
-        pomodoro_badge: None,
+        status_badge: None,
         pot: Some(&pot),
         border_width: WIDE_HUD_BORDER,
         title_width: 0,
@@ -323,7 +323,7 @@ fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
         balance: None,
         unread: 0,
         voice_badge: None,
-        pomodoro_badge: None,
+        status_badge: None,
         pot: Some(&pot),
         border_width: WIDE_HUD_BORDER,
         title_width: 0,
@@ -399,8 +399,8 @@ fn help_hint_title_compacts_separators_then_ctrl_notation() {
 /// the page tabs. Only the countdown degrades: the three older segments keep
 /// their long-standing behavior.
 #[test]
-fn status_hud_title_degrades_pomodoro_to_fit_the_border() {
-    let full = " 05:00 Pomodoro | mic #lounge [muted] | 2 unread mentions | 1500 chips ";
+fn status_hud_title_degrades_status_to_fit_the_border() {
+    let full = " 05:00 building | mic #lounge [muted] | 2 unread mentions | 1500 chips ";
     let without_label = " 05:00 | mic #lounge [muted] | 2 unread mentions | 1500 chips ";
     let without_badge = " mic #lounge [muted] | 2 unread mentions | 1500 chips ";
     // A left title the HUD must not paint over, so the spare-room subtraction
@@ -413,7 +413,7 @@ fn status_hud_title_degrades_pomodoro_to_fit_the_border() {
             balance: Some(1_500),
             unread: 2,
             voice_badge: Some(" mic #lounge [muted] "),
-            pomodoro_badge: Some("05:00 Pomodoro"),
+            status_badge: Some("05:00 building"),
             pot: None,
             border_width: spare + 2 + TABS,
             title_width: TABS,
@@ -438,7 +438,7 @@ fn status_hud_title_degrades_pomodoro_to_fit_the_border() {
     for (spare, expected) in [
         (
             full.len() as u16,
-            " 05:00 Pomodoro | mic #lounge [muted] |".len() as u16,
+            " 05:00 building | mic #lounge [muted] |".len() as u16,
         ),
         (
             without_label.len() as u16,
@@ -463,12 +463,12 @@ fn status_hud_title_degrades_pomodoro_to_fit_the_border() {
 /// A left title wider than the whole border row must not underflow the spare
 /// calculation into a huge budget: the badge is dropped, not force-fitted.
 #[test]
-fn status_hud_title_drops_pomodoro_when_the_title_outgrows_the_border() {
+fn status_hud_title_drops_status_when_the_title_outgrows_the_border() {
     let squeezed = status_hud_title(StatusHudInputs {
         balance: Some(1_500),
         unread: 0,
         voice_badge: None,
-        pomodoro_badge: Some("05:00 Pomodoro"),
+        status_badge: Some("05:00 building"),
         pot: None,
         border_width: 10,
         title_width: 40,
@@ -477,15 +477,15 @@ fn status_hud_title_drops_pomodoro_when_the_title_outgrows_the_border() {
     assert_eq!(line_text(&squeezed.line), " 1500 chips ");
 }
 
-/// A pomodoro with nothing else in the HUD still needs its dividers right: no
+/// A status with nothing else in the HUD still needs its dividers right: no
 /// leading `|` when it is the first segment, and one before the next segment.
 #[test]
-fn status_hud_title_places_pomodoro_dividers_without_mentions() {
-    let alone = hud(None, 0, None, Some("05:00 focus")).expect("pomodoro alone should render");
+fn status_hud_title_places_status_dividers_without_mentions() {
+    let alone = hud(None, 0, None, Some("05:00 focus")).expect("a status alone should render");
     assert_eq!(line_text(&alone.line), " 05:00 focus ");
 
     let with_voice = hud(None, 0, Some(" mic #lounge [muted] "), Some("05:00 focus"))
-        .expect("pomodoro + voice should render");
+        .expect("status + voice should render");
     assert_eq!(
         line_text(&with_voice.line),
         " 05:00 focus | mic #lounge [muted] "
@@ -496,7 +496,7 @@ fn status_hud_title_places_pomodoro_dividers_without_mentions() {
         balance: None,
         unread: 0,
         voice_badge: Some(" mic #lounge [muted] "),
-        pomodoro_badge: Some("05:00 focus"),
+        status_badge: Some("05:00 focus"),
         pot: None,
         border_width: 7,
         title_width: 0,

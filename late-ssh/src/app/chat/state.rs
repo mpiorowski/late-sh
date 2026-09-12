@@ -36,6 +36,7 @@ use crate::app::ai::summary::{
 use crate::app::ai::translate::{TranslationEvent, TranslationOutcome, TranslationService};
 use crate::app::common::overlay::{Overlay, OverlayInk, OverlayLine, OverlaySpan};
 
+use crate::app::common::status::Status;
 use crate::app::common::{composer, mentions, primitives::Banner};
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::notify::{Notification, Notifier};
@@ -930,7 +931,7 @@ pub struct ChatState {
     requested_mod_modal: bool,
     requested_ultimate_modal: bool,
     requested_pair: Option<PairRequest>,
-    requested_pomodoro: Option<PomodoroRequest>,
+    requested_status: Option<StatusRequest>,
     requested_icon_picker: bool,
     /// Set by `/picker`; `App` opens the Ctrl+/ room picker.
     requested_room_picker: bool,
@@ -982,9 +983,8 @@ pub struct ChatState {
     /// Set by /aquarium [feed]; consumed by `App` (which owns the tank).
     requested_aquarium_command: Option<AquariumCommand>,
     requested_poll_room: Option<Uuid>,
-    /// Set by /brb command; contains the custom message (empty = no message).
-    requested_brb: Option<String>,
-    /// Set when a real (non-command) chat message is sent; used to clear AFK.
+    /// Set when a real (non-command) chat message is sent; used to clear an
+    /// open-ended status.
     sent_regular_message: bool,
     pending_mod_outputs: VecDeque<ModCommandOutput>,
 
@@ -1277,7 +1277,7 @@ impl ChatState {
             requested_mod_modal: false,
             requested_ultimate_modal: false,
             requested_pair: None,
-            requested_pomodoro: None,
+            requested_status: None,
             requested_icon_picker: false,
             requested_room_picker: false,
             requested_message_search: None,
@@ -1301,7 +1301,6 @@ impl ChatState {
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
             requested_poll_room: None,
-            requested_brb: None,
             sent_regular_message: false,
             pending_mod_outputs: VecDeque::new(),
             collapsed_sections: HashSet::new(),
@@ -1999,8 +1998,8 @@ impl ChatState {
         self.requested_pair.take()
     }
 
-    pub(crate) fn take_requested_pomodoro(&mut self) -> Option<PomodoroRequest> {
-        self.requested_pomodoro.take()
+    pub(crate) fn take_requested_status(&mut self) -> Option<StatusRequest> {
+        self.requested_status.take()
     }
 
     pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
@@ -2037,10 +2036,6 @@ impl ChatState {
 
     pub fn take_requested_audio_fallback_url(&mut self) -> Option<String> {
         self.requested_audio_fallback_url.take()
-    }
-
-    pub fn take_requested_brb(&mut self) -> Option<String> {
-        self.requested_brb.take()
     }
 
     pub fn take_sent_regular_message(&mut self) -> bool {
@@ -3739,17 +3734,18 @@ impl ChatState {
             }
         }
 
-        if let Some(parsed) = parse_pomodoro_command(&body) {
+        if let Some(parsed) = parse_status_command(&body) {
             self.clear_composer_after_submit();
             match parsed {
-                PomodoroParse::Request(request) => {
-                    self.requested_pomodoro = Some(request);
+                StatusParse::Request(request) => {
+                    self.requested_status = Some(request);
                     return None;
                 }
-                PomodoroParse::Invalid => {
-                    return Some(Banner::error(
-                        "Usage: /pomodoro [minutes] [label...] or /pomodoro stop",
-                    ));
+                StatusParse::Invalid => {
+                    return Some(Banner::error(&format!(
+                        "Usage: /status [{}] [minutes], or /status off",
+                        Status::word_list()
+                    )));
                 }
             }
         }
@@ -3933,27 +3929,12 @@ impl ChatState {
             return None;
         }
 
-        if let Some(msg) = parse_brb_command(&body) {
-            let chat_body = if msg.is_empty() {
-                "🌙 brb".to_string()
-            } else {
-                format!("🌙 brb — {msg}")
-            };
-            let room_id = self.composer_room_id;
-            if let Some(room_id) = room_id {
-                self.service
-                    .send_message_with_reply_task(super::svc::SendMessageTask {
-                        user_id: self.user_id,
-                        room_id,
-                        room_slug: self.room_slug(room_id),
-                        body: chat_body,
-                        reply_to_message_id: None,
-                        request_id: Uuid::now_v7(),
-                        is_admin: self.is_admin,
-                    });
-            }
-            self.requested_brb = Some(msg);
+        if body.trim() == "/brb" {
             self.clear_composer_after_submit();
+            self.requested_status = Some(StatusRequest::Apply(StatusChange::Set {
+                status: Status::Away,
+                minutes: None,
+            }));
             return None;
         }
 
@@ -7539,97 +7520,80 @@ fn parse_pair_command(input: &str) -> Option<Option<PairRequest>> {
     Some(Some(PairRequest::Directed(username.to_string())))
 }
 
-/// One classic tomato when `/pomodoro` is given no duration.
-const POMODORO_DEFAULT_MINUTES: u32 = 25;
 /// Well past any real focus block, and short enough that the HUD badge stays
 /// two-digit minutes.
-const POMODORO_MAX_MINUTES: u32 = 180;
-/// The badge shares the top border with mentions, voice, and chips, so the
-/// label has to stay short. Display cells, not chars: a CJK or emoji label
-/// costs two cells per char and would otherwise crowd the border out.
-const POMODORO_LABEL_MAX_COLS: usize = 24;
-const POMODORO_DEFAULT_LABEL: &str = "Pomodoro";
+const STATUS_MAX_MINUTES: u32 = 180;
 
-/// A `/pomodoro` request drained by `handle_post_submit_requests`. The timer
-/// itself lives on `App` (not here): `tick.rs` fires it and the status HUD
+/// A `/status` request drained by `handle_post_submit_requests`. The status
+/// itself lives on `App` (not here): `tick.rs` expires it and the status HUD
 /// draws it from every screen, not just chat.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PomodoroRequest {
-    Start { minutes: u32, label: String },
-    Stop,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StatusRequest {
+    /// A change to apply directly. Split from `OpenPicker` so the function
+    /// that resolves one cannot be handed a request that sets nothing.
+    Apply(StatusChange),
+    /// `/status` bare: `App` opens the picker.
+    OpenPicker,
 }
 
-/// Outcome of parsing a `/pomodoro` line. Same shape as [`PetnameParse`]: a
+/// A `/status` change that resolves to a new status without asking anything
+/// else of the user.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StatusChange {
+    /// `minutes: None` is an open-ended status, cleared by the next message.
+    Set {
+        status: Status,
+        minutes: Option<u32>,
+    },
+    Clear,
+}
+
+/// Outcome of parsing a `/status` line. Same shape as [`PetnameParse`]: a
 /// named variant per outcome instead of a nested `Option`, so a call site
 /// cannot read "malformed" as "absent".
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PomodoroParse {
-    Request(PomodoroRequest),
-    /// `/pomodoro` with an out-of-range duration or a `stop` carrying
-    /// arguments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StatusParse {
+    Request(StatusRequest),
+    /// An unknown status word, an out-of-range duration, or trailing junk.
     Invalid,
 }
 
-/// `None` when the line isn't `/pomodoro` at all.
+/// `None` when the line isn't `/status` at all.
 ///
-/// A leading integer is the duration and everything after it is the label, so
-/// `/pomodoro 50 deep work` and the label-only `/pomodoro deep work` (default
-/// duration) both work. Only an out-of-range duration is an error.
-fn parse_pomodoro_command(input: &str) -> Option<PomodoroParse> {
-    let rest = input.trim().strip_prefix("/pomodoro")?;
+/// `/status`, `/status <word>`, `/status <word> <minutes>`, `/status off`.
+/// Nothing else: the word comes from a closed set, and a bad one is a usage
+/// banner rather than a silent fallback to some default.
+fn parse_status_command(input: &str) -> Option<StatusParse> {
+    let rest = input.trim().strip_prefix("/status")?;
     if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
         return None;
     }
-    let mut words = rest.split_whitespace().peekable();
-    // `stop` is checked before the label path so it can never be read as one.
-    if words
-        .peek()
-        .is_some_and(|word| word.eq_ignore_ascii_case("stop"))
-    {
-        words.next();
+    let mut words = rest.split_whitespace();
+    let Some(word) = words.next() else {
+        return Some(StatusParse::Request(StatusRequest::OpenPicker));
+    };
+    if word.eq_ignore_ascii_case("off") {
         return Some(match words.next() {
-            None => PomodoroParse::Request(PomodoroRequest::Stop),
-            Some(_) => PomodoroParse::Invalid,
+            None => StatusParse::Request(StatusRequest::Apply(StatusChange::Clear)),
+            Some(_) => StatusParse::Invalid,
         });
     }
-    let mut minutes = POMODORO_DEFAULT_MINUTES;
-    if words
-        .peek()
-        .is_some_and(|word| word.chars().all(|ch| ch.is_ascii_digit()))
-    {
-        let digits = words.next().unwrap_or_default();
-        // Out of range (including a digit run too long for u32) is a usage
-        // banner rather than a silent clamp.
-        match digits.parse::<u32>() {
-            Ok(parsed) if (1..=POMODORO_MAX_MINUTES).contains(&parsed) => minutes = parsed,
-            _ => return Some(PomodoroParse::Invalid),
-        }
-    }
-    // Rejoining with single spaces drops any tabs/newlines; then strip control
-    // chars (the label reaches a desktop notification and the top border) and
-    // cap the width, same shape as the `/gift` note.
-    use unicode_width::UnicodeWidthChar;
-    let mut cols = 0usize;
-    let label: String = words
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .filter(|ch| !ch.is_control())
-        .take_while(|ch| {
-            cols += ch.width().unwrap_or(0);
-            cols <= POMODORO_LABEL_MAX_COLS
-        })
-        .collect();
-    let label = label.trim();
-    let label = if label.is_empty() {
-        POMODORO_DEFAULT_LABEL.to_string()
-    } else {
-        label.to_string()
+    let Some(status) = Status::parse(word) else {
+        return Some(StatusParse::Invalid);
     };
-    Some(PomodoroParse::Request(PomodoroRequest::Start {
-        minutes,
-        label,
-    }))
+    let minutes = match words.next() {
+        None => None,
+        Some(digits) => match digits.parse::<u32>() {
+            Ok(parsed) if (1..=STATUS_MAX_MINUTES).contains(&parsed) => Some(parsed),
+            // Out of range (including a digit run too long for u32) is a
+            // usage banner rather than a silent clamp.
+            _ => return Some(StatusParse::Invalid),
+        },
+    };
+    Some(match words.next() {
+        None => StatusParse::Request(StatusRequest::Apply(StatusChange::Set { status, minutes })),
+        Some(_) => StatusParse::Invalid,
+    })
 }
 
 fn parse_me_command(input: &str) -> Option<Option<String>> {
@@ -7851,17 +7815,6 @@ fn room_slug_for(rooms: &[(ChatRoom, Vec<ChatMessage>)], room_id: Uuid) -> Optio
         .iter()
         .find(|(room, _)| room.id == room_id)
         .and_then(|(room, _)| room.slug.clone())
-}
-
-/// Parse `/brb [optional message]` from the composer.
-/// Returns `Some(message)` where message is empty if no custom text was given.
-fn parse_brb_command(input: &str) -> Option<String> {
-    let trimmed = input.trim();
-    if trimmed == "/brb" {
-        return Some(String::new());
-    }
-    let rest = trimmed.strip_prefix("/brb ")?.trim();
-    Some(rest.to_string())
 }
 
 /// Minimum characters of report text, so `/bug lol` bounces with usage help

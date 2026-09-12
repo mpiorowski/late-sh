@@ -220,7 +220,6 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
 
 pub fn test_app_state(db: Db, config: Config) -> State {
     let active_users = Arc::new(Mutex::new(HashMap::new()));
-    let afk_users = crate::state::new_afk_users();
     let username_directory = Arc::new(Mutex::new(Arc::new(HashMap::new())));
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let session_registry = SessionRegistry::new();
@@ -303,10 +302,9 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         scratchpad_registry: crate::app::scratchpad::registry::SharedScratchpadRegistry::new(),
         app_flags: crate::app::flags::svc::AppFlagService::new(db.clone()),
         runner_looks: crate::app::deadchannel::runner::svc::RunnerLookService::new(db.clone()),
-        afk_users,
         username_directory,
         flair_directory: crate::app::common::username_effect::new_directory(),
-        pomodoro_directory: crate::app::common::pomodoro::new_directory(),
+        status_directory: crate::app::common::status::new_directory(),
         crown_service: crate::app::crown::svc::CrownService::new(db.clone()),
         pot_service: crate::app::pot::svc::PotService::new(db.clone()),
         config,
@@ -672,10 +670,9 @@ fn make_app_with_chat_service_and_permissions(
         key_fingerprint: None,
         key_layout: None,
         key_left_at: None,
-        afk_users: crate::state::new_afk_users(),
         username_directory: None,
         flair_directory: None,
-        pomodoro_directory: None,
+        status_directory: None,
         crown_service: None,
         pot_service: None,
         activity_feed_rx: None,
@@ -917,10 +914,9 @@ pub fn make_app_with_paired_client(
         key_fingerprint: None,
         key_layout: None,
         key_left_at: None,
-        afk_users: crate::state::new_afk_users(),
         username_directory: None,
         flair_directory: None,
-        pomodoro_directory: None,
+        status_directory: None,
         crown_service: None,
         pot_service: None,
         activity_feed_rx: None,
