@@ -930,16 +930,26 @@ impl App {
         self.running
     }
 
-    /// Publish this session's status to the process-shared directory so
-    /// peers' chat author labels can paint it, and to the active-users roster
-    /// so the who's-online sidebar reads the same word. The single write path:
+    /// Publish this session's status to the active-users roster and then to
+    /// the process-shared directory, so peers' chat author labels can paint
+    /// it. The roster goes first because the directory entry is rebuilt from
+    /// every session the user has open. The single write path:
     /// every place that changes `status` goes through it, which is also how a
     /// clear and an expiry retire the peer badge.
     pub(crate) fn publish_status(&self) {
-        if let Some(directory) = &self.status_directory {
-            crate::app::common::status::set_user(directory, self.user_id, self.status);
-        }
         self.set_shared_session_status();
+        let Some(directory) = &self.status_directory else {
+            return;
+        };
+        match &self.active_users {
+            Some(active_users) => crate::app::common::status::publish_for_user(
+                directory,
+                active_users,
+                self.user_id,
+                self.status,
+            ),
+            None => crate::app::common::status::set_user(directory, self.user_id, self.status),
+        }
     }
 
     /// Set this session's status and publish it. `None` clears.
@@ -2806,10 +2816,9 @@ impl App {
         });
     }
 
-    /// Mirror this session's status word onto the active-users roster, which
-    /// is what the who's-online sidebar and the disconnect path read. The
-    /// badge itself comes from the status directory; this is the roster's
-    /// copy, so it carries the word and not the countdown.
+    /// Mirror this session's status onto the active-users roster. The
+    /// directory's per-user entry is rebuilt from these copies, which is how a
+    /// clear or a disconnect here falls back to another session's status.
     fn set_shared_session_status(&self) {
         let Some(active_users) = &self.active_users else {
             return;
@@ -2823,7 +2832,7 @@ impl App {
             .iter_mut()
             .find(|session| session.token == self.session_token)
         {
-            session.afk = self.status.map(|status| status.status.word().to_string());
+            session.status = self.status;
         }
     }
 

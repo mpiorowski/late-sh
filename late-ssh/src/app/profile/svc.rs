@@ -12,7 +12,7 @@ use late_core::models::game_payout::GamePayout;
 use late_core::models::irc_token::IrcToken;
 use late_core::models::marketplace;
 use late_core::models::media_queue_item::MediaQueueItem;
-use late_core::models::pet::{PetCompanion, PetMood, PetSpecies, pet_age_anchor, pet_age_label};
+use late_core::models::pet::{PetCompanion, PetMood, PetSpecies};
 use late_core::models::pot::Pot;
 use late_core::models::profile::{Profile, ProfileParams};
 use late_core::models::profile_award::{
@@ -56,7 +56,6 @@ pub struct ProfilePet {
     pub species: PetSpecies,
     pub mood: PetMood,
     pub name: Option<String>,
-    pub age: String,
 }
 
 #[derive(Clone, Default)]
@@ -255,7 +254,6 @@ impl ProfileService {
                     species: row.species(),
                     mood: row.mood(),
                     name: row.name.clone(),
-                    age: pet_age_label(pet_age_anchor(row.created, row.adopted_at), Utc::now()),
                 })
         } else {
             None

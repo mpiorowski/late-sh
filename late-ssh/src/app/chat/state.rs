@@ -3929,13 +3929,26 @@ impl ChatState {
             return None;
         }
 
-        if body.trim() == "/brb" {
+        if let Some(rest) = body.trim().strip_prefix("/brb")
+            && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
             self.clear_composer_after_submit();
-            self.requested_status = Some(StatusRequest::Apply(StatusChange::Set {
-                status: Status::Away,
-                minutes: None,
-            }));
-            return None;
+            // `/brb` is exactly `/status away` with no minutes. It used to take
+            // a message, so trailing text is told why rather than "unknown".
+            match rest.trim() {
+                "" => {
+                    self.requested_status = Some(StatusRequest::Apply(StatusChange::Set {
+                        status: Status::Away,
+                        minutes: None,
+                    }));
+                    return None;
+                }
+                _ => {
+                    return Some(Banner::error(
+                        "/brb takes no message, it sets /status away",
+                    ));
+                }
+            }
         }
 
         if let Some((kind, text)) = parse_report_command(&body) {

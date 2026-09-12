@@ -350,13 +350,23 @@ pub(super) fn resolve_status_change(
     }
 }
 
-/// What a freshly set status does next, in plain words. Shared by the command
-/// banner and the picker's live hint so the two can never drift.
+/// What a freshly set status does next, in plain words: the banner after a
+/// set, from the command or the picker.
 pub(crate) fn status_set_message(status: Status, minutes: Option<u32>) -> String {
-    let (glyph, word) = (status.glyph(), status.word());
+    format!(
+        "{} {}, {}",
+        status.glyph(),
+        status.word(),
+        status_clear_rule(minutes)
+    )
+}
+
+/// When a status clears, the one rule nobody can infer from the badge. The
+/// banner and the picker's live hint both print this, so they cannot drift.
+pub(crate) fn status_clear_rule(minutes: Option<u32>) -> String {
     match minutes {
-        Some(minutes) => format!("{glyph} {word} for {minutes}m, stays while you chat"),
-        None => format!("{glyph} {word}, clears when you next post"),
+        Some(minutes) => format!("clears in {minutes}m, stays while you chat"),
+        None => "clears when you next post".to_string(),
     }
 }
 

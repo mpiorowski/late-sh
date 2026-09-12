@@ -12,6 +12,7 @@ use ratatui::{
 };
 
 use crate::app::{
+    chat::input::status_clear_rule,
     common::status::Status,
     common::theme,
     status_picker::state::{DURATIONS, StatusPickerState},
@@ -126,10 +127,7 @@ fn draw_duration(frame: &mut Frame, area: Rect, state: &StatusPickerState) {
 
 /// What the current pick will do, in the same words the command banner uses.
 fn draw_hint(frame: &mut Frame, area: Rect, state: &StatusPickerState) {
-    let hint = match state.selected_minutes() {
-        Some(minutes) => format!("clears in {minutes}m, stays while you chat"),
-        None => "clears when you next post".to_string(),
-    };
+    let hint = status_clear_rule(state.selected_minutes());
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             format!("   {hint}"),

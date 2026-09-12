@@ -36,14 +36,31 @@ fn statuses_are_distinct_and_parse_by_word() {
     assert_eq!(Status::parse(""), None);
 }
 
+/// No status glyph may carry a variation selector. Ratatui's crossterm backend
+/// miscounts the cursor after a wide VS16 grapheme, so glyphs after one drift
+/// until a resize (`chat/CONTEXT.md`, message rendering). A status badge
+/// prints on every author line of everyone who set one, which makes it the
+/// widest place for that bug to show.
+#[test]
+fn no_status_glyph_needs_a_variation_selector() {
+    for status in Status::ALL {
+        assert!(
+            !status.glyph().contains('\u{FE0F}'),
+            "status {} uses the VS16 glyph {}",
+            status.word(),
+            status.glyph(),
+        );
+    }
+}
+
 /// The reason the set is closed at all: a status glyph must never be
 /// something a player can buy, or a badge owner would look like they set a
 /// status they never set. Scans the seed migrations, which is how every
 /// purchasable badge enters the catalog today.
 #[test]
 fn no_status_glyph_collides_with_a_purchasable_badge() {
-    // Compare with the variation selector stripped: a seed that writes the
-    // bare code point still collides visually with our VS16 spelling.
+    // Compare with the variation selector stripped: a seed that writes a
+    // status glyph's VS16 spelling still collides visually with ours.
     let bare = |text: &str| text.replace('\u{FE0F}', "");
     let migrations = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../late-core/migrations")
@@ -189,6 +206,68 @@ fn directory_publishes_clears_and_skips_stale_entries() {
     // through the same path.
     set_user(&directory, running, None);
     assert!(snapshot(&directory).get(&running).is_none());
+}
+
+/// The disconnect path in `ssh.rs`: it removes the leaving session from the
+/// roster and publishes with no status of its own. The entry falls back to a
+/// session that is still running one, and clears once the user has none left.
+#[test]
+fn publish_for_user_falls_back_to_a_remaining_sessions_status() {
+    use crate::state::{ActiveSession, ActiveUser};
+
+    let now = Utc::now();
+    let user = Uuid::from_u128(1);
+    let focus = timed(now, Status::Focus, 50);
+    let session = |token: &str, status: Option<SessionStatus>| ActiveSession {
+        token: token.to_string(),
+        fingerprint: None,
+        peer_ip: None,
+        status,
+    };
+    let active_users: ActiveUsers = Arc::new(Mutex::new(
+        [(
+            user,
+            ActiveUser {
+                username: "alice".to_string(),
+                fingerprint: None,
+                audio_source: late_core::models::user::AudioSource::default(),
+                sessions: vec![
+                    session("desktop", Some(open(Status::Away))),
+                    session("laptop", Some(focus)),
+                ],
+                connection_count: 2,
+                last_login_at: std::time::Instant::now(),
+            },
+        )]
+        .into(),
+    ));
+    let directory = new_directory();
+
+    publish_for_user(&directory, &active_users, user, Some(open(Status::Away)));
+    assert_eq!(
+        snapshot(&directory).get(&user),
+        Some(&open(Status::Away)),
+        "the session that just changed wins"
+    );
+
+    // The desktop disconnects.
+    active_users
+        .lock_recover()
+        .get_mut(&user)
+        .expect("user")
+        .sessions
+        .retain(|session| session.token != "desktop");
+    publish_for_user(&directory, &active_users, user, None);
+    assert_eq!(
+        snapshot(&directory).get(&user),
+        Some(&focus),
+        "the laptop's countdown survives the desktop leaving"
+    );
+
+    // The laptop was the last connection.
+    active_users.lock_recover().remove(&user);
+    publish_for_user(&directory, &active_users, user, None);
+    assert_eq!(snapshot(&directory).get(&user), None);
 }
 
 /// Readers hold an `Arc` of the map, so a write during a frame must not be

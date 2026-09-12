@@ -88,3 +88,74 @@ async fn leaderboard_seeds_from_the_already_published_snapshot() {
         "a later refresh must still replace the seeded snapshot"
     );
 }
+
+/// The status directory keeps one entry per user, but a status belongs to a
+/// session. One session clearing its own status must not erase a countdown
+/// another session of the same account is still running: the laptop's top
+/// bar would keep counting while every peer lost its badge.
+#[tokio::test]
+async fn clearing_one_sessions_status_keeps_the_other_sessions_badge() {
+    use crate::app::common::status::{SessionStatus, Status, new_directory, snapshot};
+    use crate::state::{ActiveSession, ActiveUser, ActiveUsers};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "status-two-sessions").await;
+    let session = |token: &str| ActiveSession {
+        token: token.to_string(),
+        fingerprint: Some(user.fingerprint.clone()),
+        peer_ip: None,
+        status: None,
+    };
+    let active_users: ActiveUsers = Arc::new(std::sync::Mutex::new(
+        [(
+            user.id,
+            ActiveUser {
+                username: user.username.clone(),
+                fingerprint: Some(user.fingerprint.clone()),
+                audio_source: late_core::models::user::AudioSource::default(),
+                sessions: vec![session("laptop"), session("desktop")],
+                connection_count: 2,
+                last_login_at: std::time::Instant::now(),
+            },
+        )]
+        .into(),
+    ));
+    let world = SessionWorld {
+        active_users: Some(active_users),
+        ..SessionWorld::default()
+    };
+    let mut laptop = make_app_in_world(test_db.db.clone(), user.id, "laptop", world.clone());
+    let mut desktop = make_app_in_world(test_db.db.clone(), user.id, "desktop", world);
+    let directory = new_directory();
+    laptop.status_directory = Some(directory.clone());
+    desktop.status_directory = Some(directory.clone());
+
+    let focus = SessionStatus {
+        status: Status::Focus,
+        ends_at: Some(chrono::Utc::now() + chrono::Duration::minutes(50)),
+    };
+    desktop.set_status(Some(SessionStatus {
+        status: Status::Away,
+        ends_at: None,
+    }));
+    laptop.set_status(Some(focus));
+    assert_eq!(
+        snapshot(&directory).get(&user.id),
+        Some(&focus),
+        "the newest set wins the shared entry"
+    );
+
+    desktop.set_status(None);
+    assert_eq!(
+        snapshot(&directory).get(&user.id),
+        Some(&focus),
+        "the laptop's countdown is still live, so its badge stays"
+    );
+
+    laptop.set_status(None);
+    assert_eq!(
+        snapshot(&directory).get(&user.id),
+        None,
+        "no session carries a status any more"
+    );
+}

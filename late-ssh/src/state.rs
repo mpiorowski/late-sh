@@ -51,9 +51,10 @@ pub struct ActiveSession {
     pub token: String,
     pub fingerprint: Option<String>,
     pub peer_ip: Option<IpAddr>,
-    /// Session-local `/status` word, for the who's-online roster. `None`
-    /// when the session has no status set.
-    pub afk: Option<String>,
+    /// This session's `/status`, `None` when unset. The status directory's
+    /// per-user entry is rebuilt from these (`status::publish_for_user`), so
+    /// one session clearing or leaving cannot erase another session's badge.
+    pub status: Option<crate::app::common::status::SessionStatus>,
 }
 
 #[derive(Clone, Debug)]

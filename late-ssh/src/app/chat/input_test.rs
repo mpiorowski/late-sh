@@ -45,7 +45,7 @@ fn a_timed_status_ends_at_the_callers_clock_and_says_the_rule() {
     // The duration is measured from the caller's clock, not re-read inside.
     assert_eq!(armed.ends_at, Some(now + chrono::Duration::minutes(50)));
     assert!(!armed.clears_on_post());
-    assert_eq!(banner.message, "🍅 focus for 50m, stays while you chat");
+    assert_eq!(banner.message, "🍅 focus, clears in 50m, stays while you chat");
 }
 
 /// The other half of the rule, and the half nobody can infer from the badge:
@@ -74,7 +74,7 @@ fn setting_a_status_replaces_the_running_one() {
     let armed = second.expect("a replacement should stay armed");
     assert_eq!(armed.status, Status::Gaming);
     assert_eq!(armed.ends_at, Some(now + chrono::Duration::minutes(5)));
-    assert_eq!(banner.message, "👾 gaming for 5m, stays while you chat");
+    assert_eq!(banner.message, "👾 gaming, clears in 5m, stays while you chat");
 }
 
 #[test]

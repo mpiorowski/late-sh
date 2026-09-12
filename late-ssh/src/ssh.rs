@@ -458,17 +458,12 @@ impl Drop for ClientHandler {
         {
             metrics::add_ssh_session(-1);
             let user_id = user.id;
-            let mut owned_status = false;
             let mut became_offline = false;
             let mut active_users = self.state.active_users.lock_recover();
 
             if let Some(active) = active_users.get_mut(&user_id) {
                 if let Some(token) = self.session_token.as_ref() {
-                    active.sessions.retain(|session| {
-                        let leaving = session.token == *token;
-                        owned_status |= leaving && session.afk.is_some();
-                        !leaving
-                    });
+                    active.sessions.retain(|session| session.token != *token);
                 }
                 if active.connection_count <= 1 {
                     active_users.remove(&user_id);
@@ -483,13 +478,16 @@ impl Drop for ClientHandler {
                     .online_user_disconnected(user_id);
             }
             drop(active_users);
-            // A status is session-local, so it retires with the session that
-            // set it: on the last connection going away, and on this session
-            // going away while others remain. There is nothing to resume when
-            // they come back.
-            if became_offline || owned_status {
-                crate::app::common::status::set_user(&self.state.status_directory, user_id, None);
-            }
+            // A status is session-local, so this session's retires with it.
+            // The user's shared entry falls back to whatever their remaining
+            // sessions carry, and clears once none does (always, on the last
+            // connection). There is nothing to resume when they come back.
+            crate::app::common::status::publish_for_user(
+                &self.state.status_directory,
+                &self.state.active_users,
+                user_id,
+                None,
+            );
         }
 
         if !self.per_ip_incremented {
@@ -548,7 +546,7 @@ impl ClientHandler {
             token: session_token.to_string(),
             fingerprint: Some(user.fingerprint.clone()),
             peer_ip: self.peer_ip,
-            afk: None,
+            status: None,
         });
     }
 }

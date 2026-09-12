@@ -2859,6 +2859,42 @@ fn parse_status_command_ignores_unrelated_input() {
     assert_eq!(parse_status_command("/poll"), None);
 }
 
+/// `/brb` is exactly `/status away` with no minutes, so a bare one sets away.
+#[tokio::test]
+async fn brb_sets_an_open_ended_away_status() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "brb_bare").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+
+    state.composer.insert_str("/brb");
+    assert!(state.submit_composer(false, false).is_none());
+    assert_eq!(
+        state.take_requested_status(),
+        Some(StatusRequest::Apply(StatusChange::Set {
+            status: Status::Away,
+            minutes: None,
+        }))
+    );
+}
+
+/// The old `/brb <message>` habit. It takes no message any more, so it gets a
+/// usage banner naming what `/brb` does, the same strictness `/status away
+/// back in 5` gets, not "Unknown command: /brb" for a command the guide lists.
+#[tokio::test]
+async fn brb_with_a_message_explains_instead_of_calling_it_unknown() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "brb_message").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+
+    state.composer.insert_str("/brb back in 5");
+    let banner = state.submit_composer(false, false).expect("banner");
+    assert_eq!(
+        banner.message,
+        "/brb takes no message, it sets /status away"
+    );
+    assert_eq!(state.take_requested_status(), None, "nothing is set");
+}
+
 #[test]
 fn format_cooldown_rounds_minutes_up() {
     assert_eq!(format_cooldown(Duration::from_secs(45)), "45s");

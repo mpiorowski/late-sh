@@ -25,6 +25,8 @@ use chrono::{DateTime, Utc};
 use late_core::MutexRecover;
 use uuid::Uuid;
 
+use crate::state::ActiveUsers;
+
 /// What a session is doing, as a closed set. The glyphs are disjoint from
 /// every purchasable badge, every special role badge, the bonsai ladder, and
 /// the crown, so a status can never be mistaken for something someone owns.
@@ -75,11 +77,11 @@ impl Status {
         match self {
             Self::Focus => "🍅",
             Self::Working => "💻",
-            Self::Building => "🛠️",
+            Self::Building => "🧱",
             Self::Reading => "📖",
             Self::Vibing => "🎶",
             Self::Gaming => "👾",
-            Self::Eating => "🍽️",
+            Self::Eating => "🍲",
             Self::Away => "💤",
         }
     }
@@ -189,11 +191,11 @@ pub fn snapshot(directory: &StatusDirectory) -> Arc<HashMap<Uuid, SessionStatus>
     Arc::clone(&directory.lock_recover())
 }
 
-/// Publish or clear one user's status. Called from every place that changes
+/// Publish or clear one user's entry, as given. Every place that changes
 /// `App::status` (the `/status` command, the picker, the message that clears
-/// an open-ended one, the tick that expires a countdown) and from session
-/// teardown, so a disconnect doesn't leave a peer showing as focusing until
-/// their original end time.
+/// an open-ended one, the tick that expires a countdown) and session teardown
+/// reach this through [`publish_for_user`], which picks the entry from every
+/// session the user has open.
 ///
 /// Readers retain their snapshot `Arc`, so `make_mut` always clones and swaps
 /// the pointer. The chat row cache epoch depends on that: never mutate the
@@ -212,6 +214,27 @@ pub fn set_user(directory: &StatusDirectory, user_id: Uuid, status: Option<Sessi
             entries.remove(&user_id);
         }
     }
+}
+
+/// Publish one user's entry after one of their sessions changed its status
+/// or went away. The directory is keyed by user while a status belongs to a
+/// session, so one entry stands for all of them: `own` (the session that just
+/// changed, `None` for one disconnecting) wins when it carries a status, and
+/// otherwise any session still carrying one keeps the badge. A clear or a
+/// disconnect in one session therefore cannot erase a countdown another is
+/// still running. Callers update the roster first (write their own session's
+/// status, or remove the leaving session), so what is read here is current.
+pub fn publish_for_user(
+    directory: &StatusDirectory,
+    active_users: &ActiveUsers,
+    user_id: Uuid,
+    own: Option<SessionStatus>,
+) {
+    let remaining = match active_users.lock_recover().get(&user_id) {
+        Some(active) => active.sessions.iter().find_map(|session| session.status),
+        None => None,
+    };
+    set_user(directory, user_id, own.or(remaining));
 }
 
 /// Resolve a directory snapshot into the per-peer badge strings a chat frame
