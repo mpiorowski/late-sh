@@ -80,7 +80,7 @@ fn parse_pot_command_only_admits_a_buyable_count() {
     // Not a pot command at all: a longer command that merely starts the same
     // way must fall through to its own parser.
     assert_eq!(parse_pot_command("/potato"), None);
-    assert_eq!(parse_pot_command("/pomodoro 25"), None);
+    assert_eq!(parse_pot_command("/status focus 25"), None);
     assert_eq!(parse_pot_command("hello"), None);
 }
 
@@ -2261,36 +2261,6 @@ fn dm_sort_key_orders_alphabetically_by_display_name() {
 }
 
 #[test]
-fn parse_brb_bare_command() {
-    assert_eq!(parse_brb_command("/brb"), Some(String::new()));
-}
-
-#[test]
-fn parse_brb_with_message() {
-    assert_eq!(
-        parse_brb_command("/brb grabbing coffee"),
-        Some("grabbing coffee".to_string())
-    );
-}
-
-#[test]
-fn parse_brb_trims_whitespace() {
-    assert_eq!(parse_brb_command("  /brb  "), Some(String::new()));
-    assert_eq!(
-        parse_brb_command("/brb   lots of spaces   "),
-        Some("lots of spaces".to_string())
-    );
-}
-
-#[test]
-fn parse_brb_rejects_non_command() {
-    assert_eq!(parse_brb_command("brb"), None);
-    assert_eq!(parse_brb_command("/brbx something"), None);
-    assert_eq!(parse_brb_command("hello /brb"), None);
-    assert_eq!(parse_brb_command(""), None);
-}
-
-#[test]
 fn set_context_value_reports_only_real_changes() {
     let user_id = Uuid::from_u128(1);
     let mut map = HashMap::new();
@@ -2778,118 +2748,151 @@ fn parse_pair_command_ignores_unrelated_input() {
     assert_eq!(parse_pair_command("/challenge @alice"), None);
 }
 
-fn pomodoro_start(minutes: u32, label: &str) -> Option<PomodoroParse> {
-    Some(PomodoroParse::Request(PomodoroRequest::Start {
-        minutes,
-        label: label.to_string(),
-    }))
+fn status_set(status: Status, minutes: Option<u32>) -> Option<StatusParse> {
+    Some(StatusParse::Request(StatusRequest::Apply(
+        StatusChange::Set { status, minutes },
+    )))
 }
 
 #[test]
-fn parse_pomodoro_command_defaults_duration_and_label() {
+fn parse_status_command_bare_opens_the_picker() {
     assert_eq!(
-        parse_pomodoro_command("/pomodoro"),
-        pomodoro_start(POMODORO_DEFAULT_MINUTES, POMODORO_DEFAULT_LABEL)
+        parse_status_command("/status"),
+        Some(StatusParse::Request(StatusRequest::OpenPicker))
     );
     assert_eq!(
-        parse_pomodoro_command("  /pomodoro   "),
-        pomodoro_start(POMODORO_DEFAULT_MINUTES, POMODORO_DEFAULT_LABEL),
-        "surrounding whitespace is not a label"
-    );
-}
-
-#[test]
-fn parse_pomodoro_command_reads_leading_minutes_then_label() {
-    assert_eq!(
-        parse_pomodoro_command("/pomodoro 50"),
-        pomodoro_start(50, POMODORO_DEFAULT_LABEL)
-    );
-    assert_eq!(
-        parse_pomodoro_command("/pomodoro 50 deep   work"),
-        pomodoro_start(50, "deep work"),
-        "label whitespace collapses"
-    );
-    // No leading integer means the whole rest is the label, so a plain
-    // `/pomodoro <thing>` still starts the default block.
-    assert_eq!(
-        parse_pomodoro_command("/pomodoro deep work"),
-        pomodoro_start(POMODORO_DEFAULT_MINUTES, "deep work")
-    );
-    assert_eq!(
-        parse_pomodoro_command("/pomodoro 5k run"),
-        pomodoro_start(POMODORO_DEFAULT_MINUTES, "5k run"),
-        "a digit-prefixed word is not a duration"
+        parse_status_command("  /status   "),
+        Some(StatusParse::Request(StatusRequest::OpenPicker)),
+        "surrounding whitespace is not an argument"
     );
 }
 
 #[test]
-fn parse_pomodoro_command_sanitizes_and_caps_the_label() {
-    let long = "x".repeat(POMODORO_LABEL_MAX_COLS + 10);
+fn parse_status_command_reads_the_word_then_optional_minutes() {
     assert_eq!(
-        parse_pomodoro_command(&format!("/pomodoro {long}")),
-        pomodoro_start(
-            POMODORO_DEFAULT_MINUTES,
-            &"x".repeat(POMODORO_LABEL_MAX_COLS)
-        )
+        parse_status_command("/status working"),
+        status_set(Status::Working, None)
     );
-    // The cap is display cells, so a double-width label stops at half the
-    // char count rather than twice the border budget.
     assert_eq!(
-        parse_pomodoro_command(&format!("/pomodoro {}", "深".repeat(20))),
-        pomodoro_start(
-            POMODORO_DEFAULT_MINUTES,
-            &"深".repeat(POMODORO_LABEL_MAX_COLS / 2)
-        )
+        parse_status_command("/status WORKING"),
+        status_set(Status::Working, None),
+        "the word is case-insensitive"
     );
-    // The label reaches a desktop notification and the top border, so control
-    // characters never survive parsing.
     assert_eq!(
-        parse_pomodoro_command("/pomodoro focus\u{1b}]777;notify"),
-        pomodoro_start(POMODORO_DEFAULT_MINUTES, "focus]777;notify")
+        parse_status_command("/status focus 50"),
+        status_set(Status::Focus, Some(50))
+    );
+    assert_eq!(
+        parse_status_command("/status   focus   50  "),
+        status_set(Status::Focus, Some(50)),
+        "spacing collapses"
+    );
+}
+
+/// The whole reason the set is closed: free text is not a status, so it is a
+/// usage banner rather than a silently accepted label.
+#[test]
+fn parse_status_command_rejects_words_outside_the_set() {
+    assert_eq!(
+        parse_status_command("/status deep"),
+        Some(StatusParse::Invalid)
+    );
+    assert_eq!(
+        parse_status_command("/status deep work"),
+        Some(StatusParse::Invalid)
+    );
+    assert_eq!(
+        parse_status_command("/status working hard"),
+        Some(StatusParse::Invalid),
+        "a valid word does not license trailing text"
+    );
+    assert_eq!(
+        parse_status_command("/status focus 25 extra"),
+        Some(StatusParse::Invalid)
     );
 }
 
 #[test]
-fn parse_pomodoro_command_stops_a_running_timer() {
+fn parse_status_command_clears_with_off() {
     assert_eq!(
-        parse_pomodoro_command("/pomodoro stop"),
-        Some(PomodoroParse::Request(PomodoroRequest::Stop))
+        parse_status_command("/status off"),
+        Some(StatusParse::Request(StatusRequest::Apply(
+            StatusChange::Clear
+        )))
     );
     assert_eq!(
-        parse_pomodoro_command("/pomodoro STOP"),
-        Some(PomodoroParse::Request(PomodoroRequest::Stop))
+        parse_status_command("/status OFF"),
+        Some(StatusParse::Request(StatusRequest::Apply(
+            StatusChange::Clear
+        )))
     );
     assert_eq!(
-        parse_pomodoro_command("/pomodoro stop now"),
-        Some(PomodoroParse::Invalid),
-        "stop takes no arguments"
+        parse_status_command("/status off now"),
+        Some(StatusParse::Invalid),
+        "off takes no arguments"
     );
 }
 
 #[test]
-fn parse_pomodoro_command_rejects_out_of_range_durations() {
+fn parse_status_command_rejects_out_of_range_durations() {
     assert_eq!(
-        parse_pomodoro_command("/pomodoro 0"),
-        Some(PomodoroParse::Invalid),
+        parse_status_command("/status focus 0"),
+        Some(StatusParse::Invalid),
         "zero"
     );
     assert_eq!(
-        parse_pomodoro_command(&format!("/pomodoro {}", POMODORO_MAX_MINUTES + 1)),
-        Some(PomodoroParse::Invalid),
+        parse_status_command(&format!("/status focus {}", STATUS_MAX_MINUTES + 1)),
+        Some(StatusParse::Invalid),
         "over the cap"
     );
     assert_eq!(
-        parse_pomodoro_command("/pomodoro 99999999999999999999"),
-        Some(PomodoroParse::Invalid),
+        parse_status_command("/status focus 99999999999999999999"),
+        Some(StatusParse::Invalid),
         "digit run too long for u32"
     );
 }
 
 #[test]
-fn parse_pomodoro_command_ignores_unrelated_input() {
-    assert_eq!(parse_pomodoro_command("/pomodoros"), None);
-    assert_eq!(parse_pomodoro_command("hello /pomodoro"), None);
-    assert_eq!(parse_pomodoro_command("/poll"), None);
+fn parse_status_command_ignores_unrelated_input() {
+    assert_eq!(parse_status_command("/statuses"), None);
+    assert_eq!(parse_status_command("hello /status"), None);
+    assert_eq!(parse_status_command("/poll"), None);
+}
+
+/// `/brb` is exactly `/status away` with no minutes, so a bare one sets away.
+#[tokio::test]
+async fn brb_sets_an_open_ended_away_status() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "brb_bare").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+
+    state.composer.insert_str("/brb");
+    assert!(state.submit_composer(false, false).is_none());
+    assert_eq!(
+        state.take_requested_status(),
+        Some(StatusRequest::Apply(StatusChange::Set {
+            status: Status::Away,
+            minutes: None,
+        }))
+    );
+}
+
+/// The old `/brb <message>` habit. It takes no message any more, so it gets a
+/// usage banner naming what `/brb` does, the same strictness `/status away
+/// back in 5` gets, not "Unknown command: /brb" for a command the guide lists.
+#[tokio::test]
+async fn brb_with_a_message_explains_instead_of_calling_it_unknown() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "brb_message").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+
+    state.composer.insert_str("/brb back in 5");
+    let banner = state.submit_composer(false, false).expect("banner");
+    assert_eq!(
+        banner.message,
+        "/brb takes no message, it sets /status away"
+    );
+    assert_eq!(state.take_requested_status(), None, "nothing is set");
 }
 
 #[test]

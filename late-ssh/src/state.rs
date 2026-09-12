@@ -38,7 +38,7 @@ use late_core::{
     rate_limit::IpRateLimiter,
 };
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::IpAddr,
     sync::{Arc, Mutex},
     time::Instant,
@@ -51,8 +51,10 @@ pub struct ActiveSession {
     pub token: String,
     pub fingerprint: Option<String>,
     pub peer_ip: Option<IpAddr>,
-    /// Session-local away state set by `/brb`.
-    pub afk: Option<String>,
+    /// This session's `/status`, `None` when unset. The status directory's
+    /// per-user entry is rebuilt from these (`status::publish_for_user`), so
+    /// one session clearing or leaving cannot erase another session's badge.
+    pub status: Option<crate::app::common::status::SessionStatus>,
 }
 
 #[derive(Clone, Debug)]
@@ -66,11 +68,6 @@ pub struct ActiveUser {
 }
 
 pub type ActiveUsers = Arc<Mutex<HashMap<Uuid, ActiveUser>>>;
-pub type AfkUsers = Arc<Mutex<Arc<HashSet<Uuid>>>>;
-
-pub fn new_afk_users() -> AfkUsers {
-    Arc::new(Mutex::new(Arc::new(HashSet::new())))
-}
 
 /// Connected humans only: the always-on bots (@bartender, @graybeard, @bot)
 /// register with no fingerprint and are excluded, matching the clubhouse
@@ -99,27 +96,6 @@ pub fn online_human_ids_excluding(active_users: &ActiveUsers, buyer: Uuid) -> Ve
         .filter(|(user_id, user)| user.fingerprint.is_some() && **user_id != buyer)
         .map(|(user_id, _)| *user_id)
         .collect()
-}
-
-pub fn afk_users_snapshot(afk_users: &AfkUsers) -> Arc<HashSet<Uuid>> {
-    Arc::clone(&afk_users.lock_recover())
-}
-
-pub fn set_afk_user(afk_users: &AfkUsers, user_id: Uuid, is_afk: bool) {
-    let mut guard = afk_users.lock_recover();
-    if guard.contains(&user_id) == is_afk {
-        return;
-    }
-    // Readers retain their snapshot Arc (`App.afk_user_ids`), so `make_mut`
-    // always clones and swaps the pointer. The render loop's Arc::ptr_eq
-    // change check (chat row cache epoch) depends on that: never mutate the
-    // set in place.
-    let users = Arc::make_mut(&mut *guard);
-    if is_afk {
-        users.insert(user_id);
-    } else {
-        users.remove(&user_id);
-    }
 }
 
 #[derive(Clone)]
@@ -185,15 +161,14 @@ pub struct State {
     pub mention_ladders: crate::app::ai::ladder::MentionLadders,
     /// Process-global `/pair` intents and shared scratchpad buffers.
     pub scratchpad_registry: crate::app::scratchpad::registry::SharedScratchpadRegistry,
-    pub afk_users: AfkUsers,
     pub username_directory: UsernameDirectory,
     /// Live 24h username effects (snapshot-swap; seeded and written by
     /// `ShopService`, resolved per session in the tick loop).
     pub flair_directory: crate::app::common::username_effect::NameFlairDirectory,
-    /// Running `/pomodoro` countdowns (snapshot-swap; written by the sessions
-    /// that own them, resolved per session in the tick loop). In-memory only:
-    /// a countdown dies with its session, so there is nothing to persist.
-    pub pomodoro_directory: crate::app::common::pomodoro::PomodoroDirectory,
+    /// Live `/status` presence (snapshot-swap; written by the sessions that
+    /// own them, resolved per session in the tick loop). In-memory only: a
+    /// status dies with its session, so there is nothing to persist.
+    pub status_directory: crate::app::common::status::StatusDirectory,
     pub crown_service: crate::app::crown::svc::CrownService,
     pub pot_service: crate::app::pot::svc::PotService,
     pub activity_feed: broadcast::Sender<ActivityEvent>,

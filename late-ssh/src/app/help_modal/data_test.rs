@@ -189,7 +189,7 @@ fn bot_context_includes_irc_access_flow() {
 fn chat_guide_lists_user_facing_slash_commands() {
     let lines = chat_help_lines(false).join("\n");
     for expected in [
-        "/brb [message]",
+        "/brb               shortcut for /status away",
         "/coffee",
         "/friend [@user]",
         "/friends",
@@ -198,6 +198,7 @@ fn chat_guide_lists_user_facing_slash_commands() {
         "/petname [name]",
         "/poll",
         "/profile [@user]",
+        "/status [word] [m] set your status",
         "/tea",
         "/upload <url>",
     ] {

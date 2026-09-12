@@ -458,7 +458,6 @@ impl Drop for ClientHandler {
         {
             metrics::add_ssh_session(-1);
             let user_id = user.id;
-            let mut user_still_afk = false;
             let mut became_offline = false;
             let mut active_users = self.state.active_users.lock_recover();
 
@@ -469,18 +468,8 @@ impl Drop for ClientHandler {
                 if active.connection_count <= 1 {
                     active_users.remove(&user_id);
                     became_offline = true;
-                    // Last connection gone: retire any running countdown so a
-                    // peer doesn't keep painting a badge for someone who left.
-                    // The timer is session-local, so there is nothing to
-                    // resume when they come back.
-                    crate::app::common::pomodoro::set_user(
-                        &self.state.pomodoro_directory,
-                        user_id,
-                        None,
-                    );
                 } else {
                     active.connection_count -= 1;
-                    user_still_afk = active.sessions.iter().any(|session| session.afk.is_some());
                 }
             }
             if became_offline {
@@ -489,7 +478,16 @@ impl Drop for ClientHandler {
                     .online_user_disconnected(user_id);
             }
             drop(active_users);
-            crate::state::set_afk_user(&self.state.afk_users, user_id, user_still_afk);
+            // A status is session-local, so this session's retires with it.
+            // The user's shared entry falls back to whatever their remaining
+            // sessions carry, and clears once none does (always, on the last
+            // connection). There is nothing to resume when they come back.
+            crate::app::common::status::publish_for_user(
+                &self.state.status_directory,
+                &self.state.active_users,
+                user_id,
+                None,
+            );
         }
 
         if !self.per_ip_incremented {
@@ -548,7 +546,7 @@ impl ClientHandler {
             token: session_token.to_string(),
             fingerprint: Some(user.fingerprint.clone()),
             peer_ip: self.peer_ip,
-            afk: None,
+            status: None,
         });
     }
 }
@@ -1032,10 +1030,9 @@ impl russh::server::Handler for ClientHandler {
             key_fingerprint,
             key_layout: device.layout,
             key_left_at: device.left_at,
-            afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
             flair_directory: Some(self.state.flair_directory.clone()),
-            pomodoro_directory: Some(self.state.pomodoro_directory.clone()),
+            status_directory: Some(self.state.status_directory.clone()),
             crown_service: Some(self.state.crown_service.clone()),
             pot_service: Some(self.state.pot_service.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),

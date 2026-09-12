@@ -65,7 +65,7 @@ pub(crate) struct ZenView<'a> {
     pub date: String,
     pub online_count: usize,
     pub friends: &'a [String],
-    pub afk: Option<&'a str>,
+    pub status: Option<crate::app::common::status::Status>,
     pub mentions_unread: i64,
     /// Daily correspondence games for the lobby tile, and whether the lobby
     /// label glows (your turn somewhere, or a result waiting).
@@ -838,11 +838,11 @@ fn draw_presence_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {
             .centered(),
         );
     }
-    if let Some(afk) = view.afk {
+    if let Some(status) = view.status {
         lines.push(Line::from(""));
         lines.push(
             Line::from(Span::styled(
-                format!("brb: {afk}"),
+                format!("{} {}", status.glyph(), status.word()),
                 Style::default().fg(theme::AMBER()),
             ))
             .centered(),

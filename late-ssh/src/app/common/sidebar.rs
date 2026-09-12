@@ -92,8 +92,6 @@ pub(crate) struct SidebarProps<'a> {
     /// Nightride metadata SSE; the dock row falls back to the station
     /// display name while this is absent.
     pub radio_now_playing: Option<&'a str>,
-    /// AFK message from /brb; None = not AFK.
-    pub afk: Option<&'a str>,
     /// Daily correspondence games: my matches, lobby activity, glow.
     pub daily: &'a crate::app::lobby::daily::state::DailyState,
     /// Unseen-challenge glow for the panel's status row.
@@ -173,12 +171,11 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
 
     let mut i = 0usize;
 
-    // Core block: presence + clock, then friends (or the AFK indicator).
+    // Core block: presence + clock, then friends.
     draw_core_block(
         frame,
         inset(layout[i]),
         props.clock_text,
-        props.afk,
         props.online_count,
         props.active_friend_names,
         props.marquee_tick,
@@ -310,13 +307,13 @@ fn visible_components(
 
 /// The pinned two-row core block at the top of the rail. Presence is chrome
 /// now, not a panel: row one is the online count (left) and the clock
-/// (right); row two is connected friends, or the AFK indicator while away.
-/// Both rows always render so the panel list below never shifts.
+/// (right); row two is connected friends. Both rows always render so the
+/// panel list below never shifts. The session's own `/status` is not here:
+/// the top border already carries it, and this row is the friends list.
 fn draw_core_block(
     frame: &mut Frame,
     area: Rect,
     clock_text: &str,
-    afk: Option<&str>,
     online_count: usize,
     active_friend_names: &[String],
     tick: usize,
@@ -375,27 +372,9 @@ fn draw_core_block(
         return;
     }
 
-    // Row 1 — AFK wins the row while away; otherwise connected friends.
-    // Blank when neither: the reserved row is what keeps chrome stable.
-    if let Some(msg) = afk {
-        let label = if msg.is_empty() {
-            "away".to_string()
-        } else {
-            format!("away · {msg}")
-        };
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled("🌙 ", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(
-                    label,
-                    Style::default()
-                        .fg(theme::AMBER())
-                        .add_modifier(Modifier::ITALIC),
-                ),
-            ])),
-            row(1),
-        );
-    } else if !active_friend_names.is_empty() {
+    // Row 1 — connected friends. Blank when there are none: the reserved
+    // row is what keeps chrome stable.
+    if !active_friend_names.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
                 friend_names_text(active_friend_names, area.width as usize, tick),

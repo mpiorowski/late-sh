@@ -424,7 +424,7 @@ with the reason.
 - Ambient presence: quiet hours, listening since, typing indicator.
 - Community texture: rotating shoutout board, wall of thanks.
 - Personalization: accent color, favorite vibe, custom tagline.
-- Cozy utilities beyond `/pomodoro`: focus playlists, now-playing shoutouts.
+- Cozy utilities beyond `/status`: focus playlists, now-playing shoutouts.
 
 ### Games
 

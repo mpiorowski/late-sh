@@ -26,6 +26,7 @@ use super::{
     help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, room_info_modal,
     room_search_modal, settings_modal, sheet_modal,
     state::App,
+    status_picker,
 };
 use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageFrame;
@@ -195,8 +196,8 @@ struct DrawContext<'a> {
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
     /// Players currently in the Lateania world (for the landing/hub card).
     lateania_online: usize,
-    /// This account's character slots, for the character-select landing.
-    lateania_slots: Vec<crate::app::door::lateania::svc::SlotSummary>,
+    /// This account's character list, for the character-select landing.
+    lateania_slots: crate::app::door::lateania::svc::SlotList,
     lateania_slot_cursor: usize,
     /// Door liveness pips, all six precomputed through
     /// `HubGame::live_screen` (the one definition the backtick cycle also
@@ -313,6 +314,7 @@ struct DrawContext<'a> {
     listen_url: &'a str,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
+    status_picker: &'a status_picker::state::StatusPickerState,
     room_info_modal_open: bool,
     room_info_modal_state: &'a room_info_modal::state::RoomInfoModalState,
     booth_modal_open: bool,
@@ -326,7 +328,7 @@ struct DrawContext<'a> {
     selected_icecast_stream: late_core::models::user::IcecastStream,
     selected_radio_station: late_core::models::user::RadioStation,
     radio_now_playing: Option<&'a str>,
-    afk: Option<&'a str>,
+    status: Option<crate::app::common::status::Status>,
     /// Humans currently connected (bots excluded) plus connected friends,
     /// for the sidebar's pinned presence rows.
     online_count: usize,
@@ -346,10 +348,11 @@ struct DrawContext<'a> {
     /// the HUD click hit test in `input.rs`.
     mentions_hud_rect: &'a std::cell::Cell<Option<Rect>>,
     voice_badge: Option<String>,
-    /// The running `/pomodoro` countdown, already rendered to `MM:SS label`.
+    /// This session's `/status`, already rendered to `MM:SS word` (a
+    /// countdown) or `glyph word` (open-ended).
     /// Formatting once per frame here keeps the HUD builder a pure function
     /// of its inputs (no clock read inside the draw path).
-    pomodoro_badge: Option<String>,
+    status_badge: Option<String>,
     home_selected: bool,
     /// The Zen pages (`app/zen`): layout state, the current room's chat
     /// (drawn at most once per frame), and the strings their status rows show.
@@ -590,10 +593,9 @@ impl App {
                         })
                     })
             });
-        let pomodoro_badge = self
-            .pomodoro
-            .as_ref()
-            .map(|timer| timer.badge(chrono::Utc::now()));
+        let status_badge = self
+            .status
+            .map(|status| status.hud_badge(chrono::Utc::now()));
         let dashboard_view = chat::ui::DashboardChatView {
             activity_ticker: self.chat.activity_ticker(),
             room: dashboard_room,
@@ -613,7 +615,6 @@ impl App {
             usernames: chat_usernames,
             countries: chat_countries,
             friend_user_ids: self.chat.friend_user_ids(),
-            afk_user_ids: self.afk_user_ids.as_ref(),
             live_user_ids: &self.chat.live_user_ids,
             message_reactions,
             message_gilds,
@@ -645,7 +646,7 @@ impl App {
             drunk_levels: &self.drunk_levels,
             name_flair: &self.name_flair,
             runner_looks: &self.runner_looks,
-            peer_pomodoros: &self.peer_pomodoros,
+            peer_statuses: &self.peer_statuses,
             name_flicker,
             translations: &self.chat.translations,
             translation_hidden: &self.chat.translation_hidden,
@@ -760,7 +761,6 @@ impl App {
             usernames: chat_usernames,
             countries: chat_countries,
             friend_user_ids: self.chat.friend_user_ids(),
-            afk_user_ids: self.afk_user_ids.as_ref(),
             live_user_ids: &self.chat.live_user_ids,
             ignored_user_ids: self.chat.ignored_user_ids(),
             sticky_unread_dm: self.chat.sticky_unread_dm,
@@ -799,7 +799,7 @@ impl App {
             drunk_levels: &self.drunk_levels,
             name_flair: &self.name_flair,
             runner_looks: &self.runner_looks,
-            peer_pomodoros: &self.peer_pomodoros,
+            peer_statuses: &self.peer_statuses,
             name_flicker,
             translations: &self.chat.translations,
             translation_hidden: &self.chat.translation_hidden,
@@ -848,7 +848,6 @@ impl App {
                     usernames: chat_usernames,
                     countries: chat_countries,
                     friend_user_ids: self.chat.friend_user_ids(),
-                    afk_user_ids: self.afk_user_ids.as_ref(),
                     live_user_ids: &self.chat.live_user_ids,
                     message_reactions,
                     message_gilds,
@@ -885,7 +884,7 @@ impl App {
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
                     name_flair: &self.name_flair,
-                    peer_pomodoros: &self.peer_pomodoros,
+                    peer_statuses: &self.peer_statuses,
                     name_flicker,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
@@ -913,7 +912,6 @@ impl App {
                     usernames: chat_usernames,
                     countries: chat_countries,
                     friend_user_ids: self.chat.friend_user_ids(),
-                    afk_user_ids: self.afk_user_ids.as_ref(),
                     live_user_ids: &self.chat.live_user_ids,
                     message_reactions,
                     message_gilds,
@@ -950,7 +948,7 @@ impl App {
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
                     name_flair: &self.name_flair,
-                    peer_pomodoros: &self.peer_pomodoros,
+                    peer_statuses: &self.peer_statuses,
                     name_flicker,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
@@ -987,7 +985,6 @@ impl App {
                     usernames: chat_usernames,
                     countries: chat_countries,
                     friend_user_ids: self.chat.friend_user_ids(),
-                    afk_user_ids: self.afk_user_ids.as_ref(),
                     live_user_ids: &self.chat.live_user_ids,
                     message_reactions,
                     message_gilds,
@@ -1041,7 +1038,7 @@ impl App {
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
                     name_flair: &self.name_flair,
-                    peer_pomodoros: &self.peer_pomodoros,
+                    peer_statuses: &self.peer_statuses,
                     name_flicker,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
@@ -1133,6 +1130,7 @@ impl App {
             || news_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
+            || self.status_picker.is_open()
             || self.booth_modal_state.is_open()
             || self.stream_modal.is_some()
             || self.chat.history_modal.is_open();
@@ -1153,6 +1151,7 @@ impl App {
             || news_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
+            || self.status_picker.is_open()
             || self.booth_modal_state.is_open()
             || self.stream_modal.is_some()
             || self.chat.history_modal.is_open();
@@ -1327,6 +1326,7 @@ impl App {
                         listen_url: &listen_url,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
+                        status_picker: &self.status_picker,
                         room_info_modal_open: self.room_info_modal_state.is_open(),
                         room_info_modal_state: &self.room_info_modal_state,
                         booth_modal_open: self.booth_modal_state.is_open(),
@@ -1340,7 +1340,7 @@ impl App {
                         selected_icecast_stream,
                         selected_radio_station,
                         radio_now_playing: radio_now_playing.as_deref(),
-                        afk: self.afk.as_deref(),
+                        status: self.status.map(|status| status.status),
                         online_count,
                         active_friend_names,
                         marquee_tick: self.marquee_tick,
@@ -1356,7 +1356,7 @@ impl App {
                         chip_balance: self.chip_balance,
                         mentions_hud_rect: &self.last_mentions_hud_rect,
                         voice_badge,
-                        pomodoro_badge,
+                        status_badge,
                         home_selected,
                         zen: &self.zen,
                         zen_chat_tiles,
@@ -1560,7 +1560,7 @@ impl App {
                 balance: Some(ctx.chip_balance),
                 unread: ctx.mentions_unread_count,
                 voice_badge: ctx.voice_badge.as_deref(),
-                pomodoro_badge: ctx.pomodoro_badge.as_deref(),
+                status_badge: ctx.status_badge.as_deref(),
                 pot: Some(ctx.pot).filter(|view| view.open),
                 border_width: area.width,
                 title_width,
@@ -1568,7 +1568,7 @@ impl App {
                 Some(hud) => {
                     // The right-aligned title's last cell sits just inside the
                     // top-right corner; the mentions segment sits `mentions_offset`
-                    // cells into the line, after the pomodoro and voice badges.
+                    // cells into the line, after the status and voice badges.
                     let total = hud.line.width() as u16;
                     let rect = (hud.mentions_width > 0).then(|| Rect {
                         x: area
@@ -1848,7 +1848,7 @@ impl App {
                     date: ctx.zen_date.clone(),
                     online_count: ctx.online_count,
                     friends: ctx.active_friend_names,
-                    afk: ctx.afk,
+                    status: ctx.status,
                     mentions_unread: ctx.mentions_unread_count,
                     daily: ctx.daily,
                     lobby_glow: ctx.lobby.glow(),
@@ -1897,7 +1897,6 @@ impl App {
                     selected_icecast_stream: ctx.selected_icecast_stream,
                     selected_radio_station: ctx.selected_radio_station,
                     radio_now_playing: ctx.radio_now_playing,
-                    afk: ctx.afk,
                     daily: ctx.daily,
                     lobby_glow: ctx.lobby.glow(),
                     online_count: ctx.online_count,
@@ -2097,6 +2096,10 @@ impl App {
             );
         }
 
+        if ctx.status_picker.is_open() {
+            status_picker::ui::draw(frame, inner, ctx.status_picker);
+        }
+
         // Drawn after the search modal: a jump too old to land in the room
         // opens history over the top of whatever was showing.
         if ctx.chat_state.history_modal.is_open() {
@@ -2167,6 +2170,7 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_ultimate_modal
         || ctx.news_modal.is_some()
         || ctx.room_search_modal_open
+        || ctx.status_picker.is_open()
         || ctx.chat_state.history_modal.is_open()
         || ctx.booth_modal_open
         || ctx.icon_picker_open
@@ -2677,7 +2681,7 @@ struct StatusHud {
     mentions_offset: u16,
 }
 
-/// Everything the status HUD needs, named: `voice_badge` and `pomodoro_badge`
+/// Everything the status HUD needs, named: `voice_badge` and `status_badge`
 /// are both `Option<&str>`, so positional arguments would let a call site swap
 /// them without a compile error. `border_width` and `title_width` come in raw
 /// rather than pre-subtracted so the fitting math below is covered by the
@@ -2686,7 +2690,7 @@ struct StatusHudInputs<'a> {
     balance: Option<i64>,
     unread: i64,
     voice_badge: Option<&'a str>,
-    pomodoro_badge: Option<&'a str>,
+    status_badge: Option<&'a str>,
     /// The open pot, `None` before the first refresh or without a pot
     /// service. Sits right before the chips so the prize reads against the
     /// viewer's own balance.
@@ -2709,7 +2713,7 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
         balance,
         unread,
         voice_badge,
-        pomodoro_badge,
+        status_badge,
         pot,
         border_width,
         title_width,
@@ -2719,7 +2723,7 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
     let spare_cols = border_width.saturating_sub(2).saturating_sub(title_width);
 
     // The three long-standing segments always render; the order of the line
-    // is pomodoro | voice | mentions | pot | chips, and the two newcomers are
+    // is status | voice | mentions | pot | chips, and the two newcomers are
     // fitted against whatever the fixed three leave, the pot last, so under a
     // tight border the pot yields before the countdown does.
     let mentions: Option<HudSegment> = (unread > 0).then(|| {
@@ -2775,15 +2779,15 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
 
     // The HUD is a right-aligned title on the same border row as the left
     // title, and ratatui paints it over anything already there: a HUD wider
-    // than `spare_cols` eats the page tabs. The countdown yields: full
-    // `MM:SS label` when it fits, bare `MM:SS` when only that does, dropped
-    // when neither does. Losing the badge is survivable because expiry still
-    // banners and notifies.
-    let pomodoro: Option<HudSegment> = pomodoro_badge.and_then(|pomodoro_badge| {
-        let time_only = pomodoro_badge
+    // than `spare_cols` eats the page tabs. The status yields: the full
+    // `MM:SS word` (or `glyph word`) when it fits, its leading `MM:SS` (or
+    // glyph) when only that does, dropped when neither does. Losing the badge
+    // is survivable because expiry still banners and notifies.
+    let status: Option<HudSegment> = status_badge.and_then(|status_badge| {
+        let time_only = status_badge
             .split_once(' ')
-            .map_or(pomodoro_badge, |(time, _)| time);
-        let text = [pomodoro_badge, time_only]
+            .map_or(status_badge, |(time, _)| time);
+        let text = [status_badge, time_only]
             .into_iter()
             .find(|text| fits(used, count, UnicodeWidthStr::width(*text) as u16))?;
         Some(vec![Span::styled(
@@ -2793,8 +2797,8 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
                 .add_modifier(Modifier::BOLD),
         )])
     });
-    if let Some(pomodoro) = &pomodoro {
-        used += hud_segment_width(pomodoro) + u16::from(count > 0);
+    if let Some(status) = &status {
+        used += hud_segment_width(status) + u16::from(count > 0);
         count += 1;
     }
 
@@ -2826,19 +2830,19 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
         ])
     });
 
-    // Mentions sit behind the pomodoro and the voice badge, so the hit test
+    // Mentions sit behind the status and the voice badge, so the hit test
     // needs how far into the line they start: every segment before them, each
     // with the divider it brings.
     let mentions_width = mentions.as_ref().map_or(0, hud_segment_width);
     let mentions_offset: u16 = match &mentions {
-        Some(_) => [&pomodoro, &voice]
+        Some(_) => [&status, &voice]
             .into_iter()
             .flatten()
             .map(|segment| hud_segment_width(segment) + 1)
             .sum(),
         None => 0,
     };
-    let segments: Vec<HudSegment> = [pomodoro, voice, mentions, pot, chips]
+    let segments: Vec<HudSegment> = [status, voice, mentions, pot, chips]
         .into_iter()
         .flatten()
         .collect();

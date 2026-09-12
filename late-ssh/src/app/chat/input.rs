@@ -1,7 +1,7 @@
-use crate::app::chat::state::PomodoroRequest;
-use crate::app::common::pomodoro::PomodoroTimer;
+use crate::app::chat::state::{StatusChange, StatusRequest};
 use crate::app::common::primitives::Banner;
 use crate::app::common::readline::ctrl_byte_to_input;
+use crate::app::common::status::{SessionStatus, Status};
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::state::App;
 use chrono::{DateTime, Utc};
@@ -185,11 +185,8 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_quit() {
         crate::app::input::trigger_global_quit(app);
     }
-    if let Some(msg) = app.chat.take_requested_brb() {
-        app.go_afk(msg);
-    }
-    if app.chat.take_sent_regular_message() && app.afk.is_some() {
-        app.return_from_afk();
+    if app.chat.take_sent_regular_message() {
+        app.clear_status_on_post();
     }
     if let Some(url) = app.chat.take_requested_audio_url() {
         app.audio.submit_trusted(url);
@@ -273,10 +270,15 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
             }
         }
     }
-    if let Some(request) = app.chat.take_requested_pomodoro() {
-        let banner = apply_pomodoro_request(&mut app.pomodoro, request, Utc::now());
-        app.publish_pomodoro();
-        app.banner = Some(banner);
+    if let Some(request) = app.chat.take_requested_status() {
+        match request {
+            StatusRequest::OpenPicker => crate::app::input::open_status_picker_globally(app),
+            StatusRequest::Apply(change) => {
+                let (status, banner) = resolve_status_change(app.status, change, Utc::now());
+                app.set_status(status);
+                app.banner = Some(banner);
+            }
+        }
     }
     if app.chat.take_requested_icon_picker() {
         crate::app::input::try_open_icon_picker(app);
@@ -312,36 +314,59 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     }
 }
 
-/// Apply a parsed `/pomodoro` command to the session's timer and produce the
-/// banner to show. Takes the timer slot rather than the whole `App`: this is a
-/// pure state transition over session-local state, with no service to call and
-/// no other field to touch, so `now` comes from the caller the same way
-/// `PomodoroTimer::badge` takes it.
-fn apply_pomodoro_request(
-    timer: &mut Option<PomodoroTimer>,
-    request: PomodoroRequest,
+/// Resolve a parsed `/status` command against the session's current status:
+/// the new status to store, and the banner to show. Takes the current status
+/// by value rather than the whole `App` because this is a pure transition
+/// over session-local state, with no service to call and no other field to
+/// touch, so `now` comes from the caller the same way `hud_badge` takes it.
+///
+/// The banner spells out the clearing rule every time. It is the one thing
+/// about statuses nobody can infer from the badge, and saying it here is what
+/// makes the typed path as teachable as the picker.
+pub(super) fn resolve_status_change(
+    current: Option<SessionStatus>,
+    change: StatusChange,
     now: DateTime<Utc>,
-) -> Banner {
-    match request {
-        PomodoroRequest::Stop => match timer.take() {
-            Some(stopped) => Banner::success(&format!("stopped {}", stopped.label)),
-            None => Banner::error("no pomodoro running, start one with /pomodoro [minutes]"),
+) -> (Option<SessionStatus>, Banner) {
+    match change {
+        StatusChange::Clear => match current {
+            Some(cleared) => (
+                None,
+                Banner::success(&format!("cleared {}", cleared.status.word())),
+            ),
+            None => (
+                None,
+                Banner::error("no status set, start one with /status [word]"),
+            ),
         },
-        PomodoroRequest::Start { minutes, label } => {
-            // A second /pomodoro replaces the running one instead of being
-            // refused: restarting a focus block is the common case, and the
-            // banner says which it was.
-            let verb = if timer.is_some() {
-                "restarted"
-            } else {
-                "started"
-            };
-            *timer = Some(PomodoroTimer {
-                label: label.clone(),
-                ends_at: now + chrono::Duration::minutes(i64::from(minutes)),
-            });
-            Banner::success(&format!("{verb} {label} for {minutes} min"))
+        StatusChange::Set { status, minutes } => {
+            let ends_at =
+                minutes.map(|minutes| now + chrono::Duration::minutes(i64::from(minutes)));
+            (
+                Some(SessionStatus { status, ends_at }),
+                Banner::success(&status_set_message(status, minutes)),
+            )
         }
+    }
+}
+
+/// What a freshly set status does next, in plain words: the banner after a
+/// set, from the command or the picker.
+pub(crate) fn status_set_message(status: Status, minutes: Option<u32>) -> String {
+    format!(
+        "{} {}, {}",
+        status.glyph(),
+        status.word(),
+        status_clear_rule(minutes)
+    )
+}
+
+/// When a status clears, the one rule nobody can infer from the badge. The
+/// banner and the picker's live hint both print this, so they cannot drift.
+pub(crate) fn status_clear_rule(minutes: Option<u32>) -> String {
+    match minutes {
+        Some(minutes) => format!("clears in {minutes}m, stays while you chat"),
+        None => "clears when you next post".to_string(),
     }
 }
 

@@ -35,8 +35,8 @@ use crate::{
         chat::news::svc::ArticleService,
         chat::notifications::svc::NotificationService,
         chat::svc::ChatService,
-        common::pomodoro::{PomodoroDirectory, PomodoroTimer},
         common::primitives::{Banner, Screen},
+        common::status::{SessionStatus, StatusDirectory},
         help_modal, hub, mod_modal, profile,
         profile::svc::ProfileService,
         profile_modal, settings_modal, sheet_modal,
@@ -394,14 +394,13 @@ pub struct SessionConfig {
     /// for a keyless session or a device with no mark yet. The bare
     /// `/summary` window; see `ChatState::device_left_at`.
     pub key_left_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub afk_users: crate::state::AfkUsers,
     pub username_directory: Option<crate::usernames::UsernameDirectory>,
     /// Live 24h username effects, shared process-wide (snapshot-swap; see
     /// `common/username_effect.rs`).
     pub flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
-    /// Running `/pomodoro` countdowns, shared process-wide (snapshot-swap; see
-    /// `common/pomodoro.rs`).
-    pub pomodoro_directory: Option<PomodoroDirectory>,
+    /// Live `/status` presence, shared process-wide (snapshot-swap; see
+    /// `common/status.rs`).
+    pub status_directory: Option<StatusDirectory>,
     /// The crown, `/crown` and `/crown take`. `None` in test harnesses that
     /// build an app without one; the glyph then simply never appears.
     pub crown_service: Option<crate::app::crown::svc::CrownService>,
@@ -548,10 +547,10 @@ pub struct App {
     pub(crate) runner_looks: crate::app::deadchannel::runner::svc::RunnerLooks,
     pub(crate) runner_looks_rx:
         tokio::sync::watch::Receiver<crate::app::deadchannel::runner::svc::RunnerLooks>,
-    /// Per-peer `/pomodoro` badges, rebuilt from the pomodoro directory on the
+    /// Per-peer `/status` badges, rebuilt from the status directory on the
     /// same ~1s cadence; chat author labels read this owned map, never the
     /// directory mutex.
-    pub(crate) peer_pomodoros: HashMap<Uuid, String>,
+    pub(crate) peer_statuses: HashMap<Uuid, String>,
     /// Human headcount and connected-friend names, recomputed on the same
     /// ~1s cadence; renderers read these owned values instead of locking the
     /// shared `active_users` map every frame.
@@ -569,7 +568,7 @@ pub struct App {
     /// every real change).
     pub(super) last_username_directory: Option<Arc<HashMap<Uuid, String>>>,
     pub(super) flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
-    pub(super) pomodoro_directory: Option<PomodoroDirectory>,
+    pub(super) status_directory: Option<StatusDirectory>,
     pub(super) crown_service: Option<crate::app::crown::svc::CrownService>,
     /// The process-shared crown holder, read on the ~1s edge and folded into
     /// `name_flair`, so no render ever queries for the glyph.
@@ -584,7 +583,6 @@ pub struct App {
     /// What the sidebar's pot panel draws, projected for this viewer.
     pub(crate) pot_view: crate::app::pot::state::PotView,
     pub(super) active_users: Option<ActiveUsers>,
-    pub(super) afk_users: crate::state::AfkUsers,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
     /// Live activity events, kept only to edge-detect friend joins for the
     /// friend-online banner; the feed itself now ships to #lounge (see
@@ -640,7 +638,6 @@ pub struct App {
 
     /// Chat
     pub(crate) chat: chat::state::ChatState,
-    pub(crate) afk_user_ids: Arc<HashSet<Uuid>>,
     pub(crate) dashboard_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) active_room_rows_cache: chat::ui::ChatRowsCache,
     /// Daily board embedded match chat; separate cache because width and
@@ -655,6 +652,8 @@ pub struct App {
     pub(crate) poll_modal_state: chat::polls::state::PollModalState,
     pub(crate) gild_modal_state: chat::gild::state::GildModalState,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
+    /// The `/status` picker overlay.
+    pub(crate) status_picker: crate::app::status_picker::state::StatusPickerState,
     pub(crate) room_info_modal_state: crate::app::room_info_modal::state::RoomInfoModalState,
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
     /// Server-authoritative audio source for the paired playback surface.
@@ -672,11 +671,6 @@ pub struct App {
 
     pub(crate) music_prefix_armed: bool,
     pub(crate) room_section_prefix_armed: bool,
-
-    /// AFK state set by /brb command. None = active.
-    pub(crate) afk: Option<String>,
-    /// True if the paired client was muted by /brb (so we can unmute on return).
-    pub(crate) afk_muted: bool,
 
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
@@ -718,6 +712,11 @@ pub struct App {
     /// Highlighted row on the Lateania character-select landing (0-based
     /// slot index). Also which slot a confirmed `d` delete targets.
     pub(crate) lateania_slot_cursor: usize,
+    /// The character-select list as of the last tick. The landing is the one
+    /// Lateania screen with no session state object to drain, so this is where
+    /// a change made elsewhere (a logout save, a delete, another connection)
+    /// is noticed and paid for with a frame.
+    pub(crate) lateania_slots_seen: crate::app::door::lateania::svc::SlotList,
     pub(crate) lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub(crate) greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
     pub(crate) darkroom_service: crate::app::door::darkroom::svc::DarkroomService,
@@ -887,12 +886,12 @@ pub struct App {
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
     /// Desktop-notification domain: producers (chat, daily, this session's
-    /// own tick-driven events like Pomodoro completion) push through cloned
+    /// own tick-driven events like a status countdown finishing) push through cloned
     /// `notifier` handles; render drains `notify_outbox` into OSC bytes.
     pub(crate) notifier: crate::app::notify::Notifier,
     pub(crate) notify_outbox: crate::app::notify::Outbox,
-    /// The running `/pomodoro` countdown, if any. `None` when idle.
-    pub(crate) pomodoro: Option<PomodoroTimer>,
+    /// This session's `/status`, if any. `None` when nothing is set.
+    pub(crate) status: Option<SessionStatus>,
 
     /// Last background color sent to the terminal via OSC 11 (if any).
     pub(crate) last_terminal_bg: Option<ratatui::style::Color>,
@@ -931,13 +930,40 @@ impl App {
         self.running
     }
 
-    /// Publish this session's countdown to the process-shared directory so
-    /// peers' chat author labels can paint it. Every place that changes
-    /// `pomodoro` calls this right after, which is also how a stop and an
-    /// expiry retire the peer badge.
-    pub(crate) fn publish_pomodoro(&self) {
-        if let Some(directory) = &self.pomodoro_directory {
-            crate::app::common::pomodoro::set_user(directory, self.user_id, self.pomodoro.as_ref());
+    /// Publish this session's status to the active-users roster and then to
+    /// the process-shared directory, so peers' chat author labels can paint
+    /// it. The roster goes first because the directory entry is rebuilt from
+    /// every session the user has open. The single write path:
+    /// every place that changes `status` goes through it, which is also how a
+    /// clear and an expiry retire the peer badge.
+    pub(crate) fn publish_status(&self) {
+        self.set_shared_session_status();
+        let Some(directory) = &self.status_directory else {
+            return;
+        };
+        match &self.active_users {
+            Some(active_users) => crate::app::common::status::publish_for_user(
+                directory,
+                active_users,
+                self.user_id,
+                self.status,
+            ),
+            None => crate::app::common::status::set_user(directory, self.user_id, self.status),
+        }
+    }
+
+    /// Set this session's status and publish it. `None` clears.
+    pub(crate) fn set_status(&mut self, status: Option<SessionStatus>) {
+        self.status = status;
+        self.publish_status();
+    }
+
+    /// Clear an open-ended status because the owner posted. A countdown is
+    /// left alone: carrying one is exactly what buys the right to keep
+    /// chatting without losing it.
+    pub(crate) fn clear_status_on_post(&mut self) {
+        if self.status.is_some_and(SessionStatus::clears_on_post) {
+            self.set_status(None);
         }
     }
 
@@ -1294,7 +1320,6 @@ impl App {
         };
 
         let active_users = config.active_users.clone();
-        let afk_users = config.afk_users.clone();
         let voice_service = config.voice_service.clone();
         let (voice_join_tx, voice_join_rx) = mpsc::unbounded_channel();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
@@ -1398,7 +1423,7 @@ impl App {
             name_flair: HashMap::new(),
             runner_looks: config.runner_looks_rx.borrow().clone(),
             runner_looks_rx: config.runner_looks_rx.clone(),
-            peer_pomodoros: HashMap::new(),
+            peer_statuses: HashMap::new(),
             online_count: active_users
                 .as_ref()
                 .map(crate::state::online_human_count)
@@ -1408,7 +1433,7 @@ impl App {
             chat_ctx_epoch: 0,
             last_username_directory: None,
             flair_directory: config.flair_directory,
-            pomodoro_directory: config.pomodoro_directory,
+            status_directory: config.status_directory,
             crown_holder_rx: config
                 .crown_service
                 .as_ref()
@@ -1429,7 +1454,6 @@ impl App {
             pot_service: config.pot_service,
             pot_view: crate::app::pot::state::PotView::default(),
             active_users: active_users.clone(),
-            afk_users: afk_users.clone(),
             username_directory: config.username_directory,
             activity_feed_rx: config.activity_feed_rx,
             last_pet_rect: std::cell::Cell::new(None),
@@ -1487,7 +1511,6 @@ impl App {
                 config.mention_ladders.clone(),
                 config.files.clone(),
             ),
-            afk_user_ids: crate::state::afk_users_snapshot(&afk_users),
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             daily_chat_rows_cache: chat::ui::ChatRowsCache::default(),
@@ -1497,6 +1520,7 @@ impl App {
             gild_modal_state: chat::gild::state::GildModalState::new(),
             room_search_modal_state:
                 crate::app::room_search_modal::state::RoomSearchModalState::default(),
+            status_picker: crate::app::status_picker::state::StatusPickerState::default(),
             room_info_modal_state: crate::app::room_info_modal::state::RoomInfoModalState::default(
             ),
             booth_modal_state: crate::app::audio::booth::state::BoothModalState::default(),
@@ -1506,8 +1530,6 @@ impl App {
             interaction_mode: config.initial_interaction_mode.unwrap_or_default(),
             music_prefix_armed: false,
             room_section_prefix_armed: false,
-            afk: None,
-            afk_muted: false,
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
                 config.user_id,
@@ -1548,6 +1570,7 @@ impl App {
             is_playing_game: false,
             door_delete_confirm: false,
             lateania_slot_cursor: 0,
+            lateania_slots_seen: crate::app::door::lateania::svc::SlotList::Loading,
             games_hub_state: crate::app::door::hub::state::State::default(),
             lateania_service: config.lateania_service,
             greendragon_service: config.greendragon_service,
@@ -1649,7 +1672,7 @@ impl App {
             terminal_image_render_state: TerminalImageRenderState::default(),
             notifier,
             notify_outbox,
-            pomodoro: None,
+            status: None,
             is_draining: config.is_draining,
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
@@ -1727,11 +1750,11 @@ impl App {
     }
 
     pub(crate) fn leave_lateania(&mut self) {
+        // Dropping the state runs its `leave_task`, and that save writes the
+        // landing's row for this character itself. Reading the list here (as
+        // this used to) only raced the save: the query won every time, so a
+        // character created this session read as an empty slot.
         self.lateania_state = None;
-        // Refresh the landing's slot list so a level/class change from the
-        // adventure just left shows up without needing to leave the screen.
-        self.lateania_service
-            .character_slots_task(self.user_id, self.repaint_signal.clone());
     }
 
     /// A backtick detach hopped out of the Lateania world recently enough
@@ -2259,11 +2282,13 @@ impl App {
         if self.screen == Screen::Artboard {
             self.enter_dartboard();
         }
-        if self.screen == Screen::Lateania {
-            // Refresh the character-select landing's slot list; the landing
-            // itself only shows once an explicit Enter joins a slot.
+        // The Games hub draws this account's character list on the Lateania
+        // card and the landing draws it in full: read it from the database the
+        // first time either is opened (and retry there if that read failed).
+        // Every change after that rides the write that made it.
+        if matches!(self.screen, Screen::Lateania | Screen::Games) {
             self.lateania_service
-                .character_slots_task(self.user_id, self.repaint_signal.clone());
+                .fill_slots_task(self.user_id, self.repaint_signal.clone());
         }
         if self.screen == Screen::Rebels {
             self.enter_rebels();
@@ -2791,51 +2816,23 @@ impl App {
         });
     }
 
-    fn set_shared_session_afk(&self, message: Option<String>) {
-        let requested_afk = message.is_some();
-        let mut shared_user_afk = requested_afk;
-        if let Some(active_users) = &self.active_users {
-            let mut active_users = active_users.lock_recover();
-            if let Some(active) = active_users.get_mut(&self.user_id) {
-                let mut session_updated = false;
-                if let Some(session) = active
-                    .sessions
-                    .iter_mut()
-                    .find(|session| session.token == self.session_token)
-                {
-                    session.afk = message;
-                    session_updated = true;
-                }
-                shared_user_afk = active.sessions.iter().any(|session| session.afk.is_some())
-                    || (requested_afk && !session_updated);
-            }
-        }
-        crate::state::set_afk_user(&self.afk_users, self.user_id, shared_user_afk);
-    }
-
-    /// Enter AFK mode: store the message, publish it, and mute paired audio if not already muted.
-    pub fn go_afk(&mut self, message: String) {
-        let already_muted = self.paired_client_state().is_some_and(|s| s.muted);
-        if !already_muted && self.toggle_paired_client_mute() {
-            self.afk_muted = true;
-        }
-        self.afk = Some(message.clone());
-        self.set_shared_session_afk(Some(message));
-    }
-
-    /// Return from AFK: clear AFK state, unmute if we were the one who muted.
-    pub fn return_from_afk(&mut self) {
-        self.afk = None;
-        self.set_shared_session_afk(None);
-        if self.afk_muted {
-            let still_muted = self.paired_client_state().is_some_and(|state| state.muted);
-            if still_muted {
-                if self.toggle_paired_client_mute() {
-                    self.afk_muted = false;
-                }
-            } else {
-                self.afk_muted = false;
-            }
+    /// Mirror this session's status onto the active-users roster. The
+    /// directory's per-user entry is rebuilt from these copies, which is how a
+    /// clear or a disconnect here falls back to another session's status.
+    fn set_shared_session_status(&self) {
+        let Some(active_users) = &self.active_users else {
+            return;
+        };
+        let mut active_users = active_users.lock_recover();
+        let Some(active) = active_users.get_mut(&self.user_id) else {
+            return;
+        };
+        if let Some(session) = active
+            .sessions
+            .iter_mut()
+            .find(|session| session.token == self.session_token)
+        {
+            session.status = self.status;
         }
     }
 

@@ -56,7 +56,6 @@ const CHAT_COMPOSER_GAP_HEIGHT: u16 = 2;
 const MIN_POLL_QUESTION_CELLS: usize = 12;
 const AUTHOR_BADGE_SEPARATOR: &str = " ";
 const FRIEND_BADGE: &str = "★";
-const AFK_BADGE: &str = "🌙";
 /// Presence tag beside an author whose stream is on air right now.
 const LIVE_BADGE: &str = "▶LIVE";
 
@@ -106,7 +105,6 @@ pub struct DashboardChatView<'a> {
     pub usernames: &'a UsernameLookup<'a>,
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
-    pub afk_user_ids: &'a HashSet<Uuid>,
     /// Users whose stream is on air; painted as the LIVE presence tag.
     pub live_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
@@ -139,9 +137,9 @@ pub struct DashboardChatView<'a> {
     /// Every runner's look (`app/deadchannel/runner`), for the portrait
     /// gutter beside messages; consulted only when `room` is #deadchannel.
     pub runner_looks: &'a HashMap<Uuid, crate::app::deadchannel::runner::state::Look>,
-    /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
-    /// `tick.rs`); painted as a presence badge after AFK.
-    pub peer_pomodoros: &'a HashMap<Uuid, String>,
+    /// Per-peer `/status` badges (resolved once a second in `tick.rs`);
+    /// painted as the trailing presence badge.
+    pub peer_statuses: &'a HashMap<Uuid, String>,
     /// Stage-2 name-flicker hit this frame (first contact,
     /// `app/deadchannel/haunt`): the message whose author label is
     /// corrupted, plus its burst seed.
@@ -1198,7 +1196,6 @@ pub fn draw_dashboard_chat_card(
             ChatRowsContext {
                 versions: view.rows_versions,
                 current_user_id: view.current_user_id,
-                afk_user_ids: view.afk_user_ids,
                 live_user_ids: view.live_user_ids,
                 show_flag_fallback: view.show_flag_fallback,
                 usernames: view.usernames,
@@ -1213,7 +1210,7 @@ pub fn draw_dashboard_chat_card(
                 dividers: view.dividers,
                 drunk_levels: view.drunk_levels,
                 name_flair: view.name_flair,
-                peer_pomodoros: view.peer_pomodoros,
+                peer_statuses: view.peer_statuses,
                 name_flicker: view.name_flicker,
                 translations: view.translations,
                 translation_hidden: view.translation_hidden,
@@ -1293,7 +1290,6 @@ pub fn draw_dashboard_chat_card(
 struct ChatRowsContext<'a> {
     versions: ChatRowsVersions,
     current_user_id: Uuid,
-    afk_user_ids: &'a HashSet<Uuid>,
     /// Users whose stream is on air; painted as the LIVE presence tag.
     live_user_ids: &'a HashSet<Uuid>,
     show_flag_fallback: bool,
@@ -1311,7 +1307,7 @@ struct ChatRowsContext<'a> {
     drunk_levels: &'a HashMap<Uuid, u8>,
     /// Resolved 24h username-effect styles per author.
     name_flair: &'a HashMap<Uuid, ResolvedName>,
-    peer_pomodoros: &'a HashMap<Uuid, String>,
+    peer_statuses: &'a HashMap<Uuid, String>,
     name_flicker: Option<(Uuid, u64)>,
     translations: &'a HashMap<Uuid, TranslationDisplay>,
     translation_hidden: &'a HashSet<Uuid>,
@@ -1727,17 +1723,14 @@ fn ensure_chat_rows_cache(
             .map(String::as_str)
             .filter(|s| !s.is_empty());
         // Presence badges trail every earned badge: the LIVE stream tag
-        // first (an invitation, the loudest of the three), then AFK, then a
-        // running `/pomodoro` countdown (minutes only; the label never
-        // leaves its owner's session).
+        // first (an invitation, the louder of the two), then the author's
+        // `/status`, which carries `away` as one of its variants and so is
+        // the only away marker there is.
         let mut presence_badges: Vec<&str> = Vec::new();
         if ctx.live_user_ids.contains(&msg.user_id) {
             presence_badges.push(LIVE_BADGE);
         }
-        if ctx.afk_user_ids.contains(&msg.user_id) {
-            presence_badges.push(AFK_BADGE);
-        }
-        if let Some(badge) = ctx.peer_pomodoros.get(&msg.user_id) {
+        if let Some(badge) = ctx.peer_statuses.get(&msg.user_id) {
             presence_badges.push(badge);
         }
         let flair = ctx.name_flair.get(&msg.user_id);
@@ -2975,7 +2968,6 @@ pub struct ChatRenderInput<'a> {
     pub composer: &'a TextArea<'static>,
     pub composing: bool,
     pub current_user_id: Uuid,
-    pub afk_user_ids: &'a HashSet<Uuid>,
     /// Users whose stream is on air; painted as the LIVE presence tag.
     pub live_user_ids: &'a HashSet<Uuid>,
     pub ignored_user_ids: &'a HashSet<Uuid>,
@@ -2999,9 +2991,9 @@ pub struct ChatRenderInput<'a> {
     /// Every runner's look (`app/deadchannel/runner`), for the portrait
     /// gutter beside messages; consulted only when `room` is #deadchannel.
     pub runner_looks: &'a HashMap<Uuid, crate::app::deadchannel::runner::state::Look>,
-    /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
-    /// `tick.rs`); painted as a presence badge after AFK.
-    pub peer_pomodoros: &'a HashMap<Uuid, String>,
+    /// Per-peer `/status` badges (resolved once a second in `tick.rs`);
+    /// painted as the trailing presence badge.
+    pub peer_statuses: &'a HashMap<Uuid, String>,
     /// Stage-2 name-flicker hit this frame (first contact,
     /// `app/deadchannel/haunt`): the message whose author label is
     /// corrupted, plus its burst seed.
@@ -3129,7 +3121,6 @@ pub struct EmbeddedRoomChatView<'a> {
     pub usernames: &'a UsernameLookup<'a>,
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
-    pub afk_user_ids: &'a HashSet<Uuid>,
     /// Users whose stream is on air; painted as the LIVE presence tag.
     pub live_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
@@ -3164,9 +3155,9 @@ pub struct EmbeddedRoomChatView<'a> {
     /// Resolved 24h username-effect styles per author (see
     /// `common/username_effect.rs`); fg painted over the bare name only.
     pub name_flair: &'a HashMap<Uuid, ResolvedName>,
-    /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
-    /// `tick.rs`); painted as a presence badge after AFK.
-    pub peer_pomodoros: &'a HashMap<Uuid, String>,
+    /// Per-peer `/status` badges (resolved once a second in `tick.rs`);
+    /// painted as the trailing presence badge.
+    pub peer_statuses: &'a HashMap<Uuid, String>,
     /// Stage-2 name-flicker hit this frame (first contact,
     /// `app/deadchannel/haunt`): the message whose author label is
     /// corrupted, plus its burst seed.
@@ -3254,7 +3245,6 @@ pub fn draw_embedded_room_chat(
         ChatRowsContext {
             versions: view.rows_versions,
             current_user_id: view.current_user_id,
-            afk_user_ids: view.afk_user_ids,
             live_user_ids: view.live_user_ids,
             show_flag_fallback: view.show_flag_fallback,
             usernames: view.usernames,
@@ -3269,7 +3259,7 @@ pub fn draw_embedded_room_chat(
             dividers: view.dividers,
             drunk_levels: view.drunk_levels,
             name_flair: view.name_flair,
-            peer_pomodoros: view.peer_pomodoros,
+            peer_statuses: view.peer_statuses,
             name_flicker: view.name_flicker,
             translations: view.translations,
             translation_hidden: view.translation_hidden,
@@ -5127,7 +5117,6 @@ fn draw_selected_content(
                         app_ctx_epoch: view.app_ctx_epoch,
                     },
                     current_user_id,
-                    afk_user_ids: view.afk_user_ids,
                     live_user_ids: view.live_user_ids,
                     show_flag_fallback: view.show_flag_fallback,
                     usernames: view.usernames,
@@ -5145,7 +5134,7 @@ fn draw_selected_content(
                     },
                     drunk_levels: view.drunk_levels,
                     name_flair: view.name_flair,
-                    peer_pomodoros: view.peer_pomodoros,
+                    peer_statuses: view.peer_statuses,
                     name_flicker: view.name_flicker,
                     translations: view.translations,
                     translation_hidden: view.translation_hidden,

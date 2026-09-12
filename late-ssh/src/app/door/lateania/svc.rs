@@ -357,9 +357,11 @@ pub struct LateaniaService {
     /// a different slot would otherwise redirect the live character's saves on
     /// top of the character saved there.
     live_slot: Arc<StdMutex<HashMap<Uuid, i16>>>,
-    /// Cached slot summaries for the character-select landing, refreshed by
-    /// `character_slots_task` and read synchronously by the render path.
-    slot_summaries: Arc<StdMutex<HashMap<Uuid, Vec<SlotSummary>>>>,
+    /// This account's character-select list: `SlotList::Loading` until the
+    /// first database read lands, then kept current by the writes that change
+    /// it (`persist`, `delete_character_task`). Read synchronously by the
+    /// render path, which cannot await a query.
+    slot_lists: Arc<StdMutex<HashMap<Uuid, SlotList>>>,
 }
 
 // ---- Snapshot (what sessions render) -------------------------------------
@@ -691,6 +693,18 @@ impl SlotSummary {
             level: saved.level,
         }
     }
+}
+
+/// The account's character-select rows, or the fact that they have not been
+/// read yet. Two different things the landing used to draw the same way: an
+/// unread list of five empty rows invited you to start a new character on top
+/// of one it simply had not heard about.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SlotList {
+    /// No database read has landed for this account yet.
+    Loading,
+    /// Every slot, in slot order.
+    Ready(Vec<SlotSummary>),
 }
 
 /// One lookable thing in the current room, as shown in the Examine panel.
@@ -1263,7 +1277,7 @@ impl LateaniaService {
             character_reset_versions: Arc::new(StdMutex::new(HashMap::new())),
             active_slot: Arc::new(StdMutex::new(HashMap::new())),
             live_slot: Arc::new(StdMutex::new(HashMap::new())),
-            slot_summaries: Arc::new(StdMutex::new(HashMap::new())),
+            slot_lists: Arc::new(StdMutex::new(HashMap::new())),
         };
         // Build the overhead map's coordinate field and POI index now. Both are
         // lazy statics costing a world-gen apiece, and their first caller is
@@ -1361,23 +1375,74 @@ impl LateaniaService {
         self.active_slot.lock_recover().insert(user_id, slot);
     }
 
-    /// Cached slot summaries for the character-select landing; empty until
-    /// `character_slots_task` resolves at least once (the landing then just
-    /// shows every slot as empty for a frame or two).
-    pub fn character_slots(&self, user_id: Uuid) -> Vec<SlotSummary> {
-        self.slot_summaries
+    /// The account's character-select list as the landing draws it: the stored
+    /// rows, with anything fresher than the database laid over them. A save
+    /// staged but not yet written (`prepared_saves`) is newer than the row on
+    /// disk, and a character standing in the world is newer still, so a
+    /// character created minutes before its first save is never drawn as an
+    /// empty slot.
+    pub fn character_slots(&self, user_id: Uuid) -> SlotList {
+        let stored = self
+            .slot_lists
             .lock_recover()
             .get(&user_id)
             .cloned()
-            .unwrap_or_else(|| (0..CHARACTER_SLOTS).map(SlotSummary::empty).collect())
+            .unwrap_or(SlotList::Loading);
+        let SlotList::Ready(mut rows) = stored else {
+            return SlotList::Loading;
+        };
+        for staged in self.staged_summaries(user_id) {
+            rows[staged.slot as usize] = staged;
+        }
+        if let Some(slot) = self.live_slot(user_id)
+            && let Some(live) = self.live_summary(user_id, slot)
+        {
+            rows[slot as usize] = live;
+        }
+        SlotList::Ready(rows)
     }
 
-    /// Refresh the cached slot summaries for the landing. Safe to call often;
-    /// it's a handful of small-blob reads, not the world lock. The render loop
-    /// only paints on input or a reported change, so the task wakes it once
-    /// the list lands; without that the landing shows the stale list (five
-    /// empty slots, or a character just deleted) until the next keypress.
-    pub fn character_slots_task(&self, user_id: Uuid, repaint: Option<Arc<RenderSignal>>) {
+    /// Rows for this account's saves that are staged but not yet written.
+    /// `prepared_saves` is cleared only after the write lands, so an entry
+    /// here is always at least as new as the row a query would return.
+    fn staged_summaries(&self, user_id: Uuid) -> Vec<SlotSummary> {
+        self.prepared_saves
+            .lock_recover()
+            .iter()
+            .filter(|((uid, _), _)| *uid == user_id)
+            .map(|((_, slot), (_, saved))| SlotSummary::from_saved(*slot, saved))
+            .collect()
+    }
+
+    /// The live character's row, read straight off the world snapshot. `None`
+    /// until it has a class: an unclassed character is not a character yet,
+    /// and `export_saved` refuses to persist one.
+    fn live_summary(&self, user_id: Uuid, slot: i16) -> Option<SlotSummary> {
+        let snapshot = self.snapshot_rx.borrow();
+        let player = snapshot.players.get(&user_id)?;
+        match player.joined && player.classed {
+            false => None,
+            true => Some(SlotSummary {
+                slot,
+                occupied: true,
+                class: Class::from_key(&player.class_key),
+                level: player.level,
+            }),
+        }
+    }
+
+    /// Fill the account's character-select list from the database, once.
+    ///
+    /// Only an unread list is ever filled this way: after the first read every
+    /// change to the list rides the write that made the change, so a query
+    /// landing late can never walk a fresher row backwards. That is also why
+    /// leaving the world no longer kicks a refresh: the old one raced the
+    /// logout save it was trying to show, and lost, so a character created
+    /// that session read as an empty slot.
+    pub fn fill_slots_task(&self, user_id: Uuid, repaint: Option<Arc<RenderSignal>>) {
+        if !self.slots_unread(user_id) {
+            return;
+        }
         let svc = self.clone();
         tokio::spawn(async move {
             let Ok(client) = svc.db.get().await else {
@@ -1400,11 +1465,41 @@ impl LateaniaService {
                     None => SlotSummary::empty(slot),
                 })
                 .collect();
-            svc.slot_summaries.lock_recover().insert(user_id, summaries);
+            // Checked again after the await: a write-through that landed
+            // while this query was out is the newer truth, and this read must
+            // not replace it.
+            if !svc.slots_unread(user_id) {
+                return;
+            }
+            svc.slot_lists
+                .lock_recover()
+                .insert(user_id, SlotList::Ready(summaries));
+            // `App::tick` notices a changed list within one idle tick; this
+            // wake is what makes the landing's first paint immediate.
             if let Some(sig) = &repaint {
                 sig.wake();
             }
         });
+    }
+
+    /// Whether this account's list still has to be read from the database.
+    fn slots_unread(&self, user_id: Uuid) -> bool {
+        !matches!(
+            self.slot_lists.lock_recover().get(&user_id),
+            Some(SlotList::Ready(_))
+        )
+    }
+
+    /// Write one slot's row from a character we just wrote to the database, so
+    /// nothing re-reads it to learn about a change we made ourselves. An
+    /// unread list stays unread: its other rows are still unknown, and the
+    /// fill that reads them lays this slot's staged save over them anyway.
+    fn publish_slot(&self, user_id: Uuid, slot: i16, summary: SlotSummary) {
+        let mut lists = self.slot_lists.lock_recover();
+        let Some(SlotList::Ready(rows)) = lists.get_mut(&user_id) else {
+            return;
+        };
+        rows[slot as usize] = summary;
     }
 
     // ---- Commands (fire-and-forget, *_task convention) -------------------
@@ -1716,7 +1811,17 @@ impl LateaniaService {
                 match MudCharacter::save(&client, save.user_id, save.slot, save.saved.to_json())
                     .await
                 {
-                    Ok(()) => self.clear_prepared_save(&save),
+                    // The landing's row is written by the save that changed
+                    // it, before the staged save it supersedes is cleared, so
+                    // there is no instant where neither carries the new row.
+                    Ok(()) => {
+                        self.publish_slot(
+                            save.user_id,
+                            save.slot,
+                            SlotSummary::from_saved(save.slot, &save.saved),
+                        );
+                        self.clear_prepared_save(&save);
+                    }
                     Err(error) => {
                         tracing::warn!(user_id = %save.user_id, slot = save.slot, ?error, "failed to save mud character");
                     }
@@ -2089,18 +2194,28 @@ impl LateaniaService {
 
             let lock = svc.persist_lock(user_id, slot);
             let _guard = lock.lock().await;
+            // Dropped before the delete, not after: a staged save left behind
+            // would lay the deleted character back over the emptied row.
+            svc.prepared_saves.lock_recover().remove(&(user_id, slot));
+            // Same write-through as a save, and only when the delete actually
+            // landed: a failed delete leaves the character on the list, which
+            // is the truth.
             match svc.db.get().await {
-                Ok(client) => {
-                    if let Err(error) = MudCharacter::delete_slot(&client, user_id, slot).await {
+                Ok(client) => match MudCharacter::delete_slot(&client, user_id, slot).await {
+                    Ok(()) => {
+                        svc.publish_slot(user_id, slot, SlotSummary::empty(slot));
+                        if let Some(sig) = &repaint {
+                            sig.wake();
+                        }
+                    }
+                    Err(error) => {
                         tracing::warn!(%user_id, slot, ?error, "failed to delete mud character");
                     }
-                }
+                },
                 Err(error) => {
                     tracing::warn!(%user_id, slot, ?error, "no db client for mud character delete");
                 }
             }
-            svc.prepared_saves.lock_recover().remove(&(user_id, slot));
-            svc.character_slots_task(user_id, repaint);
             svc.finish_character_reset(user_id, slot);
         });
     }

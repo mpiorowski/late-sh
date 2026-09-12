@@ -3,6 +3,7 @@ use super::{
     chat, dashboard, help_modal, hub, icon_picker, mod_modal, profile_modal, quit_confirm,
     room_info_modal, room_search_modal, settings_modal, sheet_modal,
     state::{App, IconPickerTarget},
+    status_picker,
 };
 use late_core::models::user::{RightSidebarMode, RoomListMode};
 
@@ -841,6 +842,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
 
     if app.room_search_modal_state.is_open() {
         room_search_modal::input::handle_input(app, event);
+        return;
+    }
+
+    if app.status_picker.is_open() {
+        status_picker::input::handle_input(app, event);
         return;
     }
 
@@ -3294,9 +3300,9 @@ fn clear_prefix_arms(app: &mut App) {
     app.room_section_prefix_armed = false;
 }
 
-/// The `Ctrl+/` room picker, also behind `/picker` for terminals that
-/// swallow the chord (Ctrl+/ and Ctrl+_ are one byte, and some keep it).
-pub(crate) fn open_room_search_modal_globally(app: &mut App) {
+/// Everything a full-screen modal has to close before it opens, so it never
+/// lands behind an overlay that is already up.
+fn close_overlays_for_modal(app: &mut App) {
     clear_prefix_arms(app);
     app.zen.close_kind_picker();
     app.show_help = false;
@@ -3317,6 +3323,19 @@ pub(crate) fn open_room_search_modal_globally(app: &mut App) {
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
     app.chat.message_search.clear();
+}
+
+/// Open the `/status` picker.
+pub(crate) fn open_status_picker_globally(app: &mut App) {
+    let current = app.status;
+    close_overlays_for_modal(app);
+    app.status_picker.open(current);
+}
+
+/// The `Ctrl+/` room picker, also behind `/picker` for terminals that
+/// swallow the chord (Ctrl+/ and Ctrl+_ are one byte, and some keep it).
+pub(crate) fn open_room_search_modal_globally(app: &mut App) {
+    close_overlays_for_modal(app);
     app.room_search_modal_state.open();
 }
 

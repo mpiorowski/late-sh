@@ -31,8 +31,8 @@ pub struct HubView<'a> {
     pub codekeep_enabled: bool,
     /// Players currently in the Lateania world, shown on its landing card.
     pub lateania_online: usize,
-    /// This account's character slots, for the landing card's select list.
-    pub lateania_slots: Vec<crate::app::door::lateania::svc::SlotSummary>,
+    /// This account's character list, for the landing card's select list.
+    pub lateania_slots: crate::app::door::lateania::svc::SlotList,
     pub lateania_slot_cursor: usize,
     /// Lateania's backtick-detach recency window is live: the sidebar marks
     /// it as a game in progress (a hop or Enter re-joins the character).
