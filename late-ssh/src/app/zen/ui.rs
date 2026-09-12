@@ -212,7 +212,7 @@ fn tile_keys(kind: TileKind, view: &ZenView<'_>) -> &'static [(&'static str, &'s
         TileKind::Aquarium => &[],
         TileKind::Pet if view.pet_strip.is_some() => &[("click", "pet")],
         TileKind::Pet => &[],
-        TileKind::Chat => &[("[ ]", "room"), ("i", "write")],
+        TileKind::Chat => &[("[ ] ctrl+/", "room"), ("i", "write")],
         TileKind::Music => &[
             ("m", "mute"),
             ("-=", "vol"),

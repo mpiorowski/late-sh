@@ -932,6 +932,8 @@ pub struct ChatState {
     requested_pair: Option<PairRequest>,
     requested_pomodoro: Option<PomodoroRequest>,
     requested_icon_picker: bool,
+    /// Set by `/picker`; `App` opens the Ctrl+/ room picker.
+    requested_room_picker: bool,
     /// Set by /search [query]; consumed by `App`, which opens the Ctrl+/
     /// modal pre-filled with `?query`.
     requested_message_search: Option<String>,
@@ -1277,6 +1279,7 @@ impl ChatState {
             requested_pair: None,
             requested_pomodoro: None,
             requested_icon_picker: false,
+            requested_room_picker: false,
             requested_message_search: None,
             requested_petname: None,
             requested_open_profile: None,
@@ -2006,6 +2009,10 @@ impl ChatState {
 
     pub fn take_requested_icon_picker(&mut self) -> bool {
         std::mem::take(&mut self.requested_icon_picker)
+    }
+
+    pub fn take_requested_room_picker(&mut self) -> bool {
+        std::mem::take(&mut self.requested_room_picker)
     }
 
     pub(crate) fn take_requested_message_search(&mut self) -> Option<String> {
@@ -3566,6 +3573,12 @@ impl ChatState {
         if body.trim() == "/icons" {
             self.clear_composer_after_submit();
             self.requested_icon_picker = true;
+            return None;
+        }
+
+        if body.trim() == "/picker" {
+            self.clear_composer_after_submit();
+            self.requested_room_picker = true;
             return None;
         }
 

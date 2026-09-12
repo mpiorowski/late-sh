@@ -2950,3 +2950,70 @@ async fn zen_every_chat_tile_keeps_its_composer_whatever_is_focused() {
         "the composers stay put when the focus walks; frame={frame:?}"
     );
 }
+
+#[tokio::test]
+async fn zen_room_picker_binds_the_focused_chat_tile_and_slash_picker_opens_it() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::zen::state::TileKind;
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "zen-picker-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    let quiet = ChatRoom::get_or_create_public_room(&client, "zen-picked")
+        .await
+        .expect("second room");
+    ChatRoomMember::join(&client, quiet.id, viewer.id)
+        .await
+        .expect("join second room");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-picker-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "zen-picked").await;
+    let home_selection = app.chat.selected_room_id;
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "Esc back").await;
+    assert_eq!(app.zen.focused_kind(), Some(TileKind::Chat));
+    assert_eq!(
+        app.zen.focused_chat_room(),
+        Some(None),
+        "the default chat tile follows Home's selection"
+    );
+
+    // `/picker` from the tile's composer opens the same modal as Ctrl+/.
+    app.handle_input(b"i/picker\r");
+    assert!(
+        app.room_search_modal_state.is_open(),
+        "/picker opens the room picker"
+    );
+
+    // A room picked with a chat tile focused binds that tile, like [ ]:
+    // the page stays up and Home's selection is untouched.
+    app.handle_input(b"zen-picked\r");
+    assert!(!app.room_search_modal_state.is_open(), "the pick closes the picker");
+    assert_eq!(app.screen, Screen::Zen, "the pick stays on Zen");
+    assert_eq!(
+        app.zen.focused_chat_room(),
+        Some(Some(quiet.id)),
+        "the focused chat tile is bound to the picked room"
+    );
+    assert_eq!(app.zen_chat_room_id(), Some(quiet.id));
+    assert_eq!(
+        app.chat.selected_room_id, home_selection,
+        "Home's selection does not move"
+    );
+
+    // With no chat tile focused the pick moves Home's selection as before.
+    app.handle_input(b"\x1b[D");
+    assert_ne!(app.zen.focused_kind(), Some(TileKind::Chat));
+    app.handle_input(b"\x1f");
+    assert!(app.room_search_modal_state.is_open(), "Ctrl+/ opens the picker");
+    app.handle_input(b"zen-picked\r");
+    assert_eq!(app.screen, Screen::Zen);
+    assert_eq!(app.chat.selected_room_id, Some(quiet.id));
+}

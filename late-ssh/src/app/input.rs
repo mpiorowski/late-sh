@@ -3290,7 +3290,9 @@ fn clear_prefix_arms(app: &mut App) {
     app.room_section_prefix_armed = false;
 }
 
-fn open_room_search_modal_globally(app: &mut App) {
+/// The `Ctrl+/` room picker, also behind `/picker` for terminals that
+/// swallow the chord (Ctrl+/ and Ctrl+_ are one byte, and some keep it).
+pub(crate) fn open_room_search_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;

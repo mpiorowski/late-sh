@@ -281,6 +281,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_icon_picker() {
         crate::app::input::try_open_icon_picker(app);
     }
+    if app.chat.take_requested_room_picker() {
+        crate::app::input::open_room_search_modal_globally(app);
+    }
     if let Some(query) = app.chat.take_requested_message_search() {
         crate::app::input::open_message_search_modal_globally(app, &query);
     }

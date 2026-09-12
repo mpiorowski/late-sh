@@ -220,9 +220,9 @@ pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
     - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels), 4 Artboard (shared ASCII canvas), 5 Profiles (the people: their projects and open-to-work cards), 6 Leaderboards (every board, monthly and all-time).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
-    - Ctrl+F opens Zen from anywhere and hands you back with Esc or the same chord: Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: Tab and the arrows focus, space picks a tile's kind, S splits, X closes, < > change width and { } height, r flips, z zooms, b g t restyle borders, gaps, and titles, R resets, ? opens the Zen guide, the layout is saved per account; each tile names its own keys on the right of its title; up to ten chat tiles each bound to a room ([ ] rebind the focused one, i or Enter write in it, j k select in it; the focused chat is the active one, the others watch), w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it, and it reads the rest of your session itself).\n\
+    - Ctrl+F opens Zen from anywhere and hands you back with Esc or the same chord: Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: Tab and the arrows focus, space picks a tile's kind, S splits, X closes, < > change width and { } height, r flips, z zooms, b g t restyle borders, gaps, and titles, R resets, ? opens the Zen guide, the layout is saved per account; each tile names its own keys on the right of its title; up to ten chat tiles each bound to a room ([ ] rebind the focused one, Ctrl+/ or /picker picks its room from the list, i or Enter write in it, j k select in it; the focused chat is the active one, the others watch), w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it, and it reads the rest of your session itself).\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Typing /shop into the composer opens the Shop. When a terminal swallows a chord, the composer has a typed fallback that does the same thing: /settings (Ctrl+O), /lobby (Ctrl+G), /zen (Ctrl+F), /redraw (Ctrl+L), /guide (?).\n\
-    - Ctrl+/ opens jump search across rooms and DMs; typing ?query searches messages.\n\
+    - Ctrl+/ opens jump search across rooms and DMs (/picker types it); typing ?query searches messages.\n\
     - Home's room rail also holds RSS, News, Cyberspace, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"N unread mentions\" counter in the top-right corner.\n\
     - A DM with unread messages jumps to an \"unread dms\" group directly under core in that rail, so nobody has to scroll to the bottom to find it; it drops back down to \"dms\" once it has been read and you move on.\n\
     - In the Clubhouse: arrows/hjkl walk, i talks (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark.\n\
@@ -573,6 +573,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /zen               open / close Zen (same as Ctrl+F)",
         "  /redraw            repaint the screen (same as Ctrl+L)",
         "  /icons             open emoji / nerd font picker",
+        "  /picker            open the room picker (same as Ctrl+/)",
         "  /petname [name]    show or set your pet's name",
         "  /brb [message]     show away badge and mute paired audio",
         "  /coffee            post a coffee cup",
@@ -636,7 +637,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /shop              open the Shop",
         "  /aquarium feed     feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the tank lives on the Zen page (Ctrl+F)",
         "  Sprout             comes up on the tank floor every 14 days, fed or not; cut it on its Shop row (Companions, -) within 7 days, or it roots as a plant; plants never die",
-        "  Ctrl+/             jump to a room or DM; type ?query to search messages",
+        "  Ctrl+/             jump to a room or DM; type ?query to search messages (/picker types it)",
         "  ?                  open this guide; Pair and terminal-specific tabs live here",
         "",
         "Messages",
@@ -1372,6 +1373,7 @@ fn zen_help_lines() -> Vec<String> {
         "Chat tiles",
         "  A page holds up to ten chat tiles, each bound to a room. The focused one is the active chat: it has the composer and the selection, and reading it marks the room read. The others watch their rooms and keep their unread counts until you focus them. Opening the page for the first time focuses the first chat tile; a click focuses any tile.",
         "  [ ]               bind the focused chat tile to the previous or next joined room",
+        "  Ctrl+/            pick the focused chat tile's room from the picker (/picker too)",
         "  i / Enter         write in the focused chat tile's room",
         "  j / k             select messages in the focused chat tile",
         "",

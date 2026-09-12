@@ -222,12 +222,22 @@ fn cycle_room(app: &mut App, delta: isize) {
         .and_then(|id| ids.iter().position(|room_id| *room_id == id))
         .unwrap_or(0);
     let next = (current as isize + delta).rem_euclid(ids.len() as isize) as usize;
-    if app.zen.bind_focused_chat_room(Some(ids[next])) {
-        app.chat.reset_composer();
-        app.chat.clear_message_selection();
-        app.sync_visible_chat_room();
-        app.mark_zen_layout_dirty();
+    bind_focused_chat_to_room(app, ids[next]);
+}
+
+/// Bind the focused chat tile to `room_id` (a layout edit, saved) and drop
+/// the draft and selection that belonged to its old room. `false` when the
+/// focus is not on a chat tile, so the caller can fall back to Home's
+/// selection; the `Ctrl+/` picker and `[` `]` both land here.
+pub(crate) fn bind_focused_chat_to_room(app: &mut App, room_id: Uuid) -> bool {
+    if !app.zen.bind_focused_chat_room(Some(room_id)) {
+        return false;
     }
+    app.chat.reset_composer();
+    app.chat.clear_message_selection();
+    app.sync_visible_chat_room();
+    app.mark_zen_layout_dirty();
+    true
 }
 
 fn event_byte(event: &ParsedInput) -> Option<u8> {
