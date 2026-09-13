@@ -3520,7 +3520,10 @@ fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
         }
         // The Zen stop teaches the chord itself, so it runs the same toggle
         // Ctrl+F runs anywhere (modals closed, return page remembered).
-        TourStep::Zen if byte == CTRL_F => {
+        // Enter does the same: terminals and multiplexers that swallow the
+        // chord would otherwise trap a newcomer here, since the gate also
+        // blocks the `/zen` fallback.
+        TourStep::Zen if matches!(byte, CTRL_F | b'\r' | b'\n') => {
             toggle_zen_globally(app);
         }
         TourStep::Enter if matches!(byte, b'\r' | b'\n') => {

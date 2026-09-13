@@ -1657,6 +1657,11 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                         "your name lands here sooner than you think.",
                         text,
                     )),
+                    Line::default(),
+                    Line::from(vec![
+                        Span::styled("[Enter] ", key),
+                        Span::styled("works too, if your terminal eats Ctrl+F.", text),
+                    ]),
                 ],
                 "Ctrl+F",
                 "zen",

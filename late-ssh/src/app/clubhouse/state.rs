@@ -123,7 +123,7 @@ pub enum Tutorial {
     VisitArtboard,
     /// On the Profiles page: people and their projects, then `6`.
     VisitDirectory,
-    /// On the Leaderboards: the last page, then `Ctrl+F` into Zen.
+    /// On the Leaderboards: the last page, then `Ctrl+F` (or Enter) into Zen.
     VisitLeaderboard,
     /// On Zen: the tiling page and its chord, then `0` home.
     VisitZen,

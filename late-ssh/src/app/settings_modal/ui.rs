@@ -2640,8 +2640,7 @@ fn translate_to_span(lang: late_core::models::message_translation::TranslateLang
     }
 }
 
-/// The room-list rail row. Mirrors `right_sidebar_mode_span` without the panel
-/// editor affordance: the rail has no panel list of its own.
+/// The "Land on" row: the page a session opens on, cycled with the arrows.
 fn landing_page_span(page: late_core::models::user::LandingPage) -> ValueSpan {
     use late_core::models::user::LandingPage;
     let text = match page {
@@ -2657,6 +2656,8 @@ fn landing_page_span(page: late_core::models::user::LandingPage) -> ValueSpan {
     }
 }
 
+/// The room-list rail row. Mirrors `right_sidebar_mode_span` without the panel
+/// editor affordance: the rail has no panel list of its own.
 fn room_list_mode_span(mode: RoomListMode) -> ValueSpan {
     match mode {
         RoomListMode::On => ValueSpan {

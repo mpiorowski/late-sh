@@ -2170,6 +2170,39 @@ async fn forced_tour_gates_input_until_each_named_key() {
     assert_eq!(app.screen, Screen::Arcade);
 }
 
+/// Some terminals and multiplexers swallow Ctrl+F, and the gate also blocks
+/// the `/zen` fallback, so the Zen stop needs a key every terminal sends.
+/// Without one the newcomer can only quit, and the tour restarts next session.
+#[tokio::test]
+async fn forced_tour_zen_stop_accepts_enter_when_the_chord_is_swallowed() {
+    use crate::app::clubhouse::state::Tutorial;
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "tour-zen-enter-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "tour-zen-enter-flow-it");
+
+    app.set_screen(Screen::Clubhouse);
+    app.clubhouse.tutorial = Tutorial::Pending;
+    app.clubhouse.enter_screen();
+    for bytes in [&b"1"[..], b"\r", b"2", b"\r", b"3", b"4", b"5", b"6"] {
+        app.handle_input(bytes);
+    }
+    assert_eq!(app.screen, Screen::Leaderboard);
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitLeaderboard);
+
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Zen);
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitZen);
+
+    // Enter is not a way past the Zen box itself: that one still names `0`.
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Zen);
+    app.handle_input(b"0");
+    assert_eq!(app.screen, Screen::Clubhouse);
+    assert_eq!(app.clubhouse.tutorial, Tutorial::Homecoming);
+}
+
 #[tokio::test]
 async fn only_esc_closes_the_stream_modal() {
     let test_db = new_test_db().await;

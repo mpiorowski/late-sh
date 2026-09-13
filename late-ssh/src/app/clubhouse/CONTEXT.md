@@ -140,7 +140,9 @@ room is the chat surface, and the full history lives in #lounge on Home.
   included, except the named digit (which runs `set_screen`; the stage
   advances in `State::tutorial_screen_entered`, hooked there), `Ctrl+F` at
   the Zen stop (`TourStep::Zen`, which runs the real `toggle_zen_globally`
-  so the page opens exactly as it does everywhere), Enter where
+  so the page opens exactly as it does everywhere; Enter runs the same
+  toggle there, because the gate also blocks the `/zen` fallback and a
+  terminal that swallows the chord would otherwise trap the newcomer), Enter where
   the box names it (the two interludes advance via `tutorial_advance`
   without persisting; only the homecoming Enter finishes and persists),
   and `q` (quitting always works; Esc's lone-byte path can still arm the
