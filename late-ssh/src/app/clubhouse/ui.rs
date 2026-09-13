@@ -1692,10 +1692,7 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                         Span::styled("[Ctrl+F] ", key),
                         Span::styled("from any page opens it; the same chord", text),
                     ]),
-                    Line::from(Span::styled(
-                        "hands you back to wherever you were.",
-                        text,
-                    )),
+                    Line::from(Span::styled("hands you back to wherever you were.", text)),
                     Line::default(),
                     Line::from(vec![
                         Span::styled("[Tab] ", key),

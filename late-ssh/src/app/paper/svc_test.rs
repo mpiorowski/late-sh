@@ -425,7 +425,17 @@ async fn a_newcomers_paper_waits_until_the_tour_is_walked() {
     assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
 
     // Nothing pops while the tour holds the keys, however long it takes.
-    for bytes in [&b"1"[..], b"\r", b"2", b"\r", b"3", b"4", b"5", b"6", b"\x06"] {
+    for bytes in [
+        &b"1"[..],
+        b"\r",
+        b"2",
+        b"\r",
+        b"3",
+        b"4",
+        b"5",
+        b"6",
+        b"\x06",
+    ] {
         app.handle_input(bytes);
         let frame = render_plain(&mut app);
         assert!(!frame.contains("The Late Edition"), "{frame}");
