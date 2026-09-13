@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use late_core::models::leaderboard::LeaderboardData;
 use late_core::models::profile::Profile;
-use late_core::models::user::{RightSidebarMode, RoomListMode};
+use late_core::models::user::{LandingPage, RightSidebarMode, RoomListMode};
 use late_core::models::user_ssh_key::KeyLayout;
 
 use crate::{
@@ -419,10 +419,9 @@ pub struct SessionConfig {
 
     /// UI flags
     pub is_new_user: bool,
-    /// Tweak: land on Home (Dashboard, page 1) instead of the Clubhouse
-    /// (page 0) when the session starts. Ignored for brand-new users so they
-    /// still get the clubhouse first-visit tutorial.
-    pub land_on_home: bool,
+    /// Tweak: the page the session starts on. Ignored for brand-new users so
+    /// they still get the clubhouse first-visit tutorial.
+    pub landing_page: LandingPage,
     /// Tweak: pop The Late Edition once a day after the splash.
     pub paper_at_login: bool,
 
@@ -495,7 +494,8 @@ pub struct App {
     pub(crate) aquarium_service: hub::aquarium::svc::AquariumService,
     /// Zen (`Ctrl+F`): the tiling layout and its focus.
     pub(crate) zen: crate::app::zen::state::ZenState,
-    /// Where `Ctrl+F` was pressed, so Esc or the chord hands the page back.
+    /// Where `Ctrl+F` was pressed, so the chord hands the page back; cleared
+    /// whenever Zen is left, and `None` on a session that landed on Zen.
     pub(crate) zen_return_screen: Option<Screen>,
     /// A layout edit not yet written to `users.settings`. Flushed on tick's
     /// one-hertz edge and on leaving the page, so a held resize key costs
@@ -1339,13 +1339,17 @@ impl App {
         );
         // Everyone lands in the clubhouse by default: the tavern is the front
         // door of late.sh (and the first-visit tutorial starts there). The
-        // "Land on Home page" tweak sends returning users straight to the
-        // dashboard instead; new users always start in the clubhouse so the
-        // tutorial runs.
-        let landing_screen = if config.land_on_home && !config.is_new_user {
-            Screen::Dashboard
+        // "Land on" tweak sends returning users to Home or Zen instead; new
+        // users always start in the clubhouse so the tutorial runs.
+        let landing = if config.is_new_user {
+            LandingPage::Clubhouse
         } else {
-            Screen::Clubhouse
+            config.landing_page
+        };
+        let landing_screen = match landing {
+            LandingPage::Clubhouse => Screen::Clubhouse,
+            LandingPage::Home => Screen::Dashboard,
+            LandingPage::Zen => Screen::Zen,
         };
         let haunt = crate::app::deadchannel::haunt::svc::arm(
             config.permissions.can_moderate(),
@@ -1687,11 +1691,16 @@ impl App {
         }
         // The landing screen skips `set_screen`, so run its entry hook by
         // hand. Clubhouse: immediate crowd refresh plus the first-visit
-        // tutorial. Dashboard: refresh the room list (sync_selection runs just
-        // below for both).
-        match landing_screen {
-            Screen::Dashboard => app.chat.request_list(),
-            _ => app.clubhouse.enter_screen(),
+        // tutorial. Home: refresh the room list (sync_selection runs just
+        // below for all three). Zen: focus the first chat tile and size the
+        // reef to its tile, as `Ctrl+F` would.
+        match landing {
+            LandingPage::Clubhouse => app.clubhouse.enter_screen(),
+            LandingPage::Home => app.chat.request_list(),
+            LandingPage::Zen => {
+                app.zen.note_opened();
+                app.sync_aquarium_bounds();
+            }
         }
         app.chat
             .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
@@ -2253,9 +2262,14 @@ impl App {
         }
 
         let screen_changed = self.screen != screen;
-        // Leaving Zen writes any layout edit the debounce still holds.
+        // Leaving Zen writes any layout edit the debounce still holds, and
+        // forgets where Ctrl+F came from however the page was left (a digit,
+        // a tour step), so a later Ctrl+F on Zen never hands back a stale
+        // page.
         if screen_changed && self.screen == Screen::Zen {
             self.flush_zen_layout();
+            self.zen.close_kind_picker();
+            self.zen_return_screen = None;
         }
         self.screen = screen;
         // The aquarium sim is sized for whichever surface shows it next.

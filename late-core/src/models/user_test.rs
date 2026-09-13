@@ -710,6 +710,30 @@ fn touched_settings_count_only_deliberate_keys() {
     );
 }
 
+#[test]
+fn landing_page_reads_the_choice_and_falls_back_to_the_clubhouse() {
+    use crate::models::user::{LandingPage, extract_landing_page};
+    assert_eq!(extract_landing_page(&json!({})), LandingPage::Clubhouse);
+    assert_eq!(
+        extract_landing_page(&json!({ "landing_page": "home" })),
+        LandingPage::Home
+    );
+    assert_eq!(
+        extract_landing_page(&json!({ "landing_page": "zen" })),
+        LandingPage::Zen
+    );
+    assert_eq!(
+        extract_landing_page(&json!({ "landing_page": "clubhouse" })),
+        LandingPage::Clubhouse
+    );
+    // An unknown value (a rolled-back binary, a hand edit) is the default,
+    // never a crash at login.
+    assert_eq!(
+        extract_landing_page(&json!({ "landing_page": "arcade" })),
+        LandingPage::Clubhouse
+    );
+}
+
 #[tokio::test]
 async fn paper_shown_claim_wins_once_per_edition_and_only_moves_forward() {
     let (client, _test_db) = setup_db().await;
