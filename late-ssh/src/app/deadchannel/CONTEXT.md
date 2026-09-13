@@ -425,8 +425,14 @@ Drained by `haunt::svc::tick`.
   a metric label: the three counters stay keyed on closed enums so the
   series count cannot grow with the player base. Grafana's "deadchannel"
   row (`monitoring/dashboards/observability.json`) reads both: the beat and
-  gate counters as reset-safe `max_over_time` sums, and the per-person
-  ladder and gate legs from the log lines. Counters live on the pod, so a
+  gate counters as reset-safe `max_over_time` sums, and from the log
+  lines a Runners table (one row per person: ladder hits, invited and
+  joined times, last seen, latest gate verdict and legs), a Recent Beats
+  table, and the Haunt Log, all three filtered by the `$runner` regex
+  variable. The log tables use the `instant` query type and extract
+  fields, because a `stats` query splits every group into its own series
+  and cannot carry strings; logs keep 7 days, so older rungs show empty
+  there and `users.settings` stays the truth. Counters live on the pod, so a
   deploy zeroes the live value; every panel there sums per-instance
   high-water marks instead. The row ships to prod with the dashboard
   ConfigMap, on a `-infra` release (`infra/monitoring.tf`), not on merge.

@@ -1,9 +1,14 @@
 # =============================================================================
 # Minecraft: Paper server with GriefPrevention
 # =============================================================================
-# A friends server on the node's public port 25565 (the client default, so
-# players type `late.sh` with no DNS work; `late.sh` already resolves to the
-# node). The port is a pod hostPort, NOT an ingress-nginx TCP passthrough
+# A friends server on agent-1's public port 25565, the client default. It is
+# pinned to agent-1 (defaults.tf, node placement) so the Java heap and a
+# growing world stay off the node that serves SSH sessions. `late.sh` and the
+# `*.late.sh` wildcard resolve to server-1, so players reach this pod through
+# two manual DNS records (infra/README.md, Minecraft): an `mc.late.sh` A record
+# for agent-1, and a `_minecraft._tcp.late.sh` SRV record pointing at
+# mc.late.sh:25565 so the client still accepts plain `late.sh`.
+# The port is a pod hostPort, NOT an ingress-nginx TCP passthrough
 # entry: every nginx config reload (cert-manager renewals included) drains
 # old workers after 240s and drops long-lived TCP sessions, which for a game
 # server means kicking every player. hostPort follows the same RKE2/Canal
@@ -99,6 +104,18 @@ resource "kubernetes_deployment_v1" "minecraft" {
         # A big world can take tens of seconds to flush; SIGKILL mid-save
         # corrupts chunks.
         termination_grace_period_seconds = 120
+
+        # Support workload: runs on agent-1 (defaults.tf, node placement).
+        node_selector = {
+          (local.support_node_label_key) = local.support_node_label_value
+        }
+
+        toleration {
+          key      = local.support_node_label_key
+          operator = "Equal"
+          value    = local.support_node_label_value
+          effect   = "NoSchedule"
+        }
 
         container {
           name  = "minecraft"

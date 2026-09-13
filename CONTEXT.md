@@ -552,7 +552,7 @@ late-sh/
 └── infra/
     ├── icecast/icecast.xml     # Icecast config
     ├── liquidsoap/             # Radio config + local fallback playlists
-    └── minecraft.tf            # Paper + GriefPrevention on node hostPort 25565, whitelist-only (see infra/README.md)
+    └── minecraft.tf            # Paper + GriefPrevention on agent-1 hostPort 25565, whitelist-only (see infra/README.md)
 ```
 
 ---

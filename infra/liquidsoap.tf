@@ -28,7 +28,10 @@ resource "kubernetes_config_map_v1" "liquidsoap_playlists" {
   }
 }
 
-# PVC for music files — synced from R2 during deploy (sync_music job in deploy_infra.yml)
+# Music library (MP3s per genre directory). R2 is the source of truth: the
+# manual sync_music workflow copies the bucket onto this PVC, and Terraform
+# never touches the files. radio.liq has no fallback beyond these files, so
+# a fresh or empty PVC streams silence until sync_music runs.
 resource "kubernetes_persistent_volume_claim_v1" "music_data" {
   metadata {
     name = "music-data"
@@ -83,6 +86,18 @@ resource "kubernetes_deployment_v1" "liquidsoap" {
       }
 
       spec {
+        # Support workload: runs on agent-1 (defaults.tf, node placement).
+        node_selector = {
+          (local.support_node_label_key) = local.support_node_label_value
+        }
+
+        toleration {
+          key      = local.support_node_label_key
+          operator = "Equal"
+          value    = local.support_node_label_value
+          effect   = "NoSchedule"
+        }
+
         container {
           name    = "liquidsoap"
           image   = "savonet/liquidsoap:v2.4.0"
