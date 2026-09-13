@@ -133,7 +133,8 @@ pub enum FirstContactBeat {
     GlitchBurst,
     NameFlicker,
     WhisperDelivered,
-    InvitationRequested,
+    /// The breakthrough played on a won invitation claim; the DM follows.
+    Breakthrough,
     /// The invitation accepted: `/join #deadchannel` created the runner.
     RunnerCreated,
 }
@@ -705,7 +706,7 @@ mod inner {
             FirstContactBeat::GlitchBurst => "glitch_burst",
             FirstContactBeat::NameFlicker => "name_flicker",
             FirstContactBeat::WhisperDelivered => "whisper_delivered",
-            FirstContactBeat::InvitationRequested => "invitation_requested",
+            FirstContactBeat::Breakthrough => "breakthrough",
             FirstContactBeat::RunnerCreated => "runner_created",
         }
     }

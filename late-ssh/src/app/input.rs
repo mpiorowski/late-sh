@@ -593,11 +593,11 @@ pub fn handle(app: &mut App, data: &[u8]) {
                 _ => {}
             }
         }
-        // First contact: an armed whisper holds the door, so input goes to
-        // the machine instead of skipping (`app/deadchannel/haunt`).
+        // First contact: an armed whisper holds the door, so input is
+        // swallowed instead of skipping (`app/deadchannel/haunt`).
         if !saw_terminal_reply
             && !data.is_empty()
-            && crate::app::deadchannel::haunt::svc::note_splash_input(app)
+            && crate::app::deadchannel::haunt::svc::swallows_splash_input(app)
         {
             return;
         }
@@ -611,6 +611,12 @@ pub fn handle(app: &mut App, data: &[u8]) {
             // so the first post-splash keypress is silently lost.
             app.vt_input.reset();
         }
+        return;
+    }
+
+    // First contact's breakthrough (`app/deadchannel/haunt`): while it
+    // plays, every key is swallowed before the parser sees it.
+    if app.haunt.breakthrough_playing() {
         return;
     }
 

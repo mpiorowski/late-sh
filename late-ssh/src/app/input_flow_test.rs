@@ -2483,7 +2483,7 @@ async fn whisper_holds_the_splash_door_then_releases_and_marks_delivery() {
     crate::app::deadchannel::haunt::svc::replay_whisper(&mut app);
     assert!(app.show_splash);
 
-    // Esc is acknowledged but the door is held: the splash does not skip.
+    // Esc does nothing: the door is held and the splash does not skip.
     app.tick();
     app.handle_input(b"\x1b");
     assert!(app.show_splash, "expected the whisper to hold the splash");

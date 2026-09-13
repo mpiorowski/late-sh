@@ -2931,29 +2931,36 @@ impl ChatService {
     }
 
     /// First contact, stage 4 (`app/deadchannel/haunt`): the one
-    /// invitation DM from the game's first voice. Ensures the voice's
-    /// ghost user (fixed fingerprint, @bartender's shape, but never
-    /// auto-joined into public rooms: the voice lives in the dark), opens
-    /// the DM, claims the once-ever right to invite this user (a
-    /// conditional settings stamp, so two devices noticing the due date at
-    /// once send one DM), then sends the plea through the normal send
-    /// path. It persists on purpose: an invitation that vanishes cannot
-    /// be followed three days later.
+    /// invitation DM from the game's first voice, carried in by the
+    /// breakthrough. Ensures the voice's ghost user (fixed fingerprint,
+    /// @bartender's shape, but never auto-joined into public rooms: the
+    /// voice lives in the dark), opens the DM, claims the once-ever right to
+    /// invite this user (a conditional settings stamp, so two devices whose
+    /// sends come due at once share one DM), and answers the claim on the
+    /// returned channel right away: the asking session plays the scene only
+    /// on `Won`. Then it waits `send_after` (the scene typing its line) and
+    /// sends the plea through the normal send path, whether or not that
+    /// session is still around. It persists on purpose: an invitation that
+    /// vanishes cannot be followed three days later.
     pub fn send_first_contact_invitation_task(
         &self,
         target_user_id: Uuid,
         target_username: String,
-    ) {
-        use crate::app::deadchannel::haunt::state::INVITATION_PLEA;
+        send_after: std::time::Duration,
+    ) -> tokio::sync::oneshot::Receiver<
+        anyhow::Result<crate::app::deadchannel::haunt::state::InvitationClaim>,
+    > {
+        use crate::app::deadchannel::haunt::state::{INVITATION_PLEA, InvitationClaim};
+        let (claim_tx, claim_rx) = tokio::sync::oneshot::channel();
         let service = self.clone();
         tokio::spawn(
             async move {
-                let result: anyhow::Result<bool> = async {
+                let claimed: anyhow::Result<Option<(Uuid, Uuid)>> = async {
                     // The voice and the DM are ensured BEFORE the once-ever
                     // claim is taken: a failure here (say, a real account
                     // squatting the username, the `system` squat of
                     // 2026-07-12 aimed at the voice) must leave the claim
-                    // untaken so a later session retries. The claim guards
+                    // untaken so a later send retries. The claim guards
                     // only the send.
                     let voice = service.ensure_first_contact_voice().await?;
                     let client = service.db.get().await?;
@@ -2963,62 +2970,79 @@ impl ChatService {
                     ChatRoomMember::join(&client, room.id, target_user_id).await?;
                     VoiceChannel::upsert_for_target(&client, TARGET_CHAT_ROOM, room.id, "dm", true)
                         .await?;
-                    if !User::claim_first_contact_invitation(
+                    let won = User::claim_first_contact_invitation(
                         &client,
                         target_user_id,
                         chrono::Utc::now(),
                     )
-                    .await?
-                    {
-                        return Ok(false);
-                    }
-                    drop(client);
-                    let sent = service
-                        .send_message(SendMessageParams {
-                            user_id: voice.id,
-                            room_id: room.id,
-                            room_slug: None,
-                            body: INVITATION_PLEA.to_string(),
-                            reply_to_message_id: None,
-                            reply_to_user_id: None,
-                            is_admin: false,
-                        })
-                        .await;
-                    match sent {
-                        Ok(_) => Ok(true),
-                        Err(send_error) => {
-                            // Give the claim back so a later session retries.
-                            // Losing the release too leaves a burned claim,
-                            // which is worth its own line.
-                            let released: anyhow::Result<()> = async {
-                                let client = service.db.get().await?;
-                                User::release_first_contact_invitation(&client, target_user_id)
-                                    .await
-                            }
-                            .await;
-                            if let Err(release_error) = released {
-                                tracing::error!(
-                                    error = ?release_error,
-                                    user_id = %target_user_id,
-                                    username = %target_username,
-                                    "failed to release a burned first contact claim"
-                                );
-                            }
-                            Err(send_error)
-                        }
+                    .await?;
+                    match won {
+                        true => Ok(Some((voice.id, room.id))),
+                        false => Ok(None),
                     }
                 }
                 .await;
-                match result {
-                    Ok(true) => {
+                let (voice_id, room_id) = match claimed {
+                    Ok(Some(ids)) => {
+                        let _ = claim_tx.send(Ok(InvitationClaim::Won));
+                        ids
+                    }
+                    Ok(None) => {
+                        // Another session claimed it first: nothing to send.
+                        let _ = claim_tx.send(Ok(InvitationClaim::Taken));
+                        return;
+                    }
+                    Err(error) => {
+                        // The asking session logs a failed ask; only when it
+                        // is gone does the failure need its own line here.
+                        if let Err(Err(error)) = claim_tx.send(Err(error)) {
+                            late_core::error_span!(
+                                "first_contact_invitation_claim_failed",
+                                error = ?error,
+                                user_id = %target_user_id,
+                                username = %target_username,
+                                "failed to claim first contact invitation"
+                            );
+                        }
+                        return;
+                    }
+                };
+                tokio::time::sleep(send_after).await;
+                let sent = service
+                    .send_message(SendMessageParams {
+                        user_id: voice_id,
+                        room_id,
+                        room_slug: None,
+                        body: INVITATION_PLEA.to_string(),
+                        reply_to_message_id: None,
+                        reply_to_user_id: None,
+                        is_admin: false,
+                    })
+                    .await;
+                match sent {
+                    Ok(_) => {
                         tracing::info!(user_id = %target_user_id, username = %target_username, "first contact invitation sent");
                     }
-                    // Another session claimed it first: nothing to do.
-                    Ok(false) => {}
-                    Err(e) => {
+                    Err(send_error) => {
+                        // Give the claim back so a later send retries. Losing
+                        // the release too leaves a burned claim, which is
+                        // worth its own line.
+                        let released: anyhow::Result<()> = async {
+                            let client = service.db.get().await?;
+                            User::release_first_contact_invitation(&client, target_user_id).await
+                        }
+                        .await;
+                        if let Err(release_error) = released {
+                            tracing::error!(
+                                error = ?release_error,
+                                user_id = %target_user_id,
+                                username = %target_username,
+                                "failed to release a burned first contact claim"
+                            );
+                        }
                         late_core::error_span!(
                             "first_contact_invitation_failed",
-                            error = ?e,
+                            error = ?send_error,
                             user_id = %target_user_id,
                             username = %target_username,
                             "failed to send first contact invitation"
@@ -3031,6 +3055,7 @@ impl ChatService {
                 user_id = %target_user_id,
             )),
         );
+        claim_rx
     }
 
     pub fn send_message_with_reply_task(&self, task: SendMessageTask) {

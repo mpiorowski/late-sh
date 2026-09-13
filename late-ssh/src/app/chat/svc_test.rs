@@ -4992,7 +4992,9 @@ mod gild {
 
 #[tokio::test]
 async fn first_contact_invitation_sends_one_dm_and_claims_once() {
-    use crate::app::deadchannel::haunt::state::{VOICE_FINGERPRINT, VOICE_USERNAME};
+    use crate::app::deadchannel::haunt::state::{
+        InvitationClaim, VOICE_FINGERPRINT, VOICE_USERNAME,
+    };
 
     let test_db = new_test_db().await;
     let service = ChatService::new(
@@ -5001,10 +5003,24 @@ async fn first_contact_invitation_sends_one_dm_and_claims_once() {
     );
     let target = create_test_user(&test_db.db, "first-contact-target").await;
 
-    // Two racing requests (two devices noticing the due date): the claim
-    // lets exactly one DM through.
-    service.send_first_contact_invitation_task(target.id, target.username.clone());
-    service.send_first_contact_invitation_task(target.id, target.username.clone());
+    // Two racing requests (two devices whose sends came due at once): the
+    // claim lets exactly one of them play the scene and one DM through.
+    let first =
+        service.send_first_contact_invitation_task(target.id, target.username.clone(), Duration::ZERO);
+    let second =
+        service.send_first_contact_invitation_task(target.id, target.username.clone(), Duration::ZERO);
+    let answers = [
+        first.await.expect("first answer").expect("first claim"),
+        second.await.expect("second answer").expect("second claim"),
+    ];
+    assert_eq!(
+        answers
+            .iter()
+            .filter(|answer| **answer == InvitationClaim::Won)
+            .count(),
+        1,
+        "exactly one session may break through: {answers:?}"
+    );
 
     let client = test_db.db.get().await.expect("db client");
     crate::test_helpers::wait_until(
@@ -5185,11 +5201,13 @@ async fn first_contact_invitation_claim_survives_a_failed_send() {
     let _squatter = create_test_user(&test_db.db, VOICE_USERNAME).await;
     let target = create_test_user(&test_db.db, "fc-claim-target").await;
 
-    service.send_first_contact_invitation_task(target.id, target.username.clone());
-
-    // The failure is silent from out here; give the task time to run its
-    // course (a negative assertion, like the racing-duplicate check above).
-    sleep(Duration::from_millis(400)).await;
+    // The asking session hears the failure, so nothing plays and a later
+    // send retries.
+    let answer = service
+        .send_first_contact_invitation_task(target.id, target.username.clone(), Duration::ZERO)
+        .await
+        .expect("answer");
+    assert!(answer.is_err(), "expected a failed ask, got {answer:?}");
 
     // The once-ever claim must not be burned by a DM that never sent: the
     // stamp stays absent so a later session retries the invitation.

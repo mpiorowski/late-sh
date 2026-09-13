@@ -1,6 +1,6 @@
 //! Orchestration for the haunting: the gate and arming at session start,
 //! the splash door, the glitch scheduler, the own-name flicker, the hit
-//! claims, the invitation, the bio screen, and the `/haunt` admin
+//! claims, the breakthrough and its invitation, the bio screen, and the `/haunt` admin
 //! controls. This is the only haunting layer that touches `App`, logging,
 //! metrics, and persistence; the machines in `state.rs` stay pure, and the
 //! root files keep one routing line each.
@@ -13,11 +13,11 @@ use tokio::sync::{oneshot, watch};
 use tracing::{Instrument, info_span};
 
 use super::state::{
-    ActiveHit, BIO_RESCREEN_AFTER_HOURS, BioStanding, ClockGlitch, FirstContactGate,
-    FirstContactMarks, GLITCH_TOTAL_CAP, GlitchTick, HauntCommand, HauntState, HitStage,
-    INVITE_DELAY_HOURS, NAME_TOTAL_CAP, NameFlicker, NameRoll, PendingClaim, PendingFlagWrite,
-    WHISPER_GAP_HOURS, WHISPER_TOTAL_CAP, WhisperState, WhisperTick, bio_hash, glitch_caps,
-    name_caps,
+    ActiveHit, BIO_RESCREEN_AFTER_HOURS, BioStanding, Breakthrough, BreakthroughPhase,
+    BreakthroughRoll, BreakthroughTick, ClockGlitch, FirstContactGate, FirstContactMarks,
+    GLITCH_TOTAL_CAP, GlitchTick, HauntCommand, HauntState, HitStage, InvitationClaim,
+    NAME_TOTAL_CAP, NameFlicker, NameRoll, PendingClaim, PendingFlagWrite, WHISPER_GAP_HOURS,
+    WHISPER_TOTAL_CAP, WhisperState, WhisperTick, bio_hash, glitch_caps, name_caps,
 };
 use crate::app::ai::screen::{BioScreen, screen_bio};
 use crate::app::ai::svc::AiService;
@@ -109,8 +109,9 @@ pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -
 /// nonrenewable resource: with the flags unread (`None`) nothing arms.
 /// The chain order is the spec: three clock bursts open stage 2, the
 /// third name hit arms the stage-3 whisper (it fires on the next fresh
-/// connect, then once more on a later day), and the last delivered
-/// whisper schedules the stage-4 invitation.
+/// connect, then once more on a later day), and a day after the last
+/// delivered whisper the next own send breaks through and the stage-4
+/// invitation DM follows.
 /// Dice are per session on purpose: the same person on two evenings, or
 /// two people side by side, roll differently.
 pub(crate) fn arm(
@@ -148,6 +149,8 @@ pub(crate) fn arm(
         whisper: whisper_armed.then(|| WhisperState::for_user(user_id, marks.whisper_hits)),
         clock_glitch: stage1.then(|| ClockGlitch::new(session_seed(user_id), 0, marks.glitch_hits)),
         name_flicker: chosen.then(|| NameFlicker::new(session_seed(user_id), marks.name_hits)),
+        breakthrough: chosen.then(|| Breakthrough::for_user(user_id)),
+        pending_invitation: None,
         witness: None,
         marks,
         gate,
@@ -175,9 +178,13 @@ pub(crate) fn tick(app: &mut App) -> bool {
         changed |= tick_splash_door(app);
     }
     changed |= tick_clock_glitch(app);
-    changed |= tick_name_flicker(app);
+    // One landing echo, two readers: stage 2 rolls on it and stage 4 breaks
+    // through on it. Drained even while unarmed, so a stale echo id never
+    // waits around for a later `/haunt on`.
+    let landed = app.chat.take_own_message_landed();
+    changed |= tick_name_flicker(app, landed);
     changed |= tick_witness(app);
-    tick_invitation(app);
+    changed |= tick_breakthrough(app, landed);
     changed |= tick_commands(app);
     changed
 }
@@ -398,10 +405,7 @@ fn tick_clock_glitch(app: &mut App) -> bool {
 /// key, so start, the wave edge, and heal each rebuild the rows exactly
 /// once), and the row's counter is what arms the
 /// stage-3 whisper at its third hit.
-fn tick_name_flicker(app: &mut App) -> bool {
-    // Drained even while unarmed, so a stale echo id never waits around
-    // for a later `/haunt on`.
-    let landed = app.chat.take_own_message_landed();
+fn tick_name_flicker(app: &mut App, landed: Option<(uuid::Uuid, uuid::Uuid)>) -> bool {
     let enabled = app.haunt.enabled();
     let stage_open = app.haunt.marks.glitch_hits >= GLITCH_TOTAL_CAP;
     let Some(flicker) = app.haunt.name_flicker.as_mut() else {
@@ -510,49 +514,83 @@ fn tick_witness(app: &mut App) -> bool {
     true
 }
 
-/// The stage-4 clock: the day after the last delivered whisper, the
-/// game's first voice sends its one persistent DM. Self-serve on purpose (the
-/// chosen one's own session notices), so there is no cross-user sweep;
-/// the conditional settings claim in the send task keeps two devices
-/// from double-sending.
-fn tick_invitation(app: &mut App) {
-    if !app.haunt.chosen
-        || app.haunt.marks.invited_at.is_some()
-        || !app.haunt.marks.whispers_spent()
-        || !app.haunt.enabled()
-    {
-        return;
-    }
-    let Some(whisper_at) = app.haunt.marks.whisper_at else {
-        return;
+/// Stage 4, the breakthrough. Once the invitation is due, the next own
+/// send asks the invitation task for the once-ever claim; the task answers
+/// before it sends anything, the scene plays here on a won claim, and the
+/// same task sends the DM once the line has finished typing, so a session
+/// that drops mid-scene still gets its invitation. A claim taken by another
+/// device stamps the marks and plays nothing; an ask that failed retries on
+/// the next send. Self-serve on purpose (the chosen one's own session
+/// notices), so there is no cross-user sweep.
+fn tick_breakthrough(app: &mut App, landed: Option<(uuid::Uuid, uuid::Uuid)>) -> bool {
+    let enabled = app.haunt.enabled();
+    let due = app.haunt.marks.breakthrough_due(chrono::Utc::now());
+    let answer = match app.haunt.pending_invitation.as_mut() {
+        None => None,
+        Some(rx) => match rx.try_recv() {
+            Ok(outcome) => Some(outcome),
+            Err(oneshot::error::TryRecvError::Empty) => None,
+            Err(oneshot::error::TryRecvError::Closed) => Some(Err(anyhow::anyhow!(
+                "invitation task dropped its sender"
+            ))),
+        },
     };
-    let now = chrono::Utc::now();
-    if now - whisper_at < chrono::Duration::hours(INVITE_DELAY_HOURS) {
-        return;
+    if answer.is_some() {
+        app.haunt.pending_invitation = None;
     }
-    send_invitation(app, now);
-}
-
-fn send_invitation(app: &mut App, now: chrono::DateTime<chrono::Utc>) {
-    // Local stamp stops this session re-spawning the task every tick; the
-    // DB claim inside the task is the cross-session guard.
-    app.haunt.marks.invited_at = Some(now);
-    app.chat
-        .service
-        .send_first_contact_invitation_task(app.user_id, app.username.clone());
-    metrics::record_first_contact_beat(FirstContactBeat::InvitationRequested);
-    tracing::info!(user_id = %app.user_id, username = %app.username, "first contact invitation requested");
-}
-
-/// Route splash input into the held door. Returns true when consumed:
-/// input is acknowledged (the machine surges static and dissolves the
-/// skip hint) but the splash does not skip. Silently ignoring input would
-/// read as a hung terminal, the exact panic the hard rules forbid.
-pub(crate) fn note_splash_input(app: &mut App) -> bool {
-    let Some(whisper) = app.haunt.whisper.as_mut() else {
+    let Some(breakthrough) = app.haunt.breakthrough.as_mut() else {
         return false;
     };
-    whisper.note_input(app.splash_ticks);
+    let mut changed = false;
+    match answer {
+        None => {}
+        Some(Ok(InvitationClaim::Won)) => {
+            breakthrough.start(app.marquee_tick);
+            app.haunt.marks.invited_at = Some(chrono::Utc::now());
+            metrics::record_first_contact_beat(FirstContactBeat::Breakthrough);
+            tracing::info!(user_id = %app.user_id, username = %app.username, "first contact breakthrough");
+            changed = true;
+        }
+        Some(Ok(InvitationClaim::Taken)) => {
+            breakthrough.claim_settled();
+            app.haunt.marks.invited_at = Some(chrono::Utc::now());
+            tracing::debug!(user_id = %app.user_id, username = %app.username, "first contact breakthrough claim taken by another session");
+        }
+        Some(Err(error)) => {
+            breakthrough.claim_settled();
+            tracing::warn!(user_id = %app.user_id, username = %app.username, error = ?error, "first contact breakthrough claim failed");
+        }
+    }
+    match breakthrough.tick(app.marquee_tick, enabled) {
+        BreakthroughTick::Idle => {}
+        BreakthroughTick::Playing | BreakthroughTick::Ended => changed = true,
+    }
+    if landed.is_none() {
+        return changed;
+    }
+    match breakthrough.note_own_message(enabled, due) {
+        BreakthroughRoll::Wait => {}
+        BreakthroughRoll::Claim => {
+            app.haunt.pending_invitation =
+                Some(app.chat.service.send_first_contact_invitation_task(
+                    app.user_id,
+                    app.username.clone(),
+                    Breakthrough::dm_delay(),
+                ));
+        }
+    }
+    changed
+}
+
+/// Route splash input into the held door. Returns true when swallowed:
+/// while the whisper holds the door every key, Esc included, does nothing
+/// at all. The scene plays on its own clock (the static pulses, the line
+/// types itself), which is what keeps a swallowed key from reading as a
+/// hung terminal.
+pub(crate) fn swallows_splash_input(app: &mut App) -> bool {
+    if app.haunt.whisper.is_none() {
+        return false;
+    }
     // A swallowed ESC leaves the parser mid-escape; same reset as the
     // normal splash skip.
     app.vt_input.reset();
@@ -702,9 +740,20 @@ fn tick_commands(app: &mut App) -> bool {
                 "whispers {}/{WHISPER_TOTAL_CAP}",
                 app.haunt.marks.whisper_hits.min(WHISPER_TOTAL_CAP)
             );
-            let invite = match app.haunt.marks.invited_at {
-                Some(_) => "invited",
-                None => "invite pending",
+            let invite = match (
+                app.haunt.marks.invited_at,
+                app.haunt.breakthrough.as_ref().map(Breakthrough::phase),
+            ) {
+                (Some(_), _) => "invited",
+                (None, None) => "breakthrough idle",
+                (None, Some(BreakthroughPhase::Idle)) => {
+                    match app.haunt.marks.breakthrough_due(chrono::Utc::now()) {
+                        true => "breakthrough due on next send",
+                        false => "breakthrough waiting",
+                    }
+                }
+                (None, Some(BreakthroughPhase::Claiming)) => "breakthrough claiming",
+                (None, Some(BreakthroughPhase::Playing { .. })) => "breaking through",
             };
             // Whether a beat of somebody else's is on this screen right now.
             let witness = match app.haunt.witness.is_some() {
@@ -746,6 +795,9 @@ fn tick_commands(app: &mut App) -> bool {
                     session_seed(app.user_id),
                     app.haunt.marks.name_hits,
                 ));
+            }
+            if app.haunt.breakthrough.is_none() {
+                app.haunt.breakthrough = Some(Breakthrough::for_user(app.user_id));
             }
         }
         HauntCommand::Off => {
@@ -793,15 +845,25 @@ fn tick_commands(app: &mut App) -> bool {
         HauntCommand::Replay => {
             replay_whisper(app);
         }
-        HauntCommand::Invite => match app.haunt.marks.invited_at {
-            Some(_) => {
+        HauntCommand::Invite => match (
+            app.haunt.marks.invited_at,
+            app.haunt.breakthrough.as_mut(),
+        ) {
+            (Some(_), _) => {
                 app.banner = Some(Banner::error(
                     "Already invited - /haunt reset to clear the marks",
                 ));
             }
-            None => {
-                send_invitation(app, chrono::Utc::now());
-                app.banner = Some(Banner::success("Invitation sent - check your DMs"));
+            (None, None) => {
+                app.banner = Some(Banner::error(
+                    "Breakthrough is not armed - /haunt on first",
+                ));
+            }
+            (None, Some(breakthrough)) => {
+                breakthrough.force_next();
+                app.banner = Some(Banner::success(
+                    "Next message you send breaks through - the DM follows",
+                ));
             }
         },
         HauntCommand::Reset => {
@@ -819,6 +881,10 @@ fn tick_commands(app: &mut App) -> bool {
             if let Some(flicker) = app.haunt.name_flicker.as_mut() {
                 *flicker = NameFlicker::new(session_seed(app.user_id), 0);
             }
+            if let Some(breakthrough) = app.haunt.breakthrough.as_mut() {
+                *breakthrough = Breakthrough::for_user(app.user_id);
+            }
+            app.haunt.pending_invitation = None;
             app.profile_state.service().reset_first_contact(app.user_id);
             app.banner = Some(Banner::success(
                 "First-contact marks cleared - the chain starts over next session",

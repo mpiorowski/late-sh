@@ -311,6 +311,9 @@ struct DrawContext<'a> {
     /// One frame of first-contact whisper theater over the splash, `None`
     /// unless the door is held this frame. See `app/deadchannel`.
     whisper: Option<crate::app::deadchannel::haunt::ui::WhisperFrame>,
+    /// One frame of the first-contact breakthrough, painted over
+    /// everything; `None` unless it is playing. See `app/deadchannel`.
+    breakthrough: Option<crate::app::deadchannel::haunt::ui::BreakthroughFrame>,
     listen_url: &'a str,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
@@ -1323,6 +1326,10 @@ impl App {
                             self.splash_ticks,
                             &self.splash_hint,
                         ),
+                        breakthrough: crate::app::deadchannel::haunt::ui::breakthrough_frame_for(
+                            &self.haunt,
+                            self.marquee_tick,
+                        ),
                         listen_url: &listen_url,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
@@ -2150,6 +2157,12 @@ impl App {
                 );
             }
             None => {}
+        }
+
+        // First contact's breakthrough (`app/deadchannel/haunt`): the whole
+        // frame, over every modal.
+        if let Some(breakthrough) = &ctx.breakthrough {
+            crate::app::deadchannel::haunt::ui::draw_breakthrough(frame, area, breakthrough);
         }
     }
 }

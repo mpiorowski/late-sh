@@ -8,7 +8,12 @@
   several replicas (root CONTEXT.md, multi-replica rule); gated behind
   the `haunt_live` fuse, unlit, so only staff (admins and moderators)
   are haunted today, and only they can finish the ladder and join.
-- Last updated: 2026-09-09 (pacing retuned so the whole ladder fits a
+- Last updated: 2026-09-13 (stage 3 plays on its own clock: the static
+  pulses and the line types from the first frames, and every key, Esc
+  included, is swallowed; the invitation no longer arrives cold: once due,
+  the next own send plays the breakthrough, a full-screen static tear with
+  a line naming afterglow, and the DM lands as the line finishes). Before
+  that, 2026-09-09 (pacing retuned so the whole ladder fits a
   week of daily connects, with every haunt kept: the first clock burst
   of a session comes 5-20 min in and later ones 20-60 min apart, the
   name roll is 1-in-3 (the daily cap does the spacing), the whisper gap
@@ -43,11 +48,13 @@ tutorial. The chain is the spec, and the ladder never skips a rung
 (counts tuned 2026-09-01, pacing 2026-09-09): three clock bursts quiet
 the clock and open stage 2, the third name hit arms the stage-3 whisper
 (it fires on the next fresh connect, and once more on a later day: two
-doors, two different lines), and the second delivered whisper schedules
-the stage-4 invitation. The daily caps, not the dice, do the pacing, and
+doors, two different lines), and 20 hours after the second delivered
+whisper the next own send plays the stage-4 breakthrough, which carries
+the invitation DM in. The daily caps, not the dice, do the pacing, and
 the ladder is built for a person who connects once a day: day 1 two
 bursts, day 2 the third burst and the first name hit, days 3 and 4 the
-other two, day 5 the first door, day 6 the second, day 7 the DM. The
+other two, day 5 the first door, day 6 the second, day 7 the breakthrough
+and the DM. The
 day-scale gaps (whisper gap, invitation delay) are 20 hours rather than
 24 so evening-to-evening connects at different times never slip a day.
 
@@ -90,18 +97,21 @@ number of replicas spend one AI call per text.
 | File | Owns |
 |---|---|
 | `glyphs.rs` | `GLYPH_ALPHABET`, the game's shared character vocabulary. Game-level: the haunting borrows it, stage-4-era spawns will render with it (the clock glitch is retroactive foreshadowing). Distinct from the static shades `░▒▓` (noise, not creatures). |
-| `haunt/state.rs` | The pure machines and data: `HauntState` (the one `App` slot), `FirstContactMarks` (persisted marks bundle), `FirstContactGate` + `BioStanding` + the thresholds and `bio_hash` (the eligibility gate), `ClockGlitch` (stage 1), `NameFlicker` (stage 2, the person being haunted), `ActiveHit` (one hit's playback, holding the wave seed: the roller's own hit and the `witness` slot share it, so every screen corrupts identically), `WhisperState` (stage 3), the voice/invitation constants (stage 4), `PendingClaim`/`HitStage` (claims in flight), `HauntCommand` + `parse_haunt_command`. No I/O, no clock reads. |
-| `haunt/svc.rs` | Orchestration: `bootstrap_gate` (gate + bio screen claim at connect), `arm` (session start), one `tick(app)` (claim drain, splash door, glitch scheduler, name-flicker roller, witness replay, invitation clock, `/haunt` drain), `note_splash_input`, `replay_whisper`, the bio screen task, and `publish_name_hit` (a won or forced hit goes on the wire through `ChatService::publish_name_hit`). The only haunting layer touching `App`, logging, metrics, and persistence. |
-| `haunt/ui.rs` | Pure render helpers: whisper frame + splash overlay + static surge, `apply_clock_glitch`, `glitched_name`, `name_flicker_for`. Deterministic per burst seed, stateless like the sidebar equalizer. |
+| `haunt/state.rs` | The pure machines and data: `HauntState` (the one `App` slot), `FirstContactMarks` (persisted marks bundle), `FirstContactGate` + `BioStanding` + the thresholds and `bio_hash` (the eligibility gate), `ClockGlitch` (stage 1), `NameFlicker` (stage 2, the person being haunted), `ActiveHit` (one hit's playback, holding the wave seed: the roller's own hit and the `witness` slot share it, so every screen corrupts identically), `WhisperState` (stage 3), `Breakthrough` + `InvitationClaim` (stage 4's full-screen beat and the claim answer), the voice/invitation/breakthrough-line constants (stage 4), `PendingClaim`/`HitStage` (claims in flight), `HauntCommand` + `parse_haunt_command`. No I/O, no clock reads. |
+| `haunt/svc.rs` | Orchestration: `bootstrap_gate` (gate + bio screen claim at connect), `arm` (session start), one `tick(app)` (claim drain, splash door, glitch scheduler, name-flicker roller, witness replay, breakthrough (claim answer, scene, due send), `/haunt` drain), `swallows_splash_input`, `replay_whisper`, the bio screen task, and `publish_name_hit` (a won or forced hit goes on the wire through `ChatService::publish_name_hit`). The only haunting layer touching `App`, logging, metrics, and persistence. |
+| `haunt/ui.rs` | Pure render helpers: whisper frame + splash overlay + static surge, breakthrough frame + full-screen draw, `apply_clock_glitch`, `glitched_name`, `name_flicker_for`. Deterministic per burst seed, stateless like the sidebar equalizer. |
 | `runner/state.rs` | The look: `PIECES` (the closed starter table, one five-cell row per piece, `Slot` hood/eyes/coat), `Tint` (the closed palette, gold deliberately absent), `Look` + `Worn` (typed, table references), `Look::random` (the join's dice), `Look::to_json` / `Look::parse` (the JSON contract on the runner row; unknown codes are a `LookError`, never a blank), `PORTRAIT_WIDTH` / `PORTRAIT_HEIGHT`. No I/O. `state_test` asserts every row is five single-width cells. |
 | `runner/ui.rs` | `portrait_spans`: the look as three styled spans, one per worn piece in its tint; `tint_color` maps the palette onto the theme. Pure. |
 | `runner/svc.rs` | `RunnerLookService`: the process-shared look directory (`watch<Arc<HashMap<Uuid, Look>>>`), seeded and refreshed from `deadchannel_runners` on the `deadchannel_runner_changed` LISTEN, the `app/flags` shape. A look that fails to parse is logged and skipped. `fixed_looks_rx` for test apps. |
 
 Root integration is deliberately thin: `App.haunt` (the one field),
 `haunt::svc::tick(self)` in `tick.rs` (plus the splash block consulting
-`HauntState::holds_splash_door` before self-expiring), one input line
-routing splash input, and three one-line draw calls in `render.rs`
-(clock transform, whisper frame for `DrawContext`, splash overlay).
+`HauntState::holds_splash_door` before self-expiring), two input lines
+(splash input to the held door, and a swallow while the breakthrough
+plays), `HauntState::breakthrough_playing` keeping `wake_hint` hot, and
+the draw hooks in `render.rs` (clock transform, whisper and breakthrough
+frames for `DrawContext`, splash overlay, the breakthrough painted last
+over every modal).
 Chat's seams: the `/haunt` submit hook (admin-gated), the
 `requested_haunt` slot, the `own_message_landed` slot set in
 `push_message` (the message id *and* its room, since the won hit is put
@@ -114,7 +124,8 @@ holding it in `pending_name_hits` until `push_message` lands the message
 if a replica's delta is behind), `name_flicker` threaded through the chat
 view structs into the rows cache key (unchanged: the row builder corrupts
 whichever message id it is handed, so witnessing cost the chat renderer
-nothing), and `ChatService::send_first_contact_invitation_task`. Outside the domain:
+nothing), and `ChatService::send_first_contact_invitation_task` (answers
+the claim on a oneshot, then sends the DM after a delay). Outside the domain:
 `app/flags/svc.rs` (the switches), `app/ai/screen.rs::screen_bio` (the
 bio verdict), `ProfileService`'s first-contact tasks (the row claims),
 `late-core`'s `models/deadchannel_name_hit.rs` (the wire's channel,
@@ -200,10 +211,14 @@ lines carry no face; every other room renders exactly as before.
    name hits have reached `NAME_TOTAL_CAP` and
    `FirstContactMarks::whisper_due` holds (under the cap, and the last
    delivery a day or more ago): the haunting follows you home, and comes
-   back. The splash neither skips nor expires while held; input is
-   acknowledged (static surge, skip-hint dissolve) but never obeyed; the
-   voiced line types itself (in answer to the first keypress, or on its
-   own); a hard cap (~10s) releases whatever the phase. Delivery claims
+   back. The splash neither skips nor expires while held,
+   and since 2026-09-13 the scene waits on nobody: the static pulses on its
+   own rhythm (~1s) from the first frame, the voiced line types itself once
+   the base splash line is done (`VOICE_TICK`), the skip hint dissolves as
+   it starts, and every key, Esc included, is swallowed and does nothing
+   (without a keypress the old scene was a quiet line under the cup, and
+   people were missing the door). A hard cap (~10s) releases whatever the
+   phase. Delivery claims
    one mark (`claim_first_contact_whisper`: increments
    `first_contact_whisper_hits` and stamps `first_contact_whisper_at`,
    conditional on the cap and the gap in the row, so two devices that
@@ -212,8 +227,21 @@ lines carry no face; every other room renders exactly as before.
    accepts, because claiming at arming would burn a whisper on every
    dropped SSH session). A kill-switch drop or lost session leaves the
    mark unspent.
-4. **Invitation (the whole game is opt-in).** `INVITE_DELAY_HOURS` (20)
-   after the second delivered whisper, the game's first voice - `afterglow`
+4. **Breakthrough, then the invitation (the whole game is opt-in).**
+   `INVITE_DELAY_HOURS` (20) after the second delivered whisper the
+   breakthrough comes due (`FirstContactMarks::breakthrough_due`), and the
+   next own send plays it (added 2026-09-13: the DM alone, met cold, was
+   taken for spam). The send asks
+   `ChatService::send_first_contact_invitation_task` for the once-ever
+   claim; the task answers `Won` or `Taken` on a oneshot before it sends
+   anything, the scene plays only on `Won` (a `Taken` stamps the marks, a
+   failed ask retries on the next send), and the task sends the DM after
+   `Breakthrough::dm_delay`, the moment the line has typed, whether or not
+   the session is still there. The scene is private and full screen: the
+   door's static, heavier and faster, over the whole frame and every
+   modal, `BREAKTHROUGH_LINE` typing in a gap torn out of the middle, about
+   six seconds, input swallowed before the parser, the kill switch cuts
+   it. The DM comes from the game's first voice - `afterglow`
    (GAME.md reserved the name for something inside the world), a
    bartender-shaped ghost user (fixed fingerprint `afterglow-fp-000`)
    that is never auto-joined into public rooms - sends one persistent DM.
@@ -329,7 +357,8 @@ Drained by `haunt::svc::tick`.
   stages armed for this session, the gate's three legs (active hours,
   touched settings, bio length and standing), glitch schedule, glitch
   and name hit counters against their caps, the witness (whether a beat
-  of somebody else's is on this screen), door, whisper, invite.
+  of somebody else's is on this screen), door, whisper, and the
+  breakthrough or invite.
 - `/haunt on` / `/haunt off` - the kill switch, an `app_flags` row: the
   flip lands on every replica through the `app_flag_changed` notify and
   survives a restart. `on` also forces this session chosen and arms the
@@ -344,7 +373,8 @@ Drained by `haunt::svc::tick`.
   caps, not the wire: the forced beat travels like a real one, which is
   how the public half of stage 2 is watched from a second session.
 - `/haunt replay` - re-run the splash whisper now, ignoring the marks.
-- `/haunt invite` - send the invitation DM now, skipping the delay.
+- `/haunt invite` - the next own send breaks through, skipping the delay;
+  the DM follows exactly as for a real one.
 - `/haunt reset` - wipe every mark; the chain starts over.
 
 ## 6. Gotchas
@@ -391,7 +421,9 @@ Drained by `haunt::svc::tick`.
   (the splash's own typing clock), the glitch and flicker on
   `marquee_tick` (wall-derived 66ms units).
 - Input swallowed by the held door leaves the VT parser mid-escape; both
-  the input path and the release path call `vt_input.reset()`.
+  the input path and the release path call `vt_input.reset()`. Input
+  swallowed by the breakthrough is dropped before the feed, so it needs no
+  reset.
 - Every voiced or corrupted character obeys the screenshot test (static /
   signal / city / channel vocabulary, never Unix internals); the whisper
   pool and the invitation plea need feed-template-grade variety before
@@ -416,7 +448,7 @@ Drained by `haunt::svc::tick`.
   bio standing, and the `GateVerdict`; `first contact gate shut` when
   haunting is off (info for staff, debug for everyone else); `first
   contact armed` for every session that can fire stage 1, with `chosen`
-  and `whisper_armed`; then one line per hit, whisper, invitation, bio
+  and `whisper_armed`; then one line per hit, whisper, breakthrough, invitation, bio
   screen, and runner. How many the gate turns away, and on which leg, is
   `late_ssh_first_contact_gate_total{verdict, audience}` (one count per
   connect, not per person); bio screens by outcome are
