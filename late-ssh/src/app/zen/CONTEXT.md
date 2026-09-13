@@ -2,9 +2,9 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/zen`
-- Last updated: 2026-09-12 (Esc never leaves the page; only the chord does. A session can land here (the "Land on" tweak), and the first-visit tour stops here after the Leaderboards. See Status and §3; `input_flow_test.rs` pins the leave rules.)
+- Last updated: 2026-09-12 (Esc never leaves the page; only the chord does. A session can land here (the "Land on" tweak), and the first-visit tour stops here after the Leaderboards. See Status and §3; `input_flow_test.rs` pins the leave rules. The pet watches the bonsai as well as the tank: a round is two legs, twenty minutes strolling then five at the tank, then the same twenty and five at the tree, and a pet with only one of them beside it spends both windows there. Chatty joined the calm moods that watch at all. See the pet tile in §1 and the render-time gotcha in §4; `pet/ui_test.rs` covers the alternation, the single-neighbour fallback, and the quieter beat at the tree.)
 - Purpose: the full-bleed page that cuts the clubhouse down to the things you keep alive.
-- Status: Experimental. Reached with `Ctrl+F` from any page, or `/zen` from any composer (same toggle); a surface over that page, absent from the Tab cycle. The chord returns to the page it was opened from (`App::zen_return_screen`), or to the Clubhouse when the session landed on Zen (Settings, Tweaks, "Land on"). Leaving by any route (a digit, a tour step) clears the return page in `App::set_screen`, so a later chord never hands back a stale page. The first-visit tour's `VisitZen` stop is reached with the chord and left with `0`.
+- Status: Experimental. Reached with `Ctrl+F` from any page, or `/zen` from any composer (same toggle); a surface over that page, absent from the Tab cycle. The chord returns to the page it was opened from (`App::zen_return_screen`), or to the Clubhouse when the session landed on Zen (Settings, Tweaks, "Land on"). Leaving by any route (a digit, a tour step) clears the return page in `App::set_screen`, so a later chord never hands back a stale page. The first-visit tour's `VisitZen` stop is reached with the chord (or Enter, for terminals that swallow it) and left with `0`.
 - Parent context: `../../../../CONTEXT.md`
 
 ---
