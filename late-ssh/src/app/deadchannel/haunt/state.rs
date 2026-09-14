@@ -531,12 +531,12 @@ const LINGER_TICKS: usize = 24;
 /// around tick 122, so the cap is a backstop, not a beat.
 const HARD_CAP_TICKS: usize = 150;
 /// The static pulses on its own rhythm for the whole scene: one surge
-/// every this many ticks (~1.6s).
-const SURGE_PERIOD_TICKS: usize = 24;
-/// How long one static surge decays (~1s).
-const SURGE_TICKS: usize = 14;
-/// How long the skip hint takes to dissolve once the voice starts (~1.3s).
-const DISSOLVE_TICKS: usize = 20;
+/// every this many ticks (~1.3s).
+const SURGE_PERIOD_TICKS: usize = 20;
+/// How long one static surge decays (~700ms).
+const SURGE_TICKS: usize = 11;
+/// How long the skip hint takes to dissolve once the voice starts (~1s).
+const DISSOLVE_TICKS: usize = 16;
 
 /// The voiced lines for the first held door: the static has noticed
 /// you. Screenshot-test vocabulary only (static, signal, city, channel,
@@ -1128,9 +1128,9 @@ const BREAKTHROUGH_VOICE_TICK: usize = 8;
 /// How long the typed line holds before the screen heals (~2s).
 const BREAKTHROUGH_LINGER_TICKS: usize = 30;
 /// Quicker pulses than the door's: this is the breach, not the knock. One
-/// surge every ~1.2s, each fading over ~800ms.
-const BREAKTHROUGH_SURGE_PERIOD_TICKS: usize = 18;
-const BREAKTHROUGH_SURGE_TICKS: usize = 12;
+/// surge every ~900ms, each fading over ~650ms.
+const BREAKTHROUGH_SURGE_PERIOD_TICKS: usize = 14;
+const BREAKTHROUGH_SURGE_TICKS: usize = 10;
 /// Wall length of one `marquee_tick`.
 const MARQUEE_TICK_MS: u64 = 66;
 

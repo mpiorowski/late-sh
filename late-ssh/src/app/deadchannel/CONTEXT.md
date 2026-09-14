@@ -219,7 +219,7 @@ lines carry no face; every other room renders exactly as before.
    delivery a day or more ago): the haunting follows you home, and comes
    back. The splash neither skips nor expires while held,
    and since 2026-09-13 the scene waits on nobody: the static pulses on its
-   own rhythm (~1.6s, each noise pattern held ~200ms) from the first
+   own rhythm (~1.3s, each noise pattern held ~130ms) from the first
    frame, the voiced line types itself once
    the base splash line is done (`VOICE_TICK`), the skip hint dissolves as
    it starts, and every key, Esc included, is swallowed and does nothing

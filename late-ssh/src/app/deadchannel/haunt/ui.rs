@@ -22,9 +22,9 @@ const SPLASH_SURGE_DENSITY: f32 = 0.18;
 /// The breakthrough tears harder than the door knocks.
 const BREAKTHROUGH_SURGE_DENSITY: f32 = 0.32;
 /// How many ticks one static pattern holds before the noise shifts
-/// (~200ms). Re-rolled on every 66ms tick it read as a frantic fizz; held,
+/// (~130ms). Re-rolled on every 66ms tick it read as a frantic fizz; held,
 /// it reads as interference rolling through.
-const STATIC_FRAME_TICKS: usize = 3;
+const STATIC_FRAME_TICKS: usize = 2;
 
 /// One frame of whisper theater, precomputed for the splash renderer.
 pub(crate) struct WhisperFrame {
