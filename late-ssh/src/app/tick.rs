@@ -967,7 +967,7 @@ impl App {
             changed |= anim_half
                 && crate::app::pet::ui::frame_changed(
                     self.pet_state.mood(),
-                    inputs.watching,
+                    inputs.neighbours,
                     self.pet_state.perch(),
                     self.pet_state.animation_ticks(),
                     inputs.travel,
@@ -1253,6 +1253,7 @@ impl App {
     /// (RenderSignal) interrupt the sleep regardless.
     pub fn wake_hint(&self) -> Duration {
         let hot = self.show_splash
+            || self.haunt.breakthrough_playing()
             || self.last_input_at.elapsed() < POST_INPUT_HOT_WINDOW
             || self.ultimate_state.has_active_effect()
             || self.screen == Screen::HouseTable

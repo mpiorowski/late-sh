@@ -202,9 +202,9 @@ pub struct LiveStreamView {
 }
 
 /// Point-in-time view of every registered stream (pending ones included:
-/// the rail's "stream" section lists a stream from `/golive` on, while the
-/// #lounge announcement and the LIVE tag wait for `live`), delivered via
-/// `watch` so `App::tick` reads local memory only.
+/// the watch page resolves from `/golive` on, while the rail's "stream"
+/// section, the room picker, the #lounge announcement, and the LIVE tag wait
+/// for `live`), delivered via `watch` so `App::tick` reads local memory only.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StreamSnapshot {
     pub streams: Vec<LiveStreamView>,

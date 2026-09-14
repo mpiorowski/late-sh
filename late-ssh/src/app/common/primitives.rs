@@ -78,7 +78,7 @@ pub enum Screen {
     Clubhouse,
     /// Zen (`Ctrl+F` from anywhere): the tiling layout you arrange yourself
     /// (`app/zen`). A surface over the page you were on, absent from the Tab
-    /// cycle; Esc or the chord returns there.
+    /// cycle; only the chord returns there (Esc stays).
     Zen,
     /// Full-screen daily-match board. Entered only from the Daily Games
     /// modal, absent from the Tab cycle; Esc returns to the modal.

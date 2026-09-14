@@ -1042,7 +1042,7 @@ impl russh::server::Handler for ClientHandler {
             artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
 
             is_new_user: self.is_new_user,
-            land_on_home: late_core::models::user::extract_land_on_home(&user.settings),
+            landing_page: late_core::models::user::extract_landing_page(&user.settings),
             paper_at_login: late_core::models::user::extract_paper_at_login(&user.settings),
 
             // Display config

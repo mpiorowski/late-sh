@@ -183,6 +183,10 @@ struct DrawContext<'a> {
     house: &'a crate::app::lobby::house::state::HouseState,
     house_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
     games_hub_selected: usize,
+    /// Rows the selected Games hub landing is scrolled down.
+    games_hub_scroll: u16,
+    /// Where the hub records how far the selected landing can scroll.
+    games_hub_max_scroll: &'a std::cell::Cell<u16>,
     /// The open rc config modal (game plus stored content), if any.
     door_rc_modal: Option<(late_core::models::door_rc::DoorRcGame, Option<&'a str>)>,
     rebels_enabled: bool,
@@ -312,6 +316,9 @@ struct DrawContext<'a> {
     /// One frame of first-contact whisper theater over the splash, `None`
     /// unless the door is held this frame. See `app/deadchannel`.
     whisper: Option<crate::app::deadchannel::haunt::ui::WhisperFrame>,
+    /// One frame of the first-contact breakthrough, painted over
+    /// everything; `None` unless it is playing. See `app/deadchannel`.
+    breakthrough: Option<crate::app::deadchannel::haunt::ui::BreakthroughFrame>,
     listen_url: &'a str,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
@@ -1216,6 +1223,8 @@ impl App {
                         house: &self.house,
                         house_chat_view,
                         games_hub_selected: self.games_hub_state.selected(),
+                        games_hub_scroll: self.games_hub_state.scroll(),
+                        games_hub_max_scroll: self.games_hub_state.max_scroll(),
                         door_rc_modal: self
                             .door_rc_modal
                             .map(|game| (game, self.door_rcs.get(&game).map(String::as_str))),
@@ -1326,6 +1335,10 @@ impl App {
                             &self.haunt,
                             self.splash_ticks,
                             &self.splash_hint,
+                        ),
+                        breakthrough: crate::app::deadchannel::haunt::ui::breakthrough_frame_for(
+                            &self.haunt,
+                            self.marquee_tick,
                         ),
                         listen_url: &listen_url,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
@@ -1645,6 +1658,8 @@ impl App {
                     content_area,
                     &crate::app::door::hub::ui::HubView {
                         selected: ctx.games_hub_selected,
+                        scroll: ctx.games_hub_scroll,
+                        max_scroll: ctx.games_hub_max_scroll,
                         delete_confirm: ctx.door_delete_confirm,
                         rebels_enabled: ctx.rebels_enabled,
                         nethack_enabled: ctx.nethack_enabled,
@@ -2151,6 +2166,12 @@ impl App {
                 );
             }
             None => {}
+        }
+
+        // First contact's breakthrough (`app/deadchannel/haunt`): the whole
+        // frame, over every modal.
+        if let Some(breakthrough) = &ctx.breakthrough {
+            crate::app::deadchannel::haunt::ui::draw_breakthrough(frame, area, breakthrough);
         }
     }
 }

@@ -117,7 +117,7 @@ async fn send_pre_translates_to_english_for_opted_in_authors() {
             room_list_mode: late_core::models::user::RoomListMode::On,
             keep_composer_focused: false,
             start_with_music_muted: false,
-            land_on_home: false,
+            landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
             show_flag_fallback: false,
             translate_to: TranslateLang::En,
@@ -734,7 +734,7 @@ async fn room_tail_task_loads_favorite_room_history() {
             room_list_mode: late_core::models::user::RoomListMode::On,
             keep_composer_focused: false,
             start_with_music_muted: false,
-            land_on_home: false,
+            landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
             show_flag_fallback: false,
             translate_to: late_core::models::message_translation::TranslateLang::En,
@@ -4992,7 +4992,9 @@ mod gild {
 
 #[tokio::test]
 async fn first_contact_invitation_sends_one_dm_and_claims_once() {
-    use crate::app::deadchannel::haunt::state::{VOICE_FINGERPRINT, VOICE_USERNAME};
+    use crate::app::deadchannel::haunt::state::{
+        InvitationClaim, VOICE_FINGERPRINT, VOICE_USERNAME,
+    };
 
     let test_db = new_test_db().await;
     let service = ChatService::new(
@@ -5001,10 +5003,30 @@ async fn first_contact_invitation_sends_one_dm_and_claims_once() {
     );
     let target = create_test_user(&test_db.db, "first-contact-target").await;
 
-    // Two racing requests (two devices noticing the due date): the claim
-    // lets exactly one DM through.
-    service.send_first_contact_invitation_task(target.id, target.username.clone());
-    service.send_first_contact_invitation_task(target.id, target.username.clone());
+    // Two racing requests (two devices whose sends came due at once): the
+    // claim lets exactly one of them play the scene and one DM through.
+    let first = service.send_first_contact_invitation_task(
+        target.id,
+        target.username.clone(),
+        Duration::ZERO,
+    );
+    let second = service.send_first_contact_invitation_task(
+        target.id,
+        target.username.clone(),
+        Duration::ZERO,
+    );
+    let answers = [
+        first.await.expect("first answer"),
+        second.await.expect("second answer"),
+    ];
+    assert_eq!(
+        answers
+            .iter()
+            .filter(|answer| **answer == InvitationClaim::Won)
+            .count(),
+        1,
+        "exactly one session may break through: {answers:?}"
+    );
 
     let client = test_db.db.get().await.expect("db client");
     crate::test_helpers::wait_until(
@@ -5172,7 +5194,7 @@ async fn first_contact_voice_ensure_is_idempotent_and_claims_the_name() {
 
 #[tokio::test]
 async fn first_contact_invitation_claim_survives_a_failed_send() {
-    use crate::app::deadchannel::haunt::state::VOICE_USERNAME;
+    use crate::app::deadchannel::haunt::state::{InvitationClaim, VOICE_USERNAME};
 
     let test_db = new_test_db().await;
     let service = ChatService::new(
@@ -5185,11 +5207,12 @@ async fn first_contact_invitation_claim_survives_a_failed_send() {
     let _squatter = create_test_user(&test_db.db, VOICE_USERNAME).await;
     let target = create_test_user(&test_db.db, "fc-claim-target").await;
 
-    service.send_first_contact_invitation_task(target.id, target.username.clone());
-
-    // The failure is silent from out here; give the task time to run its
-    // course (a negative assertion, like the racing-duplicate check above).
-    sleep(Duration::from_millis(400)).await;
+    // The asking session hears the failure, so nothing plays there.
+    let answer = service
+        .send_first_contact_invitation_task(target.id, target.username.clone(), Duration::ZERO)
+        .await
+        .expect("answer");
+    assert_eq!(answer, InvitationClaim::Failed);
 
     // The once-ever claim must not be burned by a DM that never sent: the
     // stamp stays absent so a later session retries the invitation.

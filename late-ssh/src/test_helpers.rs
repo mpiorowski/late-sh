@@ -441,6 +441,16 @@ pub struct SessionWorld {
     /// refresh. Unset means the session gets no leaderboard channel at all.
     pub leaderboard_rx:
         Option<watch::Receiver<Arc<late_core::models::leaderboard::LeaderboardData>>>,
+    /// The account's "Land on" tweak. Unset lands in the Clubhouse, the
+    /// production default.
+    pub landing_page: Option<late_core::models::user::LandingPage>,
+    /// A first-ever session, which always starts in the Clubhouse.
+    pub is_new_user: bool,
+    /// One replica's chat service, shared the way production shares it:
+    /// every session on it hears every other's `ChatEvent`s. Unset gives
+    /// the session its own. Mention notifications ride the app's own
+    /// `NotificationService`, which this does not share.
+    pub chat_service: Option<ChatService>,
 }
 
 pub fn make_app_in_world(db: Db, user_id: Uuid, session_token: &str, world: SessionWorld) -> App {
@@ -465,7 +475,10 @@ fn make_app_with_chat_service_and_permissions(
     // main.rs: mention events broadcast on the instance's channel, so a second
     // instance would never deliver them to the app.
     let notification_service = NotificationService::new(db.clone());
-    let chat_service = ChatService::new(db.clone(), notification_service.clone());
+    let chat_service = match world.chat_service.clone() {
+        Some(shared) => shared,
+        None => ChatService::new(db.clone(), notification_service.clone()),
+    };
     let activity_tx = broadcast::channel::<ActivityEvent>(64).0;
     let quest_service = QuestService::new(db.clone(), activity_tx.clone());
     let quest_snapshot_rx = quest_service.subscribe_snapshot(user_id);
@@ -676,8 +689,11 @@ fn make_app_with_chat_service_and_permissions(
         crown_service: None,
         pot_service: None,
         activity_feed_rx: None,
-        is_new_user: false,
-        land_on_home: false,
+        is_new_user: world.is_new_user,
+        landing_page: match world.landing_page {
+            Some(page) => page,
+            None => late_core::models::user::LandingPage::Clubhouse,
+        },
         paper_at_login: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
@@ -687,7 +703,14 @@ fn make_app_with_chat_service_and_permissions(
         initial_radio_station: late_core::models::user::RadioStation::default(),
     })
     .expect("app");
+    let landed = app.screen;
     app.skip_splash_for_tests();
+    // The suite starts on Home, but a test that sets the landing inputs is
+    // asserting where the session landed, so it keeps that screen.
+    if world.landing_page.is_some() || world.is_new_user {
+        app.screen = landed;
+        app.sync_visible_chat_room();
+    }
     (app, chat_service)
 }
 
@@ -921,7 +944,7 @@ pub fn make_app_with_paired_client(
         pot_service: None,
         activity_feed_rx: None,
         is_new_user: false,
-        land_on_home: false,
+        landing_page: late_core::models::user::LandingPage::Clubhouse,
         paper_at_login: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_icecast_stream: late_core::models::user::IcecastStream::default(),

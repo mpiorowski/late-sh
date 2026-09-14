@@ -867,10 +867,10 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
-            TweakRow::LandOnHome,
+            TweakRow::LandingPage,
             width,
-            "Land on Home page",
-            toggle_span(state.draft().land_on_home),
+            "Land on",
+            landing_page_span(state.draft().landing_page),
         )),
         sections[13],
     );
@@ -2636,6 +2636,22 @@ fn translate_to_span(lang: late_core::models::message_translation::TranslateLang
         text: lang.label().to_string(),
         style: Style::default()
             .fg(theme::SUCCESS())
+            .add_modifier(Modifier::BOLD),
+    }
+}
+
+/// The "Land on" row: the page a session opens on, cycled with the arrows.
+fn landing_page_span(page: late_core::models::user::LandingPage) -> ValueSpan {
+    use late_core::models::user::LandingPage;
+    let text = match page {
+        LandingPage::Clubhouse => "◂ Clubhouse ▸",
+        LandingPage::Home => "◂ Home ▸",
+        LandingPage::Zen => "◂ Zen ▸",
+    };
+    ValueSpan {
+        text: text.to_string(),
+        style: Style::default()
+            .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     }
 }

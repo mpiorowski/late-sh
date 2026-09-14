@@ -91,7 +91,9 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 qrcodegen = "1.8.0"
 rand = "0.8"
 rand_core = "0.6"
-ratatui = "0.30"
+# unstable-rendered-line-info: `Paragraph::line_count`, which the Games hub
+# landings use to clamp their scroll (late-ssh `door::landing::render_scrolled`).
+ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 ringbuf = "0.4.8"
 rstest = "0.26.1"
 rumenx-sudoku = "1.0.0"

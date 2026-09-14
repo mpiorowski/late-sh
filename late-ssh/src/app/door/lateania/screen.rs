@@ -94,6 +94,7 @@ fn draw_screen(frame: &mut Frame, area: Rect, view: &LateaniaScreenView<'_>) {
         view.online,
         view.slots,
         view.slot_cursor,
+        0,
     );
 }
 
@@ -240,8 +241,17 @@ pub fn draw_landing(
     online: usize,
     slots: &SlotList,
     slot_cursor: usize,
-) {
-    draw_launch_copy(frame, area, delete_confirm, online, slots, slot_cursor);
+    scroll: u16,
+) -> u16 {
+    draw_launch_copy(
+        frame,
+        area,
+        delete_confirm,
+        online,
+        slots,
+        slot_cursor,
+        scroll,
+    )
 }
 
 /// One row of the character-select list: the highlighted slot gets a `>`
@@ -314,7 +324,8 @@ fn draw_launch_copy(
     online: usize,
     slots: &SlotList,
     slot_cursor: usize,
-) {
+    scroll: u16,
+) -> u16 {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -421,7 +432,12 @@ fn draw_launch_copy(
         )));
     }
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    crate::app::door::landing::render_scrolled(
+        frame,
+        inner,
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        scroll,
+    )
 }
 
 fn lateania_logo() -> Vec<Line<'static>> {

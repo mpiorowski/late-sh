@@ -12,12 +12,14 @@ use crate::app::door::rebels::render::blit_screen;
 
 pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
     match state.mode() {
-        Mode::Launcher => draw_landing(frame, area, state.is_enabled()),
+        Mode::Launcher => {
+            draw_landing(frame, area, state.is_enabled(), 0);
+        }
         Mode::Running => draw_running(frame, area, state),
     }
 }
 
-pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
+pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, scroll: u16) -> u16 {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -73,7 +75,12 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
         )),
     ]);
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    crate::app::door::landing::render_scrolled(
+        frame,
+        inner,
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        scroll,
+    )
 }
 
 fn codekeep_logo() -> Vec<Line<'static>> {

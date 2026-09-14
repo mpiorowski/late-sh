@@ -23,7 +23,7 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 /// `landing::handle_launch_block`).
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
     if !state.is_enabled() {
-        draw_landing(frame, area, false, false);
+        draw_landing(frame, area, false, false, 0);
         return;
     }
     let launch = landing::handle_launch_block(
@@ -36,12 +36,12 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
             theme::SUCCESS(),
         ),
     );
-    render_landing(frame, area, launch);
+    render_landing(frame, area, launch, 0);
 }
 
 /// Brogue landing copy with the classic one-line Launch block, used by the
 /// Games hub when Brogue is selected (the hub has no per-session door state).
-pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, live: bool) {
+pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, live: bool, scroll: u16) -> u16 {
     let action_line = if live {
         landing::action(
             ">",
@@ -62,11 +62,11 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, live: bool) {
             Style::default().fg(theme::ERROR()),
         ))
     };
-    render_landing(frame, area, vec![action_line]);
+    render_landing(frame, area, vec![action_line], scroll)
 }
 
 /// The landing body around a caller-supplied Launch block.
-fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
+fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>, scroll: u16) -> u16 {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -144,7 +144,12 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
         )),
     ]);
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    crate::app::door::landing::render_scrolled(
+        frame,
+        inner,
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        scroll,
+    )
 }
 
 fn brogue_logo() -> Vec<Line<'static>> {

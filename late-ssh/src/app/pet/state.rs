@@ -91,12 +91,12 @@ pub struct Perch {
 
 /// What the last draw of the box used, recorded for the tick: how far the
 /// pet can travel, the zone it travels in (so the cursor can be placed in
-/// it), whether a tank is beside it, and where it stood.
+/// it), what it has to watch beside it, and where it stood.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PetFrameInputs {
     pub travel: PetTravel,
     pub zone: Rect,
-    pub watching: Option<super::ui::WatchSide>,
+    pub neighbours: super::ui::Neighbours,
     pub position: (usize, usize),
 }
 

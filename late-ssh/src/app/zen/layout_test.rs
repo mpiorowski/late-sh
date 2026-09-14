@@ -1,8 +1,8 @@
 use ratatui::layout::Rect;
 
-use super::{neighbour_side, tile_rects};
-use crate::app::pet::ui::WatchSide;
-use crate::app::zen::state::{Dir, Node, TileKind};
+use super::{neighbour_side, pet_neighbours, tile_rects};
+use crate::app::pet::ui::{Neighbours, WatchSide};
+use crate::app::zen::state::{Dir, Node, RiceLayout, TileKind};
 
 #[test]
 fn a_tank_tile_touching_the_pet_tile_is_a_neighbour_on_that_side() {
@@ -58,4 +58,38 @@ fn a_tile_across_the_page_or_on_a_diagonal_is_not_a_neighbour() {
     let pet = Rect::new(0, 0, 10, 10);
     let tank = Rect::new(10, 10, 10, 10);
     assert_eq!(neighbour_side(pet, tank, 0), None);
+}
+
+#[test]
+fn the_default_page_puts_the_tank_below_the_pet_and_the_bonsai_to_its_left() {
+    let rice = RiceLayout::default();
+    for area in [Rect::new(0, 0, 200, 50), Rect::new(0, 0, 120, 30)] {
+        let rects = tile_rects(&rice.root, area, rice.look.gap as u16, None);
+        assert_eq!(
+            pet_neighbours(&rects, rice.look.gap as u16),
+            Neighbours {
+                tank: Some(WatchSide::Below),
+                bonsai: Some(WatchSide::Left),
+            },
+            "on a {}x{} page",
+            area.width,
+            area.height
+        );
+    }
+}
+
+#[test]
+fn a_zoomed_pet_tile_has_no_neighbours() {
+    let rice = RiceLayout::default();
+    let area = Rect::new(0, 0, 200, 50);
+    let rects = tile_rects(&rice.root, area, rice.look.gap as u16, None);
+    let pet = rects
+        .iter()
+        .position(|(kind, _)| *kind == TileKind::Pet)
+        .expect("the default page holds a pet tile");
+    let zoomed = tile_rects(&rice.root, area, rice.look.gap as u16, Some(pet));
+    assert_eq!(
+        pet_neighbours(&zoomed, rice.look.gap as u16),
+        Neighbours::default()
+    );
 }

@@ -233,6 +233,23 @@ pub fn draw_name_modal(
     frame.render_widget(Paragraph::new(right).right_aligned(), footer_cols[2]);
 }
 
+/// Render a landing's body into `area`, scrolled down `scroll` rows, and
+/// return the furthest it can scroll: the rows left over once the paragraph
+/// is wrapped to `area`'s width. The offset is clamped here, so a stale
+/// `scroll` (a shorter landing, a taller terminal) never scrolls past the last
+/// line. Every Games hub landing ends in this.
+pub fn render_scrolled(
+    frame: &mut Frame,
+    area: Rect,
+    paragraph: Paragraph<'_>,
+    scroll: u16,
+) -> u16 {
+    let rows = u16::try_from(paragraph.line_count(area.width)).unwrap_or(u16::MAX);
+    let max_scroll = rows.saturating_sub(area.height);
+    frame.render_widget(paragraph.scroll((scroll.min(max_scroll), 0)), area);
+    max_scroll
+}
+
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     let vertical = Layout::vertical([Constraint::Length(height.min(area.height))])
         .flex(Flex::Center)
@@ -242,3 +259,7 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
         .split(vertical[0]);
     horizontal[0]
 }
+
+#[cfg(test)]
+#[path = "landing_test.rs"]
+mod landing_test;

@@ -127,7 +127,7 @@ kubectl cp -n default ./music/. "$POD":/music/ -c liquidsoap
 | Icecast | `icecast-sv` | 8000 | Audio streaming server |
 | Liquidsoap | none (dials out to `icecast-sv`) | - | Playlist encoder |
 | LiveKit | `livekit-sv` | 7880 (WSS/API), 7881 TCP, 7882 UDP, 3478 UDP, 5349 TCP | Voice-room SFU, ICE/TURN media |
-| Minecraft | none (hostPort) | 25565 TCP on the node | Paper server with GriefPrevention, whitelist-only |
+| Minecraft | none (hostPort) | 25565 TCP on `agent-1` | Paper server with GriefPrevention, whitelist-only |
 | PostgreSQL | `postgres-rw` | 5432 | CloudNativePG cluster |
 | Monitoring | OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, VictoriaTraces, Grafana | various | Full observability stack |
 
@@ -143,14 +143,80 @@ On a fresh cluster, the `livekit` pod may wait for cert-manager to create the
 `ContainerCreating`, check certificate issuance before treating the rollout as
 failed.
 
+### Nodes
+
+| Node | RKE2 role | Placement | Runs |
+|------|-----------|-----------|------|
+| `server-1` | server (control plane, etcd) | untainted | service-ssh, redis, doors, ingress-nginx, ipv6-proxy, LiveKit, Postgres |
+| `agent-1` | agent | label and `NoSchedule` taint `role=support` | service-web, Icecast, Liquidsoap, otel-collector, vmagent, kube-state-metrics, VictoriaMetrics/Logs/Traces, Grafana, Minecraft, second CoreDNS replica |
+
+A workload lands on `agent-1` only when it carries both the `role=support`
+node selector and toleration (`support_node_*` locals in `defaults.tf`). The
+taint keeps everything else, service-ssh included, on `server-1`. Workloads
+with a `local-path` volume stay pinned to the node that holds the data, so
+moving one needs a fresh volume on the new node, not just the selector.
+
+`agent-1` is a worker, not a second control plane: with two etcd members both
+must be up, so a second server adds a failure mode without adding safety.
+Control-plane HA starts at three servers.
+
+#### Adding an agent node
+
+`setup_rke2.sh` bootstraps a whole cluster, including reinstalling
+`server-1` and overwriting kubeconfig and the `KUBE_CONFIG` secret, so do not
+rerun it to add a node. On a fresh Debian host, as root:
+
+```bash
+# on your laptop: the join token
+ssh -p 22222 root@<server-1-ip> cat /var/lib/rancher/rke2/server/node-token
+
+# on the new host: admin SSH on 22222, like every node
+tee /etc/ssh/sshd_config.d/99-admin.conf >/dev/null <<'CONFIG'
+Port 22222
+CONFIG
+sshd -t && systemctl reload ssh
+
+# on the new host: join as an agent at server-1's exact RKE2 version
+mkdir -p /etc/rancher/rke2
+tee /etc/rancher/rke2/config.yaml >/dev/null <<'CONFIG'
+server: https://<server-1-ip>:9345
+token: <token>
+node-name: agent-1
+node-label:
+  - role=support
+node-taint:
+  - role=support:NoSchedule
+CONFIG
+curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE=agent INSTALL_RKE2_VERSION=v1.34.4+rke2r1 sh -
+systemctl enable rke2-agent.service
+systemctl start rke2-agent.service
+```
+
+Pin `INSTALL_RKE2_VERSION` to whatever `kubectl get nodes` shows for
+`server-1`: an agent newer than its server is unsupported. Nodes talk on TCP
+9345 and 6443 (agent to server), UDP 8472 (Canal VXLAN) and TCP 10250
+(kubelet) both ways; open those in any Hetzner Cloud Firewall attached to
+either host.
+
 ### Minecraft
 
-`infra/minecraft.tf` runs a Paper server on the node's port 25565 as a pod
+`infra/minecraft.tf` runs a Paper server on `agent-1`'s port 25565 as a pod
 hostPort, deliberately not through the ingress-nginx TCP map: nginx reloads
 drop long-lived TCP sessions, which would kick every player on each
-cert-manager renewal. Players connect to `late.sh` (client default port).
-The world lives on the `minecraft-data` PVC (`local-path`, `prevent_destroy`);
-`worldborder set 6000` at startup caps its disk growth on the shared node disk.
+cert-manager renewal. `late.sh` and the `*.late.sh` wildcard point at
+`server-1`, so two DNS records, managed by hand like the rest of the zone,
+send players to `agent-1`:
+
+```
+mc.late.sh                A    <agent-1-ip>
+_minecraft._tcp.late.sh   SRV  0 5 25565 mc.late.sh.
+```
+
+The explicit A record overrides the wildcard, and the SRV record lets the
+client accept plain `late.sh`. Both must be DNS-only, never proxied: the
+traffic is raw TCP. The world lives on the `minecraft-data` PVC (`local-path`,
+`prevent_destroy`) on `agent-1`'s disk; `worldborder set 6000` at startup caps
+its disk growth there.
 
 Access is online-mode plus an enforced whitelist. `MINECRAFT_WHITELIST` and
 `MINECRAFT_OPS` seed the lists on every boot. Day-to-day changes go through

@@ -4,11 +4,14 @@
 //! eligibility gate ([`FirstContactGate`]) that decides who goes past
 //! stage 1.
 //!
-//! The whisper is delivered on the splash screen, once per person ever:
-//! this one time the splash does not skip. Input is always acknowledged
-//! (static surges, the skip hint dissolves) but control is withheld until
-//! the voiced line has landed; a hard time cap then opens the door no
-//! matter what. Pure state machines: no I/O, no clock reads. `App` owns
+//! The whisper is delivered on the splash screen, twice per person ever:
+//! those times the splash does not skip. The scene plays on its own clock
+//! (the static pulses from the first frame, the voiced line types itself)
+//! and every key is swallowed, Esc included; a hard time cap opens the door
+//! no matter what. The last rung is the breakthrough ([`Breakthrough`]):
+//! once the invitation is due, the next own send tears the whole screen
+//! with the same static while a line says the voice got through, and the
+//! DM follows. Pure state machines: no I/O, no clock reads. `App` owns
 //! arming, the switches, and the persistence.
 //!
 //! Replica rule (root CONTEXT.md): nothing here is a source of truth. The
@@ -33,8 +36,9 @@ use uuid::Uuid;
 pub(crate) const VOICE_USERNAME: &str = "afterglow";
 pub(crate) const VOICE_FINGERPRINT: &str = "afterglow-fp-000";
 
-/// Hours between the last delivered whisper and the invitation DM ("the
-/// day after the held door"). Twenty rather than twenty-four so a person
+/// Hours between the last delivered whisper and the breakthrough coming
+/// due ("the day after the held door"); the next own send after that plays
+/// it, and the invitation DM follows. Twenty rather than twenty-four so a person
 /// who connects every evening, never at the same minute, is not slipped a
 /// whole day by a two-hour miss (pacing tuned 2026-09-09: the full ladder
 /// fits a week of daily connects). `/haunt invite` skips the wait.
@@ -60,6 +64,27 @@ pub(crate) const INVITATION_PLEA: &str = "i don't have long on this channel. \
 there is a city under your clubhouse, behind the screen, and something old \
 is broadcasting at the bottom of it. the static has been trying your name \
 for weeks. we need runners. if you're willing: /join #deadchannel";
+
+/// What the breakthrough says while the screen tears: the voice got
+/// through, and it names itself, so the DM landing a moment later reads as
+/// the same voice rather than a stranger (the plea met cold was taken for
+/// spam). One line until design review, like the plea.
+pub(crate) const BREAKTHROUGH_LINE: &str =
+    "we finally reached you. afterglow is on the line, check your messages";
+
+/// How the invitation's once-ever claim came back to the session that
+/// asked. The task answers as soon as the claim is settled and sends the
+/// DM itself afterwards, once the scene has had time to say it is coming.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InvitationClaim {
+    /// This session holds the claim: the breakthrough plays, the DM follows.
+    Won,
+    /// Another device or replica took it first: nothing plays here.
+    Taken,
+    /// The voice, the DM room, or the claim query failed, and the task
+    /// logged it: nothing plays, and the claim stays untaken.
+    Failed,
+}
 
 /// The eligibility gate (GAME.md, "the static chooses the invested"):
 /// stages 2-4 target people who have put in the hours, deliberately
@@ -301,6 +326,19 @@ impl FirstContactMarks {
         self.whisper_hits >= WHISPER_TOTAL_CAP
     }
 
+    /// Whether the breakthrough is owed at `now`: every whisper played, the
+    /// last one at least [`INVITE_DELAY_HOURS`] ago, and no invitation yet.
+    /// The invitation claim re-judges the last leg on the row.
+    pub(crate) fn breakthrough_due(&self, now: DateTime<Utc>) -> bool {
+        if self.invited_at.is_some() || !self.whispers_spent() {
+            return false;
+        }
+        match self.whisper_at {
+            None => false,
+            Some(at) => now - at >= chrono::Duration::hours(INVITE_DELAY_HOURS),
+        }
+    }
+
     /// Everything already spent: what test apps use so no stage can fire
     /// under an admin-permission test unless a test arms one on purpose.
     #[cfg(test)]
@@ -327,6 +365,12 @@ pub(crate) struct HauntState {
     pub(crate) clock_glitch: Option<ClockGlitch>,
     /// Stage 2: the own-name flicker roller.
     pub(crate) name_flicker: Option<NameFlicker>,
+    /// Stage 4: the breakthrough, the full-screen beat that carries the
+    /// invitation in. Armed with stage 2 (chosen only).
+    pub(crate) breakthrough: Option<Breakthrough>,
+    /// The invitation claim a due send asked for, while it is out;
+    /// `svc::tick` drains it.
+    pub(crate) pending_invitation: Option<oneshot::Receiver<InvitationClaim>>,
     /// Stage 2 as the rest of the room sees it: somebody else's hit,
     /// replayed here from the seed that rode the wire. Every session can
     /// hold one, armed or not: witnessing is not a rung of the ladder, it
@@ -374,6 +418,14 @@ impl HauntState {
     /// owns the release.
     pub(crate) fn holds_splash_door(&self) -> bool {
         self.whisper.is_some()
+    }
+
+    /// Whether the breakthrough is on screen: the render loop stays on its
+    /// hot cadence and input is swallowed while this holds.
+    pub(crate) fn breakthrough_playing(&self) -> bool {
+        self.breakthrough
+            .as_ref()
+            .is_some_and(Breakthrough::is_playing)
     }
 
     /// Drop an armed-but-unplayed whisper (test bootstrap).
@@ -434,7 +486,8 @@ pub(crate) enum HauntCommand {
     Name,
     /// `/haunt replay`: re-run the splash whisper now, ignoring the mark.
     Replay,
-    /// `/haunt invite`: send the invitation DM now, skipping the delay.
+    /// `/haunt invite`: the next own send breaks through, skipping the
+    /// delay; the invitation DM follows as usual.
     Invite,
     /// `/haunt reset`: clear every first-contact chain mark for this user.
     Reset,
@@ -467,19 +520,23 @@ pub(crate) fn parse_haunt_command(body: &str) -> Option<Option<HauntCommand>> {
 /// Ticks are `App::splash_ticks`: one per world tick while the splash is
 /// up, 66ms each at the splash's hot cadence.
 ///
-/// The base splash line finishes typing around tick 27; if nobody has
-/// pressed anything by here, the whisper starts on its own.
-const ANSWER_TICK: usize = 48;
+/// The base splash line finishes typing around tick 27; the voiced line
+/// starts right after it, on its own. Nothing waits for a keypress: people
+/// were missing the door.
+const VOICE_TICK: usize = 28;
 /// How long the fully typed line holds before the door opens.
 const LINGER_TICKS: usize = 24;
 /// The hard cap, from splash start: the door opens whatever the phase.
 /// A normal splash runs 90 ticks; the longest natural whisper releases
 /// around tick 122, so the cap is a backstop, not a beat.
 const HARD_CAP_TICKS: usize = 150;
-/// How long one static surge decays after a keypress.
-const SURGE_TICKS: usize = 8;
-/// How long the skip hint takes to dissolve after the first keypress.
-const DISSOLVE_TICKS: usize = 12;
+/// The static pulses on its own rhythm for the whole scene: one surge
+/// every this many ticks (~1.3s).
+const SURGE_PERIOD_TICKS: usize = 20;
+/// How long one static surge decays (~700ms).
+const SURGE_TICKS: usize = 11;
+/// How long the skip hint takes to dissolve once the voice starts (~1s).
+const DISSOLVE_TICKS: usize = 16;
 
 /// The voiced lines for the first held door: the static has noticed
 /// you. Screenshot-test vocabulary only (static, signal, city, channel,
@@ -507,7 +564,7 @@ const WHISPER_LINES_SECOND: [&str; 4] = [
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WhisperPhase {
-    /// The door is held; the line has not started.
+    /// The door is held; the line has not started (until [`VOICE_TICK`]).
     Held,
     /// The line is typing itself, one char per tick since `from_tick`.
     Typing { from_tick: usize },
@@ -530,10 +587,6 @@ pub(crate) enum WhisperTick {
 pub(crate) struct WhisperState {
     line: &'static str,
     phase: WhisperPhase,
-    /// Last tick input landed; every keypress re-surges the static.
-    last_input_tick: Option<usize>,
-    /// First tick input landed; starts the skip-hint dissolve.
-    first_input_tick: Option<usize>,
     /// Per-user seed for the deterministic corruption patterns.
     seed: u64,
 }
@@ -554,25 +607,7 @@ impl WhisperState {
         Self {
             line,
             phase: WhisperPhase::Held,
-            last_input_tick: None,
-            first_input_tick: None,
             seed,
-        }
-    }
-
-    /// Input landed while the splash is up. Acknowledged, never obeyed:
-    /// the static surges, the hint starts dissolving, and if the line has
-    /// not started yet it starts now, in answer.
-    pub(crate) fn note_input(&mut self, tick: usize) {
-        if matches!(self.phase, WhisperPhase::Released { .. }) {
-            return;
-        }
-        self.last_input_tick = Some(tick);
-        if self.first_input_tick.is_none() {
-            self.first_input_tick = Some(tick);
-        }
-        if self.phase == WhisperPhase::Held {
-            self.phase = WhisperPhase::Typing { from_tick: tick };
         }
     }
 
@@ -593,7 +628,7 @@ impl WhisperState {
         }
         match self.phase {
             WhisperPhase::Held => {
-                if tick >= ANSWER_TICK {
+                if tick >= VOICE_TICK {
                     self.phase = WhisperPhase::Typing { from_tick: tick };
                 }
             }
@@ -637,16 +672,21 @@ impl WhisperState {
         }
     }
 
-    /// 0.0 (fresh burst) to 1.0 (faded) while a static surge is live.
+    /// 0.0 (fresh burst) to 1.0 (faded) while a static surge is live. The
+    /// surges pulse on their own from the first splash tick until the door
+    /// opens; `None` between pulses and once released.
     pub(crate) fn surge_progress(&self, tick: usize) -> Option<f32> {
-        let since = tick.saturating_sub(self.last_input_tick?);
+        if matches!(self.phase, WhisperPhase::Released { .. }) {
+            return None;
+        }
+        let since = tick % SURGE_PERIOD_TICKS;
         (since < SURGE_TICKS).then(|| since as f32 / SURGE_TICKS as f32)
     }
 
-    /// 0.0 to 1.0 skip-hint dissolution once input has landed; `None`
+    /// 0.0 to 1.0 skip-hint dissolution once the voice starts; `None`
     /// while the hint is still intact.
     pub(crate) fn dissolve_progress(&self, tick: usize) -> Option<f32> {
-        let since = tick.saturating_sub(self.first_input_tick?);
+        let since = tick.checked_sub(VOICE_TICK)?;
         Some((since as f32 / DISSOLVE_TICKS as f32).min(1.0))
     }
 }
@@ -1063,6 +1103,192 @@ impl NameFlicker {
 
     /// `/haunt name`: force the next own send to hit. Admin test hook.
     pub(crate) fn force_next(&mut self) {
+        self.force_next = true;
+    }
+}
+
+/// Stage 4, the breakthrough: the last rung, and the one that has to land.
+/// The invitation met cold, with nothing on screen before it, was taken for
+/// spam; so once it is due ([`FirstContactMarks::breakthrough_due`]), the
+/// next own send (the one moment of guaranteed attention, stage 2's reason)
+/// tears the whole screen: the held door's static pulses over everything,
+/// heavier, a line types itself in a gap torn out of the middle saying the
+/// voice got through, and the DM lands as the line finishes. Private to the
+/// person (no wire, nobody else's screen), input swallowed for the few
+/// seconds it plays, and never the message itself: the send already landed.
+///
+/// A due send is a claim first: the invitation task takes the once-ever
+/// stamp and answers before it sends anything, the scene plays on a won
+/// claim, and the same task sends the DM after [`Breakthrough::dm_delay`].
+/// Ticks are `App::marquee_tick` (66ms wall units), which is what lets that
+/// delay match what the eye sees.
+///
+/// Static alone before the voice starts (~500ms).
+const BREAKTHROUGH_VOICE_TICK: usize = 8;
+/// How long the typed line holds before the screen heals (~2s).
+const BREAKTHROUGH_LINGER_TICKS: usize = 30;
+/// Quicker pulses than the door's: this is the breach, not the knock. One
+/// surge every ~900ms, each fading over ~650ms.
+const BREAKTHROUGH_SURGE_PERIOD_TICKS: usize = 14;
+const BREAKTHROUGH_SURGE_TICKS: usize = 10;
+/// Wall length of one `marquee_tick`.
+const MARQUEE_TICK_MS: u64 = 66;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BreakthroughPhase {
+    /// Waiting for a due send.
+    Idle,
+    /// The invitation claim is out; no other send asks while it is.
+    Claiming,
+    /// On screen since `since`.
+    Playing { since: usize },
+    /// The ask failed (the task logged why): no send this session asks
+    /// again, so a broken voice or DM room costs one round of queries per
+    /// session, not one per send. `/haunt invite` re-opens it.
+    Failed,
+}
+
+/// What a landed own message decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BreakthroughRoll {
+    Wait,
+    /// Due (or forced): start the invitation task and hold for its claim.
+    Claim,
+}
+
+/// What one `tick` decided, for the owner to repaint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BreakthroughTick {
+    Idle,
+    Playing,
+    /// The scene just ended (naturally or by the kill switch).
+    Ended,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Breakthrough {
+    phase: BreakthroughPhase,
+    /// Per-user seed for the static pattern.
+    seed: u64,
+    /// `/haunt invite`: the next own send claims whether or not it is due.
+    force_next: bool,
+}
+
+impl Breakthrough {
+    pub(crate) fn for_user(user_id: Uuid) -> Self {
+        Self::with_seed(user_id.as_u128() as u64)
+    }
+
+    fn with_seed(seed: u64) -> Self {
+        Self {
+            phase: BreakthroughPhase::Idle,
+            seed,
+            force_next: false,
+        }
+    }
+
+    /// A send this session submitted just succeeded. `due` is
+    /// [`FirstContactMarks::breakthrough_due`] right now.
+    pub(crate) fn note_own_send(&mut self, enabled: bool, due: bool) -> BreakthroughRoll {
+        if self.phase != BreakthroughPhase::Idle || !enabled {
+            return BreakthroughRoll::Wait;
+        }
+        let forced = std::mem::take(&mut self.force_next);
+        match forced || due {
+            true => {
+                self.phase = BreakthroughPhase::Claiming;
+                BreakthroughRoll::Claim
+            }
+            false => BreakthroughRoll::Wait,
+        }
+    }
+
+    /// The claim came back won: the scene starts now.
+    pub(crate) fn start(&mut self, tick: usize) {
+        self.phase = BreakthroughPhase::Playing { since: tick };
+    }
+
+    /// The claim came back taken by another device: nothing plays, and it
+    /// stops being due once the owner stamps the marks.
+    pub(crate) fn claim_taken(&mut self) {
+        self.phase = BreakthroughPhase::Idle;
+    }
+
+    /// The claim could not be asked: nothing plays, and this session stops
+    /// asking.
+    pub(crate) fn claim_failed(&mut self) {
+        self.phase = BreakthroughPhase::Failed;
+    }
+
+    /// Advance one world tick. `enabled` is the live kill switch: turning
+    /// it off cuts the scene (the DM, already claimed, still sends).
+    pub(crate) fn tick(&mut self, tick: usize, enabled: bool) -> BreakthroughTick {
+        let BreakthroughPhase::Playing { since } = self.phase else {
+            return BreakthroughTick::Idle;
+        };
+        if !enabled || tick.saturating_sub(since) >= Self::scene_ticks() {
+            self.phase = BreakthroughPhase::Idle;
+            return BreakthroughTick::Ended;
+        }
+        BreakthroughTick::Playing
+    }
+
+    fn scene_ticks() -> usize {
+        BREAKTHROUGH_VOICE_TICK + BREAKTHROUGH_LINE.chars().count() + BREAKTHROUGH_LINGER_TICKS
+    }
+
+    /// How long after the claim the DM should land: the moment the line has
+    /// finished typing.
+    pub(crate) fn dm_delay() -> std::time::Duration {
+        let ticks = (BREAKTHROUGH_VOICE_TICK + BREAKTHROUGH_LINE.chars().count()) as u64;
+        std::time::Duration::from_millis(ticks * MARQUEE_TICK_MS)
+    }
+
+    pub(crate) fn is_playing(&self) -> bool {
+        matches!(self.phase, BreakthroughPhase::Playing { .. })
+    }
+
+    pub(crate) fn phase(&self) -> BreakthroughPhase {
+        self.phase
+    }
+
+    pub(crate) fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    /// How many chars of [`BREAKTHROUGH_LINE`] show at `tick`, and whether it
+    /// is still typing (drives the cursor). `None` while nothing plays.
+    pub(crate) fn typed_chars(&self, tick: usize) -> Option<(usize, bool)> {
+        let BreakthroughPhase::Playing { since } = self.phase else {
+            return None;
+        };
+        let len = BREAKTHROUGH_LINE.chars().count();
+        let Some(voiced) = tick
+            .saturating_sub(since)
+            .checked_sub(BREAKTHROUGH_VOICE_TICK)
+        else {
+            return Some((0, false));
+        };
+        let typed = voiced.min(len);
+        Some((typed, typed < len))
+    }
+
+    /// 0.0 (fresh burst) to 1.0 (faded) while a surge is live; `None`
+    /// between pulses and while nothing plays.
+    pub(crate) fn surge_progress(&self, tick: usize) -> Option<f32> {
+        let BreakthroughPhase::Playing { since } = self.phase else {
+            return None;
+        };
+        let into = tick.saturating_sub(since) % BREAKTHROUGH_SURGE_PERIOD_TICKS;
+        (into < BREAKTHROUGH_SURGE_TICKS).then(|| into as f32 / BREAKTHROUGH_SURGE_TICKS as f32)
+    }
+
+    /// `/haunt invite`: the next own send claims, due or not, even after a
+    /// failed ask this session. Admin test hook.
+    pub(crate) fn force_next(&mut self) {
+        if self.phase == BreakthroughPhase::Failed {
+            self.phase = BreakthroughPhase::Idle;
+        }
         self.force_next = true;
     }
 }

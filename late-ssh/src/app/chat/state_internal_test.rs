@@ -2537,6 +2537,46 @@ async fn sync_selection_keeps_a_selected_stream_room() {
     assert_eq!(state.selected_room_id, Some(lounge.id));
 }
 
+/// A registered stream that has not reported media yet (`/golive` typed, no
+/// screen shared) has nothing to watch, so the rail skips it until it is live.
+#[test]
+fn visual_order_lists_only_live_streams() {
+    let stream = |n: u128, live: bool| crate::app::stream::registry::LiveStreamView {
+        user_id: Uuid::from_u128(n),
+        username: format!("streamer{n}"),
+        title: "show".to_string(),
+        room_id: Uuid::from_u128(n + 100),
+        voice_channel_id: Uuid::from_u128(n + 200),
+        stream_id: format!("stream-{n}"),
+        live,
+        watching: 0,
+        watch_url: String::new(),
+    };
+    let live = stream(10, true);
+    let pending = stream(20, false);
+    let usernames: HashMap<Uuid, String> = HashMap::new();
+
+    let order = visual_order_for_rooms(RoomVisualOrderInput {
+        rooms: &[],
+        user_id: Uuid::from_u128(1),
+        usernames: &usernames,
+        unread_counts: &HashMap::new(),
+        room_last_message_at: &HashMap::new(),
+        feeds_available: false,
+        cyberspace_linked: false,
+        cyberspace_rooms: &[],
+        cyberspace_mail: &[],
+        favorite_room_ids: &[],
+        collapsed_sections: &HashSet::new(),
+        ignored_user_ids: &HashSet::new(),
+        sticky_unread_dm: None,
+        live_streams: &[live.clone(), pending.clone()],
+    });
+
+    assert!(order.contains(&RoomSlot::Room(live.room_id)));
+    assert!(!order.contains(&RoomSlot::Room(pending.room_id)));
+}
+
 #[tokio::test]
 async fn snapshot_and_message_updates_preserve_row_cache_contract() {
     use late_core::models::chat_message::{ChatMessage, ChatMessageParams};

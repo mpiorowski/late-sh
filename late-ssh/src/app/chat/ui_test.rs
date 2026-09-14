@@ -2058,6 +2058,79 @@ fn cozy_room_rail_hides_dm_with_ignored_peer() {
     );
 }
 
+/// Mirrors `visual_order_lists_only_live_streams`: a pending stream gets no
+/// rail row, and with no live stream there is no stream section at all.
+#[test]
+fn cozy_room_rail_lists_only_live_streams() {
+    let bob = Uuid::from_u128(102);
+    let dm_bob = rail_dm(2, bob);
+    let rooms = vec![(dm_bob.clone(), Vec::new())];
+
+    let mut rows_cache = ChatRowsCache::default();
+    let usernames = HashMap::from([(bob, "bob".to_string())]);
+    let username_lookup = UsernameLookup::new(&usernames, None);
+    let countries = HashMap::new();
+    let message_reactions = HashMap::new();
+    let unread_counts = HashMap::new();
+    let bonsai_glyphs = HashMap::new();
+    let chat_badges = HashMap::new();
+    let composer = TextArea::default();
+    let profile_award_badges = HashMap::new();
+    let news_composer = TextArea::default();
+    let live = live_stream("bug hunt", "https://late.sh/live/abc");
+    let mut pending = live_stream("warming up", "https://late.sh/live/def");
+    pending.user_id = Uuid::from_u128(40);
+    pending.username = "zed".to_string();
+    pending.room_id = Uuid::from_u128(41);
+    pending.live = false;
+
+    let pending_only = [pending.clone()];
+    let mut view = chat_view(
+        &mut rows_cache,
+        &rooms,
+        None,
+        &username_lookup,
+        &countries,
+        &message_reactions,
+        &unread_counts,
+        &bonsai_glyphs,
+        &chat_badges,
+        &profile_award_badges,
+        &composer,
+        &news_composer,
+    );
+    view.live_streams = &pending_only;
+    let room_rows = build_cozy_room_rail_rows(&room_list_view_from_render_input(&view), 40);
+    let rendered: Vec<String> = room_rows.lines.iter().map(line_text).collect();
+    assert!(
+        !room_rows
+            .hit_slots
+            .contains(&Some(RoomSlot::Room(pending.room_id))),
+        "pending stream rendered in {rendered:?}"
+    );
+    assert!(
+        !rendered.iter().any(|line| line.contains("stream")),
+        "stream section rendered with no live stream in {rendered:?}"
+    );
+
+    let both = [live.clone(), pending.clone()];
+    view.live_streams = &both;
+    let room_rows = build_cozy_room_rail_rows(&room_list_view_from_render_input(&view), 40);
+    let rendered: Vec<String> = room_rows.lines.iter().map(line_text).collect();
+    assert!(
+        room_rows
+            .hit_slots
+            .contains(&Some(RoomSlot::Room(live.room_id))),
+        "live stream missing from {rendered:?}"
+    );
+    assert!(
+        !room_rows
+            .hit_slots
+            .contains(&Some(RoomSlot::Room(pending.room_id))),
+        "pending stream rendered in {rendered:?}"
+    );
+}
+
 #[test]
 fn room_section_header_parser_ignores_fold_key_hints() {
     assert_eq!(strip_room_section_header_prefix("[o] - core"), "core");

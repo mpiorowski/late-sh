@@ -583,7 +583,7 @@ fn beat_lines(beat: &EndingBeat) -> Vec<Line<'static>> {
 }
 
 /// The two-column landing card for the Games hub.
-pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
+pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool, scroll: u16) -> u16 {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -741,7 +741,7 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
         Style::default().fg(theme::TEXT_FAINT()),
     )));
 
-    frame.render_widget(Paragraph::new(lines), inner);
+    crate::app::door::landing::render_scrolled(frame, inner, Paragraph::new(lines), scroll)
 }
 
 /// The block-letter title, stacked over two rows like Green Dragon's so an

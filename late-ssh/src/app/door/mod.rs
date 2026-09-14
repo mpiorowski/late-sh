@@ -14,6 +14,7 @@ pub mod ingest;
 pub mod keys;
 pub mod landing;
 pub mod lateania;
+pub mod minecraft;
 pub mod nethack;
 pub mod rc;
 pub mod rebels;

@@ -13,37 +13,46 @@ fn hold_through(state: &mut WhisperState, from: usize, to: usize) {
 }
 
 #[test]
-fn natural_delivery_without_input() {
+fn the_door_plays_on_its_own_clock_and_releases_delivered() {
     let mut state = WhisperState::with_seed(0, 0);
     let line_len = state.line().chars().count();
 
-    // Held until the answer beat, then the line types itself.
-    hold_through(&mut state, 1, ANSWER_TICK - 1);
+    // The static pulses from the first frame, before anyone presses
+    // anything, and rests between pulses.
+    assert_eq!(state.surge_progress(0), Some(0.0));
+    assert_eq!(state.surge_progress(SURGE_TICKS), None);
+    assert_eq!(state.surge_progress(SURGE_PERIOD_TICKS), Some(0.0));
+
+    // Held until the base splash line has typed, the hint still intact.
+    hold_through(&mut state, 1, VOICE_TICK - 1);
     assert_eq!(
         state,
         WhisperState {
             line: WHISPER_LINES[0],
             phase: WhisperPhase::Held,
-            last_input_tick: None,
-            first_input_tick: None,
             seed: 0,
         }
     );
-    assert_eq!(state.typed_chars(ANSWER_TICK - 1), (0, false));
+    assert_eq!(state.typed_chars(VOICE_TICK - 1), (0, false));
+    assert_eq!(state.dissolve_progress(VOICE_TICK - 1), None);
 
-    hold_through(&mut state, ANSWER_TICK, ANSWER_TICK);
+    // Then the voice starts on its own and the skip hint dissolves.
+    hold_through(&mut state, VOICE_TICK, VOICE_TICK);
     assert_eq!(
         state.phase,
         WhisperPhase::Typing {
-            from_tick: ANSWER_TICK
+            from_tick: VOICE_TICK
         }
     );
-    assert_eq!(state.typed_chars(ANSWER_TICK + 5), (5, true));
+    assert_eq!(state.typed_chars(VOICE_TICK + 5), (5, true));
+    assert_eq!(
+        state.dissolve_progress(VOICE_TICK + DISSOLVE_TICKS),
+        Some(1.0)
+    );
 
-    // Fully typed, lingers, then releases delivered with no input ever
-    // recorded and no corruption windows open.
-    let typed_done = ANSWER_TICK + line_len;
-    hold_through(&mut state, ANSWER_TICK + 1, typed_done + LINGER_TICKS - 1);
+    // Fully typed, lingers, then releases delivered, and pulses no more.
+    let typed_done = VOICE_TICK + line_len;
+    hold_through(&mut state, VOICE_TICK + 1, typed_done + LINGER_TICKS - 1);
     assert_eq!(
         state.tick(typed_done + LINGER_TICKS, true),
         WhisperTick::Released { delivered: true }
@@ -53,14 +62,19 @@ fn natural_delivery_without_input() {
         WhisperState {
             line: WHISPER_LINES[0],
             phase: WhisperPhase::Released { delivered: true },
-            last_input_tick: None,
-            first_input_tick: None,
             seed: 0,
         }
     );
-    assert!(typed_done + LINGER_TICKS < HARD_CAP_TICKS);
-    assert_eq!(state.surge_progress(typed_done), None);
-    assert_eq!(state.dissolve_progress(typed_done), None);
+    assert_eq!(state.surge_progress(SURGE_PERIOD_TICKS * 20), None);
+
+    // Every line in both pools finishes well inside the hard cap, so the
+    // cap never cuts a door short of its mark.
+    for line in WHISPER_LINES.iter().chain(WHISPER_LINES_SECOND.iter()) {
+        assert!(
+            VOICE_TICK + line.chars().count() + LINGER_TICKS < HARD_CAP_TICKS,
+            "{line:?} outruns the hard cap"
+        );
+    }
 }
 
 #[test]
@@ -100,58 +114,16 @@ fn the_second_door_speaks_from_its_own_pool_and_the_marks_space_the_two_apart() 
 }
 
 #[test]
-fn input_answers_early_and_never_skips() {
-    let mut state = WhisperState::with_seed(3, 0);
-    let line_len = state.line().chars().count();
-
-    // Esc at tick 20: the line starts in answer, the static surges, the
-    // hint starts dissolving. The door stays held.
-    hold_through(&mut state, 1, 19);
-    state.note_input(20);
-    assert_eq!(state.phase, WhisperPhase::Typing { from_tick: 20 });
-    assert_eq!(state.surge_progress(20), Some(0.0));
-    assert_eq!(state.surge_progress(20 + SURGE_TICKS), None);
-    assert_eq!(state.dissolve_progress(20 + DISSOLVE_TICKS), Some(1.0));
-
-    // A second keypress mid-typing re-surges but does not restart the line.
-    hold_through(&mut state, 20, 30);
-    state.note_input(31);
-    assert_eq!(state.phase, WhisperPhase::Typing { from_tick: 20 });
-    assert_eq!(state.surge_progress(32), Some(1.0 / SURGE_TICKS as f32));
-
-    let typed_done = 20 + line_len;
-    hold_through(&mut state, 31, typed_done + LINGER_TICKS - 1);
-    assert_eq!(
-        state.tick(typed_done + LINGER_TICKS, true),
-        WhisperTick::Released { delivered: true }
-    );
-    assert_eq!(
-        state,
-        WhisperState {
-            line: WHISPER_LINES[3],
-            phase: WhisperPhase::Released { delivered: true },
-            last_input_tick: Some(31),
-            first_input_tick: Some(20),
-            seed: 3,
-        }
-    );
-
-    // Input after release is inert.
-    state.note_input(typed_done + LINGER_TICKS + 1);
-    assert_eq!(state.last_input_tick, Some(31));
-}
-
-#[test]
 fn kill_switch_drops_the_scene_unspent() {
     let mut state = WhisperState::with_seed(1, 0);
-    hold_through(&mut state, 1, ANSWER_TICK + 4);
+    hold_through(&mut state, 1, VOICE_TICK + 4);
     assert_eq!(
-        state.tick(ANSWER_TICK + 5, false),
+        state.tick(VOICE_TICK + 5, false),
         WhisperTick::Released { delivered: false }
     );
     // Released stays released, whatever comes later.
     assert_eq!(
-        state.tick(ANSWER_TICK + 6, true),
+        state.tick(VOICE_TICK + 6, true),
         WhisperTick::Released { delivered: false }
     );
 }
@@ -164,6 +136,130 @@ fn hard_cap_opens_the_door() {
     assert_eq!(
         state.tick(HARD_CAP_TICKS, true),
         WhisperTick::Released { delivered: false }
+    );
+}
+
+#[test]
+fn breakthrough_comes_due_a_delay_after_the_second_door_and_never_after_the_invite() {
+    use chrono::TimeZone;
+
+    let now = Utc.with_ymd_and_hms(2026, 9, 13, 20, 0, 0).unwrap();
+    let marks = |whisper_hits: u32,
+                 whisper_at: Option<DateTime<Utc>>,
+                 invited_at: Option<DateTime<Utc>>| FirstContactMarks {
+        glitch_hits: GLITCH_TOTAL_CAP,
+        name_hits: NAME_TOTAL_CAP,
+        whisper_hits,
+        whisper_at,
+        invited_at,
+    };
+    let a_day_ago = Some(now - chrono::Duration::hours(INVITE_DELAY_HOURS));
+    assert!(marks(WHISPER_TOTAL_CAP, a_day_ago, None).breakthrough_due(now));
+    // A door still owed, the same evening as the last door, or already
+    // invited: not due.
+    assert!(!marks(WHISPER_TOTAL_CAP - 1, a_day_ago, None).breakthrough_due(now));
+    let tonight = Some(now - chrono::Duration::hours(INVITE_DELAY_HOURS - 1));
+    assert!(!marks(WHISPER_TOTAL_CAP, tonight, None).breakthrough_due(now));
+    assert!(!marks(WHISPER_TOTAL_CAP, a_day_ago, Some(now)).breakthrough_due(now));
+}
+
+#[test]
+fn breakthrough_claims_on_a_due_send_then_plays_its_scene_and_heals() {
+    let mut breakthrough = Breakthrough::with_seed(9);
+    let len = BREAKTHROUGH_LINE.chars().count();
+
+    // Not due, or the kill switch off: sends pass untouched.
+    assert_eq!(
+        breakthrough.note_own_send(true, false),
+        BreakthroughRoll::Wait
+    );
+    assert_eq!(
+        breakthrough.note_own_send(false, true),
+        BreakthroughRoll::Wait
+    );
+    // Due: one claim, and no second ask while it is out.
+    assert_eq!(
+        breakthrough.note_own_send(true, true),
+        BreakthroughRoll::Claim
+    );
+    assert_eq!(
+        breakthrough.note_own_send(true, true),
+        BreakthroughRoll::Wait
+    );
+    assert_eq!(breakthrough.tick(100, true), BreakthroughTick::Idle);
+    assert_eq!(breakthrough.typed_chars(100), None);
+
+    // Won at tick 100: static alone first, then the line types itself.
+    breakthrough.start(100);
+    assert_eq!(breakthrough.tick(100, true), BreakthroughTick::Playing);
+    assert_eq!(breakthrough.surge_progress(100), Some(0.0));
+    assert_eq!(
+        breakthrough.typed_chars(100 + BREAKTHROUGH_VOICE_TICK - 1),
+        Some((0, false))
+    );
+    assert_eq!(
+        breakthrough.typed_chars(100 + BREAKTHROUGH_VOICE_TICK + 5),
+        Some((5, true))
+    );
+    // A send mid-scene asks for nothing.
+    assert_eq!(
+        breakthrough.note_own_send(true, true),
+        BreakthroughRoll::Wait
+    );
+
+    // The whole line holds, then the screen heals.
+    let end = 100 + BREAKTHROUGH_VOICE_TICK + len + BREAKTHROUGH_LINGER_TICKS;
+    assert_eq!(breakthrough.typed_chars(end - 1), Some((len, false)));
+    assert_eq!(breakthrough.tick(end - 1, true), BreakthroughTick::Playing);
+    assert_eq!(breakthrough.tick(end, true), BreakthroughTick::Ended);
+    assert_eq!(
+        breakthrough,
+        Breakthrough {
+            phase: BreakthroughPhase::Idle,
+            seed: 9,
+            force_next: false,
+        }
+    );
+    // The line names the voice the DM comes from.
+    assert!(BREAKTHROUGH_LINE.contains(VOICE_USERNAME));
+}
+
+#[test]
+fn breakthrough_force_a_failed_ask_and_the_kill_switch() {
+    let mut breakthrough = Breakthrough::with_seed(1);
+
+    // `/haunt invite`: the next send claims without the delay, once.
+    breakthrough.force_next();
+    assert_eq!(
+        breakthrough.note_own_send(true, false),
+        BreakthroughRoll::Claim
+    );
+    // The ask failed: nothing plays, and no send asks again this session,
+    // due or not, so a broken voice is not re-queried on every send.
+    breakthrough.claim_failed();
+    assert_eq!(
+        breakthrough.note_own_send(true, true),
+        BreakthroughRoll::Wait
+    );
+    // `/haunt invite` re-opens it.
+    breakthrough.force_next();
+    assert_eq!(
+        breakthrough.note_own_send(true, false),
+        BreakthroughRoll::Claim
+    );
+    // A claim taken by another device settles back to waiting.
+    breakthrough.claim_taken();
+    assert_eq!(breakthrough.phase(), BreakthroughPhase::Idle);
+    // The kill switch cuts a live scene.
+    breakthrough.start(10);
+    assert_eq!(breakthrough.tick(11, false), BreakthroughTick::Ended);
+    assert_eq!(
+        breakthrough,
+        Breakthrough {
+            phase: BreakthroughPhase::Idle,
+            seed: 1,
+            force_next: false,
+        }
     );
 }
 

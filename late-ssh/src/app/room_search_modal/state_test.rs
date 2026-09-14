@@ -163,3 +163,61 @@ fn room_labels_prefix_rooms_and_dms() {
     dm.dm_user_b = Some(peer);
     assert_eq!(room_label(&dm, current, &usernames), "@alice");
 }
+
+/// A live stream is pickable before the viewer ever joined its room (the
+/// pick joins lazily, like the rail); a pending one is not listed at all.
+#[tokio::test]
+async fn picker_lists_live_streams_only() {
+    use late_core::test_utils::create_test_user;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let viewer = create_test_user(&test_db.db, "picker_viewer").await;
+    let live_owner = create_test_user(&test_db.db, "onair_owner").await;
+    let pending_owner = create_test_user(&test_db.db, "pending_owner").await;
+    let live_room = ChatRoom::get_or_create_stream_room(&client, "onair_owner", live_owner.id)
+        .await
+        .expect("live stream room");
+    let pending_room =
+        ChatRoom::get_or_create_stream_room(&client, "pending_owner", pending_owner.id)
+            .await
+            .expect("pending stream room");
+    let stream = |user_id: Uuid, username: &str, room_id: Uuid, live: bool| {
+        crate::app::stream::registry::LiveStreamView {
+            user_id,
+            username: username.to_string(),
+            title: "show".to_string(),
+            room_id,
+            voice_channel_id: Uuid::now_v7(),
+            stream_id: username.to_string(),
+            live,
+            watching: 0,
+            watch_url: String::new(),
+        }
+    };
+
+    let mut app = crate::test_helpers::make_app(test_db.db.clone(), viewer.id, "picker-streams");
+    app.chat.set_live_streams(vec![
+        stream(live_owner.id, "onair_owner", live_room.id, true),
+        stream(pending_owner.id, "pending_owner", pending_room.id, false),
+    ]);
+
+    let slots: Vec<RoomSlot> = filtered_items(&app.chat, viewer.id, "")
+        .iter()
+        .map(|item| item.slot)
+        .collect();
+    assert!(
+        slots.contains(&RoomSlot::Room(live_room.id)),
+        "live stream missing from {slots:?}"
+    );
+    assert!(
+        !slots.contains(&RoomSlot::Room(pending_room.id)),
+        "pending stream listed in {slots:?}"
+    );
+
+    let hits: Vec<RoomSlot> = filtered_items(&app.chat, viewer.id, "#onair")
+        .iter()
+        .map(|item| item.slot)
+        .collect();
+    assert_eq!(hits, vec![RoomSlot::Room(live_room.id)]);
+}

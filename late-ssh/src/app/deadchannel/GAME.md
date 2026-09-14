@@ -408,19 +408,26 @@ fuse is lit.
      jump-scare into a pattern. The splash is
      the liminal space (the doorway between outside and inside the
      machine), inherently private and per-session, so the whisper
-     touches no chat surface at all. The load-bearing mechanic:
-     **respond, don't ignore.** Esc must visibly do something, just not
-     what it usually does: static surges, the skip hint itself corrupts
-     and dissolves, the mysterious voiced line types itself in answer.
-     Input acknowledged but control withheld reads as *something is
-     holding the door*; input silently ignored reads as a hung
-     terminal, which is the panic rule violated exactly. Hard time cap
-     of a few seconds, then it releases on its own whether or not they
-     pressed anything. Screenshot-bait, "glitches are coming" energy;
+     touches no chat surface at all. The load-bearing mechanic
+     (**reversed 2026-09-13**): the scene plays whether or not anyone
+     presses anything. It first shipped as *respond, don't ignore* (Esc
+     surged the static and started the line early), and without a
+     keypress the scene was a quiet line under the cup that people were
+     missing. Now the static pulses from the first frame, the skip hint
+     corrupts and dissolves as the voiced line types itself, and every
+     key, Esc included, does nothing. The panic rule still holds because
+     the screen is visibly alive the whole time: *something is holding
+     the door*, never a hung terminal. Hard time cap of a few seconds,
+     then it releases on its own. Screenshot-bait, "glitches are coming" energy;
      still no game to play.
   4. **The invitation (decided 2026-08-31: the whole game is opt-in).**
      Not a breach: no game ever lands on anyone unasked. Some days
-     after the second held door, the contact goes real: a DM from the game's
+     after the second held door, the contact goes real, and **it arrives
+     through a breakthrough (added 2026-09-13):** the DM alone, met cold,
+     was taken for spam, so once it is due the next own send tears the
+     whole screen with the door's static while a voiced line says the
+     voice finally got through and names it, and the DM lands as the
+     line finishes. The scene is theater, the DM is the invitation: a DM from the game's
      first voice, a character calling for help from the other side, not
      a system announcing a feature (name and copy at design review; a
      plea beats a pitch, it makes the reader the protagonist). It rides

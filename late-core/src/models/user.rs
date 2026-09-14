@@ -208,6 +208,45 @@ impl RightSidebarMode {
     }
 }
 
+/// The page a session starts on (Settings, Tweaks, Startup). Brand-new users
+/// always start in the Clubhouse regardless, so the first-visit tour runs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LandingPage {
+    Clubhouse,
+    Home,
+    Zen,
+}
+
+impl LandingPage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Clubhouse => "clubhouse",
+            Self::Home => "home",
+            Self::Zen => "zen",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim() {
+            "clubhouse" => Some(Self::Clubhouse),
+            "home" => Some(Self::Home),
+            "zen" => Some(Self::Zen),
+            _ => None,
+        }
+    }
+
+    pub fn cycle(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::Clubhouse, true) => Self::Home,
+            (Self::Home, true) => Self::Zen,
+            (Self::Zen, true) => Self::Clubhouse,
+            (Self::Clubhouse, false) => Self::Zen,
+            (Self::Home, false) => Self::Clubhouse,
+            (Self::Zen, false) => Self::Home,
+        }
+    }
+}
+
 /// Master on/off for the Home room-list rail, the left column. Mirrors
 /// [`RightSidebarMode`], including `Auto`: the rail folds away on terminals too
 /// narrow to carry three columns.
@@ -372,7 +411,7 @@ const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
 const ROOM_LIST_MODE_KEY: &str = "room_list_mode";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
-const LAND_ON_HOME_KEY: &str = "land_on_home";
+const LANDING_PAGE_KEY: &str = "landing_page";
 const PAPER_AT_LOGIN_KEY: &str = "paper_at_login";
 /// The edition (UTC date, ISO) whose login pop this account has had.
 const PAPER_SHOWN_ON_KEY: &str = "paper_shown_on";
@@ -1841,14 +1880,13 @@ pub fn extract_translate_mine_to_en(settings: &Value) -> bool {
         .unwrap_or(false)
 }
 
-/// Tweak: land on Home (Dashboard, page 1) instead of the Clubhouse (page 0)
-/// when a session starts. Opt-in; defaults to false so sessions land in the
-/// clubhouse tavern like today.
-pub fn extract_land_on_home(settings: &Value) -> bool {
-    settings
-        .get(LAND_ON_HOME_KEY)
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+/// Tweak: where a session starts. Absent or unreadable values land in the
+/// Clubhouse, the front door.
+pub fn extract_landing_page(settings: &Value) -> LandingPage {
+    match settings.get(LANDING_PAGE_KEY).and_then(Value::as_str) {
+        Some(key) => LandingPage::from_key(key).unwrap_or(LandingPage::Clubhouse),
+        None => LandingPage::Clubhouse,
+    }
 }
 
 /// Tweak: open The Late Edition (the daily paper) once a day at login.
