@@ -1,4 +1,4 @@
-use crate::app::{audio::client_state::ClientAudioState, common::theme};
+use crate::app::{audio::client_state::ClientAudioState, common::theme, tick::ANIM_HALF_TICK};
 use late_core::audio::VizFrame;
 use ratatui::{
     Frame,
@@ -9,21 +9,16 @@ use ratatui::{
 };
 use std::time::{Duration, Instant};
 
-/// Rows the equalizer band is drawn at; the music stage pins this height
-/// and a taller area centers the band vertically.
+/// Rows the sidebar and music-tile equalizer is drawn at; the music stage
+/// pins this height and a taller area centers the band vertically.
 const EQ_ROWS: usize = 3;
 /// Vertical resolution per cell: the ▁..█ ramp.
-const SUBCELLS: u16 = 8;
-/// Full band height in sub-cells.
-const MAX_LEVEL: u16 = EQ_ROWS as u16 * SUBCELLS;
+const SUBCELLS: usize = 8;
 /// Bars are one column wide with a one-column gap: the gap is what makes
 /// the strip read as an equalizer instead of a solid block wall.
 const BAR_STRIDE: usize = 2;
 /// Sub-cell fill glyphs, index = filled eighths of the cell.
 const BLOCKS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-/// Paid frames a peak cap hangs before falling back onto its bar: the cap
-/// is the max bar level over this trailing window, so it needs no state.
-const CAP_HOLD_FRAMES: usize = 6;
 
 /// A spectrum the client stopped refreshing for this long no longer
 /// describes what is playing: the client muted, switched to a source it
@@ -37,8 +32,19 @@ const BAND_ATTACK: f32 = 0.6;
 /// Share of the gap to a quieter band closed in one client frame: decays
 /// ease down instead of flickering.
 const BAND_RELEASE: f32 = 0.3;
-/// How far a peak cap falls per client frame, as a share of the full band.
-const PEAK_FALL: f32 = 0.04;
+/// Seconds a peak cap hangs where its bar struck it before it lets go.
+const CAP_HOLD_SECS: f32 = 0.5;
+/// How hard a released cap accelerates down, in full bands per second
+/// squared: from the top of the band it lands about 0.8s after letting go.
+const CAP_GRAVITY: f32 = 3.0;
+
+/// How far a peak cap has fallen, in bands, `age_secs` after its bar struck
+/// it: nothing through the hold, then a gravity fall that starts slow and
+/// speeds up.
+fn cap_drop(age_secs: f32) -> f32 {
+    let falling = (age_secs - CAP_HOLD_SECS).max(0.0);
+    0.5 * CAP_GRAVITY * falling * falling
+}
 
 /// Deterministic per-bar phase in [0, τ): an integer hash spread over the
 /// circle so neighbouring bars never move in lockstep.
@@ -47,12 +53,12 @@ fn bar_phase(seed: usize) -> f32 {
     (hashed >> 8) as f32 / (1u32 << 24) as f32 * std::f32::consts::TAU
 }
 
-/// Synthesized bar level in 1..=[`MAX_LEVEL`] for one paid frame. Not
-/// audio: two incommensurate per-bar oscillators plus a slow swell
-/// travelling across the strip (the shared rhythm), shaped by a
-/// bass-heavy envelope so the left of the band runs taller, the way a
-/// real spectrum sits. Never zero: the band always reads as live.
-fn bar_level(bar: usize, bars: usize, anim_frame: usize) -> u16 {
+/// Synthesized bar height in (0, 1] for one paid frame. Not audio: two
+/// incommensurate per-bar oscillators plus a slow swell travelling across
+/// the strip (the shared rhythm), shaped by a bass-heavy envelope so the
+/// left of the band runs taller, the way a real spectrum sits. Never zero:
+/// the band always reads as live.
+fn ambient_unit(bar: usize, bars: usize, anim_frame: usize) -> f32 {
     let t = anim_frame as f32;
     let fast = (t * 0.51 + bar_phase(bar)).sin();
     let slow = (t * 0.173 + bar_phase(bar + 101)).sin();
@@ -60,57 +66,89 @@ fn bar_level(bar: usize, bars: usize, anim_frame: usize) -> u16 {
     let position = bar as f32 / bars.max(1) as f32;
     let envelope = 1.0 - 0.35 * position;
     let unit = 0.42 + 0.30 * fast + 0.18 * slow + 0.10 * swell;
-    ((unit.max(0.04) * envelope * MAX_LEVEL as f32) as u16).clamp(1, MAX_LEVEL)
+    (unit.max(0.04) * envelope).min(1.0)
 }
 
-/// Peak cap for a bar: the highest level it hit over the trailing
-/// [`CAP_HOLD_FRAMES`] paid frames, so a spike leaves a marker that hangs
-/// above the bar and then drops back onto it.
-fn cap_level(bar: usize, bars: usize, anim_frame: usize) -> u16 {
-    (0..=CAP_HOLD_FRAMES)
-        .map(|back| bar_level(bar, bars, anim_frame.saturating_sub(back)))
-        .max()
-        .unwrap_or(1)
+/// Ambient peak cap for a bar, in 0..=1: the highest a cap struck on any
+/// recent paid frame still hangs, so a spike leaves a marker that holds
+/// above the bar and then falls back onto it, the way a live cap does.
+/// Stateless: the wall tick alone decides it.
+fn ambient_cap_unit(bar: usize, bars: usize, anim_frame: usize) -> f32 {
+    let frame_secs = ANIM_HALF_TICK.as_secs_f32();
+    (0..=anim_frame)
+        .map(|back| (back, cap_drop(back as f32 * frame_secs)))
+        .take_while(|(_, drop)| *drop < 1.0)
+        .map(|(back, drop)| ambient_unit(bar, bars, anim_frame - back) - drop)
+        .fold(0.0, f32::max)
 }
 
 /// The smoothed spectrum the eq draws, each value in 0..=1: the eight
-/// analyzer bands low to high, and a falling peak cap per band that never
-/// sits below its band.
+/// analyzer bands low to high, and a peak cap per band that never sits
+/// below its band.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct LiveBands {
     pub(crate) levels: [f32; 8],
     pub(crate) peaks: [f32; 8],
 }
 
+/// A live band's peak cap: the height its bar last struck, and when.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Cap {
+    struck: f32,
+    struck_at: Instant,
+}
+
+impl Cap {
+    fn height_at(&self, now: Instant) -> f32 {
+        let age = now.saturating_duration_since(self.struck_at);
+        self.struck - cap_drop(age.as_secs_f32())
+    }
+}
+
+/// Folds a band's new level into its cap: a bar at or above where the cap
+/// has fallen to strikes it afresh, a lower one leaves it falling from its
+/// last strike.
+fn fold_cap(cap: Option<Cap>, level: f32, now: Instant) -> Cap {
+    match cap {
+        Some(cap) if cap.height_at(now) > level => cap,
+        Some(_) | None => Cap {
+            struck: level,
+            struck_at: now,
+        },
+    }
+}
+
 /// The paired client's spectrum as this session last heard it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Spectrum {
     bands: LiveBands,
+    caps: [Cap; 8],
     received_at: Instant,
 }
 
 impl Spectrum {
     /// Folds one client frame in. The first frame of a run lands as-is;
-    /// later ones ease toward the new bands and let the caps fall.
+    /// later ones ease toward the new bands, and each cap holds where its
+    /// bar last struck before it falls. Caps age on `now`, not on frame
+    /// count, so the fall keeps its speed whatever the client's cadence.
     pub(crate) fn next(current: Option<Spectrum>, frame: &VizFrame, now: Instant) -> Spectrum {
         let targets = frame.bands.map(band_target);
-        let bands = match current {
-            None => LiveBands {
-                levels: targets,
-                peaks: targets,
-            },
+        let (levels, caps) = match current {
+            None => (targets, targets.map(|level| fold_cap(None, level, now))),
             Some(spectrum) => {
-                let levels: [f32; 8] = std::array::from_fn(|i| {
-                    smooth(spectrum.bands.levels[i], targets[i])
-                });
-                let peaks = std::array::from_fn(|i| {
-                    levels[i].max(spectrum.bands.peaks[i] - PEAK_FALL)
-                });
-                LiveBands { levels, peaks }
+                let levels: [f32; 8] =
+                    std::array::from_fn(|i| smooth(spectrum.bands.levels[i], targets[i]));
+                let caps =
+                    std::array::from_fn(|i| fold_cap(Some(spectrum.caps[i]), levels[i], now));
+                (levels, caps)
             }
         };
         Spectrum {
-            bands,
+            bands: LiveBands {
+                levels,
+                peaks: caps.map(|cap| cap.height_at(now)),
+            },
+            caps,
             received_at: now,
         }
     }
@@ -144,7 +182,7 @@ fn smooth(current: f32, target: f32) -> f32 {
 /// The spectrum's height under one bar, in 0..=1: the eight bands
 /// stretched across however many bars the width holds, interpolated
 /// between neighbours so a wide strip slopes instead of stepping.
-pub(crate) fn spectrum_unit(bands: &[f32; 8], bar: usize, bars: usize) -> f32 {
+fn spectrum_unit(bands: &[f32; 8], bar: usize, bars: usize) -> f32 {
     let last = bands.len() - 1;
     let position = match bars {
         0 | 1 => 0.0,
@@ -156,10 +194,11 @@ pub(crate) fn spectrum_unit(bands: &[f32; 8], bar: usize, bars: usize) -> f32 {
     bands[low] + (bands[high] - bands[low]) * t
 }
 
-/// A 0..=1 height as a bar level; every bar keeps its base pixel so a quiet
-/// passage still reads as a meter, not as an empty strip.
-fn unit_level(unit: f32) -> u16 {
-    ((unit * MAX_LEVEL as f32).round() as u16).clamp(1, MAX_LEVEL)
+/// A 0..=1 height as a bar level out of `max_level` sub-cells; every bar
+/// keeps its base pixel so a quiet passage still reads as a meter, not as
+/// an empty strip.
+fn unit_level(unit: f32, max_level: usize) -> usize {
+    ((unit * max_level as f32).round() as usize).clamp(1, max_level)
 }
 
 /// What the equalizer strip should be saying about this session's audio.
@@ -193,18 +232,110 @@ pub(crate) fn eq_state(
     }
 }
 
-/// Equalizer for the sidebar's music stage. A live spectrum draws as-is;
-/// the ambient band has no stored state and is synthesized from the
-/// `wall_tick`-derived paid frame (the app's marquee_tick), so the same
-/// tick renders the same frame at any loop cadence. Both step once per
-/// anim_half `/2` edge, which is exactly the edge tick() pays a frame on.
+/// The two ways an equalizer's bars move: the eq states that draw bars.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Dance {
+    Live(LiveBands),
+    Ambient,
+}
+
+/// Bars and their peak caps filling `rows` rows (at least one) of `width`
+/// columns, top row first. A live spectrum draws as-is; the ambient band
+/// has no stored state and is synthesized from the `wall_tick`-derived paid
+/// frame (the app's marquee_tick), so the same tick renders the same frame
+/// at any loop cadence. Both step once per anim_half `/2` edge, which is
+/// exactly the edge tick() pays a frame on.
+pub(crate) fn dance_lines(
+    dance: Dance,
+    wall_tick: usize,
+    width: usize,
+    rows: usize,
+) -> Vec<Line<'static>> {
+    let anim_frame = wall_tick / 2;
+    let bars = width.div_ceil(BAR_STRIDE);
+    let max_level = rows * SUBCELLS;
+    let (levels, caps): (Vec<usize>, Vec<usize>) = match dance {
+        Dance::Live(live) => (0..bars)
+            .map(|b| {
+                (
+                    unit_level(spectrum_unit(&live.levels, b, bars), max_level),
+                    unit_level(spectrum_unit(&live.peaks, b, bars), max_level),
+                )
+            })
+            .unzip(),
+        Dance::Ambient => (0..bars)
+            .map(|b| {
+                (
+                    unit_level(ambient_unit(b, bars, anim_frame), max_level),
+                    unit_level(ambient_cap_unit(b, bars, anim_frame), max_level),
+                )
+            })
+            .unzip(),
+    };
+
+    // Caps glow wherever they float so a falling peak stays visible.
+    let cap_style = Style::default().fg(theme::AMBER_GLOW());
+    (0..rows)
+        .map(|row| {
+            let row_style = row_style(row, rows);
+            let cell_from_bottom = rows - 1 - row;
+            let floor = cell_from_bottom * SUBCELLS;
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            let mut run_text = String::new();
+            let mut run_style = row_style;
+            for col in 0..width {
+                // Gap columns and blanks extend whatever run is open so the
+                // spans stay merged; only real glyphs force a style switch.
+                let (glyph, style) = if col % BAR_STRIDE == BAR_STRIDE - 1 {
+                    (' ', run_style)
+                } else {
+                    let bar = col / BAR_STRIDE;
+                    let fill = levels[bar].saturating_sub(floor).min(SUBCELLS);
+                    let cap_here =
+                        caps[bar] > levels[bar] && (caps[bar] - 1) / SUBCELLS == cell_from_bottom;
+                    if fill > 0 {
+                        (BLOCKS[fill], row_style)
+                    } else if cap_here {
+                        ('▁', cap_style)
+                    } else {
+                        (' ', run_style)
+                    }
+                };
+                if style != run_style && !run_text.is_empty() {
+                    spans.push(Span::styled(std::mem::take(&mut run_text), run_style));
+                }
+                run_style = style;
+                run_text.push(glyph);
+            }
+            if !run_text.is_empty() {
+                spans.push(Span::styled(run_text, run_style));
+            }
+            Line::from(spans)
+        })
+        .collect()
+}
+
+/// Vertical gradient: bar heads glow, the middle burns, the base sits in
+/// embers.
+fn row_style(row: usize, rows: usize) -> Style {
+    let position = row as f32 / rows as f32;
+    let color = if position < 0.25 {
+        theme::AMBER_GLOW()
+    } else if position < 0.6 {
+        theme::AMBER()
+    } else {
+        theme::AMBER_DIM()
+    };
+    Style::default().fg(color)
+}
+
+/// Equalizer for the sidebar's music stage and the Zen music tile: the
+/// dancing band at [`EQ_ROWS`] rows, or the muted and unpaired strips.
 pub(crate) fn render_eq(frame: &mut Frame, area: Rect, wall_tick: usize, state: EqState) {
     if area.height == 0 || area.width == 0 {
         return;
     }
     let width = area.width as usize;
-    let anim_frame = wall_tick / 2;
-    let bars = width.div_ceil(BAR_STRIDE);
 
     let mut lines = Vec::with_capacity(area.height as usize);
     // Center the band in whatever height the stage gives us; a shorter
@@ -213,19 +344,9 @@ pub(crate) fn render_eq(frame: &mut Frame, area: Rect, wall_tick: usize, state: 
         lines.push(Line::from(""));
     }
 
-    let (levels, caps): (Vec<u16>, Vec<u16>) = match state {
-        EqState::Live(live) => (
-            (0..bars)
-                .map(|b| unit_level(spectrum_unit(&live.levels, b, bars)))
-                .collect(),
-            (0..bars)
-                .map(|b| unit_level(spectrum_unit(&live.peaks, b, bars)))
-                .collect(),
-        ),
-        EqState::Ambient => (
-            (0..bars).map(|b| bar_level(b, bars, anim_frame)).collect(),
-            (0..bars).map(|b| cap_level(b, bars, anim_frame)).collect(),
-        ),
+    let dance = match state {
+        EqState::Live(live) => Dance::Live(live),
+        EqState::Ambient => Dance::Ambient,
         EqState::Muted => {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -257,51 +378,7 @@ pub(crate) fn render_eq(frame: &mut Frame, area: Rect, wall_tick: usize, state: 
             return;
         }
     };
-
-    // Vertical gradient: bar heads glow, the base sits in embers. Caps
-    // glow wherever they float so a falling peak stays visible.
-    let row_styles = [
-        Style::default().fg(theme::AMBER_GLOW()),
-        Style::default().fg(theme::AMBER()),
-        Style::default().fg(theme::AMBER_DIM()),
-    ];
-    let cap_style = Style::default().fg(theme::AMBER_GLOW());
-
-    for (row, row_style) in row_styles.iter().enumerate() {
-        let cell_from_bottom = (EQ_ROWS - 1 - row) as u16;
-        let floor = cell_from_bottom * SUBCELLS;
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        let mut run_text = String::new();
-        let mut run_style = *row_style;
-        for col in 0..width {
-            // Gap columns and blanks extend whatever run is open so the
-            // spans stay merged; only real glyphs force a style switch.
-            let (glyph, style) = if col % BAR_STRIDE == BAR_STRIDE - 1 {
-                (' ', run_style)
-            } else {
-                let bar = col / BAR_STRIDE;
-                let fill = levels[bar].saturating_sub(floor).min(SUBCELLS);
-                let cap_here =
-                    caps[bar] > levels[bar] && (caps[bar] - 1) / SUBCELLS == cell_from_bottom;
-                if fill > 0 {
-                    (BLOCKS[fill as usize], *row_style)
-                } else if cap_here {
-                    ('▁', cap_style)
-                } else {
-                    (' ', run_style)
-                }
-            };
-            if style != run_style && !run_text.is_empty() {
-                spans.push(Span::styled(std::mem::take(&mut run_text), run_style));
-            }
-            run_style = style;
-            run_text.push(glyph);
-        }
-        if !run_text.is_empty() {
-            spans.push(Span::styled(run_text, run_style));
-        }
-        lines.push(Line::from(spans));
-    }
+    lines.extend(dance_lines(dance, wall_tick, width, EQ_ROWS));
     frame.render_widget(Paragraph::new(lines), area);
 }
 

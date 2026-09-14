@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, the equalizer (live CLI spectrum with an ambient fallback), and now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the music/audio touchpoints it owns in `late-cli` and `late-web/src/pages/listen`
-- Last updated: 2026-09-14 (YouTube gets real bars on Linux: the CLI tags the `late-webview` helper's audio streams at spawn, finds the tagged stream with `pw-dump`, records just that stream with `pw-record`, and runs it through the same analyzer as Icecast and radio, so the server sees ordinary `viz` frames. The CLI analyzer also moved to a dB scale, so bars move instead of sitting near full height. See §10 and §18. Previous entry: Bringing a track pays: `MediaQueueItem::insert_youtube` is now the paying path, `SONG_QUEUE_REWARD_CHIPS` (200) for the first `SONG_QUEUE_MAX_PAID_PER_DAY` (5) tracks a person queues each UTC day, credited in the same transaction as the insert. Every track pays, repeats and History re-queues included; the day's count is the only gate. Every submit path funnels through it, so booth, `/audio`, and a history re-queue all pay the same, and `SubmitQueueResponse.reward_chips` carries what was actually minted into the banner. See "Submission reward" under §4. Previous entry: The CLI no longer unmutes itself when the pair socket dies: only a session the server never saw may release its boot mute, and the retry loop slows to 60s instead of abandoning pairing. See the end of "Mute and volume: one source of truth, stored per device". Previous entry: device-audio write path hardened: only CLI reports persist (never the webview helper's), alignment echoes are not treated as intent, a failed connect-time read disables alignment and persistence for that connection instead of imposing fresh-boot defaults, and writes land in report order. See "Mute and volume: one source of truth, stored per device")
+- Last updated: 2026-09-14 (Peak caps hold then fall: each cap hangs 0.5s where its bar struck, then drops under gravity until the bar catches it, on the sidebar, the Zen music tile and, new, the Zen visualizer tile, which now shares `viz::dance_lines` instead of its own copy of the bars. See §10. Previous entry: YouTube gets real bars on Linux: the CLI tags the `late-webview` helper's audio streams at spawn, finds the tagged stream with `pw-dump`, records just that stream with `pw-record`, and runs it through the same analyzer as Icecast and radio, so the server sees ordinary `viz` frames. The CLI analyzer also moved to a dB scale, so bars move instead of sitting near full height. See §10 and §18. Previous entry: Bringing a track pays: `MediaQueueItem::insert_youtube` is now the paying path, `SONG_QUEUE_REWARD_CHIPS` (200) for the first `SONG_QUEUE_MAX_PAID_PER_DAY` (5) tracks a person queues each UTC day, credited in the same transaction as the insert. Every track pays, repeats and History re-queues included; the day's count is the only gate. Every submit path funnels through it, so booth, `/audio`, and a history re-queue all pay the same, and `SubmitQueueResponse.reward_chips` carries what was actually minted into the banner. See "Submission reward" under §4. Previous entry: The CLI no longer unmutes itself when the pair socket dies: only a session the server never saw may release its boot mute, and the retry loop slows to 60s instead of abandoning pairing. See the end of "Mute and volume: one source of truth, stored per device". Previous entry: device-audio write path hardened: only CLI reports persist (never the webview helper's), alignment echoes are not treated as intent, a failed connect-time read disables alignment and persistence for that connection instead of imposing fresh-boot defaults, and writes land in report order. See "Mute and volume: one source of truth, stored per device")
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -419,8 +419,13 @@ up whatever landed since.
 
 `Spectrum` is a pure state machine in `viz.rs`: the first frame of a run lands
 as-is, later ones ease toward the new bands (fast attack, slower release), and
-each band keeps a peak cap that falls a little per frame and never sits below
-its band. Band values are clamped into 0..=1 at the boundary, since they come
+each band keeps a peak cap: a bar at or above the cap strikes it, the cap
+hangs there for `CAP_HOLD_SECS` (0.5s), then falls under `CAP_GRAVITY`
+(slow, then faster) until the bar catches it. Caps age on the frame's
+`Instant`, not on frame count, so the fall keeps its speed at any client
+cadence. The ambient band draws the same caps statelessly
+(`ambient_cap_unit`: the highest recent strike still falling, read off the
+wall tick). Band values are clamped into 0..=1 at the boundary, since they come
 off the network. A spectrum not refreshed for 750ms is dropped
 (`expire_spectrum`, every tick), which is how every "no audio data" case falls
 back: the client muted, switched to YouTube, lost its socket, or is a CLI
@@ -428,7 +433,9 @@ without the analyzer. The CLI sends nothing while silent, so no case needs an
 explicit off message.
 
 `viz::eq_state` is the single reading every eq surface (sidebar music stage,
-Zen visualizer tile) draws:
+Zen music and visualizer tiles) draws. The bars and caps are one renderer,
+`viz::dance_lines`, at any height: the music stage and music tile at three
+rows, the visualizer tile at its full height:
 
 | `EqState` | When | Renders |
 |---|---|---|

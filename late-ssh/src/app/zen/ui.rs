@@ -21,7 +21,7 @@ use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
 
 use crate::app::{
     audio::stations::{icecast_stream_display_name, radio_station_display_name},
-    audio::viz::{EqState, render_eq, spectrum_unit},
+    audio::viz::{Dance, EqState, dance_lines, render_eq},
     bonsai::{
         render::{PREVIEW_WIDTH, apply_sway, canvas_lines, center_lines, render_preview_lines},
         state::{BonsaiState, CANVAS_HEIGHT, CANVAS_WIDTH},
@@ -739,77 +739,21 @@ fn draw_clock_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {
     frame.render_widget(Paragraph::new(padded), area);
 }
 
-const BLOCKS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-
-fn bar_phase(seed: usize) -> f32 {
-    let hashed = (seed as u32).wrapping_mul(2_654_435_761);
-    (hashed >> 8) as f32 / (1u32 << 24) as f32 * std::f32::consts::TAU
-}
-
-/// Bar height in 0..=1 for one animation frame: the sidebar band's recipe
-/// at whatever height the tile allows.
-fn bar_unit(bar: usize, bars: usize, anim_frame: usize) -> f32 {
-    let t = anim_frame as f32;
-    let fast = (t * 0.51 + bar_phase(bar)).sin();
-    let slow = (t * 0.173 + bar_phase(bar + 101)).sin();
-    let swell = (t * 0.071 - bar as f32 * 0.9).sin();
-    let position = bar as f32 / bars.max(1) as f32;
-    let envelope = 1.0 - 0.35 * position;
-    ((0.42 + 0.30 * fast + 0.18 * slow + 0.10 * swell).max(0.04) * envelope).clamp(0.02, 1.0)
-}
-
+/// The visualizer tile is the equalizer at the tile's full height: the
+/// same bars and peak caps as the music stage, only taller.
 fn draw_visualizer_tile(frame: &mut Frame, area: Rect, wall_tick: usize, eq_state: EqState) {
     if area.width < 2 || area.height == 0 {
         return;
     }
-    let live = match eq_state {
-        EqState::Live(live) => Some(live),
-        EqState::Ambient => None,
+    let dance = match eq_state {
+        EqState::Live(live) => Dance::Live(live),
+        EqState::Ambient => Dance::Ambient,
         EqState::Muted | EqState::Unpaired => {
             render_eq(frame, area, wall_tick, eq_state);
             return;
         }
     };
-    let anim_frame = wall_tick / 2;
-    let width = area.width as usize;
-    let height = area.height as usize;
-    let bars = width.div_ceil(2);
-    let subcells = height * 8;
-    let levels: Vec<usize> = (0..bars)
-        .map(|b| {
-            let unit = match &live {
-                Some(live) => spectrum_unit(&live.levels, b, bars),
-                None => bar_unit(b, bars, anim_frame),
-            };
-            ((unit * subcells as f32).round() as usize).clamp(1, subcells)
-        })
-        .collect();
-    let mut lines = Vec::with_capacity(height);
-    for row in 0..height {
-        // Row 0 is the top; a cell is full when the bar reaches past it.
-        let cell_bottom = (height - 1 - row) * 8;
-        let mut spans = Vec::with_capacity(width);
-        let mut text = String::with_capacity(width);
-        for col in 0..width {
-            if col % 2 == 1 {
-                text.push(' ');
-                continue;
-            }
-            let level = levels[col / 2];
-            let filled = level.saturating_sub(cell_bottom).min(8);
-            text.push(BLOCKS[filled]);
-        }
-        let position = row as f32 / height.max(1) as f32;
-        let color = if position < 0.25 {
-            theme::AMBER_GLOW()
-        } else if position < 0.6 {
-            theme::AMBER()
-        } else {
-            theme::AMBER_DIM()
-        };
-        spans.push(Span::styled(text, Style::default().fg(color)));
-        lines.push(Line::from(spans));
-    }
+    let lines = dance_lines(dance, wall_tick, area.width as usize, area.height as usize);
     frame.render_widget(Paragraph::new(lines), area);
 }
 

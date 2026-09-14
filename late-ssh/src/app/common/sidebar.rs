@@ -553,12 +553,7 @@ struct MusicStageProps<'a> {
 /// frame, before the browser has finished pairing. `v+x` cycles sources
 /// in dock order (radio → youtube → icecast), so the amber `▌` accent
 /// walks down the dock as the user cycles.
-fn draw_music_stage(
-    frame: &mut Frame,
-    area: Rect,
-    props: &MusicStageProps<'_>,
-    eq_state: EqState,
-) {
+fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>, eq_state: EqState) {
     if area.width == 0 || area.height == 0 {
         return;
     }

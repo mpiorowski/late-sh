@@ -55,10 +55,11 @@ fn assert_bands_near(actual: LiveBands, expected: LiveBands) {
 }
 
 #[test]
-fn spectrum_eases_levels_and_lets_peaks_fall() {
-    // Drive a run of three frames, loud bass then loud treble then silence,
-    // and check the whole smoothed state after each: rising bands attack,
-    // falling bands release, caps hold above their bands and fall slowly.
+fn spectrum_eases_levels_and_caps_hold_where_the_bars_struck() {
+    // Drive a run of three frames at the CLI's ~15 Hz, loud bass then loud
+    // treble then silence, and check the whole smoothed state after each:
+    // rising bands attack, falling bands release, and every cap stays where
+    // its bar last struck, since the run is still inside the hold.
     let start = Instant::now();
     let bass = viz_frame([1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
     let treble = viz_frame([0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
@@ -73,21 +74,58 @@ fn spectrum_eases_levels_and_lets_peaks_fall() {
         },
     );
 
-    let second = Spectrum::next(Some(first), &treble, start);
+    let second = Spectrum::next(Some(first), &treble, start + Duration::from_millis(67));
     assert_bands_near(
         second.bands(),
         LiveBands {
             levels: [0.7, 0.7, 0.7, 0.7, 0.6, 0.6, 0.6, 0.6],
-            peaks: [0.96, 0.96, 0.96, 0.96, 0.6, 0.6, 0.6, 0.6],
+            peaks: [1.0, 1.0, 1.0, 1.0, 0.6, 0.6, 0.6, 0.6],
         },
     );
 
-    let third = Spectrum::next(Some(second), &silence, start);
+    let third = Spectrum::next(Some(second), &silence, start + Duration::from_millis(134));
     assert_bands_near(
         third.bands(),
         LiveBands {
             levels: [0.49, 0.49, 0.49, 0.49, 0.42, 0.42, 0.42, 0.42],
-            peaks: [0.92, 0.92, 0.92, 0.92, 0.56, 0.56, 0.56, 0.56],
+            peaks: [1.0, 1.0, 1.0, 1.0, 0.6, 0.6, 0.6, 0.6],
+        },
+    );
+}
+
+#[test]
+fn a_cap_hangs_through_its_hold_then_falls_faster_and_lands_on_its_bar() {
+    // One hit, then silence: the cap holds for CAP_HOLD_SECS, falls under
+    // gravity (0.4s past the hold it has dropped 0.5 * 3.0 * 0.4^2 = 0.24),
+    // and once it would pass below the bar it lands on it.
+    let start = Instant::now();
+    let hit = Spectrum::next(None, &viz_frame([1.0; 8]), start);
+    let silence = viz_frame([0.0; 8]);
+
+    let holding = Spectrum::next(Some(hit), &silence, start + Duration::from_millis(400));
+    assert_bands_near(
+        holding.bands(),
+        LiveBands {
+            levels: [0.7; 8],
+            peaks: [1.0; 8],
+        },
+    );
+
+    let falling = Spectrum::next(Some(holding), &silence, start + Duration::from_millis(900));
+    assert_bands_near(
+        falling.bands(),
+        LiveBands {
+            levels: [0.49; 8],
+            peaks: [0.76; 8],
+        },
+    );
+
+    let landed = Spectrum::next(Some(falling), &silence, start + Duration::from_millis(1400));
+    assert_bands_near(
+        landed.bands(),
+        LiveBands {
+            levels: [0.343; 8],
+            peaks: [0.343; 8],
         },
     );
 }
@@ -135,25 +173,59 @@ fn live_bars_draw_the_spectrum_not_the_wall_clock() {
 }
 
 #[test]
-fn bar_levels_stay_inside_the_band() {
-    // The synthesized level must never leave 1..=MAX_LEVEL: zero would
-    // blank a bar (the band must always read as live), above MAX_LEVEL
-    // would overflow the row cell math.
+fn a_held_cap_floats_above_its_fallen_bar_at_any_height() {
+    // The bars fell silent under caps still hanging: the cap glyph sits in
+    // the cell its height reaches, with open air between it and the base.
+    let live = LiveBands {
+        levels: [0.0; 8],
+        peaks: [1.0, 1.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+    };
+    let rendered = render_eq_state(6, EqState::Live(live));
+    let rows: Vec<Vec<char>> = rendered.lines().map(|row| row.chars().collect()).collect();
+    assert_eq!(rows[0][0], '▁', "a full cap hangs in the top row");
+    assert_eq!(rows[1][0], ' ', "above a bar that fell");
+    assert_eq!(rows[2][0], '▁', "which keeps its base");
+
+    // A tall visualizer tile: a half-height cap over six rows sits in the
+    // third cell from the bottom.
+    let tall: Vec<String> = dance_lines(Dance::Live(live), 6, TEST_WIDTH as usize, 6)
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        })
+        .collect();
+    let last_bar = TEST_WIDTH as usize - BAR_STRIDE;
+    let column: Vec<char> = tall
+        .iter()
+        .map(|row| row.chars().nth(last_bar).expect("column"))
+        .collect();
+    assert_eq!(column, vec![' ', ' ', ' ', '▁', ' ', '▁']);
+}
+
+#[test]
+fn ambient_bars_stay_inside_the_band() {
+    // The synthesized height must stay in (0, 1]: zero would blank a bar
+    // (the band must always read as live), above one would overflow the
+    // row cell math.
     for frame in 0..500 {
         for bar in 0..12 {
-            let level = bar_level(bar, 12, frame);
-            assert!((1..=MAX_LEVEL).contains(&level), "bar {bar} frame {frame}");
+            let unit = ambient_unit(bar, 12, frame);
+            assert!(unit > 0.0 && unit <= 1.0, "bar {bar} frame {frame}: {unit}");
         }
     }
 }
 
 #[test]
-fn caps_ride_at_or_above_their_bar() {
-    // The peak cap is a trailing max, so it can never sit below the live
-    // bar level.
+fn ambient_caps_ride_at_or_above_their_bar() {
+    // The ambient cap is the highest recent strike still falling, and the
+    // current frame is one of those strikes, so it can never sit below the
+    // bar.
     for frame in 0..500 {
         for bar in 0..12 {
-            assert!(cap_level(bar, 12, frame) >= bar_level(bar, 12, frame));
+            assert!(ambient_cap_unit(bar, 12, frame) >= ambient_unit(bar, 12, frame));
         }
     }
 }
@@ -162,8 +234,12 @@ fn caps_ride_at_or_above_their_bar() {
 fn left_bars_run_taller_than_right_bars() {
     // The bass-heavy envelope: averaged over time, the leftmost bar
     // outruns the rightmost, the way a real spectrum sits.
-    let average =
-        |bar: usize| -> f64 { (0..500).map(|f| bar_level(bar, 12, f) as f64).sum::<f64>() / 500.0 };
+    let average = |bar: usize| -> f64 {
+        (0..500)
+            .map(|f| ambient_unit(bar, 12, f) as f64)
+            .sum::<f64>()
+            / 500.0
+    };
     assert!(average(0) > average(11));
 }
 
