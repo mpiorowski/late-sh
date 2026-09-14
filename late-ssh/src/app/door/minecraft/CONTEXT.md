@@ -17,6 +17,7 @@ Minecraft is not a door. Nothing runs inside `late-ssh` and there is no proxy, P
 - Enter does nothing on this card (`launch_games_hub_selection` has an empty arm) and the hub footer drops its Enter hint for it. It is never "live": `live_screen` returns `None`.
 - The landing scrolls with the rest of the hub (Ctrl+J/K, Ctrl+arrows) because it is long enough to be cut on short terminals. Claiming comes before the rules on purpose, so the most useful part stays near the top.
 - `ADDRESS`, `VERSION`, `DIFFICULTY`, and `WORLD_BORDER` are constants. `ui_test.rs::quoted_settings_match_the_terraform` reads `infra/minecraft.tf` and `infra/defaults.tf` at test time and fails when the card and the server drift (version, port 25565, difficulty, online mode, whitelist, GriefPrevention, world border, and no `mob_griefing` override). The build never reads `infra/`.
+- The `?` guide has a Minecraft topic (`help_modal/data.rs::minecraft_help_lines`), which also reaches @bot through `bot_app_context`. It repeats the joining, claims, and griefing facts but not the version or world border, so only the card can drift from Terraform. Keep the two in step when the rules change.
 - GriefPrevention numbers on the card (claim blocks, the 9x9 chest claim, expiry days, explosion rules) are plugin defaults read off the live `config.yml`, not Terraform, so the drift test does not cover them. Re-check them if the plugin config is ever customised.
 
 ## Server
