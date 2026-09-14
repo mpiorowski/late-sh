@@ -1378,6 +1378,7 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
                     // the only place that can reach this arm, and it never
                     // will, but the match still has to be exhaustive.
                     HubGame::Lateania
+                    | HubGame::Minecraft
                     | HubGame::Rebels
                     | HubGame::Nethack
                     | HubGame::Dcss
@@ -1401,8 +1402,19 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
     }
 
     match event {
-        ParsedInput::Byte(b'\r' | b'\n') => {
+        ParsedInput::Byte(b'\r') => {
             launch_games_hub_selection(app, selected);
+            true
+        }
+        // Scroll the selected landing: Ctrl+K / Ctrl+Up up, Ctrl+J / Ctrl+Down
+        // down. Ctrl+J is a bare LF, which is why Enter above matches CR only
+        // (the same CR/LF split the chat composer relies on).
+        ParsedInput::Byte(0x0B) | ParsedInput::CtrlArrow(b'A') => {
+            app.games_hub_state.scroll_up();
+            true
+        }
+        ParsedInput::Byte(b'\n') | ParsedInput::CtrlArrow(b'B') => {
+            app.games_hub_state.scroll_down();
             true
         }
         // Right: l, j, or Right/Down arrow.
@@ -1470,6 +1482,9 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
             // characters to play is no longer a foregone conclusion.
             app.set_screen(Screen::Lateania);
         }
+        // Played from the Minecraft client, not the terminal: the landing
+        // says how to connect and there is nothing to launch.
+        HubGame::Minecraft => {}
         HubGame::Rebels => {
             if !app.rebels_enabled {
                 app.banner = Some(crate::app::common::primitives::Banner::error(

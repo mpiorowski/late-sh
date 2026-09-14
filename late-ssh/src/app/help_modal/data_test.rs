@@ -23,6 +23,8 @@ fn all_purpose_guide_splits_game_topics() {
     assert!(bot_app_context().contains("## Arcade\n"));
     assert!(bot_app_context().contains("## Lobby\n"));
     assert!(bot_app_context().contains("## Lateania\n"));
+    assert!(bot_app_context().contains("## Minecraft\n"));
+    assert!(bot_app_context().contains("mc.late.sh"));
     assert!(!bot_app_context().contains("## Games\n"));
 }
 

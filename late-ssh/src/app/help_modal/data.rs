@@ -27,6 +27,7 @@ pub enum HelpTopic {
     Arcade,
     Lobby,
     Lateania,
+    Minecraft,
     TerminalCopy,
     TerminalLinks,
     TerminalImages,
@@ -43,7 +44,7 @@ pub enum HelpTopic {
 }
 
 impl HelpTopic {
-    pub const ALL: [HelpTopic; 24] = [
+    pub const ALL: [HelpTopic; 25] = [
         HelpTopic::Pair,
         HelpTopic::Overview,
         HelpTopic::Chat,
@@ -54,6 +55,7 @@ impl HelpTopic {
         HelpTopic::Arcade,
         HelpTopic::Lobby,
         HelpTopic::Lateania,
+        HelpTopic::Minecraft,
         HelpTopic::TerminalCopy,
         HelpTopic::TerminalLinks,
         HelpTopic::TerminalImages,
@@ -83,6 +85,7 @@ impl HelpTopic {
             HelpTopic::Arcade => "Arcade",
             HelpTopic::Lobby => "Lobby",
             HelpTopic::Lateania => "Lateania",
+            HelpTopic::Minecraft => "Minecraft",
             HelpTopic::TerminalCopy => "Copy",
             HelpTopic::TerminalLinks => "Links",
             HelpTopic::TerminalImages => "Images",
@@ -111,20 +114,21 @@ impl HelpTopic {
             HelpTopic::Arcade => 7,
             HelpTopic::Lobby => 8,
             HelpTopic::Lateania => 9,
-            HelpTopic::TerminalCopy => 10,
-            HelpTopic::TerminalLinks => 11,
-            HelpTopic::TerminalImages => 12,
-            HelpTopic::TerminalSelection => 13,
-            HelpTopic::TerminalNotifications => 14,
-            HelpTopic::TerminalCliYoutube => 15,
-            HelpTopic::Chips => 16,
-            HelpTopic::Economy => 17,
-            HelpTopic::Bonsai => 18,
-            HelpTopic::Zen => 19,
-            HelpTopic::Settings => 20,
-            HelpTopic::Voice => 21,
-            HelpTopic::Streaming => 22,
-            HelpTopic::Architecture => 23,
+            HelpTopic::Minecraft => 10,
+            HelpTopic::TerminalCopy => 11,
+            HelpTopic::TerminalLinks => 12,
+            HelpTopic::TerminalImages => 13,
+            HelpTopic::TerminalSelection => 14,
+            HelpTopic::TerminalNotifications => 15,
+            HelpTopic::TerminalCliYoutube => 16,
+            HelpTopic::Chips => 17,
+            HelpTopic::Economy => 18,
+            HelpTopic::Bonsai => 19,
+            HelpTopic::Zen => 20,
+            HelpTopic::Settings => 21,
+            HelpTopic::Voice => 22,
+            HelpTopic::Streaming => 23,
+            HelpTopic::Architecture => 24,
         }
     }
 }
@@ -146,6 +150,7 @@ pub(crate) fn lines_for(
         HelpTopic::Arcade => arcade_help_lines(),
         HelpTopic::Lobby => lobby_help_lines(),
         HelpTopic::Lateania => lateania_help_lines(),
+        HelpTopic::Minecraft => minecraft_help_lines(),
         HelpTopic::TerminalCopy => {
             terminal_faq_topic_lines(crate::app::help_modal::terminal_faq::TerminalHelpTopic::Copy)
         }
@@ -187,7 +192,7 @@ pub(crate) fn bot_app_context() -> String {
         - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Clubhouse (0), Home (1), The Arcade (2), Games (3), Artboard (4), Profiles (5), and Leaderboards (6).\n\
         - Users constantly ask how to see their mentions. The answer: Mentions is an entry in the Home (page 1) room rail, so press 1 and pick Mentions there; or click the \"N unread mentions\" counter in the top-right corner of the frame; or press Ctrl+/ and type mentions. The unread count lives in the top border, selecting Mentions marks it read, and Enter previews a mention with its surrounding messages (Enter again jumps to it).\n\
         - Users miss their DMs the same way. A DM carrying unread messages is lifted out of the DM list at the bottom of the Home (page 1) room rail into an \"unread dms\" group directly under core, with its unread count beside it; once read it drops back into \"dms\" as soon as the user moves to another room. Favorited DMs stay in favorites instead, and a DM whose peer is ignored appears nowhere. Ctrl+/ also lists DMs unread-first, and /dm @user opens one.\n\
-        - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, and Rebels; each is launched from there, not from its own top-level page. A Dark Room is the odd one out: it is an incremental, so it grows on its own while you are connected to late.sh (about three hours of village time a day, wherever you are in the app) instead of being played in one sitting. It is also the only door with an ending, and it has two of them: flying the starship out pays 15,000 chips and the [ADE] badge, and doing it while carrying the fleet beacon taken off the immortal wanderer on the ravaged battleship pays 20,000 and the [ADB] badge. They are claimed separately, so one account can earn both. The chips land for every run that gets out, because the save is wiped on the way out and a repeat is the whole arc again; the badge lands once per account. The battleship itself only appears on the map once the account has finished the game at least once, so a first run never meets it.\n\
+        - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, and Rebels; each is launched from there, not from its own top-level page. The hub also has an info card for our Minecraft server; see the Minecraft topic. A Dark Room is the odd one out: it is an incremental, so it grows on its own while you are connected to late.sh (about three hours of village time a day, wherever you are in the app) instead of being played in one sitting. It is also the only door with an ending, and it has two of them: flying the starship out pays 15,000 chips and the [ADE] badge, and doing it while carrying the fleet beacon taken off the immortal wanderer on the ravaged battleship pays 20,000 and the [ADB] badge. They are claimed separately, so one account can earn both. The chips land for every run that gets out, because the save is wiped on the way out and a repeat is the whole arc again; the badge lands once per account. The battleship itself only appears on the map once the account has finished the game at least once, so a first run never meets it.\n\
         - The three roguelikes (NetHack, DCSS, Brogue) support stepping out mid-game: pressing ` inside a running game detaches it (the game keeps running, saved-state intact) and hops along the backtick cycle to the next live dungeon or back to Home chat. Resume from the hub card (a green dot marks a game in progress, Enter resumes) or by pressing ` again from Home. A detached game idle for 20 minutes is closed with a clean save, and it also saves if the session drops. Inside DCSS this costs crawl's own ` repeat-command key.\n\
         - Lateania rides the backtick cycle too, with a twist: pressing ` inside the world hops out like a single-press leave (the character autosaves out of the world, same as a confirmed Esc), and for the next 5 minutes Lateania stays a stop on the cycle, so ` from Home hops straight back into the same character, skipping the character-select gate. While that window is live the Games hub sidebar marks Lateania with the same green dot the roguelikes get. An explicit Esc-Esc leave drops it off the cycle immediately.\n\
         - A Dark Room and Green Dragon ride the backtick cycle too, as its last stops after Lateania and the roguelikes: pressing ` inside either hops onward with the door still loaded (the village keeps growing, the character stays listed as online), and ` from Home hops back in. While loaded they wear the same green in-progress dot on the Games hub sidebar. A loaded door left alone for 30 minutes (no key in it and its screen not open) ends its visit with the same save an explicit leave does and drops off the cycle; in Green Dragon that also drops the online flag, so an absent character becomes an ordinary sleeping PvP target. Two keys the hop never takes: a ` typed into a Green Dragon talk line stays a character, and there is no hopping out of a Green Dragon fight or mid-ascent in A Dark Room.\n\
@@ -218,7 +223,7 @@ pub(crate) fn bot_app_context() -> String {
 /// in depth, so anything past "which screen / which key" should route there.
 pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
-    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels), 4 Artboard (shared ASCII canvas), 5 Profiles (the people: their projects and open-to-work cards), 6 Leaderboards (every board, monthly and all-time).\n\
+    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels, Minecraft), 4 Artboard (shared ASCII canvas), 5 Profiles (the people: their projects and open-to-work cards), 6 Leaderboards (every board, monthly and all-time).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
     - Ctrl+F opens Zen from anywhere and the same chord hands you back (Esc does not leave it): Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: Tab and the arrows focus, space opens the tile picker for a tile, S splits, X closes, < > change width and { } height, r flips, z zooms, b g t restyle borders, gaps, and titles, R resets, ? opens the Zen guide, the layout is saved per account; each tile names its own keys on the right of its title; up to ten chat tiles each bound to a room ([ ] rebind the focused one, Ctrl+/ or /picker picks its room from the list, i or Enter write in it, j k select in it; the focused chat is the active one, the others watch), w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it, and it reads the rest of your session itself).\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Typing /shop into the composer opens the Shop. When a terminal swallows a chord, the composer has a typed fallback that does the same thing: /settings (Ctrl+O), /lobby (Ctrl+G), /zen (Ctrl+F), /redraw (Ctrl+L), /guide (?).\n\
@@ -1129,6 +1134,50 @@ fn lateania_help_lines() -> Vec<String> {
     .collect()
 }
 
+fn minecraft_help_lines() -> Vec<String> {
+    [
+        "Minecraft",
+        "",
+        "late.sh runs a whitelist-only friends survival server for Minecraft: Java",
+        "Edition. It is not played in the terminal: you join from the game client.",
+        "  3                 open the Games hub, then select the Minecraft card",
+        "                    (the card shows the client version and world settings)",
+        "  Ctrl+J / Ctrl+K   scroll the card when it is taller than your terminal",
+        "",
+        "Joining",
+        "  address           mc.late.sh",
+        "  client            Minecraft: Java Edition on the card's version; Bedrock can't join",
+        "  account           your Microsoft account; offline logins are refused",
+        "  whitelist         DM a moderator (/dm) with your exact Java Edition username",
+        "  then              Multiplayer > Add Server > mc.late.sh > Join",
+        "",
+        "Land claims (GriefPrevention)",
+        "  chest             your first chest claims the 9x9 around it",
+        "  golden shovel     right-click two opposite corners to claim, a corner to resize",
+        "  stick             right-click to see who owns land and where its border runs",
+        "  claim blocks      start with 100, earn 100 per hour played, up to 80000",
+        "  /claimslist       your claims and the claim blocks you have left",
+        "  /abandonclaim     drop the claim you stand in, blocks refunded",
+        "  /trust name       full access: build and break",
+        "  /containertrust   chests, crops, animals, and villager trades (add a name)",
+        "  /accesstrust name doors, beds, buttons and levers only",
+        "  /untrust name     take it all back",
+        "  /trapped          stuck in someone's claim: teleports you out, long cooldown",
+        "",
+        "Griefing and world rules",
+        "  In a claim nobody else builds, breaks, loots, uses switches, or hurts animals.",
+        "  Outside claims anything goes, and the Nether and End cannot be claimed at all.",
+        "  Creepers and TNT break blocks only outside claims and below sea level.",
+        "  Mob griefing is on, so villager and piglin farms work; endermen can't take blocks.",
+        "  Fire never spreads or burns blocks. PvP is on in the open, off inside claims.",
+        "  Dying drops everything and anyone can pick it up; items despawn after 5 minutes.",
+        "  A claim lapses after 60 days away, or 7 days for a first-chest claim never resized.",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
 fn overview_lines() -> Vec<String> {
     [
         "late.sh in one pass",
@@ -1147,7 +1196,7 @@ fn overview_lines() -> Vec<String> {
         "  1 Home            chat, music, and live activity",
         "  2 The Arcade      daily puzzles, endless games, quests at the top",
         "  3 Games           door games: Lateania, NetHack, DCSS, Brogue, Usurper,",
-        "                    Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels",
+        "                    Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels, Minecraft",
         "  4 Artboard        shared persistent ASCII canvas, and the gallery: frame your work, hang it, applaud others",
         "  5 Profiles        the people, one row each: their projects and work cards",
         "  6 Leaderboards    every board, monthly and all-time",
@@ -1156,7 +1205,8 @@ fn overview_lines() -> Vec<String> {
         "over your head and land in #lounge), w waves, x dances, Enter interacts.",
         "",
         "The Games hub is a grouped sidebar: arrow keys or j/k move between its",
-        "games; Enter launches the selected game. CodeKeep needs 108x24 inside the frame.",
+        "games; Enter launches the selected game; Ctrl+J/K or Ctrl+Down/Up scroll a",
+        "landing too long for the terminal. CodeKeep needs 108x24 inside the frame.",
         "Any screen too small to draw says so, naming the size it needs and the size you have.",
         "Inside a running roguelike, ` steps out while the game keeps going (a green",
         "dot marks it; ` or Enter on its card resumes). c on the NetHack or DCSS card",
@@ -1269,7 +1319,7 @@ fn architecture_lines() -> Vec<String> {
         "  the paired CLI plays audio locally; late.sh/listen plays the same sources in a browser",
         "",
         "User-facing areas",
-        "  Home/Dashboard with chat rail, The Arcade, Games (door-game hub: Lateania, the roguelikes, the BBS doors, CodeKeep, Rebels), Artboard, Profiles, and the persistent bonsai sidebar",
+        "  Home/Dashboard with chat rail, The Arcade, Games (door-game hub: Lateania, the roguelikes, the BBS doors, CodeKeep, Rebels, Minecraft), Artboard, Profiles, and the persistent bonsai sidebar",
         "  Home chat includes synthetic entries: RSS, News, Cyberspace, Voice, Mentions, Discover; Profiles owns the projects and work-card feed",
         "  The Lobby fronts daily matches (DB rows) and fixed house tables with chat_rooms(kind='game')",
         "  House-table runtime state is process-local and can reset on SSH server restart",

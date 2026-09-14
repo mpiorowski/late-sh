@@ -73,4 +73,16 @@ locals {
   minecraft_heap      = "2G"
   minecraft_whitelist = join(",", compact([for name in split(",", var.MINECRAFT_WHITELIST) : trimspace(name)]))
   minecraft_ops       = join(",", compact([for name in split(",", var.MINECRAFT_OPS) : trimspace(name)]))
+
+  # Node placement (SCALE.md, Immediate Next Work 3). agent-1 joined the
+  # cluster with this label and a NoSchedule taint of the same key and value
+  # (/etc/rancher/rke2/config.yaml on the node, infra/README.md), so a
+  # workload lands there only when it carries both the node selector and the
+  # toleration. Everything without them stays on server-1: service-ssh, redis,
+  # the doors, ingress-nginx, ipv6-proxy, LiveKit's media hostPorts, and every
+  # workload whose local-path volume is still pinned to server-1 (the Postgres
+  # instances). Moving one of those needs a fresh volume on agent-1, not just
+  # these two fields.
+  support_node_label_key   = "role"
+  support_node_label_value = "support"
 }

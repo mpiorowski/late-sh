@@ -7150,11 +7150,13 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         order.push(RoomSlot::Discover);
     }
 
-    // Stream: one row per registered "watch me" stream, directly under Core.
-    // The section exists only while somebody is streaming. Stream rooms are
-    // `kind='game'` so they can never leak into Channels/DMs below.
+    // Stream: one row per live "watch me" stream, directly under Core. A
+    // pending stream (`/golive` typed, no media yet) has nothing to watch and
+    // stays off the rail. The section exists only while somebody is live.
+    // Stream rooms are `kind='game'` so they can never leak into Channels/DMs
+    // below.
     let stream_collapsed = collapsed_sections.contains(&RoomSection::Stream);
-    for stream in live_streams {
+    for stream in live_streams.iter().filter(|stream| stream.live) {
         if pushed_rooms.insert(stream.room_id) && !stream_collapsed {
             order.push(RoomSlot::Room(stream.room_id));
         }

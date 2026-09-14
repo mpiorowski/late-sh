@@ -4452,14 +4452,14 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         push_slot(RoomSlot::Discover, &mut push_row);
     }
 
-    // Stream: registered "watch me" streams, directly under Core, mirroring
+    // Stream: live "watch me" streams, directly under Core, mirroring
     // `visual_order_for_rooms`. The section only exists while somebody is
-    // streaming.
-    if !view.live_streams.is_empty() {
+    // live; a pending stream gets no row.
+    if view.live_streams.iter().any(|stream| stream.live) {
         push_row(blank(), None, false);
         push_row(section_header(RoomSection::Stream), None, false);
         if !collapsed_set.contains(&RoomSection::Stream) {
-            for stream in view.live_streams {
+            for stream in view.live_streams.iter().filter(|stream| stream.live) {
                 push_slot(RoomSlot::Room(stream.room_id), &mut push_row);
             }
         }

@@ -183,6 +183,10 @@ struct DrawContext<'a> {
     house: &'a crate::app::lobby::house::state::HouseState,
     house_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
     games_hub_selected: usize,
+    /// Rows the selected Games hub landing is scrolled down.
+    games_hub_scroll: u16,
+    /// Where the hub records how far the selected landing can scroll.
+    games_hub_max_scroll: &'a std::cell::Cell<u16>,
     /// The open rc config modal (game plus stored content), if any.
     door_rc_modal: Option<(late_core::models::door_rc::DoorRcGame, Option<&'a str>)>,
     rebels_enabled: bool,
@@ -1216,6 +1220,8 @@ impl App {
                         house: &self.house,
                         house_chat_view,
                         games_hub_selected: self.games_hub_state.selected(),
+                        games_hub_scroll: self.games_hub_state.scroll(),
+                        games_hub_max_scroll: self.games_hub_state.max_scroll(),
                         door_rc_modal: self
                             .door_rc_modal
                             .map(|game| (game, self.door_rcs.get(&game).map(String::as_str))),
@@ -1648,6 +1654,8 @@ impl App {
                     content_area,
                     &crate::app::door::hub::ui::HubView {
                         selected: ctx.games_hub_selected,
+                        scroll: ctx.games_hub_scroll,
+                        max_scroll: ctx.games_hub_max_scroll,
                         delete_confirm: ctx.door_delete_confirm,
                         rebels_enabled: ctx.rebels_enabled,
                         nethack_enabled: ctx.nethack_enabled,

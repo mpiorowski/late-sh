@@ -1,6 +1,6 @@
 # late.sh Scale Notes
 
-Last updated: 2026-09-02 (new section "Small Debts (fix as touched)": nitpicks that are wrong at 10x and free to fix in passing, seeded from the first-contact PR review, plus a measured plan for thinning the four TUI root files (`app/{input,state,render,tick}.rs`, 11.5k lines, half domain logic that drifted up) into their domains one PR at a time. Same day, earlier: the app-side half of horizontal scaling started: root CONTEXT.md §0 now carries a multi-replica rule for all new work, `app_flags` + `app/flags/svc.rs` is the first shared primitive (process-wide switches as rows behind a LISTEN/NOTIFY-fed watch), and the first-contact haunting is the first feature built replica-clean end to end. Pain Point 2 and Next Work item 8 now split the job into the transport half (session ownership, pair-WS routing) and the app half (the per-feature ownership migration, tracked in root CONTEXT.md §7). Previously 2026-08-18, second entry: 7-day production health check, read-only. The 2026-07-26 DB fixes are now **verified in prod**, not projected: every pre-fix query shape is idle and total live DB load is about 1.9% of one core, so the chat poll is no longer the binding constraint on the 1000-user target. The largest remaining DB item is `list_discover_public_topic_rooms`, which **regressed to 771 ms mean** and turns out to be a stale-visibility-map problem rather than a query-shape problem. New sections: "Live Production Baseline (2026-08-18)" and "Observability Gaps". Previously 2026-08-18, first entry: added Pain Point 8: stream egress is the first cost that scales with *viewers* rather than sessions, the go-live publish ceiling is now pinned in code, and the OBS/WHIP path is still uncapped by construction. Previously 2026-08-06: SCALE.md is now the single home for performance findings: absorbed root CONTEXT.md's §8.5 input-lag notes into Pain Point 1 and the discover-room CNPG CPU-saturation observation into DB Hot Queries; root context keeps only current-state contracts and routes perf here. Next infra step is unchanged: add a second cluster node and move everything except `service-ssh` off `server-1`)
+Last updated: 2026-09-13 (second node: `agent-1` joined as an RKE2 agent and the support workloads moved onto it the same day (PR #603, applied by a manual `deploy_infra` dispatch from `main`, then `sync_music`); Postgres and LiveKit deliberately stay on `server-1`. Immediate Next Work 3 now records what moved, what stayed and why, the data that was reset rather than migrated, what was actually run, and the follow-ups. Previously 2026-09-02: new section "Small Debts (fix as touched)": nitpicks that are wrong at 10x and free to fix in passing, seeded from the first-contact PR review, plus a measured plan for thinning the four TUI root files (`app/{input,state,render,tick}.rs`, 11.5k lines, half domain logic that drifted up) into their domains one PR at a time. Same day, earlier: the app-side half of horizontal scaling started: root CONTEXT.md §0 now carries a multi-replica rule for all new work, `app_flags` + `app/flags/svc.rs` is the first shared primitive (process-wide switches as rows behind a LISTEN/NOTIFY-fed watch), and the first-contact haunting is the first feature built replica-clean end to end. Pain Point 2 and Next Work item 8 now split the job into the transport half (session ownership, pair-WS routing) and the app half (the per-feature ownership migration, tracked in root CONTEXT.md §7). Previously 2026-08-18, second entry: 7-day production health check, read-only. The 2026-07-26 DB fixes are now **verified in prod**, not projected: every pre-fix query shape is idle and total live DB load is about 1.9% of one core, so the chat poll is no longer the binding constraint on the 1000-user target. The largest remaining DB item is `list_discover_public_topic_rooms`, which **regressed to 771 ms mean** and turns out to be a stale-visibility-map problem rather than a query-shape problem. New sections: "Live Production Baseline (2026-08-18)" and "Observability Gaps". Previously 2026-08-18, first entry: added Pain Point 8: stream egress is the first cost that scales with *viewers* rather than sessions, the go-live publish ceiling is now pinned in code, and the OBS/WHIP path is still uncapped by construction. Previously 2026-08-06: SCALE.md is now the single home for performance findings: absorbed root CONTEXT.md's §8.5 input-lag notes into Pain Point 1 and the discover-room CNPG CPU-saturation observation into DB Hot Queries; root context keeps only current-state contracts and routes perf here. Next infra step is unchanged: add a second cluster node and move everything except `service-ssh` off `server-1`)
 
 This document records the current production capacity posture, what was discovered during the HN-spike investigations (June 2026 and the 2026-07-22 OOM, see CONTEXT.md §10.5), the DB query findings, the shipped render-cost program, and the roadmap toward roughly 1000 concurrent users.
 
@@ -8,12 +8,13 @@ This document records the current production capacity posture, what was discover
 
 Cluster shape:
 
-- Single RKE2 node: `server-1` (Kubernetes v1.34.4+rke2r1, Debian 13)
-- Node capacity observed: 8 CPU, about 15.6 GiB memory
+- Two RKE2 nodes (Kubernetes v1.34.4+rke2r1, Debian 13): `server-1`, the only control-plane and etcd member, and `agent-1`, a worker joined 2026-09-13 (Hetzner CX33, 4 vCPU, 8 GB, 40 GB disk) with label and `NoSchedule` taint `role=support`. Node table and join procedure: `infra/README.md`, Nodes
+- `server-1` capacity observed: 8 CPU, about 15.6 GiB memory
 - Node usage at about 60 concurrent sessions (2026-07-24, post-render-cost-program): about 37% CPU, 46% memory. For contrast, the pre-program reading at 80 sessions was about 77% CPU, 43% memory
 - Node usage 2026-08-18 at 38 sessions: 23% CPU, 53% memory. Scheduler requests are at 56% CPU / 56% memory; limits are overcommitted to 295% CPU / 206% memory. The overcommit is normal for this shape but means a synchronized spike across pods has no referee
 - Node disk: 52% used as of 2026-08-18, down from the 75% recorded 2026-07-24 (something reclaimed, most likely containerd image GC). `DiskPressure`, `MemoryPressure`, and `PIDPressure` all `False`
-- All core app workloads currently run on the single node
+- Support workloads run on `agent-1` since 2026-09-13 (applied and verified): service-web, Icecast, Liquidsoap, otel-collector, vmagent, kube-state-metrics, VictoriaMetrics/Logs/Traces, Grafana, Minecraft. `server-1` keeps service-ssh, redis, the doors, ingress-nginx, ipv6-proxy, LiveKit, and both Postgres instances, the last two by decision. See Immediate Next Work 3
+- Node usage 2026-09-13, minutes after the move (not a settled baseline): `server-1` 13% CPU, 41% memory, 16.6 GB disk free, down from 18% CPU, 52% memory, 7.5 GB free earlier that day. `agent-1` 4% CPU, 52% memory (about 4 GiB, Minecraft's JVM included), 29.2 GB disk free
 - Storage: every PVC uses the `local-path` (hostPath) provisioner, so any pod with a volume is pinned to the node that holds its data. This matters for any node move (door-game saves, music data, Postgres).
 
 Application deployments:
@@ -37,6 +38,7 @@ Application deployments:
 - `livekit`: 1 replica, `host_network: true`
   - Voice SFU and `/golive` video fan-out
   - Host ports: 7881 TCP and 7882 UDP (RTC), 3478 UDP and 5349 TCP (TURN)
+  - Stays on `server-1` by decision: TURN is tied to `rtc.late.sh`, which must stay on `server-1` (Immediate Next Work 3)
   - Current Terraform limit: 1 CPU, 1 GiB. Cheap by design: it forwards packets, it does not transcode
   - No `limit:` block in the server config, so LiveKit's node defaults apply (`num_tracks` 400/CPU up to 8000, `bytes_per_sec` 1 GB/s). Both are far above what the node's NIC can serve, so LiveKit will never be the thing that says no. See Pain Point 8
 - `livekit-ingress`: 1 replica, `host_network: true`
@@ -45,6 +47,7 @@ Application deployments:
   - LiveKit <-> ingress message bus only. The LiveKit server refuses Ingress API calls without it. Not application state, not a cache
 - `postgres`: CloudNativePG, 2 instances
   - Primary: `postgres-1`
+  - Both instances stay on `server-1` by decision (Immediate Next Work 3). Data leaves the node through daily barman-cloud base backups plus continuous WAL archiving to object storage
   - Current Terraform/live memory limit: 4 GiB
   - `max_connections`: 100
   - `shared_buffers`: 256 MB
@@ -375,10 +378,13 @@ Open, in the order they would start to matter:
    circuit breaker, but be clear about what it buys: `bytes_per_sec` is a node
    limit that refuses new tracks once saturated, not a per-stream cap, so it
    protects the box without stopping one streamer from hogging it.
-5. **LiveKit shares `server-1` with `service-ssh`.** It is on the move list for
-   the second node (Immediate Next Work item 3), which matters more once media
-   traffic is real: today the fan-out competes for the same NIC as every SSH
-   session.
+5. **LiveKit shares `server-1` with `service-ssh`.** It was deliberately kept
+   there when the second node landed (2026-09-13, Immediate Next Work item 3):
+   moving it breaks TURN until a dedicated TURN hostname with a DNS-01
+   certificate exists. The fan-out still competes for the same NIC as every SSH
+   session, which matters more once media traffic is real. A move to `agent-1`
+   is also the clean moment to set the UDP receive-buffer sysctls on a fresh
+   host.
 
 Measured 2026-08-18: the `livekit` pod averaged 4.6% of its 1 CPU limit but
 **peaked at 1.16 cores, so it touched and briefly exceeded its own ceiling**.
@@ -614,7 +620,7 @@ Source: `late-core/src/models/chat_room.rs`
 Found during the 2026-08-18 health check. None of these is a capacity problem; all of them limit the ability to diagnose one.
 
 - **`otel-collector` is flapping, and it is the pipeline every other number here depends on.** 28 restarts lifetime, 5 in the 7 days to 2026-08-18, with 238 readiness and 103 liveness probe failures. Not memory (256Mi limit, 239Mi used, zero OOM events) and not a collector fault: the probes use `timeoutSeconds: 1` against a `200m` CPU limit with 64.7% peak throttling, so the health endpoint misses a 1-second deadline under its own load and liveness kills the pod. Every restart is a hole in metrics, logs, and traces. **Cheapest high-value fix on this list:** raise `timeoutSeconds` and the CPU limit in the collector's Terraform.
-- **No node-exporter anywhere in the cluster.** `node_cpu_seconds_total` and the whole `node_*` family do not exist, so every host-level figure in this document is a cadvisor container sum, which cannot see the node's NIC, socket buffers, or steal time. This directly blocks Pain Point 8 item 2: the UDP receive buffer pressure is exactly what node-exporter would show and nothing currently can. Add it before the second-node work so there is a real host baseline to compare against.
+- **No node-exporter anywhere in the cluster.** `node_cpu_seconds_total` and the whole `node_*` family do not exist, so every host-level figure in this document is a cadvisor container sum, which cannot see the node's NIC, socket buffers, or steal time. This directly blocks Pain Point 8 item 2: the UDP receive buffer pressure is exactly what node-exporter would show and nothing currently can. The second node landed 2026-09-13 without it, so no host-level baseline from before the move exists. Still worth adding, as a DaemonSet with the `role=support` toleration so it covers both nodes.
 - **`late_ssh_render_stall_{skips,disconnects}_total` still has no series at all.** Meanwhile `late_ssh_render_frame_drops_total` recorded 168,480 drops across 29 episodes in 7 days, peaking at 946/min, which is the documented ~909/min single-stalled-session signature. So stalls are demonstrably happening while the guard's own metrics never report. Either the 32 MB threshold is never reached before the client drops, or the metric is not wired to the code path. One pass over `late-ssh/src/ssh.rs` would settle it.
 - **No stream telemetry** (no `record_stream_*` family). Already recorded as Pain Point 8 item 1; repeated here because it belongs to the same gap.
 
@@ -696,7 +702,7 @@ Rules for the moves, so they do not become a rewrite:
 
 0. **`VACUUM chat_room_members`.** Cheapest real win available. Fixes the only user-facing DB latency in the system (Discover at 771 ms mean, 4.1 s max) and probably helps the chat snapshot bundle too. See DB Hot Queries, `list_discover_public_topic_rooms`. Then make it durable with a per-table autovacuum setting.
 0b. **Fix the `otel-collector` probes** (`timeoutSeconds: 1` against a `200m` CPU limit). One Terraform change; protects every measurement this document depends on. See Observability Gaps.
-0c. **Add node-exporter**, before the second-node work, so host-level CPU/NIC/socket-buffer pressure is visible at all. See Observability Gaps.
+0c. **Add node-exporter** so host-level CPU/NIC/socket-buffer pressure is visible at all. The second node landed without it (2026-09-13); the DaemonSet needs the `role=support` toleration to cover `agent-1`. See Observability Gaps.
 
 Then the pre-existing list below, with items 1, 2, 4, and 6 now done and item 5 unchanged and still open.
 
@@ -727,15 +733,51 @@ when connected time is pending. Connection and disconnection do no DB work.
 
 `late-ssh` render/tick CPU is the scaling unit; everything else on `server-1` is overhead stealing cores from sessions. Move the overhead to a new node so the full 8 cores serve sessions.
 
-Plan sketch:
+**Status 2026-09-13: done.** Node joined, support workloads moved and verified in production the same day. Postgres and LiveKit deliberately stay on `server-1`. What landed, what stayed and why, what was actually run, and what is left:
 
-- Provision `server-2` and join it as an RKE2 agent (`infra/setup_rke2.sh` is the existing node bootstrap); label the nodes (for example `role=ssh` on server-1, `role=support` on server-2).
-- Stays on `server-1`: `service-ssh` (the public SSH path is pinned there: ingress-nginx TCP passthrough hostPorts, the `ipv6-proxy` DaemonSet address binding, and the DNS A/AAAA records all point at server-1), plus the door-host pods (`late-nethack`, `late-dcss`, `late-usurper`, `late-dopewars`) unless their `local-path` save PVCs are migrated; their saves are hostPath-pinned to the node.
-- Moves to `server-2`: `service-web`, `icecast`, `liquidsoap`, the monitoring stack, and LiveKit if its node bindings allow. Liquidsoap's music PVC is not a blocker: the data re-syncs from R2 by dispatching the `sync_music` workflow, so a fresh PVC on the new node refills itself (a manual step now, not a deploy side effect).
-- Postgres: keep 2 CNPG instances but spread them one per node (CNPG pod anti-affinity), which upgrades the second instance from same-node standby to actual node-level HA. Note the PVC pin: the moved instance gets a fresh volume and re-clones from the primary.
-- Placement enforcement in Terraform: `node_selector` on each moved Deployment. Optionally taint `server-1` afterwards so nothing new schedules next to `service-ssh`.
-- Cross-node hops after the move: `service-web -> icecast-sv:8000` (~128 kbps per proxied listener) and app `-> postgres-rw` if the primary lands on server-2; both are LAN-negligible, but prefer keeping the Postgres primary on server-1 with `service-ssh` and the standby on server-2.
-- Public ingress for web/audio keeps working unchanged: DNS still points at server-1, ingress-nginx forwards across the cluster network to pods on server-2.
+**The node.** `agent-1`: Hetzner CX33 (4 vCPU x86, 8 GB, 40 GB disk) in Helsinki like `server-1`, Debian 13, joined by hand as an RKE2 agent pinned to `server-1`'s version (v1.34.4+rke2r1), admin SSH on 22222. Procedure in `infra/README.md`, Nodes. Not `infra/setup_rke2.sh`: it bootstraps a whole cluster and would reinstall `server-1` and overwrite kubeconfig and the `KUBE_CONFIG` GitHub secret. x86 was picked over the spare ARM boxes because every `late-*` image is built amd64-only; all third-party images were multi-arch.
+
+**Agent, not a second server.** etcd needs a majority of members up. With two servers both must be up, so a second control-plane node adds a failure mode without adding safety. Control-plane HA starts at three servers, all schedulable, behind a stable join and API address (DNS or a Hetzner load balancer) instead of `server-1`'s IP. Converting `agent-1` later means uninstalling the agent and reinstalling as a server with the same token; take an etcd snapshot first.
+
+**Placement.** `agent-1` carries label and `NoSchedule` taint `role=support`. A workload lands there only with both the node selector and the toleration (`support_node_*` locals in `infra/defaults.tf`); the taint is what keeps `service-ssh` and everything else on `server-1`. CoreDNS needed its own toleration (`infra/coredns.tf`): its autoscaler wants one replica per node with required anti-affinity, so the second replica sat Pending after the join. local-path helper pods are bound by `nodeName`, which bypasses the scheduler, so the taint does not block volume creation on `agent-1`.
+
+**Moves to `agent-1`:** `service-web`, `icecast`, `liquidsoap`, `otel-collector`, `vmagent`, `kube-state-metrics`, `victoriametrics`, `victorialogs`, `victoriatraces`, `grafana`, Minecraft on its first deploy, and the second CoreDNS replica.
+
+**Volumes are recreated empty, not migrated, by decision.** Downtime and lost history were accepted in exchange for zero migration machinery. A `local-path` PVC is pinned to the node holding it, so a selector alone would leave the pod unschedulable. Procedure: scale `liquidsoap`, `grafana`, `victoriametrics`, `victorialogs`, and `victoriatraces` to 0, delete `music-data`, `grafana-data`, and the three Victoria PVCs, confirm they are gone, run the infra apply (it recreates them on `agent-1`), then dispatch `sync_music`. Deleting a PVC while its pod still runs leaves it Terminating and breaks the apply. Applying before deleting does not work either: the new pods need `agent-1` while the old volumes pin them to `server-1`, so they sit Pending, the Recreate-strategy Victoria stores go down anyway, and the apply times out on the rollout wait. Consequences, as observed:
+
+- Radio streamed silence from the scale-down until `sync_music` finished, about 20 minutes: `radio.liq` has no fallback beyond the files on the PVC (`mksafe` plays silence rather than crashing), and R2 is the source of truth.
+- All metric, log, and trace history before the move is gone. The figures recorded in this document are the only pre-move record.
+- Grafana lost UI-made state and its admin login is the `grafana-admin` secret again (`kubectl get secret -n monitoring grafana-admin`); the old volume's password had been changed in the UI. Dashboards and datasources are provisioned from config, and the VictoriaMetrics plugins reinstall at boot (the 508 MB `plugins` directory was most of the old volume).
+- `server-1` got back about 9 GB of disk (7.5 GB free before, 16.6 GB after).
+
+**What was actually run, 2026-09-13:**
+
+1. PR #603 merged; its `terraform_plan` showed 5 to add (Minecraft deployment, PVC, secret, RCON password; CoreDNS `HelmChartConfig`), 11 to change (the 9 deployments, the vmagent and kube-state-metrics releases, plus the unrelated deadchannel dashboard ConfigMap that rode along), 0 to destroy. Every deployment diff was only the node selector and toleration.
+2. The five stateful deployments scaled to 0 and their PVCs deleted by hand; local-path removed the PVs within seconds.
+3. Applied by a manual `deploy_infra` dispatch with `release_tag=main` (run 34779327218, 2m22s green), not by an `-infra` release, so no release tag marks this change.
+4. Verified: all 11 deployments rolled out on `agent-1` with zero restarts, the five PVCs recreated there (plus `minecraft-data`), CoreDNS at two replicas one per node, `late.sh` 200, Grafana login page up, Minecraft `Done (22s)` with GriefPrevention loaded and the whitelist seeded. The only warning events were probe failures from pods mid-rollout.
+5. `sync_music` dispatched (run 34779732666, about 11 minutes): 617 MP3s, 3.9 GB, both Icecast mounts live again.
+
+**Stays on `server-1`, and why:**
+
+- `service-ssh`, `redis`: the point of the move.
+- Door hosts: save PVCs are pinned to `server-1`.
+- ingress-nginx, `ipv6-proxy`: public ports and the DNS A/AAAA records point at `server-1`. Ingress still serves pods on `agent-1` across the cluster network.
+- **Postgres, both instances, by decision.** A standby on `agent-1` looks like node-level HA but is not: the CNPG operator and the whole control plane also live on `server-1`, so if `server-1` dies nothing is left to promote the standby. Data already leaves the node through daily barman-cloud base backups plus continuous WAL archiving to object storage, so a cross-node standby would only be a faster restore path. Keeping the primary next to `service-ssh` also keeps every query off the network. Revisit with three control-plane nodes.
+- **LiveKit and `livekit-ingress`, by decision.** Both run with `host_network`. On `agent-1`, signaling (`rtc.late.sh`) and WHIP (`whip.late.sh`) would still work through ingress, and direct media would work because `use_external_ip` advertises the node's own public IP. TURN would break: its domain is `rtc.late.sh`, which resolves to `server-1`, and that name cannot move because signaling and its HTTP-01 certificate renewal both depend on ingress-nginx on `server-1`. A clean move needs a dedicated TURN hostname (for example `turn.late.sh`) pointing at `agent-1`, with a DNS-01 certificate. Payoff: stream CPU and packet fan-out off `server-1`, and a fresh host for the UDP receive-buffer sysctls (Pain Point 8).
+- Cluster add-ons (cert-manager, the CNPG operator and barman plugin, local-path provisioner, metrics-server): untouched, no reason to move.
+
+**Minecraft addressing.** Its hostPort opens on `agent-1`, but `late.sh` resolves to `server-1` and the `*.late.sh` wildcard is Cloudflare-proxied, so two manual DNS records route players: an `mc.late.sh` A record for `agent-1`, and a `_minecraft._tcp.late.sh` SRV record so plain `late.sh` still works. Both DNS-only, never proxied. As of 2026-09-13 the A record exists and players connect to `mc.late.sh`; the SRV record does not yet, so plain `late.sh` still lands on `server-1`.
+
+**Left to do:**
+
+- Add the `_minecraft._tcp.late.sh` SRV record (priority 0, weight 5, port 25565, target `mc.late.sh`).
+- Offsite etcd snapshots. RKE2 takes one every 12 hours and keeps them only on `server-1`'s own disk. Configure the S3 upload, reusing the bucket Postgres backups go to; it restarts `rke2-server`, which briefly interrupts the API but not running pods.
+- Reclaim `server-1` disk: prune unused images and vacuum the journal (containerd held 13 GiB and the journal 2.6 GiB on 2026-09-12).
+- node-exporter on both nodes (item 0c).
+- Record a post-move baseline for both nodes once traffic settles; the reading in Current Infra Status was taken minutes after the rollout.
+- Optional: taint `server-1` so nothing new schedules next to `service-ssh`. Needs tolerations on everything that stays.
+- LiveKit move, once the TURN prerequisites above exist.
 
 ### 4. Verify the render-cost win in prod
 
@@ -781,7 +823,7 @@ Before increasing app replicas substantially:
 
 Suggested shape:
 
-- Two nodes as the first step (see Immediate Next Work): `server-1` dedicated to `service-ssh`, `server-2` for web/audio/monitoring/DB standby
+- Two nodes as the first step (Immediate Next Work 3, landed 2026-09-13): `server-1` for `service-ssh`, Postgres, LiveKit, and the doors; `agent-1` for web, audio, monitoring, and Minecraft. Node-level Postgres HA waits for three control-plane nodes
 - `service-web`: 3+ stateless replicas
 - `service-ssh`: multiple replicas, each owning many sessions
 - Redis: token ownership, presence, pub/sub, lightweight fanout
@@ -835,9 +877,9 @@ What held or is now in place:
 - `pg_stat_statements` and traces available for live diagnosis
 - Render cost: dirty gate + adaptive tick shipped; idle sessions no longer pay the 15 FPS floor
 
-Residual risk (updated 2026-08-18):
+Residual risk (updated 2026-08-18, node layout 2026-09-13):
 
-- single-node cluster (second node is the next infra step)
+- single control-plane node: `agent-1` carries support workloads, but etcd, the CNPG operator, and both Postgres instances live on `server-1`, so losing `server-1` stops the control plane and the database together (running pods on `agent-1` keep serving, nothing reschedules). etcd snapshots stay on `server-1`'s disk until the S3 upload is configured
 - single `service-ssh` pod for real session ownership
 - the feed fan-outs (Pain Point 6) drop feed events in every live session on each write. Measured at ~9,226 dropped events over 7 days, still unfixed, still three copies
 - Discover latency is a live product problem: 771 ms mean, 4.1 s max, and it regressed rather than improved. Likely a stale visibility map, fix untested
@@ -852,4 +894,4 @@ Retired from this list on 2026-08-18:
 - ~~the chat snapshot poll is the binding DB constraint on the 1000-user target~~ **it is not.** Measured at ~0.4 cores extrapolated to 1000 sessions, against a Postgres instance averaging 0.086 cores
 - ~~the `service-web -> icecast` upstream drops~~ **zero occurrences in 7 days**
 
-For posts that bring about 100 active users, current state survives, proven in production. For 1000 active terminal users the remaining projects are now: add the second node, then shardable `service-ssh` (with PgBouncer before replicas multiply). **The DB is no longer on the critical path** for that target, which is the main change from the 2026-07-23 version of this assessment: both the render-cost multiplier and the DB side are now measured rather than projected, and render/tick CPU is the sole scaling unit. At the 2026-08-18 weekly peak of 43 concurrent sessions there is roughly 7x headroom before the current single node binds.
+For posts that bring about 100 active users, current state survives, proven in production. For 1000 active terminal users the remaining projects are now: the second-node follow-ups (Immediate Next Work 3), then shardable `service-ssh` (with PgBouncer before replicas multiply). **The DB is no longer on the critical path** for that target, which is the main change from the 2026-07-23 version of this assessment: both the render-cost multiplier and the DB side are now measured rather than projected, and render/tick CPU is the sole scaling unit. At the 2026-08-18 weekly peak of 43 concurrent sessions there is roughly 7x headroom before `server-1` binds, measured while it still carried every support workload.

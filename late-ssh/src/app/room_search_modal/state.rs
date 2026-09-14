@@ -164,22 +164,36 @@ pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomS
     let mut items = Vec::new();
     for slot in chat.visual_order() {
         match slot {
-            RoomSlot::Room(room_id) => {
-                let Some((room, _)) = chat.rooms.iter().find(|(room, _)| room.id == room_id) else {
-                    continue;
-                };
-                if !is_chat_list_room(room) {
-                    continue;
-                }
-                items.push(RoomSearchItem {
+            RoomSlot::Room(room_id) => match chat.stream_for_room(room_id) {
+                // The rail order carries a stream room only while it is live.
+                // It is `kind='game'` and may not be joined yet, so the row is
+                // built from the stream; the pick joins lazily.
+                Some(stream) => items.push(RoomSearchItem {
                     slot,
-                    label: room_label(room, current_user_id, &chat.usernames),
-                    meta: room_meta(room),
-                    unread_count: chat.unread_counts.get(&room.id).copied().unwrap_or(0),
-                    last_message_at: room_activity_at(room.id, &chat.room_last_message_at),
-                    favorite: chat.favorite_room_ids().contains(&room.id),
-                });
-            }
+                    label: format!("#{}-live", stream.username),
+                    meta: format!("live stream: {}", stream.title),
+                    unread_count: chat.unread_counts.get(&room_id).copied().unwrap_or(0),
+                    last_message_at: room_activity_at(room_id, &chat.room_last_message_at),
+                    favorite: false,
+                }),
+                None => {
+                    let Some((room, _)) = chat.rooms.iter().find(|(room, _)| room.id == room_id)
+                    else {
+                        continue;
+                    };
+                    if !is_chat_list_room(room) {
+                        continue;
+                    }
+                    items.push(RoomSearchItem {
+                        slot,
+                        label: room_label(room, current_user_id, &chat.usernames),
+                        meta: room_meta(room),
+                        unread_count: chat.unread_counts.get(&room.id).copied().unwrap_or(0),
+                        last_message_at: room_activity_at(room.id, &chat.room_last_message_at),
+                        favorite: chat.favorite_room_ids().contains(&room.id),
+                    });
+                }
+            },
             RoomSlot::Feeds
             | RoomSlot::News
             | RoomSlot::Cyberspace
