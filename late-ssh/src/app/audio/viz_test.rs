@@ -63,6 +63,10 @@ fn assert_bands_near(actual: LiveBands, expected: LiveBands) {
 }
 
 #[test]
+#[expect(
+    clippy::approx_constant,
+    reason = "0.318 is an eased band level, not 1/pi"
+)]
 fn spectrum_eases_levels_and_caps_hold_where_the_bars_struck() {
     // Drive a run of three frames at one instant, loud bass then loud treble
     // then silence, and check the whole smoothed state after each. No time

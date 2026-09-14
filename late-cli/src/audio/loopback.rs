@@ -354,8 +354,9 @@ fn pump_samples(mut stdout: ChildStdout, mut samples: HeapProd<f32>) {
 /// silence must send no frames, so the TUI falls back instead of drawing a
 /// flat live spectrum.
 pub(crate) fn decode_audible_chunk(bytes: &[u8], chunk: &mut [f32]) -> bool {
-    for (sample, raw) in chunk.iter_mut().zip(bytes.chunks_exact(4)) {
-        *sample = f32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]);
+    let (raw_samples, _) = bytes.as_chunks::<4>();
+    for (sample, raw) in chunk.iter_mut().zip(raw_samples) {
+        *sample = f32::from_le_bytes(*raw);
     }
     chunk.iter().any(|sample| *sample != 0.0)
 }
