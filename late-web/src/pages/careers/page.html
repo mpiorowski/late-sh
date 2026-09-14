@@ -1,0 +1,55 @@
+{% extends "pages/layout.html" %}
+
+{% block title %}careers / late.sh{% endblock %}
+
+{% block page %}
+<div class="max-w-2xl mx-auto pt-8 sm:pt-16 pb-24">
+
+    <div class="mb-12">
+        <a href="/" class="text-xs text-gray-400 hover:text-green-400 underline underline-offset-2 transition-colors">&larr;
+            late.sh</a>
+        <h1 class="text-2xl sm:text-3xl text-green-500 tracking-tight mt-4">careers</h1>
+        <p class="text-sm text-gray-300 mt-4 leading-relaxed">
+            late.sh is a <a href="/terms" class="text-green-400 hover:text-green-300 underline underline-offset-2">one-person
+                hobby project</a>, not a company. There's no open role right now &mdash; this page exists so a real
+            posting has somewhere to live if that ever changes.
+        </p>
+    </div>
+
+    {% for card in cards %}
+    <div class="mb-8 border border-gray-600 px-5 py-4 bg-gray-900/40">
+        {% if !card.live %}
+        <div class="text-xs text-yellow-500 mb-3 uppercase tracking-wide">example &mdash; not an open role</div>
+        {% endif %}
+        <div class="flex items-center justify-between gap-4">
+            <h2 class="text-lg text-gray-100">{{ card.title }}</h2>
+            <span class="shrink-0 text-xs text-gray-400">{{ card.employment_type }}</span>
+        </div>
+        <div class="text-xs text-gray-400 mt-1">{{ card.location }}</div>
+        <p class="text-sm text-gray-300 mt-3 leading-relaxed">{{ card.summary }}</p>
+        <ul class="text-xs text-gray-400 space-y-1.5 mt-3 pl-4">
+            {% for req in card.requirements %}
+            <li><span class="text-gray-500">&#9500;&#9472;</span> {{ req }}</li>
+            {% endfor %}
+        </ul>
+        {% if card.live %}
+        <div class="mt-4 text-xs">
+            apply: <a href="mailto:{{ contact_email }}"
+                class="text-green-400 hover:text-green-300 underline underline-offset-2">{{ contact_email }}</a>
+        </div>
+        {% endif %}
+        {% if let Some(ld) = card.json_ld %}
+        <script type="application/ld+json">{{ ld|safe }}</script>
+        {% endif %}
+    </div>
+    {% endfor %}
+
+    <div class="text-xs text-gray-500 border-t border-gray-700 pt-6">
+        questions: <a href="mailto:{{ contact_email }}"
+            class="text-green-400 hover:text-green-300 underline underline-offset-2">{{ contact_email }}</a>
+        &middot; feed: <a href="/careers.xml"
+            class="text-green-400 hover:text-green-300 underline underline-offset-2">/careers.xml</a>
+    </div>
+
+</div>
+{% endblock %}
