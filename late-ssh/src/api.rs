@@ -853,11 +853,18 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
                                 position_ms,
                                 bands,
                                 rms,
-                            } => SessionMessage::Viz(VizFrame {
-                                track_pos_ms: position_ms,
-                                bands: bands_from_wire(bands),
-                                rms,
-                            }),
+                            } => {
+                                let wire_bands = match &bands {
+                                    WireBands::Eight(_) => metrics::VizWireBands::Eight,
+                                    WireBands::Sixteen(_) => metrics::VizWireBands::Sixteen,
+                                };
+                                metrics::record_pair_viz_frame(wire_bands);
+                                SessionMessage::Viz(VizFrame {
+                                    track_pos_ms: position_ms,
+                                    bands: bands_from_wire(bands),
+                                    rms,
+                                })
+                            }
                             WsPayload::ClientState {
                                 client_kind,
                                 ssh_mode,

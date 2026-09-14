@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, the equalizer (live CLI spectrum with an ambient fallback), and now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the music/audio touchpoints it owns in `late-cli` and `late-web/src/pages/listen`
-- Last updated: 2026-09-14 (The eq stops reading flat: frames carry 16 bands (an old CLI's 8 are stretched at the parse), and `Spectrum` meters them against a running mean and swing, so steady music spreads low and hits jump. Peaks now draw as a faint ghost from the bar up to the falling cap (`theme::EQ_GHOST`). See §10. Previous entry: Peak caps hold then fall: each cap hangs 0.5s where its bar struck, then drops under gravity until the bar catches it, on the sidebar, the Zen music tile and, new, the Zen visualizer tile, which now shares `viz::dance_lines` instead of its own copy of the bars. See §10. Previous entry: YouTube gets real bars on Linux: the CLI tags the `late-webview` helper's audio streams at spawn, finds the tagged stream with `pw-dump`, records just that stream with `pw-record`, and runs it through the same analyzer as Icecast and radio, so the server sees ordinary `viz` frames. The CLI analyzer also moved to a dB scale, so bars move instead of sitting near full height. See §10 and §18. Previous entry: Bringing a track pays: `MediaQueueItem::insert_youtube` is now the paying path, `SONG_QUEUE_REWARD_CHIPS` (200) for the first `SONG_QUEUE_MAX_PAID_PER_DAY` (5) tracks a person queues each UTC day, credited in the same transaction as the insert. Every track pays, repeats and History re-queues included; the day's count is the only gate. Every submit path funnels through it, so booth, `/audio`, and a history re-queue all pay the same, and `SubmitQueueResponse.reward_chips` carries what was actually minted into the banner. See "Submission reward" under §4. Previous entry: The CLI no longer unmutes itself when the pair socket dies: only a session the server never saw may release its boot mute, and the retry loop slows to 60s instead of abandoning pairing. See the end of "Mute and volume: one source of truth, stored per device". Previous entry: device-audio write path hardened: only CLI reports persist (never the webview helper's), alignment echoes are not treated as intent, a failed connect-time read disables alignment and persistence for that connection instead of imposing fresh-boot defaults, and writes land in report order. See "Mute and volume: one source of truth, stored per device")
+- Last updated: 2026-09-14 (The equalizer draws 16-band `viz` frames (an older CLI's 8 are stretched at the parse and counted by `late_ssh_pair_viz_frames_total`), meters them against a running mean and swing in `Spectrum`, and draws each peak as a faint ghost up to a cap that holds, then falls (`theme::EQ_GHOST`), on the sidebar and both Zen tiles through `viz::dance_lines`. On Linux the CLI captures the `late-webview` helper's audio, so YouTube draws live bars too. See §10 and §18.)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -65,7 +65,7 @@ Cross-crate touchpoints:
   `073_create_media_history.sql`,
   `122_drop_media_history_votes.sql`,
   `123_media_queue_unique_active_track.sql`.
-- `late-core/src/audio.rs` — `VizFrame { bands[8], rms, track_pos_ms }` shared between server and CLI.
+- `late-core/src/audio.rs`: `VizFrame { bands[VIZ_BANDS], rms, track_pos_ms }` (`VIZ_BANDS` = 16) shared between server and CLI.
 - `late-ssh/src/paired_clients.rs` — `PairedClientRegistry`, `PairControlMessage::SetPlaybackSource`, source/surface policy.
 - `late-ssh/src/api.rs` — `/api/ws/pair` multiplexes `AudioWsMessage` + `PairControlMessage`; `/api/now-playing`.
 - `late-ssh/src/app/chat/{state,input}.rs` — `/audio` and `/audio fallback` chat commands.
@@ -239,7 +239,7 @@ YouTube item without entering the switching/playback path.
 
 ### Client → server `WsPayload` (`api.rs:39-68`)
 - `heartbeat`
-- `viz { position_ms, bands[8], rms }`: the paired CLI's spectrum of what it plays (its native Icecast/radio output, or on Linux the captured YouTube helper stream); drives the equalizer (§10, §18)
+- `viz { position_ms, bands[16], rms }`: the paired CLI's spectrum of what it plays (its native Icecast/radio output, or on Linux the captured YouTube helper stream); drives the equalizer (§10, §18). Older CLIs send `bands[8]`, which `api.rs::bands_from_wire` stretches to 16.
 - `client_state { client_kind, ssh_mode, platform, capabilities, muted, volume_percent }` — older CLIs also send `icecast_output_available`, which the server now ignores: it only ever gated the browser Icecast takeover.
 - `clipboard_image { … }`, `clipboard_image_failed { … }`
 - `player_state(PlayerStateReport)` — `{ item_id, state, offset_ms?, duration_ms?, autoplay_blocked, error? }` (`svc.rs:126-138`)
@@ -421,6 +421,8 @@ The pair socket takes 16 bands (`late_core::audio::VIZ_BANDS`) or the 8 that
 CLIs from before the 16-band analyzer send; `api.rs::bands_from_wire` stretches
 8 to 16 at the parse, so everything past the socket handles one shape. An old
 server rejects a 16-band frame, so the server deploys before the CLI.
+`late_ssh_pair_viz_frames_total{bands="8"|"16"}` counts accepted frames by
+wire shape, so it shows how many paired CLIs still send 8.
 
 `Spectrum` is a pure state machine in `viz.rs`. Each frame is metered against
 a running level first (`Level`): a mean of the bands and their typical swing

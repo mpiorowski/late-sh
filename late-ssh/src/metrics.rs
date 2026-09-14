@@ -173,6 +173,14 @@ pub enum SshRejectReason {
     GlobalLimit,
 }
 
+/// The band count a paired CLI's `viz` frame arrived with. CLIs from before
+/// the 16-band analyzer send 8, which the pair socket stretches to 16.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VizWireBands {
+    Eight,
+    Sixteen,
+}
+
 #[cfg(feature = "otel")]
 mod inner {
     use std::sync::OnceLock;
@@ -189,7 +197,7 @@ mod inner {
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
         GildTier, NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult,
         PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult,
+        TranslationResult, VizWireBands,
     };
     use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
 
@@ -272,6 +280,16 @@ mod inner {
                 .with_description(
                     "Websocket pair attempts rejected because no live session owned the token",
                 )
+                .build()
+        })
+    }
+
+    fn pair_viz_frames_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pair_viz_frames_total")
+                .with_description("Spectrum frames accepted from paired CLIs, by wire band count")
                 .build()
         })
     }
@@ -791,6 +809,17 @@ mod inner {
         ws_pair_rejected_unknown_token_total().add(1, &[]);
     }
 
+    fn viz_wire_bands_label(bands: VizWireBands) -> &'static str {
+        match bands {
+            VizWireBands::Eight => "8",
+            VizWireBands::Sixteen => "16",
+        }
+    }
+
+    pub fn record_pair_viz_frame(bands: VizWireBands) {
+        pair_viz_frames_total().add(1, &[KeyValue::new("bands", viz_wire_bands_label(bands))]);
+    }
+
     pub fn record_cli_pair_usage(ssh_mode: &str, platform: &str) {
         cli_pair_usage_total().add(
             1,
@@ -1308,7 +1337,7 @@ mod inner {
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
         GildTier, NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult,
         PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult,
+        TranslationResult, VizWireBands,
     };
     use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
 
@@ -1322,6 +1351,7 @@ mod inner {
     pub fn add_ssh_session(_delta: i64) {}
     pub fn record_ws_pair_success() {}
     pub fn record_ws_pair_rejected_unknown_token() {}
+    pub fn record_pair_viz_frame(_bands: VizWireBands) {}
     pub fn record_cli_pair_usage(_ssh_mode: &str, _platform: &str) {}
     pub fn add_cli_pair_active(_delta: i64, _ssh_mode: &str, _platform: &str) {}
     pub fn record_render_frame_drop() {}

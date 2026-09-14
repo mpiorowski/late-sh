@@ -91,10 +91,18 @@ enum DiscoveryError {
 fn run_capture_worker(owner: u32, analyzer_tx: &broadcast::Sender<VizSample>, stop: &AtomicBool) {
     let mut recorder: Option<Recorder> = None;
     let mut discovery_failing = false;
+    // A serial whose recorder keeps exiting while its stream is still listed
+    // warns once, then respawns quietly until a recorder holds it.
+    let mut dropping_serial: Option<u64> = None;
     while !stop.load(Ordering::Relaxed) {
+        // A recorder never reconnects, so it exits when its stream goes away
+        // between videos. Discovery below tells that apart from a recorder
+        // that could not hold a stream that is still listed.
+        let mut exited: Option<(u64, RecorderExit)> = None;
         if let Some(active) = recorder.as_mut()
-            && active.has_exited()
+            && let Some(exit) = active.exit()
         {
+            exited = Some((active.serial, exit));
             recorder = None;
         }
 
@@ -103,12 +111,43 @@ fn run_capture_worker(owner: u32, analyzer_tx: &broadcast::Sender<VizSample>, st
                 discovery_failing = false;
                 let current = recorder.as_ref().map(|active| active.serial);
                 match (target, current) {
-                    (Some(serial), Some(current)) if serial == current => {}
+                    (Some(serial), Some(current)) if serial == current => {
+                        dropping_serial = None;
+                    }
                     (Some(serial), _) => {
                         recorder = None;
+                        let retrying = match exited {
+                            Some((exited_serial, exit)) if exited_serial == serial => {
+                                if dropping_serial != Some(serial) {
+                                    match exit {
+                                        RecorderExit::Status(status) => warn!(
+                                            serial,
+                                            ?status,
+                                            "youtube helper audio recorder exited while its stream is still listed; retrying"
+                                        ),
+                                        RecorderExit::Wait(err) => warn!(
+                                            serial,
+                                            error = %err,
+                                            "failed to check youtube helper audio recorder; retrying"
+                                        ),
+                                    }
+                                }
+                                dropping_serial = Some(serial);
+                                true
+                            }
+                            Some(_) | None => {
+                                dropping_serial = None;
+                                false
+                            }
+                        };
                         match Recorder::spawn(serial, analyzer_tx.clone()) {
                             Ok(started) => {
-                                info!(serial, "capturing youtube helper audio for the equalizer");
+                                if !retrying {
+                                    info!(
+                                        serial,
+                                        "capturing youtube helper audio for the equalizer"
+                                    );
+                                }
                                 recorder = Some(started);
                             }
                             Err(err) if err.kind() == io::ErrorKind::NotFound => {
@@ -234,6 +273,13 @@ struct Recorder {
     child: Child,
 }
 
+/// How a recorder ended. A failed status check counts as ended: the worker
+/// drops (kills) it and starts over.
+enum RecorderExit {
+    Status(ExitStatus),
+    Wait(io::Error),
+}
+
 impl Recorder {
     fn spawn(serial: u64, analyzer_tx: broadcast::Sender<VizSample>) -> io::Result<Self> {
         let mut child = Command::new("pw-record")
@@ -275,8 +321,12 @@ impl Recorder {
         Ok(Self { serial, child })
     }
 
-    fn has_exited(&mut self) -> bool {
-        !matches!(self.child.try_wait(), Ok(None))
+    fn exit(&mut self) -> Option<RecorderExit> {
+        match self.child.try_wait() {
+            Ok(None) => None,
+            Ok(Some(status)) => Some(RecorderExit::Status(status)),
+            Err(err) => Some(RecorderExit::Wait(err)),
+        }
     }
 }
 
