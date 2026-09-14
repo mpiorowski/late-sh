@@ -5005,10 +5005,16 @@ async fn first_contact_invitation_sends_one_dm_and_claims_once() {
 
     // Two racing requests (two devices whose sends came due at once): the
     // claim lets exactly one of them play the scene and one DM through.
-    let first =
-        service.send_first_contact_invitation_task(target.id, target.username.clone(), Duration::ZERO);
-    let second =
-        service.send_first_contact_invitation_task(target.id, target.username.clone(), Duration::ZERO);
+    let first = service.send_first_contact_invitation_task(
+        target.id,
+        target.username.clone(),
+        Duration::ZERO,
+    );
+    let second = service.send_first_contact_invitation_task(
+        target.id,
+        target.username.clone(),
+        Duration::ZERO,
+    );
     let answers = [
         first.await.expect("first answer"),
         second.await.expect("second answer"),

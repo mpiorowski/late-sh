@@ -851,19 +851,15 @@ fn tick_commands(app: &mut App) -> bool {
         HauntCommand::Replay => {
             replay_whisper(app);
         }
-        HauntCommand::Invite => match (
-            app.haunt.marks.invited_at,
-            app.haunt.breakthrough.as_mut(),
-        ) {
+        HauntCommand::Invite => match (app.haunt.marks.invited_at, app.haunt.breakthrough.as_mut())
+        {
             (Some(_), _) => {
                 app.banner = Some(Banner::error(
                     "Already invited - /haunt reset to clear the marks",
                 ));
             }
             (None, None) => {
-                app.banner = Some(Banner::error(
-                    "Breakthrough is not armed - /haunt on first",
-                ));
+                app.banner = Some(Banner::error("Breakthrough is not armed - /haunt on first"));
             }
             (None, Some(breakthrough)) => {
                 breakthrough.force_next();

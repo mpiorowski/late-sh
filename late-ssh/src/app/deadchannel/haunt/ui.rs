@@ -220,7 +220,10 @@ pub(crate) fn draw_breakthrough(frame: &mut Frame, area: Rect, breakthrough: &Br
     let height = 3.min(area.height);
     let gap = Rect::new(
         area.x + (area.width - width) / 2,
-        area.y + (area.height / 2).saturating_sub(1).min(area.height - height),
+        area.y
+            + (area.height / 2)
+                .saturating_sub(1)
+                .min(area.height - height),
         width,
         height,
     );

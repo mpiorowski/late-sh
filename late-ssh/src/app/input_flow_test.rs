@@ -2592,7 +2592,8 @@ async fn breakthrough_waits_for_a_send_from_its_own_session() {
         "breakthrough-phone-it",
         world.clone(),
     );
-    let mut laptop = make_app_in_world(test_db.db.clone(), user.id, "breakthrough-laptop-it", world);
+    let mut laptop =
+        make_app_in_world(test_db.db.clone(), user.id, "breakthrough-laptop-it", world);
     phone.resize(160, 40).expect("resize phone terminal");
     for app in [&mut phone, &mut laptop] {
         wait_for_render_contains(app, "lounge").await;

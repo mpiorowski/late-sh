@@ -1280,8 +1280,7 @@ impl Breakthrough {
             return None;
         };
         let into = tick.saturating_sub(since) % BREAKTHROUGH_SURGE_PERIOD_TICKS;
-        (into < BREAKTHROUGH_SURGE_TICKS)
-            .then(|| into as f32 / BREAKTHROUGH_SURGE_TICKS as f32)
+        (into < BREAKTHROUGH_SURGE_TICKS).then(|| into as f32 / BREAKTHROUGH_SURGE_TICKS as f32)
     }
 
     /// `/haunt invite`: the next own send claims, due or not, even after a
