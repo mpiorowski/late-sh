@@ -85,7 +85,7 @@ async fn send_viz_frame() {
         .await;
 
     let frame = VizFrame {
-        bands: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+        bands: [0.5; late_core::audio::VIZ_BANDS],
         rms: 0.5,
         track_pos_ms: 1000,
     };

@@ -1,5 +1,5 @@
 use crate::app::{audio::client_state::ClientAudioState, common::theme, tick::ANIM_HALF_TICK};
-use late_core::audio::VizFrame;
+use late_core::audio::{VIZ_BANDS, VizFrame};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -32,6 +32,18 @@ const BAND_ATTACK: f32 = 0.6;
 /// Share of the gap to a quieter band closed in one client frame: decays
 /// ease down instead of flickering.
 const BAND_RELEASE: f32 = 0.3;
+/// Where a band at the running mean lands on the meter: below half, so a
+/// steady passage sits low and a hit has room to jump.
+const LEVEL_CENTER: f32 = 0.35;
+/// Meter height per running swing: a band one typical swing above the mean
+/// sits this far above the center.
+const LEVEL_SPREAD: f32 = 0.2;
+/// The smallest swing the stretch divides by (about 2.4 dB of the CLI's
+/// 60 dB meter), so a near-steady signal is not blown up into noise.
+const LEVEL_MIN_SWING: f32 = 0.04;
+/// Time constant of the running mean and swing: the meter settles into a
+/// new passage over a few seconds.
+const LEVEL_SETTLE_SECS: f32 = 3.0;
 /// Seconds a peak cap hangs where its bar struck it before it lets go.
 const CAP_HOLD_SECS: f32 = 0.5;
 /// How hard a released cap accelerates down, in full bands per second
@@ -82,13 +94,55 @@ fn ambient_cap_unit(bar: usize, bars: usize, anim_frame: usize) -> f32 {
         .fold(0.0, f32::max)
 }
 
-/// The smoothed spectrum the eq draws, each value in 0..=1: the eight
-/// analyzer bands low to high, and a peak cap per band that never sits
-/// below its band.
+/// The smoothed spectrum the eq draws, each value in 0..=1: the analyzer
+/// bands low to high, and a peak cap per band that never sits below its
+/// band.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct LiveBands {
-    pub(crate) levels: [f32; 8],
-    pub(crate) peaks: [f32; 8],
+    pub(crate) levels: [f32; VIZ_BANDS],
+    pub(crate) peaks: [f32; VIZ_BANDS],
+}
+
+/// The auto-level: a running mean of the bands and their typical swing
+/// around it. The meter is drawn against these, so a quiet track and a loud
+/// one both move across the whole band, a flat passage spreads out, and the
+/// spectrum keeps its shape: a band above the mean still stands above one
+/// below it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Level {
+    mean: f32,
+    swing: f32,
+}
+
+impl Level {
+    fn first(bands: &[f32; VIZ_BANDS]) -> Level {
+        let (mean, swing) = mean_and_swing(bands);
+        Level { mean, swing }
+    }
+
+    /// Settles toward this frame's mean and swing by how long it has been
+    /// since the last one.
+    fn next(self, bands: &[f32; VIZ_BANDS], elapsed: Duration) -> Level {
+        let (mean, swing) = mean_and_swing(bands);
+        let settle = 1.0 - (-elapsed.as_secs_f32() / LEVEL_SETTLE_SECS).exp();
+        Level {
+            mean: self.mean + (mean - self.mean) * settle,
+            swing: self.swing + (swing - self.swing) * settle,
+        }
+    }
+
+    /// A band's meter height against this level.
+    fn meter(&self, band: f32) -> f32 {
+        let swings = (band - self.mean) / self.swing.max(LEVEL_MIN_SWING);
+        (LEVEL_CENTER + swings * LEVEL_SPREAD).clamp(0.0, 1.0)
+    }
+}
+
+/// A frame's mean band, and the mean distance of its bands from that mean.
+fn mean_and_swing(bands: &[f32; VIZ_BANDS]) -> (f32, f32) {
+    let mean = bands.iter().sum::<f32>() / VIZ_BANDS as f32;
+    let swing = bands.iter().map(|band| (band - mean).abs()).sum::<f32>() / VIZ_BANDS as f32;
+    (mean, swing)
 }
 
 /// A live band's peak cap: the height its bar last struck, and when.
@@ -122,25 +176,34 @@ fn fold_cap(cap: Option<Cap>, level: f32, now: Instant) -> Cap {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Spectrum {
     bands: LiveBands,
-    caps: [Cap; 8],
+    caps: [Cap; VIZ_BANDS],
+    level: Level,
     received_at: Instant,
 }
 
 impl Spectrum {
-    /// Folds one client frame in. The first frame of a run lands as-is;
-    /// later ones ease toward the new bands, and each cap holds where its
-    /// bar last struck before it falls. Caps age on `now`, not on frame
-    /// count, so the fall keeps its speed whatever the client's cadence.
+    /// Folds one client frame in. The frame is metered against the running
+    /// level first. The first frame of a run lands as-is; later ones ease
+    /// toward the new bands, and each cap holds where its bar last struck
+    /// before it falls. Caps and the level age on `now`, not on frame count,
+    /// so both keep their speed whatever the client's cadence.
     pub(crate) fn next(current: Option<Spectrum>, frame: &VizFrame, now: Instant) -> Spectrum {
-        let targets = frame.bands.map(band_target);
-        let (levels, caps) = match current {
-            None => (targets, targets.map(|level| fold_cap(None, level, now))),
+        let bands = frame.bands.map(band_target);
+        let (level, levels, caps) = match current {
+            None => {
+                let level = Level::first(&bands);
+                let levels = bands.map(|band| level.meter(band));
+                (level, levels, levels.map(|band| fold_cap(None, band, now)))
+            }
             Some(spectrum) => {
-                let levels: [f32; 8] =
-                    std::array::from_fn(|i| smooth(spectrum.bands.levels[i], targets[i]));
+                let elapsed = now.saturating_duration_since(spectrum.received_at);
+                let level = spectrum.level.next(&bands, elapsed);
+                let levels: [f32; VIZ_BANDS] = std::array::from_fn(|i| {
+                    smooth(spectrum.bands.levels[i], level.meter(bands[i]))
+                });
                 let caps =
                     std::array::from_fn(|i| fold_cap(Some(spectrum.caps[i]), levels[i], now));
-                (levels, caps)
+                (level, levels, caps)
             }
         };
         Spectrum {
@@ -149,6 +212,7 @@ impl Spectrum {
                 peaks: caps.map(|cap| cap.height_at(now)),
             },
             caps,
+            level,
             received_at: now,
         }
     }
@@ -179,10 +243,10 @@ fn smooth(current: f32, target: f32) -> f32 {
     current + (target - current) * rate
 }
 
-/// The spectrum's height under one bar, in 0..=1: the eight bands
-/// stretched across however many bars the width holds, interpolated
-/// between neighbours so a wide strip slopes instead of stepping.
-fn spectrum_unit(bands: &[f32; 8], bar: usize, bars: usize) -> f32 {
+/// The spectrum's height under one bar, in 0..=1: the bands stretched
+/// across however many bars the width holds, interpolated between
+/// neighbours so a wide strip slopes instead of stepping.
+fn spectrum_unit(bands: &[f32; VIZ_BANDS], bar: usize, bars: usize) -> f32 {
     let last = bands.len() - 1;
     let position = match bars {
         0 | 1 => 0.0,
@@ -239,7 +303,7 @@ pub(crate) enum Dance {
     Ambient,
 }
 
-/// Bars and their peak caps filling `rows` rows (at least one) of `width`
+/// Bars and their ghosts up to the peak caps, filling `rows` rows (at least one) of `width`
 /// columns, top row first. A live spectrum draws as-is; the ambient band
 /// has no stored state and is synthesized from the `wall_tick`-derived paid
 /// frame (the app's marquee_tick), so the same tick renders the same frame
@@ -273,8 +337,9 @@ pub(crate) fn dance_lines(
             .unzip(),
     };
 
-    // Caps glow wherever they float so a falling peak stays visible.
-    let cap_style = Style::default().fg(theme::AMBER_GLOW());
+    // Between a bar and its peak hangs the bar's ghost, a faint wash that
+    // stays up where the bar struck and sinks back onto it.
+    let ghost = theme::EQ_GHOST();
     (0..rows)
         .map(|row| {
             let row_style = row_style(row, rows);
@@ -284,22 +349,30 @@ pub(crate) fn dance_lines(
             let mut run_text = String::new();
             let mut run_style = row_style;
             for col in 0..width {
-                // Gap columns and blanks extend whatever run is open so the
-                // spans stay merged; only real glyphs force a style switch.
-                let (glyph, style) = if col % BAR_STRIDE == BAR_STRIDE - 1 {
-                    (' ', run_style)
-                } else {
-                    let bar = col / BAR_STRIDE;
-                    let fill = levels[bar].saturating_sub(floor).min(SUBCELLS);
-                    let cap_here =
-                        caps[bar] > levels[bar] && (caps[bar] - 1) / SUBCELLS == cell_from_bottom;
-                    if fill > 0 {
-                        (BLOCKS[fill], row_style)
-                    } else if cap_here {
-                        ('▁', cap_style)
-                    } else {
-                        (' ', run_style)
+                let bar = col / BAR_STRIDE;
+                let fill = levels[bar].saturating_sub(floor).min(SUBCELLS);
+                let ghost_fill = caps[bar].saturating_sub(floor).min(SUBCELLS);
+                let cell = match (col % BAR_STRIDE == BAR_STRIDE - 1, fill, ghost_fill) {
+                    (true, _, _) => Cell::Blank,
+                    (false, 0, 0) => Cell::Blank,
+                    (false, 0, ghost_fill) => {
+                        Cell::Glyph(BLOCKS[ghost_fill], Style::default().fg(ghost))
                     }
+                    // One cell holds one background, so the head carries the
+                    // ghost only when the peak reaches past its top: a peak
+                    // ending inside the cell would read as the whole cell.
+                    (false, fill, _) if caps[bar] > floor + SUBCELLS => {
+                        Cell::Glyph(BLOCKS[fill], row_style.bg(ghost))
+                    }
+                    (false, fill, _) => Cell::Glyph(BLOCKS[fill], row_style),
+                };
+                // Blanks extend whatever run is open so the spans stay
+                // merged, unless that run paints a background: a gap
+                // column must never pick up the ghost.
+                let (glyph, style) = match cell {
+                    Cell::Blank if run_style.bg.is_none() => (' ', run_style),
+                    Cell::Blank => (' ', row_style),
+                    Cell::Glyph(glyph, style) => (glyph, style),
                 };
                 if style != run_style && !run_text.is_empty() {
                     spans.push(Span::styled(std::mem::take(&mut run_text), run_style));
@@ -313,6 +386,12 @@ pub(crate) fn dance_lines(
             Line::from(spans)
         })
         .collect()
+}
+
+/// One bar-column cell of the equalizer: open air, or a glyph in its style.
+enum Cell {
+    Blank,
+    Glyph(char, Style),
 }
 
 /// Vertical gradient: bar heads glow, the middle burns, the base sits in

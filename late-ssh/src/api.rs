@@ -15,7 +15,10 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use late_core::api_types::{NowPlayingResponse, StatusResponse, Track};
 use late_core::models::user_ssh_key::{KeyAudio, UserSshKey};
 use late_core::telemetry::http_telemetry_middleware;
-use late_core::{MutexRecover, audio::VizFrame};
+use late_core::{
+    MutexRecover,
+    audio::{VIZ_BANDS, VizFrame},
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -45,6 +48,32 @@ struct PairParams {
 const PAIR_WS_MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 const PAIR_SESSION_MESSAGE_TIMEOUT: Duration = Duration::from_millis(250);
 
+/// The spectrum bands a pair client sends. CLIs from before the 16-band
+/// analyzer send 8; any other count fails the parse.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum WireBands {
+    Eight([f32; 8]),
+    Sixteen([f32; VIZ_BANDS]),
+}
+
+/// Stretches an older CLI's 8 bands across [`VIZ_BANDS`], interpolating
+/// between neighbours with both ends pinned, so everything past the socket
+/// handles one shape.
+fn bands_from_wire(bands: WireBands) -> [f32; VIZ_BANDS] {
+    match bands {
+        WireBands::Sixteen(bands) => bands,
+        WireBands::Eight(bands) => std::array::from_fn(|i| {
+            let last = bands.len() - 1;
+            let position = i as f32 * last as f32 / (VIZ_BANDS - 1) as f32;
+            let low = (position.floor() as usize).min(last);
+            let high = (low + 1).min(last);
+            let t = position - low as f32;
+            bands[low] + (bands[high] - bands[low]) * t
+        }),
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "event")]
 enum WsPayload {
@@ -53,7 +82,7 @@ enum WsPayload {
     #[serde(rename = "viz")]
     Viz {
         position_ms: u64,
-        bands: [f32; 8],
+        bands: WireBands,
         rms: f32,
     },
     #[serde(rename = "client_state")]
@@ -826,7 +855,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
                                 rms,
                             } => SessionMessage::Viz(VizFrame {
                                 track_pos_ms: position_ms,
-                                bands,
+                                bands: bands_from_wire(bands),
                                 rms,
                             }),
                             WsPayload::ClientState {

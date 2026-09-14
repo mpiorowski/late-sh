@@ -32,12 +32,20 @@ fn render_eq_at(wall_tick: usize) -> String {
     render_eq_state(wall_tick, EqState::Ambient)
 }
 
-fn viz_frame(bands: [f32; 8]) -> VizFrame {
+fn viz_frame(bands: [f32; VIZ_BANDS]) -> VizFrame {
     VizFrame {
         bands,
         rms: 0.5,
         track_pos_ms: 0,
     }
+}
+
+/// Bands alternating between two values, low band first.
+fn alternating(even: f32, odd: f32) -> [f32; VIZ_BANDS] {
+    std::array::from_fn(|band| match band % 2 {
+        0 => even,
+        _ => odd,
+    })
 }
 
 fn assert_bands_near(actual: LiveBands, expected: LiveBands) {
@@ -56,76 +64,139 @@ fn assert_bands_near(actual: LiveBands, expected: LiveBands) {
 
 #[test]
 fn spectrum_eases_levels_and_caps_hold_where_the_bars_struck() {
-    // Drive a run of three frames at the CLI's ~15 Hz, loud bass then loud
-    // treble then silence, and check the whole smoothed state after each:
-    // rising bands attack, falling bands release, and every cap stays where
-    // its bar last struck, since the run is still inside the hold.
+    // Drive a run of three frames at one instant, loud bass then loud treble
+    // then silence, and check the whole smoothed state after each. No time
+    // passes, so the level stays where the first frame set it (mean 0.5,
+    // swing 0.5: a full band meters 0.55, an empty one 0.15). Rising bands
+    // attack, falling bands release, and every cap stays where its bar
+    // last struck.
     let start = Instant::now();
-    let bass = viz_frame([1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
-    let treble = viz_frame([0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
-    let silence = viz_frame([0.0; 8]);
+    let halves = |low: f32, high: f32| -> [f32; VIZ_BANDS] {
+        std::array::from_fn(|band| match band < VIZ_BANDS / 2 {
+            true => low,
+            false => high,
+        })
+    };
+    let bass = viz_frame(halves(1.0, 0.0));
+    let treble = viz_frame(halves(0.0, 1.0));
+    let silence = viz_frame([0.0; VIZ_BANDS]);
 
     let first = Spectrum::next(None, &bass, start);
     assert_bands_near(
         first.bands(),
         LiveBands {
-            levels: [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
-            peaks: [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+            levels: halves(0.55, 0.15),
+            peaks: halves(0.55, 0.15),
         },
     );
 
-    let second = Spectrum::next(Some(first), &treble, start + Duration::from_millis(67));
+    let second = Spectrum::next(Some(first), &treble, start);
     assert_bands_near(
         second.bands(),
         LiveBands {
-            levels: [0.7, 0.7, 0.7, 0.7, 0.6, 0.6, 0.6, 0.6],
-            peaks: [1.0, 1.0, 1.0, 1.0, 0.6, 0.6, 0.6, 0.6],
+            levels: halves(0.43, 0.39),
+            peaks: halves(0.55, 0.39),
         },
     );
 
-    let third = Spectrum::next(Some(second), &silence, start + Duration::from_millis(134));
+    let third = Spectrum::next(Some(second), &silence, start);
     assert_bands_near(
         third.bands(),
         LiveBands {
-            levels: [0.49, 0.49, 0.49, 0.49, 0.42, 0.42, 0.42, 0.42],
-            peaks: [1.0, 1.0, 1.0, 1.0, 0.6, 0.6, 0.6, 0.6],
+            levels: halves(0.346, 0.318),
+            peaks: halves(0.55, 0.39),
         },
     );
 }
 
 #[test]
 fn a_cap_hangs_through_its_hold_then_falls_faster_and_lands_on_its_bar() {
-    // One hit, then silence: the cap holds for CAP_HOLD_SECS, falls under
-    // gravity (0.4s past the hold it has dropped 0.5 * 3.0 * 0.4^2 = 0.24),
-    // and once it would pass below the bar it lands on it.
+    // The bands trade places: the even ones strike, then drop while the odd
+    // ones rise. Every frame keeps mean 0.5 and swing 0.5, so the level
+    // never moves and a band meters 0.55 or 0.15. The even caps hold for
+    // CAP_HOLD_SECS, fall under gravity (0.2s past the hold they have
+    // dropped 0.5 * 3.0 * 0.2^2 = 0.06), and once they would pass below
+    // their bars they land on them.
     let start = Instant::now();
-    let hit = Spectrum::next(None, &viz_frame([1.0; 8]), start);
-    let silence = viz_frame([0.0; 8]);
+    let even_up = viz_frame(alternating(1.0, 0.0));
+    let odd_up = viz_frame(alternating(0.0, 1.0));
 
-    let holding = Spectrum::next(Some(hit), &silence, start + Duration::from_millis(400));
+    let hit = Spectrum::next(None, &even_up, start);
+    assert_bands_near(
+        hit.bands(),
+        LiveBands {
+            levels: alternating(0.55, 0.15),
+            peaks: alternating(0.55, 0.15),
+        },
+    );
+
+    let holding = Spectrum::next(Some(hit), &odd_up, start + Duration::from_millis(400));
     assert_bands_near(
         holding.bands(),
         LiveBands {
-            levels: [0.7; 8],
-            peaks: [1.0; 8],
+            levels: alternating(0.43, 0.39),
+            peaks: alternating(0.55, 0.39),
         },
     );
 
-    let falling = Spectrum::next(Some(holding), &silence, start + Duration::from_millis(900));
+    let falling = Spectrum::next(Some(holding), &odd_up, start + Duration::from_millis(700));
     assert_bands_near(
         falling.bands(),
         LiveBands {
-            levels: [0.49; 8],
-            peaks: [0.76; 8],
+            levels: alternating(0.346, 0.486),
+            peaks: alternating(0.49, 0.486),
         },
     );
 
-    let landed = Spectrum::next(Some(falling), &silence, start + Duration::from_millis(1400));
+    let landed = Spectrum::next(Some(falling), &odd_up, start + Duration::from_millis(1000));
     assert_bands_near(
         landed.bands(),
         LiveBands {
-            levels: [0.343; 8],
-            peaks: [0.343; 8],
+            levels: alternating(0.2872, 0.5244),
+            peaks: alternating(0.2872, 0.5244),
+        },
+    );
+}
+
+#[test]
+fn the_level_spreads_a_flat_passage_low_and_lets_a_hit_jump() {
+    // A flat passage like the one on screen: every band at 0.5 or 0.6 of the
+    // CLI meter. Metered against its own level (mean 0.55, swing 0.05) it
+    // spreads a swing either side of the low center: 0.55 and 0.15.
+    let start = Instant::now();
+    let flat = Spectrum::next(None, &viz_frame(alternating(0.6, 0.5)), start);
+    assert_bands_near(
+        flat.bands(),
+        LiveBands {
+            levels: alternating(0.55, 0.15),
+            peaks: alternating(0.55, 0.15),
+        },
+    );
+
+    // A hit lifts every band to 0.8 before the level can settle: five swings
+    // above the mean, so it meters full and the bars attack toward the top.
+    let hit = Spectrum::next(Some(flat), &viz_frame([0.8; VIZ_BANDS]), start);
+    assert_bands_near(
+        hit.bands(),
+        LiveBands {
+            levels: alternating(0.82, 0.66),
+            peaks: alternating(0.82, 0.66),
+        },
+    );
+
+    // A louder passage held long enough to settle meters where the flat one
+    // did (0.55 and 0.15), so the bars ease back down toward it: the meter
+    // follows how the music moves, not how loud it is.
+    let settled = Spectrum::next(
+        Some(hit),
+        &viz_frame(alternating(0.9, 0.8)),
+        start + Duration::from_secs(60),
+    );
+    assert_bands_near(
+        settled.bands(),
+        LiveBands {
+            levels: alternating(0.739, 0.507),
+            peaks: alternating(0.739, 0.507),
         },
     );
 }
@@ -133,14 +204,20 @@ fn a_cap_hangs_through_its_hold_then_falls_faster_and_lands_on_its_bar() {
 #[test]
 fn hostile_frames_land_inside_the_band() {
     // Frames come off the network: NaN, infinities and out-of-range values
-    // must not reach the renderer's level math.
-    let frame = viz_frame([f32::NAN, f32::INFINITY, -3.0, 7.0, 0.5, 0.0, 1.0, -0.0]);
+    // are clamped before the level sees them (clamped, the frame is
+    // 0,0,0,1,0.5,0,1,0 twice: mean 0.3125, swing 0.390625), so every band
+    // meters inside the band.
+    let frame = viz_frame(std::array::from_fn(|band| {
+        [f32::NAN, f32::INFINITY, -3.0, 7.0, 0.5, 0.0, 1.0, -0.0][band % 8]
+    }));
     let spectrum = Spectrum::next(None, &frame, Instant::now());
+    let metered: [f32; VIZ_BANDS] =
+        std::array::from_fn(|band| [0.19, 0.19, 0.19, 0.702, 0.446, 0.19, 0.702, 0.19][band % 8]);
     assert_bands_near(
         spectrum.bands(),
         LiveBands {
-            levels: [0.0, 0.0, 0.0, 1.0, 0.5, 0.0, 1.0, 0.0],
-            peaks: [0.0, 0.0, 0.0, 1.0, 0.5, 0.0, 1.0, 0.0],
+            levels: metered,
+            peaks: metered,
         },
     );
 }
@@ -148,7 +225,7 @@ fn hostile_frames_land_inside_the_band() {
 #[test]
 fn spectrum_goes_stale_once_the_client_stops_sending() {
     let start = Instant::now();
-    let spectrum = Spectrum::next(None, &viz_frame([0.5; 8]), start);
+    let spectrum = Spectrum::next(None, &viz_frame([0.5; VIZ_BANDS]), start);
     assert!(!spectrum.is_stale(start + Duration::from_millis(700)));
     assert!(spectrum.is_stale(start + Duration::from_millis(800)));
 }
@@ -157,7 +234,10 @@ fn spectrum_goes_stale_once_the_client_stops_sending() {
 fn live_bars_draw_the_spectrum_not_the_wall_clock() {
     // Loud bass, silent treble: the left bars fill the strip, the right bars
     // keep only their base pixel, and the frame ignores the wall tick.
-    let bands = [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+    let bands: [f32; VIZ_BANDS] = std::array::from_fn(|band| match band < VIZ_BANDS / 2 {
+        true => 1.0,
+        false => 0.0,
+    });
     let live = EqState::Live(LiveBands {
         levels: bands,
         peaks: bands,
@@ -172,37 +252,72 @@ fn live_bars_draw_the_spectrum_not_the_wall_clock() {
     assert_eq!(rendered, render_eq_state(20, live));
 }
 
-#[test]
-fn a_held_cap_floats_above_its_fallen_bar_at_any_height() {
-    // The bars fell silent under caps still hanging: the cap glyph sits in
-    // the cell its height reaches, with open air between it and the base.
-    let live = LiveBands {
-        levels: [0.0; 8],
-        peaks: [1.0, 1.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
-    };
-    let rendered = render_eq_state(6, EqState::Live(live));
-    let rows: Vec<Vec<char>> = rendered.lines().map(|row| row.chars().collect()).collect();
-    assert_eq!(rows[0][0], '▁', "a full cap hangs in the top row");
-    assert_eq!(rows[1][0], ' ', "above a bar that fell");
-    assert_eq!(rows[2][0], '▁', "which keeps its base");
-
-    // A tall visualizer tile: a half-height cap over six rows sits in the
-    // third cell from the bottom.
-    let tall: Vec<String> = dance_lines(Dance::Live(live), 6, TEST_WIDTH as usize, 6)
+/// Every cell of drawn lines as its glyph and style, top row first.
+fn cells(lines: &[Line<'static>]) -> Vec<Vec<(char, Style)>> {
+    lines
         .iter()
         .map(|line| {
             line.spans
                 .iter()
-                .map(|span| span.content.as_ref())
+                .flat_map(|span| span.content.chars().map(move |glyph| (glyph, span.style)))
                 .collect()
         })
-        .collect();
+        .collect()
+}
+
+#[test]
+fn a_bar_that_fell_leaves_its_ghost_standing_up_to_the_peak() {
+    // The bars fell silent under peaks still hanging: the ghost fills the
+    // air from the bar's head up to its peak, the head cell carries the
+    // ghost behind its glyph, and the gap columns stay bare.
+    let ghost = theme::EQ_GHOST();
+    let live = LiveBands {
+        levels: [0.0; VIZ_BANDS],
+        peaks: std::array::from_fn(|band| match band {
+            0 | 1 => 1.0,
+            _ => 0.5,
+        }),
+    };
+    let ghost_cell = ('█', Style::default().fg(ghost));
+    let base_under_ghost = ('▁', row_style(2, 3).bg(ghost));
+
+    // The music stage: a full peak over three rows ghosts the whole column.
+    let stage = cells(&dance_lines(Dance::Live(live), 6, TEST_WIDTH as usize, 3));
+    let first_bar: Vec<(char, Style)> = stage.iter().map(|row| row[0]).collect();
+    assert_eq!(first_bar, vec![ghost_cell, ghost_cell, base_under_ghost]);
+    assert!(
+        stage.iter().all(|row| row[1].1.bg.is_none()),
+        "a gap column never picks up the ghost"
+    );
+
+    // A tall visualizer tile: a half-height peak over six rows ghosts the
+    // bottom three cells and leaves open air above.
+    let tall = cells(&dance_lines(Dance::Live(live), 6, TEST_WIDTH as usize, 6));
     let last_bar = TEST_WIDTH as usize - BAR_STRIDE;
-    let column: Vec<char> = tall
-        .iter()
-        .map(|row| row.chars().nth(last_bar).expect("column"))
-        .collect();
-    assert_eq!(column, vec![' ', ' ', ' ', '▁', ' ', '▁']);
+    let column: Vec<(char, Style)> = tall.iter().map(|row| row[last_bar]).collect();
+    let air: Vec<char> = column[..3].iter().map(|(glyph, _)| *glyph).collect();
+    assert_eq!(air, vec![' ', ' ', ' '], "open air above the peak");
+    assert_eq!(
+        column[3..],
+        [ghost_cell, ghost_cell, ('▁', row_style(5, 6).bg(ghost))]
+    );
+}
+
+#[test]
+fn a_peak_inside_the_bars_top_cell_paints_no_ghost_above_it() {
+    // Over three rows a bar at 0.1 fills 2 of its bottom cell's 8 eighths
+    // and a peak at 0.25 ends at 6, inside that same cell. One cell holds one
+    // background, so a ghost there would fill to the cell's top, a third of
+    // the strip, and stand far above where the bar ever reached. The cell
+    // draws the bar alone.
+    let live = LiveBands {
+        levels: [0.1; VIZ_BANDS],
+        peaks: [0.25; VIZ_BANDS],
+    };
+    let stage = cells(&dance_lines(Dance::Live(live), 6, TEST_WIDTH as usize, 3));
+    let first_bar: Vec<char> = stage.iter().map(|row| row[0].0).collect();
+    assert_eq!(first_bar, vec![' ', ' ', '▂']);
+    assert_eq!(stage[2][0].1, row_style(2, 3), "no ghost behind the head");
 }
 
 #[test]

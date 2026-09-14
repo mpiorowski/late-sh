@@ -17,23 +17,41 @@ fn ws_payload_heartbeat_parses() {
 }
 
 #[test]
-fn ws_payload_viz_parses() {
-    let json = r#"{
+fn ws_payload_viz_parses_sixteen_bands_and_stretches_an_old_clis_eight() {
+    let sixteen: Vec<f32> = (0..VIZ_BANDS).map(|i| i as f32 / 16.0).collect();
+    let json = serde_json::json!({
         "event": "viz",
         "position_ms": 1500,
-        "bands": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+        "bands": sixteen,
         "rms": 0.42
-    }"#;
-    let payload: WsPayload = serde_json::from_str(json).unwrap();
-    match payload {
+    });
+    match serde_json::from_value::<WsPayload>(json).unwrap() {
         WsPayload::Viz {
             position_ms,
             bands,
             rms,
         } => {
             assert_eq!(position_ms, 1500);
-            assert_eq!(bands.len(), 8);
+            assert_eq!(bands_from_wire(bands).to_vec(), sixteen);
             assert!((rms - 0.42).abs() < f32::EPSILON);
+        }
+        _ => panic!("expected Viz"),
+    }
+
+    // A CLI from before the 16-band analyzer sends 8: a ramp stays a ramp,
+    // stretched across 16 with both ends pinned.
+    let json = r#"{
+        "event": "viz",
+        "position_ms": 0,
+        "bands": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
+        "rms": 0.5
+    }"#;
+    match serde_json::from_str::<WsPayload>(json).unwrap() {
+        WsPayload::Viz { bands, .. } => {
+            for (i, band) in bands_from_wire(bands).iter().enumerate() {
+                let want = i as f32 * 0.7 / 15.0;
+                assert!((band - want).abs() < 1e-5, "band {i}: {band}, want {want}");
+            }
         }
         _ => panic!("expected Viz"),
     }

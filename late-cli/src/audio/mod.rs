@@ -15,11 +15,16 @@ mod decoder;
 
 use decoder::{SymphoniaStreamDecoder, probe_stream_spec};
 
+/// Spectrum bands per `viz` frame, low to high. The server's
+/// `late_core::audio::VIZ_BANDS` matches it, and still accepts the 8 older
+/// CLIs send.
+pub(super) const VIZ_BANDS: usize = 16;
+
 /// One spectrum frame of what the output device actually played, sent to
 /// the TUI as the pair-WS `viz` event.
 #[derive(Debug, Clone)]
 pub(super) struct VizSample {
-    pub(super) bands: [f32; 8],
+    pub(super) bands: [f32; VIZ_BANDS],
     pub(super) rms: f32,
 }
 

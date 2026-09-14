@@ -22,7 +22,7 @@ fn loudest_band(frame: &VizSample) -> usize {
 fn silence_analyzes_to_an_empty_spectrum() {
     let mut analyzer = SpectrumAnalyzer::new(SAMPLE_RATE);
     let frame = analyzer.analyze(&[0.0; FFT_SIZE]);
-    assert_eq!(frame.bands, [0.0; BAND_COUNT]);
+    assert_eq!(frame.bands, [0.0; VIZ_BANDS]);
     assert_eq!(frame.rms, 0.0);
 }
 
@@ -34,7 +34,7 @@ fn a_bass_tone_lights_the_lowest_band_and_a_treble_tone_the_highest() {
     let treble = analyzer.analyze(&sine(9_000.0, 0.1));
     assert_eq!(
         loudest_band(&treble),
-        BAND_COUNT - 1,
+        VIZ_BANDS - 1,
         "treble bands: {:?}",
         treble.bands
     );

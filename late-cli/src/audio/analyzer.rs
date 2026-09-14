@@ -11,12 +11,14 @@ use std::{
 };
 use tokio::sync::broadcast;
 
-use super::{PlayedRing, VizSample};
+use super::{PlayedRing, VIZ_BANDS, VizSample};
 
-/// Samples per analysis window.
-const FFT_SIZE: usize = 1024;
-/// Spectrum bands per frame; the pair-WS `viz` payload is fixed at 8.
-const BAND_COUNT: usize = 8;
+/// Samples per analysis window: ~21.5 Hz per bin at 44.1 kHz, so the
+/// sixteen log bands still get separate bins near the 60 Hz bottom.
+const FFT_SIZE: usize = 2048;
+/// The window size the dB floor was fitted on. A bin's magnitude grows with
+/// the window, so a larger window is scaled back to this one's reading.
+const FITTED_FFT_SIZE: usize = 1024;
 /// Lowest and highest frequency the bands cover, log-spaced between.
 const MIN_HZ: f32 = 60.0;
 const MAX_HZ: f32 = 12_000.0;
@@ -26,9 +28,10 @@ const MAX_HZ: f32 = 12_000.0;
 const BAND_FLOOR_DB: f32 = -18.0;
 /// Level span from an empty band to a full one.
 const BAND_SPAN_DB: f32 = 60.0;
-/// Lift per band, low to high. Music carries far less energy per bin in the
-/// treble than in the mids, so without it the top bands barely register.
-const BAND_TILT_DB: f32 = 4.0;
+/// Lift per band, low to high: 30 dB from the lowest band to the highest.
+/// Music carries far less energy per bin in the treble than in the mids, so
+/// without it the top bands barely register.
+const BAND_TILT_DB: f32 = 2.0;
 /// RMS at the bottom of the meter, in dBFS; 0 dBFS is the top.
 const RMS_FLOOR_DB: f32 = -48.0;
 /// Frames per second sent to the TUI.
@@ -77,7 +80,7 @@ pub(super) struct SpectrumAnalyzer {
     fft: Arc<dyn Fft<f32>>,
     hann: Vec<f32>,
     scratch: Vec<Complex<f32>>,
-    bands: [(usize, usize); BAND_COUNT],
+    bands: [(usize, usize); VIZ_BANDS],
 }
 
 impl SpectrumAnalyzer {
@@ -104,7 +107,9 @@ impl SpectrumAnalyzer {
         let bands = std::array::from_fn(|band| {
             let (start, end) = self.bands[band];
             let bins = &self.scratch[start..end];
-            let mean = bins.iter().map(|c| c.norm()).sum::<f32>() / bins.len() as f32;
+            let mean = bins.iter().map(|c| c.norm()).sum::<f32>() / bins.len() as f32
+                * FITTED_FFT_SIZE as f32
+                / FFT_SIZE as f32;
             meter_level(
                 amplitude_db(mean) + BAND_TILT_DB * band as f32,
                 BAND_FLOOR_DB,
@@ -120,16 +125,18 @@ impl SpectrumAnalyzer {
 }
 
 /// Bin ranges `[start, end)` for log-spaced bands between [`MIN_HZ`] and
-/// [`MAX_HZ`] (capped at Nyquist). Every band holds at least one bin.
-fn log_bands(sample_rate: f32) -> [(usize, usize); BAND_COUNT] {
+/// [`MAX_HZ`] (capped at Nyquist). A bin belongs to the band its center
+/// frequency falls in, so a tone lights one band instead of bleeding into
+/// the next. Every band holds at least one bin.
+fn log_bands(sample_rate: f32) -> [(usize, usize); VIZ_BANDS] {
     let nyquist = sample_rate / 2.0;
     let half_bins = (FFT_SIZE / 2) as f32;
     let log_min = MIN_HZ.ln();
     let log_max = MAX_HZ.min(nyquist).ln();
     std::array::from_fn(|i| {
-        let f0 = (log_min + (log_max - log_min) * i as f32 / BAND_COUNT as f32).exp();
-        let f1 = (log_min + (log_max - log_min) * (i + 1) as f32 / BAND_COUNT as f32).exp();
-        let start = ((f0 / nyquist) * half_bins).floor().max(1.0) as usize;
+        let f0 = (log_min + (log_max - log_min) * i as f32 / VIZ_BANDS as f32).exp();
+        let f1 = (log_min + (log_max - log_min) * (i + 1) as f32 / VIZ_BANDS as f32).exp();
+        let start = ((f0 / nyquist) * half_bins).ceil().max(1.0) as usize;
         let end = ((f1 / nyquist) * half_bins).ceil().max(start as f32 + 1.0) as usize;
         (start, end.min(FFT_SIZE / 2))
     })

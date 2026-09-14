@@ -573,7 +573,7 @@ late-sh/
 
 **WS payloads (client → server):**
 - `{ "event": "heartbeat" }`
-- `{ "event": "viz", "position_ms": u64, "bands": [f32; 8], "rms": f32 }`
+- `{ "event": "viz", "position_ms": u64, "bands": [f32; 16], "rms": f32 }` (CLIs from before the 16-band analyzer send 8; `api.rs::bands_from_wire` stretches them to 16 at the parse)
 - `{ "event": "client_state", "client_kind": "webview" | "cli", "ssh_mode"?: "native" | "openssh" | "old", "platform"?: "android" | "linux" | "macos" | "windows", "muted": bool, "volume_percent": u8 }` (helpers from older releases send `client_kind: "browser"` and an `ssh_mode` of `"webview"`; both still deserialize, see `client_state_test.rs`)
 
 **WS payloads (server → client):**
