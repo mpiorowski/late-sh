@@ -18,9 +18,15 @@
 # whitelist. MINECRAFT_WHITELIST / MINECRAFT_OPS seed the lists on every boot;
 # runtime additions go through rcon-cli inside the pod (see README.md).
 # GriefPrevention gives players self-serve land claims that others cannot
-# build in, break, or loot; the mob_griefing gamerule covers mob damage
-# outside claims (creepers, endermen, ravagers), and GriefPrevention's own
-# config already stops fire spread and fire damage.
+# build in, break, or loot. Its own config blocks explosion damage inside
+# claims and above sea level, stops endermen moving blocks, and stops fire
+# spread and fire damage. The mob_griefing gamerule stays at the vanilla
+# default (on): turning it off also stops villagers farming and breeding and
+# piglins bartering, which breaks most automation farms.
+#
+# The Games hub card (late-ssh/src/app/door/minecraft/ui.rs) quotes the
+# version, difficulty, world border, and mob griefing setting to players;
+# its ui_test.rs reads this file and defaults.tf and fails when they drift.
 #
 # Ships through deploy_infra.yml like every other manifest. Never touches
 # anything else in the cluster.
@@ -211,15 +217,16 @@ resource "kubernetes_deployment_v1" "minecraft" {
             name  = "VIEW_DISTANCE"
             value = "10"
           }
-          # Re-applied on every boot, so a gamerule an op flips at runtime
-          # reverts on restart. Change it here if that is the intent.
-          # Gamerule names are the snake_case ones from 26.x: the old
-          # camelCase names (mobGriefing, doFireTick) fail with "Incorrect
-          # argument" in the startup log and change nothing.
-          # worldborder caps disk growth (see the PVC comment).
+          # Re-applied on every boot, so anything an op changes at runtime
+          # that is also set here reverts on restart. worldborder caps disk
+          # growth (see the PVC comment). No gamerules on purpose: mob_griefing
+          # stays at the vanilla default (see the header). A gamerule added
+          # here must use the snake_case names from 26.x: the old camelCase
+          # names (mobGriefing, doFireTick) fail with "Incorrect argument" in
+          # the startup log and change nothing.
           env {
             name  = "RCON_CMDS_STARTUP"
-            value = "gamerule mob_griefing false\nworldborder set 6000"
+            value = "worldborder set 6000"
           }
           env {
             name  = "ENABLE_RCON"

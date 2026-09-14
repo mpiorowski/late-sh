@@ -23,7 +23,7 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 /// `landing::handle_launch_block`).
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
     if !state.is_enabled() {
-        draw_landing(frame, area, false);
+        draw_landing(frame, area, false, 0);
         return;
     }
     let launch = landing::handle_launch_block(
@@ -31,7 +31,7 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
         state.entry_input(),
         landing::action(">", "Enter", "log in and start the run", theme::SUCCESS()),
     );
-    render_landing(frame, area, launch);
+    render_landing(frame, area, launch, 0);
 }
 
 /// BashQuest landing copy, used by both the standalone screen fallback and the
@@ -39,7 +39,7 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
 /// roguelike doors, bashquest.sh has no detach-and-resume model (it saves
 /// continuously instead, see `state.rs`'s teardown notes), so there is only
 /// enabled/disabled to show here.
-pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
+pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, scroll: u16) -> u16 {
     let action_line = if enabled {
         landing::action(">", "Enter", "log in and start the run", theme::SUCCESS())
     } else {
@@ -48,11 +48,11 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
             Style::default().fg(theme::ERROR()),
         ))
     };
-    render_landing(frame, area, vec![action_line]);
+    render_landing(frame, area, vec![action_line], scroll)
 }
 
 /// The landing body around a caller-supplied Launch block.
-fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
+fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>, scroll: u16) -> u16 {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -110,7 +110,12 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
         )),
     ]);
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    crate::app::door::landing::render_scrolled(
+        frame,
+        inner,
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        scroll,
+    )
 }
 
 fn bashquest_logo() -> Vec<Line<'static>> {

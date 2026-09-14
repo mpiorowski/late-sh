@@ -60,7 +60,9 @@ fn landing_text(delete_confirm: bool) -> String {
     let backend = TestBackend::new(100, 70);
     let mut terminal = Terminal::new(backend).expect("terminal");
     terminal
-        .draw(|frame| draw_landing(frame, frame.area(), delete_confirm))
+        .draw(|frame| {
+            draw_landing(frame, frame.area(), delete_confirm, 0);
+        })
         .expect("draw");
     let buffer = terminal.backend().buffer();
     let mut text = String::new();
