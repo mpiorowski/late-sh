@@ -48,3 +48,42 @@ fn move_bio_cursor_to_end_goes_to_last_line_end() {
 
     assert_eq!(input.cursor(), (2usize, "third line".chars().count()));
 }
+
+/// Three stacked 1-row rects, as the sidebar panel editor lays its rows out:
+/// row 0 at y=2, row 1 at y=3, row 2 at y=4, all spanning x 0..10.
+fn three_stacked_rows() -> Vec<Option<Rect>> {
+    (0..3)
+        .map(|i| {
+            Some(Rect {
+                x: 0,
+                y: 2 + i,
+                width: 10,
+                height: 1,
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn rect_list_index_at_point_finds_the_row_under_the_pointer() {
+    let rows = three_stacked_rows();
+    assert_eq!(rect_list_index_at_point(&rows, 5, 2), Some(0));
+    assert_eq!(rect_list_index_at_point(&rows, 5, 3), Some(1));
+    assert_eq!(rect_list_index_at_point(&rows, 5, 4), Some(2));
+}
+
+#[test]
+fn rect_list_index_at_point_misses_outside_every_row() {
+    let rows = three_stacked_rows();
+    assert_eq!(rect_list_index_at_point(&rows, 5, 1), None, "above the list");
+    assert_eq!(rect_list_index_at_point(&rows, 5, 5), None, "below the list");
+    assert_eq!(rect_list_index_at_point(&rows, 20, 2), None, "right of the row");
+}
+
+#[test]
+fn rect_list_index_at_point_skips_hidden_rows() {
+    let mut rows = three_stacked_rows();
+    rows[1] = None; // row 1 hidden this frame
+    assert_eq!(rect_list_index_at_point(&rows, 5, 3), None);
+    assert_eq!(rect_list_index_at_point(&rows, 5, 4), Some(2));
+}

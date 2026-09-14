@@ -411,6 +411,47 @@ fn handle_right_sidebar_components_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b' ' | b'\r') | ParsedInput::Char('e' | 'E') => {
             app.settings_modal_state.toggle_right_sidebar_component()
         }
+        // Mouse drag reorders the same way `[`/`]` does: Down on a row grabs
+        // it, Drag over a different row's rect moves it there directly (the
+        // list is index-based, so there's no free coordinate to snap — the
+        // dragged row always sits exactly in the slot under the pointer),
+        // Up releases the grab. `move_right_sidebar_component` already saves
+        // on every move, so there's nothing extra to commit on Up.
+        ParsedInput::Mouse(mouse) => {
+            let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
+                return;
+            };
+            match mouse.kind {
+                MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
+                    if let Some(idx) = app
+                        .settings_modal_state
+                        .right_sidebar_component_at_point(x, y)
+                    {
+                        app.settings_modal_state
+                            .start_dragging_right_sidebar_component(idx);
+                    }
+                }
+                MouseEventKind::Drag
+                    if app.settings_modal_state.dragging_right_sidebar_component() =>
+                {
+                    if let Some(idx) = app
+                        .settings_modal_state
+                        .right_sidebar_component_at_point(x, y)
+                    {
+                        let from = app.settings_modal_state.right_sidebar_components_index();
+                        if idx != from {
+                            app.settings_modal_state
+                                .move_right_sidebar_component(idx as isize - from as isize);
+                        }
+                    }
+                }
+                MouseEventKind::Up => {
+                    app.settings_modal_state
+                        .stop_dragging_right_sidebar_component();
+                }
+                _ => {}
+            }
+        }
         _ => {}
     }
 }
