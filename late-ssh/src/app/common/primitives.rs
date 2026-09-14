@@ -76,6 +76,10 @@ pub enum Screen {
     Profiles,
     Leaderboard,
     Clubhouse,
+    /// A small bar out back of the Clubhouse (`app/nightcap`): a handful of
+    /// sittable seats and a round of drinks, no walking. Entered with `n`
+    /// from the Clubhouse, absent from the Tab cycle; Esc returns there.
+    Nightcap,
     /// Zen (`Ctrl+F` from anywhere): the tiling layout you arrange yourself
     /// (`app/zen`). A surface over the page you were on, absent from the Tab
     /// cycle; only the chord returns there (Esc stays).
@@ -122,6 +126,7 @@ impl Screen {
             Screen::DailyMatch => Screen::Dashboard,
             Screen::HouseTable => Screen::Dashboard,
             Screen::Scratchpad => Screen::Dashboard,
+            Screen::Nightcap => Screen::Clubhouse,
         }
     }
 
@@ -149,6 +154,7 @@ impl Screen {
             Screen::DailyMatch => Screen::Dashboard,
             Screen::HouseTable => Screen::Dashboard,
             Screen::Scratchpad => Screen::Dashboard,
+            Screen::Nightcap => Screen::Clubhouse,
         }
     }
 }
@@ -202,6 +208,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Profiles => "Profiles",
         Screen::Leaderboard => "Leaderboards",
         Screen::Clubhouse => "Clubhouse",
+        Screen::Nightcap => "Nightcap",
         Screen::DailyMatch => "Daily Match",
         Screen::HouseTable => "House Table",
         Screen::Scratchpad => "Scratchpad",

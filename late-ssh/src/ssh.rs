@@ -1013,6 +1013,7 @@ impl russh::server::Handler for ClientHandler {
             radio_meta_rx: Some(self.state.radio_meta_rx.clone()),
             active_users: Some(self.state.active_users.clone()),
             clubhouse_lobby: Some(self.state.clubhouse_lobby.clone()),
+            nightcap_lobby: Some(self.state.nightcap_lobby.clone()),
             mention_ladders: self.state.mention_ladders.clone(),
             files: self.state.config.files.clone(),
             scratchpad_registry: Some(self.state.scratchpad_registry.clone()),

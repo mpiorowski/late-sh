@@ -6,6 +6,7 @@ pub mod audio;
 pub mod bonsai;
 pub mod chat;
 pub mod clubhouse;
+pub mod nightcap;
 pub mod common;
 pub mod crown;
 pub mod dashboard;

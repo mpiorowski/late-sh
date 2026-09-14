@@ -6,7 +6,8 @@
 //! prop follows its signpost: the arcade cabinet, the heavy door, and the
 //! easel jump to their app pages (2/3/4), the poker table opens the Lobby
 //! modal, the jukebox opens the Music Booth, and the dog gets petted where
-//! everyone can see it.
+//! everyone can see it. `n` steps outside to Nightcap, the small bar out
+//! back (`app/nightcap`).
 //! Returns `false` for anything it does not own so global keys (numbers,
 //! Tab, `q`, `?`, `v` music chords, ...) keep working. Composing and
 //! chat-overlay input never reaches this handler: the shared composer and
@@ -48,6 +49,11 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             }
             b's' | b'S' => {
                 app.clubhouse.sit();
+                return true;
+            }
+            b'n' | b'N' => {
+                app.nightcap.enter_screen();
+                app.set_screen(Screen::Nightcap);
                 return true;
             }
             b't' | b'T' if app.clubhouse.nearby() == Some(Interactive::Bartender) => {

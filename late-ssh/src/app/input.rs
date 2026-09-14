@@ -1606,6 +1606,10 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return crate::app::clubhouse::input::handle_event(app, event);
     }
 
+    if ctx.screen == Screen::Nightcap {
+        return crate::app::nightcap::input::handle_event(app, event);
+    }
+
     if ctx.screen == Screen::Zen {
         return crate::app::zen::input::handle_event(app, event);
     }
@@ -2313,6 +2317,12 @@ fn dispatch_escape(app: &mut App) {
     }
     if ctx.screen == Screen::Scratchpad {
         app.set_screen(Screen::Dashboard);
+        return;
+    }
+    // Esc from Nightcap just steps back outside to the Clubhouse; there is
+    // no in-room state to peel first (no chat pane, no pending move).
+    if ctx.screen == Screen::Nightcap {
+        app.set_screen(Screen::Clubhouse);
         return;
     }
     // Esc from a Lateania world (or its reset prompt) returns to the Games hub
@@ -3155,6 +3165,8 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         // Walk-mode arrows are consumed in handle_dedicated_screen_input;
         // composing-mode arrows are swallowed by the shared composer gate.
         Screen::Clubhouse => false,
+        // Nightcap has no arrow use (seats are picked by number key).
+        Screen::Nightcap => false,
         // Daily board arrows are consumed in handle_dedicated_screen_input.
         Screen::DailyMatch => false,
         // House table arrows are consumed in handle_dedicated_screen_input.
@@ -4077,6 +4089,10 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::Clubhouse => {
             // Clubhouse keys are handled in handle_dedicated_screen_input
             // (walking, chat routing, interactions); no-op here.
+        }
+        Screen::Nightcap => {
+            // Nightcap keys (seat picks, drink, Esc) are handled in
+            // handle_dedicated_screen_input; no-op here.
         }
         Screen::DailyMatch => {
             // Daily board keys are handled in handle_dedicated_screen_input.

@@ -1310,6 +1310,10 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                     Span::styled("[?] ", key),
                     Span::styled("the full guide", text),
                 ]),
+                Line::from(vec![
+                    Span::styled("[n] ", key),
+                    Span::styled("step outside to Nightcap for a quiet drink", text),
+                ]),
                 Line::default(),
                 Line::from(Span::styled(
                     "psst: see the bar glowing, northwest? walk over.",
