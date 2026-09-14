@@ -5010,8 +5010,8 @@ async fn first_contact_invitation_sends_one_dm_and_claims_once() {
     let second =
         service.send_first_contact_invitation_task(target.id, target.username.clone(), Duration::ZERO);
     let answers = [
-        first.await.expect("first answer").expect("first claim"),
-        second.await.expect("second answer").expect("second claim"),
+        first.await.expect("first answer"),
+        second.await.expect("second answer"),
     ];
     assert_eq!(
         answers
@@ -5188,7 +5188,7 @@ async fn first_contact_voice_ensure_is_idempotent_and_claims_the_name() {
 
 #[tokio::test]
 async fn first_contact_invitation_claim_survives_a_failed_send() {
-    use crate::app::deadchannel::haunt::state::VOICE_USERNAME;
+    use crate::app::deadchannel::haunt::state::{InvitationClaim, VOICE_USERNAME};
 
     let test_db = new_test_db().await;
     let service = ChatService::new(
@@ -5201,13 +5201,12 @@ async fn first_contact_invitation_claim_survives_a_failed_send() {
     let _squatter = create_test_user(&test_db.db, VOICE_USERNAME).await;
     let target = create_test_user(&test_db.db, "fc-claim-target").await;
 
-    // The asking session hears the failure, so nothing plays and a later
-    // send retries.
+    // The asking session hears the failure, so nothing plays there.
     let answer = service
         .send_first_contact_invitation_task(target.id, target.username.clone(), Duration::ZERO)
         .await
         .expect("answer");
-    assert!(answer.is_err(), "expected a failed ask, got {answer:?}");
+    assert_eq!(answer, InvitationClaim::Failed);
 
     // The once-ever claim must not be burned by a DM that never sent: the
     // stamp stays absent so a later session retries the invitation.

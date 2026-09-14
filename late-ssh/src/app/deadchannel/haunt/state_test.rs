@@ -170,20 +170,20 @@ fn breakthrough_claims_on_a_due_send_then_plays_its_scene_and_heals() {
 
     // Not due, or the kill switch off: sends pass untouched.
     assert_eq!(
-        breakthrough.note_own_message(true, false),
+        breakthrough.note_own_send(true, false),
         BreakthroughRoll::Wait
     );
     assert_eq!(
-        breakthrough.note_own_message(false, true),
+        breakthrough.note_own_send(false, true),
         BreakthroughRoll::Wait
     );
     // Due: one claim, and no second ask while it is out.
     assert_eq!(
-        breakthrough.note_own_message(true, true),
+        breakthrough.note_own_send(true, true),
         BreakthroughRoll::Claim
     );
     assert_eq!(
-        breakthrough.note_own_message(true, true),
+        breakthrough.note_own_send(true, true),
         BreakthroughRoll::Wait
     );
     assert_eq!(breakthrough.tick(100, true), BreakthroughTick::Idle);
@@ -203,7 +203,7 @@ fn breakthrough_claims_on_a_due_send_then_plays_its_scene_and_heals() {
     );
     // A send mid-scene asks for nothing.
     assert_eq!(
-        breakthrough.note_own_message(true, true),
+        breakthrough.note_own_send(true, true),
         BreakthroughRoll::Wait
     );
 
@@ -231,19 +231,25 @@ fn breakthrough_force_a_failed_ask_and_the_kill_switch() {
     // `/haunt invite`: the next send claims without the delay, once.
     breakthrough.force_next();
     assert_eq!(
-        breakthrough.note_own_message(true, false),
+        breakthrough.note_own_send(true, false),
         BreakthroughRoll::Claim
     );
-    // The ask failed: nothing plays, and the next due send asks again.
-    breakthrough.claim_settled();
+    // The ask failed: nothing plays, and no send asks again this session,
+    // due or not, so a broken voice is not re-queried on every send.
+    breakthrough.claim_failed();
     assert_eq!(
-        breakthrough.note_own_message(true, false),
+        breakthrough.note_own_send(true, true),
         BreakthroughRoll::Wait
     );
+    // `/haunt invite` re-opens it.
+    breakthrough.force_next();
     assert_eq!(
-        breakthrough.note_own_message(true, true),
+        breakthrough.note_own_send(true, false),
         BreakthroughRoll::Claim
     );
+    // A claim taken by another device settles back to waiting.
+    breakthrough.claim_taken();
+    assert_eq!(breakthrough.phase(), BreakthroughPhase::Idle);
     // The kill switch cuts a live scene.
     breakthrough.start(10);
     assert_eq!(breakthrough.tick(11, false), BreakthroughTick::Ended);

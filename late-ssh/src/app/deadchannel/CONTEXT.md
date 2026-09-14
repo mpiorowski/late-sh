@@ -8,7 +8,10 @@
   several replicas (root CONTEXT.md, multi-replica rule); gated behind
   the `haunt_live` fuse, unlit, so only staff (admins and moderators)
   are haunted today, and only they can finish the ladder and join.
-- Last updated: 2026-09-13 (stage 3 plays on its own clock: the static
+- Last updated: 2026-09-14 (the breakthrough plays only on a send from
+  its own session and swallows keys ahead of door games; the static rolls
+  slower, scene lengths unchanged). Before that, 2026-09-13 (stage 3
+  plays on its own clock: the static
   pulses and the line types from the first frames, and every key, Esc
   included, is swallowed; the invitation no longer arrives cold: once due,
   the next own send plays the breakthrough, a full-screen static tear with
@@ -108,12 +111,15 @@ Root integration is deliberately thin: `App.haunt` (the one field),
 `haunt::svc::tick(self)` in `tick.rs` (plus the splash block consulting
 `HauntState::holds_splash_door` before self-expiring), two input lines
 (splash input to the held door, and a swallow while the breakthrough
-plays), `HauntState::breakthrough_playing` keeping `wake_hint` hot, and
+plays, first thing in `App::handle_input` so no door passthrough sees
+the keys), `HauntState::breakthrough_playing` keeping `wake_hint` hot, and
 the draw hooks in `render.rs` (clock transform, whisper and breakthrough
 frames for `DrawContext`, splash overlay, the breakthrough painted last
 over every modal).
 Chat's seams: the `/haunt` submit hook (admin-gated), the
-`requested_haunt` slot, the `own_message_landed` slot set in
+`requested_haunt` slot, the `own_send_succeeded` flag (a `SendSucceeded`
+for a request this session submitted: the breakthrough's trigger), the
+`own_message_landed` slot set in
 `push_message` (the message id *and* its room, since the won hit is put
 on the wire for that room a tick later), the stage-2 wire itself
 (`ChatService::publish_name_hit` does the `pg_notify`; chat's message
@@ -213,7 +219,8 @@ lines carry no face; every other room renders exactly as before.
    delivery a day or more ago): the haunting follows you home, and comes
    back. The splash neither skips nor expires while held,
    and since 2026-09-13 the scene waits on nobody: the static pulses on its
-   own rhythm (~1s) from the first frame, the voiced line types itself once
+   own rhythm (~1.6s, each noise pattern held ~200ms) from the first
+   frame, the voiced line types itself once
    the base splash line is done (`VOICE_TICK`), the skip hint dissolves as
    it starts, and every key, Esc included, is swallowed and does nothing
    (without a keypress the old scene was a quiet line under the cup, and
@@ -230,18 +237,26 @@ lines carry no face; every other room renders exactly as before.
 4. **Breakthrough, then the invitation (the whole game is opt-in).**
    `INVITE_DELAY_HOURS` (20) after the second delivered whisper the
    breakthrough comes due (`FirstContactMarks::breakthrough_due`), and the
-   next own send plays it (added 2026-09-13: the DM alone, met cold, was
-   taken for spam). The send asks
+   next send this session submits plays it (added 2026-09-13: the DM
+   alone, met cold, was taken for spam). Only a `SendSucceeded` for a
+   request this session submitted counts, never the same person's send
+   from another device: every session of a user hears every send, and an
+   idle one would play the scene to nobody. The send asks
    `ChatService::send_first_contact_invitation_task` for the once-ever
-   claim; the task answers `Won` or `Taken` on a oneshot before it sends
-   anything, the scene plays only on `Won` (a `Taken` stamps the marks, a
-   failed ask retries on the next send), and the task sends the DM after
+   claim; the task answers `Won`, `Taken`, or `Failed` on a oneshot before
+   it sends anything, the scene plays only on `Won` (a `Taken` stamps the
+   marks; a `Failed` is logged by the task under
+   `first_contact_invitation_failed`, and this session stops asking until
+   `/haunt invite`), and the task sends the DM after
    `Breakthrough::dm_delay`, the moment the line has typed, whether or not
    the session is still there. The scene is private and full screen: the
-   door's static, heavier and faster, over the whole frame and every
-   modal, `BREAKTHROUGH_LINE` typing in a gap torn out of the middle, about
-   six seconds, input swallowed before the parser, the kill switch cuts
-   it. The DM comes from the game's first voice - `afterglow`
+   door's static, heavier and pulsing quicker, over the whole frame and
+   every modal, `BREAKTHROUGH_LINE` typing in a gap torn out of the middle,
+   about seven seconds, every key swallowed ahead of door passthrough and
+   the parser, the kill switch cuts it. Known gap to close before the fuse
+   is lit: the claim is stamped `dm_delay` before the DM sends, so a
+   replica stopping in that window leaves a stamp with no DM, and nothing
+   repairs it but `/haunt reset` by hand. The DM comes from the game's first voice - `afterglow`
    (GAME.md reserved the name for something inside the world), a
    bartender-shaped ghost user (fixed fingerprint `afterglow-fp-000`)
    that is never auto-joined into public rooms - sends one persistent DM.

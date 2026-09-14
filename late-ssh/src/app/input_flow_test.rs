@@ -2513,6 +2513,118 @@ async fn whisper_holds_the_splash_door_then_releases_and_marks_delivery() {
     .await;
 }
 
+/// Arm stage 4 the way `/haunt invite` leaves it: the next send this
+/// session makes asks for the invitation claim, due or not.
+fn arm_forced_breakthrough(app: &mut crate::app::state::App) {
+    let mut breakthrough =
+        crate::app::deadchannel::haunt::state::Breakthrough::for_user(app.user_id);
+    breakthrough.force_next();
+    app.haunt.breakthrough = Some(breakthrough);
+}
+
+#[tokio::test]
+async fn breakthrough_swallows_every_key_even_inside_a_running_door_game() {
+    use crate::app::common::primitives::Screen;
+
+    let (_test_db, mut app) = chat_compose_app("breakthrough-swallow").await;
+    app.resize(160, 40).expect("resize test terminal");
+    arm_forced_breakthrough(&mut app);
+
+    // The send wins the invitation claim and the screen tears.
+    app.handle_input(b"anyone out there\r");
+    wait_for_render_contains(&mut app, "we finally reached you").await;
+
+    // A key that opens the quit confirm does nothing while it plays.
+    app.handle_input(b"q");
+
+    // Inside a running roguelike too: backtick, which detaches, never
+    // reaches the door routing. No awaits until the fabricated game is gone
+    // again, so its proxy stays Connecting (see the backtick detach test).
+    app.set_screen(Screen::Games);
+    app.enter_nethack();
+    app.nethack_state
+        .as_mut()
+        .expect("nethack state")
+        .force_running_for_test();
+    app.set_screen(Screen::Nethack);
+    app.handle_input(b"`");
+    assert_eq!(
+        app.screen,
+        Screen::Nethack,
+        "expected the breakthrough to swallow the door's detach key"
+    );
+    app.nethack_state = None;
+    app.set_screen(Screen::Dashboard);
+
+    // The screen heals, the swallowed `q` left nothing behind, and keys work
+    // again.
+    wait_for_render_not_contains(&mut app, "we finally reached you").await;
+    assert_render_not_contains_for(&mut app, " Quit? ", Duration::from_millis(100)).await;
+    app.handle_input(b"q");
+    wait_for_render_contains(&mut app, " Quit? ").await;
+}
+
+#[tokio::test]
+async fn breakthrough_waits_for_a_send_from_its_own_session() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "breakthrough-own-send-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+
+    // The same person on two devices of one replica: one chat service, so
+    // each session hears the other's sends, as in production. Only the
+    // phone has the breakthrough armed.
+    let world = crate::test_helpers::SessionWorld {
+        chat_service: Some(crate::app::chat::svc::ChatService::new(
+            test_db.db.clone(),
+            crate::app::chat::notifications::svc::NotificationService::new(test_db.db.clone()),
+        )),
+        ..Default::default()
+    };
+    let mut phone = make_app_in_world(
+        test_db.db.clone(),
+        user.id,
+        "breakthrough-phone-it",
+        world.clone(),
+    );
+    let mut laptop = make_app_in_world(test_db.db.clone(), user.id, "breakthrough-laptop-it", world);
+    phone.resize(160, 40).expect("resize phone terminal");
+    for app in [&mut phone, &mut laptop] {
+        wait_for_render_contains(app, "lounge").await;
+        app.handle_input(b"i");
+        wait_for_render_contains(app, "Compose (Enter send").await;
+    }
+    arm_forced_breakthrough(&mut phone);
+
+    // The laptop's send lands on the phone too, and asks for nothing there.
+    laptop.handle_input(b"typed on the laptop\r");
+    wait_for_render_contains(&mut phone, "typed on the laptop").await;
+    assert_render_not_contains_for(
+        &mut phone,
+        "we finally reached you",
+        Duration::from_millis(500),
+    )
+    .await;
+    let stored = User::find_by_username(&client, &user.username)
+        .await
+        .expect("find user")
+        .expect("user exists");
+    assert_eq!(
+        late_core::models::user::extract_first_contact_invited_at(&stored.settings),
+        None,
+        "expected another session's send to leave the invitation unclaimed"
+    );
+
+    // The phone's own send is the one that breaks through.
+    phone.handle_input(b"typed on the phone\r");
+    wait_for_render_contains(&mut phone, "we finally reached you").await;
+}
+
 /// The gallery end to end: paint a block, frame it from the rail, name it,
 /// and find it under Mine. The rail is the only way in, so this is also the
 /// rail's keyboard contract.

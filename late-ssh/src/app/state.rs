@@ -2461,6 +2461,12 @@ impl App {
         if !data.is_empty() {
             self.last_input_at = Instant::now();
         }
+        // First contact's breakthrough (`app/deadchannel/haunt`): while it
+        // plays, every key is swallowed here, before a running door game or
+        // the parser sees it.
+        if self.haunt.breakthrough_playing() {
+            return;
+        }
         /// Backtick, the workspace-cycle key, matched as a whole input chunk
         /// (like the doors' F1 remap): inside a running roguelike it detaches
         /// instead of reaching the game. DCSS's own ` (repeat previous

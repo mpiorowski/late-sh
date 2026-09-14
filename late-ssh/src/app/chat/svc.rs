@@ -2947,9 +2947,8 @@ impl ChatService {
         target_user_id: Uuid,
         target_username: String,
         send_after: std::time::Duration,
-    ) -> tokio::sync::oneshot::Receiver<
-        anyhow::Result<crate::app::deadchannel::haunt::state::InvitationClaim>,
-    > {
+    ) -> tokio::sync::oneshot::Receiver<crate::app::deadchannel::haunt::state::InvitationClaim>
+    {
         use crate::app::deadchannel::haunt::state::{INVITATION_PLEA, InvitationClaim};
         let (claim_tx, claim_rx) = tokio::sync::oneshot::channel();
         let service = self.clone();
@@ -2984,26 +2983,25 @@ impl ChatService {
                 .await;
                 let (voice_id, room_id) = match claimed {
                     Ok(Some(ids)) => {
-                        let _ = claim_tx.send(Ok(InvitationClaim::Won));
+                        let _ = claim_tx.send(InvitationClaim::Won);
                         ids
                     }
                     Ok(None) => {
                         // Another session claimed it first: nothing to send.
-                        let _ = claim_tx.send(Ok(InvitationClaim::Taken));
+                        let _ = claim_tx.send(InvitationClaim::Taken);
                         return;
                     }
                     Err(error) => {
-                        // The asking session logs a failed ask; only when it
-                        // is gone does the failure need its own line here.
-                        if let Err(Err(error)) = claim_tx.send(Err(error)) {
-                            late_core::error_span!(
-                                "first_contact_invitation_claim_failed",
-                                error = ?error,
-                                user_id = %target_user_id,
-                                username = %target_username,
-                                "failed to claim first contact invitation"
-                            );
-                        }
+                        // Logged here, whether or not the asking session is
+                        // still around: it only settles its scene.
+                        late_core::error_span!(
+                            "first_contact_invitation_failed",
+                            error = ?error,
+                            user_id = %target_user_id,
+                            username = %target_username,
+                            "failed to claim first contact invitation"
+                        );
+                        let _ = claim_tx.send(InvitationClaim::Failed);
                         return;
                     }
                 };

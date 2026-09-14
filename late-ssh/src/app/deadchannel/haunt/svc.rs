@@ -178,13 +178,9 @@ pub(crate) fn tick(app: &mut App) -> bool {
         changed |= tick_splash_door(app);
     }
     changed |= tick_clock_glitch(app);
-    // One landing echo, two readers: stage 2 rolls on it and stage 4 breaks
-    // through on it. Drained even while unarmed, so a stale echo id never
-    // waits around for a later `/haunt on`.
-    let landed = app.chat.take_own_message_landed();
-    changed |= tick_name_flicker(app, landed);
+    changed |= tick_name_flicker(app);
     changed |= tick_witness(app);
-    changed |= tick_breakthrough(app, landed);
+    changed |= tick_breakthrough(app);
     changed |= tick_commands(app);
     changed
 }
@@ -405,7 +401,10 @@ fn tick_clock_glitch(app: &mut App) -> bool {
 /// key, so start, the wave edge, and heal each rebuild the rows exactly
 /// once), and the row's counter is what arms the
 /// stage-3 whisper at its third hit.
-fn tick_name_flicker(app: &mut App, landed: Option<(uuid::Uuid, uuid::Uuid)>) -> bool {
+fn tick_name_flicker(app: &mut App) -> bool {
+    // Drained even while unarmed, so a stale echo id never waits around
+    // for a later `/haunt on`.
+    let landed = app.chat.take_own_message_landed();
     let enabled = app.haunt.enabled();
     let stage_open = app.haunt.marks.glitch_hits >= GLITCH_TOTAL_CAP;
     let Some(flicker) = app.haunt.name_flicker.as_mut() else {
@@ -514,25 +513,32 @@ fn tick_witness(app: &mut App) -> bool {
     true
 }
 
-/// Stage 4, the breakthrough. Once the invitation is due, the next own
-/// send asks the invitation task for the once-ever claim; the task answers
-/// before it sends anything, the scene plays here on a won claim, and the
-/// same task sends the DM once the line has finished typing, so a session
-/// that drops mid-scene still gets its invitation. A claim taken by another
-/// device stamps the marks and plays nothing; an ask that failed retries on
-/// the next send. Self-serve on purpose (the chosen one's own session
+/// Stage 4, the breakthrough. Once the invitation is due, the next send
+/// this session submits asks the invitation task for the once-ever claim
+/// (the same person's send from another device never does: that screen may
+/// have nobody in front of it); the task answers before it sends anything,
+/// the scene plays here on a won claim, and the same task sends the DM once
+/// the line has finished typing, so a session that drops mid-scene still
+/// gets its invitation. A claim taken by another device stamps the marks
+/// and plays nothing; a failed ask is the task's to log, and this session
+/// stops asking. Self-serve on purpose (the chosen one's own session
 /// notices), so there is no cross-user sweep.
-fn tick_breakthrough(app: &mut App, landed: Option<(uuid::Uuid, uuid::Uuid)>) -> bool {
+fn tick_breakthrough(app: &mut App) -> bool {
+    // Drained even while unarmed, like the landing echo.
+    let sent_here = app.chat.take_own_send_succeeded();
     let enabled = app.haunt.enabled();
     let due = app.haunt.marks.breakthrough_due(chrono::Utc::now());
     let answer = match app.haunt.pending_invitation.as_mut() {
         None => None,
         Some(rx) => match rx.try_recv() {
-            Ok(outcome) => Some(outcome),
+            Ok(claim) => Some(claim),
             Err(oneshot::error::TryRecvError::Empty) => None,
-            Err(oneshot::error::TryRecvError::Closed) => Some(Err(anyhow::anyhow!(
-                "invitation task dropped its sender"
-            ))),
+            Err(oneshot::error::TryRecvError::Closed) => {
+                // The task answers on every path before it returns, so a
+                // closed channel means it died without a word of its own.
+                tracing::error!(user_id = %app.user_id, username = %app.username, "first contact invitation task dropped its claim answer");
+                Some(InvitationClaim::Failed)
+            }
         },
     };
     if answer.is_some() {
@@ -544,31 +550,30 @@ fn tick_breakthrough(app: &mut App, landed: Option<(uuid::Uuid, uuid::Uuid)>) ->
     let mut changed = false;
     match answer {
         None => {}
-        Some(Ok(InvitationClaim::Won)) => {
+        Some(InvitationClaim::Won) => {
             breakthrough.start(app.marquee_tick);
             app.haunt.marks.invited_at = Some(chrono::Utc::now());
             metrics::record_first_contact_beat(FirstContactBeat::Breakthrough);
             tracing::info!(user_id = %app.user_id, username = %app.username, "first contact breakthrough");
             changed = true;
         }
-        Some(Ok(InvitationClaim::Taken)) => {
-            breakthrough.claim_settled();
+        Some(InvitationClaim::Taken) => {
+            breakthrough.claim_taken();
             app.haunt.marks.invited_at = Some(chrono::Utc::now());
             tracing::debug!(user_id = %app.user_id, username = %app.username, "first contact breakthrough claim taken by another session");
         }
-        Some(Err(error)) => {
-            breakthrough.claim_settled();
-            tracing::warn!(user_id = %app.user_id, username = %app.username, error = ?error, "first contact breakthrough claim failed");
+        Some(InvitationClaim::Failed) => {
+            breakthrough.claim_failed();
         }
     }
     match breakthrough.tick(app.marquee_tick, enabled) {
         BreakthroughTick::Idle => {}
         BreakthroughTick::Playing | BreakthroughTick::Ended => changed = true,
     }
-    if landed.is_none() {
+    if !sent_here {
         return changed;
     }
-    match breakthrough.note_own_message(enabled, due) {
+    match breakthrough.note_own_send(enabled, due) {
         BreakthroughRoll::Wait => {}
         BreakthroughRoll::Claim => {
             app.haunt.pending_invitation =
@@ -754,6 +759,7 @@ fn tick_commands(app: &mut App) -> bool {
                 }
                 (None, Some(BreakthroughPhase::Claiming)) => "breakthrough claiming",
                 (None, Some(BreakthroughPhase::Playing { .. })) => "breaking through",
+                (None, Some(BreakthroughPhase::Failed)) => "breakthrough ask failed this session",
             };
             // Whether a beat of somebody else's is on this screen right now.
             let witness = match app.haunt.witness.is_some() {

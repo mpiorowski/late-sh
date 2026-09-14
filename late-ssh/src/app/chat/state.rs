@@ -963,6 +963,11 @@ pub struct ChatState {
     /// because a won hit is put on the wire for the rest of that room, and
     /// by then the sender may have tabbed elsewhere.
     own_message_landed: Option<(Uuid, Uuid)>,
+    /// A send this session submitted just succeeded (`SendSucceeded` for a
+    /// request in `pending_send_notices`, never the same user's send from
+    /// another device), for the stage-4 breakthrough; consumed by
+    /// `deadchannel::haunt::svc` every tick.
+    own_send_succeeded: bool,
     /// A stage-2 hit off the wire (`ChatEvent::NameHit`) whose message is
     /// on screen: the message id and the wave seed. Consumed by
     /// `deadchannel::haunt::svc` every tick, which paints it.
@@ -1292,6 +1297,7 @@ impl ChatState {
             requested_haunt: None,
             requested_paper: None,
             own_message_landed: None,
+            own_send_succeeded: false,
             witnessed_hit_landed: None,
             pending_name_hits: HashMap::new(),
             requested_watch: None,
@@ -2072,6 +2078,10 @@ impl ChatState {
 
     pub(crate) fn take_own_message_landed(&mut self) -> Option<(Uuid, Uuid)> {
         self.own_message_landed.take()
+    }
+
+    pub(crate) fn take_own_send_succeeded(&mut self) -> bool {
+        std::mem::take(&mut self.own_send_succeeded)
     }
 
     pub(crate) fn take_witnessed_hit_landed(&mut self) -> Option<(Uuid, u64)> {
@@ -5836,6 +5846,11 @@ impl ChatState {
                     user_id,
                     request_id,
                 } if self.user_id == user_id => {
+                    // Every session of this user hears every send; only a
+                    // request this session submitted is its own.
+                    if self.pending_send_notices.contains(&request_id) {
+                        self.own_send_succeeded = true;
+                    }
                     self.pending_send_notices.retain(|id| *id != request_id);
                     self.last_own_send_at = Some(std::time::Instant::now());
                     banner = Some(Banner::success("Message sent"));

@@ -614,12 +614,6 @@ pub fn handle(app: &mut App, data: &[u8]) {
         return;
     }
 
-    // First contact's breakthrough (`app/deadchannel/haunt`): while it
-    // plays, every key is swallowed before the parser sees it.
-    if app.haunt.breakthrough_playing() {
-        return;
-    }
-
     // Split-across-reads `ESC` chords: previous read ended with a lone ESC
     // and this one begins with a control byte that should be treated as an
     // Alt chord instead of feeding a wedged parser.

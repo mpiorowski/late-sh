@@ -81,6 +81,9 @@ pub enum InvitationClaim {
     Won,
     /// Another device or replica took it first: nothing plays here.
     Taken,
+    /// The voice, the DM room, or the claim query failed, and the task
+    /// logged it: nothing plays, and the claim stays untaken.
+    Failed,
 }
 
 /// The eligibility gate (GAME.md, "the static chooses the invested"):
@@ -367,7 +370,7 @@ pub(crate) struct HauntState {
     pub(crate) breakthrough: Option<Breakthrough>,
     /// The invitation claim a due send asked for, while it is out;
     /// `svc::tick` drains it.
-    pub(crate) pending_invitation: Option<oneshot::Receiver<anyhow::Result<InvitationClaim>>>,
+    pub(crate) pending_invitation: Option<oneshot::Receiver<InvitationClaim>>,
     /// Stage 2 as the rest of the room sees it: somebody else's hit,
     /// replayed here from the seed that rode the wire. Every session can
     /// hold one, armed or not: witnessing is not a rung of the ladder, it
@@ -528,12 +531,12 @@ const LINGER_TICKS: usize = 24;
 /// around tick 122, so the cap is a backstop, not a beat.
 const HARD_CAP_TICKS: usize = 150;
 /// The static pulses on its own rhythm for the whole scene: one surge
-/// every this many ticks (~1s).
-const SURGE_PERIOD_TICKS: usize = 15;
-/// How long one static surge decays.
-const SURGE_TICKS: usize = 8;
-/// How long the skip hint takes to dissolve once the voice starts.
-const DISSOLVE_TICKS: usize = 12;
+/// every this many ticks (~1.6s).
+const SURGE_PERIOD_TICKS: usize = 24;
+/// How long one static surge decays (~1s).
+const SURGE_TICKS: usize = 14;
+/// How long the skip hint takes to dissolve once the voice starts (~1.3s).
+const DISSOLVE_TICKS: usize = 20;
 
 /// The voiced lines for the first held door: the static has noticed
 /// you. Screenshot-test vocabulary only (static, signal, city, channel,
@@ -1124,9 +1127,10 @@ impl NameFlicker {
 const BREAKTHROUGH_VOICE_TICK: usize = 8;
 /// How long the typed line holds before the screen heals (~2s).
 const BREAKTHROUGH_LINGER_TICKS: usize = 30;
-/// Faster pulses than the door's: this is the breach, not the knock.
-const BREAKTHROUGH_SURGE_PERIOD_TICKS: usize = 10;
-const BREAKTHROUGH_SURGE_TICKS: usize = 7;
+/// Quicker pulses than the door's: this is the breach, not the knock. One
+/// surge every ~1.2s, each fading over ~800ms.
+const BREAKTHROUGH_SURGE_PERIOD_TICKS: usize = 18;
+const BREAKTHROUGH_SURGE_TICKS: usize = 12;
 /// Wall length of one `marquee_tick`.
 const MARQUEE_TICK_MS: u64 = 66;
 
@@ -1138,6 +1142,10 @@ pub(crate) enum BreakthroughPhase {
     Claiming,
     /// On screen since `since`.
     Playing { since: usize },
+    /// The ask failed (the task logged why): no send this session asks
+    /// again, so a broken voice or DM room costs one round of queries per
+    /// session, not one per send. `/haunt invite` re-opens it.
+    Failed,
 }
 
 /// What a landed own message decided.
@@ -1179,9 +1187,9 @@ impl Breakthrough {
         }
     }
 
-    /// One of this session's own messages just landed. `due` is
-    /// [`FirstContactMarks::breakthrough_due`] at landing.
-    pub(crate) fn note_own_message(&mut self, enabled: bool, due: bool) -> BreakthroughRoll {
+    /// A send this session submitted just succeeded. `due` is
+    /// [`FirstContactMarks::breakthrough_due`] right now.
+    pub(crate) fn note_own_send(&mut self, enabled: bool, due: bool) -> BreakthroughRoll {
         if self.phase != BreakthroughPhase::Idle || !enabled {
             return BreakthroughRoll::Wait;
         }
@@ -1200,11 +1208,16 @@ impl Breakthrough {
         self.phase = BreakthroughPhase::Playing { since: tick };
     }
 
-    /// The claim came back taken elsewhere, or could not be asked: nothing
-    /// plays. A failed ask retries on the next due send; a taken one stops
-    /// being due once the owner stamps the marks.
-    pub(crate) fn claim_settled(&mut self) {
+    /// The claim came back taken by another device: nothing plays, and it
+    /// stops being due once the owner stamps the marks.
+    pub(crate) fn claim_taken(&mut self) {
         self.phase = BreakthroughPhase::Idle;
+    }
+
+    /// The claim could not be asked: nothing plays, and this session stops
+    /// asking.
+    pub(crate) fn claim_failed(&mut self) {
+        self.phase = BreakthroughPhase::Failed;
     }
 
     /// Advance one world tick. `enabled` is the live kill switch: turning
@@ -1271,8 +1284,12 @@ impl Breakthrough {
             .then(|| into as f32 / BREAKTHROUGH_SURGE_TICKS as f32)
     }
 
-    /// `/haunt invite`: the next own send claims, due or not. Admin test hook.
+    /// `/haunt invite`: the next own send claims, due or not, even after a
+    /// failed ask this session. Admin test hook.
     pub(crate) fn force_next(&mut self) {
+        if self.phase == BreakthroughPhase::Failed {
+            self.phase = BreakthroughPhase::Idle;
+        }
         self.force_next = true;
     }
 }

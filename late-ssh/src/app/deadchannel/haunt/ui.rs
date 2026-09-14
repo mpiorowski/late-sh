@@ -21,6 +21,10 @@ use crate::app::common::theme;
 const SPLASH_SURGE_DENSITY: f32 = 0.18;
 /// The breakthrough tears harder than the door knocks.
 const BREAKTHROUGH_SURGE_DENSITY: f32 = 0.32;
+/// How many ticks one static pattern holds before the noise shifts
+/// (~200ms). Re-rolled on every 66ms tick it read as a frantic fizz; held,
+/// it reads as interference rolling through.
+const STATIC_FRAME_TICKS: usize = 3;
 
 /// One frame of whisper theater, precomputed for the splash renderer.
 pub(crate) struct WhisperFrame {
@@ -292,17 +296,18 @@ fn draw_static_surge(
     if density <= 0.0 {
         return;
     }
+    let pattern = (tick / STATIC_FRAME_TICKS) as u64;
     let buf = frame.buffer_mut();
     for y in area.y..area.bottom() {
         for x in area.x..area.right() {
-            let roll = unit_hash((u64::from(x) << 32) | u64::from(y), tick as u64, seed);
+            let roll = unit_hash((u64::from(x) << 32) | u64::from(y), pattern, seed);
             if roll >= density {
                 continue;
             }
             let Some(cell) = buf.cell_mut((x, y)) else {
                 continue;
             };
-            let shade = unit_hash((u64::from(y) << 32) | u64::from(x), tick as u64, seed);
+            let shade = unit_hash((u64::from(y) << 32) | u64::from(x), pattern, seed);
             cell.set_char(static_glyph(shade));
             cell.set_fg(if shade < 0.5 {
                 theme::TEXT_FAINT()
