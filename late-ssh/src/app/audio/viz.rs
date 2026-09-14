@@ -26,9 +26,10 @@ const BLOCKS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇',
 const CAP_HOLD_FRAMES: usize = 6;
 
 /// A spectrum the client stopped refreshing for this long no longer
-/// describes what is playing: the client muted, switched to YouTube,
-/// dropped its pair socket, or never analyzes at all. The strip falls back
-/// to the ambient band. The CLI sends at ~15 Hz, so this is ~11 frames.
+/// describes what is playing: the client muted, switched to a source it
+/// cannot capture, dropped its pair socket, or never analyzes at all. The
+/// strip falls back to the ambient band. The CLI sends at ~15 Hz, so this is
+/// ~11 frames.
 const SPECTRUM_STALE_AFTER: Duration = Duration::from_millis(750);
 /// Share of the gap to a louder band closed in one client frame: a hit
 /// lands almost at once.
@@ -167,8 +168,9 @@ pub(crate) enum EqState {
     /// A client is paired, unmuted, and streaming the spectrum of what it
     /// plays: the bars are the music.
     Live(LiveBands),
-    /// A client is paired and unmuted but sends no spectrum (YouTube, or a
-    /// CLI without the analyzer): the band dances on the wall clock.
+    /// A client is paired and unmuted but sends no spectrum (YouTube where
+    /// the CLI cannot capture the helper, or a CLI without the analyzer): the
+    /// band dances on the wall clock.
     Ambient,
     /// A client is paired and muted: a steady flat line, the meter at rest.
     Muted,

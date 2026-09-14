@@ -24,6 +24,8 @@ use tokio::{sync::broadcast, time::interval};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, info, warn};
 
+#[cfg(target_os = "linux")]
+use super::audio::loopback::{HelperAudioCapture, helper_stream_env};
 use super::{
     audio::VizSample,
     clipboard,
@@ -141,7 +143,10 @@ const WEBVIEW_CRASH_BACKOFF: Duration = Duration::from_secs(5 * 60);
 pub(super) struct WebviewPlaybackController {
     api_base_url: String,
     token: String,
-    child: Option<Child>,
+    child: Option<RunningHelper>,
+    /// Where the helper's captured audio sends its spectrum (Linux only).
+    #[cfg(target_os = "linux")]
+    analyzer_tx: broadcast::Sender<VizSample>,
     wants_youtube: bool,
     helper_log_path: Option<PathBuf>,
     crash_window_started: Option<Instant>,
@@ -149,12 +154,29 @@ pub(super) struct WebviewPlaybackController {
     disabled_until: Option<Instant>,
 }
 
+/// The helper process and, on Linux, the capture feeding its audio to the
+/// equalizer. One value, so the capture can never outlive the helper.
+struct RunningHelper {
+    child: Child,
+    #[cfg(target_os = "linux")]
+    _audio_capture: HelperAudioCapture,
+}
+
 impl WebviewPlaybackController {
-    pub(super) fn new(api_base_url: String, token: String) -> Self {
+    pub(super) fn new(
+        api_base_url: String,
+        token: String,
+        analyzer_tx: broadcast::Sender<VizSample>,
+    ) -> Self {
+        // Only Linux can capture the helper's audio today.
+        #[cfg(not(target_os = "linux"))]
+        drop(analyzer_tx);
         Self {
             api_base_url,
             token,
             child: None,
+            #[cfg(target_os = "linux")]
+            analyzer_tx,
             wants_youtube: false,
             helper_log_path: None,
             crash_window_started: None,
@@ -269,6 +291,10 @@ impl WebviewPlaybackController {
         if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
             command.env("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
+        // Tag WebKit's audio streams with this process as owner, so the
+        // capture can find and record them for the equalizer.
+        #[cfg(target_os = "linux")]
+        command.envs(helper_stream_env(std::process::id()));
         #[cfg(unix)]
         {
             // Keep WebKitGTK media subprocesses in the helper's process group
@@ -303,7 +329,11 @@ impl WebviewPlaybackController {
             self.record_helper_start_failure();
             return Ok(());
         }
-        self.child = Some(child);
+        self.child = Some(RunningHelper {
+            child,
+            #[cfg(target_os = "linux")]
+            _audio_capture: HelperAudioCapture::start(std::process::id(), self.analyzer_tx.clone()),
+        });
         info!("started embedded YouTube webview helper");
         Ok(())
     }
@@ -329,10 +359,10 @@ impl WebviewPlaybackController {
     }
 
     fn helper_is_running(&mut self) -> bool {
-        let Some(child) = self.child.as_mut() else {
+        let Some(helper) = self.child.as_mut() else {
             return false;
         };
-        match child.try_wait() {
+        match helper.child.try_wait() {
             Ok(Some(status)) => {
                 warn!(
                     ?status,
@@ -411,14 +441,14 @@ impl WebviewPlaybackController {
     }
 
     fn stop_helper(&mut self) {
-        let Some(mut child) = self.child.take() else {
+        let Some(mut helper) = self.child.take() else {
             return;
         };
-        if let Err(err) = kill_webview_helper(&mut child) {
+        if let Err(err) = kill_webview_helper(&mut helper.child) {
             warn!(error = %err, "failed to stop embedded YouTube webview helper");
             return;
         }
-        let _ = child.wait();
+        let _ = helper.child.wait();
         info!("stopped embedded YouTube webview helper");
     }
 }

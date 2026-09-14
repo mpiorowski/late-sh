@@ -293,7 +293,11 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
     let icecast_stream_url = audio.icecast_stream_url.clone();
     // Copy scalar state before entering the long-lived pair loop.
     let sample_rate = audio.sample_rate;
-    let mut webview = WebviewPlaybackController::new(api_base_url.clone(), token.clone());
+    let mut webview = WebviewPlaybackController::new(
+        api_base_url.clone(),
+        token.clone(),
+        audio.analyzer_tx.clone(),
+    );
     let mut voice = voice::VoiceRuntimeState::default();
     let (mut desktop_media, mut desktop_commands) =
         mpris::DesktopMedia::new(mpris::AudioControls {

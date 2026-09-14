@@ -320,5 +320,8 @@ mod analyzer;
 
 use analyzer::spawn_playback_analyzer_thread;
 
+#[cfg(target_os = "linux")]
+pub(super) mod loopback;
+
 #[cfg(test)]
 mod audio_test;

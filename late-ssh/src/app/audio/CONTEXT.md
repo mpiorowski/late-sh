@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, the equalizer (live CLI spectrum with an ambient fallback), and now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the music/audio touchpoints it owns in `late-cli` and `late-web/src/pages/listen`
-- Last updated: 2026-08-30 (Bringing a track pays: `MediaQueueItem::insert_youtube` is now the paying path, `SONG_QUEUE_REWARD_CHIPS` (200) for the first `SONG_QUEUE_MAX_PAID_PER_DAY` (5) tracks a person queues each UTC day, credited in the same transaction as the insert. Every track pays, repeats and History re-queues included; the day's count is the only gate. Every submit path funnels through it, so booth, `/audio`, and a history re-queue all pay the same, and `SubmitQueueResponse.reward_chips` carries what was actually minted into the banner. See "Submission reward" under §4. Previous entry: The CLI no longer unmutes itself when the pair socket dies: only a session the server never saw may release its boot mute, and the retry loop slows to 60s instead of abandoning pairing. See the end of "Mute and volume: one source of truth, stored per device". Previous entry: device-audio write path hardened: only CLI reports persist (never the webview helper's), alignment echoes are not treated as intent, a failed connect-time read disables alignment and persistence for that connection instead of imposing fresh-boot defaults, and writes land in report order. See "Mute and volume: one source of truth, stored per device")
+- Last updated: 2026-09-14 (YouTube gets real bars on Linux: the CLI tags the `late-webview` helper's audio streams at spawn, finds the tagged stream with `pw-dump`, records just that stream with `pw-record`, and runs it through the same analyzer as Icecast and radio, so the server sees ordinary `viz` frames. The CLI analyzer also moved to a dB scale, so bars move instead of sitting near full height. See §10 and §18. Previous entry: Bringing a track pays: `MediaQueueItem::insert_youtube` is now the paying path, `SONG_QUEUE_REWARD_CHIPS` (200) for the first `SONG_QUEUE_MAX_PAID_PER_DAY` (5) tracks a person queues each UTC day, credited in the same transaction as the insert. Every track pays, repeats and History re-queues included; the day's count is the only gate. Every submit path funnels through it, so booth, `/audio`, and a history re-queue all pay the same, and `SubmitQueueResponse.reward_chips` carries what was actually minted into the banner. See "Submission reward" under §4. Previous entry: The CLI no longer unmutes itself when the pair socket dies: only a session the server never saw may release its boot mute, and the retry loop slows to 60s instead of abandoning pairing. See the end of "Mute and volume: one source of truth, stored per device". Previous entry: device-audio write path hardened: only CLI reports persist (never the webview helper's), alignment echoes are not treated as intent, a failed connect-time read disables alignment and persistence for that connection instead of imposing fresh-boot defaults, and writes land in report order. See "Mute and volume: one source of truth, stored per device")
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -17,7 +17,7 @@ Owned by this domain:
 - Community Booth History: max 200 unique previously played YouTube tracks, ordered most recently played first, with requeue-from-history.
 - The singleton "YouTube fallback" stream that plays when the queue is empty.
 - Audio source selection for paired clients (`set_playback_source`). No arbitration: browser pairing is gone, so the source alone picks the surface.
-- Procedural visualizer fallback used while YouTube is the audible surface.
+- The equalizer: the paired CLI's live spectrum, with the ambient band whenever no fresh spectrum arrives (§10).
 - Now-playing poller for the Icecast track title.
 - The `/audio` and `/audio fallback` SSH chat commands (staff-only).
 - Direct-client radio source for approved external stations, currently Nightride Chillsynth, Nightride, Datawave, Spacesynth, and Ambient (Nightride's `rektify.mp3`). This must not proxy/restream third-party audio through late.sh Icecast/Liquidsoap; the paired CLI and the public listen page connect directly to official station stream URLs.
@@ -41,7 +41,7 @@ late-ssh/src/app/audio/
 ├── client_state.rs         # ClientAudioState + ClientKind/SshMode/Platform enums (the client_state WS payload)
 ├── input.rs                # v+* music suffix handling: booth, source cycling, stream/station selection
 ├── stations.rs             # server-side stream/station registry and URL resolution
-├── viz.rs                  # render_eq: decorative wall-tick equalizer, no audio data
+├── viz.rs                  # render_eq + Spectrum: live client spectrum, wall-tick ambient fallback
 ├── youtube.rs              # URL parsing + optional YouTube Data API validation client
 ├── booth/
 │   ├── mod.rs
@@ -239,7 +239,7 @@ YouTube item without entering the switching/playback path.
 
 ### Client → server `WsPayload` (`api.rs:39-68`)
 - `heartbeat`
-- `viz { position_ms, bands[8], rms }` — legacy/compat payload; nothing sends it any more and it drives nothing
+- `viz { position_ms, bands[8], rms }`: the paired CLI's spectrum of what it plays (its native Icecast/radio output, or on Linux the captured YouTube helper stream); drives the equalizer (§10, §18)
 - `client_state { client_kind, ssh_mode, platform, capabilities, muted, volume_percent }` — older CLIs also send `icecast_output_available`, which the server now ignores: it only ever gated the browser Icecast takeover.
 - `clipboard_image { … }`, `clipboard_image_failed { … }`
 - `player_state(PlayerStateReport)` — `{ item_id, state, offset_ms?, duration_ms?, autoplay_blocked, error? }` (`svc.rs:126-138`)
@@ -442,11 +442,13 @@ dancing band would be claiming playback that cannot exist. The strip points
 at the `?` guide instead, which is where both the CLI install and
 `late.sh/listen` live. The sibling volume row already rendered `—` here.
 
-YouTube stays `Ambient`: it plays inside a cross-origin iframe in the
-`late-webview` helper, where nothing can read the samples. Real YouTube bars
-need OS-level capture of the helper's audio; see §18. The pet's
-`music_playing` reads pairing and mute only, so `Live` and `Ambient` both
-count as music.
+YouTube plays inside a cross-origin iframe in the `late-webview` helper, where
+the page cannot read the samples. On Linux the CLI records the helper's own
+PipeWire stream instead and sends its spectrum as ordinary `viz` frames (§18),
+so nothing here tells YouTube apart from Icecast. Where that capture cannot
+run (Windows, macOS, a host without `pw-dump`/`pw-record`) YouTube stays
+`Ambient`. The pet's `music_playing` reads pairing and mute only, so `Live`
+and `Ambient` both count as music.
 
 ---
 
@@ -625,7 +627,7 @@ These are intentional non-goals. Reopen only if the constraint that put them her
 - **Ad stripping.** The iframe plays whatever YouTube serves.
 - **Lyrics, album art, fancy metadata.** Title + channel is enough.
 - **Custom genre control per submission.** Fallback uses the global vote winner like everywhere else.
-- **Real Web Audio analysis of the YouTube iframe.** Not possible — cross-origin iframe, no audio hook in the IFrame Player API. Browser-paired audio therefore uses the same synthetic visualizer for both Icecast and YouTube (§10) until OS-loopback capture exists.
+- **Real Web Audio analysis of the YouTube iframe.** Not possible: cross-origin iframe, no audio hook in the IFrame Player API. The CLI captures the helper's output at the OS layer instead (§18).
 
 ---
 
@@ -739,40 +741,27 @@ Current v1 opens a small undecorated companion window. Hidden/offscreen mode is 
 
 ---
 
-## 18. Parked: OS audio loopback for CLI-side visualization
+## 18. YouTube spectrum: OS capture of the helper's audio
 
-**Status: parked, next up after the live spectrum (§10).** Icecast and radio already get real bars from the CLI's own decoded output. What remains is YouTube, which plays in the `late-webview` helper's cross-origin iframe. The helper already has its own pair WS, and `api.rs` routes `viz` from any paired client, so a helper that captures its own audio and sends `viz` frames needs no server change. Linux first: tag the helper's WebKit audio stream (for example `PULSE_PROP` on spawn, unverified inside WebKitGTK's sandbox) and capture it via PipeWire.
+**Status: Linux implemented; Windows and macOS not started.** Icecast and radio get real bars from the CLI's own decoded output (§10). YouTube plays in the `late-webview` helper's cross-origin iframe, so the CLI captures the helper's audio at the OS layer and runs it through the same analyzer (`late-cli/src/audio/loopback.rs`). Frames go out on the CLI's existing pair socket as ordinary `viz` events. The server is unchanged.
 
-### Idea
+### Linux (PipeWire)
 
-Tap the CLI's own audio output at the OS layer, run FFT locally, emit `VizFrame { bands[8], rms, track_pos_ms }` through the existing pipeline. Works uniformly for YouTube, Icecast, and anything else the user plays through `late`. The current browser-pair procedural visualizer (§10) can retire for CLI-hosted playback — viz becomes CLI-owned across every source, and pair-WS `viz` fan-in can narrow to native CLI clients.
+1. **Tag at spawn.** `WebviewPlaybackController` spawns the helper with `PULSE_PROP` and `PIPEWIRE_PROPS` setting `application.id = sh.late.youtube` and `late.webview.owner = <late pid>`. WebKitGTK plays through its PulseAudio sink (via pipewire-pulse), and the tag lands on `WebKitWebProcess`'s stream props (verified on Arch, PipeWire 1.6).
+2. **Find.** A worker thread runs `pw-dump` once a second (about 11ms) and picks the `Stream/Output/Audio` node tagged with this owner: a running one before an idle one, then the newest `object.serial`. Re-reading every second is what picks up a stream WebKit replaces between videos.
+3. **Record.** `pw-record --target <serial> --raw` (mono f32 at 44.1 kHz, with `node.dont-reconnect` and `node.dont-fallback` so a vanished stream never falls back to the microphone) pipes into a ring feeding its own `spawn_playback_analyzer_thread` on the shared `analyzer_tx`.
+4. **Lifetime.** The capture lives in `RunningHelper` beside the helper `Child`, so it stops whenever the helper is stopped, dies, or is respawned.
 
-### Per-platform capture
+Why these choices:
+- **A tag, not PID matching.** For PulseAudio clients `pipewire.sec.pid` is `pipewire-pulse` itself, and `application.process.id` is client-reported (and namespaced if WebKit ever sandboxes its web process). The env tag is on the stream either way.
+- **An owner key.** Two `late` sessions on one desktop each tag their own helper; without the owner each could record the other's player.
+- **Shelling out to `pw-dump`/`pw-record`, not linking libpipewire.** Same rule as WebKitGTK: `late` must start on hosts without the library. Missing tools log one warning and the eq stays `Ambient`.
+- **The stream, not the sink monitor.** A monitor would also pick up everything else the user plays.
+- **A silence gate.** Chunks of exact digital zero (a paused or muted player) are dropped before analysis, so silence sends no frames and the TUI falls back instead of drawing flat live bars.
 
-- **Linux**: PipeWire stream linked to the CLI's output sink's monitor source. PulseAudio monitor source as fallback for non-PipeWire systems.
-- **Windows**: WASAPI loopback on the default render endpoint (`IAudioClient::Initialize` with `AUDCLNT_STREAMFLAGS_LOOPBACK`).
-- **macOS**: ScreenCaptureKit audio (14+) for the modern path; CoreAudio aggregate / virtual-device plugin for older OS versions. Triggers a system-audio permission prompt the first time.
+### Windows and macOS
 
-A single trait inside `late-cli/src/audio/` abstracts the platform-specific capture; one Linux backend can ship first and unblock the other two per-PR.
-
-### What it unlocks
-
-- Real reactive bars in YouTube mode — no procedural placeholder needed once embedded-CLI playback is the default surface.
-- Single viz pipeline regardless of source. The procedural band (§10) would stay meaningful only as the unpaired/never-installed placeholder.
-- Server no longer needs a procedural fallback for CLI-hosted YouTube playback. Each CLI generates its own frames.
-
-### Open questions
-
-- **Per-process vs system-wide capture.** System-wide picks up whatever the user is playing outside `late`; per-process is more honest but requires extra plumbing (PipeWire per-app routing, CoreAudio AudioObject scoping). Reasonable starting point: per-process where the OS supports it, fall back to system-wide.
-- **macOS permission UX.** First-launch prompt has to be explained somewhere (onboarding banner, `late doctor`, etc.).
-- **Ordering vs procedural bars.** Procedural bars (§10) ship first and cover the current browser-pair surface; OS-loopback lands later and coexists. Both paths stay live until the browser-pair YouTube surface is retired (if ever).
-
-### Reactivation criteria
-
-- Embedded-webview CLI playback work is on the active roadmap or already shipped.
-- We're willing to take on platform-specific audio code (the LATE bar to clear is one Linux backend).
-
-Until then, YouTube uses the ambient band (§10).
+Not started. The helper runs in-process there (`late webview-pair`), so candidates are per-process capture of `late` itself: WASAPI process loopback on Windows, ScreenCaptureKit audio filtered to the app on macOS (which prompts for permission). Until then YouTube uses the ambient band (§10) on those platforms.
 
 ---
 

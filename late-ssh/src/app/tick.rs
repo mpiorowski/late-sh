@@ -1265,9 +1265,12 @@ impl App {
         // pet's clocks are wall-synced (PetState::tick takes marquee_tick),
         // so the pet box rides the half tier it paints on. The
         // bonsai care modal and the profile hero sway on the same edge as
-        // the sidebar, which always carries the eq strip and that sway.
+        // the sidebar, which always carries the eq strip and that sway. A
+        // Zen music or visualizer tile paints its eq on that edge too; left
+        // to the aquarium's quarter tier it drops to ~3.8fps.
         if self.screen == Screen::Clubhouse
             || self.right_sidebar_visible()
+            || (self.screen == Screen::Zen && self.zen.shows_equalizer())
             || self.last_pet_frame.get().is_some()
             || self.show_bonsai_modal
             || (self.show_profile_modal && self.profile_modal_state.bonsai().is_some())

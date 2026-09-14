@@ -507,6 +507,28 @@ impl ZenState {
         self.rice.root.kind_at(self.focus)
     }
 
+    /// Whether the page draws a music equalizer: a music tile's eq strip or
+    /// a visualizer tile, among every tile or, while zoomed, the focused one
+    /// alone. Those paint on the anim_half edge, so the render loop has to
+    /// wake that often while one is up.
+    pub fn shows_equalizer(&self) -> bool {
+        let visible = match self.zoomed {
+            true => self.focused_kind().into_iter().collect(),
+            false => self.rice.root.leaf_kinds(),
+        };
+        visible.into_iter().any(|kind| match kind {
+            TileKind::Music | TileKind::Visualizer => true,
+            TileKind::Bonsai
+            | TileKind::Aquarium
+            | TileKind::Pet
+            | TileKind::Chat
+            | TileKind::Clock
+            | TileKind::Presence
+            | TileKind::Lobby
+            | TileKind::Blank => false,
+        })
+    }
+
     /// The page opening: the first time this session, the focus moves to
     /// the first chat tile (when there is one); later openings keep it.
     pub fn note_opened(&mut self) {

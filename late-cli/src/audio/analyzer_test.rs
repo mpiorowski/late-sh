@@ -28,18 +28,34 @@ fn silence_analyzes_to_an_empty_spectrum() {
 
 #[test]
 fn a_bass_tone_lights_the_lowest_band_and_a_treble_tone_the_highest() {
-    // Quiet enough that soft compression keeps the bands apart instead of
-    // saturating them all near 1.
     let mut analyzer = SpectrumAnalyzer::new(SAMPLE_RATE);
-    let bass = analyzer.analyze(&sine(90.0, 0.001));
+    let bass = analyzer.analyze(&sine(70.0, 0.1));
     assert_eq!(loudest_band(&bass), 0, "bass bands: {:?}", bass.bands);
-    let treble = analyzer.analyze(&sine(9_000.0, 0.001));
+    let treble = analyzer.analyze(&sine(9_000.0, 0.1));
     assert_eq!(
         loudest_band(&treble),
         BAND_COUNT - 1,
         "treble bands: {:?}",
         treble.bands
     );
+}
+
+#[test]
+fn a_quieter_signal_draws_a_lower_band_that_still_registers() {
+    // The analyzer sees post-volume samples, so this is the volume knob:
+    // turning down shrinks the bar instead of leaving it pinned or empty.
+    let mut analyzer = SpectrumAnalyzer::new(SAMPLE_RATE);
+    let loud = analyzer.analyze(&sine(1_000.0, 0.5));
+    let quiet = analyzer.analyze(&sine(1_000.0, 0.05));
+    let band = loudest_band(&loud);
+    assert!(
+        quiet.bands[band] < loud.bands[band],
+        "quiet {:?} loud {:?}",
+        quiet.bands,
+        loud.bands
+    );
+    assert!(quiet.bands[band] > 0.0, "quiet bands: {:?}", quiet.bands);
+    assert!(quiet.rms < loud.rms);
 }
 
 #[test]

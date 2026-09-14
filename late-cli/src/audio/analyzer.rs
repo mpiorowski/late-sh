@@ -20,8 +20,17 @@ const BAND_COUNT: usize = 8;
 /// Lowest and highest frequency the bands cover, log-spaced between.
 const MIN_HZ: f32 = 60.0;
 const MAX_HZ: f32 = 12_000.0;
-/// Linear gain applied before soft compression into 0..1.
-const GAIN: f32 = 3.0;
+/// A band's mean FFT magnitude at the bottom of the meter, in dB. Fitted on
+/// captured Icecast, synthwave, and house streams: typical music at 70%
+/// volume sits around half height, leaving headroom for hits to move into.
+const BAND_FLOOR_DB: f32 = -18.0;
+/// Level span from an empty band to a full one.
+const BAND_SPAN_DB: f32 = 60.0;
+/// Lift per band, low to high. Music carries far less energy per bin in the
+/// treble than in the mids, so without it the top bands barely register.
+const BAND_TILT_DB: f32 = 4.0;
+/// RMS at the bottom of the meter, in dBFS; 0 dBFS is the top.
+const RMS_FLOOR_DB: f32 = -48.0;
 /// Frames per second sent to the TUI.
 const TARGET_HZ: u64 = 15;
 
@@ -74,9 +83,7 @@ pub(super) struct SpectrumAnalyzer {
 impl SpectrumAnalyzer {
     pub(super) fn new(sample_rate: u32) -> Self {
         let hann = (0..FFT_SIZE)
-            .map(|i| {
-                0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / (FFT_SIZE as f32 - 1.0)).cos()
-            })
+            .map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / (FFT_SIZE as f32 - 1.0)).cos())
             .collect();
         Self {
             fft: FftPlanner::new().plan_fft_forward(FFT_SIZE),
@@ -94,15 +101,20 @@ impl SpectrumAnalyzer {
         }
         self.fft.process(&mut self.scratch);
 
-        let bands = self.bands.map(|(start, end)| {
+        let bands = std::array::from_fn(|band| {
+            let (start, end) = self.bands[band];
             let bins = &self.scratch[start..end];
-            let sum: f32 = bins.iter().map(|c| c.norm()).sum();
-            soft_compress(sum / bins.len() as f32 * GAIN)
+            let mean = bins.iter().map(|c| c.norm()).sum::<f32>() / bins.len() as f32;
+            meter_level(
+                amplitude_db(mean) + BAND_TILT_DB * band as f32,
+                BAND_FLOOR_DB,
+                BAND_SPAN_DB,
+            )
         });
         let rms = (samples.iter().map(|s| s * s).sum::<f32>() / FFT_SIZE as f32).sqrt();
         VizSample {
             bands,
-            rms: soft_compress(rms * GAIN),
+            rms: meter_level(amplitude_db(rms), RMS_FLOOR_DB, -RMS_FLOOR_DB),
         }
     }
 }
@@ -123,10 +135,16 @@ fn log_bands(sample_rate: f32) -> [(usize, usize); BAND_COUNT] {
     })
 }
 
-/// Maps 0..∞ into 0..1 with a soft knee, so loud passages saturate
-/// gracefully instead of pinning every band at the top.
-fn soft_compress(x: f32) -> f32 {
-    (2.0 * x / (1.0 + 2.0 * x)).clamp(0.0, 1.0)
+/// An amplitude in dB. Zero is negative infinity, which [`meter_level`]
+/// lands on the bottom of the meter.
+fn amplitude_db(amplitude: f32) -> f32 {
+    20.0 * amplitude.log10()
+}
+
+/// A dB level as a 0..=1 meter height. A log scale is what keeps the meter
+/// moving: music spans tens of dB, and a linear gain pins it at the top.
+fn meter_level(db: f32, floor_db: f32, span_db: f32) -> f32 {
+    ((db - floor_db) / span_db).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
