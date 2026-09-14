@@ -369,6 +369,9 @@ struct DrawContext<'a> {
     zen_track: String,
     zen_date: String,
     zen_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
+    zen_active_friends: &'a [crate::app::chat::state::ActiveFriend],
+    zen_pulse: &'a [Option<u16>],
+    zen_peer_statuses: &'a std::collections::HashMap<uuid::Uuid, String>,
 }
 
 impl App {
@@ -1380,6 +1383,9 @@ impl App {
                         zen_track,
                         zen_date,
                         zen_pet_strip,
+                        zen_active_friends: &self.active_friends,
+                        zen_pulse: &self.zen_pulse,
+                        zen_peer_statuses: &self.peer_statuses,
                     },
                     &mut terminal_image_frame,
                 );
@@ -1867,6 +1873,30 @@ impl App {
                     mentions_unread: ctx.mentions_unread_count,
                     daily: ctx.daily,
                     lobby_glow: ctx.lobby.glow(),
+                    activity: ctx.chat_state.activity_ticker(),
+                    active_friends: ctx.zen_active_friends,
+                    peer_statuses: ctx.zen_peer_statuses,
+                    pulse: ctx.zen_pulse,
+                    inbox: if ctx.zen.shows(crate::app::zen::state::TileKind::Inbox) {
+                        crate::app::zen::rows::inbox_rows(
+                            ctx.user_id,
+                            &ctx.chat_state.rooms,
+                            &ctx.chat_state.unread_counts,
+                            ctx.chat_state.usernames(),
+                            ctx.chat_state.ignored_user_ids(),
+                            ctx.chat_state.notifications.all_items(),
+                        )
+                    } else {
+                        Vec::new()
+                    },
+                    headlines: if ctx.zen.shows(crate::app::zen::state::TileKind::Headlines) {
+                        crate::app::zen::rows::headlines(
+                            ctx.chat_state.news.all_articles(),
+                            ctx.chat_state.feeds.all_entries(),
+                        )
+                    } else {
+                        Vec::new()
+                    },
                     wall_tick: ctx.marquee_tick,
                 };
                 crate::app::zen::ui::draw_rice(frame, content_area, view, terminal_images);

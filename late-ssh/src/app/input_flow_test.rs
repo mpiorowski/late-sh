@@ -2994,6 +2994,71 @@ async fn zen_chat_keys_belong_to_the_focused_chat_tile() {
 }
 
 #[tokio::test]
+async fn zen_inbox_enter_opens_an_unread_dm_in_the_first_chat_tile() {
+    use crate::app::zen::state::{KindPick, TileKind};
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "zen-inbox-viewer").await;
+    let peer = create_test_user(&test_db.db, "zen-inbox-peer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    let dm = ChatRoom::get_or_create_dm(&client, viewer.id, peer.id)
+        .await
+        .expect("dm room");
+    ChatRoomMember::join(&client, dm.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, dm.id, peer.id)
+        .await
+        .expect("join peer");
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: dm.id,
+            user_id: peer.id,
+            body: "psst".to_string(),
+        },
+    )
+    .await
+    .expect("dm message");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-inbox-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "Ctrl+F back").await;
+
+    // The lobby tile becomes an Inbox, which lists the unread DM.
+    app.zen.focus = app
+        .zen
+        .first_tile_of(TileKind::Lobby)
+        .expect("the default has a lobby");
+    app.zen.open_kind_picker();
+    while app.zen.kind_picker_selection() != Some(TileKind::Inbox) {
+        app.zen.move_kind_picker(1);
+    }
+    assert_eq!(app.zen.pick_kind(), KindPick::Changed);
+    wait_for_render_contains(&mut app, "@zen-inbox-peer").await;
+
+    app.handle_input(b"\r");
+    assert_eq!(
+        app.zen.focused_kind(),
+        Some(TileKind::Chat),
+        "Enter moves the focus to the chat tile"
+    );
+    assert_eq!(
+        app.zen_chat_room_id(),
+        Some(dm.id),
+        "the chat tile now shows the DM"
+    );
+}
+
+#[tokio::test]
 async fn zen_a_draft_stays_in_its_room_when_the_focus_moves_and_zoom_shows_the_focused_chat() {
     use crate::app::zen::state::TileKind;
 

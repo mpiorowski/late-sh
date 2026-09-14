@@ -21,21 +21,31 @@ pub enum TileKind {
     Visualizer,
     Presence,
     Lobby,
+    Activity,
+    Friends,
+    Pulse,
+    Inbox,
+    Headlines,
     Blank,
 }
 
 impl TileKind {
     /// Every kind, alphabetical by label: the tile picker's rows.
-    pub const ALL: [TileKind; 10] = [
+    pub const ALL: [TileKind; 15] = [
+        TileKind::Activity,
         TileKind::Aquarium,
         TileKind::Blank,
         TileKind::Bonsai,
         TileKind::Chat,
         TileKind::Clock,
+        TileKind::Friends,
+        TileKind::Headlines,
+        TileKind::Inbox,
         TileKind::Lobby,
         TileKind::Music,
         TileKind::Pet,
         TileKind::Presence,
+        TileKind::Pulse,
         TileKind::Visualizer,
     ];
 
@@ -50,6 +60,11 @@ impl TileKind {
             TileKind::Visualizer => "visualizer",
             TileKind::Presence => "presence",
             TileKind::Lobby => "lobby",
+            TileKind::Activity => "activity",
+            TileKind::Friends => "friends",
+            TileKind::Pulse => "pulse",
+            TileKind::Inbox => "inbox",
+            TileKind::Headlines => "headlines",
             TileKind::Blank => "blank",
         }
     }
@@ -483,6 +498,9 @@ pub struct ZenState {
     /// The tile picker `space` opens over the focused tile: the selected
     /// row, an index into `TileKind::ALL`, while it is open.
     pub kind_picker: Option<usize>,
+    /// The Inbox tile's selected row. Clamped at draw and at Enter, since
+    /// the rows come and go with the mentions and unread DMs.
+    pub inbox_selected: usize,
     /// Whether the page has been opened this session; the first opening
     /// lands the focus on the first chat tile so the chat keys work at once.
     opened: bool,
@@ -495,6 +513,7 @@ impl ZenState {
             focus: 0,
             zoomed: false,
             kind_picker: None,
+            inbox_selected: 0,
             opened: false,
         }
     }
@@ -525,8 +544,18 @@ impl ZenState {
             | TileKind::Clock
             | TileKind::Presence
             | TileKind::Lobby
+            | TileKind::Activity
+            | TileKind::Friends
+            | TileKind::Pulse
+            | TileKind::Inbox
+            | TileKind::Headlines
             | TileKind::Blank => false,
         })
+    }
+
+    /// Whether any tile on the page is `kind`, zoomed or not.
+    pub fn shows(&self, kind: TileKind) -> bool {
+        self.rice.root.leaf_kinds().contains(&kind)
     }
 
     /// The page opening: the first time this session, the focus moves to

@@ -169,6 +169,9 @@ pub struct State {
     /// own them, resolved per session in the tick loop). In-memory only: a
     /// status dies with its session, so there is nothing to persist.
     pub status_directory: crate::app::common::status::StatusDirectory,
+    /// The last day of human headcounts for the Zen Pulse tile, sampled once
+    /// a minute (`app/zen/svc.rs`). In-memory only, like presence.
+    pub pulse: crate::app::zen::svc::SharedPulse,
     pub crown_service: crate::app::crown::svc::CrownService,
     pub pot_service: crate::app::pot::svc::PotService,
     pub activity_feed: broadcast::Sender<ActivityEvent>,

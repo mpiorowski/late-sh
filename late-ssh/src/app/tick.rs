@@ -814,10 +814,33 @@ impl App {
                     changed = true;
                 }
             }
-            let active_friend_names = self.chat.active_friend_names();
-            if active_friend_names != self.active_friend_names {
-                self.active_friend_names = active_friend_names;
+            let active_friends = self.chat.active_friends();
+            if active_friends != self.active_friends {
+                self.active_friend_names = active_friends
+                    .iter()
+                    .map(|friend| friend.username.clone())
+                    .collect();
+                self.active_friends = active_friends;
                 changed = true;
+            }
+            if let Some(pulse) = &self.pulse {
+                let series =
+                    late_core::MutexRecover::lock_recover(pulse.as_ref()).series(chrono::Utc::now());
+                if series != self.zen_pulse {
+                    self.zen_pulse = series;
+                    changed = true;
+                }
+            }
+            // Mentions load only when asked for. An Inbox tile on the page
+            // asks whenever the unread count moves, so a new mention lands.
+            if self.screen == crate::app::common::primitives::Screen::Zen
+                && self.zen.shows(crate::app::zen::state::TileKind::Inbox)
+            {
+                let unread = self.chat.notifications.unread_count();
+                if self.zen_inbox_listed_unread != Some(unread) {
+                    self.chat.notifications.list();
+                    self.zen_inbox_listed_unread = Some(unread);
+                }
             }
             // The username directory swaps its Arc on every real change, so
             // pointer equality is the change signal for the row cache epoch.

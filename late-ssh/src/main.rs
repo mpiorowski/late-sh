@@ -446,6 +446,7 @@ async fn main() -> anyhow::Result<()> {
         username_directory: username_directory.clone(),
         flair_directory: flair_directory.clone(),
         status_directory: late_ssh::app::common::status::new_directory(),
+        pulse: late_ssh::app::zen::svc::new_shared_pulse(),
         crown_service: crown_service.clone(),
         pot_service: pot_service.clone(),
         activity_feed: activity_tx,
@@ -596,6 +597,14 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Ok(())
+    });
+
+    let pulse_shutdown = singleton_shutdown.clone();
+    let pulse = state.pulse.clone();
+    let pulse_active_users = state.active_users.clone();
+    tasks.spawn(async move {
+        late_ssh::app::zen::svc::run_pulse_sampler(pulse, pulse_active_users, pulse_shutdown).await;
         Ok(())
     });
 

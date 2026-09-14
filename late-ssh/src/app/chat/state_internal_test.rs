@@ -2028,13 +2028,16 @@ fn ticker_queue_dedupes_orders_newest_first_and_caps() {
     note_ticker_entry(&mut entries, entry(2, 30));
     assert_eq!(entries.len(), 3);
 
-    // Overflow drops the oldest, never the newest.
-    for n in 4..=12 {
+    // Overflow drops the oldest, never the newest: two past the cap, so
+    // the two oldest (1 and 3) go.
+    let newest = ACTIVITY_TICKER_CAP as u128 + 2;
+    for n in 4..=newest {
         note_ticker_entry(&mut entries, entry(n, 30 + n as i64));
     }
     assert_eq!(entries.len(), ACTIVITY_TICKER_CAP);
-    assert_eq!(entries[0].id, Uuid::from_u128(12));
+    assert_eq!(entries[0].id, Uuid::from_u128(newest));
     assert!(!entries.iter().any(|e| e.id == Uuid::from_u128(1)));
+    assert!(!entries.iter().any(|e| e.id == Uuid::from_u128(3)));
 }
 
 #[test]

@@ -1033,6 +1033,7 @@ impl russh::server::Handler for ClientHandler {
             username_directory: Some(self.state.username_directory.clone()),
             flair_directory: Some(self.state.flair_directory.clone()),
             status_directory: Some(self.state.status_directory.clone()),
+            pulse: Some(self.state.pulse.clone()),
             crown_service: Some(self.state.crown_service.clone()),
             pot_service: Some(self.state.pot_service.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),

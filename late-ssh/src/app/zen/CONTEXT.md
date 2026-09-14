@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/zen`
-- Last updated: 2026-09-12 (Esc never leaves the page; only the chord does. A session can land here (the "Land on" tweak), and the first-visit tour stops here after the Leaderboards. See Status and §3; `input_flow_test.rs` pins the leave rules. The pet watches the bonsai as well as the tank: a round is two legs, twenty minutes strolling then five at the tank, then the same twenty and five at the tree, and a pet with only one of them beside it spends both windows there. Chatty joined the calm moods that watch at all. See the pet tile in §1 and the render-time gotcha in §4; `pet/ui_test.rs` covers the alternation, the single-neighbour fallback, and the quieter beat at the tree.)
+- Last updated: 2026-09-14 (Five tiles read the clubhouse instead of keeping something alive: activity, friends, pulse, inbox, headlines. See the tile list in §1, the Inbox keys in §3, and the Pulse and Inbox notes in §4; `rows_test.rs`, `pulse_test.rs`, and `input_flow_test.rs` cover them. The music tile pins its two text rows to the bottom. Before that: Esc never leaves the page; only the chord does. A session can land here (the "Land on" tweak), and the first-visit tour stops here after the Leaderboards. See Status and §3; `input_flow_test.rs` pins the leave rules. The pet watches the bonsai as well as the tank: a round is two legs, twenty minutes strolling then five at the tank, then the same twenty and five at the tree, and a pet with only one of them beside it spends both windows there. Chatty joined the calm moods that watch at all. See the pet tile in §1 and the render-time gotcha in §4; `pet/ui_test.rs` covers the alternation, the single-neighbour fallback, and the quieter beat at the tree.)
 - Purpose: the full-bleed page that cuts the clubhouse down to the things you keep alive.
 - Status: Experimental. Reached with `Ctrl+F` from any page, or `/zen` from any composer (same toggle); a surface over that page, absent from the Tab cycle. The chord returns to the page it was opened from (`App::zen_return_screen`), or to the Clubhouse when the session landed on Zen (Settings, Tweaks, "Land on"). Leaving by any route (a digit, a tour step) clears the return page in `App::set_screen`, so a later chord never hands back a stale page. The first-visit tour's `VisitZen` stop is reached with the chord (or Enter, for terminals that swallow it) and left with `0`.
 - Parent context: `../../../../CONTEXT.md`
@@ -22,9 +22,19 @@ Tile kinds are a closed enum: bonsai (the true 81x26 canvas when the
 tile has the room, the preview otherwise), aquarium (the real reef
 simulation once the account owns it; unowned, the tile is a centered
 note pointing at `/shop`, the same shape as the pet's; owned, its title carries the care bar, fourteen boxes green for
-the feeding streak or red for the days unfed, see the hub CONTEXT), pet (the box from `pet/ui.rs`, the only place the pet is drawn besides the profile portrait; its top row reads `name · mood`, the mood inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle); when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it pets it and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_zen_tile_at`, `input_flow_test.rs`); while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the track, then the source and the station it is tuned to, `v1`..`v5` retune it), clock (block digits, online count
+the feeding streak or red for the days unfed, see the hub CONTEXT), pet (the box from `pet/ui.rs`, the only place the pet is drawn besides the profile portrait; its top row reads `name · mood`, the mood inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle); when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it pets it and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_zen_tile_at`, `input_flow_test.rs`); while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the track, then the source and the station it is tuned to, always the tile's last two rows, with the full-height visualizer filling every row above; `v1`..`v5` retune it), clock (block digits, online count
 on the date row), visualizer, presence, lobby (the daily games, compact:
-only the running games plus one footer row of count and keys), blank. The look (border style, gap, titles) is
+only the running games plus one footer row of count and keys), activity
+(the #lounge feed as a list, newest on top, each event's age flush right
+and a friend's line in the friend color: the same
+`ChatState::activity_ticker` queue the one-row ticker packs, capped at
+40), friends (connected friends, newest login first: name, `/status`
+badge, audio source, time on), pulse (people online over the last day,
+the peak of each ten-minute bucket as bars scaled to the day's peak, dots
+where nothing was sampled), inbox (unread DMs by count, then mentions
+newest first; see §3 for its keys), headlines (News articles and the
+viewer's RSS entries merged newest first, an entry shared to News listed
+once, as the article), blank. The look (border style, gap, titles) is
 part of the layout.
 
 The default, which `R` also resets to (rounded borders, no gap, titles on):
@@ -74,6 +84,9 @@ late-ssh/src/app/zen/
 |-- mod.rs        # module declarations only
 |-- state.rs      # TileKind, Node (split tree), Look, RiceLayout (serde), ZenState + edits
 |-- layout.rs     # pure rect math: rice_areas, tile_rects, tile_inner, neighbour_side, pet_neighbours
+|-- pulse.rs      # PulseHistory: a day of ten-minute headcount peaks, and the column fit
+|-- rows.rs       # pure row builders for the Inbox and Headlines tiles
+|-- svc.rs        # the once-a-minute Pulse sampler, spawned in main.rs
 |-- ui.rs         # ZenView, draw_rice, the tile widgets
 |-- input.rs      # feed keys, room walk, focus and layout keys
 `-- bigclock.rs   # block digit font for the clock tile
@@ -115,6 +128,12 @@ click focuses the tile under it (not through a modal, the same guard as
 the pet click) and falls through to the composer and message clicks of
 that tile. A click on the pet is the exception: it pets it and leaves the
 focus where it was. Aquarium `a` feed (free, once a day, +100 chips on the first feed).
+With the Inbox focused, `j` `k` walk its rows and Enter opens the selected
+row in the first chat tile and moves the focus there, so `i` answers at
+once: a DM binds the tile to its room; a mention binds it to the
+mention's room and selects the message the way a `Ctrl+/` message jump
+does. A mention in a room the account never joined opens the history
+modal instead, and a page with no chat tile says so in a banner.
 The pet has no key: it is petted with a left click and reads the rest of
 the session itself. The sprout on the tank floor (the fortnightly bud;
 leave it a week and it roots as a plant) is cut on its Shop row
@@ -123,7 +142,7 @@ collide, and the tile draws no caption for it either (2026-09-11). The bonsai ha
 Bonsai Care key and opens the same modal it opens on Home, so watering,
 cutting, and steering work exactly as on the chat page. Layout: arrows and Tab / Shift+Tab move focus (the page owns Tab; it is not the page switch here), `space` opens the tile
 picker over the focused tile (`ZenState::kind_picker`: one row per
-`TileKind`, alphabetical (`TileKind::ALL`), `j` `k` and the arrows move, Enter or `space` picks, Esc
+`TileKind`, alphabetical (`TileKind::ALL`), scrolled with the selection on a short page, `j` `k` and the arrows move, Enter or `space` picks, Esc
 closes; the picker owns every key while it is up, and a refused row
 stays up with a banner), `S` splits it (row when wide, column when tall), `X`
 closes it (the last tile stays), `<` `>` trade one column of width and
@@ -180,6 +199,19 @@ leaving the page, so a held resize key costs one row update.
   The check reads the tile kind only, so an unowned tank (the shop note) is
   watched like a live reef. A sulking or sleeping pet ignores the fish, the
   tree, and the cursor.
+- Pulse is process-wide and in-memory. `svc.rs` samples
+  `online_human_count` once a minute into `State::pulse`; each session
+  copies the day's `series` into `App::zen_pulse` on tick's one-hertz edge,
+  so render never locks it. A restart starts a fresh day, and a second
+  replica would keep its own.
+- The mentions list loads only on ask (`notifications.list()`), so while an
+  Inbox tile is on the page tick requests it again whenever the unread count
+  differs from the last request (`App::zen_inbox_listed_unread`). The Inbox
+  and Headlines rows are built per frame only while their tile is on the
+  page (`ZenState::shows`), and Enter rebuilds the same Inbox rows, so the
+  marked row is the one that opens.
 - Tests cover the split tree (`state_test.rs`), neighbour detection
-  (`layout_test.rs`), and the care bar (`ui_test.rs`); the rest of the tile
-  drawing is untested.
+  (`layout_test.rs`), the care bar and the music tile's rows (`ui_test.rs`),
+  the Pulse buckets (`pulse_test.rs`), the Inbox and Headlines rows
+  (`rows_test.rs`), and Inbox Enter (`input_flow_test.rs`); the rest of the
+  tile drawing is untested.

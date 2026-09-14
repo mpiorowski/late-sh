@@ -5511,17 +5511,32 @@ impl ChatState {
     }
 
     pub fn active_friend_names(&self) -> Vec<String> {
+        self.active_friends()
+            .into_iter()
+            .map(|friend| friend.username)
+            .collect()
+    }
+
+    /// Connected friends, the most recent login first, then by name.
+    pub fn active_friends(&self) -> Vec<ActiveFriend> {
         let Some(active_users) = &self.active_users else {
             return Vec::new();
         };
         let active_users = active_users.lock_recover();
-        let mut friends: Vec<&ActiveUser> = self
+        let mut friends: Vec<ActiveFriend> = self
             .friend_user_ids
             .iter()
-            .filter_map(|id| active_users.get(id))
+            .filter_map(|id| {
+                active_users.get(id).map(|user: &ActiveUser| ActiveFriend {
+                    user_id: *id,
+                    username: user.username.clone(),
+                    audio_source: user.audio_source,
+                    online_since: user.last_login_at,
+                })
+            })
             .collect();
         friends.sort_by(|left, right| {
-            right.last_login_at.cmp(&left.last_login_at).then_with(|| {
+            right.online_since.cmp(&left.online_since).then_with(|| {
                 left.username
                     .bytes()
                     .map(|b| b.to_ascii_lowercase())
@@ -5529,9 +5544,6 @@ impl ChatState {
             })
         });
         friends
-            .into_iter()
-            .map(|user| user.username.clone())
-            .collect()
     }
 
     pub fn note_friend_join(&mut self, user_id: Uuid, username: &str) -> Option<Banner> {
@@ -6940,9 +6952,18 @@ pub struct ActivityTickerEntry {
     pub at: DateTime<Utc>,
 }
 
-/// The ticker queue length: enough that packing left to right always fills
-/// the row on any sane terminal width, without hoarding history.
-const ACTIVITY_TICKER_CAP: usize = 10;
+/// A connected friend, as the Zen Friends tile draws them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActiveFriend {
+    pub user_id: Uuid,
+    pub username: String,
+    pub audio_source: late_core::models::user::AudioSource,
+    pub online_since: Instant,
+}
+
+/// The ticker queue length: enough to fill the one-row ticker on any sane
+/// width and a tall Zen Activity tile, without hoarding history.
+const ACTIVITY_TICKER_CAP: usize = 40;
 
 /// Insert into the newest-first ticker queue, deduped by message id (tails
 /// and snapshots replay the same lines), capped at `ACTIVITY_TICKER_CAP`.

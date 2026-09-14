@@ -1,7 +1,50 @@
-use super::{care_bar_spans, hint_line_fitting, station_text};
+use super::{care_bar_spans, draw_music_tile, hint_line_fitting, station_text};
+use crate::app::audio::viz::EqState;
 use crate::app::common::primitives::hint_line;
 use crate::app::hub::aquarium::state::CareBar;
 use late_core::models::aquarium_care::CARE_DAYS;
+use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+
+fn music_tile_rows(width: u16, height: u16) -> Vec<String> {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            draw_music_tile(
+                frame,
+                Rect::new(0, 0, width, height),
+                "Ambition",
+                "youtube",
+                0,
+                EqState::Ambient,
+            )
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    (0..height)
+        .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect()
+}
+
+#[test]
+fn the_music_tile_pins_track_and_station_to_its_last_two_rows() {
+    let rows = music_tile_rows(24, 9);
+    assert!(rows[7].contains("♪ Ambition"), "{rows:#?}");
+    assert!(rows[8].contains("youtube"), "{rows:#?}");
+    // Every row above the text belongs to the visualizer.
+    for row in &rows[..7] {
+        assert!(!row.contains("Ambition") && !row.contains("youtube"), "{rows:#?}");
+    }
+    let bar_cells = rows[..7]
+        .iter()
+        .flat_map(|row| row.chars())
+        .filter(|ch| !ch.is_whitespace())
+        .count();
+    assert!(bar_cells > 0, "{rows:#?}");
+
+    // Two rows is text only; one row keeps the track.
+    assert_eq!(music_tile_rows(24, 2)[0].trim(), "♪ Ambition");
+    assert_eq!(music_tile_rows(24, 1)[0].trim(), "♪ Ambition");
+}
 
 fn glyphs(bar: CareBar) -> String {
     care_bar_spans(bar)
