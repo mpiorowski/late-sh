@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-09-12 (The Startup tweak is a landing choice, `users.settings.landing_page` = Clubhouse (default) / Home / Zen, read as `LandingPage`; first sessions always land in the Clubhouse. Zen is left only by `Ctrl+F` / `/zen`, never Esc, and the first-visit tour takes the chord into Zen after the Leaderboards. See §Keyboard shortcuts and the zen and clubhouse contexts. Ideas and roadmap live in `PLAN.md` Backlog; this file describes the present only.)
+- Last updated: 2026-09-15 (Backtick works on Zen as on Home, and the workspace chain comes home to the page you went into the games from: Zen, or Home for everything else (`App::workspace_base`). Esc off a board or table entered from Zen lands on Zen, and Zen keeps its `Ctrl+F` page across the trip. See §Keyboard shortcuts and the workspace and zen contexts. Ideas and roadmap live in `PLAN.md` Backlog; this file describes the present only.)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -1252,7 +1252,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `Esc` | Scratchpad | Leave the pairing (notifies the partner) and return to Home |
 | `Ctrl+O` | Reserved global, except active Artboard editing | Open the settings modal from anywhere, including active Arcade games |
 | `Ctrl+G` | Reserved global, except active Artboard editing | Toggle the Lobby modal (daily correspondence games + house tables) from anywhere; the only key for it (bare `g` is unbound, and `Ctrl+Q` is unbound because many terminals intercept it) |
-| `Ctrl+F` | Reserved global, except active Artboard editing | Toggle Zen over the current page; the only way off Zen (Esc stays), back to the page it was opened from, or the Clubhouse when the session landed on Zen |
+| `Ctrl+F` | Reserved global, except active Artboard editing | Toggle Zen over the current page; the only way off Zen (Esc stays), back to the page it was opened from, or the Clubhouse when the session landed on Zen. Backtick on Zen runs the workspace cycle as on Home, and the chain comes home to Zen (`late-ssh/src/app/workspace/CONTEXT.md`) |
 | `/settings` / `/lobby` / `/zen` / `/redraw` / `/guide` / `/picker` | Chat composer | Typed fallbacks for `Ctrl+O` / `Ctrl+G` / `Ctrl+F` / `Ctrl+L` / `?` / `Ctrl+/`, for terminals and multiplexers that swallow the chord. Each runs the same function as its key (`open_settings_modal`, `toggle_lobby_globally`, `toggle_zen_globally`, `App::force_full_repaint`, `open_guide_globally`, `open_room_search_modal_globally`), so the toggles close too |
 | `/shop` | Chat composer | Open the Shop modal. The Shop has no global chord; the locked pet/aquarium nudges open the same modal programmatically |
 | `Tab` / `Shift+Tab` | Settings modal | Switch tabs: Settings, Bio, Themes, RSS, Account, and hidden Special when available |

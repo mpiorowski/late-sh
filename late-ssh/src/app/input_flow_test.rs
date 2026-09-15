@@ -2925,6 +2925,83 @@ async fn zen_is_left_only_by_ctrl_f_which_returns_where_it_was_opened() {
 }
 
 #[tokio::test]
+async fn backtick_from_zen_hops_through_the_games_and_comes_home_to_zen() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "zen-backtick-flow").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "zen-backtick-flow-it");
+
+    // Zen opened over the Leaderboards, nothing waiting: the hop stays put.
+    app.set_screen(Screen::Leaderboard);
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Zen);
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Zen);
+
+    // A loaded Dark Room is a stop: the hop goes in, and the same key comes
+    // home to Zen rather than Home chat.
+    app.enter_darkroom();
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Darkroom);
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Zen);
+
+    // The trip through the games kept Zen's own way back.
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Leaderboard);
+
+    // Going in from Home comes home to Home.
+    app.set_screen(Screen::Dashboard);
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Darkroom);
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard);
+}
+
+#[tokio::test]
+async fn a_table_opened_from_zen_hands_back_to_zen_on_esc_and_on_backtick() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::lobby::house::tables::HouseTable;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "zen-table-base").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "zen-table-base-it");
+
+    app.set_screen(Screen::Leaderboard);
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Zen);
+
+    // Opened from Zen the way the Lobby modal opens it; Esc hands back to
+    // Zen with the Lobby reopened over it, and Zen still knows its way out.
+    assert!(app.house.enter(HouseTable::Blackjack, Screen::Zen, app.chip_balance));
+    app.set_screen(Screen::HouseTable);
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| app.screen != Screen::HouseTable,
+        "esc leaves the table",
+    )
+    .await;
+    assert_eq!(app.screen, Screen::Zen);
+    assert!(app.show_lobby_modal, "expected Esc to reopen the Lobby");
+    app.handle_input(b"\x07");
+    assert!(!app.show_lobby_modal);
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Leaderboard);
+
+    // Backtick off the same table, nothing else waiting, wraps to Zen too.
+    app.handle_input(b"\x06");
+    assert!(app.house.enter(HouseTable::Blackjack, Screen::Zen, app.chip_balance));
+    app.set_screen(Screen::HouseTable);
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Zen);
+    assert!(!app.show_lobby_modal, "the wrap never opens the Lobby");
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Leaderboard);
+}
+
+#[tokio::test]
 async fn zen_chat_keys_belong_to_the_focused_chat_tile() {
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "zen-jk-viewer").await;

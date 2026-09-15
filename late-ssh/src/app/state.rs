@@ -497,6 +497,10 @@ pub struct App {
     /// Where `Ctrl+F` was pressed, so the chord hands the page back; cleared
     /// whenever Zen is left, and `None` on a session that landed on Zen.
     pub(crate) zen_return_screen: Option<Screen>,
+    /// Where the backtick chain comes home to: Home, or Zen when the games
+    /// were entered from Zen. Recorded by `set_screen` through
+    /// `workspace::cycle::note_screen_change`.
+    pub(crate) workspace_base: crate::app::workspace::cycle::WorkspaceBase,
     /// A layout edit not yet written to `users.settings`. Flushed on tick's
     /// one-hertz edge and on leaving the page, so a held resize key costs
     /// one row update rather than one per key repeat.
@@ -1405,6 +1409,12 @@ impl App {
                 crate::app::zen::state::RiceLayout::from_json(config.zen_layout.as_ref()),
             ),
             zen_return_screen: None,
+            workspace_base: match landing {
+                LandingPage::Zen => crate::app::workspace::cycle::WorkspaceBase::Zen { back: None },
+                LandingPage::Clubhouse | LandingPage::Home => {
+                    crate::app::workspace::cycle::WorkspaceBase::Home
+                }
+            },
             zen_layout_dirty: false,
             mod_modal_state: mod_modal::state::ModModalState::new(),
             pending_escape: false,
@@ -2268,6 +2278,11 @@ impl App {
             // teardown Artboard uses for its color slot.
             self.scratchpad = None;
         }
+
+        // Crossing into the games records where the backtick chain comes
+        // home to; coming home to Zen restores its Ctrl+F page, which the
+        // Zen arm below forgot on the way out.
+        crate::app::workspace::cycle::note_screen_change(self, screen);
 
         let screen_changed = self.screen != screen;
         // Leaving Zen writes any layout edit the debounce still holds, and

@@ -2,9 +2,9 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/zen`
-- Last updated: 2026-09-14 (Five tiles read the clubhouse instead of keeping something alive: activity, friends, pulse, inbox, headlines. Pulse replaced the presence tile. See the tile list in §1, the Inbox keys in §3, and the Pulse and Inbox notes in §4; `rows_test.rs` and `input_flow_test.rs` cover them. The music tile pins its two text rows to the bottom. Before that: Esc never leaves the page; only the chord does. A session can land here (the "Land on" tweak), and the first-visit tour stops here after the Leaderboards. See Status and §3; `input_flow_test.rs` pins the leave rules. The pet watches the bonsai as well as the tank: a round is two legs, twenty minutes strolling then five at the tank, then the same twenty and five at the tree, and a pet with only one of them beside it spends both windows there. Chatty joined the calm moods that watch at all. See the pet tile in §1 and the render-time gotcha in §4; `pet/ui_test.rs` covers the alternation, the single-neighbour fallback, and the quieter beat at the tree.)
+- Last updated: 2026-09-15 (backtick hops into the games waiting on you, as on Home, and the chain comes home to Zen with its `Ctrl+F` page intact; an Esc off a board or table entered from Zen lands here too. See Status and §3, and `workspace/CONTEXT.md` for the base.)
 - Purpose: the full-bleed page that cuts the clubhouse down to the things you keep alive.
-- Status: Experimental. Reached with `Ctrl+F` from any page, or `/zen` from any composer (same toggle); a surface over that page, absent from the Tab cycle. The chord returns to the page it was opened from (`App::zen_return_screen`), or to the Clubhouse when the session landed on Zen (Settings, Tweaks, "Land on"). Leaving by any route (a digit, a tour step) clears the return page in `App::set_screen`, so a later chord never hands back a stale page. The first-visit tour's `VisitZen` stop is reached with the chord (or Enter, for terminals that swallow it) and left with `0`.
+- Status: Experimental. Reached with `Ctrl+F` from any page, or `/zen` from any composer (same toggle); a surface over that page, absent from the Tab cycle. The chord returns to the page it was opened from (`App::zen_return_screen`), or to the Clubhouse when the session landed on Zen (Settings, Tweaks, "Land on"). Leaving by any route (a digit, a tour step) clears the return page in `App::set_screen`, so a later chord never hands back a stale page. The one route back that is not the chord is the backtick chain: going into the games from Zen makes Zen the chain's base (`App::workspace_base`), which carries the return page and refills it when the wrap or an Esc off a board or table lands back here. The first-visit tour's `VisitZen` stop is reached with the chord (or Enter, for terminals that swallow it) and left with `0`.
 - Parent context: `../../../../CONTEXT.md`
 
 ---
@@ -117,7 +117,9 @@ right when the terminal is narrow;
 names a key: the lobby's compact footer lost its key pair to the title.
 
 `Ctrl+F` leaves. Esc only peels the tile picker, the composer, or a selected
-message, and otherwise does nothing: it never leaves. With a chat tile focused: `[`
+message, and otherwise does nothing: it never leaves. Backtick runs the
+workspace cycle as on Home: it hops into the games waiting on you, and the
+chain comes home here. With a chat tile focused: `[`
 `]` rebind it to the previous or next joined room (a layout edit, saved),
 and a room picked in `Ctrl+/` binds it the same way,
 `i` / Enter compose in its room, `j` `k` select in it, and the message

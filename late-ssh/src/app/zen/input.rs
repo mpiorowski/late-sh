@@ -90,6 +90,9 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
             crate::app::input::feed_aquarium_globally(app);
             true
         }
+        // The backtick chain, as on Home: it hops through the games waiting
+        // on you and comes home here.
+        b'`' => crate::app::workspace::cycle::cycle_game_workspace(app),
         _ => false,
     }
 }
