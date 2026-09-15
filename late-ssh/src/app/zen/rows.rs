@@ -90,6 +90,7 @@ pub fn inbox_rows(
 pub struct Headline {
     pub title: String,
     pub source: String,
+    pub url: String,
     pub at: DateTime<Utc>,
 }
 
@@ -103,6 +104,7 @@ pub fn headlines(articles: &[ArticleFeedItem], entries: &[RssEntryView]) -> Vec<
             rows.push(Headline {
                 title: title_or_url(&item.article.title, &item.article.url),
                 source: format!("news · {}", item.author_username),
+                url: item.article.url.clone(),
                 at: item.article.created,
             });
         }
@@ -112,6 +114,7 @@ pub fn headlines(articles: &[ArticleFeedItem], entries: &[RssEntryView]) -> Vec<
             rows.push(Headline {
                 title: title_or_url(&view.entry.title, &view.entry.url),
                 source: view.feed_title.clone(),
+                url: view.entry.url.clone(),
                 at: view.entry.published_at.unwrap_or(view.entry.created),
             });
         }

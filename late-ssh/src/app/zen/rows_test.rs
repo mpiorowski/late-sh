@@ -206,16 +206,19 @@ fn headlines_merge_news_and_rss_newest_first_and_a_shared_entry_lists_once() {
             Headline {
                 title: "https://b.example/two".to_string(),
                 source: "b feed".to_string(),
+                url: "https://b.example/two".to_string(),
                 at: at(20),
             },
             Headline {
                 title: "Big news".to_string(),
                 source: "news · mira".to_string(),
+                url: "https://a.example/one".to_string(),
                 at: at(10),
             },
             Headline {
                 title: "Old story".to_string(),
                 source: "c feed".to_string(),
+                url: "https://c.example/three".to_string(),
                 at: at(2),
             },
         ]

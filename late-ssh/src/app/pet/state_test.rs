@@ -93,7 +93,10 @@ fn the_reading_runs_in_precedence_and_every_window_closes() {
 async fn fresh_state(handle: &str) -> PetState {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, handle).await;
-    let svc = super::super::svc::PetService::new(test_db.db.clone());
+    let svc = super::super::svc::PetService::new(
+        test_db.db.clone(),
+        tokio::sync::broadcast::channel::<crate::app::activity::event::ActivityEvent>(16).0,
+    );
     let pet = svc.ensure_pet(user.id).await.expect("ensure pet");
     PetState::new(user.id, svc, pet)
 }
@@ -243,7 +246,10 @@ async fn an_owner_coming_back_wakes_the_stored_sleeping_pet_on_the_profile() {
     // sleeping pet for an owner who is right there.
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "pet-wakes").await;
-    let svc = super::super::svc::PetService::new(test_db.db.clone());
+    let svc = super::super::svc::PetService::new(
+        test_db.db.clone(),
+        tokio::sync::broadcast::channel::<crate::app::activity::event::ActivityEvent>(16).0,
+    );
     let stored = svc.ensure_pet(user.id).await.expect("ensure pet");
     assert_eq!(stored.mood(), PetMood::Asleep);
     let mut state = PetState::new(user.id, svc, stored);

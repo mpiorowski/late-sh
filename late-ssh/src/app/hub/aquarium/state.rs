@@ -356,6 +356,13 @@ impl AquariumCare {
     }
 }
 
+impl AquariumCare {
+    /// Whether the tank has eaten on `today` (UTC), for the Pulse care row.
+    pub(crate) fn fed_on_day(&self, today: NaiveDate) -> bool {
+        fed_on(self.last_fed, today)
+    }
+}
+
 fn fed_on(last: Option<DateTime<Utc>>, today: NaiveDate) -> bool {
     last.is_some_and(|time| time.date_naive() == today)
 }

@@ -3411,14 +3411,15 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
     app.show_hub_modal = true;
 }
 
-/// A click on the pet: it purrs for a bit. The box only draws for owners,
-/// so the click can only land on an unlocked pet; the gate is belt and
-/// braces.
+/// A click on the pet: it purrs for a bit, and the first click of the day
+/// pays (`PetState::pet`). The box only draws for owners, so the click can
+/// only land on an unlocked pet; the service checks ownership again.
 pub(crate) fn pet_the_pet_globally(app: &mut App) {
     if !app.shop_state.entitlements().has_pet_companion() {
         return;
     }
-    app.pet_state.note_petted(std::time::Instant::now());
+    app.pet_state
+        .pet(std::time::Instant::now(), chrono::Utc::now().date_naive());
 }
 
 /// The tank's free daily meal, from any surface that shows it. Ownership is

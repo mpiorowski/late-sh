@@ -162,6 +162,8 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         | ActivityKind::AquariumSproutRooted { .. }
         | ActivityKind::AquariumSproutCut
         | ActivityKind::AquariumSproutWithered => false,
+        // And for the pet: a click is the owner's gesture, not news.
+        ActivityKind::PetPetted => false,
     }
 }
 
@@ -251,6 +253,7 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
         | ActivityKind::AquariumSproutRooted { .. }
         | ActivityKind::AquariumSproutCut
         | ActivityKind::AquariumSproutWithered
+        | ActivityKind::PetPetted
         | ActivityKind::UsernameEffectApplied { .. }
         | ActivityKind::BadgeRented { .. }
         | ActivityKind::TitleApplied { .. }

@@ -123,6 +123,9 @@ chip_moves!(
     /// The flat bonus for the first aquarium feeding of the day. Same
     /// `source_ref` story as [`ChipMove::PetFed`].
     AquariumFed,
+    /// The flat bonus for the first pet of the day (a click on the pet).
+    /// Same `source_ref` story as [`ChipMove::PetFed`].
+    PetPetted,
     /// Post-settlement top-up back to [`CHIP_FLOOR`]. Has its own write path
     /// ([`UserChips::restore_floor`]), never goes through [`UserChips::apply`].
     /// `source_ref` is the round or hand id whose settlement emptied the
@@ -249,6 +252,7 @@ impl ChipMove {
             Self::BonsaiWatered => "bonsai_watered",
             Self::PetFed => "pet_fed",
             Self::AquariumFed => "aquarium_fed",
+            Self::PetPetted => "pet_petted",
             Self::FloorRestore => "floor_restore",
             Self::GiftSent => "chip_gift_sent",
             Self::GiftReceived => "chip_gift_received",
@@ -305,7 +309,7 @@ impl ChipMove {
             Self::GiftSent | Self::GiftReceived | Self::InitialBalance => "users",
             Self::SsnakeArenaEarned | Self::SsnakeArenaLost => "ssnake_visits",
             Self::BonsaiWatered => "bonsai_trees",
-            Self::PetFed => "pet_companions",
+            Self::PetFed | Self::PetPetted => "pet_companions",
             Self::AquariumFed => "user_aquarium_care",
             Self::GildSent | Self::GildReceived => "chat_message_gilds",
             Self::CrownTaken => "crown_reigns",
@@ -353,6 +357,7 @@ impl ChipMove {
             | Self::BonsaiWatered
             | Self::PetFed
             | Self::AquariumFed
+            | Self::PetPetted
             | Self::GiftReceived
             | Self::InitialBalance
             | Self::GildReceived
@@ -437,6 +442,7 @@ impl ChipMove {
             Self::BonsaiWatered
             | Self::PetFed
             | Self::AquariumFed
+            | Self::PetPetted
             | Self::GildReceived
             | Self::PotWon
             | Self::NewsShared

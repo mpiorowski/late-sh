@@ -19,7 +19,6 @@ use uuid::Uuid;
 use super::{
     bigclock,
     layout::{self, BONSAI_STATUS_ROWS, FLOOR_ROWS},
-    pulse,
     rows::{Headline, InboxRow},
     state::{BorderKind, TileKind, ZenState},
 };
@@ -75,8 +74,6 @@ pub(crate) struct ZenView<'a> {
     pub clock: &'a str,
     pub date: String,
     pub online_count: usize,
-    pub friends: &'a [String],
-    pub status: Option<crate::app::common::status::Status>,
     pub mentions_unread: i64,
     /// Daily correspondence games for the lobby tile, and whether the lobby
     /// label glows (your turn somewhere, or a result waiting).
@@ -87,8 +84,9 @@ pub(crate) struct ZenView<'a> {
     pub active_friends: &'a [ActiveFriend],
     /// Per-peer `/status` badges, for the Friends tile.
     pub peer_statuses: &'a HashMap<Uuid, String>,
-    /// The last day of headcounts, oldest first (`pulse.rs`).
-    pub pulse: &'a [Option<u16>],
+    /// The viewer's chips and today's care, for the Pulse tile.
+    pub chip_balance: i64,
+    pub care: Care,
     /// Built only while an Inbox or Headlines tile is on the page.
     pub inbox: Vec<InboxRow>,
     pub headlines: Vec<Headline>,
@@ -145,9 +143,7 @@ pub(crate) fn draw_rice(
             | TileKind::Pet
             | TileKind::Music
             | TileKind::Clock
-            | TileKind::Visualizer
-            | TileKind::Presence
-            | TileKind::Lobby
+            | TileKind::Visualizer            | TileKind::Lobby
             | TileKind::Activity
             | TileKind::Friends
             | TileKind::Pulse
@@ -164,9 +160,7 @@ pub(crate) fn draw_rice(
                 | TileKind::Pet
                 | TileKind::Music
                 | TileKind::Clock
-                | TileKind::Visualizer
-                | TileKind::Presence
-                | TileKind::Lobby
+                | TileKind::Visualizer                | TileKind::Lobby
                 | TileKind::Activity
                 | TileKind::Friends
                 | TileKind::Pulse
@@ -188,9 +182,7 @@ pub(crate) fn draw_rice(
             | TileKind::Pet
             | TileKind::Music
             | TileKind::Clock
-            | TileKind::Visualizer
-            | TileKind::Presence
-            | TileKind::Lobby
+            | TileKind::Visualizer            | TileKind::Lobby
             | TileKind::Activity
             | TileKind::Friends
             | TileKind::Pulse
@@ -230,7 +222,6 @@ pub(crate) fn draw_rice(
             TileKind::Visualizer => {
                 draw_visualizer_tile(frame, inner, view.wall_tick, view.eq_state)
             }
-            TileKind::Presence => draw_presence_tile(frame, inner, &view),
             TileKind::Lobby => draw_lobby_tile(frame, inner, view.daily, view.lobby_glow),
             TileKind::Activity => {
                 draw_activity_tile(frame, inner, view.activity, view.active_friends)
@@ -238,7 +229,17 @@ pub(crate) fn draw_rice(
             TileKind::Friends => {
                 draw_friends_tile(frame, inner, view.active_friends, view.peer_statuses)
             }
-            TileKind::Pulse => draw_pulse_tile(frame, inner, view.pulse, view.online_count),
+            TileKind::Pulse => draw_pulse_tile(
+                frame,
+                inner,
+                &PulseView {
+                    online: view.online_count,
+                    chips: view.chip_balance,
+                    mentions: view.mentions_unread,
+                    friends: view.active_friends.len(),
+                    care: view.care,
+                },
+            ),
             TileKind::Inbox => {
                 draw_inbox_tile(frame, inner, &view.inbox, zen.inbox_selected, focused)
             }
@@ -355,9 +356,7 @@ fn tile_keys(kind: TileKind, view: &ZenView<'_>) -> &'static [(&'static str, &'s
         TileKind::Lobby => &[("ctrl+g", "open"), ("`", "toggle")],
         TileKind::Inbox => &[("jk", "pick"), ("enter", "open")],
         TileKind::Clock
-        | TileKind::Visualizer
-        | TileKind::Presence
-        | TileKind::Activity
+        | TileKind::Visualizer        | TileKind::Activity
         | TileKind::Friends
         | TileKind::Pulse
         | TileKind::Headlines => &[],
@@ -789,7 +788,7 @@ fn draw_clock_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {
         lines.push(Line::from(""));
         lines.push(
             Line::from(Span::styled(
-                format!("{} · {} online", view.date, view.online_count),
+                view.date.clone(),
                 Style::default().fg(theme::TEXT_DIM()),
             ))
             .centered(),
@@ -820,59 +819,6 @@ fn draw_visualizer_tile(frame: &mut Frame, area: Rect, wall_tick: usize, eq_stat
     };
     let lines = dance_lines(dance, wall_tick, area.width as usize, area.height as usize);
     frame.render_widget(Paragraph::new(lines), area);
-}
-
-fn draw_presence_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled(
-                view.online_count.to_string(),
-                Style::default()
-                    .fg(theme::AMBER_GLOW())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" online", dim),
-        ])
-        .centered(),
-    ];
-    if !view.friends.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(
-            Line::from(Span::styled(
-                view.friends.join(" · "),
-                Style::default().fg(theme::SUCCESS()),
-            ))
-            .centered(),
-        );
-    }
-    if let Some(status) = view.status {
-        lines.push(Line::from(""));
-        lines.push(
-            Line::from(Span::styled(
-                format!("{} {}", status.glyph(), status.word()),
-                Style::default().fg(theme::AMBER()),
-            ))
-            .centered(),
-        );
-    }
-    if view.mentions_unread > 0 {
-        lines.push(Line::from(""));
-        lines.push(
-            Line::from(Span::styled(
-                format!("@{} unread", view.mentions_unread),
-                Style::default().fg(theme::MENTION()),
-            ))
-            .centered(),
-        );
-    }
-    let top_pad = (area.height as usize).saturating_sub(lines.len()) / 2;
-    let mut padded = Vec::with_capacity(top_pad + lines.len());
-    for _ in 0..top_pad {
-        padded.push(Line::from(""));
-    }
-    padded.append(&mut lines);
-    frame.render_widget(Paragraph::new(padded), area);
 }
 
 /// The #lounge activity feed as a list: newest on top, one event a row with
@@ -983,57 +929,111 @@ fn compact_elapsed(elapsed: Duration) -> String {
     }
 }
 
-const PULSE_BLOCKS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+/// What the Pulse tile draws.
+pub(crate) struct PulseView {
+    pub online: usize,
+    pub chips: i64,
+    pub mentions: i64,
+    pub friends: usize,
+    pub care: Care,
+}
 
-/// The last day of headcounts as bars across the tile, oldest on the left,
-/// scaled to the day's peak; an unsampled stretch (the server was down)
-/// shows as dots on the floor. The bottom row names the span and the peak.
-fn draw_pulse_tile(frame: &mut Frame, area: Rect, series: &[Option<u16>], online_now: usize) {
-    if area.height < 2 || area.width < 8 {
-        return;
+/// Today's care for one companion: tended, still due, or not owned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Chore {
+    Done,
+    Due,
+    NotOwned,
+}
+
+impl Chore {
+    pub(crate) fn of(owned: bool, done_today: bool) -> Self {
+        match (owned, done_today) {
+            (false, _) => Chore::NotOwned,
+            (true, true) => Chore::Done,
+            (true, false) => Chore::Due,
+        }
     }
-    let width = area.width as usize;
-    let bar_rows = (area.height - 1) as usize;
-    let columns = pulse::columns(series, width);
-    let day_peak = columns.iter().flatten().copied().max();
-    let scale = day_peak.unwrap_or(0).max(1) as usize;
-    let max_level = bar_rows * (PULSE_BLOCKS.len() - 1);
-    let mut lines: Vec<Line<'static>> = (0..bar_rows)
-        .map(|row| {
-            let floor = (bar_rows - 1 - row) * (PULSE_BLOCKS.len() - 1);
-            let bottom = row == bar_rows - 1;
-            let text: String = columns
-                .iter()
-                .map(|column| match column {
-                    Some(value) => {
-                        let level = (*value as usize * max_level).div_ceil(scale);
-                        PULSE_BLOCKS[level.saturating_sub(floor).min(PULSE_BLOCKS.len() - 1)]
-                    }
-                    None if bottom => '·',
-                    None => ' ',
-                })
-                .collect();
-            let color = if row * 4 < bar_rows {
-                theme::AMBER_GLOW()
-            } else {
-                theme::AMBER()
-            };
-            Line::from(Span::styled(text, Style::default().fg(color)))
-        })
-        .collect();
-    let summary = match day_peak {
-        Some(peak) => format!("peak {peak} · {online_now} now"),
-        None => format!("{online_now} now"),
+}
+
+/// The three once-a-day chores Pulse's care row names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Care {
+    pub bonsai: Chore,
+    pub tank: Chore,
+    pub pet: Chore,
+}
+
+/// The numbers worth a glance, one `label  value` row each and every row
+/// always drawn, zero included: people online, your chips, unread mentions
+/// (the mention color once there are some), friends online, and today's
+/// care, each companion green once tended, amber while due, faint when not
+/// owned. A short tile keeps the top rows; the block sits centered.
+fn draw_pulse_tile(frame: &mut Frame, area: Rect, pulse: &PulseView) {
+    use crate::app::common::primitives::thousands;
+
+    let bright = Style::default()
+        .fg(theme::AMBER_GLOW())
+        .add_modifier(Modifier::BOLD);
+    let mentions_style = if pulse.mentions > 0 {
+        Style::default()
+            .fg(theme::MENTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
     };
-    lines.push(stamped_row(
-        vec![Span::styled(
-            "24h",
-            Style::default().fg(theme::TEXT_FAINT()),
-        )],
-        summary,
-        width,
-    ));
+    let chore = |name: &'static str, chore: Chore| {
+        let color = match chore {
+            Chore::Done => theme::SUCCESS(),
+            Chore::Due => theme::AMBER(),
+            Chore::NotOwned => theme::TEXT_FAINT(),
+        };
+        Span::styled(name, Style::default().fg(color))
+    };
+    let rows: [(&str, Vec<Span<'static>>); 5] = [
+        ("online", vec![Span::styled(pulse.online.to_string(), bright)]),
+        ("chips", vec![Span::styled(thousands(pulse.chips), bright)]),
+        (
+            "mentions",
+            vec![Span::styled(pulse.mentions.to_string(), mentions_style)],
+        ),
+        ("friends", vec![Span::styled(pulse.friends.to_string(), bright)]),
+        (
+            "care",
+            vec![
+                chore("bonsai", pulse.care.bonsai),
+                Span::raw(" "),
+                chore("tank", pulse.care.tank),
+                Span::raw(" "),
+                chore("pet", pulse.care.pet),
+            ],
+        ),
+    ];
+
+    let width = area.width as usize;
+    let height = area.height as usize;
+    let top_pad = height.saturating_sub(rows.len()) / 2;
+    let mut lines: Vec<Line<'static>> = vec![Line::from(""); top_pad];
+    lines.extend(
+        rows.into_iter()
+            .take(height)
+            .map(|(label, value)| stat_row(label, value, width)),
+    );
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// `label` dim on the left, `value` flush right; the label gives way first
+/// when the tile is too narrow for both.
+fn stat_row(label: &str, value: Vec<Span<'static>>, width: usize) -> Line<'static> {
+    let value_width: usize = value.iter().map(|span| span.content.width()).sum();
+    let label = fit(label, width.saturating_sub(value_width + 1));
+    let pad = width.saturating_sub(label.width() + value_width);
+    let mut spans = vec![
+        Span::styled(label, Style::default().fg(theme::TEXT_DIM())),
+        Span::raw(" ".repeat(pad)),
+    ];
+    spans.extend(value);
+    Line::from(spans)
 }
 
 /// Unread DMs, then mentions. The focused tile marks its selected row;
@@ -1120,28 +1120,33 @@ fn draw_inbox_tile(
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// News articles and the viewer's RSS entries, newest first.
+/// News articles and the viewer's RSS entries, newest first, two rows each:
+/// the title with its source and age, then the link.
 fn draw_headlines_tile(frame: &mut Frame, area: Rect, rows: &[Headline]) {
     if rows.is_empty() {
         draw_centered_note(frame, area, &["no headlines yet", "News and your RSS feeds land here"]);
         return;
     }
     let width = area.width as usize;
+    let faint = Style::default().fg(theme::TEXT_FAINT());
     let lines: Vec<Line<'static>> = rows
         .iter()
-        .take(area.height as usize)
-        .map(|row| {
-            stamped_row(
-                vec![
-                    Span::styled(row.title.clone(), Style::default().fg(theme::TEXT())),
-                    Span::styled(
-                        format!(" · {}", row.source),
-                        Style::default().fg(theme::TEXT_FAINT()),
-                    ),
-                ],
-                format_relative_time_short(row.at),
-                width,
-            )
+        .take((area.height as usize).div_ceil(2))
+        .flat_map(|row| {
+            [
+                stamped_row(
+                    vec![
+                        Span::styled(row.title.clone(), Style::default().fg(theme::TEXT())),
+                        Span::styled(format!(" · {}", row.source), faint),
+                    ],
+                    format_relative_time_short(row.at),
+                    width,
+                ),
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(fit(&row.url, width.saturating_sub(2)), faint),
+                ]),
+            ]
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), area);

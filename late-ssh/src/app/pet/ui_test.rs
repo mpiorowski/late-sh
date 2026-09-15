@@ -280,7 +280,10 @@ fn draw_at(
 async fn an_awake_pet_roams_the_whole_box_and_a_watching_one_sits_at_the_glass() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "pet-roams-box").await;
-    let svc = crate::app::pet::svc::PetService::new(test_db.db.clone());
+    let svc = crate::app::pet::svc::PetService::new(
+        test_db.db.clone(),
+        tokio::sync::broadcast::channel::<crate::app::activity::event::ActivityEvent>(16).0,
+    );
     let pet = svc.ensure_pet(user.id).await.expect("ensure pet");
     let mut state = PetState::new(user.id, svc, pet);
     let area = Rect::new(0, 0, 60, 12);
@@ -342,7 +345,10 @@ async fn an_awake_pet_roams_the_whole_box_and_a_watching_one_sits_at_the_glass()
 async fn every_species_draws_inside_the_same_eight_columns() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "pet-species-art").await;
-    let svc = crate::app::pet::svc::PetService::new(test_db.db.clone());
+    let svc = crate::app::pet::svc::PetService::new(
+        test_db.db.clone(),
+        tokio::sync::broadcast::channel::<crate::app::activity::event::ActivityEvent>(16).0,
+    );
     let pet = svc.ensure_pet(user.id).await.expect("ensure pet");
     let mut state = PetState::new(user.id, svc, pet);
     let area = Rect::new(0, 0, 20, 3);

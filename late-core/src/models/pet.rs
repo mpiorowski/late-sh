@@ -1,6 +1,6 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc};
-use tokio_postgres::Client;
+use chrono::{DateTime, NaiveDate, Utc};
+use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
 // `species` is one of [`PetSpecies`] and `mood` one of [`PetMood`], both as
@@ -20,6 +20,8 @@ crate::user_scoped_model! {
         pub species: String,
         pub mood: String,
         pub mood_since: DateTime<Utc>,
+        // The last UTC day the owner petted it: the daily chip gate.
+        pub last_petted: Option<NaiveDate>,
     }
 }
 
@@ -264,6 +266,25 @@ impl PetCompanion {
             )
             .await?;
         Ok(())
+    }
+
+    /// Stamp today's petting. `true` only for the first pet of the UTC day:
+    /// the one witness the daily chip bonus needs, atomic however many
+    /// sessions or clicks race for it.
+    pub async fn pet_day(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        today: NaiveDate,
+    ) -> Result<bool> {
+        let updated = client
+            .execute(
+                "UPDATE pet_companions
+                 SET last_petted = $2, updated = current_timestamp
+                 WHERE user_id = $1 AND last_petted IS DISTINCT FROM $2",
+                &[&user_id, &today],
+            )
+            .await?;
+        Ok(updated == 1)
     }
 
     /// Record the mood the owner's session inferred. `mood_since` only moves

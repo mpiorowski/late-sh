@@ -7,8 +7,6 @@
 pub mod bigclock;
 pub mod input;
 pub mod layout;
-pub mod pulse;
 pub mod rows;
 pub mod state;
-pub mod svc;
 pub mod ui;

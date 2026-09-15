@@ -823,14 +823,6 @@ impl App {
                 self.active_friends = active_friends;
                 changed = true;
             }
-            if let Some(pulse) = &self.pulse {
-                let series =
-                    late_core::MutexRecover::lock_recover(pulse.as_ref()).series(chrono::Utc::now());
-                if series != self.zen_pulse {
-                    self.zen_pulse = series;
-                    changed = true;
-                }
-            }
             // Mentions load only when asked for. An Inbox tile on the page
             // asks whenever the unread count moves, so a new mention lands.
             if self.screen == crate::app::common::primitives::Screen::Zen
@@ -1082,6 +1074,13 @@ impl App {
                         Some(crate::app::common::primitives::Banner::success(&format!(
                             "Fed the tank (+{} chips)",
                             crate::app::hub::aquarium::svc::FEED_CHIP_BONUS
+                        )))
+                    }
+                    // And for the pet: the first pet of the day paid.
+                    ActivityKind::PetPetted if user_id == self.user_id => {
+                        Some(crate::app::common::primitives::Banner::success(&format!(
+                            "Petted (+{} chips)",
+                            crate::app::pet::svc::PET_CHIP_BONUS
                         )))
                     }
                     // The streak's fry: the sim learns which species to draw

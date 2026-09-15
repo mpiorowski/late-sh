@@ -401,9 +401,6 @@ pub struct SessionConfig {
     /// Live `/status` presence, shared process-wide (snapshot-swap; see
     /// `common/status.rs`).
     pub status_directory: Option<StatusDirectory>,
-    /// The day of headcounts the Zen Pulse tile draws, shared process-wide
-    /// (`zen/svc.rs`). `None` in test harnesses; the tile then reads empty.
-    pub pulse: Option<crate::app::zen::svc::SharedPulse>,
     /// The crown, `/crown` and `/crown take`. `None` in test harnesses that
     /// build an app without one; the glyph then simply never appears.
     pub crown_service: Option<crate::app::crown::svc::CrownService>,
@@ -561,10 +558,6 @@ pub struct App {
     pub(crate) active_friend_names: Vec<String>,
     /// The same friends with what the Zen Friends tile shows beside them.
     pub(crate) active_friends: Vec<crate::app::chat::state::ActiveFriend>,
-    /// The process-shared day of headcounts, copied on the same ~1s edge
-    /// into `zen_pulse` so the Pulse tile never locks it.
-    pub(super) pulse: Option<crate::app::zen::svc::SharedPulse>,
-    pub(crate) zen_pulse: Vec<Option<u16>>,
     /// The unread mention count the mentions list was last requested at
     /// while an Inbox tile is on the Zen page (the list loads only on ask).
     pub(super) zen_inbox_listed_unread: Option<i64>,
@@ -1283,6 +1276,7 @@ impl App {
                     species: late_core::models::pet::PetSpecies::Cat.as_str().to_string(),
                     mood: late_core::models::pet::PetMood::Asleep.as_str().to_string(),
                     mood_since: chrono::Utc::now(),
+                    last_petted: None,
                 },
             )
         };
@@ -1446,8 +1440,6 @@ impl App {
                 .unwrap_or(0),
             active_friend_names: Vec::new(),
             active_friends: Vec::new(),
-            pulse: config.pulse,
-            zen_pulse: Vec::new(),
             zen_inbox_listed_unread: None,
             last_sidebar_clock: String::new(),
             chat_ctx_epoch: 0,

@@ -79,25 +79,35 @@ fn a_deep_column_split_moves_one_row_and_a_row_only_tree_has_no_height() {
 }
 
 #[test]
-fn shares_stay_inside_their_bounds() {
-    let area = Rect::new(0, 0, 100, 30);
+fn a_tile_shrinks_to_a_border_and_one_row_and_never_past_it() {
+    let area = Rect::new(0, 0, 100, 40);
     let mut root = Node::split(
-        Dir::Row,
-        MAX_SHARE,
-        Node::leaf(TileKind::Bonsai),
+        Dir::Column,
+        500,
+        Node::leaf(TileKind::Clock),
         Node::leaf(TileKind::Chat),
     );
-    let before = widths(&root, area, 0);
-    assert!(root.resize_leaf(0, Dir::Row, 1, area, 0));
+    for _ in 0..40 {
+        assert!(root.resize_leaf(0, Dir::Column, -1, area, 0));
+    }
     assert_eq!(
-        widths(&root, area, 0),
-        before,
-        "already at the widest share"
+        heights(&root, area, 0),
+        vec![MIN_TILE_CELLS, 40 - MIN_TILE_CELLS],
+        "the clock keeps its border and one row"
     );
-    let Node::Split { share, .. } = root else {
-        unreachable!()
-    };
-    assert_eq!(share, MAX_SHARE);
+    for _ in 0..80 {
+        assert!(root.resize_leaf(0, Dir::Column, 1, area, 0));
+    }
+    assert_eq!(
+        heights(&root, area, 0),
+        vec![40 - MIN_TILE_CELLS, MIN_TILE_CELLS],
+        "and the chat below keeps the same when the clock grows"
+    );
+
+    // A split too small for two floors splits evenly instead of panicking.
+    let tiny = Rect::new(0, 0, 100, 4);
+    assert!(root.resize_leaf(0, Dir::Column, 1, tiny, 0));
+    assert_eq!(heights(&root, tiny, 0), vec![2, 2]);
 }
 
 #[test]
@@ -155,6 +165,17 @@ fn a_chat_tile_keeps_its_room_through_the_stored_json_and_old_layouts_still_read
     });
     let old = RiceLayout::from_json(Some(&old));
     assert_eq!(old.root.leaf_rooms(), vec![None]);
+
+    // The retired presence tile reads as Pulse, not as an unreadable row
+    // that would reset the whole page to the default.
+    let retired = serde_json::json!({
+        "root": { "node": "leaf", "kind": "presence" },
+        "look": { "border": "rounded", "gap": 0, "titles": true }
+    });
+    assert_eq!(
+        RiceLayout::from_json(Some(&retired)).root.leaf_kinds(),
+        vec![TileKind::Pulse]
+    );
 
     // Leaving chat forgets the room, so coming back lands on the current one.
     zen.open_kind_picker();

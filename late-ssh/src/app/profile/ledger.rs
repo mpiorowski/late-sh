@@ -188,6 +188,7 @@ const fn pointer(mv: ChipMove) -> Pointer {
         | ChipMove::BonsaiWatered
         | ChipMove::PetFed
         | ChipMove::AquariumFed
+        | ChipMove::PetPetted
         | ChipMove::FloorRestore
         | ChipMove::InitialBalance
         | ChipMove::SsnakeArenaEarned

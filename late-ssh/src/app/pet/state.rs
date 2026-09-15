@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use late_core::models::pet::{
     LifeStage, PetCompanion, PetMood, PetSpecies, pet_age_anchor, pet_age_label,
 };
@@ -137,6 +137,10 @@ pub struct PetState {
     /// When the user unlocked the companion. Drives the life-stage buckets
     /// for purchased pets.
     pub adopted_at: Option<DateTime<Utc>>,
+    /// The last UTC day this account petted it, from the row and then from
+    /// this session's clicks: the care row reads it, and a second click the
+    /// same day does not ask the service again.
+    pub last_petted: Option<NaiveDate>,
 
     pub signals: MoodSignals,
     mood: PetMood,
@@ -155,6 +159,7 @@ impl PetState {
             species,
             created: companion.created,
             adopted_at: companion.adopted_at,
+            last_petted: companion.last_petted,
             signals: MoodSignals::default(),
             // The mood the row holds (`asleep` after the last session left):
             // the first tick reads the real thing and, since it differs,
@@ -206,6 +211,22 @@ impl PetState {
 
     pub fn note_petted(&mut self, now: Instant) {
         self.signals.petted = Some(now);
+    }
+
+    /// A click on the pet: it always purrs, and the first click of the UTC
+    /// day asks the service for the daily chips. The service's gate decides
+    /// the payout; this only saves asking twice from one session.
+    pub fn pet(&mut self, now: Instant, today: NaiveDate) {
+        self.note_petted(now);
+        if self.petted_on(today) {
+            return;
+        }
+        self.last_petted = Some(today);
+        self.svc.pet_task(self.user_id);
+    }
+
+    pub fn petted_on(&self, today: NaiveDate) -> bool {
+        self.last_petted == Some(today)
     }
 
     pub fn note_win(&mut self, now: Instant) {

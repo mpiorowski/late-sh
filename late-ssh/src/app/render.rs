@@ -336,7 +336,6 @@ struct DrawContext<'a> {
     selected_icecast_stream: late_core::models::user::IcecastStream,
     selected_radio_station: late_core::models::user::RadioStation,
     radio_now_playing: Option<&'a str>,
-    status: Option<crate::app::common::status::Status>,
     /// Humans currently connected (bots excluded) plus connected friends,
     /// for the sidebar's pinned presence rows.
     online_count: usize,
@@ -370,7 +369,7 @@ struct DrawContext<'a> {
     zen_date: String,
     zen_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     zen_active_friends: &'a [crate::app::chat::state::ActiveFriend],
-    zen_pulse: &'a [Option<u16>],
+    zen_care: crate::app::zen::ui::Care,
     zen_peer_statuses: &'a std::collections::HashMap<uuid::Uuid, String>,
 }
 
@@ -1076,6 +1075,21 @@ impl App {
             radio_now_playing.as_deref(),
         );
         let zen_date = zen_date_text(self.profile_state.profile().timezone.as_deref());
+        let care_day = chrono::Utc::now().date_naive();
+        let zen_care = crate::app::zen::ui::Care {
+            bonsai: crate::app::zen::ui::Chore::of(
+                true,
+                self.bonsai_state.last_watered == Some(care_day),
+            ),
+            tank: crate::app::zen::ui::Chore::of(
+                self.shop_state.entitlements().has_aquarium(),
+                self.aquarium_care.fed_on_day(care_day),
+            ),
+            pet: crate::app::zen::ui::Chore::of(
+                self.shop_state.entitlements().has_pet_companion(),
+                self.pet_state.petted_on(care_day),
+            ),
+        };
         let zen_pet_strip = self
             .shop_state
             .entitlements()
@@ -1360,7 +1374,6 @@ impl App {
                         selected_icecast_stream,
                         selected_radio_station,
                         radio_now_playing: radio_now_playing.as_deref(),
-                        status: self.status.map(|status| status.status),
                         online_count,
                         active_friend_names,
                         marquee_tick: self.marquee_tick,
@@ -1384,7 +1397,7 @@ impl App {
                         zen_date,
                         zen_pet_strip,
                         zen_active_friends: &self.active_friends,
-                        zen_pulse: &self.zen_pulse,
+                        zen_care,
                         zen_peer_statuses: &self.peer_statuses,
                     },
                     &mut terminal_image_frame,
@@ -1868,15 +1881,14 @@ impl App {
                     clock: ctx.sidebar_clock,
                     date: ctx.zen_date.clone(),
                     online_count: ctx.online_count,
-                    friends: ctx.active_friend_names,
-                    status: ctx.status,
                     mentions_unread: ctx.mentions_unread_count,
                     daily: ctx.daily,
                     lobby_glow: ctx.lobby.glow(),
                     activity: ctx.chat_state.activity_ticker(),
                     active_friends: ctx.zen_active_friends,
                     peer_statuses: ctx.zen_peer_statuses,
-                    pulse: ctx.zen_pulse,
+                    chip_balance: ctx.chip_balance,
+                    care: ctx.zen_care,
                     inbox: if ctx.zen.shows(crate::app::zen::state::TileKind::Inbox) {
                         crate::app::zen::rows::inbox_rows(
                             ctx.user_id,

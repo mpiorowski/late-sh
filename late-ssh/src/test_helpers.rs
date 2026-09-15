@@ -277,7 +277,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let solitaire_service = SolitaireService::new(db.clone(), activity_tx.clone());
     let minesweeper_service = MinesweeperService::new(db.clone(), activity_tx.clone());
     let bonsai_service = BonsaiService::new(db.clone(), activity_tx.clone());
-    let pet_service = PetService::new(db.clone());
+    let pet_service = PetService::new(db.clone(), activity_tx.clone());
     let aquarium_service =
         crate::app::hub::aquarium::svc::AquariumService::new(db.clone(), activity_tx.clone());
     let dartboard_server = crate::dartboard::spawn_server();
@@ -305,7 +305,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         username_directory,
         flair_directory: crate::app::common::username_effect::new_directory(),
         status_directory: crate::app::common::status::new_directory(),
-        pulse: crate::app::zen::svc::new_shared_pulse(),
         crown_service: crate::app::crown::svc::CrownService::new(db.clone()),
         pot_service: crate::app::pot::svc::PotService::new(db.clone()),
         config,
@@ -597,7 +596,7 @@ fn make_app_with_chat_service_and_permissions(
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
         initial_bonsai_decay_protection: None,
-        pet_service: PetService::new(db.clone()),
+        pet_service: PetService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_pet: None,
         aquarium_service: crate::app::hub::aquarium::svc::AquariumService::new(
             db.clone(),
@@ -687,7 +686,6 @@ fn make_app_with_chat_service_and_permissions(
         username_directory: None,
         flair_directory: None,
         status_directory: None,
-        pulse: None,
         crown_service: None,
         pot_service: None,
         activity_feed_rx: None,
@@ -852,7 +850,7 @@ pub fn make_app_with_paired_client(
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
         initial_bonsai_decay_protection: None,
-        pet_service: PetService::new(db.clone()),
+        pet_service: PetService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_pet: None,
         aquarium_service: crate::app::hub::aquarium::svc::AquariumService::new(
             db.clone(),
@@ -942,7 +940,6 @@ pub fn make_app_with_paired_client(
         username_directory: None,
         flair_directory: None,
         status_directory: None,
-        pulse: None,
         crown_service: None,
         pot_service: None,
         activity_feed_rx: None,

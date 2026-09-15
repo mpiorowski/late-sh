@@ -1,6 +1,9 @@
-use super::{care_bar_spans, draw_music_tile, hint_line_fitting, station_text};
+use super::{
+    Care, Chore, PulseView, care_bar_spans, draw_music_tile, draw_pulse_tile, hint_line_fitting,
+    station_text,
+};
 use crate::app::audio::viz::EqState;
-use crate::app::common::primitives::hint_line;
+use crate::app::common::{primitives::hint_line, theme};
 use crate::app::hub::aquarium::state::CareBar;
 use late_core::models::aquarium_care::CARE_DAYS;
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
@@ -51,6 +54,47 @@ fn glyphs(bar: CareBar) -> String {
         .iter()
         .map(|span| span.content.to_string())
         .collect()
+}
+
+#[test]
+fn pulse_draws_every_row_even_at_zero_and_colors_each_chore() {
+    let pulse = PulseView {
+        online: 0,
+        chips: 0,
+        mentions: 0,
+        friends: 0,
+        care: Care {
+            bonsai: Chore::Done,
+            tank: Chore::Due,
+            pet: Chore::NotOwned,
+        },
+    };
+    let (width, height) = (30u16, 5u16);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal
+        .draw(|frame| draw_pulse_tile(frame, Rect::new(0, 0, width, height), &pulse))
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..height)
+        .map(|y| {
+            let row: String = (0..width).map(|x| buffer[(x, y)].symbol()).collect();
+            row.split_whitespace().collect::<Vec<_>>().join(" ")
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            "online 0",
+            "chips 0",
+            "mentions 0",
+            "friends 0",
+            "care bonsai tank pet"
+        ]
+    );
+    // The chores sit flush right: `bonsai tank pet` is fifteen columns.
+    assert_eq!(buffer[(15, 4)].fg, theme::SUCCESS(), "a tended bonsai");
+    assert_eq!(buffer[(22, 4)].fg, theme::AMBER(), "a tank still due");
+    assert_eq!(buffer[(27, 4)].fg, theme::TEXT_FAINT(), "no pet owned");
 }
 
 #[test]

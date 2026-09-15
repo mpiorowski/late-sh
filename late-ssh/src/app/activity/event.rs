@@ -190,6 +190,8 @@ pub enum ActivityKind {
     /// A sprout left a week withered: the owner already owns the cap of
     /// plants, so nothing grew. Settled at login or on the day edge.
     AquariumSproutWithered,
+    /// The first pet of the UTC day cleared the DB chip gate.
+    PetPetted,
 }
 
 impl ActivityKind {
@@ -223,7 +225,8 @@ impl ActivityKind {
             | Self::AquariumSprouted { .. }
             | Self::AquariumSproutRooted { .. }
             | Self::AquariumSproutCut
-            | Self::AquariumSproutWithered => ActivityCategory::Companion,
+            | Self::AquariumSproutWithered
+            | Self::PetPetted => ActivityCategory::Companion,
         }
     }
 }
@@ -847,6 +850,15 @@ impl ActivityEvent {
             username,
             ActivityKind::AquariumFed,
             "fed their aquarium".to_string(),
+        )
+    }
+
+    pub fn pet_petted(user_id: Uuid, username: impl Into<String>) -> Self {
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::PetPetted,
+            "petted their pet".to_string(),
         )
     }
 
