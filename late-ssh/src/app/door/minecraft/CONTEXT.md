@@ -4,7 +4,7 @@
 - Scope: the Minecraft card in the Games hub (`late-ssh/src/app/door/minecraft`) and the server it describes (`infra/minecraft.tf`, `scripts/minecraft_whitelist_add.sh`).
 - Upstream: Paper (Minecraft Java Edition server) via the `itzg/minecraft-server` image, plus the GriefPrevention plugin from Modrinth.
 - Status: Active. Server live since 2026-09-13.
-- Last updated: 2026-09-14.
+- Last updated: 2026-09-15.
 - Parent context: `../../../../../CONTEXT.md`.
 
 ## Summary
@@ -74,6 +74,38 @@ kubectl logs deploy/minecraft | grep -E "Done \(|Rcon loop|Incorrect"
 - Runtime gamerule changes apply instantly and persist in `level.dat` on the next autosave.
 - Manifest changes ship only through `deploy_infra.yml` (an `-infra` or `-full` release, or a manual dispatch): a full Terraform apply. Nothing in this repo restarts the pod on an ordinary release.
 - `kubectl rollout restart deploy/minecraft` restarts it; with `Recreate` the server is down until the new pod passes `mc-health`, about 20 to 30 s on a warm volume.
+
+## Upgrading Minecraft
+
+A version bump converts the world in place and is one-way: an older server cannot load it. With no backup, a failed upgrade loses the world.
+
+Pending as of 2026-09-15: 26.3 (Wilderness Bound) released that day. Blocked on Paper (26.3 builds are ALPHA only) and GriefPrevention (16.18.7 lists up to 26.2).
+
+Gates, both must pass before bumping:
+
+```bash
+curl -s https://fill.papermc.io/v3/projects/paper/versions/26.3/builds | jq -r '.[0].channel'           # STABLE
+curl -s https://api.modrinth.com/v2/project/griefprevention/version | jq -r '.[0].game_versions[-1]'   # 26.3
+```
+
+- Paper: the image only takes default-channel builds and fails to boot otherwise. Never set `PAPER_CHANNEL=experimental` on this world.
+- GriefPrevention: a required Modrinth project with no build for `VERSION` fails the boot. Never mark it optional (`griefprevention?`) to get past this: the server would start with no claim protection.
+- Image: bump `minecraft_image` to the newest `itzg/minecraft-server:<date>-java25` tag in the same change.
+
+Steps:
+
+1. Back up while the old version is still running:
+   ```bash
+   kubectl exec deploy/minecraft -- rcon-cli save-off
+   kubectl exec deploy/minecraft -- rcon-cli "save-all flush"
+   kubectl exec deploy/minecraft -- tar czf - -C /data --exclude=libraries --exclude=cache --exclude=versions . > mc-<old>-backup.tgz
+   kubectl exec deploy/minecraft -- rcon-cli save-on
+   ```
+2. Bump every copy of the version: `minecraft_version` and `minecraft_image` in `infra/defaults.tf`, `VERSION` in `ui.rs`, the `Java Edition <version>` assertion in `ui_test.rs`, and the Server section here.
+3. Run the targeted tests (below); the drift test catches a missed copy.
+4. Ship as an `-infra` or `-full` release. First boot downloads Paper and converts the world, so expect minutes of downtime, not seconds.
+5. Verify: `kubectl logs deploy/minecraft | grep -E "Done \(|Incorrect|GriefPrevention"`, then `rcon-cli worldborder get` reports 6000.
+6. Announce it: clients on the old version can no longer join. New biomes and structures only generate in chunks never loaded before.
 
 ## Critical invariants
 
