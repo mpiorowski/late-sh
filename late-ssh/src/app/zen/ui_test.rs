@@ -1,7 +1,8 @@
 use super::{
-    Care, Chore, PulseView, care_bar_spans, draw_music_tile, draw_pulse_tile, hint_line_fitting,
-    station_text,
+    Care, Chore, PulseView, care_bar_spans, draw_headlines_tile, draw_music_tile, draw_pulse_tile,
+    hint_line_fitting, station_text,
 };
+use crate::app::zen::rows::Headline;
 use crate::app::audio::viz::EqState;
 use crate::app::common::{primitives::hint_line, theme};
 use crate::app::hub::aquarium::state::CareBar;
@@ -95,6 +96,69 @@ fn pulse_draws_every_row_even_at_zero_and_colors_each_chore() {
     assert_eq!(buffer[(15, 4)].fg, theme::SUCCESS(), "a tended bonsai");
     assert_eq!(buffer[(22, 4)].fg, theme::AMBER(), "a tank still due");
     assert_eq!(buffer[(27, 4)].fg, theme::TEXT_FAINT(), "no pet owned");
+
+    // On a wide tile the block keeps its width and sits centered.
+    let wide = 60u16;
+    let mut terminal = Terminal::new(TestBackend::new(wide, height)).expect("terminal");
+    terminal
+        .draw(|frame| draw_pulse_tile(frame, Rect::new(0, 0, wide, height), &pulse))
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    let first_row: String = (0..wide).map(|x| buffer[(x, 0)].symbol()).collect();
+    assert_eq!(first_row.find("online"), Some(14), "the block starts centered");
+    assert_eq!(
+        first_row.trim_end().len(),
+        46,
+        "and its value ends 32 columns later"
+    );
+}
+
+fn headlines_rows(selected: usize, focused: bool) -> Vec<String> {
+    let at = chrono::Utc::now();
+    let rows = vec![
+        Headline {
+            title: "first".to_string(),
+            source: "news · mira".to_string(),
+            url: "https://a.example".to_string(),
+            at,
+        },
+        Headline {
+            title: "second".to_string(),
+            source: "b feed".to_string(),
+            url: "https://b.example".to_string(),
+            at,
+        },
+    ];
+    let (width, height) = (40u16, 4u16);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            draw_headlines_tile(
+                frame,
+                Rect::new(0, 0, width, height),
+                &rows,
+                selected,
+                focused,
+            )
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    (0..height)
+        .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect()
+}
+
+#[test]
+fn headlines_mark_the_selected_item_only_while_focused() {
+    // The marker is one column, the tile's left padding: text starts one
+    // column in whether or not its row is the selected one.
+    let rows = headlines_rows(1, true);
+    assert!(rows[0].starts_with(" first"), "{rows:#?}");
+    assert!(rows[1].starts_with("   https://a.example"), "{rows:#?}");
+    assert!(rows[2].starts_with("▌second"), "{rows:#?}");
+
+    let unfocused = headlines_rows(1, false);
+    assert!(unfocused[2].starts_with(" second"), "{unfocused:#?}");
 }
 
 #[test]

@@ -203,6 +203,8 @@ pub(crate) fn draw_rice(
         if inner.width == 0 || inner.height == 0 {
             continue;
         }
+        // List tiles read better off the border: one column each side.
+        let padded = pad_sides(inner);
         match kind {
             TileKind::Bonsai => draw_bonsai_tile(frame, inner, view.bonsai, view.wall_tick),
             TileKind::Aquarium => {
@@ -222,16 +224,16 @@ pub(crate) fn draw_rice(
             TileKind::Visualizer => {
                 draw_visualizer_tile(frame, inner, view.wall_tick, view.eq_state)
             }
-            TileKind::Lobby => draw_lobby_tile(frame, inner, view.daily, view.lobby_glow),
+            TileKind::Lobby => draw_lobby_tile(frame, padded, view.daily, view.lobby_glow),
             TileKind::Activity => {
-                draw_activity_tile(frame, inner, view.activity, view.active_friends)
+                draw_activity_tile(frame, padded, view.activity, view.active_friends)
             }
             TileKind::Friends => {
-                draw_friends_tile(frame, inner, view.active_friends, view.peer_statuses)
+                draw_friends_tile(frame, padded, view.active_friends, view.peer_statuses)
             }
             TileKind::Pulse => draw_pulse_tile(
                 frame,
-                inner,
+                padded,
                 &PulseView {
                     online: view.online_count,
                     chips: view.chip_balance,
@@ -241,9 +243,15 @@ pub(crate) fn draw_rice(
                 },
             ),
             TileKind::Inbox => {
-                draw_inbox_tile(frame, inner, &view.inbox, zen.inbox_selected, focused)
+                draw_inbox_tile(frame, pad_right(inner), &view.inbox, zen.inbox_selected, focused)
             }
-            TileKind::Headlines => draw_headlines_tile(frame, inner, &view.headlines),
+            TileKind::Headlines => draw_headlines_tile(
+                frame,
+                pad_right(inner),
+                &view.headlines,
+                zen.headlines_selected,
+                focused,
+            ),
             TileKind::Blank => draw_blank_tile(frame, inner, focused),
         }
     }
@@ -355,11 +363,11 @@ fn tile_keys(kind: TileKind, view: &ZenView<'_>) -> &'static [(&'static str, &'s
         ],
         TileKind::Lobby => &[("ctrl+g", "open"), ("`", "toggle")],
         TileKind::Inbox => &[("jk", "pick"), ("enter", "open")],
+        TileKind::Headlines => &[("jk", "pick"), ("enter", "copy")],
         TileKind::Clock
         | TileKind::Visualizer        | TileKind::Activity
         | TileKind::Friends
-        | TileKind::Pulse
-        | TileKind::Headlines => &[],
+        | TileKind::Pulse => &[],
         TileKind::Blank => &[],
     }
 }
@@ -1010,16 +1018,46 @@ fn draw_pulse_tile(frame: &mut Frame, area: Rect, pulse: &PulseView) {
         ),
     ];
 
-    let width = area.width as usize;
+    // A wide tile keeps the block narrow and centered, so every label stays
+    // within reach of its value.
+    let width = area.width.min(PULSE_MAX_WIDTH);
+    let block = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y,
+        width,
+        area.height,
+    );
     let height = area.height as usize;
     let top_pad = height.saturating_sub(rows.len()) / 2;
     let mut lines: Vec<Line<'static>> = vec![Line::from(""); top_pad];
     lines.extend(
         rows.into_iter()
             .take(height)
-            .map(|(label, value)| stat_row(label, value, width)),
+            .map(|(label, value)| stat_row(label, value, width as usize)),
     );
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines), block);
+}
+
+/// The widest the Pulse block grows: past this a label drifts too far
+/// from its value to read as one row.
+const PULSE_MAX_WIDTH: u16 = 32;
+
+/// `area` less one column on each side, when it has columns to spare.
+fn pad_sides(area: Rect) -> Rect {
+    if area.width <= 2 {
+        return area;
+    }
+    Rect::new(area.x + 1, area.y, area.width - 2, area.height)
+}
+
+/// `area` less its last column. For the selectable lists (Inbox,
+/// Headlines): their one-column row marker is the left padding, so the
+/// text still sits one column in and the selection bar has a place to go.
+fn pad_right(area: Rect) -> Rect {
+    if area.width <= 1 {
+        return area;
+    }
+    Rect::new(area.x, area.y, area.width - 1, area.height)
 }
 
 /// `label` dim on the left, `value` flush right; the label gives way first
@@ -1062,7 +1100,7 @@ fn draw_inbox_tile(
         .take(visible)
         .map(|(index, row)| {
             let marked = focused && index == selected;
-            let marker = Span::styled(if marked { "▌ " } else { "  " }, amber);
+            let marker = Span::styled(if marked { "▌" } else { " " }, amber);
             let emphasis = |style: Style| {
                 if marked {
                     style.add_modifier(Modifier::BOLD)
@@ -1121,30 +1159,54 @@ fn draw_inbox_tile(
 }
 
 /// News articles and the viewer's RSS entries, newest first, two rows each:
-/// the title with its source and age, then the link.
-fn draw_headlines_tile(frame: &mut Frame, area: Rect, rows: &[Headline]) {
+/// the title with its source and age, then the link. The focused tile marks
+/// its selected item and scrolls to keep it in view; Enter copies the link
+/// (`input.rs`).
+fn draw_headlines_tile(
+    frame: &mut Frame,
+    area: Rect,
+    rows: &[Headline],
+    selected: usize,
+    focused: bool,
+) {
     if rows.is_empty() {
         draw_centered_note(frame, area, &["no headlines yet", "News and your RSS feeds land here"]);
         return;
     }
     let width = area.width as usize;
     let faint = Style::default().fg(theme::TEXT_FAINT());
+    let amber = Style::default().fg(theme::AMBER());
+    let visible = (area.height as usize).div_ceil(2);
+    let selected = selected.min(rows.len() - 1);
+    let first = (selected + 1).saturating_sub(visible);
     let lines: Vec<Line<'static>> = rows
         .iter()
-        .take((area.height as usize).div_ceil(2))
-        .flat_map(|row| {
+        .enumerate()
+        .skip(first)
+        .take(visible)
+        .flat_map(|(index, row)| {
+            let marked = focused && index == selected;
+            let marker = if marked { "▌" } else { " " };
+            let title_style = if marked {
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::TEXT())
+            };
             [
                 stamped_row(
                     vec![
-                        Span::styled(row.title.clone(), Style::default().fg(theme::TEXT())),
+                        Span::styled(marker, amber),
+                        Span::styled(row.title.clone(), title_style),
                         Span::styled(format!(" · {}", row.source), faint),
                     ],
                     format_relative_time_short(row.at),
                     width,
                 ),
                 Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(fit(&row.url, width.saturating_sub(2)), faint),
+                    Span::raw("   "),
+                    Span::styled(fit(&row.url, width.saturating_sub(3)), faint),
                 ]),
             ]
         })

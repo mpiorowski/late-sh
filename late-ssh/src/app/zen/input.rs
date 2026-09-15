@@ -45,6 +45,9 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
     if app.zen.focused_kind() == Some(TileKind::Inbox) && handle_inbox(app, byte) {
         return true;
     }
+    if app.zen.focused_kind() == Some(TileKind::Headlines) && handle_headlines(app, byte) {
+        return true;
+    }
     let chat_focused = app.zen.focused_kind() == Some(TileKind::Chat);
     // The focused chat tile's message keys, the way the house table routes
     // them to its embedded chat: `i`, `j` `k`, Ctrl+D/U, and the reaction
@@ -162,6 +165,39 @@ fn open_inbox_row(app: &mut App) {
         app.chat.set_pending_search_jump(room_id, message_id);
         app.chat.request_room_tail(room_id);
     }
+}
+
+/// The focused Headlines tile: `j` `k` walk its items, Enter copies the
+/// selected link. The rows are the ones the tile draws, so the marked item
+/// is the one copied.
+fn handle_headlines(app: &mut App, byte: u8) -> bool {
+    match byte {
+        b'j' | b'J' => {
+            let last = headline_rows(app).len().saturating_sub(1);
+            app.zen.headlines_selected = (app.zen.headlines_selected + 1).min(last);
+            true
+        }
+        b'k' | b'K' => {
+            app.zen.headlines_selected = app.zen.headlines_selected.saturating_sub(1);
+            true
+        }
+        b'\r' | b'\n' => {
+            let rows = headline_rows(app);
+            if let Some(row) = rows.get(app.zen.headlines_selected.min(rows.len().saturating_sub(1))) {
+                app.pending_clipboard = Some(row.url.clone());
+                app.banner = Some(Banner::success("Link copied to clipboard!"));
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn headline_rows(app: &App) -> Vec<super::rows::Headline> {
+    super::rows::headlines(
+        app.chat.news.all_articles(),
+        app.chat.feeds.all_entries(),
+    )
 }
 
 /// Rice: arrows, Tab, and Shift+Tab move focus and the layout keys edit

@@ -134,7 +134,7 @@ fn daily_panel_lines(width: u16, props: &DailyPanelProps) -> Vec<Line<'static>> 
     let mut lines = Vec::with_capacity(DAILY_PANEL_HEIGHT as usize);
     for slot in 0..MATCH_SLOTS {
         match props.matches.get(slot) {
-            Some(row) => lines.push(match_line(width, row)),
+            Some(row) => lines.push(match_line(width, row, RowMarker::Arrow)),
             None => lines.push(empty_slot_line()),
         }
     }
@@ -152,24 +152,33 @@ fn daily_compact_lines(width: u16, height: u16, props: &DailyPanelProps) -> Vec<
     if props.matches.is_empty() {
         if room > 0 {
             lines.push(Line::from(Span::styled(
-                "  no games running",
+                "no games running",
                 Style::default().fg(theme::TEXT_FAINT()),
             )));
         }
     } else {
+        // Bare rows: the tile already pads the edge, and the bright name
+        // and the colored status carry the attention the marker would.
         for row in props.matches.iter().take(room) {
-            lines.push(match_line(width, row));
+            lines.push(match_line(width, row, RowMarker::Bare));
         }
     }
-    // Indented like the rows above it; the keys are on the tile's title.
-    let mut footer = status_line(width.saturating_sub(2), props);
-    footer.spans.insert(0, Span::raw("  "));
-    lines.push(footer);
+    // Flush with the rows above it; the keys are on the tile's title.
+    lines.push(status_line(width, props));
     lines
 }
 
-/// `► mira        your turn` / `  c0ld          waiting` / `► kal   you won`.
-fn match_line(width: u16, row: &DailyPanelMatchRow) -> Line<'static> {
+/// Whether a match row leads with the two-column attention marker (`► `,
+/// blank for a waiting row) or starts at the name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RowMarker {
+    Arrow,
+    Bare,
+}
+
+/// `► mira        your turn` / `  c0ld          waiting` / `► kal   you won`,
+/// or the same rows without the marker column.
+fn match_line(width: u16, row: &DailyPanelMatchRow, lead: RowMarker) -> Line<'static> {
     // Everything but "waiting" is an attention row: glowing marker, bright
     // bold name, accent-colored status.
     let (marker_color, status, status_color) = match row.status {
@@ -201,11 +210,15 @@ fn match_line(width: u16, row: &DailyPanelMatchRow) -> Line<'static> {
                     .add_modifier(Modifier::BOLD),
             )
         };
+    let (marker, marker_w) = match lead {
+        RowMarker::Arrow => (marker, 2),
+        RowMarker::Bare => ("", 0),
+    };
     let status_w = status.chars().count();
-    let name_budget = (width as usize).saturating_sub(2 + status_w + 1);
+    let name_budget = (width as usize).saturating_sub(marker_w + status_w + 1);
     let name = truncate_chars(&row.opponent, name_budget);
     let pad = (width as usize)
-        .saturating_sub(2 + name.chars().count() + status_w)
+        .saturating_sub(marker_w + name.chars().count() + status_w)
         .max(1);
     Line::from(vec![
         Span::styled(marker.to_string(), marker_style),

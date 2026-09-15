@@ -24,7 +24,9 @@ simulation once the account owns it; unowned, the tile is a centered
 note pointing at `/shop`, the same shape as the pet's; owned, its title carries the care bar, fourteen boxes green for
 the feeding streak or red for the days unfed, see the hub CONTEXT), pet (the box from `pet/ui.rs`, the only place the pet is drawn besides the profile portrait; its top row reads `name · mood`, the mood inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle); when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it pets it (the first pet of the UTC day pays 100 chips, see the hub CONTEXT) and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_zen_tile_at`, `input_flow_test.rs`); while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the track, then the source and the station it is tuned to, always the tile's last two rows, with the full-height visualizer filling every row above; `v1`..`v5` retune it), clock (block digits, the date below them when the tile is seven rows
 or more; a one-row tile shows the time alone), visualizer, lobby (the daily games, compact:
-only the running games plus one footer row of count and keys), activity
+only the running games, starting at the name with no marker column
+(`RowMarker::Bare`; the sidebar panel keeps its `►`), plus one footer row of
+count and keys), activity
 (the #lounge feed as a list, newest on top, each event's age flush right
 and a friend's line in the friend color: the same
 `ChatState::activity_ticker` queue the one-row ticker packs, capped at
@@ -137,6 +139,9 @@ once: a DM binds the tile to its room; a mention binds it to the
 mention's room and selects the message the way a `Ctrl+/` message jump
 does. A mention in a room the account never joined opens the history
 modal instead, and a page with no chat tile says so in a banner.
+With Headlines focused, `j` `k` walk its items the same way and Enter
+copies the selected link to the clipboard (`pending_clipboard`, the way a
+copied search hit goes).
 The pet has no key: it is petted with a left click and reads the rest of
 the session itself. The sprout on the tank floor (the fortnightly bud;
 leave it a week and it roots as a plant) is cut on its Shop row
@@ -209,7 +214,17 @@ leaving the page, so a held resize key costs one row update.
   `active_friends`, and the care: `BonsaiState::last_watered`,
   `AquariumCare::fed_on_day`, `PetState::petted_on`), so it adds no query
   and no lock. Every row stays visible at zero, and so should any row added
-  later. The pot and the status were tried there and cut as
+  later. The block is capped at `PULSE_MAX_WIDTH` (32) columns and centered,
+  so a wide tile never strands a label far from its value.
+- The list tiles (lobby, activity, friends, pulse) draw one column in from
+  each border (`pad_sides` in `draw_rice`). The selectable ones (inbox,
+  headlines) pad only the right (`pad_right`): their one-column row marker
+  is the left padding, so every tile's text starts one column in; the chat,
+  the canvases, the clock, and the equalizers keep the full inner area. A
+  chat tile also asks the embedded chat for no inset of its own
+  (`EmbeddedRoomChatView::messages_inset: 0`): the tile border already is
+  the column of air, so the text sits where Home's does. House tables and
+  daily boards have no border around their chat and keep an inset of 1. The pot and the status were tried there and cut as
   low value. A
   history chart was tried and dropped: presence is per replica, so a
   process-local day of headcounts would disagree between pods.

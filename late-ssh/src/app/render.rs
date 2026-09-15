@@ -846,6 +846,7 @@ impl App {
             self.daily
                 .board_chat_room_id()
                 .map(|chat_room_id| chat::ui::EmbeddedRoomChatView {
+                    messages_inset: 1,
                     title: "Match Chat",
                     messages: self.chat.messages_for_room(chat_room_id),
                     overlay: self.chat.overlay(),
@@ -910,6 +911,7 @@ impl App {
             self.house
                 .chat_room_id()
                 .map(|chat_room_id| chat::ui::EmbeddedRoomChatView {
+                    messages_inset: 1,
                     title: "Table Chat",
                     messages: self.chat.messages_for_room(chat_room_id),
                     overlay: self.chat.overlay(),
@@ -983,6 +985,8 @@ impl App {
             .map(|(index, ((room_id, label), rows_cache))| {
                 let active = Some(index) == zen_active_chat;
                 let view = room_id.map(|chat_room_id| chat::ui::EmbeddedRoomChatView {
+                    // The tile's border is already the column of air.
+                    messages_inset: 0,
                     title: label.as_str(),
                     messages: self.chat.messages_for_room(chat_room_id),
                     overlay: if active { self.chat.overlay() } else { None },

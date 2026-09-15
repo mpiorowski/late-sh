@@ -142,10 +142,13 @@ fn chat_composer_layout_keeps_one_blank_row_gap() {
     let area = Rect::new(0, 0, 80, 20);
     let (messages_area, composer_area) = split_chat_and_composer(area, 3);
 
+    // Embedded chats draw no ticker, so the ticker's row goes to the
+    // messages and only the breather stays.
     assert_eq!(
         composer_area.y,
-        messages_area.y + messages_area.height + CHAT_COMPOSER_GAP_HEIGHT
+        messages_area.y + messages_area.height + 1
     );
+    assert_eq!(messages_area.height, 20 - 3 - 1);
 }
 
 #[test]

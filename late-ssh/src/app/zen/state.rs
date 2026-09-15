@@ -507,6 +507,8 @@ pub struct ZenState {
     /// The Inbox tile's selected row. Clamped at draw and at Enter, since
     /// the rows come and go with the mentions and unread DMs.
     pub inbox_selected: usize,
+    /// The Headlines tile's selected item, clamped the same way.
+    pub headlines_selected: usize,
     /// Whether the page has been opened this session; the first opening
     /// lands the focus on the first chat tile so the chat keys work at once.
     opened: bool,
@@ -520,6 +522,7 @@ impl ZenState {
             zoomed: false,
             kind_picker: None,
             inbox_selected: 0,
+            headlines_selected: 0,
             opened: false,
         }
     }

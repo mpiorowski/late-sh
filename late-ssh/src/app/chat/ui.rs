@@ -593,9 +593,17 @@ pub(crate) fn composer_placeholder_lines(view: &ComposerBlockView<'_>, width: us
     )
 }
 
+/// Vertical layout for an embedded chat (Zen tiles, house tables, daily
+/// boards): messages fill, one blank breather, then the composer. These
+/// surfaces draw no activity ticker, so its row goes to the messages.
 fn split_chat_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect) {
-    let (messages, _, composer) = split_chat_ticker_and_composer(area, composer_height);
-    (messages, composer)
+    let layout = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Length(composer_height),
+    ])
+    .split(area);
+    (layout[0], layout[2])
 }
 
 /// Vertical layout for a chat surface: messages fill, then a blank breather,
@@ -3112,6 +3120,10 @@ pub(crate) struct ChatRoomListView<'a> {
 }
 
 pub struct EmbeddedRoomChatView<'a> {
+    /// Columns kept clear on each side of the messages. A surface that
+    /// draws its own border around the chat (a Zen tile) passes 0, so the
+    /// text sits one column in, as on Home; a bare panel passes 1.
+    pub messages_inset: u16,
     pub title: &'a str,
     pub messages: &'a [ChatMessage],
     pub overlay: Option<&'a Overlay>,
@@ -3234,7 +3246,7 @@ pub fn draw_embedded_room_chat(
         };
     }
 
-    let messages_text_area = horizontal_inset(messages_area, 1);
+    let messages_text_area = horizontal_inset(messages_area, view.messages_inset);
 
     let height = messages_text_area.height.max(1) as usize;
     let width = messages_text_area.width.max(1) as usize;
