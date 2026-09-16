@@ -1960,6 +1960,114 @@ fn buying_costs_gold_and_adds_item() {
     assert!(p.inventory.contains(&1001));
 }
 
+/// A character standing at the smith with `level`, the gate titles named, and
+/// gold enough for anything.
+fn shopper(level: i32, titles: &[&str]) -> WorldState {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let p = s.players.get_mut(&uid(1)).unwrap();
+    p.room = 3; // Market Row, the Ember Forge
+    p.scores = AbilityScores::default();
+    p.level = level;
+    p.gold = 10_000_000;
+    p.titles = titles.iter().map(|t| t.to_string()).collect();
+    s
+}
+
+#[test]
+fn the_shops_deep_stock_always_trails_the_kit_the_level_expects() {
+    // The balance contract behind the whole market: gold is a floor under a
+    // straggler, never a replacement for the hunt. Every piece Embergate will
+    // sell has to be weaker than what the character's own land drops at their
+    // level, at every rung of the ladder - otherwise farming gold in easy
+    // country becomes a better way to gear than clearing the zone you are in.
+    for level in [45, 55, 65, 75, 80, 100] {
+        let s = shopper(
+            level,
+            &[FRONTIER_GATE_TITLE, REACHES_GATE_TITLE, KAELMYR_GATE_TITLE],
+        );
+        let p = &s.players[&uid(1)];
+        let tier = p.market_tier().expect("a geared level has a market");
+        let expected = expected_kit_tier(level).min(super::super::items::MARKET_TIER_MAX);
+        assert!(
+            tier < expected,
+            "L{level}: the shop tier ({tier}) must trail the expected kit ({expected})"
+        );
+        for slot in super::super::items::Slot::WEARABLE {
+            let sold = item(super::super::items::market_item_id(tier, slot)).expect("stocked");
+            let dropped =
+                item(super::super::items::market_item_id(expected, slot)).expect("dropped");
+            assert!(
+                sold.power() < dropped.power(),
+                "L{level} {slot:?}: shop piece (power {}) must not match the land's own drop (power {})",
+                sold.power(),
+                dropped.power()
+            );
+        }
+    }
+}
+
+#[test]
+fn gold_cannot_buy_a_kit_out_of_a_continent_you_have_not_opened() {
+    // Level alone must not reach into a realm the character never earned the
+    // right to walk into: someone who ground to L80 in the ungated side country
+    // still shops in the Frontier's band until the King falls.
+    let frontier = shopper(80, &[FRONTIER_GATE_TITLE]);
+    assert_eq!(
+        frontier.players[&uid(1)].market_tier(),
+        Some(super::super::items::FRONTIER_TIERS as i32),
+        "the Frontier's top tier is the ceiling without the King's Bane"
+    );
+    let reaches = shopper(80, &[FRONTIER_GATE_TITLE, REACHES_GATE_TITLE]);
+    assert_eq!(
+        reaches.players[&uid(1)].market_tier(),
+        Some((super::super::items::FRONTIER_TIERS + super::super::items::REACHES_TIERS) as i32),
+        "the Reaches' top tier is the ceiling without Yssgar's Bane"
+    );
+    // And before the Frontier opens at all, the authored stock is the whole shop.
+    assert_eq!(
+        shopper(80, &[]).players[&uid(1)].market_tier(),
+        None,
+        "no gate title, no deep stock"
+    );
+}
+
+#[test]
+fn a_market_piece_you_have_not_earned_cannot_be_bought() {
+    // The panel is only a view; `buy` is the authority. A character who has not
+    // opened the Frontier must not be able to buy deep stock by sending its id.
+    let deep = super::super::items::market_item_id(
+        super::super::items::MARKET_TIER_MAX,
+        super::super::items::Slot::Weapon,
+    );
+    let mut s = shopper(80, &[]);
+    let before = s.players[&uid(1)].gold;
+    s.buy(uid(1), deep);
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.gold, before, "no gold changes hands");
+    assert!(!p.inventory.contains(&deep), "and nothing is delivered");
+
+    // With every gate title and the level for it, the same shop sells a weapon
+    // at the character's own market tier, at the marked-up price.
+    let mut earned = shopper(
+        80,
+        &[FRONTIER_GATE_TITLE, REACHES_GATE_TITLE, KAELMYR_GATE_TITLE],
+    );
+    let tier = earned.players[&uid(1)].market_tier().expect("has a market");
+    let id = super::super::items::market_item_id(tier, super::super::items::Slot::Weapon);
+    let list = item(id).expect("stocked").price;
+    let before = earned.players[&uid(1)].gold;
+    earned.buy(uid(1), id);
+    let p = &earned.players[&uid(1)];
+    assert!(p.inventory.contains(&id), "the earned piece is delivered");
+    assert_eq!(
+        before - p.gold,
+        list * (100 + MARKET_MARKUP_PCT) / 100,
+        "deep stock is charged at the market markup, not list price"
+    );
+}
+
 #[test]
 fn waystone_travel_teleports_between_portals() {
     use super::super::archipelago::{island_entrance, village_room};

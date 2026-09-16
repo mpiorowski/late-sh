@@ -220,6 +220,16 @@ const STRAY_ADOPTION_DAYS: u32 = 5;
 const PET_WOUND_PCT: i32 = 30;
 /// Resource a caster spends to perform the Resurrection rite.
 const RESURRECT_COST: i32 = 30;
+/// How far behind its own level's expected kit Embergate's deep-realm stock
+/// stays, as a percent of the tier ladder. A bought piece is a floor, never the
+/// best thing in the land the character is standing in: every drop from the
+/// zone they are actually farming still beats it, so gold catches a straggler
+/// up without replacing the hunt.
+const MARKET_LAG_PCT: i32 = 20;
+/// What the shops add over list price for deep-realm stock nobody in town had
+/// to go and kill anything for. Gear past the authored stock is the late game's
+/// gold sink, so it is priced like a convenience, not a bargain.
+const MARKET_MARKUP_PCT: i64 = 200;
 /// Gold to warp to a marked personal waypoint. Word of recall (to Embergate)
 /// stays free; a warp to your own chosen spot costs something, so a portable
 /// teleporter stays a real convenience rather than trivialising distance.
@@ -781,6 +791,14 @@ pub struct ShopEntryView {
     pub category: &'static str,
     /// The item's flavor/description text.
     pub desc: &'static str,
+    /// The slot this gear goes in ("Weapon", "Chest", ...), or None for
+    /// consumables and valuables.
+    pub slot: Option<String>,
+    /// What the character is wearing in that slot right now, for the shop
+    /// screen's side-by-side: its name and its own stat summary. None when the
+    /// slot is empty or the listing is not gear.
+    pub worn_name: Option<String>,
+    pub worn_stats: Option<String>,
 }
 
 /// The collapsible-panel category an item belongs to. Split from a single
@@ -2698,6 +2716,77 @@ impl PlayerState {
     /// Resource regained per tick: the class regen plus Wisdom, never below 1.
     fn regen(&self) -> i32 {
         (self.resource_regen + self.scores.regen_bonus()).max(1)
+    }
+
+    fn has_title(&self, title: &str) -> bool {
+        self.titles.iter().any(|owned| owned == title)
+    }
+
+    /// The deepest realm band this character has earned the right to buy from:
+    /// the top tier of the realm their gate titles have opened. `None` until the
+    /// Frontier is open, where the authored stock is still their own power.
+    fn market_title_cap(&self) -> Option<i32> {
+        match (
+            self.has_title(KAELMYR_GATE_TITLE),
+            self.has_title(REACHES_GATE_TITLE),
+            self.has_title(FRONTIER_GATE_TITLE),
+        ) {
+            (true, _, _) => Some(super::items::MARKET_TIER_MAX),
+            (false, true, _) => {
+                Some((super::items::FRONTIER_TIERS + super::items::REACHES_TIERS) as i32)
+            }
+            (false, false, true) => Some(super::items::FRONTIER_TIERS as i32),
+            (false, false, false) => None,
+        }
+    }
+
+    /// The generated-catalog tier Embergate will stock for this character, or
+    /// `None` while the authored stock is still their own tier.
+    ///
+    /// Two factors, both required, the lower one binding. **Level** says where
+    /// on the gear ladder the crown table expects them to be, less
+    /// `MARKET_LAG_PCT` so the shop trails the land they are in. **The gate
+    /// title** says which realm's band they have actually earned, so gold can
+    /// never buy a kit out of a continent the character has not opened.
+    fn market_tier(&self) -> Option<i32> {
+        let cap = self.market_title_cap()?;
+        // Clamp to the deepest tier that exists *before* taking the lag off it,
+        // never after: lag then clamp lets a level past the ladder's end creep
+        // back up to the ladder's own top, which would put Kaelmyr's deepest
+        // drop on a shelf in Embergate.
+        let expected = expected_kit_tier(self.level).min(super::items::MARKET_TIER_MAX);
+        let tier = (expected * (100 - MARKET_LAG_PCT) / 100).min(cap);
+        (tier >= 1).then_some(tier)
+    }
+
+    /// Everything this character may buy at `shop` right now and what each costs
+    /// them: the authored stock at list price, then their market tier's pieces
+    /// at a markup. One list, so the panel and `buy` can never disagree about
+    /// what is on sale.
+    fn shop_offers(&self, shop: &super::items::Shop) -> Vec<(&'static Item, i64)> {
+        let mut out: Vec<(&'static Item, i64)> = shop
+            .stock
+            .iter()
+            .filter_map(|id| item(*id))
+            .map(|it| (it, self.buy_price(it)))
+            .collect();
+        let Some(tier) = self.market_tier() else {
+            return out;
+        };
+        out.extend(
+            shop.market_slots
+                .iter()
+                .map(|slot| super::items::market_item_id(tier, *slot))
+                .filter_map(item)
+                .map(|it| (it, self.market_price(it))),
+        );
+        out
+    }
+
+    /// What the shops charge for deep-realm stock: list price plus
+    /// `MARKET_MARKUP_PCT`, then the same Charisma haggling as anything else.
+    fn market_price(&self, it: &Item) -> i64 {
+        (self.buy_price(it) * (100 + MARKET_MARKUP_PCT) / 100).max(1)
     }
 
     /// What a shop charges this character for `it`: the list price less the
@@ -7626,14 +7715,20 @@ impl WorldState {
             );
             return;
         };
-        if !shop.stock.contains(&item_id) {
+        let Some(player) = self.players.get(&user_id) else {
             return;
-        }
-        let Some(it) = item(item_id) else { return };
-        let (gold, price) = match self.players.get(&user_id) {
-            Some(p) => (p.gold, p.buy_price(it)),
-            None => return,
         };
+        // The offers list is the authority on both what is on sale and what it
+        // costs: a market piece the character has not earned is simply not in
+        // it, so a stale panel or a hand-sent id cannot buy out of band.
+        let Some((it, price)) = player
+            .shop_offers(shop)
+            .into_iter()
+            .find(|(it, _)| it.id == item_id)
+        else {
+            return;
+        };
+        let gold = player.gold;
         if gold < price {
             self.log_to(
                 user_id,
@@ -10151,23 +10246,48 @@ impl WorldState {
                 npc_name: shop.npc_name.to_string(),
                 shop_name: shop.shop_name.to_string(),
                 greeting: shop.greeting.to_string(),
-                entries: shop
-                    .stock
-                    .iter()
-                    .filter_map(|id| item(*id))
-                    .map(|it| ShopEntryView {
-                        item_id: it.id,
-                        name: it.name.to_string(),
-                        rarity: it.rarity.label().to_string(),
-                        price: player.buy_price(it),
-                        affordable: player.gold >= player.buy_price(it),
-                        stats: it.stat_summary(),
-                        compare: compare_to_worn(&player.equipped, it),
-                        compare_pct: player.compare_gear(it),
-                        category: item_category(&it.kind),
-                        desc: it.desc,
-                    })
-                    .collect(),
+                entries: {
+                    let mut entries: Vec<ShopEntryView> = player
+                        .shop_offers(shop)
+                        .into_iter()
+                        .map(|(it, price)| {
+                            let worn = it
+                                .slot()
+                                .and_then(|slot| player.equipped.get(&slot))
+                                .and_then(|id| item(*id))
+                                .filter(|worn| worn.id != it.id);
+                            ShopEntryView {
+                                item_id: it.id,
+                                name: it.name.to_string(),
+                                rarity: it.rarity.label().to_string(),
+                                price,
+                                affordable: player.gold >= price,
+                                stats: it.stat_summary(),
+                                compare: compare_to_worn(&player.equipped, it),
+                                compare_pct: player.compare_gear(it),
+                                category: item_category(&it.kind),
+                                desc: it.desc,
+                                slot: it.slot().map(|s| s.label().to_string()),
+                                worn_name: worn.map(|w| w.name.to_string()),
+                                worn_stats: worn.map(|w| w.stat_summary()),
+                            }
+                        })
+                        .collect();
+                    // Best first inside each category, so the piece a shopper
+                    // actually wants is at the top of its group rather than
+                    // wherever the authored stock list happened to put it. Power
+                    // orders gear; price stands in for everything else (a deeper
+                    // draught costs more), and the id keeps it stable.
+                    entries.sort_by(|a, b| {
+                        let power =
+                            |e: &ShopEntryView| item(e.item_id).map(Item::power).unwrap_or(0);
+                        power(b)
+                            .cmp(&power(a))
+                            .then(b.price.cmp(&a.price))
+                            .then(a.item_id.cmp(&b.item_id))
+                    });
+                    entries
+                },
             });
 
             let owner_rating = player.attack_rating();
@@ -10656,6 +10776,31 @@ fn join_with_and(items: &[&str]) -> String {
         [a, b] => format!("{a} and {b}"),
         [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
     }
+}
+
+/// The generated-catalog tier the crown ladder expects a prepared character to
+/// be wearing at `level`, interpolated between the crowns' own kit rows.
+///
+/// The anchors are read straight off `world::CROWNS`: the three seals fall at
+/// L40 to authored gear (tier 0), the King at L55 to Frontier-10, Yssgar at L65
+/// to Reaches-10 (tier 30), Kaethyr the Unquenched at L75 to Kaelmyr-10 (tier
+/// 50), and the Ascendant at L80 to Kaelmyr-15 (tier 55). Past the last crown
+/// the ladder keeps its final slope. Re-derive these when a crown's kit moves;
+/// they are the same table, not a second opinion.
+fn expected_kit_tier(level: i32) -> i32 {
+    const ANCHORS: [(i32, i32); 5] = [(40, 0), (55, 10), (65, 30), (75, 50), (80, 55)];
+    if level <= ANCHORS[0].0 {
+        return 0;
+    }
+    for pair in ANCHORS.windows(2) {
+        let (lo_level, lo_tier) = pair[0];
+        let (hi_level, hi_tier) = pair[1];
+        if level <= hi_level {
+            return lo_tier + (hi_tier - lo_tier) * (level - lo_level) / (hi_level - lo_level);
+        }
+    }
+    let (last_level, last_tier) = ANCHORS[ANCHORS.len() - 1];
+    last_tier + (level - last_level)
 }
 
 fn gold_for_kill(xp: i32, boss: bool) -> i32 {
