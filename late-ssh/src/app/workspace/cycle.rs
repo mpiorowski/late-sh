@@ -108,14 +108,13 @@ fn is_game_side(screen: Screen) -> bool {
 
 /// `set_screen`'s hook, run before a real screen change while `app.screen`
 /// is still the page being left. Going from a page into the games (a hop,
-/// a Lobby jump, a hub launch) records the base, except `Ctrl+F` handing
-/// Zen back to a game screen it was opened over: that is closing Zen, not
-/// going in from it, so the base stays whatever it was. Coming back to Zen
-/// from the games restores the page its `Ctrl+F` hands back; a fresh chord
-/// has already stamped its own, so the restore only fills an empty one.
+/// a Lobby jump, a hub launch) records the base. `Ctrl+F` handing Zen back
+/// to a game screen is closing Zen, not going in from it, so `close_zen`
+/// puts the base back itself. Coming back to Zen from the games restores
+/// the page its `Ctrl+F` hands back; a fresh chord has already stamped its
+/// own, so the restore only fills an empty one.
 pub(crate) fn note_screen_change(app: &mut App, next: Screen) {
-    let closing_zen = app.screen == Screen::Zen && app.zen_return_screen == Some(next);
-    if is_game_side(next) && !is_game_side(app.screen) && !closing_zen {
+    if is_game_side(next) && !is_game_side(app.screen) {
         app.workspace_base = WorkspaceBase::leaving(app);
     }
     if next == Screen::Zen

@@ -3007,6 +3007,46 @@ async fn a_table_opened_from_zen_hands_back_to_zen_on_esc_and_on_backtick() {
     assert_eq!(app.screen, Screen::Leaderboard);
 }
 
+/// Zen opened over a table, then a Lobby jump from Zen onto a table: the
+/// jump lands on the same screen Ctrl+F would hand back, but it is going in
+/// from Zen, not closing it. Esc and backtick must agree that home is Zen.
+#[tokio::test]
+async fn a_lobby_jump_from_zen_opened_over_a_table_comes_home_to_zen() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::lobby::house::tables::HouseTable;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "zen-jump-base").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "zen-jump-base-it");
+
+    // Went into the table from Home, so the chain's base is Home.
+    app.set_screen(Screen::Dashboard);
+    assert!(
+        app.house
+            .enter(HouseTable::Blackjack, Screen::Dashboard, app.chip_balance)
+    );
+    app.set_screen(Screen::HouseTable);
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Zen);
+
+    // Jumped onto a table from Zen the way the Lobby modal does it.
+    assert!(
+        app.house
+            .enter(HouseTable::Blackjack, Screen::Zen, app.chip_balance)
+    );
+    app.set_screen(Screen::HouseTable);
+    app.handle_input(b"`");
+    assert_eq!(
+        app.screen,
+        Screen::Zen,
+        "backtick wraps to Zen, where Esc would go"
+    );
+
+    // Zen still hands back the table it was first opened over.
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::HouseTable);
+}
+
 #[tokio::test]
 async fn zen_chat_keys_belong_to_the_focused_chat_tile() {
     let test_db = new_test_db().await;

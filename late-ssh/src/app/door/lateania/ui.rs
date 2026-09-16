@@ -3116,10 +3116,6 @@ fn draw_journal_screen(frame: &mut Frame, area: Rect, state: &State, view: &Play
     render_scrolled(frame, cols[2], frontier, frontier_sel);
 }
 
-/// The board as a full view (wide terminals): a master-detail split - the
-/// postings list on the left, the highlighted posting's full story on the
-/// right. Same cursor and keys as the sidebar `board_panel`, which still
-/// serves cramped terminals.
 /// The shop as a full screen: a dense one-line-per-item list on the left,
 /// grouped under the same collapsible category headers the side panel uses, and
 /// the highlighted piece stood next to what it would replace on the right.
@@ -3129,6 +3125,7 @@ fn draw_journal_screen(frame: &mut Frame, area: Rect, state: &State, view: &Play
 /// the market tier's stock outgrows badly. Same cursor, same rows, same keys:
 /// only the shape changes, so `w`/`s`, Enter, and the collapse toggle behave
 /// identically in both renderings.
+///
 /// Takes its data rather than the `State` it is drawn from, so the layout can
 /// be rendered in a test without standing up a service.
 fn draw_shop_screen(
@@ -3160,7 +3157,7 @@ fn draw_shop_screen(
                     Style::default().fg(theme::TEXT_DIM()),
                 ),
             ]),
-            hint("w/s", "select  Enter buy  Space fold  b back"),
+            hint("w/s", "select  Enter buy/fold  b back"),
             Line::raw(""),
         ]),
         rows[0],
@@ -3249,7 +3246,7 @@ fn draw_shop_screen(
     let mut detail: Vec<Line> = Vec::new();
     match entry {
         None => detail.push(Line::from(Span::styled(
-            "  A category. Space folds it; w/s moves on.",
+            "  A category. Enter folds it; w/s moves on.",
             Style::default().fg(theme::TEXT_DIM()),
         ))),
         Some(e) => {
@@ -3337,6 +3334,10 @@ fn draw_shop_screen(
     frame.render_widget(Paragraph::new(detail), cols[1]);
 }
 
+/// The board as a full view (wide terminals): a master-detail split - the
+/// postings list on the left, the highlighted posting's full story on the
+/// right. Same cursor and keys as the sidebar `board_panel`, which still
+/// serves cramped terminals.
 fn draw_board_screen(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
     let Some(board) = &view.board else {
         frame.render_widget(
@@ -3645,10 +3646,6 @@ fn vitals(view: &PlayerView, style: VitalStyle) -> Vec<Line<'static>> {
     lines
 }
 
-/// The room side panel. Returns the lines plus, for each foe, the line index of
-/// its roster row and its spawn id, so the caller can record a clickable rect
-/// over each foe (click a foe to lock onto it).
-#[allow(clippy::type_complexity)]
 /// The room panel, split where it is anchored: `body` scrolls in the top of the
 /// rail, `footer` is pinned to its floor. `foe_hits`/`player_hits` index into
 /// `body`.
@@ -3659,6 +3656,9 @@ struct RoomPanel {
     player_hits: Vec<(usize, Uuid)>,
 }
 
+/// The room side panel. Alongside the lines it records, for each foe, the line
+/// index of its roster row and its spawn id, so the caller can record a
+/// clickable rect over each foe (click a foe to lock onto it).
 fn room_panel(
     view: &PlayerView,
     usernames: &UsernameLookup<'_>,
@@ -6119,7 +6119,6 @@ fn footer_hints(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
         "k titles",
         "m map",
         "[ ] scroll",
-        "i ways",
         "r recall",
         "; haven",
         "f follow",
@@ -6639,17 +6638,6 @@ fn is_blank_line(line: &Line<'_>) -> bool {
     line.spans.iter().all(|s| s.content.trim().is_empty())
 }
 
-/// Fit the room panel into `height` rows: the vitals block (everything down to
-/// the first spacer) stays pinned at the top, the rest scrolls by `prev_off`,
-/// and a `+N more` marker takes the last row whenever content is still hidden
-/// below. Returns the lines to render, how many are pinned, and the clamped
-/// offset, the last two so the caller can map a line index to its screen row
-/// for click targets.
-///
-/// Pure, because the arithmetic is fiddly: it counts **wrapped rows**, not
-/// logical lines (one wildlife entry is three rows in a narrow rail), and an
-/// off-by-one here either hides a row with no marker or reports the wrong
-/// count.
 /// Rows to reserve at the floor of the rail for the standing-key block, or
 /// `None` when it should stay ordinary scrolling content at the end of the
 /// body.
@@ -6662,6 +6650,17 @@ fn footer_anchor(footer_rows: usize, height: u16) -> Option<u16> {
     (footer_rows > 0 && footer_rows * 2 <= height as usize).then_some(footer_rows as u16)
 }
 
+/// Fit the room panel into `height` rows: the vitals block (everything down to
+/// the first spacer) stays pinned at the top, the rest scrolls by `prev_off`,
+/// and a `+N more` marker takes the last row whenever content is still hidden
+/// below. Returns the lines to render, how many are pinned, and the clamped
+/// offset, the last two so the caller can map a line index to its screen row
+/// for click targets.
+///
+/// Pure, because the arithmetic is fiddly: it counts **wrapped rows**, not
+/// logical lines (one wildlife entry is three rows in a narrow rail), and an
+/// off-by-one here either hides a row with no marker or reports the wrong
+/// count.
 fn scroll_room_panel(
     mut lines: Vec<Line<'static>>,
     prev_off: usize,

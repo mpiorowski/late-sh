@@ -3686,14 +3686,17 @@ fn open_zen_globally(app: &mut App) {
 /// Hands the page back to wherever Ctrl+F was pressed. A session that
 /// landed on Zen has nowhere to go back to, so it walks into the Clubhouse,
 /// the front door. `set_screen` closes the tile picker and forgets the
-/// return page.
+/// return page. Handing back a game screen is not going into the games from
+/// Zen, so the backtick base `set_screen` records is put back.
 fn close_zen(app: &mut App) {
     let back = match app.zen_return_screen {
         Some(screen) => screen,
         None => Screen::Clubhouse,
     };
     reset_composers_for_page_change(app);
+    let base = app.workspace_base;
     app.set_screen(back);
+    app.workspace_base = base;
     app.chat.clear_message_selection();
 }
 
