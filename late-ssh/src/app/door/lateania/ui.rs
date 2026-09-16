@@ -1044,6 +1044,12 @@ const PLACES: &[Place] = &[
         row: 4,
         at: At::Ends(17),
     },
+    // Chained outward from Broceliande, same as Aelunor off Silvael.
+    Place {
+        region: "Thornveil Falls",
+        row: 5,
+        at: At::Ends(17),
+    },
     // South of the road: the dark, and the way down into it.
     Place {
         region: "The Sunken Catacombs",
@@ -1136,6 +1142,12 @@ const ROADS: &[Road] = &[
         b: "Broceliande, the Greenwood",
         from: (4, 20),
         legs: &[Leg::Left(1)],
+    },
+    Road {
+        a: "Broceliande, the Greenwood",
+        b: "Thornveil Falls",
+        from: (4, 18),
+        legs: &[Leg::Down(1)],
     },
     Road {
         a: "The Overworld & Capitals",

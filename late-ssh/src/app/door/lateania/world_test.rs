@@ -609,6 +609,128 @@ fn broceliande_is_reachable_gated_and_behaviour_driven() {
 }
 
 #[test]
+fn thornveil_falls_is_a_braided_maze_not_a_grid() {
+    let world = seed_world();
+    let falls: Vec<&Room> = world
+        .rooms
+        .values()
+        .filter(|r| is_thornveil_room(r.id))
+        .collect();
+    // A real, sizeable continent (~1150 rooms).
+    assert!(falls.len() >= 900, "Thornveil Falls is a sizeable continent");
+    // A uniform grid has no dead-ends; braided mazes have many. Dead-ends +
+    // varied branching prove the shape.
+    let dead_ends = falls.iter().filter(|r| r.exits.len() == 1).count();
+    assert!(
+        dead_ends >= 15,
+        "Thornveil Falls should wind into dead-ends, not be square blocks (got {dead_ends})"
+    );
+    let degrees: std::collections::HashSet<usize> =
+        falls.iter().map(|r| r.exits.len()).collect();
+    assert!(
+        degrees.len() >= 3,
+        "Thornveil Falls rooms should vary in how many ways they branch (got {degrees:?})"
+    );
+}
+
+#[test]
+fn thornveil_falls_is_reachable_gated_and_rides_kaelmyrs_endgame_band() {
+    let world = seed_world();
+    // Reachable by a normal walk from the start (hung off Broceliande's own
+    // deepest chamber).
+    let mut seen = HashSet::new();
+    let mut stack = vec![world.start_room];
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        if let Some(r) = world.room(id) {
+            for to in r.exits.values() {
+                stack.push(*to);
+            }
+        }
+    }
+    assert!(
+        world.rooms.keys().any(|id| is_thornveil_room(*id)),
+        "Thornveil Falls rooms exist"
+    );
+    assert!(
+        world
+            .rooms
+            .keys()
+            .filter(|id| is_thornveil_room(**id))
+            .all(|id| seen.contains(id)),
+        "every Thornveil Falls room must be reachable from the start"
+    );
+    // The first falls-gate is a safe haven hung off Broceliande's World-Oak
+    // Crown.
+    let entrance = world
+        .room(THORNVEIL_BASE)
+        .expect("Thornveil falls-gate exists");
+    assert!(entrance.safe, "the first falls-gate is a safe haven");
+    assert!(
+        entrance
+            .exits
+            .values()
+            .any(|to| is_broceliande_room(*to) || *to == BROCELIANDE_BASE),
+        "Thornveil hangs off Broceliande by a descent"
+    );
+    // Foes are behaviour-driven with several distinct behaviours; filter by
+    // home room so nothing else can leak into the count.
+    let spawns: Vec<&MobSpawn> = world
+        .spawns
+        .iter()
+        .filter(|s| s.id >= THORNVEIL_SPAWN_ID_START && is_thornveil_room(s.home))
+        .collect();
+    assert!(!spawns.is_empty(), "Thornveil Falls should be populated");
+    let mut kinds = HashSet::new();
+    for s in &spawns {
+        let b = world.behavior_of(s.id);
+        assert_ne!(
+            b,
+            MobBehavior::Sentinel,
+            "{} should have a behavior",
+            s.name
+        );
+        kinds.insert(std::mem::discriminant(&b));
+    }
+    assert!(
+        kinds.len() >= 4,
+        "Thornveil Falls should field varied behaviours"
+    );
+    // Every zone has exactly one notable, and its loot all resolves.
+    let bosses = spawns.iter().filter(|s| s.boss).count();
+    assert_eq!(bosses, THORNVEIL_ZONES_DATA.len(), "one boss per Thornveil zone");
+    for s in &spawns {
+        for id in s.loot {
+            assert!(
+                crate::app::door::lateania::items::item(*id).is_some(),
+                "{} drops missing item {id}",
+                s.name
+            );
+        }
+    }
+    // Rides the same endgame band as Kaelmyr: a Thornveil boss should out-hit
+    // a Kaelmyr regular mob and, being a genuine alternative rather than a
+    // strictly weaker one, land in the same order of magnitude as Kaelmyr's
+    // own bosses rather than trailing far behind them.
+    let kaelmyr_bosses: Vec<&MobSpawn> = world
+        .spawns
+        .iter()
+        .filter(|s| s.id >= KAELMYR_SPAWN_ID_START && s.id < ARCH_SPAWN_ID_START && s.boss)
+        .collect();
+    assert!(!kaelmyr_bosses.is_empty(), "Kaelmyr has bosses to compare against");
+    let min_kaelmyr_boss_hp = kaelmyr_bosses.iter().map(|s| s.max_hp).min().unwrap();
+    let thornveil_bosses: Vec<&&MobSpawn> = spawns.iter().filter(|s| s.boss).collect();
+    assert!(
+        thornveil_bosses
+            .iter()
+            .any(|s| s.max_hp * 2 >= min_kaelmyr_boss_hp),
+        "Thornveil's toughest bosses should be a real alternative to Kaelmyr's, not far weaker"
+    );
+}
+
+#[test]
 fn catacombs_are_a_braided_maze_not_a_grid() {
     let world = seed_world();
     let catacomb_rooms: Vec<&Room> = world
@@ -1686,6 +1808,15 @@ fn regional_notables_carry_their_own_wildbound_finds() {
             assert!(
                 loot.contains(&id),
                 "Broceliande zone {zone}'s notable should carry find {id}"
+            );
+        }
+    }
+    for zone in 0..12 {
+        let loot = thornveil_notable_loot(zone);
+        for id in super::super::items::thornveil_find_ids(zone) {
+            assert!(
+                loot.contains(&id),
+                "Thornveil zone {zone}'s notable should carry find {id}"
             );
         }
     }

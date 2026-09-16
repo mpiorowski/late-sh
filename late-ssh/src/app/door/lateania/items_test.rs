@@ -7,6 +7,7 @@ fn item_ids_are_unique() {
         .chain(frontier_items().iter())
         .chain(reaches_items().iter())
         .chain(kaelmyr_items().iter())
+        .chain(archipelago_items().iter())
         .chain(materials().iter())
         .chain(crafted().iter())
         .chain(fish().iter())
@@ -419,9 +420,9 @@ fn crafted_gear_climbs_every_tier_and_clears_the_shop_ceiling() {
 }
 
 #[test]
-fn wildbound_adds_108_regional_finds_with_unique_resolvable_ids() {
+fn wildbound_adds_132_regional_finds_with_unique_resolvable_ids() {
     let finds = regional_finds();
-    assert_eq!(finds.len(), 108, "14+20+20 zones x 2 pieces each");
+    assert_eq!(finds.len(), 132, "14+20+12+20 zones x 2 pieces each");
     let mut ids: Vec<u32> = finds.iter().map(|it| it.id).collect();
     ids.sort_unstable();
     let n = ids.len();
@@ -476,6 +477,46 @@ fn sunderlakes_and_broceliande_finds_stay_under_the_frontier_ceiling() {
                 "{} (power {}) should stay under the Frontier's own ceiling",
                 it.name,
                 it.power()
+            );
+        }
+    }
+}
+
+#[test]
+fn thornveil_finds_match_kaelmyrs_own_power_curve() {
+    // Thornveil Falls is a parallel endgame track to Kaelmyr, not a gentler
+    // detour: its finds should land squarely inside Kaelmyr's own power
+    // range for the matching slot, not under the Sunderlakes/Broceliande
+    // ceiling those two gentler continents are held to.
+    let kaelmyr_floor = |slot: Slot| -> i32 {
+        kaelmyr_loot(0)
+            .iter()
+            .filter_map(|id| item(*id))
+            .filter(|it| it.slot() == Some(slot))
+            .map(Item::power)
+            .min()
+            .unwrap_or(0)
+    };
+    let kaelmyr_ceiling = |slot: Slot| -> i32 {
+        kaelmyr_loot(KAELMYR_TIERS - 1)
+            .iter()
+            .filter_map(|id| item(*id))
+            .filter(|it| it.slot() == Some(slot))
+            .map(Item::power)
+            .max()
+            .unwrap_or(0)
+    };
+    for zone in 0..12 {
+        for id in thornveil_find_ids(zone) {
+            let it = item(id).expect("thornveil find resolves");
+            let Some(slot) = it.slot() else { continue };
+            assert!(
+                it.power() >= kaelmyr_floor(slot) && it.power() <= kaelmyr_ceiling(slot) * 2,
+                "{} (power {}) should read as Kaelmyr-comparable gear, not far outside its range ({}..{})",
+                it.name,
+                it.power(),
+                kaelmyr_floor(slot),
+                kaelmyr_ceiling(slot) * 2
             );
         }
     }
