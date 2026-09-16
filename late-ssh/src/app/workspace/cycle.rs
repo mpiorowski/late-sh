@@ -52,7 +52,9 @@ pub(crate) enum WorkspaceBase {
     /// Zen, with the page its `Ctrl+F` hands back. `set_screen` forgets
     /// that page on the way out of Zen, so the base carries it and the
     /// return restores it.
-    Zen { back: Option<Screen> },
+    Zen {
+        back: Option<Screen>,
+    },
 }
 
 impl WorkspaceBase {

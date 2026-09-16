@@ -2974,7 +2974,10 @@ async fn a_table_opened_from_zen_hands_back_to_zen_on_esc_and_on_backtick() {
 
     // Opened from Zen the way the Lobby modal opens it; Esc hands back to
     // Zen with the Lobby reopened over it, and Zen still knows its way out.
-    assert!(app.house.enter(HouseTable::Blackjack, Screen::Zen, app.chip_balance));
+    assert!(
+        app.house
+            .enter(HouseTable::Blackjack, Screen::Zen, app.chip_balance)
+    );
     app.set_screen(Screen::HouseTable);
     app.handle_input(b"\x1b");
     wait_for_esc_effect(
@@ -2992,7 +2995,10 @@ async fn a_table_opened_from_zen_hands_back_to_zen_on_esc_and_on_backtick() {
 
     // Backtick off the same table, nothing else waiting, wraps to Zen too.
     app.handle_input(b"\x06");
-    assert!(app.house.enter(HouseTable::Blackjack, Screen::Zen, app.chip_balance));
+    assert!(
+        app.house
+            .enter(HouseTable::Blackjack, Screen::Zen, app.chip_balance)
+    );
     app.set_screen(Screen::HouseTable);
     app.handle_input(b"`");
     assert_eq!(app.screen, Screen::Zen);
