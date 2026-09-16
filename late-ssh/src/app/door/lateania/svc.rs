@@ -501,7 +501,14 @@ pub struct WildlifeView {
     /// Out of legend rather than the mundane world (Genesys).
     pub mythical: bool,
     /// Can be won over as a stray companion by feeding it daily (Genesys).
+    /// False once the player already keeps a stray, because `~` stops courting
+    /// critters then (`feed_target`) and the panel must not advertise a key
+    /// that no longer does anything.
     pub adoptable: bool,
+    /// Days fed so far, out of `STRAY_ADOPTION_DAYS`, when this is the critter
+    /// being courted. `None` before the first feed, which is the only time the
+    /// room panel spells the mechanic out in full.
+    pub adopt_streak: Option<(u32, u32)>,
 }
 
 /// One harvestable resource node in the room, for the Resources list.
@@ -10042,7 +10049,13 @@ impl WorldState {
                         _ => String::new(),
                     },
                     mythical: c.mythical,
-                    adoptable: c.adoptable,
+                    adoptable: c.adoptable && player.stray.is_none(),
+                    adopt_streak: match (critter_index(c), player.stray_bond) {
+                        (Some(gi), Some((bi, streak, _))) if gi == bi => {
+                            Some((streak, STRAY_ADOPTION_DAYS))
+                        }
+                        _ => None,
+                    },
                 })
                 .collect();
             // Harvestable nodes in the room, each flagged with whether the player

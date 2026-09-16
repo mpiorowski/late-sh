@@ -530,14 +530,14 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.flee();
             InputAction::Handled
         }
-        // Manual scroll for cursor-less text panels (character/leaderboard).
-        // List panels auto-follow their cursor, so these are no-ops there.
+        // Scroll the side panel, in every panel, always: a cursor-less one
+        // shifts its offset, a list walks its cursor (which drags the view).
         b'[' => {
-            state.scroll_text_up();
+            state.scroll_up();
             InputAction::Handled
         }
         b']' => {
-            state.scroll_text_down();
+            state.scroll_down();
             InputAction::Handled
         }
         _ => InputAction::Ignored,

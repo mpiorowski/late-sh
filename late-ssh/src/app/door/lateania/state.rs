@@ -19,9 +19,6 @@ use super::world::Dir;
 use super::world::RoomId;
 use super::worldmap::{Coord, MapCamera, Route};
 
-/// Lines moved per `[` / `]` press when scrolling a text panel.
-const SCROLL_STEP: usize = 3;
-
 /// Where the player has marked they're going, resolved against where they are
 /// standing now. Rendered as one line under the room's exits: the exits say
 /// what is available, this says which of them to take.
@@ -486,18 +483,32 @@ impl State {
         self.list_scroll.set(off);
     }
 
-    /// Manual scroll for cursor-less text panels (`[` / `]`). List panels
-    /// auto-follow their cursor and re-clamp this on the next render, so these
-    /// only have a lasting effect on text panels. The render pass clamps the
-    /// value to the content, so growing it past the end is harmless.
-    pub fn scroll_text_up(&mut self) {
-        let cur = self.list_scroll.get();
-        self.list_scroll.set(cur.saturating_sub(SCROLL_STEP));
+    /// `[` / `]`: scroll the side panel one row. Works in every panel, always,
+    /// with no conditions on size or content.
+    ///
+    /// A panel with a cursor scrolls by **moving the cursor**: the render pass
+    /// already keeps the selection in view, so stepping it drags the view along
+    /// and there is never a second, disagreeing source of truth for where the
+    /// panel sits. A cursor-less panel (the room, the character sheet, the
+    /// atlas, the leaderboard) has nothing to move, so it shifts the offset
+    /// directly; the render pass clamps it to the content, so running past the
+    /// end is harmless.
+    pub fn scroll_up(&mut self) {
+        if self.list_len() == 0 {
+            let cur = self.list_scroll.get();
+            self.list_scroll.set(cur.saturating_sub(1));
+            return;
+        }
+        self.cursor_up();
     }
 
-    pub fn scroll_text_down(&mut self) {
-        let cur = self.list_scroll.get();
-        self.list_scroll.set(cur + SCROLL_STEP);
+    pub fn scroll_down(&mut self) {
+        if self.list_len() == 0 {
+            let cur = self.list_scroll.get();
+            self.list_scroll.set(cur + 1);
+            return;
+        }
+        self.cursor_down();
     }
 
     /// Crafting rows: collapsible skill headers + the recipes of expanded skills.

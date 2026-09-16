@@ -2561,23 +2561,52 @@ fn draw_room_side(
         frame.render_widget(Paragraph::new(lines), panel_area);
         return;
     }
-    let (lines, foe_hits, player_hits) =
-        room_panel(view, usernames, panel_area.width as usize, state.heading());
-    // Make each visible foe row clickable: its rect is where the panel (drawn
+    let panel = room_panel(view, usernames, panel_area.width as usize, state.heading());
+    let RoomPanel {
+        mut body,
+        footer,
+        foe_hits,
+        player_hits,
+    } = panel;
+
+    // The standing keys are pinned to the floor of the rail rather than
+    // trailing the content. The room's state then reads top-down from the
+    // vitals and the keys sit at a fixed edge, instead of the block ending
+    // wherever the content happened to stop with dead space below it.
+    //
+    // Only while it leaves the room itself the larger half: on a cramped rail
+    // the footer goes back to being ordinary content at the end of the body,
+    // where it scrolls with everything else instead of eating the panel.
+    let footer_rows: usize = footer
+        .iter()
+        .map(|line| line_rows(line, panel_area.width as usize))
+        .sum();
+    let (body_area, footer_area) = match footer_anchor(footer_rows, panel_area.height) {
+        Some(rows) => {
+            let split =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(rows)]).split(panel_area);
+            (split[0], Some(split[1]))
+        }
+        None => {
+            body.push(Line::raw(""));
+            body.extend(footer.iter().cloned());
+            (panel_area, None)
+        }
+    };
+
     // The room panel was the one panel in the game that could not scroll: it
     // rendered every line into a fixed rect and whatever ran past the bottom
     // was silently dropped, so on a short terminal the tail of the panel simply
     // did not exist. It scrolls now, on the same `[`/`]` + `list_scroll` path
     // every other cursor-less panel uses, with the vitals block pinned: your HP
     // must not be something you scroll to find.
-    let (rendered, pinned, off) = scroll_room_panel(
-        lines,
+    let (lines, pinned, off) = scroll_room_panel(
+        body,
         state.list_scroll(),
-        panel_area.width as usize,
-        panel_area.height as usize,
+        body_area.width as usize,
+        body_area.height as usize,
     );
     state.set_list_scroll(off);
-    let lines = rendered;
 
     // Make each visible foe row clickable: its rect is where the panel (drawn
     // from the top, one pre-wrapped line per row) places that line. A row above
@@ -2594,15 +2623,15 @@ fn draw_room_side(
             }
             pinned + (below - off)
         };
-        (row < panel_area.height as usize).then_some(row as u16)
+        (row < body_area.height as usize).then_some(row as u16)
     };
     for (idx, mob_id) in foe_hits {
         if let Some(row) = screen_row(idx) {
             state.record_combat_hit(
                 Rect {
-                    x: panel_area.x,
-                    y: panel_area.y + row,
-                    width: panel_area.width,
+                    x: body_area.x,
+                    y: body_area.y + row,
+                    width: body_area.width,
                     height: 1,
                 },
                 ClickAction::AttackMob(mob_id),
@@ -2614,16 +2643,19 @@ fn draw_room_side(
         if let Some(row) = screen_row(idx) {
             state.record_combat_hit(
                 Rect {
-                    x: panel_area.x,
-                    y: panel_area.y + row,
-                    width: panel_area.width,
+                    x: body_area.x,
+                    y: body_area.y + row,
+                    width: body_area.width,
                     height: 1,
                 },
                 ClickAction::AttackPlayer(target_id),
             );
         }
     }
-    frame.render_widget(Paragraph::new(lines), panel_area);
+    frame.render_widget(Paragraph::new(lines), body_area);
+    if let Some(rect) = footer_area {
+        frame.render_widget(Paragraph::new(footer), rect);
+    }
 }
 
 /// Titles panel: a selectable list of earned titles with their levels. Enter
@@ -3617,12 +3649,22 @@ fn vitals(view: &PlayerView, style: VitalStyle) -> Vec<Line<'static>> {
 /// its roster row and its spawn id, so the caller can record a clickable rect
 /// over each foe (click a foe to lock onto it).
 #[allow(clippy::type_complexity)]
+/// The room panel, split where it is anchored: `body` scrolls in the top of the
+/// rail, `footer` is pinned to its floor. `foe_hits`/`player_hits` index into
+/// `body`.
+struct RoomPanel {
+    body: Vec<Line<'static>>,
+    footer: Vec<Line<'static>>,
+    foe_hits: Vec<(usize, u32)>,
+    player_hits: Vec<(usize, Uuid)>,
+}
+
 fn room_panel(
     view: &PlayerView,
     usernames: &UsernameLookup<'_>,
     width: usize,
     heading: Option<Heading>,
-) -> (Vec<Line<'static>>, Vec<(usize, u32)>, Vec<(usize, Uuid)>) {
+) -> RoomPanel {
     let mut foe_hits: Vec<(usize, u32)> = Vec::new();
     let mut player_hits: Vec<(usize, Uuid)> = Vec::new();
     let mut lines = vitals(view, VitalStyle::Numbers);
@@ -3773,7 +3815,6 @@ fn room_panel(
                 width,
             ));
         }
-        lines.push(hint("o", "look / interact"));
     }
     if !view.mobs.is_empty() {
         lines.push(section("Foes"));
@@ -3916,8 +3957,18 @@ fn room_panel(
             } else {
                 String::new()
             };
-            if w.adoptable {
-                detail.push_str(", feed it daily (~) and it may take to you as a stray");
+            // The tutorial sentence is worth its two wrapped lines exactly
+            // once: until the first feed. After that the player knows the
+            // mechanic, and the live count is both shorter and more use than
+            // being taught again every time they stand here.
+            match (w.adoptable, w.adopt_streak) {
+                (true, Some((fed, need))) => {
+                    detail.push_str(&format!(" (~ {fed}/{need} days)"));
+                }
+                (true, None) => {
+                    detail.push_str(", feed it daily (~) and it may take to you as a stray");
+                }
+                (false, _) => {}
             }
             lines.extend(side_text_wrap(
                 &format!("{marker}{}{detail}", w.name),
@@ -3967,9 +4018,12 @@ fn room_panel(
             ));
         }
     }
-    lines.push(Line::raw(""));
-    lines.extend(footer_hints(view, width));
-    (lines, foe_hits, player_hits)
+    RoomPanel {
+        body: lines,
+        footer: footer_hints(view, width),
+        foe_hits,
+        player_hits,
+    }
 }
 
 /// The side panel while a fight is on, in the field layout: the room summary
@@ -5955,46 +6009,62 @@ fn action_hint(key: &str, label: &str) -> Line<'static> {
 /// *here*) below the fold, under fifteen keys that are identical everywhere and
 /// already in the `?` guide.
 fn room_actions(view: &PlayerView) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    if view.dead {
-        return lines;
-    }
-    if view.corpse_here && view.can_resurrect {
-        lines.push(action_hint("g", "raise the fallen"));
-    }
-    if view.shop.is_some() {
-        lines.push(action_hint("b", "shop here"));
-    }
-    if view.stable.is_some() {
-        lines.push(action_hint("p", "stable - buy a pet"));
-    }
-    if view.crafting.is_some() {
-        lines.push(action_hint("u", "craft here"));
-    }
-    if view.nodes.iter().any(|n| n.gatherable) {
-        lines.push(action_hint("y", "gather here"));
-    }
-    if view.taming.as_ref().is_some_and(|t| !t.entries.is_empty()) {
-        lines.push(action_hint("q", "tame a beast"));
-    }
-    if view.portal.is_some() {
-        lines.push(action_hint("i", "the ways - travel"));
-    }
-    if view.housing.is_some() {
-        lines.push(action_hint("n", "housing ledger"));
-    }
-    if view.board.is_some() {
-        lines.push(action_hint("o", "read the board"));
-    }
-    if view.pet.is_some() {
-        lines.push(action_hint("~", "feed companion"));
-    }
-    if lines.is_empty() {
-        return lines;
+    let entries = room_action_entries(view);
+    if entries.is_empty() {
+        return Vec::new();
     }
     let mut out = vec![section("You can")];
-    out.append(&mut lines);
+    out.extend(entries.iter().map(|(key, label)| action_hint(key, label)));
     out.push(Line::raw(""));
+    out
+}
+
+/// The `(key, label)` table behind `room_actions`, kept separate because
+/// `footer_hints` needs the keys too: a key promoted to the top of the panel is
+/// dropped from the dim standing-key block, so each one is shown once, in the
+/// loud place, instead of twice in two different styles.
+fn room_action_entries(view: &PlayerView) -> Vec<(&'static str, &'static str)> {
+    let mut out: Vec<(&'static str, &'static str)> = Vec::new();
+    if view.dead {
+        return out;
+    }
+    if view.corpse_here && view.can_resurrect {
+        out.push(("g", "raise the fallen"));
+    }
+    if view.shop.is_some() {
+        out.push(("b", "shop here"));
+    }
+    if view.stable.is_some() {
+        out.push(("p", "stable - buy a pet"));
+    }
+    if view.crafting.is_some() {
+        out.push(("u", "craft here"));
+    }
+    if view.nodes.iter().any(|n| n.gatherable) {
+        out.push(("y", "gather here"));
+    }
+    if view.taming.as_ref().is_some_and(|t| !t.entries.is_empty()) {
+        out.push(("q", "tame a beast"));
+    }
+    if view.portal.is_some() {
+        out.push(("i", "the ways - travel"));
+    }
+    if view.housing.is_some() {
+        out.push(("n", "housing ledger"));
+    }
+    // One key, two errands: `o` opens the look list, and picking the board out
+    // of it opens the board. So a board room says so, and any other room with
+    // something worth looking at gets the general form - which used to be a
+    // key hint sitting *inside* the "Of note" list, styled like one of the
+    // features you could walk up to.
+    if view.board.is_some() {
+        out.push(("o", "read the board"));
+    } else if !view.features.is_empty() {
+        out.push(("o", "look / interact"));
+    }
+    if view.pet.is_some() {
+        out.push(("~", "feed companion"));
+    }
     out
 }
 
@@ -6048,6 +6118,7 @@ fn footer_hints(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
         "j quests",
         "k titles",
         "m map",
+        "[ ] scroll",
         "i ways",
         "r recall",
         "; haven",
@@ -6056,6 +6127,12 @@ fn footer_hints(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
         "! ranks",
         "Esc leave",
     ]);
+    // What the room promoted into "You can" does not repeat down here.
+    let promoted = room_action_entries(view);
+    chips.retain(|chip| {
+        let key = chip.split(' ').next().unwrap_or("");
+        !promoted.iter().any(|(k, _)| *k == key)
+    });
     for text in pack_hint_chips(&chips, width) {
         lines.push(Line::from(Span::styled(
             format!("  {text}"),
@@ -6573,6 +6650,18 @@ fn is_blank_line(line: &Line<'_>) -> bool {
 /// logical lines (one wildlife entry is three rows in a narrow rail), and an
 /// off-by-one here either hides a row with no marker or reports the wrong
 /// count.
+/// Rows to reserve at the floor of the rail for the standing-key block, or
+/// `None` when it should stay ordinary scrolling content at the end of the
+/// body.
+///
+/// It is anchored only while it leaves the room itself at least half the rail.
+/// Pinning it on a short terminal would trade the dead gap at the bottom of a
+/// tall one for something worse: the room's own state squeezed into four rows
+/// under a key list that never changes.
+fn footer_anchor(footer_rows: usize, height: u16) -> Option<u16> {
+    (footer_rows > 0 && footer_rows * 2 <= height as usize).then_some(footer_rows as u16)
+}
+
 fn scroll_room_panel(
     mut lines: Vec<Line<'static>>,
     prev_off: usize,
@@ -6609,7 +6698,7 @@ fn scroll_room_panel(
         if hidden > 0 {
             shown.truncate(fits);
             shown.push(Line::from(Span::styled(
-                format!("  +{hidden} more  ] to scroll"),
+                format!("  +{hidden} more  [ ] to scroll"),
                 Style::default()
                     .fg(theme::AMBER_DIM())
                     .add_modifier(Modifier::BOLD),

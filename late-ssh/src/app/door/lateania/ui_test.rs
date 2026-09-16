@@ -387,7 +387,8 @@ fn room_panel_makes_each_foe_a_clickable_row() {
 
     let names: HashMap<uuid::Uuid, String> = HashMap::new();
     let usernames = UsernameLookup::new(&names, None);
-    let (lines, hits, _player_hits) = super::room_panel(&view, &usernames, 30, None);
+    let panel = super::room_panel(&view, &usernames, 30, None);
+    let (lines, hits) = (panel.body, panel.foe_hits);
 
     assert_eq!(hits.len(), 2, "one clickable row per foe");
     for (idx, id) in &hits {
@@ -563,8 +564,13 @@ fn the_heading_line_names_the_exit_to_take_next() {
     ];
 
     let panel = |heading| {
-        let (lines, _, _) = super::room_panel(&view, &usernames, 40, heading);
-        lines.iter().map(line_text).collect::<Vec<_>>().join("\n")
+        let panel = super::room_panel(&view, &usernames, 40, heading);
+        panel
+            .body
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n")
     };
 
     let toward = panel(Some(Heading::Toward(
@@ -619,8 +625,13 @@ fn foe_rows_carry_the_full_name_without_truncation() {
     }];
     let names: HashMap<uuid::Uuid, String> = HashMap::new();
     let usernames = UsernameLookup::new(&names, None);
-    let (lines, _hits, _player_hits) = super::room_panel(&view, &usernames, 28, None);
-    let all: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    let panel = super::room_panel(&view, &usernames, 28, None);
+    let all: String = panel
+        .body
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
         !all.contains('\u{2026}'),
         "no ellipsis truncation in the foe roster: {all}"
@@ -1413,6 +1424,69 @@ fn the_shop_screen_gives_each_item_one_line_and_stands_the_worn_piece_beside_it(
 }
 
 #[test]
+fn the_shop_detail_still_ends_on_the_buy_prompt_at_the_smallest_full_screen() {
+    use crate::app::door::lateania::svc::{SectionRow, ShopEntryView, ShopView};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    // The full screen only engages at 100x20 (`draw` dispatches below that to
+    // the rail), so the detail pane has to fit the worst case at exactly that
+    // size: a piece with a slot, a worn rival, a delta, and the longest
+    // description in the catalogue. The buy prompt is the last line, so if
+    // anything is being clipped off the bottom it goes first.
+    let shop = ShopView {
+        npc_name: "Bruna Ironhand".to_string(),
+        shop_name: "The Ember Forge".to_string(),
+        greeting: String::new(),
+        entries: vec![ShopEntryView {
+            item_id: 1,
+            name: "Embergate Falchion".to_string(),
+            rarity: "rare".to_string(),
+            price: 873,
+            affordable: true,
+            stats: "+16 atk  +4 arm  +30 hp".to_string(),
+            compare: "vs worn: +8 atk  +2 arm".to_string(),
+            compare_pct: Some(77),
+            category: "Weapons",
+            desc: "A chapel reliquary recovered from the old crypts below Tasmania."
+                .to_string()
+                .leak(),
+            slot: Some("weapon".to_string()),
+            worn_name: Some("Iron Longsword".to_string()),
+            worn_stats: Some("+8 atk  +2 arm  +12 hp".to_string()),
+        }],
+    };
+    let rows = vec![
+        SectionRow::Header {
+            key: "shop:Weapons".to_string(),
+            label: "Weapons".to_string(),
+            count: 1,
+            collapsed: false,
+        },
+        SectionRow::Item { index: 0 },
+    ];
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 20)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            super::draw_shop_screen(frame, frame.area(), &rows, &shop, 1, 477, 0);
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    let text: Vec<String> = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect();
+    let joined = text.join("\n");
+    assert!(
+        joined.contains("Enter to buy"),
+        "the detail pane must still reach its buy prompt at 100x20:\n{joined}"
+    );
+}
+
+#[test]
 fn the_side_rail_grows_with_the_terminal_but_stays_a_column() {
     use super::{SIDE_MAX, SIDE_NARROW, SIDE_WIDE, side_width};
     // A small terminal keeps the narrow rail it always had.
@@ -1585,6 +1659,130 @@ fn what_this_room_offers_leads_the_panel_and_the_standing_keys_stay_short() {
     assert!(
         !footer_text.contains("stable"),
         "'p stable' belongs in the action block: {footer_text}"
+    );
+}
+
+#[test]
+fn a_key_promoted_into_you_can_is_not_repeated_in_the_standing_keys() {
+    use super::super::svc::FeatureView;
+    use super::{footer_hints, room_action_entries, room_actions};
+
+    // A room with something to look at: `o` is the key for it, and it is loud
+    // in "You can" rather than a dim hint tucked inside the "Of note" list.
+    let mut view = empty_player_view();
+    view.features = vec![FeatureView {
+        name: "a mossy well".to_string(),
+        kind: "well".to_string(),
+    }];
+    let actions: String = room_actions(&view)
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        actions.contains("look / interact"),
+        "looking is an action the room offers: {actions}"
+    );
+
+    // And having been promoted, it is gone from the dim block below: one key,
+    // shown once, in the loud place.
+    let footer: String = footer_hints(&view, 47)
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !footer.contains("o look"),
+        "the standing keys should not echo a promoted key: {footer}"
+    );
+    // Keys that work everywhere are untouched by the promotion.
+    assert!(footer.contains("wasd move"), "got {footer}");
+
+    // Nothing to look at, nothing promoted, and the standing block keeps `o`.
+    let bare = empty_player_view();
+    assert!(room_action_entries(&bare).is_empty());
+    let bare_footer: String = footer_hints(&bare, 47)
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(bare_footer.contains("o look"), "got {bare_footer}");
+}
+
+#[test]
+fn the_standing_keys_are_pinned_to_the_floor_only_when_the_room_keeps_its_half() {
+    use super::footer_anchor;
+    // A tall rail: the block takes a fixed berth at the bottom, so the room's
+    // state reads top-down and the keys stop floating wherever it ended.
+    assert_eq!(footer_anchor(7, 40), Some(7));
+    // Exactly half is still the room's to keep.
+    assert_eq!(footer_anchor(7, 14), Some(7));
+    // Below that, pinning would leave the room fewer rows than the key list,
+    // so the block goes back to being ordinary scrolling content.
+    assert_eq!(footer_anchor(7, 13), None);
+    assert_eq!(footer_anchor(7, 8), None);
+    // Nothing to pin (a fallen player's block is built, but an empty one is not).
+    assert_eq!(footer_anchor(0, 40), None);
+}
+
+#[test]
+fn the_stray_tutorial_gives_way_to_the_count_once_you_have_started_feeding() {
+    use super::super::svc::WildlifeView;
+    use crate::usernames::UsernameLookup;
+    use std::collections::HashMap;
+
+    let critter = |adoptable, streak| WildlifeView {
+        name: "a scruffy stray dog".to_string(),
+        note: String::new(),
+        kind: String::new(),
+        perk: String::new(),
+        mythical: false,
+        adoptable,
+        adopt_streak: streak,
+    };
+    let names: HashMap<uuid::Uuid, String> = HashMap::new();
+    let usernames = UsernameLookup::new(&names, None);
+    let panel = |wildlife| {
+        let mut view = empty_player_view();
+        view.classed = true;
+        view.wildlife = wildlife;
+        // The rail wraps, so flatten to one whitespace-squashed string: the
+        // assertions are about which words the panel says, not where it broke
+        // them.
+        let flat = super::room_panel(&view, &usernames, 34, None)
+            .body
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join(" ");
+        flat.split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+
+    // First time: the mechanic is spelled out, because nothing else teaches it.
+    let fresh = panel(vec![critter(true, None)]);
+    assert!(
+        fresh.contains("feed it daily"),
+        "the first sight of an adoptable critter explains it: {fresh}"
+    );
+
+    // Once they have started, the sentence they already read gives way to the
+    // count, which is shorter and tells them something they don't know.
+    let courting = panel(vec![critter(true, Some((2, 5)))]);
+    assert!(
+        courting.contains("2/5 days"),
+        "the progress replaces the lesson: {courting}"
+    );
+    assert!(
+        !courting.contains("feed it daily"),
+        "and does not print both: {courting}"
+    );
+
+    // A player who already keeps a stray can't court another, so the panel
+    // stops offering a key that would do nothing.
+    let done = panel(vec![critter(false, None)]);
+    assert!(
+        done.contains("a scruffy stray dog") && !done.contains("(~"),
+        "no courting prompt once the slot is taken: {done}"
     );
 }
 
