@@ -5398,3 +5398,42 @@ fn a_coated_weapon_works_in_a_duel_too() {
         "five landed duel swings, one coat wound"
     );
 }
+
+#[test]
+fn asking_a_villager_puts_their_answer_in_the_feed() {
+    use super::super::world::{FeatureKind, VILLAGERS, features_at};
+
+    // The bug: a villager's dialogue was logged as `LogKind::Room`, the kind
+    // that means "a line of the room description". The field layout's Recent
+    // strip drops that kind on purpose, because the Now panel already carries
+    // the description (`collapsed_recent_entries`). So pressing Enter on a
+    // villager printed nothing whatsoever, while the room stood there saying
+    // "Press o to ask".
+    let villager = VILLAGERS.first().expect("the world has villagers");
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = villager.room;
+    let idx = features_at(villager.room)
+        .iter()
+        .position(|f| f.kind == FeatureKind::Villager)
+        .expect("the villager stands in their own room");
+
+    let before = s.players[&uid(1)].log.len();
+    s.interact(uid(1), idx);
+    let spoken: Vec<_> = s.players[&uid(1)].log[before..].to_vec();
+
+    assert!(
+        spoken.iter().any(|l| l.text.contains(villager.desc)),
+        "asking a villager should say their line back: {spoken:?}"
+    );
+    // And it has to survive the feed that actually renders it. Room-kind lines
+    // are dropped there, so tagging speech as room description is the same as
+    // not logging it at all.
+    assert!(
+        spoken
+            .iter()
+            .any(|l| l.kind != LogKind::Room && l.text.contains(villager.desc)),
+        "a villager's answer is an event, not room description: {spoken:?}"
+    );
+}

@@ -5646,9 +5646,15 @@ impl WorldState {
             // which read as "...and? that's it?" A villager's dialogue is the
             // payoff, not a placeholder for one - present it directly, same
             // as the "look at" default below does for its own `desc`.
+            //
+            // `Say`, never `Room`: `Room` means "a line of the room
+            // description", and the field layout's Recent feed drops that kind
+            // because the Now panel already carries the description. Tagging
+            // an answer as description threw it away before it rendered, so
+            // asking a villager did nothing at all on screen.
             self.log_to(
                 user_id,
-                LogKind::Room,
+                LogKind::Say,
                 format!("{} says: \"{}\"", feat.name, feat.desc),
             );
             self.dirty = true;
