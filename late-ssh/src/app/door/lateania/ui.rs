@@ -33,6 +33,17 @@ const SIDE_NARROW: u16 = 28;
 /// stops reading as a column and the main view starts paying for it.
 const SIDE_MAX: u16 = 60;
 
+/// How many rows the bottom log strip gets on a terminal this tall.
+///
+/// It used to be `height / 4` capped at 7, so a tall terminal showed the same
+/// four-or-so events a short one did: room description, one look, and the text
+/// had already scrolled away. A third of the height, capped at 12, keeps a
+/// readable run of events on a big screen while still leaving the field the
+/// larger share, and short terminals are unchanged in practice.
+fn log_strip_height(total_height: u16) -> u16 {
+    (total_height / 3).clamp(4, 12)
+}
+
 /// How wide the side rail gets for a terminal this wide.
 ///
 /// It used to be 34 columns flat above a single threshold, whatever the screen:
@@ -156,7 +167,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     // Below this width the field folds away and the classic log + side view
     // stands in (the minimap still rides in the side panel there).
     if state.panel() == Panel::Room && view.rpg_mode && area.width >= 96 {
-        let log_h = (area.height / 4).clamp(4, 7);
+        let log_h = log_strip_height(area.height);
         let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(log_h)]).split(area);
         let cols = Layout::horizontal([
             Constraint::Min(24),        // live field (fills the middle)
@@ -3957,7 +3968,7 @@ fn room_panel(
         }
     }
     lines.push(Line::raw(""));
-    lines.extend(footer_hints(view));
+    lines.extend(footer_hints(view, width));
     (lines, foe_hits, player_hits)
 }
 
@@ -5955,10 +5966,10 @@ fn room_actions(view: &PlayerView) -> Vec<Line<'static>> {
         lines.push(action_hint("b", "shop here"));
     }
     if view.stable.is_some() {
-        lines.push(action_hint("p", "stable - buy a companion"));
+        lines.push(action_hint("p", "stable - buy a pet"));
     }
     if view.crafting.is_some() {
-        lines.push(action_hint("u", "craft at this station"));
+        lines.push(action_hint("u", "craft here"));
     }
     if view.nodes.iter().any(|n| n.gatherable) {
         lines.push(action_hint("y", "gather here"));
@@ -5967,16 +5978,16 @@ fn room_actions(view: &PlayerView) -> Vec<Line<'static>> {
         lines.push(action_hint("q", "tame a beast"));
     }
     if view.portal.is_some() {
-        lines.push(action_hint("i", "the ways - fast travel"));
+        lines.push(action_hint("i", "the ways - travel"));
     }
     if view.housing.is_some() {
         lines.push(action_hint("n", "housing ledger"));
     }
     if view.board.is_some() {
-        lines.push(action_hint("o", "read the quest board"));
+        lines.push(action_hint("o", "read the board"));
     }
     if view.pet.is_some() {
-        lines.push(action_hint("~", "feed your companion"));
+        lines.push(action_hint("~", "feed companion"));
     }
     if lines.is_empty() {
         return lines;
@@ -5987,7 +5998,7 @@ fn room_actions(view: &PlayerView) -> Vec<Line<'static>> {
     out
 }
 
-fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
+fn footer_hints(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
     let mut lines = vec![section("Commands")];
     if view.dead {
         lines.push(Line::from(Span::styled(
@@ -6016,7 +6027,7 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     // the world, so they pack into a few dim lines rather than fifteen. What is
     // specific to *this* room leads the panel instead (`room_actions`), and the
     // full reference lives one keypress away in the `?` guide.
-    let mut stairs = String::new();
+    let mut chips = vec!["wasd move", "space attack", "o look"];
     let has_up = view.exits.iter().any(|(dir, _)| *dir == Dir::Up);
     let has_down = view.exits.iter().any(|(dir, _)| *dir == Dir::Down);
     let has_danger_down = view
@@ -6024,24 +6035,69 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
         .iter()
         .any(|(dir, label)| *dir == Dir::Down && label.contains("dangerous Frontier"));
     match (has_up, has_down) {
-        (true, true) => stairs.push_str(" · < > up/down"),
-        (true, false) => stairs.push_str(" · < up"),
-        (false, true) if has_danger_down => stairs.push_str(" · > the Frontier"),
-        (false, true) => stairs.push_str(" · > down"),
+        (true, true) => chips.push("< > up/down"),
+        (true, false) => chips.push("< up"),
+        (false, true) if has_danger_down => chips.push("> the Frontier"),
+        (false, true) => chips.push("> down"),
         (false, false) => {}
     }
-    for text in [
-        format!("wasd move · space attack · o look{stairs}"),
-        "c v t  sheet abilities bag · j k  quests titles".to_string(),
-        "m map · i ways · r recall · ; haven · f follow".to_string(),
-        "' say · : / waypoint · ! ranks · Esc leave".to_string(),
-    ] {
+    chips.extend([
+        "c sheet",
+        "v abilities",
+        "t bag",
+        "j quests",
+        "k titles",
+        "m map",
+        "i ways",
+        "r recall",
+        "; haven",
+        "f follow",
+        "' say",
+        "! ranks",
+        "Esc leave",
+    ]);
+    for text in pack_hint_chips(&chips, width) {
         lines.push(Line::from(Span::styled(
             format!("  {text}"),
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
     lines.push(hint("?", "all keys"));
+    lines
+}
+
+/// Pack short `key label` chips into `·`-joined lines that fit `width`.
+///
+/// The standing-key block is rendered into a fixed-width rail with no wrapping
+/// (`draw_room_side` paints pre-wrapped lines), so a line built without knowing
+/// the width is simply chopped at the edge: `f follow` came out as `f follo`.
+/// Packing to the measured width means the same block reads on a 28-column rail
+/// and a 60-column one, just in more or fewer lines.
+fn pack_hint_chips(chips: &[&str], width: usize) -> Vec<String> {
+    const SEP: &str = " · ";
+    const INDENT: usize = 2;
+    let budget = width.saturating_sub(INDENT).max(1);
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for chip in chips {
+        let need = if current.is_empty() {
+            UnicodeWidthStr::width(*chip)
+        } else {
+            UnicodeWidthStr::width(current.as_str())
+                + UnicodeWidthStr::width(SEP)
+                + UnicodeWidthStr::width(*chip)
+        };
+        if !current.is_empty() && need > budget {
+            lines.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push_str(SEP);
+        }
+        current.push_str(chip);
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
     lines
 }
 

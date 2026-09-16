@@ -1505,7 +1505,7 @@ fn the_room_panel_pins_vitals_scrolls_the_rest_and_says_what_is_hidden() {
 #[test]
 fn what_this_room_offers_leads_the_panel_and_the_standing_keys_stay_short() {
     use super::super::svc::{ShopView, StableView};
-    use super::{footer_hints, room_actions};
+    use super::{SIDE_MAX, SIDE_NARROW, SIDE_WIDE, footer_hints, room_actions};
 
     // A plain room with nothing to do in it offers no action block at all.
     let plain = empty_player_view();
@@ -1544,9 +1544,29 @@ fn what_this_room_offers_leads_the_panel_and_the_standing_keys_stay_short() {
     // The standing keys that are the same in every room stay compact, and point
     // at the guide rather than reprinting it: the old block was eighteen lines
     // and pushed the panel off the bottom of the screen.
-    let footer = footer_hints(&town);
+    // Nothing in the panel may run past the rail: it is painted pre-wrapped
+    // into a fixed width with no wrapping, so an over-long line is simply
+    // chopped at the edge ("f follow" came out as "f follo").
+    for width in [
+        SIDE_NARROW as usize,
+        SIDE_WIDE as usize,
+        47,
+        SIDE_MAX as usize,
+    ] {
+        for line in room_actions(&town)
+            .iter()
+            .chain(footer_hints(&town, width).iter())
+        {
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(
+                UnicodeWidthStr::width(text.as_str()) <= width,
+                "at width {width} this line is clipped: {text:?}"
+            );
+        }
+    }
+    let footer = footer_hints(&town, 47);
     assert!(
-        footer.len() <= 7,
+        footer.len() <= 8,
         "the standing-key block should stay short, got {} lines",
         footer.len()
     );
@@ -1566,4 +1586,22 @@ fn what_this_room_offers_leads_the_panel_and_the_standing_keys_stay_short() {
         !footer_text.contains("stable"),
         "'p stable' belongs in the action block: {footer_text}"
     );
+}
+
+#[test]
+fn the_log_strip_grows_on_a_tall_terminal() {
+    use super::log_strip_height;
+    // A short terminal keeps what it had.
+    assert_eq!(log_strip_height(24), 8);
+    // The reported case: a tall window used to cap at 7 rows, so the events
+    // scrolled away as fast as on a laptop.
+    assert_eq!(log_strip_height(44), 12);
+    assert_eq!(log_strip_height(80), 12, "capped, the field keeps the rest");
+    // The field always keeps the larger share.
+    for h in [24u16, 30, 44, 60, 80] {
+        assert!(
+            log_strip_height(h) < h / 2,
+            "the log must not crowd out the world at height {h}"
+        );
+    }
 }
