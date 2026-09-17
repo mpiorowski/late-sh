@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-09-17 (Bonsai is database-backed: care actions run in `BonsaiService` under the tree's row lock and sessions only mirror the stored tree, refreshed over the `bonsai_changed` notify; see the services list and the bonsai context. A pet the cursor lets go of walks back to its stroll. Ideas and roadmap live in `PLAN.md` Backlog; this file describes the present only.)
+- Last updated: 2026-09-17 (§0 documents the reference shape for per-user state under the multi-replica rule: pure rules in `state.rs`, one locked writer in `svc.rs`, a per-session mirror in `session.rs`, a user-id-only notify. Bonsai is its first tenant and has a row in §7 "Multi-replica readiness". Ideas and roadmap live in `PLAN.md` Backlog; this file describes the present only.)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -42,6 +42,32 @@ late.sh runs as one SSH replica today, and a multi-replica rework is coming. Eve
 - **Background work dedupes through the DB.** A per-replica single-flight set only stops duplicates inside one process; a job any session may start (an AI check, a sweep, a refresh) either claims a row first or is idempotent and cheap enough to run N times.
 - **Global switches and feature fuses are rows, not memory.** A kill switch flipped on one replica must flip everywhere and survive a restart; an in-memory switch is a bug once there are two processes.
 - **Presence is the known exception** (`active_users`, `SessionRegistry`, the clubhouse `SharedLobby`): local by design under sticky sessions, listed as debt in §7 "Multi-replica readiness". Do not add new members to that table; if a design needs presence across replicas, that is the trigger to externalize it, not a reason to add another local registry.
+
+#### Reference shape: per-user state (row is truth, session is a mirror)
+
+For state one user owns and any of their sessions may change (the bonsai is the worked example, `late-ssh/src/app/bonsai`; the pet, the tank, and per-account settings fit the same shape). Three files, one job each:
+
+- **`state.rs`, the rules.** A pure state machine over one row's worth of data. No service handle, no channels, no way to write. Actions return what they did (`Applied::Unchanged | Changed | ...`) so the caller knows whether to store.
+- **`svc.rs`, the one writer.** Every action is one transaction: take the row lock (`SELECT ... FOR UPDATE`), build the state from the locked row, apply one rule, store the whole row, commit; the change notice (`<domain>_changed`, payload the owner's user id) goes out with the commit. Side payments (chips) ride the same transaction. "Already done today" is read off the locked row, never off memory. Sessions and replicas acting at once queue on the lock and run one after the other on the same truth. The `*_task` entry owns the span, the metric, error logging, and the reply; the inner fn returns data.
+- **`session.rs`, the terminal's side.** One small struct per session that `App` holds and ticks. It keeps a render mirror of the row (the only per-session fields are display state: a cursor, a status message), turns key presses into commands, and drains two inputs on tick: answers to its own requests on a private `mpsc`, and the process-wide `broadcast<Uuid>` of changed user ids. It never decides an action from the mirror and never writes, so a stale mirror is a display lag, never a wrong write.
+
+How a change travels:
+
+```text
+                      private mpsc --> acting session: Acted { row, message }
+act_task -- commit --<
+                      pg_notify(channel, user_id) --> every replica's LISTEN connection
+                          --> process-local broadcast<Uuid> --> every session compares to its own user_id
+                          --> the owner's sessions SELECT the row --> Reloaded { row }
+```
+
+- The notify belongs in an `AFTER INSERT OR UPDATE` trigger on the table, so a new write path cannot forget it (`app_flags` and chips do this). Bonsai sends it app-side from `BonsaiService` (`Tree::notify_changed`), which is safe only while that service stays the one writer; it is listed in `SCALE.md` Small Debts.
+- The notify carries the owner's **user id only**, never the state: payloads cap at 8000 bytes, a serialized copy can arrive out of order or be lost in a listener reconnect, and a re-read is always the committed row.
+- It crosses replicas because stickiness is per connection, not per user: one account's laptop and phone can sit on different replicas. It is sent unconditionally because knowing whether another session exists would take a cross-replica presence registry, which the rule forbids.
+- Every session on a replica sees every notice and filters with one UUID compare on a tick it was already running; the broadcast wakes nobody. A lagged receiver counts as "maybe mine" and reloads.
+- The row carries a revision that only the store bumps. The mirror drops a copy older than the one it shows, because an action answer and a reload race and can land out of order.
+- One action in flight per session: each task holds a pooled connection while it waits for the lock, so a held key must not queue one per repeat.
+- This shape is for low-write, per-user state. A high-frequency shared surface (the Artboard, a house table) has different costs and does not fit it; see `SCALE.md`.
 
 When a design cannot meet the rule (a hot path that would need a DB round trip per tick), say so in the local `CONTEXT.md`, keep the per-replica piece as small as possible, and list it in the §7 table so the rework finds it.
 
@@ -782,6 +808,7 @@ The SSH app assumes a single process. These in-memory structures would need to b
 | Chat translation | `TranslationService` (`app/ai/translate.rs`) | DB-backed cache + in-memory single-flight set, daily call cap, and concurrency gate, all per replica | Cache is already shared through Postgres, so correctness holds across replicas; only the dedupe and the cap are per-process, meaning N replicas can each spend up to the cap and can duplicate one call for the same message. Both are acceptable at current scale; a shared counter would be the fix. |
 | `SharedScratchpadRegistry` | `scratchpad/registry.rs` | In-memory `/pair` intents + `user_id → pairing` | Stays local by design: `/pair` pairings are explicitly ephemeral, acceptable to drop on failover |
 | Clubhouse `SharedLobby` | `state.rs` (`State.clubhouse_lobby`) | One process-global seat map and walker positions for the tavern | Presence, the known exception in §0; externalize with `active_users` if ever needed |
+| Bonsai | `app/bonsai` (`svc.rs`, `session.rs`) | Replica-clean: the row is the truth, every write runs under the row lock in `BonsaiService`, sessions mirror the row and refresh over `bonsai_changed`. The reference per-user shape, described in §0. | Nothing. |
 | First-contact haunting | `app/deadchannel/haunt`, `app/flags` | Replica-clean: switches are `app_flags` rows behind a `LISTEN/NOTIFY`-fed `watch` (`app/flags/svc.rs`, reusable for any process-wide switch), every cap and stamp is a conditional claim on the user row, the bio screen is claimed per bio text. Only the per-session dice are local, by design. | Nothing. One accepted race: two devices playing a whisper in the same window both play it, one mark lands (claiming at arming would burn it on every dropped session). |
 | `StreamRegistry` | `app/stream/registry.rs` | In-memory live-stream registry: one stream per user, capability ids, watcher heartbeats | Stays local by design: a stream dies with the process (the room and its history are DB rows and survive); the streamer just runs `/golive` again |
 
