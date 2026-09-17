@@ -30,21 +30,34 @@ pub(crate) fn render_body_to_lines(
     body_style: Style,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    let mut code_buffer: Option<Vec<&str>> = None;
+    let mut code_block: Option<CodeBlock<'_>> = None;
 
     for paragraph in body.split('\n') {
-        if let Some(buf) = code_buffer.as_mut() {
-            if paragraph.trim_start().starts_with("```") {
-                lines.extend(render_code_block(buf, width, &pad));
-                code_buffer = None;
-            } else {
-                buf.push(paragraph);
+        if let Some(block) = code_block.as_mut() {
+            match paragraph.trim_end().strip_suffix(FENCE) {
+                Some(before) => {
+                    if !before.trim().is_empty() {
+                        block.rows.push(before);
+                    }
+                    lines.extend(render_code_block(&block.shown_rows(), width, &pad));
+                    code_block = None;
+                }
+                None => block.rows.push(paragraph),
             }
             continue;
         }
 
-        if paragraph.trim_start().starts_with("```") {
-            code_buffer = Some(Vec::new());
+        if let Some(after) = paragraph.trim_start().strip_prefix(FENCE) {
+            match after.trim_end().strip_suffix(FENCE) {
+                // Opened and closed on one line: the text between is the code.
+                Some(code) => lines.extend(render_code_block(&[code], width, &pad)),
+                None => {
+                    code_block = Some(CodeBlock {
+                        opener: after,
+                        rows: Vec::new(),
+                    });
+                }
+            }
             continue;
         }
 
@@ -57,11 +70,38 @@ pub(crate) fn render_body_to_lines(
         lines.extend(render_block(block, width, &pad, body_style));
     }
 
-    if let Some(buf) = code_buffer {
-        lines.extend(render_code_block(&buf, width, &pad));
+    // A fence nobody closed still renders as a block.
+    if let Some(block) = code_block {
+        lines.extend(render_code_block(&block.shown_rows(), width, &pad));
     }
 
     lines
+}
+
+const FENCE: &str = "```";
+
+/// A fenced block being collected. `opener` is whatever followed the
+/// opening fence on its own line.
+struct CodeBlock<'a> {
+    opener: &'a str,
+    rows: Vec<&'a str>,
+}
+
+impl<'a> CodeBlock<'a> {
+    /// The rows to draw. The opener is a language tag, and hidden, only
+    /// when it is one word sitting over real code; anything else typed on
+    /// the fence line is code, so a message like "```oops" never renders
+    /// as an empty box.
+    fn shown_rows(&self) -> Vec<&'a str> {
+        let opener = self.opener.trim();
+        let is_language_tag = !opener.contains(char::is_whitespace) && !self.rows.is_empty();
+        match opener.is_empty() || is_language_tag {
+            true => self.rows.clone(),
+            false => std::iter::once(opener)
+                .chain(self.rows.iter().copied())
+                .collect(),
+        }
+    }
 }
 
 fn render_code_block(rows: &[&str], width: usize, pad: &Span<'static>) -> Vec<Line<'static>> {
