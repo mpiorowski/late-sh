@@ -121,7 +121,8 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     // dense dashboard (portrait, dot-rated scores, vitals bars). It falls back
     // to the narrow side panel on cramped terminals.
     if state.panel() == Panel::Character && area.width >= 72 && area.height >= 18 {
-        draw_character_sheet(frame, area, &view);
+        let off = draw_character_sheet(frame, area, &view, state.list_scroll());
+        state.set_list_scroll(off);
         return;
     }
 
@@ -164,16 +165,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     // The pack is the shop's twin: the same dense list, and the same need to
     // stand a piece against what it would replace.
     if state.panel() == Panel::Inventory && area.width >= 100 && area.height >= 20 {
-        draw_inventory_screen(
-            frame,
-            area,
-            &state.inv_rows(),
-            &view.inventory,
-            state.cursor(),
-            view.gold,
-            view.banked_gold,
-            view.shop.is_some(),
-        );
+        draw_inventory_screen(frame, area, &state.inv_rows(), &view, state.cursor());
         return;
     }
 
@@ -3441,6 +3433,36 @@ fn draw_shop_screen(
     frame.render_widget(Paragraph::new(detail), cols[1]);
 }
 
+/// The pack covers the field, and it is the panel opened mid-fight to drink
+/// something, so its header keeps the vitals and the fight in sight.
+fn pack_vitals_spans(view: &PlayerView) -> Vec<Span<'static>> {
+    let mut spans = vec![
+        Span::styled(
+            format!("  HP {}/{}", view.hp, view.max_hp),
+            Style::default()
+                .fg(hp_color(view.hp, view.max_hp))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                "  {} {}/{}",
+                view.resource_name, view.resource, view.max_resource
+            ),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ];
+    match &view.in_combat_with {
+        Some(foe) => spans.push(Span::styled(
+            format!("  fighting {foe}"),
+            Style::default()
+                .fg(theme::ERROR())
+                .add_modifier(Modifier::BOLD),
+        )),
+        None => {}
+    }
+    spans
+}
+
 /// The pack as a full screen, the same shape as the shop: every carried and
 /// worn piece on one line (name, sell value, the upgrade tag or `worn`) under
 /// the collapsible category headers, and the highlighted piece on the right,
@@ -3450,19 +3472,18 @@ fn draw_shop_screen(
 /// a pack of loot turns into a long scroll with no way to compare anything.
 /// Same rows, cursor, and keys in both renderings.
 ///
-/// `merchant_here` decides whether the sell keys are offered: `x` and `A/C/J`
-/// only do anything with a shop in the room.
-#[allow(clippy::too_many_arguments)]
+/// A shop in the room decides whether the sell keys are offered: `x` and
+/// `A/C/J` only do anything at a merchant.
 fn draw_inventory_screen(
     frame: &mut Frame,
     area: Rect,
     inv_rows: &[SectionRow],
-    inventory: &[InvView],
+    view: &PlayerView,
     cursor: usize,
-    gold: i64,
-    banked_gold: i64,
-    merchant_here: bool,
 ) {
+    let inventory: &[InvView] = &view.inventory;
+    let (gold, banked_gold) = (view.gold, view.banked_gold);
+    let merchant_here = view.shop.is_some();
     let rows = Layout::vertical([Constraint::Length(4), Constraint::Min(1)]).split(area);
     let carried = inventory.iter().filter(|it| !it.equipped).count();
     let worn = inventory.len() - carried;
@@ -3471,20 +3492,21 @@ fn draw_inventory_screen(
     } else {
         hint("x A/C/J", "sell, once you stand at a merchant")
     };
-    frame.render_widget(
-        Paragraph::new(item_screen_header(
-            "Inventory",
-            &format!(
-                "{carried} carried, {worn} worn - {}",
-                purse_label(gold, banked_gold)
-            ),
-            vec![
-                hint("w/s", "select  Enter equip/use/fold  t back"),
-                sell_hint,
-            ],
-        )),
-        rows[0],
+    let mut header = item_screen_header(
+        "Inventory",
+        &format!(
+            "{carried} carried, {worn} worn - {}",
+            purse_label(gold, banked_gold)
+        ),
+        vec![
+            hint("w/s", "select  Enter equip/use/fold  t back"),
+            sell_hint,
+        ],
     );
+    // On the title line, ahead of the counts: no extra row at 100x20, and a
+    // long line clips the purse rather than the fight.
+    header[0].spans.splice(1..1, pack_vitals_spans(view));
+    frame.render_widget(Paragraph::new(header), rows[0]);
 
     let cols =
         Layout::horizontal([Constraint::Percentage(52), Constraint::Percentage(48)]).split(rows[1]);
@@ -4590,7 +4612,11 @@ fn map_cell_span(cell: MapCell) -> Span<'static> {
 /// Full-width character dashboard (the `c` panel when the terminal is roomy).
 /// A class portrait and vitals bars on the left, ability scores as dot ratings
 /// in the middle, and combat/derived stats, trait, titles, and XP on the right.
-fn draw_character_sheet(frame: &mut Frame, area: Rect, view: &PlayerView) {
+/// `[`/`]` scroll all three columns together: `scroll` is the requested
+/// offset in lines, and the clamped one comes back for the caller to keep.
+/// It stops once the tallest column's last row reaches the floor; a shorter
+/// column stops at its own end rather than scrolling into blank.
+fn draw_character_sheet(frame: &mut Frame, area: Rect, view: &PlayerView, scroll: usize) -> usize {
     let accent = class_accent(Class::from_key(&view.class_key));
     let block = Block::default()
         .borders(Borders::ALL)
@@ -4609,15 +4635,26 @@ fn draw_character_sheet(frame: &mut Frame, area: Rect, view: &PlayerView) {
     ])
     .split(inner);
 
-    frame.render_widget(Paragraph::new(sheet_identity(view, accent)), cols[0]);
-    frame.render_widget(
-        Paragraph::new(sheet_attributes(view, accent)).wrap(Wrap { trim: false }),
-        cols[1],
-    );
-    frame.render_widget(
-        Paragraph::new(sheet_derived(view, accent)).wrap(Wrap { trim: false }),
-        cols[2],
-    );
+    let columns = [
+        (sheet_identity(view, accent), cols[0]),
+        (sheet_attributes(view, accent), cols[1]),
+        (sheet_derived(view, accent), cols[2]),
+    ];
+    let max_offsets = columns.each_ref().map(|(lines, col)| {
+        scroll_offset(
+            usize::MAX,
+            lines,
+            None,
+            col.width as usize,
+            col.height as usize,
+        )
+    });
+    let off = scroll.min(max_offsets.iter().copied().max().unwrap_or(0));
+    for ((mut lines, col), max_off) in columns.into_iter().zip(max_offsets) {
+        let shown = lines.split_off(off.min(max_off));
+        frame.render_widget(Paragraph::new(shown).wrap(Wrap { trim: false }), col);
+    }
+    off
 }
 
 /// Left column: portrait, identity headline, and vitals as filled meters.
@@ -6314,11 +6351,14 @@ fn room_actions(view: &PlayerView) -> Vec<Line<'static>> {
 }
 
 /// The feeding line under the companion in the room panel: the key (unless
-/// `room_action_entries` already promoted it for a hurt pet), the progress a
-/// meal buys, and how many of today's meals are left.
+/// `room_action_entries` already promoted it for a hurt pet, or a healthy
+/// pet has no meal to have), the progress a meal buys, and how many of
+/// today's meals are left.
 fn pet_feed_chips(pet: &PetView) -> Vec<String> {
     let mut chips = Vec::new();
-    if !pet.downed && pet.hp >= pet.max_hp {
+    let healthy = !pet.downed && pet.hp >= pet.max_hp;
+    let meal_to_have = pet.level < PET_MAX_LEVEL && pet.meals_today < MEALS_PER_DAY;
+    if healthy && meal_to_have {
         chips.push(format!("G feed {}g", pet.feed_cost));
     }
     if pet.level >= PET_MAX_LEVEL {

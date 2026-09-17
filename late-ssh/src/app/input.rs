@@ -3092,6 +3092,8 @@ fn handle_notifications_hud_click(app: &mut App, mouse: MouseEvent) -> bool {
     }
 
     app.pending_chat_profile_open = None;
+    app.chat.reset_composer();
+    app.chat.clear_message_selection();
     app.set_screen(Screen::Dashboard);
     app.chat.select_notifications();
     true

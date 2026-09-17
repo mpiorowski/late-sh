@@ -252,10 +252,9 @@ fn recent_log_trims_oldest_when_it_overflows_height() {
 
 #[test]
 fn the_xp_meter_stays_on_the_character_sheet_under_a_pile_of_titles() {
-    // The bug: the full-screen character sheet is three fixed-height columns
-    // with no scroll of its own (`[`/`]` only reach the narrow side panel), and
-    // the right column listed every earned title *before* Experience. Enough
-    // titles and the XP bar walked off the bottom with no way to reach it.
+    // The bug: the right column of the full-screen character sheet listed
+    // every earned title *before* Experience. Enough titles and the XP bar
+    // walked off the bottom, a scroll away at best.
     let mut view = empty_player_view();
     view.level = 30;
     view.xp_into_level = 120;
@@ -278,6 +277,59 @@ fn the_xp_meter_stays_on_the_character_sheet_under_a_pile_of_titles() {
     assert!(
         text.iter().any(|l| l.contains("+26 more")),
         "the title list is summarised rather than unbounded: {text:?}"
+    );
+}
+
+#[test]
+fn brackets_scroll_the_character_sheet_to_its_hidden_rows() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    // The sheet engages at 72x18, where the identity column (portrait,
+    // vitals, purse) runs past the 16 rows inside the border. `[`/`]` shift
+    // the shared offset; the sheet clamps it so the tallest column's last
+    // row can reach the floor and no further.
+    let mut view = empty_player_view();
+    view.classed = true;
+    view.level = 30;
+    view.gold = 4242;
+    view.banked_gold = 9000;
+    let draw = |scroll: usize| {
+        let mut terminal = Terminal::new(TestBackend::new(72, 18)).expect("terminal");
+        let mut off = 0;
+        terminal
+            .draw(|frame| {
+                off = super::draw_character_sheet(frame, frame.area(), &view, scroll);
+            })
+            .expect("draw");
+        let buffer = terminal.backend().buffer();
+        let text = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        (off, text)
+    };
+
+    let (top, top_text) = draw(0);
+    assert_eq!(top, 0);
+    assert!(
+        !top_text.contains("bank 9000"),
+        "the purse starts below the fold:\n{top_text}"
+    );
+
+    let (bottom, bottom_text) = draw(usize::MAX);
+    assert!(bottom > 0, "a sheet taller than the screen scrolls");
+    assert!(
+        bottom_text.contains("bank 9000"),
+        "scrolled to the end, the last row is on screen:\n{bottom_text}"
+    );
+    assert_eq!(
+        draw(bottom + 1).0,
+        bottom,
+        "the offset stops at the last row"
     );
 }
 
@@ -1516,7 +1568,27 @@ fn draw_inventory(
     cursor: usize,
     merchant_here: bool,
 ) -> Vec<String> {
+    let mut view = empty_player_view();
+    view.inventory = inventory.to_vec();
+    view.gold = 477;
+    view.shop = merchant_here.then(|| super::super::svc::ShopView {
+        npc_name: "Bruna Ironhand".to_string(),
+        shop_name: "The Ember Forge".to_string(),
+        greeting: String::new(),
+        entries: Vec::new(),
+    });
+    draw_inventory_view(width, height, &view, cursor)
+}
+
+fn draw_inventory_view(
+    width: u16,
+    height: u16,
+    view: &super::PlayerView,
+    cursor: usize,
+) -> Vec<String> {
     use ratatui::{Terminal, backend::TestBackend};
+
+    let inventory = &view.inventory;
 
     let rows: Vec<SectionRow> = std::iter::once(SectionRow::Header {
         key: "inv:Weapons".to_string(),
@@ -1529,16 +1601,7 @@ fn draw_inventory(
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
     terminal
         .draw(|frame| {
-            super::draw_inventory_screen(
-                frame,
-                frame.area(),
-                &rows,
-                inventory,
-                cursor,
-                477,
-                0,
-                merchant_here,
-            );
+            super::draw_inventory_screen(frame, frame.area(), &rows, view, cursor);
         })
         .expect("draw");
     let buffer = terminal.backend().buffer();
@@ -1591,6 +1654,29 @@ fn the_inventory_screen_gives_each_piece_one_line_and_stands_loot_against_the_wo
     );
     assert!(joined.contains("Enter to put it on"), "{joined}");
     assert!(joined.contains("x to sell - 218g"), "{joined}");
+}
+
+#[test]
+fn the_inventory_screen_keeps_your_vitals_and_the_fight_in_sight() {
+    // The pack covers the whole field, and it is the panel opened mid-fight
+    // to drink something, so the header carries what the field would show.
+    let mut view = empty_player_view();
+    view.inventory = vec![inv_row("Iron Longsword", Some("weapon"), true, None)];
+    view.hp = 37;
+    view.max_hp = 210;
+    view.resource_name = "Mana".to_string();
+    view.resource = 12;
+    view.max_resource = 80;
+    let calm = draw_inventory_view(100, 20, &view, 1).join("\n");
+    assert!(calm.contains("HP 37/210"), "{calm}");
+    assert!(calm.contains("Mana 12/80"), "{calm}");
+    assert!(!calm.contains("fighting"), "{calm}");
+
+    view.in_combat_with = Some("Ash Wolf".to_string());
+    let fighting = draw_inventory_view(100, 20, &view, 1).join("\n");
+    assert!(fighting.contains("fighting Ash Wolf"), "{fighting}");
+    // The prompts still fit under the extra header line at the smallest size.
+    assert!(fighting.contains("Enter to take it off"), "{fighting}");
 }
 
 #[test]
@@ -1774,6 +1860,36 @@ fn feeding_leads_the_panel_only_for_a_hurt_pet_and_otherwise_sits_under_it() {
         assert_eq!(joined.matches("G ").count(), 1, "G shown once:\n{joined}");
         assert!(joined.contains("45% to Lv4"), "{joined}");
     }
+}
+
+#[test]
+fn the_feed_key_is_only_offered_under_a_pet_a_meal_would_do_something_for() {
+    use super::super::pets::{MEALS_PER_DAY, PET_MAX_LEVEL};
+    use super::super::svc::PetView;
+
+    let pet = |level: i32, meals_today: u32| PetView {
+        name: "Cave Bear".to_string(),
+        glyph: "B".to_string(),
+        level,
+        hp: 180,
+        max_hp: 180,
+        attack: 20,
+        downed: false,
+        loyalty_pct: 45,
+        meals_today,
+        feed_cost: 20,
+        skills: Vec::new(),
+    };
+    let chips = |pet: &PetView| super::pet_feed_chips(pet).join(" ");
+
+    assert!(chips(&pet(3, 2)).contains("G feed 20g"));
+    // Healthy and out of meals: `G` would be turned away.
+    let sated = chips(&pet(3, MEALS_PER_DAY));
+    assert!(!sated.contains("G feed"), "{sated}");
+    assert!(sated.contains("4/4 today"), "{sated}");
+    // Healthy at the level cap: a meal has nothing left to raise.
+    let capped = chips(&pet(PET_MAX_LEVEL, 0));
+    assert_eq!(capped, "max level");
 }
 
 #[test]

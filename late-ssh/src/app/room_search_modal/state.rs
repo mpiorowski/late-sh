@@ -22,9 +22,29 @@ pub(crate) enum PickerScope {
 
 impl PickerScope {
     pub(crate) fn for_screen(screen: Screen) -> Self {
-        match screen == Screen::Zen {
-            true => Self::RoomsOnly,
-            false => Self::AllSlots,
+        match screen {
+            Screen::Zen => Self::RoomsOnly,
+            Screen::Dashboard
+            | Screen::Arcade
+            | Screen::Games
+            | Screen::Lateania
+            | Screen::Rebels
+            | Screen::Nethack
+            | Screen::Dcss
+            | Screen::Brogue
+            | Screen::Dopewars
+            | Screen::Bashquest
+            | Screen::Codekeep
+            | Screen::Usurper
+            | Screen::GreenDragon
+            | Screen::Darkroom
+            | Screen::Artboard
+            | Screen::Profiles
+            | Screen::Leaderboard
+            | Screen::Clubhouse
+            | Screen::DailyMatch
+            | Screen::HouseTable
+            | Screen::Scratchpad => Self::AllSlots,
         }
     }
 }

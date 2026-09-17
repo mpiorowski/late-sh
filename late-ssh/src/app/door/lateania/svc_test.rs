@@ -2467,6 +2467,39 @@ fn a_companion_grows_on_four_meals_a_day_and_is_only_mended_past_them() {
 }
 
 #[test]
+fn a_healthy_companion_at_the_level_cap_is_turned_away_free() {
+    // Loyalty past the cap raises nothing, so there is no meal to sell.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let species = super::super::pets::pet_species_by_key("cave_bear").unwrap();
+    let capped = super::super::pets::LOYALTY_PER_LEVEL
+        * i64::from(super::super::pets::PET_MAX_LEVEL - 1);
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.pet = Some(super::super::pets::Pet::new(species, capped));
+        p.gold = 500;
+    }
+    s.feed_companion(uid(1));
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.gold, 500, "nothing to pay for");
+    assert_eq!(p.pet.unwrap().loyalty_xp, capped);
+    assert_eq!(p.pet_meals, (0, 0), "and no meal is spent");
+
+    // Hurt, it is still mended for the fee.
+    {
+        let pet = s.players.get_mut(&uid(1)).unwrap().pet.as_mut().unwrap();
+        pet.downed = true;
+        pet.hp = 0;
+    }
+    s.feed_companion(uid(1));
+    let p = &s.players[&uid(1)];
+    assert!(!p.pet.unwrap().downed);
+    assert_eq!(p.gold, 500 - PET_FEED_COST);
+    assert_eq!(p.pet.unwrap().loyalty_xp, capped);
+}
+
+#[test]
 fn feeding_works_anywhere_not_just_at_a_stable() {
     // Reported pain point: a pet going down mid-fight deep in the Frontier
     // used to be stuck downed until a long walk back to a capital's Stable.

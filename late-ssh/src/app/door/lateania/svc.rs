@@ -59,7 +59,7 @@ use super::items::{
 use super::persist::{
     SavedCharacter, SavedCharacterInit, SavedMob, SavedMobDot, SavedMobStun, SavedWorld,
 };
-use super::pets::{MEALS_PER_DAY, Pet, pet_species_by_key};
+use super::pets::{MEALS_PER_DAY, PET_MAX_LEVEL, Pet, pet_species_by_key};
 use super::skills::{CraftSkill, GatherSkill, TamingSkill, skill_level_for_xp, skill_progress};
 use super::stats::{
     AbilityScores, CritOutcome, SCORE_CAP, Score, ScoreOfferView, crit_outcome, modifier,
@@ -213,17 +213,28 @@ const RESURRECT_HP_PCT: i32 = 40;
 /// Gold to feed (heal, revive, and raise the loyalty of) a companion.
 const PET_FEED_COST: i64 = 20;
 
+/// Why a feed raises no loyalty.
+#[derive(Clone, Copy)]
+enum NoMeal {
+    /// Today's `MEALS_PER_DAY` are eaten.
+    MealsSpent,
+    /// At `PET_MAX_LEVEL`: loyalty has nothing left to raise.
+    FullyGrown,
+}
+
 /// What one `G`/`~` feed of the owned companion came to.
 enum Meal {
     NoPet,
     CantAfford,
-    /// Well and out of meals: nothing to pay for.
+    /// Well and no meal to have: nothing to pay for.
     Sated {
         name: &'static str,
+        why: NoMeal,
     },
-    /// Out of meals but hurt: mended, no loyalty.
+    /// No meal to have, but hurt: mended, no loyalty.
     Mended {
         name: &'static str,
+        why: NoMeal,
     },
     /// A meal: loyalty and mended. `leveled` is the new level, if it rose.
     Fed {
@@ -9318,12 +9329,6 @@ impl WorldState {
         self.dirty = true;
     }
 
-    /// Feed the player's companion, or a wild adoptable critter sharing the
-    /// room if one is here and no stray has been won over yet (Genesys) -
-    /// one key, whichever feeding actually matters right now. An owned pet
-    /// that's hurt or downed always comes first: courting a stray is a
-    /// patient side project, never a reason to leave a real emergency
-    /// unfed.
     /// `G`: always your own companion. `feed_pet` (the `~` key) courts a
     /// stray instead whenever the pet is healthy, and Embergate's Stable
     /// shares its square with two of them, so a healthy pet could never be
@@ -9332,6 +9337,12 @@ impl WorldState {
         self.feed_owned_pet(user_id);
     }
 
+    /// Feed the player's companion, or a wild adoptable critter sharing the
+    /// room if one is here and no stray has been won over yet (Genesys) -
+    /// one key, whichever feeding actually matters right now. An owned pet
+    /// that's hurt or downed always comes first: courting a stray is a
+    /// patient side project, never a reason to leave a real emergency
+    /// unfed.
     fn feed_pet(&mut self, user_id: Uuid) {
         let Some(p) = self.players.get(&user_id) else {
             return;
@@ -9429,9 +9440,9 @@ impl WorldState {
     }
 
     /// Feed the companion for `PET_FEED_COST`: a meal (loyalty, then mended)
-    /// while it has meals left today, else just mended. A pet that is well
-    /// and has had its meals is turned away free, since there is nothing to
-    /// pay for.
+    /// while it has meals left today and levels left to gain, else just
+    /// mended. A pet that is well and has no meal to have (`NoMeal`) is
+    /// turned away free, since there is nothing to pay for.
     fn feed_owned_pet(&mut self, user_id: Uuid) {
         let today = now_unix_secs() / 86_400;
         let meal = match self.players.get_mut(&user_id) {
@@ -9442,13 +9453,17 @@ impl WorldState {
                 match p.pet.as_mut() {
                     None => Meal::NoPet,
                     Some(pet) => {
-                        let hungry = meals < MEALS_PER_DAY;
+                        let no_meal = match (pet.level() >= PET_MAX_LEVEL, meals >= MEALS_PER_DAY) {
+                            (true, _) => Some(NoMeal::FullyGrown),
+                            (false, true) => Some(NoMeal::MealsSpent),
+                            (false, false) => None,
+                        };
                         let hurt = pet.downed || pet.hp < pet.max_hp();
                         let name = pet.species.name;
-                        match (hungry, hurt) {
-                            (false, false) => Meal::Sated { name },
+                        match (no_meal, hurt) {
+                            (Some(why), false) => Meal::Sated { name, why },
                             _ if gold < PET_FEED_COST => Meal::CantAfford,
-                            (true, _) => {
+                            (None, _) => {
                                 let leveled = pet.feed();
                                 let level = pet.level();
                                 p.gold -= PET_FEED_COST;
@@ -9459,10 +9474,10 @@ impl WorldState {
                                     leveled: leveled.then_some(level),
                                 }
                             }
-                            (false, true) => {
+                            (Some(why), true) => {
                                 pet.mend();
                                 p.gold -= PET_FEED_COST;
-                                Meal::Mended { name }
+                                Meal::Mended { name, why }
                             }
                         }
                     }
@@ -9481,20 +9496,30 @@ impl WorldState {
                 LogKind::System,
                 format!("Feed costs {PET_FEED_COST} gold."),
             ),
-            Meal::Sated { name } => self.log_to(
+            Meal::Sated { name, why } => self.log_to(
                 user_id,
                 LogKind::System,
-                format!(
-                    "Your {name} is well and has had its {MEALS_PER_DAY} meals today. It will eat again after midnight UTC, in {until_reset}."
-                ),
+                match why {
+                    NoMeal::MealsSpent => format!(
+                        "Your {name} is well and has had its {MEALS_PER_DAY} meals today. It will eat again after midnight UTC, in {until_reset}."
+                    ),
+                    NoMeal::FullyGrown => format!(
+                        "Your {name} is well and as devoted as it will ever be. Feed it when it is hurt."
+                    ),
+                },
             ),
-            Meal::Mended { name } => {
+            Meal::Mended { name, why } => {
                 self.log_to(
                     user_id,
                     LogKind::Loot,
-                    format!(
-                        "You tend your {name} (-{PET_FEED_COST}g); it mends, but it has had its {MEALS_PER_DAY} meals today and grows no fonder until midnight UTC, in {until_reset}."
-                    ),
+                    match why {
+                        NoMeal::MealsSpent => format!(
+                            "You tend your {name} (-{PET_FEED_COST}g); it mends, but it has had its {MEALS_PER_DAY} meals today and grows no fonder until midnight UTC, in {until_reset}."
+                        ),
+                        NoMeal::FullyGrown => {
+                            format!("You tend your {name} (-{PET_FEED_COST}g); it mends.")
+                        }
+                    },
                 );
                 self.dirty = true;
             }

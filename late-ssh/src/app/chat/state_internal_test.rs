@@ -4000,6 +4000,39 @@ async fn summary_command_requests_the_visible_public_room() {
     assert!(matches!(event.outcome, SummaryOutcome::Unavailable));
 }
 
+/// With commands off (the Lounge), only a draft that would run as a command
+/// is refused. A bare `/` or a `//` aside is plain speech everywhere else, so
+/// it is plain speech here too.
+#[tokio::test]
+async fn a_composer_with_commands_off_refuses_commands_but_not_slash_led_speech() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "cmds_off").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+
+    for speech in ["/", "// an aside", "//"] {
+        state.composer = new_chat_textarea();
+        state.composer.insert_str(speech);
+        assert!(
+            state
+                .submit_composer(false, ComposerCommands::Disabled)
+                .is_none(),
+            "{speech:?} is speech, not a command"
+        );
+    }
+
+    for command in ["/active", "  /me waves", "/me waves\nand bows"] {
+        state.composer = new_chat_textarea();
+        state.composer.insert_str(command);
+        let banner = state
+            .submit_composer(false, ComposerCommands::Disabled)
+            .unwrap_or_else(|| panic!("{command:?} is refused"));
+        assert_eq!(
+            banner.message,
+            "Commands are off in the Lounge, use them from Home"
+        );
+    }
+}
+
 #[tokio::test]
 async fn summary_command_refuses_a_malformed_window_without_requesting() {
     let test_db = crate::test_helpers::new_test_db().await;

@@ -2110,8 +2110,15 @@ async fn clicking_the_mentions_hud_text_opens_mentions() {
     app.handle_input(format!("\x1b[<0;{};1M", chips_col + 1).as_bytes());
     assert_render_not_contains_for(&mut app, "mentioned you in", Duration::from_millis(120)).await;
 
-    // Clicking inside the mentions text opens the Mentions view.
+    // Clicking inside the mentions text opens the Mentions view, and a
+    // composer that was open closes: Mentions has nothing to type into.
+    app.handle_input(b"i");
+    assert!(app.chat.composing, "i opens the lounge composer");
     app.handle_input(format!("\x1b[<0;{};1M", mentions_col + 1).as_bytes());
+    assert!(
+        !app.chat.composing,
+        "the jump to Mentions closes the composer"
+    );
     wait_for_render_contains(&mut app, "mentioned you in").await;
 }
 

@@ -215,9 +215,29 @@ pub enum ComposerCommands {
 
 impl ComposerCommands {
     pub fn for_screen(screen: Screen) -> Self {
-        match screen == Screen::Clubhouse {
-            true => Self::Disabled,
-            false => Self::Enabled,
+        match screen {
+            Screen::Clubhouse => Self::Disabled,
+            Screen::Dashboard
+            | Screen::Arcade
+            | Screen::Games
+            | Screen::Lateania
+            | Screen::Rebels
+            | Screen::Nethack
+            | Screen::Dcss
+            | Screen::Brogue
+            | Screen::Dopewars
+            | Screen::Bashquest
+            | Screen::Codekeep
+            | Screen::Usurper
+            | Screen::GreenDragon
+            | Screen::Darkroom
+            | Screen::Artboard
+            | Screen::Profiles
+            | Screen::Leaderboard
+            | Screen::Zen
+            | Screen::DailyMatch
+            | Screen::HouseTable
+            | Screen::Scratchpad => Self::Enabled,
         }
     }
 }
@@ -3478,7 +3498,7 @@ impl ChatState {
     ) -> Option<Banner> {
         let body = self.composer.lines().join("\n").trim_end().to_string();
 
-        match (commands, body.trim_start().starts_with('/')) {
+        match (commands, is_command_draft(&body)) {
             (ComposerCommands::Disabled, true) => {
                 return Some(Banner::error(
                     "Commands are off in the Lounge, use them from Home",
@@ -7966,6 +7986,17 @@ pub(crate) fn cup_art(kind: CupKind, variant: u8) -> String {
         CupKind::Tea => "  \\___/",
     };
     format!("{steam}\n{cup}")
+}
+
+/// Whether a draft is a command attempt rather than speech: its first word
+/// leads with `/`. A bare `/` and a `//` aside are speech, as they are to
+/// `unknown_slash_command`. Multi-line drafts count, since several command
+/// parsers take a body that runs over lines.
+fn is_command_draft(input: &str) -> bool {
+    match input.split_whitespace().next() {
+        Some("/") | Some("//") | None => false,
+        Some(word) => word.starts_with('/'),
+    }
 }
 
 fn unknown_slash_command(input: &str) -> Option<&str> {

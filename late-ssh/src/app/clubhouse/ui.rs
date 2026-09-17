@@ -56,8 +56,9 @@ pub(crate) struct ClubhouseView<'a> {
     /// The shared composer block, pinned under the tavern. `None` only
     /// before the #lounge room id is known.
     pub composer: Option<crate::app::chat::ui::ComposerBlockView<'a>>,
-    /// A chat overlay opened from the composer. It owns input on this
-    /// screen (`screen_composes_chat`), so it is drawn over the tavern.
+    /// A chat overlay that lands here (requested on Home; commands are off
+    /// in this composer). It owns input on this screen
+    /// (`screen_composes_chat`), so it is drawn over the tavern.
     pub overlay: Option<&'a crate::app::common::overlay::Overlay>,
 }
 

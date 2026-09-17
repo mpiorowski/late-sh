@@ -256,7 +256,8 @@ struct DrawContext<'a> {
     clubhouse_bot_id: Option<uuid::Uuid>,
     /// The clubhouse composer footer; built only on that screen.
     clubhouse_composer: Option<chat::ui::ComposerBlockView<'a>>,
-    /// The chat overlay the Lounge composer can open (`/active`, `/members`).
+    /// A chat overlay that lands on the Lounge (a `/summary` or reaction list
+    /// requested on Home); the Lounge composer itself opens none.
     clubhouse_overlay: Option<&'a crate::app::common::overlay::Overlay>,
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
