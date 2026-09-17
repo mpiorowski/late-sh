@@ -292,6 +292,7 @@ impl App {
         changed |= self.drain_voice_join_results();
         changed |= self.tick_stream();
         changed |= self.tick_crown();
+        changed |= self.bonsai.tick();
         changed |= self.tick_pot();
         // News state is ticked inside chat.tick()
         let profile_tick = self.profile_state.tick();
@@ -936,7 +937,7 @@ impl App {
             // A Bonsai Decay Shield purchase is picked up here, but the tree
             // has no in-session decay simulation to refresh, so it only
             // matters from the next login's elapsed-day catch-up onward.
-            self.bonsai_state.decay_protection = self.shop_state.active_bonsai_decay_protection();
+            self.bonsai.tree.decay_protection = self.shop_state.active_bonsai_decay_protection();
             // An Aquarium Shield purchase takes effect at once: the fish
             // stop being hungry and the water clears on the next quarter edge.
             self.aquarium_care
@@ -1054,18 +1055,6 @@ impl App {
                     }
                     ActivityKind::GameLost { .. } if user_id == self.user_id => {
                         self.pet_state.note_loss(Instant::now());
-                        None
-                    }
-                    // The session's own watering cleared the DB chip gate:
-                    // this is the one place that may claim the payout, since
-                    // another session or an in-flight save can make the
-                    // in-memory state disagree with the row.
-                    ActivityKind::BonsaiWatered if user_id == self.user_id => {
-                        self.bonsai_state.message = Some(format!(
-                            "Watered (+{} chips)",
-                            crate::app::bonsai::svc::WATER_CHIP_BONUS
-                        ));
-                        changed = true;
                         None
                     }
                     // Same story for the tank: the DB gate said this

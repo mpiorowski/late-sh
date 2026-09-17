@@ -703,7 +703,7 @@ pub struct App {
     pub(crate) session_daily_wins: crate::app::arcade::daily::SessionDailyWins,
 
     /// Bonsai
-    pub(crate) bonsai_state: crate::app::bonsai::state::BonsaiState,
+    pub(crate) bonsai: crate::app::bonsai::session::BonsaiSession,
 
     /// Cat companion
     pub(crate) pet_state: crate::app::pet::state::PetState,
@@ -1238,27 +1238,23 @@ impl App {
         let splash_piece = config.splash_piece.clone();
         let username = config.username.clone();
 
-        let initial_bonsai_decay_protection = config.initial_bonsai_decay_protection;
-        // The fallback only exists for a failed load at bootstrap. It is
-        // built `Detached`, so every persist on it is a no-op and it can
-        // never overwrite the real row; the next login loads for real.
-        let bonsai_state = config
-            .initial_bonsai_tree
-            .map(|tree| {
-                crate::app::bonsai::state::BonsaiState::new(
-                    config.user_id,
-                    config.bonsai_service.clone(),
-                    tree,
-                    initial_bonsai_decay_protection,
-                )
-            })
-            .unwrap_or_else(|| {
-                crate::app::bonsai::state::BonsaiState::fallback(
-                    config.user_id,
-                    config.bonsai_service.clone(),
-                    config.user_id.as_u128() as i64,
-                )
-            });
+        // A failed bootstrap load draws a placeholder root until the first
+        // answer or change notice brings the stored tree in.
+        let bonsai_tree = match config.initial_bonsai_tree {
+            Some(tree) => crate::app::bonsai::state::BonsaiState::view_only(
+                tree,
+                config.initial_bonsai_decay_protection,
+            ),
+            None => crate::app::bonsai::state::BonsaiState::fallback(
+                config.user_id,
+                config.user_id.as_u128() as i64,
+            ),
+        };
+        let bonsai = crate::app::bonsai::session::BonsaiSession::new(
+            config.user_id,
+            config.bonsai_service.clone(),
+            bonsai_tree,
+        );
 
         let pet_state = if let Some(companion) = config.initial_pet {
             crate::app::pet::state::PetState::new(
@@ -1562,7 +1558,6 @@ impl App {
             profile_modal_state: profile_modal::state::ProfileModalState::new(
                 config.profile_service.clone(),
                 config.showcase_service.clone(),
-                config.bonsai_service.clone(),
             ),
             settings_modal_state,
             sheet_modal_state: sheet_modal::state::SheetModalState::new(),
@@ -1580,7 +1575,7 @@ impl App {
                 .unwrap_or_default(),
             leaderboard_rx: config.leaderboard_rx,
             session_daily_wins: crate::app::arcade::daily::SessionDailyWins::new(),
-            bonsai_state,
+            bonsai,
             pet_state,
             quest_state,
             shop_state,

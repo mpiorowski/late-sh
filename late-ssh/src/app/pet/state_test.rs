@@ -107,7 +107,26 @@ fn frame(position: (usize, usize)) -> PetFrameInputs {
         zone: Rect::new(10, 20, 48, 8),
         neighbours: Neighbours::default(),
         position,
+        home: (0, 0),
     }
+}
+
+/// Tick with the cursor outside the box until the pet is back on the
+/// stroll, asserting it walks there: never more than a cell per axis per
+/// animation edge. Returns the last perch it held, which must be right
+/// next to `home` so handing over to the stroll is not a jump either.
+fn walk_home(state: &mut PetState, mut wall: usize, now: Instant) -> Perch {
+    let mut last = state.perch().expect("perched before the cursor left");
+    for _ in 0..100 {
+        wall += 2;
+        state.tick(tick(wall, now, Some(frame((last.x, last.y))), Some((0, 0))));
+        let Some(next) = state.perch() else {
+            return last;
+        };
+        assert!(next.x.abs_diff(last.x) <= 1 && next.y.abs_diff(last.y) <= 1);
+        last = next;
+    }
+    panic!("the pet never got back to the stroll");
 }
 
 fn tick(
@@ -179,9 +198,12 @@ async fn the_pet_walks_after_the_cursor_and_lets_go_when_it_leaves() {
         "a parked pet reports nothing"
     );
 
-    // The cursor leaves the box: the stroll takes over again.
-    assert!(state.tick(tick(wall + 4, now, Some(frame((30, 4))), Some((0, 0)))));
-    assert_eq!(state.perch(), None);
+    // The cursor leaves the box: the pet walks back to where the stroll
+    // is, a cell at a time, and only then does the stroll take over. It
+    // must not teleport there.
+    let last = walk_home(&mut state, wall + 2, now);
+    assert!(last.x <= 1 && last.y <= 1, "let go right beside the stroll");
+    assert_eq!(last.look, Look::Left, "facing the way it walked");
 }
 
 #[tokio::test]
@@ -208,13 +230,13 @@ async fn a_sulking_or_sleeping_pet_does_not_come_and_a_petted_one_is_not_pinned(
 
     // Petted (the click is a report inside the box), then the cursor
     // leaves: it purrs, follows while the cursor is there, and strolls the
-    // moment it is gone. Nothing pins a purring pet.
+    // way back once it is gone. Nothing pins a purring pet.
     let later = t0 + SULK_FOR + ASLEEP_AFTER + Duration::from_secs(1);
     state.note_petted(later);
     assert!(state.tick(tick(6, later, Some(frame((7, 2))), inside)));
     assert_eq!(state.mood(), PetMood::Purring);
     assert!(state.perch().is_some(), "following the click");
-    assert!(state.tick(tick(8, later, Some(frame((7, 2))), Some((0, 0)))));
+    walk_home(&mut state, 6, later);
     assert_eq!(state.perch(), None, "cursor gone: back on the stroll");
     // The purr ends on its own.
     assert!(state.tick(tick(10, later + PURR_FOR, Some(frame((7, 2))), None)));

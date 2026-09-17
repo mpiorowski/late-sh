@@ -272,6 +272,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let bonsai_service =
         late_ssh::app::bonsai::svc::BonsaiService::new(db.clone(), activity_tx.clone());
+    let _bonsai_listener_task = bonsai_service.start_listener_task(config.db.clone());
     let pet_service = late_ssh::app::pet::svc::PetService::new(db.clone(), activity_tx.clone());
     let aquarium_service = late_ssh::app::AquariumService::new(db.clone(), activity_tx.clone());
     let initial_dartboard = match late_ssh::dartboard::load_persisted_artboard(&db).await {

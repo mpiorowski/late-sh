@@ -1086,7 +1086,7 @@ impl App {
         let zen_care = crate::app::zen::ui::Care {
             bonsai: crate::app::zen::ui::Chore::of(
                 true,
-                self.bonsai_state.last_watered == Some(care_day),
+                self.bonsai.tree.last_watered == Some(care_day),
             ),
             tank: crate::app::zen::ui::Chore::of(
                 self.shop_state.entitlements().has_aquarium(),
@@ -1310,7 +1310,7 @@ impl App {
                         paired_client: paired_client.as_ref(),
                         eq_state,
                         sidebar_clock: &sidebar_clock,
-                        bonsai: &self.bonsai_state,
+                        bonsai: &self.bonsai.tree,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
                         is_moderator: self.is_moderator,

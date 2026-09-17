@@ -4,7 +4,7 @@ use std::{
 };
 
 use chrono::{DateTime, NaiveDate, Utc};
-use late_core::models::bonsai::{Tree, TreeParams};
+use late_core::models::bonsai::{Tree, TreeWrite};
 use late_core::models::bonsai_decay_protection::BonsaiDecayProtection;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -201,22 +201,53 @@ impl BonsaiGraph {
     }
 }
 
-/// Whether this state writes to the owner's row. `Live` is the session's
-/// own tree. `Detached` is a profile view of someone else's tree or the
-/// bootstrap fallback after a failed load: every `persist*` call is a no-op,
-/// so a viewer can never write to the viewed row and a fallback can never
-/// overwrite the real one.
+/// One care action, as a session asks the service for it. The branch an
+/// action works on travels with it: selection is per session, so the
+/// service applies the action to the branch this session was looking at,
+/// not to whatever another session selected last.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum Persistence {
-    Live,
-    Detached,
+pub enum BonsaiAction {
+    /// Water, or replant when the tree is dead.
+    Water,
+    Bend {
+        dx: i8,
+        dy: i8,
+    },
+    Prune,
+    Split,
+    Pinch,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) struct BonsaiCommand {
+    pub selected_branch_id: Option<i32>,
+    pub action: BonsaiAction,
+}
+
+/// What `BonsaiState::settle` did to a freshly loaded row.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) struct Settled {
+    pub changed: bool,
+    pub died: bool,
+}
+
+/// What one `BonsaiState::apply` did.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum Applied {
+    /// Refused or a no-op: only `message` moved, nothing to store.
+    Unchanged,
+    Changed,
+    /// The first watering of the UTC day: store, and pay the chips.
+    Watered,
+}
+
+/// The bonsai rules as a pure state machine over one row's worth of data.
+/// It never reads or writes the database: `BonsaiService` loads the row
+/// under its lock, runs one of these over it, and stores the result; a
+/// session keeps one only as a mirror to draw from (`session.rs`).
 #[derive(Clone)]
 pub(crate) struct BonsaiState {
     pub user_id: Uuid,
-    pub svc: BonsaiService,
-    persistence: Persistence,
     pub seed: i64,
     pub planted_at: DateTime<Utc>,
     pub last_watered: Option<NaiveDate>,
@@ -229,92 +260,31 @@ pub(crate) struct BonsaiState {
     pub selected_branch_id: Option<i32>,
     pub mode: BonsaiMode,
     pub message: Option<String>,
-    state_revision: i64,
+    /// The row's `state_revision` this state was built from. A session
+    /// mirror uses it to drop a copy older than the one it already shows.
+    pub revision: i64,
 
     /// The user's live Bonsai Decay Shield window, if any, consulted by
     /// `simulate_day` so a protected day adds no water stress and costs no
-    /// vigor. Loaded at construction time (login, or profile view for
-    /// `view_only`) and refreshed from the shop snapshot on tick; there is
-    /// no in-session re-simulation, so a purchase mid-session only takes
-    /// visible effect from the next construction onward.
+    /// vigor. The service reads it fresh for every settle; a session mirror
+    /// also refreshes it from the shop snapshot on tick.
     pub decay_protection: Option<BonsaiDecayProtection>,
 }
 
 impl BonsaiState {
-    pub(crate) fn new(
-        user_id: Uuid,
-        svc: BonsaiService,
-        tree: Tree,
-        decay_protection: Option<BonsaiDecayProtection>,
-    ) -> Self {
-        let today = BonsaiService::today();
-        let persisted_badge_glyph = tree.badge_glyph.clone();
-        let (mut graph, normalized_ids) =
+    /// The row as stored, nothing simulated. `settle` brings it to today.
+    pub(crate) fn from_tree(tree: Tree, decay_protection: Option<BonsaiDecayProtection>) -> Self {
+        let (graph, normalized_ids) =
             serde_json::from_value::<BonsaiGraph>(tree.branch_graph.clone())
                 .map(normalize_graph_segments)
                 .unwrap_or_else(|_| (seeded_graph(tree.seed), BTreeMap::new()));
-        let repotted = repot_into_canvas(&mut graph);
         let selected_branch_id = tree
             .selected_branch_id
             .and_then(|id| normalized_ids.get(&id).copied())
             .or(tree.selected_branch_id)
             .or_else(|| graph.selected_fallback());
         let mut state = Self {
-            user_id,
-            svc,
-            persistence: Persistence::Live,
-            seed: tree.seed,
-            planted_at: tree.planted_at,
-            last_watered: tree.last_watered,
-            is_alive: tree.is_alive,
-            vigor: tree.vigor,
-            water_stress: tree.water_stress.max(0),
-            last_simulated_date: tree.last_simulated_date,
-            age_days: simulated_age_days(tree.planted_at, tree.last_simulated_date),
-            graph,
-            selected_branch_id,
-            mode: BonsaiMode::from_str(&tree.mode),
-            message: (repotted > 0).then(|| repot_message(repotted)),
-            state_revision: tree.state_revision,
-            decay_protection,
-        };
-        state.ensure_selection();
-        let was_alive = state.is_alive;
-        let elapsed_changed = state.apply_elapsed_days(today);
-        if was_alive && !state.is_alive {
-            state.svc.lost_task(user_id, state.age_days as i32);
-        }
-        let badge_changed = state.badge_glyph() != persisted_badge_glyph;
-        if elapsed_changed || badge_changed || repotted > 0 {
-            state.persist();
-        }
-        state
-    }
-
-    /// Build a read-only state for rendering another user's tree (profile
-    /// view). Catches elapsed days up in memory so the silhouette is accurate,
-    /// but is `Detached`, so viewing can never mutate the owner's tree.
-    pub(crate) fn view_only(
-        user_id: Uuid,
-        svc: BonsaiService,
-        tree: Tree,
-        decay_protection: Option<BonsaiDecayProtection>,
-    ) -> Self {
-        let today = BonsaiService::today();
-        let (mut graph, normalized_ids) =
-            serde_json::from_value::<BonsaiGraph>(tree.branch_graph.clone())
-                .map(normalize_graph_segments)
-                .unwrap_or_else(|_| (seeded_graph(tree.seed), BTreeMap::new()));
-        let _ = repot_into_canvas(&mut graph);
-        let selected_branch_id = tree
-            .selected_branch_id
-            .and_then(|id| normalized_ids.get(&id).copied())
-            .or(tree.selected_branch_id)
-            .or_else(|| graph.selected_fallback());
-        let mut state = Self {
-            user_id,
-            svc,
-            persistence: Persistence::Detached,
+            user_id: tree.user_id,
             seed: tree.seed,
             planted_at: tree.planted_at,
             last_watered: tree.last_watered,
@@ -327,26 +297,49 @@ impl BonsaiState {
             selected_branch_id,
             mode: BonsaiMode::from_str(&tree.mode),
             message: None,
-            state_revision: tree.state_revision,
+            revision: tree.state_revision,
             decay_protection,
         };
         state.ensure_selection();
-        // In-memory catch-up only; `Detached` makes every persist a no-op.
-        state.apply_elapsed_days(today);
         state
     }
 
-    /// The session's tree when the bootstrap load failed. `Detached`: it
-    /// is never written, so it can never overwrite the real row, and the
-    /// next login plants or loads for real.
-    pub(crate) fn fallback(user_id: Uuid, svc: BonsaiService, seed: i64) -> Self {
+    /// Bring a loaded row to `today`: fit it into the pot, then run the
+    /// elapsed days (dry-day decay, growth, death). The service stores the
+    /// result when `changed`; a mirror or a profile view keeps it in memory.
+    pub(crate) fn settle(&mut self, today: NaiveDate) -> Settled {
+        let repotted = repot_into_canvas(&mut self.graph);
+        if repotted > 0 {
+            self.message = Some(repot_message(repotted));
+            self.ensure_selection();
+        }
+        let was_alive = self.is_alive;
+        let elapsed_changed = self.apply_elapsed_days(today);
+        Settled {
+            changed: elapsed_changed || repotted > 0,
+            died: was_alive && !self.is_alive,
+        }
+    }
+
+    /// A state to draw from: the row settled to today in memory. Used for
+    /// a session's mirror of its own tree and for a profile view of someone
+    /// else's. Nothing here can write.
+    pub(crate) fn view_only(tree: Tree, decay_protection: Option<BonsaiDecayProtection>) -> Self {
+        let mut state = Self::from_tree(tree, decay_protection);
+        state.settle(BonsaiService::today());
+        state.message = None;
+        state
+    }
+
+    /// What a session draws when the bootstrap load failed. It is a mirror
+    /// like any other, so it can never overwrite the real row; the first
+    /// action or change notice replaces it with the stored tree.
+    pub(crate) fn fallback(user_id: Uuid, seed: i64) -> Self {
         let today = BonsaiService::today();
         let graph = seeded_graph(seed);
         let selected_branch_id = graph.selected_fallback();
         Self {
             user_id,
-            svc,
-            persistence: Persistence::Detached,
             seed,
             planted_at: Utc::now(),
             last_watered: None,
@@ -358,22 +351,44 @@ impl BonsaiState {
             graph,
             selected_branch_id,
             mode: BonsaiMode::Inspect,
-            message: Some("Bonsai is not persisted yet".to_string()),
-            state_revision: 0,
+            message: Some("Bonsai is still loading".to_string()),
+            revision: -1,
             decay_protection: None,
         }
     }
 
-    /// Water once per UTC day: a second press the same day is refused.
-    pub(crate) fn water(&mut self) -> bool {
-        let today = BonsaiService::today();
+    /// Run one care action. The caller stores the state unless it comes
+    /// back `Unchanged`; `message` is set either way.
+    pub(crate) fn apply(&mut self, command: BonsaiCommand, today: NaiveDate) -> Applied {
+        // The acting session's cursor, when it still names a live branch.
+        if let Some(id) = command.selected_branch_id
+            && self.graph.branch(id).is_some_and(Branch::is_alive)
+        {
+            self.selected_branch_id = Some(id);
+        }
+        let changed = match command.action {
+            BonsaiAction::Water => return self.water(today),
+            BonsaiAction::Bend { dx, dy } => self.bend_selected(dx, dy),
+            BonsaiAction::Prune => self.prune_selected(),
+            BonsaiAction::Split => self.split_selected(),
+            BonsaiAction::Pinch => self.pinch_selected(),
+        };
+        match changed {
+            true => Applied::Changed,
+            false => Applied::Unchanged,
+        }
+    }
+
+    /// Water once per UTC day: a second press the same day is refused. The
+    /// first `w` on a dead tree replants; watering starts on the next.
+    fn water(&mut self, today: NaiveDate) -> Applied {
         if !self.is_alive {
-            self.respawn();
-            return true;
+            self.respawn(today);
+            return Applied::Changed;
         }
         if self.last_watered == Some(today) {
             self.message = Some("Already watered today".to_string());
-            return false;
+            return Applied::Unchanged;
         }
         self.last_watered = Some(today);
         if self.last_simulated_date < today {
@@ -383,12 +398,10 @@ impl BonsaiState {
         self.vigor = (self.vigor + 18).min(100);
         self.grow_once(GrowthCause::Water);
         self.message = Some("Watered: vigor pushed new growth".to_string());
-        self.persist_watering();
-        true
+        Applied::Watered
     }
 
-    pub(crate) fn respawn(&mut self) {
-        let today = BonsaiService::today();
+    fn respawn(&mut self, today: NaiveDate) {
         self.seed = self.seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         self.planted_at = Utc::now();
         self.graph = seeded_graph(self.seed);
@@ -401,7 +414,16 @@ impl BonsaiState {
         self.age_days = 0;
         self.mode = BonsaiMode::Inspect;
         self.message = Some("New bonsai planted".to_string());
-        self.persist();
+    }
+
+    /// Move the cursor to `id` when it names a live tip; otherwise leave it
+    /// where `ensure_selection` put it.
+    pub(crate) fn select_or_keep(&mut self, id: Option<i32>) {
+        if let Some(id) = id
+            && self.branch_is_alive_tip(id)
+        {
+            self.selected_branch_id = Some(id);
+        }
     }
 
     pub(crate) fn cycle_selection(&mut self, delta: isize) {
@@ -418,37 +440,36 @@ impl BonsaiState {
         let next = (current as isize + delta).rem_euclid(ids.len() as isize) as usize;
         self.selected_branch_id = Some(ids[next]);
         self.message = None;
-        self.persist_selection();
     }
 
-    pub(crate) fn bend_selected(&mut self, dx: i8, dy: i8) {
+    fn bend_selected(&mut self, dx: i8, dy: i8) -> bool {
         let Some(id) = self.selected_branch_id else {
             self.message = Some("No branch selected".to_string());
-            return;
+            return false;
         };
         if id == ROOT_BRANCH_ID {
             self.message = Some("The trunk remembers, but it will not wire".to_string());
-            return;
+            return false;
         }
         if !self.graph.is_tip(id) {
             self.message = Some("Wire a live tip; prune structure branches first".to_string());
-            return;
+            return false;
         }
         let Some(branch) = self.graph.branch_mut(id) else {
             self.message = Some("Selected branch vanished".to_string());
             self.ensure_selection();
-            return;
+            return false;
         };
         if matches!(branch.status, BranchStatus::Cut | BranchStatus::Deadwood) {
             self.message = Some("Deadwood will not bend".to_string());
-            return;
+            return false;
         }
         if matches!(
             branch.status,
             BranchStatus::Pinched | BranchStatus::NeedsPinch | BranchStatus::LeafPad
         ) {
             self.message = Some("Pinched and leaf branches will not wire".to_string());
-            return;
+            return false;
         }
         branch.status = BranchStatus::Wired;
         branch.bend_x = (branch.bend_x + dx).clamp(-3, 3);
@@ -456,104 +477,107 @@ impl BonsaiState {
         let direction = wire_direction_label(branch.bend_x, branch.bend_y);
         self.mode = BonsaiMode::Wire;
         self.message = Some(format!("Wire set: future growth will lean {direction}"));
-        self.persist();
+        true
     }
 
-    pub(crate) fn prune_selected(&mut self) {
+    fn prune_selected(&mut self) -> bool {
         let Some(id) = self.selected_branch_id else {
             self.message = Some("No branch selected".to_string());
-            return;
+            return false;
         };
         if id == ROOT_BRANCH_ID {
             self.message = Some("Hard trunk cuts are disabled".to_string());
-            return;
+            return false;
         }
         let Some(branch) = self.graph.branch(id).cloned() else {
             self.message = Some("Selected branch vanished".to_string());
             self.ensure_selection();
-            return;
+            return false;
         };
         if matches!(branch.status, BranchStatus::Cut | BranchStatus::Deadwood) {
             self.message = Some("Already cut".to_string());
-            return;
+            return false;
         }
         let removed_count = self.remove_branch_and_descendants(id);
         self.vigor = (self.vigor - 4).max(0);
         self.message = Some(clean_cut_message(removed_count));
         self.select_parent_tip_or_fallback(branch.parent_id);
-        self.persist();
+        true
     }
 
-    pub(crate) fn split_selected(&mut self) {
+    fn split_selected(&mut self) -> bool {
         let Some(id) = self.selected_branch_id else {
             self.message = Some("No branch selected".to_string());
-            return;
+            return false;
         };
         if id == ROOT_BRANCH_ID {
             self.message = Some("The trunk will not split".to_string());
-            return;
+            return false;
         }
         if !self.graph.is_tip(id) {
             self.message = Some("Split only a live tip".to_string());
-            return;
+            return false;
         }
         let Some(branch) = self.graph.branch_mut(id) else {
             self.message = Some("Selected branch vanished".to_string());
             self.ensure_selection();
-            return;
+            return false;
         };
         match branch.status {
             BranchStatus::Growing | BranchStatus::Wired => {
                 branch.last_pruned_day = Some(self.age_days);
                 self.message = Some("Split marked: next growth forks if space is open".to_string());
-                self.persist();
+                true
             }
             BranchStatus::Pinched | BranchStatus::NeedsPinch => {
                 self.message = Some("Pinched branches stay compact; cut to rebuild".to_string());
+                false
             }
             BranchStatus::LeafPad => {
                 self.message = Some("Leaf pads stay compact; cut to rebuild".to_string());
+                false
             }
             BranchStatus::Cut | BranchStatus::Deadwood => {
                 self.message = Some("Deadwood will not split".to_string());
+                false
             }
         }
     }
 
-    pub(crate) fn pinch_selected(&mut self) {
+    fn pinch_selected(&mut self) -> bool {
         let Some(id) = self.selected_branch_id else {
             self.message = Some("No branch selected".to_string());
-            return;
+            return false;
         };
         if id == ROOT_BRANCH_ID {
             self.message = Some("The trunk will not pinch".to_string());
-            return;
+            return false;
         }
         if !self.graph.is_tip(id) {
             self.message = Some("Pinch only the current tip".to_string());
-            return;
+            return false;
         }
         let Some(branch) = self.graph.branch(id).cloned() else {
             self.message = Some("Selected branch vanished".to_string());
             self.ensure_selection();
-            return;
+            return false;
         };
         if matches!(branch.status, BranchStatus::Cut | BranchStatus::Deadwood) {
             self.message = Some("Deadwood has no soft tip".to_string());
-            return;
+            return false;
         }
         if matches!(branch.status, BranchStatus::LeafPad) {
             self.message = Some("Already a leaf pad; cut it back to rebuild".to_string());
-            return;
+            return false;
         }
         if matches!(branch.status, BranchStatus::Pinched) {
             self.message = Some("Let this pinch set before pinching again".to_string());
-            return;
+            return false;
         }
         let Some(branch) = self.graph.branch_mut(id) else {
             self.message = Some("Selected branch vanished".to_string());
             self.ensure_selection();
-            return;
+            return false;
         };
         branch.ramification = branch
             .ramification
@@ -577,7 +601,7 @@ impl BonsaiState {
             "Pinched: {}/{}; {hint}",
             ramification, LEAF_RAMIFICATION_THRESHOLD
         ));
-        self.persist();
+        true
     }
 
     pub(crate) fn share_snippet(&self) -> String {
@@ -761,45 +785,11 @@ impl BonsaiState {
         }
     }
 
-    /// The revision advances on every mutation whatever the persistence
-    /// mode, so the state machine reads the same in a profile view or a
-    /// test as in a live session; only the write is skipped when `Detached`.
-    fn persist(&mut self) {
-        let params = self.next_params();
-        match self.persistence {
-            Persistence::Live => self.svc.save_task(params),
-            Persistence::Detached => {}
-        }
-    }
-
-    /// A watering goes through the service's watering path rather than the
-    /// plain save, so the once-per-day chip bonus is paid behind the DB
-    /// gate in the same task as the write.
-    fn persist_watering(&mut self) {
-        let params = self.next_params();
-        match self.persistence {
-            Persistence::Live => self.svc.water_task(params),
-            Persistence::Detached => {}
-        }
-    }
-
-    /// The selection cursor is display state: one column, no revision, no
-    /// graph serialization. Tab and the wheel fire this on every notch.
-    fn persist_selection(&mut self) {
-        match self.persistence {
-            Persistence::Live => {
-                self.svc
-                    .select_branch_task(self.user_id, self.selected_branch_id);
-            }
-            Persistence::Detached => {}
-        }
-    }
-
-    fn next_params(&mut self) -> TreeParams {
-        self.state_revision += 1;
+    /// The whole state as `Tree::store` writes it.
+    pub(crate) fn to_write(&self) -> TreeWrite {
         let branch_graph =
             serde_json::to_value(&self.graph).unwrap_or_else(|_| serde_json::json!({}));
-        TreeParams {
+        TreeWrite {
             user_id: self.user_id,
             seed: self.seed,
             planted_at: self.planted_at,
@@ -812,7 +802,6 @@ impl BonsaiState {
             selected_branch_id: self.selected_branch_id,
             mode: self.mode.as_str().to_string(),
             badge_glyph: self.badge_glyph(),
-            state_revision: self.state_revision,
         }
     }
 }

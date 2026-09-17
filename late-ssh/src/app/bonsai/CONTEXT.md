@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/bonsai`
-- Last updated: 2026-09-08 (one Bonsai for everyone: the living branch graph is the only bonsai. The classic stage ladder, its daily care rows, the graveyard, the `dynamic_bonsai` shop unlock, and the `bonsai_variant` slot are gone (migration 177), and every tree was reset to a fresh seed rather than migrated. `bonsai_v2` took the plain `bonsai` name in code and in the database. Same day, earlier: the care modal is the pot (a fixed `CANVAS_WIDTH` 81 by `CANVAS_HEIGHT` 26 canvas drawn 1:1), growth is bounded by that canvas and shaped by length budgets per branch order, interior segments and leaf pads back-bud so a tended tree is never finished, the branch cap is 128, and the sidebar and profile draw one fixed 21x13 preview of the canvas that sways on the wall tick.)
+- Last updated: 2026-09-17 (the stored row is the truth: care actions run in `BonsaiService` under the row lock, `BonsaiState` is a pure state machine, and a session holds only a render mirror kept fresh by its own answers and the `bonsai_changed` notify. See section 3.)
 - Purpose: local working context for the bonsai branch-graph system.
 - Status: Live for every account, planted at first login.
 - Parent context: `../../../../CONTEXT.md`
@@ -30,11 +30,12 @@ History: this shipped 2026-07 as "Dynamic Bonsai", a 1000-chip shop unlock that 
 ```text
 late-ssh/src/app/bonsai/
 |-- mod.rs              # Module declarations only
-|-- state.rs            # Persistent branch graph, growth simulation, care actions, badge scoring
+|-- state.rs            # Pure state machine: branch graph, growth simulation, care actions, badge scoring
+|-- session.rs          # A session's render mirror, its cursor, and the requests it sends the service
 |-- render.rs           # The graph renderer (modal canvas), the fitted preview (sidebar, profile), the sway
 |-- modal_ui.rs         # Care workbench modal
 |-- modal_input.rs      # Modal key handling
-|-- svc.rs              # Persistence, the daily chip payout, activity events
+|-- svc.rs              # The one writer: locked actions, the daily chip payout, the change listener, activity events
 `-- CONTEXT.md          # This file
 ```
 
@@ -43,7 +44,7 @@ Related files:
 ```text
 late-core/migrations/056_create_bonsai_v2.sql     # the table, created under its old name
 late-core/migrations/177_one_bonsai_for_everyone.sql
-late-core/src/models/bonsai.rs                    # `Tree` on `bonsai_trees`
+late-core/src/models/bonsai.rs                    # `Tree` on `bonsai_trees`: `ensure`, `lock`, `store`, `notify_changed`
 late-core/src/models/bonsai_decay_protection.rs   # the Bonsai Decay Shield window
 late-core/src/models/user.rs                      # the chat badge join
 late-ssh/src/app/common/sidebar.rs
@@ -60,31 +61,37 @@ late-ssh/src/app/chat/svc.rs
 
 ## 3. Current Architecture
 
-Persistence:
+Persistence (the replica rule applied: truth lives in Postgres):
 - Table: `bonsai_trees` (created as `bonsai_v2_trees` by migration 056, renamed by 177). One row per user.
-- Stores `seed`, `last_watered`, `is_alive`, `vigor`, `water_stress`, `last_simulated_date`, `branch_graph` JSONB, `selected_branch_id`, `mode`, and precomputed `badge_glyph`. Also stores `planted_at` and `state_revision`; saves increment `state_revision` and the DB upsert ignores stale async writes with `WHERE bonsai_trees.state_revision < EXCLUDED.state_revision`.
-- `BonsaiService::ensure_tree` runs at every session bootstrap: it plants the bare root (`seeded_graph`, badge `·`) for a user with no row and returns the existing row untouched otherwise, together with the live Bonsai Decay Shield window. There is no other creation path.
+- Stores `seed`, `last_watered`, `is_alive`, `vigor`, `water_stress`, `last_simulated_date`, `branch_graph` JSONB, `selected_branch_id`, `mode`, precomputed `badge_glyph`, `planted_at`, and `state_revision`.
+- `BonsaiService` is the only writer, and every write has one shape (`lock_settled`, then `Tree::store`): open a transaction, `Tree::ensure` (plants the bare root for an account with no row), `Tree::lock` (`SELECT ... FOR UPDATE`), build a `BonsaiState` from the locked row, `settle` it to today, run the rule, `Tree::store`, `Tree::notify_changed`, commit. Two sessions, or two replicas, acting at once run one after the other on the same tree. Nothing writes a tree from a private copy.
+- `state_revision` is owned by `Tree::store` (`state_revision + 1`): it counts stored writes and nothing else. It is not a write guard; the row lock is.
+- `BonsaiService::ensure_tree` runs at every session bootstrap: the same locked shape with no action, so the elapsed-day catch-up, the repot, and a badge the current ladder scores differently are stored once however many sessions log in together. A death found there fires `ActivityKind::BonsaiLost` (private).
+- `BonsaiService::act_task(user_id, BonsaiCommand, reply)` is the orchestration entry for a care action: span `bonsai.act_task`, the `late_ssh_bonsai_actions_total{action,result}` counter (`stored` / `refused` / `failed`), error logging, activity events after the commit, and the `BonsaiOutcome` sent back to the asking session. `act` is the work half and returns data.
+- Every action settles first, so a session left open across midnight pays its dry days before the action lands. A tree that dies in that settle takes no action on top: the session sees it dead, and the next `w` replants.
+- Watering is once per UTC day, and the locked row is the only witness: `BonsaiState::apply` refuses with "Already watered today" when the row's `last_watered` is today. The first watering returns `Applied::Watered`, and `act` credits `ChipMove::BonsaiWatered` (200, `source_ref` the date) in the same transaction as the store that stamps `last_watered`, so the day can never be spent without the credit landing. The answer's message says "Watered (+200 chips)".
 
 Session state:
-- `App::bonsai_state` is the one tree. Global `w` opens the care modal (`open_bonsai_modal_globally`) when not composing; `Ctrl+B` does nothing.
-- `BonsaiState::new` runs `apply_elapsed_days`, which applies dry-day decay and death on real calendar dates. There is no in-session tick: growth comes from watering and from the daily catch-up only, and a death is only detected at the next login (the service then fires `ActivityKind::BonsaiLost`, which stays private).
-- Watering is once per UTC day. `BonsaiState::water` refuses a second press with "Already watered today"; the first press moves the meters, runs a growth wave, and persists through `persist_watering` rather than the plain `persist`.
-- The 200 chips: `BonsaiService::water_task` runs `Tree::water_day` (an `UPDATE ... WHERE last_watered IS DISTINCT FROM today RETURNING`, the one atomic witness of the first watering of the day, which never bumps `state_revision`) and `UserChips::apply(ChipMove::BonsaiWatered)` in one transaction, so the gate can never be spent without the credit landing; then `Tree::save` on its own; then the `BonsaiWatered` activity event when the gate said yes. `water_day` is the only writer of `last_watered` (`Tree::save` leaves the column alone), so a save from a pinch or a replant that lands first can neither pre-empt nor reopen the gate. The status row claims the chips only when the session sees its own `BonsaiWatered` event come back (`tick.rs`), never from in-memory state, since another session may already have watered today.
-- `Persistence` (`state.rs`): `Live` is the session's own tree; `Detached` is a profile view or the bootstrap fallback, on which every `persist*` is a no-op. That, not the revision guard, is what keeps a viewer or a fallback from writing the owner's row.
-- `cycle_selection` persists through `persist_selection` -> `Tree::select_branch`, a one-column `UPDATE` with no revision bump: Tab and the wheel fire it on every notch and must not pay a full graph upsert each time.
-- The Bonsai Decay Shield (`bonsai_decay_shield_two_weeks`, a `bonsai_consumable`) is read into `decay_protection` at construction and refreshed from the shop snapshot on tick; `simulate_day` skips the stress and vigor cost on a covered day. It only matters from the next login's catch-up onward.
+- `App::bonsai` is a `BonsaiSession` (`session.rs`): `tree`, a `BonsaiState` used as a render mirror, plus the channels. Global `w` opens the care modal (`open_bonsai_modal_globally`) when not composing; `Ctrl+B` does nothing.
+- A key press never changes the mirror's tree. `modal_input.rs` calls `BonsaiSession::request(BonsaiAction)`, which sends the action with the branch under this session's cursor; the mirror moves when `BonsaiSession::tick` (called from `App::tick`) drains the answer. The care modal rides `HOT_TICK`, so the answer shows within a frame or two of the commit.
+- The selection cursor and `message` are the only per-session state. Tab and the wheel move the cursor in memory and write nothing. The row's `selected_branch_id` is whatever the last action stored; a command carries its own cursor (`BonsaiCommand::selected_branch_id`), so an action lands on the branch the acting session was looking at.
+- Cross-session and cross-replica freshness: `BonsaiService::start_listener_task` (one LISTEN connection per process, the `CrownService` shape) turns `bonsai_changed` payloads (the owner's user id) into a process-local `broadcast<Uuid>`. A session that sees its own id asks for `reload_task`; a lagged receiver reloads too. `BonsaiSession::install` drops a tree whose `state_revision` is older than the mirror's, because a reload and an action answer race and can arrive out of order.
+- A change committed while the LISTEN connection is reconnecting is not replayed: an idle second session's mirror lags until its owner's next action or change, both of which carry the stored tree. No action is ever decided from the mirror, so a lagging mirror is a display issue only.
+- A failed bootstrap load draws `BonsaiState::fallback` (revision -1, "Bonsai is still loading"); the first answer or change notice replaces it. It cannot write anything: no mirror can.
+- There is no in-session tick: growth comes from watering and from the settle only.
+- The Bonsai Decay Shield (`bonsai_decay_shield_two_weeks`, a `bonsai_consumable`) is read fresh by the service for every settle; the mirror's copy is refreshed from the shop snapshot on tick. `simulate_day` skips the stress and vigor cost on a covered day.
 
 Rendering:
 - One plotter, `plot_tree`, puts the graph's cells (branches, then leaf pads, a pad drawn whether or not a shoot has budded out of it) into a grid with the trunk base above the last row at the center column. `render_ascii` adds the pot and is the true render; `canvas_lines` is that at `CANVAS_WIDTH` x `CANVAS_HEIGHT`, which the care modal (with selection highlighting, `center_lines` leading it inside the wider frame) and the share snippet draw 1:1. The growth rules keep every tip (and its leaf pad reach) inside the canvas, so the modal never cuts anything off.
 - The sidebar panel (`draw_bonsai_inline`) and the profile hero draw `render_preview_lines`: the true canvas fitted into one fixed block, `PREVIEW_WIDTH` 21 by `PREVIEW_HEIGHT` 13 (the sidebar's width; the profile centers the same block in its hero), by `render_preview_ascii`. It never invents anything. When the tree fits, it is the modal's own glyphs, trimmed around the trunk. When it does not, one integer scale factor is applied to both axes so the block keeps the modal's proportions (a wide tree comes out squat, never tall and thin); bare rows (structure only, no foliage, nothing mid-pinch) are dropped from the pot upward, the trunk base always kept, only as far as needed to stop the height forcing a larger factor than the width already does. A preview cell that gathered one sample keeps that sample's glyph; several samples resolve to the dominant kind, foliage as density glyphs (`@` / `*` / `#` by count), structure as its commonest glyph. The preview pot is `[=====]`. `BONSAI_MIN_HEIGHT` in the sidebar is the block plus the footer row.
 - The modal, the sidebar, and the profile hero all apply `apply_sway` off the wall tick and ride the `ANIM_HALF_TICK` tier. The profile modal takes `wall_tick` in `draw`, and `tick.rs` marks it changed on the `anim_half` edge while it shows a tree (`ProfileModalState::bonsai()`).
 - The care modal is sized to the canvas (`CANVAS_WIDTH + 12` by `CANVAS_HEIGHT + 7`): the tree, a blank row, two status rows, a two-row key footer. The status row appends "full: cut to make room" at the branch cap.
-- Profile views use `BonsaiState::view_only`, which applies elapsed-day catch-up in memory for rendering but never persists to the viewed user's row.
+- Profile views and session mirrors are both `BonsaiState::view_only`: the row settled to today in memory, for drawing. `BonsaiState` has no way to write.
 - Child branches do not redraw their parent joint cell; only root segments draw their starting cell. This keeps one-cell graph segments from visually collapsing into uneven long ASCII runs.
 
 Chat badge:
 - `bonsai_trees.badge_glyph` is joined in `User::list_chat_author_metadata` as `bonsai_badge_glyph`; `chat/svc.rs` shows it when non-empty. No row yet (a user who has not logged in since migration 177) or an empty glyph (a dead tree) shows nothing.
-- `BonsaiState::new` refreshes and persists `badge_glyph` when the current score ladder would compute a different glyph, so loaded trees migrate across badge-threshold changes without requiring a care action.
+- Every locked write stores the freshly scored `badge_glyph`, and `ensure_tree` stores when the current ladder scores the loaded tree differently, so trees migrate across badge-threshold changes without requiring a care action.
 
 ---
 
@@ -147,10 +154,10 @@ The pot (2026-09-08):
 - `natural_steps`: a free tip (not wired, not the trunk) meanders around its heading with a seeded roll per step: keep going, one notch toward level, one notch toward up, and at order 4+ sometimes a droop. Young orders mostly climb, deeper orders drift level and hang. The rolled step comes first and the others follow as fallbacks when a cell is taken, so a taken cell costs the wave nothing. The other diagonal is the last fallback. `candidate_steps` is the one list of steps a tip would take (wire, trunk, or meander), and `tip_can_grow` checks exactly that list, so the wave filter, the bud gate, and the growth itself can never disagree (they did once: the filter accepted a diagonal the meander never tried, the oldest such tip was picked every wave, failed every wave, and starved the rest until the player selected a real tip). `tip_parked`: a tip against the ceiling or a side wall grows nothing (a wire can still pull it back in), does not hold the bud gate, and the tree's energy goes to buds, which prefer room. Nothing slides or climbs along the pot.
 - The bud gate counts only shoots that can still grow (`tip_can_grow`: the straight step or any level or rising step has an open cell), so tips parked against the pot or wedged in the crown never hold the gate shut. Bud sites are ordered by `open_run`, the empty level run the shoot would face on its side, so new arms go toward empty space rather than into the crown.
 - Back-budding (`bud_once`, run at the end of every growth wave, including waves with no growing tip at all): two kinds of site at `end_y >= 2`. A live interior segment carrying exactly one live child throws a shoot leaning away from that child. A leaf pad with no shoot yet throws one out of its foliage (the renderer keeps drawing the pad; `plot_leaf_pad` no longer requires the pad to be a tip). Watering buds one site, a plain day one on a one-in-four roll, a dry day none; vigor under 40 or stress 60+ buds nothing, and neither does a tree with `MAX_OPEN_SHOOTS` (4) growing or wired tips still open off the trunk: tend the shoots you have and the tree offers more, which is what keeps an admin-watered tree from outrunning anyone's pinching. This is what puts foliage at every height and keeps a pinched-out tree in play: pinch the shoot three times and the pad has moved outward by a cell, denser.
-- `repot_into_canvas` runs in `new` and `view_only`: branches whose end lies outside the canvas are cut with their descendants (trunk untouched); `new` persists and says "Repotted: cut back N glyphs to fit the new pot". Trees planted before the canvas pay this once.
+- `repot_into_canvas` runs in `settle`: branches whose end lies outside the canvas are cut with their descendants (trunk untouched), and the service stores the result. Trees planted before the canvas pay this once.
 
 Growth paths:
-- Daily catch-up happens in `BonsaiState::new` via `apply_elapsed_days(today)`.
+- Daily catch-up happens in `BonsaiState::settle` via `apply_elapsed_days(today)`, under the row lock at login and before every action.
 - Watering grants vigor, reduces stress, and triggers extra growth attempts. There is no passive in-session growth (removed 2026-07-23).
 - Dry elapsed days increase stress, reduce vigor, and can create wild growth or deadwood.
 - Each growth event is a small wave, not a single tip: split-marked tips resolve first, then the selected tip, then the other live tips in rotation (`growth_tip_order`): the tip that has waited longest since it appeared (highest `age`) goes first, tips with nowhere to grow (`tip_can_grow`) are skipped so they never waste a slot, and the tiebreak hash is salted with `graph.next_id` so repeated waterings on one day never pick the same favourites. Water/high vigor grows the broadest wave; stress can narrow it.
@@ -226,12 +233,12 @@ Important invariant: a huge neglected mess should not automatically be prestigio
 
 - `mod.rs` stays declaration-only.
 - Rendering comes from graph state, never from static ASCII stage templates.
-- Persist mutations after user-visible graph/state changes. A watering persists through `persist_watering` so the chips ride the DB gate; a selection change through `persist_selection`; every other action uses `persist`.
-- The daily chips are paid in exactly one place, `BonsaiService::water`, behind `Tree::water_day`. No other path credits `ChipMove::BonsaiWatered`.
+- The stored row is the truth. Every write goes through `BonsaiService` under `Tree::lock`; a session never decides an action from its mirror and never writes. Do not add a save-from-memory path.
+- The daily chips are paid in exactly one place, `BonsaiService::act` on `Applied::Watered`, in the transaction that stamps `last_watered`. No other path credits `ChipMove::BonsaiWatered`.
 - Badge metadata must stay cheap for chat; use the persisted `badge_glyph`, not per-message graph rendering.
 - The renderer must tolerate narrow/sidebar areas without panics: out-of-grid cells are dropped, never indexed.
 - The care modal shows the whole canvas 1:1, always; the growth rules guarantee it fits. Small surfaces show the preview, which reads the true canvas and never invents cells: when it must shrink, drop bare rows first, then scale each axis by its own integer factor. No crop, no camera.
-- Unit tests for `state.rs` and `render.rs` stay pure logic/rendering tests; `svc_test.rs` is the DB-backed slice (planting, the chip gate).
+- Unit tests for `state.rs` and `render.rs` stay pure logic/rendering tests; `svc_test.rs` is the DB-backed slice (planting, settling, the once-a-day watering under concurrency), `session_test.rs` drives two mirrors of one account, and `late-core/src/models/bonsai_test.rs` pins the lock against lost updates.
 
 ---
 

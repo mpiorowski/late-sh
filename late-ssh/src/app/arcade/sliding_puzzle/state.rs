@@ -50,6 +50,14 @@ impl Mode {
             Self::Personal => "personal",
         }
     }
+
+    /// Sentence-case name, for the start of a message line.
+    fn title(self) -> &'static str {
+        match self {
+            Self::Daily => "Daily",
+            Self::Personal => "Personal",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -262,7 +270,7 @@ impl State {
         self.clear_reset_pending();
         self.mode = Mode::Daily;
         self.selected_difficulty = difficulty_index.min(DIFFICULTIES.len() - 1);
-        self.message = format!("Daily {} board.", self.difficulty_label());
+        self.message = self.board_message();
     }
 
     /// Roll the dailies forward when the UTC date changes under a live
@@ -282,10 +290,15 @@ impl State {
         true
     }
 
+    /// The one "which board is this" line, whichever key asked for it.
+    fn board_message(&self) -> String {
+        format!("{} {} board.", self.mode.title(), self.difficulty_label())
+    }
+
     pub fn show_daily(&mut self) {
         self.clear_reset_pending();
         self.mode = Mode::Daily;
-        self.message = format!("Daily {} board.", self.difficulty_label());
+        self.message = self.board_message();
     }
 
     pub fn show_personal(&mut self) {
@@ -312,7 +325,7 @@ impl State {
         self.clear_reset_pending();
         self.selected_difficulty = (self.selected_difficulty + 1) % DIFFICULTIES.len();
         let generated = self.mode == Mode::Personal && self.ensure_personal_snapshot();
-        self.message = format!("{} {} board.", self.mode_label(), self.difficulty_label());
+        self.message = self.board_message();
         if generated {
             self.save_async();
         }
@@ -323,7 +336,7 @@ impl State {
         self.selected_difficulty =
             (self.selected_difficulty + DIFFICULTIES.len() - 1) % DIFFICULTIES.len();
         let generated = self.mode == Mode::Personal && self.ensure_personal_snapshot();
-        self.message = format!("{} {} board.", self.mode_label(), self.difficulty_label());
+        self.message = self.board_message();
         if generated {
             self.save_async();
         }

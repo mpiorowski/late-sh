@@ -10,7 +10,6 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::app::bonsai::state::BonsaiState;
-use crate::app::bonsai::svc::BonsaiService;
 use crate::app::chat::showcase::svc::{ShowcaseFeedItem, ShowcaseService, ShowcaseSnapshot};
 use crate::app::hub::aquarium::state::AquariumState;
 use crate::app::profile::ledger::LedgerRow;
@@ -36,7 +35,6 @@ impl ScrollExtent {
 pub(crate) struct ProfileModalState {
     profile_service: ProfileService,
     showcase_service: ShowcaseService,
-    bonsai_service: BonsaiService,
     showcase_snapshot_rx: watch::Receiver<ShowcaseSnapshot>,
     showcases: Vec<ShowcaseFeedItem>,
     viewed_user_id: Option<Uuid>,
@@ -79,17 +77,12 @@ impl Drop for ProfileModalState {
 }
 
 impl ProfileModalState {
-    pub(crate) fn new(
-        profile_service: ProfileService,
-        showcase_service: ShowcaseService,
-        bonsai_service: BonsaiService,
-    ) -> Self {
+    pub(crate) fn new(profile_service: ProfileService, showcase_service: ShowcaseService) -> Self {
         let showcase_snapshot_rx = showcase_service.subscribe_snapshot();
         let showcases = showcase_snapshot_rx.borrow().items.clone();
         Self {
             profile_service,
             showcase_service,
-            bonsai_service,
             showcase_snapshot_rx,
             showcases,
             viewed_user_id: None,
@@ -231,9 +224,7 @@ impl ProfileModalState {
         self.pet = snapshot.pet;
 
         self.bonsai = match (self.viewed_user_id, snapshot.bonsai) {
-            (Some(user_id), Some(tree)) => Some(BonsaiState::view_only(
-                user_id,
-                self.bonsai_service.clone(),
+            (Some(_), Some(tree)) => Some(BonsaiState::view_only(
                 tree,
                 snapshot.bonsai_decay_protection,
             )),
