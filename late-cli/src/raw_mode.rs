@@ -8,13 +8,15 @@ pub(super) struct RawModeGuard {
 }
 
 /// Turns off the terminal modes a late.sh session turns on (mouse reporting
-/// 1000/1003/1006, bracketed paste 2004) and shows the cursor. The server
+/// 1000/1003/1006, bracketed paste 2004), resets the themed background
+/// (OSC 111), and shows the cursor. The server
 /// sends the same on a clean exit, but an idle timeout or a dropped link
 /// ends the session without it, and the shell is left printing mouse
 /// reports. Sent on every session end, so it has to be harmless twice:
 /// that is why it never leaves the alternate screen (`?1049l` a second
 /// time restores a stale cursor and the prompt overwrites the goodbye).
-const SESSION_MODES_OFF: &[u8] = b"\x1b[?1000l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?25h";
+const SESSION_MODES_OFF: &[u8] =
+    b"\x1b[?1000l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b]111\x1b\\\x1b[?25h";
 
 pub(super) fn write_session_modes_off(out: &mut impl Write) -> io::Result<()> {
     out.write_all(SESSION_MODES_OFF)?;
@@ -204,23 +206,5 @@ mod windows_console {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::write_session_modes_off;
-
-    #[test]
-    fn session_end_turns_off_every_mode_the_server_turns_on() {
-        let mut out = Vec::new();
-        write_session_modes_off(&mut out).expect("write");
-        let out = String::from_utf8(out).expect("ascii");
-        for mode in ["?1000l", "?1003l", "?1006l", "?2004l", "?25h"] {
-            assert!(
-                out.contains(&format!("\x1b[{mode}")),
-                "{mode} missing from {out:?}"
-            );
-        }
-        assert!(
-            !out.contains("?1049l"),
-            "leaving the alt screen twice would move the cursor: {out:?}"
-        );
-    }
-}
+#[path = "raw_mode_test.rs"]
+mod raw_mode_test;
