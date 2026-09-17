@@ -225,7 +225,10 @@ pub enum BranchAction {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum BonsaiCommand {
     Water,
-    Branch { branch_id: i32, action: BranchAction },
+    Branch {
+        branch_id: i32,
+        action: BranchAction,
+    },
 }
 
 impl BonsaiCommand {

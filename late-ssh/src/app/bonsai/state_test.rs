@@ -226,10 +226,7 @@ fn watering_a_dead_tree_replants_it() {
     let old_seed = state.seed;
     let today = BonsaiService::today();
 
-    let applied = state.apply(
-        BonsaiCommand::Water,
-        today,
-    );
+    let applied = state.apply(BonsaiCommand::Water, today);
 
     assert_eq!(applied, Applied::Changed);
     assert!(state.is_alive);

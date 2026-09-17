@@ -202,8 +202,8 @@ mod inner {
         TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
-    use crate::app::bonsai::state::BranchAction;
     use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
+    use crate::app::bonsai::state::BranchAction;
 
     fn meter() -> opentelemetry::metrics::Meter {
         global::meter("late-ssh")

@@ -14,13 +14,19 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
         ParsedInput::Byte(b'w' | b'W') | ParsedInput::Char('w' | 'W') => water(app),
         ParsedInput::Byte(b'x' | b'X') | ParsedInput::Char('x' | 'X') => {
-            let _ = app.bonsai.request(BonsaiAction::Branch(BranchAction::Prune));
+            let _ = app
+                .bonsai
+                .request(BonsaiAction::Branch(BranchAction::Prune));
         }
         ParsedInput::Byte(b'p' | b'P') | ParsedInput::Char('p' | 'P') => {
-            let _ = app.bonsai.request(BonsaiAction::Branch(BranchAction::Pinch));
+            let _ = app
+                .bonsai
+                .request(BonsaiAction::Branch(BranchAction::Pinch));
         }
         ParsedInput::Byte(b's' | b'S') | ParsedInput::Char('s' | 'S') => {
-            let _ = app.bonsai.request(BonsaiAction::Branch(BranchAction::Split));
+            let _ = app
+                .bonsai
+                .request(BonsaiAction::Branch(BranchAction::Split));
         }
         ParsedInput::Byte(b'c' | b'C') | ParsedInput::Char('c' | 'C') => copy_snippet(app),
         ParsedInput::Byte(b'\t') => app.bonsai.tree.cycle_selection(1),
@@ -54,7 +60,9 @@ pub(crate) fn handle_escape(app: &mut App) {
 }
 
 fn steer(app: &mut App, dx: i8, dy: i8) {
-    let _ = app.bonsai.request(BonsaiAction::Branch(BranchAction::Bend { dx, dy }));
+    let _ = app
+        .bonsai
+        .request(BonsaiAction::Branch(BranchAction::Bend { dx, dy }));
 }
 
 fn water(app: &mut App) {
