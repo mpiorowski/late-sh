@@ -702,7 +702,10 @@ fn an_ability_killing_blow_reaches_the_next_tick_output() {
     }
     s.engage_mob(uid(1), mob_id);
     s.use_ability(uid(1), 1);
-    assert!(!s.mobs[&mob_id].alive, "the Firebolt lands the killing blow");
+    assert!(
+        !s.mobs[&mob_id].alive,
+        "the Firebolt lands the killing blow"
+    );
 
     let kills: Vec<(Uuid, String)> = s
         .tick()
@@ -2473,8 +2476,8 @@ fn a_healthy_companion_at_the_level_cap_is_turned_away_free() {
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
     let species = super::super::pets::pet_species_by_key("cave_bear").unwrap();
-    let capped = super::super::pets::LOYALTY_PER_LEVEL
-        * i64::from(super::super::pets::PET_MAX_LEVEL - 1);
+    let capped =
+        super::super::pets::LOYALTY_PER_LEVEL * i64::from(super::super::pets::PET_MAX_LEVEL - 1);
     {
         let p = s.players.get_mut(&uid(1)).unwrap();
         p.pet = Some(super::super::pets::Pet::new(species, capped));

@@ -3451,14 +3451,13 @@ fn pack_vitals_spans(view: &PlayerView) -> Vec<Span<'static>> {
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ];
-    match &view.in_combat_with {
-        Some(foe) => spans.push(Span::styled(
+    if let Some(foe) = &view.in_combat_with {
+        spans.push(Span::styled(
             format!("  fighting {foe}"),
             Style::default()
                 .fg(theme::ERROR())
                 .add_modifier(Modifier::BOLD),
-        )),
-        None => {}
+        ));
     }
     spans
 }
