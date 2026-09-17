@@ -59,7 +59,7 @@ use super::items::{
 use super::persist::{
     SavedCharacter, SavedCharacterInit, SavedMob, SavedMobDot, SavedMobStun, SavedWorld,
 };
-use super::pets::{Pet, pet_species_by_key};
+use super::pets::{MEALS_PER_DAY, Pet, pet_species_by_key};
 use super::skills::{CraftSkill, GatherSkill, TamingSkill, skill_level_for_xp, skill_progress};
 use super::stats::{
     AbilityScores, CritOutcome, SCORE_CAP, Score, ScoreOfferView, crit_outcome, modifier,
@@ -212,6 +212,26 @@ const CORPSE_LINGER_SECS: u64 = 90;
 const RESURRECT_HP_PCT: i32 = 40;
 /// Gold to feed (heal, revive, and raise the loyalty of) a companion.
 const PET_FEED_COST: i64 = 20;
+
+/// What one `G`/`~` feed of the owned companion came to.
+enum Meal {
+    NoPet,
+    CantAfford,
+    /// Well and out of meals: nothing to pay for.
+    Sated {
+        name: &'static str,
+    },
+    /// Out of meals but hurt: mended, no loyalty.
+    Mended {
+        name: &'static str,
+    },
+    /// A meal: loyalty and mended. `leveled` is the new level, if it rose.
+    Fed {
+        name: &'static str,
+        meal: u32,
+        leveled: Option<i32>,
+    },
+}
 /// Consecutive days a wild adoptable critter must be fed to win it over as a
 /// stray companion (Genesys). Free (no gold cost) - the price is patience.
 const STRAY_ADOPTION_DAYS: u32 = 5;
@@ -765,6 +785,11 @@ pub struct InvView {
     pub category: &'static str,
     /// The item's flavor/description text.
     pub desc: &'static str,
+    /// What the character wears in this piece's slot, for the inventory
+    /// screen's side-by-side (see `ShopEntryView::worn_name`). None for worn
+    /// rows, non-gear, an empty slot, or a loose copy of the worn piece.
+    pub worn_name: Option<String>,
+    pub worn_stats: Option<String>,
 }
 
 /// A batch-sell request at a merchant. Consumables and equipped gear are never
@@ -837,6 +862,10 @@ pub struct PetView {
     pub downed: bool,
     /// Loyalty toward the next level, 0-100.
     pub loyalty_pct: i32,
+    /// Meals eaten today (UTC) that raised loyalty, out of `pets::MEALS_PER_DAY`.
+    pub meals_today: u32,
+    /// Gold one feed (`G`) costs.
+    pub feed_cost: i64,
     /// Auto-skills the pet has unlocked at its level: (name, unlock level). Fire
     /// automatically in combat.
     pub skills: Vec<(String, i32)>,
@@ -884,8 +913,6 @@ pub struct StableEntryView {
 #[derive(Clone, Debug)]
 pub struct StableView {
     pub entries: Vec<StableEntryView>,
-    /// Gold to feed the current companion (shown as the panel's tend action).
-    pub feed_cost: i64,
 }
 
 /// One row in the housing ledger: a deed (at the clerk) or a furnishing (inside
@@ -2025,6 +2052,11 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.feed_pet(user_id));
     }
 
+    /// `G`: feed the player's own companion, never a stray.
+    pub fn feed_companion_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.feed_companion(user_id));
+    }
+
     /// Attempt to tame the wild beast at index `idx` in the current room's
     /// tameable list into the player's active companion.
     pub fn tame_task(&self, user_id: Uuid, idx: usize) {
@@ -2572,6 +2604,10 @@ struct PlayerState {
     /// consecutive days fed, the last day fed as a Unix day number). Reset if
     /// a day is missed; promoted to `stray` once it reaches the streak needed.
     stray_bond: Option<(usize, u32, u64)>,
+    /// The companion's loyalty-raising meals: (Unix day number, meals that
+    /// day). Kept on the player, not the pet, so buying a new beast does not
+    /// reset the day's count.
+    pet_meals: (u64, u32),
     /// Chosen appearance/bio trait indices (see `appearance::FIELDS`).
     appearance: [u8; appearance::N_FIELDS],
     /// Gathering-skill xp, keyed by trade; the level is a pure function of xp.
@@ -2611,6 +2647,14 @@ struct PlayerState {
 }
 
 impl PlayerState {
+    /// Loyalty-raising meals the companion has had on `today` (a Unix day).
+    fn meals_today(&self, today: u64) -> u32 {
+        match self.pet_meals {
+            (day, meals) if day == today => meals,
+            _ => 0,
+        }
+    }
+
     fn equipment_mods(&self) -> (i32, i32, i32) {
         let mut attack = 0;
         let mut hp = 0;
@@ -3918,6 +3962,7 @@ impl WorldState {
             pet: None,
             stray: None,
             stray_bond: None,
+            pet_meals: (0, 0),
             appearance: [0; appearance::N_FIELDS],
             skills: HashMap::new(),
             craft_skills: HashMap::new(),
@@ -4247,6 +4292,7 @@ impl WorldState {
                 .stray_bond
                 .map(|(i, streak, day)| (i as usize, streak, day))
                 .filter(|&(i, ..)| i < super::world::WILDLIFE.len());
+            p.pet_meals = saved.pet_meals;
             // Restore the appearance/bio choices (clamped to valid options).
             for i in 0..appearance::N_FIELDS {
                 let v = saved.appearance.get(i).copied().unwrap_or(0);
@@ -4328,6 +4374,7 @@ impl WorldState {
             pet_loyalty: p.pet.map(|pet| pet.loyalty_xp).unwrap_or(0),
             stray: p.stray.map(|i| i as u32),
             stray_bond: p.stray_bond.map(|(i, streak, day)| (i as u32, streak, day)),
+            pet_meals: p.pet_meals,
             owned_plot: self.owned_plot(user_id).map(|plot| plot as u32),
             house_furniture: self
                 .owned_plot(user_id)
@@ -7878,7 +7925,8 @@ impl WorldState {
     // ---- Tick -----------------------------------------------------------
 
     fn tick(&mut self) -> TickOutput {
-        self.pending_kills.clear();
+        // `pending_kills` carries over on purpose: abilities land between
+        // ticks (`mutate`), and their kills ship with this tick's output.
         let now = Instant::now();
 
         // Advance the world clock (drives time-of-day and weather).
@@ -9276,6 +9324,14 @@ impl WorldState {
     /// that's hurt or downed always comes first: courting a stray is a
     /// patient side project, never a reason to leave a real emergency
     /// unfed.
+    /// `G`: always your own companion. `feed_pet` (the `~` key) courts a
+    /// stray instead whenever the pet is healthy, and Embergate's Stable
+    /// shares its square with two of them, so a healthy pet could never be
+    /// fed there.
+    fn feed_companion(&mut self, user_id: Uuid) {
+        self.feed_owned_pet(user_id);
+    }
+
     fn feed_pet(&mut self, user_id: Uuid) {
         let Some(p) = self.players.get(&user_id) else {
             return;
@@ -9372,50 +9428,98 @@ impl WorldState {
         self.dirty = true;
     }
 
+    /// Feed the companion for `PET_FEED_COST`: a meal (loyalty, then mended)
+    /// while it has meals left today, else just mended. A pet that is well
+    /// and has had its meals is turned away free, since there is nothing to
+    /// pay for.
     fn feed_owned_pet(&mut self, user_id: Uuid) {
-        let Some(p) = self.players.get(&user_id) else {
-            return;
+        let today = now_unix_secs() / 86_400;
+        let meal = match self.players.get_mut(&user_id) {
+            None => return,
+            Some(p) => {
+                let meals = p.meals_today(today);
+                let gold = p.gold;
+                match p.pet.as_mut() {
+                    None => Meal::NoPet,
+                    Some(pet) => {
+                        let hungry = meals < MEALS_PER_DAY;
+                        let hurt = pet.downed || pet.hp < pet.max_hp();
+                        let name = pet.species.name;
+                        match (hungry, hurt) {
+                            (false, false) => Meal::Sated { name },
+                            _ if gold < PET_FEED_COST => Meal::CantAfford,
+                            (true, _) => {
+                                let leveled = pet.feed();
+                                let level = pet.level();
+                                p.gold -= PET_FEED_COST;
+                                p.pet_meals = (today, meals + 1);
+                                Meal::Fed {
+                                    name,
+                                    meal: meals + 1,
+                                    leveled: leveled.then_some(level),
+                                }
+                            }
+                            (false, true) => {
+                                pet.mend();
+                                p.gold -= PET_FEED_COST;
+                                Meal::Mended { name }
+                            }
+                        }
+                    }
+                }
+            }
         };
-        if p.pet.is_none() {
-            self.log_to(
+        let until_reset = time_until_next_utc_day();
+        match meal {
+            Meal::NoPet => self.log_to(
                 user_id,
                 LogKind::System,
                 "You have no companion to feed.".to_string(),
-            );
-            return;
-        }
-        if p.gold < PET_FEED_COST {
-            self.log_to(
+            ),
+            Meal::CantAfford => self.log_to(
                 user_id,
                 LogKind::System,
                 format!("Feed costs {PET_FEED_COST} gold."),
-            );
-            return;
-        }
-        let mut leveled = false;
-        let mut name = String::new();
-        let mut new_level = 0;
-        if let Some(p) = self.players.get_mut(&user_id) {
-            p.gold -= PET_FEED_COST;
-            if let Some(pet) = p.pet.as_mut() {
-                leveled = pet.feed();
-                name = pet.species.name.to_string();
-                new_level = pet.level();
-            }
-        }
-        self.log_to(
-            user_id,
-            LogKind::Loot,
-            format!("You feed and tend your {name}; it mends and warms to you."),
-        );
-        if leveled {
-            self.log_to(
+            ),
+            Meal::Sated { name } => self.log_to(
                 user_id,
                 LogKind::System,
-                format!("Your {name} grows stronger! (companion level {new_level})"),
-            );
+                format!(
+                    "Your {name} is well and has had its {MEALS_PER_DAY} meals today. It will eat again after midnight UTC, in {until_reset}."
+                ),
+            ),
+            Meal::Mended { name } => {
+                self.log_to(
+                    user_id,
+                    LogKind::Loot,
+                    format!(
+                        "You tend your {name} (-{PET_FEED_COST}g); it mends, but it has had its {MEALS_PER_DAY} meals today and grows no fonder until midnight UTC, in {until_reset}."
+                    ),
+                );
+                self.dirty = true;
+            }
+            Meal::Fed {
+                name,
+                meal,
+                leveled,
+            } => {
+                self.log_to(
+                    user_id,
+                    LogKind::Loot,
+                    format!(
+                        "You feed and tend your {name} (-{PET_FEED_COST}g, meal {meal}/{MEALS_PER_DAY} today); it mends and warms to you."
+                    ),
+                );
+                if let Some(level) = leveled {
+                    self.log_to(
+                        user_id,
+                        LogKind::System,
+                        format!("Your {name} grows stronger! (companion level {level})"),
+                    );
+                }
+                self.dirty = true;
+            }
         }
-        self.dirty = true;
     }
 
     /// Splash a fraction of an incoming blow onto a fighting companion. A pet
@@ -10227,18 +10331,27 @@ impl WorldState {
                 .inventory
                 .iter()
                 .filter_map(|id| item(*id))
-                .map(|it| InvView {
-                    item_id: it.id,
-                    name: it.name.to_string(),
-                    rarity: it.rarity.label().to_string(),
-                    slot: it.slot().map(|s| s.label().to_string()),
-                    equipped: false,
-                    sell_price: player.sell_price(it),
-                    stats: it.stat_summary(),
-                    compare: compare_to_worn(&player.equipped, it),
-                    compare_pct: player.compare_gear(it),
-                    category: item_category(&it.kind),
-                    desc: it.desc,
+                .map(|it| {
+                    let worn = it
+                        .slot()
+                        .and_then(|slot| player.equipped.get(&slot))
+                        .and_then(|id| item(*id))
+                        .filter(|worn| worn.id != it.id);
+                    InvView {
+                        item_id: it.id,
+                        name: it.name.to_string(),
+                        rarity: it.rarity.label().to_string(),
+                        slot: it.slot().map(|s| s.label().to_string()),
+                        equipped: false,
+                        sell_price: player.sell_price(it),
+                        stats: it.stat_summary(),
+                        compare: compare_to_worn(&player.equipped, it),
+                        compare_pct: player.compare_gear(it),
+                        category: item_category(&it.kind),
+                        desc: it.desc,
+                        worn_name: worn.map(|w| w.name.to_string()),
+                        worn_stats: worn.map(|w| w.stat_summary()),
+                    }
                 })
                 .chain(
                     player
@@ -10257,6 +10370,8 @@ impl WorldState {
                             compare_pct: None,
                             category: item_category(&it.kind),
                             desc: it.desc,
+                            worn_name: None,
+                            worn_stats: None,
                         }),
                 )
                 .collect();
@@ -10319,6 +10434,8 @@ impl WorldState {
                 attack: pet.attack() + owner_rating * PET_COEF_PCT / 100,
                 downed: pet.downed,
                 loyalty_pct: pet.loyalty_pct(),
+                meals_today: player.meals_today(now_unix_secs() / 86_400),
+                feed_cost: PET_FEED_COST,
                 skills: pet
                     .species
                     .skills
@@ -10332,7 +10449,6 @@ impl WorldState {
                 .and_then(|idx| super::world::WILDLIFE.get(idx))
                 .map(|c| c.name.to_string());
             let stable = self.room_has_stable(player.room).then(|| StableView {
-                feed_cost: PET_FEED_COST,
                 entries: super::pets::PET_SPECIES
                     .iter()
                     .filter_map(|s| {

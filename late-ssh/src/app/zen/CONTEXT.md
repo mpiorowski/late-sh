@@ -56,13 +56,15 @@ room, else the first chat tile's, else (no chat tile) the current room,
 which is Home's selected room when it is a real room, else #lounge
 (`ZenState::active_chat_index`, `App::zen_chat_rooms`; a tile bound to a
 room the account has left shows the current room). The `Ctrl+/` picker
-(or `/picker`) while the page is up stays on the page: with a chat tile
+(or `/picker`) while the page is up lists real rooms only
+(`PickerScope::RoomsOnly`): Mentions, News, feeds and the other synthetic
+rail entries have no tile to land in, and the Inbox and headlines tiles
+already carry them. A pick stays on the page: with a chat tile
 focused, a room pick rebinds that tile the way `[` `]` do
 (`zen::input::bind_focused_chat_to_room`, called from
 `room_search_modal/input.rs`); a `?query` message jump lands in the same
 path, so it rebinds the tile to the hit's room (saved) and selects the
-message there; any other pick, or one with no chat tile focused, moves
-Home's selection as before. The page counts as
+message there; a pick with no chat tile focused moves Home's selection. The page counts as
 a chat-pane screen in `app/input.rs` (`screen_has_chat_pane`,
 `embedded_chat_room_id`) and reports the active room as the visible one
 (`current_visible_chat_room_id` in `state.rs`, which marks it read and

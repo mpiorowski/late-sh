@@ -3,7 +3,7 @@ use crate::app::{
     input::ParsedInput, state::App,
 };
 
-use super::state::{ModalQuery, filtered_items, parse_modal_query};
+use super::state::{ModalQuery, PickerScope, filtered_items, parse_modal_query};
 
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     let message_mode = matches!(
@@ -13,7 +13,13 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     let len = if message_mode {
         app.chat.message_search.hits.len()
     } else {
-        filtered_items(&app.chat, app.user_id, app.room_search_modal_state.query()).len()
+        filtered_items(
+            &app.chat,
+            app.user_id,
+            PickerScope::for_screen(app.screen),
+            app.room_search_modal_state.query(),
+        )
+        .len()
     };
     app.room_search_modal_state.clamp(len);
 
@@ -77,13 +83,24 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     let len = if message_mode {
         app.chat.message_search.hits.len()
     } else {
-        filtered_items(&app.chat, app.user_id, app.room_search_modal_state.query()).len()
+        filtered_items(
+            &app.chat,
+            app.user_id,
+            PickerScope::for_screen(app.screen),
+            app.room_search_modal_state.query(),
+        )
+        .len()
     };
     app.room_search_modal_state.clamp(len);
 }
 
 fn submit(app: &mut App) {
-    let items = filtered_items(&app.chat, app.user_id, app.room_search_modal_state.query());
+    let items = filtered_items(
+        &app.chat,
+        app.user_id,
+        PickerScope::for_screen(app.screen),
+        app.room_search_modal_state.query(),
+    );
     let Some(item) = items.get(app.room_search_modal_state.selected()).cloned() else {
         return;
     };

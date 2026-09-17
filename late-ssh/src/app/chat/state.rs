@@ -37,7 +37,10 @@ use crate::app::ai::translate::{TranslationEvent, TranslationOutcome, Translatio
 use crate::app::common::overlay::{Overlay, OverlayInk, OverlayLine, OverlaySpan};
 
 use crate::app::common::status::Status;
-use crate::app::common::{composer, mentions, primitives::Banner};
+use crate::app::common::{
+    composer, mentions,
+    primitives::{Banner, Screen},
+};
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::notify::{Notification, Notifier};
 use crate::authz::Permissions;
@@ -199,6 +202,23 @@ impl PendingClipboardImageUpload {
 
     fn is_expired(&self) -> bool {
         self.requested_at.elapsed() >= CLIPBOARD_IMAGE_REQUEST_TIMEOUT
+    }
+}
+
+/// Whether a submitted `/` draft runs as a command. The Lounge composer is
+/// plain speech (`Disabled`); every other chat composer takes commands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComposerCommands {
+    Enabled,
+    Disabled,
+}
+
+impl ComposerCommands {
+    pub fn for_screen(screen: Screen) -> Self {
+        match screen == Screen::Clubhouse {
+            true => Self::Disabled,
+            false => Self::Enabled,
+        }
     }
 }
 
@@ -3451,8 +3471,21 @@ impl ChatState {
         self.open_overlay("Active Users", self.active_user_lines());
     }
 
-    pub fn submit_composer(&mut self, keep_open: bool, _from_dashboard: bool) -> Option<Banner> {
+    pub fn submit_composer(
+        &mut self,
+        keep_open: bool,
+        commands: ComposerCommands,
+    ) -> Option<Banner> {
         let body = self.composer.lines().join("\n").trim_end().to_string();
+
+        match (commands, body.trim_start().starts_with('/')) {
+            (ComposerCommands::Disabled, true) => {
+                return Some(Banner::error(
+                    "Commands are off in the Lounge, use them from Home",
+                ));
+            }
+            (ComposerCommands::Disabled, false) | (ComposerCommands::Enabled, _) => {}
+        }
 
         if body.trim() == "/binds" {
             self.clear_composer_after_submit();

@@ -2203,6 +2203,95 @@ async fn forced_tour_zen_stop_accepts_enter_when_the_chord_is_swallowed() {
     assert_eq!(app.clubhouse.tutorial, Tutorial::Homecoming);
 }
 
+/// The Lounge composer is plain speech: a `/` draft is refused with a
+/// banner and kept for editing, never run and never posted.
+#[tokio::test]
+async fn clubhouse_composer_refuses_commands() {
+    use crate::app::clubhouse::state::Tutorial;
+    use crate::app::common::primitives::Screen;
+
+    let (_test_db, mut app) = chat_compose_app("clubhouse-no-commands").await;
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.chat.composing, "composer closed").await;
+    app.set_screen(Screen::Clubhouse);
+    app.clubhouse.tutorial = Tutorial::Done;
+    app.clubhouse.enter_screen();
+
+    app.handle_input(b"i");
+    app.handle_input(b"/active");
+    app.handle_input(b"\r");
+    assert!(
+        !app.chat.has_overlay(),
+        "/active does not run in the Lounge"
+    );
+    assert_eq!(
+        app.banner.as_ref().map(|banner| banner.message.as_str()),
+        Some("Commands are off in the Lounge, use them from Home")
+    );
+    assert_eq!(app.chat.composer().lines().join("\n"), "/active");
+    assert_eq!(app.screen, Screen::Clubhouse);
+}
+
+/// A chat overlay owns input in the Lounge, and one can still arrive there
+/// without a command (a `/summary` or reaction list requested on Home that
+/// lands after the walk over), so the tavern draws it rather than trap keys.
+#[tokio::test]
+async fn clubhouse_draws_a_chat_overlay_that_lands_there() {
+    use crate::app::clubhouse::state::Tutorial;
+    use crate::app::common::primitives::Screen;
+
+    let (_test_db, mut app) = chat_compose_app("clubhouse-overlay").await;
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.chat.composing, "composer closed").await;
+    app.set_screen(Screen::Clubhouse);
+    app.clubhouse.tutorial = Tutorial::Done;
+    app.clubhouse.enter_screen();
+
+    app.chat.open_active_users_overlay();
+    wait_for_render_contains(&mut app, "Active Users").await;
+
+    app.handle_input(b"q");
+    assert!(!app.chat.has_overlay(), "q closes it");
+    assert_eq!(app.screen, Screen::Clubhouse);
+}
+
+/// Zen chat tiles draw real rooms only, so the picker there offers nothing
+/// else: a pick of Mentions or News would move Home's selection and leave
+/// the page looking untouched.
+#[tokio::test]
+async fn zen_room_picker_lists_real_rooms_only() {
+    use crate::app::common::primitives::Screen;
+
+    let (_test_db, mut app) = chat_compose_app("zen-picker-rooms").await;
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.chat.composing, "composer closed").await;
+
+    // Home lists the synthetic entry, so the query itself is a real match.
+    app.handle_input(b"\x1f");
+    assert!(app.room_search_modal_state.is_open());
+    app.handle_input(b"mentions");
+    assert_render_not_contains_for(&mut app, "No matching rooms", Duration::from_millis(60)).await;
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.room_search_modal_state.is_open(),
+        "picker closed",
+    )
+    .await;
+
+    app.set_screen(Screen::Zen);
+    app.handle_input(b"\x1f");
+    assert!(app.room_search_modal_state.is_open());
+    app.handle_input(b"mentions");
+    wait_for_render_contains(&mut app, "No matching rooms").await;
+    app.handle_input(b"\r");
+    assert!(
+        !app.chat.synthetic_entry_selected(),
+        "a Zen pick never lands on a synthetic entry"
+    );
+    assert_eq!(app.screen, Screen::Zen);
+}
+
 #[tokio::test]
 async fn only_esc_closes_the_stream_modal() {
     let test_db = new_test_db().await;

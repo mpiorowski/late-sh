@@ -49,6 +49,7 @@ pub struct SavedCharacterInit {
     /// In-progress courting of a wild critter: (WILDLIFE index, streak days,
     /// last day fed as a Unix day number).
     pub stray_bond: Option<(u32, u32, u64)>,
+    pub pet_meals: (u64, u32),
     pub owned_plot: Option<u32>,
     pub house_furniture: Vec<(u32, String)>,
     pub appearance: Vec<u8>,
@@ -148,6 +149,10 @@ pub struct SavedCharacter {
     /// last day fed as a Unix day number).
     #[serde(default)]
     pub stray_bond: Option<(u32, u32, u64)>,
+    /// The companion's loyalty-raising meals: (Unix day number, meals that
+    /// day). (0, 0) for saves from before the daily meal cap.
+    #[serde(default)]
+    pub pet_meals: (u64, u32),
     /// The housing plot (tier index) this character holds the deed to, if any.
     #[serde(default)]
     pub owned_plot: Option<u32>,
@@ -275,6 +280,7 @@ impl SavedCharacter {
             pet_loyalty: init.pet_loyalty,
             stray: init.stray,
             stray_bond: init.stray_bond,
+            pet_meals: init.pet_meals,
             owned_plot: init.owned_plot,
             house_furniture: init.house_furniture,
             appearance: init.appearance,

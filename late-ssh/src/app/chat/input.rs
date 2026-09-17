@@ -1,4 +1,4 @@
-use crate::app::chat::state::{StatusChange, StatusRequest};
+use crate::app::chat::state::{ComposerCommands, StatusChange, StatusRequest};
 use crate::app::common::primitives::Banner;
 use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::common::status::{SessionStatus, Status};
@@ -54,7 +54,8 @@ pub fn handle_compose_input(
         0x1B => app.chat.reset_composer(),
         b'\r' | b'\n' => {
             let keep_open = app.profile_state.profile().keep_composer_focused;
-            if let Some(b) = app.chat.submit_composer(keep_open, from_dashboard) {
+            let commands = ComposerCommands::for_screen(app.screen);
+            if let Some(b) = app.chat.submit_composer(keep_open, commands) {
                 app.banner = Some(b);
             }
             handle_post_submit_requests(app, from_dashboard);

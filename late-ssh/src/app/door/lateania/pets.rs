@@ -203,6 +203,10 @@ pub fn pet_species_by_key(key: &str) -> Option<&'static PetSpecies> {
 pub const FEED_LOYALTY: i64 = 25;
 pub const LOYALTY_PER_LEVEL: i64 = 100;
 pub const PET_MAX_LEVEL: i32 = 10;
+/// Meals a real (UTC) day that raise loyalty. Past them a feed still mends the
+/// pet but it grows no fonder, so raising a companion to the cap takes nine
+/// days of care rather than one purse emptied at the Stable.
+pub const MEALS_PER_DAY: u32 = 4;
 
 /// A live companion owned by a player. Loyalty (and thus level) persists; the
 /// current `hp`/`downed` are runtime-only and reset to full on reload.
@@ -260,13 +264,18 @@ impl Pet {
         ((self.loyalty_xp % LOYALTY_PER_LEVEL) * 100 / LOYALTY_PER_LEVEL) as i32
     }
 
-    /// Feed the pet: revive it, heal to full, and add loyalty. Returns true if a
-    /// feeding actually leveled the pet up.
+    /// Tend the pet without a meal: revive it and heal it to full.
+    pub fn mend(&mut self) {
+        self.downed = false;
+        self.hp = self.max_hp();
+    }
+
+    /// Feed the pet: add loyalty, then mend it (at the new level's health).
+    /// Returns true if the meal leveled the pet up.
     pub fn feed(&mut self) -> bool {
         let before = self.level();
         self.loyalty_xp += FEED_LOYALTY;
-        self.downed = false;
-        self.hp = self.max_hp();
+        self.mend();
         self.level() > before
     }
 }

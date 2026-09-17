@@ -2,6 +2,7 @@ use super::{
     compare_span, fit, hug_poi_arrows, inventory_item_tag, land_chip_name, land_map_lines,
     line_rows, meter, rarity_color, scroll_offset, star_rating, wrapped_rows,
 };
+use crate::app::door::lateania::svc::{InvView, SectionRow};
 use crate::app::door::lateania::world::RegionProgress;
 use crate::app::door::lateania::worldmap::{MapArrow, Tile};
 use ratatui::style::Color;
@@ -1486,6 +1487,144 @@ fn the_shop_detail_still_ends_on_the_buy_prompt_at_the_smallest_full_screen() {
     );
 }
 
+fn inv_row(name: &str, slot: Option<&str>, equipped: bool, pct: Option<i32>) -> InvView {
+    InvView {
+        item_id: 1,
+        name: name.to_string(),
+        rarity: "rare".to_string(),
+        slot: slot.map(str::to_string),
+        equipped,
+        sell_price: 218,
+        stats: "+16 atk  +4 arm  +30 hp".to_string(),
+        compare: if equipped {
+            String::new()
+        } else {
+            "vs worn: +8 atk  +2 arm".to_string()
+        },
+        compare_pct: pct,
+        category: "Weapons",
+        desc: "A chapel reliquary recovered from the old crypts below Tasmania.",
+        worn_name: (!equipped).then(|| "Iron Longsword".to_string()),
+        worn_stats: (!equipped).then(|| "+8 atk  +2 arm  +12 hp".to_string()),
+    }
+}
+
+fn draw_inventory(
+    width: u16,
+    height: u16,
+    inventory: &[InvView],
+    cursor: usize,
+    merchant_here: bool,
+) -> Vec<String> {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let rows: Vec<SectionRow> = std::iter::once(SectionRow::Header {
+        key: "inv:Weapons".to_string(),
+        label: "Weapons".to_string(),
+        count: inventory.len(),
+        collapsed: false,
+    })
+    .chain((0..inventory.len()).map(|index| SectionRow::Item { index }))
+    .collect();
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            super::draw_inventory_screen(
+                frame,
+                frame.area(),
+                &rows,
+                inventory,
+                cursor,
+                477,
+                0,
+                merchant_here,
+            );
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect()
+}
+
+#[test]
+fn the_inventory_screen_gives_each_piece_one_line_and_stands_loot_against_the_worn_piece() {
+    let inventory = vec![
+        inv_row("Embergate Falchion", Some("weapon"), false, Some(77)),
+        inv_row("Rusty Shortsword", Some("weapon"), false, Some(-73)),
+        inv_row("Iron Longsword", Some("weapon"), true, None),
+    ];
+    let text = draw_inventory(110, 24, &inventory, 1, true);
+    let joined = text.join("\n");
+
+    // Each piece is one row of the list column, not a wrapped stanza.
+    let list: Vec<String> = text
+        .iter()
+        .map(|line| line.chars().take(57).collect())
+        .collect();
+    for name in ["Embergate Falchion", "Rusty Shortsword"] {
+        assert_eq!(
+            list.iter().filter(|l| l.contains(name)).count(),
+            1,
+            "{name} should occupy exactly one line of the list:\n{joined}"
+        );
+    }
+    // The upgrade tag and sell value fit, and worn gear is marked as worn.
+    assert!(
+        list.iter()
+            .any(|l| l.contains("Embergate Falchion") && l.contains("218g") && l.contains("+77%")),
+        "the sell value and the full upgrade tag should both fit:\n{joined}"
+    );
+    assert!(
+        list.iter()
+            .any(|l| l.contains("Iron Longsword") && l.trim_end().ends_with("worn")),
+        "the worn piece should be tagged worn:\n{joined}"
+    );
+    // The selected loot stands against what it would replace, with its verbs.
+    assert!(
+        joined.contains("instead of what you wear"),
+        "the worn piece should be shown for comparison:\n{joined}"
+    );
+    assert!(joined.contains("Enter to put it on"), "{joined}");
+    assert!(joined.contains("x to sell - 218g"), "{joined}");
+}
+
+#[test]
+fn the_inventory_detail_names_what_the_keys_do_to_worn_gear_at_the_smallest_full_screen() {
+    // At exactly 100x20 (the smallest size `draw` sends here), the longest
+    // description still leaves room for both prompts, which sit last.
+    let loot = vec![inv_row(
+        "Embergate Falchion",
+        Some("weapon"),
+        false,
+        Some(77),
+    )];
+    let joined = draw_inventory(100, 20, &loot, 1, false).join("\n");
+    assert!(joined.contains("Enter to put it on"), "{joined}");
+    assert!(
+        joined.contains("sells for 218g at a merchant"),
+        "away from a shop the sell key is not offered as live:\n{joined}"
+    );
+
+    // Worn gear comes off with Enter and has to come off before it sells.
+    let worn = vec![inv_row("Iron Longsword", Some("weapon"), true, None)];
+    let joined = draw_inventory(100, 20, &worn, 1, true).join("\n");
+    assert!(joined.contains("you are wearing this (weapon)"), "{joined}");
+    assert!(joined.contains("Enter to take it off"), "{joined}");
+    assert!(
+        joined.contains("take it off before you sell it"),
+        "{joined}"
+    );
+    assert!(
+        !joined.contains("instead of what you wear"),
+        "the worn piece is not compared against itself:\n{joined}"
+    );
+}
+
 #[test]
 fn the_side_rail_grows_with_the_terminal_but_stays_a_column() {
     use super::{SIDE_MAX, SIDE_NARROW, SIDE_WIDE, side_width};
@@ -1577,6 +1716,67 @@ fn the_room_panel_pins_vitals_scrolls_the_rest_and_says_what_is_hidden() {
 }
 
 #[test]
+fn feeding_leads_the_panel_only_for_a_hurt_pet_and_otherwise_sits_under_it() {
+    use super::super::svc::PetView;
+    use crate::usernames::UsernameLookup;
+    use std::collections::HashMap;
+
+    let pet = |hp: i32, downed: bool| PetView {
+        name: "Cave Bear".to_string(),
+        glyph: "B".to_string(),
+        level: 3,
+        hp,
+        max_hp: 180,
+        attack: 20,
+        downed,
+        loyalty_pct: 45,
+        meals_today: 2,
+        feed_cost: 20,
+        skills: Vec::new(),
+    };
+    let names: HashMap<uuid::Uuid, String> = HashMap::new();
+    let usernames = UsernameLookup::new(&names, None);
+    let render = |view: &crate::app::door::lateania::svc::PlayerView| {
+        let panel = super::room_panel(view, &usernames, 28, None);
+        panel.body.iter().map(line_text).collect::<Vec<_>>()
+    };
+
+    // A healthy pet: nothing urgent to do, so no action block, and the key sits
+    // under the pet with what a meal buys. Every chip fits the narrowest rail.
+    let mut view = empty_player_view();
+    view.pet = Some(pet(180, false));
+    assert!(super::room_actions(&view).is_empty());
+    let lines = render(&view);
+    let under = lines.join(" ");
+    for chip in ["G feed 20g", "45% to Lv4", "2/4 today"] {
+        assert!(under.contains(chip), "{chip} missing: {lines:#?}");
+    }
+    assert!(
+        lines
+            .iter()
+            .all(|l| unicode_width::UnicodeWidthStr::width(l.as_str()) <= 28),
+        "{lines:#?}"
+    );
+
+    // Hurt or downed: `G` leads the panel, and is not repeated under the pet.
+    for (hurt, label) in [
+        (pet(90, false), "mend companion"),
+        (pet(0, true), "rouse companion"),
+    ] {
+        let mut view = empty_player_view();
+        view.pet = Some(hurt);
+        let lines = render(&view);
+        let joined = lines.join("\n");
+        assert!(
+            joined.contains("You can") && joined.contains(label),
+            "{joined}"
+        );
+        assert_eq!(joined.matches("G ").count(), 1, "G shown once:\n{joined}");
+        assert!(joined.contains("45% to Lv4"), "{joined}");
+    }
+}
+
+#[test]
 fn what_this_room_offers_leads_the_panel_and_the_standing_keys_stay_short() {
     use super::super::svc::{ShopView, StableView};
     use super::{SIDE_MAX, SIDE_NARROW, SIDE_WIDE, footer_hints, room_actions};
@@ -1599,7 +1799,6 @@ fn what_this_room_offers_leads_the_panel_and_the_standing_keys_stay_short() {
     });
     town.stable = Some(StableView {
         entries: Vec::new(),
-        feed_cost: 20,
     });
     let actions: Vec<String> = room_actions(&town)
         .iter()

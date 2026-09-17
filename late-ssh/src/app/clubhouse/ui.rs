@@ -56,6 +56,9 @@ pub(crate) struct ClubhouseView<'a> {
     /// The shared composer block, pinned under the tavern. `None` only
     /// before the #lounge room id is known.
     pub composer: Option<crate::app::chat::ui::ComposerBlockView<'a>>,
+    /// A chat overlay opened from the composer. It owns input on this
+    /// screen (`screen_composes_chat`), so it is drawn over the tavern.
+    pub overlay: Option<&'a crate::app::common::overlay::Overlay>,
 }
 
 pub(crate) fn draw(frame: &mut Frame, area: Rect, view: ClubhouseView<'_>) {
@@ -166,6 +169,9 @@ fn draw_tavern(frame: &mut Frame, area: Rect, view: &ClubhouseView<'_>) {
     frame.render_widget(Paragraph::new(lines), inner);
 
     draw_overlays(frame, inner, view);
+    if let Some(overlay) = view.overlay {
+        crate::app::common::overlay::draw_overlay(frame, inner, overlay);
+    }
 }
 
 fn camera_origin(player: usize, viewport: usize, map_len: usize) -> usize {

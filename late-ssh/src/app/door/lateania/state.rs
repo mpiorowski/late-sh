@@ -909,10 +909,18 @@ impl State {
         }
     }
 
-    /// Feed and tend the player's companion at the Stable.
+    /// The `~` key: feed whichever matters here (a hurt pet, else a stray to
+    /// court, else your pet).
     pub fn feed_pet(&mut self) {
         if self.ensure_player_present() {
             self.svc.feed_pet_task(self.user_id);
+        }
+    }
+
+    /// `G`: feed and tend your own companion, never a stray.
+    pub fn feed_companion(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.feed_companion_task(self.user_id);
         }
     }
 

@@ -2910,7 +2910,11 @@ async fn brb_sets_an_open_ended_away_status() {
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
 
     state.composer.insert_str("/brb");
-    assert!(state.submit_composer(false, false).is_none());
+    assert!(
+        state
+            .submit_composer(false, ComposerCommands::Enabled)
+            .is_none()
+    );
     assert_eq!(
         state.take_requested_status(),
         Some(StatusRequest::Apply(StatusChange::Set {
@@ -2930,7 +2934,9 @@ async fn brb_with_a_message_explains_instead_of_calling_it_unknown() {
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
 
     state.composer.insert_str("/brb back in 5");
-    let banner = state.submit_composer(false, false).expect("banner");
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("banner");
     assert_eq!(
         banner.message,
         "/brb takes no message, it sets /status away"
@@ -3923,11 +3929,13 @@ async fn neither_a_summary_nor_history_spends_the_line() {
     let placed = *state.afk_lines.get(&room_id).expect("line placed");
 
     state.composer.insert_str("/history");
-    state.submit_composer(false, false);
+    state.submit_composer(false, ComposerCommands::Enabled);
     assert_eq!(state.afk_lines.get(&room_id), Some(&placed));
 
     state.composer.insert_str("/summary");
-    let banner = state.submit_composer(false, false).expect("banner");
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("banner");
     assert_eq!(banner.message, "Summarizing…");
     assert_eq!(state.afk_lines.get(&room_id), Some(&placed));
 }
@@ -3956,7 +3964,9 @@ async fn summary_command_refuses_non_public_rooms() {
     state.rooms.push((room, Vec::new()));
 
     state.composer.insert_str("/summary");
-    let banner = state.submit_composer(false, false).expect("banner");
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("banner");
 
     assert_eq!(banner.message, "Summaries cover public rooms only");
 }
@@ -3973,7 +3983,9 @@ async fn summary_command_requests_the_visible_public_room() {
     let mut events = state.summary_service.subscribe();
 
     state.composer.insert_str("/summary");
-    let banner = state.submit_composer(false, false).expect("banner");
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("banner");
     assert_eq!(banner.message, "Summarizing…");
 
     // AI is disabled in this wiring, so the issued request answers
@@ -3999,7 +4011,9 @@ async fn summary_command_refuses_a_malformed_window_without_requesting() {
     let mut events = state.summary_service.subscribe();
 
     state.composer.insert_str("/summary 6");
-    let banner = state.submit_composer(false, false).expect("banner");
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("banner");
 
     // The banner teaches the format, and nothing was spent: a typo must not
     // fall back to the default window and answer the wrong question.

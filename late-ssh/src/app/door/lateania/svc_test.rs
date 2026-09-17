@@ -676,6 +676,44 @@ fn abilities_scale_with_spell_power_and_the_auto_swings_by_calling() {
 }
 
 #[test]
+fn an_ability_killing_blow_reaches_the_next_tick_output() {
+    // Abilities land outside the tick (`mutate`), so their kill must survive
+    // until the tick hands it to `publish_kill_outcome`, or a crown taken
+    // with a spell pays nothing.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Mage);
+    let mob_id = *s.mobs.keys().next().expect("world has mobs");
+    let mob_name = {
+        let m = s.mobs.get_mut(&mob_id).unwrap();
+        m.alive = true;
+        m.revealed = true;
+        m.current_room = 2001;
+        m.leash_home = 2001;
+        m.hp = 1;
+        m.spawn.damage = 1;
+        m.spawn.profile = DamageProfile::physical();
+        m.spawn.name.to_string()
+    };
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = 2001;
+        p.equipped.insert(Slot::Weapon, 1010);
+    }
+    s.engage_mob(uid(1), mob_id);
+    s.use_ability(uid(1), 1);
+    assert!(!s.mobs[&mob_id].alive, "the Firebolt lands the killing blow");
+
+    let kills: Vec<(Uuid, String)> = s
+        .tick()
+        .kills
+        .into_iter()
+        .map(|kill| (kill.user_id, kill.mob_name))
+        .collect();
+    assert_eq!(kills, vec![(uid(1), mob_name)]);
+}
+
+#[test]
 fn a_draught_needs_a_breath_between_gulps() {
     let mut s = world();
     s.join(uid(1));
@@ -2349,6 +2387,83 @@ fn feeding_at_a_stable_revives_and_strengthens_a_companion() {
     assert_eq!(pet.hp, pet.max_hp(), "and heals it to full");
     assert!(pet.loyalty_xp > 0, "and raises its loyalty");
     assert_eq!(s.players[&uid(1)].gold, 500 - PET_FEED_COST);
+}
+
+#[test]
+fn feed_companion_feeds_a_healthy_pet_even_with_a_stray_in_the_square() {
+    // Reported: at the Stable, `x feed/tend (20g)` courted the Town Square's
+    // stray dog instead, because a healthy pet loses to an adoptable critter
+    // in the one-key `~` routing. `G` is for your own companion.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let species = super::super::pets::pet_species_by_key("cave_bear").unwrap();
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = 1; // Embergate's Town Square: the Stable and a stray dog
+        p.pet = Some(super::super::pets::Pet::new(species, 0));
+        p.gold = 500;
+    }
+    assert!(
+        critters_at(1).iter().any(|c| c.adoptable),
+        "the square must hold a stray for this to test anything"
+    );
+    s.feed_companion(uid(1));
+    let p = &s.players[&uid(1)];
+    assert!(p.stray_bond.is_none(), "the stray is left alone");
+    assert!(p.pet.unwrap().loyalty_xp > 0, "the bear is fed");
+    assert_eq!(p.gold, 500 - PET_FEED_COST);
+}
+
+#[test]
+fn a_companion_grows_on_four_meals_a_day_and_is_only_mended_past_them() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let species = super::super::pets::pet_species_by_key("cave_bear").unwrap();
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.pet = Some(super::super::pets::Pet::new(species, 0));
+        p.gold = 1_000;
+    }
+    for _ in 0..super::super::pets::MEALS_PER_DAY {
+        s.feed_companion(uid(1));
+    }
+    let loyalty = super::super::pets::FEED_LOYALTY * i64::from(super::super::pets::MEALS_PER_DAY);
+    let spent = PET_FEED_COST * i64::from(super::super::pets::MEALS_PER_DAY);
+    assert_eq!(s.players[&uid(1)].pet.unwrap().loyalty_xp, loyalty);
+    assert_eq!(s.players[&uid(1)].gold, 1_000 - spent);
+
+    // A fifth feed of a healthy pet is turned away, and costs nothing.
+    s.feed_companion(uid(1));
+    assert_eq!(s.players[&uid(1)].pet.unwrap().loyalty_xp, loyalty);
+    assert_eq!(
+        s.players[&uid(1)].gold,
+        1_000 - spent,
+        "a sated, healthy pet is free"
+    );
+
+    // A downed pet past its meals is still roused, for the fee, with no loyalty.
+    {
+        let pet = s.players.get_mut(&uid(1)).unwrap().pet.as_mut().unwrap();
+        pet.downed = true;
+        pet.hp = 0;
+    }
+    s.feed_companion(uid(1));
+    let pet = s.players[&uid(1)].pet.unwrap();
+    assert!(!pet.downed, "the cap never leaves a pet downed");
+    assert_eq!(pet.hp, pet.max_hp());
+    assert_eq!(pet.loyalty_xp, loyalty, "but it grows no fonder");
+    assert_eq!(s.players[&uid(1)].gold, 1_000 - spent - PET_FEED_COST);
+
+    // A new day brings the meals back.
+    let (day, meals) = s.players[&uid(1)].pet_meals;
+    s.players.get_mut(&uid(1)).unwrap().pet_meals = (day - 1, meals);
+    s.feed_companion(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].pet.unwrap().loyalty_xp,
+        loyalty + super::super::pets::FEED_LOYALTY
+    );
 }
 
 #[test]
