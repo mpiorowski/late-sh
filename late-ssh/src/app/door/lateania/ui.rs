@@ -1663,21 +1663,67 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         }
     }
     // The green arrow is the one you chose, and it works exactly like the
-    // amber ones: a straight-line direction to the *tracked* destination,
-    // drawn only while it sits within `PAN_LIMIT` (same land, where the
-    // coordinate delta is a real spatial relationship). Crucially this needs
-    // no `visited` at all, so it points at a boss you have never found -
-    // which is the whole job of tracking a quest. Beyond this land there is
-    // no honest direction to draw, so the journal names the region to
-    // venture into instead. Drawn after (over) the amber arrows: a border
-    // cell can only say one thing, and where-you're-going beats
-    // where-a-boss-is.
+    // amber ones: a straight-line direction, drawn only within `PAN_LIMIT`
+    // (same land, where the coordinate delta is a real spatial relationship).
+    // Crucially this needs no `visited` at all, so it points at a boss you
+    // have never found - which is the whole job of tracking a quest. Drawn
+    // after (over) the amber arrows: a border cell can only say one thing,
+    // and where-you're-going beats where-a-boss-is.
+    //
+    // On your own floor it aims along the real walk (`worldmap::track_aim`):
+    // at the destination while the walk stays on this floor and in this land,
+    // else at the room where the walk leaves them, whose stair glyph (or the
+    // room itself, for a flat crossing into another land) turns green once in
+    // view. So any destination can be tracked, however far. Viewing another
+    // floor (`<`/`>`) aims straight at the destination if it is on that floor.
     if let Some(dest) = dest_room {
-        let (dest_arrows, _) = super::worldmap::quest_arrows(coords, center, cols, height, &[dest]);
-        for arrow in hug_poi_arrows(dest_arrows, &canvas) {
-            if let Some(cell) = cells.get_mut(arrow.row).and_then(|r| r.get_mut(arrow.col)) {
-                *cell = (arrow.glyph.to_string(), quest_style);
+        let track = if level_offset == 0 {
+            state.dest_track_aim()
+        } else {
+            Some(super::worldmap::TrackAim::Target)
+        };
+        let aim = match track {
+            None => None,
+            Some(super::worldmap::TrackAim::Target) => Some(dest),
+            Some(super::worldmap::TrackAim::Stair { room, .. })
+            | Some(super::worldmap::TrackAim::Crossing { room }) => Some(room),
+        };
+        if let Some(aim) = aim {
+            let (dest_arrows, _) =
+                super::worldmap::quest_arrows(coords, center, cols, height, &[aim]);
+            for arrow in hug_poi_arrows(dest_arrows, &canvas) {
+                if let Some(cell) = cells.get_mut(arrow.row).and_then(|r| r.get_mut(arrow.col)) {
+                    *cell = (arrow.glyph.to_string(), quest_style);
+                }
             }
+        }
+        // The aimed-at room's own cell, as `map_canvas` places it, with the
+        // stair's corner cell up and to the right of it.
+        let aim_cell = |room: super::world::RoomId, dcol: i32, drow: i32| {
+            let c = coords.get(&room)?;
+            let sc = cols / 2 + 2 * (c.x - center.x) + dcol;
+            let sr = height / 2 + 2 * (c.y - center.y) + drow;
+            ((0..cols).contains(&sc) && (0..height).contains(&sr))
+                .then_some((sr as usize, sc as usize))
+        };
+        match track {
+            Some(super::worldmap::TrackAim::Stair { room, climb }) => {
+                let glyph = match climb {
+                    super::worldmap::Climb::Down => '\u{25be}', // ▾
+                    super::worldmap::Climb::Up => '\u{25b4}',   // ▴
+                };
+                if let Some((row, col)) = aim_cell(room, 1, -1) {
+                    cells[row][col] = (glyph.to_string(), quest_style);
+                }
+            }
+            Some(super::worldmap::TrackAim::Crossing { room }) if room != player_room => {
+                if let Some((row, col)) = aim_cell(room, 0, 0) {
+                    cells[row][col].1 = quest_style;
+                }
+            }
+            Some(super::worldmap::TrackAim::Crossing { .. })
+            | Some(super::worldmap::TrackAim::Target)
+            | None => {}
         }
     }
     // Cross-land quest targets are counted in the footer instead of pointed
@@ -2883,35 +2929,38 @@ fn render_scrolled(frame: &mut Frame, rect: Rect, lines: Vec<Line<'static>>, sel
     frame.render_widget(Paragraph::new(shown), rect);
 }
 
-/// Where a quest's target lies, for the journal. The green map arrow is a
-/// straight-line direction, so it can only be drawn while the target sits in
-/// the same land (within `PAN_LIMIT`, the one case where a coordinate
-/// direction is a real spatial relationship). A target beyond that gets no
-/// arrow, and this is the line that says why: it names the region to venture
-/// into, and whether the player has ever set foot in it.
+/// Where a quest's target lies, for the journal: its region, and how it sits
+/// relative to the player. Tracking any target aims the map's green arrow
+/// along the walk there (`worldmap::track_aim`), so this line only has to say
+/// how far that walk reaches: this floor, N floors away in the same land
+/// (within `PAN_LIMIT`), or beyond this land. A land with no walking way in at
+/// all gets no arrow, so it names the waystone instead.
 fn quest_place_note(target: Option<RoomId>, view: &PlayerView) -> Option<String> {
     let target = target?;
     let (region, _) = super::world::region_atlas_entry(target)?;
     let coords = super::worldmap::world_coords();
-    let same_land = match (view.room.and_then(|r| coords.get(&r)), coords.get(&target)) {
-        (Some(here), Some(there)) => {
-            here.z == there.z
-                && (here.x - there.x).abs() <= super::worldmap::PAN_LIMIT
-                && (here.y - there.y).abs() <= super::worldmap::PAN_LIMIT
+    let floors = match (view.room.and_then(|r| coords.get(&r)), coords.get(&target)) {
+        (Some(here), Some(there))
+            if (here.x - there.x).abs() <= super::worldmap::PAN_LIMIT
+                && (here.y - there.y).abs() <= super::worldmap::PAN_LIMIT =>
+        {
+            Some(there.z - here.z)
         }
-        _ => false,
+        _ => None,
     };
-    let unfound = view
-        .atlas
-        .iter()
-        .find(|r| r.name == region)
-        .is_some_and(|r| r.explored == 0);
-    Some(match (same_land, unfound) {
-        (true, _) => format!("in {region}"),
-        (false, true) => format!("in {region} - venture there and the map will point the way"),
-        (false, false) => {
-            format!("in {region} - too far for the map to point; head that way first")
+    let portal_only = super::worldmap::portal_lands().contains(&region);
+    Some(match (floors, portal_only) {
+        (Some(0), _) => format!("in {region}"),
+        (Some(dz), _) => {
+            let n = dz.abs();
+            format!(
+                "in {region} - {n} floor{} {}",
+                if n == 1 { "" } else { "s" },
+                if dz < 0 { "down" } else { "up" },
+            )
         }
+        (None, true) => format!("in {region} - reached by waystone"),
+        (None, false) => format!("in {region} - beyond this land"),
     })
 }
 

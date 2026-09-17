@@ -2118,3 +2118,17 @@ fn the_log_strip_grows_on_a_tall_terminal() {
         );
     }
 }
+
+// A target a floor away in the same land is not "too far": the journal says
+// how many floors, and tracking it aims the map at the stair.
+#[test]
+fn quest_place_note_names_the_floor_of_a_target_in_the_same_land() {
+    let mut view = empty_player_view();
+    // The Sunken Citadel's Orrery Vault, one floor above the Archdemon's throne.
+    view.room = Some(102);
+    let note = super::quest_place_note(Some(110), &view).expect("the throne has a region");
+    assert!(note.ends_with(" - 1 floor down"), "{note}");
+    // The Frontier's first zone sits in its own reserved block.
+    let note = super::quest_place_note(Some(2000), &view).expect("the frontier has a region");
+    assert!(note.ends_with(" - beyond this land"), "{note}");
+}

@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::svc::{LateaniaService, MudSnapshot, PlayerView, empty_player_view};
 use super::world::Dir;
 use super::world::RoomId;
-use super::worldmap::{Coord, MapCamera, Route};
+use super::worldmap::{Coord, MapCamera, Route, TrackAim};
 
 /// Where the player has marked they're going, resolved against where they are
 /// standing now. Rendered as one line under the room's exits: the exits say
@@ -126,6 +126,7 @@ fn is_leave_confirm_pending(until: Option<Instant>, now: Instant) -> bool {
 /// A memoised route: the `(standing in, heading for)` pair it was computed for,
 /// and the walk it produced (`None` when no known-ground route exists).
 type CachedRoute = ((RoomId, RoomId), Option<Route>);
+type CachedTrackAim = ((RoomId, RoomId), Option<TrackAim>);
 
 /// The two pages of the `m` map. `m` cycles closed -> Field -> Lands -> closed,
 /// so one key walks the whole map from where your feet are to how the world
@@ -194,6 +195,9 @@ pub struct State {
     /// redrawn on every keystroke and every snapshot, but the search runs once
     /// per room actually entered.
     route_cache: RefCell<Option<CachedRoute>>,
+    /// Where the marked destination's map arrow aims, cached on the same pair
+    /// as `route_cache` for the same reason: it is a whole-world walk.
+    track_aim_cache: RefCell<Option<CachedTrackAim>>,
 }
 
 impl State {
@@ -230,6 +234,7 @@ impl State {
             map_dest: None,
             map_quests: true,
             route_cache: RefCell::new(None),
+            track_aim_cache: RefCell::new(None),
         };
         state.svc.join_task(user_id, session_id);
         state
@@ -471,6 +476,23 @@ impl State {
             // from here now. Say so rather than showing a confident direction.
             None => Heading::Unreachable(name),
         })
+    }
+
+    /// Where the map's green arrow aims for the marked destination, from the
+    /// room the player stands in (`worldmap::track_aim`). None when nothing is
+    /// marked or no walk reaches it.
+    pub fn dest_track_aim(&self) -> Option<TrackAim> {
+        let dest = self.map_dest?;
+        let here = self.snapshot.players.get(&self.user_id)?.room?;
+        let mut cache = self.track_aim_cache.borrow_mut();
+        match *cache {
+            Some((key, aim)) if key == (here, dest) => aim,
+            _ => {
+                let aim = super::worldmap::track_aim(here, dest);
+                *cache = Some(((here, dest), aim));
+                aim
+            }
+        }
     }
 
     /// Current list scroll offset (first visible line).
