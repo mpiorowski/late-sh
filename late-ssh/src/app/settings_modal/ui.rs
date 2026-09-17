@@ -1688,6 +1688,10 @@ fn draw_right_sidebar_components_dialog(frame: &mut Frame, area: Rect, state: &S
     constraints.push(Constraint::Length(1)); // footer line 2
     let layout = Layout::vertical(constraints).split(inner);
 
+    state.set_right_sidebar_component_rects(
+        (0..components.len()).map(|idx| Some(layout[idx + 2])).collect(),
+    );
+
     let width = inner.width as usize;
     frame.render_widget(
         Paragraph::new(Line::from(vec![

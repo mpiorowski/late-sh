@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use chrono::{DateTime, Utc};
 use late_core::models::profile::{Profile, ProfileParams, normalize_profile_tags};
@@ -488,6 +488,14 @@ pub(crate) struct SettingsModalState {
     irc_token: IrcTokenDialogState,
     right_sidebar_components_open: bool,
     right_sidebar_components_index: usize,
+    /// True while a mouse drag is repositioning a sidebar panel row (Down
+    /// on a row through the matching Up). While true, Drag events reorder
+    /// live by hit-testing `right_sidebar_component_rects`.
+    right_sidebar_component_dragging: bool,
+    /// On-screen rects for each row in the sidebar panel editor, indexed the
+    /// same as `right_sidebar_components()`. Populated by the renderer each
+    /// frame, same pattern as `tab_rects` below.
+    right_sidebar_component_rects: RefCell<Vec<Option<Rect>>>,
     feeds: Vec<RssFeed>,
     feed_index: usize,
     editing_feed_url: bool,
@@ -555,6 +563,8 @@ impl SettingsModalState {
             irc_token: IrcTokenDialogState::new(),
             right_sidebar_components_open: false,
             right_sidebar_components_index: 0,
+            right_sidebar_component_dragging: false,
+            right_sidebar_component_rects: RefCell::new(Vec::new()),
             feeds: Vec::new(),
             feed_index: 0,
             editing_feed_url: false,
@@ -764,6 +774,32 @@ impl SettingsModalState {
 
     pub(crate) fn close_right_sidebar_components(&mut self) {
         self.right_sidebar_components_open = false;
+        self.right_sidebar_component_dragging = false;
+    }
+
+    pub(crate) fn set_right_sidebar_component_rects(&self, rects: Vec<Option<Rect>>) {
+        *self.right_sidebar_component_rects.borrow_mut() = rects;
+    }
+
+    /// Row index under the given point, if any — the mouse hit test for the
+    /// sidebar panel editor's row list.
+    pub(crate) fn right_sidebar_component_at_point(&self, x: u16, y: u16) -> Option<usize> {
+        rect_list_index_at_point(&self.right_sidebar_component_rects.borrow(), x, y)
+    }
+
+    /// Grab a row: select it and start treating subsequent Drag events as
+    /// live reorder motion.
+    pub(crate) fn start_dragging_right_sidebar_component(&mut self, idx: usize) {
+        self.right_sidebar_components_index = idx;
+        self.right_sidebar_component_dragging = true;
+    }
+
+    pub(crate) fn dragging_right_sidebar_component(&self) -> bool {
+        self.right_sidebar_component_dragging
+    }
+
+    pub(crate) fn stop_dragging_right_sidebar_component(&mut self) {
+        self.right_sidebar_component_dragging = false;
     }
 
     pub(crate) fn right_sidebar_components_index(&self) -> usize {
@@ -2334,6 +2370,15 @@ fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
         && x < rect.x + rect.width
         && y >= rect.y
         && y < rect.y + rect.height
+}
+
+/// Index of the first rect containing the point, skipping `None` slots
+/// (hidden/absent rows). Shared by any per-row rect list, currently the
+/// sidebar panel editor's rows.
+fn rect_list_index_at_point(rects: &[Option<Rect>], x: u16, y: u16) -> Option<usize> {
+    rects
+        .iter()
+        .position(|slot| slot.is_some_and(|rect| rect_contains(rect, x, y)))
 }
 
 #[cfg(test)]
