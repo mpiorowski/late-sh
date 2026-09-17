@@ -227,10 +227,7 @@ fn watering_a_dead_tree_replants_it() {
     let today = BonsaiService::today();
 
     let applied = state.apply(
-        BonsaiCommand {
-            selected_branch_id: None,
-            action: BonsaiAction::Water,
-        },
+        BonsaiCommand::Water,
         today,
     );
 
@@ -497,10 +494,7 @@ fn a_second_watering_the_same_day_is_refused() {
     state.vigor = 50;
     state.water_stress = 40;
     let today = BonsaiService::today();
-    let water = BonsaiCommand {
-        selected_branch_id: None,
-        action: BonsaiAction::Water,
-    };
+    let water = BonsaiCommand::Water;
 
     assert_eq!(state.apply(water, today), Applied::Watered);
     assert_eq!(state.last_watered, Some(today));
@@ -532,9 +526,9 @@ fn an_action_lands_on_the_branch_the_command_names() {
     let mut state = state_for_graph(graph, Some(stored_cursor));
 
     let applied = state.apply(
-        BonsaiCommand {
-            selected_branch_id: Some(session_cursor),
-            action: BonsaiAction::Prune,
+        BonsaiCommand::Branch {
+            branch_id: session_cursor,
+            action: BranchAction::Prune,
         },
         BonsaiService::today(),
     );
@@ -542,6 +536,34 @@ fn an_action_lands_on_the_branch_the_command_names() {
     assert_eq!(applied, Applied::Changed);
     assert!(state.graph.branch(session_cursor).is_none());
     assert!(state.graph.branch(stored_cursor).is_some());
+}
+
+/// Another session pruned the branch this one still shows under its
+/// cursor. The action is refused outright: it never falls through to the
+/// cursor stored with the row, which this session never picked.
+#[test]
+fn an_action_on_a_vanished_branch_changes_nothing() {
+    let graph = graph_with_two_editable_tips();
+    let stored_cursor = first_editable_tip(&graph);
+    let mut state = state_for_graph(graph, Some(stored_cursor));
+    let before = state.to_write();
+    let vanished = 9_999;
+    assert!(state.graph.branch(vanished).is_none());
+
+    let applied = state.apply(
+        BonsaiCommand::Branch {
+            branch_id: vanished,
+            action: BranchAction::Prune,
+        },
+        BonsaiService::today(),
+    );
+
+    assert_eq!(applied, Applied::Unchanged);
+    assert_eq!(state.message.as_deref(), Some("Selected branch vanished"));
+    let after = state.to_write();
+    assert_eq!(after.branch_graph, before.branch_graph);
+    assert_eq!(after.selected_branch_id, before.selected_branch_id);
+    assert_eq!(after.vigor, before.vigor);
 }
 
 /// A tip at its length budget forks instead of extending, so the tree

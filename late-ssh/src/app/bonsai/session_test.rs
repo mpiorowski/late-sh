@@ -90,3 +90,30 @@ async fn another_users_change_does_not_reload() {
 
     assert!(!session.own_tree_changed());
 }
+
+// A held key must not queue a task (and a pooled connection) per repeat:
+// while one action is out, further presses are dropped. The answer reopens
+// the session for the next press.
+#[tokio::test]
+async fn a_press_while_an_action_is_out_is_dropped() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "bonsai-session-inflight").await;
+    let (tx, _rx) = broadcast::channel::<ActivityEvent>(16);
+    let svc = BonsaiService::new(test_db.db.clone(), tx);
+    let tree = svc.ensure_tree(user.id).await.expect("ensure tree");
+    let mut session = BonsaiSession::new(user.id, svc.clone(), BonsaiState::view_only(tree, None));
+    let today = BonsaiService::today();
+
+    assert!(session.request(BonsaiAction::Water));
+    assert!(!session.request(BonsaiAction::Water));
+    tick_until(&mut session, "the watering's answer", |session| {
+        session.tree.last_watered == Some(today)
+    })
+    .await;
+
+    assert!(session.request(BonsaiAction::Water));
+    tick_until(&mut session, "the second watering's refusal", |session| {
+        session.tree.message.as_deref() == Some("Already watered today")
+    })
+    .await;
+}

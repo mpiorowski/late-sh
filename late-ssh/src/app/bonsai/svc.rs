@@ -123,7 +123,7 @@ impl BonsaiService {
         reply: mpsc::UnboundedSender<BonsaiOutcome>,
     ) {
         let svc = self.clone();
-        let span = info_span!("bonsai.act_task", user_id = %user_id, action = ?command.action);
+        let span = info_span!("bonsai.act_task", user_id = %user_id, action = ?command.action());
         tokio::spawn(
             async move {
                 let outcome = match svc.act(user_id, command).await {
@@ -132,7 +132,7 @@ impl BonsaiService {
                             Applied::Unchanged => BonsaiActionResult::Refused,
                             Applied::Changed | Applied::Watered => BonsaiActionResult::Stored,
                         };
-                        crate::metrics::record_bonsai_action(command.action, result);
+                        crate::metrics::record_bonsai_action(command.action(), result);
                         svc.announce(&acted, user_id).await;
                         BonsaiOutcome::Acted {
                             tree: acted.tree,
@@ -143,7 +143,7 @@ impl BonsaiService {
                     }
                     Err(e) => {
                         crate::metrics::record_bonsai_action(
-                            command.action,
+                            command.action(),
                             BonsaiActionResult::Failed,
                         );
                         tracing::error!(error = ?e, "failed to apply bonsai action");

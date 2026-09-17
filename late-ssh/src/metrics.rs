@@ -202,6 +202,7 @@ mod inner {
         TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
+    use crate::app::bonsai::state::BranchAction;
     use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -428,10 +429,10 @@ mod inner {
     fn bonsai_action_label(action: BonsaiAction) -> &'static str {
         match action {
             BonsaiAction::Water => "water",
-            BonsaiAction::Bend { .. } => "bend",
-            BonsaiAction::Prune => "prune",
-            BonsaiAction::Split => "split",
-            BonsaiAction::Pinch => "pinch",
+            BonsaiAction::Branch(BranchAction::Bend { .. }) => "bend",
+            BonsaiAction::Branch(BranchAction::Prune) => "prune",
+            BonsaiAction::Branch(BranchAction::Split) => "split",
+            BonsaiAction::Branch(BranchAction::Pinch) => "pinch",
         }
     }
 

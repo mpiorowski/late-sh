@@ -16,6 +16,8 @@ pub(crate) struct BonsaiSession {
     pub tree: BonsaiState,
     user_id: Uuid,
     svc: BonsaiService,
+    /// An action is out and its answer has not been drained yet.
+    action_in_flight: bool,
     outcome_tx: mpsc::UnboundedSender<BonsaiOutcome>,
     outcome_rx: mpsc::UnboundedReceiver<BonsaiOutcome>,
     changes_rx: broadcast::Receiver<Uuid>,
@@ -29,6 +31,7 @@ impl BonsaiSession {
             tree,
             user_id,
             svc,
+            action_in_flight: false,
             outcome_tx,
             outcome_rx,
             changes_rx,
@@ -37,13 +40,28 @@ impl BonsaiSession {
 
     /// Ask the service to run `action` on the branch under this session's
     /// cursor. The mirror does not move until the answer comes back.
-    pub(crate) fn request(&mut self, action: BonsaiAction) {
-        let command = BonsaiCommand {
-            selected_branch_id: self.tree.selected_branch_id,
-            action,
+    /// Returns whether the request went out. One action is out at a time:
+    /// every `act_task` holds a pooled connection while it waits for the
+    /// row lock, so a held key (terminal key repeat) must not queue one per
+    /// repeat. A press made while an answer is pending is dropped.
+    pub(crate) fn request(&mut self, action: BonsaiAction) -> bool {
+        if self.action_in_flight {
+            return false;
+        }
+        let command = match (action, self.tree.selected_branch_id) {
+            (BonsaiAction::Water, _) => BonsaiCommand::Water,
+            (BonsaiAction::Branch(action), Some(branch_id)) => {
+                BonsaiCommand::Branch { branch_id, action }
+            }
+            (BonsaiAction::Branch(_), None) => {
+                self.tree.message = Some("No branch selected".to_string());
+                return false;
+            }
         };
+        self.action_in_flight = true;
         self.svc
             .act_task(self.user_id, command, self.outcome_tx.clone());
+        true
     }
 
     /// Drain answers and change notices. Returns true when the mirror or
@@ -62,6 +80,7 @@ impl BonsaiSession {
                     message,
                     selected_branch_id,
                 } => {
+                    self.action_in_flight = false;
                     self.install(tree, decay_protection);
                     self.tree.select_or_keep(selected_branch_id);
                     self.tree.message = message;
@@ -71,6 +90,7 @@ impl BonsaiSession {
                     decay_protection,
                 } => self.install(tree, decay_protection),
                 BonsaiOutcome::ActionFailed => {
+                    self.action_in_flight = false;
                     self.tree.message = Some("Bonsai is unreachable; try again".to_string());
                 }
             }

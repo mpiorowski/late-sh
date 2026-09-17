@@ -7,13 +7,10 @@ use tokio::time::{Duration, timeout};
 
 use super::{BonsaiOutcome, BonsaiService, WATER_CHIP_BONUS};
 use crate::app::activity::event::{ActivityEvent, ActivityKind};
-use crate::app::bonsai::state::{Applied, BonsaiAction, BonsaiCommand};
+use crate::app::bonsai::state::{Applied, BonsaiCommand};
 use crate::test_helpers::new_test_db;
 
-const WATER: BonsaiCommand = BonsaiCommand {
-    selected_branch_id: None,
-    action: BonsaiAction::Water,
-};
+const WATER: BonsaiCommand = BonsaiCommand::Water;
 
 fn write_from(tree: &Tree) -> TreeWrite {
     TreeWrite {

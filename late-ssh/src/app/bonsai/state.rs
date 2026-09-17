@@ -201,27 +201,40 @@ impl BonsaiGraph {
     }
 }
 
-/// One care action, as a session asks the service for it. The branch an
-/// action works on travels with it: selection is per session, so the
-/// service applies the action to the branch this session was looking at,
-/// not to whatever another session selected last.
+/// One care action, as a key press asks for it.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum BonsaiAction {
     /// Water, or replant when the tree is dead.
     Water,
-    Bend {
-        dx: i8,
-        dy: i8,
-    },
+    Branch(BranchAction),
+}
+
+/// The actions that work on one branch.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum BranchAction {
+    Bend { dx: i8, dy: i8 },
     Prune,
     Split,
     Pinch,
 }
 
+/// One care action, as a session asks the service for it. A branch action
+/// names its branch: selection is per session, so the service works on the
+/// branch this session was looking at, never on whatever cursor another
+/// session stored with the row.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) struct BonsaiCommand {
-    pub selected_branch_id: Option<i32>,
-    pub action: BonsaiAction,
+pub(crate) enum BonsaiCommand {
+    Water,
+    Branch { branch_id: i32, action: BranchAction },
+}
+
+impl BonsaiCommand {
+    pub(crate) fn action(self) -> BonsaiAction {
+        match self {
+            Self::Water => BonsaiAction::Water,
+            Self::Branch { action, .. } => BonsaiAction::Branch(action),
+        }
+    }
 }
 
 /// What `BonsaiState::settle` did to a freshly loaded row.
@@ -360,18 +373,23 @@ impl BonsaiState {
     /// Run one care action. The caller stores the state unless it comes
     /// back `Unchanged`; `message` is set either way.
     pub(crate) fn apply(&mut self, command: BonsaiCommand, today: NaiveDate) -> Applied {
-        // The acting session's cursor, when it still names a live branch.
-        if let Some(id) = command.selected_branch_id
-            && self.graph.branch(id).is_some_and(Branch::is_alive)
-        {
-            self.selected_branch_id = Some(id);
+        let (branch_id, action) = match command {
+            BonsaiCommand::Water => return self.water(today),
+            BonsaiCommand::Branch { branch_id, action } => (branch_id, action),
+        };
+        // Another session may have pruned the branch this one still shows.
+        // Refuse: the cursor stored with the row is not this session's pick.
+        // A branch that is still there but dead gets its rule's own refusal.
+        if self.graph.branch(branch_id).is_none() {
+            self.message = Some("Selected branch vanished".to_string());
+            return Applied::Unchanged;
         }
-        let changed = match command.action {
-            BonsaiAction::Water => return self.water(today),
-            BonsaiAction::Bend { dx, dy } => self.bend_selected(dx, dy),
-            BonsaiAction::Prune => self.prune_selected(),
-            BonsaiAction::Split => self.split_selected(),
-            BonsaiAction::Pinch => self.pinch_selected(),
+        self.selected_branch_id = Some(branch_id);
+        let changed = match action {
+            BranchAction::Bend { dx, dy } => self.bend_selected(dx, dy),
+            BranchAction::Prune => self.prune_selected(),
+            BranchAction::Split => self.split_selected(),
+            BranchAction::Pinch => self.pinch_selected(),
         };
         match changed {
             true => Applied::Changed,
