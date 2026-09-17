@@ -1,6 +1,7 @@
 use crate::AppState;
 use axum::Router;
 
+pub(crate) mod careers;
 pub(crate) mod gallery;
 pub(crate) mod home;
 pub(crate) mod legal;
@@ -21,5 +22,6 @@ pub(crate) fn router() -> Router<AppState> {
         .merge(gallery::router())
         .merge(profiles::router())
         .merge(legal::router())
+        .merge(careers::router())
         .merge(stream::router())
 }
