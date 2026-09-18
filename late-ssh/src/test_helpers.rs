@@ -1097,12 +1097,20 @@ pub fn strip_ansi(input: &str) -> String {
                         }
                         params.push(c);
                     }
-                    // Cursor position is the one sequence that moves text;
-                    // colors, clears, and mode switches leave no glyph.
-                    if final_byte == Some('H') {
-                        let (row, col) = params.split_once(';').unwrap_or(("1", "1"));
-                        y = row.parse::<u16>().unwrap_or(1).saturating_sub(1);
-                        x = col.parse::<u16>().unwrap_or(1).saturating_sub(1);
+                    // The cursor moves are the sequences that place text;
+                    // colors, clears, and mode switches leave no glyph. The
+                    // backend uses both: row and column (`H`), and column
+                    // only (`G`) after a single-codepoint glyph.
+                    match final_byte {
+                        Some('H') => {
+                            let (row, col) = params.split_once(';').unwrap_or(("1", "1"));
+                            y = row.parse::<u16>().unwrap_or(1).saturating_sub(1);
+                            x = col.parse::<u16>().unwrap_or(1).saturating_sub(1);
+                        }
+                        Some('G') => {
+                            x = params.parse::<u16>().unwrap_or(1).saturating_sub(1);
+                        }
+                        _ => {}
                     }
                 }
                 Some(']') | Some('P') | Some('X') | Some('^') | Some('_') => {
