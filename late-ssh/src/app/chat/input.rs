@@ -454,6 +454,17 @@ fn toggle_selected_room_favorite(app: &mut App) -> bool {
     true
 }
 
+/// The favorite keys for the selected entry: `[` / `]` reorder, `f` toggles.
+/// Returns whether the byte was consumed.
+fn handle_favorite_keys(app: &mut App, byte: u8) -> bool {
+    match byte {
+        b'[' => move_selected_favorite(app, -1),
+        b']' => move_selected_favorite(app, 1),
+        b'f' | b'F' => toggle_selected_room_favorite(app),
+        _ => false,
+    }
+}
+
 fn move_selected_favorite(app: &mut App, delta: isize) -> bool {
     let Some(room_id) = app.chat.selected_favorite_room_id() else {
         return false;
@@ -789,6 +800,17 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
 
     if byte == b' ' {
         app.chat.activate_room_jump();
+        return true;
+    }
+
+    // Mentions, News, RSS and Browse can be favorited and reordered like a
+    // room, but their handlers below take every byte, so the favorite keys
+    // are answered first. None of those handlers bind `f`, `[` or `]`; the
+    // News composer is the one text input among them and keeps its bytes.
+    if app.chat.synthetic_entry_selected()
+        && !(app.chat.news_selected && app.chat.news.composing())
+        && handle_favorite_keys(app, byte)
+    {
         return true;
     }
 

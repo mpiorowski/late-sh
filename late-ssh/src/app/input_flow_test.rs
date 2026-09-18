@@ -3629,3 +3629,100 @@ async fn zen_space_opens_a_tile_picker_that_owns_the_keys_until_a_pick_or_esc() 
         "Esc under the picker does not leave Zen"
     );
 }
+
+#[tokio::test]
+async fn f_favorites_the_bugs_room_from_the_rail() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "f-fav-bugs").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    let bugs = ChatRoom::ensure_permanent(&client, "bugs")
+        .await
+        .expect("ensure bugs room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    ChatRoomMember::join(&client, bugs.id, viewer.id)
+        .await
+        .expect("join bugs");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "f-fav-bugs-flow-it");
+    app.resize(160, 32).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "bugs").await;
+
+    // Core order is lounge, then bugs: one step right lands on it.
+    app.handle_input(b"l");
+    assert_eq!(app.chat.selected_room_id, Some(bugs.id));
+
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "Added to favorites").await;
+    assert!(app.chat.favorite_room_ids().contains(&bugs.id));
+
+    // The favorite has to survive the profile round trip that tick mirrors
+    // back into chat, and the rail has to show the section.
+    wait_for_render_contains(&mut app, "favorites").await;
+    assert!(app.chat.favorite_room_ids().contains(&bugs.id));
+
+    // With a message selected, `f` belongs to the reaction leader and never
+    // reaches the favorite toggle: the favorite stays exactly as it was.
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: bugs.id,
+            user_id: viewer.id,
+            body: "---BUG--- a report to read".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+    wait_for_render_contains(&mut app, "a report to read").await;
+    app.handle_input(b"j");
+    assert!(app.chat.selected_message_id.is_some());
+    app.handle_input(b"f");
+    assert!(app.chat.is_reaction_leader_active());
+    assert!(app.chat.favorite_room_ids().contains(&bugs.id));
+}
+
+#[tokio::test]
+async fn f_favorites_the_mentions_entry() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "f-fav-mentions").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "f-fav-mentions-flow-it");
+    app.resize(160, 32).expect("resize test terminal");
+    // The rail renders its synthetic rows before the room list arrives; the
+    // selected-row marker on lounge is what says the walk below can start.
+    wait_for_render_contains(&mut app, "\u{258C}lounge").await;
+    assert_eq!(app.chat.selected_room_id, Some(lounge.id));
+
+    // Core order here is lounge, then mentions: one step right lands on it.
+    app.handle_input(b"l");
+    assert!(app.chat.notifications_selected);
+
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "Added to favorites").await;
+    let mentions_id = crate::app::chat::state::synthetic_favorite_id(
+        crate::app::chat::state::RoomSlot::Notifications,
+    )
+    .expect("mentions is favoritable");
+    assert!(app.chat.favorite_room_ids().contains(&mentions_id));
+
+    // It has to survive the profile round trip tick mirrors back into chat,
+    // and the rail has to show the section it moved into.
+    wait_for_render_contains(&mut app, "favorites").await;
+    assert!(app.chat.favorite_room_ids().contains(&mentions_id));
+
+    // A second press takes it back out.
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "Removed from favorites").await;
+    assert!(!app.chat.favorite_room_ids().contains(&mentions_id));
+}
