@@ -167,6 +167,13 @@ impl App {
             // still lands within 132ms of its tick.
             changed = true;
         }
+        if self.screen == Screen::City && anim_half {
+            // Rain, neon, steam and the screen's static ride the same
+            // ~7.5fps ambience edge as the clubhouse; the runner's steps
+            // are input-driven.
+            self.city.tick(self.marquee_tick as u64);
+            changed = true;
+        }
 
         // Expire a stale paired-clipboard wait here rather than inside
         // chat.tick(): the registry slot must be cancelled along with it, so
@@ -1280,6 +1287,7 @@ impl App {
         // Zen music or visualizer tile paints its eq on that edge too; left
         // to the aquarium's quarter tier it drops to ~3.8fps.
         if self.screen == Screen::Clubhouse
+            || self.screen == Screen::City
             || self.right_sidebar_visible()
             || (self.screen == Screen::Zen && self.zen.shows_equalizer())
             || self.last_pet_frame.get().is_some()

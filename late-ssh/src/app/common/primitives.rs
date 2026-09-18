@@ -76,6 +76,10 @@ pub enum Screen {
     Profiles,
     Leaderboard,
     Clubhouse,
+    /// The deadchannel night city (`7`): the game's wallet street, a
+    /// dedicated page while the art is being built; it moves behind
+    /// #deadchannel later (`app/deadchannel/city`).
+    City,
     /// Zen (`Ctrl+F` from anywhere): the tiling layout you arrange yourself
     /// (`app/zen`). A surface over the page you were on, absent from the Tab
     /// cycle; only the chord returns there (Esc stays).
@@ -106,7 +110,8 @@ impl Screen {
             Screen::Games => Screen::Artboard,
             Screen::Artboard => Screen::Profiles,
             Screen::Profiles => Screen::Leaderboard,
-            Screen::Leaderboard => Screen::Clubhouse,
+            Screen::Leaderboard => Screen::City,
+            Screen::City => Screen::Clubhouse,
             Screen::Zen => Screen::Dashboard,
             Screen::Lateania
             | Screen::Rebels
@@ -127,7 +132,8 @@ impl Screen {
 
     pub fn prev(self) -> Self {
         match self {
-            Screen::Clubhouse => Screen::Leaderboard,
+            Screen::Clubhouse => Screen::City,
+            Screen::City => Screen::Leaderboard,
             Screen::Zen => Screen::Dashboard,
             Screen::Dashboard => Screen::Clubhouse,
             Screen::Arcade => Screen::Dashboard,
@@ -202,6 +208,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Profiles => "Profiles",
         Screen::Leaderboard => "Leaderboards",
         Screen::Clubhouse => "Clubhouse",
+        Screen::City => "Night City",
         Screen::DailyMatch => "Daily Match",
         Screen::HouseTable => "House Table",
         Screen::Scratchpad => "Scratchpad",

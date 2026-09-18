@@ -10,12 +10,14 @@ fn screen_next_cycles_top_level_screens() {
     assert_eq!(Screen::Games.next(), Screen::Artboard);
     assert_eq!(Screen::Artboard.next(), Screen::Profiles);
     assert_eq!(Screen::Profiles.next(), Screen::Leaderboard);
-    assert_eq!(Screen::Leaderboard.next(), Screen::Clubhouse);
+    assert_eq!(Screen::Leaderboard.next(), Screen::City);
+    assert_eq!(Screen::City.next(), Screen::Clubhouse);
 }
 
 #[test]
 fn screen_prev_cycles_top_level_screens() {
-    assert_eq!(Screen::Clubhouse.prev(), Screen::Leaderboard);
+    assert_eq!(Screen::Clubhouse.prev(), Screen::City);
+    assert_eq!(Screen::City.prev(), Screen::Leaderboard);
     assert_eq!(Screen::Leaderboard.prev(), Screen::Profiles);
     assert_eq!(Screen::Dashboard.prev(), Screen::Clubhouse);
     assert_eq!(Screen::Arcade.prev(), Screen::Dashboard);

@@ -570,6 +570,9 @@ async fn shift_tab_cycles_screens_backwards() {
     wait_for_render_contains(&mut app, " Clubhouse ").await;
 
     app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, " Night City ").await;
+
+    app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, " Leaderboards ").await;
 
     app.handle_input(b"\x1b[Z");
@@ -615,6 +618,9 @@ async fn tab_cycles_screens_forward_through_all_including_profiles() {
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Leaderboards ").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, " Night City ").await;
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Clubhouse ").await;

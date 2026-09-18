@@ -1022,6 +1022,50 @@ loop's engine. Names and copy belong to the city pass.
 4. Piece catalog v1: starter sets, the first rack, the first earned
    pieces.
 
+## The city pass: the street (2026-09-18)
+
+Status: **built, art only, as a dedicated page.** The night city exists
+(`late-ssh/src/app/deadchannel/city/`, see `CONTEXT.md` §3b beside this
+file) on page `7` while the street is iterated on; it moves behind
+#deadchannel, the wire as the doorway, once a till opens. Decisions this
+pass fixed:
+
+- **Density: one glyph per person, props at full size.** The runner walks
+  the street as its mark (the one-cell avatar decided in the phase 2 pass),
+  buildings and carts are multi-cell ASCII. The clubhouse's three-row
+  figures were considered and rejected for the city: at that zoom a
+  terminal shows two shopfronts, and the city has to read as *big*. This
+  is the Rangedrifter register (3D-feeling ASCII from oblique facades and
+  a railing over a drop, not from wider sprites).
+- **The street is one block.** Stairs down, the armorer, the tailor, the
+  lockers, bands, the bar, the screen, patch; carts and stalls in the
+  road; the board and the bits machine on the sidewalk; the railing and the
+  lower city's lights to the south; the stairwell to the wire in a gap of
+  the rail, where you arrive and where you leave. The map is generated
+  from prop stamps (`scripts/gen_city_map.py`), never hand-drawn, so it
+  can grow a second block without redrawing the first.
+- **Names.** The street sign reads `STATIC ROW`; the bar is `DEAD AIR`
+  (the signal is warm in here); repairs are `PATCH`; the giant screen has
+  no sign and needs none. All pass the screenshot test. Banners in the
+  glyph alphabet hang off the buildings: the city's own script, and
+  nobody can read it, which is the point.
+- **No function behind anything yet, and the panels say so.** Every shop
+  opens and shows its real catalog (the fifteen gear tiers at LoGD prices,
+  the whole starter rack with the runner's portrait in the mirror, the
+  three bands) under a line in the voice saying the till is not open. The
+  street answers Enter at a cart with a line from a small pool. Placeholder
+  copy, design review pending: the draft **move names** (tuner: retune,
+  siphon, carrier, clear channel; jammer: hiss, jam, wither, blackout;
+  ghost: smear, from behind, unseen, vanish), the board's four notices, the
+  bar's drink list, the reader's lines (which point at the haunting).
+- **Nothing shared, nothing timed.** No crowd on the street (the design
+  says the city must never beat chat for standing around), no spawns, no
+  clock. The screen's static and the rain are render-only ambience.
+
+Next on this surface, in order: the armorer's till (bits, the day roll),
+the tailor's mirror as the editor (pick, not draw), the locker, the band
+choice, then the page moves behind `/join #deadchannel`.
+
 ## Experiment framing
 
 Success metrics, named now so the experiment can fail honestly:

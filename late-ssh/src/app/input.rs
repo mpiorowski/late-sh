@@ -1607,6 +1607,10 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return crate::app::clubhouse::input::handle_event(app, event);
     }
 
+    if ctx.screen == Screen::City {
+        return crate::app::deadchannel::city::input::handle_event(app, event);
+    }
+
     if ctx.screen == Screen::Zen {
         return crate::app::zen::input::handle_event(app, event);
     }
@@ -2359,6 +2363,12 @@ fn dispatch_escape(app: &mut App) {
         crate::app::door::darkroom::screen::GAME.handle_key(app, 0x1B);
         return;
     }
+    // Esc in the city closes an open shop panel; on the street it means
+    // nothing (the wire is the way out).
+    if ctx.screen == Screen::City && app.city.panel().is_some() {
+        app.city.close_panel();
+        return;
+    }
     // Esc from the Games hub closes the rc config modal, cancels a pending
     // reset prompt, and otherwise drops back to Home.
     if ctx.screen == Screen::Games {
@@ -2578,6 +2588,7 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
         20 => Some(Screen::Artboard),
         22 => Some(Screen::Profiles),
         24 => Some(Screen::Leaderboard),
+        26 => Some(Screen::City),
         _ => None,
     }
 }
@@ -3158,6 +3169,8 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         // Walk-mode arrows are consumed in handle_dedicated_screen_input;
         // composing-mode arrows are swallowed by the shared composer gate.
         Screen::Clubhouse => false,
+        // City arrows walk the runner in handle_dedicated_screen_input.
+        Screen::City => false,
         // Daily board arrows are consumed in handle_dedicated_screen_input.
         Screen::DailyMatch => false,
         // House table arrows are consumed in handle_dedicated_screen_input.
@@ -3947,6 +3960,11 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.set_screen(Screen::Leaderboard);
             true
         }
+        b'7' if !artboard_blocks_page_switch => {
+            reset_composers_for_page_change(app);
+            app.set_screen(Screen::City);
+            true
+        }
         b'0' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Clubhouse);
@@ -4084,6 +4102,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::Clubhouse => {
             // Clubhouse keys are handled in handle_dedicated_screen_input
             // (walking, chat routing, interactions); no-op here.
+        }
+        Screen::City => {
+            // City keys are handled in handle_dedicated_screen_input.
         }
         Screen::DailyMatch => {
             // Daily board keys are handled in handle_dedicated_screen_input.

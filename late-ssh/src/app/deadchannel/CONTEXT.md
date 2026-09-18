@@ -4,11 +4,13 @@
 - Domain: the deadchannel game (GAME.md): its onboarding, the
   first-contact haunting ladder, in the `haunt/` subdomain, and the
   start of the character layer, the runner and its look, in `runner/`
-  (phase 2, build order step 1). Built for
+  (phase 2, build order step 1), and the night city street in `city/`
+  (the wallet, GAME.md "The three surfaces"; art and walkable street
+  first, on a dedicated page `7`, no transactions yet). Built for
   several replicas (root CONTEXT.md, multi-replica rule); gated behind
   the `haunt_live` fuse, unlit, so only staff (admins and moderators)
   are haunted today, and only they can finish the ladder and join.
-- Last updated: 2026-09-14 (the breakthrough plays only on a send from
+- Last updated: 2026-09-18 (the night city exists as page `7`: the generated street, the runner as its mark, landmarks with popovers, shop panels showing catalogs without tills; §7). Before that, 2026-09-14 (the breakthrough plays only on a send from
   its own session and swallows keys ahead of door games; the static rolls
   slower, scene lengths unchanged). Before that, 2026-09-13 (stage 3
   plays on its own clock: the static
@@ -106,6 +108,11 @@ number of replicas spend one AI call per text.
 | `runner/state.rs` | The look: `PIECES` (the closed starter table, one five-cell row per piece, `Slot` hood/eyes/coat), `Tint` (the closed palette, gold deliberately absent), `Look` + `Worn` (typed, table references), `Look::random` (the join's dice), `Look::to_json` / `Look::parse` (the JSON contract on the runner row; unknown codes are a `LookError`, never a blank), `PORTRAIT_WIDTH` / `PORTRAIT_HEIGHT`. No I/O. `state_test` asserts every row is five single-width cells. |
 | `runner/ui.rs` | `portrait_spans`: the look as three styled spans, one per worn piece in its tint; `tint_color` maps the palette onto the theme. Pure. |
 | `runner/svc.rs` | `RunnerLookService`: the process-shared look directory (`watch<Arc<HashMap<Uuid, Look>>>`), seeded and refreshed from `deadchannel_runners` on the `deadchannel_runner_changed` LISTEN, the `app/flags` shape. A look that fails to parse is logged and skipped. `fixed_looks_rx` for test apps. |
+| `city/map.rs` | **Generated** by `scripts/gen_city_map.py --write` (never hand-edited): the 232x52 `MAP` literal, the `SOLID` collision bitmap, `SPAWN`, every zone (`SIGNS`, `BANNERS`, `CART_SIGNS`, `AWNINGS`, `WINDOWS`, `VENTS`, `PUDDLES`, `LAMPS`, `DROP_LIGHTS`, `SCREEN_FACE`, `WIRE`, ...), the closed `Neon` palette, `Landmark` + `nearest_landmark` (reach zones), `walkable`, `grid`/`char_at`. |
+| `city/state.rs` | Per-session view state: the runner's cell, the animation clock, the open panel, the pinned street line. `walk`, `nearby`, `Landmark::on_enter` (`Enter::Panel` for shops, `Enter::Line` for carts and the screen, `Enter::Leave` for the wire). Pure. |
+| `city/data.rs` | The city's copy and catalogs: the gear ladder (`COST_LADDER`, `WEAPONS`, `ARMOR`: LoGD numbers, GAME.md names), `BANDS` with draft move names, `NOTICES`, `DRINKS`, `TAILOR_PRICES`, the per-landmark `lines` pools, `title` and `pitch`. |
+| `city/input.rs` | Arrows/hjkl walk; Enter at a landmark; Esc or Enter closes a panel (walk keys are swallowed while one is open). Returns `false` for globals. |
+| `city/ui.rs` | Renderer: base styling by zone, the ambience pass (rain, puddles reflecting the nearest sign, neon shorts and dropped letters, window flicker, the screen's static and test pattern with rare glyph frames, steam, lamps, the drop's lights, the blimp, the mast, the bits machine, the wire's pulse), the runner as its mark, the popover, the street line, the shop panels. |
 
 Root integration is deliberately thin: `App.haunt` (the one field),
 `haunt::svc::tick(self)` in `tick.rs` (plus the splash block consulting
@@ -301,6 +308,67 @@ lines carry no face; every other room renders exactly as before.
    `visual_order_for_rooms` and both rail builders in `chat/ui.rs`).
    Copy and name face design review before real users ever see them.
 
+## 3b. The night city (page `7`, the wallet; art first)
+
+GAME.md, "The three surfaces": the city is a full-screen destination
+where nothing happens that you could miss; transactions only. What exists
+is the street and its doors, none of the tills: the design pass that fixes
+the art before a single purchase is wired.
+
+- **Where it is reached.** A dedicated top-level page for now, `7`, last
+  in the Tab cycle, title "Night City", so the art can be iterated on
+  without the invitation funnel in the way. It moves behind #deadchannel
+  (the wire is the doorway) once the shops trade; the wiring is thin on
+  purpose (`Screen::City`, `App.city`, one dispatch line each in
+  `input.rs`, `render.rs`, `tick.rs`).
+- **The register (decided 2026-09-18).** One glyph per person: the runner
+  is its mark (GAME.md, "The look"; `@` for a session without a runner
+  row), name label above. Buildings, carts and stalls are multi-cell
+  props. That is the Rangedrifter density, a tighter zoom than the
+  clubhouse's three-row figures, so the same terminal shows more city.
+  Single-width glyphs only; the generator refuses wide and combining
+  characters and `map_test` asserts it again.
+- **The street, west to east.** The stairs down (`▼ LOWER`, no function),
+  the armorer (red), the tailor (magenta, starter pieces on mannequins in
+  the window), the lockers (cyan, one letter of the sign dead for good),
+  bands (green, antennas on the roof), the bar "dead air" (amber), the
+  screen (a facade that is one screen tuned to a dead channel: static,
+  torn now and then, the test pattern for a moment each cycle, a glyph
+  from the alphabet surfacing in the noise once in a while), and patch
+  (white, repairs). Alleys between them carry fire escapes and steaming
+  vents; vertical banners in the glyph alphabet hang off the corners (the
+  city's script, unreadable on purpose). On the street: lamps, the board
+  kiosk, the bits machine, the noodle cart (the cook behind the counter,
+  steam off the bowls), the umbrella stall, the blade cart, the reader's
+  tent. South, the railing over the drop: the lower city as lights far
+  below, and the stairwell up to the wire in a gap of the rail, where the
+  runner spawns and the way out is.
+- **Colors go through `Neon`** (`Cyan`, `Magenta`, `Red`, `Amber`,
+  `Green`, `White`), mapped onto theme colors in `ui.rs` (`CHAT_AUTHOR`,
+  `BOT`, `ERROR`, `AMBER_GLOW`, `SUCCESS`, `TEXT_BRIGHT`), never raw RGB,
+  so the street follows the person's palette. Puddles reflect the sign
+  nearest by column; awnings wear their shop's color dimmed.
+- **Landmarks.** Enter at a shop (armorer, tailor, lockers, bands, bar,
+  patch, board, bits machine) opens a centered panel with its catalog and
+  a line saying the till is not open: the armorer lists all fifteen
+  tiers with bits prices, the tailor shows your portrait in the mirror
+  and the whole starter rack (every piece row, the ten marks, the five
+  tints) plus the placeholder chip prices, bands shows the three bands
+  with draft move names. Enter at a cart, the screen, or the stairs pins
+  a line from that landmark's pool top-left for ~8s. Enter at the wire
+  leaves (to Home today; to #deadchannel once the page moves).
+- **Animation** rides the clubhouse's `anim_half` edge (~7.5fps,
+  `tick.rs`), the wake tier is `ANIM_HALF_TICK` on this screen, and every
+  effect is a pure function of `marquee_tick` and the cell, so nothing
+  accumulates. The ambience never paints over a prop (`put_if_floor`, and
+  `ui_test` checks the signs and the board survive a frame).
+- **The camera looks north** (`LOOK_NORTH`, 8 rows): it centers above the
+  runner so a 24-row terminal at the spawn shows shopfronts and street,
+  not the drop.
+- **Nothing is persisted, nothing is shared.** No lobby, no crowd, no DB:
+  the city is one runner on one street per session by design (transactions
+  only; presence would make standing here beat standing in chat).
+
 ## 4. Persistence (`users.settings`, late-core `User`; `app_flags`; `deadchannel_runners`)
 
 - `deadchannel_runners` (migration 172, model
@@ -483,6 +551,13 @@ Drained by `haunt::svc::tick`.
   deploy zeroes the live value; every panel there sums per-instance
   high-water marks instead. The row ships to prod with the dashboard
   ConfigMap, on a `-infra` release (`infra/monitoring.tf`), not on merge.
+- The city map is generated: hand edits to `city/map.rs` are clobbered by
+  the next `scripts/gen_city_map.py --write`. Move a prop in the script
+  and its zone, reach, and animation cells move with it. The literal
+  arrays carry `#[rustfmt::skip]`, so `cargo fmt` and `--write` agree.
+- The city's copy (`city/data.rs`: shop lines, cart lines, draft move
+  names, notices) is placeholder content at feed-template quality
+  standards and faces design review with the rest of the phase 2 copy.
 - Piece rows are five cells with no wide glyph; the state test guards
   that and nothing more. The rows are block, box-drawing, and shape
   glyphs (`◈ ◌ ●` and their kin), which are East Asian ambiguous width
