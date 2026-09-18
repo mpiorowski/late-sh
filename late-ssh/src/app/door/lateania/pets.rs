@@ -350,7 +350,11 @@ impl Kennel {
     }
 
     /// A companion won in the wild: to the heel if it is free, else home.
-    pub fn adopt_tamed(&mut self, active: &mut Option<Pet>, species: &'static PetSpecies) -> Adopted {
+    pub fn adopt_tamed(
+        &mut self,
+        active: &mut Option<Pet>,
+        species: &'static PetSpecies,
+    ) -> Adopted {
         if self.owns(active.as_ref(), species.key) {
             return Adopted::AlreadyOwned;
         }
@@ -368,7 +372,11 @@ impl Kennel {
 
     /// A companion bought at the Stable steps straight to the heel; the one it
     /// replaces goes home rather than back to the wild.
-    pub fn adopt_bought(&mut self, active: &mut Option<Pet>, species: &'static PetSpecies) -> Bought {
+    pub fn adopt_bought(
+        &mut self,
+        active: &mut Option<Pet>,
+        species: &'static PetSpecies,
+    ) -> Bought {
         if self.owns(active.as_ref(), species.key) {
             return Bought::AlreadyOwned;
         }

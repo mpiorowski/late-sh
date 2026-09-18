@@ -5947,7 +5947,10 @@ fn stable_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
         }
         let marker = if selected { ">" } else { " " };
         lines.push(Line::from(vec![
-            Span::styled(format!("{marker} {} {}", e.glyph, e.name), row_style(selected)),
+            Span::styled(
+                format!("{marker} {} {}", e.glyph, e.name),
+                row_style(selected),
+            ),
             Span::styled(
                 format!(
                     "  Lv{} {}/{}hp · {}atk{}",
@@ -5975,12 +5978,21 @@ fn stable_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
         let price = if e.owned {
             Span::styled("  owned", Style::default().fg(theme::TEXT_DIM()))
         } else if e.affordable {
-            Span::styled(format!("  {}g", e.price), Style::default().fg(theme::BADGE_GOLD()))
+            Span::styled(
+                format!("  {}g", e.price),
+                Style::default().fg(theme::BADGE_GOLD()),
+            )
         } else {
-            Span::styled(format!("  {}g", e.price), Style::default().fg(theme::ERROR()))
+            Span::styled(
+                format!("  {}g", e.price),
+                Style::default().fg(theme::ERROR()),
+            )
         };
         lines.push(Line::from(vec![
-            Span::styled(format!("{marker} {} {}", e.glyph, e.name), row_style(selected)),
+            Span::styled(
+                format!("{marker} {} {}", e.glyph, e.name),
+                row_style(selected),
+            ),
             price,
         ]));
         lines.push(Line::from(Span::styled(

@@ -9428,7 +9428,10 @@ impl WorldState {
                 self.log_to(
                     user_id,
                     LogKind::Loot,
-                    format!("{} Your {} bounds out to your heel.", called.glyph, called.name),
+                    format!(
+                        "{} Your {} bounds out to your heel.",
+                        called.glyph, called.name
+                    ),
                 );
                 self.dirty = true;
             }

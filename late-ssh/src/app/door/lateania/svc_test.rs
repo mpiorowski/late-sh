@@ -2337,10 +2337,20 @@ fn a_new_companion_sends_the_old_one_to_the_kennel_and_it_comes_back() {
     s.players.get_mut(&uid(1)).unwrap().room = 1;
     s.players.get_mut(&uid(1)).unwrap().gold = 10_000;
     s.buy_pet(uid(1), "war_hound");
-    s.players.get_mut(&uid(1)).unwrap().pet.as_mut().unwrap().loyalty_xp = 450;
+    s.players
+        .get_mut(&uid(1))
+        .unwrap()
+        .pet
+        .as_mut()
+        .unwrap()
+        .loyalty_xp = 450;
     s.buy_pet(uid(1), "emberdrake");
 
-    let led = |s: &WorldState| s.players[&uid(1)].pet.map(|p| (p.species.key, p.loyalty_xp));
+    let led = |s: &WorldState| {
+        s.players[&uid(1)]
+            .pet
+            .map(|p| (p.species.key, p.loyalty_xp))
+    };
     let kennel = |s: &WorldState| -> Vec<(&str, i64)> {
         s.players[&uid(1)]
             .kennel
@@ -2350,12 +2360,20 @@ fn a_new_companion_sends_the_old_one_to_the_kennel_and_it_comes_back() {
             .collect()
     };
     assert_eq!(led(&s), Some(("emberdrake", 0)));
-    assert_eq!(kennel(&s), vec![("war_hound", 450)], "the hound rests, not released");
+    assert_eq!(
+        kennel(&s),
+        vec![("war_hound", 450)],
+        "the hound rests, not released"
+    );
 
     // An owned species is never sold twice.
     let gold = s.players[&uid(1)].gold;
     s.buy_pet(uid(1), "war_hound");
-    assert_eq!(s.players[&uid(1)].gold, gold, "no charge for a refused sale");
+    assert_eq!(
+        s.players[&uid(1)].gold,
+        gold,
+        "no charge for a refused sale"
+    );
     assert_eq!(led(&s), Some(("emberdrake", 0)));
 
     // The kennel survives a save and reload.

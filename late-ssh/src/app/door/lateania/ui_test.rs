@@ -1976,7 +1976,10 @@ fn what_this_room_offers_leads_the_panel_and_the_standing_keys_stay_short() {
     assert!(footer_text.contains("/ warp"), "got {footer_text}");
     // Chat, ranks and leaving live in the `?` guide, not the standing block.
     for gone in ["' say", "! ranks", "Esc leave"] {
-        assert!(!footer_text.contains(gone), "{gone:?} is back: {footer_text}");
+        assert!(
+            !footer_text.contains(gone),
+            "{gone:?} is back: {footer_text}"
+        );
     }
     // The room-specific keys live up top now, not down here.
     assert!(

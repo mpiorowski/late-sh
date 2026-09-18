@@ -95,7 +95,10 @@ fn a_tame_with_no_companion_takes_the_heel() {
     use crate::app::door::lateania::taming::TAMEABLE;
     let mut kennel = Kennel::default();
     let mut active = None;
-    assert_eq!(kennel.adopt_tamed(&mut active, &TAMEABLE[0]), Adopted::AtHeel);
+    assert_eq!(
+        kennel.adopt_tamed(&mut active, &TAMEABLE[0]),
+        Adopted::AtHeel
+    );
     assert_eq!(active.map(|p| p.species.key), Some(TAMEABLE[0].key));
     assert!(kennel.resting().is_empty());
 }
@@ -111,7 +114,10 @@ fn buying_sends_the_old_companion_home_and_calling_out_swaps_them_back() {
     };
     assert_eq!(sent_home.map(|s| s.key), Some(bear.key));
     assert_eq!(active.map(|p| p.species.key), Some(cat.key));
-    assert!(matches!(kennel.adopt_bought(&mut active, bear), Bought::AlreadyOwned));
+    assert!(matches!(
+        kennel.adopt_bought(&mut active, bear),
+        Bought::AlreadyOwned
+    ));
 
     // The bear comes back with its loyalty intact, and the cat goes home.
     let CalledOut::Swapped { called, sent_home } = kennel.call_out(&mut active, bear.key) else {
@@ -122,5 +128,8 @@ fn buying_sends_the_old_companion_home_and_calling_out_swaps_them_back() {
     let heel = active.expect("the bear is led again");
     assert_eq!((heel.species.key, heel.loyalty_xp), (bear.key, 900));
     assert_eq!(keys(&kennel), vec![cat.key]);
-    assert!(matches!(kennel.call_out(&mut active, bear.key), CalledOut::NotKenneled));
+    assert!(matches!(
+        kennel.call_out(&mut active, bear.key),
+        CalledOut::NotKenneled
+    ));
 }
