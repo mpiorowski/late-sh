@@ -64,6 +64,11 @@ cargo build --release --bin late
 # binary at target/release/late (late.exe on Windows)
 ```
 
+To install from the checkout, run `cargo install --locked --path late-cli`.
+On Windows x64 MSVC, the repository's `.cargo/config.toml` enables the static
+C runtime required by LiveKit's bundled WebRTC. If you override `RUSTFLAGS`,
+include `-C target-feature=+crt-static` to keep the runtimes consistent.
+
 ## What it does
 
 1. Opens an SSH session to `late.sh`

@@ -1,6 +1,11 @@
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
+[target.x86_64-pc-windows-msvc]
+# LiveKit's bundled WebRTC uses /MT. Keep Rust and the C/C++ bridge on the
+# same static CRT for local builds and `cargo install --path late-cli`.
+rustflags = ["-C", "target-feature=+crt-static"]
+
 [env]
 # libtest runs each test on a spawned thread, which gets std's 2 MiB default
 # rather than the main thread's 8 MiB. Unoptimized test builds keep every
