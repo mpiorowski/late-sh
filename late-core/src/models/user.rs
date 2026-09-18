@@ -686,6 +686,7 @@ impl User {
                           -- milestones above: one holder, so no rank digit
                           -- (`profile_award::is_rankless_award`).
                           WHEN 'crown' THEN 'CRWN'
+                          WHEN 'late_time' THEN 'LATE'
                           ELSE (
                             CASE category
                               WHEN 'top_chips' THEN 'CHIP'
@@ -704,6 +705,7 @@ impl User {
                                    WHEN 'top_chips' THEN 1
                                    WHEN 'crown' THEN 5
                                    WHEN 'artboard' THEN 6
+                                   WHEN 'late_time' THEN 7
                                    WHEN 'tetris' THEN 2
                                    WHEN 'twenty_forty_eight' THEN 3
                                    WHEN 'snake' THEN 4

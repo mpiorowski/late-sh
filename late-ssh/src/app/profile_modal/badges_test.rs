@@ -5,16 +5,16 @@
 //! what happened when A Dark Room's second ending was added.
 
 use late_core::models::profile_award::{
-    CROWN_AWARD_CATEGORY, MILESTONE_AWARD_CATEGORIES, award_badge,
+    MILESTONE_AWARD_CATEGORIES, SINGLE_HOLDER_AWARD_CATEGORIES, award_badge,
 };
 
 /// Every badge granted outside the ranked monthly boards. The milestones are
-/// one list already; the crown is monthly but rankless, and it is documented
-/// in the same two places, so it is checked alongside them.
+/// one list already; the single-holder monthly awards (the crown, Late Time)
+/// are documented in the same two places, so they are checked alongside them.
 fn undocumentable_badges() -> Vec<String> {
     MILESTONE_AWARD_CATEGORIES
         .iter()
-        .chain(std::iter::once(&CROWN_AWARD_CATEGORY))
+        .chain(SINGLE_HOLDER_AWARD_CATEGORIES.iter())
         .map(|category| award_badge(category, 1))
         .collect()
 }

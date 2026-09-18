@@ -97,6 +97,11 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
             "wore the crown when last month ended (/crown)",
         ),
         (
+            "LATE",
+            "Late Time",
+            "most time online last month, first place only (Late Time board)",
+        ),
+        (
             "ART",
             "Artboard Gallery",
             "last month's most applauded piece, one per hanger, 3 applause to count (Artboard page, Hang a piece); pays 40,000 / 15,000 / 10,000 chips",
