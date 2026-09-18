@@ -33,6 +33,7 @@ fn round_trips_through_json() {
         archetype: Some("assassin".to_string()),
         pet: Some("dire_wolf".to_string()),
         pet_loyalty: 250,
+        kennel: vec![("wt_hare".to_string(), 75)],
         stray: Some(7),
         stray_bond: Some((12, 3, 19_500)),
         pet_meals: (19_500, 3),
@@ -68,6 +69,7 @@ fn round_trips_through_json() {
     assert_eq!(back.archetype.as_deref(), Some("assassin"));
     assert_eq!(back.pet.as_deref(), Some("dire_wolf"));
     assert_eq!(back.pet_loyalty, 250);
+    assert_eq!(back.kennel, vec![("wt_hare".to_string(), 75)]);
     assert_eq!(back.stray, Some(7));
     assert_eq!(back.stray_bond, Some((12, 3, 19_500)));
     assert_eq!(back.pet_meals, (19_500, 3));

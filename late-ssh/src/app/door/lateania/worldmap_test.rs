@@ -961,9 +961,8 @@ fn a_room_with_a_way_down_shows_a_stair_on_the_map() {
         .collect();
     assert_eq!(
         stairs,
-        vec!['\u{25be}'],
-        "a room with both ways reads as one ▾: down is the way onward, and the \
-         exits line carries the up"
+        vec!['\u{21d5}'],
+        "a room with both ways reads as one two-headed ⇕ in its corner cell"
     );
 }
 

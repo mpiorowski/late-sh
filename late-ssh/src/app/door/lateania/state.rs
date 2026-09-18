@@ -603,7 +603,11 @@ impl State {
             Panel::Examine => self.view().features.len(),
             Panel::Titles => self.view().titles.len(),
             Panel::Follow => self.view().occupants.len(),
-            Panel::Stable => self.view().stable.map(|s| s.entries.len()).unwrap_or(0),
+            Panel::Stable => self
+                .view()
+                .stable
+                .map(|s| s.kennel.len() + s.entries.len())
+                .unwrap_or(0),
             Panel::Taming => self.view().taming.map(|t| t.entries.len()).unwrap_or(0),
             Panel::Housing => self.view().housing.map(|h| h.entries.len()).unwrap_or(0),
             Panel::Portal => self.view().portal.map(|p| p.entries.len()).unwrap_or(0),
@@ -1056,10 +1060,19 @@ impl State {
             }
             Panel::Follow => self.follow_selected(),
             Panel::Stable => {
-                if let Some(stable) = self.view().stable
-                    && let Some(entry) = stable.entries.get(self.cursor)
-                {
-                    self.svc.buy_pet_task(self.user_id, entry.key.clone());
+                // The kennel rows come first, then the shop's.
+                if let Some(stable) = self.view().stable {
+                    match self.cursor.checked_sub(stable.kennel.len()) {
+                        None => {
+                            let key = stable.kennel[self.cursor].key.clone();
+                            self.svc.call_out_pet_task(self.user_id, key);
+                        }
+                        Some(shop) => {
+                            if let Some(entry) = stable.entries.get(shop) {
+                                self.svc.buy_pet_task(self.user_id, entry.key.clone());
+                            }
+                        }
+                    }
                 }
             }
             Panel::Taming => {

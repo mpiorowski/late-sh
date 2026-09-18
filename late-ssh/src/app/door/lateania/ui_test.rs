@@ -1914,6 +1914,7 @@ fn what_this_room_offers_leads_the_panel_and_the_standing_keys_stay_short() {
         entries: Vec::new(),
     });
     town.stable = Some(StableView {
+        kennel: Vec::new(),
         entries: Vec::new(),
     });
     let actions: Vec<String> = room_actions(&town)
@@ -1970,6 +1971,13 @@ fn what_this_room_offers_leads_the_panel_and_the_standing_keys_stay_short() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(footer_text.contains("all keys"), "got {footer_text}");
+    // The waypoint pair is a standing key: mark a spot, warp back to it later.
+    assert!(footer_text.contains(": waypoint"), "got {footer_text}");
+    assert!(footer_text.contains("/ warp"), "got {footer_text}");
+    // Chat, ranks and leaving live in the `?` guide, not the standing block.
+    for gone in ["' say", "! ranks", "Esc leave"] {
+        assert!(!footer_text.contains(gone), "{gone:?} is back: {footer_text}");
+    }
     // The room-specific keys live up top now, not down here.
     assert!(
         !footer_text.contains("stable"),

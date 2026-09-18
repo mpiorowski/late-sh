@@ -754,15 +754,16 @@ pub enum Tile {
     Stair(char),
 }
 
-/// Glyph for a room's vertical exits. A room with both ways reads as `▾`
-/// rather than a two-headed arrow: only one cell per room is free (see
-/// `Tile::Stair`), an arrow reads as a control on this map where every other
-/// glyph is terrain, and down is the way onward everywhere in this world. The
-/// room panel's exits line carries the full truth for the rooms with both.
+/// Glyph for a room's vertical exits: bold double arrows, so a stair reads at
+/// a glance against the terrain. A room with both ways gets the two-headed
+/// `⇕` in its one free corner cell (see `Tile::Stair`). Double arrows keep
+/// clear of the compass's thin `↑↓` and black `⬆⬇`, and are single-width with
+/// no emoji form.
 fn stair_glyph(down: bool, up: bool) -> Option<char> {
     match (down, up) {
-        (true, _) => Some('\u{25be}'),     // ▾
-        (false, true) => Some('\u{25b4}'), // ▴
+        (true, true) => Some('\u{21d5}'),  // ⇕
+        (true, false) => Some('\u{21d3}'), // ⇓
+        (false, true) => Some('\u{21d1}'), // ⇑
         (false, false) => None,
     }
 }

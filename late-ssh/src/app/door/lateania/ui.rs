@@ -892,7 +892,7 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
             Span::styled(" you ", dim),
             Span::styled("\u{2500}\u{2502}", path_style),
             Span::styled(" path ", dim),
-            Span::styled("\u{25be}\u{25b4}", stair_style()),
+            Span::styled("\u{21d3}\u{21d1}", stair_style()),
             Span::styled(" stair ", dim),
             Span::styled("\u{2020}", foe_style),
             Span::styled(" foe ", dim),
@@ -1709,8 +1709,8 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         match track {
             Some(super::worldmap::TrackAim::Stair { room, climb }) => {
                 let glyph = match climb {
-                    super::worldmap::Climb::Down => '\u{25be}', // ▾
-                    super::worldmap::Climb::Up => '\u{25b4}',   // ▴
+                    super::worldmap::Climb::Down => '\u{21d3}', // ⇓
+                    super::worldmap::Climb::Up => '\u{21d1}',   // ⇑
                 };
                 if let Some((row, col)) = aim_cell(room, 1, -1) {
                     cells[row][col] = (glyph.to_string(), quest_style);
@@ -1928,7 +1928,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" known, elsewhere  ", dim),
-            Span::styled("\u{25be}\u{25b4}", stair_style()),
+            Span::styled("\u{21d3}\u{21d1}", stair_style()),
             Span::styled(" way down/up  ", dim),
             Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)),
             Span::styled(" look here", dim),
@@ -5919,28 +5919,69 @@ fn stable_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
         )));
     }
     lines.push(Line::raw(""));
-    for (i, e) in stable.entries.iter().enumerate() {
-        let selected = i == cursor;
+    let row_style = |selected: bool| {
         if selected {
-            sel_line = Some(lines.len());
-        }
-        let marker = if selected { ">" } else { " " };
-        let price_color = if e.affordable {
-            theme::BADGE_GOLD()
-        } else {
-            theme::ERROR()
-        };
-        let name_style = if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .patch(theme::selection_style())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme::TEXT_BRIGHT())
+        }
+    };
+    // The kennel leads: the rows Enter calls out, strongest first.
+    lines.push(Line::from(Span::styled(
+        "Your kennel",
+        Style::default().fg(theme::AMBER_GLOW()),
+    )));
+    if stable.kennel.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  empty - tamed and replaced companions rest here",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    for (i, e) in stable.kennel.iter().enumerate() {
+        let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
+        let marker = if selected { ">" } else { " " };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} {} {}", e.glyph, e.name), row_style(selected)),
+            Span::styled(
+                format!(
+                    "  Lv{} {}/{}hp · {}atk{}",
+                    e.level,
+                    e.hp,
+                    e.max_hp,
+                    e.attack,
+                    if e.downed { " (downed)" } else { "" }
+                ),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "For sale",
+        Style::default().fg(theme::AMBER_GLOW()),
+    )));
+    for (i, e) in stable.entries.iter().enumerate() {
+        let selected = stable.kennel.len() + i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
+        let marker = if selected { ">" } else { " " };
+        let price = if e.owned {
+            Span::styled("  owned", Style::default().fg(theme::TEXT_DIM()))
+        } else if e.affordable {
+            Span::styled(format!("  {}g", e.price), Style::default().fg(theme::BADGE_GOLD()))
+        } else {
+            Span::styled(format!("  {}g", e.price), Style::default().fg(theme::ERROR()))
         };
         lines.push(Line::from(vec![
-            Span::styled(format!("{marker} {} {}", e.glyph, e.name), name_style),
-            Span::styled(format!("  {}g", e.price), Style::default().fg(price_color)),
+            Span::styled(format!("{marker} {} {}", e.glyph, e.name), row_style(selected)),
+            price,
         ]));
         lines.push(Line::from(Span::styled(
             format!("    {}hp · {}atk", e.hp, e.attack),
@@ -5948,7 +5989,7 @@ fn stable_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
         )));
     }
     lines.push(Line::raw(""));
-    lines.push(hint("w/s", "select  Enter buy"));
+    lines.push(hint("w/s", "select  Enter call out / buy"));
     if let Some(pet) = &view.pet {
         lines.push(hint("G", &format!("feed your pet ({}g)", pet.feed_cost)));
     }
@@ -6524,10 +6565,9 @@ fn footer_hints(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
         "[ ] scroll",
         "r recall",
         "; haven",
+        ": waypoint",
+        "/ warp",
         "f follow",
-        "' say",
-        "! ranks",
-        "Esc leave",
     ]);
     // What the room promoted into "You can" does not repeat down here.
     let promoted = room_action_entries(view);

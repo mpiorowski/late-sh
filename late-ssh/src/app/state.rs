@@ -5,7 +5,9 @@ use crossterm::{
     terminal::{self, ClearType},
 };
 use late_core::{MutexRecover, api_types::NowPlaying};
-use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend, layout::Rect};
+use ratatui::{Terminal, TerminalOptions, Viewport, layout::Rect};
+
+use super::terminal_backend::GlyphIsolatingBackend;
 use std::{
     collections::{HashMap, HashSet},
     io::{self, Write},
@@ -511,7 +513,7 @@ pub struct App {
     pub(crate) vt_input: crate::app::input::VtInputParser,
 
     /// Terminal / rendering
-    pub(super) terminal: Terminal<CrosstermBackend<io::BufWriter<SharedBuffer>>>,
+    pub(super) terminal: Terminal<GlyphIsolatingBackend<io::BufWriter<SharedBuffer>>>,
     pub(super) shared: SharedBuffer,
 
     /// Session / connection
@@ -1098,7 +1100,7 @@ impl App {
         tracing::debug!(cols, rows, "initializing app");
 
         let shared = SharedBuffer::default();
-        let backend = CrosstermBackend::new(frame_writer(&shared));
+        let backend = GlyphIsolatingBackend::new(frame_writer(&shared));
         let viewport = Viewport::Fixed(Rect::new(0, 0, cols, rows));
         let terminal = Terminal::with_options(backend, TerminalOptions { viewport })
             .context("failed to create terminal backend")?;
@@ -2468,7 +2470,7 @@ impl App {
         // with a `Viewport::Fixed` is pure state construction and never
         // touches the backend, and `force_full_repaint` supplies the client
         // clear + full redraw that `Terminal::resize` used to perform.
-        let backend = CrosstermBackend::new(frame_writer(&self.shared));
+        let backend = GlyphIsolatingBackend::new(frame_writer(&self.shared));
         let viewport = Viewport::Fixed(Rect::new(0, 0, cols, rows));
         self.terminal = Terminal::with_options(backend, TerminalOptions { viewport })?;
         self.force_full_repaint();

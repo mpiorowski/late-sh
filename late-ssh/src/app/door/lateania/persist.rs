@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 19;
+const SCHEMA_VERSION: u32 = 20;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -44,6 +44,8 @@ pub struct SavedCharacterInit {
     pub archetype: Option<String>,
     pub pet: Option<String>,
     pub pet_loyalty: i64,
+    /// Kennelled companions as (species key, loyalty) pairs.
+    pub kennel: Vec<(String, i64)>,
     /// A won-over stray companion (Genesys): the WILDLIFE index.
     pub stray: Option<u32>,
     /// In-progress courting of a wild critter: (WILDLIFE index, streak days,
@@ -141,6 +143,10 @@ pub struct SavedCharacter {
     /// The companion's accumulated loyalty (drives its level); 0 if no pet.
     #[serde(default)]
     pub pet_loyalty: i64,
+    /// Companions resting in the kennel, as (species key, loyalty) pairs; empty
+    /// for pre-kennel (schema < 20) saves, which released a pet on every new one.
+    #[serde(default)]
+    pub kennel: Vec<(String, i64)>,
     /// A won-over stray companion (Genesys), by WILDLIFE index; None for
     /// pre-Genesys saves or characters who haven't won one over yet.
     #[serde(default)]
@@ -278,6 +284,7 @@ impl SavedCharacter {
             archetype: init.archetype,
             pet: init.pet,
             pet_loyalty: init.pet_loyalty,
+            kennel: init.kennel,
             stray: init.stray,
             stray_bond: init.stray_bond,
             pet_meals: init.pet_meals,
