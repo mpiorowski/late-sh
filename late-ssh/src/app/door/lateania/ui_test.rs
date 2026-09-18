@@ -2,6 +2,7 @@ use super::{
     compare_span, fit, hug_poi_arrows, inventory_item_tag, land_chip_name, land_map_lines,
     line_rows, meter, rarity_color, scroll_offset, star_rating, wrapped_rows,
 };
+use crate::app::door::lateania::svc::{InvView, SectionRow};
 use crate::app::door::lateania::world::RegionProgress;
 use crate::app::door::lateania::worldmap::{MapArrow, Tile};
 use ratatui::style::Color;
@@ -251,10 +252,9 @@ fn recent_log_trims_oldest_when_it_overflows_height() {
 
 #[test]
 fn the_xp_meter_stays_on_the_character_sheet_under_a_pile_of_titles() {
-    // The bug: the full-screen character sheet is three fixed-height columns
-    // with no scroll of its own (`[`/`]` only reach the narrow side panel), and
-    // the right column listed every earned title *before* Experience. Enough
-    // titles and the XP bar walked off the bottom with no way to reach it.
+    // The bug: the right column of the full-screen character sheet listed
+    // every earned title *before* Experience. Enough titles and the XP bar
+    // walked off the bottom, a scroll away at best.
     let mut view = empty_player_view();
     view.level = 30;
     view.xp_into_level = 120;
@@ -277,6 +277,59 @@ fn the_xp_meter_stays_on_the_character_sheet_under_a_pile_of_titles() {
     assert!(
         text.iter().any(|l| l.contains("+26 more")),
         "the title list is summarised rather than unbounded: {text:?}"
+    );
+}
+
+#[test]
+fn brackets_scroll_the_character_sheet_to_its_hidden_rows() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    // The sheet engages at 72x18, where the identity column (portrait,
+    // vitals, purse) runs past the 16 rows inside the border. `[`/`]` shift
+    // the shared offset; the sheet clamps it so the tallest column's last
+    // row can reach the floor and no further.
+    let mut view = empty_player_view();
+    view.classed = true;
+    view.level = 30;
+    view.gold = 4242;
+    view.banked_gold = 9000;
+    let draw = |scroll: usize| {
+        let mut terminal = Terminal::new(TestBackend::new(72, 18)).expect("terminal");
+        let mut off = 0;
+        terminal
+            .draw(|frame| {
+                off = super::draw_character_sheet(frame, frame.area(), &view, scroll);
+            })
+            .expect("draw");
+        let buffer = terminal.backend().buffer();
+        let text = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        (off, text)
+    };
+
+    let (top, top_text) = draw(0);
+    assert_eq!(top, 0);
+    assert!(
+        !top_text.contains("bank 9000"),
+        "the purse starts below the fold:\n{top_text}"
+    );
+
+    let (bottom, bottom_text) = draw(usize::MAX);
+    assert!(bottom > 0, "a sheet taller than the screen scrolls");
+    assert!(
+        bottom_text.contains("bank 9000"),
+        "scrolled to the end, the last row is on screen:\n{bottom_text}"
+    );
+    assert_eq!(
+        draw(bottom + 1).0,
+        bottom,
+        "the offset stops at the last row"
     );
 }
 
@@ -1486,6 +1539,178 @@ fn the_shop_detail_still_ends_on_the_buy_prompt_at_the_smallest_full_screen() {
     );
 }
 
+fn inv_row(name: &str, slot: Option<&str>, equipped: bool, pct: Option<i32>) -> InvView {
+    InvView {
+        item_id: 1,
+        name: name.to_string(),
+        rarity: "rare".to_string(),
+        slot: slot.map(str::to_string),
+        equipped,
+        sell_price: 218,
+        stats: "+16 atk  +4 arm  +30 hp".to_string(),
+        compare: if equipped {
+            String::new()
+        } else {
+            "vs worn: +8 atk  +2 arm".to_string()
+        },
+        compare_pct: pct,
+        category: "Weapons",
+        desc: "A chapel reliquary recovered from the old crypts below Tasmania.",
+        worn_name: (!equipped).then(|| "Iron Longsword".to_string()),
+        worn_stats: (!equipped).then(|| "+8 atk  +2 arm  +12 hp".to_string()),
+    }
+}
+
+fn draw_inventory(
+    width: u16,
+    height: u16,
+    inventory: &[InvView],
+    cursor: usize,
+    merchant_here: bool,
+) -> Vec<String> {
+    let mut view = empty_player_view();
+    view.inventory = inventory.to_vec();
+    view.gold = 477;
+    view.shop = merchant_here.then(|| super::super::svc::ShopView {
+        npc_name: "Bruna Ironhand".to_string(),
+        shop_name: "The Ember Forge".to_string(),
+        greeting: String::new(),
+        entries: Vec::new(),
+    });
+    draw_inventory_view(width, height, &view, cursor)
+}
+
+fn draw_inventory_view(
+    width: u16,
+    height: u16,
+    view: &super::PlayerView,
+    cursor: usize,
+) -> Vec<String> {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let inventory = &view.inventory;
+
+    let rows: Vec<SectionRow> = std::iter::once(SectionRow::Header {
+        key: "inv:Weapons".to_string(),
+        label: "Weapons".to_string(),
+        count: inventory.len(),
+        collapsed: false,
+    })
+    .chain((0..inventory.len()).map(|index| SectionRow::Item { index }))
+    .collect();
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            super::draw_inventory_screen(frame, frame.area(), &rows, view, cursor);
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect()
+}
+
+#[test]
+fn the_inventory_screen_gives_each_piece_one_line_and_stands_loot_against_the_worn_piece() {
+    let inventory = vec![
+        inv_row("Embergate Falchion", Some("weapon"), false, Some(77)),
+        inv_row("Rusty Shortsword", Some("weapon"), false, Some(-73)),
+        inv_row("Iron Longsword", Some("weapon"), true, None),
+    ];
+    let text = draw_inventory(110, 24, &inventory, 1, true);
+    let joined = text.join("\n");
+
+    // Each piece is one row of the list column, not a wrapped stanza.
+    let list: Vec<String> = text
+        .iter()
+        .map(|line| line.chars().take(57).collect())
+        .collect();
+    for name in ["Embergate Falchion", "Rusty Shortsword"] {
+        assert_eq!(
+            list.iter().filter(|l| l.contains(name)).count(),
+            1,
+            "{name} should occupy exactly one line of the list:\n{joined}"
+        );
+    }
+    // The upgrade tag and sell value fit, and worn gear is marked as worn.
+    assert!(
+        list.iter()
+            .any(|l| l.contains("Embergate Falchion") && l.contains("218g") && l.contains("+77%")),
+        "the sell value and the full upgrade tag should both fit:\n{joined}"
+    );
+    assert!(
+        list.iter()
+            .any(|l| l.contains("Iron Longsword") && l.trim_end().ends_with("worn")),
+        "the worn piece should be tagged worn:\n{joined}"
+    );
+    // The selected loot stands against what it would replace, with its verbs.
+    assert!(
+        joined.contains("instead of what you wear"),
+        "the worn piece should be shown for comparison:\n{joined}"
+    );
+    assert!(joined.contains("Enter to put it on"), "{joined}");
+    assert!(joined.contains("x to sell - 218g"), "{joined}");
+}
+
+#[test]
+fn the_inventory_screen_keeps_your_vitals_and_the_fight_in_sight() {
+    // The pack covers the whole field, and it is the panel opened mid-fight
+    // to drink something, so the header carries what the field would show.
+    let mut view = empty_player_view();
+    view.inventory = vec![inv_row("Iron Longsword", Some("weapon"), true, None)];
+    view.hp = 37;
+    view.max_hp = 210;
+    view.resource_name = "Mana".to_string();
+    view.resource = 12;
+    view.max_resource = 80;
+    let calm = draw_inventory_view(100, 20, &view, 1).join("\n");
+    assert!(calm.contains("HP 37/210"), "{calm}");
+    assert!(calm.contains("Mana 12/80"), "{calm}");
+    assert!(!calm.contains("fighting"), "{calm}");
+
+    view.in_combat_with = Some("Ash Wolf".to_string());
+    let fighting = draw_inventory_view(100, 20, &view, 1).join("\n");
+    assert!(fighting.contains("fighting Ash Wolf"), "{fighting}");
+    // The prompts still fit under the extra header line at the smallest size.
+    assert!(fighting.contains("Enter to take it off"), "{fighting}");
+}
+
+#[test]
+fn the_inventory_detail_names_what_the_keys_do_to_worn_gear_at_the_smallest_full_screen() {
+    // At exactly 100x20 (the smallest size `draw` sends here), the longest
+    // description still leaves room for both prompts, which sit last.
+    let loot = vec![inv_row(
+        "Embergate Falchion",
+        Some("weapon"),
+        false,
+        Some(77),
+    )];
+    let joined = draw_inventory(100, 20, &loot, 1, false).join("\n");
+    assert!(joined.contains("Enter to put it on"), "{joined}");
+    assert!(
+        joined.contains("sells for 218g at a merchant"),
+        "away from a shop the sell key is not offered as live:\n{joined}"
+    );
+
+    // Worn gear comes off with Enter and has to come off before it sells.
+    let worn = vec![inv_row("Iron Longsword", Some("weapon"), true, None)];
+    let joined = draw_inventory(100, 20, &worn, 1, true).join("\n");
+    assert!(joined.contains("you are wearing this (weapon)"), "{joined}");
+    assert!(joined.contains("Enter to take it off"), "{joined}");
+    assert!(
+        joined.contains("take it off before you sell it"),
+        "{joined}"
+    );
+    assert!(
+        !joined.contains("instead of what you wear"),
+        "the worn piece is not compared against itself:\n{joined}"
+    );
+}
+
 #[test]
 fn the_side_rail_grows_with_the_terminal_but_stays_a_column() {
     use super::{SIDE_MAX, SIDE_NARROW, SIDE_WIDE, side_width};
@@ -1577,6 +1802,97 @@ fn the_room_panel_pins_vitals_scrolls_the_rest_and_says_what_is_hidden() {
 }
 
 #[test]
+fn feeding_leads_the_panel_only_for_a_hurt_pet_and_otherwise_sits_under_it() {
+    use super::super::svc::PetView;
+    use crate::usernames::UsernameLookup;
+    use std::collections::HashMap;
+
+    let pet = |hp: i32, downed: bool| PetView {
+        name: "Cave Bear".to_string(),
+        glyph: "B".to_string(),
+        level: 3,
+        hp,
+        max_hp: 180,
+        attack: 20,
+        downed,
+        loyalty_pct: 45,
+        meals_today: 2,
+        feed_cost: 20,
+        skills: Vec::new(),
+    };
+    let names: HashMap<uuid::Uuid, String> = HashMap::new();
+    let usernames = UsernameLookup::new(&names, None);
+    let render = |view: &crate::app::door::lateania::svc::PlayerView| {
+        let panel = super::room_panel(view, &usernames, 28, None);
+        panel.body.iter().map(line_text).collect::<Vec<_>>()
+    };
+
+    // A healthy pet: nothing urgent to do, so no action block, and the key sits
+    // under the pet with what a meal buys. Every chip fits the narrowest rail.
+    let mut view = empty_player_view();
+    view.pet = Some(pet(180, false));
+    assert!(super::room_actions(&view).is_empty());
+    let lines = render(&view);
+    let under = lines.join(" ");
+    for chip in ["G feed 20g", "45% to Lv4", "2/4 today"] {
+        assert!(under.contains(chip), "{chip} missing: {lines:#?}");
+    }
+    assert!(
+        lines
+            .iter()
+            .all(|l| unicode_width::UnicodeWidthStr::width(l.as_str()) <= 28),
+        "{lines:#?}"
+    );
+
+    // Hurt or downed: `G` leads the panel, and is not repeated under the pet.
+    for (hurt, label) in [
+        (pet(90, false), "mend companion"),
+        (pet(0, true), "rouse companion"),
+    ] {
+        let mut view = empty_player_view();
+        view.pet = Some(hurt);
+        let lines = render(&view);
+        let joined = lines.join("\n");
+        assert!(
+            joined.contains("You can") && joined.contains(label),
+            "{joined}"
+        );
+        assert_eq!(joined.matches("G ").count(), 1, "G shown once:\n{joined}");
+        assert!(joined.contains("45% to Lv4"), "{joined}");
+    }
+}
+
+#[test]
+fn the_feed_key_is_only_offered_under_a_pet_a_meal_would_do_something_for() {
+    use super::super::pets::{MEALS_PER_DAY, PET_MAX_LEVEL};
+    use super::super::svc::PetView;
+
+    let pet = |level: i32, meals_today: u32| PetView {
+        name: "Cave Bear".to_string(),
+        glyph: "B".to_string(),
+        level,
+        hp: 180,
+        max_hp: 180,
+        attack: 20,
+        downed: false,
+        loyalty_pct: 45,
+        meals_today,
+        feed_cost: 20,
+        skills: Vec::new(),
+    };
+    let chips = |pet: &PetView| super::pet_feed_chips(pet).join(" ");
+
+    assert!(chips(&pet(3, 2)).contains("G feed 20g"));
+    // Healthy and out of meals: `G` would be turned away.
+    let sated = chips(&pet(3, MEALS_PER_DAY));
+    assert!(!sated.contains("G feed"), "{sated}");
+    assert!(sated.contains("4/4 today"), "{sated}");
+    // Healthy at the level cap: a meal has nothing left to raise.
+    let capped = chips(&pet(PET_MAX_LEVEL, 0));
+    assert_eq!(capped, "max level");
+}
+
+#[test]
 fn what_this_room_offers_leads_the_panel_and_the_standing_keys_stay_short() {
     use super::super::svc::{ShopView, StableView};
     use super::{SIDE_MAX, SIDE_NARROW, SIDE_WIDE, footer_hints, room_actions};
@@ -1598,8 +1914,8 @@ fn what_this_room_offers_leads_the_panel_and_the_standing_keys_stay_short() {
         entries: Vec::new(),
     });
     town.stable = Some(StableView {
+        kennel: Vec::new(),
         entries: Vec::new(),
-        feed_cost: 20,
     });
     let actions: Vec<String> = room_actions(&town)
         .iter()
@@ -1655,6 +1971,16 @@ fn what_this_room_offers_leads_the_panel_and_the_standing_keys_stay_short() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(footer_text.contains("all keys"), "got {footer_text}");
+    // The waypoint pair is a standing key: mark a spot, warp back to it later.
+    assert!(footer_text.contains(": waypoint"), "got {footer_text}");
+    assert!(footer_text.contains("/ warp"), "got {footer_text}");
+    // Chat, ranks and leaving live in the `?` guide, not the standing block.
+    for gone in ["' say", "! ranks", "Esc leave"] {
+        assert!(
+            !footer_text.contains(gone),
+            "{gone:?} is back: {footer_text}"
+        );
+    }
     // The room-specific keys live up top now, not down here.
     assert!(
         !footer_text.contains("stable"),
@@ -1802,4 +2128,18 @@ fn the_log_strip_grows_on_a_tall_terminal() {
             "the log must not crowd out the world at height {h}"
         );
     }
+}
+
+// A target a floor away in the same land is not "too far": the journal says
+// how many floors, and tracking it aims the map at the stair.
+#[test]
+fn quest_place_note_names_the_floor_of_a_target_in_the_same_land() {
+    let mut view = empty_player_view();
+    // The Sunken Citadel's Orrery Vault, one floor above the Archdemon's throne.
+    view.room = Some(102);
+    let note = super::quest_place_note(Some(110), &view).expect("the throne has a region");
+    assert!(note.ends_with(" - 1 floor down"), "{note}");
+    // The Frontier's first zone sits in its own reserved block.
+    let note = super::quest_place_note(Some(2000), &view).expect("the frontier has a region");
+    assert!(note.ends_with(" - beyond this land"), "{note}");
 }

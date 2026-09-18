@@ -8,6 +8,8 @@ use crate::app::arcade::share::ShareCardKind;
 use crate::app::arcade::sliding_puzzle::image::{
     SlidingPuzzleImageOutcome, SlidingPuzzleImageStage,
 };
+use crate::app::bonsai::state::BonsaiAction;
+use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::chat::news::svc::XMediaLookup;
 use crate::app::chat::svc::GildRefusal;
 use crate::app::crown::svc::CrownRefusal;
@@ -199,7 +201,9 @@ mod inner {
         PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
         TranslationResult, VizWireBands,
     };
+    use super::{BonsaiAction, BonsaiActionResult};
     use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
+    use crate::app::bonsai::state::BranchAction;
 
     fn meter() -> opentelemetry::metrics::Meter {
         global::meter("late-ssh")
@@ -420,6 +424,34 @@ mod inner {
             CrownRefusal::AlreadyYours => "already_yours",
             CrownRefusal::InsufficientChips { .. } => "insufficient_chips",
         }
+    }
+
+    fn bonsai_action_label(action: BonsaiAction) -> &'static str {
+        match action {
+            BonsaiAction::Water => "water",
+            BonsaiAction::Branch(BranchAction::Bend { .. }) => "bend",
+            BonsaiAction::Branch(BranchAction::Prune) => "prune",
+            BonsaiAction::Branch(BranchAction::Split) => "split",
+            BonsaiAction::Branch(BranchAction::Pinch) => "pinch",
+        }
+    }
+
+    fn bonsai_action_result_label(result: BonsaiActionResult) -> &'static str {
+        match result {
+            BonsaiActionResult::Stored => "stored",
+            BonsaiActionResult::Refused => "refused",
+            BonsaiActionResult::Failed => "failed",
+        }
+    }
+
+    fn bonsai_actions_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_bonsai_actions_total")
+                .with_description("Bonsai care actions, by action and how they settled")
+                .build()
+        })
     }
 
     fn crown_takes_total() -> &'static Counter<u64> {
@@ -1020,6 +1052,16 @@ mod inner {
         chat_gilds_refused_total().add(1, &[KeyValue::new("reason", gild_refusal_label(refusal))]);
     }
 
+    pub fn record_bonsai_action(action: BonsaiAction, result: BonsaiActionResult) {
+        bonsai_actions_total().add(
+            1,
+            &[
+                KeyValue::new("action", bonsai_action_label(action)),
+                KeyValue::new("result", bonsai_action_result_label(result)),
+            ],
+        );
+    }
+
     /// The price is burned whole, so one counter tracks the takeovers and
     /// another the chips they removed from the supply.
     pub fn record_crown_taken(price: i64) {
@@ -1339,6 +1381,7 @@ mod inner {
         PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
         TranslationResult, VizWireBands,
     };
+    use super::{BonsaiAction, BonsaiActionResult};
     use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
 
     pub fn record_ssh_connection() {}
@@ -1372,6 +1415,7 @@ mod inner {
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_gild_bought(_tier: GildTier) {}
     pub fn record_gild_refused(_refusal: GildRefusal) {}
+    pub fn record_bonsai_action(_action: BonsaiAction, _result: BonsaiActionResult) {}
     pub fn record_crown_taken(_price: i64) {}
     pub fn record_crown_take_refused(_refusal: CrownRefusal) {}
     pub fn record_round_bought(_patrons: i64, _chips: i64) {}

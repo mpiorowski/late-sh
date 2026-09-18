@@ -459,3 +459,124 @@ async fn expect_shell_data_contains(channel: &mut russh::Channel<client::Msg>, n
         String::from_utf8_lossy(&received)
     );
 }
+
+/// Open the interactive shell the way `late` does: pty, shell, first frame.
+async fn open_shell(
+    addr: std::net::SocketAddr,
+    login: &str,
+    key: Arc<PrivateKey>,
+) -> (client::Handle<TestClient>, russh::Channel<client::Msg>) {
+    let mut client = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+        .await
+        .expect("connect client");
+    assert!(
+        authenticate(&mut client, login, key).await,
+        "auth should succeed"
+    );
+    let mut shell = client
+        .channel_open_session()
+        .await
+        .expect("open shell channel");
+    shell
+        .request_pty(true, "xterm-256color", 160, 40, 0, 0, &[])
+        .await
+        .expect("request pty");
+    shell.request_shell(true).await.expect("request shell");
+    expect_shell_data(&mut shell).await;
+    (client, shell)
+}
+
+/// Favoriting a synthetic entry, end to end over the wire: a returning
+/// account walks the rail to Mentions and presses `f`; the banner shows, the
+/// favorite lands in the database, and the next connection's rail opens
+/// with the Favorites section it moved into.
+#[tokio::test]
+async fn favoriting_mentions_over_ssh_survives_a_reconnect() {
+    let test_db = new_test_db().await;
+    let config = test_config(test_db.db.config().clone());
+    let state = test_app_state(test_db.db.clone(), config);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    let handle = tokio::spawn(async move {
+        let _ = run_with_listener(listener, state, None).await;
+    });
+
+    // A returning account: its key is already on file and its first-visit
+    // tour is done, so nothing swallows the rail keys after login.
+    let key = new_client_key();
+    let fingerprint = key.public_key().fingerprint(HashAlg::Sha256).to_string();
+    let user = late_core::test_utils::create_test_user(&test_db.db, "ssh-fav-mentions").await;
+    let db_client = test_db.db.get().await.expect("db client");
+    late_core::models::user_ssh_key::UserSshKey::ensure(&db_client, user.id, &fingerprint)
+        .await
+        .expect("attach key");
+    late_core::models::user::User::set_clubhouse_tutorial_done(&db_client, user.id)
+        .await
+        .expect("mark tour done");
+    let lounge = late_core::models::chat_room::ChatRoom::ensure_lounge(&db_client)
+        .await
+        .expect("ensure lounge");
+    // A room with a slug nothing else on screen can spell: its rail row is
+    // the proof that the room list has loaded before the walk starts.
+    let probe = late_core::models::chat_room::ChatRoom::ensure_permanent(&db_client, "favprobe")
+        .await
+        .expect("ensure probe room");
+    for room in [&lounge, &probe] {
+        late_core::models::chat_room_member::ChatRoomMember::join(&db_client, room.id, user.id)
+            .await
+            .expect("join room");
+    }
+
+    // A returning account lands in the Clubhouse, whose title bar carries the
+    // page hint; Home, and its rail, is page 1.
+    let (client, mut shell) = open_shell(addr, &user.username, key.clone()).await;
+    shell.data(&b"\x1b"[..]).await.expect("dismiss splash");
+    expect_shell_data_contains(&mut shell, b"Tab/0-5 pages").await;
+    shell.data(&b"1"[..]).await.expect("open home");
+    expect_shell_data_contains(&mut shell, b"favprobe").await;
+
+    // Core reads lounge, mentions, news, browse; the probe room sits below
+    // in Channels. One step right from lounge is Mentions.
+    shell.data(&b"l"[..]).await.expect("step to mentions");
+    shell.data(&b"f"[..]).await.expect("favorite mentions");
+    expect_shell_data_contains(&mut shell, b"Added to favorites").await;
+    client
+        .disconnect(russh::Disconnect::ByApplication, "", "en")
+        .await
+        .expect("disconnect first session");
+
+    // The profile write is fire-and-forget on the session; the row is the
+    // witness that it landed.
+    let mentions_id = crate::app::chat::state::synthetic_favorite_id(
+        crate::app::chat::state::RoomSlot::Notifications,
+    )
+    .expect("mentions is favoritable");
+    wait_until(
+        || {
+            let db = test_db.db.clone();
+            async move {
+                let client = db.get().await.expect("db client");
+                late_core::models::user::User::favorite_room_ids(&client, user.id)
+                    .await
+                    .expect("read favorites")
+                    .contains(&mentions_id)
+            }
+        },
+        "mentions favorite persisted",
+    )
+    .await;
+
+    // The Favorites section only exists while something is in it, so seeing
+    // it on a fresh connection is the round trip closing.
+    let (client, mut shell) = open_shell(addr, &user.username, key).await;
+    shell.data(&b"\x1b"[..]).await.expect("dismiss splash");
+    expect_shell_data_contains(&mut shell, b"Tab/0-5 pages").await;
+    shell.data(&b"1"[..]).await.expect("open home");
+    expect_shell_data_contains(&mut shell, b"favorites").await;
+    client
+        .disconnect(russh::Disconnect::ByApplication, "", "en")
+        .await
+        .expect("disconnect second session");
+    handle.abort();
+}

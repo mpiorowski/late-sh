@@ -23,7 +23,7 @@ mod ws;
 use audio::{AudioRuntime, audio_startup_hint};
 use config::{Config, init_logging};
 use identity::ensure_client_identity_at;
-use raw_mode::{RawModeGuard, enable_ansi_output_if_tty};
+use raw_mode::{RawModeGuard, SessionModesGuard, enable_ansi_output_if_tty};
 use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_ssh};
 use ws::{
     MAX_CONSECUTIVE_FAILURES, PAIR_RECONNECT_DELAY, PAIR_SLOW_RECONNECT_DELAY, PairAttempt,
@@ -70,6 +70,10 @@ async fn main() -> Result<()> {
         .ssh_mode
         .uses_cli_raw_mode()
         .then(RawModeGuard::enable_if_tty);
+    // Declared after the raw-mode guard so it drops first: every way out of
+    // the session below, clean or not, leaves the shell without mouse
+    // reporting or bracketed paste.
+    let _session_modes = SessionModesGuard::enable_if_tty();
 
     if config.ssh_mode == config::SshMode::OpenSsh {
         return run_openssh_mode(config, ssh_identity).await;

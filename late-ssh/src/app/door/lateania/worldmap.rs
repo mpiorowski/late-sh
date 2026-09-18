@@ -618,6 +618,101 @@ pub fn route(from: RoomId, dest: RoomId, visited: &HashSet<RoomId>) -> Option<Ro
     None
 }
 
+/// Which way a stair goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Climb {
+    Up,
+    Down,
+}
+
+/// Where the tracked destination's green arrow aims from where you stand: the
+/// destination itself while the walk there stays on this floor and in this
+/// land, or else the room where the walk first leaves them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrackAim {
+    /// The walk never leaves this floor or this land.
+    Target,
+    /// The walk first leaves this floor by the stair in `room`.
+    Stair { room: RoomId, climb: Climb },
+    /// The walk first leaves this land by a flat exit out of `room` into
+    /// another reserved block (e.g. Melvanala onto the Sunderlakes).
+    Crossing { room: RoomId },
+}
+
+/// Where to aim the tracked destination's arrow: the shortest walk from
+/// `from` to `dest`, cut at the first step that leaves `from`'s floor or land.
+/// None when no walk reaches `dest` (a waystone-only land).
+///
+/// Only within one land (`PAN_LIMIT`) and one floor is a coordinate direction
+/// a real spatial relationship, so that is as far as the arrow may point; the
+/// room where the walk leaves them is always inside that range, which is what
+/// lets any destination in the world be tracked. Unlike `route`, the walk is
+/// over the whole world, not just `visited`: tracking exists to find a boss
+/// you have never reached, and it names one room on your floor, never the
+/// layout beyond. It walks exits as authored and ignores title gates, so a
+/// crown past a sealed gate is aimed at that gate; the journal says what
+/// opens it.
+pub fn track_aim(from: RoomId, dest: RoomId) -> Option<TrackAim> {
+    let rooms = &world().rooms;
+    let coords = world_coords();
+    let mut parent: HashMap<RoomId, (RoomId, Dir)> = HashMap::new();
+    let mut queue: VecDeque<RoomId> = VecDeque::from([from]);
+    let mut seen: HashSet<RoomId> = HashSet::from([from]);
+    while let Some(room) = queue.pop_front() {
+        if room == dest {
+            break;
+        }
+        let Some(r) = rooms.get(&room) else { continue };
+        for (dir, &next) in r.exits.iter() {
+            if seen.insert(next) {
+                parent.insert(next, (room, *dir));
+                queue.push_back(next);
+            }
+        }
+    }
+    if !seen.contains(&dest) {
+        return None;
+    }
+    let mut path: Vec<(RoomId, Dir, RoomId)> = Vec::new();
+    let mut at = dest;
+    while let Some(&(prev, dir)) = parent.get(&at) {
+        path.push((prev, dir, at));
+        at = prev;
+    }
+    path.reverse();
+
+    let origin = coords.get(&from)?;
+    let in_land = |id: RoomId| {
+        coords.get(&id).is_some_and(|c| {
+            c.z == origin.z
+                && (c.x - origin.x).abs() <= PAN_LIMIT
+                && (c.y - origin.y).abs() <= PAN_LIMIT
+        })
+    };
+    for (room, dir, next) in path {
+        match dir {
+            Dir::Up => {
+                return Some(TrackAim::Stair {
+                    room,
+                    climb: Climb::Up,
+                });
+            }
+            Dir::Down => {
+                return Some(TrackAim::Stair {
+                    room,
+                    climb: Climb::Down,
+                });
+            }
+            Dir::North | Dir::South | Dir::East | Dir::West => {
+                if !in_land(next) {
+                    return Some(TrackAim::Crossing { room });
+                }
+            }
+        }
+    }
+    Some(TrackAim::Target)
+}
+
 /// One cell of the rendered map. Rooms sit on even offsets from the centre and
 /// the corridors between them on the odd offsets in between, so the map shows
 /// which rooms are actually linked (walkable), not just spatially near.
@@ -659,15 +754,16 @@ pub enum Tile {
     Stair(char),
 }
 
-/// Glyph for a room's vertical exits. A room with both ways reads as `▾`
-/// rather than a two-headed arrow: only one cell per room is free (see
-/// `Tile::Stair`), an arrow reads as a control on this map where every other
-/// glyph is terrain, and down is the way onward everywhere in this world. The
-/// room panel's exits line carries the full truth for the rooms with both.
+/// Glyph for a room's vertical exits: bold double arrows, so a stair reads at
+/// a glance against the terrain. A room with both ways gets the two-headed
+/// `⇕` in its one free corner cell (see `Tile::Stair`). Double arrows keep
+/// clear of the compass's thin `↑↓` and black `⬆⬇`, and are single-width with
+/// no emoji form.
 fn stair_glyph(down: bool, up: bool) -> Option<char> {
     match (down, up) {
-        (true, _) => Some('\u{25be}'),     // ▾
-        (false, true) => Some('\u{25b4}'), // ▴
+        (true, true) => Some('\u{21d5}'),  // ⇕
+        (true, false) => Some('\u{21d3}'), // ⇓
+        (false, true) => Some('\u{21d1}'), // ⇑
         (false, false) => None,
     }
 }

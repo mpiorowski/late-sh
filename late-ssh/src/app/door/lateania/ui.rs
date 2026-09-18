@@ -19,10 +19,12 @@ use crate::usernames::UsernameLookup;
 use super::{
     appearance,
     classes::Class,
-    state::{ClickAction, Heading, MapMode, Panel, State},
+    pets::{MEALS_PER_DAY, PET_MAX_LEVEL},
+    state::{ClickAction, Heading, InvAction, MapMode, Panel, State, inv_action},
     stats::{POINT_EVERY_LEVELS, SCORE_CAP, Score},
     svc::{
-        LeaderboardEntry, LogKind, MobView, PlayerView, QuestKind, QuestView, SectionRow, ShopView,
+        InvView, LeaderboardEntry, LogKind, MobView, PetView, PlayerView, QuestKind, QuestView,
+        SectionRow, ShopView,
     },
     world::{Dir, MapCell, MiniMap, RoomId},
 };
@@ -119,7 +121,8 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     // dense dashboard (portrait, dot-rated scores, vitals bars). It falls back
     // to the narrow side panel on cramped terminals.
     if state.panel() == Panel::Character && area.width >= 72 && area.height >= 18 {
-        draw_character_sheet(frame, area, &view);
+        let off = draw_character_sheet(frame, area, &view, state.list_scroll());
+        state.set_list_scroll(off);
         return;
     }
 
@@ -157,6 +160,12 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
                 area,
             ),
         }
+        return;
+    }
+    // The pack is the shop's twin: the same dense list, and the same need to
+    // stand a piece against what it would replace.
+    if state.panel() == Panel::Inventory && area.width >= 100 && area.height >= 20 {
+        draw_inventory_screen(frame, area, &state.inv_rows(), &view, state.cursor());
         return;
     }
 
@@ -883,7 +892,7 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
             Span::styled(" you ", dim),
             Span::styled("\u{2500}\u{2502}", path_style),
             Span::styled(" path ", dim),
-            Span::styled("\u{25be}\u{25b4}", stair_style()),
+            Span::styled("\u{21d3}\u{21d1}", stair_style()),
             Span::styled(" stair ", dim),
             Span::styled("\u{2020}", foe_style),
             Span::styled(" foe ", dim),
@@ -1654,21 +1663,67 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         }
     }
     // The green arrow is the one you chose, and it works exactly like the
-    // amber ones: a straight-line direction to the *tracked* destination,
-    // drawn only while it sits within `PAN_LIMIT` (same land, where the
-    // coordinate delta is a real spatial relationship). Crucially this needs
-    // no `visited` at all, so it points at a boss you have never found -
-    // which is the whole job of tracking a quest. Beyond this land there is
-    // no honest direction to draw, so the journal names the region to
-    // venture into instead. Drawn after (over) the amber arrows: a border
-    // cell can only say one thing, and where-you're-going beats
-    // where-a-boss-is.
+    // amber ones: a straight-line direction, drawn only within `PAN_LIMIT`
+    // (same land, where the coordinate delta is a real spatial relationship).
+    // Crucially this needs no `visited` at all, so it points at a boss you
+    // have never found - which is the whole job of tracking a quest. Drawn
+    // after (over) the amber arrows: a border cell can only say one thing,
+    // and where-you're-going beats where-a-boss-is.
+    //
+    // On your own floor it aims along the real walk (`worldmap::track_aim`):
+    // at the destination while the walk stays on this floor and in this land,
+    // else at the room where the walk leaves them, whose stair glyph (or the
+    // room itself, for a flat crossing into another land) turns green once in
+    // view. So any destination can be tracked, however far. Viewing another
+    // floor (`<`/`>`) aims straight at the destination if it is on that floor.
     if let Some(dest) = dest_room {
-        let (dest_arrows, _) = super::worldmap::quest_arrows(coords, center, cols, height, &[dest]);
-        for arrow in hug_poi_arrows(dest_arrows, &canvas) {
-            if let Some(cell) = cells.get_mut(arrow.row).and_then(|r| r.get_mut(arrow.col)) {
-                *cell = (arrow.glyph.to_string(), quest_style);
+        let track = if level_offset == 0 {
+            state.dest_track_aim()
+        } else {
+            Some(super::worldmap::TrackAim::Target)
+        };
+        let aim = match track {
+            None => None,
+            Some(super::worldmap::TrackAim::Target) => Some(dest),
+            Some(super::worldmap::TrackAim::Stair { room, .. })
+            | Some(super::worldmap::TrackAim::Crossing { room }) => Some(room),
+        };
+        if let Some(aim) = aim {
+            let (dest_arrows, _) =
+                super::worldmap::quest_arrows(coords, center, cols, height, &[aim]);
+            for arrow in hug_poi_arrows(dest_arrows, &canvas) {
+                if let Some(cell) = cells.get_mut(arrow.row).and_then(|r| r.get_mut(arrow.col)) {
+                    *cell = (arrow.glyph.to_string(), quest_style);
+                }
             }
+        }
+        // The aimed-at room's own cell, as `map_canvas` places it, with the
+        // stair's corner cell up and to the right of it.
+        let aim_cell = |room: super::world::RoomId, dcol: i32, drow: i32| {
+            let c = coords.get(&room)?;
+            let sc = cols / 2 + 2 * (c.x - center.x) + dcol;
+            let sr = height / 2 + 2 * (c.y - center.y) + drow;
+            ((0..cols).contains(&sc) && (0..height).contains(&sr))
+                .then_some((sr as usize, sc as usize))
+        };
+        match track {
+            Some(super::worldmap::TrackAim::Stair { room, climb }) => {
+                let glyph = match climb {
+                    super::worldmap::Climb::Down => '\u{21d3}', // ⇓
+                    super::worldmap::Climb::Up => '\u{21d1}',   // ⇑
+                };
+                if let Some((row, col)) = aim_cell(room, 1, -1) {
+                    cells[row][col] = (glyph.to_string(), quest_style);
+                }
+            }
+            Some(super::worldmap::TrackAim::Crossing { room }) if room != player_room => {
+                if let Some((row, col)) = aim_cell(room, 0, 0) {
+                    cells[row][col].1 = quest_style;
+                }
+            }
+            Some(super::worldmap::TrackAim::Crossing { .. })
+            | Some(super::worldmap::TrackAim::Target)
+            | None => {}
         }
     }
     // Cross-land quest targets are counted in the footer instead of pointed
@@ -1873,7 +1928,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" known, elsewhere  ", dim),
-            Span::styled("\u{25be}\u{25b4}", stair_style()),
+            Span::styled("\u{21d3}\u{21d1}", stair_style()),
             Span::styled(" way down/up  ", dim),
             Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)),
             Span::styled(" look here", dim),
@@ -2874,35 +2929,38 @@ fn render_scrolled(frame: &mut Frame, rect: Rect, lines: Vec<Line<'static>>, sel
     frame.render_widget(Paragraph::new(shown), rect);
 }
 
-/// Where a quest's target lies, for the journal. The green map arrow is a
-/// straight-line direction, so it can only be drawn while the target sits in
-/// the same land (within `PAN_LIMIT`, the one case where a coordinate
-/// direction is a real spatial relationship). A target beyond that gets no
-/// arrow, and this is the line that says why: it names the region to venture
-/// into, and whether the player has ever set foot in it.
+/// Where a quest's target lies, for the journal: its region, and how it sits
+/// relative to the player. Tracking any target aims the map's green arrow
+/// along the walk there (`worldmap::track_aim`), so this line only has to say
+/// how far that walk reaches: this floor, N floors away in the same land
+/// (within `PAN_LIMIT`), or beyond this land. A land with no walking way in at
+/// all gets no arrow, so it names the waystone instead.
 fn quest_place_note(target: Option<RoomId>, view: &PlayerView) -> Option<String> {
     let target = target?;
     let (region, _) = super::world::region_atlas_entry(target)?;
     let coords = super::worldmap::world_coords();
-    let same_land = match (view.room.and_then(|r| coords.get(&r)), coords.get(&target)) {
-        (Some(here), Some(there)) => {
-            here.z == there.z
-                && (here.x - there.x).abs() <= super::worldmap::PAN_LIMIT
-                && (here.y - there.y).abs() <= super::worldmap::PAN_LIMIT
+    let floors = match (view.room.and_then(|r| coords.get(&r)), coords.get(&target)) {
+        (Some(here), Some(there))
+            if (here.x - there.x).abs() <= super::worldmap::PAN_LIMIT
+                && (here.y - there.y).abs() <= super::worldmap::PAN_LIMIT =>
+        {
+            Some(there.z - here.z)
         }
-        _ => false,
+        _ => None,
     };
-    let unfound = view
-        .atlas
-        .iter()
-        .find(|r| r.name == region)
-        .is_some_and(|r| r.explored == 0);
-    Some(match (same_land, unfound) {
-        (true, _) => format!("in {region}"),
-        (false, true) => format!("in {region} - venture there and the map will point the way"),
-        (false, false) => {
-            format!("in {region} - too far for the map to point; head that way first")
+    let portal_only = super::worldmap::portal_lands().contains(&region);
+    Some(match (floors, portal_only) {
+        (Some(0), _) => format!("in {region}"),
+        (Some(dz), _) => {
+            let n = dz.abs();
+            format!(
+                "in {region} - {n} floor{} {}",
+                if n == 1 { "" } else { "s" },
+                if dz < 0 { "down" } else { "up" },
+            )
         }
+        (None, true) => format!("in {region} - reached by waystone"),
+        (None, false) => format!("in {region} - beyond this land"),
     })
 }
 
@@ -3116,6 +3174,199 @@ fn draw_journal_screen(frame: &mut Frame, area: Rect, state: &State, view: &Play
     render_scrolled(frame, cols[2], frontier, frontier_sel);
 }
 
+/// The fixed cells of a full-screen item list row, sized once: deriving the
+/// name width from a row's own price and tag lets a long price push the tag
+/// off the column edge, which is how "▲+77%" rendered as "▲+7".
+const ITEM_ROW_VALUE_W: usize = 9;
+const ITEM_ROW_TAG_W: usize = 7;
+
+/// The upgrade tag cell of an item row: "▲+18%" green, "▼-12%" red, blank
+/// when there is nothing to compare.
+fn upgrade_tag(compare_pct: Option<i32>) -> (String, Color) {
+    match compare_pct {
+        Some(pct) if pct > 0 => (format!("\u{25B2}{pct:+}%"), theme::SUCCESS()),
+        Some(pct) if pct < 0 => (format!("\u{25BC}{pct:+}%"), theme::ERROR()),
+        Some(pct) => (format!("={pct:+}%"), theme::TEXT_DIM()),
+        None => (String::new(), theme::TEXT_DIM()),
+    }
+}
+
+/// One line of a full-screen item list (the shop's stock, the pack): the name
+/// in its rarity colour, a money cell, and a tag cell, all at fixed widths so
+/// the columns line up and nothing is clipped at the edge.
+fn item_row_line(
+    name: &str,
+    rarity: &str,
+    selected: bool,
+    value: (String, Color),
+    tag: (String, Color),
+    list_w: usize,
+) -> Line<'static> {
+    let marker = if selected { "> " } else { "  " };
+    let name_w = list_w.saturating_sub(marker.len() + ITEM_ROW_VALUE_W + ITEM_ROW_TAG_W);
+    let name_style = {
+        let base = Style::default().fg(rarity_color(rarity));
+        if selected {
+            base.patch(theme::selection_style())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            base
+        }
+    };
+    let (value, value_color) = value;
+    let (tag, tag_color) = tag;
+    Line::from(vec![
+        Span::styled(
+            format!("{marker}{:<name_w$}", truncate_chars(name, name_w)),
+            name_style,
+        ),
+        Span::styled(
+            format!("{value:>ITEM_ROW_VALUE_W$}"),
+            Style::default().fg(value_color),
+        ),
+        Span::styled(
+            format!("{tag:>ITEM_ROW_TAG_W$}"),
+            Style::default().fg(tag_color).add_modifier(Modifier::BOLD),
+        ),
+    ])
+}
+
+/// The page header of a full-screen item view: title, who/what and the purse,
+/// then one or two key-hint lines.
+fn item_screen_header(
+    title: &str,
+    subtitle: &str,
+    hints: Vec<Line<'static>>,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("   {subtitle}"),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ])];
+    lines.extend(hints);
+    lines.push(Line::raw(""));
+    lines
+}
+
+fn purse_label(gold: i64, banked_gold: i64) -> String {
+    if banked_gold > 0 {
+        format!("your gold: {gold}  (bank: {banked_gold})")
+    } else {
+        format!("your gold: {gold}")
+    }
+}
+
+/// A piece of gear as the detail pane of a full-screen item view shows it.
+struct ItemDetail<'a> {
+    name: &'a str,
+    rarity: &'a str,
+    /// "worn on the weapon" / "you are wearing this (weapon)": the pane's
+    /// second line, None for non-gear.
+    slot_line: Option<String>,
+    stats: &'a str,
+    /// Whether to stand the piece against what is worn in its slot. Off for
+    /// the worn piece itself.
+    compare_to_worn: bool,
+    slot: Option<&'a str>,
+    worn_name: Option<&'a str>,
+    worn_stats: Option<&'a str>,
+    compare: &'a str,
+    compare_pct: Option<i32>,
+    desc: &'a str,
+}
+
+/// The body of a detail pane: the piece, what it would replace, the delta,
+/// and its description. The caller appends its own action prompt.
+fn item_detail_lines(d: &ItemDetail, width: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            d.name.to_string(),
+            Style::default()
+                .fg(rarity_color(d.rarity))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  {}", d.rarity),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ])];
+    if let Some(slot_line) = &d.slot_line {
+        lines.push(Line::from(Span::styled(
+            format!("  {slot_line}"),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    lines.push(Line::raw(""));
+    if !d.stats.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", d.stats),
+            Style::default().fg(theme::AMBER()),
+        )));
+        lines.push(Line::raw(""));
+    }
+
+    // The direct comparison: what is on your body right now, then the delta
+    // between the two, so the trade reads without arithmetic.
+    if d.compare_to_worn {
+        match (d.worn_name, d.worn_stats, d.slot) {
+            (Some(name), Some(stats), _) => {
+                lines.push(Line::from(Span::styled(
+                    "  instead of what you wear:",
+                    Style::default().fg(theme::TEXT_DIM()),
+                )));
+                lines.push(Line::from(Span::styled(
+                    format!("  {name}"),
+                    Style::default().fg(theme::TEXT_BRIGHT()),
+                )));
+                lines.push(Line::from(Span::styled(
+                    format!("  {stats}"),
+                    Style::default().fg(theme::TEXT_DIM()),
+                )));
+            }
+            // No rival and no delta: the slot already holds this very piece.
+            (_, _, Some(_)) if d.compare.is_empty() => lines.push(Line::from(Span::styled(
+                "  you already wear one",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))),
+            (_, _, Some(_)) => lines.push(Line::from(Span::styled(
+                "  that slot is empty",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))),
+            (_, _, None) => {}
+        }
+        if let Some(line) = compare_line(d.compare) {
+            lines.push(line);
+        }
+        if let Some(pct) = d.compare_pct {
+            let (tag, color) = upgrade_tag(Some(pct));
+            lines.push(Line::from(Span::styled(
+                format!("  {tag} overall"),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            )));
+        }
+        lines.push(Line::raw(""));
+    }
+    if !d.desc.is_empty() {
+        lines.extend(side_text_wrap(d.desc, LAT_TEXT, width));
+        lines.push(Line::raw(""));
+    }
+    lines
+}
+
+fn prompt_line(text: String, color: Color) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("  {text}"),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    ))
+}
+
 /// The shop as a full screen: a dense one-line-per-item list on the left,
 /// grouped under the same collapsible category headers the side panel uses, and
 /// the highlighted piece stood next to what it would replace on the right.
@@ -3138,28 +3389,12 @@ fn draw_shop_screen(
     banked_gold: i64,
 ) {
     let rows = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).split(area);
-    let purse = if banked_gold > 0 {
-        format!("your gold: {gold}  (bank: {banked_gold})")
-    } else {
-        format!("your gold: {gold}")
-    };
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled(
-                    shop.shop_name.clone(),
-                    Style::default()
-                        .fg(theme::AMBER_GLOW())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!("   {} - {purse}", shop.npc_name),
-                    Style::default().fg(theme::TEXT_DIM()),
-                ),
-            ]),
-            hint("w/s", "select  Enter buy/fold  b back"),
-            Line::raw(""),
-        ]),
+        Paragraph::new(item_screen_header(
+            &shop.shop_name,
+            &format!("{} - {}", shop.npc_name, purse_label(gold, banked_gold)),
+            vec![hint("w/s", "select  Enter buy/fold  b back")],
+        )),
         rows[0],
     );
 
@@ -3187,51 +3422,19 @@ fn draw_shop_screen(
                 let Some(e) = shop.entries.get(*index) else {
                     continue;
                 };
-                let tag = e
-                    .compare_pct
-                    .map(|pct| format!("{}{pct:+}%", if pct > 0 { '\u{25B2}' } else { '\u{25BC}' }))
-                    .unwrap_or_default();
-                let price = format!("{}g", e.price);
-                let marker = if selected { "> " } else { "  " };
-                // Fixed cells, sized once: deriving the name width from this
-                // row's own price and tag lets a long price push the tag off
-                // the column edge, which is how "▲+77%" renders as "▲+7".
-                const PRICE_W: usize = 9;
-                const TAG_W: usize = 7;
-                let name_w = list_w.saturating_sub(marker.len() + PRICE_W + TAG_W);
-                let name_style = {
-                    let base = Style::default().fg(rarity_color(&e.rarity));
-                    if selected {
-                        base.patch(theme::selection_style())
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        base
-                    }
+                let price_color = if e.affordable {
+                    theme::BADGE_GOLD()
+                } else {
+                    theme::ERROR()
                 };
-                list.push(Line::from(vec![
-                    Span::styled(
-                        format!("{marker}{:<name_w$}", truncate_chars(&e.name, name_w)),
-                        name_style,
-                    ),
-                    Span::styled(
-                        format!("{price:>PRICE_W$}"),
-                        Style::default().fg(if e.affordable {
-                            theme::BADGE_GOLD()
-                        } else {
-                            theme::ERROR()
-                        }),
-                    ),
-                    Span::styled(
-                        format!("{tag:>TAG_W$}"),
-                        Style::default()
-                            .fg(match e.compare_pct {
-                                Some(pct) if pct > 0 => theme::SUCCESS(),
-                                Some(pct) if pct < 0 => theme::ERROR(),
-                                _ => theme::TEXT_DIM(),
-                            })
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]));
+                list.push(item_row_line(
+                    &e.name,
+                    &e.rarity,
+                    selected,
+                    (format!("{}g", e.price), price_color),
+                    upgrade_tag(e.compare_pct),
+                    list_w,
+                ));
             }
         }
     }
@@ -3243,94 +3446,241 @@ fn draw_shop_screen(
         SectionRow::Item { index } => shop.entries.get(*index),
         SectionRow::Header { .. } => None,
     });
-    let mut detail: Vec<Line> = Vec::new();
-    match entry {
-        None => detail.push(Line::from(Span::styled(
+    let detail = match entry {
+        None => vec![Line::from(Span::styled(
             "  A category. Enter folds it; w/s moves on.",
             Style::default().fg(theme::TEXT_DIM()),
-        ))),
+        ))],
         Some(e) => {
-            detail.push(Line::from(vec![
-                Span::styled(
-                    e.name.clone(),
-                    Style::default()
-                        .fg(rarity_color(&e.rarity))
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!("  {}", e.rarity),
-                    Style::default().fg(theme::TEXT_DIM()),
-                ),
-            ]));
-            if let Some(slot) = &e.slot {
-                detail.push(Line::from(Span::styled(
-                    format!("  worn on the {slot}"),
-                    Style::default().fg(theme::TEXT_DIM()),
-                )));
-            }
-            detail.push(Line::raw(""));
-            detail.push(Line::from(Span::styled(
-                format!("  {}", e.stats),
-                Style::default().fg(theme::AMBER()),
-            )));
-            detail.push(Line::raw(""));
-
-            // The direct comparison: what is on your body right now, then the
-            // delta between the two, so the trade reads without arithmetic.
-            match (&e.worn_name, &e.worn_stats) {
-                (Some(name), Some(stats)) => {
-                    detail.push(Line::from(Span::styled(
-                        "  instead of what you wear:",
-                        Style::default().fg(theme::TEXT_DIM()),
-                    )));
-                    detail.push(Line::from(Span::styled(
-                        format!("  {name}"),
-                        Style::default().fg(theme::TEXT_BRIGHT()),
-                    )));
-                    detail.push(Line::from(Span::styled(
-                        format!("  {stats}"),
-                        Style::default().fg(theme::TEXT_DIM()),
-                    )));
-                }
-                _ if e.slot.is_some() => detail.push(Line::from(Span::styled(
-                    "  that slot is empty",
-                    Style::default().fg(theme::TEXT_DIM()),
-                ))),
-                _ => {}
-            }
-            if let Some(line) = compare_line(&e.compare) {
-                detail.push(line);
-            }
-            if let Some(pct) = e.compare_pct {
-                let (arrow, color) = match pct {
-                    p if p > 0 => ('\u{25B2}', theme::SUCCESS()),
-                    p if p < 0 => ('\u{25BC}', theme::ERROR()),
-                    _ => ('=', theme::TEXT_DIM()),
-                };
-                detail.push(Line::from(Span::styled(
-                    format!("  {arrow}{pct:+}% overall"),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                )));
-            }
-            detail.push(Line::raw(""));
-            detail.extend(side_text_wrap(e.desc, LAT_TEXT, detail_w));
-            detail.push(Line::raw(""));
-            detail.push(Line::from(Span::styled(
-                if e.affordable {
-                    format!("  Enter to buy - {}g", e.price)
-                } else {
-                    format!("  {}g - you cannot afford this", e.price)
+            let mut detail = item_detail_lines(
+                &ItemDetail {
+                    name: &e.name,
+                    rarity: &e.rarity,
+                    slot_line: e.slot.as_ref().map(|slot| format!("worn on the {slot}")),
+                    stats: &e.stats,
+                    compare_to_worn: true,
+                    slot: e.slot.as_deref(),
+                    worn_name: e.worn_name.as_deref(),
+                    worn_stats: e.worn_stats.as_deref(),
+                    compare: &e.compare,
+                    compare_pct: e.compare_pct,
+                    desc: e.desc,
                 },
-                Style::default()
-                    .fg(if e.affordable {
-                        theme::BADGE_GOLD()
-                    } else {
-                        theme::ERROR()
-                    })
-                    .add_modifier(Modifier::BOLD),
-            )));
+                detail_w,
+            );
+            detail.push(if e.affordable {
+                prompt_line(format!("Enter to buy - {}g", e.price), theme::BADGE_GOLD())
+            } else {
+                prompt_line(
+                    format!("{}g - you cannot afford this", e.price),
+                    theme::ERROR(),
+                )
+            });
+            detail
+        }
+    };
+    frame.render_widget(Paragraph::new(detail), cols[1]);
+}
+
+/// The pack covers the field, and it is the panel opened mid-fight to drink
+/// something, so its header keeps the vitals and the fight in sight.
+fn pack_vitals_spans(view: &PlayerView) -> Vec<Span<'static>> {
+    let mut spans = vec![
+        Span::styled(
+            format!("  HP {}/{}", view.hp, view.max_hp),
+            Style::default()
+                .fg(hp_color(view.hp, view.max_hp))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                "  {} {}/{}",
+                view.resource_name, view.resource, view.max_resource
+            ),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ];
+    if let Some(foe) = &view.in_combat_with {
+        spans.push(Span::styled(
+            format!("  fighting {foe}"),
+            Style::default()
+                .fg(theme::ERROR())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    spans
+}
+
+/// The pack as a full screen, the same shape as the shop: every carried and
+/// worn piece on one line (name, sell value, the upgrade tag or `worn`) under
+/// the collapsible category headers, and the highlighted piece on the right,
+/// stood against what it would replace, with what Enter and `x` will do to it.
+///
+/// The side `inventory_panel` wraps each piece into a four-line stanza, which
+/// a pack of loot turns into a long scroll with no way to compare anything.
+/// Same rows, cursor, and keys in both renderings.
+///
+/// A shop in the room decides whether the sell keys are offered: `x` and
+/// `A/C/J` only do anything at a merchant.
+fn draw_inventory_screen(
+    frame: &mut Frame,
+    area: Rect,
+    inv_rows: &[SectionRow],
+    view: &PlayerView,
+    cursor: usize,
+) {
+    let inventory: &[InvView] = &view.inventory;
+    let (gold, banked_gold) = (view.gold, view.banked_gold);
+    let merchant_here = view.shop.is_some();
+    let rows = Layout::vertical([Constraint::Length(4), Constraint::Min(1)]).split(area);
+    let carried = inventory.iter().filter(|it| !it.equipped).count();
+    let worn = inventory.len() - carried;
+    let sell_hint = if merchant_here {
+        hint("x", "sell one  A/C/J sell all / commons / non-upgrades")
+    } else {
+        hint("x A/C/J", "sell, once you stand at a merchant")
+    };
+    let mut header = item_screen_header(
+        "Inventory",
+        &format!(
+            "{carried} carried, {worn} worn - {}",
+            purse_label(gold, banked_gold)
+        ),
+        vec![
+            hint("w/s", "select  Enter equip/use/fold  t back"),
+            sell_hint,
+        ],
+    );
+    // On the title line, ahead of the counts: no extra row at 100x20, and a
+    // long line clips the purse rather than the fight.
+    header[0].spans.splice(1..1, pack_vitals_spans(view));
+    frame.render_widget(Paragraph::new(header), rows[0]);
+
+    let cols =
+        Layout::horizontal([Constraint::Percentage(52), Constraint::Percentage(48)]).split(rows[1]);
+
+    // Left: one line a piece - name, what it sells for, and the upgrade tag
+    // (or `worn`, for what is already on your body).
+    let list_w = cols[0].width as usize;
+    let mut list: Vec<Line> = Vec::new();
+    let mut sel = None;
+    if inventory.is_empty() {
+        list.push(Line::from(Span::styled(
+            "  Your pack is empty and you wear nothing.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    for (i, row) in inv_rows.iter().enumerate() {
+        let selected = i == cursor;
+        if selected {
+            sel = Some(list.len());
+        }
+        match row {
+            SectionRow::Header {
+                label,
+                count,
+                collapsed,
+                ..
+            } => list.push(section_header_line(label, *count, *collapsed, selected)),
+            SectionRow::Item { index } => {
+                let Some(it) = inventory.get(*index) else {
+                    continue;
+                };
+                let value_color = if merchant_here && !it.equipped {
+                    theme::BADGE_GOLD()
+                } else {
+                    theme::TEXT_DIM()
+                };
+                let tag = if it.equipped {
+                    ("worn".to_string(), theme::AMBER())
+                } else {
+                    upgrade_tag(it.compare_pct)
+                };
+                list.push(item_row_line(
+                    &it.name,
+                    &it.rarity,
+                    selected,
+                    (format!("{}g", it.sell_price), value_color),
+                    tag,
+                    list_w,
+                ));
+            }
         }
     }
+    render_scrolled(frame, cols[0], list, sel);
+
+    // Right: the highlighted piece, and what the keys will do to it.
+    let detail_w = (cols[1].width as usize).saturating_sub(2);
+    let entry = inv_rows.get(cursor).and_then(|row| match row {
+        SectionRow::Item { index } => inventory.get(*index),
+        SectionRow::Header { .. } => None,
+    });
+    let detail = match entry {
+        None if inventory.is_empty() => Vec::new(),
+        None => vec![Line::from(Span::styled(
+            "  A category. Enter folds it; w/s moves on.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ))],
+        Some(it) => {
+            let slot_line = it.slot.as_ref().map(|slot| match it.equipped {
+                true => format!("you are wearing this ({slot})"),
+                false => format!("worn on the {slot}"),
+            });
+            let mut detail = item_detail_lines(
+                &ItemDetail {
+                    name: &it.name,
+                    rarity: &it.rarity,
+                    slot_line,
+                    stats: &it.stats,
+                    compare_to_worn: !it.equipped,
+                    slot: it.slot.as_deref(),
+                    worn_name: it.worn_name.as_deref(),
+                    worn_stats: it.worn_stats.as_deref(),
+                    compare: &it.compare,
+                    compare_pct: it.compare_pct,
+                    desc: it.desc,
+                },
+                detail_w,
+            );
+            let valuable = it.category == "Valuables";
+            match inv_action(it) {
+                InvAction::Unequip => detail.push(prompt_line(
+                    "Enter to take it off".to_string(),
+                    theme::AMBER(),
+                )),
+                InvAction::Equip => detail.push(prompt_line(
+                    "Enter to put it on".to_string(),
+                    theme::SUCCESS(),
+                )),
+                InvAction::Use if valuable => detail.push(prompt_line(
+                    "a valuable: its worth is in the selling".to_string(),
+                    theme::TEXT_DIM(),
+                )),
+                InvAction::Use => {
+                    detail.push(prompt_line("Enter to use it".to_string(), theme::SUCCESS()))
+                }
+            }
+            detail.push(match (it.equipped, merchant_here) {
+                (true, true) => prompt_line(
+                    "take it off before you sell it".to_string(),
+                    theme::TEXT_DIM(),
+                ),
+                (true, false) => prompt_line(
+                    format!("worth {}g to a merchant", it.sell_price),
+                    theme::TEXT_DIM(),
+                ),
+                (false, true) => prompt_line(
+                    format!("x to sell - {}g", it.sell_price),
+                    theme::BADGE_GOLD(),
+                ),
+                (false, false) => prompt_line(
+                    format!("sells for {}g at a merchant", it.sell_price),
+                    theme::TEXT_DIM(),
+                ),
+            });
+            detail
+        }
+    };
     frame.render_widget(Paragraph::new(detail), cols[1]);
 }
 
@@ -3754,6 +4104,18 @@ fn room_panel(
                 theme::AMBER_DIM(),
                 width,
             ));
+        }
+        for chip_line in pack_hint_chips(
+            &pet_feed_chips(pet)
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            width.saturating_sub(2),
+        ) {
+            lines.push(Line::from(Span::styled(
+                format!("    {chip_line}"),
+                Style::default().fg(theme::TEXT_DIM()),
+            )));
         }
     }
     let exits = if view.exits.is_empty() {
@@ -4298,7 +4660,11 @@ fn map_cell_span(cell: MapCell) -> Span<'static> {
 /// Full-width character dashboard (the `c` panel when the terminal is roomy).
 /// A class portrait and vitals bars on the left, ability scores as dot ratings
 /// in the middle, and combat/derived stats, trait, titles, and XP on the right.
-fn draw_character_sheet(frame: &mut Frame, area: Rect, view: &PlayerView) {
+/// `[`/`]` scroll all three columns together: `scroll` is the requested
+/// offset in lines, and the clamped one comes back for the caller to keep.
+/// It stops once the tallest column's last row reaches the floor; a shorter
+/// column stops at its own end rather than scrolling into blank.
+fn draw_character_sheet(frame: &mut Frame, area: Rect, view: &PlayerView, scroll: usize) -> usize {
     let accent = class_accent(Class::from_key(&view.class_key));
     let block = Block::default()
         .borders(Borders::ALL)
@@ -4317,15 +4683,26 @@ fn draw_character_sheet(frame: &mut Frame, area: Rect, view: &PlayerView) {
     ])
     .split(inner);
 
-    frame.render_widget(Paragraph::new(sheet_identity(view, accent)), cols[0]);
-    frame.render_widget(
-        Paragraph::new(sheet_attributes(view, accent)).wrap(Wrap { trim: false }),
-        cols[1],
-    );
-    frame.render_widget(
-        Paragraph::new(sheet_derived(view, accent)).wrap(Wrap { trim: false }),
-        cols[2],
-    );
+    let columns = [
+        (sheet_identity(view, accent), cols[0]),
+        (sheet_attributes(view, accent), cols[1]),
+        (sheet_derived(view, accent), cols[2]),
+    ];
+    let max_offsets = columns.each_ref().map(|(lines, col)| {
+        scroll_offset(
+            usize::MAX,
+            lines,
+            None,
+            col.width as usize,
+            col.height as usize,
+        )
+    });
+    let off = scroll.min(max_offsets.iter().copied().max().unwrap_or(0));
+    for ((mut lines, col), max_off) in columns.into_iter().zip(max_offsets) {
+        let shown = lines.split_off(off.min(max_off));
+        frame.render_widget(Paragraph::new(shown).wrap(Wrap { trim: false }), col);
+    }
+    off
 }
 
 /// Left column: portrait, identity headline, and vitals as filled meters.
@@ -5542,28 +5919,81 @@ fn stable_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
         )));
     }
     lines.push(Line::raw(""));
-    for (i, e) in stable.entries.iter().enumerate() {
-        let selected = i == cursor;
+    let row_style = |selected: bool| {
         if selected {
-            sel_line = Some(lines.len());
-        }
-        let marker = if selected { ">" } else { " " };
-        let price_color = if e.affordable {
-            theme::BADGE_GOLD()
-        } else {
-            theme::ERROR()
-        };
-        let name_style = if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .patch(theme::selection_style())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme::TEXT_BRIGHT())
+        }
+    };
+    // The kennel leads: the rows Enter calls out, strongest first.
+    lines.push(Line::from(Span::styled(
+        "Your kennel",
+        Style::default().fg(theme::AMBER_GLOW()),
+    )));
+    if stable.kennel.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  empty - tamed and replaced companions rest here",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    for (i, e) in stable.kennel.iter().enumerate() {
+        let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
+        let marker = if selected { ">" } else { " " };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{marker} {} {}", e.glyph, e.name),
+                row_style(selected),
+            ),
+            Span::styled(
+                format!(
+                    "  Lv{} {}/{}hp · {}atk{}",
+                    e.level,
+                    e.hp,
+                    e.max_hp,
+                    e.attack,
+                    if e.downed { " (downed)" } else { "" }
+                ),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "For sale",
+        Style::default().fg(theme::AMBER_GLOW()),
+    )));
+    for (i, e) in stable.entries.iter().enumerate() {
+        let selected = stable.kennel.len() + i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
+        let marker = if selected { ">" } else { " " };
+        let price = if e.owned {
+            Span::styled("  owned", Style::default().fg(theme::TEXT_DIM()))
+        } else if e.affordable {
+            Span::styled(
+                format!("  {}g", e.price),
+                Style::default().fg(theme::BADGE_GOLD()),
+            )
+        } else {
+            Span::styled(
+                format!("  {}g", e.price),
+                Style::default().fg(theme::ERROR()),
+            )
         };
         lines.push(Line::from(vec![
-            Span::styled(format!("{marker} {} {}", e.glyph, e.name), name_style),
-            Span::styled(format!("  {}g", e.price), Style::default().fg(price_color)),
+            Span::styled(
+                format!("{marker} {} {}", e.glyph, e.name),
+                row_style(selected),
+            ),
+            price,
         ]));
         lines.push(Line::from(Span::styled(
             format!("    {}hp · {}atk", e.hp, e.attack),
@@ -5571,8 +6001,10 @@ fn stable_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
         )));
     }
     lines.push(Line::raw(""));
-    lines.push(hint("w/s", "select  Enter buy"));
-    lines.push(hint("x", &format!("feed/tend ({}g)", stable.feed_cost)));
+    lines.push(hint("w/s", "select  Enter call out / buy"));
+    if let Some(pet) = &view.pet {
+        lines.push(hint("G", &format!("feed your pet ({}g)", pet.feed_cost)));
+    }
     lines.push(hint("p", "leave stable"));
     (lines, sel_line)
 }
@@ -6019,6 +6451,26 @@ fn room_actions(view: &PlayerView) -> Vec<Line<'static>> {
     out
 }
 
+/// The feeding line under the companion in the room panel: the key (unless
+/// `room_action_entries` already promoted it for a hurt pet, or a healthy
+/// pet has no meal to have), the progress a meal buys, and how many of
+/// today's meals are left.
+fn pet_feed_chips(pet: &PetView) -> Vec<String> {
+    let mut chips = Vec::new();
+    let healthy = !pet.downed && pet.hp >= pet.max_hp;
+    let meal_to_have = pet.level < PET_MAX_LEVEL && pet.meals_today < MEALS_PER_DAY;
+    if healthy && meal_to_have {
+        chips.push(format!("G feed {}g", pet.feed_cost));
+    }
+    if pet.level >= PET_MAX_LEVEL {
+        chips.push("max level".to_string());
+    } else {
+        chips.push(format!("{}% to Lv{}", pet.loyalty_pct, pet.level + 1));
+        chips.push(format!("{}/{MEALS_PER_DAY} today", pet.meals_today));
+    }
+    chips
+}
+
 /// The `(key, label)` table behind `room_actions`, kept separate because
 /// `footer_hints` needs the keys too: a key promoted to the top of the panel is
 /// dropped from the dim standing-key block, so each one is shown once, in the
@@ -6062,8 +6514,12 @@ fn room_action_entries(view: &PlayerView) -> Vec<(&'static str, &'static str)> {
     } else if !view.features.is_empty() {
         out.push(("o", "look / interact"));
     }
-    if view.pet.is_some() {
-        out.push(("~", "feed companion"));
+    // Feeding only leads the panel when it is urgent; a healthy pet's `G`
+    // sits under the pet in "Here", beside the loyalty it would raise.
+    match &view.pet {
+        Some(pet) if pet.downed => out.push(("G", "rouse companion")),
+        Some(pet) if pet.hp < pet.max_hp => out.push(("G", "mend companion")),
+        Some(_) | None => {}
     }
     out
 }
@@ -6121,10 +6577,9 @@ fn footer_hints(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
         "[ ] scroll",
         "r recall",
         "; haven",
+        ": waypoint",
+        "/ warp",
         "f follow",
-        "' say",
-        "! ranks",
-        "Esc leave",
     ]);
     // What the room promoted into "You can" does not repeat down here.
     let promoted = room_action_entries(view);

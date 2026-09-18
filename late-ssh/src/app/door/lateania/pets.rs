@@ -203,6 +203,10 @@ pub fn pet_species_by_key(key: &str) -> Option<&'static PetSpecies> {
 pub const FEED_LOYALTY: i64 = 25;
 pub const LOYALTY_PER_LEVEL: i64 = 100;
 pub const PET_MAX_LEVEL: i32 = 10;
+/// Meals a real (UTC) day that raise loyalty. Past them a feed still mends the
+/// pet but it grows no fonder, so raising a companion to the cap takes nine
+/// days of care rather than one purse emptied at the Stable.
+pub const MEALS_PER_DAY: u32 = 4;
 
 /// A live companion owned by a player. Loyalty (and thus level) persists; the
 /// current `hp`/`downed` are runtime-only and reset to full on reload.
@@ -260,13 +264,145 @@ impl Pet {
         ((self.loyalty_xp % LOYALTY_PER_LEVEL) * 100 / LOYALTY_PER_LEVEL) as i32
     }
 
-    /// Feed the pet: revive it, heal to full, and add loyalty. Returns true if a
-    /// feeding actually leveled the pet up.
+    /// Tend the pet without a meal: revive it and heal it to full.
+    pub fn mend(&mut self) {
+        self.downed = false;
+        self.hp = self.max_hp();
+    }
+
+    /// Feed the pet: add loyalty, then mend it (at the new level's health).
+    /// Returns true if the meal leveled the pet up.
     pub fn feed(&mut self) -> bool {
         let before = self.level();
         self.loyalty_xp += FEED_LOYALTY;
-        self.downed = false;
-        self.hp = self.max_hp();
+        self.mend();
         self.level() > before
+    }
+}
+
+/// The companions a player owns but is not leading: they rest at home and can
+/// be called out at any capital Stable. A tame or a purchase never throws a
+/// companion away any more; it lands here instead. Holds at most one pet of a
+/// species, and never the species at the owner's heel, so every species a
+/// player owns exists exactly once across the two.
+#[derive(Clone, Debug, Default)]
+pub struct Kennel {
+    resting: Vec<Pet>,
+}
+
+/// Where a newly won companion went.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Adopted {
+    /// There was no companion at the owner's heel, so it took the place.
+    AtHeel,
+    /// The heel was taken, so it went home to the kennel.
+    Kenneled,
+    /// The owner already keeps this species; nothing changed.
+    AlreadyOwned,
+}
+
+/// What buying a companion at the Stable did.
+#[derive(Clone, Copy, Debug)]
+pub enum Bought {
+    /// It is at the heel now; the companion it replaced, if any, went home.
+    AtHeel {
+        sent_home: Option<&'static PetSpecies>,
+    },
+    /// The owner already keeps this species; nothing changed.
+    AlreadyOwned,
+}
+
+/// What calling a kennelled companion out to the owner's heel did.
+#[derive(Clone, Copy, Debug)]
+pub enum CalledOut {
+    /// `called` is at the heel now; the companion it replaced, if any, went home.
+    Swapped {
+        called: &'static PetSpecies,
+        sent_home: Option<&'static PetSpecies>,
+    },
+    /// No companion of that species rests in the kennel.
+    NotKenneled,
+}
+
+impl Kennel {
+    /// The resting companions, strongest rung first.
+    pub fn resting(&self) -> &[Pet] {
+        &self.resting
+    }
+
+    /// Whether the owner keeps `key` anywhere: at the heel or in the kennel.
+    pub fn owns(&self, active: Option<&Pet>, key: &str) -> bool {
+        active.is_some_and(|p| p.species.key == key)
+            || self.resting.iter().any(|p| p.species.key == key)
+    }
+
+    /// Admit a companion that is not at the heel (a tame when the heel is
+    /// taken, the old companion when a new one steps up, a reloaded save).
+    /// Returns false, changing nothing, when the species is already owned.
+    pub fn admit(&mut self, active: Option<&Pet>, pet: Pet) -> bool {
+        if self.owns(active, pet.species.key) {
+            return false;
+        }
+        self.resting.push(pet);
+        self.resting
+            .sort_by_key(|p| (std::cmp::Reverse(p.species.rung()), p.species.key));
+        true
+    }
+
+    /// A companion won in the wild: to the heel if it is free, else home.
+    pub fn adopt_tamed(
+        &mut self,
+        active: &mut Option<Pet>,
+        species: &'static PetSpecies,
+    ) -> Adopted {
+        if self.owns(active.as_ref(), species.key) {
+            return Adopted::AlreadyOwned;
+        }
+        match active {
+            None => {
+                *active = Some(Pet::new(species, 0));
+                Adopted::AtHeel
+            }
+            Some(_) => {
+                self.admit(active.as_ref(), Pet::new(species, 0));
+                Adopted::Kenneled
+            }
+        }
+    }
+
+    /// A companion bought at the Stable steps straight to the heel; the one it
+    /// replaces goes home rather than back to the wild.
+    pub fn adopt_bought(
+        &mut self,
+        active: &mut Option<Pet>,
+        species: &'static PetSpecies,
+    ) -> Bought {
+        if self.owns(active.as_ref(), species.key) {
+            return Bought::AlreadyOwned;
+        }
+        let bought = Pet::new(species, 0);
+        let sent_home = active.replace(bought);
+        if let Some(old) = sent_home {
+            self.admit(Some(&bought), old);
+        }
+        Bought::AtHeel {
+            sent_home: sent_home.map(|p| p.species),
+        }
+    }
+
+    /// Swap the kennelled `key` in for whatever is at the heel.
+    pub fn call_out(&mut self, active: &mut Option<Pet>, key: &str) -> CalledOut {
+        let Some(at) = self.resting.iter().position(|p| p.species.key == key) else {
+            return CalledOut::NotKenneled;
+        };
+        let called = self.resting.remove(at);
+        let sent_home = active.replace(called);
+        if let Some(old) = sent_home {
+            self.admit(Some(&called), old);
+        }
+        CalledOut::Swapped {
+            called: called.species,
+            sent_home: sent_home.map(|p| p.species),
+        }
     }
 }

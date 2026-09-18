@@ -2910,7 +2910,11 @@ async fn brb_sets_an_open_ended_away_status() {
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
 
     state.composer.insert_str("/brb");
-    assert!(state.submit_composer(false, false).is_none());
+    assert!(
+        state
+            .submit_composer(false, ComposerCommands::Enabled)
+            .is_none()
+    );
     assert_eq!(
         state.take_requested_status(),
         Some(StatusRequest::Apply(StatusChange::Set {
@@ -2930,7 +2934,9 @@ async fn brb_with_a_message_explains_instead_of_calling_it_unknown() {
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
 
     state.composer.insert_str("/brb back in 5");
-    let banner = state.submit_composer(false, false).expect("banner");
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("banner");
     assert_eq!(
         banner.message,
         "/brb takes no message, it sets /status away"
@@ -3923,11 +3929,13 @@ async fn neither_a_summary_nor_history_spends_the_line() {
     let placed = *state.afk_lines.get(&room_id).expect("line placed");
 
     state.composer.insert_str("/history");
-    state.submit_composer(false, false);
+    state.submit_composer(false, ComposerCommands::Enabled);
     assert_eq!(state.afk_lines.get(&room_id), Some(&placed));
 
     state.composer.insert_str("/summary");
-    let banner = state.submit_composer(false, false).expect("banner");
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("banner");
     assert_eq!(banner.message, "Summarizing…");
     assert_eq!(state.afk_lines.get(&room_id), Some(&placed));
 }
@@ -3956,7 +3964,9 @@ async fn summary_command_refuses_non_public_rooms() {
     state.rooms.push((room, Vec::new()));
 
     state.composer.insert_str("/summary");
-    let banner = state.submit_composer(false, false).expect("banner");
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("banner");
 
     assert_eq!(banner.message, "Summaries cover public rooms only");
 }
@@ -3973,7 +3983,9 @@ async fn summary_command_requests_the_visible_public_room() {
     let mut events = state.summary_service.subscribe();
 
     state.composer.insert_str("/summary");
-    let banner = state.submit_composer(false, false).expect("banner");
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("banner");
     assert_eq!(banner.message, "Summarizing…");
 
     // AI is disabled in this wiring, so the issued request answers
@@ -3988,6 +4000,39 @@ async fn summary_command_requests_the_visible_public_room() {
     assert!(matches!(event.outcome, SummaryOutcome::Unavailable));
 }
 
+/// With commands off (the Lounge), only a draft that would run as a command
+/// is refused. A bare `/` or a `//` aside is plain speech everywhere else, so
+/// it is plain speech here too.
+#[tokio::test]
+async fn a_composer_with_commands_off_refuses_commands_but_not_slash_led_speech() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "cmds_off").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+
+    for speech in ["/", "// an aside", "//"] {
+        state.composer = new_chat_textarea();
+        state.composer.insert_str(speech);
+        assert!(
+            state
+                .submit_composer(false, ComposerCommands::Disabled)
+                .is_none(),
+            "{speech:?} is speech, not a command"
+        );
+    }
+
+    for command in ["/active", "  /me waves", "/me waves\nand bows"] {
+        state.composer = new_chat_textarea();
+        state.composer.insert_str(command);
+        let banner = state
+            .submit_composer(false, ComposerCommands::Disabled)
+            .unwrap_or_else(|| panic!("{command:?} is refused"));
+        assert_eq!(
+            banner.message,
+            "Commands are off in the Lounge, use them from Home"
+        );
+    }
+}
+
 #[tokio::test]
 async fn summary_command_refuses_a_malformed_window_without_requesting() {
     let test_db = crate::test_helpers::new_test_db().await;
@@ -3999,7 +4044,9 @@ async fn summary_command_refuses_a_malformed_window_without_requesting() {
     let mut events = state.summary_service.subscribe();
 
     state.composer.insert_str("/summary 6");
-    let banner = state.submit_composer(false, false).expect("banner");
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("banner");
 
     // The banner teaches the format, and nothing was spent: a typo must not
     // fall back to the default window and answer the wrong question.
@@ -4183,5 +4230,74 @@ fn the_members_overlay_draws_in_the_readers_theme_whoever_built_it() {
     assert_eq!(
         borrowed, home,
         "the member list took its colours from whichever session last rendered on this thread"
+    );
+}
+
+#[test]
+fn synthetic_favorite_ids_round_trip_and_cannot_be_room_ids() {
+    for slot in [
+        RoomSlot::Notifications,
+        RoomSlot::News,
+        RoomSlot::Feeds,
+        RoomSlot::Discover,
+    ] {
+        let id = synthetic_favorite_id(slot).expect("favoritable entry has an id");
+        assert_eq!(synthetic_slot_for_favorite_id(id), Some(slot));
+        assert_eq!(
+            id.get_version_num(),
+            0,
+            "sentinel must not look like a v7 room id"
+        );
+    }
+    assert_eq!(synthetic_favorite_id(RoomSlot::Cyberspace), None);
+    assert_eq!(
+        synthetic_favorite_id(RoomSlot::Room(Uuid::from_u128(7))),
+        None
+    );
+    assert_eq!(synthetic_slot_for_favorite_id(Uuid::now_v7()), None);
+}
+
+#[test]
+fn visual_order_moves_favorited_synthetic_entries_out_of_core() {
+    let me = Uuid::from_u128(1);
+    let lounge = Uuid::from_u128(10);
+    let rooms = vec![make_room(lounge, "lounge", "public", true, Some("lounge"))];
+    let favorites = [FAVORITE_ID_NEWS, FAVORITE_ID_FEEDS, FAVORITE_ID_DISCOVER];
+    let order_for = |collapsed: HashSet<RoomSection>| {
+        visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &rooms,
+            user_id: me,
+            usernames: &HashMap::new(),
+            unread_counts: &HashMap::new(),
+            room_last_message_at: &HashMap::new(),
+            feeds_available: false,
+            cyberspace_linked: false,
+            cyberspace_rooms: &[],
+            cyberspace_mail: &[],
+            favorite_room_ids: &favorites,
+            collapsed_sections: &collapsed,
+            ignored_user_ids: &HashSet::new(),
+            sticky_unread_dm: None,
+            live_streams: &[],
+        })
+    };
+
+    // News and Browse lead in favorites order and leave Core; RSS is
+    // favorited but feeds are unavailable, so it has no row anywhere.
+    assert_eq!(
+        order_for(HashSet::new()),
+        vec![
+            RoomSlot::News,
+            RoomSlot::Discover,
+            RoomSlot::Room(lounge),
+            RoomSlot::Notifications,
+        ]
+    );
+
+    // Collapsing Favorites folds them away without letting them reappear in
+    // Core, the same rule a collapsed favorite room follows.
+    assert_eq!(
+        order_for(HashSet::from([RoomSection::Favorites])),
+        vec![RoomSlot::Room(lounge), RoomSlot::Notifications]
     );
 }

@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/zen`
-- Last updated: 2026-09-15 (backtick hops into the games waiting on you, as on Home, and the chain comes home to Zen with its `Ctrl+F` page intact; an Esc off a board or table entered from Zen lands here too. See Status and §3, and `workspace/CONTEXT.md` for the base.)
+- Last updated: 2026-09-17 (the `Ctrl+/` picker on the page lists real rooms only, `PickerScope::RoomsOnly`: synthetic rail entries have no tile to land in. See the chat tile notes.)
 - Purpose: the full-bleed page that cuts the clubhouse down to the things you keep alive.
 - Status: Experimental. Reached with `Ctrl+F` from any page, or `/zen` from any composer (same toggle); a surface over that page, absent from the Tab cycle. The chord returns to the page it was opened from (`App::zen_return_screen`), or to the Clubhouse when the session landed on Zen (Settings, Tweaks, "Land on"). Leaving by any route (a digit, a tour step) clears the return page in `App::set_screen`, so a later chord never hands back a stale page. The one route back that is not the chord is the backtick chain: going into the games from Zen makes Zen the chain's base (`App::workspace_base`), which carries the return page and refills it when the wrap or an Esc off a board or table lands back here. The first-visit tour's `VisitZen` stop is reached with the chord (or Enter, for terminals that swallow it) and left with `0`.
 - Parent context: `../../../../CONTEXT.md`
@@ -56,13 +56,15 @@ room, else the first chat tile's, else (no chat tile) the current room,
 which is Home's selected room when it is a real room, else #lounge
 (`ZenState::active_chat_index`, `App::zen_chat_rooms`; a tile bound to a
 room the account has left shows the current room). The `Ctrl+/` picker
-(or `/picker`) while the page is up stays on the page: with a chat tile
+(or `/picker`) while the page is up lists real rooms only
+(`PickerScope::RoomsOnly`): Mentions, News, feeds and the other synthetic
+rail entries have no tile to land in, and the Inbox and headlines tiles
+already carry them. A pick stays on the page: with a chat tile
 focused, a room pick rebinds that tile the way `[` `]` do
 (`zen::input::bind_focused_chat_to_room`, called from
 `room_search_modal/input.rs`); a `?query` message jump lands in the same
 path, so it rebinds the tile to the hit's room (saved) and selects the
-message there; any other pick, or one with no chat tile focused, moves
-Home's selection as before. The page counts as
+message there; a pick with no chat tile focused moves Home's selection. The page counts as
 a chat-pane screen in `app/input.rs` (`screen_has_chat_pane`,
 `embedded_chat_room_id`) and reports the active room as the visible one
 (`current_visible_chat_room_id` in `state.rs`, which marks it read and

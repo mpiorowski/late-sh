@@ -84,7 +84,7 @@ impl Dir {
     }
 
     /// A single compass-arrow glyph for this direction, distinct from the
-    /// `▴`/`▾` stair markers (those mean "a staircase is here"; this means
+    /// `⇑`/`⇓`/`⇕` stair markers (those mean "a staircase is here"; this means
     /// "go this way") so the two never read as the same thing on screen.
     pub fn compass_glyph(self) -> char {
         match self {

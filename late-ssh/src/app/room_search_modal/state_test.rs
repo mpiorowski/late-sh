@@ -202,7 +202,7 @@ async fn picker_lists_live_streams_only() {
         stream(pending_owner.id, "pending_owner", pending_room.id, false),
     ]);
 
-    let slots: Vec<RoomSlot> = filtered_items(&app.chat, viewer.id, "")
+    let slots: Vec<RoomSlot> = filtered_items(&app.chat, viewer.id, PickerScope::AllSlots, "")
         .iter()
         .map(|item| item.slot)
         .collect();
@@ -215,7 +215,7 @@ async fn picker_lists_live_streams_only() {
         "pending stream listed in {slots:?}"
     );
 
-    let hits: Vec<RoomSlot> = filtered_items(&app.chat, viewer.id, "#onair")
+    let hits: Vec<RoomSlot> = filtered_items(&app.chat, viewer.id, PickerScope::AllSlots, "#onair")
         .iter()
         .map(|item| item.slot)
         .collect();

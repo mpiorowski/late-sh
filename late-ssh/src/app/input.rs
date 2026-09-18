@@ -997,7 +997,8 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
                     return;
                 }
                 let from_dashboard = ctx.screen == Screen::Dashboard;
-                if let Some(b) = app.chat.submit_composer(true, from_dashboard) {
+                let commands = chat::state::ComposerCommands::for_screen(ctx.screen);
+                if let Some(b) = app.chat.submit_composer(true, commands) {
                     app.banner = Some(b);
                 }
                 chat::input::handle_post_submit_requests(app, from_dashboard);
@@ -3091,6 +3092,8 @@ fn handle_notifications_hud_click(app: &mut App, mouse: MouseEvent) -> bool {
     }
 
     app.pending_chat_profile_open = None;
+    app.chat.reset_composer();
+    app.chat.clear_message_selection();
     app.set_screen(Screen::Dashboard);
     app.chat.select_notifications();
     true

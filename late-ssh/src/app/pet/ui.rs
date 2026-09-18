@@ -148,6 +148,11 @@ pub fn draw_pet_box(frame: &mut Frame, area: Rect, view: &PetView<'_>, neighbour
             zone: area,
             neighbours,
             position: art.position,
+            home: pet_position(
+                PetPose::for_frame(state.mood(), neighbours, None, state.animation_ticks()),
+                state.animation_ticks(),
+                travel,
+            ),
         }));
     }
 }

@@ -98,6 +98,9 @@ pub struct PetFrameInputs {
     pub zone: Rect,
     pub neighbours: super::ui::Neighbours,
     pub position: (usize, usize),
+    /// Where the pet would stand with no perch (the stroll, the sulk spot,
+    /// the glass): where a pet the cursor let go of walks back to.
+    pub home: (usize, usize),
 }
 
 /// How far the pet can travel inside its box, in cells, on each axis.
@@ -263,23 +266,36 @@ impl PetState {
             (true, Some(frame), Some(cursor)) => cursor_target(frame, cursor),
             (true, _, _) | (false, _, _) => None,
         };
-        // Walking after the cursor: one cell per animation edge on each
-        // axis, from wherever the pet stood. The moment the cursor leaves
-        // the box the stroll takes over again, purring or not: a pet that
-        // holds still where it was petted reads as stuck.
+        // Off the stroll the pet only ever walks: one cell per animation
+        // edge on each axis, from wherever it stood. After the cursor while
+        // it is in the box; back to where the stroll is once it leaves,
+        // purring or not (a pet that holds still where it was petted reads
+        // as stuck, and one that jumps back reads as a glitch). The stroll
+        // takes over when the pet is right beside it.
+        // The stroll paints on every second wall tick; the walk keeps that
+        // pace whatever the loop's cadence.
+        let cells = elapsed.div_ceil(2);
         let perch = match (target, self.perch, input.frame) {
             (Some(target), from, Some(frame)) => {
                 let (x, y) = from.map_or(frame.position, |perch| (perch.x, perch.y));
-                // The stroll paints on every second wall tick; the walk
-                // keeps that pace whatever the loop's cadence.
-                let cells = elapsed.div_ceil(2);
                 Some(Perch {
                     x: step_toward(x, target.x, cells),
                     y: step_toward(y, target.y, cells),
                     look: target.look,
                 })
             }
-            (Some(_), _, None) | (None, _, _) => None,
+            (None, Some(from), Some(frame)) => {
+                let (home_x, home_y) = frame.home;
+                match from.x.abs_diff(home_x) <= 1 && from.y.abs_diff(home_y) <= 1 {
+                    true => None,
+                    false => Some(Perch {
+                        x: step_toward(from.x, home_x, cells),
+                        y: step_toward(from.y, home_y, cells),
+                        look: look_toward(from.x, home_x),
+                    }),
+                }
+            }
+            (None, None, Some(_)) | (Some(_), _, None) | (None, _, None) => None,
         };
         if perch != self.perch {
             self.perch = perch;
@@ -325,6 +341,15 @@ fn cursor_target(frame: PetFrameInputs, cursor: (u16, u16)) -> Option<Perch> {
         Look::Ahead
     };
     Some(Perch { x, y, look })
+}
+
+/// Which way the pet faces while walking from `from` to `to`.
+fn look_toward(from: usize, to: usize) -> Look {
+    match from.cmp(&to) {
+        std::cmp::Ordering::Less => Look::Right,
+        std::cmp::Ordering::Equal => Look::Ahead,
+        std::cmp::Ordering::Greater => Look::Left,
+    }
 }
 
 fn step_toward(from: usize, to: usize, cells: usize) -> usize {

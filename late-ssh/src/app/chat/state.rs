@@ -37,7 +37,10 @@ use crate::app::ai::translate::{TranslationEvent, TranslationOutcome, Translatio
 use crate::app::common::overlay::{Overlay, OverlayInk, OverlayLine, OverlaySpan};
 
 use crate::app::common::status::Status;
-use crate::app::common::{composer, mentions, primitives::Banner};
+use crate::app::common::{
+    composer, mentions,
+    primitives::{Banner, Screen},
+};
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::notify::{Notification, Notifier};
 use crate::authz::Permissions;
@@ -199,6 +202,43 @@ impl PendingClipboardImageUpload {
 
     fn is_expired(&self) -> bool {
         self.requested_at.elapsed() >= CLIPBOARD_IMAGE_REQUEST_TIMEOUT
+    }
+}
+
+/// Whether a submitted `/` draft runs as a command. The Lounge composer is
+/// plain speech (`Disabled`); every other chat composer takes commands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComposerCommands {
+    Enabled,
+    Disabled,
+}
+
+impl ComposerCommands {
+    pub fn for_screen(screen: Screen) -> Self {
+        match screen {
+            Screen::Clubhouse => Self::Disabled,
+            Screen::Dashboard
+            | Screen::Arcade
+            | Screen::Games
+            | Screen::Lateania
+            | Screen::Rebels
+            | Screen::Nethack
+            | Screen::Dcss
+            | Screen::Brogue
+            | Screen::Dopewars
+            | Screen::Bashquest
+            | Screen::Codekeep
+            | Screen::Usurper
+            | Screen::GreenDragon
+            | Screen::Darkroom
+            | Screen::Artboard
+            | Screen::Profiles
+            | Screen::Leaderboard
+            | Screen::Zen
+            | Screen::DailyMatch
+            | Screen::HouseTable
+            | Screen::Scratchpad => Self::Enabled,
+        }
     }
 }
 
@@ -460,6 +500,51 @@ pub(crate) enum RoomSlot {
     Discover,
     Showcase,
     Work,
+}
+
+/// Fixed ids for the synthetic Core entries a user can favorite (mentions,
+/// news, rss, browse rooms). They ride in `users.settings.favorite_room_ids`
+/// next to real room ids so the favorites list, its order, the picker sort,
+/// and the Core exclusion set stay one `Vec<Uuid>`. Real rooms are UUID v7;
+/// these carry a zero version nibble, so nothing generated can collide with
+/// them. These two functions are the only code that interprets the ids.
+const FAVORITE_ID_NOTIFICATIONS: Uuid = Uuid::from_u128(0x1a7e_0000_0000_0000_0000_0000_0000_0001);
+const FAVORITE_ID_NEWS: Uuid = Uuid::from_u128(0x1a7e_0000_0000_0000_0000_0000_0000_0002);
+const FAVORITE_ID_FEEDS: Uuid = Uuid::from_u128(0x1a7e_0000_0000_0000_0000_0000_0000_0003);
+const FAVORITE_ID_DISCOVER: Uuid = Uuid::from_u128(0x1a7e_0000_0000_0000_0000_0000_0000_0004);
+
+/// The favorites-list id of a synthetic entry, or `None` for a real room and
+/// for the synthetic entries that cannot be favorited.
+pub(crate) fn synthetic_favorite_id(slot: RoomSlot) -> Option<Uuid> {
+    match slot {
+        RoomSlot::Notifications => Some(FAVORITE_ID_NOTIFICATIONS),
+        RoomSlot::News => Some(FAVORITE_ID_NEWS),
+        RoomSlot::Feeds => Some(FAVORITE_ID_FEEDS),
+        RoomSlot::Discover => Some(FAVORITE_ID_DISCOVER),
+        RoomSlot::Room(_)
+        | RoomSlot::Cyberspace
+        | RoomSlot::CyberspaceNotifications
+        | RoomSlot::CyberspaceMail(_)
+        | RoomSlot::CyberspaceRoom(_)
+        | RoomSlot::Showcase
+        | RoomSlot::Work => None,
+    }
+}
+
+/// The synthetic entry a favorites-list id stands for, or `None` when the id
+/// is a real room's.
+pub(crate) fn synthetic_slot_for_favorite_id(id: Uuid) -> Option<RoomSlot> {
+    if id == FAVORITE_ID_NOTIFICATIONS {
+        Some(RoomSlot::Notifications)
+    } else if id == FAVORITE_ID_NEWS {
+        Some(RoomSlot::News)
+    } else if id == FAVORITE_ID_FEEDS {
+        Some(RoomSlot::Feeds)
+    } else if id == FAVORITE_ID_DISCOVER {
+        Some(RoomSlot::Discover)
+    } else {
+        None
+    }
 }
 
 /// Collapsible groupings of the room-list rail. Each maps to one section
@@ -3019,6 +3104,9 @@ impl ChatState {
     }
 
     pub(crate) fn selected_favorite_room_id(&self) -> Option<Uuid> {
+        if let Some(id) = self.current_slot().and_then(synthetic_favorite_id) {
+            return Some(id);
+        }
         if self.synthetic_entry_selected() {
             return None;
         }
@@ -3451,8 +3539,21 @@ impl ChatState {
         self.open_overlay("Active Users", self.active_user_lines());
     }
 
-    pub fn submit_composer(&mut self, keep_open: bool, _from_dashboard: bool) -> Option<Banner> {
+    pub fn submit_composer(
+        &mut self,
+        keep_open: bool,
+        commands: ComposerCommands,
+    ) -> Option<Banner> {
         let body = self.composer.lines().join("\n").trim_end().to_string();
+
+        match (commands, is_command_draft(&body)) {
+            (ComposerCommands::Disabled, true) => {
+                return Some(Banner::error(
+                    "Commands are off in the Lounge, use them from Home",
+                ));
+            }
+            (ComposerCommands::Disabled, false) | (ComposerCommands::Enabled, _) => {}
+        }
 
         if body.trim() == "/binds" {
             self.clear_composer_after_submit();
@@ -7132,6 +7233,19 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     // then only appends to `order` when the section is expanded.
     let favorites_collapsed = collapsed_sections.contains(&RoomSection::Favorites);
     for favorite_id in favorite_room_ids {
+        // A favorited synthetic entry takes its slot here and is skipped by
+        // Core below through the same `pushed_rooms` set the rooms use. RSS
+        // without feeds has no row anywhere, so it is not marked pushed.
+        match synthetic_slot_for_favorite_id(*favorite_id) {
+            Some(RoomSlot::Feeds) if !feeds_available => continue,
+            Some(slot) => {
+                if pushed_rooms.insert(*favorite_id) && !favorites_collapsed {
+                    order.push(slot);
+                }
+                continue;
+            }
+            None => {}
+        }
         if rooms.iter().any(|(room, _)| {
             room.id == *favorite_id
                 && is_chat_list_room(room)
@@ -7157,9 +7271,13 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         }
     }
     if !core_collapsed {
-        order.push(RoomSlot::Notifications);
-        order.push(RoomSlot::News);
-        if feeds_available {
+        if !pushed_rooms.contains(&FAVORITE_ID_NOTIFICATIONS) {
+            order.push(RoomSlot::Notifications);
+        }
+        if !pushed_rooms.contains(&FAVORITE_ID_NEWS) {
+            order.push(RoomSlot::News);
+        }
+        if feeds_available && !pushed_rooms.contains(&FAVORITE_ID_FEEDS) {
             order.push(RoomSlot::Feeds);
         }
     }
@@ -7181,7 +7299,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     {
         order.push(RoomSlot::Room(room.id));
     }
-    if !core_collapsed {
+    if !core_collapsed && !pushed_rooms.contains(&FAVORITE_ID_DISCOVER) {
         // Discover ("browse rooms") lives at the bottom of Core.
         order.push(RoomSlot::Discover);
     }
@@ -7933,6 +8051,17 @@ pub(crate) fn cup_art(kind: CupKind, variant: u8) -> String {
         CupKind::Tea => "  \\___/",
     };
     format!("{steam}\n{cup}")
+}
+
+/// Whether a draft is a command attempt rather than speech: its first word
+/// leads with `/`. A bare `/` and a `//` aside are speech, as they are to
+/// `unknown_slash_command`. Multi-line drafts count, since several command
+/// parsers take a body that runs over lines.
+fn is_command_draft(input: &str) -> bool {
+    match input.split_whitespace().next() {
+        Some("/") | Some("//") | None => false,
+        Some(word) => word.starts_with('/'),
+    }
 }
 
 fn unknown_slash_command(input: &str) -> Option<&str> {

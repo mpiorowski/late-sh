@@ -4,11 +4,52 @@ use chrono::{DateTime, Utc};
 use late_core::models::chat_room::ChatRoom;
 use uuid::Uuid;
 
-use crate::app::chat::state::{ChatState, RoomSlot, is_chat_list_room, room_activity_at};
+use crate::app::chat::state::{
+    ChatState, RoomSlot, is_chat_list_room, room_activity_at, synthetic_favorite_id,
+};
 use crate::app::chat::svc::SEARCH_MIN_CHARS;
+use crate::app::common::primitives::Screen;
 
 /// Quiet time after the last keystroke before a message search fires.
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(300);
+
+/// Which rail entries the picker offers. Zen chat tiles draw real rooms
+/// only, so a synthetic entry (Mentions, News, feeds...) picked there would
+/// land nowhere visible; everywhere else the whole rail is on offer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PickerScope {
+    AllSlots,
+    RoomsOnly,
+}
+
+impl PickerScope {
+    pub(crate) fn for_screen(screen: Screen) -> Self {
+        match screen {
+            Screen::Zen => Self::RoomsOnly,
+            Screen::Dashboard
+            | Screen::Arcade
+            | Screen::Games
+            | Screen::Lateania
+            | Screen::Rebels
+            | Screen::Nethack
+            | Screen::Dcss
+            | Screen::Brogue
+            | Screen::Dopewars
+            | Screen::Bashquest
+            | Screen::Codekeep
+            | Screen::Usurper
+            | Screen::GreenDragon
+            | Screen::Darkroom
+            | Screen::Artboard
+            | Screen::Profiles
+            | Screen::Leaderboard
+            | Screen::Clubhouse
+            | Screen::DailyMatch
+            | Screen::HouseTable
+            | Screen::Scratchpad => Self::AllSlots,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RoomSearchItem {
@@ -160,7 +201,11 @@ impl RoomSearchModalState {
     }
 }
 
-pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomSearchItem> {
+pub(crate) fn search_items(
+    chat: &ChatState,
+    current_user_id: Uuid,
+    scope: PickerScope,
+) -> Vec<RoomSearchItem> {
     let mut items = Vec::new();
     for slot in chat.visual_order() {
         match slot {
@@ -203,9 +248,10 @@ pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomS
             | RoomSlot::Notifications
             | RoomSlot::Discover
             | RoomSlot::Showcase
-            | RoomSlot::Work => {
-                items.push(synthetic_item(slot, chat));
-            }
+            | RoomSlot::Work => match scope {
+                PickerScope::AllSlots => items.push(synthetic_item(slot, chat)),
+                PickerScope::RoomsOnly => {}
+            },
         }
     }
     sort_picker_items(&mut items);
@@ -215,10 +261,11 @@ pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomS
 pub(crate) fn filtered_items(
     chat: &ChatState,
     current_user_id: Uuid,
+    scope: PickerScope,
     query: &str,
 ) -> Vec<RoomSearchItem> {
     let query = SearchQuery::parse(query);
-    let mut all = search_items(chat, current_user_id);
+    let mut all = search_items(chat, current_user_id, scope);
     if query.kind == SearchQueryKind::All && query.text.is_empty() {
         return all;
     }
@@ -324,7 +371,8 @@ fn synthetic_item(slot: RoomSlot, chat: &ChatState) -> RoomSearchItem {
         meta: meta.to_string(),
         unread_count,
         last_message_at: None,
-        favorite: false,
+        favorite: synthetic_favorite_id(slot)
+            .is_some_and(|id| chat.favorite_room_ids().contains(&id)),
     }
 }
 

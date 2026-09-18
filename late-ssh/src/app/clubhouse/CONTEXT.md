@@ -2,7 +2,7 @@
 
 ## Metadata
 - Domain: the Late Lounge tavern, top-level screen `0`, the default landing screen (always the landing for a first-ever session)
-- Last updated: 2026-09-12 (the forced tour takes the `Ctrl+F` chord from the Leaderboards into a Zen stop, `VisitZen`, which pitches the page and its main keys and leaves with `0` for the homecoming. §5.)
+- Last updated: 2026-09-17 (slash commands are off in the Lounge composer, `ComposerCommands::Disabled`: a command draft gets a banner and stays in the composer, while a bare `/` or `//` aside posts as speech; a chat overlay that lands here is drawn over the tavern. §2 `ui.rs` row and the composer notes.)
 - Status: Active
 
 ## 1. Summary
@@ -22,7 +22,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
 | `lobby.rs` | `SharedLobby`, the process-global `Arc<Mutex<..>>` presence map: parked spot assignments, walkers, emotes, the dog-pet event, snapshots. |
 | `state.rs` | Per-session view state: camera target, animation clock, latest `LobbySnapshot`, arrival/departure door events, the `Tutorial` state machine. |
 | `input.rs` | Walking (arrows/hjkl), `i` composer, `w`/`x` emotes, `t` bartender mention, Enter on landmarks/dog, tutorial Enter. Returns `false` for globals. |
-| `ui.rs` | Renderer: camera pan, base-grid styling, animations, crowd placement, emote frames, speech bubbles, door ambience, tutorial overlays, prop popovers, composer footer. |
+| `ui.rs` | Renderer: camera pan, base-grid styling, animations, crowd placement, emote frames, speech bubbles, door ambience, tutorial overlays, prop popovers, composer footer, and any chat overlay that lands here (a `/summary` or reaction list requested on Home; it owns input via `screen_composes_chat`, so it must be drawn). |
 
 ## 3. The shared lobby (multiplayer contract)
 
@@ -78,7 +78,10 @@ room is the chat surface, and the full history lives in #lounge on Home.
   dashboard card uses; grows while typing, shows placeholder hints idle).
 - `i` (or Enter in the open) composes into #lounge through the normal global
   composer pipeline; image paste works (Clubhouse is a
-  `is_chat_composer_context` screen in `app::input`).
+  `is_chat_composer_context` screen in `app::input`). Slash commands are
+  off here (`ComposerCommands::Disabled`): a draft whose first word leads
+  with `/` (`is_command_draft`) gets a banner, stays in the composer, and is
+  neither run nor posted. A bare `/` or a `//` aside is speech and posts.
 - Messages younger than ~10s render as bordered bubbles above their author's
   avatar (latest per author, up to 3 lines, width widens 28 -> 36 -> 44
   before truncating, reply-quote line stripped). Room tails are newest-first
