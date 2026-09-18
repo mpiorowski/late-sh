@@ -4,7 +4,9 @@ use chrono::{DateTime, Utc};
 use late_core::models::chat_room::ChatRoom;
 use uuid::Uuid;
 
-use crate::app::chat::state::{ChatState, RoomSlot, is_chat_list_room, room_activity_at};
+use crate::app::chat::state::{
+    ChatState, RoomSlot, is_chat_list_room, room_activity_at, synthetic_favorite_id,
+};
 use crate::app::chat::svc::SEARCH_MIN_CHARS;
 use crate::app::common::primitives::Screen;
 
@@ -369,7 +371,8 @@ fn synthetic_item(slot: RoomSlot, chat: &ChatState) -> RoomSearchItem {
         meta: meta.to_string(),
         unread_count,
         last_message_at: None,
-        favorite: false,
+        favorite: synthetic_favorite_id(slot)
+            .is_some_and(|id| chat.favorite_room_ids().contains(&id)),
     }
 }
 

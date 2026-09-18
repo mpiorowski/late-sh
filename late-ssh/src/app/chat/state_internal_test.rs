@@ -4232,3 +4232,72 @@ fn the_members_overlay_draws_in_the_readers_theme_whoever_built_it() {
         "the member list took its colours from whichever session last rendered on this thread"
     );
 }
+
+#[test]
+fn synthetic_favorite_ids_round_trip_and_cannot_be_room_ids() {
+    for slot in [
+        RoomSlot::Notifications,
+        RoomSlot::News,
+        RoomSlot::Feeds,
+        RoomSlot::Discover,
+    ] {
+        let id = synthetic_favorite_id(slot).expect("favoritable entry has an id");
+        assert_eq!(synthetic_slot_for_favorite_id(id), Some(slot));
+        assert_eq!(
+            id.get_version_num(),
+            0,
+            "sentinel must not look like a v7 room id"
+        );
+    }
+    assert_eq!(synthetic_favorite_id(RoomSlot::Cyberspace), None);
+    assert_eq!(
+        synthetic_favorite_id(RoomSlot::Room(Uuid::from_u128(7))),
+        None
+    );
+    assert_eq!(synthetic_slot_for_favorite_id(Uuid::now_v7()), None);
+}
+
+#[test]
+fn visual_order_moves_favorited_synthetic_entries_out_of_core() {
+    let me = Uuid::from_u128(1);
+    let lounge = Uuid::from_u128(10);
+    let rooms = vec![make_room(lounge, "lounge", "public", true, Some("lounge"))];
+    let favorites = [FAVORITE_ID_NEWS, FAVORITE_ID_FEEDS, FAVORITE_ID_DISCOVER];
+    let order_for = |collapsed: HashSet<RoomSection>| {
+        visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &rooms,
+            user_id: me,
+            usernames: &HashMap::new(),
+            unread_counts: &HashMap::new(),
+            room_last_message_at: &HashMap::new(),
+            feeds_available: false,
+            cyberspace_linked: false,
+            cyberspace_rooms: &[],
+            cyberspace_mail: &[],
+            favorite_room_ids: &favorites,
+            collapsed_sections: &collapsed,
+            ignored_user_ids: &HashSet::new(),
+            sticky_unread_dm: None,
+            live_streams: &[],
+        })
+    };
+
+    // News and Browse lead in favorites order and leave Core; RSS is
+    // favorited but feeds are unavailable, so it has no row anywhere.
+    assert_eq!(
+        order_for(HashSet::new()),
+        vec![
+            RoomSlot::News,
+            RoomSlot::Discover,
+            RoomSlot::Room(lounge),
+            RoomSlot::Notifications,
+        ]
+    );
+
+    // Collapsing Favorites folds them away without letting them reappear in
+    // Core, the same rule a collapsed favorite room follows.
+    assert_eq!(
+        order_for(HashSet::from([RoomSection::Favorites])),
+        vec![RoomSlot::Room(lounge), RoomSlot::Notifications]
+    );
+}

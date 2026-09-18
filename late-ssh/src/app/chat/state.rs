@@ -502,6 +502,51 @@ pub(crate) enum RoomSlot {
     Work,
 }
 
+/// Fixed ids for the synthetic Core entries a user can favorite (mentions,
+/// news, rss, browse rooms). They ride in `users.settings.favorite_room_ids`
+/// next to real room ids so the favorites list, its order, the picker sort,
+/// and the Core exclusion set stay one `Vec<Uuid>`. Real rooms are UUID v7;
+/// these carry a zero version nibble, so nothing generated can collide with
+/// them. These two functions are the only code that interprets the ids.
+const FAVORITE_ID_NOTIFICATIONS: Uuid = Uuid::from_u128(0x1a7e_0000_0000_0000_0000_0000_0000_0001);
+const FAVORITE_ID_NEWS: Uuid = Uuid::from_u128(0x1a7e_0000_0000_0000_0000_0000_0000_0002);
+const FAVORITE_ID_FEEDS: Uuid = Uuid::from_u128(0x1a7e_0000_0000_0000_0000_0000_0000_0003);
+const FAVORITE_ID_DISCOVER: Uuid = Uuid::from_u128(0x1a7e_0000_0000_0000_0000_0000_0000_0004);
+
+/// The favorites-list id of a synthetic entry, or `None` for a real room and
+/// for the synthetic entries that cannot be favorited.
+pub(crate) fn synthetic_favorite_id(slot: RoomSlot) -> Option<Uuid> {
+    match slot {
+        RoomSlot::Notifications => Some(FAVORITE_ID_NOTIFICATIONS),
+        RoomSlot::News => Some(FAVORITE_ID_NEWS),
+        RoomSlot::Feeds => Some(FAVORITE_ID_FEEDS),
+        RoomSlot::Discover => Some(FAVORITE_ID_DISCOVER),
+        RoomSlot::Room(_)
+        | RoomSlot::Cyberspace
+        | RoomSlot::CyberspaceNotifications
+        | RoomSlot::CyberspaceMail(_)
+        | RoomSlot::CyberspaceRoom(_)
+        | RoomSlot::Showcase
+        | RoomSlot::Work => None,
+    }
+}
+
+/// The synthetic entry a favorites-list id stands for, or `None` when the id
+/// is a real room's.
+pub(crate) fn synthetic_slot_for_favorite_id(id: Uuid) -> Option<RoomSlot> {
+    if id == FAVORITE_ID_NOTIFICATIONS {
+        Some(RoomSlot::Notifications)
+    } else if id == FAVORITE_ID_NEWS {
+        Some(RoomSlot::News)
+    } else if id == FAVORITE_ID_FEEDS {
+        Some(RoomSlot::Feeds)
+    } else if id == FAVORITE_ID_DISCOVER {
+        Some(RoomSlot::Discover)
+    } else {
+        None
+    }
+}
+
 /// Collapsible groupings of the room-list rail. Each maps to one section
 /// header drawn by `build_cozy_room_rail_rows`. A section in
 /// `ChatState::collapsed_sections` renders header-only and its rooms drop out
@@ -3059,6 +3104,9 @@ impl ChatState {
     }
 
     pub(crate) fn selected_favorite_room_id(&self) -> Option<Uuid> {
+        if let Some(id) = self.current_slot().and_then(synthetic_favorite_id) {
+            return Some(id);
+        }
         if self.synthetic_entry_selected() {
             return None;
         }
@@ -7185,6 +7233,19 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     // then only appends to `order` when the section is expanded.
     let favorites_collapsed = collapsed_sections.contains(&RoomSection::Favorites);
     for favorite_id in favorite_room_ids {
+        // A favorited synthetic entry takes its slot here and is skipped by
+        // Core below through the same `pushed_rooms` set the rooms use. RSS
+        // without feeds has no row anywhere, so it is not marked pushed.
+        match synthetic_slot_for_favorite_id(*favorite_id) {
+            Some(RoomSlot::Feeds) if !feeds_available => continue,
+            Some(slot) => {
+                if pushed_rooms.insert(*favorite_id) && !favorites_collapsed {
+                    order.push(slot);
+                }
+                continue;
+            }
+            None => {}
+        }
         if rooms.iter().any(|(room, _)| {
             room.id == *favorite_id
                 && is_chat_list_room(room)
@@ -7210,9 +7271,13 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         }
     }
     if !core_collapsed {
-        order.push(RoomSlot::Notifications);
-        order.push(RoomSlot::News);
-        if feeds_available {
+        if !pushed_rooms.contains(&FAVORITE_ID_NOTIFICATIONS) {
+            order.push(RoomSlot::Notifications);
+        }
+        if !pushed_rooms.contains(&FAVORITE_ID_NEWS) {
+            order.push(RoomSlot::News);
+        }
+        if feeds_available && !pushed_rooms.contains(&FAVORITE_ID_FEEDS) {
             order.push(RoomSlot::Feeds);
         }
     }
@@ -7234,7 +7299,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     {
         order.push(RoomSlot::Room(room.id));
     }
-    if !core_collapsed {
+    if !core_collapsed && !pushed_rooms.contains(&FAVORITE_ID_DISCOVER) {
         // Discover ("browse rooms") lives at the bottom of Core.
         order.push(RoomSlot::Discover);
     }

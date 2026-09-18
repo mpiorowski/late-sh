@@ -42,7 +42,8 @@ use super::state::{
     MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot, RoomVisualOrderInput,
     SelectedRoomSlotState, SelectionScroll, TranslationDisplay, compare_dm_rooms_for_nav,
     dm_is_promoted_unread, dm_peer_is_ignored, is_chat_list_room, is_deadchannel_room,
-    is_selected_slot, visual_order_for_rooms,
+    is_selected_slot, synthetic_favorite_id, synthetic_slot_for_favorite_id,
+    visual_order_for_rooms,
 };
 use super::ui_text::{AuthorTint, Gutter, reaction_label, wrap_chat_entry_to_lines};
 
@@ -4388,19 +4389,25 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         .favorite_room_ids
         .iter()
         .copied()
-        .map(RoomSlot::Room)
+        .map(|id| synthetic_slot_for_favorite_id(id).unwrap_or(RoomSlot::Room(id)))
         .filter(|slot| order.contains(slot))
         .collect();
     let favorite_ids: std::collections::HashSet<Uuid> = view
         .favorite_room_ids
         .iter()
         .copied()
-        .filter(|id| {
-            view.chat_rooms
+        .filter(|id| match synthetic_slot_for_favorite_id(*id) {
+            Some(RoomSlot::Feeds) => view.feeds_available,
+            Some(_) => true,
+            None => view
+                .chat_rooms
                 .iter()
-                .any(|(r, _)| r.id == *id && is_chat_list_room(r))
+                .any(|(r, _)| r.id == *id && is_chat_list_room(r)),
         })
         .collect();
+    let favorited = |slot: RoomSlot| -> bool {
+        synthetic_favorite_id(slot).is_some_and(|id| favorite_ids.contains(&id))
+    };
     if !bumped_slugs.is_empty() {
         push_row(plain_section_header("bumped"), None, false);
         for slug in &bumped_slugs {
@@ -4438,9 +4445,13 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
                 push_slot(RoomSlot::Room(room.id), &mut push_row);
             }
         }
-        push_slot(RoomSlot::Notifications, &mut push_row);
-        push_slot(RoomSlot::News, &mut push_row);
-        if view.feeds_available {
+        if !favorited(RoomSlot::Notifications) {
+            push_slot(RoomSlot::Notifications, &mut push_row);
+        }
+        if !favorited(RoomSlot::News) {
+            push_slot(RoomSlot::News, &mut push_row);
+        }
+        if view.feeds_available && !favorited(RoomSlot::Feeds) {
             push_slot(RoomSlot::Feeds, &mut push_row);
         }
         // Voice sits directly above Discover ("+ browse rooms") at the bottom of Core.
@@ -4461,7 +4472,9 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             push_slot(RoomSlot::Room(room.id), &mut push_row);
         }
         // Discover ("+ browse rooms") is the last entry in Core.
-        push_slot(RoomSlot::Discover, &mut push_row);
+        if !favorited(RoomSlot::Discover) {
+            push_slot(RoomSlot::Discover, &mut push_row);
+        }
     }
 
     // Stream: live "watch me" streams, directly under Core, mirroring

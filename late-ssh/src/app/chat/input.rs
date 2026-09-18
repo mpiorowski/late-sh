@@ -447,9 +447,9 @@ fn toggle_selected_room_favorite(app: &mut App) -> bool {
     app.chat
         .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
     app.banner = Some(if added {
-        Banner::success("Room added to favorites")
+        Banner::success("Added to favorites")
     } else {
-        Banner::success("Room removed from favorites")
+        Banner::success("Removed from favorites")
     });
     true
 }

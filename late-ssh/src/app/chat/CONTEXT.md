@@ -290,7 +290,7 @@ There is no top-level `Screen::Chat`. `Screen::Dashboard` renders as Home and ow
 - On wide terminals, `chat::ui::draw_room_list_rail` renders a borderless left rail. On narrow terminals, the center owns the available width.
 
 Room favorites:
-- Press `f` on a selected real room to toggle it in `ProfileState::toggle_favorite_room`.
+- Press `f` on a selected real room, or on Mentions, News, RSS or `+ browse rooms`, to toggle it in `ProfileState::toggle_favorite_room`. The four synthetic entries are stored under fixed sentinel ids (`state.rs` `synthetic_favorite_id` / `synthetic_slot_for_favorite_id`, the only code that interprets them; version nibble 0, so no v7 room id can collide). A favorited entry moves from Core into Favorites in both rail builders through the same pushed-id exclusion the rooms use; RSS stays hidden everywhere while feeds are unavailable.
 - Press `[` / `]` on a selected favorite to move it up/down via `ProfileState::move_favorite_room`. No-op when the selection isn't a favorite or is already at the edge.
 - Favorites are stored in `users.settings.favorite_room_ids` and the vec order drives both the Home room rail and the global picker.
 - Favorites are no longer edited through a Settings tab.
