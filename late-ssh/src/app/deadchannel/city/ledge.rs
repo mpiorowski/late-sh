@@ -22,14 +22,21 @@ use super::ui::{INK, INK_DIM, NIGHT, Rgb, ink, lit, mix, neon_rgb, rgb_color, sc
 
 /// Where the horizon sits, as a fraction of the height from the top.
 const HORIZON: f32 = 0.28;
-/// The haze the far city dissolves into, and the sky above it.
-const HAZE: Rgb = [0.09, 0.10, 0.16];
-const SKY: Rgb = [0.05, 0.05, 0.09];
+/// The haze the far city dissolves into, and the sky above it: the sky
+/// is the night itself, the haze a thin band of the city's own glow.
+const HAZE: Rgb = [0.07, 0.07, 0.12];
+const SKY: Rgb = [0.02, 0.02, 0.04];
+/// The glow off the streets far below, at the bottom of the picture.
+const GROUND: Rgb = [0.11, 0.07, 0.03];
 /// Tower faces, near to far: the near ones are black against the glow.
-const TOWER_NEAR: Rgb = [0.06, 0.06, 0.09];
-const TOWER_FAR: Rgb = [0.16, 0.17, 0.24];
+const TOWER_NEAR: Rgb = [0.03, 0.03, 0.05];
+const TOWER_FAR: Rgb = [0.10, 0.11, 0.16];
 /// Window colors.
 const WINDOWS: [Rgb; 3] = [[0.95, 0.70, 0.35], [0.45, 0.80, 0.95], [0.70, 0.70, 0.78]];
+/// How many of a tower's pixels are lit windows, far to near. Sparse: a
+/// city at night is mostly dark wall.
+const WINDOWS_FAR: f32 = 0.05;
+const WINDOWS_NEAR: f32 = 0.09;
 /// Rows between raindrops in one column of sky.
 const RAIN_PERIOD: u64 = 10;
 
@@ -120,8 +127,13 @@ fn pixels(w: usize, ph: usize, t: u64) -> Vec<Rgb> {
     // down into the dark.
     for y in 0..ph {
         let d = (y as f32 - horizon as f32).abs() / ph as f32;
-        let k = (1.0 - d * 3.0).clamp(0.0, 1.0);
-        let color = lerp(SKY, HAZE, k);
+        let k = (1.0 - d * 4.0).clamp(0.0, 1.0);
+        let mut color = lerp(SKY, HAZE, k);
+        // The streets far below throw a warm glow up the bottom edge.
+        let from_bottom = (ph - y) as f32 / ph as f32;
+        if from_bottom < 0.18 {
+            color = lerp(color, GROUND, 1.0 - from_bottom / 0.18);
+        }
         for x in 0..w {
             px[y * w + x] = color;
         }
@@ -130,7 +142,7 @@ fn pixels(w: usize, ph: usize, t: u64) -> Vec<Rgb> {
         let face = lerp(TOWER_FAR, TOWER_NEAR, tower.depth);
         let haze = 1.0 - tower.depth;
         let face = lerp(face, HAZE, haze * 0.6);
-        let density = 0.10 + 0.14 * tower.depth;
+        let density = WINDOWS_FAR + (WINDOWS_NEAR - WINDOWS_FAR) * tower.depth;
         for y in tower.top..ph {
             for x in tower.x0..tower.x1 {
                 let h = mix(u64::from(x as u32) * 131 + u64::from(y as u32) * 17 + 5);
@@ -141,7 +153,7 @@ fn pixels(w: usize, ph: usize, t: u64) -> Vec<Rgb> {
                 let color = if window {
                     let off = mix(u64::from(x as u32) * 7 + u64::from(y as u32) * 3 + t / 6)
                         .is_multiple_of(19);
-                    let level = if off { 0.25 } else { 0.55 + 0.45 * tower.depth };
+                    let level = if off { 0.2 } else { 0.4 + 0.5 * tower.depth };
                     lerp(scale(WINDOWS[tower.tint], level), HAZE, haze * 0.5)
                 } else {
                     face
