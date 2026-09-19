@@ -2588,7 +2588,6 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
         20 => Some(Screen::Artboard),
         22 => Some(Screen::Profiles),
         24 => Some(Screen::Leaderboard),
-        26 => Some(Screen::City),
         _ => None,
     }
 }
@@ -3756,7 +3755,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     // While the reaction leader is armed, every digit belongs to it: `1`-`9`
     // are the quick reactions and `0` opens the custom icon picker. Let them
     // fall through to the chat message-action handler instead of the global
-    // page switch (`0` now lands on the Clubhouse, `1`-`7` on other pages).
+    // page switch (`0` now lands on the Clubhouse, `1`-`6` on other pages).
     if matches!(
         byte,
         b'0' | b'1' | b'2' | b'3' | b'4' | b'5' | b'6' | b'7' | b'8' | b'9'
@@ -3960,14 +3959,18 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.set_screen(Screen::Leaderboard);
             true
         }
-        b'7' if !artboard_blocks_page_switch => {
-            reset_composers_for_page_change(app);
-            app.set_screen(Screen::City);
-            true
-        }
+        // `0` is the clubhouse. Pressed again on the clubhouse it goes
+        // down to the undercity (deadchannel's street), runners only;
+        // from the undercity it comes back up.
         b'0' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Clubhouse);
+            let target = match ctx.screen {
+                Screen::Clubhouse if crate::app::deadchannel::city::input::allowed(app) => {
+                    Screen::City
+                }
+                _ => Screen::Clubhouse,
+            };
+            app.set_screen(target);
             true
         }
         b'\t' if artboard_rail_takes_tab(app, ctx.screen) => {

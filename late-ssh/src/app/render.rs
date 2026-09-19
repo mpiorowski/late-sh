@@ -2281,7 +2281,6 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Artboard, "4"),
         (Screen::Profiles, "5"),
         (Screen::Leaderboard, "6"),
-        (Screen::City, "7"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -2306,7 +2305,8 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                         | Screen::GreenDragon
                 ))
             || (*tab_screen == Screen::Dashboard
-                && matches!(screen, Screen::DailyMatch | Screen::HouseTable));
+                && matches!(screen, Screen::DailyMatch | Screen::HouseTable))
+            || (*tab_screen == Screen::Clubhouse && screen == Screen::City);
         let style = if active {
             Style::default()
                 .fg(theme::BG_SELECTION())
@@ -2337,7 +2337,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Profiles => "Profiles",
         Screen::Leaderboard => "Leaderboards",
         Screen::Clubhouse => "Clubhouse",
-        Screen::City => "Night City",
+        Screen::City => "Undercity",
         Screen::DailyMatch => "Daily Match",
         Screen::HouseTable => "House Table",
         Screen::Scratchpad => "Scratchpad",

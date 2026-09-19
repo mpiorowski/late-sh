@@ -31,12 +31,9 @@ fn walls_facades_carts_and_the_drop_block_the_runner() {
         !walkable(SIGNS[0].zone.x0, SIGNS[0].zone.y0),
         "inside a facade"
     );
-    assert!(
-        !walkable(BOARD.x0 + 1, BOARD.y0 + 1),
-        "inside the board kiosk"
-    );
+    assert!(!walkable(BOARD.x0, BOARD.y0), "the board kiosk");
     assert!(!walkable(SPAWN.0, DROP.y0 + 3), "the drop");
-    assert!(walkable(SPAWN.0, STREET.y0 + 12), "the street");
+    assert!(walkable(OPEN.0, OPEN.1), "the street");
 }
 
 #[test]
@@ -66,5 +63,5 @@ fn every_landmark_is_reachable_from_the_wire() {
 fn the_wire_is_within_reach_at_the_spawn() {
     assert_eq!(nearest_landmark(SPAWN.0, SPAWN.1), Some(Landmark::Wire));
     // Open asphalt, nothing within reach.
-    assert_eq!(nearest_landmark(SPAWN.0, STREET.y0 + 12), None);
+    assert_eq!(nearest_landmark(OPEN.0, OPEN.1), None);
 }

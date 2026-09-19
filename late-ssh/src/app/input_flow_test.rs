@@ -570,9 +570,6 @@ async fn shift_tab_cycles_screens_backwards() {
     wait_for_render_contains(&mut app, " Clubhouse ").await;
 
     app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, " Night City ").await;
-
-    app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, " Leaderboards ").await;
 
     app.handle_input(b"\x1b[Z");
@@ -620,13 +617,46 @@ async fn tab_cycles_screens_forward_through_all_including_profiles() {
     wait_for_render_contains(&mut app, " Leaderboards ").await;
 
     app.handle_input(b"\t");
-    wait_for_render_contains(&mut app, " Night City ").await;
-
-    app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Clubhouse ").await;
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Home ").await;
+}
+
+#[tokio::test]
+async fn zero_twice_goes_under_the_clubhouse_for_runners_only() {
+    use crate::app::deadchannel::runner::state::Look;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "undercity-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "undercity-flow-it");
+
+    // Not a runner: `0` lands on the clubhouse and stays there.
+    app.handle_input(b"1");
+    wait_for_render_contains(&mut app, " Home ").await;
+    app.handle_input(b"0");
+    wait_for_render_contains(&mut app, " Clubhouse ").await;
+    app.handle_input(b"0");
+    assert_render_not_contains_for(&mut app, " Undercity ", Duration::from_millis(200)).await;
+
+    // A runner: the second `0` goes under, the next one comes back up.
+    let mut rng = StdRng::seed_from_u64(7);
+    app.runner_looks = Arc::new(HashMap::from([(user.id, Look::random(&mut rng))]));
+    app.handle_input(b"0");
+    wait_for_render_contains(&mut app, " Undercity ").await;
+    app.handle_input(b"0");
+    wait_for_render_contains(&mut app, " Clubhouse ").await;
 }
 
 #[tokio::test]

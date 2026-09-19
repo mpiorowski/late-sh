@@ -35,9 +35,8 @@ fn the_runner_and_the_wire_popover_render_at_the_spawn() {
     let state = State::new();
     let screen = render(&state, 100, 30);
     // The camera follows the runner: their name is on screen, and the
-    // stairwell to the wire is under them.
+    // way up to the wire is within reach.
     assert!(screen.contains("mira"), "name label\n{screen}");
-    assert!(screen.contains("THE WIRE"), "the stairwell\n{screen}");
     assert!(screen.contains("the wire"), "the popover title\n{screen}");
     assert!(
         screen.contains("back up the wire"),

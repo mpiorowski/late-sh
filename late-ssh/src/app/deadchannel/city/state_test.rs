@@ -16,9 +16,8 @@ fn walking_stops_at_the_railing_and_moves_on_the_street() {
 fn spawn_stands_at_the_wire_and_the_street_has_no_landmark() {
     let mut state = State::new();
     assert_eq!(state.nearby(), Some(Landmark::Wire));
-    for _ in 0..6 {
-        state.walk(0, -1);
-    }
+    state.player_x = map::OPEN.0;
+    state.player_y = map::OPEN.1;
     assert_eq!(state.nearby(), None);
 }
 

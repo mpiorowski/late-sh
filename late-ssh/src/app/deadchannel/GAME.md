@@ -1024,26 +1024,36 @@ loop's engine. Names and copy belong to the city pass.
 
 ## The city pass: the street (2026-09-18)
 
-Status: **built, art only, as a dedicated page.** The night city exists
+Status: **built, art only, under the clubhouse.** The night city exists
 (`late-ssh/src/app/deadchannel/city/`, see `CONTEXT.md` §3b beside this
-file) on page `7` while the street is iterated on; it moves behind
-#deadchannel, the wire as the doorway, once a till opens. Decisions this
-pass fixed:
+file). It is the undercity: `0` is the clubhouse, `0` again goes down,
+runners only (2026-09-19; it was a dedicated page `7` for a day). Two art
+registers are built and one is still to be chosen. Decisions this pass
+fixed:
 
-- **Density: one glyph per person, props at full size.** The runner walks
-  the street as its mark (the one-cell avatar decided in the phase 2 pass),
-  buildings and carts are multi-cell ASCII. The clubhouse's three-row
-  figures were considered and rejected for the city: at that zoom a
-  terminal shows two shopfronts, and the city has to read as *big*. This
-  is the Rangedrifter register (3D-feeling ASCII from oblique facades and
-  a railing over a drop, not from wider sprites).
+- **One glyph per person, in either register.** The runner walks the
+  street as its mark (the one-cell avatar decided in the phase 2 pass).
+  The clubhouse's three-row figures were considered and rejected for the
+  city: at that zoom a terminal shows two shopfronts.
+- **Two registers to choose between (2026-09-19).** The first pass drew
+  the street front-on, Rangedrifter-style: multi-cell facades, carts,
+  a skyline. It read as a plaza: symmetrical, wide, no corridors. The
+  second is pure Dwarf Fortress: top-down, one tile per thing, nothing
+  drawn larger than a cell. A side street four tiles wide that doglegs,
+  alleys one to three wide, rooms you walk into, stalls of five tiles,
+  a ledge over the drop, and room on the floor for cats and NPCs later.
+  Both are in the generator (`--style tiles|drawn`); the loser gets
+  deleted.
 - **The street is one block.** Stairs down, the armorer, the tailor, the
-  lockers, bands, the bar, the screen, patch; carts and stalls in the
-  road; the board and the bits machine on the sidewalk; the railing and the
-  lower city's lights to the south; the stairwell to the wire in a gap of
-  the rail, where you arrive and where you leave. The map is generated
-  from prop stamps (`scripts/gen_city_map.py`), never hand-drawn, so it
-  can grow a second block without redrawing the first.
+  lockers, bands, the bar, the screen, patch; carts and stalls against
+  the walls; the board and the bits machine; the railing and the lower
+  city's lights; the way up to the wire in a gap of the rail, where you
+  arrive and where you leave. The tile register adds what has no
+  function, on purpose: two tenements, a lockup with a guard, a pawn shop
+  with its shutter down and its sign still burning, a motel called
+  SLEEP, a hidden court with a shrine. The map is generated from stamps
+  (`scripts/gen_city_map.py`), never hand-drawn, so it can grow a second
+  block without redrawing the first.
 - **Names.** The street sign reads `STATIC ROW`; the bar is `DEAD AIR`
   (the signal is warm in here); repairs are `PATCH`; the giant screen has
   no sign and needs none. All pass the screenshot test. Banners in the
@@ -1062,9 +1072,9 @@ pass fixed:
   says the city must never beat chat for standing around), no spawns, no
   clock. The screen's static and the rain are render-only ambience.
 
-Next on this surface, in order: the armorer's till (bits, the day roll),
-the tailor's mirror as the editor (pick, not draw), the locker, the band
-choice, then the page moves behind `/join #deadchannel`.
+Next on this surface, in order: pick the register and delete the other,
+the armorer's till (bits, the day roll), the tailor's mirror as the
+editor (pick, not draw), the locker, the band choice.
 
 ## Experiment framing
 

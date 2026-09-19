@@ -6,11 +6,12 @@
   start of the character layer, the runner and its look, in `runner/`
   (phase 2, build order step 1), and the night city street in `city/`
   (the wallet, GAME.md "The three surfaces"; art and walkable street
-  first, on a dedicated page `7`, no transactions yet). Built for
+  first, under the clubhouse on a second `0`, runners only, no
+  transactions yet). Built for
   several replicas (root CONTEXT.md, multi-replica rule); gated behind
   the `haunt_live` fuse, unlit, so only staff (admins and moderators)
   are haunted today, and only they can finish the ladder and join.
-- Last updated: 2026-09-18 (the night city exists as page `7`: the generated street, the runner as its mark, landmarks with popovers, shop panels showing catalogs without tills; §7). Before that, 2026-09-14 (the breakthrough plays only on a send from
+- Last updated: 2026-09-19 (the city moved under the clubhouse: `0` on the clubhouse goes down, runners only; two map registers in the generator, tiles (top-down, Dwarf Fortress) and drawn (front-on facades), `map::STYLE` picks; §3b). Before that, 2026-09-18 (the night city exists: the generated street, the runner as its mark, landmarks with popovers, shop panels showing catalogs without tills). Before that, 2026-09-14 (the breakthrough plays only on a send from
   its own session and swallows keys ahead of door games; the static rolls
   slower, scene lengths unchanged). Before that, 2026-09-13 (stage 3
   plays on its own clock: the static
@@ -308,27 +309,51 @@ lines carry no face; every other room renders exactly as before.
    `visual_order_for_rooms` and both rail builders in `chat/ui.rs`).
    Copy and name face design review before real users ever see them.
 
-## 3b. The night city (page `7`, the wallet; art first)
+## 3b. The night city (the undercity under `0`, the wallet; art first)
 
 GAME.md, "The three surfaces": the city is a full-screen destination
 where nothing happens that you could miss; transactions only. What exists
 is the street and its doors, none of the tills: the design pass that fixes
 the art before a single purchase is wired.
 
-- **Where it is reached.** A dedicated top-level page for now, `7`, last
-  in the Tab cycle, title "Night City", so the art can be iterated on
-  without the invitation funnel in the way. It moves behind #deadchannel
-  (the wire is the doorway) once the shops trade; the wiring is thin on
-  purpose (`Screen::City`, `App.city`, one dispatch line each in
-  `input.rs`, `render.rs`, `tick.rs`).
-- **The register (decided 2026-09-18).** One glyph per person: the runner
-  is its mark (GAME.md, "The look"; `@` for a session without a runner
-  row), name label above. Buildings, carts and stalls are multi-cell
-  props. That is the Rangedrifter density, a tighter zoom than the
-  clubhouse's three-row figures, so the same terminal shows more city.
-  Single-width glyphs only; the generator refuses wide and combining
-  characters and `map_test` asserts it again.
-- **The street, west to east.** The stairs down (`▼ LOWER`, no function),
+- **Where it is reached.** Under the clubhouse: `0` lands on the
+  clubhouse, `0` again on the clubhouse goes down to the undercity, `0`
+  on the undercity comes back up. Runners only (`city::input::allowed`:
+  a look in `App.runner_looks` for this user, so a `deadchannel_runners`
+  row); anyone else stays on the clubhouse. Not in the Tab cycle
+  (`Screen::City.next()`/`prev()` return the clubhouse), no tab of its
+  own, the clubhouse tab stays lit under it, title "Undercity". Enter at
+  the wire goes back up to the clubhouse. The wiring is thin on purpose
+  (`Screen::City`, `App.city`, one dispatch line each in `input.rs`,
+  `render.rs`, `tick.rs`).
+- **Two registers, one wiring (2026-09-19).** The generator has two
+  layouts and `map::STYLE` says which one `map.rs` holds; `ui.rs`
+  branches on it for the base styling and the register-specific
+  ambience, everything else (landmarks, reach, panels, the runner) is
+  shared. `python3 scripts/gen_city_map.py --write` (tiles, the default)
+  or `--write --style drawn`, then rebuild. One of them gets deleted once
+  the choice is made.
+  - **tiles**: top-down, one tile per thing, the Dwarf Fortress register.
+    `#` walls in the shop's neon, `+` doors, `╬` windows that flicker,
+    `=` counters, `)` blades, `[` plate, `"` marks, `!` bottles, `%`
+    bowls, `∩` lockers, `▬` beds, `▪` crates, `@` people, `c` cats, `r`
+    rats, `>` stairs, `*` lamps, `°` lanterns, `≡` grates that steam. A
+    four-tile street that doglegs once, alleys one to three wide running
+    off it (dead ends, a hidden court with a shrine and a plant), rooms
+    you walk into (the shops, two tenements, a lockup, a shuttered pawn
+    shop, a motel, none of the last four with a function), stalls of
+    five tiles against the walls, the ledge with the railing and the
+    wire stairs (`>` in the gap, the spawn) on the east leg, the screen
+    as three tiles of static closing the street. A spinner's searchlight
+    sweeps the street now and then.
+  - **drawn**: front-on, multi-cell facades and carts under a skyline,
+    the first pass (2026-09-18). Kept for comparison; its street reads as
+    a plaza, which is why the tile register was built.
+- **The runner** is its mark in both (GAME.md, "The look"; `@` for a
+  session without a runner row), name label above. Single-width glyphs
+  only; the generator refuses wide and combining characters and
+  `map_test` asserts it again.
+- **The drawn street, west to east.** The stairs down (`▼ LOWER`, no function),
   the armorer (red), the tailor (magenta, starter pieces on mannequins in
   the window), the lockers (cyan, one letter of the sign dead for good),
   bands (green, antennas on the roof), the bar "dead air" (amber), the

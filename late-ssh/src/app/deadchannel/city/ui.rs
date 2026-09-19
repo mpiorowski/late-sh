@@ -1,11 +1,15 @@
 //! City renderer: the street viewport (camera-follow over the map, the
 //! runner as its one-cell mark) with the ambience painted on top every
-//! animation tick: rain across the sky, the street and the drop, puddles
-//! catching the nearest neon, signs that short out and drop a letter, steam
-//! off the vents and the noodle bowls, the screen's static and its test
-//! pattern, a blimp crossing behind the towers, the lower city twinkling
-//! under the railing. Three overlays: a popover for the landmark within
-//! reach, a pinned line when the street talks back, and a shop panel.
+//! animation tick: rain on every open cell, puddles catching the nearest
+//! neon, signs that short out and drop a letter, steam off the vents and
+//! the noodle bowls, the screen's static and its test pattern, the lower
+//! city twinkling under the railing. The two map registers (`map::STYLE`)
+//! differ in what a cell means, so the base styling and a few of the
+//! animations branch on it: the drawn map has a skyline, a blimp and
+//! awnings; the tile map has walls that take their shop's neon and a
+//! spinner's searchlight sweeping the street. Three overlays: a popover
+//! for the landmark within reach, a pinned line when the street talks
+//! back, and a shop panel.
 //!
 //! Every color comes from the theme through the closed `Neon` palette, so
 //! the city follows whatever palette the person picked. Single-width
@@ -26,7 +30,7 @@ use crate::app::deadchannel::runner::state::{Look, Slot, pieces_for};
 use crate::app::deadchannel::runner::ui::{portrait_spans, tint_color};
 
 use super::data;
-use super::map::{self, Landmark, Neon};
+use super::map::{self, Landmark, MapStyle, Neon};
 use super::state::{Enter, State};
 
 /// Widest a floor label gets.
@@ -43,7 +47,7 @@ const SCREEN_PATTERN_TICKS: u64 = 8;
 const STATIC_CHARS: [char; 6] = ['░', '▒', '▓', ' ', '░', '░'];
 /// Steam rising off a vent.
 const STEAM_CHARS: [char; 4] = ['~', '≈', '∙', '·'];
-/// The blimp crossing the sky, behind the towers.
+/// The blimp crossing the sky, behind the towers (drawn register only).
 const BLIMP: &str = "<══╬══>";
 
 pub(crate) struct CityView<'a> {
@@ -258,15 +262,6 @@ fn base_style(ch: char, x: u16, y: u16) -> Style {
         }
         return frame_style;
     }
-    // The far skyline: silhouettes, a few lit windows, the mast.
-    if map::SKY.contains(x, y) {
-        return match ch {
-            '▪' => dim(hashed_neon(x, y)),
-            '·' => faint(),
-            '╫' => concrete(),
-            _ => faint(),
-        };
-    }
     // Neon burns, one letter on the lockers is dead.
     if (x, y) == map::DEAD_LETTER {
         return faint();
@@ -274,10 +269,28 @@ fn base_style(ch: char, x: u16, y: u16) -> Style {
     if let Some(neon) = sign_at(x, y) {
         return lit(neon);
     }
-    if map::BOARD_SIGN.contains(x, y) {
+    match map::STYLE {
+        MapStyle::Drawn => base_style_drawn(ch, x, y),
+        MapStyle::Tiles => base_style_tiles(ch, x, y),
+    }
+}
+
+/// The drawn register: bands top to bottom (skyline, facades, street,
+/// railing, drop), each with its own reading of the glyphs.
+fn base_style_drawn(ch: char, x: u16, y: u16) -> Style {
+    // The far skyline: silhouettes, a few lit windows, the mast.
+    if map::SKY.is_some_and(|sky| sky.contains(x, y)) {
+        return match ch {
+            '▪' => dim(hashed_neon(x, y)),
+            '·' => faint(),
+            '╫' => concrete(),
+            _ => faint(),
+        };
+    }
+    if map::BOARD_SIGN.is_some_and(|z| z.contains(x, y)) {
         return lit(Neon::White);
     }
-    if map::WIRE_SIGN.contains(x, y) {
+    if map::WIRE_SIGN.is_some_and(|z| z.contains(x, y)) {
         return match ch {
             '▲' => lit(Neon::Amber),
             _ => Style::default()
@@ -305,7 +318,7 @@ fn base_style(ch: char, x: u16, y: u16) -> Style {
         return concrete();
     }
     // The facades: concrete lines, lit doorways, what is in the windows.
-    let facade_band = y > map::SKY.y1 && y < map::STREET.y0;
+    let facade_band = map::SKY.is_some_and(|sky| y > sky.y1) && y < map::STREET.y0;
     if facade_band {
         return match ch {
             '┃' => muted(),
@@ -332,7 +345,6 @@ fn base_style(ch: char, x: u16, y: u16) -> Style {
         return match ch {
             '╌' => faint(),
             '≈' | '~' => dim(nearest_neon(x)),
-            '▒' if map::BOARD.contains(x, y) => faint(),
             '▒' => faint(),
             '╥' => glow(Neon::Amber),
             '@' => muted(),
@@ -344,8 +356,6 @@ fn base_style(ch: char, x: u16, y: u16) -> Style {
             '≡' => faint(),
             '▓' => glow(Neon::Green),
             '(' | ')' => muted(),
-            '╱' | '╲' | '▔' => concrete(),
-            'o' => concrete(),
             _ => concrete(),
         };
     }
@@ -368,7 +378,71 @@ fn base_style(ch: char, x: u16, y: u16) -> Style {
     }
     match ch {
         '▪' => dim(hashed_neon(x, y)),
-        '·' | '∙' => faint(),
+        _ => faint(),
+    }
+}
+
+/// The tile register: every glyph is one thing. Walls and fittings take
+/// their building's neon; the street reads by glyph alone.
+fn base_style_tiles(ch: char, x: u16, y: u16) -> Style {
+    if map::SCREEN_FACE.contains(x, y) {
+        return concrete();
+    }
+    if map::STAIRS_SIGNS.iter().any(|z| z.contains(x, y)) {
+        return glow(Neon::Red);
+    }
+    if map::WIRE.contains(x, y) && ch == '>' {
+        return lit(Neon::Amber);
+    }
+    if map::DROP.contains(x, y) {
+        return match ch {
+            '▪' => dim(hashed_neon(x, y)),
+            _ => faint(),
+        };
+    }
+    if let Some(building) = map::BUILDINGS.iter().find(|b| b.zone.contains(x, y)) {
+        return match ch {
+            '#' => match building.color {
+                Some(neon) => dim(neon),
+                None => concrete(),
+            },
+            '+' => match building.color {
+                Some(neon) => glow(neon),
+                None => muted(),
+            },
+            '╬' => window_glow(x, y),
+            '=' | '∩' => match building.color {
+                Some(neon) => dim(neon),
+                None => concrete(),
+            },
+            '@' | ')' | '[' | '"' | '!' | '/' | '\\' | 'x' | 'Y' | 'o' | '&' | '▌' => {
+                match building.color {
+                    Some(neon) => glow(neon),
+                    None => muted(),
+                }
+            }
+            '$' => glow(Neon::Green),
+            '♪' => glow(Neon::Amber),
+            '▬' | '▪' => concrete(),
+            '▓' => muted(),
+            _ => faint(),
+        };
+    }
+    // The street, the alleys, the court, the yard.
+    match ch {
+        '≈' | '~' => dim(nearest_neon(x)),
+        '≡' | '▒' | '▪' | '=' | '═' | '╪' | '#' | '░' => concrete(),
+        '%' => glow(Neon::Amber),
+        'T' => glow(Neon::Cyan),
+        ')' => glow(Neon::Red),
+        '*' => lit(Neon::Amber),
+        '°' => dim(Neon::Amber),
+        '$' => lit(Neon::Green),
+        '?' => lit(Neon::White),
+        '_' => glow(Neon::White),
+        '♣' => dim(Neon::Green),
+        'c' => Style::default().fg(theme::TEXT_BRIGHT()),
+        'r' | '@' => muted(),
         _ => faint(),
     }
 }
@@ -395,38 +469,40 @@ fn animate(cells: &mut Cells, t: u64) {
     drop_lights(cells, t);
     blimp(cells, t);
     mast(cells, t);
+    searchlight(cells, t);
     bits_screen(cells, t);
     wire_pulse(cells, t);
 }
 
-/// Rain across the sky, the street and the drop: one drop per column every
-/// `RAIN_PERIOD` rows, falling one row a tick, only on open cells and never
-/// under an awning.
+/// Rain on every open cell (the street, the alleys, the drop, the sky
+/// when there is one): one drop per column every `RAIN_PERIOD` rows,
+/// falling one row a tick, never under an awning.
 fn rain(cells: &mut Cells, t: u64) {
-    for zone in [map::SKY, map::STREET, map::DROP] {
-        for y in zone.y0..=zone.y1 {
-            for x in zone.x0..=zone.x1 {
-                if map::char_at(x, y) != ' ' {
-                    continue;
-                }
-                if y <= map::STREET.y0 + 1 && map::AWNINGS.iter().any(|a| a.x0 <= x && x <= a.x1) {
-                    continue;
-                }
-                let column = mix(u64::from(x) * 7919);
-                if column % 3 == 0 {
-                    continue;
-                }
-                if (u64::from(y) + t + column) % RAIN_PERIOD != 0 {
-                    continue;
-                }
-                let ch = if column % 5 == 0 { '|' } else { '\'' };
-                let style = if zone == map::SKY {
-                    concrete()
-                } else {
-                    faint()
-                };
-                set(cells, x, y, ch, style);
+    for y in 1..map::MAP_H - 1 {
+        for x in 1..map::MAP_W - 1 {
+            if !is_floor(map::char_at(x, y)) {
+                continue;
             }
+            let sky = map::SKY.is_some_and(|sky| sky.contains(x, y));
+            if !sky && !map::walkable(x, y) && !map::DROP.contains(x, y) {
+                continue;
+            }
+            if map::AWNINGS
+                .iter()
+                .any(|a| a.x0 <= x && x <= a.x1 && y > a.y0 && y <= a.y0 + 2)
+            {
+                continue;
+            }
+            let column = mix(u64::from(x) * 7919);
+            if column % 3 == 0 {
+                continue;
+            }
+            if (u64::from(y) + t + column) % RAIN_PERIOD != 0 {
+                continue;
+            }
+            let ch = if column % 5 == 0 { '|' } else { '\'' };
+            let style = if sky { concrete() } else { faint() };
+            set(cells, x, y, ch, style);
         }
     }
 }
@@ -444,10 +520,16 @@ fn puddles(cells: &mut Cells, t: u64) {
 
 /// Neon shorts out for a frame now and then, or drops one letter.
 fn signs(cells: &mut Cells, t: u64) {
+    // A drawn cart has a neon name row; a tile stall's sign is its vendor,
+    // and people do not short out.
+    let carts: &[map::Sign] = match map::STYLE {
+        MapStyle::Drawn => map::CART_SIGNS,
+        MapStyle::Tiles => &[],
+    };
     let all = map::SIGNS
         .iter()
         .chain(map::BANNERS.iter())
-        .chain(map::CART_SIGNS.iter());
+        .chain(carts.iter());
     for (index, sign) in all.enumerate() {
         let h = mix(index as u64 * 131 + t / 3);
         let short = h % 23 == 0;
@@ -476,17 +558,26 @@ fn signs(cells: &mut Cells, t: u64) {
     set(cells, dx, dy, map::char_at(dx, dy), faint());
 }
 
-/// A lit window goes dark for a while now and then.
+/// A lit window goes dark for a while now and then: a pane in a drawn
+/// window field, a `╬` in a tile building's wall.
 fn windows(cells: &mut Cells, t: u64) {
+    let pane = match map::STYLE {
+        MapStyle::Drawn => '▪',
+        MapStyle::Tiles => '╬',
+    };
     for zone in map::WINDOWS.iter() {
         for y in zone.y0..=zone.y1 {
             for x in zone.x0..=zone.x1 {
-                if map::char_at(x, y) != '▪' {
+                if map::char_at(x, y) != pane {
                     continue;
                 }
                 let h = mix(u64::from(x) * 53 + u64::from(y) * 97 + t / 12);
                 if h % 13 == 0 {
-                    set(cells, x, y, '·', faint());
+                    let dark = match map::STYLE {
+                        MapStyle::Drawn => '·',
+                        MapStyle::Tiles => '╬',
+                    };
+                    set(cells, x, y, dark, faint());
                 }
             }
         }
@@ -561,27 +652,49 @@ fn steam(cells: &mut Cells, t: u64) {
     }
 }
 
-/// Each street lamp throws a little light on the sidewalk below it, and
-/// flickers now and then.
+/// Each street lamp throws a little light on the ground (a cone on the
+/// sidewalk below it when drawn, a pool around it in tiles), and flickers
+/// now and then.
 fn lamps(cells: &mut Cells, t: u64) {
+    let pole = match map::STYLE {
+        MapStyle::Drawn => '╥',
+        MapStyle::Tiles => '*',
+    };
     for (index, &(lx, ly)) in map::LAMPS.iter().enumerate() {
         let h = mix(index as u64 * 977 + t / 8);
         if h % 9 == 0 {
-            set(cells, lx, ly, '╥', dim(Neon::Amber));
+            set(cells, lx, ly, pole, dim(Neon::Amber));
             continue;
         }
-        set(cells, lx, ly, '╥', lit(Neon::Amber));
-        for (dy, reach) in [(1u16, 1i32), (2, 2)] {
-            for dx in -reach..=reach {
-                let x = lx.saturating_add_signed(dx as i16);
-                put_if_floor(
-                    cells,
-                    x,
-                    ly + dy,
-                    '·',
-                    Style::default().fg(theme::AMBER_DIM()),
-                );
-            }
+        set(cells, lx, ly, pole, lit(Neon::Amber));
+        let pool: &[(i32, i32)] = match map::STYLE {
+            MapStyle::Drawn => &[
+                (0, 1),
+                (1, 1),
+                (-1, 1),
+                (0, 2),
+                (1, 2),
+                (-1, 2),
+                (2, 2),
+                (-2, 2),
+            ],
+            MapStyle::Tiles => &[
+                (-1, 0),
+                (1, 0),
+                (-2, 0),
+                (2, 0),
+                (0, -1),
+                (-1, -1),
+                (1, -1),
+                (0, 1),
+                (-1, 1),
+                (1, 1),
+            ],
+        };
+        for &(dx, dy) in pool {
+            let x = lx.saturating_add_signed(dx as i16);
+            let y = ly.saturating_add_signed(dy as i16);
+            put_if_floor(cells, x, y, '·', Style::default().fg(theme::AMBER_DIM()));
         }
     }
 }
@@ -603,9 +716,12 @@ fn drop_lights(cells: &mut Cells, t: u64) {
 
 /// A blimp crosses the sky behind the towers, its light blinking.
 fn blimp(cells: &mut Cells, t: u64) {
+    let Some(sky) = map::SKY else {
+        return;
+    };
     let span = i64::from(map::MAP_W) + 40;
     let head = (t / 4 % span as u64) as i64 - 20;
-    let y = map::SKY.y0 + 1;
+    let y = sky.y0 + 1;
     for (i, ch) in BLIMP.chars().enumerate() {
         let x = head + i as i64;
         if x < 1 || x >= i64::from(map::MAP_W) - 1 {
@@ -630,38 +746,97 @@ fn blimp(cells: &mut Cells, t: u64) {
 
 /// The antenna mast's red light blinks.
 fn mast(cells: &mut Cells, t: u64) {
-    let (x, y) = map::MAST_LIGHT;
+    let Some((x, y)) = map::MAST_LIGHT else {
+        return;
+    };
     if (t / 6) % 2 == 0 {
         set(cells, x, y, '*', lit(Neon::Red));
     }
 }
 
-/// The bits machine hums: its little display scrolls.
-fn bits_screen(cells: &mut Cells, t: u64) {
-    let z = map::BITS_SCREEN;
-    const HUM: [char; 4] = ['▓', '▒', '░', '▒'];
-    for x in z.x0..=z.x1 {
-        let ch = HUM[((u64::from(x) + t / 4) % HUM.len() as u64) as usize];
-        set(cells, x, z.y0, ch, glow(Neon::Green));
+/// A spinner passes overhead now and then: its searchlight sweeps the
+/// length of the street, a pale pool on the wet ground. Tiles only.
+fn searchlight(cells: &mut Cells, t: u64) {
+    if map::STYLE != MapStyle::Tiles {
+        return;
+    }
+    let span = i64::from(map::MAP_W) + 80;
+    let cx = (t / 2 % span as u64) as i64 - 40;
+    let cy = i64::from(map::STREET.y0 + map::STREET.y1) / 2;
+    for dy in -1i64..=1 {
+        for dx in -5i64..=5 {
+            if dx.abs() + 3 * dy.abs() > 5 {
+                continue;
+            }
+            let (x, y) = (cx + dx, cy + dy);
+            if x < 1 || y < 1 {
+                continue;
+            }
+            put_if_floor(
+                cells,
+                x as u16,
+                y as u16,
+                '·',
+                Style::default().fg(theme::TEXT()),
+            );
+        }
     }
 }
 
-/// The stairwell to the wire pulses upward, a signal climbing.
+/// The bits machine hums: its little display scrolls (drawn), or the
+/// machine itself pulses (tiles).
+fn bits_screen(cells: &mut Cells, t: u64) {
+    let z = map::BITS_SCREEN;
+    match map::STYLE {
+        MapStyle::Drawn => {
+            const HUM: [char; 4] = ['▓', '▒', '░', '▒'];
+            for x in z.x0..=z.x1 {
+                let ch = HUM[((u64::from(x) + t / 4) % HUM.len() as u64) as usize];
+                set(cells, x, z.y0, ch, glow(Neon::Green));
+            }
+        }
+        MapStyle::Tiles => {
+            let style = if (t / 4) % 2 == 0 {
+                lit(Neon::Green)
+            } else {
+                glow(Neon::Green)
+            };
+            set(cells, z.x0, z.y0, map::char_at(z.x0, z.y0), style);
+        }
+    }
+}
+
+/// The way up to the wire pulses, a signal climbing: the stairwell's
+/// steps when drawn, the railing either side of the gap in tiles.
 fn wire_pulse(cells: &mut Cells, t: u64) {
     let z = map::WIRE;
-    let phase = (t / 5) % 3;
-    for (i, y) in (z.y0 + 2..=z.y0 + 4).enumerate() {
-        for x in z.x0 + 1..z.x1 {
-            let ch = map::char_at(x, y);
-            if ch == ' ' {
-                continue;
+    match map::STYLE {
+        MapStyle::Drawn => {
+            let phase = (t / 5) % 3;
+            for (i, y) in (z.y0 + 2..=z.y0 + 4).enumerate() {
+                for x in z.x0 + 1..z.x1 {
+                    let ch = map::char_at(x, y);
+                    if ch == ' ' {
+                        continue;
+                    }
+                    let style = if i as u64 == 2 - phase {
+                        lit(Neon::Amber)
+                    } else {
+                        dim(Neon::Amber)
+                    };
+                    set(cells, x, y, ch, style);
+                }
             }
-            let style = if i as u64 == 2 - phase {
+        }
+        MapStyle::Tiles => {
+            let style = if (t / 5) % 2 == 0 {
                 lit(Neon::Amber)
             } else {
                 dim(Neon::Amber)
             };
-            set(cells, x, y, ch, style);
+            for x in [z.x0, z.x1] {
+                set(cells, x, z.y0, map::char_at(x, z.y0), style);
+            }
         }
     }
 }
@@ -1034,9 +1209,15 @@ fn set(cells: &mut Cells, x: u16, y: u16, ch: char, style: Style) {
     }
 }
 
-/// Paint only where the map is open, so ambience never eats a prop.
+/// Open ground: bare, or the tile register's wet-ground texture.
+fn is_floor(ch: char) -> bool {
+    matches!(ch, ' ' | '.' | ',' | '`')
+}
+
+/// Paint only where the map is open ground someone could stand on, so
+/// ambience never eats a prop or leaks into a wall.
 fn put_if_floor(cells: &mut Cells, x: u16, y: u16, ch: char, style: Style) {
-    if x < map::MAP_W && y < map::MAP_H && map::char_at(x, y) == ' ' {
+    if is_floor(map::char_at(x, y)) && map::walkable(x, y) {
         cells[usize::from(y)][usize::from(x)] = (ch, style);
     }
 }
