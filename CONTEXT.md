@@ -1235,7 +1235,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `4` | Global | Jump to Artboard |
 | `5` | Global | Jump to Directory |
 | `0` | Global | Jump to the Clubhouse |
-| `0` again | Clubhouse | Go down to the undercity, deadchannel's street (`late-ssh/src/app/deadchannel/city`), for runners only (a `deadchannel_runners` row); `0` on the undercity comes back up |
+| `0` again | Clubhouse | Go down to the undercity, deadchannel's street (`late-ssh/src/app/deadchannel/city`), for runners only (a `deadchannel_runners` row); `0` on the undercity comes back up. There: arrows/hjkl walk, Shift+arrow or `HJKL` run, Enter at a landmark, Esc closes a panel |
 | `Ctrl+L` | Global (except the Scratchpad, which cycles its highlight language) | Force a full repaint: clears the client screen and re-emits every cell via `App::force_full_repaint`. The escape hatch when something outside late.sh scribbles on the terminal. |
 | `m` | Global | Toggle mute on paired client (persisted per device, so it sticks across sessions) |
 | `+` / `=` | Global | Volume up on paired client |

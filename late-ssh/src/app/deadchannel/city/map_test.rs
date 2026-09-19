@@ -60,6 +60,16 @@ fn every_landmark_is_reachable_from_the_wire() {
 }
 
 #[test]
+fn every_walker_paces_open_floor() {
+    for walker in WALKERS {
+        assert!(walker.x1 > walker.x0, "{walker:?} has no stretch");
+        for x in walker.x0..=walker.x1 {
+            assert!(walkable(x, walker.y), "{walker:?} path blocked at {x}");
+        }
+    }
+}
+
+#[test]
 fn the_wire_is_within_reach_at_the_spawn() {
     assert_eq!(nearest_landmark(SPAWN.0, SPAWN.1), Some(Landmark::Wire));
     // Open asphalt, nothing within reach.

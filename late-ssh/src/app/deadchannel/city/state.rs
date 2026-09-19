@@ -11,6 +11,8 @@ use super::map::{self, Landmark};
 /// How long a street line (a vendor's remark) stays pinned, in animation
 /// ticks (~7.5 per second).
 const LINE_TICKS: u64 = 60;
+/// How far one run goes.
+pub const RUN_STEPS: u16 = 6;
 
 /// What Enter does at the landmark within reach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +97,24 @@ impl State {
         self.player_x = nx;
         self.player_y = ny;
         true
+    }
+
+    /// Several steps in one go (Shift+arrow, `HJKL`): up to `RUN_STEPS`,
+    /// stopping at anything solid and at the first landmark that comes
+    /// within reach, so a run never overshoots a door. Returns the steps
+    /// taken.
+    pub fn run(&mut self, dx: i32, dy: i32) -> u16 {
+        let mut steps = 0;
+        while steps < RUN_STEPS {
+            if !self.walk(dx, dy) {
+                break;
+            }
+            steps += 1;
+            if self.nearby().is_some() {
+                break;
+            }
+        }
+        steps
     }
 
     /// The landmark within reach of the runner, if any.

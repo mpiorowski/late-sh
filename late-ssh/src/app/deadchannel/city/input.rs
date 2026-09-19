@@ -1,5 +1,6 @@
-//! City input: roguelike walking (arrows/hjkl), Enter at a landmark (a shop
-//! panel, a street line, or the wire out), Esc or Enter to close a panel.
+//! City input: roguelike walking (arrows/hjkl, Shift+arrow or HJKL to
+//! run), Enter at a landmark (a shop panel, a street line, or the wire
+//! out), Esc or Enter to close a panel.
 //! Returns `false` for anything it does not own so global keys (page
 //! digits, Tab, `q`, `?`) keep working. While a panel is open the walk keys
 //! are swallowed so the runner does not wander under the box.
@@ -52,19 +53,39 @@ fn handle_panel(app: &mut App, event: &ParsedInput) -> bool {
             app.city.close_panel();
             true
         }
-        _ => walk_delta(event).is_some(),
+        _ => walk_delta(event).is_some() || run_delta(event).is_some(),
     }
 }
 
-/// Arrow keys and lowercase hjkl move the runner. Consumes the key even when
-/// the step is blocked so walking into a cart never triggers a global.
+/// Arrow keys and lowercase hjkl move the runner one step; Shift+arrow
+/// and uppercase HJKL run. Consumes the key even when the step is blocked
+/// so walking into a wall never triggers a global.
 fn handle_walk(app: &mut App, event: &ParsedInput) -> bool {
+    if let Some((dx, dy)) = run_delta(event) {
+        app.music_prefix_armed = false;
+        app.city.run(dx, dy);
+        return true;
+    }
     let Some((dx, dy)) = walk_delta(event) else {
         return false;
     };
     app.music_prefix_armed = false;
     app.city.walk(dx, dy);
     true
+}
+
+fn run_delta(event: &ParsedInput) -> Option<(i32, i32)> {
+    match event {
+        ParsedInput::ShiftArrow(b'A') => Some((0, -1)),
+        ParsedInput::ShiftArrow(b'B') => Some((0, 1)),
+        ParsedInput::ShiftArrow(b'C') => Some((1, 0)),
+        ParsedInput::ShiftArrow(b'D') => Some((-1, 0)),
+        ParsedInput::Byte(b'K') | ParsedInput::Char('K') => Some((0, -1)),
+        ParsedInput::Byte(b'J') | ParsedInput::Char('J') => Some((0, 1)),
+        ParsedInput::Byte(b'L') | ParsedInput::Char('L') => Some((1, 0)),
+        ParsedInput::Byte(b'H') | ParsedInput::Char('H') => Some((-1, 0)),
+        _ => None,
+    }
 }
 
 fn walk_delta(event: &ParsedInput) -> Option<(i32, i32)> {

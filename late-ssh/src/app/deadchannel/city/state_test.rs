@@ -22,6 +22,28 @@ fn spawn_stands_at_the_wire_and_the_street_has_no_landmark() {
 }
 
 #[test]
+fn a_run_covers_open_street_and_stops_at_a_wall() {
+    let mut state = State::new();
+    state.player_x = map::OPEN.0;
+    state.player_y = map::OPEN.1;
+    // Open street ahead: the full run.
+    let steps = state.run(1, 0);
+    assert_eq!(steps, RUN_STEPS);
+    assert_eq!(state.player_x, map::OPEN.0 + RUN_STEPS);
+    // Into a wall: no step, no move.
+    state.player_x = map::OPEN.0;
+    state.player_y = map::OPEN.1;
+    let mut blocked = 0;
+    while state.walk(0, -1) {
+        blocked += 1;
+        assert!(blocked < 50, "never hit a wall");
+    }
+    let (x, y) = (state.player_x, state.player_y);
+    assert_eq!(state.run(0, -1), 0);
+    assert_eq!((state.player_x, state.player_y), (x, y));
+}
+
+#[test]
 fn panels_open_and_close() {
     let mut state = State::new();
     assert_eq!(state.panel(), None);

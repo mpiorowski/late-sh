@@ -526,7 +526,6 @@ def layout_drawn():
     L['PUDDLES'] = puddles
     L['LAMPS'] = lamps
     L['DROP_LIGHTS'] = DROP_LIGHTS
-    L['WALKERS'] = []
     L['reach'] = {
         'Armorer': doors['Armorer'], 'Tailor': doors['Tailor'], 'Lockers': doors['Lockers'],
         'Bands': doors['Bands'], 'Bar': doors['Bar'], 'Screen': doors['Screen'],
@@ -542,15 +541,12 @@ def layout_drawn():
 
 # ====================================================================== tiles
 def layout_tiles():
-    """Top-down, one tile per thing. A long side street in three legs with
-    a dogleg between each, alleys off it north and south, a back lane
-    behind the second leg, a canal under the first two legs with a bank of
-    warehouses beyond it, rooms you walk into, a ledge over the drop along
-    the third leg, and the screen closing the street at the east end."""
-    new_grid(440, 44, all_solid=True)
+    """Top-down, one tile per thing. A side street that jogs once, alleys
+    off it north and south, rooms you walk into, a hidden court, a ledge
+    over the drop at the east end and the screen closing the street."""
+    new_grid(156, 36, all_solid=True)
     L = {'STYLE': 'Tiles'}
     L['TITLE'] = frame(TITLE)
-    rng = random.Random(3)
 
     neon_signs = []   # (zone, color): the shop names in the street-facing walls
     tags = []         # (zone, color): glyph-script graffiti on the walls
@@ -558,7 +554,6 @@ def layout_tiles():
     vents = []        # steam rises off these
     puddles = []
     lamps = []
-    walkers = []      # (x0, x1, y, glyph, period, phase): pacing a floor path
     stalls = {}       # name -> (zone, vendor zone, color)
     reach = {}
     dist = {}
@@ -611,10 +606,6 @@ def layout_tiles():
         tile(x, y, '*')
         lamps.append((x, y))
 
-    def grate(x, y):
-        tile(x, y, '≡', block=False)
-        vents.append((x, y))
-
     def stall(name, x, y, row, vendor_x, color):
         """A counter of `=` with the goods on it and the vendor beside it."""
         put(x, y, row)
@@ -624,88 +615,34 @@ def layout_tiles():
         reach[name] = zone(x0, y, x1, y)
         dist[name] = 1
 
-    def walker(x0, x1, y, glyph, period):
-        walkers.append((x0, x1, y, glyph, period, rng.randrange(2 * (x1 - x0))))
-
-    def tenement(x0, y0, x1, y1, door_y, windows_y, sleepers=1):
-        """A block of rooms nobody sells anything in: a corridor along the
-        street wall, a partition with a door per room, beds, a cabinet or
-        two, someone asleep. The corridor is on the street side."""
-        south_facing = door_y == y1
-        room(x0, y0, x1, y1, None)
-        w = x1 - x0 - 1
-        door_x = x0 + 1 + rng.randrange(max(1, w - 2)) + 1
-        door_x = min(max(door_x, x0 + 2), x1 - 2)
-        tile(door_x, door_y, '+', block=False)
-        for wx in range(x0 + 3, x1 - 2, 6):
-            if wx != door_x and abs(wx - door_x) > 1:
-                tile(wx, windows_y, '╬')
-        # the partition two rows in from the street wall
-        part_y = y1 - 2 if south_facing else y0 + 2
-        rooms_y0, rooms_y1 = (y0 + 1, part_y - 1) if south_facing else (part_y + 1, y1 - 1)
-        if rooms_y1 - rooms_y0 < 1:
-            return
-        cols = list(range(x0 + 1, x1, 6))
-        doors = [min(c + 3, x1 - 2) for c in cols]
-        wall(x0 + 1, part_y, x1 - 1, part_y, doors=[(d, part_y) for d in doors if x0 < d < x1])
-        for c in cols[1:]:
-            wall(c, rooms_y0, c, rooms_y1)
-        for k, c in enumerate(cols):
-            bx = c + 1
-            if bx >= x1 - 1:
-                continue
-            by = rooms_y0 + (rooms_y1 - rooms_y0) // 2
-            tile(bx, by, '▬')
-            if k % 3 == 1 and bx + 2 < x1 - 1:
-                tile(bx + 2, rooms_y0, '∩')
-            if sleepers > 0 and k % 2 == 1:
-                tile(bx, min(by + 1, rooms_y1), '@')
-                sleepers -= 1
-
-    def alley(x0, x1, y0, y1, back=True):
-        """A gap between buildings: floor, something at the dead end, a
-        grate, a lantern or two, sometimes a rat."""
-        carve(x0, y0, x1, y1)
-        if back:
-            tile(x0, y0, '▒')
-            if x1 > x0:
-                tile(x1, y0, rng.choice('▒▪'))
-        mid = (x0 + x1) // 2
-        span = y1 - y0
-        if span >= 5:
-            grate(mid, y0 + span // 2)
-        if span >= 3:
-            lantern(mid, y0 + 2)
-        if span >= 8:
-            lantern(mid, y1 - 2)
-        r = rng.random()
-        if r < 0.35:
-            tile(x0, y0 + 1, 'r')
-        elif r < 0.6:
-            tile(x1, y0 + 1, 'c')
-
     # ------------------------------------------------------------ the street
-    # Leg one runs west to east at rows 17-20; leg two drops two rows at
-    # x=128; leg three climbs three rows at x=270 and runs along the ledge
-    # to the yard under the screen.
-    carve(1, 17, 130, 20)
-    carve(128, 19, 272, 22)
-    carve(270, 16, 400, 19)
-    carve(270, 16, 272, 22)
-    carve(401, 14, 430, 19)
-    L['STREET'] = zone(1, 14, 430, 22)
+    # West leg, four tiles wide, then a dogleg south, then the east leg
+    # along the ledge, opening into a small yard under the screen.
+    carve(1, 17, 72, 20)
+    carve(70, 19, 150, 22)
+    carve(138, 17, 150, 22)
+    L['STREET'] = zone(1, 17, 150, 22)
 
-    # =========================================================== leg one
-    # ---- north side (south walls at row 16)
-    tenement(2, 9, 18, 16, door_y=16, windows_y=16)
+    # ------------------------------------------------------- north, west leg
+    # A tenement: a lobby, a partition, beds behind it. Nobody sells anything.
+    room(2, 9, 18, 16, None, doors=[(10, 16)], windows=[(5, 16), (14, 16), (9, 9)])
+    wall(3, 12, 17, 12, doors=[(10, 12)])
+    for bx in (4, 8, 13, 16):
+        tile(bx, 10, '▬')
+    tile(15, 14, '@')
     tag(3, 16, '▚', MAGENTA)
+    # the stairs down to the lower city, at the west end of the street
     tile(2, 18, '>', block=False)
     L['STAIRS_SIGNS'] = [zone(2, 18, 2, 18)]
     reach['Stairs'] = zone(2, 18, 2, 18); dist['Stairs'] = 0
 
-    alley(19, 21, 5, 16)
-    tile(21, 6, 'c')
+    # an alley: a dumpster at the back, a cat on it, lanterns on a string
+    carve(19, 5, 21, 16)
+    tile(19, 5, '▒'); tile(20, 5, '▒'); tile(21, 6, 'c')
+    tile(20, 10, '≡', block=False); vents.append((20, 10))
+    lantern(20, 8); lantern(20, 13)
 
+    # the armorer: blades and plate on the shelf, the counter, the man
     room(22, 10, 36, 16, RED, doors=[(33, 16)], windows=[(35, 16), (27, 10)],
          sign=(24, 16, 'ARMORER'))
     for gx, g in ((24, ')'), (26, ')'), (28, '/'), (32, '['), (34, '[')):
@@ -714,8 +651,11 @@ def layout_tiles():
     tile(29, 12, '@')
     reach['Armorer'] = zone(24, 14, 34, 14); dist['Armorer'] = 0
 
-    carve(37, 12, 37, 16); grate(37, 13)
+    # a crack between two buildings, one tile wide
+    carve(37, 12, 37, 16)
+    tile(37, 13, '≡', block=False); vents.append((37, 13))
 
+    # the tailor: a storeroom up top, the rack, the mirror, two mannequins
     room(38, 8, 52, 16, MAGENTA, doors=[(49, 16)], windows=[(47, 16), (43, 8)],
          sign=(40, 16, 'TAILOR'))
     wall(39, 10, 51, 10, doors=[(45, 10)])
@@ -728,8 +668,12 @@ def layout_tiles():
     tile(40, 15, '&'); tile(50, 15, '&')
     reach['Tailor'] = zone(40, 14, 50, 14); dist['Tailor'] = 0
 
-    alley(53, 54, 6, 16)
+    # an alley with a rat in it
+    carve(53, 6, 54, 16)
+    tile(53, 6, '▒'); tile(54, 9, 'r')
+    lantern(53, 11)
 
+    # the lockers: two banks of them, a walk between
     room(55, 11, 69, 16, CYAN, doors=[(66, 16)], windows=[(68, 16)],
          sign=(57, 16, 'LOCKERS'))
     for lx in range(56, 69):
@@ -740,298 +684,176 @@ def layout_tiles():
     # a long alley north to a hidden court: a shrine, a plant, a cat
     carve(70, 8, 71, 16)
     carve(64, 3, 78, 7)
-    tile(68, 5, '♣'); tile(74, 4, '_'); tile(78, 7, '▒')
+    tile(68, 5, '♣'); tile(74, 4, '_'); tile(70, 6, 'c'); tile(78, 7, '▒')
     for lx in (65, 69, 73, 77):
         lantern(lx, 3)
-    lantern(70, 12); grate(71, 9)
-    walker(65, 77, 6, 'c', 5)
+    lantern(70, 12)
+    tile(71, 9, '≡', block=False); vents.append((71, 9))
 
-    tenement(72, 7, 90, 16, door_y=16, windows_y=16, sleepers=2)
-    carve(91, 13, 91, 16); grate(91, 14)
+    # ------------------------------------------------------- north, east leg
+    # bands: dials and aerials on the shelves
+    room(73, 11, 88, 18, GREEN, doors=[(84, 18)], windows=[(75, 18), (86, 18), (80, 11)],
+         sign=(76, 18, 'BANDS'))
+    for gx in (76, 80, 84):
+        tile(gx, 12, 'o')
+    for gx in (75, 78, 81, 84, 87):
+        tile(gx, 13, 'Y')
+    put(75, 15, '=' * 12)
+    tile(80, 14, '@')
+    reach['Bands'] = zone(75, 16, 86, 16); dist['Bands'] = 0
 
-    # a clinic: cots, bottles, someone on duty. Nothing to do here.
-    room(92, 10, 108, 16, WHITE, doors=[(105, 16)], windows=[(94, 16), (100, 10)],
-         sign=(94, 16, 'CLINIC'))
-    for bx in (94, 97, 100):
+    carve(89, 13, 89, 18)
+    tile(89, 15, '≡', block=False); vents.append((89, 15))
+
+    # the bar: bottles, a long counter, stools, a jukebox in the corner
+    room(90, 12, 110, 18, AMBER, doors=[(105, 18)],
+         windows=[(92, 18), (108, 18), (96, 12), (104, 12)], sign=(93, 18, 'DEAD AIR'))
+    for gx in (94, 96, 98, 102, 104, 106):
+        tile(gx, 13, '!')
+    tile(100, 13, '@')
+    put(93, 14, '=' * 15)
+    for gx in (94, 97, 100, 103, 106):
+        tile(gx, 15, 'o')
+    tile(92, 16, '♪')
+    reach['Bar'] = zone(93, 15, 107, 16); dist['Bar'] = 0
+
+    carve(111, 9, 112, 18)
+    tile(111, 9, '▒')
+    tile(111, 12, '≡', block=False); vents.append((111, 12))
+    lantern(112, 10); lantern(112, 14)
+
+    # repairs: tools on the wall, a bench
+    room(113, 13, 123, 18, WHITE, doors=[(121, 18)], windows=[(114, 18)],
+         sign=(115, 18, 'PATCH'))
+    for gx, g in ((115, '/'), (117, '\\'), (119, 'x'), (121, '/')):
+        tile(gx, 14, g)
+    tile(118, 15, '@')
+    put(115, 16, '=' * 7)
+    reach['Repairs'] = zone(115, 17, 121, 17); dist['Repairs'] = 0
+
+    carve(124, 15, 124, 18)
+    tile(124, 16, 'r')
+
+    # a motel: rooms off a corridor, someone asleep. Nothing to do here.
+    room(125, 10, 137, 18, CYAN, doors=[(135, 18)], windows=[(126, 18), (127, 10), (135, 10)],
+         sign=(128, 18, 'SLEEP'))
+    wall(126, 16, 136, 16, doors=[(128, 16), (131, 16), (134, 16)])
+    wall(129, 11, 129, 15); wall(133, 11, 133, 15)
+    for bx in (127, 131, 135):
         tile(bx, 12, '▬')
-    for gx in (103, 105, 107):
-        tile(gx, 11, '!')
-    tile(105, 13, '@')
+    tile(127, 13, '@')
 
-    alley(109, 111, 4, 16)
-    tenement(112, 10, 130, 16, door_y=16, windows_y=16)
+    # ------------------------------------------------------------- the yard
+    carve(143, 10, 144, 16)
+    tile(143, 10, '▒'); lantern(144, 12)
+    tile(144, 14, '≡', block=False); vents.append((144, 14))
+    for lx in (140, 144, 148):
+        lantern(lx, 17)
+    # the bits machine, against the motel's corner
+    tile(139, 18, '$')
+    L['BITS_SCREEN'] = zone(139, 18, 139, 18)
+    L['BOARD_SIGN'] = None
+    reach['Bits'] = zone(139, 18, 139, 18); dist['Bits'] = 1
+    # the reader at her table, a candle either side
+    put(146, 21, '===')
+    tile(147, 20, '@'); tile(146, 20, '°'); tile(148, 20, '°')
+    stalls['Reader'] = (zone(146, 20, 148, 21), zone(147, 20, 147, 20), MAGENTA)
+    reach['Reader'] = zone(146, 20, 148, 21); dist['Reader'] = 1
+    # the screen closes the street: three tiles of static, wall above and below
+    put(151, 16, '###'); put(151, 24, '###')
+    for y in range(17, 24):
+        put(151, y, '░░░')
+    L['SCREEN_FACE'] = zone(151, 17, 153, 23)
+    reach['Screen'] = zone(150, 17, 150, 22); dist['Screen'] = 0
 
-    # ---- south side (north walls at row 21)
-    tenement(2, 21, 28, 32, door_y=21, windows_y=21, sleepers=2)
-    alley(29, 31, 21, 32, back=False)
+    # ------------------------------------------------------- south, west leg
+    # a tenement: corridor, four rooms, beds, one tenant awake
+    room(2, 21, 28, 30, None, doors=[(14, 21)], windows=[(6, 21), (22, 21)])
+    wall(3, 23, 27, 23, doors=[(6, 23), (12, 23), (18, 23), (24, 23)])
+    for cx in (9, 15, 21):
+        wall(cx, 24, cx, 29)
+    for bx in (4, 11, 17, 24):
+        tile(bx, 26, '▬')
+    tile(5, 28, '@'); tile(8, 25, '∩'); tile(20, 25, '∩')
+
+    # an alley south, dead end
+    carve(29, 21, 31, 32)
+    tile(30, 32, '▒'); tile(29, 30, 'r')
+    tile(30, 26, '≡', block=False); vents.append((30, 26))
+    lantern(30, 23); lantern(30, 28)
+
+    # the noodle stall, pressed against the lockup wall
     stall('Noodles', 34, 20, '=%=%=', 33, AMBER)
     vents.append((35, 20)); vents.append((37, 20))
 
-    room(32, 21, 58, 32, None, doors=[(45, 21)])
-    for (x0, y0, x1, y1) in ((34, 28, 36, 31), (40, 25, 42, 26), (50, 29, 54, 31), (55, 23, 57, 24)):
+    # a lockup: crates, a guard, nothing for sale
+    room(32, 21, 58, 30, None, doors=[(45, 21)])
+    for (x0, y0, x1, y1) in ((34, 27, 36, 29), (40, 25, 42, 26), (50, 28, 54, 29), (55, 23, 57, 24)):
         for y in range(y0, y1 + 1):
             put(x0, y, '▪' * (x1 - x0 + 1))
-    tile(45, 23, '@'); grate(50, 24)
+    tile(45, 23, '@')
+    tile(50, 24, '≡', block=False)
     tag(33, 21, '▞', CYAN)
 
+    # umbrellas
     stall('Umbrellas', 62, 20, '=T=T=', 67, CYAN)
-    room(59, 21, 69, 32, RED, sign=(62, 21, 'PAWN'), shutter=(67, 21))
+
+    # a pawn shop, shuttered. The sign still burns.
+    room(59, 21, 69, 30, RED, sign=(62, 21, 'PAWN'), shutter=(67, 21))
     for gx, g in ((61, '$'), (63, ')'), (65, '"'), (67, '[')):
         tile(gx, 23, g)
     put(61, 25, '=' * 7)
 
-    alley(70, 71, 21, 32, back=False)
-    tenement(72, 21, 100, 32, door_y=21, windows_y=21, sleepers=2)
-    alley(101, 103, 21, 32, back=False)
+    # ------------------------------------------------------- south, east leg
+    carve(70, 23, 71, 30)
+    tile(70, 30, '▒'); tile(71, 25, 'r')
+    tile(71, 27, '≡', block=False); vents.append((71, 27))
 
-    # the baths: a pool inside, steam, a few people. Nothing to do here.
-    room(104, 21, 127, 32, CYAN, doors=[(110, 21)], windows=[(115, 21), (122, 21)],
-         sign=(112, 21, 'BATHS'))
-    for y in range(24, 30):
-        put(108, y, '≈' * 14)
-    for (px, py) in ((106, 23), (124, 26), (107, 30), (123, 31)):
-        tile(px, py, '@')
-    vents.append((110, 26)); vents.append((118, 28))
+    # the flop: a corridor of rooms, most of them taken
+    room(72, 23, 106, 32, None, doors=[(80, 23), (98, 23)], windows=[(75, 23), (89, 23), (103, 23)])
+    wall(73, 25, 105, 25, doors=[(76, 25), (82, 25), (88, 25), (94, 25), (100, 25)])
+    for cx in (79, 85, 91, 97, 103):
+        wall(cx, 26, cx, 31)
+    for bx in (75, 81, 87, 93, 99, 104):
+        tile(bx, 28, '▬')
+    tile(76, 30, '@'); tile(94, 30, '@')
+    for cx in (78, 90, 102):
+        tile(cx, 27, '∩')
 
-    # =========================================================== leg two
-    # ---- north side (south walls at row 18)
-    room(131, 11, 146, 18, GREEN, doors=[(142, 18)], windows=[(133, 18), (144, 18), (138, 11)],
-         sign=(134, 18, 'BANDS'))
-    for gx in (134, 138, 142):
-        tile(gx, 12, 'o')
-    for gx in (133, 136, 139, 142, 145):
-        tile(gx, 13, 'Y')
-    put(133, 15, '=' * 12)
-    tile(138, 14, '@')
-    reach['Bands'] = zone(133, 16, 144, 16); dist['Bands'] = 0
+    # the board: one pillar of notices against the flop's wall
+    tile(87, 22, '?')
+    L['BOARD'] = zone(87, 22, 87, 22)
+    reach['Board'] = zone(87, 22, 87, 22); dist['Board'] = 1
 
-    carve(147, 13, 147, 18); grate(147, 15)
+    # blades, against the railing
+    stall('Blades', 112, 22, '=)=)=', 117, RED)
 
-    room(148, 12, 168, 18, AMBER, doors=[(163, 18)],
-         windows=[(150, 18), (166, 18), (154, 12), (162, 12)], sign=(151, 18, 'DEAD AIR'))
-    for gx in (152, 154, 156, 160, 162, 164):
-        tile(gx, 13, '!')
-    tile(158, 13, '@')
-    put(151, 14, '=' * 15)
-    for gx in (152, 155, 158, 161, 164):
-        tile(gx, 15, 'o')
-    tile(150, 16, '♪')
-    reach['Bar'] = zone(151, 15, 165, 16); dist['Bar'] = 0
-
-    alley(169, 170, 9, 18)
-
-    room(171, 13, 181, 18, WHITE, doors=[(179, 18)], windows=[(172, 18)],
-         sign=(173, 18, 'PATCH'))
-    for gx, g in ((173, '/'), (175, '\\'), (177, 'x'), (179, '/')):
-        tile(gx, 14, g)
-    tile(176, 15, '@')
-    put(173, 16, '=' * 7)
-    reach['Repairs'] = zone(173, 17, 179, 17); dist['Repairs'] = 0
-
-    carve(182, 15, 182, 18); tile(182, 16, 'r')
-
-    room(183, 10, 195, 18, CYAN, doors=[(193, 18)], windows=[(184, 18), (185, 10), (193, 10)],
-         sign=(186, 18, 'SLEEP'))
-    wall(184, 16, 194, 16, doors=[(186, 16), (189, 16), (192, 16)])
-    wall(187, 11, 187, 15); wall(191, 11, 191, 15)
-    for bx in (185, 189, 193):
-        tile(bx, 12, '▬')
-    tile(185, 13, '@')
-
-    # the back lane: two rows behind the next three buildings, reached
-    # from the alleys either end and their back doors
-    carve(196, 5, 262, 6)
-    alley(196, 198, 7, 18, back=False)
-    for lx in range(202, 260, 8):
-        lantern(lx, 5)
-    grate(230, 6)
-    walker(200, 258, 5, '@', 4)
-
-    # the arcade: cabinets in rows, a change machine, two people playing
-    room(199, 7, 217, 18, MAGENTA, doors=[(212, 18), (208, 7)], windows=[(202, 18), (215, 18)],
-         sign=(202, 18, 'COIN'))
-    for y in (10, 13):
-        for gx in range(201, 216, 3):
-            tile(gx, y, '▓')
-    tile(203, 11, '@'); tile(212, 14, '@'); tile(215, 9, '$')
-
-    carve(218, 14, 218, 18); grate(218, 16)
-
-    # a shrine: an altar, candles, one plant, nobody
-    room(219, 9, 237, 18, AMBER, doors=[(228, 18)], windows=[(221, 18), (235, 18)],
-         sign=(222, 18, 'SHRINE'))
-    tile(228, 11, '_')
-    for gx in (225, 227, 229, 231):
-        tile(gx, 12, '°')
-    tile(221, 11, '♣'); tile(235, 11, '♣')
-    tile(228, 15, '@')
-
-    alley(238, 239, 7, 18, back=False)
-
-    # a market hall: counters of food and drink, three sellers, two doors
-    room(240, 9, 259, 18, GREEN, doors=[(244, 18), (255, 18), (250, 9)], windows=[(250, 18)],
-         sign=(242, 18, 'MARKET'))
-    for y in (12, 15):
-        put(242, y, '=%=!=%=')
-        put(251, y, '="=%=!=')
-    tile(245, 11, '@'); tile(254, 11, '@'); tile(245, 14, '@')
-    vents.append((243, 12)); vents.append((253, 15))
-
-    alley(260, 262, 7, 18, back=False)
-    tenement(263, 10, 269, 18, door_y=18, windows_y=18, sleepers=0)
-
-    # ---- south side (north walls at row 23)
-    tenement(128, 23, 160, 32, door_y=23, windows_y=23, sleepers=3)
-    tile(143, 22, '?')
-    L['BOARD'] = zone(143, 22, 143, 22)
-    L['BOARD_SIGN'] = None
-    reach['Board'] = zone(143, 22, 143, 22); dist['Board'] = 1
-
-    alley(161, 162, 23, 32, back=False)
-
-    # a garage: the roll door down, a wreck inside, crates
-    room(163, 23, 200, 32, None, doors=[(196, 23)])
-    put(178, 23, '▓▓▓')
-    put(172, 27, '▬▬▬')
-    for (x0, y0, x1, y1) in ((165, 29, 168, 31), (190, 25, 194, 26)):
-        for y in range(y0, y1 + 1):
-            put(x0, y, '▪' * (x1 - x0 + 1))
-    tile(185, 28, '@'); grate(180, 30)
-    tag(164, 23, '▚', GREEN)
-
-    stall('Blades', 205, 22, '=)=)=', 210, RED)
-    tenement(201, 23, 230, 32, door_y=23, windows_y=23, sleepers=2)
-    alley(231, 232, 23, 32, back=False)
-
-    # a dock: pallets, a forklift-sized gap, nobody about
-    room(233, 23, 269, 32, None, doors=[(240, 23), (262, 23)])
-    for (x0, y0, x1, y1) in ((236, 27, 240, 29), (245, 25, 249, 26), (255, 28, 260, 31), (263, 25, 266, 26)):
-        for y in range(y0, y1 + 1):
-            put(x0, y, '▪' * (x1 - x0 + 1))
-    grate(252, 30)
-
-    # ---- the canal under legs one and two: a walkway, water, a bank
-    carve(1, 33, 270, 33)
-    for y in (34, 35, 36):
-        put(1, y, '≈' * 270)
-    carve(1, 37, 270, 37)
-    for bx in (60, 61, 190, 191):
-        for y in (34, 35, 36):
-            tile(bx, y, '=', block=False)
-    for lx in range(8, 270, 24):
-        lantern(lx, 33)
-    tile(120, 33, '▒'); tile(200, 37, '▒')
-    walker(40, 118, 33, 'r', 3)
-    walker(125, 260, 33, '@', 5)
-    walker(10, 180, 37, '@', 6)
-    # the far bank: long warehouses, few doors
-    room(2, 38, 90, 42, None, doors=[(20, 38), (61, 38)])
-    room(91, 38, 180, 42, None, doors=[(140, 38)])
-    room(181, 38, 270, 42, None, doors=[(191, 38), (250, 38)])
-    for (x0, y0, x1, y1) in ((30, 40, 40, 41), (100, 39, 112, 40), (160, 40, 170, 41), (220, 39, 240, 41)):
-        for y in range(y0, y1 + 1):
-            put(x0, y, '▪' * (x1 - x0 + 1))
-    tile(75, 40, '@'); tile(205, 41, '@')
-
-    # ========================================================= leg three
-    # ---- north side (south walls at row 15)
-    tenement(273, 4, 290, 15, door_y=15, windows_y=15, sleepers=3)
-    carve(291, 12, 291, 15); grate(291, 13)
-
-    # a chop shop: tools, parts, a man under a lamp
-    room(292, 9, 310, 15, GREEN, doors=[(306, 15)], windows=[(294, 15), (300, 9)],
-         sign=(295, 15, 'TEK'))
-    for gx, g in ((294, '/'), (296, 'x'), (298, '\\'), (300, 'x')):
-        tile(gx, 10, g)
-    for (x0, y0, x1, y1) in ((303, 10, 308, 11),):
-        for y in range(y0, y1 + 1):
-            put(x0, y, '▪' * (x1 - x0 + 1))
-    put(294, 12, '=' * 9)
-    tile(298, 11, '@'); tile(302, 13, '*'); lamps.append((302, 13))
-
-    alley(311, 313, 6, 15)
-
-    # a video store: shelves, one clerk, one browser
-    room(314, 8, 334, 15, MAGENTA, doors=[(330, 15)], windows=[(316, 15), (324, 15), (320, 8)],
-         sign=(317, 15, 'VIDS'))
-    for y in (10, 12):
-        for gx in range(316, 332, 2):
-            tile(gx, y, '"')
-    tile(332, 13, '@'); tile(320, 13, '@')
-
-    carve(335, 11, 335, 15); grate(335, 12)
-    tenement(336, 8, 356, 15, door_y=15, windows_y=15, sleepers=2)
-    alley(357, 359, 4, 15)
-
-    # an aerial lot: masts behind a fence, a gate, the hum
-    room(360, 8, 380, 15, GREEN, doors=[(370, 15)], sign=(363, 15, 'AERIAL'))
-    for gx in range(362, 380, 4):
-        tile(gx, 10, 'Y'); tile(gx + 2, 13, 'Y')
-    grate(370, 12)
-
-    carve(381, 12, 381, 15); tile(381, 13, 'r')
-    tenement(382, 10, 400, 15, door_y=15, windows_y=15)
-
-    # ---- the ledge: the railing along the south of leg three, the drop
-    for rx in range(285, 431):
-        tile(rx, 20, '╪' if rx % 8 == 0 else '═')
-    tile(300, 20, '>', block=False)
-    L['RAIL_Y'] = 20
-    L['WIRE'] = zone(299, 20, 301, 20)
+    # ------------------------------------------------------------- the drop
+    # The railing along the ledge, one gap for the stairs to the wire.
+    for rx in range(107, 151):
+        tile(rx, 23, '╪' if rx % 8 == 0 else '═')
+    tile(126, 23, '>', block=False)
+    L['RAIL_Y'] = 23
+    L['WIRE'] = zone(125, 23, 127, 23)
     L['WIRE_SIGN'] = None
-    L['SPAWN'] = (300, 20)
-    reach['Wire'] = zone(300, 20, 300, 20); dist['Wire'] = 0
-    L['DROP'] = zone(285, 21, W - 2, H - 2)
+    L['SPAWN'] = (126, 23)
+    reach['Wire'] = zone(126, 23, 126, 23); dist['Wire'] = 0
+    L['DROP'] = zone(107, 24, W - 2, H - 2)
     drop_lights = []
-    drng = random.Random(7)
-    for y in range(21, H - 1):
-        for lx in range(285, W - 1):
-            if drng.random() < 0.05:
-                grid[y][lx] = drng.choice('·∙·▪·')
+    rng = random.Random(7)
+    for y in range(24, H - 1):
+        for lx in range(107, W - 1):
+            if rng.random() < 0.05:
+                grid[y][lx] = rng.choice('·∙·▪·')
                 drop_lights.append((lx, y))
     L['DROP_LIGHTS'] = drop_lights
-    # the corner west of the railing: a dumpster and a stack of crates
-    tile(273, 20, '▒'); tile(274, 20, '▒'); put(276, 20, '▪▪▪')
-
-    # ---- the yard under the screen
-    wall(401, 13, 430, 13)
-    carve(410, 8, 411, 12); tile(410, 8, '▒'); lantern(411, 10); grate(411, 11)
-    for lx in (404, 412, 420, 428):
-        lantern(lx, 14)
-    tile(403, 15, '$')
-    L['BITS_SCREEN'] = zone(403, 15, 403, 15)
-    reach['Bits'] = zone(403, 15, 403, 15); dist['Bits'] = 1
-    put(420, 18, '===')
-    tile(421, 17, '@'); tile(420, 17, '°'); tile(422, 17, '°')
-    stalls['Reader'] = (zone(420, 17, 422, 18), zone(421, 17, 421, 17), MAGENTA)
-    reach['Reader'] = zone(420, 17, 422, 18); dist['Reader'] = 1
-    put(407, 19, '==='); tile(410, 19, '▪')   # a cart nobody came back for
-    put(431, 12, '###'); put(431, 21, '###')
-    for y in range(13, 21):
-        put(431, y, '░░░')
-    L['SCREEN_FACE'] = zone(431, 13, 433, 20)
-    reach['Screen'] = zone(430, 14, 430, 19); dist['Screen'] = 0
     L['SKY'] = None
     L['MAST_LIGHT'] = None
     put((W - len('╡ the wire ╞')) // 2, H - 1, '╡ the wire ╞')
 
     # --------------------------------------------------------------- lamps
-    for (lx, ly) in ((12, 17), (46, 17), (86, 17), (120, 17), (30, 20), (100, 20),
-                     (150, 22), (200, 22), (250, 22), (175, 19), (225, 19),
-                     (285, 16), (330, 16), (375, 16), (405, 19), (426, 14)):
+    for (lx, ly) in ((12, 17), (30, 17), (57, 17), (86, 19), (110, 22), (134, 22), (141, 18)):
         lamp(lx, ly)
-
-    # ------------------------------------------------------------- walkers
-    walker(5, 60, 18, '@', 4)
-    walker(66, 124, 18, '@', 5)
-    walker(30, 110, 19, '@', 6)
-    walker(133, 200, 20, '@', 4)
-    walker(210, 268, 21, '@', 5)
-    walker(155, 245, 20, 'c', 7)
-    walker(275, 395, 17, '@', 4)
-    walker(290, 360, 18, '@', 6)
-    walker(340, 398, 17, 'c', 5)
-    walker(403, 428, 16, 'r', 3)
 
     # -------------------------------------------------------------- puddles
     def puddle(px, py, ch):
@@ -1039,10 +861,10 @@ def layout_tiles():
             grid[py][px] = ch
             puddles.append((px, py))
 
-    for _ in range(90):
-        px = rng.randrange(2, W - 6)
-        py = rng.randrange(2, H - 2)
-        n = rng.randrange(1, 5)
+    for (px, py, n) in ((8, 19, 3), (26, 18, 4), (44, 19, 3), (50, 17, 2), (66, 18, 3),
+                        (78, 21, 4), (96, 20, 3), (104, 21, 2), (118, 20, 4), (131, 21, 3),
+                        (140, 20, 3), (146, 18, 2), (72, 22, 2), (53, 14, 2), (66, 6, 2),
+                        (20, 15, 2), (112, 16, 1), (143, 15, 2)):
         for i in range(n):
             puddle(px + i, py, '≈' if i % 2 == 0 else '~')
         if n >= 4:
@@ -1050,17 +872,17 @@ def layout_tiles():
 
     # ------------------------------------------------------------- texture
     # Wet ground: a scatter of `.` `,` and grit on every open tile.
-    trng = random.Random(11)
+    rng = random.Random(11)
     for y in range(1, H - 1):
         for x in range(1, W - 1):
             if solid[y][x] or grid[y][x] != ' ':
                 continue
-            r = trng.random()
-            if r < 0.22:
+            r = rng.random()
+            if r < 0.30:
                 grid[y][x] = '.'
-            elif r < 0.27:
+            elif r < 0.36:
                 grid[y][x] = ','
-            elif r < 0.29:
+            elif r < 0.39:
                 grid[y][x] = '`'
 
     L['OPEN'] = (44, 18)
@@ -1073,7 +895,6 @@ def layout_tiles():
     L['VENTS'] = vents
     L['PUDDLES'] = puddles
     L['LAMPS'] = lamps
-    L['WALKERS'] = walkers
     L['reach'] = reach
     L['dist'] = dist
     return L
@@ -1116,10 +937,6 @@ def validate(L):
             if distance(L['reach'][name], x, y) <= L['dist'][name]:
                 return name
         return None
-
-    for (x0, x1, y, glyph, _period, _phase) in L['WALKERS']:
-        for x in range(x0, x1 + 1):
-            assert walkable(x, y), ('walker path blocked', glyph, x, y)
 
     seen = flood(L['SPAWN'])
     for name in LANDMARKS:
@@ -1275,26 +1092,6 @@ pub const LAMPS: &[(u16, u16)] = &[__LAMPS__];
 /// The lower city's lights, seen from the railing.
 #[rustfmt::skip]
 pub const DROP_LIGHTS: &[(u16, u16)] = &[__DROP_LIGHTS__];
-
-/// Someone pacing a stretch of open floor, back and forth: people, cats,
-/// rats. Drawn by `ui.rs` as a pure function of the tick, so they need
-/// no state and never stand on anything solid (the generator checks the
-/// whole path).
-#[derive(Debug, Clone, Copy)]
-pub struct Walker {
-    pub x0: u16,
-    pub x1: u16,
-    pub y: u16,
-    pub glyph: char,
-    /// Ticks per step.
-    pub period: u64,
-    pub phase: u64,
-}
-
-#[rustfmt::skip]
-pub const WALKERS: &[Walker] = &[
-__WALKERS__
-];
 
 /// The two registers the generator knows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1507,9 +1304,6 @@ def emit(L):
            .replace('__PUDDLES__', cells_lit(L['PUDDLES']))
            .replace('__LAMPS__', cells_lit(L['LAMPS']))
            .replace('__DROP_LIGHTS__', cells_lit(L['DROP_LIGHTS']))
-           .replace('__WALKERS__', '\n'.join(
-               f"    Walker {{ x0: {x0}, x1: {x1}, y: {y}, glyph: '{g}', period: {p}, phase: {ph} }},"
-               for (x0, x1, y, g, p, ph) in L['WALKERS']))
            .replace('__REACH__', reach_arms)
            .replace('__DIST__', dist_arms))
     path = os.path.join(os.path.dirname(__file__), '..', 'late-ssh', 'src', 'app', 'deadchannel', 'city', 'map.rs')

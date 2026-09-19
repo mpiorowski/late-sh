@@ -1042,8 +1042,15 @@ fixed:
   drawn larger than a cell. A side street four tiles wide that doglegs,
   alleys one to three wide, rooms you walk into, stalls of five tiles,
   a ledge over the drop, and room on the floor for cats and NPCs later.
-  Both are in the generator (`--style tiles|drawn`); the loser gets
-  deleted.
+  Both are in the generator (`--style tiles|drawn`). **Tiles won**, the
+  same day: it went long (440 columns, three legs, a canal, a back
+  lane), gained walkers pacing the street, and the drawn one stays only
+  as `--style drawn` and in `scripts/city_versions/` until it is deleted.
+- **Alive without state.** The street's extras, the people pacing it,
+  the cats, the rats, the rain, the searchlight, are all pure functions
+  of the tick. Nothing moves that could desync across replicas, nothing
+  is persisted. Real NPCs and cats with behavior come later; the walkers
+  are the placeholder that makes the street read as inhabited now.
 - **The street is one block.** Stairs down, the armorer, the tailor, the
   lockers, bands, the bar, the screen, patch; carts and stalls against
   the walls; the board and the bits machine; the railing and the lower
@@ -1072,9 +1079,9 @@ fixed:
   says the city must never beat chat for standing around), no spawns, no
   clock. The screen's static and the rain are render-only ambience.
 
-Next on this surface, in order: pick the register and delete the other,
-the armorer's till (bits, the day roll), the tailor's mirror as the
-editor (pick, not draw), the locker, the band choice.
+Next on this surface, in order: delete the drawn register, the
+armorer's till (bits, the day roll), the tailor's mirror as the editor
+(pick, not draw), the locker, the band choice.
 
 ## Experiment framing
 

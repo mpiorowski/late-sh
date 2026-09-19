@@ -39,7 +39,11 @@ const LABEL_MAX: usize = 10;
 /// the runner, so a short terminal shows the shopfronts, not the drop.
 const LOOK_NORTH: u16 = 8;
 /// Rows between raindrops in one column.
-const RAIN_PERIOD: u64 = 9;
+const RAIN_PERIOD: u64 = 12;
+/// The ambience runs at half the animation edge, so the street breathes
+/// instead of flickering. Walkers keep the full edge; their `period` is
+/// the pacing.
+const SLOW: u64 = 2;
 /// The screen's cycle: static, then the test pattern for a moment.
 const SCREEN_CYCLE: u64 = 120;
 const SCREEN_PATTERN_TICKS: u64 = 8;
@@ -459,19 +463,43 @@ fn window_glow(x: u16, y: u16) -> Style {
 // ------------------------------------------------------------ animation
 
 fn animate(cells: &mut Cells, t: u64) {
-    rain(cells, t);
-    puddles(cells, t);
-    signs(cells, t);
-    windows(cells, t);
-    screen(cells, t);
-    steam(cells, t);
-    lamps(cells, t);
-    drop_lights(cells, t);
-    blimp(cells, t);
-    mast(cells, t);
-    searchlight(cells, t);
-    bits_screen(cells, t);
-    wire_pulse(cells, t);
+    let slow = t / SLOW;
+    rain(cells, slow);
+    puddles(cells, slow);
+    signs(cells, slow);
+    windows(cells, slow);
+    screen(cells, slow);
+    steam(cells, slow);
+    lamps(cells, slow);
+    drop_lights(cells, slow);
+    blimp(cells, slow);
+    mast(cells, slow);
+    searchlight(cells, slow);
+    bits_screen(cells, slow);
+    wire_pulse(cells, slow);
+    walkers(cells, t);
+}
+
+/// The street's people, cats and rats pace their stretch of floor, back
+/// and forth, one step every `period` ticks. Pure in the tick: no state.
+fn walkers(cells: &mut Cells, t: u64) {
+    for walker in map::WALKERS.iter() {
+        let len = u64::from(walker.x1 - walker.x0);
+        if len == 0 {
+            continue;
+        }
+        let k = (t / walker.period + walker.phase) % (2 * len);
+        let offset = if k <= len { k } else { 2 * len - k };
+        let x = walker.x0 + offset as u16;
+        let style = match walker.glyph {
+            'c' => Style::default().fg(theme::TEXT_BRIGHT()),
+            'r' => muted(),
+            _ => concrete(),
+        };
+        if map::walkable(x, walker.y) {
+            set(cells, x, walker.y, walker.glyph, style);
+        }
+    }
 }
 
 /// Rain on every open cell (the street, the alleys, the drop, the sky
@@ -494,10 +522,10 @@ fn rain(cells: &mut Cells, t: u64) {
                 continue;
             }
             let column = mix(u64::from(x) * 7919);
-            if column % 3 == 0 {
+            if column % 2 == 0 {
                 continue;
             }
-            if (u64::from(y) + t + column) % RAIN_PERIOD != 0 {
+            if (u64::from(y) + t / 2 + column) % RAIN_PERIOD != 0 {
                 continue;
             }
             let ch = if column % 5 == 0 { '|' } else { '\'' };

@@ -333,19 +333,38 @@ the art before a single purchase is wired.
   shared. `python3 scripts/gen_city_map.py --write` (tiles, the default)
   or `--write --style drawn`, then rebuild. One of them gets deleted once
   the choice is made.
-  - **tiles**: top-down, one tile per thing, the Dwarf Fortress register.
-    `#` walls in the shop's neon, `+` doors, `╬` windows that flicker,
-    `=` counters, `)` blades, `[` plate, `"` marks, `!` bottles, `%`
-    bowls, `∩` lockers, `▬` beds, `▪` crates, `@` people, `c` cats, `r`
+  - **tiles** (chosen 2026-09-19): top-down, one tile per thing, the
+    Dwarf Fortress register. `#` walls in the shop's neon, `+` doors,
+    `╬` windows that flicker, `=` counters, `)` blades, `[` plate, `"`
+    marks, `!` bottles, `%` bowls, `∩` lockers, `▬` beds, `▪` crates,
+    `▓` shutters and cabinets, `≈` water, `@` people, `c` cats, `r`
     rats, `>` stairs, `*` lamps, `°` lanterns, `≡` grates that steam. A
-    four-tile street that doglegs once, alleys one to three wide running
-    off it (dead ends, a hidden court with a shrine and a plant), rooms
-    you walk into (the shops, two tenements, a lockup, a shuttered pawn
-    shop, a motel, none of the last four with a function), stalls of
-    five tiles against the walls, the ledge with the railing and the
-    wire stairs (`>` in the gap, the spawn) on the east leg, the screen
-    as three tiles of static closing the street. A spinner's searchlight
-    sweeps the street now and then.
+    440-column street in three legs with a dogleg between each (the
+    camera scrolls), four tiles wide, alleys one to three wide running
+    off it (dead ends, a hidden court with a shrine and a plant, a back
+    lane behind the second leg reached from its two end alleys and the
+    arcade's back door), rooms you walk into, stalls of five tiles
+    against the walls, a canal under the first two legs (a walkway, two
+    bridges, warehouses on the far bank), the ledge with the railing and
+    the wire stairs (`>` in the gap, the spawn) along the third leg, a
+    small yard and the screen as three tiles of static closing the
+    street. The shops are the landmarks; everything else is there to be
+    there: tenements (`tenement()` lays out corridor, rooms, beds and a
+    sleeper from a seed), a lockup, a shuttered pawn shop, a clinic, the
+    baths, a motel, the arcade, a shrine, a market hall, a garage, a
+    dock, a chop shop, a video store, an aerial lot. **Walkers**
+    (`map::WALKERS`, `ui::walkers`): people, cats and rats pacing a
+    stretch of floor as a pure function of the tick, no state; the
+    generator and `map_test` prove every path is open floor. A
+    spinner's searchlight sweeps the street now and then.
+  - **Speed.** Arrows/hjkl step; Shift+arrow and `HJKL` run up to
+    `RUN_STEPS` (6), stopping at anything solid and at the first
+    landmark within reach so a run never overshoots a door. The ambience
+    runs at half the animation edge (`ui::SLOW`), the rain at a quarter,
+    so the street breathes instead of flickering; walkers keep the full
+    edge and pace by their own `period`.
+  - **Snapshots.** `scripts/city_versions/` keeps a copy of the
+    generator from before each rework, with a README on restoring one.
   - **drawn**: front-on, multi-cell facades and carts under a skyline,
     the first pass (2026-09-18). Kept for comparison; its street reads as
     a plaza, which is why the tile register was built.
