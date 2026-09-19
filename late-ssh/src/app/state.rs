@@ -940,6 +940,15 @@ pub(super) fn listen_url(web_url: &str) -> String {
 }
 
 impl App {
+    /// A runner: this session's user has a `deadchannel_runners` row, the
+    /// one thing `/join #deadchannel` creates and nothing else does. The
+    /// gate for everything under the clubhouse (the undercity today). Read
+    /// from the owned looks map, so it costs nothing on the hot path and
+    /// follows a join on the next tick edge, on every replica.
+    pub fn is_runner(&self) -> bool {
+        self.runner_looks.contains_key(&self.user_id)
+    }
+
     pub fn is_running(&self) -> bool {
         self.running
     }

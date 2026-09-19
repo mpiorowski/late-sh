@@ -13,13 +13,6 @@ use crate::app::state::App;
 use super::data;
 use super::state::Enter;
 
-/// Who may go under: runners, the sessions with a `deadchannel_runners`
-/// row (a look in the shared table). Everyone else pressing `0` on the
-/// clubhouse stays on the clubhouse.
-pub fn allowed(app: &App) -> bool {
-    app.runner_looks.contains_key(&app.user_id)
-}
-
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     if app.city.panel().is_some() || app.city.at_ledge() {
         return handle_panel(app, event);

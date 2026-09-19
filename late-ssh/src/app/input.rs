@@ -3965,9 +3965,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         b'0' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             let target = match ctx.screen {
-                Screen::Clubhouse if crate::app::deadchannel::city::input::allowed(app) => {
-                    Screen::City
-                }
+                Screen::Clubhouse if app.is_runner() => Screen::City,
                 _ => Screen::Clubhouse,
             };
             app.set_screen(target);

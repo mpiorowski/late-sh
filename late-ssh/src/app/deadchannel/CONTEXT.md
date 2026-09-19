@@ -318,9 +318,11 @@ the art before a single purchase is wired.
 
 - **Where it is reached.** Under the clubhouse: `0` lands on the
   clubhouse, `0` again on the clubhouse goes down to the undercity, `0`
-  on the undercity comes back up. Runners only (`city::input::allowed`:
-  a look in `App.runner_looks` for this user, so a `deadchannel_runners`
-  row); anyone else stays on the clubhouse. Not in the Tab cycle
+  on the undercity comes back up. Runners only (`App::is_runner`: a look
+  in `App.runner_looks` for this user, so a `deadchannel_runners` row,
+  the one thing `/join #deadchannel` creates; the app-wide gate for
+  everything under the clubhouse, not an `app_flags` switch, which are
+  process-wide, not per user); anyone else stays on the clubhouse. Not in the Tab cycle
   (`Screen::City.next()`/`prev()` return the clubhouse), no tab of its
   own, the clubhouse tab stays lit under it, title "Undercity". Enter at
   the wire goes back up to the clubhouse. The wiring is thin on purpose
