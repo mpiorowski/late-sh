@@ -370,7 +370,7 @@ the art before a single purchase is wired.
   under a wall) or emissive (neon, lamps, windows: they burn on their
   own and only fade with distance). Height is faked: the top wall of a
   building against the dark draws as `▀`, the floor south of any wall is
-  in shadow. Rain shows only where there is light to see it by, in that
+  in shadow. Rain takes the color of the light it falls through, in that
   light's color. The runner carries a light (`CARRY_RADIUS`): where you
   stand is always the best lit place on the street. Light crosses flat
   water, so the canal and the puddles take the bank's lanterns. Every
@@ -386,11 +386,17 @@ the art before a single purchase is wired.
   is in the road. The monorail crosses the sky row (`TRACK_Y`, a dashed
   track across the top of the map), eastbound one run and westbound the
   next, windows amber and cyan, flickering. `map::BILLBOARDS` are nine
-  two-row zones the generator leaves blank (five over the rooftops in
-  the sky rows, four on the towers below the ledge); the renderer writes
-  the city's script on them, one text per `BILLBOARD_CYCLE`, dark for a
-  moment between, a letter flickering; each is a `LightKind::Billboard`
-  in the light map. Raindrops landing on a puddle throw an `o`.
+  one-row strips the generator leaves blank (five over the rooftops in
+  the sky row, four on the towers below the ledge); the renderer edges
+  each in dark steel and scrolls a line of street copy across it in the
+  board's neon (`BILLBOARD_LINES`, one line per `BILLBOARD_CYCLE`, dark
+  for a moment between, a letter flickering); each is a
+  `LightKind::Billboard` in the light map. The first cut was two rows of
+  the glyph script and read as floating blocks of noise. Raindrops
+  landing on a puddle throw an `o`. Rain falls in two columns of three
+  on every bare cell under the sky, the street, the drop and the void
+  between the blocks alike, dim where the light is dim, and never inside
+  a room (`inside_map`) or on a prop.
 - **The ledge (`Landmark::Ledge`, `city/ledge.rs`).** Standing at the
   railing anywhere along it (one row north of `RAIL_Y`, not on the wire
   stairs) the popover says "look over"; Enter swaps the street for the

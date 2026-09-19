@@ -164,28 +164,33 @@ fn the_car_route_is_open_street_end_to_end() {
 }
 
 #[test]
-fn billboards_write_the_citys_script_on_blank_cells() {
+fn billboards_scroll_street_copy_across_blank_cells() {
     let scene = Scene::build(0, map::SPAWN.0, map::SPAWN.1);
     let mut cells = compose_grid(&scene);
-    let mut written = 0;
-    for t in 0..(BILLBOARD_CYCLE * 2) {
+    let mut seen: Vec<String> = Vec::new();
+    for t in 0..BILLBOARD_CYCLE {
         animate(&mut cells, t * SLOW, &scene);
         for sign in map::BILLBOARDS.iter() {
-            for y in sign.zone.y0..=sign.zone.y1 {
-                for x in sign.zone.x0..=sign.zone.x1 {
+            let y = sign.zone.y0;
+            let strip: String = (sign.zone.x0..=sign.zone.x1)
+                .map(|x| {
                     assert_eq!(
                         map::char_at(x, y),
                         ' ',
                         "billboard cell is blank on the map"
                     );
-                    if GLYPH_ALPHABET.contains(&cells[usize::from(y)][usize::from(x)].0) {
-                        written += 1;
-                    }
-                }
-            }
+                    cells[usize::from(y)][usize::from(x)].0
+                })
+                .collect();
+            assert!(strip.starts_with('▌') && strip.ends_with('▐'), "{strip}");
+            seen.push(strip);
         }
     }
-    assert!(written > 0, "the boards showed a text");
+    assert!(
+        seen.iter()
+            .any(|s| s.contains("DEAD AIR") || s.contains("NOODLES") || s.contains("VIDS")),
+        "a line scrolled by: {seen:?}"
+    );
 }
 
 #[test]
@@ -207,4 +212,29 @@ fn looking_over_the_ledge_swaps_the_street_for_the_lower_city() {
         !screen.contains("the wire"),
         "the street's popover is gone: {screen}"
     );
+}
+
+#[test]
+fn rain_falls_on_the_street_and_the_drop_but_never_in_a_room() {
+    let scene = Scene::build(0, map::SPAWN.0, map::SPAWN.1);
+    let mut cells = compose_grid(&scene);
+    let mut outside = 0;
+    for t in 0..8u64 {
+        animate(&mut cells, t * SLOW, &scene);
+        for y in 1..map::MAP_H - 1 {
+            for x in 1..map::MAP_W - 1 {
+                let ch = cells[usize::from(y)][usize::from(x)].0;
+                let drop = matches!(ch, '\'' | '|') && is_floor(map::char_at(x, y));
+                if !drop {
+                    continue;
+                }
+                assert!(
+                    inside_map()[index(x, y)].is_none(),
+                    "rain in a room at ({x}, {y})"
+                );
+                outside += 1;
+            }
+        }
+    }
+    assert!(outside > 100, "the city rains: {outside}");
 }

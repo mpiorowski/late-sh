@@ -552,29 +552,28 @@ def layout_tiles():
             if drng.random() < 0.05:
                 grid[y][lx] = drng.choice('·∙·▪·')
                 drop_lights.append((lx, y))
-    # ---- billboards: hoardings over the rooftops (rows 2 and 3, sky) and
-    # on the towers below the ledge. Two rows of the city's script each;
-    # the map holds blank cells, the renderer writes and flickers them.
+    # ---- billboards: hoardings over the rooftops (row 2, sky) and on the
+    # towers below the ledge. One row each, a strip the renderer scrolls
+    # street copy across; the map holds blank cells.
     billboards = []
 
     def billboard(x0, y0, width, color):
-        for y in (y0, y0 + 1):
-            for x in range(x0, x0 + width):
-                assert grid[y][x] in ' ·∙▪', ('billboard over something', x, y, grid[y][x])
-                grid[y][x] = ' '
-                if (x, y) in drop_lights:
-                    drop_lights.remove((x, y))
-        billboards.append((zone(x0, y0, x0 + width - 1, y0 + 1), color))
+        for x in range(x0, x0 + width):
+            assert grid[y0][x] in ' ·∙▪', ('billboard over something', x, y0, grid[y0][x])
+            grid[y0][x] = ' '
+            if (x, y0) in drop_lights:
+                drop_lights.remove((x, y0))
+        billboards.append((zone(x0, y0, x0 + width - 1, y0), color))
 
-    billboard(30, 2, 12, MAGENTA)
-    billboard(150, 2, 14, CYAN)
-    billboard(236, 2, 12, AMBER)
-    billboard(330, 2, 12, GREEN)
-    billboard(400, 2, 10, RED)
-    billboard(300, 27, 12, CYAN)
-    billboard(350, 33, 12, MAGENTA)
-    billboard(405, 26, 12, AMBER)
-    billboard(330, 38, 10, RED)
+    billboard(30, 2, 18, MAGENTA)
+    billboard(150, 2, 20, CYAN)
+    billboard(236, 2, 18, AMBER)
+    billboard(330, 2, 18, GREEN)
+    billboard(400, 2, 16, RED)
+    billboard(300, 27, 16, CYAN)
+    billboard(350, 33, 16, MAGENTA)
+    billboard(405, 26, 16, AMBER)
+    billboard(330, 38, 14, RED)
     L['BILLBOARDS'] = billboards
     L['DROP_LIGHTS'] = drop_lights
     # the corner west of the railing: a dumpster and a stack of crates
@@ -879,9 +878,9 @@ pub const CART_SIGNS: &[Sign] = &[
 __CART_SIGNS__
 ];
 
-/// The billboards: two rows of the city's script each, over the rooftops
-/// and on the towers below the ledge. The cells are blank on the map; the
-/// renderer writes them and flickers them.
+/// The billboards: a strip each, over the rooftops and on the towers
+/// below the ledge, that the renderer scrolls street copy across. The
+/// cells are blank on the map.
 #[rustfmt::skip]
 pub const BILLBOARDS: &[Sign] = &[
 __BILLBOARDS__

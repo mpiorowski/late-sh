@@ -47,7 +47,7 @@ const LABEL_MAX: usize = 10;
 /// the runner, so a short terminal shows the shopfronts, not the drop.
 const LOOK_NORTH: u16 = 8;
 /// Rows between raindrops in one column.
-const RAIN_PERIOD: u64 = 12;
+const RAIN_PERIOD: u64 = 7;
 /// The ambience runs at half the animation edge, so the street breathes
 /// instead of flickering. Walkers keep the full edge; their `period` is
 /// the pacing.
@@ -92,10 +92,21 @@ const TRACK_Y: u16 = 1;
 const TRAIN: &str = "╞▬▬▪▬▬▪▬▬▪▬▬▪▬▬╡";
 const TRAIN_SPEED: u64 = 2;
 const TRAIN_RUN: u64 = 560;
-/// A billboard shows one text for this many ticks, then goes dark for a
-/// moment and shows the next.
-const BILLBOARD_CYCLE: u64 = 40;
-const BILLBOARD_DARK: u64 = 4;
+/// A billboard scrolls one line for this many ticks, then goes dark for
+/// a moment and starts the next.
+const BILLBOARD_CYCLE: u64 = 120;
+const BILLBOARD_DARK: u64 = 6;
+/// What the boards say: street copy, one line at a time, scrolling.
+const BILLBOARD_LINES: [&str; 8] = [
+    "DEAD AIR   the signal is warm in here",
+    "TEK   repairs, when there is something to repair",
+    "VIDS   tuned to a dead channel",
+    "NOODLES   two bowls or none",
+    "THE LOWER CITY   all the way down",
+    "BITS   it hums. it has never once paid out",
+    "OFF-STREET   rooms by the hour, by the night",
+    "THE WIRE   back up to #deadchannel",
+];
 /// How close to a building counts as at its door.
 const REVEAL_REACH: u16 = 3;
 /// Color channels are rounded to this many steps so neighbouring cells
@@ -250,6 +261,7 @@ pub(super) fn scale(c: Rgb, k: f32) -> Rgb {
     [c[0] * k, c[1] * k, c[2] * k]
 }
 
+#[cfg(test)]
 fn luma(c: Rgb) -> f32 {
     0.3 * c[0] + 0.55 * c[1] + 0.15 * c[2]
 }
@@ -1001,45 +1013,58 @@ fn animate(cells: &mut Cells, t: u64, scene: &Scene) {
     monorail(cells, t, scene);
 }
 
-/// The billboards: two rows of the city's script each, one text at a
-/// time, dark for a moment between texts, a letter flickering now and
-/// then. The cells under them are blank on the map.
+/// The billboards: a strip each, edged in dark steel, a line of street
+/// copy scrolling across it in the board's neon, dark for a moment
+/// between lines, a letter flickering now and then. The cells under them
+/// are blank on the map.
 fn billboards(cells: &mut Cells, t: u64, scene: &Scene) {
-    for sign in map::BILLBOARDS.iter() {
+    let edge = lit_surface(scale(WALL, 0.7));
+    let strip = lit_surface(scale(WALL, 0.35));
+    for (i, sign) in map::BILLBOARDS.iter().enumerate() {
         let z = sign.zone;
+        let y = z.y0;
+        set(cells, z.x0, y, '▌', styled(edge, scene, z.x0, y, false));
+        set(cells, z.x1, y, '▐', styled(edge, scene, z.x1, y, false));
+        let inner = z.x0 + 1..z.x1;
         let light_x = (z.x0 + z.x1) / 2;
-        let text = match billboard_state(light_x, t) {
+        let line = match billboard_state(light_x, t) {
             BillboardState::Dark => {
-                for y in z.y0..=z.y1 {
-                    for x in z.x0..=z.x1 {
-                        set(
-                            cells,
-                            x,
-                            y,
-                            '▪',
-                            styled(lit_surface(scale(WALL, 0.5)), scene, x, y, false),
-                        );
-                    }
+                for x in inner {
+                    set(cells, x, y, ' ', styled(strip, scene, x, y, false));
                 }
                 continue;
             }
-            BillboardState::Showing(text) => text,
-        };
-        for y in z.y0..=z.y1 {
-            for x in z.x0..=z.x1 {
-                let h = mix(text * 31 + u64::from(x) * 7 + u64::from(y) * 13);
-                let glyph = GLYPH_ALPHABET[(h % GLYPH_ALPHABET.len() as u64) as usize];
-                let flicker = mix(u64::from(x) * 3 + u64::from(y) * 5 + t / 2).is_multiple_of(13);
-                let level = if flicker { 0.35 } else { 1.0 };
-                let style = styled(
-                    emissive(scale(neon_rgb(sign.color), level)),
-                    scene,
-                    x,
-                    y,
-                    !flicker,
-                );
-                set(cells, x, y, glyph, style);
+            BillboardState::Showing(n) => {
+                BILLBOARD_LINES[((n + i as u64) % BILLBOARD_LINES.len() as u64) as usize]
             }
+        };
+        // The line enters from the right and runs off the left, then a
+        // gap, then again.
+        let width = u64::from(z.x1 - z.x0 - 1);
+        let chars: Vec<char> = line.chars().collect();
+        let run = chars.len() as u64 + width;
+        let offset = (t + u64::from(light_x) * 7) % BILLBOARD_CYCLE % run;
+        for (k, x) in inner.enumerate() {
+            let pos = k as u64 + offset;
+            let ch = if pos >= width && ((pos - width) as usize) < chars.len() {
+                chars[(pos - width) as usize]
+            } else {
+                ' '
+            };
+            let flicker = mix(u64::from(x) * 3 + t / 2).is_multiple_of(17);
+            let level = if flicker { 0.4 } else { 1.0 };
+            let surface = if ch == ' ' {
+                strip
+            } else {
+                emissive(scale(neon_rgb(sign.color), level))
+            };
+            set(
+                cells,
+                x,
+                y,
+                ch,
+                styled(surface, scene, x, y, ch != ' ' && !flicker),
+            );
         }
     }
 }
@@ -1137,24 +1162,23 @@ fn walkers(cells: &mut Cells, t: u64, scene: &Scene) {
     }
 }
 
-/// Rain on every open cell there is light to see it by: one drop per
-/// column every `RAIN_PERIOD` rows, falling one row a tick, in the color
-/// of the light it falls through.
+/// Rain on every bare cell under the sky: the street, the alleys, the
+/// drop, the void between the blocks, never a room and never a prop. Two
+/// columns in three, a drop every `RAIN_PERIOD` rows, falling one row a
+/// tick, in the color of the light it falls through (dim where the light
+/// is dim).
 fn rain(cells: &mut Cells, t: u64, scene: &Scene) {
+    let inside = inside_map();
     for y in 1..map::MAP_H - 1 {
         for x in 1..map::MAP_W - 1 {
             if !is_floor(map::char_at(x, y)) {
                 continue;
             }
-            if !map::walkable(x, y) && !map::DROP.contains(x, y) {
-                continue;
-            }
-            let light = scene.light(x, y);
-            if luma(light) < 0.10 {
+            if inside[index(x, y)].is_some() {
                 continue;
             }
             let column = mix(u64::from(x) * 7919);
-            if column.is_multiple_of(2) {
+            if column.is_multiple_of(3) {
                 continue;
             }
             if !(u64::from(y) + t / 2 + column).is_multiple_of(RAIN_PERIOD) {
