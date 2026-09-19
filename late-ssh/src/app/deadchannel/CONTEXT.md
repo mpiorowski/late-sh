@@ -371,7 +371,38 @@ the art before a single purchase is wired.
   own and only fade with distance). Height is faked: the top wall of a
   building against the dark draws as `▀`, the floor south of any wall is
   in shadow. Rain shows only where there is light to see it by, in that
-  light's color.
+  light's color. The runner carries a light (`CARRY_RADIUS`): where you
+  stand is always the best lit place on the street. Light crosses flat
+  water, so the canal and the puddles take the bank's lanterns. Every
+  sign smears its color a few rows into the wet ground in front of it
+  (`reflections`, shimmering). The fixed lights' footprints are computed
+  once (`footprints`), as is every cell's base surface (`base_map`) and
+  which room it is in (`inside_map`): a debug frame is ~30ms, not 130.
+- **Traffic, billboards, splashes.** All pure in the tick. A car runs the
+  length of the street (`car_route`: the three legs through both
+  doglegs, `ui_test` proves every cell is open) as two cells, tail red,
+  head white, with the pool of its headlights running ahead of it in the
+  light map; it draws only on open floor, so it passes behind whatever
+  is in the road. The monorail crosses the sky row (`TRACK_Y`, a dashed
+  track across the top of the map), eastbound one run and westbound the
+  next, windows amber and cyan, flickering. `map::BILLBOARDS` are nine
+  two-row zones the generator leaves blank (five over the rooftops in
+  the sky rows, four on the towers below the ledge); the renderer writes
+  the city's script on them, one text per `BILLBOARD_CYCLE`, dark for a
+  moment between, a letter flickering; each is a `LightKind::Billboard`
+  in the light map. Raindrops landing on a puddle throw an `o`.
+- **The ledge (`Landmark::Ledge`, `city/ledge.rs`).** Standing at the
+  railing anywhere along it (one row north of `RAIL_Y`, not on the wire
+  stairs) the popover says "look over"; Enter swaps the street for the
+  lower city, all the way down: a perspective picture at half-block
+  resolution (two colors per cell, `▀` with fg and bg), towers in four
+  depths from the far hazed ones on the horizon to the near black ones
+  standing below the frame, windows lit at random and flickering, the
+  city's script in neon bands across the near towers, antenna lights
+  blinking, the spinner's beam crossing, rain in the sky. Pure in the
+  area's size and the tick; the same size always draws the same city.
+  Enter or Esc steps back. `State::at_ledge` gates the walk keys like a
+  panel does.
 - **Own palette, not the theme.** The city does not follow the person's
   theme at all: one look, tuned once (`ui::NIGHT` painted under every
   cell and overlay, `ui::neon_rgb`, the surface constants, the `INK_*`

@@ -208,30 +208,3 @@ fn looking_over_the_ledge_swaps_the_street_for_the_lower_city() {
         "the street's popover is gone: {screen}"
     );
 }
-
-#[test]
-fn tmp_frame_cost() {
-    let n = 20u64;
-    let t0 = std::time::Instant::now();
-    for t in 0..n {
-        let _ = light_map(t, map::SPAWN.0, map::SPAWN.1);
-    }
-    eprintln!("light_map: {:?}", t0.elapsed() / n as u32);
-    let t0 = std::time::Instant::now();
-    for _ in 0..n {
-        let _ = visibility_map(map::SPAWN.0, map::SPAWN.1);
-    }
-    eprintln!("visibility_map: {:?}", t0.elapsed() / n as u32);
-    let scene = Scene::build(3, map::SPAWN.0, map::SPAWN.1);
-    let t0 = std::time::Instant::now();
-    for _ in 0..n {
-        let _ = compose_grid(&scene);
-    }
-    eprintln!("compose_grid: {:?}", t0.elapsed() / n as u32);
-    let mut cells = compose_grid(&scene);
-    let t0 = std::time::Instant::now();
-    for t in 0..n {
-        animate(&mut cells, t, &scene);
-    }
-    eprintln!("animate: {:?}", t0.elapsed() / n as u32);
-}

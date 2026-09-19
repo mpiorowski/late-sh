@@ -18,4 +18,9 @@ street, so any earlier version can be put back in one step:
   is in git history beside it (the lit renderer needs `LIGHTS`, which
   this script does not emit).
 
+- `v4_lit_gen_city_map.py`: the lit street (2026-09-19): emits `LIGHTS`,
+  the drawn register gone. Taken before the ledge, the billboards, the
+  traffic and the brighter night. Renders with the lit renderer from git
+  history (no `BILLBOARDS`, no `Ledge` landmark yet).
+
 The live script is the version after the last snapshot.

@@ -1088,11 +1088,13 @@ fixed:
   says the city must never beat chat for standing around), no spawns, no
   clock. The screen's static and the rain are render-only ambience.
 
-Next on this surface, in order: reflections (signs smeared into the
-canal and the puddles), traffic (a car with headlights, a monorail),
-billboards in the glyph script; then the armorer's till (bits, the day
-roll), the tailor's mirror as the editor (pick, not draw), the locker,
-the band choice.
+Done since: the signs smear into the wet ground, a car runs the street
+with its headlights ahead of it, the monorail crosses the sky,
+billboards cycle the glyph script, rain splashes on the puddles, and at
+the railing Enter looks over the ledge at the lower city (a half-block
+perspective picture, the showpiece). Next on this surface, in order:
+the armorer's till (bits, the day roll), the tailor's mirror as the
+editor (pick, not draw), the locker, the band choice.
 
 ## Experiment framing
 
