@@ -337,8 +337,8 @@ def layout_tiles():
     tile(45, 23, '@'); grate(50, 24)
     tag(33, 21, '▞', CYAN)
 
-    stall('Umbrellas', 62, 20, '=T=T=', 67, CYAN)
-    room(59, 21, 69, 32, RED, sign=(62, 21, 'PAWN'), shutter=(67, 21))
+    stall('Umbrellas', 74, 20, '=T=T=', 79, CYAN)
+    room(59, 21, 69, 32, RED, doors=[(67, 21)], sign=(62, 21, 'PAWN'))
     for gx, g in ((61, '$'), (63, ')'), (65, '"'), (67, '[')):
         tile(gx, 23, g)
     put(61, 25, '=' * 7)
@@ -740,6 +740,20 @@ def validate(L):
             if distance(L['reach'][name], x, y) <= L['dist'][name]:
                 return name
         return None
+
+    # Every shop with a sign can be entered: a door somewhere in its walls.
+    for (sz, _color) in L['SIGNS']:
+        sx0, sy0, _sx1, _sy1 = sz
+        for (bz, _c) in L['BUILDINGS']:
+            bx0, by0, bx1, by1 = bz
+            if not (bx0 <= sx0 <= bx1 and by0 <= sy0 <= by1):
+                continue
+            edge = [(x, y) for y in range(by0, by1 + 1) for x in range(bx0, bx1 + 1)
+                    if x in (bx0, bx1) or y in (by0, by1)]
+            assert any(grid[y][x] == '+' for (x, y) in edge), ('signed shop with no door', sz)
+            break
+        else:
+            raise AssertionError(('sign outside every building', sz))
 
     for (x0, x1, y, glyph, _period, _phase) in L['WALKERS']:
         for x in range(x0, x1 + 1):

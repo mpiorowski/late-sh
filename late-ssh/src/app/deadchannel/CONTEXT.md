@@ -345,12 +345,14 @@ the art before a single purchase is wired.
   and the screen as three tiles of static closing the street. The shops
   are the landmarks; everything else is there to be there: tenements
   (`tenement()` lays out corridor, rooms, beds and a sleeper from a
-  seed), a lockup, a shuttered pawn shop, a clinic, the baths, a motel,
+  seed), a lockup, a pawn shop, a clinic, the baths, a motel,
   the arcade, a shrine, a market hall, a garage, a dock, a chop shop, a
   video store, an aerial lot. **Walkers** (`map::WALKERS`,
   `ui::walkers`): people, cats and rats pacing a stretch of floor as a
   pure function of the tick, no state; the generator and `map_test`
-  prove every path is open floor.
+  prove every path is open floor. Rule: every shop with a sign has a
+  door somewhere in its walls (the generator refuses a signed shop
+  without one); what happens inside can be shuffled or removed later.
 - **Light (2026-09-19).** Blade Runner, not cyberpunk: the street is
   dark and every color has a source. `map::LIGHTS` is every light on the
   street, found by the generator scanning the finished grid (a `*` is a
