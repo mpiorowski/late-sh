@@ -49,7 +49,7 @@ fn panels_open_and_close() {
     assert_eq!(state.panel(), None);
     state.open_panel(Landmark::Armorer);
     assert_eq!(state.panel(), Some(Landmark::Armorer));
-    state.close_panel();
+    state.dismiss();
     assert_eq!(state.panel(), None);
 }
 
@@ -85,6 +85,6 @@ fn enter_at_the_railing_looks_over_the_ledge_and_enter_again_steps_back() {
     assert!(!state.at_ledge());
     state.look_over();
     assert!(state.at_ledge());
-    state.step_back();
+    state.dismiss();
     assert!(!state.at_ledge());
 }

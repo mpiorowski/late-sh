@@ -4,8 +4,8 @@
 Top-down, one tile per thing, the Dwarf Fortress register: `#` walls,
 `+` doors, `=` counters, `)` blades, `[` plate, `%` bowls, `@` people,
 `c` cats. A long side street with alleys, courts and rooms you walk into.
-No multi-cell drawings. (The front-on register of the first pass lives in
-`scripts/city_versions/v2_tiles_gen_city_map.py` as `--style drawn`.)
+No multi-cell drawings. (The front-on register of the first pass was
+dropped; git history has it.)
 
 The city is authored here as stamps on a grid, validated (row widths,
 single-width glyphs only, every landmark reachable from the spawn, every

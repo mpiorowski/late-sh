@@ -1,10 +1,12 @@
 //! City input: roguelike walking (arrows/hjkl, Shift+arrow or HJKL to
 //! run), Enter at a landmark (a shop panel, a street line, or the wire
-//! out), Esc or Enter to close a panel.
+//! out), Enter to close a panel.
 //! Returns `false` for anything it does not own so global keys (page
 //! digits, Tab, `q`, `?`) keep working. While a panel is open, or the
 //! runner is looking over the ledge, the walk keys are swallowed so the
-//! runner does not wander under the box.
+//! runner does not wander under the box. A lone Esc never arrives here:
+//! the root flushes it to `dispatch_escape`, which calls
+//! `State::dismiss` for this screen.
 
 use crate::app::common::primitives::Screen;
 use crate::app::input::ParsedInput;
@@ -40,14 +42,12 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     handle_walk(app, event)
 }
 
-/// A panel, or the ledge view, takes Esc and Enter to close, and eats the
-/// walk keys. Everything else (digits, Tab, `q`) falls through to the
-/// globals.
+/// A panel, or the ledge view, takes Enter to close, and eats the walk
+/// keys. Everything else (digits, Tab, `q`) falls through to the globals.
 fn handle_panel(app: &mut App, event: &ParsedInput) -> bool {
     match event {
-        ParsedInput::Byte(0x1B) | ParsedInput::Byte(b'\r') | ParsedInput::Byte(b'\n') => {
-            app.city.close_panel();
-            app.city.step_back();
+        ParsedInput::Byte(b'\r') | ParsedInput::Byte(b'\n') => {
+            app.city.dismiss();
             true
         }
         _ => walk_delta(event).is_some() || run_delta(event).is_some(),

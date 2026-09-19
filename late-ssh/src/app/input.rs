@@ -2363,10 +2363,10 @@ fn dispatch_escape(app: &mut App) {
         crate::app::door::darkroom::screen::GAME.handle_key(app, 0x1B);
         return;
     }
-    // Esc in the city closes an open shop panel; on the street it means
-    // nothing (the wire is the way out).
-    if ctx.screen == Screen::City && app.city.panel().is_some() {
-        app.city.close_panel();
+    // Esc in the city closes an open shop panel or steps back from the
+    // ledge; on the street it means nothing (the wire is the way out).
+    if ctx.screen == Screen::City && (app.city.panel().is_some() || app.city.at_ledge()) {
+        app.city.dismiss();
         return;
     }
     // Esc from the Games hub closes the rc config modal, cancels a pending
@@ -3961,11 +3961,16 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         // `0` is the clubhouse. Pressed again on the clubhouse it goes
         // down to the undercity (deadchannel's street), runners only;
-        // from the undercity it comes back up.
+        // from the undercity it comes back up. A descent always lands on
+        // the street: a panel or the ledge left open on the way up does
+        // not carry over.
         b'0' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             let target = match ctx.screen {
-                Screen::Clubhouse if app.is_runner() => Screen::City,
+                Screen::Clubhouse if app.is_runner() => {
+                    app.city.dismiss();
+                    Screen::City
+                }
                 _ => Screen::Clubhouse,
             };
             app.set_screen(target);

@@ -1044,7 +1044,7 @@ fixed:
   a ledge over the drop, and room on the floor for cats and NPCs later.
   **Tiles won**, the same day: it went long (440 columns, three legs, a
   canal, a back lane), gained walkers pacing the street, and the drawn
-  one left the live script (it lives in `scripts/city_versions/`).
+  one left the live script (git history has it).
 - **Blade Runner, not cyberpunk.** Dark, wet, few strong light sources,
   warm sodium against cold neon, everything else in silhouette. Not
   saturated everywhere: terminal cells cannot blend, so color on every

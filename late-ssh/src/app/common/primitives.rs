@@ -76,9 +76,9 @@ pub enum Screen {
     Profiles,
     Leaderboard,
     Clubhouse,
-    /// The deadchannel night city (`7`): the game's wallet street, a
-    /// dedicated page while the art is being built; it moves behind
-    /// #deadchannel later (`app/deadchannel/city`).
+    /// The Undercity (`app/deadchannel/city`): deadchannel's street under
+    /// the Clubhouse. `0` again on the Clubhouse goes down, runners only;
+    /// `0` or Enter at the wire comes back up. Not in the Tab cycle.
     City,
     /// Zen (`Ctrl+F` from anywhere): the tiling layout you arrange yourself
     /// (`app/zen`). A surface over the page you were on, absent from the Tab

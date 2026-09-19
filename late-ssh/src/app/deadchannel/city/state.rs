@@ -8,9 +8,10 @@
 
 use super::map::{self, Landmark};
 
-/// How long a street line (a vendor's remark) stays pinned, in animation
-/// ticks (~7.5 per second).
-const LINE_TICKS: u64 = 60;
+/// How long a street line (a vendor's remark) stays pinned, in
+/// `marquee_tick` units (~15 per second; the clock is sampled on every
+/// other one, see `tick.rs`).
+const LINE_TICKS: u64 = 120;
 /// How far one run goes.
 pub const RUN_STEPS: u16 = 6;
 
@@ -136,10 +137,6 @@ impl State {
         self.panel = Some(landmark);
     }
 
-    pub fn close_panel(&mut self) {
-        self.panel = None;
-    }
-
     /// Whether the runner is looking over the ledge.
     pub fn at_ledge(&self) -> bool {
         self.ledge
@@ -149,7 +146,11 @@ impl State {
         self.ledge = true;
     }
 
-    pub fn step_back(&mut self) {
+    /// Back on the street: closes the panel and steps back from the ledge,
+    /// whichever is up. Esc, and every way off the page, so a look never
+    /// carries over to the next descent.
+    pub fn dismiss(&mut self) {
+        self.panel = None;
         self.ledge = false;
     }
 

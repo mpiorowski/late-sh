@@ -112,7 +112,7 @@ number of replicas spend one AI call per text.
 | `city/map.rs` | **Generated** by `scripts/gen_city_map.py --write` (never hand-edited): the 232x52 `MAP` literal, the `SOLID` collision bitmap, `SPAWN`, every zone (`SIGNS`, `BANNERS`, `CART_SIGNS`, `AWNINGS`, `WINDOWS`, `VENTS`, `PUDDLES`, `LAMPS`, `DROP_LIGHTS`, `SCREEN_FACE`, `WIRE`, ...), the closed `Neon` palette, `Landmark` + `nearest_landmark` (reach zones), `walkable`, `grid`/`char_at`. |
 | `city/state.rs` | Per-session view state: the runner's cell, the animation clock, the open panel, the pinned street line. `walk`, `nearby`, `Landmark::on_enter` (`Enter::Panel` for shops, `Enter::Line` for carts and the screen, `Enter::Leave` for the wire). Pure. |
 | `city/data.rs` | The city's copy and catalogs: the gear ladder (`COST_LADDER`, `WEAPONS`, `ARMOR`: LoGD numbers, GAME.md names), `BANDS` with draft move names, `NOTICES`, `DRINKS`, `TAILOR_PRICES`, the per-landmark `lines` pools, `title` and `pitch`. |
-| `city/input.rs` | Arrows/hjkl walk; Enter at a landmark; Esc or Enter closes a panel (walk keys are swallowed while one is open). Returns `false` for globals. |
+| `city/input.rs` | Arrows/hjkl walk; Enter at a landmark; Enter closes a panel or the ledge view, Esc too through the root's `dispatch_escape` (walk keys are swallowed while one is open). Returns `false` for globals. |
 | `city/ui.rs` | Renderer: base styling by zone, the ambience pass (rain, puddles reflecting the nearest sign, neon shorts and dropped letters, window flicker, the screen's static and test pattern with rare glyph frames, steam, lamps, the drop's lights, the blimp, the mast, the bits machine, the wire's pulse), the runner as its mark, the popover, the street line, the shop panels. |
 
 Root integration is deliberately thin: `App.haunt` (the one field),
@@ -334,9 +334,8 @@ the art before a single purchase is wired.
   bottles, `%` bowls, `∩` lockers, `▬` beds, `▪` crates, `▓` shutters and
   cabinets, `≈` water, `@` people, `c` cats, `r` rats, `>` stairs, `*`
   lamps, `°` lanterns, `≡` grates that steam. The first pass drew the
-  street front-on with multi-cell facades; it read as a plaza and lives
-  only in `scripts/city_versions/v2_tiles_gen_city_map.py` (`--style
-  drawn` there). A 440-column street in three legs with a dogleg between
+  street front-on with multi-cell facades; it read as a plaza and was
+  dropped (git history has it). A 440-column street in three legs with a dogleg between
   each (the camera scrolls), four tiles wide, alleys one to three wide
   running off it (dead ends, a hidden court with a shrine and a plant, a
   back lane behind the second leg reached from its two end alleys and the
@@ -432,7 +431,7 @@ the art before a single purchase is wired.
   tints) plus the placeholder chip prices, bands shows the three bands
   with draft move names. Enter at a cart, the screen, or the stairs pins
   a line from that landmark's pool top-left for ~8s. Enter at the wire
-  leaves (to Home today; to #deadchannel once the page moves).
+  leaves, back up to the Clubhouse.
 - **Animation** rides the clubhouse's `anim_half` edge (~7.5fps,
   `tick.rs`), the wake tier is `ANIM_HALF_TICK` on this screen, and every
   effect is a pure function of `marquee_tick` and the cell, so nothing
