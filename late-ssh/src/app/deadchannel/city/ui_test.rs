@@ -94,9 +94,10 @@ fn light_falls_on_the_street_and_stops_at_walls() {
         luma(scene.light(lamp.x + 1, lamp.y)) > 0.3,
         "beside the lamp"
     );
-    // Far down the street from the runner the ground is near black.
+    // Far down the street from the runner the ground is at the floor:
+    // dim, still readable.
     assert!(
-        scene.vis(map::OPEN.0, map::OPEN.1) < 0.3,
+        (scene.vis(map::OPEN.0, map::OPEN.1) - SEE_FLOOR).abs() < 0.01,
         "the far end fades"
     );
     assert_eq!(scene.vis(map::SPAWN.0, map::SPAWN.1), 1.0, "here is bright");
@@ -138,4 +139,72 @@ fn every_cell_sits_on_the_city_night_not_the_theme_canvas() {
             assert_eq!(buffer[(x, y)].bg, night(), "cell ({x}, {y})");
         }
     }
+}
+
+#[test]
+fn the_car_route_is_open_street_end_to_end() {
+    for &(x, y) in car_route() {
+        assert!(map::walkable(x, y), "car route blocked at ({x}, {y})");
+    }
+    // With the car and the train on the street the props still stand.
+    let t = 50;
+    assert!(car_at(t).is_some(), "the car is out at tick {t}");
+    let scene = Scene::build(t, map::SPAWN.0, map::SPAWN.1);
+    let mut cells = compose_grid(&scene);
+    animate(&mut cells, t, &scene);
+    for sign in map::SIGNS.iter().chain(map::CART_SIGNS.iter()) {
+        for x in sign.zone.x0..=sign.zone.x1 {
+            let (ch, _) = cells[usize::from(sign.zone.y0)][usize::from(x)];
+            assert_eq!(ch, map::char_at(x, sign.zone.y0), "sign letters stay put");
+        }
+    }
+    for lamp in map::LIGHTS.iter().filter(|l| l.kind == LightKind::Lamp) {
+        assert_eq!(cells[usize::from(lamp.y)][usize::from(lamp.x)].0, '*');
+    }
+}
+
+#[test]
+fn billboards_write_the_citys_script_on_blank_cells() {
+    let scene = Scene::build(0, map::SPAWN.0, map::SPAWN.1);
+    let mut cells = compose_grid(&scene);
+    let mut written = 0;
+    for t in 0..(BILLBOARD_CYCLE * 2) {
+        animate(&mut cells, t * SLOW, &scene);
+        for sign in map::BILLBOARDS.iter() {
+            for y in sign.zone.y0..=sign.zone.y1 {
+                for x in sign.zone.x0..=sign.zone.x1 {
+                    assert_eq!(
+                        map::char_at(x, y),
+                        ' ',
+                        "billboard cell is blank on the map"
+                    );
+                    if GLYPH_ALPHABET.contains(&cells[usize::from(y)][usize::from(x)].0) {
+                        written += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(written > 0, "the boards showed a text");
+}
+
+#[test]
+fn where_the_runner_stands_is_lit_even_with_no_lamp_near() {
+    let scene = Scene::build(0, map::OPEN.0, map::OPEN.1);
+    assert!(
+        luma(scene.light(map::OPEN.0, map::OPEN.1)) > 0.3,
+        "the carried light"
+    );
+}
+
+#[test]
+fn looking_over_the_ledge_swaps_the_street_for_the_lower_city() {
+    let mut state = State::new();
+    state.look_over();
+    let screen = render(&state, 100, 30);
+    assert!(screen.contains("[Enter] step back"), "{screen}");
+    assert!(
+        !screen.contains("the wire"),
+        "the street's popover is gone: {screen}"
+    );
 }

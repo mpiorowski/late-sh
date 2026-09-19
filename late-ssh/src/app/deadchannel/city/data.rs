@@ -167,7 +167,8 @@ pub fn lines(landmark: Landmark) -> &'static [&'static str] {
         | Landmark::Repairs
         | Landmark::Board
         | Landmark::Bits
-        | Landmark::Wire => &[],
+        | Landmark::Wire
+        | Landmark::Ledge => &[],
     }
 }
 
@@ -189,6 +190,7 @@ pub fn title(landmark: Landmark) -> &'static str {
         Landmark::Reader => "the reader",
         Landmark::Stairs => "the stairs down",
         Landmark::Wire => "the wire",
+        Landmark::Ledge => "the ledge",
     }
 }
 
@@ -210,5 +212,6 @@ pub fn pitch(landmark: Landmark) -> &'static str {
         Landmark::Reader => "she reads the static",
         Landmark::Stairs => "the way down is not open",
         Landmark::Wire => "back up to #deadchannel",
+        Landmark::Ledge => "the lower city, all the way down",
     }
 }

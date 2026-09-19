@@ -23,6 +23,8 @@ pub enum Enter {
     Line(Landmark),
     /// Back up the wire: the way out of the city.
     Leave,
+    /// Look over the ledge: the lower city fills the screen until Enter.
+    Ledge,
 }
 
 impl Landmark {
@@ -44,6 +46,7 @@ impl Landmark {
             | Landmark::Reader
             | Landmark::Stairs => Enter::Line(self),
             Landmark::Wire => Enter::Leave,
+            Landmark::Ledge => Enter::Ledge,
         }
     }
 }
@@ -55,6 +58,8 @@ pub struct State {
     /// Wall-synced animation clock (`marquee_tick`), mirrored on each tick.
     pub anim_tick: u64,
     panel: Option<Landmark>,
+    /// Looking over the ledge: the lower city instead of the street.
+    ledge: bool,
     /// A line the street said, and the tick it stops showing.
     line: Option<(Landmark, usize, u64)>,
 }
@@ -72,6 +77,7 @@ impl State {
             player_y: map::SPAWN.1,
             anim_tick: 0,
             panel: None,
+            ledge: false,
             line: None,
         }
     }
@@ -132,6 +138,19 @@ impl State {
 
     pub fn close_panel(&mut self) {
         self.panel = None;
+    }
+
+    /// Whether the runner is looking over the ledge.
+    pub fn at_ledge(&self) -> bool {
+        self.ledge
+    }
+
+    pub fn look_over(&mut self) {
+        self.ledge = true;
+    }
+
+    pub fn step_back(&mut self) {
+        self.ledge = false;
     }
 
     /// The street says something: which landmark spoke and which line of

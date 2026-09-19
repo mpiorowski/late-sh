@@ -74,3 +74,17 @@ fn enter_routes_shops_to_panels_and_the_wire_out() {
     assert_eq!(Landmark::Noodles.on_enter(), Enter::Line(Landmark::Noodles));
     assert_eq!(Landmark::Wire.on_enter(), Enter::Leave);
 }
+
+#[test]
+fn enter_at_the_railing_looks_over_the_ledge_and_enter_again_steps_back() {
+    let mut state = State::new();
+    // One row north of the wire stairs: at the railing, not on the wire.
+    state.player_y = map::RAIL_Y - 1;
+    assert_eq!(state.nearby(), Some(Landmark::Ledge));
+    assert_eq!(Landmark::Ledge.on_enter(), Enter::Ledge);
+    assert!(!state.at_ledge());
+    state.look_over();
+    assert!(state.at_ledge());
+    state.step_back();
+    assert!(!state.at_ledge());
+}

@@ -12,9 +12,12 @@
 //! with distance). The ambience is painted on top: rain where there is
 //! light to see it by, puddles catching what shines on them, signs that
 //! short out (and their light with them), steam, the screen's static.
-//! Walkers pace the street under the same light. Three overlays: a
-//! popover for the landmark within reach, a pinned line when the street
-//! talks back, and a shop panel.
+//! Walkers pace the street under the same light, a car crosses it with
+//! its headlights ahead of it, the monorail passes overhead, the signs
+//! smear into the wet ground below them, the billboards cycle through
+//! the city's script. Three overlays: a popover for the landmark within
+//! reach, a pinned line when the street talks back, and a shop panel.
+//! At the railing, Enter swaps the street for `ledge`: the lower city.
 //!
 //! The city has its own palette (fixed RGB: `NIGHT` under every cell,
 //! `neon_rgb`, the surface constants, the `INK_*` greys of the overlays)
@@ -34,6 +37,7 @@ use crate::app::deadchannel::runner::state::Tint;
 use crate::app::deadchannel::runner::state::{Look, Slot, pieces_for};
 
 use super::data;
+use super::ledge;
 use super::map::{self, Landmark, LightKind, Neon};
 use super::state::{Enter, State};
 
@@ -58,19 +62,40 @@ const STEAM_CHARS: [char; 4] = ['~', '≈', '∙', '·'];
 
 // Lighting. The night is dark: an unlit surface shows at `AMBIENT` of its
 // color, a lit one adds the light that reaches it.
-const AMBIENT: f32 = 0.16;
+const AMBIENT: f32 = 0.30;
 /// Columns from the runner within which everything shows in full.
-const SEE_FULL: f32 = 22.0;
+const SEE_FULL: f32 = 30.0;
 /// Columns from the runner beyond which the street is at its darkest.
-const SEE_END: f32 = 72.0;
+const SEE_END: f32 = 110.0;
 /// How much of a lit surface survives at the far end.
-const SEE_FLOOR: f32 = 0.18;
+const SEE_FLOOR: f32 = 0.30;
 /// How much of an emissive surface survives at the far end: neon carries.
-const EMISSIVE_FLOOR: f32 = 0.45;
+const EMISSIVE_FLOOR: f32 = 0.55;
 /// The shadow under a wall.
-const SHADOW: f32 = 0.45;
+const SHADOW: f32 = 0.5;
 /// A room you are not at the door of.
-const INSIDE_DARK: f32 = 0.3;
+const INSIDE_DARK: f32 = 0.45;
+/// The light the runner carries: a pool around you, so where you stand is
+/// always the best lit place on the street.
+const CARRY_RADIUS: u16 = 7;
+const CARRY: f32 = 0.7;
+/// How many rows a sign smears into the wet ground in front of it.
+const REFLECT_ROWS: u16 = 6;
+const REFLECT: f32 = 0.5;
+/// The car: one cell every `CAR_STEP` ticks along its route, then a gap
+/// of `CAR_GAP` cells before the next one.
+const CAR_STEP: u64 = 1;
+const CAR_GAP: u64 = 240;
+/// The monorail: the track row (sky), the train, its speed in cells per
+/// tick, and the run it makes (the map plus room to leave the frame).
+const TRACK_Y: u16 = 1;
+const TRAIN: &str = "╞▬▬▪▬▬▪▬▬▪▬▬▪▬▬╡";
+const TRAIN_SPEED: u64 = 2;
+const TRAIN_RUN: u64 = 560;
+/// A billboard shows one text for this many ticks, then goes dark for a
+/// moment and shows the next.
+const BILLBOARD_CYCLE: u64 = 40;
+const BILLBOARD_DARK: u64 = 4;
 /// How close to a building counts as at its door.
 const REVEAL_REACH: u16 = 3;
 /// Color channels are rounded to this many steps so neighbouring cells
@@ -86,13 +111,17 @@ pub(crate) struct CityView<'a> {
 }
 
 type Cells = Vec<Vec<(char, Style)>>;
-type Rgb = [f32; 3];
+pub(super) type Rgb = [f32; 3];
 
 pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
     if area.width < 4 || area.height < 4 {
         return;
     }
     let t = view.state.anim_tick;
+    if view.state.at_ledge() {
+        ledge::draw(frame, area, t);
+        return;
+    }
     let scene = Scene::build(t, view.state.player_x, view.state.player_y);
     let mut cells = compose_grid(&scene);
     animate(&mut cells, t, &scene);
@@ -160,7 +189,7 @@ fn camera_origin(player: usize, viewport: usize, map_len: usize) -> usize {
 // ------------------------------------------------------------- palette
 
 /// The neon colors, fixed: the city's own palette.
-fn neon_rgb(neon: Neon) -> Rgb {
+pub(super) fn neon_rgb(neon: Neon) -> Rgb {
     match neon {
         Neon::Cyan => [0.15, 0.85, 1.0],
         Neon::Magenta => [1.0, 0.30, 0.80],
@@ -185,24 +214,24 @@ const STEAM: Rgb = [0.80, 0.80, 0.84];
 const FRAME: Rgb = [0.30, 0.27, 0.25];
 /// The sky over the street: painted under every cell and every overlay,
 /// so the terminal's canvas never shows through.
-const NIGHT: Rgb = [0.03, 0.03, 0.05];
+pub(super) const NIGHT: Rgb = [0.03, 0.03, 0.05];
 /// The overlays' text, rain-grey on the night, bright to muted.
-const INK_BRIGHT: Rgb = [0.92, 0.93, 0.96];
-const INK: Rgb = [0.74, 0.76, 0.82];
-const INK_DIM: Rgb = [0.50, 0.52, 0.58];
+pub(super) const INK_BRIGHT: Rgb = [0.92, 0.93, 0.96];
+pub(super) const INK: Rgb = [0.74, 0.76, 0.82];
+pub(super) const INK_DIM: Rgb = [0.50, 0.52, 0.58];
 const INK_MUTED: Rgb = [0.34, 0.35, 0.40];
 
-fn rgb_color(c: Rgb) -> Color {
+pub(super) fn rgb_color(c: Rgb) -> Color {
     let q = |v: f32| ((v.clamp(0.0, 1.0) * LEVELS).round() / LEVELS * 255.0) as u8;
     Color::Rgb(q(c[0]), q(c[1]), q(c[2]))
 }
 
-fn night() -> Color {
+pub(super) fn night() -> Color {
     rgb_color(NIGHT)
 }
 
 /// A foreground on the night sky: every cell and every overlay span.
-fn ink(c: Rgb) -> Style {
+pub(super) fn ink(c: Rgb) -> Style {
     Style::default().fg(rgb_color(c)).bg(night())
 }
 
@@ -217,7 +246,7 @@ fn tint_rgb(tint: Tint) -> Rgb {
     }
 }
 
-fn scale(c: Rgb, k: f32) -> Rgb {
+pub(super) fn scale(c: Rgb, k: f32) -> Rgb {
     [c[0] * k, c[1] * k, c[2] * k]
 }
 
@@ -226,7 +255,7 @@ fn luma(c: Rgb) -> f32 {
 }
 
 /// A neon at full burn, for the overlays and the runner's mark.
-fn lit(neon: Neon) -> Style {
+pub(super) fn lit(neon: Neon) -> Style {
     ink(neon_rgb(neon)).add_modifier(Modifier::BOLD)
 }
 
@@ -257,6 +286,7 @@ fn landmark_neon(landmark: Landmark) -> Neon {
         Landmark::Reader => Neon::Magenta,
         Landmark::Stairs => Neon::Red,
         Landmark::Wire => Neon::Amber,
+        Landmark::Ledge => Neon::White,
     }
 }
 
@@ -297,7 +327,7 @@ struct Scene {
 impl Scene {
     fn build(t: u64, player_x: u16, player_y: u16) -> Scene {
         Scene {
-            light: light_map(t / SLOW),
+            light: light_map(t, player_x, player_y),
             vis: visibility_map(player_x, player_y),
         }
     }
@@ -317,19 +347,43 @@ fn index(x: u16, y: u16) -> usize {
 
 /// Every light spread over the floor it reaches. A column is one unit of
 /// distance, a row two (the cells are twice as tall as wide); light
-/// crosses open floor and doorways, lands on walls, and stops there.
-fn light_map(t: u64) -> Vec<Rgb> {
+/// crosses open floor, doorways and water, lands on walls, and stops
+/// there. Takes the raw tick: the fixed lights run at the slow clock, the
+/// car at the full one.
+fn light_map(t: u64, player_x: u16, player_y: u16) -> Vec<Rgb> {
     let mut out = vec![[0.0f32; 3]; usize::from(map::MAP_W) * usize::from(map::MAP_H)];
+    // What the runner carries.
+    spread(
+        &mut out,
+        player_x,
+        player_y,
+        CARRY_RADIUS,
+        scale([1.0, 0.95, 0.85], CARRY),
+    );
+    // The car's headlights: a pool ahead of it, and its own glow.
+    if let Some(car) = car_at(t) {
+        let route = car_route();
+        let ahead = route[(car.index + 3).min(route.len() - 1)];
+        spread(
+            &mut out,
+            ahead.0,
+            ahead.1,
+            6,
+            scale(neon_rgb(Neon::White), 1.1),
+        );
+        let (cx, cy) = route[car.index];
+        spread(&mut out, cx, cy, 2, scale(neon_rgb(Neon::Red), 0.5));
+    }
+    reflections(&mut out, t / SLOW);
+    let t = t / SLOW;
     for (i, light) in map::LIGHTS.iter().enumerate() {
         let level = light_level(i, light, t);
         if level <= 0.0 {
             continue;
         }
-        spread(
+        add(
             &mut out,
-            light.x,
-            light.y,
-            light.radius,
+            &footprints()[i],
             scale(neon_rgb(light.color), level),
         );
     }
@@ -350,29 +404,63 @@ fn light_map(t: u64) -> Vec<Rgb> {
     out
 }
 
-/// One light, flooded out to its radius: Dial's buckets by cost, a
-/// column costing one and a row two.
+/// The cells one light reaches, and how much of it lands on each.
+type Footprint = Vec<(usize, f32)>;
+
+/// The fixed lights' footprints, computed once: the geometry never
+/// changes, only the level each light burns at this tick.
+fn footprints() -> &'static [Footprint] {
+    static FOOTPRINTS: std::sync::OnceLock<Vec<Footprint>> = std::sync::OnceLock::new();
+    FOOTPRINTS.get_or_init(|| {
+        map::LIGHTS
+            .iter()
+            .map(|light| footprint(light.x, light.y, light.radius))
+            .collect()
+    })
+}
+
+fn add(out: &mut [Rgb], footprint: &Footprint, color: Rgb) {
+    for &(i, k) in footprint {
+        let cell = &mut out[i];
+        cell[0] += color[0] * k;
+        cell[1] += color[1] * k;
+        cell[2] += color[2] * k;
+    }
+}
+
+/// One moving light, flooded out to its radius and added in.
 fn spread(out: &mut [Rgb], x0: u16, y0: u16, radius: u16, color: Rgb) {
+    add(out, &footprint(x0, y0, radius), color);
+}
+
+/// One light, flooded out to its radius: Dial's buckets by cost, a
+/// column costing one and a row two. The cost map is a local window
+/// around the source, `radius` columns each way and half that in rows.
+fn footprint(x0: u16, y0: u16, radius: u16) -> Footprint {
     let radius = usize::from(radius);
+    let span_x = 2 * radius + 1;
+    let span_y = radius + 1;
+    let win_x0 = i64::from(x0) - radius as i64;
+    let win_y0 = i64::from(y0) - (radius / 2) as i64;
+    let slot = |x: u16, y: u16| -> usize {
+        ((i64::from(y) - win_y0) as usize) * span_x + (i64::from(x) - win_x0) as usize
+    };
+    let mut best = vec![usize::MAX; span_x * span_y];
     let mut buckets: Vec<Vec<(u16, u16)>> = vec![Vec::new(); radius + 1];
-    let mut best: std::collections::HashMap<(u16, u16), usize> = std::collections::HashMap::new();
+    let mut out = Vec::new();
     buckets[0].push((x0, y0));
-    best.insert((x0, y0), 0);
+    best[slot(x0, y0)] = 0;
     for cost in 0..=radius {
         let cells = std::mem::take(&mut buckets[cost]);
         for (x, y) in cells {
-            if best.get(&(x, y)) != Some(&cost) {
+            if best[slot(x, y)] != cost {
                 continue;
             }
             let fall = 1.0 - cost as f32 / (radius as f32 + 1.0);
-            let k = fall * fall;
-            let cell = &mut out[index(x, y)];
-            cell[0] += color[0] * k;
-            cell[1] += color[1] * k;
-            cell[2] += color[2] * k;
+            out.push((index(x, y), fall * fall));
             // Light leaves the source whatever it is set in, then only
-            // crosses open ground.
-            if (x, y) != (x0, y0) && !map::walkable(x, y) {
+            // crosses open ground and water.
+            if (x, y) != (x0, y0) && !transparent(x, y) {
                 continue;
             }
             for (dx, dy, step) in [(1i32, 0i32, 1usize), (-1, 0, 1), (0, 1, 2), (0, -1, 2)] {
@@ -385,11 +473,50 @@ fn spread(out: &mut [Rgb], x0: u16, y0: u16, radius: u16, color: Rgb) {
                 if next > radius {
                     continue;
                 }
-                let entry = best.entry((nx, ny)).or_insert(usize::MAX);
+                let entry = &mut best[slot(nx, ny)];
                 if next < *entry {
                     *entry = next;
                     buckets[next].push((nx, ny));
                 }
+            }
+        }
+    }
+    out
+}
+
+/// Light crosses open ground and flat water; everything else stops it.
+fn transparent(x: u16, y: u16) -> bool {
+    map::walkable(x, y) || matches!(map::char_at(x, y), '≈' | '~')
+}
+
+/// Every sign smears its color into the wet ground in front of it: down
+/// the street when the sign faces south, up it when it faces north, a
+/// few rows, fading, shimmering with the rain.
+fn reflections(out: &mut [Rgb], t: u64) {
+    for sign in map::SIGNS.iter() {
+        let z = sign.zone;
+        let dir: i16 = if transparent(z.x0, z.y0 + 1) {
+            1
+        } else if z.y0 > 0 && transparent(z.x0, z.y0 - 1) {
+            -1
+        } else {
+            continue;
+        };
+        let color = neon_rgb(sign.color);
+        for x in z.x0..=z.x1 {
+            for k in 1..=REFLECT_ROWS {
+                let y = z.y0.saturating_add_signed(dir * k as i16);
+                if !transparent(x, y) {
+                    break;
+                }
+                let shimmer =
+                    0.6 + 0.1 * (mix(u64::from(x) * 13 + u64::from(y) * 29 + t / 2) % 5) as f32;
+                let fall = 1.0 - f32::from(k) / (f32::from(REFLECT_ROWS) + 1.0);
+                let k = REFLECT * fall * shimmer;
+                let cell = &mut out[index(x, y)];
+                cell[0] += color[0] * k;
+                cell[1] += color[1] * k;
+                cell[2] += color[2] * k;
             }
         }
     }
@@ -450,6 +577,98 @@ fn light_level(i: usize, light: &map::Light, t: u64) -> f32 {
                 0.7 + (mix(t) % 5) as f32 * 0.08
             }
         }
+        LightKind::Billboard => match billboard_state(light.x, t) {
+            BillboardState::Dark => 0.0,
+            BillboardState::Showing(_) => 0.8,
+        },
+    }
+}
+
+enum BillboardState {
+    /// Between two texts.
+    Dark,
+    /// Which text is up.
+    Showing(u64),
+}
+
+/// A billboard cycles through texts, dark for a moment between them. Keyed
+/// on its light column so the letters and the light agree.
+fn billboard_state(light_x: u16, t: u64) -> BillboardState {
+    let t = t + u64::from(light_x) * 7;
+    if t % BILLBOARD_CYCLE < BILLBOARD_DARK {
+        BillboardState::Dark
+    } else {
+        BillboardState::Showing(t / BILLBOARD_CYCLE)
+    }
+}
+
+/// Where the car is on its route this tick, if it is on the street.
+struct Car {
+    index: usize,
+}
+
+/// The car's route: the length of the street, leg by leg, through both
+/// doglegs. One cell per step.
+fn car_route() -> &'static [(u16, u16)] {
+    static ROUTE: std::sync::OnceLock<Vec<(u16, u16)>> = std::sync::OnceLock::new();
+    ROUTE.get_or_init(|| {
+        let waypoints: [(u16, u16); 7] = [
+            (3, 19),
+            (129, 19),
+            (129, 21),
+            (269, 21),
+            (271, 21),
+            (271, 18),
+            (398, 18),
+        ];
+        let mut route = vec![waypoints[0]];
+        for pair in waypoints.windows(2) {
+            let (mut x, mut y) = pair[0];
+            let (tx, ty) = pair[1];
+            while (x, y) != (tx, ty) {
+                x = if x < tx {
+                    x + 1
+                } else if x > tx {
+                    x - 1
+                } else {
+                    x
+                };
+                y = if y < ty {
+                    y + 1
+                } else if y > ty {
+                    y - 1
+                } else {
+                    y
+                };
+                route.push((x, y));
+            }
+        }
+        route
+    })
+}
+
+fn car_at(t: u64) -> Option<Car> {
+    let len = car_route().len() as u64;
+    let pos = t / CAR_STEP % (len + CAR_GAP);
+    if pos < len {
+        Some(Car {
+            index: pos as usize,
+        })
+    } else {
+        None
+    }
+}
+
+/// Where the train's first cell is this tick, if it is crossing: it runs
+/// east one time and west the next, and sits out every other run.
+fn train_at(t: u64) -> Option<i64> {
+    let run = t * TRAIN_SPEED / TRAIN_RUN;
+    let along = (t * TRAIN_SPEED % TRAIN_RUN) as i64;
+    let lead = TRAIN.chars().count() as i64;
+    match run % 4 {
+        0 => Some(along - lead - 40),
+        2 => Some(i64::from(map::MAP_W) + 40 - along),
+        _ => None,
     }
 }
 
@@ -726,7 +945,123 @@ fn animate(cells: &mut Cells, t: u64, scene: &Scene) {
     steam(cells, slow, scene);
     drop_lights(cells, slow, scene);
     wire_pulse(cells, slow, scene);
+    billboards(cells, slow, scene);
     walkers(cells, t, scene);
+    car(cells, t, scene);
+    monorail(cells, t, scene);
+}
+
+/// The billboards: two rows of the city's script each, one text at a
+/// time, dark for a moment between texts, a letter flickering now and
+/// then. The cells under them are blank on the map.
+fn billboards(cells: &mut Cells, t: u64, scene: &Scene) {
+    for sign in map::BILLBOARDS.iter() {
+        let z = sign.zone;
+        let light_x = (z.x0 + z.x1) / 2;
+        let text = match billboard_state(light_x, t) {
+            BillboardState::Dark => {
+                for y in z.y0..=z.y1 {
+                    for x in z.x0..=z.x1 {
+                        set(
+                            cells,
+                            x,
+                            y,
+                            '▪',
+                            styled(lit_surface(scale(WALL, 0.5)), scene, x, y, false),
+                        );
+                    }
+                }
+                continue;
+            }
+            BillboardState::Showing(text) => text,
+        };
+        for y in z.y0..=z.y1 {
+            for x in z.x0..=z.x1 {
+                let h = mix(text * 31 + u64::from(x) * 7 + u64::from(y) * 13);
+                let glyph = GLYPH_ALPHABET[(h % GLYPH_ALPHABET.len() as u64) as usize];
+                let flicker = mix(u64::from(x) * 3 + u64::from(y) * 5 + t / 2).is_multiple_of(13);
+                let level = if flicker { 0.35 } else { 1.0 };
+                let style = styled(
+                    emissive(scale(neon_rgb(sign.color), level)),
+                    scene,
+                    x,
+                    y,
+                    !flicker,
+                );
+                set(cells, x, y, glyph, style);
+            }
+        }
+    }
+}
+
+/// The car: two cells on the street, tail light red, headlight white,
+/// the pool of its headlights running ahead of it (`light_map`). Drawn
+/// only on open floor, so it passes behind anything in the road.
+fn car(cells: &mut Cells, t: u64, scene: &Scene) {
+    let Some(car) = car_at(t) else {
+        return;
+    };
+    let route = car_route();
+    let (fx, fy) = route[car.index];
+    let front = styled(
+        emissive(scale(neon_rgb(Neon::White), 0.9)),
+        scene,
+        fx,
+        fy,
+        false,
+    );
+    put_if_floor(cells, fx, fy, '▪', front);
+    if car.index > 0 {
+        let (bx, by) = route[car.index - 1];
+        let back = styled(
+            emissive(scale(neon_rgb(Neon::Red), 0.8)),
+            scene,
+            bx,
+            by,
+            false,
+        );
+        put_if_floor(cells, bx, by, '▪', back);
+    }
+}
+
+/// The monorail: a track across the sky, and now and then the train
+/// crossing it, lit windows flickering.
+fn monorail(cells: &mut Cells, t: u64, scene: &Scene) {
+    let track = emissive(scale(FRAME, 0.9));
+    for x in 1..map::MAP_W - 1 {
+        set(
+            cells,
+            x,
+            TRACK_Y,
+            '╌',
+            styled(track, scene, x, TRACK_Y, false),
+        );
+    }
+    let Some(head) = train_at(t) else {
+        return;
+    };
+    for (i, ch) in TRAIN.chars().enumerate() {
+        let x = head + i as i64;
+        if x < 1 || x >= i64::from(map::MAP_W) - 1 {
+            continue;
+        }
+        let x = x as u16;
+        let surface = match ch {
+            '▪' => {
+                let dark = mix(u64::from(x) * 17 + t / 6).is_multiple_of(7);
+                let color = if i % 2 == 0 { Neon::Amber } else { Neon::Cyan };
+                emissive(scale(neon_rgb(color), if dark { 0.3 } else { 1.0 }))
+            }
+            _ => emissive([0.40, 0.42, 0.48]),
+        };
+        set(
+            cells,
+            x,
+            TRACK_Y,
+            ch,
+            styled(surface, scene, x, TRACK_Y, false),
+        );
+    }
 }
 
 /// The street's people, cats and rats pace their stretch of floor, back
@@ -786,8 +1121,21 @@ fn rain(cells: &mut Cells, t: u64, scene: &Scene) {
 fn puddles(cells: &mut Cells, t: u64, scene: &Scene) {
     for &(x, y) in map::PUDDLES.iter() {
         let h = mix(u64::from(x) * 3 + u64::from(y) * 7 + t / 6);
-        let ch = if h.is_multiple_of(2) { '≈' } else { '~' };
-        let reflect = if h.is_multiple_of(7) { 2.4 } else { 1.4 };
+        let splash = mix(u64::from(x) * 5 + u64::from(y) * 11 + t).is_multiple_of(9);
+        let ch = if splash {
+            'o'
+        } else if h.is_multiple_of(2) {
+            '≈'
+        } else {
+            '~'
+        };
+        let reflect = if splash {
+            2.8
+        } else if h.is_multiple_of(7) {
+            2.4
+        } else {
+            1.4
+        };
         let style = styled(wet(PUDDLE, reflect), scene, x, y, false);
         set(cells, x, y, ch, style);
     }
@@ -1015,6 +1363,7 @@ fn draw_popover(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
         Enter::Panel(_) => "step in",
         Enter::Line(_) => "look closer",
         Enter::Leave => "back up the wire",
+        Enter::Ledge => "look over",
     };
     let title = format!(" {} ", data::title(landmark));
     let lines = vec![
@@ -1283,7 +1632,8 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
         | Landmark::Blades
         | Landmark::Reader
         | Landmark::Stairs
-        | Landmark::Wire => {}
+        | Landmark::Wire
+        | Landmark::Ledge => {}
     }
     lines
 }
@@ -1337,7 +1687,7 @@ fn truncate_name(name: &str) -> String {
     out
 }
 
-fn mix(mut v: u64) -> u64 {
+pub(super) fn mix(mut v: u64) -> u64 {
     v ^= v >> 33;
     v = v.wrapping_mul(0xff51_afd7_ed55_8ccd);
     v ^= v >> 33;

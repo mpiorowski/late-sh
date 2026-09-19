@@ -99,8 +99,7 @@ TITLE = '╡ ▚ STATIC ROW ▞ ╞'
 
 # The landmark order is the popover priority; map.rs lists it the same way.
 LANDMARKS = ['Armorer', 'Tailor', 'Lockers', 'Bands', 'Bar', 'Screen', 'Repairs',
-             'Board', 'Bits', 'Noodles', 'Umbrellas', 'Blades', 'Reader', 'Stairs', 'Wire',
-             'Ledge']
+             'Board', 'Bits', 'Noodles', 'Umbrellas', 'Blades', 'Reader', 'Stairs', 'Wire']
 
 
 # ====================================================================== tiles
@@ -542,8 +541,6 @@ def layout_tiles():
     L['WIRE'] = zone(299, 20, 301, 20)
     L['SPAWN'] = (300, 20)
     reach['Wire'] = zone(300, 20, 300, 20); dist['Wire'] = 0
-    # the ledge: stand at the railing anywhere along it and look over
-    reach['Ledge'] = zone(286, 19, 429, 19); dist['Ledge'] = 0
     L['DROP'] = zone(285, 21, W - 2, H - 2)
     drop_lights = []
     drng = random.Random(7)
@@ -552,30 +549,6 @@ def layout_tiles():
             if drng.random() < 0.05:
                 grid[y][lx] = drng.choice('·∙·▪·')
                 drop_lights.append((lx, y))
-    # ---- billboards: hoardings over the rooftops (rows 2 and 3, sky) and
-    # on the towers below the ledge. Two rows of the city's script each;
-    # the map holds blank cells, the renderer writes and flickers them.
-    billboards = []
-
-    def billboard(x0, y0, width, color):
-        for y in (y0, y0 + 1):
-            for x in range(x0, x0 + width):
-                assert grid[y][x] in ' ·∙▪', ('billboard over something', x, y, grid[y][x])
-                grid[y][x] = ' '
-                if (x, y) in drop_lights:
-                    drop_lights.remove((x, y))
-        billboards.append((zone(x0, y0, x0 + width - 1, y0 + 1), color))
-
-    billboard(30, 2, 12, MAGENTA)
-    billboard(150, 2, 14, CYAN)
-    billboard(236, 2, 12, AMBER)
-    billboard(330, 2, 12, GREEN)
-    billboard(400, 2, 10, RED)
-    billboard(300, 27, 12, CYAN)
-    billboard(350, 33, 12, MAGENTA)
-    billboard(405, 26, 12, AMBER)
-    billboard(330, 38, 10, RED)
-    L['BILLBOARDS'] = billboards
     L['DROP_LIGHTS'] = drop_lights
     # the corner west of the railing: a dumpster and a stack of crates
     tile(273, 20, '▒'); tile(274, 20, '▒'); put(276, 20, '▪▪▪')
@@ -687,9 +660,6 @@ def lights(L):
     for (z, color) in L['SIGNS']:
         x0, y0, x1, _y1 = z
         out.append(((x0 + x1) // 2, y0, 'Sign', color, 7))
-    for (z, color) in L['BILLBOARDS']:
-        x0, y0, x1, y1 = z
-        out.append(((x0 + x1) // 2, y1, 'Billboard', color, 5))
     for (z, color) in L['BUILDINGS']:
         x0, y0, x1, y1 = z
         for y in range(y0, y1 + 1):
@@ -847,7 +817,6 @@ pub enum LightKind {
     Door,
     Window,
     Screen,
-    Billboard,
 }
 
 /// A light source: where it is, what color it throws, how far (in
@@ -877,14 +846,6 @@ __BANNERS__
 #[rustfmt::skip]
 pub const CART_SIGNS: &[Sign] = &[
 __CART_SIGNS__
-];
-
-/// The billboards: two rows of the city's script each, over the rooftops
-/// and on the towers below the ledge. The cells are blank on the map; the
-/// renderer writes them and flickers them.
-#[rustfmt::skip]
-pub const BILLBOARDS: &[Sign] = &[
-__BILLBOARDS__
 ];
 
 /// The buildings.
@@ -983,13 +944,11 @@ pub enum Landmark {
     Reader,
     Stairs,
     Wire,
-    /// The railing over the drop: look over the ledge.
-    Ledge,
 }
 
 impl Landmark {
     /// Every landmark, in popover priority order.
-    pub const ALL: [Landmark; 16] = [
+    pub const ALL: [Landmark; 15] = [
         Landmark::Armorer,
         Landmark::Tailor,
         Landmark::Lockers,
@@ -1005,7 +964,6 @@ impl Landmark {
         Landmark::Reader,
         Landmark::Stairs,
         Landmark::Wire,
-        Landmark::Ledge,
     ];
 
     /// The cells that put the player within reach: in front of a counter,
@@ -1120,7 +1078,6 @@ def emit(L):
            .replace('__SIGNS__', sign_lits(L['SIGNS']))
            .replace('__BANNERS__', sign_lits(L['BANNERS']))
            .replace('__CART_SIGNS__', sign_lits(L['CART_SIGNS']))
-           .replace('__BILLBOARDS__', sign_lits(L['BILLBOARDS']))
            .replace('__BUILDINGS__', building_lits)
            .replace('__LIGHTS__', '\n'.join(
                f'    Light {{ x: {x}, y: {y}, kind: LightKind::{k}, color: Neon::{c}, radius: {r} }},'

@@ -2,8 +2,9 @@
 //! run), Enter at a landmark (a shop panel, a street line, or the wire
 //! out), Esc or Enter to close a panel.
 //! Returns `false` for anything it does not own so global keys (page
-//! digits, Tab, `q`, `?`) keep working. While a panel is open the walk keys
-//! are swallowed so the runner does not wander under the box.
+//! digits, Tab, `q`, `?`) keep working. While a panel is open, or the
+//! runner is looking over the ledge, the walk keys are swallowed so the
+//! runner does not wander under the box.
 
 use crate::app::common::primitives::Screen;
 use crate::app::input::ParsedInput;
@@ -20,7 +21,7 @@ pub fn allowed(app: &App) -> bool {
 }
 
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
-    if app.city.panel().is_some() {
+    if app.city.panel().is_some() || app.city.at_ledge() {
         return handle_panel(app, event);
     }
 
@@ -38,6 +39,7 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
                 app.city.say(landmark, index);
             }
             Enter::Leave => app.set_screen(Screen::Clubhouse),
+            Enter::Ledge => app.city.look_over(),
         }
         return true;
     }
@@ -45,12 +47,14 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     handle_walk(app, event)
 }
 
-/// A panel takes Esc and Enter to close, and eats the walk keys. Everything
-/// else (digits, Tab, `q`) falls through to the globals.
+/// A panel, or the ledge view, takes Esc and Enter to close, and eats the
+/// walk keys. Everything else (digits, Tab, `q`) falls through to the
+/// globals.
 fn handle_panel(app: &mut App, event: &ParsedInput) -> bool {
     match event {
         ParsedInput::Byte(0x1B) | ParsedInput::Byte(b'\r') | ParsedInput::Byte(b'\n') => {
             app.city.close_panel();
+            app.city.step_back();
             true
         }
         _ => walk_delta(event).is_some() || run_delta(event).is_some(),
