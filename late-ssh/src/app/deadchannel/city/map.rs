@@ -6,17 +6,12 @@
 //! GAME.md, "The night city": the wallet. Shops, the armorer, repairs, the
 //! board, the tailor, all on one rainy street with a screen tuned to a
 //! dead channel at the end of it. One glyph per person (your runner's
-//! mark). Single-width glyphs only. `STYLE` says which register this map
-//! is in; `ui.rs` branches on it where the two differ.
+//! mark). Single-width glyphs only. Top-down, one tile per thing.
 
 #[rustfmt::skip]
 pub const MAP_W: u16 = 440;
 #[rustfmt::skip]
 pub const MAP_H: u16 = 44;
-
-/// Which register the map was generated in.
-#[rustfmt::skip]
-pub const STYLE: MapStyle = MapStyle::Tiles;
 
 #[rustfmt::skip]
 pub const MAP: [&str; MAP_H as usize] = [
@@ -126,12 +121,6 @@ pub const OPEN: (u16, u16) = (44, 18);
 /// The street sign on the top wall.
 #[rustfmt::skip]
 pub const TITLE: Zone = Zone { x0: 211, y0: 0, x1: 228, y1: 0 };
-/// The far skyline, when the register has one: rain falls across it.
-#[rustfmt::skip]
-pub const SKY: Option<Zone> = None;
-/// The antenna mast's light, when the register has one.
-#[rustfmt::skip]
-pub const MAST_LIGHT: Option<(u16, u16)> = None;
 /// The street band: everything walkable lies in it, plus the stalls.
 #[rustfmt::skip]
 pub const STREET: Zone = Zone { x0: 1, y0: 14, x1: 430, y1: 22 };
@@ -144,22 +133,18 @@ pub const DROP: Zone = Zone { x0: 285, y0: 21, x1: 438, y1: 42 };
 /// The screen's face: static, and now and then the test pattern.
 #[rustfmt::skip]
 pub const SCREEN_FACE: Zone = Zone { x0: 431, y0: 13, x1: 433, y1: 20 };
-/// The bits machine's display (drawn) or the machine itself (tiles).
+/// The bits machine.
 #[rustfmt::skip]
-pub const BITS_SCREEN: Zone = Zone { x0: 403, y0: 15, x1: 403, y1: 15 };
-/// The board kiosk, and its title row when it has one.
+pub const BITS: (u16, u16) = (403, 15);
+/// The board: one pillar of notices.
 #[rustfmt::skip]
 pub const BOARD: Zone = Zone { x0: 143, y0: 22, x1: 143, y1: 22 };
+/// The stairs down to the lower city.
 #[rustfmt::skip]
-pub const BOARD_SIGN: Option<Zone> = None;
-/// The stairs down to the lower city: their signs (drawn) or the tile.
-#[rustfmt::skip]
-pub const STAIRS_SIGNS: &[Zone] = &[Zone { x0: 2, y0: 18, x1: 2, y1: 18 }];
-/// The stairs up to the wire (the way out), and their sign when drawn.
+pub const STAIRS: (u16, u16) = (2, 18);
+/// The stairs up to the wire (the way out): the gap in the railing.
 #[rustfmt::skip]
 pub const WIRE: Zone = Zone { x0: 299, y0: 20, x1: 301, y1: 20 };
-#[rustfmt::skip]
-pub const WIRE_SIGN: Option<Zone> = None;
 /// The one dead letter on the lockers' sign: always dark.
 #[rustfmt::skip]
 pub const DEAD_LETTER: (u16, u16) = (61, 16);
@@ -171,12 +156,38 @@ pub struct Sign {
     pub color: Neon,
 }
 
-/// A building: its footprint, and the neon its walls take (`None` for
-/// plain concrete). Tiles only; empty when drawn.
+/// A building: its footprint, and its neon (`None` for a place with no
+/// sign): the doorway burns in it.
 #[derive(Debug, Clone, Copy)]
 pub struct Building {
     pub zone: Zone,
     pub color: Option<Neon>,
+}
+
+/// What kind of thing a light is; `ui.rs` decides how each kind
+/// flickers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LightKind {
+    Lamp,
+    Lantern,
+    Machine,
+    Candle,
+    Stairs,
+    Sign,
+    Door,
+    Window,
+    Screen,
+}
+
+/// A light source: where it is, what color it throws, how far (in
+/// columns; rows count double, the cells are twice as tall as wide).
+#[derive(Debug, Clone, Copy)]
+pub struct Light {
+    pub x: u16,
+    pub y: u16,
+    pub kind: LightKind,
+    pub color: Neon,
+    pub radius: u16,
 }
 
 /// The shop names in neon.
@@ -208,7 +219,7 @@ pub const BANNERS: &[Sign] = &[
     Sign { zone: Zone { x0: 164, y0: 23, x1: 164, y1: 23 }, color: Neon::Green },
 ];
 
-/// The carts and stalls: their name row (drawn) or their vendor (tiles).
+/// The stalls: their vendor, in the stall's color.
 #[rustfmt::skip]
 pub const CART_SIGNS: &[Sign] = &[
     Sign { zone: Zone { x0: 33, y0: 20, x1: 33, y1: 20 }, color: Neon::Amber },
@@ -217,51 +228,7 @@ pub const CART_SIGNS: &[Sign] = &[
     Sign { zone: Zone { x0: 421, y0: 17, x1: 421, y1: 17 }, color: Neon::Magenta },
 ];
 
-/// The awnings hanging over the sidewalk, one per facade (drawn only).
-#[rustfmt::skip]
-pub const AWNINGS: &[Zone] = &[
-
-];
-
-/// Where windows flicker: window fields (drawn) or whole buildings (tiles).
-#[rustfmt::skip]
-pub const WINDOWS: &[Zone] = &[
-    Zone { x0: 2, y0: 9, x1: 18, y1: 16 },
-    Zone { x0: 22, y0: 10, x1: 36, y1: 16 },
-    Zone { x0: 38, y0: 8, x1: 52, y1: 16 },
-    Zone { x0: 55, y0: 11, x1: 69, y1: 16 },
-    Zone { x0: 72, y0: 7, x1: 90, y1: 16 },
-    Zone { x0: 92, y0: 10, x1: 108, y1: 16 },
-    Zone { x0: 112, y0: 10, x1: 130, y1: 16 },
-    Zone { x0: 2, y0: 21, x1: 28, y1: 32 },
-    Zone { x0: 32, y0: 21, x1: 58, y1: 32 },
-    Zone { x0: 59, y0: 21, x1: 69, y1: 32 },
-    Zone { x0: 72, y0: 21, x1: 100, y1: 32 },
-    Zone { x0: 104, y0: 21, x1: 127, y1: 32 },
-    Zone { x0: 131, y0: 11, x1: 146, y1: 18 },
-    Zone { x0: 148, y0: 12, x1: 168, y1: 18 },
-    Zone { x0: 171, y0: 13, x1: 181, y1: 18 },
-    Zone { x0: 183, y0: 10, x1: 195, y1: 18 },
-    Zone { x0: 199, y0: 7, x1: 217, y1: 18 },
-    Zone { x0: 219, y0: 9, x1: 237, y1: 18 },
-    Zone { x0: 240, y0: 9, x1: 259, y1: 18 },
-    Zone { x0: 263, y0: 10, x1: 269, y1: 18 },
-    Zone { x0: 128, y0: 23, x1: 160, y1: 32 },
-    Zone { x0: 163, y0: 23, x1: 200, y1: 32 },
-    Zone { x0: 201, y0: 23, x1: 230, y1: 32 },
-    Zone { x0: 233, y0: 23, x1: 269, y1: 32 },
-    Zone { x0: 2, y0: 38, x1: 90, y1: 42 },
-    Zone { x0: 91, y0: 38, x1: 180, y1: 42 },
-    Zone { x0: 181, y0: 38, x1: 270, y1: 42 },
-    Zone { x0: 273, y0: 4, x1: 290, y1: 15 },
-    Zone { x0: 292, y0: 9, x1: 310, y1: 15 },
-    Zone { x0: 314, y0: 8, x1: 334, y1: 15 },
-    Zone { x0: 336, y0: 8, x1: 356, y1: 15 },
-    Zone { x0: 360, y0: 8, x1: 380, y1: 15 },
-    Zone { x0: 382, y0: 10, x1: 400, y1: 15 },
-];
-
-/// The buildings, for wall colors (tiles only).
+/// The buildings.
 #[rustfmt::skip]
 pub const BUILDINGS: &[Building] = &[
     Building { zone: Zone { x0: 2, y0: 9, x1: 18, y1: 16 }, color: None },
@@ -299,6 +266,189 @@ pub const BUILDINGS: &[Building] = &[
     Building { zone: Zone { x0: 382, y0: 10, x1: 400, y1: 15 }, color: None },
 ];
 
+/// Every light on the street.
+#[rustfmt::skip]
+pub const LIGHTS: &[Light] = &[
+    Light { x: 65, y: 3, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 69, y: 3, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 73, y: 3, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 77, y: 3, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 74, y: 4, kind: LightKind::Candle, color: Neon::White, radius: 2 },
+    Light { x: 202, y: 5, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 210, y: 5, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 218, y: 5, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 226, y: 5, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 234, y: 5, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 242, y: 5, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 250, y: 5, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 258, y: 5, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 110, y: 6, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 358, y: 6, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 20, y: 7, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 53, y: 8, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 312, y: 8, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 197, y: 9, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 215, y: 9, kind: LightKind::Machine, color: Neon::Green, radius: 3 },
+    Light { x: 238, y: 9, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 261, y: 9, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 411, y: 10, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 169, y: 11, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 228, y: 11, kind: LightKind::Candle, color: Neon::White, radius: 2 },
+    Light { x: 70, y: 12, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 225, y: 12, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 227, y: 12, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 229, y: 12, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 231, y: 12, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 302, y: 13, kind: LightKind::Lamp, color: Neon::Amber, radius: 8 },
+    Light { x: 312, y: 13, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 358, y: 13, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 20, y: 14, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 53, y: 14, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 110, y: 14, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 404, y: 14, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 412, y: 14, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 420, y: 14, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 426, y: 14, kind: LightKind::Lamp, color: Neon::Amber, radius: 8 },
+    Light { x: 428, y: 14, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 403, y: 15, kind: LightKind::Machine, color: Neon::Green, radius: 3 },
+    Light { x: 150, y: 16, kind: LightKind::Machine, color: Neon::Amber, radius: 3 },
+    Light { x: 169, y: 16, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 197, y: 16, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 238, y: 16, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 261, y: 16, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 285, y: 16, kind: LightKind::Lamp, color: Neon::Amber, radius: 8 },
+    Light { x: 330, y: 16, kind: LightKind::Lamp, color: Neon::Amber, radius: 8 },
+    Light { x: 375, y: 16, kind: LightKind::Lamp, color: Neon::Amber, radius: 8 },
+    Light { x: 12, y: 17, kind: LightKind::Lamp, color: Neon::Amber, radius: 8 },
+    Light { x: 46, y: 17, kind: LightKind::Lamp, color: Neon::Amber, radius: 8 },
+    Light { x: 86, y: 17, kind: LightKind::Lamp, color: Neon::Amber, radius: 8 },
+    Light { x: 120, y: 17, kind: LightKind::Lamp, color: Neon::Amber, radius: 8 },
+    Light { x: 420, y: 17, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 422, y: 17, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 2, y: 18, kind: LightKind::Stairs, color: Neon::Amber, radius: 3 },
+    Light { x: 175, y: 19, kind: LightKind::Lamp, color: Neon::Amber, radius: 8 },
+    Light { x: 225, y: 19, kind: LightKind::Lamp, color: Neon::Amber, radius: 8 },
+    Light { x: 405, y: 19, kind: LightKind::Lamp, color: Neon::Amber, radius: 8 },
+    Light { x: 30, y: 20, kind: LightKind::Lamp, color: Neon::Amber, radius: 8 },
+    Light { x: 100, y: 20, kind: LightKind::Lamp, color: Neon::Amber, radius: 8 },
+    Light { x: 300, y: 20, kind: LightKind::Stairs, color: Neon::Amber, radius: 3 },
+    Light { x: 143, y: 22, kind: LightKind::Machine, color: Neon::White, radius: 2 },
+    Light { x: 150, y: 22, kind: LightKind::Lamp, color: Neon::Amber, radius: 8 },
+    Light { x: 200, y: 22, kind: LightKind::Lamp, color: Neon::Amber, radius: 8 },
+    Light { x: 250, y: 22, kind: LightKind::Lamp, color: Neon::Amber, radius: 8 },
+    Light { x: 30, y: 23, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 61, y: 23, kind: LightKind::Machine, color: Neon::Green, radius: 3 },
+    Light { x: 70, y: 23, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 102, y: 23, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 161, y: 25, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 231, y: 25, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 30, y: 30, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 70, y: 30, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 102, y: 30, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 161, y: 30, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 231, y: 30, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 8, y: 33, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 32, y: 33, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 56, y: 33, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 80, y: 33, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 104, y: 33, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 128, y: 33, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 152, y: 33, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 176, y: 33, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 200, y: 33, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 224, y: 33, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 248, y: 33, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
+    Light { x: 27, y: 16, kind: LightKind::Sign, color: Neon::Red, radius: 7 },
+    Light { x: 42, y: 16, kind: LightKind::Sign, color: Neon::Magenta, radius: 7 },
+    Light { x: 60, y: 16, kind: LightKind::Sign, color: Neon::Cyan, radius: 7 },
+    Light { x: 96, y: 16, kind: LightKind::Sign, color: Neon::White, radius: 7 },
+    Light { x: 63, y: 21, kind: LightKind::Sign, color: Neon::Red, radius: 7 },
+    Light { x: 114, y: 21, kind: LightKind::Sign, color: Neon::Cyan, radius: 7 },
+    Light { x: 136, y: 18, kind: LightKind::Sign, color: Neon::Green, radius: 7 },
+    Light { x: 154, y: 18, kind: LightKind::Sign, color: Neon::Amber, radius: 7 },
+    Light { x: 175, y: 18, kind: LightKind::Sign, color: Neon::White, radius: 7 },
+    Light { x: 188, y: 18, kind: LightKind::Sign, color: Neon::Cyan, radius: 7 },
+    Light { x: 203, y: 18, kind: LightKind::Sign, color: Neon::Magenta, radius: 7 },
+    Light { x: 224, y: 18, kind: LightKind::Sign, color: Neon::Amber, radius: 7 },
+    Light { x: 244, y: 18, kind: LightKind::Sign, color: Neon::Green, radius: 7 },
+    Light { x: 296, y: 15, kind: LightKind::Sign, color: Neon::Green, radius: 7 },
+    Light { x: 318, y: 15, kind: LightKind::Sign, color: Neon::Magenta, radius: 7 },
+    Light { x: 365, y: 15, kind: LightKind::Sign, color: Neon::Green, radius: 7 },
+    Light { x: 5, y: 16, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 11, y: 16, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 27, y: 10, kind: LightKind::Window, color: Neon::Red, radius: 2 },
+    Light { x: 33, y: 16, kind: LightKind::Door, color: Neon::Red, radius: 3 },
+    Light { x: 35, y: 16, kind: LightKind::Window, color: Neon::Red, radius: 2 },
+    Light { x: 43, y: 8, kind: LightKind::Window, color: Neon::Magenta, radius: 2 },
+    Light { x: 47, y: 16, kind: LightKind::Window, color: Neon::Magenta, radius: 2 },
+    Light { x: 49, y: 16, kind: LightKind::Door, color: Neon::Magenta, radius: 3 },
+    Light { x: 66, y: 16, kind: LightKind::Door, color: Neon::Cyan, radius: 3 },
+    Light { x: 68, y: 16, kind: LightKind::Window, color: Neon::Cyan, radius: 2 },
+    Light { x: 75, y: 16, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 81, y: 16, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 87, y: 16, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 100, y: 10, kind: LightKind::Window, color: Neon::White, radius: 2 },
+    Light { x: 105, y: 16, kind: LightKind::Door, color: Neon::White, radius: 3 },
+    Light { x: 115, y: 16, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 127, y: 16, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 5, y: 21, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 17, y: 21, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 23, y: 21, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 75, y: 21, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 81, y: 21, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 87, y: 21, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 93, y: 21, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 110, y: 21, kind: LightKind::Door, color: Neon::Cyan, radius: 3 },
+    Light { x: 122, y: 21, kind: LightKind::Window, color: Neon::Cyan, radius: 2 },
+    Light { x: 138, y: 11, kind: LightKind::Window, color: Neon::Green, radius: 2 },
+    Light { x: 133, y: 18, kind: LightKind::Window, color: Neon::Green, radius: 2 },
+    Light { x: 142, y: 18, kind: LightKind::Door, color: Neon::Green, radius: 3 },
+    Light { x: 144, y: 18, kind: LightKind::Window, color: Neon::Green, radius: 2 },
+    Light { x: 154, y: 12, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 162, y: 12, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 150, y: 18, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 163, y: 18, kind: LightKind::Door, color: Neon::Amber, radius: 3 },
+    Light { x: 166, y: 18, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 172, y: 18, kind: LightKind::Window, color: Neon::White, radius: 2 },
+    Light { x: 179, y: 18, kind: LightKind::Door, color: Neon::White, radius: 3 },
+    Light { x: 185, y: 10, kind: LightKind::Window, color: Neon::Cyan, radius: 2 },
+    Light { x: 193, y: 10, kind: LightKind::Window, color: Neon::Cyan, radius: 2 },
+    Light { x: 184, y: 18, kind: LightKind::Window, color: Neon::Cyan, radius: 2 },
+    Light { x: 193, y: 18, kind: LightKind::Door, color: Neon::Cyan, radius: 3 },
+    Light { x: 208, y: 7, kind: LightKind::Door, color: Neon::Magenta, radius: 3 },
+    Light { x: 212, y: 18, kind: LightKind::Door, color: Neon::Magenta, radius: 3 },
+    Light { x: 215, y: 18, kind: LightKind::Window, color: Neon::Magenta, radius: 2 },
+    Light { x: 221, y: 18, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 228, y: 18, kind: LightKind::Door, color: Neon::Amber, radius: 3 },
+    Light { x: 235, y: 18, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 250, y: 9, kind: LightKind::Door, color: Neon::Green, radius: 3 },
+    Light { x: 250, y: 18, kind: LightKind::Window, color: Neon::Green, radius: 2 },
+    Light { x: 255, y: 18, kind: LightKind::Door, color: Neon::Green, radius: 3 },
+    Light { x: 131, y: 23, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 137, y: 23, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 149, y: 23, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 155, y: 23, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 204, y: 23, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 210, y: 23, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 216, y: 23, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 222, y: 23, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 276, y: 15, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 282, y: 15, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 300, y: 9, kind: LightKind::Window, color: Neon::Green, radius: 2 },
+    Light { x: 294, y: 15, kind: LightKind::Window, color: Neon::Green, radius: 2 },
+    Light { x: 306, y: 15, kind: LightKind::Door, color: Neon::Green, radius: 3 },
+    Light { x: 320, y: 8, kind: LightKind::Window, color: Neon::Magenta, radius: 2 },
+    Light { x: 316, y: 15, kind: LightKind::Window, color: Neon::Magenta, radius: 2 },
+    Light { x: 324, y: 15, kind: LightKind::Window, color: Neon::Magenta, radius: 2 },
+    Light { x: 330, y: 15, kind: LightKind::Door, color: Neon::Magenta, radius: 3 },
+    Light { x: 339, y: 15, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 351, y: 15, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 370, y: 15, kind: LightKind::Door, color: Neon::Green, radius: 3 },
+    Light { x: 385, y: 15, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 391, y: 15, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 431, y: 16, kind: LightKind::Screen, color: Neon::White, radius: 12 },
+];
+
 /// Steam rises from these cells (vents, grates, the noodle bowls).
 #[rustfmt::skip]
 pub const VENTS: &[(u16, u16)] = &[(20, 10), (37, 13), (53, 11), (71, 9), (91, 14), (110, 10), (30, 26), (35, 20), (37, 20), (50, 24), (70, 26), (102, 26), (110, 26), (118, 28), (147, 15), (169, 13), (197, 12), (230, 6), (218, 16), (238, 12), (243, 12), (253, 15), (261, 12), (161, 27), (180, 30), (231, 27), (252, 30), (291, 13), (312, 10), (335, 12), (358, 9), (370, 12), (411, 11)];
@@ -306,10 +456,6 @@ pub const VENTS: &[(u16, u16)] = &[(20, 10), (37, 13), (53, 11), (71, 9), (91, 1
 /// Puddle cells: they catch the neon.
 #[rustfmt::skip]
 pub const PUDDLES: &[(u16, u16)] = &[(301, 16), (302, 16), (303, 16), (312, 12), (313, 12), (24, 40), (195, 39), (196, 39), (197, 39), (284, 19), (285, 19), (103, 28), (105, 28), (314, 18), (315, 18), (162, 25), (195, 26), (196, 26), (197, 26), (198, 26), (196, 27), (268, 26), (222, 17), (223, 17), (224, 17), (12, 26), (13, 26), (33, 23), (34, 23), (35, 23), (33, 24), (182, 24), (183, 24), (184, 24), (192, 19), (154, 39), (155, 39), (156, 39), (92, 25), (93, 25), (164, 25), (155, 26), (336, 19), (337, 19), (170, 13), (170, 14), (347, 16), (348, 16), (349, 16), (350, 16), (348, 17), (174, 15), (175, 15), (177, 15), (140, 16), (239, 24), (240, 24), (241, 24), (242, 24), (240, 25), (150, 28), (151, 28), (152, 28), (151, 29), (20, 28), (288, 16), (36, 39), (37, 39), (38, 39), (63, 17), (29, 41), (89, 17), (90, 17), (91, 17), (252, 39), (27, 19), (28, 19), (139, 41), (140, 41), (141, 41), (142, 41), (29, 32), (30, 32), (65, 5), (38, 24), (39, 24), (40, 24), (41, 24), (39, 25)];
-
-/// Street lamps: a pool of light around each.
-#[rustfmt::skip]
-pub const LAMPS: &[(u16, u16)] = &[(302, 13), (12, 17), (46, 17), (86, 17), (120, 17), (30, 20), (100, 20), (150, 22), (200, 22), (250, 22), (175, 19), (225, 19), (285, 16), (330, 16), (375, 16), (405, 19), (426, 14)];
 
 /// The lower city's lights, seen from the railing.
 #[rustfmt::skip]
@@ -349,17 +495,8 @@ pub const WALKERS: &[Walker] = &[
     Walker { x0: 403, x1: 428, y: 16, glyph: 'r', period: 3, phase: 23 },
 ];
 
-/// The two registers the generator knows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MapStyle {
-    /// Front-on facades and carts under a skyline.
-    Drawn,
-    /// Top-down, one tile per thing.
-    Tiles,
-}
-
-/// The closed neon palette. Mapped onto the theme in `ui.rs`, never to raw
-/// colors, so the city follows whatever palette the person picked.
+/// The closed neon palette. `ui.rs` gives each its fixed color: the city
+/// has its own palette and does not follow the theme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Neon {
     Cyan,

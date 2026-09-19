@@ -1042,10 +1042,18 @@ fixed:
   drawn larger than a cell. A side street four tiles wide that doglegs,
   alleys one to three wide, rooms you walk into, stalls of five tiles,
   a ledge over the drop, and room on the floor for cats and NPCs later.
-  Both are in the generator (`--style tiles|drawn`). **Tiles won**, the
-  same day: it went long (440 columns, three legs, a canal, a back
-  lane), gained walkers pacing the street, and the drawn one stays only
-  as `--style drawn` and in `scripts/city_versions/` until it is deleted.
+  **Tiles won**, the same day: it went long (440 columns, three legs, a
+  canal, a back lane), gained walkers pacing the street, and the drawn
+  one left the live script (it lives in `scripts/city_versions/`).
+- **Blade Runner, not cyberpunk.** Dark, wet, few strong light sources,
+  warm sodium against cold neon, everything else in silhouette. Not
+  saturated everywhere: terminal cells cannot blend, so color on every
+  cell reads as noise. So the street is lit: every lamp, sign, doorway
+  and window is a light source with falloff stopped by walls, the
+  street fades to black with distance, rooms are dark until you are at
+  the door, walls throw shadows, rain shows only in light. And the city
+  has **its own palette**: it does not follow the person's theme. A
+  hundred palettes cannot all be lit well; one look, tuned once.
 - **Alive without state.** The street's extras, the people pacing it,
   the cats, the rats, the rain, the searchlight, are all pure functions
   of the tick. Nothing moves that could desync across replicas, nothing
@@ -1079,9 +1087,11 @@ fixed:
   says the city must never beat chat for standing around), no spawns, no
   clock. The screen's static and the rain are render-only ambience.
 
-Next on this surface, in order: delete the drawn register, the
-armorer's till (bits, the day roll), the tailor's mirror as the editor
-(pick, not draw), the locker, the band choice.
+Next on this surface, in order: reflections (signs smeared into the
+canal and the puddles), traffic (a car with headlights, a monorail),
+billboards in the glyph script; then the armorer's till (bits, the day
+roll), the tailor's mirror as the editor (pick, not draw), the locker,
+the band choice.
 
 ## Experiment framing
 

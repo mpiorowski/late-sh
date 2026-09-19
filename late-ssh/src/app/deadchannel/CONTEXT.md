@@ -11,7 +11,7 @@
   several replicas (root CONTEXT.md, multi-replica rule); gated behind
   the `haunt_live` fuse, unlit, so only staff (admins and moderators)
   are haunted today, and only they can finish the ladder and join.
-- Last updated: 2026-09-19 (the city moved under the clubhouse: `0` on the clubhouse goes down, runners only; two map registers in the generator, tiles (top-down, Dwarf Fortress) and drawn (front-on facades), `map::STYLE` picks; §3b). Before that, 2026-09-18 (the night city exists: the generated street, the runner as its mark, landmarks with popovers, shop panels showing catalogs without tills). Before that, 2026-09-14 (the breakthrough plays only on a send from
+- Last updated: 2026-09-19 (the city moved under the clubhouse: `0` on the clubhouse goes down, runners only; the tile register won and the drawn one left the live script; the street went long, with walkers and running; the renderer lights the street from every lamp and sign, fades it with distance and shadows the walls, in the city's own fixed palette; §3b). Before that, 2026-09-18 (the night city exists: the generated street, the runner as its mark, landmarks with popovers, shop panels showing catalogs without tills). Before that, 2026-09-14 (the breakthrough plays only on a send from
   its own session and swallows keys ahead of door games; the static rolls
   slower, scene lengths unchanged). Before that, 2026-09-13 (stage 3
   plays on its own clock: the static
@@ -326,72 +326,60 @@ the art before a single purchase is wired.
   the wire goes back up to the clubhouse. The wiring is thin on purpose
   (`Screen::City`, `App.city`, one dispatch line each in `input.rs`,
   `render.rs`, `tick.rs`).
-- **Two registers, one wiring (2026-09-19).** The generator has two
-  layouts and `map::STYLE` says which one `map.rs` holds; `ui.rs`
-  branches on it for the base styling and the register-specific
-  ambience, everything else (landmarks, reach, panels, the runner) is
-  shared. `python3 scripts/gen_city_map.py --write` (tiles, the default)
-  or `--write --style drawn`, then rebuild. One of them gets deleted once
-  the choice is made.
-  - **tiles** (chosen 2026-09-19): top-down, one tile per thing, the
-    Dwarf Fortress register. `#` walls in the shop's neon, `+` doors,
-    `╬` windows that flicker, `=` counters, `)` blades, `[` plate, `"`
-    marks, `!` bottles, `%` bowls, `∩` lockers, `▬` beds, `▪` crates,
-    `▓` shutters and cabinets, `≈` water, `@` people, `c` cats, `r`
-    rats, `>` stairs, `*` lamps, `°` lanterns, `≡` grates that steam. A
-    440-column street in three legs with a dogleg between each (the
-    camera scrolls), four tiles wide, alleys one to three wide running
-    off it (dead ends, a hidden court with a shrine and a plant, a back
-    lane behind the second leg reached from its two end alleys and the
-    arcade's back door), rooms you walk into, stalls of five tiles
-    against the walls, a canal under the first two legs (a walkway, two
-    bridges, warehouses on the far bank), the ledge with the railing and
-    the wire stairs (`>` in the gap, the spawn) along the third leg, a
-    small yard and the screen as three tiles of static closing the
-    street. The shops are the landmarks; everything else is there to be
-    there: tenements (`tenement()` lays out corridor, rooms, beds and a
-    sleeper from a seed), a lockup, a shuttered pawn shop, a clinic, the
-    baths, a motel, the arcade, a shrine, a market hall, a garage, a
-    dock, a chop shop, a video store, an aerial lot. **Walkers**
-    (`map::WALKERS`, `ui::walkers`): people, cats and rats pacing a
-    stretch of floor as a pure function of the tick, no state; the
-    generator and `map_test` prove every path is open floor. A
-    spinner's searchlight sweeps the street now and then.
-  - **Speed.** Arrows/hjkl step; Shift+arrow and `HJKL` run up to
-    `RUN_STEPS` (6), stopping at anything solid and at the first
-    landmark within reach so a run never overshoots a door. The ambience
-    runs at half the animation edge (`ui::SLOW`), the rain at a quarter,
-    so the street breathes instead of flickering; walkers keep the full
-    edge and pace by their own `period`.
-  - **Snapshots.** `scripts/city_versions/` keeps a copy of the
-    generator from before each rework, with a README on restoring one.
-  - **drawn**: front-on, multi-cell facades and carts under a skyline,
-    the first pass (2026-09-18). Kept for comparison; its street reads as
-    a plaza, which is why the tile register was built.
-- **The runner** is its mark in both (GAME.md, "The look"; `@` for a
-  session without a runner row), name label above. Single-width glyphs
+- **The register (decided 2026-09-19): tiles.** Top-down, one tile per
+  thing, the Dwarf Fortress register. `#` walls, `+` doors, `╬` windows
+  that flicker, `=` counters, `)` blades, `[` plate, `"` marks, `!`
+  bottles, `%` bowls, `∩` lockers, `▬` beds, `▪` crates, `▓` shutters and
+  cabinets, `≈` water, `@` people, `c` cats, `r` rats, `>` stairs, `*`
+  lamps, `°` lanterns, `≡` grates that steam. The first pass drew the
+  street front-on with multi-cell facades; it read as a plaza and lives
+  only in `scripts/city_versions/v2_tiles_gen_city_map.py` (`--style
+  drawn` there). A 440-column street in three legs with a dogleg between
+  each (the camera scrolls), four tiles wide, alleys one to three wide
+  running off it (dead ends, a hidden court with a shrine and a plant, a
+  back lane behind the second leg reached from its two end alleys and the
+  arcade's back door), rooms you walk into, stalls of five tiles against
+  the walls, a canal under the first two legs (a walkway, two bridges,
+  warehouses on the far bank), the ledge with the railing and the wire
+  stairs (`>` in the gap, the spawn) along the third leg, a small yard
+  and the screen as three tiles of static closing the street. The shops
+  are the landmarks; everything else is there to be there: tenements
+  (`tenement()` lays out corridor, rooms, beds and a sleeper from a
+  seed), a lockup, a shuttered pawn shop, a clinic, the baths, a motel,
+  the arcade, a shrine, a market hall, a garage, a dock, a chop shop, a
+  video store, an aerial lot. **Walkers** (`map::WALKERS`,
+  `ui::walkers`): people, cats and rats pacing a stretch of floor as a
+  pure function of the tick, no state; the generator and `map_test`
+  prove every path is open floor.
+- **Light (2026-09-19).** Blade Runner, not cyberpunk: the street is
+  dark and every color has a source. `map::LIGHTS` is every light on the
+  street, found by the generator scanning the finished grid (a `*` is a
+  lamp, a `°` a lantern, `$` `♪` `?` machines, `_` candles, `>` stairs)
+  plus the signs, the shops' doorways, the windows and the screen, each
+  with a kind, a `Neon` and a radius. Each frame `ui::Scene` spreads
+  every light over the floor it reaches (Dial's buckets: a column costs
+  one, a row two, light crosses open ground and doorways, lands on walls
+  and stops) at the level `light_level` gives it this tick (lamps
+  flicker, signs short out and their light with them, windows go dark
+  for a while, the screen pulses with its static), and adds the
+  spinner's searchlight passing over. A **visibility map** fades
+  everything with distance from the runner (`SEE_FULL` columns in full,
+  black-ish by `SEE_END`) and keeps a room at `INSIDE_DARK` until the
+  runner is at its door. Every cell is a `Surface`: lit (its color times
+  ambient plus the light on it, wet things more, halved in the shadow
+  under a wall) or emissive (neon, lamps, windows: they burn on their
+  own and only fade with distance). Height is faked: the top wall of a
+  building against the dark draws as `▀`, the floor south of any wall is
+  in shadow. Rain shows only where there is light to see it by, in that
+  light's color.
+- **Own palette, not the theme.** The city does not follow the person's
+  theme: one look, tuned once (`ui::neon_rgb` and the surface constants,
+  fixed RGB). A hundred palettes cannot all be lit well. The overlays
+  (popover, street line, panel) are chrome and keep the theme.
+- **The runner** is its mark (GAME.md, "The look"; `@` for a session
+  without a runner row), name label above. Single-width glyphs
   only; the generator refuses wide and combining characters and
   `map_test` asserts it again.
-- **The drawn street, west to east.** The stairs down (`▼ LOWER`, no function),
-  the armorer (red), the tailor (magenta, starter pieces on mannequins in
-  the window), the lockers (cyan, one letter of the sign dead for good),
-  bands (green, antennas on the roof), the bar "dead air" (amber), the
-  screen (a facade that is one screen tuned to a dead channel: static,
-  torn now and then, the test pattern for a moment each cycle, a glyph
-  from the alphabet surfacing in the noise once in a while), and patch
-  (white, repairs). Alleys between them carry fire escapes and steaming
-  vents; vertical banners in the glyph alphabet hang off the corners (the
-  city's script, unreadable on purpose). On the street: lamps, the board
-  kiosk, the bits machine, the noodle cart (the cook behind the counter,
-  steam off the bowls), the umbrella stall, the blade cart, the reader's
-  tent. South, the railing over the drop: the lower city as lights far
-  below, and the stairwell up to the wire in a gap of the rail, where the
-  runner spawns and the way out is.
-- **Colors go through `Neon`** (`Cyan`, `Magenta`, `Red`, `Amber`,
-  `Green`, `White`), mapped onto theme colors in `ui.rs` (`CHAT_AUTHOR`,
-  `BOT`, `ERROR`, `AMBER_GLOW`, `SUCCESS`, `TEXT_BRIGHT`), never raw RGB,
-  so the street follows the person's palette. Puddles reflect the sign
-  nearest by column; awnings wear their shop's color dimmed.
 - **Landmarks.** Enter at a shop (armorer, tailor, lockers, bands, bar,
   patch, board, bits machine) opens a centered panel with its catalog and
   a line saying the till is not open: the armorer lists all fifteen

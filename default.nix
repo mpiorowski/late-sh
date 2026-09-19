@@ -14,6 +14,7 @@
   unzip,
   makeWrapper ? null,
   alsa-lib,
+  libpulseaudio ? null,
   glib-networking ? null,
   gst_all_1 ? null,
   gtk3 ? null,
@@ -163,6 +164,11 @@ in
     # sandbox. `late` itself no longer links WebKitGTK on Linux, but it is
     # still wrapped: the spawned late-webview child inherits these variables.
     postFixup = lib.optionalString stdenv.isLinux ''
+      # WebRTC's voice audio device dlopen()s libpulse.so.0 at runtime, so the
+      # linker never records it and shrink-rpath would drop it. Add it after
+      # fixup, before wrapping, or voice init fails on NixOS.
+      patchelf --add-rpath "${lib.makeLibraryPath [libpulseaudio]}" "$out/bin/late"
+
       for bin in late late-cli late-webview; do
         if [ -x "$out/bin/$bin" ]; then
           wrapProgram "$out/bin/$bin" \

@@ -11,4 +11,11 @@ street, so any earlier version can be put back in one step:
   columns, one leg with a dogleg, before it grew long. Its `--style drawn`
   is v1, the front-on plaza (2026-09-18).
 
+- `v3_long_street_gen_city_map.py`: the long tile street (2026-09-19),
+  440 columns, three legs, canal, back lane, walkers, running. The one
+  you said you loved. Taken before the lighting pass; it still carries
+  the drawn register as `--style drawn`, and the renderer of that time
+  is in git history beside it (the lit renderer needs `LIGHTS`, which
+  this script does not emit).
+
 The live script is the version after the last snapshot.

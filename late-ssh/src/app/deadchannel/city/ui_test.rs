@@ -65,8 +65,9 @@ fn the_street_line_pins_what_the_cart_said() {
 
 #[test]
 fn animation_never_paints_over_a_prop() {
-    let mut cells = styled_base_grid();
-    animate(&mut cells, 12_345);
+    let scene = Scene::build(12_345, map::SPAWN.0, map::SPAWN.1);
+    let mut cells = compose_grid(&scene);
+    animate(&mut cells, 12_345, &scene);
     for sign in map::SIGNS.iter().chain(map::CART_SIGNS.iter()) {
         for x in sign.zone.x0..=sign.zone.x1 {
             let (ch, _) = cells[usize::from(sign.zone.y0)][usize::from(x)];
@@ -78,6 +79,27 @@ fn animation_never_paints_over_a_prop() {
         cells[usize::from(by)][usize::from(bx)].0,
         map::char_at(bx, by)
     );
+}
+
+#[test]
+fn light_falls_on_the_street_and_stops_at_walls() {
+    let scene = Scene::build(0, map::SPAWN.0, map::SPAWN.1);
+    // The cell next to a street lamp is lit; deep inside a tenement's
+    // back rooms, away from every window and door, it is not.
+    let lamp = map::LIGHTS
+        .iter()
+        .find(|l| l.kind == LightKind::Lamp)
+        .expect("a lamp");
+    assert!(
+        luma(scene.light(lamp.x + 1, lamp.y)) > 0.3,
+        "beside the lamp"
+    );
+    // Far down the street from the runner the ground is near black.
+    assert!(
+        scene.vis(map::OPEN.0, map::OPEN.1) < 0.3,
+        "the far end fades"
+    );
+    assert_eq!(scene.vis(map::SPAWN.0, map::SPAWN.1), 1.0, "here is bright");
 }
 
 #[test]
