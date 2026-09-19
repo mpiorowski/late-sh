@@ -679,6 +679,7 @@ fn visibility_map(player_x: u16, player_y: u16) -> Vec<f32> {
         .iter()
         .map(|b| b.zone.distance(player_x, player_y) <= REVEAL_REACH)
         .collect();
+    let inside = inside_map();
     let mut out = vec![1.0f32; usize::from(map::MAP_W) * usize::from(map::MAP_H)];
     for y in 0..map::MAP_H {
         for x in 0..map::MAP_W {
@@ -691,13 +692,8 @@ fn visibility_map(player_x: u16, player_y: u16) -> Vec<f32> {
                 let k = ((d - SEE_FULL) / (SEE_END - SEE_FULL)).min(1.0);
                 1.0 - k * (1.0 - SEE_FLOOR)
             };
-            if let Some(i) = map::BUILDINGS.iter().position(|b| {
-                b.zone.contains(x, y)
-                    && x > b.zone.x0
-                    && x < b.zone.x1
-                    && y > b.zone.y0
-                    && y < b.zone.y1
-            }) && !revealed[i]
+            if let Some(i) = inside[index(x, y)]
+                && !revealed[i]
             {
                 v *= INSIDE_DARK;
             }
@@ -705,6 +701,22 @@ fn visibility_map(player_x: u16, player_y: u16) -> Vec<f32> {
         }
     }
     out
+}
+
+/// Which building each cell is strictly inside of, if any: computed once.
+fn inside_map() -> &'static [Option<usize>] {
+    static INSIDE: std::sync::OnceLock<Vec<Option<usize>>> = std::sync::OnceLock::new();
+    INSIDE.get_or_init(|| {
+        let mut out = vec![None; usize::from(map::MAP_W) * usize::from(map::MAP_H)];
+        for (i, b) in map::BUILDINGS.iter().enumerate() {
+            for y in b.zone.y0 + 1..b.zone.y1 {
+                for x in b.zone.x0 + 1..b.zone.x1 {
+                    out[index(x, y)] = Some(i);
+                }
+            }
+        }
+        out
+    })
 }
 
 // ------------------------------------------------------------ surfaces
@@ -902,21 +914,59 @@ fn styled(surface: Surface, scene: &Scene, x: u16, y: u16, bold: bool) -> Style 
     }
 }
 
+/// What a map cell is before this frame's light: its glyph (a roof edge
+/// where the wall meets the dark), its surface, whether it sits in a
+/// wall's shadow, whether it is a neon letter. Computed once.
+#[derive(Clone, Copy)]
+struct Base {
+    glyph: char,
+    surface: Surface,
+    shadow: bool,
+    bold: bool,
+}
+
+fn base_map() -> &'static [Base] {
+    static BASE: std::sync::OnceLock<Vec<Base>> = std::sync::OnceLock::new();
+    BASE.get_or_init(|| {
+        let mut out = Vec::with_capacity(usize::from(map::MAP_W) * usize::from(map::MAP_H));
+        for (y, row) in map::grid().iter().enumerate() {
+            let y = y as u16;
+            for (x, &ch) in row.iter().enumerate() {
+                let x = x as u16;
+                let surface = surface(ch, x, y);
+                out.push(Base {
+                    glyph: roof_edge(ch, x, y),
+                    surface,
+                    shadow: !surface.emissive && casts_shadow(x, y),
+                    bold: surface.emissive && ch.is_alphabetic(),
+                });
+            }
+        }
+        out
+    })
+}
+
 /// Every map cell lit: the base frame before the ambience.
 fn compose_grid(scene: &Scene) -> Cells {
-    map::grid()
-        .iter()
-        .enumerate()
-        .map(|(y, row)| {
-            let y = y as u16;
-            row.iter()
-                .enumerate()
-                .map(|(x, &ch)| {
-                    let x = x as u16;
-                    let surface = surface(ch, x, y);
-                    let glyph = roof_edge(ch, x, y);
-                    let bold = surface.emissive && ch.is_alphabetic();
-                    (glyph, styled(surface, scene, x, y, bold))
+    let base = base_map();
+    (0..map::MAP_H)
+        .map(|y| {
+            (0..map::MAP_W)
+                .map(|x| {
+                    let cell = base[index(x, y)];
+                    let color = shade(
+                        cell.surface,
+                        scene.light(x, y),
+                        scene.vis(x, y),
+                        cell.shadow,
+                    );
+                    let style = ink(color);
+                    let style = if cell.bold {
+                        style.add_modifier(Modifier::BOLD)
+                    } else {
+                        style
+                    };
+                    (cell.glyph, style)
                 })
                 .collect()
         })
