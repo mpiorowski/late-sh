@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: public web frontend for late.sh
 - Primary audience: LLM agents working on `late-web`, human contributors
-- Last updated: 2026-08-11 (new `pages/live` module: the public `/live/{id}` watch page and `/golive/{token}` broadcast console for "watch me" streams, both thin LiveKit browser clients with same-origin proxies of the late-ssh `/api/stream/*` capability routes; design and invariants in `late-ssh/src/app/stream/CONTEXT.md`)
+- Last updated: 2026-09-15 (gallery canvas mobile navigation: touch pan drag, pinch-to-zoom, double-tap to fit, enlarged mobile touch buttons; character rendering: added Noto Sans Symbols 2 font webfont fallback under `static/fonts/` for Unicode Symbols for Legacy Computing e.g. U+1FB00-1FBFF)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -96,7 +96,7 @@ Important route details:
 - npm scripts in `late-web/package.json`:
   - `npm run tailwind:watch`
   - `npm run tailwind:build`
-- Static fonts include Symbols Nerd Font under `static/fonts/`.
+- Static fonts include Symbols Nerd Font and Noto Sans Symbols 2 (for legacy computing symbols) under `static/fonts/`.
 
 ---
 
