@@ -109,3 +109,33 @@ fn camera_centers_small_maps_and_clamps_large_ones() {
     assert_eq!(camera_origin(100, 40, 200), 80);
     assert_eq!(camera_origin(199, 40, 200), 160);
 }
+
+#[test]
+fn every_cell_sits_on_the_city_night_not_the_theme_canvas() {
+    // The street, the padding around a small map, and an open panel all
+    // paint the same fixed background, so a light theme never bleeds in.
+    let mut state = State::new();
+    state.open_panel(Landmark::Armorer);
+    let backend = TestBackend::new(60, 20);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            draw(
+                frame,
+                area,
+                CityView {
+                    state: &state,
+                    own_username: "mira",
+                    look: None,
+                },
+            );
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            assert_eq!(buffer[(x, y)].bg, night(), "cell ({x}, {y})");
+        }
+    }
+}

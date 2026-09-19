@@ -373,9 +373,12 @@ the art before a single purchase is wired.
   in shadow. Rain shows only where there is light to see it by, in that
   light's color.
 - **Own palette, not the theme.** The city does not follow the person's
-  theme: one look, tuned once (`ui::neon_rgb` and the surface constants,
-  fixed RGB). A hundred palettes cannot all be lit well. The overlays
-  (popover, street line, panel) are chrome and keep the theme.
+  theme at all: one look, tuned once (`ui::NIGHT` painted under every
+  cell and overlay, `ui::neon_rgb`, the surface constants, the `INK_*`
+  greys of the overlay text, all fixed RGB). A hundred palettes cannot
+  all be lit well, and a light canvas showing through the street breaks
+  the night. Nothing in `city/ui.rs` reads the theme module; the mirror
+  in the tailor's panel recolors the tints through `ui::tint_rgb`.
 - **The runner** is its mark (GAME.md, "The look"; `@` for a session
   without a runner row), name label above. Single-width glyphs
   only; the generator refuses wide and combining characters and

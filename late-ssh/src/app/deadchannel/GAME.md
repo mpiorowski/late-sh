@@ -1052,8 +1052,9 @@ fixed:
   and window is a light source with falloff stopped by walls, the
   street fades to black with distance, rooms are dark until you are at
   the door, walls throw shadows, rain shows only in light. And the city
-  has **its own palette**: it does not follow the person's theme. A
-  hundred palettes cannot all be lit well; one look, tuned once.
+  has **its own palette**: it does not follow the person's theme, not
+  even for the background or the overlay text. A hundred palettes
+  cannot all be lit well; one look, tuned once.
 - **Alive without state.** The street's extras, the people pacing it,
   the cats, the rats, the rain, the searchlight, are all pure functions
   of the tick. Nothing moves that could desync across replicas, nothing

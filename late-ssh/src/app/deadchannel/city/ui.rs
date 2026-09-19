@@ -16,9 +16,10 @@
 //! popover for the landmark within reach, a pinned line when the street
 //! talks back, and a shop panel.
 //!
-//! The city has its own palette (fixed RGB, `neon_rgb` and the surface
-//! constants) and does not follow the theme: one look, tuned once. The
-//! overlays are chrome and keep the theme.
+//! The city has its own palette (fixed RGB: `NIGHT` under every cell,
+//! `neon_rgb`, the surface constants, the `INK_*` greys of the overlays)
+//! and does not follow the theme at all: one look, tuned once. Nothing on
+//! this screen reads the theme module, so a light theme cannot bleed in.
 
 use ratatui::{
     Frame,
@@ -28,11 +29,9 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use crate::app::common::theme;
 use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
 use crate::app::deadchannel::runner::state::Tint;
 use crate::app::deadchannel::runner::state::{Look, Slot, pieces_for};
-use crate::app::deadchannel::runner::ui::{portrait_spans, tint_color};
 
 use super::data;
 use super::map::{self, Landmark, LightKind, Neon};
@@ -112,6 +111,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
     let pad_x = vw.saturating_sub(map_w) / 2;
     let pad_y = vh.saturating_sub(map_h) / 2;
 
+    frame.render_widget(Block::default().style(ink(INK)), area);
     let mut lines: Vec<Line> = Vec::with_capacity(vh);
     for _ in 0..pad_y {
         lines.push(Line::default());
@@ -119,7 +119,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
     for row in cells.iter().skip(cam_y).take(vh.saturating_sub(pad_y)) {
         let mut spans: Vec<Span> = Vec::new();
         if pad_x > 0 {
-            spans.push(Span::raw(" ".repeat(pad_x)));
+            spans.push(Span::styled(" ".repeat(pad_x), ink(INK)));
         }
         // Same-style runs become one span each; the street is long runs.
         let mut run = String::new();
@@ -143,7 +143,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
         }
         lines.push(Line::from(spans));
     }
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines).style(ink(INK)), area);
 
     draw_street_line(frame, area, &view);
     draw_popover(frame, area, &view);
@@ -183,10 +183,38 @@ const PLANT: Rgb = [0.38, 0.68, 0.38];
 const RAIN: Rgb = [0.70, 0.76, 0.92];
 const STEAM: Rgb = [0.80, 0.80, 0.84];
 const FRAME: Rgb = [0.30, 0.27, 0.25];
+/// The sky over the street: painted under every cell and every overlay,
+/// so the terminal's canvas never shows through.
+const NIGHT: Rgb = [0.03, 0.03, 0.05];
+/// The overlays' text, rain-grey on the night, bright to muted.
+const INK_BRIGHT: Rgb = [0.92, 0.93, 0.96];
+const INK: Rgb = [0.74, 0.76, 0.82];
+const INK_DIM: Rgb = [0.50, 0.52, 0.58];
+const INK_MUTED: Rgb = [0.34, 0.35, 0.40];
 
 fn rgb_color(c: Rgb) -> Color {
     let q = |v: f32| ((v.clamp(0.0, 1.0) * LEVELS).round() / LEVELS * 255.0) as u8;
     Color::Rgb(q(c[0]), q(c[1]), q(c[2]))
+}
+
+fn night() -> Color {
+    rgb_color(NIGHT)
+}
+
+/// A foreground on the night sky: every cell and every overlay span.
+fn ink(c: Rgb) -> Style {
+    Style::default().fg(rgb_color(c)).bg(night())
+}
+
+/// A tint of the tailor's rack in the city's own palette.
+fn tint_rgb(tint: Tint) -> Rgb {
+    match tint {
+        Tint::Static => INK_DIM,
+        Tint::Amber => neon_rgb(Neon::Amber),
+        Tint::Phosphor => neon_rgb(Neon::Green),
+        Tint::White => INK_BRIGHT,
+        Tint::Red => neon_rgb(Neon::Red),
+    }
 }
 
 fn scale(c: Rgb, k: f32) -> Rgb {
@@ -199,17 +227,15 @@ fn luma(c: Rgb) -> f32 {
 
 /// A neon at full burn, for the overlays and the runner's mark.
 fn lit(neon: Neon) -> Style {
-    Style::default()
-        .fg(rgb_color(neon_rgb(neon)))
-        .add_modifier(Modifier::BOLD)
+    ink(neon_rgb(neon)).add_modifier(Modifier::BOLD)
 }
 
 fn glow(neon: Neon) -> Style {
-    Style::default().fg(rgb_color(neon_rgb(neon)))
+    ink(neon_rgb(neon))
 }
 
 fn dim(neon: Neon) -> Style {
-    Style::default().fg(rgb_color(scale(neon_rgb(neon), 0.55)))
+    ink(scale(neon_rgb(neon), 0.55))
 }
 
 /// The neon a landmark burns in: its sign's color, or the street's grey
@@ -375,21 +401,21 @@ fn light_level(i: usize, light: &map::Light, t: u64) -> f32 {
     let h = mix(i as u64 * 977 + t / 8);
     match light.kind {
         LightKind::Lamp => {
-            if h % 11 == 0 {
+            if h.is_multiple_of(11) {
                 0.35
             } else {
                 1.0
             }
         }
         LightKind::Lantern => {
-            if mix(i as u64 * 31 + t / 3) % 4 == 0 {
+            if mix(i as u64 * 31 + t / 3).is_multiple_of(4) {
                 0.7
             } else {
                 1.0
             }
         }
         LightKind::Machine => {
-            if (t / 4 + i as u64) % 2 == 0 {
+            if (t / 4 + i as u64).is_multiple_of(2) {
                 1.0
             } else {
                 0.7
@@ -397,7 +423,7 @@ fn light_level(i: usize, light: &map::Light, t: u64) -> f32 {
         }
         LightKind::Candle => 0.5 + (mix(i as u64 * 7 + t / 2) % 3) as f32 * 0.15,
         LightKind::Stairs => {
-            if (t / 5) % 2 == 0 {
+            if (t / 5).is_multiple_of(2) {
                 1.0
             } else {
                 0.6
@@ -598,7 +624,7 @@ fn window_color(x: u16, y: u16) -> Rgb {
 
 /// A window goes dark for a while now and then.
 fn window_dark(x: u16, y: u16, t: u64) -> bool {
-    mix(u64::from(x) * 53 + u64::from(y) * 97 + t / 12) % 13 == 0
+    mix(u64::from(x) * 53 + u64::from(y) * 97 + t / 12).is_multiple_of(13)
 }
 
 enum SignState {
@@ -613,9 +639,9 @@ enum SignState {
 /// on the sign's light cell so the letters and the light agree.
 fn sign_state(light_x: u16, light_y: u16, t: u64) -> SignState {
     let h = mix(u64::from(light_x) * 131 + u64::from(light_y) * 17 + t / 3);
-    if h % 23 == 0 {
+    if h.is_multiple_of(23) {
         SignState::Short
-    } else if h % 11 == 0 {
+    } else if h.is_multiple_of(11) {
         SignState::Dropped((h / 11 % 9) as u16)
     } else {
         SignState::Burning
@@ -649,7 +675,7 @@ fn shade(surface: Surface, light: Rgb, vis: f32, shadow: bool) -> Rgb {
 fn styled(surface: Surface, scene: &Scene, x: u16, y: u16, bold: bool) -> Style {
     let shadow = !surface.emissive && casts_shadow(x, y);
     let color = shade(surface, scene.light(x, y), scene.vis(x, y), shadow);
-    let style = Style::default().fg(rgb_color(color));
+    let style = ink(color);
     if bold {
         style.add_modifier(Modifier::BOLD)
     } else {
@@ -743,13 +769,13 @@ fn rain(cells: &mut Cells, t: u64, scene: &Scene) {
                 continue;
             }
             let column = mix(u64::from(x) * 7919);
-            if column % 2 == 0 {
+            if column.is_multiple_of(2) {
                 continue;
             }
-            if (u64::from(y) + t / 2 + column) % RAIN_PERIOD != 0 {
+            if !(u64::from(y) + t / 2 + column).is_multiple_of(RAIN_PERIOD) {
                 continue;
             }
-            let ch = if column % 5 == 0 { '|' } else { '\'' };
+            let ch = if column.is_multiple_of(5) { '|' } else { '\'' };
             let style = styled(wet(RAIN, 1.3), scene, x, y, false);
             set(cells, x, y, ch, style);
         }
@@ -760,8 +786,8 @@ fn rain(cells: &mut Cells, t: u64, scene: &Scene) {
 fn puddles(cells: &mut Cells, t: u64, scene: &Scene) {
     for &(x, y) in map::PUDDLES.iter() {
         let h = mix(u64::from(x) * 3 + u64::from(y) * 7 + t / 6);
-        let ch = if h % 2 == 0 { '≈' } else { '~' };
-        let reflect = if h % 7 == 0 { 2.4 } else { 1.4 };
+        let ch = if h.is_multiple_of(2) { '≈' } else { '~' };
+        let reflect = if h.is_multiple_of(7) { 2.4 } else { 1.4 };
         let style = styled(wet(PUDDLE, reflect), scene, x, y, false);
         set(cells, x, y, ch, style);
     }
@@ -836,19 +862,19 @@ fn screen(cells: &mut Cells, t: u64, scene: &Scene) {
         Neon::Red,
     ];
     for y in face.y0..=face.y1 {
-        let torn = mix(u64::from(y) * 17 + t / 2) % 17 == 0;
+        let torn = mix(u64::from(y) * 17 + t / 2).is_multiple_of(17);
         for x in face.x0..=face.x1 {
             let h = mix(u64::from(x) * 97 + u64::from(y) * 53 + t);
             let vis = scene.vis(x, y);
             if pattern {
                 let bar = (u64::from(x - face.x0) * 6 / width) as usize;
                 let color = shade(emissive(neon_rgb(bars[bar])), [0.0; 3], vis, false);
-                set(cells, x, y, '█', Style::default().fg(rgb_color(color)));
+                set(cells, x, y, '█', ink(color));
                 continue;
             }
             let ch = if torn {
-                if h % 2 == 0 { '▀' } else { '▄' }
-            } else if glyph_frame && h % 9 == 0 {
+                if h.is_multiple_of(2) { '▀' } else { '▄' }
+            } else if glyph_frame && h.is_multiple_of(9) {
                 GLYPH_ALPHABET[(h / 9 % GLYPH_ALPHABET.len() as u64) as usize]
             } else {
                 STATIC_CHARS[(h % STATIC_CHARS.len() as u64) as usize]
@@ -869,7 +895,7 @@ fn screen(cells: &mut Cells, t: u64, scene: &Scene) {
                 vis,
                 false,
             );
-            set(cells, x, y, ch, Style::default().fg(rgb_color(color)));
+            set(cells, x, y, ch, ink(color));
         }
     }
 }
@@ -881,7 +907,7 @@ fn steam(cells: &mut Cells, t: u64, scene: &Scene) {
         for k in 1..=3u16 {
             let y = vy.saturating_sub(k);
             let h = mix(u64::from(vx) * 31 + u64::from(k) * 17 + t / 2);
-            if h % 3 == 0 {
+            if h.is_multiple_of(3) {
                 continue;
             }
             let drift = (h / 3 % 3) as i32 - 1;
@@ -901,9 +927,9 @@ fn drop_lights(cells: &mut Cells, t: u64, scene: &Scene) {
         let h = mix(u64::from(x) * 31 + u64::from(y) * 131 + t / 10);
         let base = surface(ch, x, y);
         let level = match ch {
-            '▪' if h % 5 == 0 => 0.3,
+            '▪' if h.is_multiple_of(5) => 0.3,
             '▪' => 1.0,
-            _ if h % 6 == 0 => 0.4,
+            _ if h.is_multiple_of(6) => 0.4,
             _ => 1.0,
         };
         let style = styled(emissive(scale(base.color, level)), scene, x, y, false);
@@ -915,7 +941,7 @@ fn drop_lights(cells: &mut Cells, t: u64, scene: &Scene) {
 /// side of the gap.
 fn wire_pulse(cells: &mut Cells, t: u64, scene: &Scene) {
     let z = map::WIRE;
-    let level = if (t / 5) % 2 == 0 { 1.0 } else { 0.5 };
+    let level = if (t / 5).is_multiple_of(2) { 1.0 } else { 0.5 };
     for x in [z.x0, z.x1] {
         let style = styled(
             emissive(scale(neon_rgb(Neon::Amber), level)),
@@ -935,13 +961,7 @@ fn draw_runner(cells: &mut Cells, view: &CityView<'_>) {
     let mark = view.look.map(|look| look.mark).unwrap_or('@');
     set(cells, x, y, mark, lit(Neon::Amber));
     let label = truncate_name(view.own_username);
-    put_label(
-        cells,
-        x,
-        y.saturating_sub(1),
-        &label,
-        Style::default().fg(theme::TEXT_BRIGHT()),
-    );
+    put_label(cells, x, y.saturating_sub(1), &label, ink(INK_BRIGHT));
 }
 
 // ------------------------------------------------------------- overlays
@@ -965,19 +985,17 @@ fn draw_street_line(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
     };
     frame.render_widget(Clear, rect);
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            *text,
-            Style::default().fg(theme::TEXT()),
-        )))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(dim(neon))
-                .title(Span::styled(
-                    format!(" {} ", data::title(landmark)),
-                    lit(neon),
-                )),
-        ),
+        Paragraph::new(Line::from(Span::styled(*text, ink(INK))))
+            .style(ink(INK))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(dim(neon))
+                    .title(Span::styled(
+                        format!(" {} ", data::title(landmark)),
+                        lit(neon),
+                    )),
+            ),
         rect,
     );
 }
@@ -991,10 +1009,8 @@ fn draw_popover(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
         return;
     };
     let neon = landmark_neon(landmark);
-    let key = Style::default()
-        .fg(theme::AMBER_GLOW())
-        .add_modifier(Modifier::BOLD);
-    let text = Style::default().fg(theme::TEXT());
+    let key = lit(Neon::Amber);
+    let text = ink(INK);
     let verb = match landmark.on_enter() {
         Enter::Panel(_) => "step in",
         Enter::Line(_) => "look closer",
@@ -1006,10 +1022,7 @@ fn draw_popover(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
             Span::styled("[Enter] ", key),
             Span::styled(verb, text),
         ]),
-        Line::from(Span::styled(
-            data::pitch(landmark),
-            Style::default().fg(theme::TEXT_DIM()),
-        )),
+        Line::from(Span::styled(data::pitch(landmark), ink(INK_DIM))),
     ];
     let width = (lines
         .iter()
@@ -1028,7 +1041,7 @@ fn draw_popover(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
     };
     frame.render_widget(Clear, rect);
     frame.render_widget(
-        Paragraph::new(lines).block(
+        Paragraph::new(lines).style(ink(INK)).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(glow(neon))
@@ -1057,7 +1070,7 @@ fn draw_panel(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
     };
     frame.render_widget(Clear, rect);
     frame.render_widget(
-        Paragraph::new(lines).block(
+        Paragraph::new(lines).style(ink(INK)).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(glow(neon))
@@ -1065,23 +1078,18 @@ fn draw_panel(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
                     format!(" {} ", data::title(landmark)),
                     lit(neon),
                 ))
-                .title_bottom(Span::styled(
-                    " Esc closes ",
-                    Style::default().fg(theme::TEXT_DIM()),
-                )),
+                .title_bottom(Span::styled(" Esc closes ", ink(INK_DIM))),
         ),
         rect,
     );
 }
 
 fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
-    let text = Style::default().fg(theme::TEXT());
-    let dim_text = Style::default().fg(theme::TEXT_DIM());
-    let muted_text = Style::default().fg(theme::TEXT_MUTED());
-    let head = Style::default()
-        .fg(theme::TEXT_BRIGHT())
-        .add_modifier(Modifier::BOLD);
-    let number = Style::default().fg(theme::AMBER());
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let muted_text = ink(INK_MUTED);
+    let head = ink(INK_BRIGHT).add_modifier(Modifier::BOLD);
+    let number = glow(Neon::Amber);
     let mut lines: Vec<Line<'static>> = Vec::new();
     let blank = || Line::default();
     match landmark {
@@ -1115,11 +1123,14 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
             lines.push(Line::from(Span::styled("the mirror", head)));
             match view.look {
                 Some(look) => {
-                    for span in portrait_spans(look) {
-                        lines.push(Line::from(vec![Span::raw("   "), span]));
+                    for worn in look.rows() {
+                        lines.push(Line::from(vec![
+                            Span::styled("   ", text),
+                            Span::styled(worn.piece.row, ink(tint_rgb(worn.tint))),
+                        ]));
                     }
                     lines.push(Line::from(vec![
-                        Span::raw("   "),
+                        Span::styled("   ", text),
                         Span::styled("mark ", dim_text),
                         Span::styled(look.mark.to_string(), lit(Neon::Amber)),
                     ]));
@@ -1142,11 +1153,8 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
                 let mut spans = vec![Span::styled(label, dim_text)];
                 for (i, piece) in pieces_for(slot).enumerate() {
                     let tint = TINT_CYCLE[i % TINT_CYCLE.len()];
-                    spans.push(Span::styled(
-                        piece.row,
-                        Style::default().fg(tint_color(tint)),
-                    ));
-                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(piece.row, ink(tint_rgb(tint))));
+                    spans.push(Span::styled(" ", text));
                 }
                 lines.push(Line::from(spans));
             }
@@ -1159,7 +1167,7 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
             for tint in TINT_CYCLE {
                 tints.push(Span::styled(
                     format!("{:?} ", tint).to_lowercase(),
-                    Style::default().fg(tint_color(tint)),
+                    ink(tint_rgb(tint)),
                 ));
             }
             lines.push(Line::from(tints));
