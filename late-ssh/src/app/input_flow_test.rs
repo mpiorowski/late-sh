@@ -661,7 +661,9 @@ async fn zero_twice_goes_under_the_clubhouse_for_runners_only() {
 
 /// A runner's session parked on the Undercity, one row north of the wire
 /// stairs: at the railing, where the popover offers the ledge.
-async fn runner_at_the_railing(name: &str) -> (late_core::test_utils::TestDb, crate::app::state::App) {
+async fn runner_at_the_railing(
+    name: &str,
+) -> (late_core::test_utils::TestDb, crate::app::state::App) {
     use crate::app::deadchannel::runner::state::Look;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
