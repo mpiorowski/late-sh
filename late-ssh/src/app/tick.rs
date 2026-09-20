@@ -167,6 +167,13 @@ impl App {
             // still lands within 132ms of its tick.
             changed = true;
         }
+        if self.screen == Screen::City && anim_half {
+            // Rain, neon, steam and the screen's static ride the same
+            // ~7.5fps ambience edge as the clubhouse; the runner's steps
+            // are input-driven.
+            self.city.tick(self.marquee_tick as u64);
+            changed = true;
+        }
 
         // Expire a stale paired-clipboard wait here rather than inside
         // chat.tick(): the registry slot must be cancelled along with it, so
@@ -775,6 +782,15 @@ impl App {
             if self.runner_looks_rx.has_changed().unwrap_or(false) {
                 self.runner_looks = self.runner_looks_rx.borrow_and_update().clone();
                 self.chat_ctx_epoch += 1;
+                // Leaving #deadchannel on one session closes the undercity
+                // for every session the runner has open, here and on every
+                // other replica. This edge is the only place in the process
+                // that can notice: the gate on `0` guards the descent, not
+                // the standing there.
+                if self.screen == Screen::City && !self.is_runner() {
+                    self.set_screen(Screen::Clubhouse);
+                    changed = true;
+                }
             }
             // The pot resolves on the same edge, and for the same reason:
             // the panel reads owned values, and only a change the viewer can
@@ -1268,7 +1284,11 @@ impl App {
             || self.last_input_at.elapsed() < POST_INPUT_HOT_WINDOW
             || self.ultimate_state.has_active_effect()
             || self.screen == Screen::HouseTable
-            || (self.screen == Screen::Arcade && self.is_playing_game);
+            || (self.screen == Screen::Arcade && self.is_playing_game)
+            // A pool shot is the daily board's only animation: while one is
+            // rolling it wants the same 15fps as a live table, and the moment
+            // it settles the board goes back to being event-driven.
+            || (self.screen == Screen::DailyMatch && self.daily.pool_is_animating());
         if hot {
             return HOT_TICK;
         }
@@ -1280,6 +1300,7 @@ impl App {
         // Zen music or visualizer tile paints its eq on that edge too; left
         // to the aquarium's quarter tier it drops to ~3.8fps.
         if self.screen == Screen::Clubhouse
+            || self.screen == Screen::City
             || self.right_sidebar_visible()
             || (self.screen == Screen::Zen && self.zen.shows_equalizer())
             || self.last_pet_frame.get().is_some()

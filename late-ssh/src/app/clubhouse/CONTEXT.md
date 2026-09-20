@@ -2,7 +2,7 @@
 
 ## Metadata
 - Domain: the Late Lounge tavern, top-level screen `0`, the default landing screen (always the landing for a first-ever session)
-- Last updated: 2026-09-17 (slash commands are off in the Lounge composer, `ComposerCommands::Disabled`: a command draft gets a banner and stays in the composer, while a bare `/` or `//` aside posts as speech; a chat overlay that lands here is drawn over the tavern. §2 `ui.rs` row and the composer notes.)
+- Last updated: 2026-09-17 (slash commands are off in the Lounge composer, `ComposerCommands::Disabled`: a command draft gets a banner and stays in the composer, while a bare `/` or `//` aside posts as speech; a chat overlay that lands here is drawn over the tavern. §2 `ui.rs` row and the composer notes.) Previously: 2026-09-10 (a pool table joined the games corner, directly under the poker table and on the same errand: the poker table opens the Lobby, the pool table opens it on a fresh pool challenge with eight-ball under the cursor — `Interactive::Pool`, `map::POOL_TABLE`, `DailyState::begin_challenge_draft_for`. It displaced the old games-corner table at (148, 26). Note the generator drift called out in §2 before touching the map again.) Previous: 2026-08-25 (a rented Shop title now trails the name on the floor label, truncated to `LABEL_MAX` like the name and painted in the dim label style; `put_label_styled` takes the name length so only the name takes a color effect. §3.)
 - Status: Active
 
 ## 1. Summary
@@ -18,7 +18,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
 
 | File | Owns |
 |---|---|
-| `map.rs` | The 184x50 generated floor plan (`MAP` literal, do not hand-edit; re-run `scripts/gen_clubhouse_map.py --write`), collision (`walkable`), `SEATS`/`STANDING_SPOTS`/`DOOR_STACK`, interactive zones, animation cell lists, `DOOR_SIGN`. |
+| `map.rs` | The 184x50 generated floor plan (`MAP` literal, do not hand-edit; re-run `scripts/gen_clubhouse_map.py --write`), collision (`walkable`), `SEATS`/`STANDING_SPOTS`/`DOOR_STACK`, interactive zones, animation cell lists, `DOOR_SIGN`. **The generator's `RUST_TEMPLATE` has drifted behind this file** — it predates `DOOR_STACK`, `BOT_SPOT`, `DOG_HOME`/`DOG_WAYPOINTS`, `BAR_APPROACH` and the `dog` parameter on `nearest_interactive`, so a bare `--write` silently *reverts* all of them. Until it is resynced: author the art in the script, run it to validate, and splice only the `MAP` and `SEATS` blocks into this file. That is how the pool table landed (2026-09-10). |
 | `lobby.rs` | `SharedLobby`, the process-global `Arc<Mutex<..>>` presence map: parked spot assignments, walkers, emotes, the dog-pet event, snapshots. |
 | `state.rs` | Per-session view state: camera target, animation clock, latest `LobbySnapshot`, arrival/departure door events, the `Tutorial` state machine. |
 | `input.rs` | Walking (arrows/hjkl), `i` composer, `w`/`x` emotes, `t` bartender mention, Enter on landmarks/dog, tutorial Enter. Returns `false` for globals. |

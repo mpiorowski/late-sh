@@ -20,7 +20,8 @@
 # GriefPrevention gives players self-serve land claims that others cannot
 # build in, break, or loot. Its own config blocks explosion damage inside
 # claims and above sea level, stops endermen moving blocks, and stops fire
-# spread and fire damage. The mob_griefing gamerule stays at the vanilla
+# spread and fire damage. Claims work in the overworld and the nether
+# (minecraft_patches below). The mob_griefing gamerule stays at the vanilla
 # default (on): turning it off also stops villagers farming and breeding and
 # piglins bartering, which breaks most automation farms.
 #
@@ -50,6 +51,25 @@ resource "kubernetes_secret_v1" "minecraft" {
 # World, plugins, and server jar live here. A played world grows to a few
 # GiB; the node disk is 37 GiB shared with everything else, so the claim is
 # deliberately small and the server sets a world border (see RCON_CMDS_STARTUP).
+# Plugin config overrides. GriefPrevention writes its config.yml to the PVC
+# on first boot, and the image applies these patches to it before every
+# start, so a hand edit to a patched key in the pod reverts on restart.
+# Nether claims are on; the End stays unclaimable (GriefPrevention default).
+resource "kubernetes_config_map_v1" "minecraft_patches" {
+  metadata {
+    name = "minecraft-patches"
+  }
+
+  data = {
+    "griefprevention.json" = jsonencode({
+      file = "/data/plugins/GriefPreventionData/config.yml"
+      ops = [
+        { "$set" = { path = "$.GriefPrevention.Claims.Mode.world_nether", value = "Survival" } },
+      ]
+    })
+  }
+}
+
 resource "kubernetes_persistent_volume_claim_v1" "minecraft_data" {
   metadata {
     name = "minecraft-data"
@@ -103,6 +123,9 @@ resource "kubernetes_deployment_v1" "minecraft" {
       metadata {
         labels = {
           app = "minecraft"
+        }
+        annotations = {
+          patches_hash = sha256(join("", values(kubernetes_config_map_v1.minecraft_patches.data)))
         }
       }
 
@@ -206,6 +229,10 @@ resource "kubernetes_deployment_v1" "minecraft" {
             value = "griefprevention"
           }
           env {
+            name  = "PATCH_DEFINITIONS"
+            value = "/patches"
+          }
+          env {
             name  = "MOTD"
             value = "late.sh"
           }
@@ -284,6 +311,12 @@ resource "kubernetes_deployment_v1" "minecraft" {
             name       = "data"
             mount_path = "/data"
           }
+
+          volume_mount {
+            name       = "patches"
+            mount_path = "/patches"
+            read_only  = true
+          }
         }
 
         volume {
@@ -291,6 +324,14 @@ resource "kubernetes_deployment_v1" "minecraft" {
 
           persistent_volume_claim {
             claim_name = kubernetes_persistent_volume_claim_v1.minecraft_data.metadata[0].name
+          }
+        }
+
+        volume {
+          name = "patches"
+
+          config_map {
+            name = kubernetes_config_map_v1.minecraft_patches.metadata[0].name
           }
         }
       }

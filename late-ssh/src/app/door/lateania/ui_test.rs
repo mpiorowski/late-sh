@@ -2143,3 +2143,76 @@ fn quest_place_note_names_the_floor_of_a_target_in_the_same_land() {
     let note = super::quest_place_note(Some(2000), &view).expect("the frontier has a region");
     assert!(note.ends_with(" - beyond this land"), "{note}");
 }
+
+// ---- the tracked walk's stair on the world map ----------------------------
+
+#[test]
+fn the_tracked_stair_swaps_its_double_arrow_for_the_walks_single_arrow() {
+    use crate::app::door::lateania::worldmap::{Climb, Coord, TrackAim};
+    use ratatui::style::{Modifier, Style};
+    use std::collections::HashMap;
+
+    // Two rooms on one floor, each with a way down: the tracked walk leaves
+    // by room 2's stair, room 3's is just another stair on the map. Every
+    // stair is already drawn in the map's green, so the tracked one has to
+    // read differently by glyph, not only by colour.
+    let (cols, height) = (11, 7);
+    let center = Coord { x: 0, y: 0, z: 0 };
+    let coords: HashMap<_, _> = [
+        (1, center),
+        (2, Coord { x: 0, y: -1, z: 0 }),
+        (3, Coord { x: -2, y: 0, z: 0 }),
+    ]
+    .into_iter()
+    .collect();
+    let stair = Style::default().fg(Color::Green);
+    let tracked = Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::BOLD);
+    let mut cells = vec![vec![(" ".to_string(), Style::default()); cols as usize]; height as usize];
+    // The corner cell up and to the right of each stair room, as the canvas
+    // places it: room 2 sits at (col 5, row 1), room 3 at (col 1, row 3).
+    cells[0][6] = ("\u{21d3}".to_string(), stair);
+    cells[2][2] = ("\u{21d3}".to_string(), stair);
+
+    super::paint_track_aim(
+        &mut cells,
+        &coords,
+        center,
+        cols,
+        height,
+        Some(TrackAim::Stair {
+            room: 2,
+            climb: Climb::Down,
+        }),
+        1,
+        tracked,
+    );
+
+    assert_eq!(
+        cells[0][6],
+        ("\u{2193}".to_string(), tracked),
+        "the stair the walk takes shows the walk's own arrow in the tracked style"
+    );
+    assert_eq!(
+        cells[2][2],
+        ("\u{21d3}".to_string(), stair),
+        "a stair not on the walk keeps its double arrow"
+    );
+
+    // The way up gets the up arrow.
+    super::paint_track_aim(
+        &mut cells,
+        &coords,
+        center,
+        cols,
+        height,
+        Some(TrackAim::Stair {
+            room: 3,
+            climb: Climb::Up,
+        }),
+        1,
+        tracked,
+    );
+    assert_eq!(cells[2][2], ("\u{2191}".to_string(), tracked));
+}

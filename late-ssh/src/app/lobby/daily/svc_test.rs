@@ -4,9 +4,14 @@ use crate::app::activity::event::{ActivityEvent, ActivityKind};
 use crate::app::activity::publisher::ActivityPublisher;
 use crate::app::games::chess_core::rules;
 use crate::app::games::chips::svc::ChipService;
+use crate::app::games::pool_core::{
+    rules::{Group, PoolRules},
+    shot::Shot,
+};
 use crate::app::lobby::daily::battleship::DailyBattleshipState;
 use crate::app::lobby::daily::connect4::DailyConnect4State;
 use crate::app::lobby::daily::games::DailyGame;
+use crate::app::lobby::daily::pool::{DailyPoolState, PoolShotRecord};
 use crate::app::lobby::daily::svc::{
     DAILY_MAX_ACTIVE_ENTRIES, DAILY_WIN_MIN_MOVES, DailyChessState, DailyOutcome, DailyService,
     DailyWinPayout,
@@ -1423,4 +1428,480 @@ async fn claimed_challenge_rejects_a_later_claim() {
         .await
         .expect_err("a claimed challenge must reject a later claim");
     assert_eq!(error.to_string(), "challenge is no longer open");
+}
+
+// ── Pool ──────────────────────────────────────────────────────────────
+
+fn pool_state(row: &DailyMatch) -> DailyPoolState {
+    DailyPoolState::parse(&row.state).expect("parse daily pool state")
+}
+
+/// Leave exactly `live` on the table and pot everything else.
+///
+/// Reaching a chosen position by playing real shots would mean tuning a
+/// break, and a break is chaotic on purpose. What these tests are about is the
+/// service — turn handling, the CAS guard, the finish and its payout — so the
+/// position is placed and the physics only has to sink one straight ball.
+fn set_rack(state: &mut DailyPoolState, live: &[(u8, [f64; 2])]) {
+    for ball in state.rack.balls.iter_mut() {
+        match live.iter().find(|(id, _)| *id == ball.id) {
+            Some((_, at)) => {
+                ball.pos = *at;
+                ball.potted = None;
+            }
+            None => ball.potted = Some(0),
+        }
+    }
+}
+
+/// A stub shot history `n` long.
+///
+/// Needed because both rulesets treat the break specially — eight-ball spots
+/// the eight rather than losing the rack on it — so a crafted mid-rack
+/// position has to look like one. It also carries the state past
+/// `DAILY_WIN_MIN_MOVES`, which a real rack clears long before the money ball.
+fn played_shots(n: usize) -> Vec<PoolShotRecord> {
+    (0..n)
+        .map(|i| PoolShotRecord {
+            seat: (i % 2) as u8,
+            shot: Shot {
+                place: None,
+                azimuth: 0.0,
+                tip: [0.0, 0.0],
+                speed: 1.0,
+                called_pocket: None,
+                play_again: false,
+            },
+            label: "earlier".to_string(),
+            at: chrono::Utc::now(),
+        })
+        .collect()
+}
+
+/// Write a crafted state onto the row, keeping `turn` on the clock.
+async fn install_pool_state(
+    client: &tokio_postgres::Client,
+    match_id: Uuid,
+    state: &DailyPoolState,
+) {
+    client
+        .execute(
+            "UPDATE daily_matches SET state = $2, turn_user_id = $3 WHERE id = $1",
+            &[
+                &match_id,
+                &serde_json::to_value(state).expect("serialize pool state"),
+                &state.turn_user(),
+            ],
+        )
+        .await
+        .expect("install pool state");
+}
+
+/// A ball hanging in the mouth of the bottom side pocket, the cue ball placed
+/// for a 45-degree cut on it, and the azimuth that sinks it.
+///
+/// The cut is the point. A straight-in shot sends the cue ball down the same
+/// pocket — draw does not survive half a metre of cloth — so a test built on
+/// one scratches instead of potting and the finish never happens. Cutting it
+/// puts the cue ball on the tangent line, which runs along the rail and away.
+///
+/// Returns `(object ball spot, cue ball spot, azimuth)`.
+fn hanger(spec: &crate::app::games::pool_core::table::TableSpec) -> ([f64; 2], [f64; 2], f64) {
+    let radius = spec.ball_radius;
+    let mouth = [spec.length / 2.0, radius * 1.02];
+    // The contact point that sends the object ball straight down the pocket.
+    let ghost = [mouth[0], mouth[1] + 2.0 * radius];
+    let cue = [ghost[0] - 0.35, ghost[1] + 0.35];
+    let azimuth = (ghost[1] - cue[1]).atan2(ghost[0] - cue[0]);
+    (mouth, cue, azimuth)
+}
+
+/// A stun shot through the ghost ball: the object ball goes in, the cue ball
+/// leaves at ninety degrees to it.
+fn potting_shot(azimuth: f64) -> Shot {
+    Shot {
+        place: None,
+        azimuth,
+        tip: [0.0, 0.0],
+        speed: 1.4,
+        called_pocket: None,
+        play_again: false,
+    }
+}
+
+#[tokio::test]
+async fn pool_claim_racks_the_table_and_puts_the_breaker_on_the_clock() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-pool-challenger").await;
+    let opponent = create_test_user(&test_db.db, "daily-pool-opponent").await;
+    let svc = daily_service(&test_db);
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::EightBall, None)
+        .await
+        .expect("post eight-ball challenge");
+    assert_eq!(challenge.game_kind, DailyMatch::GAME_KIND_EIGHTBALL);
+    let claimed = svc
+        .claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("claim eight-ball challenge");
+
+    let state = pool_state(&claimed);
+    assert_eq!(state.rules, PoolRules::EightBall);
+    assert_eq!(state.rack.balls.len(), 16, "cue ball plus fifteen");
+    assert_eq!(state.rack.on_table().count(), 16, "none of them potted");
+    assert!(state.spec().is_ok(), "on a table this build knows");
+
+    // The coin flip picked who breaks, and the breaker is the one on the 24h
+    // clock — in pool the break is the whole opening advantage.
+    assert!([challenger.id, opponent.id].contains(&state.turn_user()));
+    assert_eq!(claimed.turn_user_id, Some(state.turn_user()));
+    assert!(claimed.turn_deadline_at.is_some());
+
+    // A pool shot cannot ride the two-usize move channel.
+    let wrong_channel = svc.play_move(state.turn_user(), claimed.id, 0, 0).await;
+    assert!(
+        wrong_channel.is_err(),
+        "pool shots must go through the shot channel"
+    );
+}
+
+#[tokio::test]
+async fn pool_shots_validate_the_turn_and_the_stroke() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-pool-turn-a").await;
+    let opponent = create_test_user(&test_db.db, "daily-pool-turn-b").await;
+    let svc = daily_service(&test_db);
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::NineBall, None)
+        .await
+        .expect("post nine-ball challenge");
+    let claimed = svc
+        .claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("claim nine-ball challenge");
+    let state = pool_state(&claimed);
+    let breaker = state.turn_user();
+    let waiting = state.user_of(1 - state.turn);
+
+    let break_shot = Shot {
+        place: None,
+        azimuth: 0.0,
+        tip: [0.0, 0.0],
+        speed: 7.0,
+        called_pocket: None,
+        play_again: false,
+    };
+    assert!(
+        svc.play_pool_shot(waiting, claimed.id, break_shot)
+            .await
+            .is_err(),
+        "shooting out of turn is rejected"
+    );
+    assert!(
+        svc.play_pool_shot(
+            breaker,
+            claimed.id,
+            Shot {
+                speed: 500.0,
+                ..break_shot
+            }
+        )
+        .await
+        .is_err(),
+        "an unplayable stroke speed is rejected"
+    );
+    // Ball in hand is the ruling's to grant, not the shooter's to claim.
+    assert!(
+        svc.play_pool_shot(
+            breaker,
+            claimed.id,
+            Shot {
+                place: Some([0.3, 0.3]),
+                ..break_shot
+            }
+        )
+        .await
+        .is_err(),
+        "placing the cue ball without ball in hand is rejected"
+    );
+
+    svc.play_pool_shot(breaker, claimed.id, break_shot)
+        .await
+        .expect("the break itself is legal");
+    let client = test_db.db.get().await.expect("db client");
+    let row = DailyMatch::get(&client, claimed.id)
+        .await
+        .expect("load match")
+        .expect("match exists");
+    assert_eq!(pool_state(&row).move_count(), 1, "the break was recorded");
+}
+
+#[tokio::test]
+async fn potting_keeps_the_table_and_a_miss_hands_it_over() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-pool-run-a").await;
+    let opponent = create_test_user(&test_db.db, "daily-pool-run-b").await;
+    let svc = daily_service(&test_db);
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::NineBall, None)
+        .await
+        .expect("post nine-ball challenge");
+    let claimed = svc
+        .claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("claim nine-ball challenge");
+    let client = test_db.db.get().await.expect("db client");
+
+    let mut state = pool_state(&claimed);
+    let spec = state.spec().expect("known table");
+    let (mouth, cue, azimuth) = hanger(spec);
+    // The 1 hanging, the 9 parked out of the way up-table so the rack cannot
+    // end on this shot.
+    set_rack(
+        &mut state,
+        &[
+            (0, cue),
+            (1, mouth),
+            (9, [spec.length * 0.2, spec.width * 0.25]),
+        ],
+    );
+    // Past `DAILY_WIN_MIN_MOVES`, so a later finish is a paid one.
+    state.revision = 10;
+    state.shots = played_shots(6);
+    let shooter = state.turn_user();
+    install_pool_state(&client, claimed.id, &state).await;
+
+    svc.play_pool_shot(shooter, claimed.id, potting_shot(azimuth))
+        .await
+        .expect("the 1 drops");
+    let row = DailyMatch::get(&client, claimed.id)
+        .await
+        .expect("load match")
+        .expect("match exists");
+    let after = pool_state(&row);
+    assert!(
+        after.rack.get(1).expect("the 1").potted.is_some(),
+        "it went"
+    );
+    assert!(
+        after.rack.get(0).expect("cue ball").potted.is_none(),
+        "draw kept the cue ball out of the pocket behind it"
+    );
+    assert_eq!(
+        row.turn_user_id,
+        Some(shooter),
+        "potting holds the table, which is what keeps a rack from taking as
+         many days as it has balls"
+    );
+
+    // Now a shot at nothing: no contact is a foul, and the table changes hands
+    // with ball in hand for the incoming player.
+    let miss = Shot {
+        azimuth: std::f64::consts::FRAC_PI_2,
+        speed: 0.6,
+        ..potting_shot(azimuth)
+    };
+    svc.play_pool_shot(shooter, claimed.id, miss)
+        .await
+        .expect("a miss is still a legal move");
+    let row = DailyMatch::get(&client, claimed.id)
+        .await
+        .expect("load match")
+        .expect("match exists");
+    let after = pool_state(&row);
+    assert_ne!(row.turn_user_id, Some(shooter), "a miss passes the turn");
+    assert!(after.last_foul.is_some(), "and it was a foul");
+    assert!(
+        after.ball_in_hand.is_some(),
+        "so the table comes with the ball"
+    );
+}
+
+#[tokio::test]
+async fn nine_ball_out_finishes_the_match_and_pays_the_winner() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-9ball-winner").await;
+    let opponent = create_test_user(&test_db.db, "daily-9ball-loser").await;
+    let svc = daily_service(&test_db);
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::NineBall, None)
+        .await
+        .expect("post nine-ball challenge");
+    let claimed = svc
+        .claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("claim nine-ball challenge");
+    let client = test_db.db.get().await.expect("db client");
+
+    let mut state = pool_state(&claimed);
+    let spec = state.spec().expect("known table");
+    let (mouth, cue, azimuth) = hanger(spec);
+    // Only the nine left: potting it wins the rack.
+    set_rack(&mut state, &[(0, cue), (9, mouth)]);
+    state.revision = 10;
+    state.shots = played_shots(6);
+    let shooter = state.turn_user();
+    install_pool_state(&client, claimed.id, &state).await;
+
+    svc.play_pool_shot(shooter, claimed.id, potting_shot(azimuth))
+        .await
+        .expect("the nine drops");
+
+    let row = DailyMatch::get(&client, claimed.id)
+        .await
+        .expect("load match")
+        .expect("match exists");
+    assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
+    assert_eq!(row.result, DailyMatch::RESULT_NINE_POTTED);
+    assert_eq!(row.winner_user_id, Some(shooter));
+    assert_eq!(row.turn_user_id, None);
+    assert_eq!(row.turn_deadline_at, None);
+
+    // The 400-chip nine-ball payout lands through migration 177's template.
+    let mut credited = None;
+    for _ in 0..100 {
+        let rows = client
+            .query(
+                "SELECT delta FROM chip_ledger
+                 WHERE user_id = $1 AND reason = 'daily_nineball_win'",
+                &[&shooter],
+            )
+            .await
+            .expect("ledger rows");
+        if let Some(row) = rows.first() {
+            credited = Some(row.get::<_, i64>("delta"));
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        credited,
+        Some(DailyGame::NineBall.win_payout()),
+        "the winner never received the nine-ball payout"
+    );
+}
+
+#[tokio::test]
+async fn potting_the_eight_early_hands_the_match_to_the_other_player() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-8ball-early-a").await;
+    let opponent = create_test_user(&test_db.db, "daily-8ball-early-b").await;
+    let svc = daily_service(&test_db);
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::EightBall, None)
+        .await
+        .expect("post eight-ball challenge");
+    let claimed = svc
+        .claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("claim eight-ball challenge");
+    let client = test_db.db.get().await.expect("db client");
+
+    let mut state = pool_state(&claimed);
+    let spec = state.spec().expect("known table");
+    let (mouth, cue, azimuth) = hanger(spec);
+    // Groups assigned and the shooter still owes a solid, so the eight is not
+    // theirs to shoot: dropping it loses the rack there and then.
+    set_rack(
+        &mut state,
+        &[
+            (0, cue),
+            (8, mouth),
+            (3, [spec.length * 0.2, spec.width * 0.25]),
+        ],
+    );
+    state.groups = Some([Group::Solids, Group::Stripes]);
+    state.turn = 0;
+    state.revision = 10;
+    // On the break the eight is spotted instead of deciding the rack, so this
+    // has to be a mid-rack position for the loss to be a loss.
+    state.shots = played_shots(6);
+    let shooter = state.user_of(0);
+    let other = state.user_of(1);
+    install_pool_state(&client, claimed.id, &state).await;
+
+    svc.play_pool_shot(shooter, claimed.id, potting_shot(azimuth))
+        .await
+        .expect("the shot is legal even though it loses");
+
+    let row = DailyMatch::get(&client, claimed.id)
+        .await
+        .expect("load match")
+        .expect("match exists");
+    assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
+    assert_eq!(
+        row.result,
+        DailyMatch::RESULT_EARLY_EIGHT,
+        "an early eight is its own result: the loser is the one who potted it"
+    );
+    assert_eq!(row.winner_user_id, Some(other));
+}
+
+#[tokio::test]
+async fn a_superseded_pool_shot_is_rejected_rather_than_applied_twice() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-pool-cas-a").await;
+    let opponent = create_test_user(&test_db.db, "daily-pool-cas-b").await;
+    let svc = daily_service(&test_db);
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::NineBall, None)
+        .await
+        .expect("post nine-ball challenge");
+    let claimed = svc
+        .claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("claim nine-ball challenge");
+    let client = test_db.db.get().await.expect("db client");
+
+    let mut state = pool_state(&claimed);
+    let spec = state.spec().expect("known table");
+    let (mouth, cue, azimuth) = hanger(spec);
+    // Two balls hanging, so potting one keeps the table: the turn does not
+    // change, and the CAS guard is the only thing standing between the player
+    // and a double-applied shot.
+    set_rack(
+        &mut state,
+        &[
+            (0, cue),
+            (1, mouth),
+            (9, [spec.length * 0.2, spec.width * 0.25]),
+        ],
+    );
+    state.revision = 10;
+    let shooter = state.turn_user();
+    install_pool_state(&client, claimed.id, &state).await;
+
+    svc.play_pool_shot(shooter, claimed.id, potting_shot(azimuth))
+        .await
+        .expect("the first shot lands");
+    let after = pool_state(
+        &DailyMatch::get(&client, claimed.id)
+            .await
+            .expect("load match")
+            .expect("match exists"),
+    );
+    assert_eq!(after.revision, 11, "the revision advanced");
+
+    // Replay the same stale state: a client that loaded at revision 10 and
+    // fired again. The turn is still theirs, so only the revision guard can
+    // catch it.
+    install_pool_state(&client, claimed.id, &state).await;
+    let stale = DailyMatch::update_state(
+        &client,
+        claimed.id,
+        &serde_json::to_value(&state).expect("serialize"),
+        shooter,
+        shooter,
+        chrono::Utc::now() + chrono::Duration::hours(24),
+        11,
+    )
+    .await
+    .expect("update state");
+    assert_eq!(stale, 0, "a write expecting a revision the row never had");
 }

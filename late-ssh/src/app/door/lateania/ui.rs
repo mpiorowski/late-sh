@@ -1053,6 +1053,12 @@ const PLACES: &[Place] = &[
         row: 4,
         at: At::Ends(17),
     },
+    // Chained outward from Broceliande, same as Aelunor off Silvael.
+    Place {
+        region: "Thornveil Falls",
+        row: 5,
+        at: At::Ends(17),
+    },
     // South of the road: the dark, and the way down into it.
     Place {
         region: "The Sunken Catacombs",
@@ -1145,6 +1151,12 @@ const ROADS: &[Road] = &[
         b: "Broceliande, the Greenwood",
         from: (4, 20),
         legs: &[Leg::Left(1)],
+    },
+    Road {
+        a: "Broceliande, the Greenwood",
+        b: "Thornveil Falls",
+        from: (4, 18),
+        legs: &[Leg::Down(1)],
     },
     Road {
         a: "The Overworld & Capitals",
@@ -1472,6 +1484,52 @@ fn land_style(progress: Option<&super::world::RegionProgress>) -> Style {
 
 // ---- The overhead map page: viewport, legend, and compass (5.1) ----------
 
+/// Paint the room where the tracked walk leaves this floor or land, once it
+/// is in view. A stair on the way swaps its double arrow for the walk's own
+/// single arrow in the tracked colour: every stair is already the map's
+/// green, so a recolour alone said nothing, and the single arrow is the same
+/// one the border draws for the walk. A flat crossing keeps its room glyph
+/// and only takes the colour. `cells` are the map body as `map_canvas` lays
+/// it out: rooms on even offsets from the centre, a stair in the corner cell
+/// up and to the right of its room.
+#[allow(clippy::too_many_arguments)]
+fn paint_track_aim(
+    cells: &mut [Vec<(String, Style)>],
+    coords: &std::collections::HashMap<super::world::RoomId, super::worldmap::Coord>,
+    center: super::worldmap::Coord,
+    cols: i32,
+    height: i32,
+    track: Option<super::worldmap::TrackAim>,
+    player_room: super::world::RoomId,
+    style: Style,
+) {
+    let aim_cell = |room: super::world::RoomId, dcol: i32, drow: i32| {
+        let c = coords.get(&room)?;
+        let sc = cols / 2 + 2 * (c.x - center.x) + dcol;
+        let sr = height / 2 + 2 * (c.y - center.y) + drow;
+        ((0..cols).contains(&sc) && (0..height).contains(&sr)).then_some((sr as usize, sc as usize))
+    };
+    match track {
+        Some(super::worldmap::TrackAim::Stair { room, climb }) => {
+            let glyph = match climb {
+                super::worldmap::Climb::Down => '\u{2193}', // ↓
+                super::worldmap::Climb::Up => '\u{2191}',   // ↑
+            };
+            if let Some((row, col)) = aim_cell(room, 1, -1) {
+                cells[row][col] = (glyph.to_string(), style);
+            }
+        }
+        Some(super::worldmap::TrackAim::Crossing { room }) if room != player_room => {
+            if let Some((row, col)) = aim_cell(room, 0, 0) {
+                cells[row][col].1 = style;
+            }
+        }
+        Some(super::worldmap::TrackAim::Crossing { .. })
+        | Some(super::worldmap::TrackAim::Target)
+        | None => {}
+    }
+}
+
 fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
     use super::world::region_atlas_entry;
     use super::worldmap::{Tile, map_canvas, poi, poi_arrows, world_coords};
@@ -1672,9 +1730,10 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     //
     // On your own floor it aims along the real walk (`worldmap::track_aim`):
     // at the destination while the walk stays on this floor and in this land,
-    // else at the room where the walk leaves them, whose stair glyph (or the
-    // room itself, for a flat crossing into another land) turns green once in
-    // view. So any destination can be tracked, however far. Viewing another
+    // else at the room where the walk leaves them, whose stair swaps to the
+    // walk's single arrow (or the room itself, for a flat crossing into
+    // another land, turns green) once in view. So any destination can be
+    // tracked, however far. Viewing another
     // floor (`<`/`>`) aims straight at the destination if it is on that floor.
     if let Some(dest) = dest_room {
         let track = if level_offset == 0 {
@@ -1697,34 +1756,16 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
                 }
             }
         }
-        // The aimed-at room's own cell, as `map_canvas` places it, with the
-        // stair's corner cell up and to the right of it.
-        let aim_cell = |room: super::world::RoomId, dcol: i32, drow: i32| {
-            let c = coords.get(&room)?;
-            let sc = cols / 2 + 2 * (c.x - center.x) + dcol;
-            let sr = height / 2 + 2 * (c.y - center.y) + drow;
-            ((0..cols).contains(&sc) && (0..height).contains(&sr))
-                .then_some((sr as usize, sc as usize))
-        };
-        match track {
-            Some(super::worldmap::TrackAim::Stair { room, climb }) => {
-                let glyph = match climb {
-                    super::worldmap::Climb::Down => '\u{21d3}', // ⇓
-                    super::worldmap::Climb::Up => '\u{21d1}',   // ⇑
-                };
-                if let Some((row, col)) = aim_cell(room, 1, -1) {
-                    cells[row][col] = (glyph.to_string(), quest_style);
-                }
-            }
-            Some(super::worldmap::TrackAim::Crossing { room }) if room != player_room => {
-                if let Some((row, col)) = aim_cell(room, 0, 0) {
-                    cells[row][col].1 = quest_style;
-                }
-            }
-            Some(super::worldmap::TrackAim::Crossing { .. })
-            | Some(super::worldmap::TrackAim::Target)
-            | None => {}
-        }
+        paint_track_aim(
+            &mut cells,
+            coords,
+            center,
+            cols,
+            height,
+            track,
+            player_room,
+            quest_style,
+        );
     }
     // Cross-land quest targets are counted in the footer instead of pointed
     // at with a meaningless direction.

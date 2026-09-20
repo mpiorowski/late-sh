@@ -149,6 +149,18 @@ fn interactives_resolve_by_proximity() {
         nearest_interactive(145, 15, DOG_HOME),
         Some(Interactive::Poker)
     );
+    // And to the pool table below it. The two sit one under the other and
+    // both open the Lobby, so the gap between them has to be wide enough that
+    // standing at one never offers the other.
+    assert_eq!(
+        nearest_interactive(146, 27, DOG_HOME),
+        Some(Interactive::Pool)
+    );
+    assert_eq!(
+        nearest_interactive(160, 21, DOG_HOME),
+        None,
+        "the aisle between the two tables belongs to neither"
+    );
     // Admiring the easel.
     assert_eq!(
         nearest_interactive(19, 33, DOG_HOME),

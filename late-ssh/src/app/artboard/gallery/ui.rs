@@ -50,7 +50,7 @@ pub fn rail_layout(rows: &[RailRow]) -> Vec<RailLine> {
     for row in rows {
         match row {
             RailRow::Board => lines.push(RailLine::Row(*row)),
-            RailRow::Gallery(GallerySection::ThisMonth) => {
+            RailRow::Gallery(GallerySection::Newest) => {
                 lines.push(RailLine::Blank);
                 lines.push(RailLine::Heading("GALLERY"));
                 lines.push(RailLine::Row(*row));

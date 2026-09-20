@@ -12,7 +12,7 @@ use crate::app::state::App;
 
 /// Route one event to the board. Returns true when consumed.
 pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
-    match event {
+    let consumed = match event {
         ParsedInput::Byte(byte) => handle_key(app, *byte),
         ParsedInput::Char(ch) if ch.is_ascii() => handle_key(app, *ch as u8),
         ParsedInput::Arrow(key) => {
@@ -21,7 +21,13 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         }
         ParsedInput::Mouse(mouse) => handle_mouse(app, mouse),
         _ => false,
-    }
+    };
+    // One funnel for the aim broadcast: anything that could have moved the
+    // shot came through here, and the publish is a no-op when nothing did.
+    // Hanging it off each individual handler instead would mean every new
+    // control is one forgotten line away from being invisible to the opponent.
+    app.daily.pool_publish_aim();
+    consumed
 }
 
 pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
@@ -54,6 +60,11 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
     // (which mirrors this ordering); this byte path covers synthesized
     // 0x1B events, same as the chat-selection clear above.
     if byte == 0x1B && app.daily.cancel_pending_move() {
+        return true;
+    }
+    // Pool owns a whole key map of its own, and it overlaps wasd, so it goes
+    // first and falls through untouched on every other board.
+    if super::pool_input::pool_key(app, byte) {
         return true;
     }
     match byte {
@@ -97,6 +108,10 @@ pub(crate) fn handle_arrow(app: &mut App, key: u8) {
     }
 }
 
+pub(crate) fn within(area: ratatui::layout::Rect, x: u16, y: u16) -> bool {
+    x >= area.x && y >= area.y && x < area.x + area.width && y < area.y + area.height
+}
+
 fn board_wants_arrows(app: &App) -> bool {
     let Some(board) = &app.daily.board else {
         return false;
@@ -110,6 +125,11 @@ fn board_wants_arrows(app: &App) -> bool {
 }
 
 fn handle_mouse(app: &mut App, mouse: &MouseEvent) -> bool {
+    // Pool is the one board that reads more than a click: the power stroke is
+    // a drag down and a release, so it sees Drag and Up as well.
+    if super::pool_input::is_pool_board(app) && super::pool_input::handle_pool_mouse(app, mouse) {
+        return true;
+    }
     if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
         return false;
     }

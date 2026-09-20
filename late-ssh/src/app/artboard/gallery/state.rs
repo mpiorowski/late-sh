@@ -29,7 +29,7 @@ pub enum GallerySection {
 }
 
 impl GallerySection {
-    pub const ALL: [Self; 4] = [Self::ThisMonth, Self::Newest, Self::HallOfFame, Self::Mine];
+    pub const ALL: [Self; 4] = [Self::Newest, Self::ThisMonth, Self::HallOfFame, Self::Mine];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -83,8 +83,8 @@ impl GallerySection {
 
     fn index(self) -> usize {
         match self {
-            Self::ThisMonth => 0,
-            Self::Newest => 1,
+            Self::Newest => 0,
+            Self::ThisMonth => 1,
             Self::HallOfFame => 2,
             Self::Mine => 3,
         }

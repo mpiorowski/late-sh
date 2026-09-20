@@ -5,8 +5,8 @@
 //! pours a `@bartender ` mention into the composer. Enter next to a landmark
 //! prop follows its signpost: the arcade cabinet, the heavy door, and the
 //! easel jump to their app pages (2/3/4), the poker table opens the Lobby
-//! modal, the jukebox opens the Music Booth, and the dog gets petted where
-//! everyone can see it.
+//! modal and the pool table opens it on a fresh pool challenge, the jukebox
+//! opens the Music Booth, and the dog gets petted where everyone can see it.
 //! Returns `false` for anything it does not own so global keys (numbers,
 //! Tab, `q`, `?`, `v` music chords, ...) keep working. Composing and
 //! chat-overlay input never reaches this handler: the shared composer and
@@ -14,6 +14,7 @@
 
 use crate::app::common::primitives::Screen;
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
+use crate::app::lobby::daily::games::DailyGame;
 use crate::app::state::App;
 
 use super::lobby::Emote;
@@ -73,6 +74,14 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
                     Some(Interactive::Doors) => app.set_screen(Screen::Games),
                     Some(Interactive::Poker) => {
                         crate::app::input::open_daily_modal_globally(app);
+                    }
+                    // The same Lobby, but a player standing at the pool table
+                    // came to play pool: open it on the challenge picker with
+                    // eight-ball already under the cursor.
+                    Some(Interactive::Pool) => {
+                        crate::app::input::open_daily_modal_globally(app);
+                        app.daily
+                            .begin_challenge_draft_for(DailyGame::EightBall, false);
                     }
                     Some(Interactive::Easel) => app.set_screen(Screen::Artboard),
                     _ => {
