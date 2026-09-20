@@ -22,6 +22,12 @@
         font-style: normal;
         font-weight: 400;
         font-display: block;
+        /* The face's own symbol coverage (cmap), so the download only happens when the
+           snapshot contains a glyph it can render; plain text never fetches it. */
+        unicode-range: U+21AF-2219, U+2299-22C6, U+2316-232B, U+237B-244A, U+25A0-27BE,
+            U+2800-28FF, U+2981-29EB, U+2B00-2BFF, U+4DC0-4DFF, U+10140-101FD, U+102E0-102FB,
+            U+10E60-10E7E, U+1D2C0-1D378, U+1F000-1F10F, U+1F16D-1F1AD, U+1F30D-1F336,
+            U+1F378-1F5FA, U+1F650-1F6FC, U+1F774-1F8B1, U+1F900-1F946, U+1FA00-1FBF9;
     }
 
     :root {
@@ -225,6 +231,11 @@
         height: 14px;
     }
 
+    .gal-btn-sm {
+        width: 1.9rem;
+        height: 1.9rem;
+    }
+
     .gal-status {
         position: absolute;
         left: 0.85rem;
@@ -277,7 +288,8 @@
             max-width: calc(100% - 7rem);
         }
 
-        .gal-btn {
+        .gal-btn,
+        .gal-btn-sm {
             width: 2.6rem;
             height: 2.6rem;
             font-size: 1.1rem;
@@ -299,7 +311,7 @@
 <div class="gal-root" x-data="gallery()" x-init="init()" @keydown.window="onKey($event)">
 
     <header class="gal-topbar">
-        <button type="button" class="gal-btn" style="width: 1.9rem; height: 1.9rem;"
+        <button type="button" class="gal-btn gal-btn-sm"
             @click="sidebarHidden = !sidebarHidden" aria-label="toggle snapshots panel" title="toggle list (s)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                 stroke-linejoin="round">
@@ -432,7 +444,13 @@
             touchMidX: 0,
             touchMidY: 0,
             touchPanning: false,
+            touchStartTime: 0,
+            touchStartX: 0,
+            touchStartY: 0,
+            tapCandidate: false,
             lastTapTime: 0,
+            lastTapX: 0,
+            lastTapY: 0,
             zoomLabel: '100%',
             statusText: 'drag or swipe to pan · scroll or pinch to zoom',
             defaultStatus: 'drag or swipe to pan · scroll or pinch to zoom',
@@ -486,10 +504,12 @@
 
             async renderWhenFontsReady() {
                 if (!document.fonts) return;
+                // Passing the snapshot's characters lets unicode-range gate the fetch.
+                const text = Array.from(new Set(this.cells.map((cell) => cell.ch))).join('');
                 try {
                     await Promise.allSettled([
                         document.fonts.load(this.fontSize + 'px "Symbols Nerd Font"'),
-                        document.fonts.load(this.fontSize + 'px "Noto Sans Symbols 2"')
+                        document.fonts.load(this.fontSize + 'px "Noto Sans Symbols 2"', text)
                     ]);
                     this.renderSnapshot();
                 } catch (_) {
@@ -596,61 +616,94 @@
                 if (e.target.closest('.gal-toolbar')) return;
                 const touches = e.touches;
                 if (touches.length === 1) {
+                    const t = touches[0];
                     const now = Date.now();
-                    if (now - this.lastTapTime < 300) {
+                    const nearLastTap =
+                        Math.hypot(t.clientX - this.lastTapX, t.clientY - this.lastTapY) < 30;
+                    if (now - this.lastTapTime < 300 && nearLastTap) {
                         this.fitToView();
                         this.lastTapTime = 0;
-                        return;
+                        this.tapCandidate = false;
+                    } else {
+                        this.tapCandidate = true;
                     }
-                    this.lastTapTime = now;
-                    this.touchPanning = true;
-                    this.panStartX = touches[0].clientX;
-                    this.panStartY = touches[0].clientY;
-                    this.panStartTx = this.tx;
-                    this.panStartTy = this.ty;
-                    this.updateStatus(touches[0]);
+                    this.touchStartTime = now;
+                    this.touchStartX = t.clientX;
+                    this.touchStartY = t.clientY;
+                    this.beginTouchPan(t);
+                    this.updateStatus(t);
                 } else if (touches.length >= 2) {
                     this.touchPanning = false;
+                    this.tapCandidate = false;
                     const dx = touches[0].clientX - touches[1].clientX;
                     const dy = touches[0].clientY - touches[1].clientY;
                     this.touchDist = Math.hypot(dx, dy);
-                    const rect = this.stageRect();
-                    this.touchMidX = (touches[0].clientX + touches[1].clientX) / 2 - rect.left;
-                    this.touchMidY = (touches[0].clientY + touches[1].clientY) / 2 - rect.top;
+                    const mid = this.touchMidpoint(touches);
+                    this.touchMidX = mid.x;
+                    this.touchMidY = mid.y;
                 }
             },
 
             onTouchMove(e) {
                 const touches = e.touches;
                 if (touches.length === 1 && this.touchPanning) {
-                    this.tx = this.panStartTx + (touches[0].clientX - this.panStartX);
-                    this.ty = this.panStartTy + (touches[0].clientY - this.panStartY);
+                    const t = touches[0];
+                    if (Math.hypot(t.clientX - this.touchStartX, t.clientY - this.touchStartY) >= 10) {
+                        this.tapCandidate = false;
+                    }
+                    this.tx = this.panStartTx + (t.clientX - this.panStartX);
+                    this.ty = this.panStartTy + (t.clientY - this.panStartY);
                     this.applyTransform();
-                    this.updateStatus(touches[0]);
+                    this.updateStatus(t);
                 } else if (touches.length >= 2 && this.touchDist > 0) {
                     const dx = touches[0].clientX - touches[1].clientX;
                     const dy = touches[0].clientY - touches[1].clientY;
                     const newDist = Math.hypot(dx, dy);
-                    if (newDist > 0) {
-                        const factor = newDist / this.touchDist;
-                        this.zoomAt(factor, this.touchMidX, this.touchMidY);
-                        this.touchDist = newDist;
-                    }
+                    if (newDist === 0) return;
+                    // Follow the fingers: translate by the midpoint drift, then zoom about
+                    // the fresh midpoint so the content stays under the grip.
+                    const mid = this.touchMidpoint(touches);
+                    this.tx += mid.x - this.touchMidX;
+                    this.ty += mid.y - this.touchMidY;
+                    this.applyTransform();
+                    this.zoomAt(newDist / this.touchDist, mid.x, mid.y);
+                    this.touchDist = newDist;
+                    this.touchMidX = mid.x;
+                    this.touchMidY = mid.y;
                 }
             },
 
             onTouchEnd(e) {
                 if (e.touches.length === 0) {
+                    const held = Date.now() - this.touchStartTime;
+                    if (this.tapCandidate && held < 250) {
+                        this.lastTapTime = Date.now();
+                        this.lastTapX = this.touchStartX;
+                        this.lastTapY = this.touchStartY;
+                    }
+                    this.tapCandidate = false;
                     this.touchPanning = false;
                     this.touchDist = 0;
                 } else if (e.touches.length === 1) {
-                    this.touchPanning = true;
-                    this.panStartX = e.touches[0].clientX;
-                    this.panStartY = e.touches[0].clientY;
-                    this.panStartTx = this.tx;
-                    this.panStartTy = this.ty;
+                    this.beginTouchPan(e.touches[0]);
                     this.touchDist = 0;
                 }
+            },
+
+            beginTouchPan(t) {
+                this.touchPanning = true;
+                this.panStartX = t.clientX;
+                this.panStartY = t.clientY;
+                this.panStartTx = this.tx;
+                this.panStartTy = this.ty;
+            },
+
+            touchMidpoint(touches) {
+                const rect = this.stageRect();
+                return {
+                    x: (touches[0].clientX + touches[1].clientX) / 2 - rect.left,
+                    y: (touches[0].clientY + touches[1].clientY) / 2 - rect.top,
+                };
             },
 
             onWheel(e) {
