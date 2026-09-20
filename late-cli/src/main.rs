@@ -23,7 +23,7 @@ mod ws;
 use audio::{AudioRuntime, audio_startup_hint};
 use config::{Config, init_logging};
 use identity::ensure_client_identity_at;
-use raw_mode::{RawModeGuard, enable_ansi_output_if_tty};
+use raw_mode::{RawModeGuard, SessionModesGuard, enable_ansi_output_if_tty};
 use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_ssh};
 use ws::{
     MAX_CONSECUTIVE_FAILURES, PAIR_RECONNECT_DELAY, PAIR_SLOW_RECONNECT_DELAY, PairAttempt,
@@ -70,6 +70,10 @@ async fn main() -> Result<()> {
         .ssh_mode
         .uses_cli_raw_mode()
         .then(RawModeGuard::enable_if_tty);
+    // Declared after the raw-mode guard so it drops first: every way out of
+    // the session below, clean or not, leaves the shell without mouse
+    // reporting or bracketed paste.
+    let _session_modes = SessionModesGuard::enable_if_tty();
 
     if config.ssh_mode == config::SshMode::OpenSsh {
         return run_openssh_mode(config, ssh_identity).await;
@@ -293,7 +297,11 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
     let icecast_stream_url = audio.icecast_stream_url.clone();
     // Copy scalar state before entering the long-lived pair loop.
     let sample_rate = audio.sample_rate;
-    let mut webview = WebviewPlaybackController::new(api_base_url.clone(), token.clone());
+    let mut webview = WebviewPlaybackController::new(
+        api_base_url.clone(),
+        token.clone(),
+        audio.analyzer_tx.clone(),
+    );
     let mut voice = voice::VoiceRuntimeState::default();
     let (mut desktop_media, mut desktop_commands) =
         mpris::DesktopMedia::new(mpris::AudioControls {
@@ -323,6 +331,9 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
             }
             Ok(ws) => {
                 let established = Instant::now();
+                // Subscribed per session so a reconnect starts from live
+                // frames instead of flushing a backlog from the outage.
+                let mut viz_frames = audio.analyzer_tx.subscribe();
                 let session = run_pair_session(
                     ws,
                     &client,
@@ -332,6 +343,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
                         voice: &mut voice,
                         desktop_media: &mut desktop_media,
                         desktop_commands: &mut desktop_commands,
+                        viz_frames: &mut viz_frames,
                     },
                 )
                 .await;

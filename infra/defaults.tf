@@ -60,4 +60,29 @@ locals {
   irc_port            = 6697
   irc_tls_secret_name = "irc-tls"
   irc_tls_mount_path  = "/etc/irc-tls"
+
+  # Minecraft (infra/minecraft.tf). Image and game version are code: bumping
+  # the game version is a world upgrade and a client requirement for every
+  # player, so it lands as a reviewed diff. Java 25 runs both 1.21.x and
+  # 26.x Paper builds. Whitelist and ops come from GitHub variables so player
+  # names stay out of git; empty means nobody is seeded and the first names
+  # go in through rcon-cli (README.md).
+  minecraft_image     = "itzg/minecraft-server:2026.9.0-java25"
+  minecraft_version   = "26.2"
+  minecraft_port      = 25565
+  minecraft_heap      = "2G"
+  minecraft_whitelist = join(",", compact([for name in split(",", var.MINECRAFT_WHITELIST) : trimspace(name)]))
+  minecraft_ops       = join(",", compact([for name in split(",", var.MINECRAFT_OPS) : trimspace(name)]))
+
+  # Node placement (SCALE.md, Immediate Next Work 3). agent-1 joined the
+  # cluster with this label and a NoSchedule taint of the same key and value
+  # (/etc/rancher/rke2/config.yaml on the node, infra/README.md), so a
+  # workload lands there only when it carries both the node selector and the
+  # toleration. Everything without them stays on server-1: service-ssh, redis,
+  # the doors, ingress-nginx, ipv6-proxy, LiveKit's media hostPorts, and every
+  # workload whose local-path volume is still pinned to server-1 (the Postgres
+  # instances). Moving one of those needs a fresh volume on agent-1, not just
+  # these two fields.
+  support_node_label_key   = "role"
+  support_node_label_value = "support"
 }

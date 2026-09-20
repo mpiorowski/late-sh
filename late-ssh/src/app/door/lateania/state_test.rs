@@ -15,6 +15,8 @@ fn row(slot: Option<&str>, equipped: bool) -> InvView {
         compare_pct: None,
         category: "Weapons",
         desc: "A well-balanced blade.",
+        worn_name: None,
+        worn_stats: None,
     }
 }
 

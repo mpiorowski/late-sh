@@ -5,6 +5,8 @@ use russh::ChannelId;
 use russh::server::Handle;
 use tokio::sync::{mpsc, watch};
 
+use crate::morgue;
+
 /// How long to wait for crawl's hangup-save after SIGHUP before falling back to
 /// SIGKILL. crawl saves-and-exits on SIGHUP (the behavior every dgamelaunch
 /// public server relies on) normally in well under a second; the bound just
@@ -153,6 +155,17 @@ async fn run_bridge(
     fs::create_dir_all(&macros)
         .with_context(|| format!("failed to create dcss macro dir {macros}"))?;
 
+    // Per-player morgue directory. crawl's default drops every dump flat into
+    // `$HOME/.crawl/morgue`, but the public DCSS tooling addresses a game as
+    // `<morgue>/<playname>/morgue-<playname>-<stamp>.txt` and builds that path
+    // from the xlog line alone, so a flat tree 404s every published link (see
+    // `morgue.rs`). crawl mkdirs this itself, but do it here anyway: the
+    // failure is then a launch error naming the path, not crawl's own
+    // `end(1)` on a dead pty.
+    let morgues = morgue::player_dir(&cfg.data_dir, &cfg.playname);
+    fs::create_dir_all(&morgues)
+        .with_context(|| format!("failed to create dcss morgue dir {morgues}"))?;
+
     // Materialize the per-account rc pushed by the client. When a file lands,
     // `-rc` points crawl at it instead of the shared `$HOME/.crawl/init.txt`;
     // the `-extra-opt-last` display defaults below still apply on top.
@@ -167,7 +180,12 @@ async fn run_bridge(
     // override of the OS size and then ignores SIGWINCH, freezing crawl at its
     // spawn-time geometry.
     cmd.env_clear()
-        .args(crawl_args(&cfg.playname, &macros, rc_path.as_deref()))
+        .args(crawl_args(
+            &cfg.playname,
+            &macros,
+            &morgues,
+            rc_path.as_deref(),
+        ))
         .env("TERM", &cfg.term)
         .env("HOME", &cfg.data_dir)
         .env("LANG", "C.UTF-8")
@@ -358,7 +376,11 @@ fn send_sighup(pid: u32, playname: &str) {
 /// open someone else's save). `-macro` sets the per-player macro dir via
 /// `SysEnv.macro_dir`, consumed directly during path init rather than through
 /// the option system, so it is not something an rc line can override (see
-/// `macro_dir` below). The `-extra-opt-last` lines are server-side display
+/// `macro_dir` below). `-morgue` does the same for the morgue directory, and
+/// is the command-line form for the same reason: `fixup_options()` re-applies
+/// `SysEnv.morgue_dir` AFTER the rc is parsed (initfile.cc), so it settles a
+/// pushed rc's `morgue_dir =` line, which unlike `macro_dir` IS a live option
+/// on this build. The `-extra-opt-last` lines are server-side display
 /// defaults: the viewport maxima let the map grow with the terminal instead of
 /// crawl's cramped 33x21 default (81x71 are the hard caps), and
 /// use_terminal_default_colours makes crawl inherit the terminal's default
@@ -378,12 +400,19 @@ fn send_sighup(pid: u32, playname: &str) {
 /// is equally rejected by the option parser, so there is nothing to guard
 /// against here. Re-verify against the pinned Makefile before ever touching
 /// this again.
-fn crawl_args(playname: &str, macro_dir: &str, rc_path: Option<&str>) -> Vec<String> {
+fn crawl_args(
+    playname: &str,
+    macro_dir: &str,
+    morgue_dir: &str,
+    rc_path: Option<&str>,
+) -> Vec<String> {
     let mut args = vec![
         "-name".to_string(),
         playname.to_string(),
         "-macro".to_string(),
         macro_dir.to_string(),
+        "-morgue".to_string(),
+        morgue_dir.to_string(),
         "-extra-opt-last".to_string(),
         "view_max_width=81".to_string(),
         "-extra-opt-last".to_string(),

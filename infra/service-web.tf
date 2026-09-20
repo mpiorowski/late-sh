@@ -33,6 +33,18 @@ resource "kubernetes_deployment_v1" "service_web" {
       }
 
       spec {
+        # Support workload: runs on agent-1 (defaults.tf, node placement).
+        node_selector = {
+          (local.support_node_label_key) = local.support_node_label_value
+        }
+
+        toleration {
+          key      = local.support_node_label_key
+          operator = "Equal"
+          value    = local.support_node_label_value
+          effect   = "NoSchedule"
+        }
+
         container {
           image = local.image_tags["web"]
           name  = "service-web"

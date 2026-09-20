@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::app::common::primitives::Banner;
 
 use super::{
-    catalog::ShopCategory,
+    catalog::{CompanionSection, ShopCategory},
     entitlements::ShopEntitlements,
     svc::{
         ActiveChatRoomEffect, ActiveRental, ActiveUsernameEffect, ShopCatalogItem, ShopEvent,
@@ -18,7 +18,7 @@ use super::{
 use late_core::models::{
     aquarium_shield::AquariumShield,
     bonsai_decay_protection::BonsaiDecayProtection,
-    marketplace::CHAT_CONSUMABLE_ITEM_KIND,
+    marketplace::{CHAT_CONSUMABLE_ITEM_KIND, TankStockKind},
     rental::TITLE_MAX_LEN,
     username_effect::{GlowColor, GradientPair, UsernameEffect},
 };
@@ -211,18 +211,37 @@ impl ShopState {
             .iter()
             .filter(|item| category.matches_item(item))
             .collect();
-        // On the Chat tab the name-adjacent rentals lead: username effects
-        // first, then titles, then the room consumables. Stable, so catalog
-        // order holds inside each group.
-        items.sort_by_key(|item| match item {
-            item if item.is_username_effect() => 0,
-            item if item.is_title_rental() => 1,
-            _ => 2,
+        // Two tabs order their sections themselves, stable, so catalog
+        // order holds inside each group. Chat: the name-adjacent rentals
+        // lead, username effects first, then titles, then the room
+        // consumables. Companions: `CompanionSection` order, the tank's
+        // growth and plants between the tank and its fish.
+        items.sort_by_key(|item| match category {
+            ShopCategory::Chat => match item {
+                item if item.is_username_effect() => 0,
+                item if item.is_title_rental() => 1,
+                _ => 2,
+            },
+            ShopCategory::Companions => CompanionSection::of(item) as usize,
+            ShopCategory::Badges | ShopCategory::Flags | ShopCategory::Ultimates => 0,
         });
         items
     }
 
-    pub(crate) fn active_aquarium_fish(&self) -> Vec<(String, usize)> {
+    /// How many of one kind the user owns, in the water and parked: what
+    /// the kind's cap counts (`TankStockKind::cap`).
+    pub(crate) fn owned_tank_stock(&self, kind: TankStockKind) -> i32 {
+        self.snapshot
+            .items
+            .iter()
+            .filter(|item| item.tank_stock_kind() == Some(kind))
+            .map(|item| item.quantity.max(0))
+            .sum()
+    }
+
+    /// Every creature in the water, fish and plants alike, as the tank
+    /// draws them: `(creature, active count)`.
+    pub(crate) fn active_aquarium_creatures(&self) -> Vec<(String, usize)> {
         if !self.snapshot.entitlements.has_aquarium() {
             return Vec::new();
         }
@@ -419,9 +438,21 @@ impl ShopState {
             });
             return Some(Banner::success("Pick a style"));
         }
-        if item.is_aquarium_fish() {
+        if item.is_sprout() {
+            return Some(Banner::error(
+                "Sprouts come up on their own, every 14 days; - cuts the one on the floor",
+            ));
+        }
+        if item.is_welcome_fish() {
+            return Some(Banner::error(
+                "Fry are not for sale, they only breed: one with the tank, one per fourteen-day streak",
+            ));
+        }
+        if item.is_tank_stock() {
             if !self.snapshot.entitlements.has_aquarium() {
-                return Some(Banner::error("Unlock Aquarium before buying fish"));
+                return Some(Banner::error(
+                    "Unlock Aquarium before buying fish or plants",
+                ));
             }
             self.service
                 .purchase_item_task(self.user_id, item.sku, current_room_id, None);
@@ -576,16 +607,17 @@ impl ShopState {
         Some(Banner::success("Cancelled custom title"))
     }
 
-    pub(crate) fn adjust_selected_aquarium_fish(&mut self, delta: i32) -> Option<Banner> {
+    /// `+` / `-` on a fish or a plant: one copy into or out of the water.
+    pub(crate) fn adjust_selected_tank_stock(&mut self, delta: i32) -> Option<Banner> {
         let item = self.selected_item()?.clone();
-        if !item.is_aquarium_fish() {
+        if !item.is_tank_stock() {
             return None;
         }
         if !self.snapshot.entitlements.has_aquarium() {
-            return Some(Banner::error("Unlock Aquarium before managing fish"));
+            return Some(Banner::error("Unlock Aquarium before managing the tank"));
         }
         self.service
-            .adjust_aquarium_fish_task(self.user_id, item.sku, delta);
+            .adjust_aquarium_active_task(self.user_id, item.sku, delta);
         let label = if delta > 0 { "Adding" } else { "Removing" };
         Some(Banner::success(&format!("{label} {}", item.name)))
     }

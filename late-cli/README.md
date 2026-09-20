@@ -28,6 +28,33 @@ Nix / NixOS:
 nix run github:mpiorowski/late-sh#late
 ```
 
+## Verifying downloads
+
+Every release binary ships with a Sigstore build-provenance attestation, produced keylessly by the GitHub Actions release workflow. It proves the exact file was built by this repository's workflow at the tagged commit; there is no long-lived signing key anywhere. The bundle is published next to each binary as `<binary>.sigstore.json`.
+
+The installers also verify each download against `sha256sums.txt` served from the [GitHub Release](https://github.com/mpiorowski/late-sh/releases) rather than from `cli.late.sh`, and fail closed if the checksum file is unavailable or does not match. A tampered download host cannot swap the binary under a trusted copy of the installer. The installer itself is served from the same host, so `curl ... | sh` still trusts `cli.late.sh` for the script; to remove that trust, run the installer from a checkout of this repository, or verify the provenance bundle by hand as below.
+
+To verify a binary yourself with the GitHub CLI:
+
+```bash
+gh attestation verify late --repo mpiorowski/late-sh
+```
+
+Or offline with [cosign](https://github.com/sigstore/cosign) v3, using the published bundle:
+
+```bash
+tag=v0.27.11-cli
+target=x86_64-unknown-linux-gnu
+curl -fsSLO "https://cli.late.sh/releases/${tag}/${target}/late"
+curl -fsSLO "https://cli.late.sh/releases/${tag}/${target}/late.sigstore.json"
+cosign verify-blob-attestation late \
+  --bundle late.sigstore.json \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/mpiorowski/late-sh/\.github/workflows/deploy_cli\.yml@refs/tags/'
+```
+
+The identity is always `deploy_cli.yml`, the workflow that runs the build. On a tagged release it is called from `release.yml`, and Sigstore names the called workflow, not the caller. The build always runs on the release tag itself, so the ref is `refs/tags/<tag>` for normal releases and manual redeploys alike. Pin the regexp to `@refs/tags/<tag>$` to check a specific version. cosign v2 needs `--new-bundle-format` added to the command.
+
 ## Build from source
 
 ```bash

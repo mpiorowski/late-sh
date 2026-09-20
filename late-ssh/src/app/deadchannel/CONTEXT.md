@@ -4,11 +4,22 @@
 - Domain: the deadchannel game (GAME.md): its onboarding, the
   first-contact haunting ladder, in the `haunt/` subdomain, and the
   start of the character layer, the runner and its look, in `runner/`
-  (phase 2, build order step 1). Built for
+  (phase 2, build order step 1), and the night city street in `city/`
+  (the wallet, GAME.md "The three surfaces"; art and walkable street
+  first, under the clubhouse on a second `0`, runners only, no
+  transactions yet). Built for
   several replicas (root CONTEXT.md, multi-replica rule); gated behind
   the `haunt_live` fuse, unlit, so only staff (admins and moderators)
   are haunted today, and only they can finish the ladder and join.
-- Last updated: 2026-09-09 (pacing retuned so the whole ladder fits a
+- Last updated: 2026-09-19 (the city moved under the clubhouse: `0` on the clubhouse goes down, runners only; the tile register won and the drawn one left the live script; the street went long, with walkers and running; the renderer lights the street from every lamp and sign, fades it with distance and shadows the walls, in the city's own fixed palette; §3b). Before that, 2026-09-18 (the night city exists: the generated street, the runner as its mark, landmarks with popovers, shop panels showing catalogs without tills). Before that, 2026-09-14 (the breakthrough plays only on a send from
+  its own session and swallows keys ahead of door games; the static rolls
+  slower, scene lengths unchanged). Before that, 2026-09-13 (stage 3
+  plays on its own clock: the static
+  pulses and the line types from the first frames, and every key, Esc
+  included, is swallowed; the invitation no longer arrives cold: once due,
+  the next own send plays the breakthrough, a full-screen static tear with
+  a line naming afterglow, and the DM lands as the line finishes). Before
+  that, 2026-09-09 (pacing retuned so the whole ladder fits a
   week of daily connects, with every haunt kept: the first clock burst
   of a session comes 5-20 min in and later ones 20-60 min apart, the
   name roll is 1-in-3 (the daily cap does the spacing), the whisper gap
@@ -43,11 +54,13 @@ tutorial. The chain is the spec, and the ladder never skips a rung
 (counts tuned 2026-09-01, pacing 2026-09-09): three clock bursts quiet
 the clock and open stage 2, the third name hit arms the stage-3 whisper
 (it fires on the next fresh connect, and once more on a later day: two
-doors, two different lines), and the second delivered whisper schedules
-the stage-4 invitation. The daily caps, not the dice, do the pacing, and
+doors, two different lines), and 20 hours after the second delivered
+whisper the next own send plays the stage-4 breakthrough, which carries
+the invitation DM in. The daily caps, not the dice, do the pacing, and
 the ladder is built for a person who connects once a day: day 1 two
 bursts, day 2 the third burst and the first name hit, days 3 and 4 the
-other two, day 5 the first door, day 6 the second, day 7 the DM. The
+other two, day 5 the first door, day 6 the second, day 7 the breakthrough
+and the DM. The
 day-scale gaps (whisper gap, invitation delay) are 20 hours rather than
 24 so evening-to-evening connects at different times never slip a day.
 
@@ -90,20 +103,31 @@ number of replicas spend one AI call per text.
 | File | Owns |
 |---|---|
 | `glyphs.rs` | `GLYPH_ALPHABET`, the game's shared character vocabulary. Game-level: the haunting borrows it, stage-4-era spawns will render with it (the clock glitch is retroactive foreshadowing). Distinct from the static shades `░▒▓` (noise, not creatures). |
-| `haunt/state.rs` | The pure machines and data: `HauntState` (the one `App` slot), `FirstContactMarks` (persisted marks bundle), `FirstContactGate` + `BioStanding` + the thresholds and `bio_hash` (the eligibility gate), `ClockGlitch` (stage 1), `NameFlicker` (stage 2, the person being haunted), `ActiveHit` (one hit's playback, holding the wave seed: the roller's own hit and the `witness` slot share it, so every screen corrupts identically), `WhisperState` (stage 3), the voice/invitation constants (stage 4), `PendingClaim`/`HitStage` (claims in flight), `HauntCommand` + `parse_haunt_command`. No I/O, no clock reads. |
-| `haunt/svc.rs` | Orchestration: `bootstrap_gate` (gate + bio screen claim at connect), `arm` (session start), one `tick(app)` (claim drain, splash door, glitch scheduler, name-flicker roller, witness replay, invitation clock, `/haunt` drain), `note_splash_input`, `replay_whisper`, the bio screen task, and `publish_name_hit` (a won or forced hit goes on the wire through `ChatService::publish_name_hit`). The only haunting layer touching `App`, logging, metrics, and persistence. |
-| `haunt/ui.rs` | Pure render helpers: whisper frame + splash overlay + static surge, `apply_clock_glitch`, `glitched_name`, `name_flicker_for`. Deterministic per burst seed, stateless like the sidebar equalizer. |
+| `haunt/state.rs` | The pure machines and data: `HauntState` (the one `App` slot), `FirstContactMarks` (persisted marks bundle), `FirstContactGate` + `BioStanding` + the thresholds and `bio_hash` (the eligibility gate), `ClockGlitch` (stage 1), `NameFlicker` (stage 2, the person being haunted), `ActiveHit` (one hit's playback, holding the wave seed: the roller's own hit and the `witness` slot share it, so every screen corrupts identically), `WhisperState` (stage 3), `Breakthrough` + `InvitationClaim` (stage 4's full-screen beat and the claim answer), the voice/invitation/breakthrough-line constants (stage 4), `PendingClaim`/`HitStage` (claims in flight), `HauntCommand` + `parse_haunt_command`. No I/O, no clock reads. |
+| `haunt/svc.rs` | Orchestration: `bootstrap_gate` (gate + bio screen claim at connect), `arm` (session start), one `tick(app)` (claim drain, splash door, glitch scheduler, name-flicker roller, witness replay, breakthrough (claim answer, scene, due send), `/haunt` drain), `swallows_splash_input`, `replay_whisper`, the bio screen task, and `publish_name_hit` (a won or forced hit goes on the wire through `ChatService::publish_name_hit`). The only haunting layer touching `App`, logging, metrics, and persistence. |
+| `haunt/ui.rs` | Pure render helpers: whisper frame + splash overlay + static surge, breakthrough frame + full-screen draw, `apply_clock_glitch`, `glitched_name`, `name_flicker_for`. Deterministic per burst seed, stateless like the sidebar equalizer. |
 | `runner/state.rs` | The look: `PIECES` (the closed starter table, one five-cell row per piece, `Slot` hood/eyes/coat), `Tint` (the closed palette, gold deliberately absent), `Look` + `Worn` (typed, table references), `Look::random` (the join's dice), `Look::to_json` / `Look::parse` (the JSON contract on the runner row; unknown codes are a `LookError`, never a blank), `PORTRAIT_WIDTH` / `PORTRAIT_HEIGHT`. No I/O. `state_test` asserts every row is five single-width cells. |
 | `runner/ui.rs` | `portrait_spans`: the look as three styled spans, one per worn piece in its tint; `tint_color` maps the palette onto the theme. Pure. |
 | `runner/svc.rs` | `RunnerLookService`: the process-shared look directory (`watch<Arc<HashMap<Uuid, Look>>>`), seeded and refreshed from `deadchannel_runners` on the `deadchannel_runner_changed` LISTEN, the `app/flags` shape. A look that fails to parse is logged and skipped. `fixed_looks_rx` for test apps. |
+| `city/map.rs` | **Generated** by `scripts/gen_city_map.py --write` (never hand-edited): the 232x52 `MAP` literal, the `SOLID` collision bitmap, `SPAWN`, every zone (`SIGNS`, `BANNERS`, `CART_SIGNS`, `AWNINGS`, `WINDOWS`, `VENTS`, `PUDDLES`, `LAMPS`, `DROP_LIGHTS`, `SCREEN_FACE`, `WIRE`, ...), the closed `Neon` palette, `Landmark` + `nearest_landmark` (reach zones), `walkable`, `grid`/`char_at`. |
+| `city/state.rs` | Per-session view state: the runner's cell, the animation clock, the open panel, the pinned street line. `walk`, `nearby`, `Landmark::on_enter` (`Enter::Panel` for shops, `Enter::Line` for carts and the screen, `Enter::Leave` for the wire). Pure. |
+| `city/data.rs` | The city's copy and catalogs: the gear ladder (`COST_LADDER`, `WEAPONS`, `ARMOR`: LoGD numbers, GAME.md names), `BANDS` with draft move names, `NOTICES`, `DRINKS`, `TAILOR_PRICES`, the per-landmark `lines` pools, `title` and `pitch`. |
+| `city/input.rs` | Arrows/hjkl walk; Enter at a landmark; Enter closes a panel or the ledge view, Esc too through the root's `dispatch_escape` (walk keys are swallowed while one is open). Returns `false` for globals. |
+| `city/ui.rs` | Renderer: base styling by zone, the ambience pass (rain, puddles reflecting the nearest sign, neon shorts and dropped letters, window flicker, the screen's static and test pattern with rare glyph frames, steam, lamps, the drop's lights, the blimp, the mast, the bits machine, the wire's pulse), the runner as its mark, the popover, the street line, the shop panels. |
 
 Root integration is deliberately thin: `App.haunt` (the one field),
 `haunt::svc::tick(self)` in `tick.rs` (plus the splash block consulting
-`HauntState::holds_splash_door` before self-expiring), one input line
-routing splash input, and three one-line draw calls in `render.rs`
-(clock transform, whisper frame for `DrawContext`, splash overlay).
+`HauntState::holds_splash_door` before self-expiring), two input lines
+(splash input to the held door, and a swallow while the breakthrough
+plays, first thing in `App::handle_input` so no door passthrough sees
+the keys), `HauntState::breakthrough_playing` keeping `wake_hint` hot, and
+the draw hooks in `render.rs` (clock transform, whisper and breakthrough
+frames for `DrawContext`, splash overlay, the breakthrough painted last
+over every modal).
 Chat's seams: the `/haunt` submit hook (admin-gated), the
-`requested_haunt` slot, the `own_message_landed` slot set in
+`requested_haunt` slot, the `own_send_succeeded` flag (a `SendSucceeded`
+for a request this session submitted: the breakthrough's trigger), the
+`own_message_landed` slot set in
 `push_message` (the message id *and* its room, since the won hit is put
 on the wire for that room a tick later), the stage-2 wire itself
 (`ChatService::publish_name_hit` does the `pg_notify`; chat's message
@@ -114,7 +138,8 @@ holding it in `pending_name_hits` until `push_message` lands the message
 if a replica's delta is behind), `name_flicker` threaded through the chat
 view structs into the rows cache key (unchanged: the row builder corrupts
 whichever message id it is handed, so witnessing cost the chat renderer
-nothing), and `ChatService::send_first_contact_invitation_task`. Outside the domain:
+nothing), and `ChatService::send_first_contact_invitation_task` (answers
+the claim on a oneshot, then sends the DM after a delay). Outside the domain:
 `app/flags/svc.rs` (the switches), `app/ai/screen.rs::screen_bio` (the
 bio verdict), `ProfileService`'s first-contact tasks (the row claims),
 `late-core`'s `models/deadchannel_name_hit.rs` (the wire's channel,
@@ -200,10 +225,15 @@ lines carry no face; every other room renders exactly as before.
    name hits have reached `NAME_TOTAL_CAP` and
    `FirstContactMarks::whisper_due` holds (under the cap, and the last
    delivery a day or more ago): the haunting follows you home, and comes
-   back. The splash neither skips nor expires while held; input is
-   acknowledged (static surge, skip-hint dissolve) but never obeyed; the
-   voiced line types itself (in answer to the first keypress, or on its
-   own); a hard cap (~10s) releases whatever the phase. Delivery claims
+   back. The splash neither skips nor expires while held,
+   and since 2026-09-13 the scene waits on nobody: the static pulses on its
+   own rhythm (~1.3s, each noise pattern held ~130ms) from the first
+   frame, the voiced line types itself once
+   the base splash line is done (`VOICE_TICK`), the skip hint dissolves as
+   it starts, and every key, Esc included, is swallowed and does nothing
+   (without a keypress the old scene was a quiet line under the cup, and
+   people were missing the door). A hard cap (~10s) releases whatever the
+   phase. Delivery claims
    one mark (`claim_first_contact_whisper`: increments
    `first_contact_whisper_hits` and stamps `first_contact_whisper_at`,
    conditional on the cap and the gap in the row, so two devices that
@@ -212,8 +242,29 @@ lines carry no face; every other room renders exactly as before.
    accepts, because claiming at arming would burn a whisper on every
    dropped SSH session). A kill-switch drop or lost session leaves the
    mark unspent.
-4. **Invitation (the whole game is opt-in).** `INVITE_DELAY_HOURS` (20)
-   after the second delivered whisper, the game's first voice - `afterglow`
+4. **Breakthrough, then the invitation (the whole game is opt-in).**
+   `INVITE_DELAY_HOURS` (20) after the second delivered whisper the
+   breakthrough comes due (`FirstContactMarks::breakthrough_due`), and the
+   next send this session submits plays it (added 2026-09-13: the DM
+   alone, met cold, was taken for spam). Only a `SendSucceeded` for a
+   request this session submitted counts, never the same person's send
+   from another device: every session of a user hears every send, and an
+   idle one would play the scene to nobody. The send asks
+   `ChatService::send_first_contact_invitation_task` for the once-ever
+   claim; the task answers `Won`, `Taken`, or `Failed` on a oneshot before
+   it sends anything, the scene plays only on `Won` (a `Taken` stamps the
+   marks; a `Failed` is logged by the task under
+   `first_contact_invitation_failed`, and this session stops asking until
+   `/haunt invite`), and the task sends the DM after
+   `Breakthrough::dm_delay`, the moment the line has typed, whether or not
+   the session is still there. The scene is private and full screen: the
+   door's static, heavier and pulsing quicker, over the whole frame and
+   every modal, `BREAKTHROUGH_LINE` typing in a gap torn out of the middle,
+   about seven seconds, every key swallowed ahead of door passthrough and
+   the parser, the kill switch cuts it. Known gap to close before the fuse
+   is lit: the claim is stamped `dm_delay` before the DM sends, so a
+   replica stopping in that window leaves a stamp with no DM, and nothing
+   repairs it but `/haunt reset` by hand. The DM comes from the game's first voice - `afterglow`
    (GAME.md reserved the name for something inside the world), a
    bartender-shaped ghost user (fixed fingerprint `afterglow-fp-000`)
    that is never auto-joined into public rooms - sends one persistent DM.
@@ -257,6 +308,141 @@ lines carry no face; every other room renders exactly as before.
    Channels (`chat/state.rs::is_deadchannel_room`, read by
    `visual_order_for_rooms` and both rail builders in `chat/ui.rs`).
    Copy and name face design review before real users ever see them.
+
+## 3b. The night city (the undercity under `0`, the wallet; art first)
+
+GAME.md, "The three surfaces": the city is a full-screen destination
+where nothing happens that you could miss; transactions only. What exists
+is the street and its doors, none of the tills: the design pass that fixes
+the art before a single purchase is wired.
+
+- **Where it is reached.** Under the clubhouse: `0` lands on the
+  clubhouse, `0` again on the clubhouse goes down to the undercity, `0`
+  on the undercity comes back up. Runners only (`App::is_runner`: a look
+  in `App.runner_looks` for this user, so a `deadchannel_runners` row,
+  the one thing `/join #deadchannel` creates; the app-wide gate for
+  everything under the clubhouse, not an `app_flags` switch, which are
+  process-wide, not per user); anyone else stays on the clubhouse. Not in the Tab cycle
+  (`Screen::City.next()`/`prev()` return the clubhouse), no tab of its
+  own, the clubhouse tab stays lit under it, title "Undercity". Enter at
+  the wire goes back up to the clubhouse. The wiring is thin on purpose
+  (`Screen::City`, `App.city`, one dispatch line each in `input.rs`,
+  `render.rs`, `tick.rs`).
+- **The register (decided 2026-09-19): tiles.** Top-down, one tile per
+  thing, the Dwarf Fortress register. `#` walls, `+` doors, `╬` windows
+  that flicker, `=` counters, `)` blades, `[` plate, `"` marks, `!`
+  bottles, `%` bowls, `∩` lockers, `▬` beds, `▪` crates, `▓` shutters and
+  cabinets, `≈` water, `@` people, `c` cats, `r` rats, `>` stairs, `*`
+  lamps, `°` lanterns, `≡` grates that steam. The first pass drew the
+  street front-on with multi-cell facades; it read as a plaza and was
+  dropped (git history has it). A 440-column street in three legs with a dogleg between
+  each (the camera scrolls), four tiles wide, alleys one to three wide
+  running off it (dead ends, a hidden court with a shrine and a plant, a
+  back lane behind the second leg reached from its two end alleys and the
+  arcade's back door), rooms you walk into, stalls of five tiles against
+  the walls, a canal under the first two legs (a walkway, two bridges,
+  warehouses on the far bank), the ledge with the railing and the wire
+  stairs (`>` in the gap, the spawn) along the third leg, a small yard
+  and the screen as three tiles of static closing the street. The shops
+  are the landmarks; everything else is there to be there: tenements
+  (`tenement()` lays out corridor, rooms, beds and a sleeper from a
+  seed), a lockup, a pawn shop, a clinic, the baths, a motel,
+  the arcade, a shrine, a market hall, a garage, a dock, a chop shop, a
+  video store, an aerial lot. **Walkers** (`map::WALKERS`,
+  `ui::walkers`): people, cats and rats pacing a stretch of floor as a
+  pure function of the tick, no state; the generator and `map_test`
+  prove every path is open floor. Rule: every shop with a sign has a
+  door somewhere in its walls (the generator refuses a signed shop
+  without one); what happens inside can be shuffled or removed later.
+- **Light (2026-09-19).** Blade Runner, not cyberpunk: the street is
+  dark and every color has a source. `map::LIGHTS` is every light on the
+  street, found by the generator scanning the finished grid (a `*` is a
+  lamp, a `°` a lantern, `$` `♪` `?` machines, `_` candles, `>` stairs)
+  plus the signs, the shops' doorways, the windows and the screen, each
+  with a kind, a `Neon` and a radius. Each frame `ui::Scene` spreads
+  every light over the floor it reaches (Dial's buckets: a column costs
+  one, a row two, light crosses open ground and doorways, lands on walls
+  and stops) at the level `light_level` gives it this tick (lamps
+  flicker, signs short out and their light with them, windows go dark
+  for a while, the screen pulses with its static), and adds the
+  spinner's searchlight passing over. A **visibility map** fades
+  everything with distance from the runner (`SEE_FULL` columns in full,
+  black-ish by `SEE_END`) and keeps a room at `INSIDE_DARK` until the
+  runner is at its door. Every cell is a `Surface`: lit (its color times
+  ambient plus the light on it, wet things more, halved in the shadow
+  under a wall) or emissive (neon, lamps, windows: they burn on their
+  own and only fade with distance). Height is faked: the top wall of a
+  building against the dark draws as `▀`, the floor south of any wall is
+  in shadow. Rain takes the color of the light it falls through, in that
+  light's color. The runner carries a light (`CARRY_RADIUS`): where you
+  stand is always the best lit place on the street. Light crosses flat
+  water, so the canal and the puddles take the bank's lanterns. Every
+  sign smears its color a few rows into the wet ground in front of it
+  (`reflections`, shimmering). The fixed lights' footprints are computed
+  once (`footprints`), as is every cell's base surface (`base_map`) and
+  which room it is in (`inside_map`): a debug frame is ~30ms, not 130.
+- **Traffic, billboards, splashes.** All pure in the tick. A car runs the
+  length of the street (`car_route`: the three legs through both
+  doglegs, `ui_test` proves every cell is open) as two cells, tail red,
+  head white, with the pool of its headlights running ahead of it in the
+  light map; it draws only on open floor, so it passes behind whatever
+  is in the road. The monorail crosses the sky row (`TRACK_Y`, a dashed
+  track across the top of the map), eastbound one run and westbound the
+  next, windows amber and cyan, flickering. `map::BILLBOARDS` are nine
+  one-row strips the generator leaves blank (five over the rooftops in
+  the sky row, four on the towers below the ledge); the renderer edges
+  each in dark steel and scrolls a line of street copy across it in the
+  board's neon (`BILLBOARD_LINES`, one line per `BILLBOARD_CYCLE`, dark
+  for a moment between, a letter flickering); each is a
+  `LightKind::Billboard` in the light map. The first cut was two rows of
+  the glyph script and read as floating blocks of noise. Raindrops
+  landing on a puddle throw an `o`. Rain falls in two columns of three
+  on every bare cell under the sky, the street, the drop and the void
+  between the blocks alike, dim where the light is dim, and never inside
+  a room (`inside_map`) or on a prop.
+- **The ledge (`Landmark::Ledge`, `city/ledge.rs`).** Standing at the
+  railing anywhere along it (one row north of `RAIL_Y`, not on the wire
+  stairs) the popover says "look over"; Enter swaps the street for the
+  lower city, all the way down: a perspective picture at half-block
+  resolution (two colors per cell, `▀` with fg and bg), towers in four
+  depths from the far hazed ones on the horizon to the near black ones
+  standing below the frame, windows lit at random and flickering, the
+  city's script in neon bands across the near towers, antenna lights
+  blinking, the spinner's beam crossing, rain in the sky. Pure in the
+  area's size and the tick; the same size always draws the same city.
+  Enter or Esc steps back. `State::at_ledge` gates the walk keys like a
+  panel does.
+- **Own palette, not the theme.** The city does not follow the person's
+  theme at all: one look, tuned once (`ui::NIGHT` painted under every
+  cell and overlay, `ui::neon_rgb`, the surface constants, the `INK_*`
+  greys of the overlay text, all fixed RGB). A hundred palettes cannot
+  all be lit well, and a light canvas showing through the street breaks
+  the night. Nothing in `city/ui.rs` reads the theme module; the mirror
+  in the tailor's panel recolors the tints through `ui::tint_rgb`.
+- **The runner** is its mark (GAME.md, "The look"; `@` for a session
+  without a runner row), name label above. Single-width glyphs
+  only; the generator refuses wide and combining characters and
+  `map_test` asserts it again.
+- **Landmarks.** Enter at a shop (armorer, tailor, lockers, bands, bar,
+  patch, board, bits machine) opens a centered panel with its catalog and
+  a line saying the till is not open: the armorer lists all fifteen
+  tiers with bits prices, the tailor shows your portrait in the mirror
+  and the whole starter rack (every piece row, the ten marks, the five
+  tints) plus the placeholder chip prices, bands shows the three bands
+  with draft move names. Enter at a cart, the screen, or the stairs pins
+  a line from that landmark's pool top-left for ~8s. Enter at the wire
+  leaves, back up to the Clubhouse.
+- **Animation** rides the clubhouse's `anim_half` edge (~7.5fps,
+  `tick.rs`), the wake tier is `ANIM_HALF_TICK` on this screen, and every
+  effect is a pure function of `marquee_tick` and the cell, so nothing
+  accumulates. The ambience never paints over a prop (`put_if_floor`, and
+  `ui_test` checks the signs and the board survive a frame).
+- **The camera looks north** (`LOOK_NORTH`, 8 rows): it centers above the
+  runner so a 24-row terminal at the spawn shows shopfronts and street,
+  not the drop.
+- **Nothing is persisted, nothing is shared.** No lobby, no crowd, no DB:
+  the city is one runner on one street per session by design (transactions
+  only; presence would make standing here beat standing in chat).
 
 ## 4. Persistence (`users.settings`, late-core `User`; `app_flags`; `deadchannel_runners`)
 
@@ -329,7 +515,8 @@ Drained by `haunt::svc::tick`.
   stages armed for this session, the gate's three legs (active hours,
   touched settings, bio length and standing), glitch schedule, glitch
   and name hit counters against their caps, the witness (whether a beat
-  of somebody else's is on this screen), door, whisper, invite.
+  of somebody else's is on this screen), door, whisper, and the
+  breakthrough or invite.
 - `/haunt on` / `/haunt off` - the kill switch, an `app_flags` row: the
   flip lands on every replica through the `app_flag_changed` notify and
   survives a restart. `on` also forces this session chosen and arms the
@@ -344,7 +531,8 @@ Drained by `haunt::svc::tick`.
   caps, not the wire: the forced beat travels like a real one, which is
   how the public half of stage 2 is watched from a second session.
 - `/haunt replay` - re-run the splash whisper now, ignoring the marks.
-- `/haunt invite` - send the invitation DM now, skipping the delay.
+- `/haunt invite` - the next own send breaks through, skipping the delay;
+  the DM follows exactly as for a real one.
 - `/haunt reset` - wipe every mark; the chain starts over.
 
 ## 6. Gotchas
@@ -391,7 +579,9 @@ Drained by `haunt::svc::tick`.
   (the splash's own typing clock), the glitch and flicker on
   `marquee_tick` (wall-derived 66ms units).
 - Input swallowed by the held door leaves the VT parser mid-escape; both
-  the input path and the release path call `vt_input.reset()`.
+  the input path and the release path call `vt_input.reset()`. Input
+  swallowed by the breakthrough is dropped before the feed, so it needs no
+  reset.
 - Every voiced or corrupted character obeys the screenshot test (static /
   signal / city / channel vocabulary, never Unix internals); the whisper
   pool and the invitation plea need feed-template-grade variety before
@@ -416,7 +606,7 @@ Drained by `haunt::svc::tick`.
   bio standing, and the `GateVerdict`; `first contact gate shut` when
   haunting is off (info for staff, debug for everyone else); `first
   contact armed` for every session that can fire stage 1, with `chosen`
-  and `whisper_armed`; then one line per hit, whisper, invitation, bio
+  and `whisper_armed`; then one line per hit, whisper, breakthrough, invitation, bio
   screen, and runner. How many the gate turns away, and on which leg, is
   `late_ssh_first_contact_gate_total{verdict, audience}` (one count per
   connect, not per person); bio screens by outcome are
@@ -425,11 +615,24 @@ Drained by `haunt::svc::tick`.
   a metric label: the three counters stay keyed on closed enums so the
   series count cannot grow with the player base. Grafana's "deadchannel"
   row (`monitoring/dashboards/observability.json`) reads both: the beat and
-  gate counters as reset-safe `max_over_time` sums, and the per-person
-  ladder and gate legs from the log lines. Counters live on the pod, so a
+  gate counters as reset-safe `max_over_time` sums, and from the log
+  lines a Runners table (one row per person: ladder hits, invited and
+  joined times, last seen, latest gate verdict and legs), a Recent Beats
+  table, and the Haunt Log, all three filtered by the `$runner` regex
+  variable. The log tables use the `instant` query type and extract
+  fields, because a `stats` query splits every group into its own series
+  and cannot carry strings; logs keep 7 days, so older rungs show empty
+  there and `users.settings` stays the truth. Counters live on the pod, so a
   deploy zeroes the live value; every panel there sums per-instance
   high-water marks instead. The row ships to prod with the dashboard
   ConfigMap, on a `-infra` release (`infra/monitoring.tf`), not on merge.
+- The city map is generated: hand edits to `city/map.rs` are clobbered by
+  the next `scripts/gen_city_map.py --write`. Move a prop in the script
+  and its zone, reach, and animation cells move with it. The literal
+  arrays carry `#[rustfmt::skip]`, so `cargo fmt` and `--write` agree.
+- The city's copy (`city/data.rs`: shop lines, cart lines, draft move
+  names, notices) is placeholder content at feed-template quality
+  standards and faces design review with the rest of the phase 2 copy.
 - Piece rows are five cells with no wide glyph; the state test guards
   that and nothing more. The rows are block, box-drawing, and shape
   glyphs (`◈ ◌ ●` and their kin), which are East Asian ambiguous width

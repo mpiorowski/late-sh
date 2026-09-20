@@ -84,7 +84,7 @@ impl Dir {
     }
 
     /// A single compass-arrow glyph for this direction, distinct from the
-    /// `▴`/`▾` stair markers (those mean "a staircase is here"; this means
+    /// `⇑`/`⇓`/`⇕` stair markers (those mean "a staircase is here"; this means
     /// "go this way") so the two never read as the same thing on screen.
     pub fn compass_glyph(self) -> char {
         match self {
@@ -1663,7 +1663,7 @@ pub const VILLAGERS: &[Feature] = &[
         22099,
         "a forester with a hound at heel",
         FeatureKind::Villager,
-        "The rideable mounts roam deep in this wood. Palfreys and elks near the eaves, the truly mythical things much further in.",
+        "The great beasts roam deep in this wood. Hares and foxes near the eaves, the truly mythical things much further in.",
     ),
     feat(
         22198,
@@ -1699,7 +1699,7 @@ pub const VILLAGERS: &[Feature] = &[
         22693,
         "a herbalist gathering dew",
         FeatureKind::Villager,
-        "The rideable mounts roam deep in this wood. Palfreys and elks near the eaves, the truly mythical things much further in.",
+        "The great beasts roam deep in this wood. Hares and foxes near the eaves, the truly mythical things much further in.",
     ),
     feat(
         22807,
@@ -1735,7 +1735,7 @@ pub const VILLAGERS: &[Feature] = &[
         23287,
         "a woodward marking trees for the season",
         FeatureKind::Villager,
-        "The rideable mounts roam deep in this wood. Palfreys and elks near the eaves, the truly mythical things much further in.",
+        "The great beasts roam deep in this wood. Hares and foxes near the eaves, the truly mythical things much further in.",
     ),
     feat(
         23386,
@@ -1771,7 +1771,7 @@ pub const VILLAGERS: &[Feature] = &[
         23881,
         "a green-robed acolyte of the Greenwood",
         FeatureKind::Villager,
-        "The rideable mounts roam deep in this wood. Palfreys and elks near the eaves, the truly mythical things much further in.",
+        "The great beasts roam deep in this wood. Hares and foxes near the eaves, the truly mythical things much further in.",
     ),
     feat(
         600,

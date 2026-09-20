@@ -106,28 +106,26 @@ pub(crate) enum TweakRow {
     TextBrightness,
     RightSidebar,
     RoomListSidebar,
-    PetStrip,
     // Compose / Display / Startup groups. There is deliberately no music-mute
     // row: mute and volume are owned by `m` and `+`/`-`, persisted per device,
     // and a second control here would be a second source of truth for them.
     ComposerKeepFocused,
     FlagFallback,
-    LandOnHome,
+    LandingPage,
     PaperAtLogin,
     // Input group.
     InteractionMode,
 }
 
 impl TweakRow {
-    pub(crate) const ALL: [TweakRow; 10] = [
+    pub(crate) const ALL: [TweakRow; 9] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
         TweakRow::RoomListSidebar,
-        TweakRow::PetStrip,
         TweakRow::ComposerKeepFocused,
         TweakRow::FlagFallback,
-        TweakRow::LandOnHome,
+        TweakRow::LandingPage,
         TweakRow::PaperAtLogin,
         TweakRow::InteractionMode,
     ];
@@ -845,17 +843,14 @@ impl SettingsModalState {
             TweakRow::RoomListSidebar => {
                 self.device_rails.0 = self.device_rails.0.cycle(true);
             }
-            TweakRow::PetStrip => {
-                self.draft.show_pet_strip ^= true;
-            }
             TweakRow::ComposerKeepFocused => {
                 self.draft.keep_composer_focused ^= true;
             }
             TweakRow::FlagFallback => {
                 self.draft.show_flag_fallback ^= true;
             }
-            TweakRow::LandOnHome => {
-                self.draft.land_on_home ^= true;
+            TweakRow::LandingPage => {
+                self.draft.landing_page = self.draft.landing_page.cycle(true);
             }
             TweakRow::PaperAtLogin => {
                 self.draft.paper_at_login ^= true;
@@ -872,6 +867,10 @@ impl SettingsModalState {
     pub(crate) fn cycle_selected_tweak(&mut self, forward: bool) {
         match self.selected_tweak_row() {
             TweakRow::TextBrightness => self.cycle_text_brightness_adjustment(forward),
+            TweakRow::LandingPage => {
+                self.draft.landing_page = self.draft.landing_page.cycle(forward);
+                self.save();
+            }
             _ => self.toggle_selected_tweak(),
         }
     }
@@ -2211,10 +2210,9 @@ impl SettingsModalState {
                 room_list_mode: self.draft.room_list_mode,
                 keep_composer_focused: self.draft.keep_composer_focused,
                 start_with_music_muted: self.draft.start_with_music_muted,
-                land_on_home: self.draft.land_on_home,
+                landing_page: self.draft.landing_page,
                 paper_at_login: self.draft.paper_at_login,
                 show_flag_fallback: self.draft.show_flag_fallback,
-                show_pet_strip: self.draft.show_pet_strip,
                 translate_to: self.draft.translate_to,
                 auto_translate: self.draft.auto_translate,
                 translate_mine_to_en: self.draft.translate_mine_to_en,

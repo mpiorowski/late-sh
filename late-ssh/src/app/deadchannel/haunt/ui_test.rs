@@ -1,5 +1,28 @@
 use super::*;
 
+/// The cells one static surge paints at `tick`, at full strength.
+fn static_at(tick: usize) -> ratatui::buffer::Buffer {
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(40, 12)).expect("test terminal");
+    terminal
+        .draw(|frame| draw_static_surge(frame, frame.area(), tick, 7, 0.0, 0.5))
+        .expect("draw static");
+    terminal.backend().buffer().clone()
+}
+
+#[test]
+fn static_holds_each_pattern_for_a_few_frames_then_shifts() {
+    let first = static_at(0);
+    assert!(
+        first.content().iter().any(|cell| cell.symbol() != " "),
+        "expected the surge to paint something"
+    );
+    for tick in 1..STATIC_FRAME_TICKS {
+        assert_eq!(static_at(tick), first, "pattern moved early at tick {tick}");
+    }
+    assert_ne!(static_at(STATIC_FRAME_TICKS), first);
+}
+
 #[test]
 fn dissolved_hint_is_deterministic_and_ends_gone() {
     let hint = "press Esc to skip";

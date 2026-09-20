@@ -20,11 +20,14 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tokio::time::interval;
+use tokio::{sync::broadcast, time::interval};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, info, warn};
 
+#[cfg(target_os = "linux")]
+use super::audio::loopback::{HelperAudioCapture, helper_stream_env};
 use super::{
+    audio::VizSample,
     clipboard,
     mpris::{DesktopCommand, DesktopMedia, IcecastTrack, MediaSource, RadioTrack, YoutubeTrack},
     voice::VoiceRuntimeState,
@@ -140,7 +143,10 @@ const WEBVIEW_CRASH_BACKOFF: Duration = Duration::from_secs(5 * 60);
 pub(super) struct WebviewPlaybackController {
     api_base_url: String,
     token: String,
-    child: Option<Child>,
+    child: Option<RunningHelper>,
+    /// Where the helper's captured audio sends its spectrum (Linux only).
+    #[cfg(target_os = "linux")]
+    analyzer_tx: broadcast::Sender<VizSample>,
     wants_youtube: bool,
     helper_log_path: Option<PathBuf>,
     crash_window_started: Option<Instant>,
@@ -148,12 +154,29 @@ pub(super) struct WebviewPlaybackController {
     disabled_until: Option<Instant>,
 }
 
+/// The helper process and, on Linux, the capture feeding its audio to the
+/// equalizer. One value, so the capture can never outlive the helper.
+struct RunningHelper {
+    child: Child,
+    #[cfg(target_os = "linux")]
+    _audio_capture: HelperAudioCapture,
+}
+
 impl WebviewPlaybackController {
-    pub(super) fn new(api_base_url: String, token: String) -> Self {
+    pub(super) fn new(
+        api_base_url: String,
+        token: String,
+        analyzer_tx: broadcast::Sender<VizSample>,
+    ) -> Self {
+        // Only Linux can capture the helper's audio today.
+        #[cfg(not(target_os = "linux"))]
+        drop(analyzer_tx);
         Self {
             api_base_url,
             token,
             child: None,
+            #[cfg(target_os = "linux")]
+            analyzer_tx,
             wants_youtube: false,
             helper_log_path: None,
             crash_window_started: None,
@@ -268,6 +291,10 @@ impl WebviewPlaybackController {
         if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
             command.env("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
+        // Tag WebKit's audio streams with this process as owner, so the
+        // capture can find and record them for the equalizer.
+        #[cfg(target_os = "linux")]
+        command.envs(helper_stream_env(std::process::id()));
         #[cfg(unix)]
         {
             // Keep WebKitGTK media subprocesses in the helper's process group
@@ -302,7 +329,11 @@ impl WebviewPlaybackController {
             self.record_helper_start_failure();
             return Ok(());
         }
-        self.child = Some(child);
+        self.child = Some(RunningHelper {
+            child,
+            #[cfg(target_os = "linux")]
+            _audio_capture: HelperAudioCapture::start(std::process::id(), self.analyzer_tx.clone()),
+        });
         info!("started embedded YouTube webview helper");
         Ok(())
     }
@@ -328,10 +359,10 @@ impl WebviewPlaybackController {
     }
 
     fn helper_is_running(&mut self) -> bool {
-        let Some(child) = self.child.as_mut() else {
+        let Some(helper) = self.child.as_mut() else {
             return false;
         };
-        match child.try_wait() {
+        match helper.child.try_wait() {
             Ok(Some(status)) => {
                 warn!(
                     ?status,
@@ -410,14 +441,14 @@ impl WebviewPlaybackController {
     }
 
     fn stop_helper(&mut self) {
-        let Some(mut child) = self.child.take() else {
+        let Some(mut helper) = self.child.take() else {
             return;
         };
-        if let Err(err) = kill_webview_helper(&mut child) {
+        if let Err(err) = kill_webview_helper(&mut helper.child) {
             warn!(error = %err, "failed to stop embedded YouTube webview helper");
             return;
         }
-        let _ = child.wait();
+        let _ = helper.child.wait();
         info!("stopped embedded YouTube webview helper");
     }
 }
@@ -638,12 +669,14 @@ impl Drop for WebviewPlaybackController {
 }
 
 /// Mutable client-side runtime driven by the pair websocket loop: the webview
-/// helper, voice state, and the desktop media surface with its command feed.
+/// helper, voice state, the desktop media surface with its command feed, and
+/// the playback analyzer's spectrum frames.
 pub(super) struct PairRuntime<'a> {
     pub(super) webview: &'a mut WebviewPlaybackController,
     pub(super) voice: &'a mut VoiceRuntimeState,
     pub(super) desktop_media: &'a mut DesktopMedia,
     pub(super) desktop_commands: &'a mut tokio::sync::mpsc::Receiver<DesktopCommand>,
+    pub(super) viz_frames: &'a mut broadcast::Receiver<VizSample>,
 }
 
 /// How long a pair connection has to hold before the retry loop treats it as
@@ -847,6 +880,26 @@ async fn pair_session_loop(
             // what lets a widget press mute YouTube too.
             Some(command) = runtime.desktop_commands.recv() => {
                 send_desktop_command(ws, command).await?;
+            }
+            // The spectrum of what this CLI just played, for the TUI's
+            // equalizer. Lagging only means the socket was slower than the
+            // analyzer; the next frame supersedes the skipped ones.
+            recv = runtime.viz_frames.recv() => {
+                match recv {
+                    Ok(frame) => {
+                        let payload = json!({
+                            "event": "viz",
+                            "position_ms": playback_position_ms(playback.played_samples, playback.sample_rate),
+                            "bands": frame.bands,
+                            "rms": frame.rms,
+                        });
+                        ws.send(Message::Text(payload.to_string().into())).await?;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => {
+                        unreachable!("the audio runtime holds the analyzer sender for the whole pair loop")
+                    }
+                }
             }
             _ = voice_state_heartbeat.tick(), if runtime.voice.joined => {
                 send_voice_state(ws, runtime.voice).await?;

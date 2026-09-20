@@ -92,6 +92,19 @@ resource "helm_release" "vmagent" {
     yamlencode({
       fullnameOverride = "vmagent"
 
+      # Support workload: runs on agent-1 (defaults.tf, node placement).
+      nodeSelector = {
+        (local.support_node_label_key) = local.support_node_label_value
+      }
+      tolerations = [
+        {
+          key      = local.support_node_label_key
+          operator = "Equal"
+          value    = local.support_node_label_value
+          effect   = "NoSchedule"
+        }
+      ]
+
       remoteWrite = [
         {
           url = "http://victoriametrics.monitoring.svc.cluster.local:8428/api/v1/write"
@@ -160,6 +173,19 @@ resource "helm_release" "kube_state_metrics" {
   values = [
     yamlencode({
       fullnameOverride = "kube-state-metrics"
+
+      # Support workload: runs on agent-1 (defaults.tf, node placement).
+      nodeSelector = {
+        (local.support_node_label_key) = local.support_node_label_value
+      }
+      tolerations = [
+        {
+          key      = local.support_node_label_key
+          operator = "Equal"
+          value    = local.support_node_label_value
+          effect   = "NoSchedule"
+        }
+      ]
 
       prometheusScrape = false
 
@@ -306,6 +332,18 @@ resource "kubernetes_deployment_v1" "otel_collector" {
       }
 
       spec {
+        # Support workload: runs on agent-1 (defaults.tf, node placement).
+        node_selector = {
+          (local.support_node_label_key) = local.support_node_label_value
+        }
+
+        toleration {
+          key      = local.support_node_label_key
+          operator = "Equal"
+          value    = local.support_node_label_value
+          effect   = "NoSchedule"
+        }
+
         container {
           name  = "otel-collector"
           image = "otel/opentelemetry-collector-contrib:0.147.0"
@@ -453,6 +491,18 @@ resource "kubernetes_deployment_v1" "victorialogs" {
       }
 
       spec {
+        # Support workload: runs on agent-1 (defaults.tf, node placement).
+        node_selector = {
+          (local.support_node_label_key) = local.support_node_label_value
+        }
+
+        toleration {
+          key      = local.support_node_label_key
+          operator = "Equal"
+          value    = local.support_node_label_value
+          effect   = "NoSchedule"
+        }
+
         container {
           name  = "victorialogs"
           image = "victoriametrics/victoria-logs:v1.47.0"
@@ -565,6 +615,18 @@ resource "kubernetes_deployment_v1" "victoriatraces" {
       }
 
       spec {
+        # Support workload: runs on agent-1 (defaults.tf, node placement).
+        node_selector = {
+          (local.support_node_label_key) = local.support_node_label_value
+        }
+
+        toleration {
+          key      = local.support_node_label_key
+          operator = "Equal"
+          value    = local.support_node_label_value
+          effect   = "NoSchedule"
+        }
+
         container {
           name  = "victoriatraces"
           image = "victoriametrics/victoria-traces:v0.7.1"
@@ -693,6 +755,18 @@ resource "kubernetes_deployment_v1" "victoriametrics" {
       }
 
       spec {
+        # Support workload: runs on agent-1 (defaults.tf, node placement).
+        node_selector = {
+          (local.support_node_label_key) = local.support_node_label_value
+        }
+
+        toleration {
+          key      = local.support_node_label_key
+          operator = "Equal"
+          value    = local.support_node_label_value
+          effect   = "NoSchedule"
+        }
+
         container {
           name  = "victoriametrics"
           image = "victoriametrics/victoria-metrics:v1.137.0"
@@ -808,6 +882,18 @@ resource "kubernetes_deployment_v1" "grafana" {
       }
 
       spec {
+        # Support workload: runs on agent-1 (defaults.tf, node placement).
+        node_selector = {
+          (local.support_node_label_key) = local.support_node_label_value
+        }
+
+        toleration {
+          key      = local.support_node_label_key
+          operator = "Equal"
+          value    = local.support_node_label_value
+          effect   = "NoSchedule"
+        }
+
         container {
           name  = "grafana"
           image = "grafana/grafana-enterprise:12.4.0"

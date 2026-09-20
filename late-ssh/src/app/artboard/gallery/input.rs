@@ -8,7 +8,7 @@ use dartboard_editor::{AppKey, AppKeyCode, AppModifiers};
 use crate::app::artboard::input::app_pointer_event_from_mouse;
 use crate::app::artboard::state::State;
 use crate::app::artboard::svc::ArtboardSnapshotKind;
-use crate::app::input::{MouseButton, MouseEventKind, ParsedInput};
+use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
 
 use super::state::{Focus, HangFlow, RailActivation, RailRow};
 
@@ -190,9 +190,12 @@ pub fn handle_event(
 
     match event {
         ParsedInput::Mouse(mouse) => {
+            let Some((x, y)) = frame_cell(mouse) else {
+                return GalleryAction::Ignored;
+            };
             let left_down = matches!(mouse.kind, MouseEventKind::Down)
                 && matches!(mouse.button, Some(MouseButton::Left));
-            if left_down && let Some(row) = state.gallery().rail_row_at(mouse.x, mouse.y) {
+            if left_down && let Some(row) = state.gallery().rail_row_at(x, y) {
                 let gallery = state.gallery_mut();
                 gallery.rail_select(row);
                 gallery.focus_rail();
@@ -212,7 +215,7 @@ pub fn handle_event(
             if !state.gallery().shows_gallery_pane() {
                 return GalleryAction::Ignored;
             }
-            if left_down && let Some(index) = state.gallery().list_index_at(mouse.x, mouse.y) {
+            if left_down && let Some(index) = state.gallery().list_index_at(x, y) {
                 let gallery = state.gallery_mut();
                 gallery.list_select(index);
                 gallery.focus_list();
@@ -291,16 +294,25 @@ fn handle_archive_key(state: &mut State, byte: u8) -> GalleryAction {
     }
 }
 
+/// The 0-based frame cell under a mouse report. SGR reports are 1-based,
+/// and the rail and list areas are recorded in frame cells.
+fn frame_cell(mouse: &MouseEvent) -> Option<(u16, u16)> {
+    Some((mouse.x.checked_sub(1)?, mouse.y.checked_sub(1)?))
+}
+
 fn handle_archive_event(state: &mut State, event: &ParsedInput) -> GalleryAction {
     match event {
         ParsedInput::Mouse(mouse) => {
+            let Some((x, y)) = frame_cell(mouse) else {
+                return GalleryAction::Ignored;
+            };
             let left_down = matches!(mouse.kind, MouseEventKind::Down)
                 && matches!(mouse.button, Some(MouseButton::Left));
-            if left_down && let Some(index) = state.archive_index_at(mouse.x, mouse.y) {
+            if left_down && let Some(index) = state.archive_index_at(x, y) {
                 state.archive_select(index);
                 return GalleryAction::Handled;
             }
-            if state.gallery().rail_line_at(mouse.x, mouse.y).is_none() {
+            if state.gallery().rail_line_at(x, y).is_none() {
                 return GalleryAction::Ignored;
             }
             match mouse.kind {
@@ -484,3 +496,7 @@ fn handle_confirm_key(state: &mut State, byte: u8) -> GalleryAction {
         _ => GalleryAction::Handled,
     }
 }
+
+#[cfg(test)]
+#[path = "input_test.rs"]
+mod input_test;

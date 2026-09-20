@@ -1,10 +1,58 @@
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use std::io::IsTerminal;
+use std::io::{self, IsTerminal, Write};
 
 pub(super) struct RawModeGuard {
     raw_enabled: bool,
     #[cfg(windows)]
     input_mode: Option<windows_console::ConsoleModeGuard>,
+}
+
+/// Turns off the terminal modes a late.sh session turns on (mouse reporting
+/// 1000/1003/1006, bracketed paste 2004), resets the themed background
+/// (OSC 111), and shows the cursor. The server
+/// sends the same on a clean exit, but an idle timeout or a dropped link
+/// ends the session without it, and the shell is left printing mouse
+/// reports. Sent on every session end, so it has to be harmless twice:
+/// that is why it never leaves the alternate screen (`?1049l` a second
+/// time restores a stale cursor and the prompt overwrites the goodbye).
+const SESSION_MODES_OFF: &[u8] =
+    b"\x1b[?1000l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b]111\x1b\\\x1b[?25h";
+
+pub(super) fn write_session_modes_off(out: &mut impl Write) -> io::Result<()> {
+    out.write_all(SESSION_MODES_OFF)?;
+    out.flush()
+}
+
+/// Writes [`SESSION_MODES_OFF`] to the terminal when the session ends,
+/// however it ends. Inert when stdout is not a VT-capable terminal.
+pub(super) struct SessionModesGuard {
+    enabled: bool,
+}
+
+impl SessionModesGuard {
+    pub(super) fn enable_if_tty() -> Self {
+        Self {
+            enabled: std::io::stdout().is_terminal() && supports_vt_output(),
+        }
+    }
+}
+
+impl Drop for SessionModesGuard {
+    fn drop(&mut self) {
+        if self.enabled {
+            let _ = write_session_modes_off(&mut std::io::stdout());
+        }
+    }
+}
+
+#[cfg(windows)]
+fn supports_vt_output() -> bool {
+    crossterm::ansi_support::supports_ansi()
+}
+
+#[cfg(not(windows))]
+fn supports_vt_output() -> bool {
+    true
 }
 
 pub(super) fn enable_ansi_output_if_tty() {
@@ -156,3 +204,7 @@ mod windows_console {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "raw_mode_test.rs"]
+mod raw_mode_test;

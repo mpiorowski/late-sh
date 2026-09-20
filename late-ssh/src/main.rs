@@ -132,7 +132,6 @@ async fn main() -> anyhow::Result<()> {
     let conn_limit = Arc::new(Semaphore::new(config.max_conns_global));
     let conn_counts = Arc::new(Mutex::new(HashMap::new()));
     let active_users = Arc::new(Mutex::new(HashMap::new()));
-    let afk_users = late_ssh::state::new_afk_users();
     let username_directory = late_ssh::usernames::load(&db)
         .await
         .context("failed to load username directory")?;
@@ -273,6 +272,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let bonsai_service =
         late_ssh::app::bonsai::svc::BonsaiService::new(db.clone(), activity_tx.clone());
+    let _bonsai_listener_task = bonsai_service.start_listener_task(config.db.clone());
     let pet_service = late_ssh::app::pet::svc::PetService::new(db.clone(), activity_tx.clone());
     let aquarium_service = late_ssh::app::AquariumService::new(db.clone(), activity_tx.clone());
     let initial_dartboard = match late_ssh::dartboard::load_persisted_artboard(&db).await {
@@ -444,10 +444,9 @@ async fn main() -> anyhow::Result<()> {
         clubhouse_lobby,
         mention_ladders,
         scratchpad_registry,
-        afk_users,
         username_directory: username_directory.clone(),
         flair_directory: flair_directory.clone(),
-        pomodoro_directory: late_ssh::app::common::pomodoro::new_directory(),
+        status_directory: late_ssh::app::common::status::new_directory(),
         crown_service: crown_service.clone(),
         pot_service: pot_service.clone(),
         activity_feed: activity_tx,

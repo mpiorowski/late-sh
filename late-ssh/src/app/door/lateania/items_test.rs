@@ -309,6 +309,40 @@ fn frontier_tier_one_beats_every_shop_slot() {
 }
 
 #[test]
+fn the_market_ladder_walks_the_three_realms_and_keeps_its_slot() {
+    // The shops' deep stock is a slice of the realm catalogs, not a second copy
+    // of them, so the ladder has to be continuous across the Frontier/Reaches/
+    // Kaelmyr handoffs and always hand back the slot it was asked for. A drift
+    // between `GENERATED_SLOTS` and `market_item_id` would silently sell a helm
+    // as a ring.
+    for slot in Slot::WEARABLE {
+        let mut last = 0;
+        for tier in 1..=MARKET_TIER_MAX {
+            let it = item(market_item_id(tier, slot))
+                .unwrap_or_else(|| panic!("market tier {tier} has no {slot:?}"));
+            assert_eq!(it.slot(), Some(slot), "tier {tier} sold the wrong slot");
+            assert!(
+                it.power() > last,
+                "{slot:?} power should climb every market tier (tier {tier}: {} after {last})",
+                it.power()
+            );
+            last = it.power();
+        }
+    }
+    // Consumables are pointedly not on the market: the shops sell gear only, so
+    // the heal curve the whole combat tuning rests on stays where it was.
+    for shop in SHOPS {
+        for slot in shop.market_slots {
+            assert!(
+                item(market_item_id(1, *slot)).is_some_and(|it| it.slot().is_some()),
+                "{} stocks only wearable slots",
+                shop.shop_name
+            );
+        }
+    }
+}
+
+#[test]
 fn every_trinket_and_ring_carries_a_visible_bonus() {
     // Reported bug: trinkets that show no bonus you can actually see. Every
     // Trinket/Ring across every catalog - hand-authored, and the three

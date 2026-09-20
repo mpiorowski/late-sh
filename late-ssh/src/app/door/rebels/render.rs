@@ -20,16 +20,16 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
-    draw_landing(frame, area, state.is_enabled());
+    draw_landing(frame, area, state.is_enabled(), 0);
 }
 
 /// Rebels landing, used by both the standalone screen fallback and the Games
 /// hub when Rebels is selected.
-pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
-    draw_launch_copy(frame, area, enabled);
+pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, scroll: u16) -> u16 {
+    draw_launch_copy(frame, area, enabled, scroll)
 }
 
-fn draw_launch_copy(frame: &mut Frame, area: Rect, enabled: bool) {
+fn draw_launch_copy(frame: &mut Frame, area: Rect, enabled: bool, scroll: u16) -> u16 {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -90,7 +90,12 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, enabled: bool) {
         )),
     ]);
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    crate::app::door::landing::render_scrolled(
+        frame,
+        inner,
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        scroll,
+    )
 }
 
 fn rebels_logo() -> Vec<Line<'static>> {

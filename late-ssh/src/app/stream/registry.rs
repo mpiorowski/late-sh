@@ -202,9 +202,9 @@ pub struct LiveStreamView {
 }
 
 /// Point-in-time view of every registered stream (pending ones included:
-/// the rail's "stream" section lists a stream from `/golive` on, while the
-/// #lounge announcement and the LIVE tag wait for `live`), delivered via
-/// `watch` so `App::tick` reads local memory only.
+/// the watch page resolves from `/golive` on, while the rail's "stream"
+/// section, the room picker, the #lounge announcement, and the LIVE tag wait
+/// for `live`), delivered via `watch` so `App::tick` reads local memory only.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StreamSnapshot {
     pub streams: Vec<LiveStreamView>,
@@ -260,6 +260,7 @@ pub struct ObsPublisherPoll {
     pub user_id: Uuid,
     pub title: String,
     pub ingress_id: String,
+    pub stream_id: String,
 }
 
 /// Everything the publisher grant endpoint needs to mint a publish ticket.
@@ -502,6 +503,7 @@ impl StreamRegistry {
                     user_id: entry.user_id,
                     title: entry.title.clone(),
                     ingress_id: ingress.ingress_id.clone(),
+                    stream_id: entry.stream_id.clone(),
                 }),
             })
             .collect()

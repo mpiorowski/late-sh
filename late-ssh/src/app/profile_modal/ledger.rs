@@ -33,6 +33,7 @@ pub(crate) fn label(mv: ChipMove) -> &'static str {
         ChipMove::BonsaiWatered => "bonsai watered",
         ChipMove::PetFed => "pet fed",
         ChipMove::AquariumFed => "aquarium fed",
+        ChipMove::PetPetted => "pet petted",
         ChipMove::FloorRestore => "floor restored",
         ChipMove::GiftSent => "gift sent",
         ChipMove::GiftReceived => "gift received",

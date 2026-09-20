@@ -7,16 +7,20 @@ use std::sync::{
 
 use ringbuf::{
     HeapCons, HeapProd,
-    traits::{Consumer, Observer},
+    traits::{Consumer, Observer, Producer},
 };
 
 use super::{AudioBackendProfile, AudioSpec};
 
 pub(super) type PlaybackQueue = HeapProd<f32>;
 pub(super) type PlaybackQueueReader = HeapCons<f32>;
+pub(super) type PlayedRing = HeapCons<f32>;
+pub(super) type PlayedRingWriter = HeapProd<f32>;
 
 struct PlaybackOutputState {
     queue: PlaybackQueueReader,
+    /// Audible mono samples for the analyzer thread.
+    played_ring: PlayedRingWriter,
     played_samples: Arc<AtomicU64>,
     source_channels: usize,
     muted: Arc<AtomicBool>,
@@ -40,6 +44,7 @@ pub(super) struct BuiltOutputStream {
 pub(super) fn build_output_stream(
     spec: AudioSpec,
     queue: PlaybackQueueReader,
+    played_ring: PlayedRingWriter,
     played_samples: Arc<AtomicU64>,
     muted: Arc<AtomicBool>,
     volume_percent: Arc<AtomicU8>,
@@ -71,6 +76,7 @@ pub(super) fn build_output_stream(
     };
     let mut output_state = PlaybackOutputState {
         queue,
+        played_ring,
         played_samples,
         source_channels: spec.channels,
         muted,
@@ -252,6 +258,15 @@ where
         }
 
         if had_frame {
+            // The analyzer follows what is audible: post-volume, and nothing
+            // at all while silenced, so a muted or YouTube-selected CLI sends
+            // no spectrum. A full ring means the analyzer is behind; the
+            // sample is dropped rather than blocking the callback.
+            if !muted {
+                let _ = state
+                    .played_ring
+                    .try_push(downmix_to_mono(&state.source_frame) * volume);
+            }
             state.played_samples.fetch_add(1, Ordering::Relaxed);
         }
     }

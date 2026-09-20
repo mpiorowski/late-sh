@@ -4423,6 +4423,15 @@ pub fn SUDOKU_SAME_NUM_BG() -> Color {
     blend_toward_canvas(Color::Rgb(210, 180, 90), 0.72)
 }
 
+/// The ghost of an equalizer bar: the air between a bar and its falling
+/// peak, a faint amber that stays up where the bar struck and sinks back
+/// onto it. Derived from the palette's amber, so no per-palette field is
+/// needed.
+#[allow(non_snake_case)]
+pub fn EQ_GHOST() -> Color {
+    blend_toward_canvas(AMBER(), 0.7)
+}
+
 /// Background wash for a chat message that mentions you.
 #[allow(non_snake_case)]
 pub fn CHAT_MENTION_BG() -> Color {

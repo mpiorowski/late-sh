@@ -8,6 +8,8 @@ use crate::app::arcade::share::ShareCardKind;
 use crate::app::arcade::sliding_puzzle::image::{
     SlidingPuzzleImageOutcome, SlidingPuzzleImageStage,
 };
+use crate::app::bonsai::state::BonsaiAction;
+use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::chat::news::svc::XMediaLookup;
 use crate::app::chat::svc::GildRefusal;
 use crate::app::crown::svc::CrownRefusal;
@@ -133,7 +135,8 @@ pub enum FirstContactBeat {
     GlitchBurst,
     NameFlicker,
     WhisperDelivered,
-    InvitationRequested,
+    /// The breakthrough played on a won invitation claim; the DM follows.
+    Breakthrough,
     /// The invitation accepted: `/join #deadchannel` created the runner.
     RunnerCreated,
 }
@@ -172,6 +175,14 @@ pub enum SshRejectReason {
     GlobalLimit,
 }
 
+/// The band count a paired CLI's `viz` frame arrived with. CLIs from before
+/// the 16-band analyzer send 8, which the pair socket stretches to 16.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VizWireBands {
+    Eight,
+    Sixteen,
+}
+
 #[cfg(feature = "otel")]
 mod inner {
     use std::sync::OnceLock;
@@ -188,9 +199,11 @@ mod inner {
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
         GildTier, NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult,
         PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult,
+        TranslationResult, VizWireBands,
     };
+    use super::{BonsaiAction, BonsaiActionResult};
     use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
+    use crate::app::bonsai::state::BranchAction;
 
     fn meter() -> opentelemetry::metrics::Meter {
         global::meter("late-ssh")
@@ -271,6 +284,16 @@ mod inner {
                 .with_description(
                     "Websocket pair attempts rejected because no live session owned the token",
                 )
+                .build()
+        })
+    }
+
+    fn pair_viz_frames_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pair_viz_frames_total")
+                .with_description("Spectrum frames accepted from paired CLIs, by wire band count")
                 .build()
         })
     }
@@ -401,6 +424,34 @@ mod inner {
             CrownRefusal::AlreadyYours => "already_yours",
             CrownRefusal::InsufficientChips { .. } => "insufficient_chips",
         }
+    }
+
+    fn bonsai_action_label(action: BonsaiAction) -> &'static str {
+        match action {
+            BonsaiAction::Water => "water",
+            BonsaiAction::Branch(BranchAction::Bend { .. }) => "bend",
+            BonsaiAction::Branch(BranchAction::Prune) => "prune",
+            BonsaiAction::Branch(BranchAction::Split) => "split",
+            BonsaiAction::Branch(BranchAction::Pinch) => "pinch",
+        }
+    }
+
+    fn bonsai_action_result_label(result: BonsaiActionResult) -> &'static str {
+        match result {
+            BonsaiActionResult::Stored => "stored",
+            BonsaiActionResult::Refused => "refused",
+            BonsaiActionResult::Failed => "failed",
+        }
+    }
+
+    fn bonsai_actions_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_bonsai_actions_total")
+                .with_description("Bonsai care actions, by action and how they settled")
+                .build()
+        })
     }
 
     fn crown_takes_total() -> &'static Counter<u64> {
@@ -705,7 +756,7 @@ mod inner {
             FirstContactBeat::GlitchBurst => "glitch_burst",
             FirstContactBeat::NameFlicker => "name_flicker",
             FirstContactBeat::WhisperDelivered => "whisper_delivered",
-            FirstContactBeat::InvitationRequested => "invitation_requested",
+            FirstContactBeat::Breakthrough => "breakthrough",
             FirstContactBeat::RunnerCreated => "runner_created",
         }
     }
@@ -788,6 +839,17 @@ mod inner {
 
     pub fn record_ws_pair_rejected_unknown_token() {
         ws_pair_rejected_unknown_token_total().add(1, &[]);
+    }
+
+    fn viz_wire_bands_label(bands: VizWireBands) -> &'static str {
+        match bands {
+            VizWireBands::Eight => "8",
+            VizWireBands::Sixteen => "16",
+        }
+    }
+
+    pub fn record_pair_viz_frame(bands: VizWireBands) {
+        pair_viz_frames_total().add(1, &[KeyValue::new("bands", viz_wire_bands_label(bands))]);
     }
 
     pub fn record_cli_pair_usage(ssh_mode: &str, platform: &str) {
@@ -988,6 +1050,16 @@ mod inner {
 
     pub fn record_gild_refused(refusal: GildRefusal) {
         chat_gilds_refused_total().add(1, &[KeyValue::new("reason", gild_refusal_label(refusal))]);
+    }
+
+    pub fn record_bonsai_action(action: BonsaiAction, result: BonsaiActionResult) {
+        bonsai_actions_total().add(
+            1,
+            &[
+                KeyValue::new("action", bonsai_action_label(action)),
+                KeyValue::new("result", bonsai_action_result_label(result)),
+            ],
+        );
     }
 
     /// The price is burned whole, so one counter tracks the takeovers and
@@ -1307,8 +1379,9 @@ mod inner {
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
         GildTier, NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult,
         PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult,
+        TranslationResult, VizWireBands,
     };
+    use super::{BonsaiAction, BonsaiActionResult};
     use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
 
     pub fn record_ssh_connection() {}
@@ -1321,6 +1394,7 @@ mod inner {
     pub fn add_ssh_session(_delta: i64) {}
     pub fn record_ws_pair_success() {}
     pub fn record_ws_pair_rejected_unknown_token() {}
+    pub fn record_pair_viz_frame(_bands: VizWireBands) {}
     pub fn record_cli_pair_usage(_ssh_mode: &str, _platform: &str) {}
     pub fn add_cli_pair_active(_delta: i64, _ssh_mode: &str, _platform: &str) {}
     pub fn record_render_frame_drop() {}
@@ -1341,6 +1415,7 @@ mod inner {
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_gild_bought(_tier: GildTier) {}
     pub fn record_gild_refused(_refusal: GildRefusal) {}
+    pub fn record_bonsai_action(_action: BonsaiAction, _result: BonsaiActionResult) {}
     pub fn record_crown_taken(_price: i64) {}
     pub fn record_crown_take_refused(_refusal: CrownRefusal) {}
     pub fn record_round_bought(_patrons: i64, _chips: i64) {}

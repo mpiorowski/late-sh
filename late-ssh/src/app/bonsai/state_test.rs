@@ -1,17 +1,9 @@
 use super::*;
 
-fn test_bonsai_service() -> BonsaiService {
-    let db = late_core::db::Db::new(&late_core::db::DbConfig::default()).expect("test db");
-    let (tx, _) = tokio::sync::broadcast::channel(1);
-    BonsaiService::new(db, tx)
-}
-
 fn state_for_graph(graph: BonsaiGraph, selected_branch_id: Option<i32>) -> BonsaiState {
     let today = BonsaiService::today();
     BonsaiState {
         user_id: Uuid::nil(),
-        svc: test_bonsai_service(),
-        persistence: Persistence::Detached,
         seed: 42,
         planted_at: Utc::now(),
         last_watered: None,
@@ -24,7 +16,7 @@ fn state_for_graph(graph: BonsaiGraph, selected_branch_id: Option<i32>) -> Bonsa
         selected_branch_id,
         mode: BonsaiMode::Inspect,
         message: None,
-        state_revision: 0,
+        revision: 0,
         decay_protection: None,
     }
 }
@@ -222,19 +214,27 @@ fn seeded_graph_starts_as_one_locked_root_segment() {
     assert_eq!(state.message.as_deref(), Some("The trunk will not pinch"));
 }
 
-#[tokio::test]
-async fn respawn_resets_age_anchor_and_advances_revision() {
+/// `w` on a dead tree replants instead of watering: a fresh seed and age,
+/// and the day's watering is still open.
+#[test]
+fn watering_a_dead_tree_replants_it() {
     let old_planted_at = Utc::now() - chrono::Duration::days(12);
     let mut state = state_for_graph(graph_with_two_isolated_tips(), None);
     state.planted_at = old_planted_at;
     state.age_days = 12;
-    state.state_revision = 7;
+    state.is_alive = false;
+    let old_seed = state.seed;
+    let today = BonsaiService::today();
 
-    state.respawn();
+    let applied = state.apply(BonsaiCommand::Water, today);
 
+    assert_eq!(applied, Applied::Changed);
+    assert!(state.is_alive);
     assert_eq!(state.age_days, 0);
     assert!(state.planted_at > old_planted_at);
-    assert_eq!(state.state_revision, 8);
+    assert_ne!(state.seed, old_seed);
+    assert_eq!(state.last_watered, None);
+    assert_eq!(state.message.as_deref(), Some("New bonsai planted"));
 }
 
 #[test]
@@ -485,30 +485,82 @@ fn simulate_day_protection_keeps_an_already_spent_tree_alive() {
 
 /// One watering a day, for everyone: the second press the same day is
 /// refused and leaves the tree exactly as the first left it.
-#[tokio::test]
-async fn a_second_watering_the_same_day_is_refused() {
+#[test]
+fn a_second_watering_the_same_day_is_refused() {
     let mut state = state_for_graph(seeded_graph(42), None);
     state.vigor = 50;
     state.water_stress = 40;
-
-    assert!(state.water());
     let today = BonsaiService::today();
+    let water = BonsaiCommand::Water;
+
+    assert_eq!(state.apply(water, today), Applied::Watered);
     assert_eq!(state.last_watered, Some(today));
     assert_eq!(state.vigor, 68);
     assert_eq!(state.water_stress, 5);
-    let snapshot = |state: &BonsaiState| {
-        (
-            serde_json::to_value(&state.graph).expect("graph json"),
-            state.state_revision,
-            state.vigor,
-            state.water_stress,
-        )
-    };
-    let after_first = snapshot(&state);
+    let after_first = state.to_write();
 
-    assert!(!state.water());
+    assert_eq!(state.apply(water, today), Applied::Unchanged);
     assert_eq!(state.message.as_deref(), Some("Already watered today"));
-    assert_eq!(snapshot(&state), after_first);
+    let after_second = state.to_write();
+    assert_eq!(after_second.branch_graph, after_first.branch_graph);
+    assert_eq!(after_second.vigor, after_first.vigor);
+    assert_eq!(after_second.water_stress, after_first.water_stress);
+    assert_eq!(after_second.last_watered, after_first.last_watered);
+}
+
+/// An action works on the branch the acting session had under its cursor,
+/// not on the cursor stored with the row by whoever acted last.
+#[test]
+fn an_action_lands_on_the_branch_the_command_names() {
+    let graph = graph_with_two_editable_tips();
+    let tips: Vec<i32> = graph
+        .branches
+        .iter()
+        .filter(|branch| branch.id != ROOT_BRANCH_ID && graph.is_tip(branch.id))
+        .map(|branch| branch.id)
+        .collect();
+    let (stored_cursor, session_cursor) = (tips[0], tips[1]);
+    let mut state = state_for_graph(graph, Some(stored_cursor));
+
+    let applied = state.apply(
+        BonsaiCommand::Branch {
+            branch_id: session_cursor,
+            action: BranchAction::Prune,
+        },
+        BonsaiService::today(),
+    );
+
+    assert_eq!(applied, Applied::Changed);
+    assert!(state.graph.branch(session_cursor).is_none());
+    assert!(state.graph.branch(stored_cursor).is_some());
+}
+
+/// Another session pruned the branch this one still shows under its
+/// cursor. The action is refused outright: it never falls through to the
+/// cursor stored with the row, which this session never picked.
+#[test]
+fn an_action_on_a_vanished_branch_changes_nothing() {
+    let graph = graph_with_two_editable_tips();
+    let stored_cursor = first_editable_tip(&graph);
+    let mut state = state_for_graph(graph, Some(stored_cursor));
+    let before = state.to_write();
+    let vanished = 9_999;
+    assert!(state.graph.branch(vanished).is_none());
+
+    let applied = state.apply(
+        BonsaiCommand::Branch {
+            branch_id: vanished,
+            action: BranchAction::Prune,
+        },
+        BonsaiService::today(),
+    );
+
+    assert_eq!(applied, Applied::Unchanged);
+    assert_eq!(state.message.as_deref(), Some("Selected branch vanished"));
+    let after = state.to_write();
+    assert_eq!(after.branch_graph, before.branch_graph);
+    assert_eq!(after.selected_branch_id, before.selected_branch_id);
+    assert_eq!(after.vigor, before.vigor);
 }
 
 /// A tip at its length budget forks instead of extending, so the tree

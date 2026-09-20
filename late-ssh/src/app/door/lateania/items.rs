@@ -2373,6 +2373,53 @@ pub fn archipelago_find_ids(isle: usize) -> [u32; 2] {
     ]
 }
 
+/// The slot layout every generated realm tier is built in: offsets 0-7 of a
+/// tier's ten-id block, in this order. `market_item_id` maps a slot back onto
+/// that offset, so the two must never drift - hence one table, not two.
+const GENERATED_SLOTS: [(Slot, &str); 8] = [
+    (Slot::Weapon, "Blade"),
+    (Slot::Head, "Helm"),
+    (Slot::Chest, "Cuirass"),
+    (Slot::Legs, "Greaves"),
+    (Slot::Hands, "Gauntlets"),
+    (Slot::Feet, "Boots"),
+    (Slot::Ring, "Band"),
+    (Slot::Trinket, "Charm"),
+];
+
+/// The deepest tier a shop will ever stock: Kaelmyr's last tier, the deepest
+/// full eight-slot set that exists. Past it only the Archipelago's finds climb,
+/// and those cover four slots, so there is nothing to sell.
+pub const MARKET_TIER_MAX: i32 = (FRONTIER_TIERS + REACHES_TIERS + KAELMYR_TIERS) as i32;
+
+/// The generated-catalog id for `slot` at a 1-based market tier
+/// (1..=`MARKET_TIER_MAX`), walking the three realm ladders in the same order
+/// their power curves continue each other: Frontier 1-20, Reaches 21-40,
+/// Kaelmyr 41-60. Tiers outside the range clamp to the ends.
+pub fn market_item_id(tier: i32, slot: Slot) -> u32 {
+    let offset = GENERATED_SLOTS
+        .iter()
+        .position(|(s, _)| *s == slot)
+        .expect("every equipment slot is a generated slot") as u32;
+    market_tier_base(tier) + offset
+}
+
+/// The first id of a market tier's ten-id block.
+fn market_tier_base(tier: i32) -> u32 {
+    let t = tier.clamp(1, MARKET_TIER_MAX);
+    let (base, within) = match t {
+        t if t <= FRONTIER_TIERS as i32 => (FRONTIER_ITEM_BASE, t),
+        t if t <= (FRONTIER_TIERS + REACHES_TIERS) as i32 => {
+            (REACHES_ITEM_BASE, t - FRONTIER_TIERS as i32)
+        }
+        t => (
+            KAELMYR_ITEM_BASE,
+            t - (FRONTIER_TIERS + REACHES_TIERS) as i32,
+        ),
+    };
+    base + (within as u32 - 1) * 10
+}
+
 struct GeneratedRealm {
     base_id: u32,
     /// Added to the 1-based tier before computing stats, so a later realm's
@@ -2386,24 +2433,13 @@ struct GeneratedRealm {
 }
 
 fn build_generated_items(realm: GeneratedRealm) -> Vec<Item> {
-    const SLOTS: [(Slot, &str); 8] = [
-        (Slot::Weapon, "Blade"),
-        (Slot::Head, "Helm"),
-        (Slot::Chest, "Cuirass"),
-        (Slot::Legs, "Greaves"),
-        (Slot::Hands, "Gauntlets"),
-        (Slot::Feet, "Boots"),
-        (Slot::Ring, "Band"),
-        (Slot::Trinket, "Charm"),
-    ];
-
     let tiers = realm.materials.len();
     let mut out = Vec::with_capacity(tiers * 10);
     for tier in 0..tiers {
         let t = realm.power_offset + (tier + 1) as i32;
         let rarity = realm.rarities[tier];
         let mat = realm.materials[tier];
-        for (i, (slot, type_name)) in SLOTS.iter().enumerate() {
+        for (i, (slot, type_name)) in GENERATED_SLOTS.iter().enumerate() {
             let id = realm.base_id + (tier as u32) * 10 + i as u32;
             let name: &'static str = Box::leak(format!("{mat} {type_name}").into_boxed_str());
             let desc: &'static str =
@@ -2463,6 +2499,16 @@ pub struct Shop {
     /// The line the NPC greets shoppers with.
     pub greeting: &'static str,
     pub stock: &'static [u32],
+    /// The slots this NPC will also stock from the player's market tier (see
+    /// `svc::PlayerState::market_tier`). Empty means the authored stock is the
+    /// whole shop. Split by trade so all four storefronts stay worth a visit.
+    ///
+    /// Gear only, deliberately: the Apothecary stocks nothing from the market,
+    /// because a deep-realm draught heals `120 + 20t` and would put a heal well
+    /// past the Phoenix Tonic on tap in town, unlimited. Consumables are the
+    /// pressure valve the whole combat curve is tuned against, so they stay
+    /// authored and stay earned.
+    pub market_slots: &'static [Slot],
 }
 
 /// Every storefront in Embergate, keyed to the room its NPC stands in.
@@ -2481,6 +2527,7 @@ pub const SHOPS: &[Shop] = &[
         shop_name: "The Ember Forge",
         greeting: "Bruna looks up from the anvil, soot on her brow. \"Steel for steel's work. What'll it be?\"",
         stock: &[1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009],
+        market_slots: &[Slot::Weapon, Slot::Hands],
     },
     Shop {
         room: 201,
@@ -2491,6 +2538,7 @@ pub const SHOPS: &[Shop] = &[
             1100, 1101, 1102, 1103, 1104, 1105, 1106, 1107, 1108, 1109, 1110, 1111, 1112, 1113,
             1126, 1127, 1128, 1129, 1130, 1131, 1132, 1133, 1134, 1135,
         ],
+        market_slots: &[Slot::Head, Slot::Chest, Slot::Legs, Slot::Feet],
     },
     Shop {
         room: 202,
@@ -2498,6 +2546,7 @@ pub const SHOPS: &[Shop] = &[
         shop_name: "The Apothecary",
         greeting: "Shelves of bottles glint behind a stooped woman who smells of crushed herbs. \"Hurt, are you? I have just the thing.\"",
         stock: &[1300, 1301, 1302, 1303, 1304, 1305, 1306],
+        market_slots: &[],
     },
     Shop {
         room: 203,
@@ -2505,6 +2554,7 @@ pub const SHOPS: &[Shop] = &[
         shop_name: "The Curio Cart",
         greeting: "A grinning fellow guards a cart of glittering oddments. \"Rings, charms, lucky bits and bobs! All genuine, mostly.\"",
         stock: &[1200, 1201, 1202, 1203, 1204, 1205, 1206],
+        market_slots: &[Slot::Ring, Slot::Trinket],
     },
 ];
 

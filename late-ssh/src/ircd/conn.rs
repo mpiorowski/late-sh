@@ -444,7 +444,7 @@ fn track_active_irc_user(
         token: irc_session_token(conn_id),
         fingerprint: Some(registered.fingerprint.clone()),
         peer_ip: client_ip,
-        afk: None,
+        status: None,
     };
 
     let became_online = if let Some(active) = active_users.get_mut(&registered.user_id) {

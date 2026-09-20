@@ -22,6 +22,7 @@ fn crawl_args_never_reforce_macro_dir_or_save_dir_as_extra_opts() {
     let args = crawl_args(
         "alice",
         "/data/.crawl/macros/alice",
+        "/data/.crawl/morgue/alice",
         Some("/data/rc/alice.rc"),
     );
     assert!(
@@ -40,8 +41,25 @@ fn crawl_args_never_reforce_macro_dir_or_save_dir_as_extra_opts() {
         .expect("-macro present");
     assert_eq!(args[macro_flag + 1], "/data/.crawl/macros/alice");
 
+    // Same story for the morgue: the per-player directory every published
+    // link resolves through arrives as `-morgue`, never as an extra-opt.
+    assert!(
+        args.iter().all(|a| !a.starts_with("morgue_dir=")),
+        "morgue isolation is `-morgue <dir>`, not an extra-opt; args={args:?}"
+    );
+    let morgue_flag = args
+        .iter()
+        .position(|a| a == "-morgue")
+        .expect("-morgue present");
+    assert_eq!(args[morgue_flag + 1], "/data/.crawl/morgue/alice");
+
     // No rc pushed: no -rc pair sneaks in.
-    let args = crawl_args("bob", "/data/.crawl/macros/bob", None);
+    let args = crawl_args(
+        "bob",
+        "/data/.crawl/macros/bob",
+        "/data/.crawl/morgue/bob",
+        None,
+    );
     assert!(!args.contains(&"-rc".to_string()));
 }
 

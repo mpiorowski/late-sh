@@ -1,16 +1,9 @@
 use super::*;
 use crate::app::bonsai::state::BonsaiGraph;
-use crate::app::bonsai::svc::BonsaiService;
 use uuid::Uuid;
 
-fn test_bonsai_service() -> BonsaiService {
-    let db = late_core::db::Db::new(&late_core::db::DbConfig::default()).expect("test db");
-    let (tx, _) = tokio::sync::broadcast::channel(1);
-    BonsaiService::new(db, tx)
-}
-
 fn state_with_branches(branches: Vec<Branch>) -> BonsaiState {
-    let mut state = BonsaiState::fallback(Uuid::nil(), test_bonsai_service(), 42);
+    let mut state = BonsaiState::fallback(Uuid::nil(), 42);
     state.graph = BonsaiGraph {
         version: 1,
         next_id: branches

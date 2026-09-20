@@ -84,8 +84,8 @@ fn pending_streams_appear_in_the_snapshot_as_not_live() {
 
     let handles = begin_ok(&registry, user, "mat", "quiet", room, channel);
 
-    // The rail's "stream" section lists a stream from /golive on; the
-    // announcement and LIVE tag key off `live`, which waits for media.
+    // The snapshot carries a stream from /golive on; the rail row, room
+    // picker, announcement, and LIVE tag key off `live`, which waits for media.
     let snapshot = registry.snapshot();
     assert_eq!(snapshot.streams.len(), 1);
     assert!(!snapshot.streams[0].live);

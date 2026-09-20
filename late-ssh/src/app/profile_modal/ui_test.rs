@@ -9,11 +9,9 @@ use std::sync::{Arc, Mutex};
 use late_core::models::chips::{ChipMove, UserChips};
 use late_core::test_utils::create_test_user;
 use ratatui::{Terminal, backend::TestBackend};
-use tokio::sync::broadcast;
 use tokio::time::{Duration, timeout};
 use uuid::Uuid;
 
-use crate::app::bonsai::svc::BonsaiService;
 use crate::app::chat::showcase::svc::ShowcaseService;
 use crate::app::profile::svc::ProfileService;
 use crate::test_helpers::new_test_db;
@@ -64,12 +62,7 @@ async fn fixture(slug: &str) -> Fixture {
 
     let profile_service = ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new())));
     let mut snapshot_rx = profile_service.subscribe_snapshot(user.id);
-    let (activity_tx, _activity_rx) = broadcast::channel(8);
-    let mut state = ProfileModalState::new(
-        profile_service,
-        ShowcaseService::new(db.clone()),
-        BonsaiService::new(db.clone(), activity_tx),
-    );
+    let mut state = ProfileModalState::new(profile_service, ShowcaseService::new(db.clone()));
     state.open(user.id, user.username.clone());
     timeout(Duration::from_secs(5), async {
         loop {

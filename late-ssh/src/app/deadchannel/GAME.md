@@ -408,19 +408,26 @@ fuse is lit.
      jump-scare into a pattern. The splash is
      the liminal space (the doorway between outside and inside the
      machine), inherently private and per-session, so the whisper
-     touches no chat surface at all. The load-bearing mechanic:
-     **respond, don't ignore.** Esc must visibly do something, just not
-     what it usually does: static surges, the skip hint itself corrupts
-     and dissolves, the mysterious voiced line types itself in answer.
-     Input acknowledged but control withheld reads as *something is
-     holding the door*; input silently ignored reads as a hung
-     terminal, which is the panic rule violated exactly. Hard time cap
-     of a few seconds, then it releases on its own whether or not they
-     pressed anything. Screenshot-bait, "glitches are coming" energy;
+     touches no chat surface at all. The load-bearing mechanic
+     (**reversed 2026-09-13**): the scene plays whether or not anyone
+     presses anything. It first shipped as *respond, don't ignore* (Esc
+     surged the static and started the line early), and without a
+     keypress the scene was a quiet line under the cup that people were
+     missing. Now the static pulses from the first frame, the skip hint
+     corrupts and dissolves as the voiced line types itself, and every
+     key, Esc included, does nothing. The panic rule still holds because
+     the screen is visibly alive the whole time: *something is holding
+     the door*, never a hung terminal. Hard time cap of a few seconds,
+     then it releases on its own. Screenshot-bait, "glitches are coming" energy;
      still no game to play.
   4. **The invitation (decided 2026-08-31: the whole game is opt-in).**
      Not a breach: no game ever lands on anyone unasked. Some days
-     after the second held door, the contact goes real: a DM from the game's
+     after the second held door, the contact goes real, and **it arrives
+     through a breakthrough (added 2026-09-13):** the DM alone, met cold,
+     was taken for spam, so once it is due the next own send tears the
+     whole screen with the door's static while a voiced line says the
+     voice finally got through and names it, and the DM lands as the
+     line finishes. The scene is theater, the DM is the invitation: a DM from the game's
      first voice, a character calling for help from the other side, not
      a system announcing a feature (name and copy at design review; a
      plea beats a pitch, it makes the reader the protagonist). It rides
@@ -1014,6 +1021,80 @@ loop's engine. Names and copy belong to the city pass.
    the locker, the band choice, the ration ritual against glyphs.
 4. Piece catalog v1: starter sets, the first rack, the first earned
    pieces.
+
+## The city pass: the street (2026-09-18)
+
+Status: **built, art only, under the clubhouse.** The night city exists
+(`late-ssh/src/app/deadchannel/city/`, see `CONTEXT.md` §3b beside this
+file). It is the undercity: `0` is the clubhouse, `0` again goes down,
+runners only (2026-09-19; it was a dedicated page `7` for a day). Two art
+registers are built and one is still to be chosen. Decisions this pass
+fixed:
+
+- **One glyph per person, in either register.** The runner walks the
+  street as its mark (the one-cell avatar decided in the phase 2 pass).
+  The clubhouse's three-row figures were considered and rejected for the
+  city: at that zoom a terminal shows two shopfronts.
+- **Two registers to choose between (2026-09-19).** The first pass drew
+  the street front-on, Rangedrifter-style: multi-cell facades, carts,
+  a skyline. It read as a plaza: symmetrical, wide, no corridors. The
+  second is pure Dwarf Fortress: top-down, one tile per thing, nothing
+  drawn larger than a cell. A side street four tiles wide that doglegs,
+  alleys one to three wide, rooms you walk into, stalls of five tiles,
+  a ledge over the drop, and room on the floor for cats and NPCs later.
+  **Tiles won**, the same day: it went long (440 columns, three legs, a
+  canal, a back lane), gained walkers pacing the street, and the drawn
+  one left the live script (git history has it).
+- **Blade Runner, not cyberpunk.** Dark, wet, few strong light sources,
+  warm sodium against cold neon, everything else in silhouette. Not
+  saturated everywhere: terminal cells cannot blend, so color on every
+  cell reads as noise. So the street is lit: every lamp, sign, doorway
+  and window is a light source with falloff stopped by walls, the
+  street fades to black with distance, rooms are dark until you are at
+  the door, walls throw shadows, rain shows only in light. And the city
+  has **its own palette**: it does not follow the person's theme, not
+  even for the background or the overlay text. A hundred palettes
+  cannot all be lit well; one look, tuned once.
+- **Alive without state.** The street's extras, the people pacing it,
+  the cats, the rats, the rain, the searchlight, are all pure functions
+  of the tick. Nothing moves that could desync across replicas, nothing
+  is persisted. Real NPCs and cats with behavior come later; the walkers
+  are the placeholder that makes the street read as inhabited now.
+- **The street is one block.** Stairs down, the armorer, the tailor, the
+  lockers, bands, the bar, the screen, patch; carts and stalls against
+  the walls; the board and the bits machine; the railing and the lower
+  city's lights; the way up to the wire in a gap of the rail, where you
+  arrive and where you leave. The tile register adds what has no
+  function, on purpose: two tenements, a lockup with a guard, a pawn shop
+  with its shutter down and its sign still burning, a motel called
+  SLEEP, a hidden court with a shrine. The map is generated from stamps
+  (`scripts/gen_city_map.py`), never hand-drawn, so it can grow a second
+  block without redrawing the first.
+- **Names.** The street sign reads `STATIC ROW`; the bar is `DEAD AIR`
+  (the signal is warm in here); repairs are `PATCH`; the giant screen has
+  no sign and needs none. All pass the screenshot test. Banners in the
+  glyph alphabet hang off the buildings: the city's own script, and
+  nobody can read it, which is the point.
+- **No function behind anything yet, and the panels say so.** Every shop
+  opens and shows its real catalog (the fifteen gear tiers at LoGD prices,
+  the whole starter rack with the runner's portrait in the mirror, the
+  three bands) under a line in the voice saying the till is not open. The
+  street answers Enter at a cart with a line from a small pool. Placeholder
+  copy, design review pending: the draft **move names** (tuner: retune,
+  siphon, carrier, clear channel; jammer: hiss, jam, wither, blackout;
+  ghost: smear, from behind, unseen, vanish), the board's four notices, the
+  bar's drink list, the reader's lines (which point at the haunting).
+- **Nothing shared, nothing timed.** No crowd on the street (the design
+  says the city must never beat chat for standing around), no spawns, no
+  clock. The screen's static and the rain are render-only ambience.
+
+Done since: the signs smear into the wet ground, a car runs the street
+with its headlights ahead of it, the monorail crosses the sky,
+billboards cycle the glyph script, rain splashes on the puddles, and at
+the railing Enter looks over the ledge at the lower city (a half-block
+perspective picture, the showpiece). Next on this surface, in order:
+the armorer's till (bits, the day roll), the tailor's mirror as the
+editor (pick, not draw), the locker, the band choice.
 
 ## Experiment framing
 

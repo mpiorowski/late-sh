@@ -23,7 +23,12 @@ ENV_TEMPLATE = .env.dev
 #   make .env-instance2           # just (re)generate .env without starting
 
 CHECK_PACKAGES = -p late-cli -p late-core -p late-ssh -p late-web -p late-webview
-CHECK_CARGO_ENV = CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+# `env -u MAKEFLAGS -u MFLAGS`: make exports command-line variables (the
+# `ARGS="..."` in `make test-llm ARGS=...`) through MAKEFLAGS, cargo forwards
+# it to build scripts, and tikv-jemalloc-sys's nested make then parses ARGS'
+# words as targets and dies on a fresh build. Cargo gives build scripts its
+# own jobserver, so dropping make's costs no parallelism.
+CHECK_CARGO_ENV = env -u MAKEFLAGS -u MFLAGS CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 # Cap parallel compile/link jobs locally; 16-way builds spike past RAM on a
 # swapless machine and freeze the desktop. CI overrides via CHECK_BUILD_JOBS.
 CHECK_BUILD_JOBS ?= 8

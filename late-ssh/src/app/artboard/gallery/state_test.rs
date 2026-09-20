@@ -25,8 +25,8 @@ fn the_rail_shrinks_to_board_and_archives_while_the_gallery_is_off() {
         RailRow::rows(true),
         vec![
             RailRow::Board,
-            RailRow::Gallery(GallerySection::ThisMonth),
             RailRow::Gallery(GallerySection::Newest),
+            RailRow::Gallery(GallerySection::ThisMonth),
             RailRow::Gallery(GallerySection::HallOfFame),
             RailRow::Gallery(GallerySection::Mine),
             RailRow::Hang,

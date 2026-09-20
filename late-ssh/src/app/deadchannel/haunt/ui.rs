@@ -1,4 +1,5 @@
-//! Render helpers for the splash whisper. Everything here is a pure
+//! Render helpers for the splash whisper, the breakthrough, and the
+//! corrupted clock and name. Everything here is a pure
 //! function of (state, tick, seed): the corruption is deterministic
 //! theater, stateless like the sidebar equalizer, so the same tick paints
 //! the same frame at any loop cadence.
@@ -11,10 +12,19 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Clear, Paragraph};
 
-use super::state::{HauntState, WhisperState};
+use super::state::{BREAKTHROUGH_LINE, HauntState, WhisperState};
 use crate::app::common::theme;
+
+/// Peak share of cells a splash surge covers.
+const SPLASH_SURGE_DENSITY: f32 = 0.18;
+/// The breakthrough tears harder than the door knocks.
+const BREAKTHROUGH_SURGE_DENSITY: f32 = 0.32;
+/// How many ticks one static pattern holds before the noise shifts
+/// (~130ms). Re-rolled on every 66ms tick it read as a frantic fizz; held,
+/// it reads as interference rolling through.
+const STATIC_FRAME_TICKS: usize = 2;
 
 /// One frame of whisper theater, precomputed for the splash renderer.
 pub(crate) struct WhisperFrame {
@@ -22,7 +32,8 @@ pub(crate) struct WhisperFrame {
     /// the whisper has not started.
     pub(crate) line: String,
     /// The skip hint as it should draw this frame: the original while
-    /// intact, part-dissolved into static after input, `None` once gone.
+    /// intact, part-dissolved into static once the voice starts, `None`
+    /// once gone.
     pub(crate) hint: Option<String>,
     /// A live static surge, 0.0 (fresh burst) to 1.0 (faded).
     pub(crate) surge: Option<f32>,
@@ -121,9 +132,8 @@ pub(crate) fn glitched_name(label: &str, burst_seed: u64) -> String {
         .collect()
 }
 
-/// The whisper's splash overlay: the voiced line answering directly under
-/// the coffee cup, and the static surge over everything (input is
-/// acknowledged, control withheld). The dissolving skip hint rides
+/// The whisper's splash overlay: the voiced line directly under the coffee
+/// cup, and the pulsing static over everything. The dissolving skip hint rides
 /// `WhisperFrame::hint` in the splash's own hint draw.
 pub(crate) fn draw_splash_whisper(
     frame: &mut Frame,
@@ -144,8 +154,88 @@ pub(crate) fn draw_splash_whisper(
         frame.render_widget(Paragraph::new(line).centered(), line_area);
     }
     if let Some(progress) = whisper.surge {
-        draw_static_surge(frame, area, splash_ticks, whisper.seed, progress);
+        draw_static_surge(
+            frame,
+            area,
+            splash_ticks,
+            whisper.seed,
+            progress,
+            SPLASH_SURGE_DENSITY,
+        );
     }
+}
+
+/// One frame of the breakthrough, precomputed for the root draw.
+pub(crate) struct BreakthroughFrame {
+    /// The typed prefix of the line, cursor included; empty while only the
+    /// static has arrived.
+    pub(crate) line: String,
+    /// A live static surge, 0.0 (fresh burst) to 1.0 (faded).
+    pub(crate) surge: Option<f32>,
+    pub(crate) seed: u64,
+    pub(crate) tick: usize,
+}
+
+/// The breakthrough for this frame, or `None` while it is not playing.
+/// What `DrawContext` carries; the root only routes.
+pub(crate) fn breakthrough_frame_for(
+    haunt: &HauntState,
+    marquee_tick: usize,
+) -> Option<BreakthroughFrame> {
+    let breakthrough = haunt.breakthrough.as_ref()?;
+    let (typed, typing) = breakthrough.typed_chars(marquee_tick)?;
+    let mut line: String = BREAKTHROUGH_LINE.chars().take(typed).collect();
+    if typing {
+        line.push(if marquee_tick % 4 < 2 { '█' } else { ' ' });
+    }
+    Some(BreakthroughFrame {
+        line,
+        surge: breakthrough.surge_progress(marquee_tick),
+        seed: breakthrough.seed(),
+        tick: marquee_tick,
+    })
+}
+
+/// The breakthrough over the whole frame, sidebar and chrome included,
+/// painted after every modal: the held door's static, heavier, and the
+/// voiced line in a gap torn out of the middle of it. No border, no box:
+/// a frame around it would read as the system talking.
+pub(crate) fn draw_breakthrough(frame: &mut Frame, area: Rect, breakthrough: &BreakthroughFrame) {
+    if let Some(progress) = breakthrough.surge {
+        draw_static_surge(
+            frame,
+            area,
+            breakthrough.tick,
+            breakthrough.seed,
+            progress,
+            BREAKTHROUGH_SURGE_DENSITY,
+        );
+    }
+    if breakthrough.line.is_empty() || area.width == 0 || area.height == 0 {
+        return;
+    }
+    let width = (BREAKTHROUGH_LINE.chars().count() as u16)
+        .saturating_add(4)
+        .min(area.width);
+    let height = 3.min(area.height);
+    let gap = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y
+            + (area.height / 2)
+                .saturating_sub(1)
+                .min(area.height - height),
+        width,
+        height,
+    );
+    frame.render_widget(Clear, gap);
+    let line_area = Rect::new(gap.x, gap.y + height / 2, gap.width, 1);
+    let line = Line::from(Span::styled(
+        breakthrough.line.clone(),
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .add_modifier(Modifier::ITALIC),
+    ));
+    frame.render_widget(Paragraph::new(line).centered(), line_area);
 }
 
 pub(crate) fn whisper_frame(state: &WhisperState, tick: usize, hint: &str) -> WhisperFrame {
@@ -194,31 +284,33 @@ fn dissolved_hint(hint: &str, progress: f32, seed: u64) -> Option<String> {
     Some(out)
 }
 
-/// A static surge over the whole splash: scattered block cells whose
-/// density decays as the burst fades. Painted over whatever is there; the
-/// underlying frame heals untouched the moment the surge ends.
-pub(crate) fn draw_static_surge(
+/// A static surge over `area`: scattered block cells whose density decays
+/// from `peak_density` as the burst fades. Painted over whatever is there;
+/// the underlying frame heals untouched the moment the surge ends.
+fn draw_static_surge(
     frame: &mut Frame,
     area: Rect,
     tick: usize,
     seed: u64,
     progress: f32,
+    peak_density: f32,
 ) {
-    let density = 0.18 * (1.0 - progress);
+    let density = peak_density * (1.0 - progress);
     if density <= 0.0 {
         return;
     }
+    let pattern = (tick / STATIC_FRAME_TICKS) as u64;
     let buf = frame.buffer_mut();
     for y in area.y..area.bottom() {
         for x in area.x..area.right() {
-            let roll = unit_hash((u64::from(x) << 32) | u64::from(y), tick as u64, seed);
+            let roll = unit_hash((u64::from(x) << 32) | u64::from(y), pattern, seed);
             if roll >= density {
                 continue;
             }
             let Some(cell) = buf.cell_mut((x, y)) else {
                 continue;
             };
-            let shade = unit_hash((u64::from(y) << 32) | u64::from(x), tick as u64, seed);
+            let shade = unit_hash((u64::from(y) << 32) | u64::from(x), pattern, seed);
             cell.set_char(static_glyph(shade));
             cell.set_fg(if shade < 0.5 {
                 theme::TEXT_FAINT()

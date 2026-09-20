@@ -1,8 +1,5 @@
 pub mod activity;
 pub mod ai;
-pub mod announcements;
-#[cfg(test)]
-mod announcements_test;
 pub mod arcade;
 pub mod artboard;
 pub mod audio;
@@ -49,7 +46,11 @@ mod smoke_test;
 pub mod state;
 #[cfg(test)]
 mod state_test;
+pub(crate) mod status_picker;
 pub mod stream;
+pub(crate) mod terminal_backend;
+#[cfg(test)]
+mod terminal_backend_test;
 pub mod tick;
 #[cfg(test)]
 mod tick_test;

@@ -1,8 +1,15 @@
-use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
+use late_core::{
+    audio::VizFrame,
+    models::user::{AudioSource, IcecastStream, RadioStation},
+};
+use std::time::Instant;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
-use super::svc::{AudioEvent, AudioService, QueueSnapshot};
+use super::{
+    svc::{AudioEvent, AudioService, QueueSnapshot},
+    viz::{LiveBands, Spectrum},
+};
 use crate::app::common::primitives::Banner;
 
 pub struct AudioTick {
@@ -17,6 +24,9 @@ pub struct AudioState {
     user_id: Uuid,
     event_rx: broadcast::Receiver<AudioEvent>,
     snapshot_rx: watch::Receiver<QueueSnapshot>,
+    /// The paired client's latest spectrum; `None` while no client is
+    /// streaming one.
+    spectrum: Option<Spectrum>,
 }
 
 impl AudioState {
@@ -28,7 +38,28 @@ impl AudioState {
             user_id,
             event_rx,
             snapshot_rx,
+            spectrum: None,
         }
+    }
+
+    /// Folds a paired client's `viz` frame into the eq's spectrum. Not a
+    /// paint on its own: the eq repaints on the anim_half edge it already
+    /// pays while visible, and picks up whatever landed since.
+    pub fn apply_viz_frame(&mut self, frame: &VizFrame, now: Instant) {
+        self.spectrum = Some(Spectrum::next(self.spectrum, frame, now));
+    }
+
+    /// Drops a spectrum the client stopped refreshing, so the eq falls back
+    /// to the ambient band.
+    pub fn expire_spectrum(&mut self, now: Instant) {
+        match self.spectrum {
+            Some(spectrum) if spectrum.is_stale(now) => self.spectrum = None,
+            Some(_) | None => {}
+        }
+    }
+
+    pub(crate) fn live_bands(&self) -> Option<LiveBands> {
+        self.spectrum.as_ref().map(Spectrum::bands)
     }
 
     pub fn queue_snapshot(&self) -> QueueSnapshot {

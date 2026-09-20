@@ -4,8 +4,8 @@ use uuid::Uuid;
 use crate::{
     models::{
         aquarium_care::{
-            AquariumCare, CARE_DAYS, deaths_due, dry_days, fish_weight, hatches_fry,
-            pick_by_weight, streak_continues_from,
+            AquariumCare, CARE_DAYS, SPROUT_DAYS, SPROUT_EVERY_DAYS, deaths_due, dry_days,
+            fish_weight, hatches_fry, pick_by_weight, sprout_rooted, streak_continues_from,
         },
         aquarium_shield::AquariumShield,
         marketplace::FishStock,
@@ -230,4 +230,105 @@ async fn ensure_starts_the_clock_yesterday_and_keeps_an_existing_row() {
         "ensure never rewinds a fed tank"
     );
     assert_eq!(care.streak, 1);
+}
+
+#[test]
+fn a_sprout_can_be_cut_for_a_week_and_then_it_is_a_plant() {
+    assert!(!sprout_rooted(day(1), day(1)));
+    assert!(
+        !sprout_rooted(day(1), day(7)),
+        "the seventh day: still a sprout"
+    );
+    assert!(sprout_rooted(day(1), day(8)), "the day after: rooted");
+    assert_eq!(SPROUT_DAYS, 7);
+    assert_eq!(SPROUT_EVERY_DAYS, 14);
+}
+
+#[tokio::test]
+async fn the_sprout_clock_raises_one_every_two_weeks_and_cut_or_root_clears_it() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "aquarium-care-sprout").await;
+    let client = test_db.db.get().await.expect("db client");
+    let today = Utc::now().date_naive();
+    AquariumCare::ensure(&**client, user.id).await.unwrap();
+
+    // A fresh row books the first sprout two weeks out: nothing today.
+    let care = AquariumCare::load(&**client, user.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(care.sprout_born, None);
+    assert_eq!(care.next_sprout, today + chrono::Days::new(14));
+    assert!(
+        !AquariumCare::sprout_up(&**client, user.id, today)
+            .await
+            .unwrap()
+    );
+
+    // Two weeks later: up it comes, and the next one is booked.
+    let due = today + chrono::Days::new(14);
+    assert!(
+        AquariumCare::sprout_up(&**client, user.id, due)
+            .await
+            .unwrap()
+    );
+    let care = AquariumCare::load(&**client, user.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(care.sprout_born, Some(due));
+    assert_eq!(care.next_sprout, due + chrono::Days::new(14));
+    // One at a time: a second is not raised while this one stands, even
+    // when the next is due.
+    assert!(
+        !AquariumCare::sprout_up(&**client, user.id, due + chrono::Days::new(30))
+            .await
+            .unwrap()
+    );
+
+    // Too young to root, young enough to cut.
+    let sixth = due + chrono::Days::new(6);
+    assert!(
+        !AquariumCare::root_sprout(&**client, user.id, sixth)
+            .await
+            .unwrap()
+    );
+    assert!(
+        AquariumCare::cut_sprout(&**client, user.id, sixth)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !AquariumCare::cut_sprout(&**client, user.id, sixth)
+            .await
+            .unwrap(),
+        "nothing left to cut"
+    );
+
+    // The next one, left alone for a week, roots; a late cut finds a plant.
+    let second = due + chrono::Days::new(14);
+    assert!(
+        AquariumCare::sprout_up(&**client, user.id, second)
+            .await
+            .unwrap()
+    );
+    let rooted_on = second + chrono::Days::new(7);
+    assert!(
+        !AquariumCare::cut_sprout(&**client, user.id, rooted_on)
+            .await
+            .unwrap()
+    );
+    assert!(
+        AquariumCare::root_sprout(&**client, user.id, rooted_on)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        AquariumCare::load(&**client, user.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .sprout_born,
+        None
+    );
 }

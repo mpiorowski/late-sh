@@ -4,12 +4,12 @@
 use ratatui::layout::Rect;
 
 use super::state::{BorderKind, Dir, Look, Node, TileKind};
-use crate::app::pet::ui::WatchSide;
+use crate::app::pet::ui::{Neighbours, WatchSide};
 
 /// One row under the tree for its status line.
 pub const BONSAI_STATUS_ROWS: u16 = 1;
-/// The pet box at its smallest: the Home strip's height.
-pub const FLOOR_ROWS: u16 = crate::app::pet::ui::PET_STRIP_HEIGHT;
+/// The pet box at its smallest: its three art rows.
+pub const FLOOR_ROWS: u16 = crate::app::pet::ui::PET_BOX_MIN_ROWS;
 /// The Rice page: one hint row at the bottom, tiles above.
 pub fn rice_areas(area: Rect) -> (Rect, Rect) {
     let hint = Rect::new(
@@ -43,7 +43,7 @@ pub fn tile_rects(
 
 fn collect_rects(node: &Node, area: Rect, gap: u16, out: &mut Vec<(TileKind, Rect)>) {
     match node {
-        Node::Leaf { kind } => out.push((*kind, area)),
+        Node::Leaf { kind, .. } => out.push((*kind, area)),
         Node::Split {
             dir,
             share,
@@ -160,6 +160,27 @@ pub fn neighbour_side(from: Rect, to: Rect, gap: u16) -> Option<WatchSide> {
         return Some(WatchSide::Above);
     }
     None
+}
+
+/// Where the pet's tile sees a tank and a bonsai tile, among `rects` as
+/// `tile_rects` returns them. No pet tile, or no tank or bonsai sharing an
+/// edge with it, leaves that side empty.
+pub fn pet_neighbours(rects: &[(TileKind, Rect)], gap: u16) -> Neighbours {
+    match rects.iter().find(|(kind, _)| *kind == TileKind::Pet) {
+        None => Neighbours::default(),
+        Some((_, pet_rect)) => {
+            let side_of = |want: TileKind| {
+                rects
+                    .iter()
+                    .filter(|(kind, _)| *kind == want)
+                    .find_map(|(_, other)| neighbour_side(*pet_rect, *other, gap))
+            };
+            Neighbours {
+                tank: side_of(TileKind::Aquarium),
+                bonsai: side_of(TileKind::Bonsai),
+            }
+        }
+    }
 }
 
 #[cfg(test)]

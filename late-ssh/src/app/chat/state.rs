@@ -36,7 +36,11 @@ use crate::app::ai::summary::{
 use crate::app::ai::translate::{TranslationEvent, TranslationOutcome, TranslationService};
 use crate::app::common::overlay::{Overlay, OverlayInk, OverlayLine, OverlaySpan};
 
-use crate::app::common::{composer, mentions, primitives::Banner};
+use crate::app::common::status::Status;
+use crate::app::common::{
+    composer, mentions,
+    primitives::{Banner, Screen},
+};
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::notify::{Notification, Notifier};
 use crate::authz::Permissions;
@@ -198,6 +202,44 @@ impl PendingClipboardImageUpload {
 
     fn is_expired(&self) -> bool {
         self.requested_at.elapsed() >= CLIPBOARD_IMAGE_REQUEST_TIMEOUT
+    }
+}
+
+/// Whether a submitted `/` draft runs as a command. The Lounge composer is
+/// plain speech (`Disabled`); every other chat composer takes commands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComposerCommands {
+    Enabled,
+    Disabled,
+}
+
+impl ComposerCommands {
+    pub fn for_screen(screen: Screen) -> Self {
+        match screen {
+            Screen::Clubhouse => Self::Disabled,
+            Screen::Dashboard
+            | Screen::Arcade
+            | Screen::Games
+            | Screen::Lateania
+            | Screen::Rebels
+            | Screen::Nethack
+            | Screen::Dcss
+            | Screen::Brogue
+            | Screen::Dopewars
+            | Screen::Bashquest
+            | Screen::Codekeep
+            | Screen::Usurper
+            | Screen::GreenDragon
+            | Screen::Darkroom
+            | Screen::Artboard
+            | Screen::Profiles
+            | Screen::Leaderboard
+            | Screen::City
+            | Screen::Zen
+            | Screen::DailyMatch
+            | Screen::HouseTable
+            | Screen::Scratchpad => Self::Enabled,
+        }
     }
 }
 
@@ -365,21 +407,11 @@ fn parse_pot_command(body: &str) -> Option<Option<PotCommand>> {
 }
 
 /// An aquarium control requested from the composer (`/aquarium`,
-/// `/aquarium feed`). `App` owns the tray state and entitlements, so the
-/// composer just records the intent and `App` carries it out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AquariumCommand {
-    Toggle,
-    Feed,
-}
-
-/// A pet action requested from the composer (`/pet` toggles the strip;
-/// `/pet feed` is the day's meal). `App` owns the pet state and
+/// `/aquarium feed`). `App` owns the tank state and
 /// entitlements, so the composer just records the intent and `App` carries
 /// it out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PetCommand {
-    Toggle,
+pub(crate) enum AquariumCommand {
     Feed,
 }
 
@@ -469,6 +501,51 @@ pub(crate) enum RoomSlot {
     Discover,
     Showcase,
     Work,
+}
+
+/// Fixed ids for the synthetic Core entries a user can favorite (mentions,
+/// news, rss, browse rooms). They ride in `users.settings.favorite_room_ids`
+/// next to real room ids so the favorites list, its order, the picker sort,
+/// and the Core exclusion set stay one `Vec<Uuid>`. Real rooms are UUID v7;
+/// these carry a zero version nibble, so nothing generated can collide with
+/// them. These two functions are the only code that interprets the ids.
+const FAVORITE_ID_NOTIFICATIONS: Uuid = Uuid::from_u128(0x1a7e_0000_0000_0000_0000_0000_0000_0001);
+const FAVORITE_ID_NEWS: Uuid = Uuid::from_u128(0x1a7e_0000_0000_0000_0000_0000_0000_0002);
+const FAVORITE_ID_FEEDS: Uuid = Uuid::from_u128(0x1a7e_0000_0000_0000_0000_0000_0000_0003);
+const FAVORITE_ID_DISCOVER: Uuid = Uuid::from_u128(0x1a7e_0000_0000_0000_0000_0000_0000_0004);
+
+/// The favorites-list id of a synthetic entry, or `None` for a real room and
+/// for the synthetic entries that cannot be favorited.
+pub(crate) fn synthetic_favorite_id(slot: RoomSlot) -> Option<Uuid> {
+    match slot {
+        RoomSlot::Notifications => Some(FAVORITE_ID_NOTIFICATIONS),
+        RoomSlot::News => Some(FAVORITE_ID_NEWS),
+        RoomSlot::Feeds => Some(FAVORITE_ID_FEEDS),
+        RoomSlot::Discover => Some(FAVORITE_ID_DISCOVER),
+        RoomSlot::Room(_)
+        | RoomSlot::Cyberspace
+        | RoomSlot::CyberspaceNotifications
+        | RoomSlot::CyberspaceMail(_)
+        | RoomSlot::CyberspaceRoom(_)
+        | RoomSlot::Showcase
+        | RoomSlot::Work => None,
+    }
+}
+
+/// The synthetic entry a favorites-list id stands for, or `None` when the id
+/// is a real room's.
+pub(crate) fn synthetic_slot_for_favorite_id(id: Uuid) -> Option<RoomSlot> {
+    if id == FAVORITE_ID_NOTIFICATIONS {
+        Some(RoomSlot::Notifications)
+    } else if id == FAVORITE_ID_NEWS {
+        Some(RoomSlot::News)
+    } else if id == FAVORITE_ID_FEEDS {
+        Some(RoomSlot::Feeds)
+    } else if id == FAVORITE_ID_DISCOVER {
+        Some(RoomSlot::Discover)
+    } else {
+        None
+    }
 }
 
 /// Collapsible groupings of the room-list rail. Each maps to one section
@@ -827,6 +904,10 @@ pub struct ChatState {
     /// center, and embedded Rooms chat.
     pub(crate) last_chat_hit_layout: Cell<Option<super::ui::ChatHitLayout>>,
     pending_send_notices: VecDeque<Uuid>,
+    /// When a message of this user's last landed, in any room or DM: the
+    /// pet's "chatty" signal. Commands never count, only sends that
+    /// succeeded.
+    last_own_send_at: Option<std::time::Instant>,
     pub(crate) pending_chat_screen_switch: bool,
     pub(crate) mention_ac: MentionAutocomplete,
     pub(crate) all_usernames: Arc<Vec<String>>,
@@ -929,11 +1010,17 @@ pub struct ChatState {
     requested_room_info_modal: Option<RoomInfoRequest>,
     requested_settings_modal: bool,
     requested_shop_modal: bool,
+    requested_lobby_toggle: bool,
+    requested_zen_toggle: bool,
+    requested_guide: bool,
+    requested_redraw: bool,
     requested_mod_modal: bool,
     requested_ultimate_modal: bool,
     requested_pair: Option<PairRequest>,
-    requested_pomodoro: Option<PomodoroRequest>,
+    requested_status: Option<StatusRequest>,
     requested_icon_picker: bool,
+    /// Set by `/picker`; `App` opens the Ctrl+/ room picker.
+    requested_room_picker: bool,
     /// Set by /search [query]; consumed by `App`, which opens the Ctrl+/
     /// modal pre-filled with `?query`.
     requested_message_search: Option<String>,
@@ -962,6 +1049,11 @@ pub struct ChatState {
     /// because a won hit is put on the wire for the rest of that room, and
     /// by then the sender may have tabbed elsewhere.
     own_message_landed: Option<(Uuid, Uuid)>,
+    /// A send this session submitted just succeeded (`SendSucceeded` for a
+    /// request in `pending_send_notices`, never the same user's send from
+    /// another device), for the stage-4 breakthrough; consumed by
+    /// `deadchannel::haunt::svc` every tick.
+    own_send_succeeded: bool,
     /// A stage-2 hit off the wire (`ChatEvent::NameHit`) whose message is
     /// on screen: the message id and the wave seed. Consumed by
     /// `deadchannel::haunt::svc` every tick, which paints it.
@@ -979,14 +1071,11 @@ pub struct ChatState {
     /// tells the stream service a named viewer showed up. Recorded here
     /// rather than acted on inline because `App` owns the stream service.
     opened_stream_room: Option<Uuid>,
-    /// Set by /aquarium [feed]; consumed by `App` (which owns the tray).
+    /// Set by /aquarium [feed]; consumed by `App` (which owns the tank).
     requested_aquarium_command: Option<AquariumCommand>,
-    /// Set by /pet, /pet feed; consumed by `App` (which owns the pet).
-    requested_pet_command: Option<PetCommand>,
     requested_poll_room: Option<Uuid>,
-    /// Set by /brb command; contains the custom message (empty = no message).
-    requested_brb: Option<String>,
-    /// Set when a real (non-command) chat message is sent; used to clear AFK.
+    /// Set when a real (non-command) chat message is sent; used to clear an
+    /// open-ended status.
     sent_regular_message: bool,
     pending_mod_outputs: VecDeque<ModCommandOutput>,
 
@@ -1211,6 +1300,7 @@ impl ChatState {
             last_composer_click: None,
             last_chat_hit_layout: Cell::new(None),
             pending_send_notices: VecDeque::new(),
+            last_own_send_at: None,
             pending_chat_screen_switch: false,
             mention_ac: MentionAutocomplete::default(),
             all_usernames: Arc::new(Vec::new()),
@@ -1271,11 +1361,16 @@ impl ChatState {
             requested_room_info_modal: None,
             requested_settings_modal: false,
             requested_shop_modal: false,
+            requested_lobby_toggle: false,
+            requested_zen_toggle: false,
+            requested_guide: false,
+            requested_redraw: false,
             requested_mod_modal: false,
             requested_ultimate_modal: false,
             requested_pair: None,
-            requested_pomodoro: None,
+            requested_status: None,
             requested_icon_picker: false,
+            requested_room_picker: false,
             requested_message_search: None,
             requested_petname: None,
             requested_open_profile: None,
@@ -1288,17 +1383,16 @@ impl ChatState {
             requested_haunt: None,
             requested_paper: None,
             own_message_landed: None,
+            own_send_succeeded: false,
             witnessed_hit_landed: None,
             pending_name_hits: HashMap::new(),
             requested_watch: None,
             opened_stream_room: None,
             requested_aquarium_command: None,
-            requested_pet_command: None,
             requested_audio_url: None,
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
             requested_poll_room: None,
-            requested_brb: None,
             sent_regular_message: false,
             pending_mod_outputs: VecDeque::new(),
             collapsed_sections: HashSet::new(),
@@ -1483,11 +1577,6 @@ impl ChatState {
             is_dm,
             unread,
         });
-    }
-
-    pub fn mark_room_read_at(&self, room_id: Uuid, read_at: DateTime<Utc>) {
-        self.service
-            .mark_room_read_at_task(self.user_id, room_id, read_at);
     }
 
     pub fn mark_selected_room_read(&mut self) {
@@ -1969,6 +2058,22 @@ impl ChatState {
         std::mem::take(&mut self.requested_shop_modal)
     }
 
+    pub fn take_requested_lobby_toggle(&mut self) -> bool {
+        std::mem::take(&mut self.requested_lobby_toggle)
+    }
+
+    pub fn take_requested_zen_toggle(&mut self) -> bool {
+        std::mem::take(&mut self.requested_zen_toggle)
+    }
+
+    pub fn take_requested_guide(&mut self) -> bool {
+        std::mem::take(&mut self.requested_guide)
+    }
+
+    pub fn take_requested_redraw(&mut self) -> bool {
+        std::mem::take(&mut self.requested_redraw)
+    }
+
     pub fn take_requested_room_info_modal(&mut self) -> Option<RoomInfoRequest> {
         self.requested_room_info_modal.take()
     }
@@ -1985,8 +2090,8 @@ impl ChatState {
         self.requested_pair.take()
     }
 
-    pub(crate) fn take_requested_pomodoro(&mut self) -> Option<PomodoroRequest> {
-        self.requested_pomodoro.take()
+    pub(crate) fn take_requested_status(&mut self) -> Option<StatusRequest> {
+        self.requested_status.take()
     }
 
     pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
@@ -1995,6 +2100,10 @@ impl ChatState {
 
     pub fn take_requested_icon_picker(&mut self) -> bool {
         std::mem::take(&mut self.requested_icon_picker)
+    }
+
+    pub fn take_requested_room_picker(&mut self) -> bool {
+        std::mem::take(&mut self.requested_room_picker)
     }
 
     pub(crate) fn take_requested_message_search(&mut self) -> Option<String> {
@@ -2019,10 +2128,6 @@ impl ChatState {
 
     pub fn take_requested_audio_fallback_url(&mut self) -> Option<String> {
         self.requested_audio_fallback_url.take()
-    }
-
-    pub fn take_requested_brb(&mut self) -> Option<String> {
-        self.requested_brb.take()
     }
 
     pub fn take_sent_regular_message(&mut self) -> bool {
@@ -2059,6 +2164,10 @@ impl ChatState {
 
     pub(crate) fn take_own_message_landed(&mut self) -> Option<(Uuid, Uuid)> {
         self.own_message_landed.take()
+    }
+
+    pub(crate) fn take_own_send_succeeded(&mut self) -> bool {
+        std::mem::take(&mut self.own_send_succeeded)
     }
 
     pub(crate) fn take_witnessed_hit_landed(&mut self) -> Option<(Uuid, u64)> {
@@ -2129,8 +2238,9 @@ impl ChatState {
         self.requested_aquarium_command.take()
     }
 
-    pub(crate) fn take_requested_pet_command(&mut self) -> Option<PetCommand> {
-        self.requested_pet_command.take()
+    /// When a message of this user's last landed (`SendSucceeded`).
+    pub(crate) fn last_own_send_at(&self) -> Option<std::time::Instant> {
+        self.last_own_send_at
     }
 
     pub fn take_requested_poll_room(&mut self) -> Option<Uuid> {
@@ -2995,6 +3105,9 @@ impl ChatState {
     }
 
     pub(crate) fn selected_favorite_room_id(&self) -> Option<Uuid> {
+        if let Some(id) = self.current_slot().and_then(synthetic_favorite_id) {
+            return Some(id);
+        }
         if self.synthetic_entry_selected() {
             return None;
         }
@@ -3239,6 +3352,11 @@ impl ChatState {
         composer::set_themed_textarea_cursor_visible(&mut self.composer, false);
     }
 
+    /// The room an open draft was started in: where every submit goes.
+    pub(crate) fn composer_room_id(&self) -> Option<Uuid> {
+        self.composer_room_id
+    }
+
     pub fn reset_composer(&mut self) {
         self.composer = new_chat_textarea();
         self.composing = false;
@@ -3422,8 +3540,21 @@ impl ChatState {
         self.open_overlay("Active Users", self.active_user_lines());
     }
 
-    pub fn submit_composer(&mut self, keep_open: bool, _from_dashboard: bool) -> Option<Banner> {
+    pub fn submit_composer(
+        &mut self,
+        keep_open: bool,
+        commands: ComposerCommands,
+    ) -> Option<Banner> {
         let body = self.composer.lines().join("\n").trim_end().to_string();
+
+        match (commands, is_command_draft(&body)) {
+            (ComposerCommands::Disabled, true) => {
+                return Some(Banner::error(
+                    "Commands are off in the Lounge, use them from Home",
+                ));
+            }
+            (ComposerCommands::Disabled, false) | (ComposerCommands::Enabled, _) => {}
+        }
 
         if body.trim() == "/binds" {
             self.clear_composer_after_submit();
@@ -3440,6 +3571,33 @@ impl ChatState {
         if body.trim() == "/shop" {
             self.clear_composer_after_submit();
             self.requested_shop_modal = true;
+            return None;
+        }
+
+        // Typed fallbacks for the global chords (Ctrl+G, Ctrl+F, Ctrl+L, ?), for
+        // terminals and multiplexers that swallow those keys. Each one runs
+        // exactly what its key runs.
+        if body.trim() == "/lobby" {
+            self.clear_composer_after_submit();
+            self.requested_lobby_toggle = true;
+            return None;
+        }
+
+        if body.trim() == "/zen" {
+            self.clear_composer_after_submit();
+            self.requested_zen_toggle = true;
+            return None;
+        }
+
+        if body.trim() == "/guide" {
+            self.clear_composer_after_submit();
+            self.requested_guide = true;
+            return None;
+        }
+
+        if body.trim() == "/redraw" {
+            self.clear_composer_after_submit();
+            self.requested_redraw = true;
             return None;
         }
 
@@ -3522,6 +3680,12 @@ impl ChatState {
         if body.trim() == "/icons" {
             self.clear_composer_after_submit();
             self.requested_icon_picker = true;
+            return None;
+        }
+
+        if body.trim() == "/picker" {
+            self.clear_composer_after_submit();
+            self.requested_room_picker = true;
             return None;
         }
 
@@ -3682,17 +3846,18 @@ impl ChatState {
             }
         }
 
-        if let Some(parsed) = parse_pomodoro_command(&body) {
+        if let Some(parsed) = parse_status_command(&body) {
             self.clear_composer_after_submit();
             match parsed {
-                PomodoroParse::Request(request) => {
-                    self.requested_pomodoro = Some(request);
+                StatusParse::Request(request) => {
+                    self.requested_status = Some(request);
                     return None;
                 }
-                PomodoroParse::Invalid => {
-                    return Some(Banner::error(
-                        "Usage: /pomodoro [minutes] [label...] or /pomodoro stop",
-                    ));
+                StatusParse::Invalid => {
+                    return Some(Banner::error(&format!(
+                        "Usage: /status [{}] [minutes], or /status off",
+                        Status::word_list()
+                    )));
                 }
             }
         }
@@ -3777,23 +3942,19 @@ impl ChatState {
             return None;
         }
 
+        if matches!(body.trim(), "/aquarium" | "/aq") {
+            self.clear_composer_after_submit();
+            return Some(Banner::info(
+                "The tank lives on the Zen page (Ctrl+F): /aquarium feed; its sprout is cut in /shop",
+            ));
+        }
+
         if let Some(command) = match body.trim() {
-            "/aquarium" | "/aq" => Some(AquariumCommand::Toggle),
             "/aquarium feed" | "/aq feed" => Some(AquariumCommand::Feed),
             _ => None,
         } {
             self.clear_composer_after_submit();
             self.requested_aquarium_command = Some(command);
-            return None;
-        }
-
-        if let Some(command) = match body.trim() {
-            "/pet" => Some(PetCommand::Toggle),
-            "/pet feed" => Some(PetCommand::Feed),
-            _ => None,
-        } {
-            self.clear_composer_after_submit();
-            self.requested_pet_command = Some(command);
             return None;
         }
 
@@ -3880,28 +4041,24 @@ impl ChatState {
             return None;
         }
 
-        if let Some(msg) = parse_brb_command(&body) {
-            let chat_body = if msg.is_empty() {
-                "🌙 brb".to_string()
-            } else {
-                format!("🌙 brb — {msg}")
-            };
-            let room_id = self.composer_room_id;
-            if let Some(room_id) = room_id {
-                self.service
-                    .send_message_with_reply_task(super::svc::SendMessageTask {
-                        user_id: self.user_id,
-                        room_id,
-                        room_slug: self.room_slug(room_id),
-                        body: chat_body,
-                        reply_to_message_id: None,
-                        request_id: Uuid::now_v7(),
-                        is_admin: self.is_admin,
-                    });
-            }
-            self.requested_brb = Some(msg);
+        if let Some(rest) = body.trim().strip_prefix("/brb")
+            && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
             self.clear_composer_after_submit();
-            return None;
+            // `/brb` is exactly `/status away` with no minutes. It used to take
+            // a message, so trailing text is told why rather than "unknown".
+            match rest.trim() {
+                "" => {
+                    self.requested_status = Some(StatusRequest::Apply(StatusChange::Set {
+                        status: Status::Away,
+                        minutes: None,
+                    }));
+                    return None;
+                }
+                _ => {
+                    return Some(Banner::error("/brb takes no message, it sets /status away"));
+                }
+            }
         }
 
         if let Some((kind, text)) = parse_report_command(&body) {
@@ -5456,17 +5613,32 @@ impl ChatState {
     }
 
     pub fn active_friend_names(&self) -> Vec<String> {
+        self.active_friends()
+            .into_iter()
+            .map(|friend| friend.username)
+            .collect()
+    }
+
+    /// Connected friends, the most recent login first, then by name.
+    pub fn active_friends(&self) -> Vec<ActiveFriend> {
         let Some(active_users) = &self.active_users else {
             return Vec::new();
         };
         let active_users = active_users.lock_recover();
-        let mut friends: Vec<&ActiveUser> = self
+        let mut friends: Vec<ActiveFriend> = self
             .friend_user_ids
             .iter()
-            .filter_map(|id| active_users.get(id))
+            .filter_map(|id| {
+                active_users.get(id).map(|user: &ActiveUser| ActiveFriend {
+                    user_id: *id,
+                    username: user.username.clone(),
+                    audio_source: user.audio_source,
+                    online_since: user.last_login_at,
+                })
+            })
             .collect();
         friends.sort_by(|left, right| {
-            right.last_login_at.cmp(&left.last_login_at).then_with(|| {
+            right.online_since.cmp(&left.online_since).then_with(|| {
                 left.username
                     .bytes()
                     .map(|b| b.to_ascii_lowercase())
@@ -5474,9 +5646,6 @@ impl ChatState {
             })
         });
         friends
-            .into_iter()
-            .map(|user| user.username.clone())
-            .collect()
     }
 
     pub fn note_friend_join(&mut self, user_id: Uuid, username: &str) -> Option<Banner> {
@@ -5791,7 +5960,13 @@ impl ChatState {
                     user_id,
                     request_id,
                 } if self.user_id == user_id => {
+                    // Every session of this user hears every send; only a
+                    // request this session submitted is its own.
+                    if self.pending_send_notices.contains(&request_id) {
+                        self.own_send_succeeded = true;
+                    }
                     self.pending_send_notices.retain(|id| *id != request_id);
+                    self.last_own_send_at = Some(std::time::Instant::now());
                     banner = Some(Banner::success("Message sent"));
                 }
                 ChatEvent::DeltaSynced {
@@ -6879,9 +7054,18 @@ pub struct ActivityTickerEntry {
     pub at: DateTime<Utc>,
 }
 
-/// The ticker queue length: enough that packing left to right always fills
-/// the row on any sane terminal width, without hoarding history.
-const ACTIVITY_TICKER_CAP: usize = 10;
+/// A connected friend, as the Zen Friends tile draws them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActiveFriend {
+    pub user_id: Uuid,
+    pub username: String,
+    pub audio_source: late_core::models::user::AudioSource,
+    pub online_since: Instant,
+}
+
+/// The ticker queue length: enough to fill the one-row ticker on any sane
+/// width and a tall Zen Activity tile, without hoarding history.
+const ACTIVITY_TICKER_CAP: usize = 40;
 
 /// Insert into the newest-first ticker queue, deduped by message id (tails
 /// and snapshots replay the same lines), capped at `ACTIVITY_TICKER_CAP`.
@@ -7050,6 +7234,19 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     // then only appends to `order` when the section is expanded.
     let favorites_collapsed = collapsed_sections.contains(&RoomSection::Favorites);
     for favorite_id in favorite_room_ids {
+        // A favorited synthetic entry takes its slot here and is skipped by
+        // Core below through the same `pushed_rooms` set the rooms use. RSS
+        // without feeds has no row anywhere, so it is not marked pushed.
+        match synthetic_slot_for_favorite_id(*favorite_id) {
+            Some(RoomSlot::Feeds) if !feeds_available => continue,
+            Some(slot) => {
+                if pushed_rooms.insert(*favorite_id) && !favorites_collapsed {
+                    order.push(slot);
+                }
+                continue;
+            }
+            None => {}
+        }
         if rooms.iter().any(|(room, _)| {
             room.id == *favorite_id
                 && is_chat_list_room(room)
@@ -7075,9 +7272,13 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         }
     }
     if !core_collapsed {
-        order.push(RoomSlot::Notifications);
-        order.push(RoomSlot::News);
-        if feeds_available {
+        if !pushed_rooms.contains(&FAVORITE_ID_NOTIFICATIONS) {
+            order.push(RoomSlot::Notifications);
+        }
+        if !pushed_rooms.contains(&FAVORITE_ID_NEWS) {
+            order.push(RoomSlot::News);
+        }
+        if feeds_available && !pushed_rooms.contains(&FAVORITE_ID_FEEDS) {
             order.push(RoomSlot::Feeds);
         }
     }
@@ -7099,16 +7300,18 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     {
         order.push(RoomSlot::Room(room.id));
     }
-    if !core_collapsed {
+    if !core_collapsed && !pushed_rooms.contains(&FAVORITE_ID_DISCOVER) {
         // Discover ("browse rooms") lives at the bottom of Core.
         order.push(RoomSlot::Discover);
     }
 
-    // Stream: one row per registered "watch me" stream, directly under Core.
-    // The section exists only while somebody is streaming. Stream rooms are
-    // `kind='game'` so they can never leak into Channels/DMs below.
+    // Stream: one row per live "watch me" stream, directly under Core. A
+    // pending stream (`/golive` typed, no media yet) has nothing to watch and
+    // stays off the rail. The section exists only while somebody is live.
+    // Stream rooms are `kind='game'` so they can never leak into Channels/DMs
+    // below.
     let stream_collapsed = collapsed_sections.contains(&RoomSection::Stream);
-    for stream in live_streams {
+    for stream in live_streams.iter().filter(|stream| stream.live) {
         if pushed_rooms.insert(stream.room_id) && !stream_collapsed {
             order.push(RoomSlot::Room(stream.room_id));
         }
@@ -7485,97 +7688,80 @@ fn parse_pair_command(input: &str) -> Option<Option<PairRequest>> {
     Some(Some(PairRequest::Directed(username.to_string())))
 }
 
-/// One classic tomato when `/pomodoro` is given no duration.
-const POMODORO_DEFAULT_MINUTES: u32 = 25;
 /// Well past any real focus block, and short enough that the HUD badge stays
 /// two-digit minutes.
-const POMODORO_MAX_MINUTES: u32 = 180;
-/// The badge shares the top border with mentions, voice, and chips, so the
-/// label has to stay short. Display cells, not chars: a CJK or emoji label
-/// costs two cells per char and would otherwise crowd the border out.
-const POMODORO_LABEL_MAX_COLS: usize = 24;
-const POMODORO_DEFAULT_LABEL: &str = "Pomodoro";
+const STATUS_MAX_MINUTES: u32 = 180;
 
-/// A `/pomodoro` request drained by `handle_post_submit_requests`. The timer
-/// itself lives on `App` (not here): `tick.rs` fires it and the status HUD
+/// A `/status` request drained by `handle_post_submit_requests`. The status
+/// itself lives on `App` (not here): `tick.rs` expires it and the status HUD
 /// draws it from every screen, not just chat.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PomodoroRequest {
-    Start { minutes: u32, label: String },
-    Stop,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StatusRequest {
+    /// A change to apply directly. Split from `OpenPicker` so the function
+    /// that resolves one cannot be handed a request that sets nothing.
+    Apply(StatusChange),
+    /// `/status` bare: `App` opens the picker.
+    OpenPicker,
 }
 
-/// Outcome of parsing a `/pomodoro` line. Same shape as [`PetnameParse`]: a
+/// A `/status` change that resolves to a new status without asking anything
+/// else of the user.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StatusChange {
+    /// `minutes: None` is an open-ended status, cleared by the next message.
+    Set {
+        status: Status,
+        minutes: Option<u32>,
+    },
+    Clear,
+}
+
+/// Outcome of parsing a `/status` line. Same shape as [`PetnameParse`]: a
 /// named variant per outcome instead of a nested `Option`, so a call site
 /// cannot read "malformed" as "absent".
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PomodoroParse {
-    Request(PomodoroRequest),
-    /// `/pomodoro` with an out-of-range duration or a `stop` carrying
-    /// arguments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StatusParse {
+    Request(StatusRequest),
+    /// An unknown status word, an out-of-range duration, or trailing junk.
     Invalid,
 }
 
-/// `None` when the line isn't `/pomodoro` at all.
+/// `None` when the line isn't `/status` at all.
 ///
-/// A leading integer is the duration and everything after it is the label, so
-/// `/pomodoro 50 deep work` and the label-only `/pomodoro deep work` (default
-/// duration) both work. Only an out-of-range duration is an error.
-fn parse_pomodoro_command(input: &str) -> Option<PomodoroParse> {
-    let rest = input.trim().strip_prefix("/pomodoro")?;
+/// `/status`, `/status <word>`, `/status <word> <minutes>`, `/status off`.
+/// Nothing else: the word comes from a closed set, and a bad one is a usage
+/// banner rather than a silent fallback to some default.
+fn parse_status_command(input: &str) -> Option<StatusParse> {
+    let rest = input.trim().strip_prefix("/status")?;
     if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
         return None;
     }
-    let mut words = rest.split_whitespace().peekable();
-    // `stop` is checked before the label path so it can never be read as one.
-    if words
-        .peek()
-        .is_some_and(|word| word.eq_ignore_ascii_case("stop"))
-    {
-        words.next();
+    let mut words = rest.split_whitespace();
+    let Some(word) = words.next() else {
+        return Some(StatusParse::Request(StatusRequest::OpenPicker));
+    };
+    if word.eq_ignore_ascii_case("off") {
         return Some(match words.next() {
-            None => PomodoroParse::Request(PomodoroRequest::Stop),
-            Some(_) => PomodoroParse::Invalid,
+            None => StatusParse::Request(StatusRequest::Apply(StatusChange::Clear)),
+            Some(_) => StatusParse::Invalid,
         });
     }
-    let mut minutes = POMODORO_DEFAULT_MINUTES;
-    if words
-        .peek()
-        .is_some_and(|word| word.chars().all(|ch| ch.is_ascii_digit()))
-    {
-        let digits = words.next().unwrap_or_default();
-        // Out of range (including a digit run too long for u32) is a usage
-        // banner rather than a silent clamp.
-        match digits.parse::<u32>() {
-            Ok(parsed) if (1..=POMODORO_MAX_MINUTES).contains(&parsed) => minutes = parsed,
-            _ => return Some(PomodoroParse::Invalid),
-        }
-    }
-    // Rejoining with single spaces drops any tabs/newlines; then strip control
-    // chars (the label reaches a desktop notification and the top border) and
-    // cap the width, same shape as the `/gift` note.
-    use unicode_width::UnicodeWidthChar;
-    let mut cols = 0usize;
-    let label: String = words
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .filter(|ch| !ch.is_control())
-        .take_while(|ch| {
-            cols += ch.width().unwrap_or(0);
-            cols <= POMODORO_LABEL_MAX_COLS
-        })
-        .collect();
-    let label = label.trim();
-    let label = if label.is_empty() {
-        POMODORO_DEFAULT_LABEL.to_string()
-    } else {
-        label.to_string()
+    let Some(status) = Status::parse(word) else {
+        return Some(StatusParse::Invalid);
     };
-    Some(PomodoroParse::Request(PomodoroRequest::Start {
-        minutes,
-        label,
-    }))
+    let minutes = match words.next() {
+        None => None,
+        Some(digits) => match digits.parse::<u32>() {
+            Ok(parsed) if (1..=STATUS_MAX_MINUTES).contains(&parsed) => Some(parsed),
+            // Out of range (including a digit run too long for u32) is a
+            // usage banner rather than a silent clamp.
+            _ => return Some(StatusParse::Invalid),
+        },
+    };
+    Some(match words.next() {
+        None => StatusParse::Request(StatusRequest::Apply(StatusChange::Set { status, minutes })),
+        Some(_) => StatusParse::Invalid,
+    })
 }
 
 fn parse_me_command(input: &str) -> Option<Option<String>> {
@@ -7799,17 +7985,6 @@ fn room_slug_for(rooms: &[(ChatRoom, Vec<ChatMessage>)], room_id: Uuid) -> Optio
         .and_then(|(room, _)| room.slug.clone())
 }
 
-/// Parse `/brb [optional message]` from the composer.
-/// Returns `Some(message)` where message is empty if no custom text was given.
-fn parse_brb_command(input: &str) -> Option<String> {
-    let trimmed = input.trim();
-    if trimmed == "/brb" {
-        return Some(String::new());
-    }
-    let rest = trimmed.strip_prefix("/brb ")?.trim();
-    Some(rest.to_string())
-}
-
 /// Minimum characters of report text, so `/bug lol` bounces with usage help
 /// instead of posting a useless card.
 const REPORT_MIN_CHARS: usize = 10;
@@ -7877,6 +8052,17 @@ pub(crate) fn cup_art(kind: CupKind, variant: u8) -> String {
         CupKind::Tea => "  \\___/",
     };
     format!("{steam}\n{cup}")
+}
+
+/// Whether a draft is a command attempt rather than speech: its first word
+/// leads with `/`. A bare `/` and a `//` aside are speech, as they are to
+/// `unknown_slash_command`. Multi-line drafts count, since several command
+/// parsers take a body that runs over lines.
+fn is_command_draft(input: &str) -> bool {
+    match input.split_whitespace().next() {
+        Some("/") | Some("//") | None => false,
+        Some(word) => word.starts_with('/'),
+    }
 }
 
 fn unknown_slash_command(input: &str) -> Option<&str> {

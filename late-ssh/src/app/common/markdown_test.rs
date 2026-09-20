@@ -214,3 +214,48 @@ fn wrap_plain_line_empty_returns_empty() {
     let result = wrap_plain_line("", 40);
     assert!(result.is_empty());
 }
+
+fn code_rows(body: &str) -> Vec<String> {
+    let lines = render_body_to_lines(body, 80, Span::raw(""), Style::default());
+    lines_to_strings(&lines)
+        .into_iter()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// Text typed on a fence line is code, not something to throw away: a
+/// message that never reaches a second line must not render an empty box.
+#[test]
+fn text_on_a_fence_line_stays_in_the_block() {
+    assert_eq!(code_rows("```let x = 1;```"), ["let x = 1;"]);
+    assert_eq!(code_rows("```let x = 1;"), ["let x = 1;"]);
+    assert_eq!(code_rows("```oops"), ["oops"]);
+    assert_eq!(code_rows("```\nlet x = 1;```"), ["let x = 1;"]);
+    assert_eq!(
+        code_rows("```let x = 1;\nlet y = 2;\n```"),
+        ["let x = 1;", "let y = 2;"]
+    );
+}
+
+/// A one-word info string over real code is still a language tag.
+#[test]
+fn a_language_tag_over_code_is_not_shown() {
+    assert_eq!(code_rows("```rust\nlet x = 1;\n```"), ["let x = 1;"]);
+    assert_eq!(code_rows("```rust\nlet x = 1;"), ["let x = 1;"]);
+}
+
+#[test]
+fn prose_after_a_one_line_block_is_prose() {
+    let lines = render_body_to_lines("```ls -la```\noof", 80, Span::raw(""), Style::default());
+    let last = lines.last().expect("prose line");
+    assert_eq!(
+        lines_to_strings(&lines).last().map(|s| s.trim()),
+        Some("oof")
+    );
+    assert!(
+        last.spans
+            .iter()
+            .all(|s| s.style.bg != Some(theme::BG_HIGHLIGHT()))
+    );
+}

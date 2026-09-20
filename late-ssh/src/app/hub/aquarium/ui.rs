@@ -4,7 +4,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, Clear, Paragraph, Widget},
+    widgets::{Block, Borders, Paragraph, Widget},
 };
 
 use crate::app::common::theme;
@@ -14,46 +14,6 @@ use super::{
     state::{AquariumState, RuntimeMode, TankState, WaterBand},
     world::ReefWorld,
 };
-
-// Sized to exactly fit the tallest creature (Big Bert, 9 art rows) plus the
-// 1-row surface and floor.
-const TOP_TRAY_HEIGHT: u16 = 11;
-
-pub(crate) fn top_tray_area(area: Rect) -> Rect {
-    let height = TOP_TRAY_HEIGHT.min(area.height);
-    Rect::new(area.x, area.y, area.width, height)
-}
-
-/// Split `area` into the top aquarium tray and the remaining content below.
-/// Returns no tray when the lounge below would drop under its minimum: the
-/// tray is only reachable through the `/aquarium` composer command, so a tray
-/// that eats the composer would lock the user out of hiding it again.
-pub(crate) fn carve_top_tray(area: Rect) -> (Option<Rect>, Rect) {
-    if area.height < TOP_TRAY_HEIGHT + crate::app::chat::ui::MIN_CHAT_HEIGHT_WITH_LOUNGE {
-        return (None, area);
-    }
-    let tray = top_tray_area(area);
-    let rest = Rect::new(
-        area.x,
-        area.y + tray.height,
-        area.width,
-        area.height.saturating_sub(tray.height),
-    );
-    (Some(tray), rest)
-}
-
-pub(crate) fn draw_top_tray(frame: &mut Frame<'_>, area: Rect, state: &AquariumState) {
-    if area.height == 0 || area.width == 0 {
-        return;
-    }
-
-    frame.render_widget(Clear, area);
-    frame.render_widget(
-        Block::new().style(Style::new().bg(theme::BG_CANVAS())),
-        area,
-    );
-    draw(frame, area, state);
-}
 
 pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, app: &AquariumState) {
     draw_into(frame.buffer_mut(), area, app);
@@ -108,9 +68,6 @@ fn render_tank(buf: &mut Buffer, area: Rect, app: &AquariumState, tank_state: &T
         render_water(buf, water, app.tick);
     }
     render_food_flakes(buf, water, app);
-    if app.is_murky() {
-        render_murk(buf, water, app.tick);
-    }
     render_creatures(
         buf,
         water,
@@ -119,7 +76,6 @@ fn render_tank(buf: &mut Buffer, area: Rect, app: &AquariumState, tank_state: &T
         app.tick,
         0,
         app.show_creature_names,
-        app.is_murky(),
     );
 }
 
@@ -135,9 +91,6 @@ fn render_reef(buf: &mut Buffer, area: Rect, app: &AquariumState, world: &ReefWo
         render_water(buf, water, app.tick);
     }
     render_food_flakes(buf, water, app);
-    if app.is_murky() {
-        render_murk(buf, water, app.tick);
-    }
 
     render_surface_wave(buf, area, app.tick);
     render_layer(buf, area, world, LayerPosition::Floor);
@@ -149,7 +102,6 @@ fn render_reef(buf: &mut Buffer, area: Rect, app: &AquariumState, world: &ReefWo
         app.tick,
         world.viewport_x,
         app.show_creature_names,
-        app.is_murky(),
     );
 }
 
@@ -275,33 +227,6 @@ fn render_food_flakes(buf: &mut Buffer, area: Rect, app: &AquariumState) {
     }
 }
 
-/// Murky water, a week unfed: algae drift slowly through the tank. Drawn
-/// under the fish, so nothing is hidden, only dimmed and crowded.
-fn render_murk(buf: &mut Buffer, area: Rect, tick: u64) {
-    if area.width == 0 {
-        return;
-    }
-    let style = Style::new()
-        .fg(theme::BONSAI_LEAF())
-        .add_modifier(Modifier::DIM);
-    for y in 0..area.height {
-        for x in 0..area.width {
-            // The specks drift one column left every eight ticks.
-            let drifted = (x as u64 + tick / 8) % area.width as u64;
-            let seed = stable_hash(drifted * 7919 + y as u64 * 104_729);
-            let glyph = match seed % 41 {
-                0 => "·",
-                1 => ",",
-                2 => "'",
-                _ => continue,
-            };
-            if let Some(cell) = buf.cell_mut((area.x + x, area.y + y)) {
-                cell.set_symbol(glyph).set_style(style);
-            }
-        }
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn render_creatures(
     buf: &mut Buffer,
@@ -311,7 +236,6 @@ fn render_creatures(
     tick: u64,
     viewport_x: i32,
     show_names: bool,
-    murky: bool,
 ) {
     let buffer = &mut *buf;
 
@@ -327,13 +251,7 @@ fn render_creatures(
             entity.animation_tick_for(def, tick),
             entity.phase,
         );
-        // Murky water washes the colour out of every fish.
-        let color = if murky {
-            theme::TEXT_DIM()
-        } else {
-            entity.color
-        };
-        let style = Style::new().fg(color).add_modifier(if def.brownian {
+        let style = Style::new().fg(entity.color).add_modifier(if def.brownian {
             Modifier::BOLD
         } else {
             Modifier::empty()
@@ -541,7 +459,3 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
         height.min(area.height),
     )
 }
-
-#[cfg(test)]
-#[path = "ui_test.rs"]
-mod ui_test;

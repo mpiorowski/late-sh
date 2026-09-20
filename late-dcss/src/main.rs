@@ -10,6 +10,7 @@ mod host;
 mod identity;
 #[cfg(test)]
 mod identity_test;
+mod morgue;
 mod playname;
 mod publish;
 mod rc;
@@ -45,6 +46,12 @@ async fn main() -> anyhow::Result<()> {
         publish_port = config.publish_port,
         "late-dcss host starting"
     );
+
+    // Carry any dump written before `-morgue` existed into its player's
+    // directory, the only layout the public DCSS tooling can address (see
+    // morgue.rs). Runs here, before either listener binds, so no child is
+    // writing a dump and no fetcher can see the tree half-moved.
+    morgue::migrate_flat(&config.data_dir);
 
     // Ephemeral SSH host key, generated fresh on each start. late-ssh is the only
     // client and accepts any host key (auth is the shared-secret-derived client
