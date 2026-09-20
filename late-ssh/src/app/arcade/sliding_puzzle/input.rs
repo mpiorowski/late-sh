@@ -57,7 +57,9 @@ pub fn handle_mouse(state: &mut State, area: Rect, mouse: MouseEvent) -> bool {
     let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
         return false;
     };
-    let Some(index) = super::ui::hit_test(area, state.difficulty(), state.tile_view(), x, y) else {
+    let Some(index) =
+        super::ui::hit_test(area, state.difficulty(), state.art_tile_geometry(), x, y)
+    else {
         return false;
     };
 

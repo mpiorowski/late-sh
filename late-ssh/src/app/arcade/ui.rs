@@ -12,7 +12,6 @@ use ratatui::{
 
 use crate::app::{
     common::theme,
-    files::terminal_image::{TerminalImageFrame, TerminalImageProtocol},
     state::{
         GAME_SELECTION_2048, GAME_SELECTION_LE_WORD, GAME_SELECTION_MINESWEEPER,
         GAME_SELECTION_NONOGRAMS, GAME_SELECTION_RUBIKS_CUBE, GAME_SELECTION_SLIDING_PUZZLE,
@@ -303,8 +302,6 @@ pub fn draw_arcade_hub(
     frame: &mut Frame,
     area: Rect,
     view: &ArcadeHubView<'_>,
-    terminal_image_protocol: Option<TerminalImageProtocol>,
-    terminal_images: &mut TerminalImageFrame,
 ) {
     let show_bottom_bar = SHOW_GAME_BOTTOM_BAR;
     if view.is_playing_game {
@@ -334,8 +331,6 @@ pub fn draw_arcade_hub(
                 area,
                 view.sliding_puzzle_state,
                 show_bottom_bar,
-                terminal_image_protocol,
-                terminal_images,
             );
             return;
         } else if view.game_selection == GAME_SELECTION_LE_WORD {

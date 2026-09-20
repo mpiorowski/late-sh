@@ -223,3 +223,104 @@ async fn service_loads_upserted_slots_and_publishes_only_the_first_same_day_win(
         .expect("win exists");
     assert_eq!(best.moves, 8, "same-day replay keeps the lower move count");
 }
+
+/// The board asks for the day's art once, off the tick, and the state
+/// lands it as tiles for every difficulty with the piece credited. The
+/// claim is the gallery model's (`ArtboardPiece::feature_for_day`); this
+/// pins the session side of it.
+#[tokio::test]
+async fn the_board_lands_yesterdays_gallery_piece_as_its_art() {
+    use super::{
+        art::{TileGeometry, TileView},
+        state::{ArtStatus, State},
+    };
+    use crate::test_helpers::wait_until;
+    use late_core::models::artboard_piece::{ArtboardPiece, HangOutcome, HangParams};
+    use serde_json::json;
+
+    let test_db = new_test_db().await;
+    let painter = create_test_user(&test_db.db, "puzzle-art-painter").await;
+    let player = create_test_user(&test_db.db, "puzzle-art-player").await;
+    let client = test_db.db.get().await.expect("db client");
+    let piece = match ArtboardPiece::hang(
+        &client,
+        HangParams {
+            user_id: painter.id,
+            title: "night train".to_string(),
+            width: 12,
+            height: 4,
+            canvas: json!({
+                "width": 12,
+                "height": 4,
+                "cells": [[{"x": 0, "y": 0}, {"Narrow": "#"}]],
+                "colors": [],
+            }),
+            provenance: json!({ "cells": [[{"x": 0, "y": 0}, "painter"]] }),
+            glyph_count: 40,
+            own_share_percent: 100,
+            content_hash: "hash-night-train".to_string(),
+        },
+    )
+    .await
+    .expect("hang")
+    {
+        HangOutcome::Hung(piece) => piece,
+        other => panic!("expected the piece to hang, got {other:?}"),
+    };
+    client
+        .execute(
+            "UPDATE artboard_pieces SET created = created - INTERVAL '1 day' WHERE id = $1",
+            &[&piece.id],
+        )
+        .await
+        .expect("backdate the piece to yesterday");
+
+    let (activity, _) = broadcast::channel(8);
+    let service = SlidingPuzzleService::new(test_db.db.clone(), activity);
+    let mut state = State::new(player.id, service, Vec::new());
+    assert_eq!(state.tile_view(), TileView::Art);
+    assert_eq!(state.art_status(), ArtStatus::Loading);
+    assert_eq!(state.art_credit(), None);
+
+    let mut ticks = 0;
+    wait_until(
+        || {
+            ticks += 1;
+            state.poll_art();
+            let ready = state.art_status() == ArtStatus::Ready;
+            async move { ready }
+        },
+        "the day's art to land",
+    )
+    .await;
+    assert!(ticks > 1, "the load is asynchronous, not a blocking tick");
+    assert_eq!(
+        state.art_credit().as_deref(),
+        Some(format!("night train by @{}", painter.username).as_str())
+    );
+    // A 12x4 piece pads out to the minimum tile on every board size.
+    assert_eq!(
+        state.art_tile_geometry(),
+        Some(TileGeometry {
+            width: 6,
+            height: 3
+        })
+    );
+    state.next_difficulty();
+    assert_eq!(state.art_grid().expect("hard grid").lines.len(), 15);
+
+    // Numbered tiles hide the art without dropping it; the grid is back
+    // on the next toggle with nothing to reload.
+    state.toggle_tile_view();
+    assert_eq!(state.art_status(), ArtStatus::Numbered);
+    assert_eq!(state.art_tile_geometry(), None);
+    state.toggle_tile_view();
+    assert_eq!(state.art_status(), ArtStatus::Ready);
+    assert_eq!(
+        ArtboardPiece::feature_for_day(&client, state.puzzle_date())
+            .await
+            .expect("claim")
+            .map(|featured| featured.id),
+        Some(piece.id)
+    );
+}

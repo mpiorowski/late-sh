@@ -363,19 +363,6 @@ impl TerminalImageRenderState {
     }
 }
 
-/// Identity of a non-modal raster placement, for the pre-frame wipe's
-/// change detection. Folds where it lands together with what it shows, so
-/// either moving it or changing it counts as a change worth wiping for.
-pub(crate) fn persistent_raster_tag(area: Rect, cache_key: u64) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    area.x.hash(&mut hasher);
-    area.y.hash(&mut hasher);
-    area.width.hash(&mut hasher);
-    area.height.hash(&mut hasher);
-    cache_key.hash(&mut hasher);
-    hasher.finish()
-}
-
 /// Whether the upcoming frame can be emitted as an in-place replacement:
 /// same number of images, each covering exactly the cells the previous one
 /// did, and each fully opaque so the new pixels hide the old without a wipe.

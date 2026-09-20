@@ -4,17 +4,17 @@ use late_core::models::{
     sliding_puzzle::{Game, GameParams},
 };
 use rand_core::{OsRng, RngCore};
-use ratatui::layout::Rect;
+use std::time::{Duration, Instant};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use super::{
-    image::{ImageStatus, ImageTiles, NativePuzzleImageSet, TileView, image_tile_geometry},
-    svc::SlidingPuzzleService,
+    art::{ArtGrid, PuzzleArt, TileGeometry, TileView, art_grid},
+    svc::{ArtLoad, SlidingPuzzleService},
 };
-use crate::app::files::{
-    inline_image::{InlineImagePreview, InlineImageRenderSettings},
-    terminal_image::TerminalImageProtocol,
-};
+
+/// How long a failed art load waits before the next tick asks again.
+const ART_RETRY_DELAY: Duration = Duration::from_secs(30);
 
 const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
 
@@ -72,6 +72,33 @@ pub struct GeneratedBoard {
     pub blank_moves: Vec<Direction>,
 }
 
+/// Where the day's art stands. One load per session per board date;
+/// `poll_art` walks it forward from the tick.
+enum ArtSlot {
+    Unrequested,
+    Loading(oneshot::Receiver<ArtLoad>),
+    /// The piece and its grid for each difficulty, cut once on arrival.
+    Ready(Box<ReadyArt>),
+    /// Nothing in the gallery's backlog, or the gallery switched off.
+    Empty,
+    Failed { retry_after: Instant },
+}
+
+struct ReadyArt {
+    art: PuzzleArt,
+    grids: [ArtGrid; 3],
+}
+
+/// What the art view can show right now, for the tip line and the tiles.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArtStatus {
+    Numbered,
+    Loading,
+    Ready,
+    Empty,
+    Failed,
+}
+
 #[derive(Clone)]
 struct Snapshot {
     seed: u64,
@@ -89,7 +116,8 @@ pub struct State {
     personal_snapshots: [Option<Snapshot>; 3],
     reset_pending: Option<ResetAction>,
     message: String,
-    image_tiles: ImageTiles,
+    tile_view: TileView,
+    art: ArtSlot,
     svc: SlidingPuzzleService,
 }
 
@@ -139,7 +167,8 @@ impl State {
             personal_snapshots,
             reset_pending: None,
             message: "Slide a tile into the gap: direction key or click.".to_string(),
-            image_tiles: ImageTiles::new(),
+            tile_view: TileView::default(),
+            art: ArtSlot::Unrequested,
             svc,
         }
     }
@@ -163,54 +192,112 @@ impl State {
     }
 
     pub fn tile_view(&self) -> TileView {
-        self.image_tiles.view()
+        self.tile_view
     }
 
+    /// `i`: numbered tiles or the day's art, for this session only. Turning
+    /// the art back on after a failed load asks again at once, so `i` twice
+    /// is the retry.
     pub fn toggle_tile_view(&mut self) {
         self.reset_pending = None;
-        let seed = self.active_snapshot().seed;
-        let difficulty = self.difficulty();
-        self.image_tiles.toggle(seed, difficulty);
-        self.message = match self.tile_view() {
-            TileView::Numbered => "Numbered tile view.".to_string(),
-            TileView::Image => "Image tile view selected.".to_string(),
+        self.tile_view = match self.tile_view {
+            TileView::Numbered => TileView::Art,
+            TileView::Art => TileView::Numbered,
+        };
+        self.message = match self.tile_view {
+            TileView::Numbered => "Numbered tiles.".to_string(),
+            TileView::Art => {
+                if matches!(self.art, ArtSlot::Failed { .. }) {
+                    self.art = ArtSlot::Unrequested;
+                }
+                "Art tiles.".to_string()
+            }
         };
     }
 
-    pub(crate) fn poll_image_tiles(
-        &mut self,
-        settings: InlineImageRenderSettings,
-        board_area: Rect,
-        protocol: Option<TerminalImageProtocol>,
-    ) -> bool {
-        let seed = self.active_snapshot().seed;
-        let difficulty = self.difficulty();
-        let Some(geometry) = image_tile_geometry(board_area, difficulty) else {
-            return false;
-        };
-        self.image_tiles
-            .poll(seed, difficulty, geometry, settings, protocol)
+    /// Walks the day's art load forward; called from the tick while this
+    /// board is the open screen. Returns true when the frame changed.
+    pub(crate) fn poll_art(&mut self) -> bool {
+        let now = Instant::now();
+        match &mut self.art {
+            ArtSlot::Unrequested => {
+                if tokio::runtime::Handle::try_current().is_err() {
+                    return false;
+                }
+                self.art = ArtSlot::Loading(self.svc.load_daily_art_task(self.puzzle_date));
+                false
+            }
+            ArtSlot::Loading(rx) => match rx.try_recv() {
+                Ok(ArtLoad::Featured(art)) => {
+                    let grids = DIFFICULTIES.map(|difficulty| art_grid(&art, difficulty));
+                    self.art = ArtSlot::Ready(Box::new(ReadyArt { art, grids }));
+                    true
+                }
+                Ok(ArtLoad::Empty) => {
+                    self.art = ArtSlot::Empty;
+                    true
+                }
+                Ok(ArtLoad::Failed) | Err(oneshot::error::TryRecvError::Closed) => {
+                    self.art = ArtSlot::Failed {
+                        retry_after: now + ART_RETRY_DELAY,
+                    };
+                    true
+                }
+                Err(oneshot::error::TryRecvError::Empty) => false,
+            },
+            ArtSlot::Failed { retry_after } => {
+                if now >= *retry_after {
+                    self.art = ArtSlot::Unrequested;
+                }
+                false
+            }
+            ArtSlot::Ready(_) | ArtSlot::Empty => false,
+        }
     }
 
-    /// Frees the session's image caches once this board is no longer the open
-    /// screen. `poll_image_tiles` only runs while it is, so nothing else can.
-    pub(crate) fn release_image_tiles(&mut self) -> bool {
-        self.image_tiles.release()
+    pub(crate) fn art_status(&self) -> ArtStatus {
+        if self.tile_view == TileView::Numbered {
+            return ArtStatus::Numbered;
+        }
+        match self.art {
+            ArtSlot::Unrequested | ArtSlot::Loading(_) => ArtStatus::Loading,
+            ArtSlot::Ready(_) => ArtStatus::Ready,
+            ArtSlot::Empty => ArtStatus::Empty,
+            ArtSlot::Failed { .. } => ArtStatus::Failed,
+        }
     }
 
-    pub(crate) fn image_status(&self) -> ImageStatus {
-        self.image_tiles
-            .status_for(self.active_snapshot().seed, self.difficulty())
+    /// The day's piece cut for the active difficulty, when the art view is
+    /// on and the piece has landed.
+    pub(crate) fn art_grid(&self) -> Option<&ArtGrid> {
+        if self.tile_view == TileView::Numbered {
+            return None;
+        }
+        match &self.art {
+            ArtSlot::Ready(ready) => Some(&ready.grids[self.selected_difficulty]),
+            _ => None,
+        }
     }
 
-    pub(crate) fn image_preview(&self) -> Option<&InlineImagePreview> {
-        self.image_tiles
-            .preview_for(self.active_snapshot().seed, self.difficulty())
+    /// The tile size the art view wants, or `None` when numbered tiles are
+    /// what will draw. Mouse hit-testing reads this so it lands on the same
+    /// grid the frame drew.
+    pub(crate) fn art_tile_geometry(&self) -> Option<TileGeometry> {
+        self.art_grid().map(|grid| grid.geometry)
     }
 
-    pub(crate) fn display_native_tiles(&self) -> Option<&NativePuzzleImageSet> {
-        self.image_tiles
-            .native_tiles_for(self.active_snapshot().seed, self.difficulty())
+    /// "title by @painter" for the board's frame while the art is showing.
+    pub(crate) fn art_credit(&self) -> Option<String> {
+        if self.tile_view == TileView::Numbered {
+            return None;
+        }
+        match &self.art {
+            ArtSlot::Ready(ready) => Some(format!(
+                "{} by @{}",
+                ready.art.title, ready.art.username
+            )),
+            _ => None,
+        }
     }
 
     pub fn reward_chips(&self) -> Option<i64> {
@@ -283,6 +370,7 @@ impl State {
         self.puzzle_date = today;
         self.daily_snapshots = DIFFICULTIES
             .map(|difficulty| fresh_snapshot(difficulty, daily_seed(today, difficulty)));
+        self.art = ArtSlot::Unrequested;
         self.clear_reset_pending();
         if self.mode == Mode::Daily {
             self.message = "Today's Sliding Puzzle is ready.".to_string();
@@ -503,11 +591,17 @@ impl State {
     }
 
     #[cfg(test)]
-    pub(crate) fn apply_image_result_for_test(
-        &mut self,
-        result: Result<InlineImagePreview, String>,
-    ) {
-        self.image_tiles.apply_active_result_for_test(result);
+    pub(crate) fn set_art_for_test(&mut self, load: ArtLoad) {
+        self.art = match load {
+            ArtLoad::Featured(art) => {
+                let grids = DIFFICULTIES.map(|difficulty| art_grid(&art, difficulty));
+                ArtSlot::Ready(Box::new(ReadyArt { art, grids }))
+            }
+            ArtLoad::Empty => ArtSlot::Empty,
+            ArtLoad::Failed => ArtSlot::Failed {
+                retry_after: Instant::now() + ART_RETRY_DELAY,
+            },
+        };
     }
 
     fn request_action(&mut self, action: ResetAction, message: &str) -> bool {

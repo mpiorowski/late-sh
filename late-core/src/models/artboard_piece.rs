@@ -31,6 +31,8 @@ use serde_json::Value;
 use tokio_postgres::{Row, error::SqlState};
 use uuid::Uuid;
 
+use super::app_flag::AppFlag;
+
 /// Fewest non-blank glyphs a frame may hold. A smiley is not a piece.
 pub const PIECE_MIN_GLYPHS: usize = 40;
 /// Largest frame, in cells. Every piece fits a terminal, which is what makes
@@ -421,6 +423,62 @@ impl ArtboardPiece {
             )
             .await?;
         Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    /// Sliding Puzzle's art for one UTC day: the piece stamped `featured_on`
+    /// that day, or, when no piece holds the day yet, the most applauded
+    /// piece never featured and hung before that day, claimed by stamping
+    /// it. Ties go to the earliest hang. Two pieces hung the same day
+    /// therefore queue up, one per day, in applause order.
+    ///
+    /// The claim is one `UPDATE` racing on the partial unique index over
+    /// `featured_on` (migration 188): the loser's stamp is refused and it
+    /// reads the winner's row back. A piece taken down leaves the index, so
+    /// a removal frees the day for the next in line. The gallery's kill
+    /// switch (`artboard_gallery_enabled`) is in both statements, the way
+    /// the paper's wall column obeys it. `None` is an empty backlog or the
+    /// switch off.
+    pub async fn feature_for_day(client: &impl GenericClient, day: NaiveDate) -> Result<Option<Self>> {
+        if let Some(piece) = Self::featured_on(client, day).await? {
+            return Ok(Some(piece));
+        }
+        let claimed = client
+            .execute(
+                "UPDATE artboard_pieces
+                 SET featured_on = $1
+                 WHERE id = (
+                    SELECT p.id FROM artboard_pieces p
+                    WHERE p.removed_at IS NULL
+                      AND p.featured_on IS NULL
+                      AND p.created < ($1::date AT TIME ZONE 'UTC')
+                    ORDER BY (SELECT count(*) FROM artboard_piece_votes v WHERE v.piece_id = p.id) DESC,
+                             p.created ASC
+                    LIMIT 1
+                 )
+                 AND EXISTS (SELECT 1 FROM app_flags WHERE key = $2 AND enabled)",
+                &[&day, &AppFlag::ArtboardGalleryEnabled.key()],
+            )
+            .await;
+        match claimed {
+            Ok(_) => {}
+            Err(error) if error.code() == Some(&SqlState::UNIQUE_VIOLATION) => {}
+            Err(error) => return Err(error.into()),
+        }
+        Self::featured_on(client, day).await
+    }
+
+    async fn featured_on(client: &impl GenericClient, day: NaiveDate) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                &format!(
+                    "{PIECE_VIEW_SQL}
+                     WHERE p.featured_on = $2
+                       AND EXISTS (SELECT 1 FROM app_flags WHERE key = $3 AND enabled)"
+                ),
+                &[&Uuid::nil(), &day, &AppFlag::ArtboardGalleryEnabled.key()],
+            )
+            .await?;
+        Ok(row.map(Self::from))
     }
 
     /// Applaud a piece, or take the applause back if it is already there.

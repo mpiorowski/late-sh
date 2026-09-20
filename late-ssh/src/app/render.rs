@@ -1193,21 +1193,9 @@ impl App {
             || self.booth_modal_state.is_open()
             || self.stream_modal.is_some()
             || self.chat.history_modal.is_open();
-        // Which screen owns a non-modal raster is decided here; what that
-        // raster will look like is the screen's own business.
-        let non_modal_image_tag = (screen == Screen::Arcade
-            && self.is_playing_game
-            && self.game_selection == crate::app::state::GAME_SELECTION_SLIDING_PUZZLE)
-            .then(|| {
-                let inner = app_frame_inner_area(area);
-                let (content_area, _) = app_content_and_sidebar_areas(inner, show_right_sidebar);
-                crate::app::arcade::sliding_puzzle::ui::persistent_raster_tag(
-                    content_area,
-                    &self.sliding_puzzle_state,
-                    self.terminal_image_protocol,
-                )
-            })
-            .flatten();
+        // No screen places a non-modal persistent raster today; the slot
+        // stays so a screen that does can tag its raster here.
+        let non_modal_image_tag: Option<u64> = None;
         let pre_wipe = self
             .terminal_image_render_state
             .pre_frame_persistent_raster_wipe_bytes(
@@ -1851,8 +1839,6 @@ impl App {
                     session_daily_completion: ctx.session_daily_wins.today(),
                     quest_state: ctx.quest_state,
                 },
-                ctx.terminal_image_protocol,
-                terminal_images,
             ),
             Screen::Leaderboard => crate::app::leaderboard::ui::draw(
                 frame,

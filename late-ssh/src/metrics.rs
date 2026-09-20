@@ -5,9 +5,7 @@ use late_core::models::media_queue_item::SongQueueReward;
 
 use crate::app::activity::event::ActivityGame;
 use crate::app::arcade::share::ShareCardKind;
-use crate::app::arcade::sliding_puzzle::image::{
-    SlidingPuzzleImageOutcome, SlidingPuzzleImageStage,
-};
+use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleArtLoad;
 use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::chat::news::svc::XMediaLookup;
@@ -213,7 +211,7 @@ mod inner {
         SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
-    use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
+    use super::SlidingPuzzleArtLoad;
     use crate::app::bonsai::state::BranchAction;
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -976,45 +974,31 @@ mod inner {
         share_cards_total().add(1, &[KeyValue::new("card", share_card_kind_label(kind))]);
     }
 
-    fn sliding_puzzle_image_stage_label(stage: SlidingPuzzleImageStage) -> &'static str {
-        match stage {
-            SlidingPuzzleImageStage::Preview => "preview",
-            SlidingPuzzleImageStage::Native => "native",
+    fn sliding_puzzle_art_load_label(load: SlidingPuzzleArtLoad) -> &'static str {
+        match load {
+            SlidingPuzzleArtLoad::Featured => "featured",
+            SlidingPuzzleArtLoad::Empty => "empty",
+            SlidingPuzzleArtLoad::Failed => "failed",
         }
     }
 
-    fn sliding_puzzle_image_outcome_label(outcome: SlidingPuzzleImageOutcome) -> &'static str {
-        match outcome {
-            SlidingPuzzleImageOutcome::Rendered => "rendered",
-            SlidingPuzzleImageOutcome::Cached => "cached",
-            SlidingPuzzleImageOutcome::Failed => "failed",
-        }
-    }
-
-    fn sliding_puzzle_images_total() -> &'static Counter<u64> {
+    fn sliding_puzzle_art_loads_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
             meter()
-                .u64_counter("late_ssh_sliding_puzzle_images_total")
+                .u64_counter("late_ssh_sliding_puzzle_art_loads_total")
                 .with_description(
-                    "Sliding Puzzle image stages finished; a run of failed is the artwork CDN refusing us",
+                    "Sliding Puzzle daily art loads: a gallery piece featured, an empty backlog, or a failure",
                 )
                 .build()
         })
     }
 
-    /// One Sliding Puzzle image stage (Chafa preview or native cell set)
-    /// finished, from the cache or the encoder, or failed.
-    pub fn record_sliding_puzzle_image(
-        stage: SlidingPuzzleImageStage,
-        outcome: SlidingPuzzleImageOutcome,
-    ) {
-        sliding_puzzle_images_total().add(
+    /// One session asked for the day's Sliding Puzzle art.
+    pub fn record_sliding_puzzle_art(load: SlidingPuzzleArtLoad) {
+        sliding_puzzle_art_loads_total().add(
             1,
-            &[
-                KeyValue::new("stage", sliding_puzzle_image_stage_label(stage)),
-                KeyValue::new("outcome", sliding_puzzle_image_outcome_label(outcome)),
-            ],
+            &[KeyValue::new("outcome", sliding_puzzle_art_load_label(load))],
         );
     }
 
@@ -1445,7 +1429,7 @@ mod inner {
         SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
-    use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
+    use super::SlidingPuzzleArtLoad;
 
     pub fn record_ssh_connection() {}
     pub fn record_ssh_connection_rejected(_reason: SshRejectReason) {}
@@ -1468,11 +1452,7 @@ mod inner {
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}
     pub fn record_share_card(_kind: ShareCardKind) {}
-    pub fn record_sliding_puzzle_image(
-        _stage: SlidingPuzzleImageStage,
-        _outcome: SlidingPuzzleImageOutcome,
-    ) {
-    }
+    pub fn record_sliding_puzzle_art(_load: SlidingPuzzleArtLoad) {}
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_pool_shot(_outcome: PoolShotOutcome) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
