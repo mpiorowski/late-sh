@@ -17,7 +17,8 @@ use crate::app::{
         },
         pool_core::{
             cue::{PowerBand, ShotMode},
-            shot::Shot,
+            shot::{Shot, Timeline},
+            sim,
             table_3d::Eye,
         },
     },
@@ -105,6 +106,49 @@ pub struct DailyState {
 }
 
 /// Full-screen correspondence board (`Screen::DailyMatch`).
+/// What one event off the daily feed did to this session.
+///
+/// The feed is process-wide: every session on the replica receives every
+/// event, and most of them are about matches this session is not in and is
+/// not watching. So an event reports whether it moved something *here*, and
+/// the tick repaints on that rather than on an event having arrived at all.
+///
+/// The distinction only started to matter when pool added `AimChanged`, which
+/// is the first event on this feed that arrives many times a second: repainting
+/// every session for one of them means one player lining up a shot rebuilds a
+/// frame for everybody on the replica, eight times a second, most of whom are
+/// in a chat room or a door game.
+struct EventEffect {
+    banner: Option<Banner>,
+    changed: bool,
+}
+
+impl EventEffect {
+    /// Nothing this session draws is any different for having seen it.
+    fn ignored() -> Self {
+        Self {
+            banner: None,
+            changed: false,
+        }
+    }
+
+    /// Something moved, and there is a banner to raise for it.
+    fn raising(banner: Banner) -> Self {
+        Self {
+            banner: Some(banner),
+            changed: true,
+        }
+    }
+
+    /// Something may have moved, with nothing to say about it.
+    fn touched(changed: bool) -> Self {
+        Self {
+            banner: None,
+            changed,
+        }
+    }
+}
+
 pub struct DailyBoardState {
     pub match_id: Uuid,
     /// You aren't a player in this match: the board is read-only. No cursor,
@@ -141,6 +185,10 @@ pub struct DailyBoardState {
     /// it, so opening a match does not replay the shot that happened before
     /// you got there — only what arrives while you are watching.
     pub pool_animated: Option<usize>,
+    /// A shot being re-simulated for playback on a blocking thread. The tick
+    /// path does not run physics (root `CONTEXT.md` §2.5), so the animation is
+    /// asked for here and collected a tick or two later.
+    timeline_rx: Option<oneshot::Receiver<Timeline>>,
     /// The last aim this session broadcast, and when. Kept so an unchanged
     /// draft costs nothing and a changing one is rate-limited.
     pub pool_shared: Option<PoolAimShare>,
@@ -483,7 +531,7 @@ impl DailyState {
     /// (board, lobby glow, turn markers).
     pub fn tick(&mut self) -> DailyTick {
         let mut banner = None;
-        let mut changed = !self.event_rx.is_empty();
+        let mut changed = false;
         if self.snapshot_rx.has_changed().unwrap_or(false) {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
             self.notify_turn_edges();
@@ -492,11 +540,15 @@ impl DailyState {
         loop {
             match self.event_rx.try_recv() {
                 Ok(event) => {
-                    // Every event on this feed changes something the board or
-                    // the panel is showing — an aim update in particular has
-                    // no banner and no reload, and repaints or it is invisible.
-                    changed = true;
-                    if let Some(b) = self.apply_event(event) {
+                    // Each event says whether it moved anything *this* session
+                    // draws, and the repaint follows that rather than the mere
+                    // arrival of an event. The feed is process-wide, so most of
+                    // what lands here is somebody else's match — and an aim
+                    // update, the one event that arrives many times a second,
+                    // is visible only to the session holding that board.
+                    let effect = self.apply_event(event);
+                    changed |= effect.changed;
+                    if let Some(b) = effect.banner {
                         banner = Some(b);
                     }
                 }
@@ -511,6 +563,9 @@ impl DailyState {
         if self.poll_board_load() {
             changed = true;
         }
+        if self.poll_pool_timeline() {
+            changed = true;
+        }
         if self.drive_pool_playback() {
             changed = true;
         }
@@ -522,7 +577,7 @@ impl DailyState {
         }
     }
 
-    fn apply_event(&mut self, event: DailyEvent) -> Option<Banner> {
+    fn apply_event(&mut self, event: DailyEvent) -> EventEffect {
         match event {
             DailyEvent::Error { user_id, message } if user_id == self.user_id => {
                 // A rejected action (a refused optimistic move, an expired
@@ -532,14 +587,14 @@ impl DailyState {
                     self.request_board_reload();
                 }
                 // svc errors are lowercase; the banner keeps sentence case.
-                Some(Banner::error(&format!("Daily games: {message}")))
+                EventEffect::raising(Banner::error(&format!("Daily games: {message}")))
             }
             DailyEvent::ChallengePosted {
                 game,
                 challenger_id,
                 target_username,
                 ..
-            } if challenger_id == self.user_id => Some(match target_username {
+            } if challenger_id == self.user_id => EventEffect::raising(match target_username {
                 Some(name) => {
                     Banner::success(&format!("Daily {} challenge sent to @{name}", game.label()))
                 }
@@ -556,11 +611,13 @@ impl DailyState {
                 outcome,
                 result,
             } => {
+                let mut reloaded = false;
                 if self.board.as_ref().is_some_and(|b| b.match_id == match_id) {
                     self.request_board_reload();
+                    reloaded = true;
                 }
                 let playing = challenger_id == self.user_id || opponent_id == Some(self.user_id);
-                match outcome {
+                let banner = match outcome {
                     DailyFinishOutcome::Won { user_id, payout } if user_id == self.user_id => {
                         self.own_win = true;
                         // The payout was settled before this event was sent,
@@ -601,7 +658,11 @@ impl DailyState {
                         game.label()
                     ))),
                     DailyFinishOutcome::Won { .. } | DailyFinishOutcome::Draw => None,
-                }
+                };
+                // A match you are not in, finishing while you are not watching
+                // it, is news for the lobby snapshot and not for this frame.
+                let changed = reloaded || banner.is_some();
+                EventEffect { banner, changed }
             }
             // Somebody is lining up a shot on a table this session has open.
             // Only the *other* player's aim is worth drawing: your own board
@@ -612,6 +673,7 @@ impl DailyState {
                 by_user_id,
                 aim,
             } => {
+                let mut drawn_on = false;
                 if by_user_id != self.user_id
                     && let Some(board) = &mut self.board
                     && board.match_id == match_id
@@ -621,17 +683,25 @@ impl DailyState {
                     | DailyGameDetail::Snooker(pool) = &mut detail.game
                 {
                     pool.watching = Some(aim);
+                    drawn_on = true;
                 }
-                None
+                // The write and the repaint are one value on purpose: an aim
+                // that repaints without being drawn is the storm, and one
+                // drawn without a repaint is an opponent's cue frozen mid-shot.
+                EventEffect::touched(drawn_on)
             }
             DailyEvent::MovePlayed { match_id, .. }
             | DailyEvent::ChallengeClaimed { match_id, .. } => {
-                if self.board.as_ref().is_some_and(|b| b.match_id == match_id) {
+                let mine = self.board.as_ref().is_some_and(|b| b.match_id == match_id);
+                if mine {
                     self.request_board_reload();
                 }
-                None
+                EventEffect::touched(mine)
             }
-            _ => None,
+            // Everything else on the feed is somebody else's match. The lobby
+            // panel and the modal read the snapshot, not this feed, and the
+            // snapshot raises its own flag at the top of the tick.
+            _ => EventEffect::ignored(),
         }
     }
 
@@ -926,6 +996,7 @@ impl DailyState {
             target_geometry: Cell::new(None),
             cue_geometry: Cell::new(None),
             pool_animated: None,
+            timeline_rx: None,
             pool_shared: None,
             pool_shared_at: None,
             pool_eye: false,
@@ -1660,12 +1731,55 @@ impl DailyState {
             None => board.pool_animated = Some(played),
             Some(seen) if played > seen => {
                 board.pool_animated = Some(played);
-                if let Some(timeline) = pool.state.last_timeline() {
-                    pool.playback = Some(PoolPlayback::new(timeline));
+                // Gathering the inputs is local memory; running the shot is
+                // not, so it goes to a blocking thread and comes back through
+                // `poll_pool_timeline`. A newer shot landing first simply
+                // replaces the receiver and the older animation is dropped,
+                // which is the same thing the board would do anyway.
+                if let Some((spec, start, strike)) = pool.state.last_shot_sim() {
+                    let (tx, rx) = oneshot::channel();
+                    tokio::task::spawn_blocking(move || {
+                        let geom = spec.geometry();
+                        let _ = tx.send(sim::simulate(spec, &geom, &start, &strike).timeline);
+                    });
+                    board.timeline_rx = Some(rx);
                 }
             }
             Some(_) => {}
         }
+    }
+
+    /// Collect a shot that finished re-simulating and start it playing.
+    /// Returns whether anything changed, like the other tick drains.
+    fn poll_pool_timeline(&mut self) -> bool {
+        let Some(board) = &mut self.board else {
+            return false;
+        };
+        let Some(rx) = &mut board.timeline_rx else {
+            return false;
+        };
+        let timeline = match rx.try_recv() {
+            Ok(timeline) => timeline,
+            Err(oneshot::error::TryRecvError::Empty) => return false,
+            // The worker is gone, so no animation is coming. The board still
+            // shows the settled rack, which is the truth either way.
+            Err(oneshot::error::TryRecvError::Closed) => {
+                board.timeline_rx = None;
+                return false;
+            }
+        };
+        board.timeline_rx = None;
+        let Some(detail) = &mut board.detail else {
+            return false;
+        };
+        let (DailyGameDetail::EightBall(pool)
+        | DailyGameDetail::NineBall(pool)
+        | DailyGameDetail::Snooker(pool)) = &mut detail.game
+        else {
+            return false;
+        };
+        pool.playback = Some(PoolPlayback::new(timeline));
+        true
     }
 
     /// Retire a finished playback. Returns whether the board is animating, so
@@ -1882,6 +1996,7 @@ pub fn result_phrase(result: &str) -> &'static str {
         DailyMatch::RESULT_EIGHT_POTTED => "eight ball",
         DailyMatch::RESULT_EARLY_EIGHT => "early eight",
         DailyMatch::RESULT_NINE_POTTED => "nine ball",
+        DailyMatch::RESULT_FRAME_WON => "frame won",
         _ => "finished",
     }
 }

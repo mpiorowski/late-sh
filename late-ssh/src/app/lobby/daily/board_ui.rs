@@ -521,6 +521,11 @@ pub(super) fn result_banner(
         DailyMatch::RESULT_NINE_POTTED => {
             ("Nine ball", winner_text(detail.row.winner_user_id), color)
         }
+        // A frame is won on points, so it names no ball: the last black is
+        // just the last ball.
+        DailyMatch::RESULT_FRAME_WON => {
+            ("Frame won", winner_text(detail.row.winner_user_id), color)
+        }
         DailyMatch::RESULT_TIMEOUT => (
             "Timeout",
             format!(

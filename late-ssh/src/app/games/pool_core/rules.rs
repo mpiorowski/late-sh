@@ -82,6 +82,9 @@ pub enum Foul {
     IllegalBreak,
     /// The cue ball was placed somewhere it may not be.
     BadPlacement,
+    /// More than one ball potted when only one was on. Snooker's alone: reds
+    /// are the exception and go down in multiples all frame.
+    MultiplePotted,
 }
 
 impl Foul {
@@ -94,6 +97,7 @@ impl Foul {
             Self::NoRail => "no rail after contact",
             Self::IllegalBreak => "illegal break",
             Self::BadPlacement => "illegal cue ball placement",
+            Self::MultiplePotted => "more than one ball potted",
         }
     }
 }
@@ -114,9 +118,14 @@ pub struct Ruling {
     pub penalty: i32,
     /// Snooker: the striker has just potted a red and is on a colour.
     pub next_on_colour: bool,
-    /// Snooker: the incoming player was left snookered by a foul and may treat
-    /// any ball as the ball on.
-    pub free_ball: bool,
+    /// Snooker: this shot fouled, so the incoming player gets a free ball *if*
+    /// the table leaves them snookered.
+    ///
+    /// Two halves of one rule, and they are split because only one of them can
+    /// be answered here: this layer never sees the table, and the table that
+    /// decides it is the one *after* `balls_to_spot` goes back up. The caller
+    /// owns that ordering (`DailyPoolState::table_after`).
+    pub free_ball_if_snookered: bool,
     /// Every ball is gone. Who won is then a matter of the score, which this
     /// layer does not keep.
     pub frame_over: bool,
@@ -136,7 +145,7 @@ impl Ruling {
             points: 0,
             penalty: 0,
             next_on_colour: false,
-            free_ball: false,
+            free_ball_if_snookered: false,
             frame_over: false,
             group_assignment: None,
             winner: None,
@@ -257,12 +266,11 @@ impl PoolRules {
         state: &GameState,
         outcome: &ShotOutcome,
         called_pocket: Option<u8>,
-        snookered: bool,
     ) -> Ruling {
         match self {
             Self::EightBall => rules_eight::judge(state, outcome, called_pocket),
             Self::NineBall => rules_nine::judge(state, outcome),
-            Self::Snooker => rules_snooker::judge(state, outcome, snookered),
+            Self::Snooker => rules_snooker::judge(state, outcome),
         }
     }
 

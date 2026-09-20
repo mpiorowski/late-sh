@@ -55,7 +55,7 @@ fn shot(first: Option<u8>, potted: &[u8]) -> ShotOutcome {
 }
 
 fn judge(state: &GameState, outcome: &ShotOutcome) -> Ruling {
-    RULES.judge(state, outcome, None, false)
+    RULES.judge(state, outcome, None)
 }
 
 #[test]

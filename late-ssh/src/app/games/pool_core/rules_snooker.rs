@@ -109,10 +109,11 @@ pub fn legal_targets(state: &GameState) -> Vec<u8> {
 
 /// Judge one shot.
 ///
-/// `snookered` is whether the *incoming* player would be left unable to hit
-/// any ball on — the caller works it out, because it needs the table geometry
-/// and this layer deliberately never sees any.
-pub fn judge(state: &GameState, outcome: &ShotOutcome, snookered: bool) -> Ruling {
+/// Whether the incoming player is left *snookered* is not answered here: it
+/// needs the table geometry this layer deliberately never sees, and it needs
+/// it after `balls_to_spot` has gone back up. A foul says a free ball is owed
+/// (`free_ball_if_snookered`) and the caller says whether the table agrees.
+pub fn judge(state: &GameState, outcome: &ShotOutcome) -> Ruling {
     let targets = legal_targets(state);
 
     // What would have been on *without* the free ball. A free ball makes every
@@ -126,10 +127,22 @@ pub fn judge(state: &GameState, outcome: &ShotOutcome, snookered: bool) -> Rulin
     };
     let on_a_red = real_on.first().copied().is_some_and(is_red);
 
+    // The ball on is one ball, and so is its value: a red while the reds are
+    // up, the lowest colour once they are gone, and — in the one phase where
+    // the striker has a choice — the colour they nominated by hitting it. A
+    // shot that touched nothing legal nominated nothing and pays the floor.
+    // Taking the dearest ball on the table instead would bill every foul in
+    // the frame's commonest position at seven.
+    let choosing = !on_a_red && real_on.len() > 1;
+    let ball_on = match choosing {
+        true => outcome.first_contact.filter(|id| real_on.contains(id)),
+        false => real_on.first().copied(),
+    };
+
     // Everything the shot did wrong, in the order a referee calls it. The
     // penalty is the value of the ball on or of the ball at fault, whichever
     // is higher, and never less than four.
-    let ball_on_value = real_on.iter().copied().map(value).max().unwrap_or(0);
+    let ball_on_value = ball_on.map(value).unwrap_or(0);
     let mut fault = None;
     let mut at_fault = ball_on_value;
 
@@ -158,6 +171,13 @@ pub fn judge(state: &GameState, outcome: &ShotOutcome, snookered: bool) -> Rulin
             }
         }
     }
+    // Only reds go down in multiples. Everywhere else there is exactly one
+    // ball on, so a second ball in the same stroke is a foul at the dearer of
+    // them, however well the rest of the shot went.
+    if fault.is_none() && !on_a_red && potted.len() > 1 {
+        fault = Some(Foul::MultiplePotted);
+        at_fault = at_fault.max(potted.iter().copied().map(value).max().unwrap_or(0));
+    }
     if fault.is_none() && potted.is_empty() && stalled_after_contact(outcome) {
         fault = Some(Foul::NoRail);
     }
@@ -176,7 +196,9 @@ pub fn judge(state: &GameState, outcome: &ShotOutcome, snookered: bool) -> Rulin
             penalty: at_fault.max(MIN_PENALTY),
             group_assignment: None,
             next_on_colour: false,
-            free_ball: snookered,
+            // Owed. Whether the table actually hides them is the caller's
+            // question, and it is asked of the re-spotted table.
+            free_ball_if_snookered: true,
             frame_over: false,
             winner: None,
         };
@@ -233,7 +255,7 @@ pub fn judge(state: &GameState, outcome: &ShotOutcome, snookered: bool) -> Rulin
         penalty: 0,
         group_assignment: None,
         next_on_colour: potted_a_red && reds_left,
-        free_ball: false,
+        free_ball_if_snookered: false,
         frame_over: nothing_left,
         winner: None,
     }

@@ -242,16 +242,29 @@ impl DailyPoolState {
         self.rack.get(CUE).is_none_or(|b| b.potted.is_some())
     }
 
-    /// Re-simulate the most recent shot for playback. `None` before the break,
-    /// and on a state whose table preset this build no longer knows.
-    pub fn last_timeline(&self) -> Option<Timeline> {
+    /// What the most recent shot would be re-simulated from: the table, the
+    /// rack it was played on, and the stroke. `None` before the break, and on
+    /// a state whose table preset this build no longer knows.
+    ///
+    /// Split from the simulation itself because the caller that wants the
+    /// animation is a session tick, which reads local memory and does not run
+    /// physics. Gathering the inputs is the cheap half and can happen there;
+    /// `simulate` is the other half and belongs on a blocking thread.
+    pub fn last_shot_sim(&self) -> Option<(&'static TableSpec, RackState, Strike)> {
         let record = self.shots.last()?;
         let spec = self.spec().ok()?;
-        let geom = spec.geometry();
         let mut start = self.prev_rack.clone()?;
         apply_placement(&mut start, record.shot.place).ok()?;
         let strike = strike_of(&record.shot).ok()?;
-        Some(sim::simulate(spec, &geom, &start, &strike).timeline)
+        Some((spec, start, strike))
+    }
+
+    /// Re-simulate the most recent shot for playback, here and now. Only for
+    /// callers that are already off the tick path: a shot is thousands of
+    /// integration steps.
+    pub fn last_timeline(&self) -> Option<Timeline> {
+        let (spec, start, strike) = self.last_shot_sim()?;
+        Some(sim::simulate(spec, &spec.geometry(), &start, &strike).timeline)
     }
 
     /// Play one shot: place the cue ball if asked, strike, simulate, judge,
@@ -272,6 +285,10 @@ impl DailyPoolState {
         // nothing to animate.
         if shot.play_again {
             ensure!(
+                self.rules.scores(),
+                "handing the shot back is snooker's rule, not this game's"
+            );
+            ensure!(
                 self.may_return,
                 "there is nothing to hand back: the last shot was not a foul"
             );
@@ -279,7 +296,12 @@ impl DailyPoolState {
             self.may_return = false;
             self.free_ball = false;
             self.on_colour = false;
-            self.ball_in_hand = None;
+            // Handing the shot back does not take the cue ball out of the
+            // pocket. If the foul was an in-off the offender plays it again
+            // from in hand, which is both the rule and the only way the frame
+            // can go on at all: with no cue ball and no placement they could
+            // neither shoot nor place, and the clock would run them out.
+            self.ball_in_hand = self.must_place().then_some(BallInHand::TheD);
             self.turn = rules::other_seat(seat);
             self.shots.push(PoolShotRecord {
                 seat,
@@ -324,33 +346,25 @@ impl DailyPoolState {
         }
 
         let strike = strike_of(shot)?;
-        let result = sim::simulate(spec, &geom, &start, &strike);
+        let sim::SimResult {
+            rack: settled,
+            outcome,
+            ..
+        } = sim::simulate(spec, &geom, &start, &strike);
 
-        // Whether the incoming player would be left unable to hit a ball on —
-        // which is what decides a free ball, and which the rules layer cannot
-        // work out for itself because it never sees the table. Only asked when
-        // it could matter, since it walks every ball against every other.
-        let snookered = self.rules.scores() && {
-            let mut after = before.clone();
-            after.rack = result.rack.clone();
-            after.turn = rules::other_seat(seat);
-            after.on_colour = false;
-            after.free_ball = false;
-            let on = self.rules.legal_targets(&after);
-            rules_snooker::is_snookered(spec, &geom, &after.rack, &on)
-        };
-        let ruling = self
-            .rules
-            .judge(&before, &result.outcome, shot.called_pocket, snookered);
+        let ruling = self.rules.judge(&before, &outcome, shot.called_pocket);
+        // The rack the incoming player will actually face, and whether they
+        // are snookered on it. The unrounded, unspotted `settled` is consumed
+        // here on purpose: it is not a table anybody ever plays.
+        let (rack, snookered) = self.table_after(
+            spec,
+            &geom,
+            settled.rounded(PERSIST_DECIMALS),
+            &ruling,
+            seat,
+        );
 
-        let mut rack = result.rack.rounded(PERSIST_DECIMALS);
-        // Spot what the ruling sent back up before anything else looks at the
-        // rack: the incoming player's placement has to see the spotted balls.
-        for id in &ruling.balls_to_spot {
-            spot_ball(spec, &geom, &mut rack, *id);
-        }
-
-        let label = shot_label(&result.outcome, &ruling, self.rules);
+        let label = shot_label(&outcome, &ruling, self.rules);
         self.prev_rack = Some(self.rack.clone());
         self.rack = rack;
         self.groups = ruling.group_assignment.or(self.groups);
@@ -359,10 +373,11 @@ impl DailyPoolState {
         self.scores[seat as usize] += ruling.points;
         self.scores[rules::other_seat(seat) as usize] += ruling.penalty;
         self.on_colour = ruling.next_on_colour;
-        self.free_ball = ruling.free_ball;
+        self.free_ball = snookered;
         // The offer to hand the shot straight back only exists after a foul,
-        // and only until the fouled player does something with it.
-        self.may_return = ruling.foul.is_some();
+        // only until the fouled player does something with it, and only in
+        // the ruleset that has the rule.
+        self.may_return = ruling.foul.is_some() && self.rules.scores();
         self.winner = match (ruling.winner, ruling.frame_over) {
             (Some(seat), _) => Some(seat),
             // A frame is not won by potting the last ball; it is won by being
@@ -385,12 +400,51 @@ impl DailyPoolState {
         });
 
         Ok(PoolShotResult {
-            outcome: result.outcome,
+            outcome,
             label,
             foul: ruling.foul,
             winner: self.winner,
             finished: self.is_finished(),
         })
+    }
+
+    /// The table the incoming player will actually face, and whether they are
+    /// snookered on it.
+    ///
+    /// **The order is the whole point.** Everything the ruling sent back up
+    /// goes on the table *before* anyone asks whether the next player can see
+    /// a ball on. Ask the rack the simulator left and every colour this same
+    /// foul is about to re-spot is missing from it — which is both an
+    /// obstruction that is not counted and, in the colours-only phase, the
+    /// wrong ball taken as the ball on. That rack is not a table anybody ever
+    /// plays, so it takes it by value and gives back the one that is.
+    ///
+    /// Snookered is only ever asked when a free ball is on the table, which
+    /// is to say after a foul in snooker: it walks every ball against every
+    /// other, and the answer is not wanted anywhere else.
+    fn table_after(
+        &self,
+        spec: &TableSpec,
+        geom: &Geometry,
+        settled: RackState,
+        ruling: &rules::Ruling,
+        seat: Seat,
+    ) -> (RackState, bool) {
+        let mut rack = settled;
+        for id in &ruling.balls_to_spot {
+            spot_ball(spec, geom, &mut rack, *id);
+        }
+        if !ruling.free_ball_if_snookered {
+            return (rack, false);
+        }
+        let mut after = self.game_state();
+        after.rack = rack.clone();
+        after.turn = rules::other_seat(seat);
+        after.on_colour = false;
+        after.free_ball = false;
+        let on = self.rules.legal_targets(&after);
+        let snookered = rules_snooker::is_snookered(spec, geom, &rack, &on);
+        (rack, snookered)
     }
 }
 

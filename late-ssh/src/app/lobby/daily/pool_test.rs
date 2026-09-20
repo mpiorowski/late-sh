@@ -12,6 +12,7 @@ use super::*;
 use crate::app::games::pool_core::{
     cue::{MAX_SPEED, MISCUE_LIMIT, PowerBand, ShotMode},
     rules::{self, PoolRules},
+    rules_snooker::{BLACK, RED_FIRST},
 };
 
 fn players() -> (Uuid, Uuid) {
@@ -32,6 +33,14 @@ fn break_shot() -> Shot {
         speed: 7.0,
         called_pocket: None,
         play_again: false,
+    }
+}
+
+/// The fouled player handing the shot straight back to the offender.
+fn hand_back() -> Shot {
+    Shot {
+        play_again: true,
+        ..break_shot()
     }
 }
 
@@ -236,6 +245,125 @@ fn a_scratch_leaves_the_cue_ball_down_until_it_is_placed() {
         state.ball_in_hand.is_none() || state.ball_in_hand.is_some(),
         "the next ruling owns this field"
     );
+}
+
+#[test]
+fn handing_a_shot_back_is_snookers_alone() {
+    // Eight-ball and nine-ball have no such rule: a foul there is worth ball
+    // in hand and nothing else. The offer must never be made, and a shot that
+    // claims it anyway has to be refused rather than quietly taken — it would
+    // cost the fouled player the ball in hand they were just awarded.
+    for rules in [PoolRules::EightBall, PoolRules::NineBall] {
+        let mut state = state(rules);
+        state.may_return = true;
+        assert!(
+            state.apply_shot(0, &hand_back()).is_err(),
+            "{rules:?} has no play-again, whatever the state says"
+        );
+    }
+}
+
+#[test]
+fn handing_back_a_scratch_leaves_the_offender_a_ball_to_place() {
+    let mut state = state(PoolRules::Snooker);
+    // Seat 0 went in off, so seat 1 is in hand in the D and may either play
+    // it or hand it straight back. Set up by hand: what is under test is the
+    // bookkeeping, not the shot that got here.
+    let cue = state
+        .rack
+        .balls
+        .iter_mut()
+        .find(|b| b.id == CUE)
+        .expect("cue ball");
+    cue.potted = Some(0);
+    state.ball_in_hand = Some(BallInHand::TheD);
+    state.may_return = true;
+    state.turn = 1;
+
+    state
+        .apply_shot(1, &hand_back())
+        .expect("handing it back is legal");
+
+    assert_eq!(state.turn, 0, "the offender is back at the table");
+    assert!(
+        state.must_place(),
+        "and the cue ball is still in the pocket"
+    );
+    assert_eq!(
+        state.ball_in_hand,
+        Some(BallInHand::TheD),
+        "so they must still be in hand, or neither player can ever move again"
+    );
+
+    // Which is the whole point: the frame goes on.
+    let spec = state.spec().expect("known table");
+    let in_the_d = [
+        rules::head_string(spec) - spec.d_radius * 0.5,
+        spec.width / 2.0,
+    ];
+    let placed = Shot {
+        place: Some(in_the_d),
+        ..break_shot()
+    };
+    state
+        .apply_shot(0, &placed)
+        .expect("the offender can play from in hand");
+}
+
+#[test]
+fn a_free_ball_is_judged_after_the_colours_go_back_up() {
+    // A foul that pots a colour sends it straight back up, so it is an
+    // obstruction again by the time the next player comes to the table. Judge
+    // the free ball against the rack the simulator left, before the re-spots,
+    // and the line to the ball on looks clear when it is not.
+    let state = state(PoolRules::Snooker);
+    let spec = state.spec().expect("known table");
+    let geom = spec.geometry();
+    let black_spot = rack::colour_spots(spec)
+        .into_iter()
+        .find(|(id, _)| *id == BLACK)
+        .map(|(_, at)| at)
+        .expect("the black has a spot");
+
+    // Strip the table to the cue ball and one red, facing each other across
+    // the black's spot with the black itself down.
+    let mut settled = state.rack.clone();
+    for ball in settled.balls.iter_mut() {
+        ball.potted = match ball.id {
+            CUE | RED_FIRST => None,
+            _ => Some(0),
+        };
+        ball.pos = match ball.id {
+            CUE => [black_spot[0], black_spot[1] - 0.3],
+            RED_FIRST => [black_spot[0], black_spot[1] + 0.3],
+            _ => ball.pos,
+        };
+    }
+
+    let owed = rules::Ruling {
+        foul: Some(Foul::WrongBallFirst),
+        free_ball_if_snookered: true,
+        balls_to_spot: vec![BLACK],
+        ..rules::Ruling::pass()
+    };
+    let (spotted, snookered) = state.table_after(spec, &geom, settled.clone(), &owed, 0);
+    assert!(
+        spotted.get(BLACK).is_some_and(|b| b.potted.is_none()),
+        "the black goes back up"
+    );
+    assert!(
+        snookered,
+        "and it stands between them, so the free ball is owed"
+    );
+
+    // The same foul with nothing to re-spot leaves the line open, which is
+    // what makes the assertion above about the order and not the geometry.
+    let nothing_back = rules::Ruling {
+        balls_to_spot: Vec::new(),
+        ..owed.clone()
+    };
+    let (_, snookered) = state.table_after(spec, &geom, settled, &nothing_back, 0);
+    assert!(!snookered, "nothing is in the way when nothing comes back");
 }
 
 #[test]

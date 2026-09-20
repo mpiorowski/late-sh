@@ -63,7 +63,7 @@ fn a_frame_alternates_reds_and_colours_then_stops() {
 
     // Pot one and the colours are on — any of them, which is what "nominate"
     // means when the nomination is the ball you hit.
-    let ruling = RULES.judge(&state, &shot(Some(RED_FIRST), &[RED_FIRST]), None, false);
+    let ruling = RULES.judge(&state, &shot(Some(RED_FIRST), &[RED_FIRST]), None);
     assert_eq!(ruling.turn, Turn::Keep);
     assert_eq!(ruling.points, 1);
     assert!(ruling.next_on_colour);
@@ -74,7 +74,7 @@ fn a_frame_alternates_reds_and_colours_then_stops() {
     assert_eq!(on, COLOURS.to_vec(), "any colour, and only a colour");
 
     // A colour potted off a red goes straight back on its spot.
-    let ruling = RULES.judge(&state, &shot(Some(BLACK), &[BLACK]), None, false);
+    let ruling = RULES.judge(&state, &shot(Some(BLACK), &[BLACK]), None);
     assert_eq!(ruling.points, 7);
     assert_eq!(ruling.balls_to_spot, vec![BLACK]);
     assert!(!ruling.next_on_colour, "back on a red");
@@ -83,7 +83,7 @@ fn a_frame_alternates_reds_and_colours_then_stops() {
     pot(&mut state, &(RED_FIRST..=RED_LAST).collect::<Vec<_>>());
     state.on_colour = false;
     assert_eq!(RULES.legal_targets(&state), vec![YELLOW]);
-    let ruling = RULES.judge(&state, &shot(Some(YELLOW), &[YELLOW]), None, false);
+    let ruling = RULES.judge(&state, &shot(Some(YELLOW), &[YELLOW]), None);
     assert_eq!(ruling.points, 2);
     assert!(
         ruling.balls_to_spot.is_empty(),
@@ -101,7 +101,7 @@ fn the_frame_ends_when_the_last_ball_goes() {
     pot(&mut state, &[YELLOW, GREEN, BROWN, BLUE, PINK]);
     assert_eq!(RULES.legal_targets(&state), vec![BLACK]);
 
-    let ruling = RULES.judge(&state, &shot(Some(BLACK), &[BLACK]), None, false);
+    let ruling = RULES.judge(&state, &shot(Some(BLACK), &[BLACK]), None);
     assert!(ruling.frame_over, "nothing left to pot");
     assert_eq!(ruling.points, 7);
     assert!(
@@ -115,7 +115,7 @@ fn a_foul_pays_the_ball_on_or_the_ball_at_fault() {
     let state = frame();
 
     // Missing everything is the cheapest foul there is: four.
-    let ruling = RULES.judge(&state, &shot(None, &[]), None, false);
+    let ruling = RULES.judge(&state, &shot(None, &[]), None);
     assert_eq!(ruling.foul, Some(Foul::NoContact));
     assert_eq!(ruling.penalty, 4);
     assert_eq!(ruling.points, 0);
@@ -123,14 +123,14 @@ fn a_foul_pays_the_ball_on_or_the_ball_at_fault() {
 
     // Hitting the black when you are on a red costs seven, not four: the
     // penalty is the value of whichever ball is higher.
-    let ruling = RULES.judge(&state, &shot(Some(BLACK), &[]), None, false);
+    let ruling = RULES.judge(&state, &shot(Some(BLACK), &[]), None);
     assert_eq!(ruling.foul, Some(Foul::WrongBallFirst));
     assert_eq!(ruling.penalty, 7);
 
     // And potting the cue ball hands over the D as well as the points.
     let mut scratched = shot(Some(RED_FIRST), &[]);
     scratched.cue_potted = true;
-    let ruling = RULES.judge(&state, &scratched, None, false);
+    let ruling = RULES.judge(&state, &scratched, None);
     assert_eq!(ruling.foul, Some(Foul::Scratch));
     assert_eq!(ruling.ball_in_hand, Some(BallInHand::TheD));
 }
@@ -143,7 +143,7 @@ fn a_red_potted_on_a_foul_stays_down_and_a_colour_goes_back_up() {
     let state = frame();
     let mut fouled = shot(Some(BLACK), &[BLACK, RED_FIRST]);
     fouled.cue_potted = false;
-    let ruling = RULES.judge(&state, &fouled, None, false);
+    let ruling = RULES.judge(&state, &fouled, None);
 
     assert!(ruling.foul.is_some());
     assert_eq!(ruling.balls_to_spot, vec![BLACK]);
@@ -164,20 +164,89 @@ fn a_free_ball_makes_anything_the_ball_on_and_scores_it_as_the_ball_on() {
 
     // Potting the black as a free ball while on a red scores *one*, not seven
     // — the free ball is worth the value of the ball it stands in for.
-    let ruling = RULES.judge(&state, &shot(Some(BLACK), &[BLACK]), None, false);
+    let ruling = RULES.judge(&state, &shot(Some(BLACK), &[BLACK]), None);
     assert!(ruling.foul.is_none(), "a free ball is not a foul");
     assert_eq!(ruling.points, 1, "worth the red it stood in for");
     assert_eq!(ruling.turn, Turn::Keep);
 }
 
 #[test]
-fn a_foul_that_leaves_them_snookered_awards_a_free_ball() {
+fn a_foul_is_what_owes_a_free_ball_and_the_table_settles_it() {
     let state = frame();
-    let clear = RULES.judge(&state, &shot(None, &[]), None, false);
-    assert!(!clear.free_ball, "a plain foul is only a foul");
+    let clean = RULES.judge(&state, &shot(Some(RED_FIRST), &[RED_FIRST]), None);
+    assert!(!clean.free_ball_if_snookered, "a legal pot owes nothing");
 
-    let snookered = RULES.judge(&state, &shot(None, &[]), None, true);
-    assert!(snookered.free_ball, "and one that hides them is worse");
+    let fouled = RULES.judge(&state, &shot(None, &[]), None);
+    assert_eq!(fouled.foul, Some(Foul::NoContact));
+    assert!(
+        fouled.free_ball_if_snookered,
+        "a foul owes a free ball if the table turns out to hide them — and \
+         whether it does is asked of the table *after* the re-spots, which is \
+         why this layer cannot answer it"
+    );
+}
+
+#[test]
+fn a_foul_while_on_a_colour_pays_the_colour_that_was_nominated() {
+    // Straight after a red the striker is on a colour of their choosing, and
+    // the one they hit is the one they nominated. Fouling then costs what
+    // *that* colour is worth, not what the dearest ball on the table is
+    // worth — otherwise every foul in the frame's commonest position is
+    // billed at seven for as long as the black is up.
+    let mut state = frame();
+    pot(&mut state, &[RED_FIRST]);
+    state.on_colour = true;
+
+    let mut scratched = shot(Some(YELLOW), &[]);
+    scratched.cue_potted = true;
+    let ruling = RULES.judge(&state, &scratched, None);
+    assert_eq!(ruling.foul, Some(Foul::Scratch));
+    assert_eq!(ruling.penalty, 4, "the yellow was on, not the black");
+
+    let mut scratched = shot(Some(BLUE), &[]);
+    scratched.cue_potted = true;
+    let ruling = RULES.judge(&state, &scratched, None);
+    assert_eq!(ruling.penalty, 5, "nominate the blue and the blue is on");
+
+    // Touching nothing nominates nothing, so it pays the floor.
+    let ruling = RULES.judge(&state, &shot(None, &[]), None);
+    assert_eq!(ruling.foul, Some(Foul::NoContact));
+    assert_eq!(ruling.penalty, 4);
+
+    // Once the reds are gone the table decides the ball on, not the striker,
+    // so the value is the lowest colour left however the shot went.
+    let mut endgame = frame();
+    pot(&mut endgame, &(RED_FIRST..=RED_LAST).collect::<Vec<_>>());
+    pot(&mut endgame, &[YELLOW, GREEN]);
+    let ruling = RULES.judge(&endgame, &shot(None, &[]), None);
+    assert_eq!(ruling.penalty, 4, "the brown is on and a brown is four");
+}
+
+#[test]
+fn only_reds_go_down_in_multiples() {
+    // Two reds in one stroke is a good shot worth two. Two colours is a foul
+    // however well the rest of it went: there is only ever one colour on.
+    let mut state = frame();
+    let ruling = RULES.judge(&state, &shot(Some(RED_FIRST), &[RED_FIRST, RED_LAST]), None);
+    assert!(ruling.foul.is_none(), "reds are the exception");
+    assert_eq!(ruling.points, 2);
+
+    pot(&mut state, &[RED_FIRST]);
+    state.on_colour = true;
+    let ruling = RULES.judge(&state, &shot(Some(YELLOW), &[YELLOW, BLACK]), None);
+    assert_eq!(
+        ruling.foul,
+        Some(Foul::MultiplePotted),
+        "a second colour is a foul"
+    );
+    assert_eq!(ruling.points, 0, "and a foul scores nothing");
+    assert_eq!(ruling.penalty, 7, "at the dearest ball involved");
+    assert_eq!(ruling.turn, Turn::Pass);
+    assert_eq!(
+        ruling.balls_to_spot,
+        vec![YELLOW, BLACK],
+        "both go back up while a red is on the table"
+    );
 }
 
 #[test]

@@ -15,7 +15,7 @@ use crate::app::chat::svc::GildRefusal;
 use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::games::chips::svc::RoundRefusal;
-use crate::app::lobby::daily::svc::DailyWinPayout;
+use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome};
 use crate::app::pot::svc::PotRefusal;
 
 /// Why the render loop drew a frame. The loop can only distinguish its two
@@ -198,8 +198,8 @@ mod inner {
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
         GildTier, NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult,
-        PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult, VizWireBands,
+        PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason,
+        SummaryResult, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
@@ -644,6 +644,18 @@ mod inner {
         })
     }
 
+    fn pool_shots_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pool_shots_total")
+                .with_description(
+                    "Daily pool shots by how they ended. `truncated` is a physics bug reaching production: the simulator gave up at its guard rails and the half-played rack was still written as the match",
+                )
+                .build()
+        })
+    }
+
     fn news_shares_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -987,6 +999,25 @@ mod inner {
         daily_win_payouts_total().add(
             1,
             &[KeyValue::new("outcome", daily_win_payout_label(payout))],
+        );
+    }
+
+    fn pool_shot_outcome_label(outcome: PoolShotOutcome) -> &'static str {
+        match outcome {
+            PoolShotOutcome::Settled => "settled",
+            PoolShotOutcome::Truncated => "truncated",
+            PoolShotOutcome::Rejected => "rejected",
+        }
+    }
+
+    /// One daily pool shot reached the end of the only path it has. `settled`
+    /// is the denominator the other two are read against: a little `rejected`
+    /// is players and clients disagreeing, a rising `rejected` is a desync,
+    /// and any `truncated` at all is the physics.
+    pub fn record_pool_shot(outcome: PoolShotOutcome) {
+        pool_shots_total().add(
+            1,
+            &[KeyValue::new("outcome", pool_shot_outcome_label(outcome))],
         );
     }
 
@@ -1378,8 +1409,8 @@ mod inner {
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
         GildTier, NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult,
-        PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult, VizWireBands,
+        PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason,
+        SummaryResult, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
@@ -1410,6 +1441,7 @@ mod inner {
     ) {
     }
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
+    pub fn record_pool_shot(_outcome: PoolShotOutcome) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}

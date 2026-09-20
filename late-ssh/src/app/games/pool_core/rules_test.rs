@@ -254,7 +254,7 @@ fn play_out(rules: PoolRules, seed: u64) -> Option<u32> {
         } else {
             None
         };
-        let ruling = rules.judge(&state, &result.outcome, call, false);
+        let ruling = rules.judge(&state, &result.outcome, call);
 
         state.rack = result.rack;
         state.shots_taken += 1;

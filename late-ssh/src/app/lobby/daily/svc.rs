@@ -154,6 +154,26 @@ impl DailyFinishedItem {
 /// it would make the lobby a faucet. Both players' moves count.
 pub const DAILY_WIN_MIN_MOVES: u64 = 5;
 
+/// What became of one pool shot, as the one counter that watches the
+/// simulator reports it. Every arm is a metric label.
+///
+/// `Truncated` is the one that matters and the reason this exists: `sim`'s
+/// step and time guard rails are there so a physics bug is a truncated shot
+/// rather than a hung session, but a truncated shot is still written down as
+/// the authoritative rack. Without a count, the guard rail trips in silence
+/// and the only symptom is a table that settled somewhere strange. It should
+/// be flat zero; anything else is a bug in the physics, not in the play.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoolShotOutcome {
+    /// Simulated to a standstill and written.
+    Settled,
+    /// Hit `MAX_STEPS` or `MAX_TIME` and was cut short.
+    Truncated,
+    /// Refused before it changed anything: an illegal stroke, a shot out of
+    /// turn, or one superseded by a write that landed first.
+    Rejected,
+}
+
 /// What the winner's chips did. Decided inline on finish so the banner tells
 /// the truth, stored on the row (`daily_matches.win_payout`) so the lingering
 /// result row can tell an offline winner the same thing; every arm is one
@@ -280,6 +300,79 @@ pub struct DailyMoveRecord {
     pub to: usize,
     pub label: String,
     pub at: DateTime<Utc>,
+}
+
+/// One simulated pool shot, decided and ready to be written.
+///
+/// It exists because the two halves of a shot want different threads: working
+/// out what the shot did is arithmetic (a break is a few thousand integration
+/// steps), and writing it down is I/O. The first half runs on a blocking
+/// thread with no database connection in hand, and hands this across.
+struct PoolShotCommit {
+    row: DailyMatch,
+    game: DailyGame,
+    shooter: Uuid,
+    base_revision: i64,
+    revision: u64,
+    state_value: serde_json::Value,
+    /// Who is on after this shot. Potting keeps the table, so it can be the
+    /// shooter again.
+    next_turn: Uuid,
+    label: String,
+    /// The simulator cut this shot short at its guard rails. Carried out to
+    /// the task boundary, which is where the whole story of a shot is told.
+    truncated: bool,
+    /// `Some((winner, result))` when the shot ended the match. A snooker frame
+    /// can run out of balls with the scores level, which neither pool game can
+    /// do, so the end of a match and the existence of a winner are two
+    /// separate questions.
+    finished: Option<(Option<Uuid>, &'static str)>,
+}
+
+/// Simulate and judge one shot. Pure, and the expensive half of playing one.
+fn prepare_pool_shot(
+    row: DailyMatch,
+    game: DailyGame,
+    user_id: Uuid,
+    shot: &Shot,
+) -> Result<PoolShotCommit> {
+    let mut state = DailyPoolState::parse(&row.state)?;
+    let seat = state
+        .seat_of(user_id)
+        .ok_or_else(|| anyhow::anyhow!("you are not playing in this match"))?;
+    // The prelude checked the row's turn; the state is the deeper truth, so a
+    // disagreement must fail loudly rather than corrupt the rack.
+    ensure!(state.turn == seat, "not your turn");
+    let base_revision = state.revision as i64;
+    state.revision = state.revision.saturating_add(1);
+    let played = state.apply_shot(seat, shot)?;
+    let finished = match (played.finished, played.winner) {
+        (false, _) => None,
+        (true, Some(winner)) => {
+            let result = match game {
+                // Losing on the eight is its own result: the loser is the one
+                // who potted it, so "eight potted" would read as a win.
+                DailyGame::EightBall if winner == seat => DailyMatch::RESULT_EIGHT_POTTED,
+                DailyGame::EightBall => DailyMatch::RESULT_EARLY_EIGHT,
+                DailyGame::Snooker => DailyMatch::RESULT_FRAME_WON,
+                _ => DailyMatch::RESULT_NINE_POTTED,
+            };
+            Some((Some(state.user_of(winner)), result))
+        }
+        (true, None) => Some((None, DailyMatch::RESULT_DRAW)),
+    };
+    Ok(PoolShotCommit {
+        truncated: played.outcome.truncated,
+        state_value: serde_json::to_value(&state)?,
+        next_turn: state.turn_user(),
+        revision: state.revision,
+        row,
+        game,
+        shooter: user_id,
+        base_revision,
+        label: played.label,
+        finished,
+    })
 }
 
 impl DailyChessState {
@@ -856,21 +949,58 @@ impl DailyService {
     /// backgammon this cannot ride the two-usize `play_move`, and the server
     /// re-simulates from the stored rack rather than trusting any client
     /// result — the physics is the referee.
+    /// The orchestration boundary for a shot, and the one place every way one
+    /// can end is named: counted, logged where a human needs to see it, and
+    /// reported back to the player who played it.
     pub fn play_pool_shot_task(&self, user_id: Uuid, match_id: Uuid, shot: Shot) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.play_pool_shot(user_id, match_id, shot).await {
-                tracing::error!(error = ?e, %user_id, %match_id, "failed to play daily pool shot");
-                svc.send_error(user_id, &e);
+            let outcome = match svc.play_pool_shot(user_id, match_id, shot).await {
+                Ok(outcome) => outcome,
+                Err(e) => {
+                    tracing::error!(error = ?e, %user_id, %match_id, "failed to play daily pool shot");
+                    svc.send_error(user_id, &e);
+                    PoolShotOutcome::Rejected
+                }
+            };
+            if outcome == PoolShotOutcome::Truncated {
+                // The rack this wrote is whatever the shot had reached when
+                // the loop gave up, and it is now the match. Nobody upstream
+                // is watching a spawned task, so it says so here.
+                tracing::error!(
+                    %user_id,
+                    %match_id,
+                    "pool shot hit the simulator's guard rails and was cut short"
+                );
             }
+            crate::metrics::record_pool_shot(outcome);
         });
     }
 
-    pub async fn play_pool_shot(&self, user_id: Uuid, match_id: Uuid, shot: Shot) -> Result<()> {
+    pub async fn play_pool_shot(
+        &self,
+        user_id: Uuid,
+        match_id: Uuid,
+        shot: Shot,
+    ) -> Result<PoolShotOutcome> {
+        let (row, game) = {
+            let client = self.db.get().await?;
+            let (row, game) = self.move_prelude(&client, user_id, match_id).await?;
+            ensure!(game.is_pool(), "not a pool match");
+            (row, game)
+        };
+        // The physics is the expensive half of a shot, so it runs on a
+        // blocking thread rather than parking an async worker — and the pooled
+        // connection goes back before it starts rather than being held through
+        // it. Nothing between the two halves needs the row to stay locked: the
+        // write is guarded by `base_revision`, so a shot that raced another
+        // one is refused rather than applied to a rack that moved.
+        let played =
+            tokio::task::spawn_blocking(move || prepare_pool_shot(row, game, user_id, &shot))
+                .await
+                .context("pool shot simulation panicked")??;
         let client = self.db.get().await?;
-        let (row, game) = self.move_prelude(&client, user_id, match_id).await?;
-        ensure!(game.is_pool(), "not a pool match");
-        self.play_pool(&client, row, game, user_id, &shot).await
+        self.commit_pool_shot(&client, played).await
     }
 
     async fn play_chess_move(
@@ -1454,46 +1584,24 @@ impl DailyService {
     /// never an illegal *result*. Potting keeps the table, which is what stops
     /// a rack costing as many days as it has balls — a present player runs out
     /// in one sitting, and only a miss hands the clock over.
-    async fn play_pool(
+    async fn commit_pool_shot(
         &self,
         client: &tokio_postgres::Client,
-        row: DailyMatch,
-        game: DailyGame,
-        user_id: Uuid,
-        shot: &Shot,
-    ) -> Result<()> {
+        played: PoolShotCommit,
+    ) -> Result<PoolShotOutcome> {
+        let PoolShotCommit {
+            row,
+            game,
+            shooter: user_id,
+            base_revision,
+            revision,
+            state_value,
+            next_turn,
+            label,
+            truncated,
+            finished,
+        } = played;
         let match_id = row.id;
-        let mut state = DailyPoolState::parse(&row.state)?;
-        let seat = state
-            .seat_of(user_id)
-            .ok_or_else(|| anyhow::anyhow!("you are not playing in this match"))?;
-        // The prelude checked the row's turn; the state is the deeper truth,
-        // so a disagreement must fail loudly rather than corrupt the rack.
-        ensure!(state.turn == seat, "not your turn");
-        let base_revision = state.revision as i64;
-        state.revision = state.revision.saturating_add(1);
-        let played = state.apply_shot(seat, shot)?;
-        let label = played.label;
-        let state_value = serde_json::to_value(&state)?;
-
-        // A snooker frame can run out of balls with the scores level, which
-        // neither pool game can do — so the end of the match and the existence
-        // of a winner are two separate questions here.
-        let finished = match (played.finished, played.winner) {
-            (false, _) => None,
-            (true, Some(winner)) => {
-                let result = match game {
-                    // Losing on the eight is its own result: the loser is the
-                    // one who potted it, so "eight potted" would read as a win.
-                    DailyGame::EightBall if winner == seat => DailyMatch::RESULT_EIGHT_POTTED,
-                    DailyGame::EightBall => DailyMatch::RESULT_EARLY_EIGHT,
-                    DailyGame::Snooker => DailyMatch::RESULT_FRAME_WON,
-                    _ => DailyMatch::RESULT_NINE_POTTED,
-                };
-                Some((Some(state.user_of(winner)), result))
-            }
-            (true, None) => Some((None, DailyMatch::RESULT_DRAW)),
-        };
         match finished {
             Some((winner, result)) => {
                 let updated = DailyMatch::finish(
@@ -1511,13 +1619,12 @@ impl DailyService {
                     by_user_id: user_id,
                     label,
                 });
-                self.finish_events(&row, game, winner, result, state.revision)
+                self.finish_events(&row, game, winner, result, revision)
                     .await;
             }
             None => {
-                // Potting holds the table, so this can point back at the
-                // shooter — and then the deadline simply resets for them.
-                let next_turn = state.turn_user();
+                // Potting holds the table, so `next_turn` can point back at
+                // the shooter — and then the deadline simply resets for them.
                 let updated = DailyMatch::update_state(
                     client,
                     match_id,
@@ -1537,7 +1644,10 @@ impl DailyService {
             }
         }
         self.publish(client).await?;
-        Ok(())
+        Ok(match truncated {
+            true => PoolShotOutcome::Truncated,
+            false => PoolShotOutcome::Settled,
+        })
     }
 
     /// Game-agnostic: the winner is simply the other player on the row, and
