@@ -7,6 +7,7 @@ fn item_ids_are_unique() {
         .chain(frontier_items().iter())
         .chain(reaches_items().iter())
         .chain(kaelmyr_items().iter())
+        .chain(archipelago_items().iter())
         .chain(materials().iter())
         .chain(crafted().iter())
         .chain(fish().iter())
@@ -309,6 +310,40 @@ fn frontier_tier_one_beats_every_shop_slot() {
 }
 
 #[test]
+fn the_market_ladder_walks_the_three_realms_and_keeps_its_slot() {
+    // The shops' deep stock is a slice of the realm catalogs, not a second copy
+    // of them, so the ladder has to be continuous across the Frontier/Reaches/
+    // Kaelmyr handoffs and always hand back the slot it was asked for. A drift
+    // between `GENERATED_SLOTS` and `market_item_id` would silently sell a helm
+    // as a ring.
+    for slot in Slot::WEARABLE {
+        let mut last = 0;
+        for tier in 1..=MARKET_TIER_MAX {
+            let it = item(market_item_id(tier, slot))
+                .unwrap_or_else(|| panic!("market tier {tier} has no {slot:?}"));
+            assert_eq!(it.slot(), Some(slot), "tier {tier} sold the wrong slot");
+            assert!(
+                it.power() > last,
+                "{slot:?} power should climb every market tier (tier {tier}: {} after {last})",
+                it.power()
+            );
+            last = it.power();
+        }
+    }
+    // Consumables are pointedly not on the market: the shops sell gear only, so
+    // the heal curve the whole combat tuning rests on stays where it was.
+    for shop in SHOPS {
+        for slot in shop.market_slots {
+            assert!(
+                item(market_item_id(1, *slot)).is_some_and(|it| it.slot().is_some()),
+                "{} stocks only wearable slots",
+                shop.shop_name
+            );
+        }
+    }
+}
+
+#[test]
 fn every_trinket_and_ring_carries_a_visible_bonus() {
     // Reported bug: trinkets that show no bonus you can actually see. Every
     // Trinket/Ring across every catalog - hand-authored, and the three
@@ -385,9 +420,9 @@ fn crafted_gear_climbs_every_tier_and_clears_the_shop_ceiling() {
 }
 
 #[test]
-fn wildbound_adds_108_regional_finds_with_unique_resolvable_ids() {
+fn wildbound_adds_132_regional_finds_with_unique_resolvable_ids() {
     let finds = regional_finds();
-    assert_eq!(finds.len(), 108, "14+20+20 zones x 2 pieces each");
+    assert_eq!(finds.len(), 132, "14+20+12+20 zones x 2 pieces each");
     let mut ids: Vec<u32> = finds.iter().map(|it| it.id).collect();
     ids.sort_unstable();
     let n = ids.len();
@@ -442,6 +477,29 @@ fn sunderlakes_and_broceliande_finds_stay_under_the_frontier_ceiling() {
                 "{} (power {}) should stay under the Frontier's own ceiling",
                 it.name,
                 it.power()
+            );
+        }
+    }
+}
+
+#[test]
+fn thornveil_finds_ride_the_shared_realm_slot_curve() {
+    // Thornveil's finds are built from the same universal per-slot table every
+    // generated realm catalog uses, at t=41..52 (Kaelmyr's own item-power floor
+    // upward). Assert the exact stats rather than a range: a hand-mirrored copy
+    // of that table has already drifted here once, and a range wide enough to
+    // be safe is wide enough to miss the drift.
+    for zone in 0..THORNVEIL_ZONE_WORDS.len() {
+        let t = 41 + zone as i32;
+        for id in thornveil_find_ids(zone) {
+            let it = item(id).expect("thornveil find resolves");
+            let slot = it.slot().expect("a thornveil find is equipment");
+            let (attack, max_hp, armor) = realm_slot_stats(slot, t);
+            assert_eq!(
+                (it.mods.attack, it.mods.max_hp, it.mods.armor),
+                (attack, max_hp, armor),
+                "{} ({slot:?} at t={t}) should ride the shared realm slot curve",
+                it.name
             );
         }
     }

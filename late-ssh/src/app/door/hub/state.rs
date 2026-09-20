@@ -2,9 +2,13 @@
 //! (Lateania, DCSS, NetHack, Green Dragon, ...). It is a selector — a grouped
 //! sidebar of games on the left with the selected game's full landing page
 //! rendered beside it — not a scroll. Up/down (or j/k, h/l) change the
-//! selection; Enter launches the selected game. Adding a future door game is a
+//! selection; Enter launches the selected game; Ctrl+J/K (or Ctrl+Down/Up)
+//! scroll a landing too long for the terminal. Adding a future door game is a
 //! new `HubGame` entry with a `group()` arm plus a `draw_landing` for it, not a
-//! new top-level screen.
+//! new top-level screen. Minecraft is the one card with nothing to launch: the
+//! server is played from the game client, so its landing is information only.
+
+use std::cell::Cell;
 
 use crate::app::common::primitives::Screen;
 use crate::app::state::App;
@@ -12,6 +16,7 @@ use crate::app::state::App;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HubGame {
     Lateania,
+    Minecraft,
     Rebels,
     Nethack,
     Dcss,
@@ -47,12 +52,13 @@ impl HubGroup {
 }
 
 impl HubGame {
-    /// Selector order, top to bottom: the house game first (Lateania, ours
-    /// from the ground up), the roguelikes by stature, the remakes (our own
+    /// Selector order, top to bottom: the house games first (Lateania, ours
+    /// from the ground up, then the Minecraft server we host), the roguelikes by stature, the remakes (our own
     /// builds of A Dark Room and Green Dragon), then the doors (foreign upstream
     /// terminal games hosted on a PTY).
-    pub const ALL: [HubGame; 11] = [
+    pub const ALL: [HubGame; 12] = [
         HubGame::Lateania,
+        HubGame::Minecraft,
         HubGame::Dcss,
         HubGame::Nethack,
         HubGame::Brogue,
@@ -68,6 +74,7 @@ impl HubGame {
     pub fn label(self) -> &'static str {
         match self {
             HubGame::Lateania => "Lateania",
+            HubGame::Minecraft => "Minecraft",
             HubGame::Rebels => "Rebels",
             HubGame::Nethack => "NetHack",
             HubGame::Dcss => "DCSS",
@@ -83,7 +90,7 @@ impl HubGame {
 
     pub fn group(self) -> HubGroup {
         match self {
-            HubGame::Lateania => HubGroup::House,
+            HubGame::Lateania | HubGame::Minecraft => HubGroup::House,
             HubGame::Dcss | HubGame::Nethack | HubGame::Brogue => HubGroup::Roguelikes,
             HubGame::Darkroom | HubGame::GreenDragon => HubGroup::Remakes,
             HubGame::Usurper
@@ -103,6 +110,7 @@ impl HubGame {
             HubGame::Nethack => Some(DoorRcGame::Nethack),
             HubGame::Dcss => Some(DoorRcGame::Dcss),
             HubGame::Lateania
+            | HubGame::Minecraft
             | HubGame::Rebels
             | HubGame::Brogue
             | HubGame::Usurper
@@ -127,7 +135,8 @@ impl HubGame {
     /// test; `App::tick` saves and drops them once the player has been away
     /// past [`crate::app::door::game::IDLE_WINDOW`], which is what ends it.
     /// The PTY doors (Usurper, dopewars, BashQuest, Rebels, CodeKeep) end
-    /// their session on leaving the screen, so they are never live.
+    /// their session on leaving the screen, so they are never live. Minecraft
+    /// has no session here at all.
     pub(crate) fn live_screen(self, app: &App) -> Option<Screen> {
         match self {
             HubGame::Lateania => app.lateania_recently_active().then_some(Screen::Lateania),
@@ -151,7 +160,8 @@ impl HubGame {
                 .greendragon_state
                 .is_some()
                 .then_some(Screen::GreenDragon),
-            HubGame::Usurper
+            HubGame::Minecraft
+            | HubGame::Usurper
             | HubGame::Dopewars
             | HubGame::Bashquest
             | HubGame::Rebels
@@ -169,10 +179,18 @@ pub(crate) fn live_doors(app: &App) -> Vec<Screen> {
         .collect()
 }
 
-/// Per-session hub state: which game card is currently selected.
+/// Per-session hub state: which game card is selected, and how far its
+/// landing is scrolled.
 #[derive(Default)]
 pub struct State {
     selected: usize,
+    /// Rows the selected landing is scrolled down. Back to the top whenever the
+    /// selection changes.
+    scroll: u16,
+    /// How far the selected landing could scroll on the last frame, recorded by
+    /// `hub::ui::draw_games_hub`. Input has no layout to measure, so it clamps
+    /// to what was last drawn.
+    max_scroll: Cell<u16>,
 }
 
 impl State {
@@ -187,17 +205,46 @@ impl State {
     /// Move the selection one game down the sidebar, clamped at the last game.
     pub fn select_next(&mut self) {
         let last = HubGame::ALL.len() - 1;
-        self.selected = self.selected().saturating_add(1).min(last);
+        self.set_selected(self.selected().saturating_add(1).min(last));
     }
 
     /// Move the selection one game up the sidebar, clamped at the first game.
     pub fn select_prev(&mut self) {
-        self.selected = self.selected().saturating_sub(1);
+        self.set_selected(self.selected().saturating_sub(1));
     }
 
     pub fn select(&mut self, index: usize) {
         if index < HubGame::ALL.len() {
-            self.selected = index;
+            self.set_selected(index);
         }
+    }
+
+    /// A different game starts at the top of its landing; re-selecting the
+    /// same one keeps the reader's place.
+    fn set_selected(&mut self, index: usize) {
+        if index != self.selected() {
+            self.scroll = 0;
+        }
+        self.selected = index;
+    }
+
+    pub fn scroll(&self) -> u16 {
+        self.scroll
+    }
+
+    /// Where the renderer records the selected landing's scroll range.
+    pub fn max_scroll(&self) -> &Cell<u16> {
+        &self.max_scroll
+    }
+
+    /// Scroll the landing one row down, stopping at the range last drawn.
+    pub fn scroll_down(&mut self) {
+        self.scroll = self.scroll.saturating_add(1).min(self.max_scroll.get());
+    }
+
+    /// Scroll the landing one row up. Clamps to the range last drawn first, so
+    /// after a resize shortens the landing the first press already moves it.
+    pub fn scroll_up(&mut self) {
+        self.scroll = self.scroll.min(self.max_scroll.get()).saturating_sub(1);
     }
 }

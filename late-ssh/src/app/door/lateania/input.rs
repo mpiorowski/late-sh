@@ -7,10 +7,9 @@
 //   - Combat: space/x attack; 1-9 use the ability in that action-bar slot (0 is
 //     slot 10; deeper rosters cast from the Abilities panel); Q quaffs the best
 //     healing potion without leaving the view; z flee.
-//   - Mounts: G mounts/dismounts a rideable companion (one step then strides
-//     several rooms; the best beasts skip 5). Combat puts you back on foot.
-//   - Companion care: ~ feeds and tends your companion from anywhere, no
-//     stable needed - reviving one that went down mid-fight. If a wild
+//   - Companion care: G feeds and tends your own companion from anywhere
+//     (20g; four loyalty-raising meals a UTC day, and past them it still
+//     mends). ~ does the same, except that if a wild
 //     adoptable creature shares the room and your own pet doesn't need
 //     tending, ~ feeds it instead (Genesys) - five days running wins it
 //     over as a stray, kept on top of any pet you already have.
@@ -355,6 +354,12 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.quaff();
             InputAction::Handled
         }
+        b'G' => {
+            // Your own companion, always, wherever you stand. `~` is the
+            // feed-whatever-matters key that courts strays.
+            state.feed_companion();
+            InputAction::Handled
+        }
         b'~' => {
             // Feed and tend your companion, wherever you stand - no more
             // walking a downed pet all the way back to a capital's Stable.
@@ -441,11 +446,6 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.resurrect();
             InputAction::Handled
         }
-        b'G' => {
-            // Giddy-up: mount or dismount a rideable companion (Wildbound).
-            state.toggle_mount();
-            InputAction::Handled
-        }
         b'e' | b'E' => {
             // Open the appearance / bio builder.
             state.open_appearance();
@@ -515,9 +515,6 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         b'x' | b'X' => {
             if panel == Panel::Follow {
                 state.stop_follow();
-            } else if panel == Panel::Stable {
-                // At the Stable, the secondary action tends (feeds) your beast.
-                state.feed_pet();
             } else if panel == Panel::Appearance {
                 // The secondary action cycles the trait the other way.
                 state.cycle_appearance(-1);
@@ -537,14 +534,14 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.flee();
             InputAction::Handled
         }
-        // Manual scroll for cursor-less text panels (character/leaderboard).
-        // List panels auto-follow their cursor, so these are no-ops there.
+        // Scroll the side panel, in every panel, always: a cursor-less one
+        // shifts its offset, a list walks its cursor (which drags the view).
         b'[' => {
-            state.scroll_text_up();
+            state.scroll_up();
             InputAction::Handled
         }
         b']' => {
-            state.scroll_text_down();
+            state.scroll_down();
             InputAction::Handled
         }
         _ => InputAction::Ignored,

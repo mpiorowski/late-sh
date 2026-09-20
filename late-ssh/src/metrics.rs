@@ -8,12 +8,14 @@ use crate::app::arcade::share::ShareCardKind;
 use crate::app::arcade::sliding_puzzle::image::{
     SlidingPuzzleImageOutcome, SlidingPuzzleImageStage,
 };
+use crate::app::bonsai::state::BonsaiAction;
+use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::chat::news::svc::XMediaLookup;
 use crate::app::chat::svc::GildRefusal;
 use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::games::chips::svc::RoundRefusal;
-use crate::app::lobby::daily::svc::DailyWinPayout;
+use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome};
 use crate::app::pot::svc::PotRefusal;
 
 /// Why the render loop drew a frame. The loop can only distinguish its two
@@ -133,9 +135,21 @@ pub enum FirstContactBeat {
     GlitchBurst,
     NameFlicker,
     WhisperDelivered,
-    InvitationRequested,
+    /// The breakthrough played on a won invitation claim; the DM follows.
+    Breakthrough,
     /// The invitation accepted: `/join #deadchannel` created the runner.
     RunnerCreated,
+}
+
+/// A runner going through the door after the ladder is done. Leaving keeps
+/// the character (the row stays, `left_at` is stamped), so the two sides
+/// are one counter: the gap between them is how many runners are standing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunnerDoor {
+    /// `/leave #deadchannel`: the gate closed on every replica.
+    Left,
+    /// An invited rejoin brought a runner who had left back, same look.
+    Returned,
 }
 
 /// How one bio screen (the first-contact eligibility gate's AI leg)
@@ -172,6 +186,14 @@ pub enum SshRejectReason {
     GlobalLimit,
 }
 
+/// The band count a paired CLI's `viz` frame arrived with. CLIs from before
+/// the 16-band analyzer send 8, which the pair socket stretches to 16.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VizWireBands {
+    Eight,
+    Sixteen,
+}
+
 #[cfg(feature = "otel")]
 mod inner {
     use std::sync::OnceLock;
@@ -187,10 +209,12 @@ mod inner {
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
         GildTier, NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult,
-        PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult,
+        PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, RunnerDoor, SongQueueReward,
+        SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
     };
+    use super::{BonsaiAction, BonsaiActionResult};
     use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
+    use crate::app::bonsai::state::BranchAction;
 
     fn meter() -> opentelemetry::metrics::Meter {
         global::meter("late-ssh")
@@ -271,6 +295,16 @@ mod inner {
                 .with_description(
                     "Websocket pair attempts rejected because no live session owned the token",
                 )
+                .build()
+        })
+    }
+
+    fn pair_viz_frames_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pair_viz_frames_total")
+                .with_description("Spectrum frames accepted from paired CLIs, by wire band count")
                 .build()
         })
     }
@@ -401,6 +435,34 @@ mod inner {
             CrownRefusal::AlreadyYours => "already_yours",
             CrownRefusal::InsufficientChips { .. } => "insufficient_chips",
         }
+    }
+
+    fn bonsai_action_label(action: BonsaiAction) -> &'static str {
+        match action {
+            BonsaiAction::Water => "water",
+            BonsaiAction::Branch(BranchAction::Bend { .. }) => "bend",
+            BonsaiAction::Branch(BranchAction::Prune) => "prune",
+            BonsaiAction::Branch(BranchAction::Split) => "split",
+            BonsaiAction::Branch(BranchAction::Pinch) => "pinch",
+        }
+    }
+
+    fn bonsai_action_result_label(result: BonsaiActionResult) -> &'static str {
+        match result {
+            BonsaiActionResult::Stored => "stored",
+            BonsaiActionResult::Refused => "refused",
+            BonsaiActionResult::Failed => "failed",
+        }
+    }
+
+    fn bonsai_actions_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_bonsai_actions_total")
+                .with_description("Bonsai care actions, by action and how they settled")
+                .build()
+        })
     }
 
     fn crown_takes_total() -> &'static Counter<u64> {
@@ -593,6 +655,18 @@ mod inner {
         })
     }
 
+    fn pool_shots_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pool_shots_total")
+                .with_description(
+                    "Daily pool shots by how they ended. `truncated` is a physics bug reaching production: the simulator gave up at its guard rails and the half-played rack was still written as the match",
+                )
+                .build()
+        })
+    }
+
     fn news_shares_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -665,6 +739,16 @@ mod inner {
         })
     }
 
+    fn runner_door_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_runner_door_total")
+                .with_description("Runners leaving and returning to #deadchannel, by direction")
+                .build()
+        })
+    }
+
     fn first_contact_bio_screens_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -705,8 +789,15 @@ mod inner {
             FirstContactBeat::GlitchBurst => "glitch_burst",
             FirstContactBeat::NameFlicker => "name_flicker",
             FirstContactBeat::WhisperDelivered => "whisper_delivered",
-            FirstContactBeat::InvitationRequested => "invitation_requested",
+            FirstContactBeat::Breakthrough => "breakthrough",
             FirstContactBeat::RunnerCreated => "runner_created",
+        }
+    }
+
+    fn runner_door_label(door: RunnerDoor) -> &'static str {
+        match door {
+            RunnerDoor::Left => "left",
+            RunnerDoor::Returned => "returned",
         }
     }
 
@@ -724,6 +815,10 @@ mod inner {
     pub fn record_first_contact_beat(beat: FirstContactBeat) {
         first_contact_beats_total()
             .add(1, &[KeyValue::new("beat", first_contact_beat_label(beat))]);
+    }
+
+    pub fn record_runner_door(door: RunnerDoor) {
+        runner_door_total().add(1, &[KeyValue::new("direction", runner_door_label(door))]);
     }
 
     pub fn record_first_contact_bio_screen(outcome: BioScreenOutcome) {
@@ -788,6 +883,17 @@ mod inner {
 
     pub fn record_ws_pair_rejected_unknown_token() {
         ws_pair_rejected_unknown_token_total().add(1, &[]);
+    }
+
+    fn viz_wire_bands_label(bands: VizWireBands) -> &'static str {
+        match bands {
+            VizWireBands::Eight => "8",
+            VizWireBands::Sixteen => "16",
+        }
+    }
+
+    pub fn record_pair_viz_frame(bands: VizWireBands) {
+        pair_viz_frames_total().add(1, &[KeyValue::new("bands", viz_wire_bands_label(bands))]);
     }
 
     pub fn record_cli_pair_usage(ssh_mode: &str, platform: &str) {
@@ -928,6 +1034,25 @@ mod inner {
         );
     }
 
+    fn pool_shot_outcome_label(outcome: PoolShotOutcome) -> &'static str {
+        match outcome {
+            PoolShotOutcome::Settled => "settled",
+            PoolShotOutcome::Truncated => "truncated",
+            PoolShotOutcome::Rejected => "rejected",
+        }
+    }
+
+    /// One daily pool shot reached the end of the only path it has. `settled`
+    /// is the denominator the other two are read against: a little `rejected`
+    /// is players and clients disagreeing, a rising `rejected` is a desync,
+    /// and any `truncated` at all is the physics.
+    pub fn record_pool_shot(outcome: PoolShotOutcome) {
+        pool_shots_total().add(
+            1,
+            &[KeyValue::new("outcome", pool_shot_outcome_label(outcome))],
+        );
+    }
+
     /// A share pays a flat reward, so one counter tracks the shares and
     /// another the chips they minted; the two together are the sink-free
     /// half of the News economy.
@@ -988,6 +1113,16 @@ mod inner {
 
     pub fn record_gild_refused(refusal: GildRefusal) {
         chat_gilds_refused_total().add(1, &[KeyValue::new("reason", gild_refusal_label(refusal))]);
+    }
+
+    pub fn record_bonsai_action(action: BonsaiAction, result: BonsaiActionResult) {
+        bonsai_actions_total().add(
+            1,
+            &[
+                KeyValue::new("action", bonsai_action_label(action)),
+                KeyValue::new("result", bonsai_action_result_label(result)),
+            ],
+        );
     }
 
     /// The price is burned whole, so one counter tracks the takeovers and
@@ -1306,14 +1441,16 @@ mod inner {
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
         GildTier, NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult,
-        PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult,
+        PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, RunnerDoor, SongQueueReward,
+        SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
     };
+    use super::{BonsaiAction, BonsaiActionResult};
     use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
 
     pub fn record_ssh_connection() {}
     pub fn record_ssh_connection_rejected(_reason: SshRejectReason) {}
     pub fn record_first_contact_beat(_beat: FirstContactBeat) {}
+    pub fn record_runner_door(_door: RunnerDoor) {}
     pub fn record_first_contact_bio_screen(_outcome: BioScreenOutcome) {}
     pub fn record_first_contact_gate(_verdict: GateVerdict, _staff: bool) {}
     pub fn record_render(_reason: RenderReason) {}
@@ -1321,6 +1458,7 @@ mod inner {
     pub fn add_ssh_session(_delta: i64) {}
     pub fn record_ws_pair_success() {}
     pub fn record_ws_pair_rejected_unknown_token() {}
+    pub fn record_pair_viz_frame(_bands: VizWireBands) {}
     pub fn record_cli_pair_usage(_ssh_mode: &str, _platform: &str) {}
     pub fn add_cli_pair_active(_delta: i64, _ssh_mode: &str, _platform: &str) {}
     pub fn record_render_frame_drop() {}
@@ -1336,11 +1474,13 @@ mod inner {
     ) {
     }
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
+    pub fn record_pool_shot(_outcome: PoolShotOutcome) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_gild_bought(_tier: GildTier) {}
     pub fn record_gild_refused(_refusal: GildRefusal) {}
+    pub fn record_bonsai_action(_action: BonsaiAction, _result: BonsaiActionResult) {}
     pub fn record_crown_taken(_price: i64) {}
     pub fn record_crown_take_refused(_refusal: CrownRefusal) {}
     pub fn record_round_bought(_patrons: i64, _chips: i64) {}

@@ -237,7 +237,7 @@ fn build_segments(
                     .fg(theme::AMBER_GLOW())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(format!(" · {} · {}", pet.mood.as_str(), pet.age), dim),
+            Span::styled(format!(" · {}", pet.mood.as_str()), dim),
         ]));
         segments.push(Segment::Text(lines));
     }

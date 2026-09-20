@@ -1,4 +1,5 @@
 use ratatui::layout::Rect;
+use uuid::Uuid;
 
 use super::*;
 use crate::app::zen::layout::tile_rects;
@@ -78,25 +79,35 @@ fn a_deep_column_split_moves_one_row_and_a_row_only_tree_has_no_height() {
 }
 
 #[test]
-fn shares_stay_inside_their_bounds() {
-    let area = Rect::new(0, 0, 100, 30);
+fn a_tile_shrinks_to_a_border_and_one_row_and_never_past_it() {
+    let area = Rect::new(0, 0, 100, 40);
     let mut root = Node::split(
-        Dir::Row,
-        MAX_SHARE,
-        Node::leaf(TileKind::Bonsai),
+        Dir::Column,
+        500,
+        Node::leaf(TileKind::Clock),
         Node::leaf(TileKind::Chat),
     );
-    let before = widths(&root, area, 0);
-    assert!(root.resize_leaf(0, Dir::Row, 1, area, 0));
+    for _ in 0..40 {
+        assert!(root.resize_leaf(0, Dir::Column, -1, area, 0));
+    }
     assert_eq!(
-        widths(&root, area, 0),
-        before,
-        "already at the widest share"
+        heights(&root, area, 0),
+        vec![MIN_TILE_CELLS, 40 - MIN_TILE_CELLS],
+        "the clock keeps its border and one row"
     );
-    let Node::Split { share, .. } = root else {
-        unreachable!()
-    };
-    assert_eq!(share, MAX_SHARE);
+    for _ in 0..80 {
+        assert!(root.resize_leaf(0, Dir::Column, 1, area, 0));
+    }
+    assert_eq!(
+        heights(&root, area, 0),
+        vec![40 - MIN_TILE_CELLS, MIN_TILE_CELLS],
+        "and the chat below keeps the same when the clock grows"
+    );
+
+    // A split too small for two floors splits evenly instead of panicking.
+    let tiny = Rect::new(0, 0, 100, 4);
+    assert!(root.resize_leaf(0, Dir::Column, 1, tiny, 0));
+    assert_eq!(heights(&root, tiny, 0), vec![2, 2]);
 }
 
 #[test]
@@ -124,4 +135,165 @@ fn holding_split_stops_at_the_tile_cap_and_the_layout_still_round_trips() {
     let read_back: RiceLayout = serde_json::from_value(stored["zen_layout"].clone())
         .expect("a layout built by holding S parses back");
     assert_eq!(read_back, zen.rice);
+}
+
+#[test]
+fn a_chat_tile_keeps_its_room_through_the_stored_json_and_old_layouts_still_read() {
+    let mut zen = ZenState::new(RiceLayout::default());
+    let chat = zen
+        .first_tile_of(TileKind::Chat)
+        .expect("the default has a chat");
+    let room = Uuid::now_v7();
+    // Only a focused chat tile takes a room.
+    assert!(
+        !zen.bind_focused_chat_room(Some(room)),
+        "bonsai has no room"
+    );
+    zen.focus = chat;
+    assert!(zen.bind_focused_chat_room(Some(room)));
+    assert_eq!(zen.focused_chat_room(), Some(Some(room)));
+    assert_eq!(zen.chat_tiles(), vec![(chat, Some(room))]);
+
+    let read_back = RiceLayout::from_json(Some(&zen.rice.to_json()));
+    assert_eq!(read_back, zen.rice, "the binding is part of the layout");
+
+    // A layout saved before rooms were per tile has bare leaves: it parses,
+    // and its chat shows the current room.
+    let old = serde_json::json!({
+        "root": { "node": "leaf", "kind": "chat" },
+        "look": { "border": "rounded", "gap": 0, "titles": true }
+    });
+    let old = RiceLayout::from_json(Some(&old));
+    assert_eq!(old.root.leaf_rooms(), vec![None]);
+
+    // The retired presence tile reads as Pulse, not as an unreadable row
+    // that would reset the whole page to the default.
+    let retired = serde_json::json!({
+        "root": { "node": "leaf", "kind": "presence" },
+        "look": { "border": "rounded", "gap": 0, "titles": true }
+    });
+    assert_eq!(
+        RiceLayout::from_json(Some(&retired)).root.leaf_kinds(),
+        vec![TileKind::Pulse]
+    );
+
+    // Leaving chat forgets the room, so coming back lands on the current one.
+    zen.open_kind_picker();
+    zen.move_kind_picker(1);
+    assert_eq!(zen.pick_kind(), KindPick::Changed);
+    assert_eq!(zen.focused_kind(), Some(TileKind::Clock));
+    zen.open_kind_picker();
+    zen.move_kind_picker(-1);
+    assert_eq!(zen.pick_kind(), KindPick::Changed);
+    assert_eq!(zen.focused_kind(), Some(TileKind::Chat));
+    assert_eq!(zen.focused_chat_room(), Some(None));
+}
+
+#[test]
+fn the_page_holds_ten_chats_and_the_first_opening_lands_on_the_first_one() {
+    let mut zen = ZenState::new(RiceLayout::default());
+    // Split the bonsai again and again and pick Chat for each new tile in
+    // the picker (the tile is set to Bonsai first, the row before Chat, so
+    // one move down lands on it): Chat until the cap, then the row is
+    // refused, the picker stays up, and the next row down is Clock.
+    zen.focus = 0;
+    for _ in 0..MAX_CHAT_TILES + 2 {
+        assert!(zen.split_focused(true));
+        zen.rice.root.set_kind(zen.focus, TileKind::Bonsai);
+        zen.open_kind_picker();
+        assert_eq!(zen.kind_picker_selection(), Some(TileKind::Bonsai));
+        zen.move_kind_picker(1);
+        assert_eq!(zen.kind_picker_selection(), Some(TileKind::Chat));
+        match zen.pick_kind() {
+            KindPick::Changed => assert!(zen.kind_picker.is_none(), "a pick closes the picker"),
+            KindPick::Unchanged => panic!("a new tile picked as chat must change"),
+            KindPick::ChatFull => {
+                assert!(
+                    zen.kind_picker.is_some(),
+                    "a refused row keeps the picker up"
+                );
+                assert!(!zen.kind_allowed(TileKind::Chat));
+                zen.move_kind_picker(1);
+                assert_eq!(zen.pick_kind(), KindPick::Changed);
+            }
+        }
+    }
+    assert_eq!(
+        zen.chat_tile_count(),
+        MAX_CHAT_TILES,
+        "chat is refused past the cap"
+    );
+    assert_eq!(zen.focused_kind(), Some(TileKind::Clock));
+    // A tile that already is a chat can leave and come back: it counts
+    // itself out of the cap.
+    zen.focus = zen.first_tile_of(TileKind::Chat).expect("chats");
+    assert!(zen.kind_allowed(TileKind::Chat));
+    zen.open_kind_picker();
+    zen.move_kind_picker(-1);
+    assert_eq!(zen.pick_kind(), KindPick::Changed);
+    assert_ne!(zen.focused_kind(), Some(TileKind::Chat));
+    zen.open_kind_picker();
+    zen.move_kind_picker(1);
+    assert_eq!(zen.pick_kind(), KindPick::Changed);
+    assert_eq!(zen.focused_kind(), Some(TileKind::Chat));
+    assert_eq!(zen.chat_tile_count(), MAX_CHAT_TILES);
+    // Picking the tile's own kind closes the picker and changes nothing.
+    zen.open_kind_picker();
+    assert_eq!(zen.pick_kind(), KindPick::Unchanged);
+    assert!(zen.kind_picker.is_none());
+    // The list wraps at both ends.
+    zen.open_kind_picker();
+    zen.move_kind_picker(-(TileKind::ALL.len() as isize));
+    assert_eq!(zen.kind_picker_selection(), Some(TileKind::Chat));
+    zen.close_kind_picker();
+
+    // The first opening focuses the first chat tile; later ones keep focus.
+    let mut fresh = ZenState::new(RiceLayout::default());
+    fresh.note_opened();
+    assert_eq!(fresh.focused_kind(), Some(TileKind::Chat));
+    assert_eq!(fresh.active_chat_index(), Some(0));
+    fresh.focus = 0;
+    fresh.note_opened();
+    assert_eq!(fresh.focused_kind(), Some(TileKind::Bonsai));
+    // With the bonsai focused the first chat tile is still the active one.
+    assert_eq!(fresh.active_chat_index(), Some(0));
+    // A reset lands on the chat tile too.
+    fresh.reset();
+    assert_eq!(fresh.focused_kind(), Some(TileKind::Chat));
+}
+
+#[test]
+fn the_equalizer_shows_through_a_music_or_visualizer_tile_and_zoom_keeps_only_the_focused_one() {
+    // Leaves run bonsai, chat, clock, music, lobby, pet, aquarium.
+    let mut zen = ZenState::new(RiceLayout::default());
+    assert!(zen.shows_equalizer(), "the default page has a music tile");
+
+    zen.zoomed = true;
+    zen.focus = 0;
+    assert!(
+        !zen.shows_equalizer(),
+        "zoomed on the bonsai hides the music tile"
+    );
+    zen.focus = 3;
+    assert!(
+        zen.shows_equalizer(),
+        "zoomed on the music tile keeps its eq"
+    );
+
+    let visualizer_only = ZenState::new(RiceLayout {
+        root: Node::leaf(TileKind::Visualizer),
+        look: Look::default(),
+    });
+    assert!(visualizer_only.shows_equalizer());
+
+    let no_eq = ZenState::new(RiceLayout {
+        root: Node::split(
+            Dir::Row,
+            500,
+            Node::leaf(TileKind::Clock),
+            Node::leaf(TileKind::Aquarium),
+        ),
+        look: Look::default(),
+    });
+    assert!(!no_eq.shows_equalizer());
 }

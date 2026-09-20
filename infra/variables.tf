@@ -169,6 +169,22 @@ variable "IRC_PROXY_EMIT" {
   }
 }
 
+# =============================================================================
+# Minecraft
+# =============================================================================
+
+variable "MINECRAFT_WHITELIST" {
+  description = "Comma-separated Minecraft usernames allowed to join. Seeded on every boot; names added via rcon-cli persist alongside. Empty seeds nobody."
+  type        = string
+  default     = ""
+}
+
+variable "MINECRAFT_OPS" {
+  description = "Comma-separated Minecraft usernames granted operator. Seeded on every boot. Empty seeds nobody."
+  type        = string
+  default     = ""
+}
+
 # S3-Compatible Storage (for DB backups)
 # =============================================================================
 

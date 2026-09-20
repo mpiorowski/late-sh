@@ -15,9 +15,9 @@ use crate::authz::Permissions;
 //     → API/WS handler looks up token
 //       → SessionRegistry sends SessionMessage over mpsc
 //         → ssh.rs receives and forwards into App
-//           → App drops Viz payloads (the sidebar eq is synthetic; the
-//             variant survives for old clients until the pipeline removal
-//             tracked in SCALE.md lands)
+//           → App folds Viz payloads into the eq's live spectrum
+//             (`AudioState::apply_viz_frame`); stale spectra fall back to
+//             the ambient band
 
 #[derive(Debug, Clone)]
 pub enum SessionMessage {

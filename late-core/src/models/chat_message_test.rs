@@ -719,3 +719,95 @@ async fn first_unread_after_finds_the_oldest_foreign_message_past_the_cutoff() {
             .unwrap();
     assert!(none.is_none());
 }
+
+#[tokio::test]
+async fn list_public_room_between_with_author_reads_the_window_oldest_first_for_everyone() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let room = ChatRoom::find_non_dm_by_slug(&client, "announcements")
+        .await
+        .expect("find announcements")
+        .expect("announcements room");
+    let admin = User::create(
+        &client,
+        UserParams {
+            fingerprint: "between-admin".to_string(),
+            username: "betweenadmin".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .unwrap();
+    let floor = chrono::Utc::now() - chrono::Duration::days(1);
+    let ceiling = chrono::Utc::now() + chrono::Duration::minutes(1);
+    let base = chrono::Utc::now() - chrono::Duration::hours(2);
+    for (index, body) in ["before the window", "first", "second"]
+        .into_iter()
+        .enumerate()
+    {
+        let message = ChatMessage::create(
+            &client,
+            ChatMessageParams {
+                room_id: room.id,
+                user_id: admin.id,
+                body: body.to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        let created = if index == 0 {
+            floor - chrono::Duration::hours(1)
+        } else {
+            base + chrono::Duration::seconds(index as i64)
+        };
+        client
+            .execute(
+                "UPDATE chat_messages SET created = $2 WHERE id = $1",
+                &[&message.id, &created],
+            )
+            .await
+            .unwrap();
+    }
+
+    // No viewer: the author's own posts come back too, and the message
+    // before the window does not.
+    let page =
+        ChatMessage::list_public_room_between_with_author(&client, room.id, floor, ceiling, 10)
+            .await
+            .unwrap();
+    assert_eq!(
+        page.iter()
+            .map(|message| (message.author.as_str(), message.body.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("betweenadmin", "first"), ("betweenadmin", "second")]
+    );
+
+    // The cap keeps the newest, still handed back oldest first.
+    let capped =
+        ChatMessage::list_public_room_between_with_author(&client, room.id, floor, ceiling, 1)
+            .await
+            .unwrap();
+    assert_eq!(capped.len(), 1);
+    assert_eq!(capped[0].body, "second");
+
+    // A private room never comes back, whatever the window.
+    let private = ChatRoom::create_private_room(&client, "between-secret", admin.id)
+        .await
+        .unwrap();
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: private.id,
+            user_id: admin.id,
+            body: "secret".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    let hidden =
+        ChatMessage::list_public_room_between_with_author(&client, private.id, floor, ceiling, 10)
+            .await
+            .unwrap();
+    assert!(hidden.is_empty());
+}

@@ -20,6 +20,10 @@ pub struct RcModalView<'a> {
 /// View data the renderer needs for one frame of the Games hub.
 pub struct HubView<'a> {
     pub selected: usize,
+    /// Rows the selected landing is scrolled down (`hub::state::State`).
+    pub scroll: u16,
+    /// Where this frame records how far the selected landing can scroll.
+    pub max_scroll: &'a std::cell::Cell<u16>,
     pub delete_confirm: bool,
     pub rebels_enabled: bool,
     pub nethack_enabled: bool,
@@ -31,8 +35,8 @@ pub struct HubView<'a> {
     pub codekeep_enabled: bool,
     /// Players currently in the Lateania world, shown on its landing card.
     pub lateania_online: usize,
-    /// This account's character slots, for the landing card's select list.
-    pub lateania_slots: Vec<crate::app::door::lateania::svc::SlotSummary>,
+    /// This account's character list, for the landing card's select list.
+    pub lateania_slots: crate::app::door::lateania::svc::SlotList,
     pub lateania_slot_cursor: usize,
     /// Lateania's backtick-detach recency window is live: the sidebar marks
     /// it as a game in progress (a hop or Enter re-joins the character).
@@ -62,7 +66,8 @@ impl HubView<'_> {
             HubGame::Brogue => self.brogue_live,
             HubGame::Darkroom => self.darkroom_live,
             HubGame::GreenDragon => self.greendragon_live,
-            HubGame::Rebels
+            HubGame::Minecraft
+            | HubGame::Rebels
             | HubGame::Usurper
             | HubGame::Dopewars
             | HubGame::Bashquest
@@ -160,8 +165,10 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
     draw_sidebar(frame, body[0], selected, view);
 
     // The selected game owns the pane beside the sidebar, rendered with its
-    // real landing (logo, stats, actions).
-    match HubGame::ALL[selected] {
+    // real landing (logo, stats, actions) and scrolled by the hub's offset.
+    // Each landing reports how far it could scroll; input clamps to that.
+    let scroll = view.scroll;
+    let max_scroll = match HubGame::ALL[selected] {
         HubGame::Lateania => crate::app::door::lateania::screen::draw_landing(
             frame,
             body[1],
@@ -169,63 +176,76 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             view.lateania_online,
             &view.lateania_slots,
             view.lateania_slot_cursor,
+            scroll,
         ),
-        HubGame::Rebels => {
-            crate::app::door::rebels::render::draw_landing(frame, body[1], view.rebels_enabled);
-        }
-        HubGame::Nethack => {
-            crate::app::door::nethack::render::draw_landing(
-                frame,
-                body[1],
-                view.nethack_enabled,
-                view.nethack_live,
-            );
-        }
-        HubGame::Dcss => {
-            crate::app::door::dcss::render::draw_landing(
-                frame,
-                body[1],
-                view.dcss_enabled,
-                view.dcss_live,
-            );
-        }
-        HubGame::Brogue => {
-            crate::app::door::brogue::render::draw_landing(
-                frame,
-                body[1],
-                view.brogue_enabled,
-                view.brogue_live,
-            );
-        }
-        HubGame::Usurper => {
-            crate::app::door::usurper::render::draw_landing(frame, body[1], view.usurper_enabled);
-        }
-        HubGame::GreenDragon => {
-            crate::app::door::greendragon::screen::draw_landing(
-                frame,
-                body[1],
-                view.delete_confirm,
-            );
-        }
-        HubGame::Dopewars => {
-            crate::app::door::dopewars::render::draw_landing(frame, body[1], view.dopewars_enabled);
-        }
-        HubGame::Bashquest => {
-            crate::app::door::bashquest::render::draw_landing(
-                frame,
-                body[1],
-                view.bashquest_enabled,
-            );
-        }
-        HubGame::Darkroom => {
-            crate::app::door::darkroom::screen::draw_landing(frame, body[1], view.delete_confirm);
-        }
-        HubGame::Codekeep => {
-            crate::app::door::codekeep::render::draw_landing(frame, body[1], view.codekeep_enabled);
-        }
-    }
+        HubGame::Minecraft => crate::app::door::minecraft::ui::draw_landing(frame, body[1], scroll),
+        HubGame::Rebels => crate::app::door::rebels::render::draw_landing(
+            frame,
+            body[1],
+            view.rebels_enabled,
+            scroll,
+        ),
+        HubGame::Nethack => crate::app::door::nethack::render::draw_landing(
+            frame,
+            body[1],
+            view.nethack_enabled,
+            view.nethack_live,
+            scroll,
+        ),
+        HubGame::Dcss => crate::app::door::dcss::render::draw_landing(
+            frame,
+            body[1],
+            view.dcss_enabled,
+            view.dcss_live,
+            scroll,
+        ),
+        HubGame::Brogue => crate::app::door::brogue::render::draw_landing(
+            frame,
+            body[1],
+            view.brogue_enabled,
+            view.brogue_live,
+            scroll,
+        ),
+        HubGame::Usurper => crate::app::door::usurper::render::draw_landing(
+            frame,
+            body[1],
+            view.usurper_enabled,
+            scroll,
+        ),
+        HubGame::GreenDragon => crate::app::door::greendragon::screen::draw_landing(
+            frame,
+            body[1],
+            view.delete_confirm,
+            scroll,
+        ),
+        HubGame::Dopewars => crate::app::door::dopewars::render::draw_landing(
+            frame,
+            body[1],
+            view.dopewars_enabled,
+            scroll,
+        ),
+        HubGame::Bashquest => crate::app::door::bashquest::render::draw_landing(
+            frame,
+            body[1],
+            view.bashquest_enabled,
+            scroll,
+        ),
+        HubGame::Darkroom => crate::app::door::darkroom::screen::draw_landing(
+            frame,
+            body[1],
+            view.delete_confirm,
+            scroll,
+        ),
+        HubGame::Codekeep => crate::app::door::codekeep::render::draw_landing(
+            frame,
+            body[1],
+            view.codekeep_enabled,
+            scroll,
+        ),
+    };
+    view.max_scroll.set(max_scroll);
 
-    draw_footer(frame, layout[1]);
+    draw_footer(frame, layout[1], HubGame::ALL[selected]);
 
     if let Some(modal) = &view.rc_modal {
         draw_rc_modal(frame, area, modal);
@@ -394,11 +414,25 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, selected: usize, view: &HubView) 
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect) {
-    let hints: &[(&str, &str)] = &[
-        ("\u{2191} \u{2193}  or  j k", "switch game"),
-        ("Enter", "play"),
-    ];
+/// The hub footer. Minecraft has nothing to launch, so its card drops the
+/// Enter hint rather than advertising a key that does nothing.
+fn draw_footer(frame: &mut Frame, area: Rect, selected: HubGame) {
+    let switch = ("\u{2191} \u{2193}  or  j k", "switch game");
+    let scroll = ("ctrl j k", "scroll");
+    let hints: &[(&str, &str)] = match selected {
+        HubGame::Minecraft => &[switch, scroll],
+        HubGame::Lateania
+        | HubGame::Rebels
+        | HubGame::Nethack
+        | HubGame::Dcss
+        | HubGame::Brogue
+        | HubGame::Usurper
+        | HubGame::GreenDragon
+        | HubGame::Dopewars
+        | HubGame::Bashquest
+        | HubGame::Codekeep
+        | HubGame::Darkroom => &[switch, scroll, ("Enter", "play")],
+    };
     frame.render_widget(Paragraph::new(hint_line(hints)), area);
 }
 

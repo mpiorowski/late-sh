@@ -5,6 +5,7 @@
 
 use std::collections::HashSet;
 
+use chrono::{DateTime, Utc};
 use dartboard_core::RgbColor;
 use late_core::models::app_flag::AppFlag;
 use late_core::models::paper::{PaperEdition, PaperRoomPage, PaperSectionKind, PaperStatus};
@@ -21,6 +22,9 @@ pub(crate) const PAPER_ELSEWHERE_LIMIT: usize = 3;
 /// How many of yesterday's pieces ON THE WALL prints, most applauded
 /// first. That is the whole rule: no applause floor, no line budget.
 pub(crate) const PAPER_WALL_PIECES: i64 = 3;
+/// How many of yesterday's `#announcements` posts the paper prints, the
+/// newest ones. A day with more than this is not a day anyone has had.
+pub(crate) const PAPER_ANNOUNCEMENTS_LIMIT: i64 = 50;
 
 /// The paper's per-session state, owned by `App`.
 pub(crate) struct PaperState {
@@ -33,7 +37,7 @@ pub(crate) struct PaperState {
     /// The trigger whose result this session still wants. Closing the
     /// "at the press" modal clears it, so a late answer is dropped.
     pub(super) awaiting: Option<PaperTrigger>,
-    /// A ready paper that arrived while the login announcements were up.
+    /// A ready paper that arrived while a newcomer's tour held the keys.
     pub(super) pending_modal: Option<PaperModal>,
     pub(super) pending_flag_writes: Vec<PendingFlagWrite>,
 }
@@ -163,9 +167,15 @@ impl PaperModal {
     }
 }
 
-/// Everything the layout needs from the session: the edition's rows and
-/// how this reader's rail is ordered (favorites first, as the rail draws
-/// them), which rooms they are in, and which rooms carry a shop bump.
+/// One of yesterday's `#announcements` posts, printed word for word: the
+/// operator's own text, never rewritten by the press.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaperAnnouncement {
+    pub author: String,
+    pub posted_at: DateTime<Utc>,
+    pub body: String,
+}
+
 /// One piece on the wall: yesterday's most applauded, printed in its own
 /// colours, glyph for glyph.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -176,8 +186,15 @@ pub struct PaperWall {
     pub lines: Vec<Vec<PaintRun>>,
 }
 
+/// Everything the layout needs from the session: the edition's rows, the
+/// pages read at open time (announcements, the wall), and how this
+/// reader's rail is ordered (favorites first, as the rail draws them),
+/// which rooms they are in, and which rooms carry a shop bump.
 pub(crate) struct PaperLayout<'a> {
     pub edition: &'a PaperEdition,
+    /// Yesterday's announcements, oldest first; empty on a day the
+    /// operator said nothing.
+    pub announcements: &'a [PaperAnnouncement],
     /// The pieces on the wall, most applauded first; empty when yesterday
     /// hung nothing.
     pub wall: &'a [PaperWall],
@@ -281,12 +298,14 @@ fn labels(pages: &[&PaperRoomPage]) -> String {
         .join(", ")
 }
 
-/// The whole paper, top to bottom: byline, your rooms in rail order,
-/// elsewhere, what we were reading, outside, and a footer naming the
-/// rooms that were quiet or still at the press.
+/// The whole paper, top to bottom: byline, yesterday's announcements
+/// verbatim, your rooms in rail order, elsewhere, what we were reading,
+/// outside, the wall, and a footer naming the rooms that were quiet or
+/// still at the press.
 pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<PaperLine> {
     let PaperLayout {
         edition,
+        announcements,
         wall,
         rail_order,
         member_room_ids,
@@ -300,6 +319,24 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<PaperLine> {
         ),
         PaperInk::Faint,
     )]];
+
+    // The operator's word comes first and comes whole: every post from
+    // #announcements in the window, as written, no column and no jab.
+    if !announcements.is_empty() {
+        lines.push(PaperLine::new());
+        lines.push(heading("ANNOUNCEMENTS"));
+        for announcement in announcements {
+            lines.push(PaperLine::new());
+            lines.push(vec![
+                PaperSpan::new(format!("@{}", announcement.author), PaperInk::Title),
+                PaperSpan::new(
+                    format!(" · {}", announcement.posted_at.format("%H:%M")),
+                    PaperInk::Meta,
+                ),
+            ]);
+            lines.extend(column_lines(&announcement.body));
+        }
+    }
 
     // Member rooms in rail order, then any the rail does not list.
     let mut member_pages: Vec<&PaperRoomPage> = Vec::new();

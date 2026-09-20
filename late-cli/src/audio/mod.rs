@@ -9,13 +9,31 @@ use std::{
     },
     time::Duration,
 };
+use tokio::sync::broadcast;
 
 mod decoder;
 
 use decoder::{SymphoniaStreamDecoder, probe_stream_spec};
 
+/// Spectrum bands per `viz` frame, low to high. The server's
+/// `late_core::audio::VIZ_BANDS` matches it, and still accepts the 8 older
+/// CLIs send.
+pub(super) const VIZ_BANDS: usize = 16;
+
+/// One spectrum frame of what the output device actually played, sent to
+/// the TUI as the pair-WS `viz` event.
+#[derive(Debug, Clone)]
+pub(super) struct VizSample {
+    pub(super) bands: [f32; VIZ_BANDS],
+    pub(super) rms: f32,
+}
+
 pub(super) struct AudioRuntime {
     _stream: Option<cpal::Stream>,
+    /// Spectrum frames from the playback analyzer. The runtime holds this
+    /// sender for its whole life, so a subscriber never sees the channel
+    /// close while the runtime is borrowed.
+    pub(super) analyzer_tx: broadcast::Sender<VizSample>,
     pub(super) played_samples: Arc<AtomicU64>,
     pub(super) sample_rate: u32,
     pub(super) stop: Arc<AtomicBool>,
@@ -50,11 +68,16 @@ use resampler::StreamingLinearResampler;
 
 mod output;
 
-use output::{PlaybackQueue, build_output_stream, output_sample_rate_for};
+use output::{PlaybackQueue, PlayedRing, build_output_stream, output_sample_rate_for};
 use ringbuf::{HeapRb, traits::Split};
 
 const AUDIO_STARTUP_RETRIES: usize = 3;
 const AUDIO_STARTUP_RETRY_DELAY: Duration = Duration::from_millis(750);
+/// Played mono samples buffered for the analyzer between its ticks: one
+/// 15 Hz tick at 48 kHz is 3200 samples.
+const ANALYZER_RING_SAMPLES: usize = 4096;
+/// Spectrum frames a slow pair socket may fall behind before it skips.
+const ANALYZER_CHANNEL_FRAMES: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AudioBackendProfile {
@@ -115,6 +138,8 @@ impl AudioRuntime {
             output_sample_rate_for(source_spec, audio_output_device.as_deref())?;
         let queue_capacity = output_sample_rate as usize * source_spec.channels * 2;
         let (queue_tx, queue_rx) = HeapRb::<f32>::new(queue_capacity).split();
+        let (played_tx, played_rx) = HeapRb::<f32>::new(ANALYZER_RING_SAMPLES).split();
+        let (analyzer_tx, _) = broadcast::channel(ANALYZER_CHANNEL_FRAMES);
         let played_samples = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
         // Boot silent. The cpal output stream is started before the pair-WS
@@ -137,6 +162,7 @@ impl AudioRuntime {
         let stream = build_output_stream(
             source_spec,
             queue_rx,
+            played_tx,
             Arc::clone(&played_samples),
             Arc::clone(&muted),
             Arc::clone(&volume_percent),
@@ -161,6 +187,12 @@ impl AudioRuntime {
             ready_tx,
             prebuffer_samples(profile, output_sample_rate, source_spec.channels),
         );
+        spawn_playback_analyzer_thread(
+            played_rx,
+            analyzer_tx.clone(),
+            output_sample_rate,
+            Arc::clone(&stop),
+        );
         ready_rx
             .recv()
             .context("failed to receive decoder startup status")??;
@@ -170,6 +202,7 @@ impl AudioRuntime {
 
         Ok(Self {
             _stream: Some(stream),
+            analyzer_tx,
             played_samples,
             sample_rate: output_sample_rate,
             stop,
@@ -186,8 +219,10 @@ impl AudioRuntime {
     }
 
     fn disabled() -> Self {
+        let (analyzer_tx, _) = broadcast::channel(ANALYZER_CHANNEL_FRAMES);
         Self {
             _stream: None,
+            analyzer_tx,
             played_samples: Arc::new(AtomicU64::new(0)),
             sample_rate: 1,
             stop: Arc::new(AtomicBool::new(false)),
@@ -285,6 +320,13 @@ const fn local_audio_disabled_on_this_platform() -> bool {
 mod decoder_thread;
 
 use decoder_thread::spawn_decoder_thread;
+
+mod analyzer;
+
+use analyzer::spawn_playback_analyzer_thread;
+
+#[cfg(target_os = "linux")]
+pub(super) mod loopback;
 
 #[cfg(test)]
 mod audio_test;

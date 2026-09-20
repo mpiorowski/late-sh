@@ -200,6 +200,10 @@ jobs:
       - name: set_up_android_sdk
         if: matrix.android == true
         uses: android-actions/setup-android@v4.0.1
+        # The action's default installs the removed legacy `tools` package,
+        # which fails on current cmdline-tools. Only the NDK is needed.
+        with:
+          packages: platform-tools
       - name: install_android_ndk
         if: matrix.android == true
         env:

@@ -123,6 +123,9 @@ chip_moves!(
     /// The flat bonus for the first aquarium feeding of the day. Same
     /// `source_ref` story as [`ChipMove::PetFed`].
     AquariumFed,
+    /// The flat bonus for the first pet of the day (a click on the pet).
+    /// Same `source_ref` story as [`ChipMove::PetFed`].
+    PetPetted,
     /// Post-settlement top-up back to [`CHIP_FLOOR`]. Has its own write path
     /// ([`UserChips::restore_floor`]), never goes through [`UserChips::apply`].
     /// `source_ref` is the round or hand id whose settlement emptied the
@@ -199,6 +202,9 @@ chip_moves!(
     DailyCheckersWin,
     DailyBackgammonWin,
     DailyBriscolaWin,
+    DailyEightBallWin,
+    DailyNineBallWin,
+    DailySnookerWin,
     TronWin,
     /// A Super Snake seat that came out ahead, banked when the player stands
     /// up. The arena keeps the running total in memory: one row per visit,
@@ -249,6 +255,7 @@ impl ChipMove {
             Self::BonsaiWatered => "bonsai_watered",
             Self::PetFed => "pet_fed",
             Self::AquariumFed => "aquarium_fed",
+            Self::PetPetted => "pet_petted",
             Self::FloorRestore => "floor_restore",
             Self::GiftSent => "chip_gift_sent",
             Self::GiftReceived => "chip_gift_received",
@@ -276,6 +283,9 @@ impl ChipMove {
             Self::DailyCheckersWin => "daily_checkers_win",
             Self::DailyBackgammonWin => "daily_backgammon_win",
             Self::DailyBriscolaWin => "daily_briscola_win",
+            Self::DailyEightBallWin => "daily_eightball_win",
+            Self::DailyNineBallWin => "daily_nineball_win",
+            Self::DailySnookerWin => "daily_snooker_win",
             Self::TronWin => "tron_win",
             Self::SsnakeArenaEarned => "ssnake_arena_earned",
             Self::SsnakeArenaLost => "ssnake_arena_lost",
@@ -305,7 +315,7 @@ impl ChipMove {
             Self::GiftSent | Self::GiftReceived | Self::InitialBalance => "users",
             Self::SsnakeArenaEarned | Self::SsnakeArenaLost => "ssnake_visits",
             Self::BonsaiWatered => "bonsai_trees",
-            Self::PetFed => "pet_companions",
+            Self::PetFed | Self::PetPetted => "pet_companions",
             Self::AquariumFed => "user_aquarium_care",
             Self::GildSent | Self::GildReceived => "chat_message_gilds",
             Self::CrownTaken => "crown_reigns",
@@ -328,6 +338,9 @@ impl ChipMove {
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
+            | Self::DailyEightBallWin
+            | Self::DailyNineBallWin
+            | Self::DailySnookerWin
             | Self::TronWin
             | Self::GreendragonDragonSlain
             | Self::DarkroomEscape
@@ -353,6 +366,7 @@ impl ChipMove {
             | Self::BonsaiWatered
             | Self::PetFed
             | Self::AquariumFed
+            | Self::PetPetted
             | Self::GiftReceived
             | Self::InitialBalance
             | Self::GildReceived
@@ -372,6 +386,9 @@ impl ChipMove {
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
+            | Self::DailyEightBallWin
+            | Self::DailyNineBallWin
+            | Self::DailySnookerWin
             | Self::TronWin
             | Self::SsnakeArenaEarned
             | Self::GreendragonDragonSlain
@@ -437,6 +454,7 @@ impl ChipMove {
             Self::BonsaiWatered
             | Self::PetFed
             | Self::AquariumFed
+            | Self::PetPetted
             | Self::GildReceived
             | Self::PotWon
             | Self::NewsShared
@@ -454,6 +472,9 @@ impl ChipMove {
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
+            | Self::DailyEightBallWin
+            | Self::DailyNineBallWin
+            | Self::DailySnookerWin
             | Self::TronWin
             | Self::SsnakeArenaEarned
             | Self::GreendragonDragonSlain

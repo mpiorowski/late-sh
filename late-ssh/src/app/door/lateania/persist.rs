@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 19;
+const SCHEMA_VERSION: u32 = 20;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -44,11 +44,14 @@ pub struct SavedCharacterInit {
     pub archetype: Option<String>,
     pub pet: Option<String>,
     pub pet_loyalty: i64,
+    /// Kennelled companions as (species key, loyalty) pairs.
+    pub kennel: Vec<(String, i64)>,
     /// A won-over stray companion (Genesys): the WILDLIFE index.
     pub stray: Option<u32>,
     /// In-progress courting of a wild critter: (WILDLIFE index, streak days,
     /// last day fed as a Unix day number).
     pub stray_bond: Option<(u32, u32, u64)>,
+    pub pet_meals: (u64, u32),
     pub owned_plot: Option<u32>,
     pub house_furniture: Vec<(u32, String)>,
     pub appearance: Vec<u8>,
@@ -140,6 +143,10 @@ pub struct SavedCharacter {
     /// The companion's accumulated loyalty (drives its level); 0 if no pet.
     #[serde(default)]
     pub pet_loyalty: i64,
+    /// Companions resting in the kennel, as (species key, loyalty) pairs; empty
+    /// for pre-kennel (schema < 20) saves, which released a pet on every new one.
+    #[serde(default)]
+    pub kennel: Vec<(String, i64)>,
     /// A won-over stray companion (Genesys), by WILDLIFE index; None for
     /// pre-Genesys saves or characters who haven't won one over yet.
     #[serde(default)]
@@ -148,6 +155,10 @@ pub struct SavedCharacter {
     /// last day fed as a Unix day number).
     #[serde(default)]
     pub stray_bond: Option<(u32, u32, u64)>,
+    /// The companion's loyalty-raising meals: (Unix day number, meals that
+    /// day). (0, 0) for saves from before the daily meal cap.
+    #[serde(default)]
+    pub pet_meals: (u64, u32),
     /// The housing plot (tier index) this character holds the deed to, if any.
     #[serde(default)]
     pub owned_plot: Option<u32>,
@@ -273,8 +284,10 @@ impl SavedCharacter {
             archetype: init.archetype,
             pet: init.pet,
             pet_loyalty: init.pet_loyalty,
+            kennel: init.kennel,
             stray: init.stray,
             stray_bond: init.stray_bond,
+            pet_meals: init.pet_meals,
             owned_plot: init.owned_plot,
             house_furniture: init.house_furniture,
             appearance: init.appearance,

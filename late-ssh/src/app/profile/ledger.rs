@@ -165,6 +165,9 @@ const fn pointer(mv: ChipMove) -> Pointer {
         | ChipMove::DailyCheckersWin
         | ChipMove::DailyBackgammonWin
         | ChipMove::DailyBriscolaWin
+        | ChipMove::DailyEightBallWin
+        | ChipMove::DailyNineBallWin
+        | ChipMove::DailySnookerWin
         | ChipMove::TronWin
         | ChipMove::GreendragonDragonSlain
         | ChipMove::DarkroomEscape
@@ -188,6 +191,7 @@ const fn pointer(mv: ChipMove) -> Pointer {
         | ChipMove::BonsaiWatered
         | ChipMove::PetFed
         | ChipMove::AquariumFed
+        | ChipMove::PetPetted
         | ChipMove::FloorRestore
         | ChipMove::InitialBalance
         | ChipMove::SsnakeArenaEarned

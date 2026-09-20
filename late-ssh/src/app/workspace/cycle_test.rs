@@ -7,7 +7,7 @@ fn id(n: u128) -> Uuid {
 #[test]
 fn from_home_enters_first_board() {
     assert_eq!(
-        next_workspace(&[id(1), id(2)], &[], &[], &[], GameWorkspace::Dashboard),
+        next_workspace(&[id(1), id(2)], &[], &[], &[], GameWorkspace::Base),
         GameWorkspace::DailyBoard(id(1))
     );
 }
@@ -15,8 +15,8 @@ fn from_home_enters_first_board() {
 #[test]
 fn from_home_with_no_stops_stays_home() {
     assert_eq!(
-        next_workspace(&[], &[], &[], &[], GameWorkspace::Dashboard),
-        GameWorkspace::Dashboard
+        next_workspace(&[], &[], &[], &[], GameWorkspace::Base),
+        GameWorkspace::Base
     );
 }
 
@@ -29,7 +29,7 @@ fn advances_through_boards_then_wraps_home() {
     );
     assert_eq!(
         next_workspace(&ids, &[], &[], &[], GameWorkspace::DailyBoard(id(2))),
-        GameWorkspace::Dashboard
+        GameWorkspace::Base
     );
 }
 
@@ -53,7 +53,7 @@ fn board_no_longer_my_turn_restarts_from_front() {
 fn last_board_gone_and_queue_empty_lands_home() {
     assert_eq!(
         next_workspace(&[], &[], &[], &[], GameWorkspace::DailyBoard(id(1))),
-        GameWorkspace::Dashboard
+        GameWorkspace::Base
     );
 }
 
@@ -88,7 +88,7 @@ fn seated_tables_slot_after_your_turn_boards() {
             &[],
             GameWorkspace::HouseTable(HouseTable::Tron)
         ),
-        GameWorkspace::Dashboard
+        GameWorkspace::Base
     );
 }
 
@@ -96,7 +96,7 @@ fn seated_tables_slot_after_your_turn_boards() {
 fn tables_only_cycle_works_without_boards() {
     let tables = [HouseTable::Blackjack];
     assert_eq!(
-        next_workspace(&[], &tables, &[], &[], GameWorkspace::Dashboard),
+        next_workspace(&[], &tables, &[], &[], GameWorkspace::Base),
         GameWorkspace::HouseTable(HouseTable::Blackjack)
     );
     assert_eq!(
@@ -107,7 +107,7 @@ fn tables_only_cycle_works_without_boards() {
             &[],
             GameWorkspace::HouseTable(HouseTable::Blackjack)
         ),
-        GameWorkspace::Dashboard
+        GameWorkspace::Base
     );
 }
 
@@ -157,7 +157,7 @@ fn arcade_stops_slot_after_house_tables() {
             &[],
             GameWorkspace::Arcade(ArcadeStop::Solitaire)
         ),
-        GameWorkspace::Dashboard
+        GameWorkspace::Base
     );
 }
 
@@ -165,7 +165,7 @@ fn arcade_stops_slot_after_house_tables() {
 fn arcade_only_cycle_works_without_lobby_stops() {
     let arcade = [ArcadeStop::LeWord];
     assert_eq!(
-        next_workspace(&[], &[], &arcade, &[], GameWorkspace::Dashboard),
+        next_workspace(&[], &[], &arcade, &[], GameWorkspace::Base),
         GameWorkspace::Arcade(ArcadeStop::LeWord)
     );
     assert_eq!(
@@ -176,7 +176,7 @@ fn arcade_only_cycle_works_without_lobby_stops() {
             &[],
             GameWorkspace::Arcade(ArcadeStop::LeWord)
         ),
-        GameWorkspace::Dashboard
+        GameWorkspace::Base
     );
 }
 
@@ -206,7 +206,7 @@ fn live_doors_slot_last_then_wrap_home() {
             &doors,
             GameWorkspace::Door(Screen::Nethack)
         ),
-        GameWorkspace::Dashboard
+        GameWorkspace::Base
     );
 }
 
@@ -227,7 +227,7 @@ fn door_only_cycle_hops_between_dungeons() {
             &[Screen::Nethack],
             GameWorkspace::Door(Screen::Nethack)
         ),
-        GameWorkspace::Dashboard
+        GameWorkspace::Base
     );
 }
 
@@ -237,7 +237,7 @@ fn recently_detached_lateania_leads_the_door_stops() {
     // the roguelikes, then the cycle wraps home.
     let doors = [Screen::Lateania, Screen::Dcss];
     assert_eq!(
-        next_workspace(&[], &[], &[], &doors, GameWorkspace::Dashboard),
+        next_workspace(&[], &[], &[], &doors, GameWorkspace::Base),
         GameWorkspace::Door(Screen::Lateania)
     );
     assert_eq!(
@@ -246,7 +246,7 @@ fn recently_detached_lateania_leads_the_door_stops() {
     );
     assert_eq!(
         next_workspace(&[], &[], &[], &doors, GameWorkspace::Door(Screen::Dcss)),
-        GameWorkspace::Dashboard
+        GameWorkspace::Base
     );
 }
 
@@ -274,7 +274,7 @@ fn native_remakes_slot_after_the_roguelikes() {
             &doors,
             GameWorkspace::Door(Screen::GreenDragon)
         ),
-        GameWorkspace::Dashboard
+        GameWorkspace::Base
     );
 }
 

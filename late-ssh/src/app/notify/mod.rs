@@ -142,11 +142,11 @@ impl Notification {
     /// Reuses `GameEvents` rather than adding a dedicated `Kind`/settings row:
     /// this is the same "something you started needs your attention" bucket
     /// as the daily/house your-turn alerts.
-    pub(crate) fn pomodoro_done(label: &str) -> Self {
+    pub(crate) fn status_done(word: &str) -> Self {
         Self {
             kind: Kind::GameEvents,
-            title: format!("{label} done"),
-            body: "your /pomodoro timer finished".to_string(),
+            title: format!("{word} done"),
+            body: "your /status countdown finished".to_string(),
         }
     }
 }

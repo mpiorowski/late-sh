@@ -142,10 +142,10 @@ fn chat_composer_layout_keeps_one_blank_row_gap() {
     let area = Rect::new(0, 0, 80, 20);
     let (messages_area, composer_area) = split_chat_and_composer(area, 3);
 
-    assert_eq!(
-        composer_area.y,
-        messages_area.y + messages_area.height + CHAT_COMPOSER_GAP_HEIGHT
-    );
+    // Embedded chats draw no ticker, so the ticker's row goes to the
+    // messages and only the breather stays.
+    assert_eq!(composer_area.y, messages_area.y + messages_area.height + 1);
+    assert_eq!(messages_area.height, 20 - 3 - 1);
 }
 
 #[test]
@@ -223,7 +223,6 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
     let bonsai_glyphs = HashMap::new();
     let chat_badges = HashMap::from([(author_id, "🐱".to_string())]);
     let friend_user_ids = HashSet::new();
-    let afk_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let message_gilds = HashMap::new();
@@ -239,14 +238,13 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
             milestone: None,
         },
     )]);
-    let peer_pomodoros = HashMap::new();
+    let peer_statuses = HashMap::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
         current_user_id,
-        afk_user_ids: &afk_user_ids,
         live_user_ids: &live_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
@@ -261,7 +259,7 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
-        peer_pomodoros: &peer_pomodoros,
+        peer_statuses: &peer_statuses,
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -321,7 +319,6 @@ fn the_crown_glyph_renders_between_the_author_name_and_their_title() {
     let bonsai_glyphs = HashMap::new();
     let chat_badges = HashMap::from([(author_id, "🐱".to_string())]);
     let friend_user_ids = HashSet::new();
-    let afk_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let message_gilds = HashMap::new();
@@ -337,14 +334,13 @@ fn the_crown_glyph_renders_between_the_author_name_and_their_title() {
             milestone: None,
         },
     )]);
-    let peer_pomodoros = HashMap::new();
+    let peer_statuses = HashMap::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
         current_user_id,
-        afk_user_ids: &afk_user_ids,
         live_user_ids: &live_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
@@ -359,7 +355,7 @@ fn the_crown_glyph_renders_between_the_author_name_and_their_title() {
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
-        peer_pomodoros: &peer_pomodoros,
+        peer_statuses: &peer_statuses,
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -396,7 +392,6 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
     let bonsai_glyphs = HashMap::new();
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
-    let afk_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let message_gilds = HashMap::new();
@@ -404,7 +399,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_flair = HashMap::new();
-    let peer_pomodoros = HashMap::new();
+    let peer_statuses = HashMap::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
@@ -412,7 +407,6 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
         current_user_id: user_id,
-        afk_user_ids: &afk_user_ids,
         live_user_ids: &live_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
@@ -427,7 +421,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
-        peer_pomodoros: &peer_pomodoros,
+        peer_statuses: &peer_statuses,
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -453,7 +447,6 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
     let bonsai_glyphs = HashMap::new();
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
-    let afk_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let message_gilds = HashMap::new();
@@ -461,7 +454,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_flair = HashMap::new();
-    let peer_pomodoros = HashMap::new();
+    let peer_statuses = HashMap::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
@@ -475,7 +468,6 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
     let ctx = |versions| ChatRowsContext {
         versions,
         current_user_id: user_id,
-        afk_user_ids: &afk_user_ids,
         live_user_ids: &live_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
@@ -490,7 +482,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
-        peer_pomodoros: &peer_pomodoros,
+        peer_statuses: &peer_statuses,
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -555,7 +547,6 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
     let bonsai_glyphs = HashMap::new();
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
-    let afk_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let message_gilds = HashMap::new();
@@ -563,14 +554,13 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_flair = HashMap::new();
-    let peer_pomodoros = HashMap::new();
+    let peer_statuses = HashMap::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
         current_user_id,
-        afk_user_ids: &afk_user_ids,
         live_user_ids: &live_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
@@ -585,7 +575,7 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
-        peer_pomodoros: &peer_pomodoros,
+        peer_statuses: &peer_statuses,
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -768,7 +758,6 @@ fn mentions_and_replies_paint_a_background_wash() {
     let bonsai_glyphs = HashMap::new();
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
-    let afk_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let message_gilds = HashMap::new();
@@ -776,14 +765,13 @@ fn mentions_and_replies_paint_a_background_wash() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_flair = HashMap::new();
-    let peer_pomodoros = HashMap::new();
+    let peer_statuses = HashMap::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
         current_user_id,
-        afk_user_ids: &afk_user_ids,
         live_user_ids: &live_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
@@ -798,7 +786,7 @@ fn mentions_and_replies_paint_a_background_wash() {
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
-        peer_pomodoros: &peer_pomodoros,
+        peer_statuses: &peer_statuses,
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -853,7 +841,6 @@ fn background_wash_fills_the_whole_row_width() {
     let bonsai_glyphs = HashMap::new();
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
-    let afk_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let message_gilds = HashMap::new();
@@ -861,14 +848,13 @@ fn background_wash_fills_the_whole_row_width() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_flair = HashMap::new();
-    let peer_pomodoros = HashMap::new();
+    let peer_statuses = HashMap::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
         current_user_id,
-        afk_user_ids: &afk_user_ids,
         live_user_ids: &live_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
@@ -883,7 +869,7 @@ fn background_wash_fills_the_whole_row_width() {
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
-        peer_pomodoros: &peer_pomodoros,
+        peer_statuses: &peer_statuses,
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -928,6 +914,7 @@ fn composer_view<'a>(textarea: &'a TextArea<'static>) -> ComposerBlockView<'a> {
         mention_matches: &[],
         mention_selected: 0,
         keep_composer_focused: false,
+        inert: false,
     }
 }
 
@@ -948,7 +935,7 @@ fn chat_view<'a>(
 ) -> ChatRenderInput<'a> {
     static INLINE_IMAGES: OnceLock<HashMap<Uuid, InlineImagePreview>> = OnceLock::new();
     static FRIEND_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
-    static AFK_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
+    static LIVE_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static IGNORED_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static VOICE_SNAPSHOT: OnceLock<crate::app::voice::svc::VoiceSnapshot> = OnceLock::new();
     static VOICE_CHANNELS: OnceLock<HashMap<Uuid, late_core::models::voice_channel::VoiceChannel>> =
@@ -1041,8 +1028,7 @@ fn chat_view<'a>(
         composer,
         composing: false,
         current_user_id: Uuid::nil(),
-        afk_user_ids: AFK_USER_IDS.get_or_init(HashSet::new),
-        live_user_ids: AFK_USER_IDS.get_or_init(HashSet::new),
+        live_user_ids: LIVE_USER_IDS.get_or_init(HashSet::new),
         ignored_user_ids: IGNORED_USER_IDS.get_or_init(HashSet::new),
         sticky_unread_dm: None,
         show_flag_fallback: false,
@@ -1058,7 +1044,7 @@ fn chat_view<'a>(
         drunk_levels: DRUNK_LEVELS.get_or_init(HashMap::new),
         name_flair: NAME_STYLES.get_or_init(HashMap::new),
         runner_looks: RUNNER_LOOKS.get_or_init(HashMap::new),
-        peer_pomodoros: PEER_POMODOROS.get_or_init(HashMap::new),
+        peer_statuses: PEER_POMODOROS.get_or_init(HashMap::new),
         name_flicker: None,
         translations: TRANSLATIONS.get_or_init(HashMap::new),
         translation_hidden: TRANSLATION_HIDDEN.get_or_init(HashSet::new),
@@ -2072,6 +2058,79 @@ fn cozy_room_rail_hides_dm_with_ignored_peer() {
     );
 }
 
+/// Mirrors `visual_order_lists_only_live_streams`: a pending stream gets no
+/// rail row, and with no live stream there is no stream section at all.
+#[test]
+fn cozy_room_rail_lists_only_live_streams() {
+    let bob = Uuid::from_u128(102);
+    let dm_bob = rail_dm(2, bob);
+    let rooms = vec![(dm_bob.clone(), Vec::new())];
+
+    let mut rows_cache = ChatRowsCache::default();
+    let usernames = HashMap::from([(bob, "bob".to_string())]);
+    let username_lookup = UsernameLookup::new(&usernames, None);
+    let countries = HashMap::new();
+    let message_reactions = HashMap::new();
+    let unread_counts = HashMap::new();
+    let bonsai_glyphs = HashMap::new();
+    let chat_badges = HashMap::new();
+    let composer = TextArea::default();
+    let profile_award_badges = HashMap::new();
+    let news_composer = TextArea::default();
+    let live = live_stream("bug hunt", "https://late.sh/live/abc");
+    let mut pending = live_stream("warming up", "https://late.sh/live/def");
+    pending.user_id = Uuid::from_u128(40);
+    pending.username = "zed".to_string();
+    pending.room_id = Uuid::from_u128(41);
+    pending.live = false;
+
+    let pending_only = [pending.clone()];
+    let mut view = chat_view(
+        &mut rows_cache,
+        &rooms,
+        None,
+        &username_lookup,
+        &countries,
+        &message_reactions,
+        &unread_counts,
+        &bonsai_glyphs,
+        &chat_badges,
+        &profile_award_badges,
+        &composer,
+        &news_composer,
+    );
+    view.live_streams = &pending_only;
+    let room_rows = build_cozy_room_rail_rows(&room_list_view_from_render_input(&view), 40);
+    let rendered: Vec<String> = room_rows.lines.iter().map(line_text).collect();
+    assert!(
+        !room_rows
+            .hit_slots
+            .contains(&Some(RoomSlot::Room(pending.room_id))),
+        "pending stream rendered in {rendered:?}"
+    );
+    assert!(
+        !rendered.iter().any(|line| line.contains("stream")),
+        "stream section rendered with no live stream in {rendered:?}"
+    );
+
+    let both = [live.clone(), pending.clone()];
+    view.live_streams = &both;
+    let room_rows = build_cozy_room_rail_rows(&room_list_view_from_render_input(&view), 40);
+    let rendered: Vec<String> = room_rows.lines.iter().map(line_text).collect();
+    assert!(
+        room_rows
+            .hit_slots
+            .contains(&Some(RoomSlot::Room(live.room_id))),
+        "live stream missing from {rendered:?}"
+    );
+    assert!(
+        !room_rows
+            .hit_slots
+            .contains(&Some(RoomSlot::Room(pending.room_id))),
+        "pending stream rendered in {rendered:?}"
+    );
+}
+
 #[test]
 fn room_section_header_parser_ignores_fold_key_hints() {
     assert_eq!(strip_room_section_header_prefix("[o] - core"), "core");
@@ -2773,6 +2832,54 @@ fn live_stream(title: &str, watch_url: &str) -> crate::app::stream::registry::Li
     }
 }
 
+/// The rail row carries only the streamer and the watcher count in brackets:
+/// the unread badge already sits on the right as a bare number, so the count
+/// must not read as a second one, and the title stays in the stream header.
+#[test]
+fn stream_rail_label_is_the_username_and_a_bracketed_watcher_count() {
+    // The 24-column rail leaves a label 17 cells with jump keys hidden.
+    const LABEL_MAX: usize = 17;
+    let mut stream = live_stream("bug hunt", "https://late.sh/live/abc");
+    assert_eq!(super::stream_rail_label(&stream, LABEL_MAX), "▶ mat [3]");
+
+    // Zero watchers still shows the bracket, so the slot never jumps around.
+    stream.watching = 0;
+    assert_eq!(super::stream_rail_label(&stream, LABEL_MAX), "▶ mat [0]");
+
+    // Pending: no media yet, so no count to stand behind. The marker keeps
+    // the bracket so it cannot pass for a clipped row.
+    stream.live = false;
+    stream.watching = 2;
+    assert_eq!(super::stream_rail_label(&stream, LABEL_MAX), "▶ mat […]");
+}
+
+/// A username can run 32 characters against a 17-cell label budget. The
+/// row renderer clips from the right, which would eat the count first and
+/// leave a live stream ending in the pending `…`. So the name is what
+/// shortens, and the bracket is always the last thing on the row.
+#[test]
+fn stream_rail_label_shortens_the_username_and_keeps_the_watcher_count() {
+    const LABEL_MAX: usize = 17;
+    let mut stream = live_stream("bug hunt", "https://late.sh/live/abc");
+    stream.username = "averyverylongstreamername".to_string();
+    stream.watching = 12;
+
+    let label = super::stream_rail_label(&stream, LABEL_MAX);
+    assert_eq!(label, "▶ averyvery… [12]");
+    assert_eq!(UnicodeWidthStr::width(label.as_str()), LABEL_MAX);
+
+    // Two cells fewer while jump keys are shown: still the whole bracket.
+    let label = super::stream_rail_label(&stream, LABEL_MAX - 2);
+    assert_eq!(label, "▶ averyve… [12]");
+
+    // Pending with a long name still reads as pending, not as clipped.
+    stream.live = false;
+    assert_eq!(
+        super::stream_rail_label(&stream, LABEL_MAX),
+        "▶ averyveryl… […]"
+    );
+}
+
 /// A real stream id is 16 random bytes in base64url (`registry::capability_id`),
 /// so `watch: <url>` plus its trailing cell runs 51 columns, wider than the
 /// slack an ordinary chat pane has left over. The link is the point of the
@@ -2928,7 +3035,6 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
     let bonsai_glyphs = HashMap::new();
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
-    let afk_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let message_gilds = HashMap::new();
@@ -2936,7 +3042,7 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_flair = HashMap::new();
-    let peer_pomodoros = HashMap::new();
+    let peer_statuses = HashMap::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
@@ -2948,7 +3054,6 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
         let ctx = ChatRowsContext {
             versions: ChatRowsVersions::default(),
             current_user_id,
-            afk_user_ids: &afk_user_ids,
             live_user_ids: &live_user_ids,
             show_flag_fallback: false,
             usernames: &username_lookup,
@@ -2963,7 +3068,7 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
             dividers,
             drunk_levels: &drunk_levels,
             name_flair: &name_flair,
-            peer_pomodoros: &peer_pomodoros,
+            peer_statuses: &peer_statuses,
             name_flicker: None,
             translations: &translations,
             translation_hidden: &translation_hidden,
@@ -3113,7 +3218,6 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
     let bonsai_glyphs = HashMap::new();
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
-    let afk_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let message_gilds = HashMap::new();
@@ -3121,14 +3225,13 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_flair = HashMap::new();
-    let peer_pomodoros = HashMap::new();
+    let peer_statuses = HashMap::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
         current_user_id,
-        afk_user_ids: &afk_user_ids,
         live_user_ids: &live_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
@@ -3143,7 +3246,7 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
-        peer_pomodoros: &peer_pomodoros,
+        peer_statuses: &peer_statuses,
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,

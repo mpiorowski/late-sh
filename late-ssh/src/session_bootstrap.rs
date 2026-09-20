@@ -409,22 +409,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     // not seen, or the cup. One claim per login, the gallery logs its
     // own failures.
     let splash_piece = state.gallery_service.claim_splash_piece(user_id).await;
-    let initial_announcements = match state.db.get().await {
-        Ok(client) => {
-            match crate::app::announcements::load_login_announcements(&client, user_id).await {
-                Ok(announcements) => announcements,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load login announcements");
-                    None
-                }
-            }
-        }
-        Err(e) => {
-            tracing::warn!(error = ?e, "failed to get db client for login announcements");
-            None
-        }
-    };
-
     let initial_door_rcs = match state.door_rc_service.list(user_id).await {
         Ok(rcs) => rcs,
         Err(e) => {
@@ -571,6 +555,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         radio_meta_rx: Some(state.radio_meta_rx.clone()),
         active_users: Some(state.active_users.clone()),
         clubhouse_lobby: Some(state.clubhouse_lobby.clone()),
+        nightcap_lobby: Some(state.nightcap_lobby.clone()),
         mention_ladders: state.mention_ladders.clone(),
         files: state.config.files.clone(),
         scratchpad_registry: Some(state.scratchpad_registry.clone()),
@@ -585,21 +570,19 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         app_flags: Some(state.app_flags.clone()),
         runner_looks_rx: state.runner_looks.subscribe(),
         zen_layout: late_core::models::user::extract_zen_layout(&user.settings),
-        afk_users: state.afk_users.clone(),
         username_directory: Some(state.username_directory.clone()),
         flair_directory: Some(state.flair_directory.clone()),
-        pomodoro_directory: Some(state.pomodoro_directory.clone()),
+        status_directory: Some(state.status_directory.clone()),
         crown_service: Some(state.crown_service.clone()),
         pot_service: Some(state.pot_service.clone()),
         activity_feed_rx,
-        initial_announcements,
         user_id,
         permissions,
         artboard_banned: artboard_ban.is_some(),
         artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
         leaderboard_rx: Some(state.leaderboard_service.subscribe()),
         is_new_user,
-        land_on_home: late_core::models::user::extract_land_on_home(&user.settings),
+        landing_page: late_core::models::user::extract_landing_page(&user.settings),
         paper_at_login: late_core::models::user::extract_paper_at_login(&user.settings),
         initial_theme_id: late_core::models::user::extract_theme_id(&user.settings)
             .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),

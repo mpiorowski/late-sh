@@ -2,6 +2,7 @@ use super::{
     compare_span, fit, hug_poi_arrows, inventory_item_tag, land_chip_name, land_map_lines,
     line_rows, meter, rarity_color, scroll_offset, star_rating, wrapped_rows,
 };
+use crate::app::door::lateania::svc::{InvView, SectionRow};
 use crate::app::door::lateania::world::RegionProgress;
 use crate::app::door::lateania::worldmap::{MapArrow, Tile};
 use ratatui::style::Color;
@@ -251,10 +252,9 @@ fn recent_log_trims_oldest_when_it_overflows_height() {
 
 #[test]
 fn the_xp_meter_stays_on_the_character_sheet_under_a_pile_of_titles() {
-    // The bug: the full-screen character sheet is three fixed-height columns
-    // with no scroll of its own (`[`/`]` only reach the narrow side panel), and
-    // the right column listed every earned title *before* Experience. Enough
-    // titles and the XP bar walked off the bottom with no way to reach it.
+    // The bug: the right column of the full-screen character sheet listed
+    // every earned title *before* Experience. Enough titles and the XP bar
+    // walked off the bottom, a scroll away at best.
     let mut view = empty_player_view();
     view.level = 30;
     view.xp_into_level = 120;
@@ -277,6 +277,59 @@ fn the_xp_meter_stays_on_the_character_sheet_under_a_pile_of_titles() {
     assert!(
         text.iter().any(|l| l.contains("+26 more")),
         "the title list is summarised rather than unbounded: {text:?}"
+    );
+}
+
+#[test]
+fn brackets_scroll_the_character_sheet_to_its_hidden_rows() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    // The sheet engages at 72x18, where the identity column (portrait,
+    // vitals, purse) runs past the 16 rows inside the border. `[`/`]` shift
+    // the shared offset; the sheet clamps it so the tallest column's last
+    // row can reach the floor and no further.
+    let mut view = empty_player_view();
+    view.classed = true;
+    view.level = 30;
+    view.gold = 4242;
+    view.banked_gold = 9000;
+    let draw = |scroll: usize| {
+        let mut terminal = Terminal::new(TestBackend::new(72, 18)).expect("terminal");
+        let mut off = 0;
+        terminal
+            .draw(|frame| {
+                off = super::draw_character_sheet(frame, frame.area(), &view, scroll);
+            })
+            .expect("draw");
+        let buffer = terminal.backend().buffer();
+        let text = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        (off, text)
+    };
+
+    let (top, top_text) = draw(0);
+    assert_eq!(top, 0);
+    assert!(
+        !top_text.contains("bank 9000"),
+        "the purse starts below the fold:\n{top_text}"
+    );
+
+    let (bottom, bottom_text) = draw(usize::MAX);
+    assert!(bottom > 0, "a sheet taller than the screen scrolls");
+    assert!(
+        bottom_text.contains("bank 9000"),
+        "scrolled to the end, the last row is on screen:\n{bottom_text}"
+    );
+    assert_eq!(
+        draw(bottom + 1).0,
+        bottom,
+        "the offset stops at the last row"
     );
 }
 
@@ -387,7 +440,8 @@ fn room_panel_makes_each_foe_a_clickable_row() {
 
     let names: HashMap<uuid::Uuid, String> = HashMap::new();
     let usernames = UsernameLookup::new(&names, None);
-    let (lines, hits, _player_hits) = super::room_panel(&view, &usernames, 30, None);
+    let panel = super::room_panel(&view, &usernames, 30, None);
+    let (lines, hits) = (panel.body, panel.foe_hits);
 
     assert_eq!(hits.len(), 2, "one clickable row per foe");
     for (idx, id) in &hits {
@@ -563,8 +617,13 @@ fn the_heading_line_names_the_exit_to_take_next() {
     ];
 
     let panel = |heading| {
-        let (lines, _, _) = super::room_panel(&view, &usernames, 40, heading);
-        lines.iter().map(line_text).collect::<Vec<_>>().join("\n")
+        let panel = super::room_panel(&view, &usernames, 40, heading);
+        panel
+            .body
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n")
     };
 
     let toward = panel(Some(Heading::Toward(
@@ -619,8 +678,13 @@ fn foe_rows_carry_the_full_name_without_truncation() {
     }];
     let names: HashMap<uuid::Uuid, String> = HashMap::new();
     let usernames = UsernameLookup::new(&names, None);
-    let (lines, _hits, _player_hits) = super::room_panel(&view, &usernames, 28, None);
-    let all: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    let panel = super::room_panel(&view, &usernames, 28, None);
+    let all: String = panel
+        .body
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
         !all.contains('\u{2026}'),
         "no ellipsis truncation in the foe roster: {all}"
@@ -1313,4 +1377,842 @@ fn the_point_screen_fits_the_rows_it_has() {
         short.iter().any(|l| l.contains("1-6")),
         "the keys are still explained"
     );
+}
+
+#[test]
+fn the_shop_screen_gives_each_item_one_line_and_stands_the_worn_piece_beside_it() {
+    use crate::app::door::lateania::svc::{SectionRow, ShopEntryView, ShopView};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let entry = |name: &str, price: i64, pct: Option<i32>| ShopEntryView {
+        item_id: 1,
+        name: name.to_string(),
+        rarity: "rare".to_string(),
+        price,
+        affordable: true,
+        stats: "+16 atk".to_string(),
+        compare: "vs worn: +8 atk".to_string(),
+        compare_pct: pct,
+        category: "Weapons",
+        desc: "A two-handed brute that bites through mail."
+            .to_string()
+            .leak(),
+        slot: Some("weapon".to_string()),
+        worn_name: Some("Iron Longsword".to_string()),
+        worn_stats: Some("+8 atk".to_string()),
+    };
+    let shop = ShopView {
+        npc_name: "Bruna Ironhand".to_string(),
+        shop_name: "The Ember Forge".to_string(),
+        greeting: String::new(),
+        entries: vec![
+            entry("Steel Greatsword", 311, Some(6)),
+            entry("Embergate Falchion", 873, Some(77)),
+            entry("Rusty Shortsword", 25, Some(-73)),
+        ],
+    };
+    let rows = vec![
+        SectionRow::Header {
+            key: "shop:Weapons".to_string(),
+            label: "Weapons".to_string(),
+            count: 3,
+            collapsed: false,
+        },
+        SectionRow::Item { index: 0 },
+        SectionRow::Item { index: 1 },
+        SectionRow::Item { index: 2 },
+    ];
+
+    let mut terminal = Terminal::new(TestBackend::new(110, 24)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            super::draw_shop_screen(frame, frame.area(), &rows, &shop, 1, 477, 0);
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    let text: Vec<String> = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect();
+
+    // Every listing is one row in the list column, not a wrapped stanza: the
+    // three names and their header each sit on exactly one line there.
+    let list: Vec<String> = text
+        .iter()
+        .map(|line| line.chars().take(57).collect())
+        .collect();
+    for name in [
+        "Weapons",
+        "Steel Greatsword",
+        "Embergate Falchion",
+        "Rusty Shortsword",
+    ] {
+        assert_eq!(
+            list.iter().filter(|l| l.contains(name)).count(),
+            1,
+            "{name} should occupy exactly one line of the list:\n{}",
+            text.join("\n")
+        );
+    }
+    // Prices and upgrade tags survive the column edge rather than being clipped.
+    assert!(
+        list.iter()
+            .any(|l| l.contains("873g") && l.contains("+77%")),
+        "the price and the full upgrade tag should both fit:\n{}",
+        text.join("\n")
+    );
+    // The selected piece stands next to what it would replace, on screen at once.
+    let joined = text.join("\n");
+    assert!(
+        joined.contains("Iron Longsword") && joined.contains("instead of what you wear"),
+        "the worn piece should be shown for comparison:\n{joined}"
+    );
+    assert!(
+        joined.contains("Enter to buy"),
+        "the buy prompt should name the price:\n{joined}"
+    );
+}
+
+#[test]
+fn the_shop_detail_still_ends_on_the_buy_prompt_at_the_smallest_full_screen() {
+    use crate::app::door::lateania::svc::{SectionRow, ShopEntryView, ShopView};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    // The full screen only engages at 100x20 (`draw` dispatches below that to
+    // the rail), so the detail pane has to fit the worst case at exactly that
+    // size: a piece with a slot, a worn rival, a delta, and the longest
+    // description in the catalogue. The buy prompt is the last line, so if
+    // anything is being clipped off the bottom it goes first.
+    let shop = ShopView {
+        npc_name: "Bruna Ironhand".to_string(),
+        shop_name: "The Ember Forge".to_string(),
+        greeting: String::new(),
+        entries: vec![ShopEntryView {
+            item_id: 1,
+            name: "Embergate Falchion".to_string(),
+            rarity: "rare".to_string(),
+            price: 873,
+            affordable: true,
+            stats: "+16 atk  +4 arm  +30 hp".to_string(),
+            compare: "vs worn: +8 atk  +2 arm".to_string(),
+            compare_pct: Some(77),
+            category: "Weapons",
+            desc: "A chapel reliquary recovered from the old crypts below Tasmania."
+                .to_string()
+                .leak(),
+            slot: Some("weapon".to_string()),
+            worn_name: Some("Iron Longsword".to_string()),
+            worn_stats: Some("+8 atk  +2 arm  +12 hp".to_string()),
+        }],
+    };
+    let rows = vec![
+        SectionRow::Header {
+            key: "shop:Weapons".to_string(),
+            label: "Weapons".to_string(),
+            count: 1,
+            collapsed: false,
+        },
+        SectionRow::Item { index: 0 },
+    ];
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 20)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            super::draw_shop_screen(frame, frame.area(), &rows, &shop, 1, 477, 0);
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    let text: Vec<String> = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect();
+    let joined = text.join("\n");
+    assert!(
+        joined.contains("Enter to buy"),
+        "the detail pane must still reach its buy prompt at 100x20:\n{joined}"
+    );
+}
+
+fn inv_row(name: &str, slot: Option<&str>, equipped: bool, pct: Option<i32>) -> InvView {
+    InvView {
+        item_id: 1,
+        name: name.to_string(),
+        rarity: "rare".to_string(),
+        slot: slot.map(str::to_string),
+        equipped,
+        sell_price: 218,
+        stats: "+16 atk  +4 arm  +30 hp".to_string(),
+        compare: if equipped {
+            String::new()
+        } else {
+            "vs worn: +8 atk  +2 arm".to_string()
+        },
+        compare_pct: pct,
+        category: "Weapons",
+        desc: "A chapel reliquary recovered from the old crypts below Tasmania.",
+        worn_name: (!equipped).then(|| "Iron Longsword".to_string()),
+        worn_stats: (!equipped).then(|| "+8 atk  +2 arm  +12 hp".to_string()),
+    }
+}
+
+fn draw_inventory(
+    width: u16,
+    height: u16,
+    inventory: &[InvView],
+    cursor: usize,
+    merchant_here: bool,
+) -> Vec<String> {
+    let mut view = empty_player_view();
+    view.inventory = inventory.to_vec();
+    view.gold = 477;
+    view.shop = merchant_here.then(|| super::super::svc::ShopView {
+        npc_name: "Bruna Ironhand".to_string(),
+        shop_name: "The Ember Forge".to_string(),
+        greeting: String::new(),
+        entries: Vec::new(),
+    });
+    draw_inventory_view(width, height, &view, cursor)
+}
+
+fn draw_inventory_view(
+    width: u16,
+    height: u16,
+    view: &super::PlayerView,
+    cursor: usize,
+) -> Vec<String> {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let inventory = &view.inventory;
+
+    let rows: Vec<SectionRow> = std::iter::once(SectionRow::Header {
+        key: "inv:Weapons".to_string(),
+        label: "Weapons".to_string(),
+        count: inventory.len(),
+        collapsed: false,
+    })
+    .chain((0..inventory.len()).map(|index| SectionRow::Item { index }))
+    .collect();
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            super::draw_inventory_screen(frame, frame.area(), &rows, view, cursor);
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect()
+}
+
+#[test]
+fn the_inventory_screen_gives_each_piece_one_line_and_stands_loot_against_the_worn_piece() {
+    let inventory = vec![
+        inv_row("Embergate Falchion", Some("weapon"), false, Some(77)),
+        inv_row("Rusty Shortsword", Some("weapon"), false, Some(-73)),
+        inv_row("Iron Longsword", Some("weapon"), true, None),
+    ];
+    let text = draw_inventory(110, 24, &inventory, 1, true);
+    let joined = text.join("\n");
+
+    // Each piece is one row of the list column, not a wrapped stanza.
+    let list: Vec<String> = text
+        .iter()
+        .map(|line| line.chars().take(57).collect())
+        .collect();
+    for name in ["Embergate Falchion", "Rusty Shortsword"] {
+        assert_eq!(
+            list.iter().filter(|l| l.contains(name)).count(),
+            1,
+            "{name} should occupy exactly one line of the list:\n{joined}"
+        );
+    }
+    // The upgrade tag and sell value fit, and worn gear is marked as worn.
+    assert!(
+        list.iter()
+            .any(|l| l.contains("Embergate Falchion") && l.contains("218g") && l.contains("+77%")),
+        "the sell value and the full upgrade tag should both fit:\n{joined}"
+    );
+    assert!(
+        list.iter()
+            .any(|l| l.contains("Iron Longsword") && l.trim_end().ends_with("worn")),
+        "the worn piece should be tagged worn:\n{joined}"
+    );
+    // The selected loot stands against what it would replace, with its verbs.
+    assert!(
+        joined.contains("instead of what you wear"),
+        "the worn piece should be shown for comparison:\n{joined}"
+    );
+    assert!(joined.contains("Enter to put it on"), "{joined}");
+    assert!(joined.contains("x to sell - 218g"), "{joined}");
+}
+
+#[test]
+fn the_inventory_screen_keeps_your_vitals_and_the_fight_in_sight() {
+    // The pack covers the whole field, and it is the panel opened mid-fight
+    // to drink something, so the header carries what the field would show.
+    let mut view = empty_player_view();
+    view.inventory = vec![inv_row("Iron Longsword", Some("weapon"), true, None)];
+    view.hp = 37;
+    view.max_hp = 210;
+    view.resource_name = "Mana".to_string();
+    view.resource = 12;
+    view.max_resource = 80;
+    let calm = draw_inventory_view(100, 20, &view, 1).join("\n");
+    assert!(calm.contains("HP 37/210"), "{calm}");
+    assert!(calm.contains("Mana 12/80"), "{calm}");
+    assert!(!calm.contains("fighting"), "{calm}");
+
+    view.in_combat_with = Some("Ash Wolf".to_string());
+    let fighting = draw_inventory_view(100, 20, &view, 1).join("\n");
+    assert!(fighting.contains("fighting Ash Wolf"), "{fighting}");
+    // The prompts still fit under the extra header line at the smallest size.
+    assert!(fighting.contains("Enter to take it off"), "{fighting}");
+}
+
+#[test]
+fn the_inventory_detail_names_what_the_keys_do_to_worn_gear_at_the_smallest_full_screen() {
+    // At exactly 100x20 (the smallest size `draw` sends here), the longest
+    // description still leaves room for both prompts, which sit last.
+    let loot = vec![inv_row(
+        "Embergate Falchion",
+        Some("weapon"),
+        false,
+        Some(77),
+    )];
+    let joined = draw_inventory(100, 20, &loot, 1, false).join("\n");
+    assert!(joined.contains("Enter to put it on"), "{joined}");
+    assert!(
+        joined.contains("sells for 218g at a merchant"),
+        "away from a shop the sell key is not offered as live:\n{joined}"
+    );
+
+    // Worn gear comes off with Enter and has to come off before it sells.
+    let worn = vec![inv_row("Iron Longsword", Some("weapon"), true, None)];
+    let joined = draw_inventory(100, 20, &worn, 1, true).join("\n");
+    assert!(joined.contains("you are wearing this (weapon)"), "{joined}");
+    assert!(joined.contains("Enter to take it off"), "{joined}");
+    assert!(
+        joined.contains("take it off before you sell it"),
+        "{joined}"
+    );
+    assert!(
+        !joined.contains("instead of what you wear"),
+        "the worn piece is not compared against itself:\n{joined}"
+    );
+}
+
+#[test]
+fn the_side_rail_grows_with_the_terminal_but_stays_a_column() {
+    use super::{SIDE_MAX, SIDE_NARROW, SIDE_WIDE, side_width};
+    // A small terminal keeps the narrow rail it always had.
+    assert_eq!(side_width(80), SIDE_NARROW);
+    // At the old threshold nothing changes, so no one's layout shifts under them.
+    assert_eq!(side_width(84), SIDE_WIDE);
+    assert_eq!(side_width(136), SIDE_WIDE);
+    // Past that it breathes: the reported 190-column terminal was spending a
+    // third of the panel's height on wrap damage at a flat 34.
+    assert_eq!(side_width(190), 47);
+    // And it stops before the rail stops reading as a column.
+    assert_eq!(side_width(400), SIDE_MAX);
+    // Never wider than the screen it sits in.
+    for w in [84u16, 100, 190, 400] {
+        assert!(side_width(w) < w, "the rail must leave room for the world");
+    }
+}
+
+#[test]
+fn the_room_panel_pins_vitals_scrolls_the_rest_and_says_what_is_hidden() {
+    use ratatui::text::Line;
+    // A room panel shaped like the real one: vitals, a spacer, then more
+    // content than the window can hold.
+    let mut lines: Vec<Line<'static>> = vec![
+        Line::from("Warrior lvl 9"),
+        Line::from("HP 56/56"),
+        Line::raw(""),
+    ];
+    for i in 0..20 {
+        lines.push(Line::from(format!("row {i}")));
+    }
+    let (shown, pinned, off) = super::scroll_room_panel(lines.clone(), 0, 40, 10);
+    assert_eq!(pinned, 3, "vitals and their spacer stay pinned");
+    assert_eq!(off, 0);
+    assert_eq!(shown.len(), 10, "the panel fills its window exactly");
+    let text: Vec<String> = shown
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+        .collect();
+    assert_eq!(
+        text[0], "Warrior lvl 9",
+        "HP is never something you scroll to"
+    );
+    // 7 body rows fit alongside the marker, so 14 of the 20 are still below.
+    assert!(
+        text[9].contains("+14 more"),
+        "the hidden count should be exact, got {:?}",
+        text[9]
+    );
+
+    // Scrolled down, the pinned head stays put and the body moves under it.
+    let (shown, pinned, off) = super::scroll_room_panel(lines.clone(), 5, 40, 10);
+    assert_eq!((pinned, off), (3, 5));
+    let text: Vec<String> = shown
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+        .collect();
+    assert_eq!(text[0], "Warrior lvl 9");
+    assert_eq!(text[3], "row 5", "the body scrolled by the offset");
+
+    // Scrolled to the end there is nothing hidden, so no marker claims there is.
+    let (shown, _, off) = super::scroll_room_panel(lines.clone(), 999, 40, 10);
+    let text: Vec<String> = shown
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+        .collect();
+    assert!(
+        off > 0 && off < 20,
+        "the offset clamps to the content: {off}"
+    );
+    assert!(
+        !text.iter().any(|l| l.contains("more")),
+        "no overflow marker at the end of the list: {text:?}"
+    );
+    assert!(
+        text.iter().any(|l| l.contains("row 19")),
+        "the last row is reachable: {text:?}"
+    );
+
+    // A panel that fits is left exactly as it was.
+    let short = vec![
+        Line::from("Warrior lvl 9"),
+        Line::raw(""),
+        Line::from("row 0"),
+    ];
+    let (shown, _, off) = super::scroll_room_panel(short.clone(), 0, 40, 10);
+    assert_eq!((shown.len(), off), (3, 0));
+}
+
+#[test]
+fn feeding_leads_the_panel_only_for_a_hurt_pet_and_otherwise_sits_under_it() {
+    use super::super::svc::PetView;
+    use crate::usernames::UsernameLookup;
+    use std::collections::HashMap;
+
+    let pet = |hp: i32, downed: bool| PetView {
+        name: "Cave Bear".to_string(),
+        glyph: "B".to_string(),
+        level: 3,
+        hp,
+        max_hp: 180,
+        attack: 20,
+        downed,
+        loyalty_pct: 45,
+        meals_today: 2,
+        feed_cost: 20,
+        skills: Vec::new(),
+    };
+    let names: HashMap<uuid::Uuid, String> = HashMap::new();
+    let usernames = UsernameLookup::new(&names, None);
+    let render = |view: &crate::app::door::lateania::svc::PlayerView| {
+        let panel = super::room_panel(view, &usernames, 28, None);
+        panel.body.iter().map(line_text).collect::<Vec<_>>()
+    };
+
+    // A healthy pet: nothing urgent to do, so no action block, and the key sits
+    // under the pet with what a meal buys. Every chip fits the narrowest rail.
+    let mut view = empty_player_view();
+    view.pet = Some(pet(180, false));
+    assert!(super::room_actions(&view).is_empty());
+    let lines = render(&view);
+    let under = lines.join(" ");
+    for chip in ["G feed 20g", "45% to Lv4", "2/4 today"] {
+        assert!(under.contains(chip), "{chip} missing: {lines:#?}");
+    }
+    assert!(
+        lines
+            .iter()
+            .all(|l| unicode_width::UnicodeWidthStr::width(l.as_str()) <= 28),
+        "{lines:#?}"
+    );
+
+    // Hurt or downed: `G` leads the panel, and is not repeated under the pet.
+    for (hurt, label) in [
+        (pet(90, false), "mend companion"),
+        (pet(0, true), "rouse companion"),
+    ] {
+        let mut view = empty_player_view();
+        view.pet = Some(hurt);
+        let lines = render(&view);
+        let joined = lines.join("\n");
+        assert!(
+            joined.contains("You can") && joined.contains(label),
+            "{joined}"
+        );
+        assert_eq!(joined.matches("G ").count(), 1, "G shown once:\n{joined}");
+        assert!(joined.contains("45% to Lv4"), "{joined}");
+    }
+}
+
+#[test]
+fn the_feed_key_is_only_offered_under_a_pet_a_meal_would_do_something_for() {
+    use super::super::pets::{MEALS_PER_DAY, PET_MAX_LEVEL};
+    use super::super::svc::PetView;
+
+    let pet = |level: i32, meals_today: u32| PetView {
+        name: "Cave Bear".to_string(),
+        glyph: "B".to_string(),
+        level,
+        hp: 180,
+        max_hp: 180,
+        attack: 20,
+        downed: false,
+        loyalty_pct: 45,
+        meals_today,
+        feed_cost: 20,
+        skills: Vec::new(),
+    };
+    let chips = |pet: &PetView| super::pet_feed_chips(pet).join(" ");
+
+    assert!(chips(&pet(3, 2)).contains("G feed 20g"));
+    // Healthy and out of meals: `G` would be turned away.
+    let sated = chips(&pet(3, MEALS_PER_DAY));
+    assert!(!sated.contains("G feed"), "{sated}");
+    assert!(sated.contains("4/4 today"), "{sated}");
+    // Healthy at the level cap: a meal has nothing left to raise.
+    let capped = chips(&pet(PET_MAX_LEVEL, 0));
+    assert_eq!(capped, "max level");
+}
+
+#[test]
+fn what_this_room_offers_leads_the_panel_and_the_standing_keys_stay_short() {
+    use super::super::svc::{ShopView, StableView};
+    use super::{SIDE_MAX, SIDE_NARROW, SIDE_WIDE, footer_hints, room_actions};
+
+    // A plain room with nothing to do in it offers no action block at all.
+    let plain = empty_player_view();
+    assert!(
+        room_actions(&plain).is_empty(),
+        "an empty field should not grow a 'You can' header"
+    );
+
+    // Standing at a merchant with a stable next door, both lead the panel, in
+    // the loud style, under their own header.
+    let mut town = empty_player_view();
+    town.shop = Some(ShopView {
+        npc_name: "Bruna Ironhand".to_string(),
+        shop_name: "The Ember Forge".to_string(),
+        greeting: String::new(),
+        entries: Vec::new(),
+    });
+    town.stable = Some(StableView {
+        kennel: Vec::new(),
+        entries: Vec::new(),
+    });
+    let actions: Vec<String> = room_actions(&town)
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+        .collect();
+    assert!(actions[0].contains("You can"), "got {actions:?}");
+    assert!(
+        actions[1].contains('b') && actions[1].contains("shop"),
+        "got {actions:?}"
+    );
+    assert!(
+        actions[2].contains('p') && actions[2].contains("stable"),
+        "got {actions:?}"
+    );
+
+    // The standing keys that are the same in every room stay compact, and point
+    // at the guide rather than reprinting it: the old block was eighteen lines
+    // and pushed the panel off the bottom of the screen.
+    // Nothing in the panel may run past the rail: it is painted pre-wrapped
+    // into a fixed width with no wrapping, so an over-long line is simply
+    // chopped at the edge ("f follow" came out as "f follo").
+    for width in [
+        SIDE_NARROW as usize,
+        SIDE_WIDE as usize,
+        47,
+        SIDE_MAX as usize,
+    ] {
+        for line in room_actions(&town)
+            .iter()
+            .chain(footer_hints(&town, width).iter())
+        {
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(
+                UnicodeWidthStr::width(text.as_str()) <= width,
+                "at width {width} this line is clipped: {text:?}"
+            );
+        }
+    }
+    let footer = footer_hints(&town, 47);
+    assert!(
+        footer.len() <= 8,
+        "the standing-key block should stay short, got {} lines",
+        footer.len()
+    );
+    let footer_text: String = footer
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(footer_text.contains("all keys"), "got {footer_text}");
+    // The waypoint pair is a standing key: mark a spot, warp back to it later.
+    assert!(footer_text.contains(": waypoint"), "got {footer_text}");
+    assert!(footer_text.contains("/ warp"), "got {footer_text}");
+    // Chat, ranks and leaving live in the `?` guide, not the standing block.
+    for gone in ["' say", "! ranks", "Esc leave"] {
+        assert!(
+            !footer_text.contains(gone),
+            "{gone:?} is back: {footer_text}"
+        );
+    }
+    // The room-specific keys live up top now, not down here.
+    assert!(
+        !footer_text.contains("stable"),
+        "'p stable' belongs in the action block: {footer_text}"
+    );
+}
+
+#[test]
+fn a_key_promoted_into_you_can_is_not_repeated_in_the_standing_keys() {
+    use super::super::svc::FeatureView;
+    use super::{footer_hints, room_action_entries, room_actions};
+
+    // A room with something to look at: `o` is the key for it, and it is loud
+    // in "You can" rather than a dim hint tucked inside the "Of note" list.
+    let mut view = empty_player_view();
+    view.features = vec![FeatureView {
+        name: "a mossy well".to_string(),
+        kind: "well".to_string(),
+    }];
+    let actions: String = room_actions(&view)
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        actions.contains("look / interact"),
+        "looking is an action the room offers: {actions}"
+    );
+
+    // And having been promoted, it is gone from the dim block below: one key,
+    // shown once, in the loud place.
+    let footer: String = footer_hints(&view, 47)
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !footer.contains("o look"),
+        "the standing keys should not echo a promoted key: {footer}"
+    );
+    // Keys that work everywhere are untouched by the promotion.
+    assert!(footer.contains("wasd move"), "got {footer}");
+
+    // Nothing to look at, nothing promoted, and the standing block keeps `o`.
+    let bare = empty_player_view();
+    assert!(room_action_entries(&bare).is_empty());
+    let bare_footer: String = footer_hints(&bare, 47)
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(bare_footer.contains("o look"), "got {bare_footer}");
+}
+
+#[test]
+fn the_standing_keys_are_pinned_to_the_floor_only_when_the_room_keeps_its_half() {
+    use super::footer_anchor;
+    // A tall rail: the block takes a fixed berth at the bottom, so the room's
+    // state reads top-down and the keys stop floating wherever it ended.
+    assert_eq!(footer_anchor(7, 40), Some(7));
+    // Exactly half is still the room's to keep.
+    assert_eq!(footer_anchor(7, 14), Some(7));
+    // Below that, pinning would leave the room fewer rows than the key list,
+    // so the block goes back to being ordinary scrolling content.
+    assert_eq!(footer_anchor(7, 13), None);
+    assert_eq!(footer_anchor(7, 8), None);
+    // Nothing to pin (a fallen player's block is built, but an empty one is not).
+    assert_eq!(footer_anchor(0, 40), None);
+}
+
+#[test]
+fn the_stray_tutorial_gives_way_to_the_count_once_you_have_started_feeding() {
+    use super::super::svc::WildlifeView;
+    use crate::usernames::UsernameLookup;
+    use std::collections::HashMap;
+
+    let critter = |adoptable, streak| WildlifeView {
+        name: "a scruffy stray dog".to_string(),
+        note: String::new(),
+        kind: String::new(),
+        perk: String::new(),
+        mythical: false,
+        adoptable,
+        adopt_streak: streak,
+    };
+    let names: HashMap<uuid::Uuid, String> = HashMap::new();
+    let usernames = UsernameLookup::new(&names, None);
+    let panel = |wildlife| {
+        let mut view = empty_player_view();
+        view.classed = true;
+        view.wildlife = wildlife;
+        // The rail wraps, so flatten to one whitespace-squashed string: the
+        // assertions are about which words the panel says, not where it broke
+        // them.
+        let flat = super::room_panel(&view, &usernames, 34, None)
+            .body
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join(" ");
+        flat.split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+
+    // First time: the mechanic is spelled out, because nothing else teaches it.
+    let fresh = panel(vec![critter(true, None)]);
+    assert!(
+        fresh.contains("feed it daily"),
+        "the first sight of an adoptable critter explains it: {fresh}"
+    );
+
+    // Once they have started, the sentence they already read gives way to the
+    // count, which is shorter and tells them something they don't know.
+    let courting = panel(vec![critter(true, Some((2, 5)))]);
+    assert!(
+        courting.contains("2/5 days"),
+        "the progress replaces the lesson: {courting}"
+    );
+    assert!(
+        !courting.contains("feed it daily"),
+        "and does not print both: {courting}"
+    );
+
+    // A player who already keeps a stray can't court another, so the panel
+    // stops offering a key that would do nothing.
+    let done = panel(vec![critter(false, None)]);
+    assert!(
+        done.contains("a scruffy stray dog") && !done.contains("(~"),
+        "no courting prompt once the slot is taken: {done}"
+    );
+}
+
+#[test]
+fn the_log_strip_grows_on_a_tall_terminal() {
+    use super::log_strip_height;
+    // A short terminal keeps what it had.
+    assert_eq!(log_strip_height(24), 8);
+    // The reported case: a tall window used to cap at 7 rows, so the events
+    // scrolled away as fast as on a laptop.
+    assert_eq!(log_strip_height(44), 12);
+    assert_eq!(log_strip_height(80), 12, "capped, the field keeps the rest");
+    // The field always keeps the larger share.
+    for h in [24u16, 30, 44, 60, 80] {
+        assert!(
+            log_strip_height(h) < h / 2,
+            "the log must not crowd out the world at height {h}"
+        );
+    }
+}
+
+// A target a floor away in the same land is not "too far": the journal says
+// how many floors, and tracking it aims the map at the stair.
+#[test]
+fn quest_place_note_names_the_floor_of_a_target_in_the_same_land() {
+    let mut view = empty_player_view();
+    // The Sunken Citadel's Orrery Vault, one floor above the Archdemon's throne.
+    view.room = Some(102);
+    let note = super::quest_place_note(Some(110), &view).expect("the throne has a region");
+    assert!(note.ends_with(" - 1 floor down"), "{note}");
+    // The Frontier's first zone sits in its own reserved block.
+    let note = super::quest_place_note(Some(2000), &view).expect("the frontier has a region");
+    assert!(note.ends_with(" - beyond this land"), "{note}");
+}
+
+// ---- the tracked walk's stair on the world map ----------------------------
+
+#[test]
+fn the_tracked_stair_swaps_its_double_arrow_for_the_walks_single_arrow() {
+    use crate::app::door::lateania::worldmap::{Climb, Coord, TrackAim};
+    use ratatui::style::{Modifier, Style};
+    use std::collections::HashMap;
+
+    // Two rooms on one floor, each with a way down: the tracked walk leaves
+    // by room 2's stair, room 3's is just another stair on the map. Every
+    // stair is already drawn in the map's green, so the tracked one has to
+    // read differently by glyph, not only by colour.
+    let (cols, height) = (11, 7);
+    let center = Coord { x: 0, y: 0, z: 0 };
+    let coords: HashMap<_, _> = [
+        (1, center),
+        (2, Coord { x: 0, y: -1, z: 0 }),
+        (3, Coord { x: -2, y: 0, z: 0 }),
+    ]
+    .into_iter()
+    .collect();
+    let stair = Style::default().fg(Color::Green);
+    let tracked = Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::BOLD);
+    let mut cells = vec![vec![(" ".to_string(), Style::default()); cols as usize]; height as usize];
+    // The corner cell up and to the right of each stair room, as the canvas
+    // places it: room 2 sits at (col 5, row 1), room 3 at (col 1, row 3).
+    cells[0][6] = ("\u{21d3}".to_string(), stair);
+    cells[2][2] = ("\u{21d3}".to_string(), stair);
+
+    super::paint_track_aim(
+        &mut cells,
+        &coords,
+        center,
+        cols,
+        height,
+        Some(TrackAim::Stair {
+            room: 2,
+            climb: Climb::Down,
+        }),
+        1,
+        tracked,
+    );
+
+    assert_eq!(
+        cells[0][6],
+        ("\u{2193}".to_string(), tracked),
+        "the stair the walk takes shows the walk's own arrow in the tracked style"
+    );
+    assert_eq!(
+        cells[2][2],
+        ("\u{21d3}".to_string(), stair),
+        "a stair not on the walk keeps its double arrow"
+    );
+
+    // The way up gets the up arrow.
+    super::paint_track_aim(
+        &mut cells,
+        &coords,
+        center,
+        cols,
+        height,
+        Some(TrackAim::Stair {
+            room: 3,
+            climb: Climb::Up,
+        }),
+        1,
+        tracked,
+    );
+    assert_eq!(cells[2][2], ("\u{2191}".to_string(), tracked));
 }

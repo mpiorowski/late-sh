@@ -56,6 +56,10 @@ pub(crate) struct ClubhouseView<'a> {
     /// The shared composer block, pinned under the tavern. `None` only
     /// before the #lounge room id is known.
     pub composer: Option<crate::app::chat::ui::ComposerBlockView<'a>>,
+    /// A chat overlay that lands here (requested on Home; commands are off
+    /// in this composer). It owns input on this screen
+    /// (`screen_composes_chat`), so it is drawn over the tavern.
+    pub overlay: Option<&'a crate::app::common::overlay::Overlay>,
 }
 
 pub(crate) fn draw(frame: &mut Frame, area: Rect, view: ClubhouseView<'_>) {
@@ -166,6 +170,9 @@ fn draw_tavern(frame: &mut Frame, area: Rect, view: &ClubhouseView<'_>) {
     frame.render_widget(Paragraph::new(lines), inner);
 
     draw_overlays(frame, inner, view);
+    if let Some(overlay) = view.overlay {
+        crate::app::common::overlay::draw_overlay(frame, inner, overlay);
+    }
 }
 
 fn camera_origin(player: usize, viewport: usize, map_len: usize) -> usize {
@@ -317,6 +324,15 @@ fn base_style(ch: char, x: u16, y: u16) -> Style {
             '♥' | '♦' => Style::default().fg(theme::ERROR()),
             '♠' | '♣' => Style::default().fg(theme::TEXT_BRIGHT()),
             _ => signpost_text(ch).unwrap_or_else(|| Style::default().fg(theme::ERROR())),
+        };
+    }
+    if map::POOL_TABLE.contains(x, y) {
+        return match ch {
+            '▒' => Style::default().fg(theme::SUCCESS()),
+            // The pockets, and the two balls left loose on the cloth.
+            '●' => Style::default().fg(theme::TEXT_DIM()),
+            '◦' => Style::default().fg(theme::TEXT_BRIGHT()),
+            _ => signpost_text(ch).unwrap_or_else(|| Style::default().fg(theme::AMBER_DIM())),
         };
     }
     if map::EASEL.contains(x, y) {
@@ -1310,6 +1326,10 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                     Span::styled("[?] ", key),
                     Span::styled("the full guide", text),
                 ]),
+                Line::from(vec![
+                    Span::styled("[n] ", key),
+                    Span::styled("step outside to Nightcap for a quiet drink", text),
+                ]),
                 Line::default(),
                 Line::from(Span::styled(
                     "psst: see the bar glowing, northwest? walk over.",
@@ -1327,7 +1347,7 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
             ],
         ),
         // Mid-loop stages never render in the tavern: the forced gate only
-        // lets the route's digits through, and `0` lands straight on
+        // lets the route's keys through, and `0` from Zen lands straight on
         // Homecoming.
         Tutorial::VisitChat
         | Tutorial::VisitMusic
@@ -1337,6 +1357,7 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
         | Tutorial::VisitArtboard
         | Tutorial::VisitDirectory
         | Tutorial::VisitLeaderboard
+        | Tutorial::VisitZen
         | Tutorial::Off
         | Tutorial::Pending
         | Tutorial::Done => return false,
@@ -1656,6 +1677,65 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                         "your name lands here sooner than you think.",
                         text,
                     )),
+                    Line::default(),
+                    Line::from(vec![
+                        Span::styled("[Enter] ", key),
+                        Span::styled("works too, if your terminal eats Ctrl+F.", text),
+                    ]),
+                ],
+                "Ctrl+F",
+                "zen",
+            ),
+            Tutorial::VisitZen => (
+                Screen::Zen,
+                " ✦ the tour · zen ",
+                vec![
+                    Line::from(Span::styled(
+                        "the whole house cut down to what you keep alive:",
+                        text,
+                    )),
+                    Line::from(vec![
+                        Span::styled("your ", text),
+                        Span::styled("bonsai", name),
+                        Span::styled(", the ", text),
+                        Span::styled("reef", name),
+                        Span::styled(", a ", text),
+                        Span::styled("pet", name),
+                        Span::styled(", your rooms, music and a clock,", text),
+                    ]),
+                    Line::from(Span::styled(
+                        "as tiles you arrange yourself. the layout is saved.",
+                        text,
+                    )),
+                    Line::default(),
+                    Line::from(vec![
+                        Span::styled("[Ctrl+F] ", key),
+                        Span::styled("from any page opens it; the same chord", text),
+                    ]),
+                    Line::from(Span::styled("hands you back to wherever you were.", text)),
+                    Line::default(),
+                    Line::from(vec![
+                        Span::styled("[Tab] ", key),
+                        Span::styled("focus a tile · ", text),
+                        Span::styled("[space] ", key),
+                        Span::styled("pick what it shows", text),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("[S] ", key),
+                        Span::styled("split · ", text),
+                        Span::styled("[X] ", key),
+                        Span::styled("close · ", text),
+                        Span::styled("[z] ", key),
+                        Span::styled("zoom · ", text),
+                        Span::styled("[R] ", key),
+                        Span::styled("reset", text),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("[i] ", key),
+                        Span::styled("write in the focused chat · ", text),
+                        Span::styled("[?] ", key),
+                        Span::styled("the zen guide", text),
+                    ]),
                 ],
                 "0",
                 "home to the lounge",
@@ -1790,6 +1870,20 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
                 ]),
                 Line::from(Span::styled(
                     "poker · blackjack · asterion · tron, chips on the line",
+                    dim,
+                )),
+            ],
+        ),
+        map::Interactive::Pool => (
+            " ◦ the pool table ",
+            interactive,
+            vec![
+                Line::from(vec![
+                    Span::styled("[Enter] ", key),
+                    Span::styled("rack them up: a new pool challenge", text),
+                ]),
+                Line::from(Span::styled(
+                    "eight-ball or nine-ball, one shot a day, 400 chips",
                     dim,
                 )),
             ],

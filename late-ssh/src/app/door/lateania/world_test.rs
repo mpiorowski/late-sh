@@ -211,6 +211,18 @@ fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
         (900..=3 * WILDBOUND_BIOME_STRIDE as usize).contains(&wildbound),
         "the Wildbound Waste should be ~1000+ rooms, got {wildbound}"
     );
+    // Thornveil Falls: twelve braided-maze zones behind Broceliande's deepest
+    // chamber (rooms 34000+). Maze-only, so every zone fills its cell field
+    // and the count is exact rather than a band.
+    let thornveil = count_in(
+        THORNVEIL_BASE,
+        THORNVEIL_BASE + THORNVEIL_ZONES as RoomId * THORNVEIL_ZONE_STRIDE,
+    );
+    assert_eq!(
+        thornveil,
+        THORNVEIL_ZONES * THORNVEIL_W * THORNVEIL_H,
+        "Thornveil Falls should fill all twelve maze zones"
+    );
     // Wayfarer's Hollow: the five-room new-player tutorial zone (rooms
     // 40000+), hung off the Gilded Flagon. A fixed, fully hand-authored set,
     // so this is an exact count rather than a band.
@@ -233,6 +245,7 @@ fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
             + villages
             + islands
             + wildbound
+            + thornveil
             + tutorial,
         "every room should belong to a known region"
     );
@@ -605,6 +618,170 @@ fn broceliande_is_reachable_gated_and_behaviour_driven() {
     assert!(
         spawns.iter().all(|s| s.damage < king.damage),
         "Broceliande stays below the endgame king's bite"
+    );
+}
+
+#[test]
+fn thornveil_falls_is_a_braided_maze_not_a_grid() {
+    let world = seed_world();
+    let falls: Vec<&Room> = world
+        .rooms
+        .values()
+        .filter(|r| is_thornveil_room(r.id))
+        .collect();
+    // A real, sizeable continent (~1150 rooms).
+    assert!(
+        falls.len() >= 900,
+        "Thornveil Falls is a sizeable continent"
+    );
+    // A uniform grid has no dead-ends; braided mazes have many. Dead-ends +
+    // varied branching prove the shape.
+    let dead_ends = falls.iter().filter(|r| r.exits.len() == 1).count();
+    assert!(
+        dead_ends >= 15,
+        "Thornveil Falls should wind into dead-ends, not be square blocks (got {dead_ends})"
+    );
+    let degrees: std::collections::HashSet<usize> = falls.iter().map(|r| r.exits.len()).collect();
+    assert!(
+        degrees.len() >= 3,
+        "Thornveil Falls rooms should vary in how many ways they branch (got {degrees:?})"
+    );
+}
+
+#[test]
+fn thornveil_falls_is_reachable_gated_and_sits_below_kaelmyr() {
+    let world = seed_world();
+    // Reachable by a normal walk from the start (hung off Broceliande's own
+    // deepest chamber).
+    let mut seen = HashSet::new();
+    let mut stack = vec![world.start_room];
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        if let Some(r) = world.room(id) {
+            for to in r.exits.values() {
+                stack.push(*to);
+            }
+        }
+    }
+    assert!(
+        world.rooms.keys().any(|id| is_thornveil_room(*id)),
+        "Thornveil Falls rooms exist"
+    );
+    assert!(
+        world
+            .rooms
+            .keys()
+            .filter(|id| is_thornveil_room(**id))
+            .all(|id| seen.contains(id)),
+        "every Thornveil Falls room must be reachable from the start"
+    );
+    // The first falls-gate is a safe haven hung off Broceliande's World-Oak
+    // Crown.
+    let entrance = world
+        .room(THORNVEIL_BASE)
+        .expect("Thornveil falls-gate exists");
+    assert!(entrance.safe, "the first falls-gate is a safe haven");
+    assert!(
+        entrance
+            .exits
+            .values()
+            .any(|to| is_broceliande_room(*to) || *to == BROCELIANDE_BASE),
+        "Thornveil hangs off Broceliande by a descent"
+    );
+    // Foes are behaviour-driven with several distinct behaviours; filter by
+    // home room so nothing else can leak into the count.
+    let spawns: Vec<&MobSpawn> = world
+        .spawns
+        .iter()
+        .filter(|s| s.id >= THORNVEIL_SPAWN_ID_START && is_thornveil_room(s.home))
+        .collect();
+    assert!(!spawns.is_empty(), "Thornveil Falls should be populated");
+    let mut kinds = HashSet::new();
+    for s in &spawns {
+        let b = world.behavior_of(s.id);
+        assert_ne!(
+            b,
+            MobBehavior::Sentinel,
+            "{} should have a behavior",
+            s.name
+        );
+        kinds.insert(std::mem::discriminant(&b));
+    }
+    assert!(
+        kinds.len() >= 4,
+        "Thornveil Falls should field varied behaviours"
+    );
+    // Every zone has exactly one notable, and its loot all resolves.
+    let bosses = spawns.iter().filter(|s| s.boss).count();
+    assert_eq!(
+        bosses,
+        THORNVEIL_ZONES_DATA.len(),
+        "one boss per Thornveil zone"
+    );
+    for s in &spawns {
+        for id in s.loot {
+            assert!(
+                crate::app::door::lateania::items::item(*id).is_some(),
+                "{} drops missing item {id}",
+                s.name
+            );
+        }
+    }
+    // Where Thornveil actually sits, in the levels a player reads off a mob.
+    //
+    // The intent is a second late-game road beside Kaelmyr, but that is not
+    // what the numbers do: Thornveil's deepest notable is weaker than
+    // Kaelmyr's shallowest, so it reads as Reaches-tier side country. Pinned
+    // exactly rather than loosely, because the loose form of this assertion
+    // ("some Thornveil boss has half the hp of Kaelmyr's weakest") passed for
+    // every boss in the land and so guarded nothing. Raising Thornveil is an
+    // open decision; when it moves, this test must be re-blessed deliberately
+    // and CONTEXT.md §9's measured ladder updated with it.
+    let band = |of: &dyn Fn(&MobSpawn) -> bool, boss: bool| -> (i32, i32) {
+        let levels: Vec<i32> = world
+            .spawns
+            .iter()
+            .filter(|s| s.boss == boss && of(s))
+            .map(MobSpawn::level)
+            .collect();
+        assert!(!levels.is_empty(), "the band has mobs to measure");
+        (
+            *levels.iter().min().expect("a floor"),
+            *levels.iter().max().expect("a ceiling"),
+        )
+    };
+    let is_thornveil = |s: &MobSpawn| s.id >= THORNVEIL_SPAWN_ID_START && is_thornveil_room(s.home);
+    let is_kaelmyr = |s: &MobSpawn| s.id >= KAELMYR_SPAWN_ID_START && s.id < ARCH_SPAWN_ID_START;
+
+    let thornveil_trash = band(&is_thornveil, false);
+    let thornveil_boss = band(&is_thornveil, true);
+    let kaelmyr_trash = band(&is_kaelmyr, false);
+    let kaelmyr_boss = band(&is_kaelmyr, true);
+
+    assert_eq!(
+        (thornveil_trash, thornveil_boss),
+        ((58, 69), (64, 68)),
+        "Thornveil's measured level band moved; re-bless it against CONTEXT.md §9"
+    );
+    assert_eq!(
+        (kaelmyr_trash, kaelmyr_boss),
+        ((63, 78), (69, 80)),
+        "Kaelmyr's measured level band moved; re-bless it against CONTEXT.md §9"
+    );
+    // The ordering those two bands encode, stated as the property rather than
+    // left implicit in the numbers above.
+    assert!(
+        thornveil_boss.1 < kaelmyr_boss.0,
+        "Thornveil's deepest notable ({}) still reads below Kaelmyr's shallowest ({})",
+        thornveil_boss.1,
+        kaelmyr_boss.0
+    );
+    // Whatever band it lands in, the land has to climb within itself.
+    assert!(
+        thornveil_trash.0 < thornveil_trash.1 && thornveil_boss.0 < thornveil_boss.1,
+        "Thornveil should climb across its own twelve zones"
     );
 }
 
@@ -1038,6 +1215,120 @@ fn the_archipelago_is_mazes_and_caverns_with_a_boss_per_isle() {
     assert!(
         dead_ends >= 15,
         "islands should wind into dead-ends, not be square blocks (got {dead_ends})"
+    );
+}
+
+#[test]
+fn the_archipelago_ramps_past_the_last_crown_instead_of_sitting_flat_at_the_cap() {
+    // The isles are the one land allowed to out-hit Kaethyr Ascendant: they
+    // are portal-reachable, ungated, and run past the end of the crown ladder
+    // rather than sitting on a rung of it. What they are not allowed to be is
+    // flat. A tier of `isle + 52` put every mob on all twenty islands at
+    // Lv100, hitting for up to 1187 against the last crown's 397 - twenty
+    // islands of identical ceiling and no reason to sail past the first one.
+    // Assert the whole ladder rather than its endpoints, because the failure
+    // that shipped was in the middle of it and both endpoints looked right.
+    use super::super::archipelago as arch;
+    use super::super::classes::Class;
+    let world = seed_world();
+    let ascendant = CROWNS.last().expect("the ladder ends on a crown");
+
+    let boss_levels: Vec<i32> = (0..arch::ISLAND_COUNT)
+        .map(|i| {
+            let base = arch::island_entrance(i);
+            let end = base + arch::ARCH_STRIDE;
+            world
+                .spawns
+                .iter()
+                .find(|s| s.boss && (base..end).contains(&s.home))
+                .expect("every island has a boss")
+                .level()
+        })
+        .collect();
+    let expected: Vec<i32> = (0..arch::ISLAND_COUNT)
+        .map(|i| (82 + i as i32).min(Class::MAX_LEVEL))
+        .collect();
+    assert_eq!(
+        boss_levels, expected,
+        "one displayed level per island from Lv82 to the cap; re-bless against CONTEXT.md §9"
+    );
+    assert!(
+        boss_levels[0] > ascendant.level,
+        "even the shallowest island should read past {} (Lv{})",
+        ascendant.name,
+        ascendant.level
+    );
+
+    // Regulars ramp too, and no island is flat against the one before it.
+    let trash: Vec<Vec<i32>> = (0..arch::ISLAND_COUNT)
+        .map(|i| {
+            let base = arch::island_entrance(i);
+            let end = base + arch::ARCH_STRIDE;
+            world
+                .spawns
+                .iter()
+                .filter(|s| !s.boss && (base..end).contains(&s.home))
+                .map(|s| s.level())
+                .collect()
+        })
+        .collect();
+    let floors: Vec<i32> = trash
+        .iter()
+        .map(|lv| *lv.iter().min().expect("every island is populated"))
+        .collect();
+    let ceilings: Vec<i32> = trash
+        .iter()
+        .map(|lv| *lv.iter().max().expect("every island is populated"))
+        .collect();
+    assert_eq!(
+        (floors[0], *ceilings.last().expect("twenty islands")),
+        (80, Class::MAX_LEVEL),
+        "the regulars should run from just past Kaelmyr's Lv78 ceiling to the cap"
+    );
+    assert!(
+        floors.windows(2).all(|w| w[0] <= w[1]),
+        "an island's regulars should never read below the island before it, got {floors:?}"
+    );
+    assert!(
+        floors.last() > floors.first(),
+        "the regular ladder should climb across the isles, got {floors:?}"
+    );
+}
+
+#[test]
+fn the_archipelago_is_the_fastest_ground_in_the_game_to_reach_the_cap_on() {
+    // The isles' whole draw is that they are where you climb to Lv100, so they
+    // have to out-pay the deepest crowned land per point of health chewed
+    // through. They used to lose to it badly: doubled health for half again
+    // the xp, which made the deadliest ground in the game also the slowest to
+    // level on. Health is the cost of a kill and xp is the price paid for it,
+    // so the ratio is the thing to pin - raising xp alone says nothing if the
+    // health it is paid against moved too. Gold follows xp (`gold_for_kill`).
+    let world = seed_world();
+    let rate = |f: &dyn Fn(&MobSpawn) -> bool| -> f64 {
+        let xp: i64 = world
+            .spawns
+            .iter()
+            .filter(|s| f(s))
+            .map(|s| i64::from(s.xp))
+            .sum();
+        let hp: i64 = world
+            .spawns
+            .iter()
+            .filter(|s| f(s))
+            .map(|s| i64::from(s.max_hp))
+            .sum();
+        assert!(hp > 0, "the filter should match a populated land");
+        xp as f64 / hp as f64
+    };
+    let arch_trash =
+        rate(&|s| !s.boss && s.id >= ARCH_SPAWN_ID_START && s.id < LAKES_SPAWN_ID_START);
+    let kaelmyr_trash =
+        rate(&|s| !s.boss && s.id >= KAELMYR_SPAWN_ID_START && s.id < ARCH_SPAWN_ID_START);
+    assert!(
+        arch_trash > kaelmyr_trash * 5.0 / 4.0,
+        "the isles should pay at least a quarter more xp per point of health than Kaelmyr, \
+         got {arch_trash:.2} against {kaelmyr_trash:.2}"
     );
 }
 
@@ -1689,6 +1980,15 @@ fn regional_notables_carry_their_own_wildbound_finds() {
             );
         }
     }
+    for zone in 0..12 {
+        let loot = thornveil_notable_loot(zone);
+        for id in super::super::items::thornveil_find_ids(zone) {
+            assert!(
+                loot.contains(&id),
+                "Thornveil zone {zone}'s notable should carry find {id}"
+            );
+        }
+    }
     for isle in 0..20 {
         let loot = archipelago_boss_loot(isle);
         for id in super::super::items::archipelago_find_ids(isle) {
@@ -1965,12 +2265,15 @@ fn a_wildbound_apex_boss_pays_off_its_own_biome_not_the_frontier_crown() {
     // catalog's top table, which meant the 1500hp Duskmire boss dropped - on
     // every kill, since `roll_loot` never rolls for a boss - what the King Who
     // Was Promised Nothing guards at the end of twenty Frontier zones.
-    use super::super::items::{FRONTIER_TIERS, frontier_loot};
+    use super::super::items::{MARKET_TIER_MAX, realm_loot};
     let world = seed_world();
+    // Resolved against the whole shared ladder, not the Frontier catalog
+    // alone: the Scorched Flats charge 3960hp a regular and now draw from the
+    // Reaches, which the Frontier-only lookup this used to do could not name.
     let tier_of = |loot: &'static [u32]| {
-        (0..FRONTIER_TIERS)
-            .find(|t| frontier_loot(*t) == loot)
-            .expect("the Waste borrows the Frontier catalog, one tier per table")
+        (1..=MARKET_TIER_MAX)
+            .find(|t| realm_loot(*t) == loot)
+            .expect("the Waste draws from the shared realm ladder, one tier per table")
     };
 
     for (b, biome) in WILDBOUND_BIOMES.iter().enumerate() {
@@ -1996,13 +2299,13 @@ fn a_wildbound_apex_boss_pays_off_its_own_biome_not_the_frontier_crown() {
             biome.zone
         );
         assert!(
-            boss_tier < FRONTIER_TIERS - 1,
-            "the catalog's top table belongs to the Frontier's crown, not {} (tier {boss_tier})",
+            boss_tier < MARKET_TIER_MAX,
+            "the ladder's top table belongs to Kaelmyr's crown, not {} (tier {boss_tier})",
             boss.name
         );
         if let Some(next) = WILDBOUND_BIOMES.get(b + 1) {
             assert!(
-                boss_tier <= next.loot_base,
+                boss_tier <= next.loot_base as i32,
                 "{} should not out-pay the shallow end of {} (tier {}), got tier {boss_tier}",
                 boss.name,
                 next.zone,
@@ -2264,7 +2567,7 @@ fn zone_level_bands_are_sane_and_cover_the_road() {
 
 /// Every themed region: name, theme table, base room id, and rooms per zone.
 /// A spawn's home maps back to its zone by `(home - base) / stride`.
-fn themed_regions() -> [(&'static str, &'static [ZoneTheme], u32, u32); 7] {
+fn themed_regions() -> [(&'static str, &'static [ZoneTheme], u32, u32); 8] {
     use super::super::archipelago;
     [
         (
@@ -2308,6 +2611,12 @@ fn themed_regions() -> [(&'static str, &'static [ZoneTheme], u32, u32); 7] {
             &archipelago::ISLAND_THEMES,
             archipelago::ARCH_BASE,
             archipelago::ARCH_STRIDE,
+        ),
+        (
+            "Thornveil",
+            &THORNVEIL_ZONE_THEMES,
+            THORNVEIL_BASE,
+            THORNVEIL_ZONE_STRIDE,
         ),
     ]
 }
@@ -2657,4 +2966,88 @@ fn the_world_pass_redistributes_grind_rates_but_never_rebalances_a_class() {
         max - min <= 0.12,
         "routed spread {max:.3} - {min:.3} is past 12 points"
     );
+}
+
+#[test]
+#[ignore = "prints every region with its measured level band, loot source and role; the map of the whole game"]
+fn region_atlas_yardstick() {
+    let world = seed_world();
+    println!(
+        "\n{:<34} {:>6} {:>9} {:>9} {:>8} {:>7} {:>6} {:>6}  {:<13} reached by",
+        "region", "rooms", "trash lvl", "boss lvl", "trash hp", "xp/hp", "bosses", "crowns", "kind",
+    );
+    for &(name, lo, hi, kind, gateway) in REGIONS {
+        let rooms = world
+            .rooms
+            .keys()
+            .filter(|id| (lo..hi).contains(id))
+            .count();
+        if rooms == 0 {
+            continue;
+        }
+        let here: Vec<&MobSpawn> = world
+            .spawns
+            .iter()
+            .filter(|s| (lo..hi).contains(&s.home))
+            .collect();
+        let band = |boss: bool| -> String {
+            let lv: Vec<i32> = here
+                .iter()
+                .filter(|s| s.boss == boss)
+                .map(|s| s.level())
+                .collect();
+            match (lv.iter().min(), lv.iter().max()) {
+                (Some(a), Some(b)) => format!("{a}-{b}"),
+                _ => "-".to_string(),
+            }
+        };
+        let bosses = here.iter().filter(|s| s.boss).count();
+        let crowns = here
+            .iter()
+            .filter(|s| s.boss && CROWNS.iter().any(|c| c.name == s.name))
+            .count();
+        // Median regular health, and xp per point of it. Health is what a
+        // region charges for a kill and xp/hp is what it pays, so together
+        // they say whether a land's loot tier is earned or handed over: two
+        // regions at the same displayed level can be a factor of five apart
+        // on what it costs to clear them.
+        let mut hps: Vec<i32> = here.iter().filter(|s| !s.boss).map(|s| s.max_hp).collect();
+        hps.sort_unstable();
+        let (hp, rate) = match hps.len() {
+            0 => ("-".to_string(), "-".to_string()),
+            n => {
+                let med = hps[n / 2];
+                let xp: i64 = here
+                    .iter()
+                    .filter(|s| !s.boss)
+                    .map(|s| i64::from(s.xp))
+                    .sum();
+                let pool: i64 = here
+                    .iter()
+                    .filter(|s| !s.boss)
+                    .map(|s| i64::from(s.max_hp))
+                    .sum();
+                (med.to_string(), format!("{:.2}", xp as f64 / pool as f64))
+            }
+        };
+        println!(
+            "{name:<34} {rooms:>6} {:>9} {:>9} {hp:>8} {rate:>7} {bosses:>6} {crowns:>6}  {kind:<13} {gateway}",
+            band(false),
+            band(true),
+        );
+    }
+    println!("\ncrowns, in ladder order (the road):");
+    for c in CROWNS {
+        let where_ = world
+            .spawns
+            .iter()
+            .find(|s| s.name == c.name)
+            .and_then(|s| region_atlas_entry(s.home))
+            .map(|(r, _)| r)
+            .unwrap_or("?");
+        println!(
+            "  L{:<3} {:<46} {:>6} hp {:>4} dmg   {where_}",
+            c.level, c.name, c.max_hp, c.damage
+        );
+    }
 }

@@ -3,6 +3,7 @@ use super::{
     chat, dashboard, help_modal, hub, icon_picker, mod_modal, profile_modal, quit_confirm,
     room_info_modal, room_search_modal, settings_modal, sheet_modal,
     state::{App, IconPickerTarget},
+    status_picker,
 };
 use late_core::models::user::{RightSidebarMode, RoomListMode};
 
@@ -592,11 +593,11 @@ pub fn handle(app: &mut App, data: &[u8]) {
                 _ => {}
             }
         }
-        // First contact: an armed whisper holds the door, so input goes to
-        // the machine instead of skipping (`app/deadchannel/haunt`).
+        // First contact: an armed whisper holds the door, so input is
+        // swallowed instead of skipping (`app/deadchannel/haunt`).
         if !saw_terminal_reply
             && !data.is_empty()
-            && crate::app::deadchannel::haunt::svc::note_splash_input(app)
+            && crate::app::deadchannel::haunt::svc::swallows_splash_input(app)
         {
             return;
         }
@@ -731,34 +732,6 @@ fn handle_image_modal_input(app: &mut App, event: &ParsedInput) {
     }
 }
 
-fn handle_login_announcements_input(app: &mut App, event: &ParsedInput) {
-    match event {
-        ParsedInput::Byte(0x1B | b'\r' | b'\n' | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
-            dismiss_login_announcements(app);
-        }
-        ParsedInput::Byte(b'j' | b'J') | ParsedInput::Char('j' | 'J') => {
-            if let Some(announcements) = app.login_announcements.as_mut() {
-                announcements.scroll(1);
-            }
-        }
-        ParsedInput::Byte(b'k' | b'K') | ParsedInput::Char('k' | 'K') => {
-            if let Some(announcements) = app.login_announcements.as_mut() {
-                announcements.scroll(-1);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn dismiss_login_announcements(app: &mut App) {
-    let Some(announcements) = app.login_announcements.take() else {
-        return;
-    };
-    if let Some(read_at) = announcements.latest_displayed_at() {
-        app.chat.mark_room_read_at(announcements.room_id, read_at);
-    }
-}
-
 fn close_image_modal(app: &mut App) {
     let needs_full_repaint = matches!(
         app.terminal_image_protocol,
@@ -811,12 +784,8 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.login_announcements_visible() {
-        handle_login_announcements_input(app, &event);
-        return;
-    }
-    // The Late Edition sits right under the announcements: the operator's
-    // word first, then graybeard's, then everything else.
+    // The Late Edition sits above everything else: it is the first thing
+    // a session sees after the splash and the tour.
     if app.paper.modal_visible() {
         crate::app::paper::input::handle_input(app, &event);
         return;
@@ -827,7 +796,7 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
     // and bearer token), so a stray keystroke while reading them must not
     // take the values off the screen. Esc lands in `dispatch_escape`; every
     // other event is swallowed here. It sits above everything except the
-    // announcements, so nothing else steals the keys either.
+    // paper, so nothing else steals the keys either.
     if app.stream_modal.is_some() {
         return;
     }
@@ -873,6 +842,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
 
     if app.room_search_modal_state.is_open() {
         room_search_modal::input::handle_input(app, event);
+        return;
+    }
+
+    if app.status_picker.is_open() {
+        status_picker::input::handle_input(app, event);
         return;
     }
 
@@ -1023,7 +997,8 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
                     return;
                 }
                 let from_dashboard = ctx.screen == Screen::Dashboard;
-                if let Some(b) = app.chat.submit_composer(true, from_dashboard) {
+                let commands = chat::state::ComposerCommands::for_screen(ctx.screen);
+                if let Some(b) = app.chat.submit_composer(true, commands) {
                     app.banner = Some(b);
                 }
                 chat::input::handle_post_submit_requests(app, from_dashboard);
@@ -1398,6 +1373,7 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
                     // the only place that can reach this arm, and it never
                     // will, but the match still has to be exhaustive.
                     HubGame::Lateania
+                    | HubGame::Minecraft
                     | HubGame::Rebels
                     | HubGame::Nethack
                     | HubGame::Dcss
@@ -1421,8 +1397,19 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
     }
 
     match event {
-        ParsedInput::Byte(b'\r' | b'\n') => {
+        ParsedInput::Byte(b'\r') => {
             launch_games_hub_selection(app, selected);
+            true
+        }
+        // Scroll the selected landing: Ctrl+K / Ctrl+Up up, Ctrl+J / Ctrl+Down
+        // down. Ctrl+J is a bare LF, which is why Enter above matches CR only
+        // (the same CR/LF split the chat composer relies on).
+        ParsedInput::Byte(0x0B) | ParsedInput::CtrlArrow(b'A') => {
+            app.games_hub_state.scroll_up();
+            true
+        }
+        ParsedInput::Byte(b'\n') | ParsedInput::CtrlArrow(b'B') => {
+            app.games_hub_state.scroll_down();
             true
         }
         // Right: l, j, or Right/Down arrow.
@@ -1490,6 +1477,9 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
             // characters to play is no longer a foregone conclusion.
             app.set_screen(Screen::Lateania);
         }
+        // Played from the Minecraft client, not the terminal: the landing
+        // says how to connect and there is nothing to launch.
+        HubGame::Minecraft => {}
         HubGame::Rebels => {
             if !app.rebels_enabled {
                 app.banner = Some(crate::app::common::primitives::Banner::error(
@@ -1615,6 +1605,14 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
 
     if ctx.screen == Screen::Clubhouse {
         return crate::app::clubhouse::input::handle_event(app, event);
+    }
+
+    if ctx.screen == Screen::Nightcap {
+        return crate::app::nightcap::input::handle_event(app, event);
+    }
+
+    if ctx.screen == Screen::City {
+        return crate::app::deadchannel::city::input::handle_event(app, event);
     }
 
     if ctx.screen == Screen::Zen {
@@ -2203,10 +2201,6 @@ fn dispatch_escape(app: &mut App) {
         app.booth_modal_state.close();
         return;
     }
-    if app.login_announcements_visible() {
-        dismiss_login_announcements(app);
-        return;
-    }
     if app.paper.modal_visible() {
         app.paper.close_modal();
         return;
@@ -2307,9 +2301,14 @@ fn dispatch_escape(app: &mut App) {
     // editor's own `EditOutcome::Cancel`: a lone Esc never reaches the keymap,
     // it is held as `pending_escape` and lands here via `flush_pending_escape`.
     // The keymap only sees Esc when it arrives mid-chunk with other bytes.
-    // Esc on Zen peels a selected message first, then hands the page back
-    // to wherever Ctrl+F was pressed.
+    // Esc on Zen peels the tile picker, the composer, or a selected message,
+    // and otherwise does nothing: only Ctrl+F (or `/zen`) leaves the page,
+    // so a stray Esc never throws away the layout you sat down in.
     if ctx.screen == Screen::Zen {
+        if app.zen.kind_picker.is_some() {
+            app.zen.close_kind_picker();
+            return;
+        }
         if app.chat.composing {
             app.chat.reset_composer();
             return;
@@ -2318,13 +2317,17 @@ fn dispatch_escape(app: &mut App) {
             && app.chat.selected_message_body_in_room(room_id).is_some()
         {
             app.chat.clear_message_selection();
-            return;
         }
-        close_zen(app);
         return;
     }
     if ctx.screen == Screen::Scratchpad {
         app.set_screen(Screen::Dashboard);
+        return;
+    }
+    // Esc from Nightcap just steps back outside to the Clubhouse; there is
+    // no in-room state to peel first (no chat pane, no pending move).
+    if ctx.screen == Screen::Nightcap {
+        app.set_screen(Screen::Clubhouse);
         return;
     }
     // Esc from a Lateania world (or its reset prompt) returns to the Games hub
@@ -2368,6 +2371,12 @@ fn dispatch_escape(app: &mut App) {
             return;
         }
         crate::app::door::darkroom::screen::GAME.handle_key(app, 0x1B);
+        return;
+    }
+    // Esc in the city closes an open shop panel or steps back from the
+    // ledge; on the street it means nothing (the wire is the way out).
+    if ctx.screen == Screen::City && (app.city.panel().is_some() || app.city.at_ledge()) {
+        app.city.dismiss();
         return;
     }
     // Esc from the Games hub closes the rc config modal, cancels a pending
@@ -2728,10 +2737,19 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         select_screen_from_topbar(app, screen, target);
         return true;
     }
-    if handle_chat_composer_click(app, screen, x, y) {
+    // Petting the pet is a passing gesture, not a move: it takes the click
+    // before the Zen focus, so a click on the pet leaves the keys with the
+    // chat tile the page opened on.
+    if handle_pet_click(app, x, y) {
         return true;
     }
-    if handle_pet_click(app, x, y) {
+    // A click on a Zen tile focuses it, then falls through so the composer
+    // and the messages of that tile still take the click. A modal over the
+    // page takes the click itself, the same guard the pet click uses.
+    if screen == Screen::Zen && !chat_scroll_clicks_blocked(app) {
+        focus_zen_tile_at(app, x, y);
+    }
+    if handle_chat_composer_click(app, screen, x, y) {
         return true;
     }
     if handle_chat_scroll_click(app, screen, x, y) {
@@ -2922,7 +2940,6 @@ fn chat_scroll_clicks_blocked(app: &App) -> bool {
         || app.show_quit_confirm
         || app.show_bonsai_modal
         || app.show_lobby_modal
-        || app.login_announcements_visible()
         || app.icon_picker_open
 }
 
@@ -3095,6 +3112,8 @@ fn handle_notifications_hud_click(app: &mut App, mouse: MouseEvent) -> bool {
     }
 
     app.pending_chat_profile_open = None;
+    app.chat.reset_composer();
+    app.chat.clear_message_selection();
     app.set_screen(Screen::Dashboard);
     app.chat.select_notifications();
     true
@@ -3159,6 +3178,10 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         // Walk-mode arrows are consumed in handle_dedicated_screen_input;
         // composing-mode arrows are swallowed by the shared composer gate.
         Screen::Clubhouse => false,
+        // Nightcap has no arrow use (seats are picked by number key).
+        Screen::Nightcap => false,
+        // City arrows walk the runner in handle_dedicated_screen_input.
+        Screen::City => false,
         // Daily board arrows are consumed in handle_dedicated_screen_input.
         Screen::DailyMatch => false,
         // House table arrows are consumed in handle_dedicated_screen_input.
@@ -3318,8 +3341,11 @@ fn clear_prefix_arms(app: &mut App) {
     app.room_section_prefix_armed = false;
 }
 
-fn open_room_search_modal_globally(app: &mut App) {
+/// Everything a full-screen modal has to close before it opens, so it never
+/// lands behind an overlay that is already up.
+fn close_overlays_for_modal(app: &mut App) {
     clear_prefix_arms(app);
+    app.zen.close_kind_picker();
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
@@ -3338,6 +3364,19 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
     app.chat.message_search.clear();
+}
+
+/// Open the `/status` picker.
+pub(crate) fn open_status_picker_globally(app: &mut App) {
+    let current = app.status;
+    close_overlays_for_modal(app);
+    app.status_picker.open(current);
+}
+
+/// The `Ctrl+/` room picker, also behind `/picker` for terminals that
+/// swallow the chord (Ctrl+/ and Ctrl+_ are one byte, and some keep it).
+pub(crate) fn open_room_search_modal_globally(app: &mut App) {
+    close_overlays_for_modal(app);
     app.room_search_modal_state.open();
 }
 
@@ -3399,14 +3438,15 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
     app.show_hub_modal = true;
 }
 
-/// A click on the pet: it purrs for a bit. The box only draws for owners,
-/// so the click can only land on an unlocked pet; the gate is belt and
-/// braces.
+/// A click on the pet: it purrs for a bit, and the first click of the day
+/// pays (`PetState::pet`). The box only draws for owners, so the click can
+/// only land on an unlocked pet; the service checks ownership again.
 pub(crate) fn pet_the_pet_globally(app: &mut App) {
     if !app.shop_state.entitlements().has_pet_companion() {
         return;
     }
-    app.pet_state.note_petted(std::time::Instant::now());
+    app.pet_state
+        .pet(std::time::Instant::now(), chrono::Utc::now().date_naive());
 }
 
 /// The tank's free daily meal, from any surface that shows it. Ownership is
@@ -3428,40 +3468,6 @@ pub(crate) fn feed_aquarium_globally(app: &mut App) {
         crate::app::hub::aquarium::state::CareOutcome::AlreadyFedToday => {
             app.banner = Some(crate::app::common::primitives::Banner::error(
                 "The tank already ate today",
-            ));
-        }
-    }
-}
-
-/// Cut the sprout on the tank floor, from any surface that shows it. The
-/// floor clears at once; the service writes it behind the row's own gate.
-pub(crate) fn cut_aquarium_sprout_globally(app: &mut App) {
-    clear_prefix_arms(app);
-    if !app.shop_state.entitlements().has_aquarium() {
-        app.banner = Some(crate::app::common::primitives::Banner::error(
-            "Unlock Aquarium in Hub Shop",
-        ));
-        return;
-    }
-    match app
-        .aquarium_care
-        .cut_sprout(chrono::Utc::now().date_naive())
-    {
-        crate::app::hub::aquarium::state::CutOutcome::Cut => {
-            app.refresh_aquarium_population();
-            app.aquarium_service.cut_task(app.user_id);
-            app.banner = Some(crate::app::common::primitives::Banner::success(
-                "Cut the sprout",
-            ));
-        }
-        crate::app::hub::aquarium::state::CutOutcome::NothingToCut => {
-            app.banner = Some(crate::app::common::primitives::Banner::error(
-                "Nothing to cut: the floor is bare",
-            ));
-        }
-        crate::app::hub::aquarium::state::CutOutcome::Rooted => {
-            app.banner = Some(crate::app::common::primitives::Banner::error(
-                "Too late to cut: the sprout rooted, a wigglewort grows at your next login",
             ));
         }
     }
@@ -3555,12 +3561,20 @@ fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
             // the tour to the next stop.
             app.set_screen(screen);
         }
+        // The Zen stop teaches the chord itself, so it runs the same toggle
+        // Ctrl+F runs anywhere (modals closed, return page remembered).
+        // Enter does the same: terminals and multiplexers that swallow the
+        // chord would otherwise trap a newcomer here, since the gate also
+        // blocks the `/zen` fallback.
+        TourStep::Zen if matches!(byte, CTRL_F | b'\r' | b'\n') => {
+            toggle_zen_globally(app);
+        }
         TourStep::Enter if matches!(byte, b'\r' | b'\n') => {
             if app.clubhouse.tutorial_advance() {
                 app.persist_clubhouse_tutorial_done();
             }
         }
-        TourStep::Page(..) | TourStep::Enter => match byte {
+        TourStep::Page(..) | TourStep::Zen | TourStep::Enter => match byte {
             // The way out is always open.
             b'q' | b'Q' => trigger_global_quit(app),
             _ => {}
@@ -3597,13 +3611,7 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
         CTRL_G => {
             // The Lobby owns the friendlier chord: Ctrl+Q is intercepted by
             // some terminals and the Lobby is the surface people live in.
-            // Toggle: the daily surface is built for fast in-and-out, so the
-            // same chord that opens it closes it.
-            if app.show_lobby_modal {
-                app.show_lobby_modal = false;
-            } else {
-                open_daily_modal_globally(app);
-            }
+            toggle_lobby_globally(app);
             true
         }
         CTRL_F => {
@@ -3614,8 +3622,63 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
     }
 }
 
+/// Move the Zen focus to the tile under a click. Nothing happens on the
+/// footer, on a gap, or on the tile already focused.
+fn focus_zen_tile_at(app: &mut App, x: u16, y: u16) {
+    use crate::app::zen::layout as zen_layout;
+    let (cols, rows) = app.size;
+    let (tiles_area, _) = zen_layout::rice_areas(Rect::new(0, 0, cols, rows));
+    let zoomed = app.zen.zoomed.then_some(app.zen.focus);
+    let rects = zen_layout::tile_rects(
+        &app.zen.rice.root,
+        tiles_area,
+        app.zen.rice.look.gap as u16,
+        zoomed,
+    );
+    let hit = rects
+        .iter()
+        .position(|(_, rect)| rect_contains(*rect, x, y));
+    let Some(ordinal) = hit else {
+        return;
+    };
+    // Zoomed, the one rect on show is the focused tile whatever its index.
+    if zoomed.is_some() || ordinal == app.zen.focus {
+        return;
+    }
+    app.zen.focus = ordinal;
+    crate::app::zen::input::focus_moved(app);
+}
+
+/// Toggle: the daily surface is built for fast in-and-out, so the same chord
+/// (or `/lobby`) that opens it closes it.
+pub(crate) fn toggle_lobby_globally(app: &mut App) {
+    if app.show_lobby_modal {
+        app.show_lobby_modal = false;
+    } else {
+        open_daily_modal_globally(app);
+    }
+}
+
+/// The global guide, opened on the topic that fits the current page. Shared
+/// by `?` and `/guide`.
+pub(crate) fn open_guide_globally(app: &mut App) {
+    app.help_modal_state
+        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
+    let topic = if app.screen == Screen::Lateania {
+        HelpTopic::Lateania
+    } else if app.screen == Screen::Profiles {
+        HelpTopic::Profiles
+    } else if app.screen == Screen::Zen {
+        HelpTopic::Zen
+    } else {
+        HelpTopic::Pair
+    };
+    app.help_modal_state.open(topic);
+    app.show_help = true;
+}
+
 /// Zen is a surface, not a place in the tab order: the chord opens it over
-/// whatever page is up and the same chord (or Esc) returns there.
+/// whatever page is up and the same chord returns there. Esc never leaves.
 pub(crate) fn toggle_zen_globally(app: &mut App) {
     if app.screen == Screen::Zen {
         close_zen(app);
@@ -3640,14 +3703,27 @@ fn open_zen_globally(app: &mut App) {
     app.show_lobby_modal = false;
     app.zen_return_screen = Some(app.screen);
     reset_composers_for_page_change(app);
+    // The first opening this session lands on the first chat tile, so the
+    // chat keys work before anyone reads the footer.
+    app.zen.note_opened();
     app.set_screen(Screen::Zen);
     app.chat.clear_message_selection();
 }
 
-pub(crate) fn close_zen(app: &mut App) {
-    let back = app.zen_return_screen.take().unwrap_or(Screen::Dashboard);
+/// Hands the page back to wherever Ctrl+F was pressed. A session that
+/// landed on Zen has nowhere to go back to, so it walks into the Clubhouse,
+/// the front door. `set_screen` closes the tile picker and forgets the
+/// return page. Handing back a game screen is not going into the games from
+/// Zen, so the backtick base `set_screen` records is put back.
+fn close_zen(app: &mut App) {
+    let back = match app.zen_return_screen {
+        Some(screen) => screen,
+        None => Screen::Clubhouse,
+    };
     reset_composers_for_page_change(app);
+    let base = app.workspace_base;
     app.set_screen(back);
+    app.workspace_base = base;
     app.chat.clear_message_selection();
 }
 
@@ -3684,24 +3760,14 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     let chat_message_shortcut =
         ctx.screen == Screen::Dashboard && app.chat.selected_message_id.is_some();
     if guide_shortcut && !chat_message_shortcut {
-        app.help_modal_state
-            .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
-        let topic = if ctx.screen == Screen::Lateania {
-            HelpTopic::Lateania
-        } else if ctx.screen == Screen::Profiles {
-            HelpTopic::Profiles
-        } else {
-            HelpTopic::Pair
-        };
-        app.help_modal_state.open(topic);
-        app.show_help = true;
+        open_guide_globally(app);
         return true;
     }
 
     // While the reaction leader is armed, every digit belongs to it: `1`-`9`
     // are the quick reactions and `0` opens the custom icon picker. Let them
     // fall through to the chat message-action handler instead of the global
-    // page switch (`0` now lands on the Clubhouse, `1`-`7` on other pages).
+    // page switch (`0` now lands on the Clubhouse, `1`-`6` on other pages).
     if matches!(
         byte,
         b'0' | b'1' | b'2' | b'3' | b'4' | b'5' | b'6' | b'7' | b'8' | b'9'
@@ -3905,9 +3971,21 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.set_screen(Screen::Leaderboard);
             true
         }
+        // `0` is the clubhouse. Pressed again on the clubhouse it goes
+        // down to the undercity (deadchannel's street), runners only;
+        // from the undercity it comes back up. A descent always lands on
+        // the street: a panel or the ledge left open on the way up does
+        // not carry over.
         b'0' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Clubhouse);
+            let target = match ctx.screen {
+                Screen::Clubhouse if app.is_runner() => {
+                    app.city.dismiss();
+                    Screen::City
+                }
+                _ => Screen::Clubhouse,
+            };
+            app.set_screen(target);
             true
         }
         b'\t' if artboard_rail_takes_tab(app, ctx.screen) => {
@@ -4042,6 +4120,13 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::Clubhouse => {
             // Clubhouse keys are handled in handle_dedicated_screen_input
             // (walking, chat routing, interactions); no-op here.
+        }
+        Screen::Nightcap => {
+            // Nightcap keys (seat picks, drink, Esc) are handled in
+            // handle_dedicated_screen_input; no-op here.
+        }
+        Screen::City => {
+            // City keys are handled in handle_dedicated_screen_input.
         }
         Screen::DailyMatch => {
             // Daily board keys are handled in handle_dedicated_screen_input.

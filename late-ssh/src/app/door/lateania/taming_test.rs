@@ -1,26 +1,28 @@
+use super::super::pets::PET_SPECIES;
 use super::*;
 
 #[test]
-fn there_are_fifty_tameable_beasts_ordered_small_to_large() {
-    // Fifty classic beasts, plus the ten Wildbound rideables at the summit.
-    assert_eq!(TAMEABLE_COUNT, 60, "fifty beasts + ten Wildbound mounts");
+fn there_are_sixty_tameable_beasts_ordered_small_to_large() {
+    // Fifty classic beasts, plus the ten Wildbound beasts at the summit.
+    assert_eq!(TAMEABLE_COUNT, 60, "fifty beasts + ten Wildbound beasts");
     // The taming difficulty is non-decreasing across the list (small -> large
-    // -> harder and harder), the fifty classic beasts spanning 1..=50 and the
-    // Wildbound mounts continuing above them.
+    // -> harder and harder), the fifty classic beasts spanning 1..=54 and the
+    // Wildbound beasts continuing above them.
     for w in TAMEABLE.windows(2) {
         assert!(
-            w[1].tame_level >= w[0].tame_level,
+            w[1].tame_level() >= w[0].tame_level(),
             "tame level must not fall going down the list ({} -> {})",
             w[0].name,
             w[1].name
         );
     }
     assert_eq!(
-        TAMEABLE[0].tame_level, 1,
+        TAMEABLE[0].tame_level(),
+        1,
         "the first beast is a novice tame"
     );
     assert_eq!(
-        TAMEABLE[TAMEABLE_COUNT - 1].tame_level,
+        TAMEABLE[TAMEABLE_COUNT - 1].tame_level(),
         100,
         "the last beast needs a taming grandmaster (the Wildbound summit)"
     );
@@ -36,39 +38,40 @@ fn there_are_fifty_tameable_beasts_ordered_small_to_large() {
 }
 
 #[test]
-fn no_beast_is_out_classed_by_an_easier_one() {
-    // Grinding Animal Taming must never hand you a worse companion than the one
-    // you can already tame. Beasts at the same tier are free to trade attack for
-    // bulk (a hitter vs. a wall is a real choice), so the invariant is Pareto,
-    // not monotonic: no beast may be beaten on *both* axes by something at a
-    // strictly lower tame level.
+fn no_companion_is_out_classed_by_an_easier_one() {
+    // Every companion sits on one ladder: a wild beast at the Animal Taming
+    // level it needs, a Stable pet at the rung it is priced to match. Climbing
+    // that ladder must never hand you a pet you would not want. Pets on the
+    // same rung may trade attack for bulk (a hitter vs. a wall is a real
+    // choice), so the invariant is Pareto, not monotonic: no pet may be beaten
+    // on *both* axes by one at the same or a lower rung.
     //
-    // The ten Wildbound mounts used to open at attack 22 / hp 420 against the
-    // tame-50 Green Wyrm's 38 / 560, leaving taming 51..=79 as pure dead grind -
-    // twenty-five levels that downgraded your pet.
-    //
-    // Both pools are one ladder as far as a player is concerned: they grind a
-    // single Animal Taming level and pick the best beast it opens, wherever it
-    // roams. So the rule spans `TAMEABLE` and `AELUNOR_TAMEABLE` together, in
-    // both directions - Aelunor's five used to escape it entirely by sitting
-    // in their own const, and three of them lost outright to easier classics.
-    let pool: Vec<&PetSpecies> = TAMEABLE.iter().chain(AELUNOR_TAMEABLE).collect();
+    // "The same rung" is what keeps a tier free of dead beasts: ten of them
+    // once shared taming 50 and eight lost outright to the Scion or the Green
+    // Wyrm beside them. Against the Stable it cuts both ways: a bought pet is
+    // never worse than the easier wild beasts, and never beats a harder one.
+    let pool: Vec<&PetSpecies> = TAMEABLE
+        .iter()
+        .chain(AELUNOR_TAMEABLE)
+        .chain(PET_SPECIES)
+        .collect();
     for b in &pool {
         if let Some(better) = pool.iter().find(|c| {
-            c.tame_level < b.tame_level
+            c.key != b.key
+                && c.rung() <= b.rung()
                 && c.base_attack >= b.base_attack
                 && c.base_hp >= b.base_hp
                 && (c.base_attack > b.base_attack || c.base_hp > b.base_hp)
         }) {
             panic!(
-                "{} (taming {}, attack {}, hp {}) is out-classed by {} at taming {} \
-                 (attack {}, hp {}) - the levels between are dead grind",
+                "{} (rung {}, attack {}, hp {}) is out-classed by {} at rung {} \
+                 (attack {}, hp {}) - nobody should ever pick it",
                 b.name,
-                b.tame_level,
+                b.rung(),
                 b.base_attack,
                 b.base_hp,
                 better.name,
-                better.tame_level,
+                better.rung(),
                 better.base_attack,
                 better.base_hp,
             );
@@ -153,31 +156,4 @@ fn pet_skills_unlock_on_the_ladder() {
     for w in PET_SKILLS.windows(2) {
         assert!(w[1].level > w[0].level, "pet skill unlocks climb");
     }
-}
-
-// Wildbound mounts: ten rideable beasts (wild + mythical), every key a real
-// tameable species, strides 2..=5 with the summit stride hitting 5, and the
-// mythical fliers gated at the top of the doubled taming ladder.
-#[test]
-fn ten_rideable_beasts_climb_to_a_stride_of_five() {
-    use super::{RIDEABLE, mount_stride, tameable_by_key};
-    assert!(RIDEABLE.len() >= 10, "at least ten rideable beasts");
-    let mut top = 0;
-    for &(key, stride) in RIDEABLE {
-        let species = tameable_by_key(key)
-            .unwrap_or_else(|| panic!("rideable {key} is not a tameable species"));
-        assert!(
-            species.tame_level >= 55,
-            "{key} should gate in the Wildbound band"
-        );
-        assert!(
-            (2..=5).contains(&stride),
-            "{key} stride {stride} out of band"
-        );
-        top = top.max(stride);
-        assert_eq!(mount_stride(key), Some(stride));
-    }
-    assert_eq!(top, 5, "the best mounts skip five rooms a step");
-    // A beast that isn't in the table can't be ridden.
-    assert_eq!(mount_stride("wt_hare"), None);
 }

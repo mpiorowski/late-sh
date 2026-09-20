@@ -33,7 +33,7 @@
   "You land in the Clubhouse: walk with hjkl, press i to talk, w to wave, x to dance",
   "In the Clubhouse your words float over your head; the full chat lives on Home (1)",
   "Walk up to the Clubhouse dog and press Enter. Everyone sees the pet",
-  "Press ` on Home to hop through games waiting on you: your-move boards, seated tables, unfinished daily puzzles, live door games",
+  "Press ` on Home or Zen to hop through games waiting on you: your-move boards, seated tables, unfinished daily puzzles, live door games",
   "Type /search in chat to find old messages across all your rooms",
   "Made a private room? /roominfo sets what it is about and its rules",
   "Lost in Lateania? Press m for the overhead map: it fills in only where you have walked",
@@ -44,5 +44,8 @@
   "Press g on someone else's message to gild it: three tiers, chips to the author, a permanent marker on the message",
   "/crown shows who wears the crown; /crown take buys it off them and burns every chip",
   "Sliding Puzzle in the Arcade: a new picture each UTC day, shared across difficulties. Press i to switch views; submit your own in #puzzle-art",
-  "Proud of your Artboard work? On page 4 pick Hang a piece in the rail and frame it"
+  "Proud of your Artboard work? On page 4 pick Hang a piece in the rail and frame it",
+  "Pool in the Lobby: ' picks the ball that's on, a aims, e sets spin, then s and stroke the mouse down and up",
+  "Pool's cue panel is the shot: click the target ball to aim, the cue ball to set spin, the cue itself to stroke",
+  "Daily snooker is the full frame on a 12ft table: reds and colours, free balls, and 700 chips to whoever is ahead at the end"
 ]

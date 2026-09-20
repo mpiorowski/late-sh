@@ -160,7 +160,9 @@ Cross-domain touchpoints:
 - `app/chat/state.rs` / `app/chat/ui.rs` — `ChatState::live_streams` (copied
   from the registry watch ~1/s in `App::tick_stream`, epoch-bumped on
   change), the rail's `RoomSection::Stream` (under Core, above
-  Cyberspace/Channels, visible from `/golive` on), the `▶LIVE` author
+  Cyberspace/Channels, live streams only: a pending stream has no row; the
+  `Ctrl+/` room picker lists the same live streams as `#{username}-live`,
+  pickable before joining), the `▶LIVE` author
   presence badge (live streams only), the stream header block above the
   room's chat (title, watcher count, watch-URL nudge; the URL carries a
   trailing space so it never lands in the last column, where terminal link

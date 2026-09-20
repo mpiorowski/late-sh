@@ -607,3 +607,23 @@ async fn daily_artwork_loads_from_the_shared_assignment_and_survives_difficulty_
     state.show_personal();
     assert_eq!(state.artwork_key(), personal);
 }
+
+/// The board line reads the same whichever key produced it: changing the
+/// difficulty and then pressing `d` must not flip "daily" to "Daily".
+#[test]
+fn the_board_message_is_cased_the_same_from_every_key() {
+    let user_id = Uuid::now_v7();
+    let date = NaiveDate::from_ymd_opt(2026, 8, 21).unwrap();
+    let mut state = State::new_for_date(user_id, service(), date, Vec::new());
+    state.open_daily(0);
+
+    state.next_difficulty();
+    let after_difficulty = state.message().to_string();
+    state.show_daily();
+
+    assert_eq!(after_difficulty, "Daily medium 4×4 board.");
+    assert_eq!(state.message(), after_difficulty);
+
+    state.prev_difficulty();
+    assert_eq!(state.message(), "Daily easy 3×3 board.");
+}

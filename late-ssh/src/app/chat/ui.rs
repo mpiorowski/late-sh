@@ -42,7 +42,8 @@ use super::state::{
     MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot, RoomVisualOrderInput,
     SelectedRoomSlotState, SelectionScroll, TranslationDisplay, compare_dm_rooms_for_nav,
     dm_is_promoted_unread, dm_peer_is_ignored, is_chat_list_room, is_deadchannel_room,
-    is_selected_slot, visual_order_for_rooms,
+    is_selected_slot, synthetic_favorite_id, synthetic_slot_for_favorite_id,
+    visual_order_for_rooms,
 };
 use super::ui_text::{AuthorTint, Gutter, reaction_label, wrap_chat_entry_to_lines};
 
@@ -56,7 +57,6 @@ const CHAT_COMPOSER_GAP_HEIGHT: u16 = 2;
 const MIN_POLL_QUESTION_CELLS: usize = 12;
 const AUTHOR_BADGE_SEPARATOR: &str = " ";
 const FRIEND_BADGE: &str = "★";
-const AFK_BADGE: &str = "🌙";
 /// Presence tag beside an author whose stream is on air right now.
 const LIVE_BADGE: &str = "▶LIVE";
 
@@ -106,7 +106,6 @@ pub struct DashboardChatView<'a> {
     pub usernames: &'a UsernameLookup<'a>,
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
-    pub afk_user_ids: &'a HashSet<Uuid>,
     /// Users whose stream is on air; painted as the LIVE presence tag.
     pub live_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
@@ -139,9 +138,9 @@ pub struct DashboardChatView<'a> {
     /// Every runner's look (`app/deadchannel/runner`), for the portrait
     /// gutter beside messages; consulted only when `room` is #deadchannel.
     pub runner_looks: &'a HashMap<Uuid, crate::app::deadchannel::runner::state::Look>,
-    /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
-    /// `tick.rs`); painted as a presence badge after AFK.
-    pub peer_pomodoros: &'a HashMap<Uuid, String>,
+    /// Per-peer `/status` badges (resolved once a second in `tick.rs`);
+    /// painted as the trailing presence badge.
+    pub peer_statuses: &'a HashMap<Uuid, String>,
     /// Stage-2 name-flicker hit this frame (first contact,
     /// `app/deadchannel/haunt`): the message whose author label is
     /// corrupted, plus its burst seed.
@@ -194,6 +193,10 @@ pub(crate) struct ComposerBlockView<'a> {
     /// When true, Enter sends without closing the composer and Alt+S is a
     /// no-op. Drives the title-hint tier swap.
     pub keep_composer_focused: bool,
+    /// A composer that takes no keys: a Zen chat tile that is not the
+    /// focused one keeps its strip so the rows never jump, but `i`, `j`,
+    /// and `k` act on the focused tile, so it must not advertise them.
+    pub inert: bool,
 }
 
 /// Pick the longest tier whose display width fits inside a titled `Block`
@@ -235,6 +238,9 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
 }
 
 fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> String {
+    if view.inert {
+        return pick_title_that_fits(block_width, &[" watching ", ""]).to_string();
+    }
     if !view.composing {
         return pick_title_that_fits(
             block_width,
@@ -441,6 +447,13 @@ fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'stat
 fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Paragraph<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());
 
+    if view.inert {
+        return Paragraph::new(Line::from(Span::styled(
+            "Tab or a click focuses this tile · i writes",
+            dim,
+        )));
+    }
+
     if view.composing {
         return Paragraph::new(Line::from(vec![
             Span::styled("T", theme::punch_through(theme::TEXT_DIM())),
@@ -581,9 +594,17 @@ pub(crate) fn composer_placeholder_lines(view: &ComposerBlockView<'_>, width: us
     )
 }
 
+/// Vertical layout for an embedded chat (Zen tiles, house tables, daily
+/// boards): messages fill, one blank breather, then the composer. These
+/// surfaces draw no activity ticker, so its row goes to the messages.
 fn split_chat_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect) {
-    let (messages, _, composer) = split_chat_ticker_and_composer(area, composer_height);
-    (messages, composer)
+    let layout = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Length(composer_height),
+    ])
+    .split(area);
+    (layout[0], layout[2])
 }
 
 /// Vertical layout for a chat surface: messages fill, then a blank breather,
@@ -604,8 +625,7 @@ fn split_chat_ticker_and_composer(area: Rect, composer_height: u16) -> (Rect, Re
 /// queue packs left to right, newest first — each event as `text (5m)` with
 /// faint `·` separators — until the row is full; whatever doesn't fit is
 /// simply not shown (the queue is sized to outfill the row). It gets its own
-/// one-row slot hugging the composer (below the pet strip when that is shown),
-/// with a blank breather higher up. The slot always exists, so the chrome
+/// one-row slot hugging the composer, with a blank breather higher up. The slot always exists, so the chrome
 /// never moves; an empty queue just leaves it blank.
 fn draw_activity_ticker(
     frame: &mut Frame,
@@ -1127,6 +1147,7 @@ pub fn draw_dashboard_chat_card(
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
+                inert: false,
             },
             composer_text_width,
         ));
@@ -1184,7 +1205,6 @@ pub fn draw_dashboard_chat_card(
             ChatRowsContext {
                 versions: view.rows_versions,
                 current_user_id: view.current_user_id,
-                afk_user_ids: view.afk_user_ids,
                 live_user_ids: view.live_user_ids,
                 show_flag_fallback: view.show_flag_fallback,
                 usernames: view.usernames,
@@ -1199,7 +1219,7 @@ pub fn draw_dashboard_chat_card(
                 dividers: view.dividers,
                 drunk_levels: view.drunk_levels,
                 name_flair: view.name_flair,
-                peer_pomodoros: view.peer_pomodoros,
+                peer_statuses: view.peer_statuses,
                 name_flicker: view.name_flicker,
                 translations: view.translations,
                 translation_hidden: view.translation_hidden,
@@ -1263,6 +1283,7 @@ pub fn draw_dashboard_chat_card(
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
             keep_composer_focused: view.keep_composer_focused,
+            inert: false,
         },
     );
     record_composer_mouse_target(
@@ -1278,7 +1299,6 @@ pub fn draw_dashboard_chat_card(
 struct ChatRowsContext<'a> {
     versions: ChatRowsVersions,
     current_user_id: Uuid,
-    afk_user_ids: &'a HashSet<Uuid>,
     /// Users whose stream is on air; painted as the LIVE presence tag.
     live_user_ids: &'a HashSet<Uuid>,
     show_flag_fallback: bool,
@@ -1296,7 +1316,7 @@ struct ChatRowsContext<'a> {
     drunk_levels: &'a HashMap<Uuid, u8>,
     /// Resolved 24h username-effect styles per author.
     name_flair: &'a HashMap<Uuid, ResolvedName>,
-    peer_pomodoros: &'a HashMap<Uuid, String>,
+    peer_statuses: &'a HashMap<Uuid, String>,
     name_flicker: Option<(Uuid, u64)>,
     translations: &'a HashMap<Uuid, TranslationDisplay>,
     translation_hidden: &'a HashSet<Uuid>,
@@ -1712,17 +1732,14 @@ fn ensure_chat_rows_cache(
             .map(String::as_str)
             .filter(|s| !s.is_empty());
         // Presence badges trail every earned badge: the LIVE stream tag
-        // first (an invitation, the loudest of the three), then AFK, then a
-        // running `/pomodoro` countdown (minutes only; the label never
-        // leaves its owner's session).
+        // first (an invitation, the louder of the two), then the author's
+        // `/status`, which carries `away` as one of its variants and so is
+        // the only away marker there is.
         let mut presence_badges: Vec<&str> = Vec::new();
         if ctx.live_user_ids.contains(&msg.user_id) {
             presence_badges.push(LIVE_BADGE);
         }
-        if ctx.afk_user_ids.contains(&msg.user_id) {
-            presence_badges.push(AFK_BADGE);
-        }
-        if let Some(badge) = ctx.peer_pomodoros.get(&msg.user_id) {
+        if let Some(badge) = ctx.peer_statuses.get(&msg.user_id) {
             presence_badges.push(badge);
         }
         let flair = ctx.name_flair.get(&msg.user_id);
@@ -2960,7 +2977,6 @@ pub struct ChatRenderInput<'a> {
     pub composer: &'a TextArea<'static>,
     pub composing: bool,
     pub current_user_id: Uuid,
-    pub afk_user_ids: &'a HashSet<Uuid>,
     /// Users whose stream is on air; painted as the LIVE presence tag.
     pub live_user_ids: &'a HashSet<Uuid>,
     pub ignored_user_ids: &'a HashSet<Uuid>,
@@ -2984,9 +3000,9 @@ pub struct ChatRenderInput<'a> {
     /// Every runner's look (`app/deadchannel/runner`), for the portrait
     /// gutter beside messages; consulted only when `room` is #deadchannel.
     pub runner_looks: &'a HashMap<Uuid, crate::app::deadchannel::runner::state::Look>,
-    /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
-    /// `tick.rs`); painted as a presence badge after AFK.
-    pub peer_pomodoros: &'a HashMap<Uuid, String>,
+    /// Per-peer `/status` badges (resolved once a second in `tick.rs`);
+    /// painted as the trailing presence badge.
+    pub peer_statuses: &'a HashMap<Uuid, String>,
     /// Stage-2 name-flicker hit this frame (first contact,
     /// `app/deadchannel/haunt`): the message whose author label is
     /// corrupted, plus its burst seed.
@@ -3105,6 +3121,10 @@ pub(crate) struct ChatRoomListView<'a> {
 }
 
 pub struct EmbeddedRoomChatView<'a> {
+    /// Columns kept clear on each side of the messages. A surface that
+    /// draws its own border around the chat (a Zen tile) passes 0, so the
+    /// text sits one column in, as on Home; a bare panel passes 1.
+    pub messages_inset: u16,
     pub title: &'a str,
     pub messages: &'a [ChatMessage],
     pub overlay: Option<&'a Overlay>,
@@ -3114,7 +3134,6 @@ pub struct EmbeddedRoomChatView<'a> {
     pub usernames: &'a UsernameLookup<'a>,
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
-    pub afk_user_ids: &'a HashSet<Uuid>,
     /// Users whose stream is on air; painted as the LIVE presence tag.
     pub live_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
@@ -3132,6 +3151,10 @@ pub struct EmbeddedRoomChatView<'a> {
     pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
+    /// The composer strip is drawn but takes no keys: a Zen chat tile that
+    /// is not the focused one. It keeps its strip so the rows never jump
+    /// and says so instead of naming keys that act on the focused tile.
+    pub composer_inert: bool,
     pub composing: bool,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
@@ -3145,9 +3168,9 @@ pub struct EmbeddedRoomChatView<'a> {
     /// Resolved 24h username-effect styles per author (see
     /// `common/username_effect.rs`); fg painted over the bare name only.
     pub name_flair: &'a HashMap<Uuid, ResolvedName>,
-    /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
-    /// `tick.rs`); painted as a presence badge after AFK.
-    pub peer_pomodoros: &'a HashMap<Uuid, String>,
+    /// Per-peer `/status` badges (resolved once a second in `tick.rs`);
+    /// painted as the trailing presence badge.
+    pub peer_statuses: &'a HashMap<Uuid, String>,
     /// Stage-2 name-flicker hit this frame (first contact,
     /// `app/deadchannel/haunt`): the message whose author label is
     /// corrupted, plus its burst seed.
@@ -3192,6 +3215,7 @@ pub fn draw_embedded_room_chat(
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
+                inert: view.composer_inert,
             },
             composer_text_width,
         ));
@@ -3223,7 +3247,7 @@ pub fn draw_embedded_room_chat(
         };
     }
 
-    let messages_text_area = horizontal_inset(messages_area, 1);
+    let messages_text_area = horizontal_inset(messages_area, view.messages_inset);
 
     let height = messages_text_area.height.max(1) as usize;
     let width = messages_text_area.width.max(1) as usize;
@@ -3234,7 +3258,6 @@ pub fn draw_embedded_room_chat(
         ChatRowsContext {
             versions: view.rows_versions,
             current_user_id: view.current_user_id,
-            afk_user_ids: view.afk_user_ids,
             live_user_ids: view.live_user_ids,
             show_flag_fallback: view.show_flag_fallback,
             usernames: view.usernames,
@@ -3249,7 +3272,7 @@ pub fn draw_embedded_room_chat(
             dividers: view.dividers,
             drunk_levels: view.drunk_levels,
             name_flair: view.name_flair,
-            peer_pomodoros: view.peer_pomodoros,
+            peer_statuses: view.peer_statuses,
             name_flicker: view.name_flicker,
             translations: view.translations,
             translation_hidden: view.translation_hidden,
@@ -3309,6 +3332,7 @@ pub fn draw_embedded_room_chat(
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
             keep_composer_focused: view.keep_composer_focused,
+            inert: view.composer_inert,
         },
     );
     record_composer_mouse_target(
@@ -3418,6 +3442,7 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
                         mention_matches: view.mention_matches,
                         mention_selected: view.mention_selected,
                         keep_composer_focused: view.keep_composer_focused,
+                        inert: false,
                     },
                     composer_text_width,
                 ),
@@ -4200,6 +4225,10 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     let mut hit_slots: Vec<Option<RoomSlot>> = Vec::new();
     let mut selected_row_index = None;
     let inner_width = width.saturating_sub(3) as usize; // 2 left gutter + 1 right margin
+    // Cells a row label may use: the jump-key prefix (`k ` or two blanks)
+    // when room-jump is active, plus four for the badge and its gap.
+    let key_width = if view.room_jump_active { 2 } else { 0 };
+    let label_max = inner_width.saturating_sub(key_width + 4);
     let order = visual_order_for_rooms(RoomVisualOrderInput {
         rooms: view.chat_rooms,
         user_id: view.current_user_id,
@@ -4283,8 +4312,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         } else {
             String::new()
         };
-        let key_width = UnicodeWidthStr::width(key_prefix.as_str());
-        let label_max = inner_width.saturating_sub(key_width + 4);
         let display_label = if UnicodeWidthStr::width(label.as_str()) > label_max && label_max > 1 {
             let mut s = String::new();
             let mut w = 0usize;
@@ -4345,7 +4372,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     let push_slot =
         |slot: RoomSlot, push_row: &mut dyn FnMut(Line<'static>, Option<RoomSlot>, bool)| {
             let active = cozy_slot_selected(view, slot);
-            let (label, unread) = room_slot_label_and_unread(view, slot);
+            let (label, unread) = room_slot_label_and_unread(view, slot, label_max);
             let badge = room_slot_badge(view, slot, unread);
             push_row(
                 item_row(
@@ -4368,19 +4395,25 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         .favorite_room_ids
         .iter()
         .copied()
-        .map(RoomSlot::Room)
+        .map(|id| synthetic_slot_for_favorite_id(id).unwrap_or(RoomSlot::Room(id)))
         .filter(|slot| order.contains(slot))
         .collect();
     let favorite_ids: std::collections::HashSet<Uuid> = view
         .favorite_room_ids
         .iter()
         .copied()
-        .filter(|id| {
-            view.chat_rooms
+        .filter(|id| match synthetic_slot_for_favorite_id(*id) {
+            Some(RoomSlot::Feeds) => view.feeds_available,
+            Some(_) => true,
+            None => view
+                .chat_rooms
                 .iter()
-                .any(|(r, _)| r.id == *id && is_chat_list_room(r))
+                .any(|(r, _)| r.id == *id && is_chat_list_room(r)),
         })
         .collect();
+    let favorited = |slot: RoomSlot| -> bool {
+        synthetic_favorite_id(slot).is_some_and(|id| favorite_ids.contains(&id))
+    };
     if !bumped_slugs.is_empty() {
         push_row(plain_section_header("bumped"), None, false);
         for slug in &bumped_slugs {
@@ -4424,9 +4457,13 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
                 push_slot(RoomSlot::Room(room.id), &mut push_row);
             }
         }
-        push_slot(RoomSlot::Notifications, &mut push_row);
-        push_slot(RoomSlot::News, &mut push_row);
-        if view.feeds_available {
+        if !favorited(RoomSlot::Notifications) {
+            push_slot(RoomSlot::Notifications, &mut push_row);
+        }
+        if !favorited(RoomSlot::News) {
+            push_slot(RoomSlot::News, &mut push_row);
+        }
+        if view.feeds_available && !favorited(RoomSlot::Feeds) {
             push_slot(RoomSlot::Feeds, &mut push_row);
         }
         // Voice sits directly above Discover ("+ browse rooms") at the bottom of Core.
@@ -4447,17 +4484,19 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             push_slot(RoomSlot::Room(room.id), &mut push_row);
         }
         // Discover ("+ browse rooms") is the last entry in Core.
-        push_slot(RoomSlot::Discover, &mut push_row);
+        if !favorited(RoomSlot::Discover) {
+            push_slot(RoomSlot::Discover, &mut push_row);
+        }
     }
 
-    // Stream: registered "watch me" streams, directly under Core, mirroring
+    // Stream: live "watch me" streams, directly under Core, mirroring
     // `visual_order_for_rooms`. The section only exists while somebody is
-    // streaming.
-    if !view.live_streams.is_empty() {
+    // live; a pending stream gets no row.
+    if view.live_streams.iter().any(|stream| stream.live) {
         push_row(blank(), None, false);
         push_row(section_header(RoomSection::Stream), None, false);
         if !collapsed_set.contains(&RoomSection::Stream) {
-            for stream in view.live_streams {
+            for stream in view.live_streams.iter().filter(|stream| stream.live) {
                 push_slot(RoomSlot::Room(stream.room_id), &mut push_row);
             }
         }
@@ -4588,19 +4627,24 @@ fn room_slot_badge(view: &ChatRoomListView<'_>, slot: RoomSlot, unread: i64) -> 
     }
 }
 
-fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (String, i64) {
+fn room_slot_label_and_unread(
+    view: &ChatRoomListView<'_>,
+    slot: RoomSlot,
+    label_max: usize,
+) -> (String, i64) {
     match slot {
         RoomSlot::Room(room_id) => {
-            // A stream row carries the show, not the room: streamer, title,
-            // and the watcher count. It also renders before this user is a
-            // member (the room may be missing from `chat_rooms` entirely).
+            // A stream row carries the show, not the room: the streamer and
+            // the bracketed watcher count; the title lives in the room's
+            // stream header. It also renders before this user is a member
+            // (the room may be missing from `chat_rooms` entirely).
             if let Some(stream) = view
                 .live_streams
                 .iter()
                 .find(|stream| stream.room_id == room_id)
             {
                 let unread = view.unread_counts.get(&room_id).copied().unwrap_or(0);
-                return (stream_rail_label(stream), unread);
+                return (stream_rail_label(stream, label_max), unread);
             }
             let Some((room, _)) = view.chat_rooms.iter().find(|(room, _)| room.id == room_id)
             else {
@@ -4657,20 +4701,30 @@ fn stream_on_air_view(
     crate::app::voice::ui::OnAirView { live: stream.live }
 }
 
-/// The rail row label for one stream: `▶ #mat-live · title · 3 watching`.
-/// A pending stream (registered, no media yet) shows `starting…` instead of
-/// the count; the watch count only means something once frames flow.
-fn stream_rail_label(stream: &crate::app::stream::registry::LiveStreamView) -> String {
-    let mut label = format!("▶ {}-live", stream.username);
-    if !stream.title.trim().is_empty() {
-        label.push_str(&format!(" · {}", stream.title.trim()));
-    }
-    if !stream.live {
-        label.push_str(" · starting…");
-    } else if stream.watching > 0 {
-        label.push_str(&format!(" · {} watching", stream.watching));
-    }
-    label
+/// The rail row label for one stream: `▶ mat [3]`, the bracket being the
+/// watcher count (zero included). The title lives in the room's stream
+/// header, not here: the row already carries the unread badge on its right,
+/// and a second bare number would read as the same thing. A pending stream
+/// (registered, no media yet) shows `[…]` in the count's slot; the watch
+/// count only means something once frames flow.
+///
+/// The label fits `max_width` by shortening the username, never the bracket:
+/// the row renderer clips labels from the right, which would drop the count
+/// first and end the row in the same `…` a pending stream shows. A username
+/// can run 32 characters while the rail leaves the label 17 cells or fewer,
+/// so a long name is the ordinary case, not a corner.
+fn stream_rail_label(
+    stream: &crate::app::stream::registry::LiveStreamView,
+    max_width: usize,
+) -> String {
+    let count = match stream.live {
+        true => format!("[{}]", stream.watching),
+        false => "[…]".to_string(),
+    };
+    // `▶ ` before the name, one space before the count.
+    let name_budget = max_width.saturating_sub(3 + UnicodeWidthStr::width(count.as_str()));
+    let name = truncate_cells(&stream.username, name_budget);
+    format!("▶ {name} {count}")
 }
 
 /// Slugs of public topic rooms currently carrying a `room_bump` effect,
@@ -5100,7 +5154,6 @@ fn draw_selected_content(
                         app_ctx_epoch: view.app_ctx_epoch,
                     },
                     current_user_id,
-                    afk_user_ids: view.afk_user_ids,
                     live_user_ids: view.live_user_ids,
                     show_flag_fallback: view.show_flag_fallback,
                     usernames: view.usernames,
@@ -5118,7 +5171,7 @@ fn draw_selected_content(
                     },
                     drunk_levels: view.drunk_levels,
                     name_flair: view.name_flair,
-                    peer_pomodoros: view.peer_pomodoros,
+                    peer_statuses: view.peer_statuses,
                     name_flicker: view.name_flicker,
                     translations: view.translations,
                     translation_hidden: view.translation_hidden,
@@ -5377,6 +5430,7 @@ fn draw_selected_content(
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
+                inert: false,
             },
         );
         record_composer_mouse_target(

@@ -19,15 +19,15 @@
 // step) lives in `svc.rs` / `state.rs` / `ui.rs`; only the data and the pure
 // maths live here.
 
-use super::pets::PetSpecies;
+use super::pets::{PetSource, PetSpecies};
 use super::skills::{TamingSkill, skill_level_for_xp};
 use super::world::{BROCELIANDE_BASE, BROCELIANDE_ZONE_COUNT, BROCELIANDE_ZONE_STRIDE, RoomId};
 
-/// The fifty tameable beasts of Broceliande, ordered smallest to largest. The
-/// `tame_level` climbs from 1 to 50 across the list, so early beasts fall to a
-/// novice and the great forest wyrm needs a near-master tamer. Health and attack
-/// scale with size, so a bigger beast is a stronger companion. `price` is unused
-/// for tameables (they are earned, not bought).
+/// The tameable beasts of Broceliande, ordered smallest to largest. The
+/// `tame_level` climbs from 1 to 54 across the classic fifty, so early beasts
+/// fall to a novice and the great forest wyrm needs a near-master tamer, then
+/// from 55 to 100 across the ten Wildbound summit beasts. Health and attack
+/// scale with size, so a bigger beast is a stronger companion.
 ///
 /// KEYS ARE PERSISTED - never reorder or rename an existing key.
 pub const TAMEABLE: &[PetSpecies] = &[
@@ -324,7 +324,7 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "Worldroot Delver",
         "\u{1F994}",
         46,
-        320,
+        340,
         24,
         "a huge burrowing root-beast of the deep caverns",
     ),
@@ -333,7 +333,7 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "Storm-Crowned Elk",
         "\u{1F98C}",
         47,
-        288,
+        310,
         29,
         "a lightning-antlered elk of the standing kings",
     ),
@@ -342,7 +342,7 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "Greenwood Alpha",
         "\u{1F43A}",
         47,
-        300,
+        330,
         28,
         "the grey alpha whose howl empties a valley",
     ),
@@ -352,7 +352,7 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "\u{1F409}",
         48,
         340,
-        28,
+        30,
         "a young forest-wyrm, coiled and cunning",
     ),
     beast(
@@ -360,8 +360,8 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "Oakheart Treantling",
         "\u{1F333}",
         48,
-        400,
-        24,
+        420,
+        25,
         "a walking oak-child of the Oakheart grove",
     ),
     beast(
@@ -369,8 +369,8 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "Vine-Choked Dire-Drake",
         "\u{1F409}",
         49,
-        360,
-        30,
+        350,
+        31,
         "a dire-drake wound about with strangler-vine",
     ),
     beast(
@@ -378,16 +378,16 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "Barrowgreen Great-Wyrm",
         "\u{1F409}",
         49,
-        380,
-        31,
+        400,
+        29,
         "a barrow-wyrm risen green from the burial mounds",
     ),
     beast(
         "wt_fae_lord",
         "Erlking's Great Hart",
         "\u{1F98C}",
-        49,
-        340,
+        50,
+        370,
         33,
         "the Erlking's own hart, antlers hung with gold",
     ),
@@ -396,7 +396,7 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "Cernun Hunt-Beast",
         "\u{1F43A}",
         50,
-        360,
+        350,
         34,
         "the lead beast of the Wild Hunt itself",
     ),
@@ -404,92 +404,89 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "wt_ruin_wyrm",
         "Greenmantle Guard-Wyrm",
         "\u{1F409}",
-        50,
-        420,
-        30,
+        51,
+        460,
+        31,
         "the coiled wyrm that guards the taken keep",
     ),
     beast(
         "wt_stormwyrm",
         "Storm-Wyrm of the Kings",
         "\u{1F409}",
-        50,
+        51,
         400,
-        33,
+        35,
         "a wyrm crowned in the standing-stones' storm",
     ),
     beast(
         "wt_deepdrake",
         "Worldroot Deep-Drake",
         "\u{1F409}",
-        50,
-        440,
-        32,
+        52,
+        480,
+        34,
         "a pale eyeless drake of the World-Oak's roots",
     ),
     beast(
         "wt_greattreant",
         "Greenmarch Treant",
         "\u{1F332}",
-        50,
-        520,
-        28,
+        52,
+        560,
+        30,
         "a great treant that walks the wood's still heart",
     ),
     beast(
         "wt_heartwyrm",
         "Heart-Oak Wyrm",
         "\u{1F409}",
-        50,
-        460,
-        34,
+        53,
+        500,
+        36,
         "the green wyrm coiled in the Heart-Oak's shade",
     ),
     beast(
         "wt_ancient_drake",
         "Ancient Forest-Drake",
         "\u{1F409}",
-        50,
-        500,
-        36,
+        53,
+        470,
+        37,
         "an ancient drake, old as the first wood",
     ),
     beast(
         "wt_worldtreant",
         "Elder World-Treant",
         "\u{1F332}",
-        50,
-        620,
-        30,
+        53,
+        640,
+        33,
         "an elder treant, a moving hill of ancient oak",
     ),
     beast(
         "wt_greenwyrm",
         "Green Wyrm of the World-Oak",
         "\u{1F409}",
-        50,
-        560,
-        38,
+        54,
+        580,
+        39,
         "a great green wyrm coiled through the World-Oak's crown",
     ),
     beast(
         "wt_worldoak",
         "Scion of the World-Oak",
         "\u{1F333}",
-        50,
-        700,
-        34,
+        54,
+        720,
+        35,
         "a living scion of the World-Oak, oldest and mightiest of all beasts",
     ),
-    // ---- Wildbound: the rideable beasts (five wild, five mythical) -------
+    // ---- Wildbound: the summit beasts (five wild, five mythical) ---------
     //
     // These sit above the fifty classic beasts on the taming ladder, so their
-    // stats have to *start* above the best tame-50 beast (the Green Wyrm of the
-    // World-Oak at attack 38, the Scion at hp 700) and climb from there. They
-    // originally began at attack 22 / hp 420, which meant taming 51..=79 earned
-    // you a strictly worse companion than the one you already had - twenty-five
-    // levels of the trade spent going backwards. Pinned by
-    // `every_taming_tier_offers_a_better_companion_than_the_one_below`.
+    // stats have to *start* above the best tame-54 beasts (the Green Wyrm of
+    // the World-Oak at attack 39, the Scion at hp 720) and climb from there.
+    // Pinned by `no_companion_is_out_classed_by_an_easier_one`.
     beast(
         "wb_palfrey",
         "Duskmane Palfrey",
@@ -497,7 +494,7 @@ pub const TAMEABLE: &[PetSpecies] = &[
         55,
         720,
         40,
-        "a calm-eyed forest horse, dusk-grey down the mane; steady under a saddle",
+        "a calm-eyed forest horse, dusk-grey down the mane; steady as the old oaks",
     ),
     beast(
         "wb_elk",
@@ -506,7 +503,7 @@ pub const TAMEABLE: &[PetSpecies] = &[
         60,
         760,
         42,
-        "a bull elk whose antlers scrape the low boughs; strong enough to carry two",
+        "a bull elk whose antlers scrape the low boughs; it clears a path wherever it goes",
     ),
     beast(
         "wb_ram",
@@ -533,7 +530,7 @@ pub const TAMEABLE: &[PetSpecies] = &[
         75,
         880,
         48,
-        "a stag grown vast and wary in the deep wood; it suffers only a worthy rider",
+        "a stag grown vast and wary in the deep wood; it suffers only a worthy master",
     ),
     beast(
         "wb_unicorn",
@@ -542,7 +539,7 @@ pub const TAMEABLE: &[PetSpecies] = &[
         80,
         920,
         50,
-        "a unicorn seen only where moonlight pools; its stride bends the miles",
+        "a unicorn seen only where moonlight pools; its horn turns aside the dark",
     ),
     beast(
         "wb_hippogriff",
@@ -578,36 +575,12 @@ pub const TAMEABLE: &[PetSpecies] = &[
         100,
         1000,
         56,
-        "the horizon-swimmer of the old sagas; to ride it is to arrive before you left",
+        "the horizon-swimmer of the old sagas; where it coils, the world holds its breath",
     ),
 ];
 
-/// Number of tameable beasts (the design target is fifty).
+/// Number of tameable beasts: the classic fifty plus the ten Wildbound.
 pub const TAMEABLE_COUNT: usize = TAMEABLE.len();
-
-/// The rideable species and how far they carry you: one keypress while mounted
-/// strides this many rooms. The wild mounts walk 2-3; the mythicals at the top
-/// of the taming ladder stride 4, and the very best skip 5 rooms at a time.
-pub const RIDEABLE: &[(&str, u8)] = &[
-    ("wb_palfrey", 2),
-    ("wb_elk", 2),
-    ("wb_ram", 3),
-    ("wb_strider", 3),
-    ("wb_direstag", 3),
-    ("wb_unicorn", 4),
-    ("wb_hippogriff", 4),
-    ("wb_griffin", 4),
-    ("wb_wyvern", 5),
-    ("wb_worldserpent", 5),
-];
-
-/// How many rooms one mounted step covers for a species, if it can be ridden.
-pub fn mount_stride(species_key: &str) -> Option<u8> {
-    RIDEABLE
-        .iter()
-        .find(|(key, _)| *key == species_key)
-        .map(|&(_, stride)| stride)
-}
 
 /// A `const` constructor for a tameable species (keeps the table readable).
 /// Every classic/Wildbound beast walks the shared `PET_SKILLS` ladder.
@@ -650,11 +623,10 @@ const fn beast_with_skills(
         key,
         name,
         glyph,
-        price: 0,
         base_hp,
         base_attack,
         desc,
-        tame_level,
+        source: PetSource::Wild { tame_level },
         skills,
     }
 }
@@ -733,10 +705,10 @@ pub fn beasts_at(room: RoomId) -> Vec<&'static WildBeast> {
 /// thrown.
 pub fn tame_chance(taming_xp: i64, beast: &PetSpecies, cha_pct: i32) -> u32 {
     let level = skill_level_for_xp(taming_xp);
-    if level < beast.tame_level {
+    if level < beast.tame_level() {
         return 0;
     }
-    let surplus = level - beast.tame_level;
+    let surplus = level - beast.tame_level();
     // 40% at exactly the required level, +9% per level of surplus, plus
     // Charisma, capped at 95.
     (40 + surplus * 9 + cha_pct).clamp(0, 95) as u32
@@ -747,7 +719,7 @@ pub fn tame_chance(taming_xp: i64, beast: &PetSpecies, cha_pct: i32) -> u32 {
 /// working up the beasts is a real, rewarding progression on the shared
 /// skill curve.
 pub fn tame_xp(beast: &PetSpecies) -> i32 {
-    30 + beast.tame_level * beast.tame_level / 2
+    30 + beast.tame_level() * beast.tame_level() / 2
 }
 
 // ---- Pet auto-skills ------------------------------------------------------
@@ -986,13 +958,14 @@ const AELUNOR_HOUND_SKILLS: &[PetSkill] = &[
 ];
 
 /// The five tameable companions of Aelunor, ordered easy to hard. Stats climb
-/// with `tame_level` under the same "no beast Pareto-dominated by an easier
-/// one" rule as the classic fifty: same-tier beasts may trade attack for hp,
-/// but nothing higher may lose on both axes to something cheaper. The rule
-/// spans both pools, since a player grinds one Animal Taming level and takes
-/// the best beast it opens wherever it roams - `taming_test`'s
-/// `no_beast_is_out_classed_by_an_easier_one` walks the combined list, so a
-/// stat edit here is checked against every Broceliande beast too.
+/// with `tame_level` under the same "no companion Pareto-dominated by an
+/// easier one" rule as the classic fifty: same-tier beasts may trade attack
+/// for hp, but nothing may lose on both axes to something at the same or a
+/// lower rung. The rule spans every pool (both wild lists and the Stable),
+/// since a player grinds one Animal Taming level and takes the best pet it
+/// opens wherever it comes from - `taming_test`'s
+/// `no_companion_is_out_classed_by_an_easier_one` walks the combined list, so
+/// a stat edit here is checked against every other companion too.
 pub const AELUNOR_TAMEABLE: &[PetSpecies] = &[
     beast_with_skills(
         "ae_faerie",
@@ -1000,7 +973,7 @@ pub const AELUNOR_TAMEABLE: &[PetSpecies] = &[
         "\u{1F9DA}",
         8,
         58,
-        9,
+        10,
         "a small fae creature trailing cold moonlight, quick to heal what it loves",
         AELUNOR_FAERIE_SKILLS,
     ),
@@ -1029,8 +1002,8 @@ pub const AELUNOR_TAMEABLE: &[PetSpecies] = &[
         "Druid's Fox",
         "\u{1F98A}",
         34,
-        110,
-        21,
+        150,
+        22,
         "a russet fox that runs at a druid's heel and fights with the wood's own cunning",
         AELUNOR_FOX_SKILLS,
     ),

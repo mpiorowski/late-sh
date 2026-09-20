@@ -17,10 +17,7 @@ use super::classes::Class;
 use super::svc::{LateaniaService, MudSnapshot, PlayerView, empty_player_view};
 use super::world::Dir;
 use super::world::RoomId;
-use super::worldmap::{Coord, MapCamera, Route};
-
-/// Lines moved per `[` / `]` press when scrolling a text panel.
-const SCROLL_STEP: usize = 3;
+use super::worldmap::{Coord, MapCamera, Route, TrackAim};
 
 /// Where the player has marked they're going, resolved against where they are
 /// standing now. Rendered as one line under the room's exits: the exits say
@@ -129,6 +126,7 @@ fn is_leave_confirm_pending(until: Option<Instant>, now: Instant) -> bool {
 /// A memoised route: the `(standing in, heading for)` pair it was computed for,
 /// and the walk it produced (`None` when no known-ground route exists).
 type CachedRoute = ((RoomId, RoomId), Option<Route>);
+type CachedTrackAim = ((RoomId, RoomId), Option<TrackAim>);
 
 /// The two pages of the `m` map. `m` cycles closed -> Field -> Lands -> closed,
 /// so one key walks the whole map from where your feet are to how the world
@@ -197,6 +195,9 @@ pub struct State {
     /// redrawn on every keystroke and every snapshot, but the search runs once
     /// per room actually entered.
     route_cache: RefCell<Option<CachedRoute>>,
+    /// Where the marked destination's map arrow aims, cached on the same pair
+    /// as `route_cache` for the same reason: it is a whole-world walk.
+    track_aim_cache: RefCell<Option<CachedTrackAim>>,
 }
 
 impl State {
@@ -233,6 +234,7 @@ impl State {
             map_dest: None,
             map_quests: true,
             route_cache: RefCell::new(None),
+            track_aim_cache: RefCell::new(None),
         };
         state.svc.join_task(user_id, session_id);
         state
@@ -476,6 +478,23 @@ impl State {
         })
     }
 
+    /// Where the map's green arrow aims for the marked destination, from the
+    /// room the player stands in (`worldmap::track_aim`). None when nothing is
+    /// marked or no walk reaches it.
+    pub fn dest_track_aim(&self) -> Option<TrackAim> {
+        let dest = self.map_dest?;
+        let here = self.snapshot.players.get(&self.user_id)?.room?;
+        let mut cache = self.track_aim_cache.borrow_mut();
+        match *cache {
+            Some((key, aim)) if key == (here, dest) => aim,
+            _ => {
+                let aim = super::worldmap::track_aim(here, dest);
+                *cache = Some(((here, dest), aim));
+                aim
+            }
+        }
+    }
+
     /// Current list scroll offset (first visible line).
     pub fn list_scroll(&self) -> usize {
         self.list_scroll.get()
@@ -486,18 +505,32 @@ impl State {
         self.list_scroll.set(off);
     }
 
-    /// Manual scroll for cursor-less text panels (`[` / `]`). List panels
-    /// auto-follow their cursor and re-clamp this on the next render, so these
-    /// only have a lasting effect on text panels. The render pass clamps the
-    /// value to the content, so growing it past the end is harmless.
-    pub fn scroll_text_up(&mut self) {
-        let cur = self.list_scroll.get();
-        self.list_scroll.set(cur.saturating_sub(SCROLL_STEP));
+    /// `[` / `]`: scroll the side panel one row. Works in every panel, always,
+    /// with no conditions on size or content.
+    ///
+    /// A panel with a cursor scrolls by **moving the cursor**: the render pass
+    /// already keeps the selection in view, so stepping it drags the view along
+    /// and there is never a second, disagreeing source of truth for where the
+    /// panel sits. A cursor-less panel (the room, the character sheet, the
+    /// atlas, the leaderboard) has nothing to move, so it shifts the offset
+    /// directly; the render pass clamps it to the content, so running past the
+    /// end is harmless.
+    pub fn scroll_up(&mut self) {
+        if self.list_len() == 0 {
+            let cur = self.list_scroll.get();
+            self.list_scroll.set(cur.saturating_sub(1));
+            return;
+        }
+        self.cursor_up();
     }
 
-    pub fn scroll_text_down(&mut self) {
-        let cur = self.list_scroll.get();
-        self.list_scroll.set(cur + SCROLL_STEP);
+    pub fn scroll_down(&mut self) {
+        if self.list_len() == 0 {
+            let cur = self.list_scroll.get();
+            self.list_scroll.set(cur + 1);
+            return;
+        }
+        self.cursor_down();
     }
 
     /// Crafting rows: collapsible skill headers + the recipes of expanded skills.
@@ -570,7 +603,11 @@ impl State {
             Panel::Examine => self.view().features.len(),
             Panel::Titles => self.view().titles.len(),
             Panel::Follow => self.view().occupants.len(),
-            Panel::Stable => self.view().stable.map(|s| s.entries.len()).unwrap_or(0),
+            Panel::Stable => self
+                .view()
+                .stable
+                .map(|s| s.kennel.len() + s.entries.len())
+                .unwrap_or(0),
             Panel::Taming => self.view().taming.map(|t| t.entries.len()).unwrap_or(0),
             Panel::Housing => self.view().housing.map(|h| h.entries.len()).unwrap_or(0),
             Panel::Portal => self.view().portal.map(|p| p.entries.len()).unwrap_or(0),
@@ -827,13 +864,6 @@ impl State {
         }
     }
 
-    /// Mount or dismount the companion (Wildbound rideable beasts).
-    pub fn toggle_mount(&mut self) {
-        if self.ensure_player_present() {
-            self.svc.toggle_mount_task(self.user_id);
-        }
-    }
-
     /// Quaff the best healing potion without leaving the combat view, so you can
     /// keep an eye on both health bars instead of opening the inventory panel.
     pub fn quaff(&mut self) {
@@ -905,10 +935,18 @@ impl State {
         }
     }
 
-    /// Feed and tend the player's companion at the Stable.
+    /// The `~` key: feed whichever matters here (a hurt pet, else a stray to
+    /// court, else your pet).
     pub fn feed_pet(&mut self) {
         if self.ensure_player_present() {
             self.svc.feed_pet_task(self.user_id);
+        }
+    }
+
+    /// `G`: feed and tend your own companion, never a stray.
+    pub fn feed_companion(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.feed_companion_task(self.user_id);
         }
     }
 
@@ -1022,10 +1060,19 @@ impl State {
             }
             Panel::Follow => self.follow_selected(),
             Panel::Stable => {
-                if let Some(stable) = self.view().stable
-                    && let Some(entry) = stable.entries.get(self.cursor)
-                {
-                    self.svc.buy_pet_task(self.user_id, entry.key.clone());
+                // The kennel rows come first, then the shop's.
+                if let Some(stable) = self.view().stable {
+                    match self.cursor.checked_sub(stable.kennel.len()) {
+                        None => {
+                            let key = stable.kennel[self.cursor].key.clone();
+                            self.svc.call_out_pet_task(self.user_id, key);
+                        }
+                        Some(shop) => {
+                            if let Some(entry) = stable.entries.get(shop) {
+                                self.svc.buy_pet_task(self.user_id, entry.key.clone());
+                            }
+                        }
+                    }
                 }
             }
             Panel::Taming => {

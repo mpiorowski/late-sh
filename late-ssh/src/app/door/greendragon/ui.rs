@@ -1268,7 +1268,7 @@ fn controls_hint(mode: Mode) -> &'static str {
 }
 
 /// Two-column Green Dragon landing card for the Games hub.
-pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
+pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool, scroll: u16) -> u16 {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -1373,7 +1373,12 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
         )));
     }
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    crate::app::door::landing::render_scrolled(
+        frame,
+        inner,
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        scroll,
+    )
 }
 
 fn title_art() -> Vec<Line<'static>> {

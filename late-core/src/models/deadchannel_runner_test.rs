@@ -38,3 +38,61 @@ async fn ensure_creates_once_and_keeps_the_first_look() {
         .expect("list looks");
     assert_eq!(looks, vec![(user.id, first_look)]);
 }
+
+#[tokio::test]
+async fn leaving_hides_the_runner_but_keeps_the_character() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "runner-two").await;
+
+    let look = serde_json::json!({"hood": "hood.cross"});
+    let (created, _) = DeadchannelRunner::ensure_for_user(&client, user.id, &look)
+        .await
+        .expect("ensure");
+
+    assert!(
+        DeadchannelRunner::mark_left(&client, user.id)
+            .await
+            .expect("mark left")
+    );
+    // Leaving twice writes once: the second call has no door to close, so
+    // it notifies no replica.
+    assert!(
+        !DeadchannelRunner::mark_left(&client, user.id)
+            .await
+            .expect("mark left again")
+    );
+
+    // Gone from the directory, so the gate is shut everywhere and the old
+    // messages lose their portrait.
+    assert!(
+        DeadchannelRunner::list_looks(&client)
+            .await
+            .expect("list looks")
+            .is_empty()
+    );
+    // The character is still there, stamped.
+    let left = DeadchannelRunner::find_by_user(&client, user.id)
+        .await
+        .expect("find")
+        .expect("row survives the leave");
+    assert_eq!(left.id, created.id);
+    assert_eq!(left.look, look);
+    assert!(left.left_at.is_some());
+
+    // An invited rejoin brings back the same face, whatever look it offers.
+    let offered = serde_json::json!({"hood": "hood.plain"});
+    let (back, origin) = DeadchannelRunner::ensure_for_user(&client, user.id, &offered)
+        .await
+        .expect("ensure back");
+    assert_eq!(origin, RunnerOrigin::Returned);
+    assert_eq!(back.id, created.id);
+    assert_eq!(back.look, look);
+    assert!(back.left_at.is_none());
+    assert_eq!(
+        DeadchannelRunner::list_looks(&client)
+            .await
+            .expect("list looks again"),
+        vec![(user.id, look)]
+    );
+}

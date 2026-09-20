@@ -1,8 +1,8 @@
 # Clubhouse Context (late-ssh/src/app/clubhouse)
 
 ## Metadata
-- Domain: the Late Lounge tavern, top-level screen `0`, the landing screen for every session
-- Last updated: 2026-08-25 (a rented Shop title now trails the name on the floor label, truncated to `LABEL_MAX` like the name and painted in the dim label style; `put_label_styled` takes the name length so only the name takes a color effect. §3. Previous: the forced tour gained two Enter interludes for the features with no page of their own: the music box on Home after the chat stop, pitching the sources plus the two ways to actually hear sound (late.sh/listen, the `late` CLI), and the lobby box on The Arcade after the arcade stop, carrying the Ctrl+G daily-duel and live-table content the arcade box used to cram in)
+- Domain: the Late Lounge tavern, top-level screen `0`, the default landing screen (always the landing for a first-ever session)
+- Last updated: 2026-09-17 (slash commands are off in the Lounge composer, `ComposerCommands::Disabled`: a command draft gets a banner and stays in the composer, while a bare `/` or `//` aside posts as speech; a chat overlay that lands here is drawn over the tavern. §2 `ui.rs` row and the composer notes.) Previously: 2026-09-10 (a pool table joined the games corner, directly under the poker table and on the same errand: the poker table opens the Lobby, the pool table opens it on a fresh pool challenge with eight-ball under the cursor — `Interactive::Pool`, `map::POOL_TABLE`, `DailyState::begin_challenge_draft_for`. It displaced the old games-corner table at (148, 26). Note the generator drift called out in §2 before touching the map again.) Previous: 2026-08-25 (a rented Shop title now trails the name on the floor label, truncated to `LABEL_MAX` like the name and painted in the dim label style; `put_label_styled` takes the name length so only the name takes a color effect. §3.)
 - Status: Active
 
 ## 1. Summary
@@ -18,11 +18,11 @@ room is the chat surface, and the full history lives in #lounge on Home.
 
 | File | Owns |
 |---|---|
-| `map.rs` | The 184x50 generated floor plan (`MAP` literal, do not hand-edit; re-run `scripts/gen_clubhouse_map.py --write`), collision (`walkable`), `SEATS`/`STANDING_SPOTS`/`DOOR_STACK`, interactive zones, animation cell lists, `DOOR_SIGN`. |
+| `map.rs` | The 184x50 generated floor plan (`MAP` literal, do not hand-edit; re-run `scripts/gen_clubhouse_map.py --write`), collision (`walkable`), `SEATS`/`STANDING_SPOTS`/`DOOR_STACK`, interactive zones, animation cell lists, `DOOR_SIGN`. **The generator's `RUST_TEMPLATE` has drifted behind this file** — it predates `DOOR_STACK`, `BOT_SPOT`, `DOG_HOME`/`DOG_WAYPOINTS`, `BAR_APPROACH` and the `dog` parameter on `nearest_interactive`, so a bare `--write` silently *reverts* all of them. Until it is resynced: author the art in the script, run it to validate, and splice only the `MAP` and `SEATS` blocks into this file. That is how the pool table landed (2026-09-10). |
 | `lobby.rs` | `SharedLobby`, the process-global `Arc<Mutex<..>>` presence map: parked spot assignments, walkers, emotes, the dog-pet event, snapshots. |
 | `state.rs` | Per-session view state: camera target, animation clock, latest `LobbySnapshot`, arrival/departure door events, the `Tutorial` state machine. |
 | `input.rs` | Walking (arrows/hjkl), `i` composer, `w`/`x` emotes, `t` bartender mention, Enter on landmarks/dog, tutorial Enter. Returns `false` for globals. |
-| `ui.rs` | Renderer: camera pan, base-grid styling, animations, crowd placement, emote frames, speech bubbles, door ambience, tutorial overlays, prop popovers, composer footer. |
+| `ui.rs` | Renderer: camera pan, base-grid styling, animations, crowd placement, emote frames, speech bubbles, door ambience, tutorial overlays, prop popovers, composer footer, and any chat overlay that lands here (a `/summary` or reaction list requested on Home; it owns input via `screen_composes_chat`, so it must be drawn). |
 
 ## 3. The shared lobby (multiplayer contract)
 
@@ -78,7 +78,10 @@ room is the chat surface, and the full history lives in #lounge on Home.
   dashboard card uses; grows while typing, shows placeholder hints idle).
 - `i` (or Enter in the open) composes into #lounge through the normal global
   composer pipeline; image paste works (Clubhouse is a
-  `is_chat_composer_context` screen in `app::input`).
+  `is_chat_composer_context` screen in `app::input`). Slash commands are
+  off here (`ComposerCommands::Disabled`): a draft whose first word leads
+  with `/` (`is_command_draft`) gets a banner, stays in the composer, and is
+  neither run nor posted. A bare `/` or a `//` aside is speech and posts.
 - Messages younger than ~10s render as bordered bubbles above their author's
   avatar (latest per author, up to 3 lines, width widens 28 -> 36 -> 44
   before truncating, reply-quote line stripped). Room tails are newest-first
@@ -126,17 +129,23 @@ room is the chat surface, and the full history lives in #lounge on Home.
   late.sh/listen or the `late` CLI) -> `VisitArcade` (2) -> `VisitLobby`
   (Enter, still on The Arcade: the Ctrl+G daily duels and live tables) ->
   `VisitGames` (3) -> `VisitArtboard` (4) -> `VisitDirectory` (5) ->
-  `VisitLeaderboard` (6) -> `Homecoming` (0, back in the tavern). Each stop
+  `VisitLeaderboard` (6) -> `VisitZen` (`Ctrl+F`: Zen has no digit, so the
+  stop teaches the chord and the main tile keys) -> `Homecoming` (0, back in
+  the tavern). Each stop
   draws a centered pitch box over the real page (`ui::draw_tour_overlay`,
   called from `render.rs`) ending in the next key; `Homecoming`'s Enter
   finishes the tour in place and frees input: the player stays in the
-  tavern. Hold the line at these two interludes: pages are self-evidencing,
-  and every extra forced stop taxes all future newcomers.
+  tavern. Hold the line at these two interludes and the Zen stop: pages are
+  self-evidencing, and every extra forced stop taxes all future newcomers.
 - **The tour is forced.** While `State::tutorial_forced_step` is `Some`,
   `handle_tour_gate` in `app/input.rs` (sitting above the reserved chords,
   below the quit-confirm modal) swallows every input, mouse and chords
   included, except the named digit (which runs `set_screen`; the stage
-  advances in `State::tutorial_screen_entered`, hooked there), Enter where
+  advances in `State::tutorial_screen_entered`, hooked there), `Ctrl+F` at
+  the Zen stop (`TourStep::Zen`, which runs the real `toggle_zen_globally`
+  so the page opens exactly as it does everywhere; Enter runs the same
+  toggle there, because the gate also blocks the `/zen` fallback and a
+  terminal that swallows the chord would otherwise trap the newcomer), Enter where
   the box names it (the two interludes advance via `tutorial_advance`
   without persisting; only the homecoming Enter finishes and persists),
   and `q` (quitting always works; Esc's lone-byte path can still arm the

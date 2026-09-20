@@ -1,168 +1,195 @@
 {
-  description = "late.sh — a social SSH terminal";
+        description = "late.sh — a social SSH terminal";
 
-  inputs = {
-    # For listing and iterating nix systems
-    flake-utils.url = "github:numtide/flake-utils";
+        inputs = {
+                # For listing and iterating nix systems
+                flake-utils.url = "github:numtide/flake-utils";
 
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+                nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
-    # For installing non-standard rustc versions
-    rust-overlay.url = "github:oxalica/rust-overlay";
-    rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
-  };
-
-  outputs = {
-    self,
-    nixpkgs,
-    flake-utils,
-    rust-overlay,
-  }:
-    {
-      overlays.default = final: prev: {
-        late = self.packages.${final.stdenv.hostPlatform.system}.late;
-        late-sh = self.packages.${final.stdenv.hostPlatform.system}.late-sh;
-      };
-    }
-    // (flake-utils.lib.eachSystem nixpkgs.lib.systems.flakeExposed (system: let
-      pkgs = import nixpkgs {
-        inherit system;
-        overlays = [
-          rust-overlay.overlays.default
-        ];
-      };
-
-      # When we're running in the shell, we want rustc with a bunch of extra
-      # bits so that rust-analyzer, clippy, rustfmt, etc. all work out of the
-      # box.
-      rustShellToolchain = pkgs.rust-bin.stable.latest.default.override {
-        # NOTE: explicitly add rust-src to the rustc compiler only in devShell.
-        # this in turn causes a dependency on the rust compiler src, which
-        # bloats the closure size by several GiB. but doing this here and not
-        # by default avoids the default flake install from including that
-        # dependency, so it's worth it.
-        extensions = [
-          "rust-src"
-          "rust-analyzer"
-          "llvm-tools-preview"
-        ];
-      };
-
-      # But, whenever we are running CI builds or checks, we want to use a
-      # smaller closure. This reduces the CI impact on fresh clones/VMs, etc.
-      rustMinimalPlatform = let
-        platform = pkgs.rust-bin.stable.latest.minimal;
-      in
-        pkgs.makeRustPlatform {
-          rustc = platform;
-          cargo = platform;
+                # For installing non-standard rustc versions
+                rust-overlay.url = "github:oxalica/rust-overlay";
+                rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
         };
-    in {
-      formatter = pkgs.alejandra;
 
-      packages = rec {
-        late = pkgs.callPackage ./default.nix {
-          rustPlatform = rustMinimalPlatform;
-          gitRev = self.rev or self.dirtyRev or null;
-          packageName = "late";
-          packageDescription = "Companion CLI for late.sh";
-          mainProgram = "late";
-          # late-webview is the standalone YouTube helper `late` spawns on
-          # Linux; `late` itself must not link WebKitGTK.
-          cargoBuildFlags = ["-p" "late-cli" "--bin" "late" "-p" "late-webview" "--bin" "late-webview"];
-        };
-        late-sh = pkgs.callPackage ./default.nix {
-          rustPlatform = rustMinimalPlatform;
-          gitRev = self.rev or self.dirtyRev or null;
-        };
-        default = late-sh;
-      };
+        outputs =
+                {
+                        self,
+                        nixpkgs,
+                        flake-utils,
+                        rust-overlay,
+                }:
+                {
+                        overlays.default = final: prev: {
+                                late = self.packages.${final.stdenv.hostPlatform.system}.late;
+                                late-sh = self.packages.${final.stdenv.hostPlatform.system}.late-sh;
+                        };
+                }
+                // (flake-utils.lib.eachSystem nixpkgs.lib.systems.flakeExposed (
+                        system:
+                        let
+                                pkgs = import nixpkgs {
+                                        inherit system;
+                                        overlays = [
+                                                rust-overlay.overlays.default
+                                        ];
+                                };
 
-      apps = rec {
-        late = flake-utils.lib.mkApp {
-          drv = self.packages.${system}.late;
-          exePath = "/bin/late";
-        };
-        late-sh = flake-utils.lib.mkApp {
-          drv = self.packages.${system}.late-sh;
-          exePath = "/bin/late-ssh";
-        };
-        default = late-sh;
-      };
+                                # When we're running in the shell, we want rustc with a bunch of extra
+                                # bits so that rust-analyzer, clippy, rustfmt, etc. all work out of the
+                                # box.
+                                rustShellToolchain = pkgs.rust-bin.stable.latest.default.override {
+                                        # NOTE: explicitly add rust-src to the rustc compiler only in devShell.
+                                        # this in turn causes a dependency on the rust compiler src, which
+                                        # bloats the closure size by several GiB. but doing this here and not
+                                        # by default avoids the default flake install from including that
+                                        # dependency, so it's worth it.
+                                        extensions = [
+                                                "rust-src"
+                                                "rust-analyzer"
+                                                "llvm-tools-preview"
+                                        ];
+                                };
 
-      checks.late-sh = self.packages.${system}.late-sh.overrideAttrs ({...}: {
-        # The default Rust infrastructure runs all builds in the release
-        # profile, which is significantly slower. Run this under the `test`
-        # profile instead
-        cargoBuildType = "test";
-        cargoCheckType = "test";
-        buildPhase = "true";
-        installPhase = "touch $out";
-      });
+                                # But, whenever we are running CI builds or checks, we want to use a
+                                # smaller closure. This reduces the CI impact on fresh clones/VMs, etc.
+                                rustMinimalPlatform =
+                                        let
+                                                platform = pkgs.rust-bin.stable.latest.minimal;
+                                        in
+                                        pkgs.makeRustPlatform {
+                                                rustc = platform;
+                                                cargo = platform;
+                                        };
+                        in
+                        {
+                                formatter = pkgs.alejandra;
 
-      devShells.default = let
-        packages = with pkgs; [
-          rustShellToolchain
-          llvmPackages.llvm # for e.g. llvm-symbolizer
+                                packages = rec {
+                                        late = pkgs.callPackage ./default.nix {
+                                                rustPlatform = rustMinimalPlatform;
+                                                gitRev = self.rev or self.dirtyRev or null;
+                                                packageName = "late";
+                                                packageDescription = "Companion CLI for late.sh";
+                                                mainProgram = "late";
+                                                # late-webview is the standalone YouTube helper `late` spawns on
+                                                # Linux; `late` itself must not link WebKitGTK.
+                                                cargoBuildFlags = [
+                                                        "-p"
+                                                        "late-cli"
+                                                        "--bin"
+                                                        "late"
+                                                        "-p"
+                                                        "late-webview"
+                                                        "--bin"
+                                                        "late-webview"
+                                                ];
+                                        };
+                                        late-sh = pkgs.callPackage ./default.nix {
+                                                rustPlatform = rustMinimalPlatform;
+                                                gitRev = self.rev or self.dirtyRev or null;
+                                        };
+                                        default = late-sh;
+                                };
 
-          # Matches .mise.toml / CONTRIBUTING tooling
-          mold
-          cargo-nextest
-          typos
+                                apps = rec {
+                                        late = flake-utils.lib.mkApp {
+                                                drv = self.packages.${system}.late;
+                                                exePath = "/bin/late";
+                                        };
+                                        late-sh = flake-utils.lib.mkApp {
+                                                drv = self.packages.${system}.late-sh;
+                                                exePath = "/bin/late-ssh";
+                                        };
+                                        default = late-sh;
+                                };
 
-          # Commonly useful cargo helpers
-          cargo-llvm-cov
-          cargo-watch
-          cargo-autoinherit
-          cargo-msrv
+                                checks.late-sh = self.packages.${system}.late-sh.overrideAttrs (
+                                        { ... }: {
+                                                # The default Rust infrastructure runs all builds in the release
+                                                # profile, which is significantly slower. Run this under the `test`
+                                                # profile instead
+                                                cargoBuildType = "test";
+                                                cargoCheckType = "test";
+                                                buildPhase = "true";
+                                                installPhase = "touch $out";
+                                        }
+                                );
 
-          # late-web frontend tooling
-          nodejs
-          tailwindcss_4
+                                devShells.default =
+                                        let
+                                                packages = with pkgs; [
+                                                        rustShellToolchain
+                                                        llvmPackages.llvm # for e.g. llvm-symbolizer
 
-          # Integration / infra tooling (docker-compose stack, migrations, etc.)
-          postgresql
-          docker-compose
+                                                        # Matches .mise.toml / CONTRIBUTING tooling
+                                                        mold
+                                                        cargo-nextest
+                                                        typos
 
-          # Commit signing
-          gnupg
-        ];
+                                                        # Commonly useful cargo helpers
+                                                        cargo-llvm-cov
+                                                        cargo-watch
+                                                        cargo-autoinherit
+                                                        cargo-msrv
 
-        # on macOS and Linux, use faster parallel linkers that are much more
-        # efficient than the defaults. these noticeably improve link time even
-        # for medium sized rust projects.
-        rustLinkerFlags =
-          if pkgs.stdenv.isLinux
-          then ["-fuse-ld=mold" "-Wl,--compress-debug-sections=zstd"]
-          else if pkgs.stdenv.isDarwin
-          then
-            # on darwin, /usr/bin/ld actually looks at the environment variable
-            # $DEVELOPER_DIR, which is set by the nix stdenv, and if set,
-            # automatically uses it to route the `ld` invocation to the binary
-            # within. in the devShell though, that isn't what we want; it's
-            # functional, but Xcode's linker as of ~v15 (not yet open source)
-            # is ultra-fast and very shiny; it is enabled via -ld_new, and on by
-            # default as of v16+
-            ["--ld-path=$(unset DEVELOPER_DIR; /usr/bin/xcrun --find ld)" "-ld_new"]
-          else [];
+                                                        # late-web frontend tooling
+                                                        nodejs
+                                                        tailwindcss_4
 
-        rustLinkFlagsString =
-          pkgs.lib.concatStringsSep " "
-          (pkgs.lib.concatMap (x: ["-C" "link-arg=${x}"]) rustLinkerFlags);
+                                                        # Integration / infra tooling (docker-compose stack, migrations, etc.)
+                                                        postgresql
+                                                        docker-compose
 
-        # The `RUSTFLAGS` environment variable is set in `shellHook` instead of
-        # `env` to allow the `xcrun` command above to be interpreted by the
-        # shell.
-        shellHook = ''
-          export RUSTFLAGS="${rustLinkFlagsString}"
-        '';
+                                                        # Commit signing
+                                                        gnupg
+                                                ];
 
-        late-sh = self.packages.${system}.late-sh;
-      in
-        pkgs.mkShell {
-          name = "late-sh";
-          packages = packages ++ late-sh.nativeBuildInputs ++ late-sh.buildInputs;
-          inherit shellHook;
-        };
-    }));
+                                                # on macOS and Linux, use faster parallel linkers that are much more
+                                                # efficient than the defaults. these noticeably improve link time even
+                                                # for medium sized rust projects.
+                                                rustLinkerFlags =
+                                                        if pkgs.stdenv.hostPlatform.isLinux then
+                                                                [
+                                                                        "-fuse-ld=mold"
+                                                                        "-Wl,--compress-debug-sections=zstd"
+                                                                ]
+                                                        else if pkgs.stdenv.hostPlatform.isDarwin then
+                                                                # on darwin, /usr/bin/ld actually looks at the environment variable
+                                                                # $DEVELOPER_DIR, which is set by the nix stdenv, and if set,
+                                                                # automatically uses it to route the `ld` invocation to the binary
+                                                                # within. in the devShell though, that isn't what we want; it's
+                                                                # functional, but Xcode's linker as of ~v15 (not yet open source)
+                                                                # is ultra-fast and very shiny; it is enabled via -ld_new, and on by
+                                                                # default as of v16+
+                                                                [
+                                                                        "--ld-path=$(unset DEVELOPER_DIR; /usr/bin/xcrun --find ld)"
+                                                                        "-ld_new"
+                                                                ]
+                                                        else
+                                                                [ ];
+
+                                                rustLinkFlagsString = pkgs.lib.concatStringsSep " " (
+                                                        pkgs.lib.concatMap (x: [
+                                                                "-C"
+                                                                "link-arg=${x}"
+                                                        ]) rustLinkerFlags
+                                                );
+
+                                                # The `RUSTFLAGS` environment variable is set in `shellHook` instead of
+                                                # `env` to allow the `xcrun` command above to be interpreted by the
+                                                # shell.
+                                                shellHook = ''
+                                                        export RUSTFLAGS="${rustLinkFlagsString}"
+                                                '';
+
+                                                late-sh = self.packages.${system}.late-sh;
+                                        in
+                                        pkgs.mkShell {
+                                                name = "late-sh";
+                                                packages = packages ++ late-sh.nativeBuildInputs ++ late-sh.buildInputs;
+                                                inherit shellHook;
+                                        };
+                        }
+                ));
 }

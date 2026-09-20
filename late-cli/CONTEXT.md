@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh (plus the sibling `late-webview` helper crate)
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-08-26 (Pair-WS reconnect no longer unmutes a paired session or gives up on pairing: releasing the startup mute is gated on the server never having seen the session, a connection that held 60s clears the failure count, and the loop backs off to a 60s retry instead of parking forever. See §6 "Pairing behavior" and §7. Previous entry: macOS native voice is back: `build.rs` passes `-ObjC` when linking the `late` binary on darwin, which is what the vendored `webrtc-sys` patch was working around, plus the microphone `Info.plist` section; `default.nix` now predeclares the mac WebRTC archives too; see §9 "macOS voice link requirements")
+- Last updated: 2026-09-14 (The analyzer runs a 2048-sample FFT into 16 log bands on a dB scale, and on Linux `src/audio/loopback.rs` records the `late-webview` helper's tagged audio stream with `pw-dump` and `pw-record`, so YouTube sends `viz` frames too. The server accepts 8 or 16 bands, so it deploys before the CLI. See §6 and §7.)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -89,7 +89,7 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 - `src/mpris.rs` - Linux MPRIS service, track metadata projection, and the desktop command queue (transport/volume mapped to server-routed `set_muted`/`set_volume`); other platforms compile a no-op publisher
 - `src/ssh.rs` - native SSH, OpenSSH ControlMaster mode, legacy PTY subprocess mode, token parsing, resize forwarding
 - `src/pty.rs` - terminal size/PTY helpers
-- `src/raw_mode.rs` - local raw-mode guard for modes where CLI owns terminal forwarding
+- `src/raw_mode.rs` - local raw-mode guard for modes where CLI owns terminal forwarding, plus `SessionModesGuard`, which turns off mouse reporting and bracketed paste, resets the themed background (OSC 111), and shows the cursor when the session ends in any mode (the server's own teardown never arrives on an idle timeout or a dropped link). It never sends `?1049l`: after a clean exit that would restore a stale cursor over the goodbye line
 - `src/ws.rs` - paired-client WebSocket protocol, control handling, client state
 - `src/voice.rs` - LiveKit voice-room media runtime; see `../late-ssh/src/app/voice/CONTEXT.md` for full voice protocol and invariants
 - `../late-webview/` - embedded YouTube webview crate (wry/tao/WebKitGTK page host, JS bridge commands, pair-WS relay, `page.html`). Ships as the standalone `late-webview` binary on Linux; compiled into `late` as a library on Windows/macOS. `late-cli` must not depend on it on Linux — that dependency edge is what keeps WebKitGTK out of the `late` binary.
@@ -126,7 +126,7 @@ Defaults in `src/config.rs`:
 - `LATE_WEBVIEW_DEBUG_STDERR=1`: inherit the embedded YouTube helper's stderr instead of redirecting it to the helper log file. Useful with `late -v 2>late-debug.log` when diagnosing GTK/WebKit/GStreamer startup.
 - The parent starts the embedded YouTube helper with `NO_AT_BRIDGE=1` to opt the helper out of the AT-SPI accessibility bridge. This avoids host `libatk-bridge-2.0` crashes caused by stale `at-spi-bus-launcher`/dbus state while keeping the setting scoped to the helper process. On Linux it also sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` by default if the caller did not set that variable, matching the common Arch/Wayland workaround for WebKitGTK DMABUF renderer failures.
 - `-v`, `--verbose`: enables debug logging when `RUST_LOG` is not set
-- `LATE_NO_UPDATE_CHECK=1`: skips the pre-connect "update available" check (see §13). Any non-empty value other than `0` disables it.
+- `LATE_NO_UPDATE_CHECK=1`: skips the pre-connect "update available" check (see §9 "Update check"). Any non-empty value other than `0` disables it.
 - `LATE_INSTALL_BASE_URL`: distribution host override shared with the installer; the update check fetches `{base}/VERSION` from it (default `https://cli.late.sh`).
 
 Logging:
@@ -336,6 +336,7 @@ Embedded YouTube helper window:
 - At spawn the parent passes its current mute/volume via `LATE_WEBVIEW_INITIAL_MUTED` / `LATE_WEBVIEW_INITIAL_VOLUME` (internal parent-to-helper env, not user config); the helper seeds its audio settings from them and pushes them into the page on the page's `ready` event. Server-side, `api.rs` aligns a connecting webview client's mute to the live CLI entry's muted state instead of `start_with_music_muted`, so a respawned or reconnected helper keeps the session's runtime mute.
 - If the embedded helper exits or fails to start 3 times within 60 seconds, the parent disables embedded YouTube fallback for 5 minutes and logs the helper log path. This prevents the repeated open/close loop when a host WebKit/GStreamer install is broken. Nothing takes over: YouTube is simply unavailable in the CLI until the helper works, and users can listen at late.sh/listen meanwhile. After the backoff expires the heartbeat watchdog retries automatically.
 - The helper requests no initial focus, always-on-bottom placement, and an initial top-right position on the primary monitor; on Linux it also skips the taskbar. These are best-effort window-manager hints, not a hidden/background player. On Linux/Wayland the app id/class is `sh.late.youtube`; Hyprland may ignore always-on-bottom or client-side positioning, so users who need stronger routing should use a special workspace/scratchpad instead of relying on fully off-screen placement.
+- On Linux the spawn also sets `PULSE_PROP` and `PIPEWIRE_PROPS` (`application.id=sh.late.youtube`, `late.webview.owner=<late pid>`), so the helper's WebKit audio streams can be found and recorded for the equalizer. The capture (`src/audio/loopback.rs`) lives in `RunningHelper` beside the helper child and stops with it. See §7 and `late-ssh/src/app/audio/CONTEXT.md` §18.
 - On initial helper open only, `webview-pair` uses the first `queue_update.current.started_at_ms` snapshot to apply one `startSeconds` value to the first matching `load_video`. If a `load_video` arrives before that first snapshot, the relay buffers it and flushes it when the snapshot decision is known. After that first load is dispatched, heartbeats and later track switches do not receive a seek offset and continue through the normal `loadVideoById({ videoId })` path.
 - The helper page suppresses transient YouTube IFrame `unstarted`/`cued` states and only reports `ended` after the current item has reached `playing`; the server still owns queue advancement through its playback timer.
 - If YouTube rejects the embedded iframe with `101`, `150`, or `153`, the helper logs the rejection and stays on its controlled bridge page. It does not navigate to the normal `youtube.com/watch` page because that would leave the local player bridge and make source switching/state harder to reason about.
@@ -352,11 +353,12 @@ Audio path:
 3. Prefer the stream's native `44.1 kHz` when supported.
 4. If the device requires another rate, such as `48 kHz`, resample locally with streaming linear resampling.
 5. Decode frames into a lock-free SPSC playback ring buffer.
-6. The output callback applies mute/volume and records post-mute/post-volume samples into the played ring.
-7. The analyzer reads from the played ring and broadcasts `VizSample { bands: [f32; 8], rms }`.
+6. The output callback applies mute/volume and pushes post-volume mono samples into the played ring, but only while output is audible (not muted, native source selected).
+7. The analyzer thread (`src/audio/analyzer.rs`) reads the played ring and, on each tick that played new samples, broadcasts `VizSample { bands: [f32; 16], rms }`. Each pair session subscribes fresh and sends frames as `viz` events.
+8. YouTube on Linux: while the helper runs, `src/audio/loopback.rs` records the helper's tagged PipeWire stream with `pw-record` (already post-volume, since the page applies mute and volume), and feeds a ring into a second `spawn_playback_analyzer_thread` on the same `analyzer_tx`. The native output is silent while YouTube is selected, so the two analyzers never interleave frames.
 
 Critical audio invariant:
-- The analyzer must follow audible output, not raw decoded samples. Muting or lowering volume should visibly affect the TUI visualizer.
+- The analyzer must follow audible output, not raw decoded samples. Lowering volume shrinks the bars. Silence sends nothing at all: a muted CLI, a YouTube-selected CLI with no helper capture, or an underrun produces no frames, so the TUI's spectrum goes stale and falls back on its own (muted shows the flat line, an uncaptured YouTube the ambient band). Never push zeros for silence; a stream of empty frames would pin the TUI on flat live bars. The helper capture holds the same line by dropping chunks of exact digital zero.
 - The CPAL output callback must not take a mutex or allocate per output frame. Keep decoder-to-output transport on a lock-free SPSC ring and map channels directly into the callback buffer.
 - Reuse Symphonia `SampleBuffer` storage across decoded packets; do not allocate a fresh conversion buffer per packet.
 
@@ -376,14 +378,15 @@ Platform notes:
 - Desktop writes are not applied locally. The MPRIS interface queues a `DesktopCommand`, the pair WS loop sends it as a `set_muted`/`set_volume` event, and the server fans the result back to every paired client (`PairControlMessage::SetMuted`/`SetVolume`), exactly like a TUI `m` keypress. That round trip is what lets a widget pause reach YouTube, which plays in the separate `late-webview` helper on its own pair WS, and it keeps CLI, helper, and sidebar convergent. It also means controls need a live pair socket, and the widget updates when the fan-out lands rather than instantly.
 - MPRIS startup and update errors fail open. Headless Linux, WSL, containers, and other environments without a usable session D-Bus continue SSH/audio normally without desktop publication.
 - The playback queue caps at roughly two seconds of output samples.
-- Analyzer cadence is about 15 Hz with a 1024-sample FFT and 8 log-spaced bands.
+- Analyzer cadence is about 15 Hz with a 2048-sample FFT and 16 log-spaced bands (60 Hz to 12 kHz; `VIZ_BANDS` in `src/audio/mod.rs` matches `late_core::audio::VIZ_BANDS`). A bin belongs to the band its center frequency falls in, so a tone lights one band. Each band's mean FFT magnitude, scaled back to the 1024-sample window the constants were fitted on, maps to meter height on a dB scale: floor -18 dB, 60 dB span, plus 2 dB of tilt per band (30 dB bottom to top) so the treble registers; RMS maps -48..0 dBFS. The constants were fitted on captured Icecast, Nightride synthwave, and house streams to sit near half height at 70% volume with room above for hits.
 
 Audio and stream resiliency:
 - WebSocket pairing retries every 2s for 10 consecutive failures, then every 60s for as long as the session lives; see §6 for the stable-connection reset and the mute rule.
 - Startup stream probing and the decoder thread's first stream open each retry 3 times with a short 750ms delay before aborting startup. This covers rare Icecast/network timing blips where the first CLI launch says "failed to create audio decoder" but immediately joining again works.
 - Decoder recovery re-probes `SymphoniaStreamDecoder` in place after stream failures, sleeps 2s between reconnects, and gives up after 10 consecutive failures.
 - CPAL output stream errors mark `icecast_output_available=false`; the pair WebSocket sends an updated `client_state` so the server knows this CLI is not producing audio.
-- `viz` frames are a legacy pair-WS payload. Nothing renders them: the sidebar equalizer is synthesized from the wall tick (see `late-ssh/src/app/audio/CONTEXT.md` §10).
+- `viz` frames drive the TUI equalizer's live spectrum for Icecast and radio, and on Linux for YouTube through the helper capture (see `late-ssh/src/app/audio/CONTEXT.md` §10 and §18). CLIs released between the analyzer's removal (2026-07-23) and its return send none and keep the ambient band.
+- The helper capture fails open. Missing `pw-dump` or `pw-record` logs one warning and YouTube keeps the ambient band; a failing graph read warns once per run of failures and retries every second; a recorder whose stream vanished is dropped and the next matching stream is picked up; a recorder that exits while its stream is still listed warns once with its exit status and respawns every second until one holds.
 
 ---
 
@@ -421,6 +424,7 @@ Public installers:
 Installer defaults:
 - `scripts/install.sh` and `scripts/install.ps1` default to `https://cli.late.sh`
 - `LATE_INSTALL_BASE_URL` overrides distribution host
+- `LATE_INSTALL_CHECKSUM_BASE_URL` overrides where `sha256sums.txt` is read from; default is the GitHub Release assets, `https://github.com/mpiorowski/late-sh/releases/download`
 - `LATE_INSTALL_VERSION` selects a specific version instead of `latest`
 - `LATE_INSTALL_DIR` overrides install directory
 - Shell installer detects WSL, Termux, and Git Bash/MSYS/Cygwin; Termux receives the Android build and Windows shell environments receive the Windows `late.exe` build
@@ -428,16 +432,28 @@ Installer defaults:
 - PowerShell installer places `late.exe` under `%LOCALAPPDATA%\Programs\late` unless overridden and prints a PATH hint when needed
 - PowerShell installer uses environment-based architecture detection instead of `RuntimeInformation.OSArchitecture` so older Windows PowerShell/.NET hosts can run it
 - PowerShell installer passes `-UseBasicParsing` on download requests for Windows PowerShell 5.1 compatibility.
-- Checksum verification runs when checksum download succeeds; checksum download failure is warning-only
+- Checksum verification is mandatory and fails closed (see "Supply chain" below)
+
+### Supply chain
+
+- `latest` is only a pointer. Both installers resolve it by reading `{base}/latest/VERSION`, validate the tag against `^[A-Za-z0-9][A-Za-z0-9._-]*$` (it is interpolated into URL paths on two hosts, so a tampered pointer must not be able to walk to another GitHub path), then fetch every file from `releases/<tag>/`. Nothing is installed from `latest/<target>/`.
+- `sha256sums.txt` is read from the GitHub Release assets (`{LATE_INSTALL_CHECKSUM_BASE_URL}/<tag>/sha256sums.txt`), not from the distribution bucket. A binary from R2 must match a checksum from GitHub, so a compromised bucket or bucket credential alone cannot swap the binary under a trusted copy of the installer. Two residual attacks from a bucket alone: a downgrade, pointing `latest/VERSION` at an older genuine tag; and replacing the installer itself, since `install.sh`, `install.ps1`, and `index.html` are served from the same bucket and `curl ... | sh` trusts it for the script. The second is closed only by running the installer from a checkout or verifying the provenance bundle by hand.
+- Verification is fail-closed in both installers: unreachable checksum file, missing entry, no SHA-256 tool, or mismatch abort the install. The `late-webview` helper, when its download succeeds, is verified the same way. `install.ps1` enables TLS 1.2 on `ServicePointManager` first, because github.com refuses older TLS and Windows PowerShell 5.1 on older .NET hosts does not offer 1.2 by default.
+- Releases published before the GitHub checksum upload existed have no `sha256sums.txt` on their Release and cannot be installed through `LATE_INSTALL_VERSION` unless the file is backfilled by hand with `gh release upload`. Rollout: before the first `-cli` release after this landed, backfill the tag `latest/VERSION` currently points at (and any tag users are likely to pin), so a CDN-cached pointer cannot make the new installer fail closed against a tag without checksums.
+- Every binary carries a keyless Sigstore build-provenance attestation from `actions/attest`, published next to it as `<binary>.sigstore.json` (R2 only; bundles are self-verifying, so their origin does not matter). One attestation per file keeps bundles single-subject for `cosign verify-blob-attestation --bundle`. The certificate identity is always `deploy_cli.yml@refs/tags/<tag>`: Sigstore takes the identity from `job_workflow_ref`, which for a reusable workflow is the called file, and `release.yml` only appears in the build-config extension. Verification commands live in `README.md` "Verifying downloads".
+- The build must run on the release tag. The OIDC token carries the ref the workflow started on, not the ref checked out, so a dispatch from `main` would sign `main`'s commit as the release. `build_cli` fails first thing unless `GITHUB_REF` is `refs/tags/<release_tag>`; a manual redeploy is `gh workflow run deploy_cli.yml --ref <tag> -f release_tag=<tag>`. The release event already runs on the tag.
+- A published tag is immutable. `publish_cli` uploads `sha256sums.txt` to the Release only when the Release has none; if one exists and matches the build it is left alone (a re-run of failed jobs reuses the same artifacts), and if it differs the job fails so the rebuild ships under a new tag. There is no `rust-toolchain` pin, so a rebuild on a newer runner image will generally differ. To retry a tag on purpose, `gh release delete-asset <tag> sha256sums.txt` first. Manual dispatch also requires the GitHub Release to exist, since the checksum asset lives on it.
+- Permissions: `build_cli` holds `id-token`, `attestations`, and `artifact-metadata` write for attestation; `publish_cli` holds `contents: write` only for `gh release upload` of the checksum file. `release.yml` grants the union to the `cli` job and `deploy_cli.yml` narrows per job. The checksum upload runs before any bucket upload so a tag never exists on R2 without its GitHub checksums.
 
 Release workflow:
 - `.github/workflows/deploy_cli.yml` builds `late-cli` release artifacts
-- `deploy_cli.yml` triggers on published `*-cli` GitHub Releases and also supports manual `workflow_dispatch` with `release_tag` and `environment` inputs. Manual dispatch checks out the requested tag through the shared `source_ref` path and is the recovery path when GitHub misses a release event.
+- `deploy_cli.yml` triggers on published `*-cli` GitHub Releases and also supports manual `workflow_dispatch` with `release_tag` and `environment` inputs. Manual dispatch is the recovery path when GitHub misses a release event; it must be dispatched on the tag itself (`gh workflow run deploy_cli.yml --ref <tag> -f release_tag=<tag>`), see "Supply chain".
 - Linux CI/release jobs install `libwebkit2gtk-4.1-dev` to build the `late-webview` helper crate. `late-cli` itself no longer needs WebKitGTK dev packages on Linux (`cargo build -p late-cli` works without them).
 - Linux glibc release artifacts are two binaries per target: `late` plus the `late-webview` helper, uploaded and checksummed together; `install.sh` installs both into the same directory (helper download is warning-only so older releases still install). Android/Termux, macOS, and Windows remain single-binary.
 - Desktop release artifacts include native LiveKit voice media on Linux, macOS, and Windows. Keep Windows MSVC release builds on the static CRT (`crt-static`/`/MT`) because LiveKit's bundled WebRTC objects are built that way. macOS release builds depend on the two `build.rs` darwin link args (see "macOS voice link requirements" below).
 - Publishes versioned releases plus `latest`
 - Publishes `install.sh` and `install.ps1` at the distribution root
+- Uploads `sha256sums.txt` to the GitHub Release and `<binary>.sigstore.json` provenance bundles next to every binary on R2 (see "Supply chain")
 
 Version stamping:
 - The release tag is the single source of truth for the CLI version. `deploy_cli.yml`'s `build_cli` job exports `LATE_CLI_VERSION=<tag>`, and `late-cli/build.rs` embeds it via `cargo:rustc-env` so the binary version matches the published `VERSION` file (`publish/VERSION`, `publish/latest/VERSION`) byte-for-byte. Local/dev and CI test builds fall back to the `Cargo.toml` version, so nothing needs to be set for `cargo build`.
@@ -460,6 +476,7 @@ Nix flake outputs:
 - `apps.${system}.late` runs that CLI package for `nix run ...#late`
 - `packages.${system}.late-sh` remains the default multi-binary package with `mainProgram = "late-ssh"`
 - On Linux, the Nix package builds with WebKitGTK 4.1, GTK3, ALSA, glib-networking, and GStreamer base/good/bad/ugly/libav plugins. The GStreamer path uses `gstreamer.out`, and `gst-plugins-bad` is overridden with `-Dlv2=disabled` to avoid `libgstlv2.so` crashes during plugin scanning. The flake's `late` package builds both the `late` and `late-webview` binaries; the installed binaries are wrapped with a fixed `GST_PLUGIN_SYSTEM_PATH_1_0`, `GST_PLUGIN_SCANNER`, `GIO_EXTRA_MODULES`, and `LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS`; on Linux the webview helper adds those GStreamer store paths to WebKitGTK's web-process sandbox before creating the webview.
+- On Linux, `postFixup` adds `libpulseaudio` to the `late` binary's rpath with `patchelf --add-rpath`, before `wrapProgram`. WebRTC's voice audio device `dlopen()`s `libpulse.so.0` at runtime, so the linker never records it, fixup's shrink-rpath would drop it, and NixOS has no `/usr/lib` fallback. Without it, voice join fails with `PlatformAudio: failed to acquire Platform ADM`, the CLI reports `voice_state { joined: false }`, and the server removes the user from the room, which reads as an instant kick. Music is unaffected because cpal links `libasound` directly. It goes on the rpath rather than a wrapper `LD_LIBRARY_PATH` so child processes (`late-webview`, system `ssh`) do not inherit it.
 - `default.nix` predeclares LiveKit's `webrtc-51ef663` WebRTC zip for all four voice-capable systems (`x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, `aarch64-darwin`) and exports `LK_CUSTOM_WEBRTC` during the Cargo build. This keeps `webrtc-sys` from trying to download WebRTC from GitHub inside the Nix sandbox. All four archives unpack to the same `{triple}/` layout, so `preBuild` asserts the same three files everywhere. Darwin builds also get `xcbuild` in `nativeBuildInputs` because `webrtc-sys` shells out to `xcrun` for the macOS SDK path. Bumping `webrtc-sys` means re-fetching every archive's hash, not just the Linux pair.
 
 ---
@@ -523,9 +540,95 @@ Relevant TUI controls:
 ## 12. Current Known Gaps [VOLATILE]
 
 - Full desktop CLI audio still depends on a working configured or default local audio output device; without one, the CLI proceeds into SSH/pairing with local audio disabled.
-- Embedded YouTube on Linux depends on the `late-webview` helper binary being installed next to `late` (plus the host WebKitGTK/GStreamer packages). A missing helper or missing libraries only disables embedded YouTube via the crash backoff; radio and icecast are unaffected, and the queue stays listenable at late.sh/listen.
+- Embedded YouTube on Linux depends on the `late-webview` helper binary being installed next to `late` (plus the host WebKitGTK/GStreamer packages). A missing helper or missing libraries only disables embedded YouTube via the crash backoff; radio and icecast are unaffected, and the queue stays listenable at late.sh/listen. Today Linux users must install `webkit2gtk-4.1 gst-plugins-good gst-libav` for YouTube; §13 is the plan to remove that requirement.
 - Darwin Nix builds (`nix build .#late` on macOS) are wired but unverified: the WebRTC archives and `xcrun` provider are declared, and nobody has run the build on a mac yet.
 - OpenSSH mode is Unix-only; Windows users should use native mode.
 - Old mode remains as a compatibility path and still depends on system OpenSSH plus PTY behavior.
 - Native mode does not handle OpenSSH/FIDO/YubiKey auth flows; users must switch to OpenSSH mode for those.
 - `scripts/run_local_cli.sh` checks for `script` but does not use it.
+
+---
+
+## 13. Planned: YouTube Player Backend Chain [VOLATILE]
+
+Status: decided direction, nothing implemented yet (2026-09-12). Delete or rewrite this section as the work lands; move shipped behavior into §3, §4, §6, and §9.
+
+### Goal
+
+Embedded YouTube on Linux should need nothing installed, and must stay within YouTube's ToS. Keep `late-webview` as a fallback, not the primary path.
+
+### Problem
+
+- WebKitGTK has no decoders of its own on Linux. All media goes through GStreamer, and the decoding and output plugins are optional distro packages. Users currently have to install `webkit2gtk-4.1 gst-plugins-good gst-libav`. Windows (WebView2/Edge) and macOS (WKWebView) do not have this problem.
+- On Arch, `webkit2gtk-4.1` hard-depends only on `gst-plugins-base-libs` and `gst-plugins-bad-libs`; `gst-plugins-good`, `gst-plugins-bad`, and `gst-libav` are optional. The Nix build works only because the flake bundles plugins and sets `GST_PLUGIN_SYSTEM_PATH_1_0`.
+- What YouTube needs from GStreamer (package ownership checked on Arch):
+
+| Need | Plugin | Arch package |
+|---|---|---|
+| WebM container | `matroska` | gst-plugins-good |
+| VP9 video | `vpx` | gst-plugins-good |
+| MP4 container (fallback) | `isomp4` | gst-plugins-good |
+| Audio output | `autodetect` + `pulseaudio` | gst-plugins-good |
+| Opus audio | `opus` | gst-plugins-base (not base-libs) |
+| H.264 / AAC | `libav` | gst-libav |
+
+- `libwebkit2gtk-4.1.so` references `autoaudiosink` and `webkitaudiosink`, so without `gst-plugins-good` YouTube is silent even with every codec present.
+- `gst-libav` is only the H.264/AAC path; if YouTube negotiates VP9/Opus it is never used. Unverified: that `base` + `good` alone plays YouTube in WebKitGTK. Test without uninstalling: `GST_PLUGIN_SYSTEM_PATH_1_0` pointed at a scratch dir of symlinks to only those plugins plus the `base-libs` ones, a fresh `GST_REGISTRY`, then `late webview-spike <video_id>`.
+
+### Rejected options
+
+- **Native audio extraction in the CLI** (resolve itag 140 AAC/MP4, decode with symphonia `aac` + `isomp4`, play through the existing pipeline; plumbing exists via `set_playback_source.stream_url` and `.m4a` support in `resolve_stream_url`). Best UX, but breaks YouTube ToS and the API Developer Policies: downloading, separating audio from video, background play without a visible player, and skipping ads. The current 200x200 window exists because 200x200 is the policy minimum player size. Concrete risks:
+  - Revocation of the Data API key that booth submissions need (`LATE_YOUTUBE_API_KEY`, required in prod). This is the real lever.
+  - A cease and desist. Precedent: the Groovy and Rythm Discord music bots were shut down by Google in 2021, and Invidious got a C&D in 2023. A shared community queue resembles those bots more than personal yt-dlp use.
+  - Extraction breaking every few weeks as YouTube changes signature and PO-token checks.
+  - A server-side proxy is worse still: redistribution plus copyright exposure, bandwidth cost, and datacenter IP blocks.
+  - If ever revisited: client-side only, opt-in, iframe stays the default, and prefer shelling out to the user's own `yt-dlp` over bundling extraction code (the mpv model).
+- **Bundled GStreamer codec pack** (the 6 plugins above, statically linked against libvpx and libopus, built against an old GStreamer 1.x and old glibc, a few MB, shipped next to `late-webview`, loaded via `GST_PLUGIN_PATH_1_0` (additive, not `GST_PLUGIN_SYSTEM_PATH_1_0`, which replaces the system path), with `late-webview/src/lib.rs` sandbox path collection extended to that var). It would remove `gst-plugins-good` and `gst-libav` but not `webkit2gtk-4.1` (about 130 MB, a system engine that can't be vendored small). Still a valid improvement for the webview fallback later.
+- **AppImage of WebKitGTK plus GStreamer**: 150 to 250 MB; WebKit helper processes, the bubblewrap sandbox, and mesa/GPU ABI make it fragile.
+- **CEF or Electron**: self-contained Chromium and ToS-clean, but a 100 MB+ download, a rewrite, and Chromium's sandbox is blocked by AppArmor unprivileged-userns restrictions on Ubuntu 24.04+ without a shipped profile or disabling the sandbox.
+- **Qt WebEngine** (needs the Qt stack), **Servo** (uses GStreamer on Linux, not production-ready), **Ultralight / Sciter** (cannot play YouTube).
+
+### Decided design
+
+Borrow a browser the user already has, falling back through a chain. Every option runs the official IFrame player in a real browser engine, so ToS stays clean.
+
+```
+Chromium family --app  ->  Firefox (own profile)  ->  late-webview  ->  point at late.sh/listen
+```
+
+1. **Chromium family** (`google-chrome`, `chromium`, `brave`, `microsoft-edge`, `vivaldi`):
+   `<bin> --app=http://localhost:<port>/ --user-data-dir=<late profile dir> --window-size=200,200 --autoplay-policy=no-user-gesture-required`.
+   `--app` gives a chromeless window. `--user-data-dir` is mandatory: without it the launch hands off to the user's running browser and exits immediately, which the watchdog would read as a crash. With it, `late` owns the child process, so the heartbeat watchdog and respawn keep working. The separate profile is logged out of YouTube, so ads show; acceptable and ToS-friendly.
+2. **Firefox**: `firefox --profile <late profile dir> --no-remote <url>` starts an owned instance. Firefox bundles VP9/AV1/Opus decoding, so YouTube needs no system libs. No app mode; seed the profile on first launch with `user.js` (`media.autoplay.default=0`, skip welcome, default-browser check, telemetry) and a `userChrome.css` hiding tabs and toolbars. Window may be larger than 200x200 (minimum size not checked).
+3. **`late-webview`**: current helper, kept as the fallback.
+4. All backends exhausted: pause and point at late.sh/listen, as today.
+
+**One bridge for every backend.** Today the page talks to Rust through wry IPC (`window.ipc.postMessage` in `page.html`, `evaluate_script` in `late-webview/src/lib.rs`). Replace both directions with one WebSocket from the page to the existing loopback page server (`lib.rs` already binds a `TcpListener` to serve `page.html`). Then:
+- `late` runs the page server and the relay (`late-webview/src/pair.rs`, about 830 lines, plus `page.html`), one copy for all backends. The relay and page code must move somewhere wry-free so `late` never links WebKitGTK on Linux.
+- Each backend only opens a window on the URL. `late-webview` shrinks to "show this URL in a 200x200 window".
+- The relay keeps its own pair WebSocket as `client_kind: "webview"`, so the server protocol does not change.
+
+**Detection and fallback:**
+- Closed enum, no catch-all: `PlayerBackend { Chromium(PathBuf), Firefox(PathBuf), Webview(PathBuf) }`. Detection returns an ordered list.
+- Look up browser binaries on `PATH`; snap browsers appear under `/snap/bin`; Flatpak browsers need `flatpak run <app id>`; webview keeps the existing `LATE_WEBVIEW_BIN` / sibling / `PATH` lookup.
+- Crash backoff becomes per backend: 3 exits or failed starts within 60s moves to the next backend instead of disabling YouTube. Only when every backend is exhausted does the 5-minute pause apply.
+- User choice of backend, wanted as a real setting, not only an env var. Values: `auto` (the chain above), `chromium`, `firefox`, `webview`. An explicit choice that fails to start should fall back to `auto` only if the user opts into that; otherwise report the failure. Where it lives is still open:
+  - **TUI setting stored per device** (preferred). The backend depends on what is installed on that machine, so it belongs with the per-device settings row that already holds mute/volume (`user_ssh_keys.settings`, see `late-ssh/src/app/audio/CONTEXT.md` "Mute and volume: one source of truth, stored per device"), not on the account. The server would send it over the pair WS on connect and on change (a new server-to-client event), and the CLI could list the backends it detected in `client_state` so the setting only offers ones that exist.
+  - **CLI config file / env** as a local override: `youtube-player` key in `config.toml`, `LATE_YOUTUBE_PLAYER` env, plus an explicit browser path. §4 says in-app preferences belong server-side, so this is the override for scripting and debugging, not the main surface.
+- Report the active backend in `client_state`, so "YouTube doesn't work" reports show which path is in use.
+- Windows can use Edge `--app` (always installed); macOS uses an installed Chromium browser if any. This could eventually retire wry on those platforms too.
+
+**Gotchas:**
+- Snap Chromium and snap Firefox are Ubuntu defaults and cannot write hidden dirs under `$HOME`, so a profile under `~/.local/share/late/...` fails. Pick a snap-reachable dir.
+- Detected does not mean working (for example, an AppArmor-blocked Chromium sandbox). The per-backend backoff catches that, not detection.
+- Tiling WMs (Hyprland) can route the `--app` window by class, same as the current `sh.late.youtube` helper.
+
+**Cheap stopgap, independent of the chain:** when the webview helper hits its backoff, show the exact distro install command in the TUI instead of failing silently.
+
+### Work order
+
+1. Move the page/Rust bridge to the loopback WebSocket with the webview as the only backend. Proves the relay move with no new backends.
+2. Add the Chromium backend.
+3. Add the Firefox backend.
+4. Add the per-backend fallback chain, override env var, and `client_state` backend label plus detected backends; update installer and docs.
+5. Add the per-device "YouTube player" setting in the TUI and its pair-WS event.

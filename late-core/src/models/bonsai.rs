@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
 use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
@@ -25,11 +25,39 @@ crate::user_scoped_model! {
     }
 }
 
+/// Carries the owner's user id as its payload: the row is re-read by
+/// whoever cares, never trusted from a serialized copy.
+pub const BONSAI_CHANGED_CHANNEL: &str = "bonsai_changed";
+
+pub async fn listen_for_bonsai_changes(client: &Client) -> Result<()> {
+    client
+        .batch_execute(&format!("LISTEN {BONSAI_CHANGED_CHANNEL};"))
+        .await?;
+    Ok(())
+}
+
+/// Everything `Tree::store` writes. No revision: the row owns that.
+#[derive(Clone, Debug)]
+pub struct TreeWrite {
+    pub user_id: Uuid,
+    pub seed: i64,
+    pub last_watered: Option<NaiveDate>,
+    pub is_alive: bool,
+    pub vigor: i32,
+    pub water_stress: i32,
+    pub last_simulated_date: NaiveDate,
+    pub branch_graph: serde_json::Value,
+    pub selected_branch_id: Option<i32>,
+    pub mode: String,
+    pub badge_glyph: String,
+    pub planted_at: DateTime<Utc>,
+}
+
 impl Tree {
     /// Load the user's tree, planting a fresh one from `branch_graph` when
     /// none exists yet. An existing row is returned untouched.
     pub async fn ensure(
-        client: &Client,
+        client: &impl GenericClient,
         user_id: Uuid,
         seed: i64,
         today: NaiveDate,
@@ -49,94 +77,74 @@ impl Tree {
         Ok(Self::from(row))
     }
 
-    /// The daily watering gate: stamps `last_watered` with `today` and
-    /// reports whether this call was the one that moved it. This is the only
-    /// writer of `last_watered` (`save` leaves the column alone), so the
-    /// once-per-day chip bonus has one atomic witness no matter how many
-    /// sessions, presses, or in-flight saves race for it. Takes a
-    /// `GenericClient` so the credit can share its transaction. Deliberately
-    /// does not touch `state_revision`, so the save that follows still lands.
-    pub async fn water_day(
-        client: &impl GenericClient,
-        user_id: Uuid,
-        today: NaiveDate,
-    ) -> Result<bool> {
+    /// Take the user's row lock for the rest of the transaction. Every
+    /// write to a tree happens behind this lock: the caller reads the row,
+    /// applies one rule to it, and stores the result, so two sessions (or
+    /// two replicas) acting at once run one after the other on the same
+    /// truth instead of overwriting each other from private copies.
+    pub async fn lock(client: &impl GenericClient, user_id: Uuid) -> Result<Self> {
         let row = client
-            .query_opt(
+            .query_one(
+                "SELECT * FROM bonsai_trees WHERE user_id = $1 FOR UPDATE",
+                &[&user_id],
+            )
+            .await
+            .context("locking bonsai tree")?;
+        Ok(Self::from(row))
+    }
+
+    /// Write the whole tree back. Call it only while holding `lock`.
+    /// `state_revision` is owned here: it counts stored writes, so a session
+    /// holding two copies of the row can tell which one is newer.
+    pub async fn store(client: &impl GenericClient, write: TreeWrite) -> Result<Self> {
+        let row = client
+            .query_one(
                 "UPDATE bonsai_trees
-                 SET last_watered = $2,
+                 SET seed = $2,
+                     last_watered = $3,
+                     is_alive = $4,
+                     vigor = $5,
+                     water_stress = $6,
+                     last_simulated_date = $7,
+                     branch_graph = $8,
+                     selected_branch_id = $9,
+                     mode = $10,
+                     badge_glyph = $11,
+                     planted_at = $12,
+                     state_revision = state_revision + 1,
                      updated = current_timestamp
                  WHERE user_id = $1
-                   AND last_watered IS DISTINCT FROM $2
-                 RETURNING user_id",
-                &[&user_id, &today],
-            )
-            .await?;
-        Ok(row.is_some())
-    }
-
-    /// Persist the whole in-memory tree. Stale async writes lose: a row
-    /// whose `state_revision` already passed the incoming one is left alone.
-    /// `last_watered` is not written here: `water_day` owns that column, and
-    /// a save landing out of order must never pre-empt or reopen the gate.
-    pub async fn save(client: &Client, params: TreeParams) -> Result<()> {
-        client
-            .execute(
-                "INSERT INTO bonsai_trees
-                    (user_id, seed, is_alive, vigor, water_stress,
-                     last_simulated_date, branch_graph, selected_branch_id, mode, badge_glyph,
-                     planted_at, state_revision)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                 ON CONFLICT (user_id) DO UPDATE
-                 SET seed = EXCLUDED.seed,
-                     is_alive = EXCLUDED.is_alive,
-                     vigor = EXCLUDED.vigor,
-                     water_stress = EXCLUDED.water_stress,
-                     last_simulated_date = EXCLUDED.last_simulated_date,
-                     branch_graph = EXCLUDED.branch_graph,
-                     selected_branch_id = EXCLUDED.selected_branch_id,
-                     mode = EXCLUDED.mode,
-                     badge_glyph = EXCLUDED.badge_glyph,
-                     planted_at = EXCLUDED.planted_at,
-                     state_revision = EXCLUDED.state_revision,
-                     updated = current_timestamp
-                 WHERE bonsai_trees.state_revision < EXCLUDED.state_revision",
+                 RETURNING *",
                 &[
-                    &params.user_id,
-                    &params.seed,
-                    &params.is_alive,
-                    &params.vigor,
-                    &params.water_stress,
-                    &params.last_simulated_date,
-                    &params.branch_graph,
-                    &params.selected_branch_id,
-                    &params.mode,
-                    &params.badge_glyph,
-                    &params.planted_at,
-                    &params.state_revision,
+                    &write.user_id,
+                    &write.seed,
+                    &write.last_watered,
+                    &write.is_alive,
+                    &write.vigor,
+                    &write.water_stress,
+                    &write.last_simulated_date,
+                    &write.branch_graph,
+                    &write.selected_branch_id,
+                    &write.mode,
+                    &write.badge_glyph,
+                    &write.planted_at,
                 ],
             )
-            .await?;
-        Ok(())
+            .await
+            .context("storing bonsai tree")?;
+        Ok(Self::from(row))
     }
 
-    /// The selection cursor alone. Display state that changes on every Tab
-    /// and wheel notch, so it must not cost a full graph upsert; it bumps no
-    /// revision, and the next real save carries the same value anyway.
-    pub async fn select_branch(
-        client: &Client,
-        user_id: Uuid,
-        selected_branch_id: Option<i32>,
-    ) -> Result<()> {
+    /// Tell every replica this user's tree moved. Sent inside the writing
+    /// transaction, so it is delivered on commit and never for a rollback.
+    pub async fn notify_changed(client: &impl GenericClient, user_id: Uuid) -> Result<()> {
         client
             .execute(
-                "UPDATE bonsai_trees
-                 SET selected_branch_id = $2,
-                     updated = current_timestamp
-                 WHERE user_id = $1",
-                &[&user_id, &selected_branch_id],
+                "SELECT pg_notify($1, $2)",
+                &[&BONSAI_CHANGED_CHANNEL, &user_id.to_string()],
             )
-            .await?;
+            .await
+            .context("notifying bonsai change")?;
         Ok(())
     }
 }

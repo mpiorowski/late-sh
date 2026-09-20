@@ -132,6 +132,10 @@ const DEFAULT_CREATURE_SOURCES: &[EmbeddedKdl] = &[
         source: include_str!("../../../../assets/aquarium/creatures/sprout.kdl"),
     },
     EmbeddedKdl {
+        path: "art/creatures/seatuft.kdl",
+        source: include_str!("../../../../assets/aquarium/creatures/seatuft.kdl"),
+    },
+    EmbeddedKdl {
         path: "art/creatures/wingfish.kdl",
         source: include_str!("../../../../assets/aquarium/creatures/wingfish.kdl"),
     },

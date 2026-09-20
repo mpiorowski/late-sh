@@ -84,7 +84,7 @@ impl Dir {
     }
 
     /// A single compass-arrow glyph for this direction, distinct from the
-    /// `▴`/`▾` stair markers (those mean "a staircase is here"; this means
+    /// `⇑`/`⇓`/`⇕` stair markers (those mean "a staircase is here"; this means
     /// "go this way") so the two never read as the same thing on screen.
     pub fn compass_glyph(self) -> char {
         match self {
@@ -351,6 +351,13 @@ const REGIONS: &[(&str, RoomId, RoomId, &str, &str)] = &[
         "the Faewood's own threshold",
     ),
     (
+        "Thornveil Falls",
+        THORNVEIL_BASE,
+        THORNVEIL_BASE + THORNVEIL_ZONES_DATA.len() as RoomId * THORNVEIL_ZONE_STRIDE,
+        "endgame",
+        "off the World-Oak Crown",
+    ),
+    (
         "Portal Villages",
         super::archipelago::VILLAGE_BASE,
         super::archipelago::VILLAGE_BASE + 1000,
@@ -434,6 +441,12 @@ const LAND_CHAINS: &[(&str, RoomId, RoomId, usize)] = &[
         WILDBOUND_BASE,
         WILDBOUND_BIOME_STRIDE,
         3,
+    ),
+    (
+        "Thornveil Falls",
+        THORNVEIL_BASE,
+        THORNVEIL_ZONE_STRIDE,
+        THORNVEIL_ZONES,
     ),
 ];
 
@@ -1663,7 +1676,7 @@ pub const VILLAGERS: &[Feature] = &[
         22099,
         "a forester with a hound at heel",
         FeatureKind::Villager,
-        "The rideable mounts roam deep in this wood. Palfreys and elks near the eaves, the truly mythical things much further in.",
+        "The great beasts roam deep in this wood. Hares and foxes near the eaves, the truly mythical things much further in.",
     ),
     feat(
         22198,
@@ -1699,7 +1712,7 @@ pub const VILLAGERS: &[Feature] = &[
         22693,
         "a herbalist gathering dew",
         FeatureKind::Villager,
-        "The rideable mounts roam deep in this wood. Palfreys and elks near the eaves, the truly mythical things much further in.",
+        "The great beasts roam deep in this wood. Hares and foxes near the eaves, the truly mythical things much further in.",
     ),
     feat(
         22807,
@@ -1735,7 +1748,7 @@ pub const VILLAGERS: &[Feature] = &[
         23287,
         "a woodward marking trees for the season",
         FeatureKind::Villager,
-        "The rideable mounts roam deep in this wood. Palfreys and elks near the eaves, the truly mythical things much further in.",
+        "The great beasts roam deep in this wood. Hares and foxes near the eaves, the truly mythical things much further in.",
     ),
     feat(
         23386,
@@ -1771,7 +1784,7 @@ pub const VILLAGERS: &[Feature] = &[
         23881,
         "a green-robed acolyte of the Greenwood",
         FeatureKind::Villager,
-        "The rideable mounts roam deep in this wood. Palfreys and elks near the eaves, the truly mythical things much further in.",
+        "The great beasts roam deep in this wood. Hares and foxes near the eaves, the truly mythical things much further in.",
     ),
     feat(
         600,
@@ -1952,6 +1965,81 @@ pub const VILLAGERS: &[Feature] = &[
         "a lost-looking merchant's clerk",
         FeatureKind::Villager,
         "Bandits used to work this road. Haven't seen one in an age - whatever's scaring them off, I don't want to meet it either.",
+    ),
+    // ---- Thornveil Falls' twelve falls-gates (rooms 34000+) ---------------
+    // Every zone is a braided maze (see `thornveil_zone_is_cavern`), so its
+    // entrance is always cell 0 and these ids are exact and stable.
+    feat(
+        THORNVEIL_BASE,
+        "a fog-wrapped ranger keeping the mist-line",
+        FeatureKind::Villager,
+        "Thornveil Falls lies hidden past the World-Oak's own roots. Once you're through the mist, there's no path back but the one you make.",
+    ),
+    feat(
+        THORNVEIL_BASE + THORNVEIL_ZONE_STRIDE,
+        "a rain-soaked forager sheltering under a dripping bough",
+        FeatureKind::Villager,
+        "The Weeping Boughs never dry. Neither do the things that hunt beneath them.",
+    ),
+    feat(
+        THORNVEIL_BASE + 2 * THORNVEIL_ZONE_STRIDE,
+        "a deaf old fisher who's stopped noticing the roar",
+        FeatureKind::Villager,
+        "Six falls meet in that basin ahead. Shout if you need me, though I doubt I'll hear you over it.",
+    ),
+    feat(
+        THORNVEIL_BASE + 3 * THORNVEIL_ZONE_STRIDE,
+        "a root-cutter eyeing the flooded hollow warily",
+        FeatureKind::Villager,
+        "Drownroot's water never rises and never falls. I don't ask why. I just don't wade in past my knees.",
+    ),
+    feat(
+        THORNVEIL_BASE + 4 * THORNVEIL_ZONE_STRIDE,
+        "a cliff-guide coiling wet rope",
+        FeatureKind::Villager,
+        "The Hanging Spray will soak you to the bone before you're halfway across. Mind your footing; the stone forgets nothing.",
+    ),
+    feat(
+        THORNVEIL_BASE + 5 * THORNVEIL_ZONE_STRIDE,
+        "a step-warden counting the falls under their breath",
+        FeatureKind::Villager,
+        "Nine steps down to the last pool, each one meaner than the last. I've counted them a thousand times and never once enjoyed it.",
+    ),
+    feat(
+        THORNVEIL_BASE + 6 * THORNVEIL_ZONE_STRIDE,
+        "a chorister listening to the cavern's echo",
+        FeatureKind::Villager,
+        "Behind the falls the water sings. Some say it's just the echo. I've heard it answer back.",
+    ),
+    feat(
+        THORNVEIL_BASE + 7 * THORNVEIL_ZONE_STRIDE,
+        "a wind-burnt scout eyeing the broken cliff",
+        FeatureKind::Villager,
+        "Something tore this cliff clean through, long before any of us were born. Whatever did it, I hope it stays gone.",
+    ),
+    feat(
+        THORNVEIL_BASE + 8 * THORNVEIL_ZONE_STRIDE,
+        "a root-priest kneeling by the plunging roots",
+        FeatureKind::Villager,
+        "These are the World-Oak's own roots, still reaching down after all these ages. I come here to remember how old this wood really is.",
+    ),
+    feat(
+        THORNVEIL_BASE + 9 * THORNVEIL_ZONE_STRIDE,
+        "a storm-scarred lookout lashed to the canopy walk",
+        FeatureKind::Villager,
+        "The storms up here never break. Rope yourself in, or the wind will decide where you're going next.",
+    ),
+    feat(
+        THORNVEIL_BASE + 10 * THORNVEIL_ZONE_STRIDE,
+        "a pilgrim shouting to be heard over the greatest fall",
+        FeatureKind::Villager,
+        "THE LAST CATARACT, THEY CALL IT! LOUDEST THING IN THE WORLD, I'D WAGER! MIND THE SPRAY!",
+    ),
+    feat(
+        THORNVEIL_BASE + 11 * THORNVEIL_ZONE_STRIDE,
+        "a silent watcher at the sanctum's still black water",
+        FeatureKind::Villager,
+        "Every fall in Thornveil ends here, and here the water finally stops. Something old enough to remember why is still listening.",
     ),
     // ---- The Wildbound Waste's three gate towns (rooms 30000+) -----------
     feat(
@@ -5796,6 +5884,16 @@ pub fn seed_world() -> World {
     extend_aelunor(&mut rooms, &mut spawns, &mut behaviors);
     extend_silvael(&mut rooms);
 
+    // Append Thornveil Falls: a ~1150-room forest/waterfall continent (rooms
+    // 34000+), hung off Broceliande's own deepest chamber (the World-Oak
+    // Crown) so it reads as a hidden second wood beyond the known Greenwood.
+    // A parallel endgame track to Kaelmyr, not a sequel to it: its tier band
+    // overlaps Kaelmyr's own lower half, so players have a real second choice
+    // once they reach that point instead of only ever grinding the Ashen
+    // Reach. Runs after Broceliande so its gateway search finds the World-Oak
+    // Crown boss room.
+    extend_thornveil(&mut rooms, &mut spawns, &mut behaviors);
+
     // Append the Wildbound Waste: a Felucca-style pvp continent (rooms
     // 30000+) of three chained biomes - Duskmire Wood, the Hollowdeep, and
     // the Scorched Flats - hung off the Sahra Wastes' Sand-Wyrm's Maw. Every
@@ -5878,16 +5976,29 @@ fn extend_villages(rooms: &mut HashMap<RoomId, Room>) {
 /// Reaches' actual ids.
 const ARCH_SPAWN_ID_START: u32 = 970_000;
 
-/// An island boss's loot: the Reaches table it always drew from, plus the
-/// island's own two Wildbound finds - a real step past even Kaelmyr, since
-/// the Archipelago rides the same endgame curve one continent further.
+/// An island boss's loot: the Archipelago's own catalog for that island (see
+/// `items::archipelago_loot`, no longer a Reaches repeat), plus its two
+/// signature finds. The finds are backloaded toward the back of the chain -
+/// islands 0..10 carry one copy (baseline odds), 10..15 carry two, and the
+/// last quarter (15..20) carry four - so the toughest islands are also the
+/// likeliest to pay out the Archipelago's own top-of-curve gear.
 fn archipelago_boss_loot(isle: usize) -> &'static [u32] {
     static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
     let tables = TABLES.get_or_init(|| {
         (0..super::archipelago::ISLAND_COUNT)
             .map(|i| {
-                let mut v = super::items::reaches_loot(i).to_vec();
-                v.extend(super::items::archipelago_find_ids(i));
+                let mut v = super::items::archipelago_loot(i).to_vec();
+                let finds = super::items::archipelago_find_ids(i);
+                let weight = if i * 4 >= super::archipelago::ISLAND_COUNT * 3 {
+                    4
+                } else if i * 2 >= super::archipelago::ISLAND_COUNT {
+                    2
+                } else {
+                    1
+                };
+                for _ in 0..weight {
+                    v.extend(finds);
+                }
                 v
             })
             .collect()
@@ -5910,7 +6021,23 @@ fn extend_archipelago(
         ISLANDS.iter().enumerate()
     {
         let ibase = island_entrance(isle);
-        let tier = (isle + 14) as i32; // the isles sit at and beyond the Reaches
+        let isle_n = isle as i32;
+        // The isles are the true endgame: a ramp that starts one notch past
+        // Kaelmyr's deepest zone and climbs to the level cap, so the twenty
+        // islands are a ladder rather than one flat wall. There is no `tier`
+        // here on purpose. A tier is a generator input that the band row then
+        // rescales, and the Archipelago's row is 1:1 (see
+        // `tune_spawn_balance`), so these numbers are what is actually
+        // fielded and can be read against the crown ladder directly:
+        //
+        //   island  0: trash Lv80-87, boss Lv82, boss bite 348
+        //   island 19: trash Lv93-100, boss Lv100, boss bite 443
+        //
+        // Kaethyr Ascendant, the last crown, is Lv80 at 397. The shallow
+        // islands therefore hit softer than he does and the deep ones harder:
+        // the Archipelago is off-road content that runs past the end of the
+        // road, not a rung on it. See CONTEXT.md §9 for the full ladder.
+        let apex = isle + 3 >= super::archipelago::ISLAND_COUNT;
         let mut rng = MazeRng::new(ARCH_SEED ^ (isle as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
 
         // Every third island is an organic cavern; the rest are braided mazes. A
@@ -6024,21 +6151,40 @@ fn extend_archipelago(
             }
 
             let depth = dist[cell] as i32;
-            let (mob_name, behavior, boss_mob, hp, dmg) = if is_boss {
+            // xp rides in the tuple beside the health it is paid for. The two
+            // regular kinds sit on different health curves, so one shared xp
+            // line would pay them at different rates; what the Archipelago
+            // sells is xp per point of health, and that is the number this
+            // keeps honest (~1.41 for a regular, ~1.05 for a boss, against
+            // Kaelmyr's 0.93 and 0.68). This is the region's whole draw: it is
+            // the fastest ground in the game to climb to the cap on, which it
+            // was not before, being both the slowest and the deadliest.
+            let (mob_name, behavior, boss_mob, hp, dmg, xp) = if is_boss {
+                // One displayed level per island, Lv82 up to the cap. The apex
+                // islands are a longer, richer fight rather than a bigger one:
+                // they take the health and the xp, never the bite. Widening
+                // the bite there instead would put a cliff in the middle of
+                // the ramp, and past Lv80 `level_for_bite` extrapolates on the
+                // slope between the last two crowns, so a cliff in damage is a
+                // cliff in displayed level.
+                let base_hp = 15_000 + isle_n * 470;
+                let base_xp = 15_750 + isle_n * 495;
                 (
                     boss,
                     MobBehavior::Brute,
                     true,
-                    1500 + tier * 240,
-                    66 + tier * 6,
+                    if apex { base_hp * 5 / 4 } else { base_hp },
+                    348 + isle_n * 5,
+                    if apex { base_xp * 5 / 4 } else { base_xp },
                 )
             } else if degree == 1 {
                 (
                     mob_names[0],
                     MobBehavior::Ambusher,
                     false,
-                    860 + tier * 62 + depth * 6,
-                    58 + tier * 4 + depth,
+                    4600 + isle_n * 130 + depth * 14,
+                    278 + isle_n * 3 + depth * 3 / 4,
+                    6400 + isle_n * 182 + depth * 20,
                 )
             } else if degree >= 3 {
                 (
@@ -6049,8 +6195,9 @@ fn extend_archipelago(
                         MobBehavior::Summoner
                     },
                     false,
-                    940 + tier * 72 + depth * 6,
-                    60 + tier * 5 + depth,
+                    4900 + isle_n * 140 + depth * 14,
+                    286 + isle_n * 3 + depth * 3 / 4,
+                    6900 + isle_n * 196 + depth * 20,
                 )
             } else {
                 if rng.chance(35) {
@@ -6066,8 +6213,9 @@ fn extend_archipelago(
                     mob_names[2],
                     behavior,
                     false,
-                    860 + tier * 62 + depth * 6,
-                    58 + tier * 4 + depth,
+                    4600 + isle_n * 130 + depth * 14,
+                    278 + isle_n * 3 + depth * 3 / 4,
+                    6400 + isle_n * 182 + depth * 20,
                 )
             };
             let attack = match behavior {
@@ -6088,16 +6236,12 @@ fn extend_archipelago(
                 home: id,
                 max_hp: hp,
                 damage: dmg,
-                xp: if boss_mob {
-                    760 + tier * 92
-                } else {
-                    210 + tier * 40 + depth * 5
-                },
+                xp,
                 respawn_secs: if boss_mob { 600 } else { 90 },
                 loot: if boss_mob {
                     archipelago_boss_loot(isle)
                 } else {
-                    super::items::reaches_loot(isle)
+                    super::items::archipelago_loot(isle)
                 },
                 boss: boss_mob,
                 profile,
@@ -7380,6 +7524,11 @@ enum Band {
     Reaches,
     Kaelmyr,
     Archipelago,
+    /// Thornveil Falls: a parallel endgame track to Kaelmyr, not a sequel to
+    /// it (see `extend_thornveil`) - rides the exact same row as `Kaelmyr`
+    /// rather than the Archipelago's deliberately hotter one, since the two
+    /// are meant to read as equivalent choices, not a harder/easier pair.
+    Thornveil,
 }
 
 fn band_of(id: u32) -> Band {
@@ -7393,6 +7542,8 @@ fn band_of(id: u32) -> Band {
         Band::Kaelmyr
     } else if (ARCH_SPAWN_ID_START..LAKES_SPAWN_ID_START).contains(&id) {
         Band::Archipelago
+    } else if (THORNVEIL_SPAWN_ID_START..THORNVEIL_SPAWN_ID_START + 20_000).contains(&id) {
+        Band::Thornveil
     } else {
         Band::Overworld
     }
@@ -7406,10 +7557,13 @@ fn band_of(id: u32) -> Band {
 /// (a regular dies in ~3 prepared ticks and needs 15+ to kill you, casters
 /// included since armor blunts a school only by a quarter; a zone boss ~8
 /// and ~14), so what their generators author is what is fielded;
-/// the Frontier's generator was re-sloped for that and its row is 1:1. The
-/// Archipelago keeps the old endgame multipliers on purpose: it is ungated,
-/// portal-reachable, and deadly by design. Crowns are re-fielded afterwards
-/// by `tune_crowns`, so nothing here decides what a crown is.
+/// the Frontier's generator was re-sloped for that and its row is 1:1, and
+/// the Archipelago's was too, for the same reason: it is ungated,
+/// portal-reachable and deadly by design, so the one land that runs past the
+/// end of the crown ladder is the one that can least afford a multiplier
+/// standing between what its generator says and what a player meets. Crowns
+/// are re-fielded afterwards by `tune_crowns`, so nothing here decides what a
+/// crown is.
 fn tune_spawn_balance(spawns: &mut [MobSpawn]) {
     for spawn in spawns {
         let band = band_of(spawn.id);
@@ -7424,8 +7578,18 @@ fn tune_spawn_balance(spawns: &mut [MobSpawn]) {
             (Band::Reaches, false) => (4, 3, 4, 5, 3, 2),
             (Band::Kaelmyr, true) => (5, 6, 4, 5, 4, 3),
             (Band::Kaelmyr, false) => (4, 5, 2, 3, 3, 2),
-            (Band::Archipelago, true) => (12, 5, 21, 10, 4, 3),
-            (Band::Archipelago, false) => (2, 1, 19, 10, 3, 2),
+            // 1:1, like the Frontier's: `extend_archipelago` authors the
+            // numbers it wants fielded and reads them against the crown
+            // ladder itself. The old row multiplied damage by 19/10 and 21/10
+            // on top of a tier, which is how a one-line tier change could
+            // silently put every mob on all twenty islands at Lv100 while
+            // out-hitting the last crown threefold.
+            (Band::Archipelago, true) => (1, 1, 1, 1, 1, 1),
+            (Band::Archipelago, false) => (1, 1, 1, 1, 1, 1),
+            // Same row as Kaelmyr: a parallel track is meant to hit like the
+            // land it's an alternative to, not a harder or easier clone of it.
+            (Band::Thornveil, true) => (5, 6, 4, 5, 4, 3),
+            (Band::Thornveil, false) => (4, 5, 2, 3, 3, 2),
         };
         spawn.max_hp = scale_i32(spawn.max_hp, hp_num, hp_den);
         spawn.damage = scale_i32(spawn.damage, dmg_num, dmg_den);
@@ -7433,7 +7597,11 @@ fn tune_spawn_balance(spawns: &mut [MobSpawn]) {
         if !spawn.boss {
             let endgame = matches!(
                 band,
-                Band::Frontier | Band::Reaches | Band::Kaelmyr | Band::Archipelago
+                Band::Frontier
+                    | Band::Reaches
+                    | Band::Kaelmyr
+                    | Band::Archipelago
+                    | Band::Thornveil
             );
             spawn.respawn_secs = if endgame {
                 scale_u64(spawn.respawn_secs, 3, 4).max(60)
@@ -9652,6 +9820,16 @@ pub fn region_layout(id: RoomId) -> Option<RegionPlacement> {
     if is_wildbound_room(id) {
         return wildbound_layout(id);
     }
+    if is_thornveil_room(id) {
+        return Some(multi(
+            "thornveil",
+            THORNVEIL_BASE,
+            THORNVEIL_W,
+            THORNVEIL_H,
+            0,
+            THORNVEIL_ZONES,
+        ));
+    }
     None
 }
 
@@ -9732,6 +9910,7 @@ pub fn biome_of(id: RoomId) -> Biome {
             "kaelmyr" => kaelmyr_zone_is_cavern(p.zone as usize),
             "lakes" => lakes_zone_is_cavern(p.zone as usize),
             "broceliande" => broceliande_zone_is_cavern(p.zone as usize),
+            "thornveil" => thornveil_zone_is_cavern(p.zone as usize),
             _ => false,
         };
         if cavern_zone {
@@ -9739,7 +9918,7 @@ pub fn biome_of(id: RoomId) -> Biome {
         }
         return match p.region {
             "catacombs" | "caverns" => Biome::Cavern,
-            "thornwood" | "broceliande" | "aelunor" => Biome::Forest,
+            "thornwood" | "broceliande" | "aelunor" | "thornveil" => Biome::Forest,
             "kaelmyr" => Biome::Ash,
             "lakes" => Biome::Water,
             "reaches" | "frontier" => Biome::Badlands,
@@ -10128,25 +10307,36 @@ fn broceliande_desc(adj: &str, green: &str, feature: &str, creature: &str, idx: 
 }
 
 /// A small drop table for a Broceliande zone: representative gear from the
-/// generated Frontier catalog for a matching tier, so a slain Greenwood
-/// notable/mob yields real loot that resolves through `item`. Broceliande has
-/// no gear catalog of its own; the reward here is the taming (see `taming.rs`).
+/// shared realm ladder at a matching tier, so a slain Greenwood notable/mob
+/// yields real loot that resolves through `item`. Broceliande has no gear
+/// catalog of its own; the reward here is the taming (see `taming.rs`).
+///
+/// Half a Frontier tier per zone (`z / 2`, t=1..10 over the wood's twenty
+/// zones), and that halving is deliberate. It looks stingy against displayed
+/// level: zone 19 reads Lv51 and pays t=10, where the Frontier pays t=20 by
+/// Lv53. It is not. A Greenwood regular is 924hp at its deepest against the
+/// Frontier's 2005hp at t=20, so the wood already charges half the health for
+/// half the tier. Pay it per level instead and it hands out the Frontier's top
+/// table for 46% of the work, on ground with no title gate on it.
+///
+/// Displayed level is a damage reading (see `MobSpawn::level`), so it says
+/// nothing about what a region costs to clear. Health does. Compare health per
+/// tier against the road before re-slanting any land's loot.
 fn broceliande_loot(z: usize) -> &'static [u32] {
-    // Map the twenty zones onto a modest slice of the Frontier tiers so the wood
-    // gives useful mid gear that rises with depth, without a bespoke catalog.
     let tier = (z / 2).min(super::items::FRONTIER_TIERS - 1);
     super::items::frontier_loot(tier)
 }
 
-/// A Greenwood notable's loot: the borrowed Frontier tier plus Broceliande's
-/// own two uniquely named Wildbound finds for that zone.
+/// A Greenwood notable's loot: the zone's own realm tier plus Broceliande's
+/// own two uniquely named Wildbound finds for that zone. The tier comes from
+/// `broceliande_loot` rather than a second copy of its formula, which is how
+/// the two drifted apart last time.
 fn broceliande_notable_loot(z: usize) -> &'static [u32] {
     static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
     let tables = TABLES.get_or_init(|| {
         (0..BROCELIANDE_ZONES)
             .map(|zone| {
-                let tier = (zone / 2).min(super::items::FRONTIER_TIERS - 1);
-                let mut v = super::items::frontier_loot(tier).to_vec();
+                let mut v = broceliande_loot(zone).to_vec();
                 v.extend(super::items::broceliande_find_ids(zone));
                 v
             })
@@ -10421,6 +10611,624 @@ fn extend_broceliande(
     if let Some(r) = rooms.get_mut(&entrance) {
         r.exits.insert(portal.opposite(), anchor);
     }
+}
+
+// ---- Thornveil Falls (rooms 34000+) ---------------------------------------
+//
+//   Thornveil Falls is a hidden second wood past the known Greenwood: a
+//   ~1150-room continent of mist-wrapped canopy, root-choked hollows, and a
+//   descending chain of waterfalls each louder and older than the last. Where
+//   Broceliande is a moderate country you can walk into and out of freely,
+//   Thornveil is late-game ground intended as an alternative to Kaelmyr rather
+//   than a harder gate sitting past it.
+//
+//   **It does not reach that intent yet.** Measured through
+//   `tune_spawn_balance` and `MobSpawn::level`, Thornveil's twelve zones read
+//   L58-69 trash and L64-68 boss, against Kaelmyr's L63-78 and L69-80: every
+//   Thornveil notable reads below Kaelmyr's shallowest, so it lands as a
+//   Reaches-tier side country, not a second road through the same stretch.
+//   Raising it is an open balance decision, not a settled one - see the
+//   measured ladder in CONTEXT.md §9. `tier` is not comparable across bands:
+//   the band rows in `tune_spawn_balance` do most of the work, so compare
+//   displayed levels, never the tier literals.
+//
+//   Twelve zones of ~96 rooms each, every one carved as a braided maze
+//   (`carve_maze`) - never a uniform grid. Every zone is a maze rather than a
+//   mix of maze and cavern (see `thornveil_zone_is_cavern`) so each zone's
+//   entrance is deterministically cell 0, letting the villager roster
+//   (`VILLAGERS`) list an exact, stable gate room per zone. Zones chain
+//   deepest-room -> next-entrance, same as Kaelmyr and Broceliande; mobs are
+//   behaviour-driven by maze-role. Hung off
+//   Broceliande's own deepest chamber (the World-Oak Crown, where
+//   Broceliande the Green Wyrm keeps its watch) by a descent, not a portal -
+//   the falls are reachable only once that guardian has been bested.
+
+pub const THORNVEIL_BASE: RoomId = 34_000;
+const THORNVEIL_W: usize = 12;
+const THORNVEIL_H: usize = 8;
+const THORNVEIL_ZONES: usize = THORNVEIL_ZONES_DATA.len();
+/// Thornveil mob ids sit in a fresh band clear of every other region (Broceliande
+/// tops out at 990000+, Wildbound starts at 1500000+). Included in the endgame
+/// scaler (see `tune_spawn_balance`) so it rides Kaelmyr's own multipliers.
+const THORNVEIL_SPAWN_ID_START: u32 = 1_000_000;
+const THORNVEIL_SEED: u64 = 0x7407_11EA_FA11_u64;
+/// Each zone reserves this many room ids (a `THORNVEIL_W`x`THORNVEIL_H` cell field).
+const THORNVEIL_ZONE_STRIDE: u32 = (THORNVEIL_W * THORNVEIL_H) as u32;
+
+/// Which Thornveil zones are carved as organic caverns rather than braided
+/// mazes. Always false: every zone is a braided maze (`carve_maze`, never a
+/// uniform grid), so every zone's entrance is deterministically cell 0 - the
+/// villager roster (`VILLAGERS`) lists an exact room id per zone gate, which a
+/// cavern's RNG-chosen entrance cell can't offer without re-deriving those ids
+/// by hand each time the carve or seed changes. Kept as a named predicate (not
+/// just deleted) so a future zone can still opt into a cavern deliberately.
+const fn thornveil_zone_is_cavern(_z: usize) -> bool {
+    false
+}
+
+pub fn is_thornveil_room(id: RoomId) -> bool {
+    (THORNVEIL_BASE..THORNVEIL_BASE + THORNVEIL_ZONES as u32 * THORNVEIL_ZONE_STRIDE).contains(&id)
+}
+
+/// One theme per Thornveil zone, feeding the resist/weak pass exactly like
+/// `KAELMYR_ZONE_THEMES` and `BROCELIANDE_ZONE_THEMES`. Wet, green, storm-lit
+/// country, so the lanes lean Lightning/Fire/Arcane, with the beasts of the
+/// eaves, the haunted broken cliff, and the veiled sanctum rounding it out.
+/// The census contract in `the_school_census_stays_inside_its_declared_bands`
+/// caps a twelve-zone land at three zones per weak school and four resist
+/// zones; this sits at three and three.
+const THORNVEIL_ZONE_THEMES: [ZoneTheme; THORNVEIL_ZONES] = [
+    ZoneTheme::Beastwild, // Mistgate Eaves
+    ZoneTheme::Verdant,   // Weeping Boughs
+    ZoneTheme::Tidal,     // Sixfold Cataracts
+    ZoneTheme::Drowned,   // Drownroot Hollow
+    ZoneTheme::Storm,     // Hanging Spray
+    ZoneTheme::Verdant,   // Greywater Steps
+    ZoneTheme::Resonant,  // Undersong
+    ZoneTheme::Haunted,   // Cliffbroken Reach
+    ZoneTheme::Verdant,   // Rootfall Deep
+    ZoneTheme::Storm,     // Stormcanopy Heights
+    ZoneTheme::Tidal,     // Last Cataract
+    ZoneTheme::Fae,       // Veilfall Sanctum
+];
+
+/// Twelve zones of Thornveil Falls: (zone, adjective, ground, landmark,
+/// creatures, three mob names, boss). `thornveil_desc` supplies the paragraph
+/// prose. Zone names must NOT start with "The " (kept clean for the leaked
+/// zone label, same convention as `KAELMYR_ZONES_DATA`/`BROCELIANDE_ZONES_DATA`).
+#[allow(clippy::type_complexity)]
+const THORNVEIL_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 12] = [
+    (
+        "Mistgate Eaves",
+        "mist-hung",
+        "damp leaf-mould",
+        "the last true trees of the known Greenwood, before the fog swallows the path",
+        "eaves-lurkers",
+        [
+            "a mist-cloaked stalker",
+            "an eaves-lurker",
+            "a fog-born hound",
+        ],
+        "Warden Fenn of the Mistgate",
+    ),
+    (
+        "Weeping Boughs",
+        "rain-slick",
+        "moss-drowned root",
+        "boughs that weep a ceaseless, unnatural rain",
+        "bough-wraiths",
+        [
+            "a weeping bough-wraith",
+            "a rain-soaked stalker",
+            "a drip-fanged crawler",
+        ],
+        "The Weeping Mother",
+    ),
+    (
+        "Sixfold Cataracts",
+        "thunder-loud",
+        "spray-slick stone",
+        "six falls crashing together into one deafening basin",
+        "cataract-born",
+        [
+            "a cataract-born brute",
+            "a spray-drenched hunter",
+            "a white-water horror",
+        ],
+        "The Sixfold Warden",
+    ),
+    (
+        "Drownroot Hollow",
+        "flood-dark",
+        "black flooded root",
+        "the drowned roots of trees older than Broceliande itself",
+        "drownroot-things",
+        [
+            "a drownroot crawler",
+            "a root-bound revenant",
+            "a flood-dark lurker",
+        ],
+        "The Drownroot Elder",
+    ),
+    (
+        "Hanging Spray",
+        "cloud-wrapped",
+        "slick hanging stone",
+        "a cliffside veil of spray that never quite touches ground",
+        "spray-walkers",
+        [
+            "a spray-walker",
+            "a cloud-veiled stalker",
+            "a mist-fanged hunter",
+        ],
+        "The Spraywalker Queen",
+    ),
+    (
+        "Greywater Steps",
+        "stair-cut",
+        "worn grey step",
+        "a terraced stair of falls, each pool feeding the next",
+        "step-wardens",
+        [
+            "a greywater warden",
+            "a step-cut sentinel",
+            "a pool-lurking horror",
+        ],
+        "The Warden of the Ninth Step",
+    ),
+    (
+        "Undersong",
+        "hollow-echoing",
+        "damp resonant stone",
+        "a cavern hollowed out behind the falls, where the water's roar becomes a song",
+        "undersong-things",
+        [
+            "an undersong chorister",
+            "a hollow-voiced stalker",
+            "an echo-drenched horror",
+        ],
+        "The First Voice of the Undersong",
+    ),
+    (
+        "Cliffbroken Reach",
+        "wind-raw",
+        "crumbling ledge",
+        "a cliff face broken clean through by some ancient flood",
+        "cliffbroken things",
+        [
+            "a cliffbroken skirmisher",
+            "a ledge-walking hunter",
+            "a wind-raw stalker",
+        ],
+        "The Cliffbreaker",
+    ),
+    (
+        "Rootfall Deep",
+        "root-choked",
+        "black cavern loam",
+        "a cavern where the World-Oak's own roots plunge down into the dark",
+        "rootfall-dwellers",
+        [
+            "a rootfall crawler",
+            "a deep-root horror",
+            "a loam-drenched stalker",
+        ],
+        "The Rootfall Warden",
+    ),
+    (
+        "Stormcanopy Heights",
+        "storm-lashed",
+        "wind-bent canopy walk",
+        "a canopy walk lashed by storms that never seem to end",
+        "storm-canopy things",
+        [
+            "a storm-canopy raider",
+            "a lightning-scarred hunter",
+            "a wind-torn stalker",
+        ],
+        "Skyreach, the Canopy Storm",
+    ),
+    (
+        "Last Cataract",
+        "world-shaking",
+        "trembling wet stone",
+        "the greatest of the falls, louder than thought and older than the wood around it",
+        "cataract-guard",
+        [
+            "a cataract guardian",
+            "a world-shaking horror",
+            "a last-fall sentinel",
+        ],
+        "The Keeper of the Last Cataract",
+    ),
+    (
+        "Veilfall Sanctum",
+        "veil-shrouded",
+        "the sanctum's still black water",
+        "the sanctum behind every fall in Thornveil, where the water finally, briefly, stops",
+        "veil-things",
+        [
+            "a veilfall guardian",
+            "a still-water horror",
+            "a sanctum-bound revenant",
+        ],
+        "Thornveil, the Voice Beneath the Falls",
+    ),
+];
+
+/// Thornveil's paragraph prose: a wet, root-and-waterfall counterpart to
+/// `kaelmyr_desc`/`broceliande_desc`. Hits the >=180-char multi-sentence bar
+/// and varies by cell index so no two rooms read alike.
+fn thornveil_desc(adj: &str, ground: &str, feature: &str, creature: &str, idx: u32) -> String {
+    const TERRAIN: [&str; 5] = [
+        "You pick across {adj} ground where {ground} shifts underfoot, and somewhere close the falls never once stop their roar.",
+        "The path here runs {adj} and treacherous, the {ground} slick with a spray that never fully dries, no matter the season.",
+        "This {adj} stretch offers no true dry footing; {ground} runs on every side, and the air itself tastes of standing water.",
+        "The way winds between root and stone, the {ground} banked deep in every hollow and cold with a chill the sun never reaches.",
+        "Water sifts down without end across this {adj} reach, and the {ground} answers every step with a soft, wet give.",
+    ];
+    const FEATURE: [&str; 5] = [
+        "Ahead lies {feature}, half-lost in the spray and older than any living memory of it.",
+        "Off the path stands {feature}, a landmark for the very few who walk this deep into the falls.",
+        "The moss-black bones of {feature} rise from the mist, from an age before the Greenwood itself took root.",
+        "Beside the way rests {feature}, silent witness to however many centuries the water has run.",
+        "Through the spray-haze you make out {feature}, worn smooth by an uncounted weight of falling water.",
+    ];
+    const ATMOS: [&str; 5] = [
+        "Somewhere in the mist {creature} call to one another, and the sound carries far under the endless roar of water.",
+        "The air hangs damp with menace, for {creature} have left their marks on root and stone alike.",
+        "Nothing stirs but the falling spray, yet you feel {creature} watching from beyond the silvered murk.",
+        "A cold wet hush lies over the reach; {creature} hunt these falls, and the water hides their approach.",
+        "A ringing quiet holds the deep, broken only by falling water, the quiet of a place from which {creature} have driven all else.",
+    ];
+    let i = idx as usize;
+    let t = TERRAIN[i % 5]
+        .replace("{adj}", adj)
+        .replace("{ground}", ground);
+    let f = FEATURE[(i / 5) % 5].replace("{feature}", feature);
+    let a = ATMOS[(i / 7 + i) % 5].replace("{creature}", creature);
+    format!("{t} {f} {a}")
+}
+
+/// Thornveil's wet, wooded places, filling in the non-entrance, non-boss cells.
+const THORNVEIL_PLACES: [&str; 10] = [
+    "Fern Crossing",
+    "Spray Hollow",
+    "Root Bridge",
+    "Mist Landing",
+    "Falls Overlook",
+    "Willow Bend",
+    "Stone Ford",
+    "Canopy Rise",
+    "Pool's Edge",
+    "Hollow Path",
+];
+
+/// A regular Thornveil mob's loot: one realm tier per zone, t=29..40, the
+/// Reaches' own upper half. The falls have no bespoke catalog: their gear
+/// identity is the two signature finds per zone (`thornveil_notable_loot`),
+/// the same fallback-plus-finds shape Broceliande uses.
+///
+/// Reaches gear on ground that reads Lv58-69 looks under-paid next to
+/// Kaelmyr's Lv63 zone paying t=41, and it is not: a Thornveil regular runs
+/// 2760hp to 3288hp, which is what the road charges at exactly t=29 and t=40.
+/// The falls are priced on the health they cost, to the tier. What makes them
+/// read late is their damage, and damage is what sets displayed level; it buys
+/// no gear. The two finds per zone ride t=41..52 on top of this, and that
+/// lottery is the whole reward for coming, the same way Aelunor's Legendary
+/// roll is (see `aelunor_loot`).
+fn thornveil_loot(z: usize) -> &'static [u32] {
+    // One tier per zone, never clamped: `(10 + z).min(19)` collapsed zones 9,
+    // 10 and 11 onto one table, so the last quarter of the continent paid no
+    // gear progression at all.
+    super::items::realm_loot(29 + z as i32)
+}
+
+/// A Thornveil notable's loot: the zone's base Reaches tier (t=29..40) plus
+/// its own two uniquely named finds, which ride t=41..52 through the shared
+/// `items::realm_slot_stats`. The finds are the only Kaelmyr-grade gear the
+/// falls pay, and they are meant to be: see `thornveil_loot`.
+fn thornveil_notable_loot(z: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| {
+        (0..THORNVEIL_ZONES)
+            .map(|zone| {
+                let mut v = thornveil_loot(zone).to_vec();
+                v.extend(super::items::thornveil_find_ids(zone));
+                v
+            })
+            .collect()
+    });
+    tables[z.min(THORNVEIL_ZONES - 1)].as_slice()
+}
+
+/// Build Thornveil Falls: twelve zones of braided mazes (never a grid),
+/// chained deepest-room -> next-entrance, and hung off the deepest room of
+/// Broceliande (the World-Oak Crown).
+#[allow(clippy::needless_range_loop, clippy::type_complexity)]
+fn extend_thornveil(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    let (w, h) = (THORNVEIL_W, THORNVEIL_H);
+    let n = w * h;
+    let mut spawn_id: u32 = THORNVEIL_SPAWN_ID_START;
+    let mut prev_exit: Option<RoomId> = None;
+
+    for (z, &(zname, adj, ground, feature, creature, mob_names, boss)) in
+        THORNVEIL_ZONES_DATA.iter().enumerate()
+    {
+        let zbase = THORNVEIL_BASE + (z as u32) * THORNVEIL_ZONE_STRIDE;
+        // Intended as a band beside Kaelmyr's own 32..51 (see
+        // `extend_kaelmyr`), but a raw tier comparison is misleading: the two
+        // lands ride different rows in `tune_spawn_balance` and Thornveil's
+        // base coefficients are ~10-15% gentler on top of that. Measured, this
+        // lands at L64-68 for notables against Kaelmyr's L69-80, i.e. below
+        // it. Open balance decision; see the block comment above.
+        let tier = (z + 30) as i32;
+        let mut rng = MazeRng::new(THORNVEIL_SEED ^ (z as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+
+        // Carve as a braided maze (the connectivity pass). Every zone is a
+        // maze (see `thornveil_zone_is_cavern`), so `cavern_floor` is always
+        // `None` here - the branch is kept in the same shape as every sibling
+        // region purely so a future zone can opt into a cavern later. No
+        // uniform grids here either way.
+        let cavern_floor = if thornveil_zone_is_cavern(z) {
+            let floor = carve_cavern(w, h, &mut rng);
+            (floor.iter().filter(|f| **f).count() >= 24).then_some(floor)
+        } else {
+            None
+        };
+        let (entrance, reachable, dist, cell_exits): (
+            usize,
+            Vec<bool>,
+            Vec<usize>,
+            Vec<Vec<(Dir, usize)>>,
+        ) = if let Some(floor) = cavern_floor {
+            let entrance = (0..n).find(|&i| floor[i]).unwrap_or(0);
+            let dist = cavern_distances(&floor, w, h, entrance);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    let (x, y) = (c % w, c / w);
+                    let consider = |nx: i64, ny: i64, d: Dir, v: &mut Vec<(Dir, usize)>| {
+                        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+                            let nb = ny as usize * w + nx as usize;
+                            if reachable[nb] {
+                                v.push((d, nb));
+                            }
+                        }
+                    };
+                    consider(x as i64, y as i64 - 1, Dir::North, &mut v);
+                    consider(x as i64 + 1, y as i64, Dir::East, &mut v);
+                    consider(x as i64, y as i64 + 1, Dir::South, &mut v);
+                    consider(x as i64 - 1, y as i64, Dir::West, &mut v);
+                    v
+                })
+                .collect();
+            (entrance, reachable, dist, exits)
+        } else {
+            let open = carve_maze(w, h, &mut rng);
+            let dist = maze_distances(&open, w, h, 0);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    for d in 0..4 {
+                        if open[c][d]
+                            && let Some(nb) = maze_neighbor(c, d, w, h)
+                        {
+                            v.push((DIRS[d], nb));
+                        }
+                    }
+                    v
+                })
+                .collect();
+            (0, reachable, dist, exits)
+        };
+
+        // The zone's notable waits in the cell farthest from the entrance.
+        let deepest = (0..n)
+            .filter(|&c| reachable[c])
+            .max_by_key(|&c| dist[c])
+            .unwrap_or(entrance);
+        let zone: &'static str = Box::leak(zname.to_string().into_boxed_str());
+
+        for cell in 0..n {
+            if !reachable[cell] {
+                continue;
+            }
+            let id = zbase + cell as u32;
+            let is_entrance = cell == entrance;
+            let is_boss = cell == deepest && cell != entrance;
+            let degree = cell_exits[cell].len();
+
+            let exits: HashMap<Dir, RoomId> = cell_exits[cell]
+                .iter()
+                .map(|(d, nb)| (*d, zbase + *nb as u32))
+                .collect();
+
+            let name: &'static str = if is_entrance {
+                Box::leak(format!("{zname} - the Falls-Gate").into_boxed_str())
+            } else if is_boss {
+                Box::leak(format!("{zname} - the Falls' Heart").into_boxed_str())
+            } else {
+                Box::leak(format!("{zname} - {}", THORNVEIL_PLACES[cell % 10]).into_boxed_str())
+            };
+            let desc: &'static str = Box::leak(
+                thornveil_desc(adj, ground, feature, creature, cell as u32).into_boxed_str(),
+            );
+
+            rooms.insert(
+                id,
+                Room {
+                    id,
+                    name,
+                    desc,
+                    zone,
+                    // Every falls-gate is a safe haven, same as Broceliande's
+                    // own woodward-holts: Thornveil is meant to be entered and
+                    // explored freely, not walled off zone by zone.
+                    safe: is_entrance,
+                    pvp: false,
+                    exits,
+                },
+            );
+
+            if is_entrance {
+                continue;
+            }
+
+            let depth = dist[cell] as i32;
+            // Behaviour-driven foes by maze-role, same shape as Kaelmyr but
+            // roughly 10-15% gentler base coefficients at the same tier - a
+            // real alternative to Kaelmyr, not a reskin with identical numbers.
+            let (mob_name, behavior, boss_mob, hp, dmg) = if is_boss {
+                (
+                    boss,
+                    MobBehavior::Brute,
+                    true,
+                    2800 + tier * 225,
+                    112 + tier * 5,
+                )
+            } else if degree == 1 {
+                (
+                    mob_names[0],
+                    MobBehavior::Ambusher,
+                    false,
+                    1650 + tier * 60 + depth * 6,
+                    100 + tier * 3 + depth,
+                )
+            } else if degree >= 3 {
+                (
+                    mob_names[1],
+                    if rng.chance(50) {
+                        MobBehavior::PackHunter
+                    } else {
+                        MobBehavior::Summoner
+                    },
+                    false,
+                    1750 + tier * 68 + depth * 6,
+                    102 + tier * 4 + depth,
+                )
+            } else {
+                // Leave some corridors quiet so the falls breathe.
+                if rng.chance(35) {
+                    continue;
+                }
+                let behavior = match rng.below(4) {
+                    0 => MobBehavior::Wanderer,
+                    1 => MobBehavior::Patroller,
+                    2 => MobBehavior::Hunter,
+                    _ => MobBehavior::Caster(DamageType::Frost),
+                };
+                (
+                    mob_names[2],
+                    behavior,
+                    false,
+                    1650 + tier * 60 + depth * 6,
+                    100 + tier * 3 + depth,
+                )
+            };
+            // Same weak-forward shape as every other themed continent: the
+            // notable wears the zone's weakness but never its resist, so prep
+            // is pure reward on the fight players provision for. Thornveil
+            // shipped with flat `None/None` profiles, which left all twelve
+            // notables with no weakness at all and broke
+            // `every_boss_carries_a_weakness`.
+            let attack = match behavior {
+                MobBehavior::Caster(school) => school,
+                _ => DamageType::Physical,
+            };
+            let theme = THORNVEIL_ZONE_THEMES[z];
+            let profile = if boss_mob {
+                DamageProfile::new(attack, None, theme.weak())
+            } else {
+                DamageProfile::new(attack, theme.resist(), theme.weak())
+            };
+            spawns.push(MobSpawn {
+                id: spawn_id,
+                name: mob_name,
+                home: id,
+                max_hp: hp,
+                damage: dmg,
+                xp: if boss_mob {
+                    1200 + tier * 95
+                } else {
+                    360 + tier * 38 + depth * 5
+                },
+                respawn_secs: if boss_mob { 600 } else { 90 },
+                loot: if boss_mob {
+                    thornveil_notable_loot(z)
+                } else {
+                    thornveil_loot(z)
+                },
+                boss: boss_mob,
+                profile,
+            });
+            behaviors.insert(spawn_id, behavior);
+            spawn_id += 1;
+        }
+
+        // Chain this zone to the previous one: the prior falls-heart room
+        // descends to this zone's falls-gate, and back up again.
+        let entrance_id = zbase + entrance as u32;
+        if let Some(prev) = prev_exit {
+            if let Some(r) = rooms.get_mut(&prev) {
+                r.exits.insert(Dir::Down, entrance_id);
+            }
+            if let Some(r) = rooms.get_mut(&entrance_id) {
+                r.exits.insert(Dir::Up, prev);
+            }
+        }
+        prev_exit = Some(zbase + deepest as u32);
+    }
+
+    // Hang Thornveil off the deepest room of Broceliande - the World-Oak
+    // Crown, where the Green Wyrm keeps its watch - so the whole continent is
+    // reachable and gated behind that guardian. Descend past the crown-roots,
+    // and rise back.
+    let entrance = THORNVEIL_BASE;
+    if let Some(gate_room) = thornveil_gate_room(rooms, spawns) {
+        if let Some(hub) = rooms.get_mut(&gate_room) {
+            hub.exits.insert(Dir::Down, entrance);
+        }
+        if let Some(r) = rooms.get_mut(&entrance) {
+            r.exits.insert(Dir::Up, gate_room);
+        }
+    }
+}
+
+/// The room Thornveil hangs off: Broceliande's World-Oak Crown, where the
+/// Green Wyrm makes its home - the deepest boss chamber of the whole
+/// Greenwood. Falls back to any World-Oak Crown room, then Broceliande's own
+/// base, so the continent is never orphaned even if Broceliande changes shape.
+fn thornveil_gate_room(rooms: &HashMap<RoomId, Room>, spawns: &[MobSpawn]) -> Option<RoomId> {
+    spawns
+        .iter()
+        .find(|s| s.name == "Broceliande, the Green Wyrm of the World-Oak")
+        .map(|s| s.home)
+        .filter(|home| rooms.contains_key(home))
+        .or_else(|| {
+            rooms
+                .values()
+                .filter(|r| is_broceliande_room(r.id) && r.zone == "World-Oak Crown")
+                .max_by_key(|r| r.id)
+                .map(|r| r.id)
+        })
+        .or_else(|| {
+            rooms
+                .contains_key(&BROCELIANDE_BASE)
+                .then_some(BROCELIANDE_BASE)
+        })
 }
 
 // ---- Aelunor, the Faewood: a sprawling elven/fae forest (rooms 25000+) ----
@@ -11251,8 +12059,10 @@ struct WildboundBiome {
     tiers: [(i32, i32); 5],
     /// Pre-balance-scale (max_hp, damage) for the biome's apex boss.
     boss_stats: (i32, i32),
-    /// Base offset into the Frontier loot catalog's twenty tiers (see
-    /// `wildbound_loot`); each biome climbs five tiers from here.
+    /// The biome's first tier on the shared realm ladder (1-based, see
+    /// `items::realm_loot` and `wildbound_loot`); each biome climbs five
+    /// tiers from here, and its apex boss takes the sixth. Chosen against the
+    /// health the biome actually charges, not against its displayed level.
     loot_base: usize,
     town_square_name: &'static str,
     town_square_desc: &'static str,
@@ -11317,7 +12127,7 @@ const WILDBOUND_BIOMES: [WildboundBiome; 3] = [
         weak: Some(DamageType::Fire),
         tiers: [(120, 10), (220, 16), (340, 22), (480, 28), (640, 34)],
         boss_stats: (1000, 45),
-        loot_base: 0,
+        loot_base: 1,
         town_square_name: "Last Watch - the Muster Square",
         town_square_desc: "Last Watch is less a town than a standing dare: a ring of timber palisade thrown up at the edge of civilised ground, where the King's law gives out and the Wildbound Waste begins. A muster bell hangs ready in a scorched frame at the square's heart, and the packed dirt underfoot is scuffed by boots that came back fewer than went out. Sellswords and the desperate share the fires here, sizing each other up as readily as any foe beyond the wall. A rough shelter stands west, a scavenger's outfitter east, and the log-gate south opens straight onto Duskmire Wood.",
         town_shelter_name: "Last Watch - the Ember Shelter",
@@ -11379,7 +12189,7 @@ const WILDBOUND_BIOMES: [WildboundBiome; 3] = [
         weak: Some(DamageType::Holy),
         tiers: [(420, 26), (620, 34), (860, 42), (1140, 50), (1460, 58)],
         boss_stats: (2200, 68),
-        loot_base: 7,
+        loot_base: 10,
         town_square_name: "Barrowgate - the Sunken Square",
         town_square_desc: "Barrowgate is built into the mouth of the Hollowdeep itself, its houses sunk half into the hillside as though the crypt-country had already begun to claim them. The square is a bowl of packed grave-dirt around an old well nobody drinks from anymore, ringed by lean stone houses whose owners deal only with those who go below and, sometimes, come back. A shelter stands west, an outfitter east, and the crypt-gate south breathes cold air up from the Hollowdeep.",
         town_shelter_name: "Barrowgate - the Vigil House",
@@ -11442,7 +12252,7 @@ const WILDBOUND_BIOMES: [WildboundBiome; 3] = [
         weak: Some(DamageType::Frost),
         tiers: [(1200, 58), (1650, 68), (2150, 78), (2700, 88), (3300, 98)],
         boss_stats: (4200, 120),
-        loot_base: 13,
+        loot_base: 25,
         town_square_name: "Ashhold - the Scorched Square",
         town_square_desc: "Ashhold is a huddle of blackened stone at the true edge of the map, where the Wildbound Waste finally burns itself out into the Scorched Flats. Nothing grows here; the square is bare fused ground, and the folk who hold it - a harder breed than even Last Watch or Barrowgate turns out - trust nobody who hasn't already bled for the privilege. A shelter stands west, an outfitter east, and the ash-gate south is the last safe threshold before the Flats proper.",
         town_shelter_name: "Ashhold - the Cinder Hall",
@@ -11454,14 +12264,22 @@ const WILDBOUND_BIOMES: [WildboundBiome; 3] = [
     },
 ];
 
-/// The drop table for a Wildbound Waste tier: borrows the Frontier catalog
-/// (which already spans early-endgame through the game's toughest numbers)
+/// The drop table for a Wildbound Waste tier: borrows the shared realm ladder
 /// rather than authoring a bespoke item set, same shortcut `broceliande_loot`
-/// takes.
+/// takes. It draws through `realm_loot`, not `frontier_loot`, because the
+/// Scorched Flats outgrew the Frontier catalog: a regular there is 3960hp,
+/// which is what the road charges around t=52, and it was paying t=18 because
+/// the Frontier's twenty tiers were the only ones this function could reach.
+/// The clamp that held it there was invisible from the call site.
+///
+/// The Flats are paid at t=25..29 rather than the t=52 their health alone
+/// would earn. They are a sponge with a soft bite (117 damage against
+/// Kaelmyr's 213), and a sponge is a longer fight, not a deadlier one, so
+/// health buys the tier its *level* supports: the road pays t=29 at Lv57 too.
 ///
 /// Every table here is keyed to the biome's own `loot_base`, the apex boss
 /// included: one affix ladder past its deepest regular, and never the
-/// catalog's top tier (hence the `- 2` clamp, which holds however `loot_base`
+/// catalog's top tier (hence the clamp, which holds however `loot_base`
 /// is retuned later). The boss branch used to hand all three apexes
 /// `FRONTIER_TIERS - 1`, which paid the ~1500hp Duskmire boss - walked to off
 /// the Sahra Wastes, at gentle overworld multipliers, with no title anywhere
@@ -11475,7 +12293,10 @@ fn wildbound_loot(loot_base: usize, tier: usize, boss: bool) -> &'static [u32] {
     } else {
         loot_base + tier
     };
-    super::items::frontier_loot(tier.min(super::items::FRONTIER_TIERS - 2))
+    // Never the shared ladder's top tier, whatever a biome's `loot_base` is
+    // retuned to: the deepest full set in the game stays Kaelmyr's own.
+    let ceiling = super::items::MARKET_TIER_MAX - 1;
+    super::items::realm_loot((tier as i32).min(ceiling))
 }
 
 /// Build the Wildbound Waste: three chained biomes (rooms 30000+), each a

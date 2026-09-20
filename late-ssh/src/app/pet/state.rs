@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use late_core::models::pet::{
     LifeStage, PetCompanion, PetMood, PetSpecies, pet_age_anchor, pet_age_label,
 };
@@ -91,13 +91,16 @@ pub struct Perch {
 
 /// What the last draw of the box used, recorded for the tick: how far the
 /// pet can travel, the zone it travels in (so the cursor can be placed in
-/// it), whether a tank is beside it, and where it stood.
+/// it), what it has to watch beside it, and where it stood.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PetFrameInputs {
     pub travel: PetTravel,
     pub zone: Rect,
-    pub watching: Option<super::ui::WatchSide>,
+    pub neighbours: super::ui::Neighbours,
     pub position: (usize, usize),
+    /// Where the pet would stand with no perch (the stroll, the sulk spot,
+    /// the glass): where a pet the cursor let go of walks back to.
+    pub home: (usize, usize),
 }
 
 /// How far the pet can travel inside its box, in cells, on each axis.
@@ -137,6 +140,10 @@ pub struct PetState {
     /// When the user unlocked the companion. Drives the life-stage buckets
     /// for purchased pets.
     pub adopted_at: Option<DateTime<Utc>>,
+    /// The last UTC day this account petted it, from the row and then from
+    /// this session's clicks: the care row reads it, and a second click the
+    /// same day does not ask the service again.
+    pub last_petted: Option<NaiveDate>,
 
     pub signals: MoodSignals,
     mood: PetMood,
@@ -155,6 +162,7 @@ impl PetState {
             species,
             created: companion.created,
             adopted_at: companion.adopted_at,
+            last_petted: companion.last_petted,
             signals: MoodSignals::default(),
             // The mood the row holds (`asleep` after the last session left):
             // the first tick reads the real thing and, since it differs,
@@ -208,6 +216,22 @@ impl PetState {
         self.signals.petted = Some(now);
     }
 
+    /// A click on the pet: it always purrs, and the first click of the UTC
+    /// day asks the service for the daily chips. The service's gate decides
+    /// the payout; this only saves asking twice from one session.
+    pub fn pet(&mut self, now: Instant, today: NaiveDate) {
+        self.note_petted(now);
+        if self.petted_on(today) {
+            return;
+        }
+        self.last_petted = Some(today);
+        self.svc.pet_task(self.user_id);
+    }
+
+    pub fn petted_on(&self, today: NaiveDate) -> bool {
+        self.last_petted == Some(today)
+    }
+
     pub fn note_win(&mut self, now: Instant) {
         self.signals.won = Some(now);
     }
@@ -242,23 +266,36 @@ impl PetState {
             (true, Some(frame), Some(cursor)) => cursor_target(frame, cursor),
             (true, _, _) | (false, _, _) => None,
         };
-        // Walking after the cursor: one cell per animation edge on each
-        // axis, from wherever the pet stood. The moment the cursor leaves
-        // the box the stroll takes over again, purring or not: a pet that
-        // holds still where it was petted reads as stuck.
+        // Off the stroll the pet only ever walks: one cell per animation
+        // edge on each axis, from wherever it stood. After the cursor while
+        // it is in the box; back to where the stroll is once it leaves,
+        // purring or not (a pet that holds still where it was petted reads
+        // as stuck, and one that jumps back reads as a glitch). The stroll
+        // takes over when the pet is right beside it.
+        // The stroll paints on every second wall tick; the walk keeps that
+        // pace whatever the loop's cadence.
+        let cells = elapsed.div_ceil(2);
         let perch = match (target, self.perch, input.frame) {
             (Some(target), from, Some(frame)) => {
                 let (x, y) = from.map_or(frame.position, |perch| (perch.x, perch.y));
-                // The stroll paints on every second wall tick; the walk
-                // keeps that pace whatever the loop's cadence.
-                let cells = elapsed.div_ceil(2);
                 Some(Perch {
                     x: step_toward(x, target.x, cells),
                     y: step_toward(y, target.y, cells),
                     look: target.look,
                 })
             }
-            (Some(_), _, None) | (None, _, _) => None,
+            (None, Some(from), Some(frame)) => {
+                let (home_x, home_y) = frame.home;
+                match from.x.abs_diff(home_x) <= 1 && from.y.abs_diff(home_y) <= 1 {
+                    true => None,
+                    false => Some(Perch {
+                        x: step_toward(from.x, home_x, cells),
+                        y: step_toward(from.y, home_y, cells),
+                        look: look_toward(from.x, home_x),
+                    }),
+                }
+            }
+            (None, None, Some(_)) | (Some(_), _, None) | (None, _, None) => None,
         };
         if perch != self.perch {
             self.perch = perch;
@@ -304,6 +341,15 @@ fn cursor_target(frame: PetFrameInputs, cursor: (u16, u16)) -> Option<Perch> {
         Look::Ahead
     };
     Some(Perch { x, y, look })
+}
+
+/// Which way the pet faces while walking from `from` to `to`.
+fn look_toward(from: usize, to: usize) -> Look {
+    match from.cmp(&to) {
+        std::cmp::Ordering::Less => Look::Right,
+        std::cmp::Ordering::Equal => Look::Ahead,
+        std::cmp::Ordering::Greater => Look::Left,
+    }
 }
 
 fn step_toward(from: usize, to: usize, cells: usize) -> usize {

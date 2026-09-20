@@ -1,0 +1,24 @@
+name "seatuft"
+kindom plant
+title "a seafloor tuft"
+description "a tuft of seagrass on the floor, its blades swaying between two poses"
+sauce author=late.sh date=20260911 license=CCBYSA4.0
+
+count 8
+
+h-velocity 0
+v-velocity 0
+
+spawn-location floor
+
+face ###"""
+\ | /
+ \|/
+  |
+"""###
+
+face1 ###"""
+ \|/
+ \|/
+  |
+"""###
