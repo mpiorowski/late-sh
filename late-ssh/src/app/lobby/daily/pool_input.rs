@@ -39,7 +39,8 @@ fn draft_mut(app: &mut App) -> Option<(&mut PoolDraft, &DailyPoolState)> {
 ///
 /// ```text
 /// [  ]  '     step through the legal targets; `'` jumps to the obvious one
-/// a           aim mode: the pointer walks the aim across the ball
+/// {  }        step through the pots on offer for the ball the aim is on
+/// a           aim mode: the pointer turns the cue
 /// e           spin mode: the pointer walks the tip across the cue ball
 /// m           ball in hand, when a foul has granted one
 /// p           name a pocket, when the shot has to call one
@@ -47,7 +48,7 @@ fn draft_mut(app: &mut App) -> Option<(&mut PoolDraft, &DailyPoolState)> {
 /// v           swap the overview for the view down the shot
 /// y           snooker: after a foul, make them play it again
 /// x  s  w     arm the stroke light / normal / strong, then draw and push
-/// h  l        walk the aim by hand; H/L a fifth as far
+/// h  l        turn the cue a degree; H/L a tenth of one
 /// ```
 ///
 /// This overlaps wasd, which is why it runs before the shared cursor keys —
@@ -59,6 +60,10 @@ pub(crate) fn pool_key(app: &mut App, byte: u8) -> bool {
     match byte {
         b'[' => pool_cycle_target(app, -1),
         b']' => pool_cycle_target(app, 1),
+        // Shifted brackets: the same hand again, one level up. A ball, then
+        // the pockets it can go in.
+        b'{' => pool_cycle_pot(app, -1),
+        b'}' => pool_cycle_pot(app, 1),
         // Next to the brackets on purpose: the same hand, the same job.
         b'\'' => pool_next_in_line(app),
         b'a' | b'A' => pool_toggle_mode(app, ShotMode::Aim),
@@ -284,6 +289,17 @@ pub(crate) fn pool_cycle_target(app: &mut App, delta: isize) -> bool {
     true
 }
 
+/// `{` / `}`: step through the pots on offer for the ball the aim is on.
+/// Reports the key as handled even when there is no pot to offer, so it
+/// never falls through to something else on the board.
+pub(crate) fn pool_cycle_pot(app: &mut App, delta: isize) -> bool {
+    let Some((draft, state)) = draft_mut(app) else {
+        return false;
+    };
+    draft.cycle_pot(state, delta);
+    true
+}
+
 /// `a` / `e` / `x` / `s` / `w`: arm a mode, or drop it if it is already
 /// running. Returns whether the key was for this board.
 pub(crate) fn pool_toggle_mode(app: &mut App, mode: ShotMode) -> bool {
@@ -372,9 +388,9 @@ pub(crate) fn pool_reset_mode(app: &mut App) -> bool {
     }
 }
 
-/// `h`/`l` walk the aim, `H`/`L` walk it a fifth as far for the last
-/// fraction of a degree. These work whether or not aim mode is armed —
-/// they are unambiguous on their own, so there is nothing to gate them on.
+/// `h`/`l` turn the cue a degree, `H`/`L` a tenth of one. These work
+/// whether or not aim mode is armed: they are unambiguous on their own, so
+/// there is nothing to gate them on.
 pub(crate) fn pool_aim(app: &mut App, delta: isize, fine: bool) -> bool {
     let Some((draft, _)) = draft_mut(app) else {
         return false;
@@ -427,7 +443,7 @@ pub(crate) fn pool_click_table(app: &mut App, at: [f64; 2]) -> bool {
         .min_by(|a, b| a.1.total_cmp(&b.1));
     match hit {
         Some((id, _)) => draft.aim_at_ball(state, id),
-        None => draft.aim_at_point(at),
+        None => draft.aim_at_point(state, at),
     }
     true
 }

@@ -13,7 +13,7 @@ use crate::app::games::pool_core::{
     rules::{Group, PoolRules},
     shot::Shot,
 };
-use crate::app::lobby::daily::pool_draft::PoolPlayback;
+use crate::app::lobby::daily::pool_draft::{PoolDraft, PoolPlayback};
 
 fn pool_state() -> DailyPoolState {
     DailyPoolState::new(PoolRules::EightBall, Uuid::new_v4(), Uuid::new_v4())
@@ -77,18 +77,79 @@ fn the_layout_still_works_at_the_smallest_board_we_accept() {
         cols[1].width
     );
 
-    let panel_rows =
-        Layout::vertical([Constraint::Length(INFO_ROWS), Constraint::Fill(1)]).split(cols[1]);
+    let (cue_rows, legend_rows) = column_split(cols[1].height);
     assert!(
-        panel_rows[1].height > READOUT_ROWS,
+        cue_rows > READOUT_ROWS,
         "the cue drawing needs rows of its own once the readouts have theirs"
     );
+    assert_eq!(
+        legend_rows, 0,
+        "the smallest board has no room to teach the keys without losing the cue"
+    );
+}
+
+#[test]
+fn a_tall_board_shows_the_whole_key_legend_and_caps_the_cue() {
+    // The right column is info, cue drawing, readouts, legend. The legend is
+    // all or nothing: half a key map teaches nothing, and the cue drawing
+    // stops growing so a tall terminal spends its rows on the keys instead.
+    let (cue_rows, legend_rows) = column_split(60);
+    assert_eq!(legend_rows, LEGEND_ROWS);
+    assert_eq!(
+        cue_rows,
+        READOUT_ROWS + MAX_CUE_ROWS,
+        "the cue drawing is capped"
+    );
+    assert_eq!(
+        LEGEND.len() as u16 + 1,
+        LEGEND_ROWS,
+        "every row of the legend fits in the rows reserved for it"
+    );
+    // Two keys to a row in a panel this narrow: keys and labels must fit the
+    // narrowest column, or the second one is clipped mid-word.
+    let inner = PANEL_WIDTH - 2;
+    for row in LEGEND {
+        let width = format!(
+            "{:<6}{:<10}{:<4}{:<10}",
+            row[0].0, row[0].1, row[1].0, row[1].1
+        )
+        .trim_end()
+        .chars()
+        .count();
+        assert!(
+            width <= inner as usize,
+            "{row:?} is {width} wide, past the {inner}-column panel"
+        );
+    }
+}
+
+#[test]
+fn the_readout_names_what_the_line_is_on() {
+    let state = pool_state();
+    let draft = PoolDraft::new(&state);
+    let line = draft.line(&state).expect("a cue ball to shoot from");
+    let label = target_label(&state, Some(&line));
+    assert!(
+        label.starts_with("on: the 1"),
+        "a fresh eight-ball aim is on the one: {label}"
+    );
+    assert!(
+        label.contains("full ball"),
+        "aimed at its centre, which is a full ball: {label}"
+    );
+
+    let mut off = draft;
+    off.aim_at_point(&state, [state.spec().expect("table").length * 0.05, 0.0]);
+    let line = off.line(&state).expect("aimed");
+    let label = target_label(&state, Some(&line));
+    assert!(label.starts_with("on: the rail"), "a bare rail: {label}");
+    assert_eq!(target_label(&state, None), "on: nothing");
 }
 
 #[test]
 fn a_rack_hands_the_renderer_one_frame_per_ball() {
     let state = pool_state();
-    let frames = ball_frames(&state);
+    let frames = PoolDraft::new(&state).frames(&state);
     assert_eq!(frames.len(), state.rack.balls.len());
     assert!(
         frames.iter().all(|f| !f.potted),
@@ -101,7 +162,7 @@ fn a_rack_hands_the_renderer_one_frame_per_ball() {
 fn a_potted_ball_stops_being_drawn() {
     let mut state = pool_state();
     state.rack.balls[3].potted = Some(1);
-    let frames = ball_frames(&state);
+    let frames = PoolDraft::new(&state).frames(&state);
     assert_eq!(
         frames.iter().filter(|f| f.potted).count(),
         1,

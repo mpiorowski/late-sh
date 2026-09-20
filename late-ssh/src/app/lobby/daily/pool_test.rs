@@ -523,6 +523,7 @@ fn nothing_is_called_when_nothing_is_being_called_for() {
 // `PoolDraft` lives in `state.rs`, but its arithmetic is all against a
 // `DailyPoolState`, so it is tested here where a state is a one-liner.
 
+use crate::app::games::pool_core::aim::Hit;
 use crate::app::lobby::daily::pool_draft::{PointerOutcome, PoolDraft};
 
 fn drafted() -> (DailyPoolState, PoolDraft) {
@@ -531,16 +532,49 @@ fn drafted() -> (DailyPoolState, PoolDraft) {
     (state, draft)
 }
 
+/// How far the line passes from the centre of the ball it is on, in radii.
+fn sight_offset(draft: &PoolDraft, state: &DailyPoolState) -> f64 {
+    draft
+        .line(state)
+        .and_then(|line| line.sighted)
+        .map_or(0.0, |(_, offset)| offset)
+}
+
+/// The turn that walks the line `radii` off the centre of the ball it is on.
+fn turn_for(draft: &PoolDraft, state: &DailyPoolState, radii: f64) -> f64 {
+    let spec = state.spec().expect("known table");
+    let line = draft.line(state).expect("a cue ball to shoot from");
+    let ball = state
+        .rack
+        .get(line.target().expect("a ball to walk across"))
+        .expect("on the table");
+    let reach = (ball.pos[0] - line.from[0]).hypot(ball.pos[1] - line.from[1]);
+    (radii * spec.ball_radius / reach).asin()
+}
+
+/// Nine-ball with only the one left, so walking the aim off it reaches the
+/// rail rather than the rest of the rack.
+fn lone_one() -> (DailyPoolState, PoolDraft) {
+    let mut state = state(PoolRules::NineBall);
+    for ball in &mut state.rack.balls {
+        if ball.id > 1 {
+            ball.potted = Some(0);
+        }
+    }
+    let draft = PoolDraft::new(&state);
+    (state, draft)
+}
+
 #[test]
 fn a_new_draft_is_aimed_at_something_legal() {
     let (state, draft) = drafted();
     assert_eq!(
-        draft.target,
+        draft.target(&state),
         state.legal_targets().first().copied(),
         "a player who fires straight away should play a real shot"
     );
     assert!(draft.shot(&state).is_some());
-    assert_eq!(draft.aim_offset, 0.0);
+    assert_eq!(sight_offset(&draft, &state), 0.0, "and dead on it");
 }
 
 #[test]
@@ -555,18 +589,21 @@ fn cycling_walks_the_legal_targets_and_wraps() {
         "an open eight-ball table is every ball but the eight"
     );
 
-    let first = draft.target.expect("aimed at something");
+    // The pick, not the ball the line is on: on a fresh rack the balls
+    // behind the apex are hidden behind it, and the line stops at the
+    // front one whichever of them was picked.
+    let first = draft.picked.expect("aimed at something");
     draft.cycle_target(&state, 1);
-    assert_ne!(draft.target, Some(first), "forward moves on");
+    assert_ne!(draft.picked, Some(first), "forward moves on");
 
     // All the way round comes home.
     for _ in 1..targets.len() {
         draft.cycle_target(&state, 1);
     }
-    assert_eq!(draft.target, Some(first), "the cycle wraps");
+    assert_eq!(draft.picked, Some(first), "the cycle wraps");
 
     draft.cycle_target(&state, -1);
-    assert_ne!(draft.target, Some(first), "and it walks backwards too");
+    assert_ne!(draft.picked, Some(first), "and it walks backwards too");
 }
 
 #[test]
@@ -582,7 +619,7 @@ fn cycling_never_offers_a_ball_that_is_not_on() {
     for _ in 0..12 {
         draft.cycle_target(&state, 1);
         assert_eq!(
-            draft.target,
+            draft.picked,
             Some(6),
             "the 6 is the lowest left, so it is the only thing on"
         );
@@ -590,38 +627,59 @@ fn cycling_never_offers_a_ball_that_is_not_on() {
 }
 
 #[test]
-fn the_aim_offset_slides_across_the_shot_line_not_along_it() {
+fn turning_the_cue_walks_the_line_across_the_ball() {
+    // The aim is a bearing; the offset the panel shows is read back off the
+    // table. A turn to the right (clockwise on the overview) puts the line to
+    // the right of the ball's centre, and the same turn back undoes it.
     let (state, mut draft) = drafted();
-    let spec = state.spec().expect("known table");
-    let centre = draft.aim_point(&state).expect("aimed");
-    draft.nudge_aim(1.0);
-    let slid = draft.aim_point(&state).expect("still aimed");
-
-    let moved = (slid[0] - centre[0]).hypot(slid[1] - centre[1]);
+    let turn = turn_for(&draft, &state, 1.0);
+    draft.turn(turn);
+    let offset = sight_offset(&draft, &state);
     assert!(
-        (moved - spec.ball_radius).abs() < 1e-9,
-        "one unit of offset is one ball radius, got {moved}"
+        (offset - 1.0).abs() < 1e-6,
+        "a radius off centre, to the right: {offset}"
     );
-
-    // And it is perpendicular: the distance from the cue ball is unchanged to
-    // first order, but the direction is not.
-    let before = draft.azimuth(&state);
-    draft.nudge_aim(-1.0);
+    draft.turn(-turn);
     assert!(
-        (before - draft.azimuth(&state)).abs() > 1e-6,
-        "sliding the aim point must change the shot direction"
+        sight_offset(&draft, &state).abs() < 1e-9,
+        "and back dead on"
     );
 }
 
 #[test]
-fn changing_target_forgets_the_old_offset() {
-    // The offset is measured across a particular shot line; carrying it onto a
-    // new target would silently aim somewhere nobody asked for.
+fn snapping_to_a_ball_points_dead_at_it() {
+    // Whatever the aim was doing, picking a ball aims at its centre: carrying
+    // an old offset onto a new target would aim somewhere nobody asked for.
     let (state, mut draft) = drafted();
-    draft.nudge_aim(1.5);
-    assert!(draft.aim_offset != 0.0);
+    draft.turn(turn_for(&draft, &state, 1.5));
+    assert!(sight_offset(&draft, &state) != 0.0);
     draft.cycle_target(&state, 1);
-    assert_eq!(draft.aim_offset, 0.0);
+    assert!(sight_offset(&draft, &state).abs() < 1e-9);
+}
+
+#[test]
+fn the_keys_turn_the_cue_in_degrees_and_wrap() {
+    let (_, mut draft) = drafted();
+    let start = draft.azimuth;
+    draft.key_aim(1, false);
+    assert!(
+        (draft.azimuth - start - 1f64.to_radians()).abs() < 1e-12,
+        "l is a degree to the right"
+    );
+    draft.key_aim(-1, true);
+    assert!(
+        (draft.azimuth - start - 0.9f64.to_radians()).abs() < 1e-12,
+        "H is a tenth of one back"
+    );
+    for _ in 0..360 {
+        draft.key_aim(1, false);
+    }
+    assert!(
+        (draft.azimuth - start - 0.9f64.to_radians()).abs() < 1e-9,
+        "a full turn comes back round: {}",
+        draft.azimuth
+    );
+    assert!(draft.azimuth >= 0.0 && draft.azimuth < std::f64::consts::TAU);
 }
 
 #[test]
@@ -630,7 +688,7 @@ fn the_ghost_ball_sits_two_radii_back_from_the_target() {
     let spec = state.spec().expect("known table");
     let target = state
         .rack
-        .get(draft.target.expect("aimed"))
+        .get(draft.target(&state).expect("aimed"))
         .expect("on the table");
     let ghost = draft.ghost(&state).expect("a centred aim contacts");
 
@@ -645,14 +703,79 @@ fn the_ghost_ball_sits_two_radii_back_from_the_target() {
 fn the_ghost_ball_vanishes_when_the_aim_misses() {
     // Losing the ghost is how the board says the line is off the ball, so it
     // has to actually go when the line stops touching.
-    let (state, mut draft) = drafted();
-    draft.nudge_aim(2.4);
+    let (state, mut draft) = lone_one();
+    let miss = turn_for(&draft, &state, 2.2);
+    draft.turn(miss);
     assert!(
         draft.ghost(&state).is_none(),
         "past two radii the cue ball passes clean by"
     );
-    draft.nudge_aim(-2.4);
+    assert_eq!(
+        draft.target(&state),
+        state.legal_targets().first().copied(),
+        "but the ball stays sighted while the aim is walked off its edge"
+    );
+    draft.turn(-miss);
     assert!(draft.ghost(&state).is_some(), "and comes back when it does");
+}
+
+#[test]
+fn the_pot_lines_step_through_the_pockets_the_ball_can_go_in() {
+    // A ball a hand's width off a corner with the cue ball behind it: the
+    // corner is on. `}` aims the pot, and the line drawn then shows the
+    // object ball dropping.
+    let mut state = state(PoolRules::NineBall);
+    let spec = state.spec().expect("known table");
+    let geom = spec.geometry();
+    let corner = geom.pockets[2].center;
+    for ball in &mut state.rack.balls {
+        // Everything else off the table but the one and the cue ball.
+        if ball.id != 1 && ball.id != 0 {
+            ball.potted = Some(0);
+        }
+    }
+    state.rack.balls[1].pos = [corner[0] - 0.25, corner[1] - 0.25];
+    state.rack.balls[0].pos = [corner[0] - 0.9, corner[1] - 0.6];
+    let mut draft = PoolDraft::new(&state);
+
+    // Turn the aim well off the ball first: the pot line must not depend on
+    // where the cue happened to be pointing.
+    draft.turn(0.5);
+    assert!(draft.cycle_pot(&state, 1), "the corner is on");
+    let line = draft.line(&state).expect("aimed");
+    let object = line.object.expect("the one is hit");
+    assert!(
+        matches!(object.hit, Hit::Pocket { .. }),
+        "and it goes in: {:?}",
+        object.hit
+    );
+    let first = draft.azimuth;
+    // Stepping on from the easiest and back again lands on the same bearing.
+    draft.cycle_pot(&state, 1);
+    draft.cycle_pot(&state, -1);
+    assert!(
+        (draft.azimuth - first).abs() < 1e-12,
+        "the cycle is a cycle"
+    );
+
+    // With nothing on, the key reports so rather than turning the cue.
+    state.rack.balls[0].pos = [corner[0] - 0.05, corner[1] - 0.6];
+    state.rack.balls[1].pos = [spec.length * 0.5, spec.width * 0.5];
+    let before = draft.azimuth;
+    let mut walled = state.clone();
+    // A wall of balls round the one.
+    for (index, ball) in walled.rack.balls.iter_mut().enumerate() {
+        if index >= 2 && index < 8 {
+            let angle = index as f64;
+            ball.potted = None;
+            ball.pos = [
+                spec.length * 0.5 + angle.cos() * spec.ball_radius * 2.2,
+                spec.width * 0.5 + angle.sin() * spec.ball_radius * 2.2,
+            ];
+        }
+    }
+    assert!(!draft.cycle_pot(&walled, 1), "nothing is on");
+    assert_eq!(draft.azimuth, before, "and the cue has not moved");
 }
 
 #[test]
@@ -710,18 +833,18 @@ fn committing_keeps_the_adjustment_and_esc_puts_it_back() {
     let (_, mut draft) = drafted();
 
     draft.toggle_mode(ShotMode::Aim);
-    draft.nudge_aim(0.6);
-    let kept = draft.aim_offset;
+    draft.turn(0.02);
+    let kept = draft.azimuth;
     assert!(draft.commit(), "a left click commits");
     assert_eq!(draft.mode, ShotMode::Idle);
-    assert_eq!(draft.aim_offset, kept, "committing keeps it");
+    assert_eq!(draft.azimuth, kept, "committing keeps it");
 
     draft.toggle_mode(ShotMode::Aim);
-    draft.nudge_aim(1.2);
-    assert_ne!(draft.aim_offset, kept, "moved somewhere else");
+    draft.turn(0.04);
+    assert_ne!(draft.azimuth, kept, "moved somewhere else");
     assert!(draft.cancel(), "esc cancels");
     assert_eq!(
-        draft.aim_offset, kept,
+        draft.azimuth, kept,
         "cancelling restores the value the mode was armed with, not zero"
     );
 }
@@ -743,9 +866,12 @@ fn right_click_zeroes_the_armed_adjustment_and_stays_in_it() {
     assert_eq!(draft.mode, ShotMode::Spin, "and still on the cue ball");
 
     draft.toggle_mode(ShotMode::Aim);
-    draft.nudge_aim(0.9);
+    draft.turn(turn_for(&draft, &state, 0.9));
     assert!(draft.reset(&state));
-    assert_eq!(draft.aim_offset, 0.0, "back to dead on");
+    assert!(
+        sight_offset(&draft, &state).abs() < 1e-9,
+        "back to dead on the ball the line is on"
+    );
     assert_eq!(draft.mode, ShotMode::Aim);
 
     // Committed and idle, a reset clears the whole shot. This is the common
@@ -754,14 +880,14 @@ fn right_click_zeroes_the_armed_adjustment_and_stays_in_it() {
     // put the cue down.
     draft.commit();
     draft.nudge_tip(0.2, 0.1);
-    draft.nudge_aim(0.5);
+    draft.turn(turn_for(&draft, &state, 0.5));
     assert_eq!(draft.mode, ShotMode::Idle);
     assert!(
         draft.reset(&state),
         "an idle board still has something to clear"
     );
     assert_eq!(draft.tip, [0.0, 0.0]);
-    assert_eq!(draft.aim_offset, 0.0);
+    assert!(sight_offset(&draft, &state).abs() < 1e-9);
     assert!(
         !draft.reset(&state),
         "and nothing to clear once it is square"
@@ -784,15 +910,15 @@ fn cancelling_a_mode_never_rolls_back_an_earlier_one() {
     // snapshot across both would let a cancelled spin undo a settled aim.
     let (_, mut draft) = drafted();
     draft.toggle_mode(ShotMode::Aim);
-    draft.nudge_aim(0.9);
-    let settled_aim = draft.aim_offset;
+    draft.turn(0.03);
+    let settled_aim = draft.azimuth;
 
     draft.toggle_mode(ShotMode::Spin);
     draft.nudge_tip(0.2, 0.1);
     assert!(draft.cancel(), "cancel the spin");
     assert_eq!(draft.tip, [0.0, 0.0], "the tip goes back");
     assert_eq!(
-        draft.aim_offset, settled_aim,
+        draft.azimuth, settled_aim,
         "but the aim, already committed, stays put"
     );
 }
@@ -823,7 +949,7 @@ fn nothing_moves_until_a_mode_is_armed() {
     // pixel of motion, and a mouse crossing the screen cannot be allowed to
     // walk the aim off the ball.
     let (_, mut draft) = drafted();
-    let before = draft.aim_offset;
+    let before = draft.azimuth;
     for x in 10..40u16 {
         assert_eq!(
             draft.pointer_moved(x, 20, false),
@@ -831,7 +957,7 @@ fn nothing_moves_until_a_mode_is_armed() {
             "idle consumes nothing"
         );
     }
-    assert_eq!(draft.aim_offset, before);
+    assert_eq!(draft.azimuth, before);
 }
 
 #[test]
@@ -839,30 +965,36 @@ fn arming_a_mode_never_jumps_the_setting_to_the_pointer() {
     // Motion is a delta from the last report, not a position, so the first
     // event after arming only sets the reference. Otherwise arming would yank
     // the aim to wherever the mouse happened to be resting.
-    let (_, mut draft) = drafted();
+    let (state, mut draft) = drafted();
     draft.toggle_mode(ShotMode::Aim);
     assert_eq!(
         draft.pointer_moved(80, 12, false),
         PointerOutcome::Ignored,
         "the first report is the reference, not a move"
     );
-    assert_eq!(draft.aim_offset, 0.0);
+    assert_eq!(sight_offset(&draft, &state), 0.0);
     assert_eq!(
         draft.pointer_moved(90, 12, false),
         PointerOutcome::Changed,
         "the second one moves it"
     );
-    assert!(draft.aim_offset > 0.0);
+    assert!(
+        sight_offset(&draft, &state) > 0.0,
+        "and to the right, the way the mouse went"
+    );
 }
 
 #[test]
 fn the_pointer_steers_whichever_mode_is_armed() {
-    let (_, mut draft) = drafted();
+    let (state, mut draft) = drafted();
 
     draft.toggle_mode(ShotMode::Aim);
     draft.pointer_moved(50, 20, false);
     draft.pointer_moved(60, 30, false);
-    assert!(draft.aim_offset > 0.0, "aim follows horizontal travel");
+    assert!(
+        sight_offset(&draft, &state) > 0.0,
+        "aim follows horizontal travel"
+    );
     assert_eq!(draft.tip, [0.0, 0.0], "and leaves the tip alone");
 
     draft.toggle_mode(ShotMode::Spin);
@@ -1019,9 +1151,16 @@ fn aiming_at_a_bare_point_drops_the_ball_target() {
     // keyboard cannot.
     let (state, mut draft) = drafted();
     let spec = state.spec().expect("known table");
-    draft.aim_at_point([spec.length * 0.9, 0.0]);
-    assert_eq!(draft.target, None);
+    draft.aim_at_point(&state, [spec.length * 0.9, 0.0]);
+    assert_eq!(draft.target(&state), None);
     assert!(draft.ghost(&state).is_none(), "no ball, no ghost");
+    let line = draft.line(&state).expect("aimed");
+    assert!(
+        matches!(line.hit, Hit::Cushion { .. }),
+        "the line runs to the rail: {:?}",
+        line.hit
+    );
+    assert!(line.rebound.is_some(), "and shows where it comes off");
     assert!(draft.shot(&state).is_some(), "but still a shot to play");
 }
 
@@ -1224,49 +1363,21 @@ fn a_click_on_the_cloth_sets_the_ball_down_and_ends_the_mode() {
 }
 
 #[test]
-fn the_aim_has_a_second_axis_so_it_never_runs_out_of_screen() {
-    // Sideways says which side of centre, up and down say how far. Two ways to
-    // reach the same place, because a pointer runs out of screen long before
-    // an aim runs out of range — a player aiming from the right-hand side of
-    // the board had nowhere left to push.
+fn the_pointer_has_one_axis_in_aim_mode() {
+    // Only sideways turns the cue. A hand that drifts up the pad while
+    // sweeping must not change the shot, and the eye view turns with the
+    // same gesture, where "up" would mean nothing at all.
     let (_, mut draft) = drafted();
+    // Off zero first, so a turn to the left is a smaller number and not a
+    // wrap round to just under a full turn.
+    draft.turn(0.5);
     draft.toggle_mode(ShotMode::Aim);
-
-    draft.nudge_aim(0.3);
-    let side = draft.aim_offset;
-    assert!(side > 0.0);
-
-    draft.spread_aim(0.5);
-    assert!(
-        draft.aim_offset > side,
-        "down walks it further off centre: {} then {}",
-        side,
-        draft.aim_offset
-    );
-    let far = draft.aim_offset;
-    draft.spread_aim(-0.2);
-    assert!(draft.aim_offset < far, "and up walks it back in");
-
-    // The far side is reachable the same way once the aim is on it.
-    draft.nudge_aim(-2.0);
-    assert!(draft.aim_offset < 0.0, "now off the other side");
-    let left = draft.aim_offset;
-    draft.spread_aim(0.4);
-    assert!(
-        draft.aim_offset < left,
-        "spreading keeps the side it is already on"
-    );
-
-    // Coming back in stops dead at centre rather than sliding through to the
-    // other side of the ball, which nobody asked for and cannot be aimed at.
-    draft.spread_aim(-99.0);
-    assert_eq!(draft.aim_offset, 0.0, "dead on is a place you can land");
-    draft.spread_aim(99.0);
-    assert!(
-        draft.aim_offset.abs() <= 2.4 + 1e-9,
-        "and the far end is still the far end: {}",
-        draft.aim_offset
-    );
+    draft.pointer_moved(50, 20, false);
+    let before = draft.azimuth;
+    assert_eq!(draft.pointer_moved(50, 30, false), PointerOutcome::Changed);
+    assert_eq!(draft.azimuth, before, "vertical travel turns nothing");
+    draft.pointer_moved(40, 30, false);
+    assert!(draft.azimuth < before, "left turns left");
 }
 
 #[test]
@@ -1332,7 +1443,7 @@ fn an_aim_goes_out_on_a_change_and_not_on_every_pixel() {
     );
 
     let mut nudged = base;
-    nudged.aim_offset += 0.05;
+    nudged.azimuth += 0.002;
     assert!(
         !should_share_aim(Some(base), Some(Instant::now()), nudged),
         "a pixel of aim waits its turn: pointer motion is per terminal cell"
@@ -1361,19 +1472,19 @@ fn a_shot_survives_the_trip_to_the_other_players_board() {
     let (state, mut draft) = drafted();
     draft.toggle_mode(ShotMode::Spin);
     draft.nudge_tip(0.2, -0.15);
-    draft.nudge_aim(0.7);
+    draft.turn(0.02);
     draft.nudge_pull(0.1);
 
     let theirs = PoolDraft::watching(draft.share());
     assert_eq!(theirs.mode, draft.mode);
-    assert_eq!(theirs.target, draft.target);
+    assert_eq!(theirs.azimuth, draft.azimuth);
+    assert_eq!(theirs.target(&state), draft.target(&state));
     assert_eq!(theirs.tip, draft.tip);
-    assert_eq!(theirs.aim_offset, draft.aim_offset);
     assert_eq!(theirs.pull, draft.pull);
     assert_eq!(theirs.called_pocket, draft.called_pocket);
-    // And it draws the same picture: the aim line and the ghost are what the
+    // And it draws the same picture: the shot line and the ghost are what the
     // watcher actually sees move.
-    assert_eq!(theirs.aim_point(&state), draft.aim_point(&state));
+    assert_eq!(theirs.line(&state), draft.line(&state));
     assert_eq!(theirs.ghost(&state), draft.ghost(&state));
     assert_eq!(theirs.power(), draft.power());
     assert_eq!(theirs.share(), draft.share(), "and it round-trips");
@@ -1386,11 +1497,12 @@ fn holding_the_button_re_grips_instead_of_steering() {
     // is lifting the mouse off the pad — the reference follows, the setting
     // does not — and it is the only way to keep turning past the edge.
     let (_, mut draft) = drafted();
+    let start = draft.azimuth;
     draft.toggle_mode(ShotMode::Aim);
     draft.pointer_moved(40, 10, false);
     draft.pointer_moved(60, 10, false);
-    let aimed = draft.aim_offset;
-    assert_ne!(aimed, 0.0, "bare motion steers");
+    let aimed = draft.azimuth;
+    assert_ne!(aimed, start, "bare motion steers");
 
     for x in [50, 40, 30, 20] {
         assert_eq!(
@@ -1399,11 +1511,11 @@ fn holding_the_button_re_grips_instead_of_steering() {
             "a held button drags the hand back, not the aim"
         );
     }
-    assert_eq!(draft.aim_offset, aimed, "the aim survived the re-grip");
+    assert_eq!(draft.azimuth, aimed, "the aim survived the re-grip");
 
     draft.pointer_moved(30, 10, false);
     assert!(
-        draft.aim_offset > aimed,
+        draft.azimuth > aimed,
         "and carries on in the same direction from the new grip"
     );
 }
@@ -1432,14 +1544,26 @@ fn the_next_ball_in_line_is_the_lowest_that_is_on() {
     for rules_kind in PoolRules::ALL {
         let state = state(rules_kind);
         let mut draft = PoolDraft::new(&state);
-        draft.aim_at_point([0.5, 0.5]);
-        assert_eq!(draft.target, None, "aimed at a cushion");
+        // Straight back at the head rail: nothing sits behind the cue ball
+        // in any of the three games.
+        let cue = draft.cue_ball(&state).expect("a cue ball to shoot from");
+        draft.aim_at_point(&state, [cue[0] - 0.3, cue[1]]);
+        assert_eq!(draft.target(&state), None, "aimed at a cushion");
 
         draft.next_in_line(&state);
+        let lowest = state.legal_targets().first().copied().expect("a ball on");
         assert_eq!(
-            draft.target,
-            state.legal_targets().first().copied(),
+            draft.picked,
+            Some(lowest),
             "{rules_kind:?} should jump to the lowest ball that is on"
+        );
+        // And the cue points at its centre, whatever sits in the way (in
+        // snooker the brown does, from the D).
+        let ball = state.rack.get(lowest).expect("on the table");
+        let bearing = (ball.pos[1] - cue[1]).atan2(ball.pos[0] - cue[0]);
+        assert!(
+            (draft.azimuth - bearing.rem_euclid(std::f64::consts::TAU)).abs() < 1e-12,
+            "{rules_kind:?} aims dead at it"
         );
     }
 }

@@ -60,9 +60,7 @@ async fn only_events_this_session_can_see_cost_a_repaint() {
 
     let elsewhere = Uuid::from_u128(42);
     let aim = PoolAimShare {
-        target: None,
-        aim_at: [0.0, 0.0],
-        aim_offset: 0.0,
+        azimuth: 0.0,
         tip: [0.0, 0.0],
         pull: 0.0,
         mode: ShotMode::Idle,

@@ -37,6 +37,17 @@ fn frames() -> Vec<BallFrame> {
         .collect()
 }
 
+/// Marks under which every object ball is the striker's, so the whole rack
+/// wears its numbers.
+fn all_numbered() -> Overlay {
+    let ids: Vec<u8> = (1..=15).collect();
+    Overlay {
+        line: None,
+        legal: table_ui::BallSet::from_ids(&ids),
+        called_pocket: None,
+    }
+}
+
 #[test]
 fn the_canvas_fills_every_cell() {
     let mut c = canvas();
@@ -221,7 +232,7 @@ fn a_big_ball_wears_a_painted_number_inside_its_own_edge() {
         &SPEC.geometry(),
         &view,
         &balls,
-        &Overlay::default(),
+        &all_numbered(),
     );
 
     let ink = [16, 16, 18];
@@ -275,11 +286,11 @@ fn a_big_ball_wears_a_painted_number_inside_its_own_edge() {
 }
 
 #[test]
-fn a_solid_is_plain_and_a_stripe_wears_its_band() {
-    // The rim used to be how a stripe was told from its solid, which put an
-    // outline on all fifteen for the sake of seven. A stripe is now painted
-    // the way a real one looks from above — colour across the middle, white at
-    // both ends — and a solid is just a disc.
+fn a_solid_is_plain_and_a_stripe_wears_a_white_rim() {
+    // A stripe is a coloured core in a white shell and a solid is just a
+    // disc. Painting the real look (colour across the middle, white at both
+    // ends) broke the silhouette of a ball a few pixels wide into a square
+    // with ears; a rim keeps every ball round.
     let mut c = Canvas::new(220, 60, CLOTH);
     let view = View::fit(&SPEC, &c);
     // Two balls, far apart, so neither one's halo touches the other.
@@ -337,12 +348,93 @@ fn a_solid_is_plain_and_a_stripe_wears_its_band() {
     );
 
     let stripe = across(&balls[1]);
-    assert_eq!(stripe.first(), Some(&white), "white at the left end");
-    assert_eq!(stripe.last(), Some(&white), "and at the right end");
+    // The rim is white shaded at its edge, so the outermost pixel is a light
+    // neutral rather than the hue.
+    let light_neutral =
+        |px: &[u8; 3]| px[0].abs_diff(px[1]) < 12 && px[1].abs_diff(px[2]) < 12 && px[0] > 120;
     assert!(
-        stripe.contains(&table_ui::ball_colour(11)),
-        "with the hue running between them: {stripe:?}"
+        light_neutral(stripe.first().expect("a ball")),
+        "white at the left edge: {stripe:?}"
     );
+    assert!(
+        light_neutral(stripe.last().expect("a ball")),
+        "and at the right edge: {stripe:?}"
+    );
+    assert!(
+        stripe.contains(&white),
+        "with a white band inside the edge: {stripe:?} r={}",
+        view.ball_px()
+    );
+    let mid = stripe.len() / 2;
+    assert_eq!(
+        stripe[mid],
+        table_ui::ball_colour(11),
+        "and the hue at the core: {stripe:?}"
+    );
+}
+
+#[test]
+fn balls_the_striker_may_not_hit_are_dimmed_and_bare() {
+    // Fifteen bold numbers were the busiest thing on the table. Only the
+    // balls that matter to the shot wear one, and the rest step back toward
+    // the cloth, so what is yours is what you see first.
+    use crate::app::games::pool_core::table_ui::BallSet;
+
+    let mut c = Canvas::new(220, 60, CLOTH);
+    let view = View::fit(&SPEC, &c);
+    let balls = vec![
+        BallFrame {
+            id: 3,
+            pos: [SPEC.length * 0.25, SPEC.width * 0.5],
+            potted: false,
+        },
+        BallFrame {
+            id: 4,
+            pos: [SPEC.length * 0.75, SPEC.width * 0.5],
+            potted: false,
+        },
+    ];
+    let marks = Overlay {
+        line: None,
+        legal: BallSet::from_ids(&[3]),
+        called_pocket: None,
+    };
+    table_ui::draw(&mut c, &SPEC, &SPEC.geometry(), &view, &balls, &marks);
+
+    let ink = [16, 16, 18];
+    let has = |ball: &BallFrame, colour: [u8; 3]| {
+        let (bx, by) = view.to_px(ball.pos);
+        let reach = view.ball_px().ceil() as i32;
+        ((by.floor() as i32 - reach)..=(by.floor() as i32 + reach)).any(|y| {
+            ((bx.floor() as i32 - reach)..=(bx.floor() as i32 + reach))
+                .any(|x| c.get(x, y) == colour)
+        })
+    };
+    assert!(
+        has(&balls[0], table_ui::ball_colour(3)),
+        "the legal ball keeps its hue"
+    );
+    assert!(has(&balls[0], ink), "and wears its number");
+    assert!(
+        !has(&balls[1], table_ui::ball_colour(4)),
+        "the other is pulled toward the cloth"
+    );
+    assert!(!has(&balls[1], ink), "and carries no number");
+
+    // Nobody at the table: every ball is drawn plain.
+    let mut plain = Canvas::new(220, 60, CLOTH);
+    table_ui::draw(
+        &mut plain,
+        &SPEC,
+        &SPEC.geometry(),
+        &view,
+        &balls,
+        &Overlay::default(),
+    );
+    let (bx, by) = view.to_px(balls[1].pos);
+    let purple = (0..plain.height() as i32)
+        .any(|y| (0..plain.cols() as i32).any(|x| plain.get(x, y) == table_ui::ball_colour(4)));
+    assert!(purple, "the four is its own colour at {bx},{by}");
 }
 
 #[test]
@@ -421,7 +513,7 @@ fn a_rack_never_mixes_painted_numbers_with_borrowed_ones() {
         &SPEC.geometry(),
         &view,
         &balls,
-        &Overlay::default(),
+        &all_numbered(),
     );
 
     let ink = [16, 16, 18];
@@ -514,7 +606,7 @@ fn a_ball_against_the_far_cushion_does_not_float_into_the_room() {
             potted: false,
         },
         BallFrame {
-            id: 9,
+            id: 4,
             pos: against_the_rail,
             potted: false,
         },
@@ -539,7 +631,7 @@ fn a_ball_against_the_far_cushion_does_not_float_into_the_room() {
     //
     // Overlapping the rail is not the bug and is not tested for: from this low
     // a ball frozen on the far cushion covers it, the way it does in a photo.
-    let colour = table_ui::ball_colour(9);
+    let colour = table_ui::ball_colour(4);
     let foot = eye
         .to_screen(against_the_rail, 0.0)
         .expect("down the table, in view")
@@ -547,10 +639,10 @@ fn a_ball_against_the_far_cushion_does_not_float_into_the_room() {
     let painted: Vec<i32> = (0..c.height() as i32)
         .filter(|y| (0..c.cols() as i32).any(|x| c.get(x, *y) == colour))
         .collect();
-    let bottom = *painted.last().expect("the nine was drawn at all") as f64;
+    let bottom = *painted.last().expect("the four was drawn at all") as f64;
     assert!(
         (bottom - foot).abs() <= 1.5,
-        "the nine's disc ends at {bottom} but it touches the cloth at {foot}"
+        "the four's disc ends at {bottom} but it touches the cloth at {foot}"
     );
 }
 
@@ -903,8 +995,13 @@ fn the_aim_overlay_changes_the_picture() {
         &view,
         &frames(),
         &Overlay {
-            aim_to: Some([SPEC.length * 0.7, SPEC.width * 0.5]),
-            highlight: Some(1),
+            line: Some(crate::app::games::pool_core::aim::shot_line(
+                &SPEC,
+                &geom,
+                &frames(),
+                [SPEC.length * 0.25, SPEC.width * 0.5],
+                0.0,
+            )),
             ..Overlay::default()
         },
     );

@@ -121,7 +121,7 @@ impl PowerBand {
 pub enum ShotMode {
     /// Nothing armed. Clicks pick a target and the brackets cycle one.
     Idle,
-    /// Pointer motion walks the aim across the target ball.
+    /// Pointer motion turns the cue.
     Aim,
     /// Pointer motion walks the tip across the cue ball's face.
     Spin,
@@ -174,10 +174,10 @@ impl ShotMode {
             // spin, and the cue itself arms the stroke. Saying so here means a
             // player never has to learn the key map to start.
             Self::Idle => {
-                "[ ] target · click a ball to aim, the cue ball for spin, the cue to stroke · a e x/s/w · c clears"
+                "click a ball or the cloth to aim there · h/l turn · [ ] ball · { } pot · a e x/s/w arm the mouse"
             }
             Self::Aim => {
-                "aiming: mouse left/right for the side, up/down for how far off · h/l H/L by key · right-click straightens"
+                "aiming: mouse left/right turns the cue · h/l 1° · H/L 0.1° · click keeps it · right-click straightens"
             }
             Self::Spin => {
                 "spin: mouse or arrows · click the face to set it · right-click centres it · esc undoes"

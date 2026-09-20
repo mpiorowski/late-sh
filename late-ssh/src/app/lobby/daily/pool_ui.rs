@@ -22,6 +22,12 @@
 //! `ShotMode::hint` to say so. That string lives in `pool_core` beside the
 //! mode enum rather than here, so the controls and the description of them
 //! cannot drift apart.
+//!
+//! The keys themselves live in a legend under the cue panel, in the right
+//! column, whenever the terminal is tall enough for it. One hint row could
+//! not hold twenty keys and still be read, and a game with this many
+//! controls should not make a player memorise them: the cue drawing is
+//! capped so the legend has room.
 
 use chrono::Utc;
 use ratatui::{
@@ -36,15 +42,15 @@ use uuid::Uuid;
 use crate::app::{
     common::{primitives::draw_too_small, theme},
     games::pool_core::{
+        aim::{Hit, ShotLine},
         ball::CUE,
         canvas::Canvas,
         cue::MAX_SPEED,
         cue_ui::{self, BACKDROP, CueView},
         rules::PoolRules,
-        shot::BallFrame,
         table::{self, TableSpec},
-        table_3d::{self, Eye, Sight},
-        table_ui::{self, Overlay, SURROUND, View},
+        table_3d::{self, Eye},
+        table_ui::{self, BallSet, Overlay, SURROUND, View},
     },
     lobby::daily::{
         board_ui::{name_for, result_banner},
@@ -66,8 +72,17 @@ const PANEL_WIDTH: u16 = 34;
 const MAX_PANEL_WIDTH: u16 = 60;
 /// Rows the info panel takes before the cue panel gets the rest.
 const INFO_ROWS: u16 = 9;
-/// Readout rows under the cue drawing (aim, spin, power).
-const READOUT_ROWS: u16 = 3;
+/// Readout rows under the cue drawing (aim, what it is on, spin, power).
+const READOUT_ROWS: u16 = 4;
+/// The key legend under the readouts: a title and seven rows of two keys.
+const LEGEND_ROWS: u16 = 8;
+/// The cue drawing stops growing here. Past it the balls are as big as they
+/// are useful and the rows are better spent on the legend.
+const MAX_CUE_ROWS: u16 = 24;
+/// The legend only appears once the cue drawing keeps at least this many
+/// rows: a legend that squeezed the cue into a sliver would be teaching the
+/// keys for a panel that can no longer be aimed on.
+const MIN_CUE_ROWS_WITH_LEGEND: u16 = 12;
 
 pub(crate) fn draw(
     frame: &mut Frame,
@@ -206,7 +221,19 @@ fn draw_table(
     // already been played.
     let (frames, aiming) = match &pool.playback {
         Some(playback) => (playback.frame(), false),
-        None => (held_ball_frames(pool, shot), true),
+        None => (shot.frames(&pool.state), true),
+    };
+    // One set of marks for both views, so a click on either lands on the
+    // same shot. The legal set is the striker's whoever is looking: what the
+    // watcher sees dimmed is what the shooter may not hit.
+    let marks = if aiming {
+        Overlay {
+            line: shot.line(&pool.state),
+            legal: BallSet::from_ids(&pool.state.legal_targets()),
+            called_pocket: shot.called_pocket,
+        }
+    } else {
+        Overlay::default()
     };
 
     // The eye view is the same rack seen from behind the cue ball. Recorded
@@ -220,38 +247,11 @@ fn draw_table(
     board.pool_eye_geometry.set(eye);
     match eye {
         Some(eye) => {
-            let sight = if aiming {
-                Sight {
-                    aim_from: shot.cue_ball(&pool.state),
-                    aim_to: shot.aim_point(&pool.state),
-                    ghost: shot.ghost(&pool.state),
-                    called_pocket: shot.called_pocket,
-                }
-            } else {
-                Sight::default()
-            };
-            table_3d::draw(&mut canvas, spec, &spec.geometry(), &eye, &frames, &sight);
+            table_3d::draw(&mut canvas, spec, &spec.geometry(), &eye, &frames, &marks);
         }
         None => {
             let view = View::fit(spec, &canvas);
-            let overlay = if aiming {
-                Overlay {
-                    aim_to: shot.aim_point(&pool.state),
-                    ghost: shot.ghost(&pool.state),
-                    highlight: shot.target,
-                    called_pocket: shot.called_pocket,
-                }
-            } else {
-                Overlay::default()
-            };
-            table_ui::draw(
-                &mut canvas,
-                spec,
-                &spec.geometry(),
-                &view,
-                &frames,
-                &overlay,
-            );
+            table_ui::draw(&mut canvas, spec, &spec.geometry(), &view, &frames, &marks);
         }
     }
     board.target_geometry.set(Some(area));
@@ -277,7 +277,7 @@ fn eye_for(pool: &PoolDetail, shot: &PoolDraft, spec: &TableSpec, canvas: &Canva
         return Some(Eye::behind(cue, played.shot.azimuth, spec, canvas));
     }
     let cue = shot.cue_ball(&pool.state)?;
-    Some(Eye::behind(cue, shot.azimuth(&pool.state), spec, canvas))
+    Some(Eye::behind(cue, shot.azimuth, spec, canvas))
 }
 
 /// Turn a click inside the recorded table rect into a spot on the cloth.
@@ -306,36 +306,6 @@ pub(crate) fn table_point_at(
     }
 }
 
-/// Ball positions with a pending ball-in-hand placement folded in.
-///
-/// A potted cue ball is not on the table, so without this the player would be
-/// carrying it invisibly — the one thing they need to see while placing it is
-/// where it is going to land.
-fn held_ball_frames(pool: &PoolDetail, shot: &PoolDraft) -> Vec<BallFrame> {
-    let mut frames = ball_frames(&pool.state);
-    if let Some(at) = shot.place
-        && let Some(cue) = frames.iter_mut().find(|frame| frame.id == CUE)
-    {
-        cue.pos = at;
-        cue.potted = false;
-    }
-    frames
-}
-
-/// Current ball positions, as the renderer wants them.
-fn ball_frames(state: &DailyPoolState) -> Vec<BallFrame> {
-    state
-        .rack
-        .balls
-        .iter()
-        .map(|ball| BallFrame {
-            id: ball.id,
-            pos: ball.pos,
-            potted: ball.potted.is_some(),
-        })
-        .collect()
-}
-
 fn draw_panels(
     frame: &mut Frame,
     area: Rect,
@@ -356,12 +326,72 @@ fn draw_panels(
         ..inner
     };
 
-    let rows = Layout::vertical([Constraint::Length(INFO_ROWS), Constraint::Fill(1)]).split(inner);
+    let (cue_rows, legend_rows) = column_split(inner.height);
+    let rows = Layout::vertical([
+        Constraint::Length(INFO_ROWS),
+        Constraint::Length(cue_rows),
+        Constraint::Length(legend_rows),
+        Constraint::Fill(1),
+    ])
+    .split(inner);
     frame.render_widget(
         Paragraph::new(info_lines(daily, board, detail, pool)),
         rows[0],
     );
     draw_cue_panel(frame, rows[1], board, pool, shot);
+    if legend_rows > 0 {
+        frame.render_widget(Paragraph::new(legend_lines()), rows[2]);
+    }
+}
+
+/// How the right column below the info panel is shared between the cue panel
+/// (drawing plus readouts) and the key legend: rows for each.
+///
+/// The cue panel takes what is left after the info panel and, when there is
+/// room for both, the legend; it stops growing at `MAX_CUE_ROWS`. The legend
+/// is all or nothing, because half a key map teaches nothing.
+pub(crate) fn column_split(height: u16) -> (u16, u16) {
+    let below_info = height.saturating_sub(INFO_ROWS);
+    let with_legend = below_info.saturating_sub(LEGEND_ROWS);
+    if with_legend >= READOUT_ROWS + MIN_CUE_ROWS_WITH_LEGEND {
+        (with_legend.min(READOUT_ROWS + MAX_CUE_ROWS), LEGEND_ROWS)
+    } else {
+        (below_info.min(READOUT_ROWS + MAX_CUE_ROWS), 0)
+    }
+}
+
+/// Every key on the board, two to a row. The hint row at the bottom says what
+/// the *mouse* is doing; this is the keyboard, all of it, so nothing has to be
+/// memorised.
+pub(crate) const LEGEND: [[(&str, &str); 2]; 7] = [
+    [("h l", "aim 1°"), ("[ ]", "ball")],
+    [("H L", "aim 0.1°"), ("{ }", "pot line")],
+    [("a", "mouse aim"), ("'", "lowest ball")],
+    [("e", "spin"), ("m", "ball in hand")],
+    [("x s w", "stroke"), ("p", "call pocket")],
+    [("c", "reset"), ("v", "eye view")],
+    [("Esc", "back"), ("r", "resign")],
+];
+
+fn legend_lines() -> Vec<Line<'static>> {
+    let key = Style::default().fg(theme::AMBER());
+    let label = Style::default().fg(theme::TEXT_DIM());
+    let mut lines = vec![Line::from(Span::styled(
+        "keys",
+        Style::default()
+            .fg(theme::TEXT_DIM())
+            .add_modifier(Modifier::BOLD),
+    ))];
+    for row in LEGEND {
+        let mut spans = Vec::new();
+        for (index, (k, what)) in row.into_iter().enumerate() {
+            let width = if index == 0 { 6 } else { 4 };
+            spans.push(Span::styled(format!("{k:<width$}"), key));
+            spans.push(Span::styled(format!("{what:<10}"), label));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines
 }
 
 /// Game, seats, groups, and what is left on the table.
@@ -438,6 +468,57 @@ fn info_lines(
         )));
     }
     lines
+}
+
+/// What the line is on, in the language of the game: the ball and the cut,
+/// with the pocket when the object ball's own leg ends in one; the rail; a
+/// pocket the cue ball is headed straight for.
+pub(crate) fn target_label(state: &DailyPoolState, line: Option<&ShotLine>) -> String {
+    let Some(line) = line else {
+        return "on: nothing".to_string();
+    };
+    match line.hit {
+        Hit::Ball { id, .. } => {
+            let name = ball_name(state, id);
+            let Some(object) = line.object else {
+                return format!("on: {name}");
+            };
+            let degrees = object.cut.abs().to_degrees();
+            let cut = if degrees < 0.5 {
+                "full ball".to_string()
+            } else if object.cut > 0.0 {
+                format!("cut {degrees:.0}° right")
+            } else {
+                format!("cut {degrees:.0}° left")
+            };
+            match object.hit {
+                Hit::Pocket { index, .. } => {
+                    format!("on: {name} · {cut} · {}", table::pocket_name(index))
+                }
+                Hit::Ball { .. } | Hit::Cushion { .. } | Hit::Nothing { .. } => {
+                    format!("on: {name} · {cut}")
+                }
+            }
+        }
+        Hit::Cushion { .. } => match line.target() {
+            Some(id) => format!("on: the rail, past {}", ball_name(state, id)),
+            None => "on: the rail".to_string(),
+        },
+        Hit::Pocket { index, .. } => format!("on: the {} pocket", table::pocket_name(index)),
+        Hit::Nothing { .. } => "on: nothing".to_string(),
+    }
+}
+
+/// A ball as the striker would name it: its number, or its colour in snooker.
+fn ball_name(state: &DailyPoolState, id: u8) -> String {
+    if state.rules.scores() {
+        match snooker_name(id) {
+            "a red" => "a red".to_string(),
+            colour => format!("the {colour}"),
+        }
+    } else {
+        format!("the {id}")
+    }
 }
 
 /// What the other player is doing, in the third person. `ShotMode::label` is
@@ -534,11 +615,19 @@ fn draw_cue_panel(
         Layout::vertical([Constraint::Fill(1), Constraint::Length(READOUT_ROWS)]).split(area);
 
     let draft = shot;
+    let line = draft.line(&pool.state);
     let mut canvas = Canvas::new(rows[0].width, rows[0].height, BACKDROP);
     let view = CueView {
-        target: draft.target,
-        distance: draft.aim_distance(&pool.state),
-        aim_offset: draft.aim_offset,
+        target: line.and_then(|line| line.target()),
+        distance: line
+            .map(|line| {
+                let at = line.hit.at();
+                (at[0] - line.from[0]).hypot(at[1] - line.from[1])
+            })
+            .unwrap_or(1.0),
+        aim_offset: line
+            .and_then(|line| line.sighted)
+            .map_or(0.0, |(_, offset)| offset),
         tip: draft.tip,
         power: draft.power(),
         mode: draft.mode,
@@ -557,10 +646,8 @@ fn draw_cue_panel(
     let dim = Style::default().fg(theme::TEXT_DIM());
     frame.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled(
-                cue_ui::aim_label(draft.azimuth(&pool.state)),
-                dim,
-            )),
+            Line::from(Span::styled(cue_ui::aim_label(draft.azimuth), dim)),
+            Line::from(Span::styled(target_label(&pool.state, line.as_ref()), dim)),
             Line::from(Span::styled(cue_ui::spin_label(draft.tip), dim)),
             Line::from(Span::styled(
                 cue_ui::power_label(draft.power(), draft.mode.band(), MAX_SPEED),

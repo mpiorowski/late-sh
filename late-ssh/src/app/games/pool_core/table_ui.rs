@@ -15,18 +15,27 @@
 //! ## Telling balls apart
 //!
 //! Colour does the work, using the standard pool colours, and a stripe is told
-//! from its solid the way a real one is: the hue runs as a band across the
-//! middle and both ends are white. Drawn vertically it degrades on its own —
-//! at three pixels the caps are a column each side, at ten they are two clean
-//! stripes. Every ball also has its outermost shell shaded in its own hue,
-//! which is what keeps a rack of overlapping discs reading as fifteen balls.
-//! It has to be the ball's *own* shell: separating them with a ring of cloth
-//! outside each one meant every ball took a bite out of the neighbour drawn
-//! before it, and a cluster came out as rectangles. Numbers appear once the
-//! ball is wide enough to hold them. The info panel carries the full list
-//! whatever the size.
+//! from its solid by a white rim: a coloured core inside a white shell. That
+//! is not quite how a real stripe looks from above, but the real look (colour
+//! across the middle, white at both ends) breaks the disc's silhouette on a
+//! ball a few pixels wide, so every stripe read as a coloured square with
+//! white ears, and a rack of them was noise. A rim keeps every ball round
+//! and reads at any size. Every ball also has its outermost shell shaded in
+//! its own hue, which is what keeps a rack of overlapping discs reading as
+//! fifteen balls. It has to be the ball's *own* shell: separating them with a
+//! ring of cloth outside each one meant every ball took a bite out of the
+//! neighbour drawn before it, and a cluster came out as rectangles.
+//!
+//! Numbers are painted only on the balls that matter to the shot: the ones
+//! the striker may hit and the one the aim is on. Fifteen bold numbers on a
+//! hundred-column table were the busiest thing on the screen, and the colour
+//! and the rim already say which ball is which; the info panel carries the
+//! full list whatever the size. Balls the striker may *not* hit are dimmed
+//! toward the cloth for the same reason: what is yours should be what you
+//! see first.
 
 use crate::app::games::pool_core::{
+    aim::{Leg, LegKind, ShotLine},
     ball::CUE,
     canvas::{Canvas, Rgb, mix},
     rack,
@@ -49,8 +58,16 @@ pub const POCKET: Rgb = [10, 10, 12];
 pub const POCKET_CALLED: Rgb = [150, 158, 152];
 pub const CUE_BALL: Rgb = [242, 240, 232];
 pub const WHITE: Rgb = [245, 243, 236];
-pub const GUIDE: Rgb = [200, 214, 205];
-pub const GHOST: Rgb = [150, 180, 165];
+/// The cue ball's leg of the shot line. The brightest mark on the cloth, on
+/// purpose: it is the one thing a player is looking at while they aim.
+pub const GUIDE: Rgb = [230, 240, 232];
+pub const GHOST: Rgb = [196, 220, 206];
+/// The cue ball's stun line off the object ball, and where a miss comes off
+/// the rail. Dimmer than the aim itself: consequences, not the choice.
+pub const TANGENT: Rgb = [168, 184, 174];
+pub const REBOUND: Rgb = [128, 156, 140];
+/// How far a ball the striker may not hit is pulled toward the cloth.
+const DIM_MIX: f64 = 0.45;
 
 /// Smallest a ball may be drawn, in pixels. Below about two and a half the
 /// disc stops reading as round and the stripe band has nowhere to go, and at
@@ -88,11 +105,11 @@ const MIN_RAIL_PX: f64 = 2.0;
 /// diagonally and so covers more cloth for the same mouth.
 const CORNER_TRIM: f64 = 0.85;
 const SIDE_TRIM: f64 = 0.9;
-/// Half-width of a stripe's coloured band, as a fraction of the ball's radius.
-/// Everything outside it is white. Low enough that the hue still reads on a
-/// three-pixel ball, high enough that the caps are two clear stripes on a
-/// large one.
-const STRIPE_BAND: f64 = 0.55;
+/// Width of a stripe's white rim as a fraction of the ball's radius, and
+/// never under a pixel: a rim that falls between two pixel centres is no rim
+/// at all, and on the small balls that is exactly where a fraction lands.
+/// The shaded shell, where there is one, sits outside this.
+const STRIPE_RIM: f64 = 0.3;
 /// A ball at least this wide gets its number drawn in the cell.
 const DIGIT_BALL_PX: f64 = 3.0;
 /// A ball at least this wide carries its number twice, one copy above the
@@ -270,17 +287,72 @@ impl View {
     }
 }
 
+/// A set of ball ids, one bit each. Ids run to 36, so a word holds every
+/// ball of every ruleset.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BallSet(u64);
+
+impl BallSet {
+    pub fn from_ids(ids: &[u8]) -> Self {
+        Self(ids.iter().fold(0, |bits, id| bits | (1u64 << id)))
+    }
+
+    pub fn contains(self, id: u8) -> bool {
+        self.0 & (1u64 << id) != 0
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+/// How one ball is painted this frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BallLook {
+    /// The ball the aim is on: ringed.
+    pub highlighted: bool,
+    /// A ball the striker may not hit first: pulled toward the cloth.
+    pub dimmed: bool,
+    /// Wears its number.
+    pub numbered: bool,
+}
+
 /// What to draw on top of the balls this frame.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Overlay {
-    /// Aim line from the cue ball, in table coordinates.
-    pub aim_to: Option<[f64; 2]>,
-    /// Ghost ball at the contact point of the current aim.
-    pub ghost: Option<[f64; 2]>,
-    /// Ball to ring as the current target.
-    pub highlight: Option<u8>,
+    /// The shot line, in table coordinates.
+    pub line: Option<ShotLine>,
+    /// The balls the striker may hit first. Empty means nobody is at the
+    /// table (a shot is playing), and every ball is drawn plain.
+    pub legal: BallSet,
     /// Ring the pocket being called.
     pub called_pocket: Option<u8>,
+}
+
+impl Overlay {
+    /// How ball `id` is painted under these marks. Shared with the eye view,
+    /// so the two cannot disagree about which balls are yours.
+    pub fn look(&self, id: u8) -> BallLook {
+        let highlighted = self.line.and_then(|line| line.target()) == Some(id);
+        let legal = self.legal.contains(id);
+        BallLook {
+            highlighted,
+            dimmed: id != CUE && !self.legal.is_empty() && !legal,
+            numbered: highlighted || legal,
+        }
+    }
+}
+
+/// The colour and the dot pattern of one leg of the shot line: colour, on,
+/// off, in pixels. One table for both views.
+pub fn leg_style(kind: LegKind) -> (Rgb, u32, u32) {
+    match kind {
+        LegKind::Cue => (GUIDE, 1, 1),
+        // The object ball's own hue, lifted so it reads on the cloth.
+        LegKind::Object(id) => (mix(ball_colour(id), WHITE, 0.35), 1, 2),
+        LegKind::Tangent => (TANGENT, 1, 2),
+        LegKind::Rebound => (REBOUND, 1, 3),
+    }
 }
 
 /// Draw the whole table into `canvas`.
@@ -295,18 +367,23 @@ pub fn draw(
     draw_bed(canvas, spec, view);
     draw_pockets(canvas, spec, geom, view, overlay.called_pocket);
 
-    if let Some(to) = overlay.aim_to
-        && let Some(cue) = balls.iter().find(|b| b.id == CUE && !b.potted)
-    {
-        let from = view.to_px(cue.pos);
-        canvas.line(from, view.to_px(to), GUIDE, 1, 2);
-    }
-    if let Some(at) = overlay.ghost {
-        let (x, y) = view.to_px(at);
-        ring(canvas, x, y, view.ball_px(), GHOST);
+    // The whole line, under the balls: the cue ball's leg to its first
+    // contact, then what happens after. A ball in the way covers it, which is
+    // the truth about the shot.
+    if let Some(line) = &overlay.line {
+        for Leg { from, to, kind } in line.legs() {
+            let (colour, on, off) = leg_style(kind);
+            canvas.line(view.to_px(from), view.to_px(to), colour, on, off);
+        }
     }
     for ball in balls.iter().filter(|b| !b.potted) {
-        draw_ball(canvas, view, ball, overlay.highlight == Some(ball.id));
+        draw_ball(canvas, view, ball, overlay.look(ball.id));
+    }
+    // The ghost over the balls: it is where the cue ball is going to be, and
+    // it sits half over the ball it touches.
+    if let Some(at) = overlay.line.and_then(|line| line.ghost()) {
+        let (x, y) = view.to_px(at);
+        ring(canvas, x, y, view.ball_px(), GHOST);
     }
 }
 
@@ -458,13 +535,10 @@ fn draw_pockets(
 /// Shaded rather than outlined, too: a darker rim of the ball's own hue is
 /// what a sphere's edge looks like, where a contrasting outline reads as
 /// decoration. The 8 goes the other way, since nothing is darker than it.
-fn draw_ball(canvas: &mut Canvas, view: &View, ball: &BallFrame, highlighted: bool) {
+fn draw_ball(canvas: &mut Canvas, view: &View, ball: &BallFrame, look: BallLook) {
     let (x, y) = view.to_px(ball.pos);
     let r = view.ball_px();
-    paint_ball(canvas, x, y, r, ball.id);
-    if highlighted {
-        ring(canvas, x, y, r + 1.2, GUIDE);
-    }
+    paint_ball(canvas, x, y, r, ball.id, look);
 }
 
 /// One ball at a place and a size, however the caller worked those out.
@@ -472,36 +546,44 @@ fn draw_ball(canvas: &mut Canvas, view: &View, ball: &BallFrame, highlighted: bo
 /// Shared with the shooter's-eye view, which arrives at the same three numbers
 /// through a projection rather than a scale — a ball has to look like the same
 /// ball in both, or the two views are two games.
-pub(super) fn paint_ball(canvas: &mut Canvas, x: f64, y: f64, r: f64, id: u8) {
-    let colour = ball_colour(id);
+pub(super) fn paint_ball(canvas: &mut Canvas, x: f64, y: f64, r: f64, id: u8, look: BallLook) {
+    let dim = |colour: Rgb| {
+        if look.dimmed {
+            mix(colour, CLOTH, DIM_MIX)
+        } else {
+            colour
+        }
+    };
+    let colour = dim(ball_colour(id));
 
-    canvas.disc(x, y, r, colour);
-    if r >= 2.0 {
-        ring(canvas, x, y, r, edge_shade(colour));
-    }
-
-    // A stripe is painted the way a real one looks from above: the colour is a
-    // band across the middle and the two ends are white. Drawn *after* the
-    // shading, so the white runs all the way to the ball's edge and the caps
-    // read as caps rather than as two blobs floating beside it. It degrades on
-    // its own — at three pixels the caps are a column each side, at ten they
-    // are two clean stripes with the hue running between them.
+    // A stripe is a coloured core in a white shell; a solid is the disc. The
+    // shell gets the same shaded edge as a solid, so the two sit on the cloth
+    // the same way.
     if is_stripe(id) {
-        let band = r * STRIPE_BAND;
-        let span = r.ceil() as i32;
-        for dy in -span..=span {
-            for dx in -span..=span {
-                let (px, py) = (x.floor() as i32 + dx, y.floor() as i32 + dy);
-                let ddx = px as f64 + 0.5 - x;
-                let ddy = py as f64 + 0.5 - y;
-                if ddx * ddx + ddy * ddy <= r * r && ddx.abs() > band {
-                    canvas.set(px, py, WHITE);
-                }
-            }
+        let white = dim(WHITE);
+        canvas.disc(x, y, r, white);
+        // The shell is shaded only once there is room for a pixel of white
+        // inside it: below that a small stripe would wear a grey ring
+        // instead of a white one.
+        let shaded = r >= 4.0;
+        if shaded {
+            ring(canvas, x, y, r, edge_shade(white));
+        }
+        let rim = (r * STRIPE_RIM).max(1.0) + if shaded { 1.0 } else { 0.0 };
+        canvas.disc(x, y, r - rim, colour);
+    } else {
+        canvas.disc(x, y, r, colour);
+        if r >= 2.0 {
+            ring(canvas, x, y, r, edge_shade(colour));
         }
     }
 
-    write_number(canvas, x, y, r, id);
+    if look.numbered {
+        write_number(canvas, x, y, r, id);
+    }
+    if look.highlighted {
+        ring(canvas, x, y, r + 1.2, GUIDE);
+    }
 }
 
 /// The printed number, where the ball is big enough to carry it.

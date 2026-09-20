@@ -1,3 +1,4 @@
+pub mod aim;
 pub mod ball;
 pub mod canvas;
 pub mod collide;
@@ -14,6 +15,8 @@ pub mod table;
 pub mod table_3d;
 pub mod table_ui;
 
+#[cfg(test)]
+mod aim_test;
 #[cfg(test)]
 mod cue_ui_test;
 #[cfg(test)]

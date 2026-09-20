@@ -22,13 +22,14 @@
 //! ball hidden behind another is a shot you cannot take.
 
 use crate::app::games::pool_core::{
+    aim::Leg,
     ball::CUE,
     canvas::{Canvas, Rgb},
     shot::BallFrame,
     table::{Geometry, PocketKind, TableSpec},
     table_ui::{
-        CLOTH, GHOST, GUIDE, MARKING, POCKET, POCKET_CALLED, RAIL, RAIL_DARK, SURROUND, marking_at,
-        paint_ball,
+        CLOTH, GHOST, MARKING, Overlay, POCKET, POCKET_CALLED, RAIL, RAIL_DARK, SURROUND,
+        leg_style, marking_at, paint_ball,
     },
 };
 
@@ -197,14 +198,9 @@ impl Eye {
     }
 }
 
-/// What to draw on the cloth under the balls, in table coordinates.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Sight {
-    pub aim_from: Option<[f64; 2]>,
-    pub aim_to: Option<[f64; 2]>,
-    pub ghost: Option<[f64; 2]>,
-    pub called_pocket: Option<u8>,
-}
+/// What to draw on the cloth under the balls, in table coordinates. The same
+/// marks as the overview's, so the two views are one shot.
+pub type Sight = Overlay;
 
 /// Draw the table and the rack from the eye's point of view.
 pub fn draw(
@@ -216,21 +212,29 @@ pub fn draw(
     sight: &Sight,
 ) {
     paint_cloth(canvas, spec, geom, eye, sight);
-    // The aim line is *projected*, not sampled off the cloth like everything
+    // The shot line is *projected*, not sampled off the cloth like everything
     // else. A line a few millimetres wide falls between the rays on a short
     // canvas and vanishes exactly where it is needed; two projected endpoints
     // and a dotted line between them are crisp at any size. Drawn under the
-    // balls, so a ball in the way hides it — which is the truth about the shot.
-    if let (Some(from), Some(to)) = (sight.aim_from, sight.aim_to)
-        // On the cloth, not at ball height: the balls are sprites standing on
-        // their contact points, so a line drawn level with their centres would
-        // float above the table they are sitting on.
-        && let (Some(a), Some(b)) = (eye.to_screen(from, 0.0), eye.to_screen(to, 0.0))
-    {
-        canvas.line((a.0, a.1), (b.0, b.1), GUIDE, 1, 2);
+    // balls, so a ball in the way hides it, which is the truth about the shot.
+    // The eye stands on the aim, so the cue ball's leg runs straight up the
+    // middle of the screen and turning the cue turns the room.
+    if let Some(line) = &sight.line {
+        for Leg { from, to, kind } in line.legs() {
+            // On the cloth, not at ball height: the balls are sprites standing
+            // on their contact points, so a line drawn level with their
+            // centres would float above the table they are sitting on. A leg
+            // that runs behind the eye (a rebound coming back) has no picture
+            // and is left out.
+            let (Some(a), Some(b)) = (eye.to_screen(from, 0.0), eye.to_screen(to, 0.0)) else {
+                continue;
+            };
+            let (colour, on, off) = leg_style(kind);
+            canvas.line((a.0, a.1), (b.0, b.1), colour, on, off);
+        }
     }
-    paint_balls(canvas, spec, eye, balls);
-    if let Some(at) = sight.ghost
+    paint_balls(canvas, spec, eye, balls, sight);
+    if let Some(at) = sight.line.and_then(|line| line.ghost())
         && let Some((x, y, r, _)) = eye.sprite(at, spec.ball_radius)
     {
         ring(canvas, x, y, r, GHOST);
@@ -310,7 +314,13 @@ fn cloth_at(
 
 /// Far to near, so a ball in front covers one behind it. That occlusion is the
 /// point of the view: a ball you cannot see is a ball you cannot hit.
-fn paint_balls(canvas: &mut Canvas, spec: &TableSpec, eye: &Eye, balls: &[BallFrame]) {
+fn paint_balls(
+    canvas: &mut Canvas,
+    spec: &TableSpec,
+    eye: &Eye,
+    balls: &[BallFrame],
+    sight: &Sight,
+) {
     let mut drawn: Vec<(f64, f64, f64, f64, u8)> = balls
         .iter()
         .filter(|ball| !ball.potted)
@@ -321,7 +331,7 @@ fn paint_balls(canvas: &mut Canvas, spec: &TableSpec, eye: &Eye, balls: &[BallFr
         .collect();
     drawn.sort_by(|a, b| b.0.total_cmp(&a.0));
     for (_, x, y, r, id) in drawn {
-        paint_ball(canvas, x, y, r, id);
+        paint_ball(canvas, x, y, r, id, sight.look(id));
     }
 }
 

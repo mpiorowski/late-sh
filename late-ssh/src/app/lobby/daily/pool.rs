@@ -554,9 +554,7 @@ fn shot_label(outcome: &ShotOutcome, ruling: &rules::Ruling, rules_kind: PoolRul
 /// costs nothing and there is nothing to reconcile.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PoolAimShare {
-    pub target: Option<u8>,
-    pub aim_at: [f64; 2],
-    pub aim_offset: f64,
+    pub azimuth: f64,
     pub tip: [f64; 2],
     pub pull: f64,
     pub mode: ShotMode,

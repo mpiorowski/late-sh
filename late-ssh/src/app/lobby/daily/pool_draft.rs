@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use ratatui::layout::Rect;
 
 use crate::app::games::pool_core::{
+    aim::{self, ShotLine},
     ball::CUE,
     cue::{MAX_SPEED, MISCUE_LIMIT, PowerBand, ShotMode},
     cue_ui::PanelHit,
@@ -49,7 +50,7 @@ pub struct PoolDetail {
     /// What the *other* player is lining up, as their board last broadcast it.
     ///
     /// A daily game is otherwise a series of still frames a day apart, and
-    /// watching an opponent pick a ball and walk the aim across it is the only
+    /// watching an opponent pick a ball and turn the cue onto it is the only
     /// moment the correspondence version has the texture of the real one. It
     /// is presentation only: nothing here can become a move, and the shot
     /// itself still arrives as a reload like every other game's.
@@ -116,11 +117,14 @@ const PLAYBACK_HOLD: f64 = 0.6;
 /// sweep is a handful of events rather than one per terminal cell.
 const AIM_SHARE_INTERVAL: Duration = Duration::from_millis(120);
 
-/// The shot under construction, and what the pointer is currently wired to.
+/// The shot being composed, and the aiming aids around it.
 ///
-/// Kept out of `Shot` because these are aiming aids, not part of the move: the
-/// target is what the aim is measured *against*, and the server only ever
-/// receives the resulting azimuth.
+/// The aim is a **bearing** and nothing else. Which ball it is on, where the
+/// cue ball will touch it, where the object ball goes, which rail a miss
+/// meets: all of that is read back off the table by `pool_core::aim`, never
+/// stored, so the picture and the shot cannot disagree. Turning the bearing
+/// is what every aiming control does, whether it is a key, the pointer, a
+/// click on a ball or a pot line; they differ only in how far.
 ///
 /// **Nothing here is sequenced.** Target, spin, aim and stroke are all live at
 /// once and a player may strike at any moment; `mode` only says which of them
@@ -128,15 +132,16 @@ const AIM_SHARE_INTERVAL: Duration = Duration::from_millis(120);
 /// key is that a terminal has no key-up event to observe (see `ShotMode`).
 pub struct PoolDraft {
     pub mode: ShotMode,
-    /// The ball being shot at, or `None` when the target is a cushion point.
-    pub target: Option<u8>,
-    /// The spot being aimed at, in table coordinates. The target ball's centre
-    /// while a ball is picked; an arbitrary point when it is a cushion.
-    pub aim_at: [f64; 2],
-    /// How far the aim line passes from `aim_at`, in ball radii, measured
-    /// across the shot line. Zero is dead centre and past ±2 the cue ball
-    /// misses the ball entirely.
-    pub aim_offset: f64,
+    /// Where the cue ball is sent, in radians from table +x, increasing
+    /// clockwise on the overview (which draws +y downward). The only aiming
+    /// state there is; everything drawn is read back off the table from it.
+    pub azimuth: f64,
+    /// The ball last *picked* by name (a click, `[`/`]`, `'`), which is not
+    /// always the ball the line is on: pick a ball hidden behind another and
+    /// the line stops at the one in front. The brackets step from here, or
+    /// stepping onto a hidden ball would be stepping onto the same ball for
+    /// ever. Nothing else reads it; the picture follows the line.
+    pub picked: Option<u8>,
     /// Tip placement on the cue ball's face, `[across, up]` in ball radii.
     pub tip: [f64; 2],
     /// How far the cue is drawn back, 0 to 1 *within the armed band*. The band
@@ -170,7 +175,7 @@ pub struct PoolDraft {
 /// The values a mode can change, snapshotted at arming time.
 #[derive(Clone, Copy)]
 struct DraftRestore {
-    aim_offset: f64,
+    azimuth: f64,
     tip: [f64; 2],
     pull: f64,
     place: Option<[f64; 2]>,
@@ -190,13 +195,11 @@ pub enum PointerOutcome {
     Strike,
 }
 
-/// Aim offset per keypress, in ball radii: enough to walk across a ball in a
-/// few presses, with the shifted step for the last fraction of a degree.
-const AIM_STEP: f64 = 0.12;
-const AIM_FINE_STEP: f64 = 0.02;
-/// The offset past which the cue ball misses the object ball altogether.
-/// Slightly over two radii, so a deliberate swerve past it is still allowed.
-const AIM_LIMIT: f64 = 2.4;
+/// How far a keypress turns the aim. A degree is a ball's width at about a
+/// metre and a half, so held down it sweeps the table in a few seconds and
+/// tapped it walks across a ball; the shifted step is for the last fraction.
+const AIM_STEP: f64 = 1.0 * std::f64::consts::PI / 180.0;
+const AIM_FINE_STEP: f64 = 0.1 * std::f64::consts::PI / 180.0;
 /// Tip movement per keypress, in ball radii.
 const TIP_STEP: f64 = 0.05;
 /// Pull per keypress, for the keyboard-only path.
@@ -208,12 +211,11 @@ const PULL_STEP: f64 = 0.05;
 // is wide, so the vertical rates are roughly double their horizontal twins to
 // keep the gesture feeling isotropic.
 
-/// Aim offset per column of pointer travel: a whole ball's width in about
-/// twenty-five columns, which is a comfortable sweep at the minimum width.
-const AIM_PER_COLUMN: f64 = 0.08;
-/// The same walk on the other axis — how far off centre rather than which way
-/// — at the doubled rate a cell's shape asks for.
-const AIM_PER_ROW: f64 = 0.16;
+/// How far a column of pointer travel turns the aim: a ball's width at a
+/// metre in about twenty columns, a comfortable sweep at the minimum width.
+/// Turning rather than sliding, so the same gesture steers the eye view,
+/// where the whole room turns with it.
+const AIM_PER_COLUMN: f64 = 0.15 * std::f64::consts::PI / 180.0;
 /// Tip travel per column and per row of pointer travel. Halved when the cue
 /// panel started drawing the face magnified — the mark moves twice as far per
 /// unit of tip there, so the same pointer speed now buys twice the precision
@@ -247,9 +249,8 @@ impl PoolDraft {
             } else {
                 ShotMode::Idle
             },
-            target,
-            aim_at: default_aim(state, target),
-            aim_offset: 0.0,
+            azimuth: default_aim(state, place, target),
+            picked: target,
             tip: [0.0, 0.0],
             // Two thirds drawn back: a player who arms a band and fires
             // without touching the mouse plays an ordinary shot, not a tap.
@@ -284,96 +285,68 @@ impl PoolDraft {
         })
     }
 
-    /// Distance from the cue ball to the aim point, for the cue panel's
-    /// depth scaling.
-    pub fn aim_distance(&self, state: &DailyPoolState) -> f64 {
-        let Some(cue) = self.cue_ball(state) else {
-            return 1.0;
-        };
-        let (dx, dy) = (self.aim_at[0] - cue[0], self.aim_at[1] - cue[1]);
-        dx.hypot(dy)
-    }
-
-    /// The point the cue ball is actually sent at: `aim_at` slid sideways by
-    /// the aim offset, across the shot line.
-    ///
-    /// Doing it this way rather than nudging an angle is what makes the offset
-    /// mean the same thing at every distance — half a ball off is half a ball
-    /// off whether the target is a foot away or the length of the table, and
-    /// that is exactly what the cue panel draws.
-    pub fn aim_point(&self, state: &DailyPoolState) -> Option<[f64; 2]> {
-        let cue = self.cue_ball(state)?;
-        let spec = state.spec().ok()?;
-        let (dx, dy) = (self.aim_at[0] - cue[0], self.aim_at[1] - cue[1]);
-        let len = dx.hypot(dy);
-        if len < 1e-9 {
-            return None;
+    /// Ball positions as the table will be when the shot is struck: the rack,
+    /// with a pending ball-in-hand placement folded in. A potted cue ball is
+    /// not on the table, so without this the player would be carrying it
+    /// invisibly, and the line would have nowhere to start.
+    pub fn frames(&self, state: &DailyPoolState) -> Vec<BallFrame> {
+        let mut frames: Vec<BallFrame> = state
+            .rack
+            .balls
+            .iter()
+            .map(|ball| BallFrame {
+                id: ball.id,
+                pos: ball.pos,
+                potted: ball.potted.is_some(),
+            })
+            .collect();
+        if let Some(at) = self.place
+            && let Some(cue) = frames.iter_mut().find(|frame| frame.id == CUE)
+        {
+            cue.pos = at;
+            cue.potted = false;
         }
-        // Left-hand normal to the shot line.
-        let (nx, ny) = (-dy / len, dx / len);
-        let slide = self.aim_offset * spec.ball_radius;
-        Some([self.aim_at[0] + nx * slide, self.aim_at[1] + ny * slide])
+        frames
     }
 
-    /// Where the cue ball's centre will be at the moment it touches the target
-    /// — the "ghost ball" every player aims with.
-    ///
-    /// `None` when the aim misses the target ball, which is itself the useful
-    /// answer: the ghost vanishing is how the board says the line is off it.
+    /// The aim, read off the table: what the cue ball meets first, where the
+    /// object ball goes, where a miss comes off the rail. `None` only when
+    /// there is no cue ball to shoot from.
+    pub fn line(&self, state: &DailyPoolState) -> Option<ShotLine> {
+        let from = self.cue_ball(state)?;
+        let spec = state.spec().ok()?;
+        Some(aim::shot_line(
+            spec,
+            &spec.geometry(),
+            &self.frames(state),
+            from,
+            self.azimuth,
+        ))
+    }
+
+    /// The ball the aim is on, if the line runs near enough to one.
+    pub fn target(&self, state: &DailyPoolState) -> Option<u8> {
+        self.line(state).and_then(|line| line.target())
+    }
+
+    /// Where the cue ball's centre will be at the moment it touches the ball
+    /// it is aimed at: the "ghost ball" every player aims with. `None` when
+    /// the line reaches no ball, which is how the board says the aim is off.
     pub fn ghost(&self, state: &DailyPoolState) -> Option<[f64; 2]> {
-        let cue = self.cue_ball(state)?;
-        let aim = self.aim_point(state)?;
-        let spec = state.spec().ok()?;
-        let target = state.rack.get(self.target?)?;
-        if target.potted.is_some() {
-            return None;
-        }
-
-        let (dx, dy) = (aim[0] - cue[0], aim[1] - cue[1]);
-        let len = dx.hypot(dy);
-        if len < 1e-9 {
-            return None;
-        }
-        let dir = [dx / len, dy / len];
-        // Closest approach of the aim line to the target's centre.
-        let to_target = [target.pos[0] - cue[0], target.pos[1] - cue[1]];
-        let along = to_target[0] * dir[0] + to_target[1] * dir[1];
-        if along <= 0.0 {
-            return None; // the target is behind the cue ball
-        }
-        let perp = (to_target[0] * to_target[0] + to_target[1] * to_target[1] - along * along)
-            .max(0.0)
-            .sqrt();
-        let touch = 2.0 * spec.ball_radius;
-        if perp >= touch {
-            return None; // the line passes clean by
-        }
-        let back = (touch * touch - perp * perp).sqrt();
-        let hit = along - back;
-        Some([cue[0] + dir[0] * hit, cue[1] + dir[1] * hit])
+        self.line(state).and_then(|line| line.ghost())
     }
 
-    /// The move to send. `None` when there is nowhere to shoot from or the
-    /// aim point sits on top of the cue ball, which has no direction.
+    /// The move to send. `None` when there is nowhere to shoot from.
     pub fn shot(&self, state: &DailyPoolState) -> Option<Shot> {
-        let cue = self.cue_ball(state)?;
-        let aim = self.aim_point(state)?;
-        let (dx, dy) = (aim[0] - cue[0], aim[1] - cue[1]);
-        if dx.hypot(dy) < 1e-9 {
-            return None;
-        }
+        self.cue_ball(state)?;
         Some(Shot {
             place: self.place,
-            azimuth: dy.atan2(dx),
+            azimuth: self.azimuth,
             tip: self.tip,
             speed: self.power().clamp(0.05, 1.0) * MAX_SPEED,
             called_pocket: self.called_pocket,
             play_again: false,
         })
-    }
-
-    pub fn azimuth(&self, state: &DailyPoolState) -> f64 {
-        self.shot(state).map(|shot| shot.azimuth).unwrap_or(0.0)
     }
 
     // ── Modes ─────────────────────────────────────────────────────────
@@ -392,7 +365,7 @@ impl PoolDraft {
         // Arming a different mode commits the one running, then takes a fresh
         // snapshot: cancelling the new mode must not roll back the old one.
         self.restore = Some(DraftRestore {
-            aim_offset: self.aim_offset,
+            azimuth: self.azimuth,
             tip: self.tip,
             pull: self.pull,
             place: self.place,
@@ -428,7 +401,7 @@ impl PoolDraft {
     pub fn cancel(&mut self) -> bool {
         let was_armed = self.mode != ShotMode::Idle;
         if let Some(restore) = self.restore.take() {
-            self.aim_offset = restore.aim_offset;
+            self.azimuth = restore.azimuth;
             self.tip = restore.tip;
             self.pull = restore.pull;
             self.place = restore.place;
@@ -444,9 +417,7 @@ impl PoolDraft {
     /// What the other side needs to draw this shot as it is being composed.
     pub fn share(&self) -> PoolAimShare {
         PoolAimShare {
-            target: self.target,
-            aim_at: self.aim_at,
-            aim_offset: self.aim_offset,
+            azimuth: self.azimuth,
             tip: self.tip,
             pull: self.pull,
             mode: self.mode,
@@ -462,9 +433,8 @@ impl PoolDraft {
     pub fn watching(share: PoolAimShare) -> Self {
         Self {
             mode: share.mode,
-            target: share.target,
-            aim_at: share.aim_at,
-            aim_offset: share.aim_offset,
+            azimuth: share.azimuth,
+            picked: None,
             tip: share.tip,
             pull: share.pull,
             place: share.place,
@@ -482,26 +452,24 @@ impl PoolDraft {
     /// Neutral, not "what it was when this mode was armed": centre-ball and
     /// dead-on are positions a player asks for by name, and reaching them by
     /// walking the pointer back is fiddly on a face a few pixels across. A
-    /// stroke has no meaningful neutral — half-drawn is not a thing anyone
-    /// wants — so there it means put the cue down.
+    /// stroke has no meaningful neutral (half-drawn is not a thing anyone
+    /// wants), so there it means put the cue down. Dead-on is the centre of
+    /// the ball the line is on; with no ball on the line there is nothing to
+    /// straighten onto and the aim stays.
     pub fn reset(&mut self, state: &DailyPoolState) -> bool {
         match self.mode {
             // Nothing armed: put the whole shot back to square. Reaching for
-            // "centre the spin" *after* committing it is the common case —
+            // "centre the spin" *after* committing it is the common case:
             // you look at the panel, decide against the english, and there is
             // nothing to re-arm and undo, because you already put the cue
             // down. So an idle right-click clears both adjustments at once.
             ShotMode::Idle => {
-                let moved = self.aim_offset != 0.0 || self.tip != [0.0, 0.0];
-                self.aim_offset = 0.0;
+                let straightened = self.straighten(state);
+                let moved = straightened || self.tip != [0.0, 0.0];
                 self.tip = [0.0, 0.0];
                 moved
             }
-            ShotMode::Aim => {
-                let moved = self.aim_offset != 0.0;
-                self.aim_offset = 0.0;
-                moved
-            }
+            ShotMode::Aim => self.straighten(state),
             ShotMode::Spin => {
                 let moved = self.tip != [0.0, 0.0];
                 self.tip = [0.0, 0.0];
@@ -556,13 +524,12 @@ impl PoolDraft {
         match self.mode {
             ShotMode::Idle => PointerOutcome::Ignored,
             ShotMode::Aim => {
-                // Sideways walks the aim across the ball. Up and down walk it
-                // *in toward* and *out from* centre — the same range reached a
-                // second way, because a pointer runs out of screen long before
-                // an aim runs out of range, and a player aiming from the right
-                // of the board had nowhere left to push.
-                self.nudge_aim(dx * AIM_PER_COLUMN);
-                self.spread_aim(dy * AIM_PER_ROW);
+                // Sideways turns the cue: right is clockwise on the overview
+                // and a turn to the right in the eye view. Up and down mean
+                // nothing, so a hand that drifts while sweeping does not
+                // change the shot. Running out of screen is what the re-grip
+                // above is for.
+                self.turn(dx * AIM_PER_COLUMN);
                 PointerOutcome::Changed
             }
             ShotMode::Spin => {
@@ -643,24 +610,74 @@ impl PoolDraft {
     pub fn key_step(&mut self, state: &DailyPoolState, dx: isize, dy: isize) {
         match self.mode {
             ShotMode::Idle => self.cycle_target(state, dx.signum()),
-            // Both axes, same as the pointer: left/right picks the side, up
-            // and down how far off centre. Screen "up" is toward the far rail
-            // (`board_move_cursor` hands us +1 for up), and up is *in* toward
-            // centre, hence the negation.
-            ShotMode::Aim => {
-                self.nudge_aim(dx as f64 * AIM_STEP);
-                self.spread_aim(-dy as f64 * AIM_STEP);
-            }
+            // Left and right turn the cue, like `h` and `l`. Up and down do
+            // nothing here: there is only one axis to an aim.
+            ShotMode::Aim => self.turn(dx as f64 * AIM_STEP),
             ShotMode::Spin => self.nudge_tip(dx as f64 * TIP_STEP, dy as f64 * TIP_STEP),
             ShotMode::Place => self.nudge_placement(state, dx, dy),
             ShotMode::Stroke(_) => self.nudge_pull(-dy as f64 * PULL_STEP),
         }
     }
 
-    /// `h`/`l`, and `H`/`L` a fifth as far for the last fraction of a degree.
+    /// `h`/`l` turn the cue a degree, `H`/`L` a tenth of one.
     pub fn key_aim(&mut self, delta: isize, fine: bool) {
         let step = if fine { AIM_FINE_STEP } else { AIM_STEP };
-        self.nudge_aim(delta as f64 * step);
+        self.turn(delta as f64 * step);
+    }
+
+    /// Turn the cue by `delta` radians, positive clockwise on the overview.
+    pub fn turn(&mut self, delta: f64) {
+        self.azimuth = (self.azimuth + delta).rem_euclid(std::f64::consts::TAU);
+    }
+
+    /// Point dead at the centre of the ball the line is on. Reports whether
+    /// the aim moved; with no ball on the line there is nothing to do.
+    fn straighten(&mut self, state: &DailyPoolState) -> bool {
+        let Some(id) = self.target(state) else {
+            return false;
+        };
+        let before = self.azimuth;
+        self.aim_at_ball(state, id);
+        self.azimuth != before
+    }
+
+    /// `{` / `}`: step through the pots on offer for the ball the aim is on,
+    /// easiest first. Reports whether there was one to step to.
+    ///
+    /// The ball is the sighted one when it is legal to hit, and otherwise the
+    /// first legal target, so the key always answers about a ball the shot
+    /// could play. Which pot is "current" is read back off the bearing rather
+    /// than remembered: an aim that has since been turned by hand is not on
+    /// any of them, and the next press starts from the easiest again.
+    pub fn cycle_pot(&mut self, state: &DailyPoolState, delta: isize) -> bool {
+        let legal = state.legal_targets();
+        let target = match self.target(state) {
+            Some(id) if legal.contains(&id) => id,
+            Some(_) | None => match legal.first() {
+                Some(id) => *id,
+                None => return false,
+            },
+        };
+        let Some(from) = self.cue_ball(state) else {
+            return false;
+        };
+        let Ok(spec) = state.spec() else {
+            return false;
+        };
+        let pots = aim::pot_lines(spec, &spec.geometry(), &self.frames(state), from, target);
+        if pots.is_empty() {
+            return false;
+        }
+        let current = pots
+            .iter()
+            .position(|pot| (pot.azimuth - self.azimuth).abs() < 1e-9);
+        let next = match current {
+            Some(index) => (index as isize + delta).rem_euclid(pots.len() as isize) as usize,
+            None if delta < 0 => pots.len() - 1,
+            None => 0,
+        };
+        self.azimuth = pots[next].azimuth;
+        true
     }
 
     /// Step through the balls this player may legally hit first.
@@ -674,8 +691,12 @@ impl PoolDraft {
         if targets.is_empty() {
             return;
         }
+        // From the picked ball while it is still on, otherwise from the ball
+        // the line happens to be on.
         let current = self
-            .target
+            .picked
+            .filter(|id| targets.contains(id))
+            .or_else(|| self.target(state))
             .and_then(|id| targets.iter().position(|t| *t == id));
         let next = match current {
             Some(index) => (index as isize + delta).rem_euclid(targets.len() as isize) as usize,
@@ -695,15 +716,13 @@ impl PoolDraft {
         }
     }
 
+    /// Point dead at the centre of ball `id`, and remember it as the pick.
     pub fn aim_at_ball(&mut self, state: &DailyPoolState, id: u8) {
         let Some(ball) = state.rack.get(id).filter(|b| b.potted.is_none()) else {
             return;
         };
-        self.target = Some(id);
-        self.aim_at = ball.pos;
-        // A new target makes the old offset meaningless — it was measured
-        // across a different line.
-        self.aim_offset = 0.0;
+        self.picked = Some(id);
+        self.aim_at_point(state, ball.pos);
     }
 
     /// Set the cue ball down at `at`, or as near as the rules allow.
@@ -794,34 +813,18 @@ impl PoolDraft {
         }
     }
 
-    /// Aim at a bare point on the cloth: a cushion, or a spot to send the cue
-    /// ball to. The offset was measured across the old line, so it goes too.
-    pub fn aim_at_point(&mut self, at: [f64; 2]) {
-        self.target = None;
-        self.aim_at = at;
-        self.aim_offset = 0.0;
-    }
-
-    pub fn nudge_aim(&mut self, delta: f64) {
-        self.aim_offset = (self.aim_offset + delta).clamp(-AIM_LIMIT, AIM_LIMIT);
-    }
-
-    /// Walk the aim away from the target's centre (positive) or back toward it
-    /// (negative), keeping the side it is already on.
-    ///
-    /// The second axis of the aim. Sideways motion says *which way* off centre
-    /// and this says *how far*, so the whole range is reachable without ever
-    /// running the pointer into the edge of the screen — which is what makes
-    /// aiming from the right-hand side of a board possible at all.
-    ///
-    /// Coming back in stops dead at centre rather than crossing to the other
-    /// side: sliding through zero would flip the shot to the far side of the
-    /// ball without the player asking for it, and "dead on" is a place you
-    /// want to be able to land on.
-    pub fn spread_aim(&mut self, delta: f64) {
-        let side = if self.aim_offset < 0.0 { -1.0 } else { 1.0 };
-        let reach = (self.aim_offset.abs() + delta).clamp(0.0, AIM_LIMIT);
-        self.aim_offset = side * reach;
+    /// Point at a bare spot on the cloth: a cushion, or a spot to send the
+    /// cue ball to. A spot on top of the cue ball has no direction and leaves
+    /// the aim where it was.
+    pub fn aim_at_point(&mut self, state: &DailyPoolState, at: [f64; 2]) {
+        let Some(cue) = self.cue_ball(state) else {
+            return;
+        };
+        let (dx, dy) = (at[0] - cue[0], at[1] - cue[1]);
+        if dx.hypot(dy) < 1e-9 {
+            return;
+        }
+        self.azimuth = dy.atan2(dx).rem_euclid(std::f64::consts::TAU);
     }
 
     /// Move the tip across the cue ball's face, staying inside the miscue
@@ -887,13 +890,23 @@ pub(crate) fn should_share_aim(
 
 /// Point the opening aim at the first legal target, or down the table when
 /// there is nothing to aim at yet.
-fn default_aim(state: &DailyPoolState, target: Option<u8>) -> [f64; 2] {
-    target
+fn default_aim(state: &DailyPoolState, place: Option<[f64; 2]>, target: Option<u8>) -> f64 {
+    let from = place.or_else(|| {
+        state
+            .rack
+            .get(CUE)
+            .filter(|ball| ball.potted.is_none())
+            .map(|ball| ball.pos)
+    });
+    let at = target
         .and_then(|id| state.rack.get(id))
         .filter(|ball| ball.potted.is_none())
         .map(|ball| ball.pos)
-        .unwrap_or_else(|| match state.spec() {
-            Ok(spec) => rack::foot_spot(spec),
-            Err(_) => [0.0, 0.0],
-        })
+        .or_else(|| state.spec().ok().map(rack::foot_spot));
+    match (from, at) {
+        (Some(from), Some(at)) => (at[1] - from[1])
+            .atan2(at[0] - from[0])
+            .rem_euclid(std::f64::consts::TAU),
+        _ => 0.0,
+    }
 }
