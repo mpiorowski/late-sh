@@ -19,15 +19,15 @@
 //! Nothing about a shot is sequenced: target, spin, aim and stroke are all
 //! live at once and the player may strike at any moment. What changes is which
 //! of them the *pointer* is steering, and the hint row is rewritten from
-//! `ShotMode::hint` to say so. That string lives in `pool_core` beside the
-//! mode enum rather than here, so the controls and the description of them
-//! cannot drift apart.
+//! `ShotMode::hint` to say so, on the status line beside the mode's name.
+//! That string lives in `pool_core` beside the mode enum rather than here, so
+//! the controls and the description of them cannot drift apart.
 //!
-//! The keys themselves live in a legend under the cue panel, in the right
-//! column, whenever the terminal is tall enough for it. One hint row could
-//! not hold twenty keys and still be read, and a game with this many
-//! controls should not make a player memorise them: the cue drawing is
-//! capped so the legend has room.
+//! The keys live in a legend under the cue panel, in the right column, and
+//! nowhere else: a hint row along the bottom used to repeat half of them,
+//! and a row spent saying the same thing twice is a row the cue drawing does
+//! not get. A game with this many controls should not make a player memorise
+//! them, so the cue drawing is capped and the legend takes the rows below.
 
 use chrono::Utc;
 use ratatui::{
@@ -45,7 +45,7 @@ use crate::app::{
         aim::{Hit, ShotLine},
         ball::CUE,
         canvas::Canvas,
-        cue::MAX_SPEED,
+        cue::{MAX_SPEED, ShotMode},
         cue_ui::{self, BACKDROP, CueView},
         rules::PoolRules,
         table::{self, TableSpec},
@@ -71,18 +71,23 @@ const PANEL_WIDTH: u16 = 34;
 /// taking the table's room for nothing.
 const MAX_PANEL_WIDTH: u16 = 60;
 /// Rows the info panel takes before the cue panel gets the rest.
-const INFO_ROWS: u16 = 9;
+const INFO_ROWS: u16 = 8;
 /// Readout rows under the cue drawing (aim, what it is on, spin, power).
 const READOUT_ROWS: u16 = 4;
-/// The key legend under the readouts: a title and seven rows of two keys.
-const LEGEND_ROWS: u16 = 8;
-/// The cue drawing stops growing here. Past it the balls are as big as they
-/// are useful and the rows are better spent on the legend.
-const MAX_CUE_ROWS: u16 = 24;
+/// The key legend under the readouts: the seven rows of `LEGEND` and one
+/// more for leaving the board (chat, lobby).
+const LEGEND_ROWS: u16 = LEGEND.len() as u16 + 1;
+/// The cue drawing stops growing here. The balls take a share of the
+/// panel's width as well as its height, and at the widest panel the width
+/// is the limit from about here on, so rows past it are better spent on
+/// the legend.
+const MAX_CUE_ROWS: u16 = 28;
 /// The legend only appears once the cue drawing keeps at least this many
 /// rows: a legend that squeezed the cue into a sliver would be teaching the
-/// keys for a panel that can no longer be aimed on.
-const MIN_CUE_ROWS_WITH_LEGEND: u16 = 12;
+/// keys for a panel that can no longer be aimed on. Low enough that the
+/// smallest board still gets it, since the legend is the only place the
+/// keys are taught.
+const MIN_CUE_ROWS_WITH_LEGEND: u16 = 8;
 
 pub(crate) fn draw(
     frame: &mut Frame,
@@ -106,7 +111,6 @@ pub(crate) fn draw(
     let rows = Layout::vertical([
         Constraint::Length(1), // status
         Constraint::Fill(1),   // table + panels
-        Constraint::Length(1), // key hints
     ])
     .split(area);
     let cols = Layout::horizontal([
@@ -132,10 +136,6 @@ pub(crate) fn draw(
     frame.render_widget(block, cols[0]);
     draw_table(frame, table_area, spec, pool, &shown, board);
     draw_panels(frame, cols[1], daily, board, detail, pool, &shown);
-    frame.render_widget(
-        Paragraph::new(hint_line(board, detail, pool)).alignment(Alignment::Center),
-        rows[2],
-    );
 }
 
 /// The frame around the table, which says whose board it is and whether
@@ -315,15 +315,13 @@ fn draw_panels(
     pool: &PoolDetail,
     shot: &PoolDraft,
 ) {
-    let block = Block::default()
-        .borders(Borders::LEFT)
-        .border_style(Style::default().fg(theme::BORDER_DIM()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    // No frame of its own: the table's border already draws the seam, and a
+    // second line beside it was a column the cue drawing did not get. One
+    // column of air keeps the text off the table.
     let inner = Rect {
-        x: inner.x + 1,
-        width: inner.width.saturating_sub(1),
-        ..inner
+        x: area.x + 1,
+        width: area.width.saturating_sub(1),
+        ..area
     };
 
     let (cue_rows, legend_rows) = column_split(inner.height);
@@ -340,7 +338,8 @@ fn draw_panels(
     );
     draw_cue_panel(frame, rows[1], board, pool, shot);
     if legend_rows > 0 {
-        frame.render_widget(Paragraph::new(legend_lines()), rows[2]);
+        let chat = !board.spectating && detail.row.chat_room_id.is_some();
+        frame.render_widget(Paragraph::new(legend_lines(chat)), rows[2]);
     }
 }
 
@@ -360,9 +359,10 @@ pub(crate) fn column_split(height: u16) -> (u16, u16) {
     }
 }
 
-/// Every key on the board, two to a row. The hint row at the bottom says what
-/// the *mouse* is doing; this is the keyboard, all of it, so nothing has to be
-/// memorised.
+/// Every key that plays the game, two to a row. The status line says what the
+/// *mouse* is doing; this is the keyboard, all of it, so nothing has to be
+/// memorised. The row for leaving the board is built beside it, because one
+/// of its keys depends on the match having a chat.
 pub(crate) const LEGEND: [[(&str, &str); 2]; 7] = [
     [("h l", "aim 1°"), ("[ ]", "ball")],
     [("H L", "aim 0.1°"), ("{ }", "pot line")],
@@ -373,25 +373,36 @@ pub(crate) const LEGEND: [[(&str, &str); 2]; 7] = [
     [("Esc", "back"), ("r", "resign")],
 ];
 
-fn legend_lines() -> Vec<Line<'static>> {
+/// The legend's exit row: the keys that leave the board rather than play on
+/// it. Chat only where the match has one, or the key would teach a lie.
+pub(crate) fn exit_row(chat: bool) -> [(&'static str, &'static str); 2] {
+    if chat {
+        [("i", "chat"), ("Q", "lobby")]
+    } else {
+        [("Q", "lobby"), ("", "")]
+    }
+}
+
+fn legend_lines(chat: bool) -> Vec<Line<'static>> {
+    LEGEND
+        .into_iter()
+        .chain([exit_row(chat)])
+        .map(legend_row)
+        .collect()
+}
+
+/// One row of the legend: two keys with their labels, in fixed columns so
+/// the rows line up.
+fn legend_row(row: [(&'static str, &'static str); 2]) -> Line<'static> {
     let key = Style::default().fg(theme::AMBER());
     let label = Style::default().fg(theme::TEXT_DIM());
-    let mut lines = vec![Line::from(Span::styled(
-        "keys",
-        Style::default()
-            .fg(theme::TEXT_DIM())
-            .add_modifier(Modifier::BOLD),
-    ))];
-    for row in LEGEND {
-        let mut spans = Vec::new();
-        for (index, (k, what)) in row.into_iter().enumerate() {
-            let width = if index == 0 { 6 } else { 4 };
-            spans.push(Span::styled(format!("{k:<width$}"), key));
-            spans.push(Span::styled(format!("{what:<10}"), label));
-        }
-        lines.push(Line::from(spans));
+    let mut spans = Vec::new();
+    for (index, (k, what)) in row.into_iter().enumerate() {
+        let width = if index == 0 { 6 } else { 4 };
+        spans.push(Span::styled(format!("{k:<width$}"), key));
+        spans.push(Span::styled(format!("{what:<10}"), label));
     }
-    lines
+    Line::from(spans)
 }
 
 /// Game, seats, groups, and what is left on the table.
@@ -406,17 +417,21 @@ fn info_lines(
     let dim = Style::default().fg(theme::TEXT_DIM());
     let text = Style::default().fg(theme::TEXT());
 
-    let mut lines = vec![Line::from(Span::styled(
-        match state.rules {
-            PoolRules::EightBall => "Eight-ball".to_string(),
-            PoolRules::NineBall => "Nine-ball".to_string(),
-            PoolRules::Snooker => "Snooker".to_string(),
-        },
-        Style::default()
-            .fg(theme::TEXT_BRIGHT())
-            .add_modifier(Modifier::BOLD),
-    ))];
-    lines.push(Line::from(Span::styled(state.table.clone(), dim)));
+    // The game and its table share a row: two things a player reads once,
+    // and a row apiece was a row off the cue drawing.
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            match state.rules {
+                PoolRules::EightBall => "Eight-ball",
+                PoolRules::NineBall => "Nine-ball",
+                PoolRules::Snooker => "Snooker",
+            },
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!(" · {}", state.table), dim),
+    ])];
     lines.push(Line::from(""));
 
     for seat in 0u8..2 {
@@ -730,33 +745,7 @@ fn status_line(
         ));
     }
     if my_turn && !board.spectating {
-        spans.push(Span::styled(
-            format!("   {}", pool.draft.mode.label()),
-            Style::default().fg(theme::TEXT_BRIGHT()),
-        ));
-        if pool.state.must_place() && pool.draft.place.is_none() {
-            spans.push(Span::styled(
-                "   click the cloth to set the cue ball down",
-                Style::default().fg(theme::ERROR()),
-            ));
-        } else if pool.state.ball_in_hand.is_some() && pool.draft.place.is_none() {
-            // The cue ball is still up, so this one is an offer rather than a
-            // demand: take it or shoot from where it lies.
-            spans.push(Span::styled(
-                "   ball in hand · m to move it",
-                Style::default().fg(theme::AMBER()),
-            ));
-        } else if pool.state.requires_call() {
-            spans.push(Span::styled(
-                match pool.draft.called_pocket {
-                    Some(index) => format!("   calling the {}", table::pocket_name(index)),
-                    // Naming one is not optional: the server refuses an
-                    // uncalled shot on the eight, so say how to name it.
-                    None => "   call a pocket for the eight: click it, or p".to_string(),
-                },
-                Style::default().fg(theme::AMBER()),
-            ));
-        }
+        spans.extend(shooter_spans(pool.draft.mode, prompt_for(pool)));
     }
     if let Some(deadline) = detail.row.turn_deadline_at {
         spans.push(Span::styled(
@@ -767,87 +756,85 @@ fn status_line(
     Line::from(spans)
 }
 
-/// The hint row, rewritten per armed mode. `ShotMode::hint` is the source of
-/// the wording so the guidance cannot drift from the controls it describes.
-fn hint_line(
-    board: &DailyBoardState,
-    detail: &DailyMatchDetail,
-    pool: &PoolDetail,
-) -> Line<'static> {
-    let mut spans = Vec::new();
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    if pool.playback.is_some() {
-        // Nothing is adjustable while the balls are still rolling, so offering
-        // keys here would only invite presses that do nothing — except the
-        // camera, which is the one thing worth changing while watching.
-        spans.push(Span::styled("the shot is playing   ".to_string(), dim));
-        spans.push(Span::styled(
-            "v".to_string(),
-            Style::default().fg(theme::AMBER()),
-        ));
-        spans.push(Span::styled(
-            if board.pool_eye {
-                " overhead   "
-            } else {
-                " eye view   "
-            }
-            .to_string(),
-            dim,
-        ));
-    } else if board.spectating {
-        spans.push(Span::styled("watching   ".to_string(), dim));
-        spans.push(Span::styled(
-            "v".to_string(),
-            Style::default().fg(theme::AMBER()),
-        ));
-        spans.push(Span::styled(
-            if board.pool_eye {
-                " overhead   "
-            } else {
-                " eye view   "
-            }
-            .to_string(),
-            dim,
-        ));
-    } else if detail.is_active() {
-        spans.push(Span::styled(format!("{}   ", pool.draft.mode.hint()), dim));
-        spans.push(Span::styled(
-            "v".to_string(),
-            Style::default().fg(theme::AMBER()),
-        ));
-        spans.push(Span::styled(
-            if board.pool_eye {
-                " overhead   "
-            } else {
-                " eye view   "
-            }
-            .to_string(),
-            dim,
-        ));
-        spans.push(Span::styled(
-            "Esc".to_string(),
-            Style::default().fg(theme::AMBER()),
-        ));
-        spans.push(Span::styled(" back a step   ".to_string(), dim));
-        spans.push(Span::styled(
-            "r".to_string(),
-            Style::default().fg(theme::AMBER()),
-        ));
-        spans.push(Span::styled(" resign   ".to_string(), dim));
+/// Something the rules want from the shooter before the shot, said on the
+/// status line. At most one at a time, and the order is the order of urgency.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Prompt {
+    /// The cue ball is off the table and has to be set down.
+    MustPlace,
+    /// Ball in hand granted, cue ball still up: an offer, not a demand.
+    InHand,
+    /// The eight needs a pocket named, and none is yet.
+    CallPocket,
+    /// A pocket is named.
+    Calling(u8),
+}
+
+impl Prompt {
+    pub(crate) const ALL: [Self; 4] = [
+        Self::MustPlace,
+        Self::InHand,
+        Self::CallPocket,
+        Self::Calling(0),
+    ];
+
+    fn span(self) -> Span<'static> {
+        match self {
+            Self::MustPlace => Span::styled(
+                "   click the cloth to set the cue ball down",
+                Style::default().fg(theme::ERROR()),
+            ),
+            Self::InHand => Span::styled(
+                "   ball in hand · m to move it",
+                Style::default().fg(theme::AMBER()),
+            ),
+            // Naming one is not optional: the server refuses an uncalled shot
+            // on the eight, so say how to name it.
+            Self::CallPocket => Span::styled(
+                "   call a pocket: click it, or p",
+                Style::default().fg(theme::AMBER()),
+            ),
+            Self::Calling(index) => Span::styled(
+                format!("   calling the {}", table::pocket_name(index)),
+                Style::default().fg(theme::AMBER()),
+            ),
+        }
     }
-    if !board.spectating && detail.row.chat_room_id.is_some() {
-        spans.push(Span::styled(
-            "i".to_string(),
-            Style::default().fg(theme::AMBER()),
-        ));
-        spans.push(Span::styled(" chat   ".to_string(), dim));
+}
+
+fn prompt_for(pool: &PoolDetail) -> Option<Prompt> {
+    if pool.state.must_place() && pool.draft.place.is_none() {
+        Some(Prompt::MustPlace)
+    } else if pool.state.ball_in_hand.is_some() && pool.draft.place.is_none() {
+        Some(Prompt::InHand)
+    } else if pool.state.requires_call() {
+        match pool.draft.called_pocket {
+            Some(index) => Some(Prompt::Calling(index)),
+            None => Some(Prompt::CallPocket),
+        }
+    } else {
+        None
     }
-    spans.push(Span::styled(
-        "Q".to_string(),
-        Style::default().fg(theme::AMBER()),
-    ));
-    spans.push(Span::styled(" back to lobby".to_string(), dim));
-    Line::from(spans)
+}
+
+/// The shooter's part of the status line: the armed mode, what the mouse
+/// does in it, and whatever the rules are asking for. Pure, so the test can
+/// lay out the longest case and measure it.
+pub(crate) fn shooter_spans(mode: ShotMode, prompt: Option<Prompt>) -> Vec<Span<'static>> {
+    let mut spans = vec![
+        Span::styled(
+            format!("   {}", mode.label()),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ),
+        Span::styled(
+            format!(" · {}", mode.hint()),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ];
+    if let Some(prompt) = prompt {
+        spans.push(prompt.span());
+    }
+    spans
 }
 
 #[cfg(test)]
