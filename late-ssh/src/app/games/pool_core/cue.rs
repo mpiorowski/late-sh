@@ -42,6 +42,11 @@ pub const MISCUE_LIMIT: f64 = 0.5;
 /// Tip offset that produces immediate natural roll — see the module docs.
 pub const NATURAL_ROLL_TIP: f64 = 0.4;
 
+/// Angular speed per unit of tip offset, in units of `V / R`: the `5/2` in
+/// the module docs. Shared with the aim, which needs the cue ball's english
+/// at contact to draw where a thrown object ball really goes.
+pub const SPIN_PER_TIP: f64 = 2.5;
+
 /// Fastest stroke we accept. A hard break is around 8 m/s; the cap exists so
 /// a malformed shot cannot hand the simulator an absurd amount of energy.
 pub const MAX_SPEED: f64 = 12.0;
@@ -165,29 +170,22 @@ impl ShotMode {
         }
     }
 
-    /// What the player can do right now. The board screen shows this verbatim,
-    /// so nobody has to already know the controls.
+    /// What the *mouse* does right now, in a few words. The board screen
+    /// says this beside the mode's name on its status line, so nobody has
+    /// to already know the controls to start. The keyboard is not repeated
+    /// here: the board carries a legend for it, and a hint that listed the
+    /// keys as well ran to a hundred columns.
     pub fn hint(self) -> &'static str {
         match self {
             // The panel is divided the way the shot is: the target ball and
             // the sighting line up top arm the aim, the cue ball's face arms
             // spin, and the cue itself arms the stroke. Saying so here means a
             // player never has to learn the key map to start.
-            Self::Idle => {
-                "click a ball or the cloth to aim there · h/l turn · [ ] ball · { } pot · a e x/s/w arm the mouse"
-            }
-            Self::Aim => {
-                "aiming: mouse left/right turns the cue · h/l 1° · H/L 0.1° · click keeps it · right-click straightens"
-            }
-            Self::Spin => {
-                "spin: mouse or arrows · click the face to set it · right-click centres it · esc undoes"
-            }
-            Self::Place => {
-                "ball in hand: the cue ball follows the pointer · click sets it down · right-click resets"
-            }
-            Self::Stroke(_) => {
-                "draw down, then push back up through the ball to strike · esc or right-click to stop"
-            }
+            Self::Idle => "click a ball or cloth to aim",
+            Self::Aim => "move to turn, click to keep",
+            Self::Spin => "click the face to set the tip",
+            Self::Place => "it follows you, click to set",
+            Self::Stroke(_) => "pull down, push up to strike",
         }
     }
 }
@@ -245,7 +243,7 @@ impl Strike {
     pub fn apply(&self, cue: &mut Ball, spec: &TableSpec) {
         let (sin_a, cos_a) = self.azimuth.sin_cos();
         let d = [cos_a, sin_a];
-        let k = 2.5 * self.speed / spec.ball_radius;
+        let k = SPIN_PER_TIP * self.speed / spec.ball_radius;
 
         cue.vel = [self.speed * d[0], self.speed * d[1]];
         cue.spin = [

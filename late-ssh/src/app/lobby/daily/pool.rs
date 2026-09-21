@@ -514,11 +514,11 @@ fn shot_label(outcome: &ShotOutcome, ruling: &rules::Ruling, rules_kind: PoolRul
 
     let potted: Vec<String> = outcome
         .potted_object_balls()
-        .map(|id| id.to_string())
+        .map(|id| ball_label(rules_kind, id))
         .collect();
     if potted.is_empty() {
         parts.push(match outcome.first_contact {
-            Some(hit) => format!("{hit}, no pot"),
+            Some(hit) => format!("{}, no pot", ball_label(rules_kind, hit)),
             None => "no contact".to_string(),
         });
     } else {
@@ -539,6 +539,15 @@ fn shot_label(outcome: &ShotOutcome, ruling: &rules::Ruling, rules_kind: PoolRul
         );
     }
     parts.join(" · ")
+}
+
+/// A ball as the move list names it: its number in the pool games, its colour
+/// in snooker, whose ids are indexes no player has ever seen.
+fn ball_label(rules_kind: PoolRules, id: u8) -> String {
+    match rules_kind {
+        PoolRules::EightBall | PoolRules::NineBall => id.to_string(),
+        PoolRules::Snooker => rules_snooker::name(id).to_string(),
+    }
 }
 
 /// What one player is lining up, as the other player's board draws it.

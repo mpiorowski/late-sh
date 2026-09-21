@@ -12,7 +12,8 @@ use super::*;
 use crate::app::games::pool_core::{
     cue::{MAX_SPEED, MISCUE_LIMIT, PowerBand, ShotMode},
     rules::{self, PoolRules},
-    rules_snooker::{BLACK, RED_FIRST},
+    rules_snooker::{BLACK, RED_FIRST, YELLOW},
+    shot::{Pot, ShotOutcome},
 };
 
 fn players() -> (Uuid, Uuid) {
@@ -525,6 +526,43 @@ fn nothing_is_called_when_nothing_is_being_called_for() {
 
 use crate::app::games::pool_core::aim::Hit;
 use crate::app::lobby::daily::pool_draft::{PointerOutcome, PoolDraft};
+
+#[test]
+fn the_move_list_names_snooker_balls_and_numbers_pool_balls() {
+    // A snooker ball has no number printed on it, and its id is an index the
+    // player has never seen. The last-shot line reads as a commentator
+    // would call it: "yellow down", never "31 down".
+    let potted = |id: u8| ShotOutcome {
+        first_contact: Some(id),
+        potted: vec![Pot {
+            ball: id,
+            pocket: 0,
+        }],
+        cushion_after_contact: true,
+        ..ShotOutcome::default()
+    };
+    let missed = |id: u8| ShotOutcome {
+        first_contact: Some(id),
+        cushion_after_contact: true,
+        ..ShotOutcome::default()
+    };
+    assert_eq!(
+        shot_label(&potted(YELLOW), &rules::Ruling::keep(), PoolRules::Snooker),
+        "yellow down"
+    );
+    assert_eq!(
+        shot_label(
+            &missed(RED_FIRST),
+            &rules::Ruling::pass(),
+            PoolRules::Snooker
+        ),
+        "red, no pot"
+    );
+    assert_eq!(
+        shot_label(&potted(9), &rules::Ruling::keep(), PoolRules::NineBall),
+        "9 down"
+    );
+}
 
 fn drafted() -> (DailyPoolState, PoolDraft) {
     let state = state(PoolRules::NineBall);
@@ -1344,6 +1382,58 @@ fn any_foul_hands_the_ball_over_and_the_board_opens_holding_it() {
     assert_eq!(
         draft.place, None,
         "picked up from where it lies: taking it must not move it"
+    );
+}
+
+#[test]
+fn the_aim_stays_on_the_ball_while_the_cue_ball_is_carried() {
+    // Ball in hand is played as: pick the ball, then walk the cue ball
+    // around until the shot is straight. The line has to stay on the ball
+    // while the cue ball moves, or every step of the walk swings it off
+    // onto a rail and the player is aiming again instead of placing.
+    let (state, mut draft) = scratched();
+    let spec = state.spec().expect("known table");
+    draft.aim_at_ball(&state, 1);
+    assert_eq!(draft.target(&state), Some(1));
+
+    assert!(draft.put_down(&state, [spec.length * 0.3, spec.width * 0.15]));
+    assert_eq!(
+        draft.target(&state),
+        Some(1),
+        "the line follows the one to the new spot"
+    );
+    assert!(
+        sight_offset(&draft, &state).abs() < 1e-9,
+        "dead on it, as a placed ball would be aimed by hand"
+    );
+}
+
+#[test]
+fn a_reset_puts_an_unpotted_cue_ball_back_where_it_lay() {
+    // Ball in hand after a foul that left the cue ball up: right click while
+    // carrying it means "put it back", and back is where it was lying, not
+    // the break spot. Only a potted cue ball has an opening spot to return
+    // to, because it has nowhere else to be.
+    let mut state = state(PoolRules::EightBall);
+    state.ball_in_hand = Some(BallInHand::Anywhere);
+    let mut draft = PoolDraft::new(&state);
+    let spec = state.spec().expect("known table");
+    assert!(draft.put_down(&state, [spec.length * 0.6, spec.width * 0.3]));
+    assert!(
+        draft.reset(&state),
+        "carrying it somewhere else, so a reset moves it"
+    );
+    assert_eq!(
+        draft.place, None,
+        "back where it lay, which is no placement at all"
+    );
+
+    let (state, mut draft) = scratched();
+    draft.put_down(&state, [spec.length * 0.6, spec.width * 0.3]);
+    draft.reset(&state);
+    assert!(
+        draft.place.is_some(),
+        "a potted cue ball still goes back to its opening spot"
     );
 }
 

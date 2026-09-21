@@ -101,6 +101,36 @@ pub fn ball_ball(a: &mut Ball, b: &mut Ball, spec: &TableSpec) -> Option<f64> {
     Some(approach)
 }
 
+/// How far an object ball at rest is *thrown* off the line of centres by a
+/// cue ball arriving along `dir`, in radians, positive toward `ẑ × n` where
+/// `n` is the unit line of centres from the cue ball to the object ball.
+///
+/// This is `ball_ball` with the algebra done once, per unit of speed, so the
+/// aim can draw where the object ball really goes and a pot line can aim
+/// through it. Friction at the contact drags the object ball along with the
+/// cue ball's sideways motion: a cut throws the ball toward the side the cue
+/// ball is travelling to, by a few degrees, and it is the same few degrees
+/// at any speed because both the slip and the friction cap scale with it.
+/// `side_spin` is the cue ball's english at contact as `R·ωz / V`; gearing
+/// english (rubbing the same way the balls already slide) cancels the throw
+/// and the opposite english adds to it, exactly as on the table.
+pub fn throw(spec: &TableSpec, dir: [f64; 2], n: [f64; 2], side_spin: f64) -> f64 {
+    let t = [-n[1], n[0]];
+    let approach = dir[0] * n[0] + dir[1] * n[1];
+    if approach <= 0.0 {
+        return 0.0;
+    }
+    // Per unit mass and unit speed, the same two impulses as `ball_ball`.
+    let jn = 0.5 * (1.0 + spec.e_ball_ball) * approach;
+    let slip = dir[0] * t[0] + dir[1] * t[1] + side_spin;
+    let want = -slip / 7.0;
+    let cap = spec.mu_ball_ball * jn;
+    let p = want.clamp(-cap, cap);
+    // The object ball leaves with `jn` along the normal and `-p` along the
+    // tangent.
+    (-p).atan2(jn)
+}
+
 /// Resolve a ball-cushion impact.
 ///
 /// `n` is the unit direction from the cushion's nearest point to the ball —

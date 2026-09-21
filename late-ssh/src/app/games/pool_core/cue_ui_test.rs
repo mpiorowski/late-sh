@@ -325,16 +325,18 @@ fn only_a_stroke_mode_carries_a_band() {
 
 #[test]
 fn every_mode_tells_the_player_what_to_do() {
-    // The hint row is the only guidance there is. A blank one leaves a player
-    // looking at a table with no idea which key does anything.
+    // The hint beside the mode's name is the only guidance about the mouse
+    // there is. A blank one leaves a player looking at a table with no idea
+    // what a click does.
     for mode in ShotMode::ALL {
-        assert!(!mode.hint().is_empty(), "{mode:?} needs a hint");
+        let hint = mode.hint();
+        assert!(!hint.is_empty(), "{mode:?} needs a hint");
         assert!(!mode.label().is_empty(), "{mode:?} needs a label");
-    }
-    // Idle is the one that has to teach the whole map, since it is where a
-    // player who has just opened the board is standing.
-    let idle = ShotMode::Idle.hint();
-    for key in ['[', ']', 'a', 'e', 'x', 's', 'w'] {
-        assert!(idle.contains(key), "the idle hint must mention `{key}`");
+        assert!(
+            ["click", "move", "pull", "pointer"]
+                .iter()
+                .any(|word| hint.contains(word)),
+            "{mode:?} hint should say what the mouse does: {hint}"
+        );
     }
 }

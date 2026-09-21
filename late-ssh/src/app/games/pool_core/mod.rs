@@ -18,6 +18,8 @@ pub mod table_ui;
 #[cfg(test)]
 mod aim_test;
 #[cfg(test)]
+mod collide_test;
+#[cfg(test)]
 mod cue_ui_test;
 #[cfg(test)]
 mod determinism_test;

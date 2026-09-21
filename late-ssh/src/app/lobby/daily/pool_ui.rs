@@ -48,6 +48,7 @@ use crate::app::{
         cue::{MAX_SPEED, ShotMode},
         cue_ui::{self, BACKDROP, CueView},
         rules::PoolRules,
+        rules_snooker,
         table::{self, TableSpec},
         table_3d::{self, Eye},
         table_ui::{self, BallSet, Overlay, SURROUND, View},
@@ -526,13 +527,10 @@ pub(crate) fn target_label(state: &DailyPoolState, line: Option<&ShotLine>) -> S
 
 /// A ball as the striker would name it: its number, or its colour in snooker.
 fn ball_name(state: &DailyPoolState, id: u8) -> String {
-    if state.rules.scores() {
-        match snooker_name(id) {
-            "a red" => "a red".to_string(),
-            colour => format!("the {colour}"),
-        }
-    } else {
-        format!("the {id}")
+    match state.rules {
+        PoolRules::EightBall | PoolRules::NineBall => format!("the {id}"),
+        PoolRules::Snooker if rules_snooker::is_red(id) => "a red".to_string(),
+        PoolRules::Snooker => format!("the {}", rules_snooker::name(id)),
     }
 }
 
@@ -556,7 +554,6 @@ fn lining_up(mode: crate::app::games::pool_core::cue::ShotMode) -> &'static str 
 /// player is on "a red" or "the colours" — fifteen ids on one line would be
 /// noise, and none of those balls has a number printed on it anyway.
 fn on_line(state: &DailyPoolState, targets: &[u8]) -> String {
-    use crate::app::games::pool_core::rules_snooker;
     if targets.is_empty() {
         return "on: nothing".to_string();
     }
@@ -572,7 +569,7 @@ fn on_line(state: &DailyPoolState, targets: &[u8]) -> String {
         }
         return format!(
             "on: {} ({})",
-            snooker_name(targets[0]),
+            rules_snooker::name(targets[0]),
             rules_snooker::value(targets[0])
         );
     }
@@ -584,20 +581,6 @@ fn on_line(state: &DailyPoolState, targets: &[u8]) -> String {
             .collect::<Vec<_>>()
             .join(" ")
     )
-}
-
-/// Snooker balls have names rather than numbers.
-fn snooker_name(id: u8) -> &'static str {
-    use crate::app::games::pool_core::rules_snooker as s;
-    match id {
-        s::YELLOW => "yellow",
-        s::GREEN => "green",
-        s::BROWN => "brown",
-        s::BLUE => "blue",
-        s::PINK => "pink",
-        s::BLACK => "black",
-        _ => "a red",
-    }
 }
 
 fn group_label(group: crate::app::games::pool_core::rules::Group) -> &'static str {
@@ -771,6 +754,9 @@ pub(crate) enum Prompt {
 }
 
 impl Prompt {
+    /// Every prompt, for the test that lays the status line out at its
+    /// longest.
+    #[cfg(test)]
     pub(crate) const ALL: [Self; 4] = [
         Self::MustPlace,
         Self::InHand,
@@ -820,17 +806,31 @@ fn prompt_for(pool: &PoolDetail) -> Option<Prompt> {
 /// The shooter's part of the status line: the armed mode, what the mouse
 /// does in it, and whatever the rules are asking for. Pure, so the test can
 /// lay out the longest case and measure it.
+///
+/// The two halves are not allowed to say the same thing. While the cue ball
+/// is being carried the mode's own hint is the placing instruction, so the
+/// prompts about placing it are dropped; and while the cue ball is off the
+/// table and *not* being carried, the prompt is the one thing to do, so the
+/// mode's hint about aiming would be a contradiction and is dropped instead.
 pub(crate) fn shooter_spans(mode: ShotMode, prompt: Option<Prompt>) -> Vec<Span<'static>> {
-    let mut spans = vec![
-        Span::styled(
-            format!("   {}", mode.label()),
-            Style::default().fg(theme::TEXT_BRIGHT()),
-        ),
-        Span::styled(
-            format!(" · {}", mode.hint()),
+    let prompt = match prompt {
+        Some(Prompt::MustPlace | Prompt::InHand) if mode == ShotMode::Place => None,
+        other => other,
+    };
+    let hint = match prompt {
+        Some(Prompt::MustPlace) => None,
+        _ => Some(mode.hint()),
+    };
+    let mut spans = vec![Span::styled(
+        format!("   {}", mode.label()),
+        Style::default().fg(theme::TEXT_BRIGHT()),
+    )];
+    if let Some(hint) = hint {
+        spans.push(Span::styled(
+            format!(" · {hint}"),
             Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ];
+        ));
+    }
     if let Some(prompt) = prompt {
         spans.push(prompt.span());
     }

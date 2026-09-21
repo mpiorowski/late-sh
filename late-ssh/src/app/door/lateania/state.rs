@@ -182,6 +182,13 @@ pub struct State {
     /// Which page of the map `m` is showing. Always reopens on the field, so
     /// `m` means the same thing every time it is pressed from the room.
     map_mode: MapMode,
+    /// Whether the terminal the render pass last drew into could hold the land
+    /// map. The land picture is a fixed 76x13 drawing that cannot be shrunk, so
+    /// on a phone `m` would otherwise cycle into a page that falls back to the
+    /// text atlas - a second press that appears to do nothing useful. The
+    /// render pass sets this each frame (the same way it hands back
+    /// `list_scroll`), and `cycle_map` skips the page when it is false.
+    lands_available: Cell<bool>,
     /// A room the player has marked to travel back to (`x` on the map's
     /// crosshair, or Enter on a journal quest row). Local to the session and
     /// never persisted: it is a note to oneself, not world truth.
@@ -231,6 +238,7 @@ impl State {
             leave_confirm_until: None,
             map_camera: MapCamera::default(),
             map_mode: MapMode::Field,
+            lands_available: Cell::new(true),
             map_dest: None,
             map_quests: true,
             route_cache: RefCell::new(None),
@@ -338,6 +346,11 @@ impl State {
         self.map_mode
     }
 
+    /// Told by the render pass whether this terminal can draw the land map.
+    pub fn set_lands_available(&self, yes: bool) {
+        self.lands_available.set(yes);
+    }
+
     /// `m`: closed -> the overhead field -> the land graph -> closed. One key
     /// walks the whole map, from the ground under your feet out to how the
     /// countries hang together.
@@ -346,6 +359,12 @@ impl State {
             (false, _) => {
                 self.map_mode = MapMode::Field;
                 self.set_panel(Panel::Map);
+            }
+            // On a terminal too small for the land picture the cycle is two
+            // states, not three: field -> closed. Better one key that always
+            // does something than a page that silently degrades.
+            (true, MapMode::Field) if !self.lands_available.get() => {
+                self.set_panel(Panel::Room);
             }
             (true, MapMode::Field) => {
                 self.map_mode = MapMode::Lands;

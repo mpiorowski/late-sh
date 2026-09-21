@@ -9,16 +9,26 @@
 //! straight-line geometry every player draws in their head before a shot,
 //! and it is cheap enough to redo on every pointer event.
 //!
+//! The one piece of physics the line does borrow is **throw**: a cut drags
+//! the object ball a few degrees off the line of centres, toward the side the
+//! cue ball is travelling to, and over a table's length that is more than a
+//! pocket forgives. The object ball's leg leaves along `collide::throw`, the
+//! same impulse model the simulator resolves the contact with, so the drawn
+//! leg is where the ball goes and not where a diagram says it should.
+//!
 //! The pot lines are the same geometry run backwards: for a target ball and
 //! a pocket, the ghost ball is fixed, so the bearing that pots it is one
-//! `atan2`. Whether the pot is *on* is whether the two straight legs are
-//! clear, which is the same cast again.
+//! `atan2`, then walked a few fixed iterations to aim *through* the throw the
+//! cut produces. Whether the pot is *on* is whether the two legs are clear,
+//! which is the same cast again.
 //!
 //! Surface-agnostic like the rest of the kernel: the board screen and a
 //! future live table draw the same line.
 
 use crate::app::games::pool_core::{
     ball::CUE,
+    collide,
+    cue::SPIN_PER_TIP,
     shot::BallFrame,
     table::{Geometry, TableSpec},
 };
@@ -35,6 +45,11 @@ pub const MAX_POT_CUT: f64 = 80.0 * std::f64::consts::PI / 180.0;
 /// full-speed contact at right angles. Scaled down by the sine of the cut,
 /// since that is the share of its speed the cue ball keeps.
 const TANGENT_STUB: f64 = 8.0;
+/// Fixed passes when aiming a pot through its own throw. The throw depends
+/// on the cut and the cut on the bearing, so the bearing is refined a few
+/// times; a handful is far past where it stops moving, and fixed rather than
+/// converged so the answer is a pure function of the table.
+const THROW_ITERS: u32 = 4;
 
 /// What the cue ball's centre reaches first along the line.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -167,13 +182,16 @@ pub struct PotLine {
     pub cut: f64,
 }
 
-/// Walk `azimuth` from `from` and report everything on the way.
+/// Walk `azimuth` from `from` and report everything on the way. `tip_side`
+/// is the cue ball's english as the strike will apply it, in ball radii,
+/// because it bends where the object ball goes.
 pub fn shot_line(
     spec: &TableSpec,
     geom: &Geometry,
     balls: &[BallFrame],
     from: [f64; 2],
     azimuth: f64,
+    tip_side: f64,
 ) -> ShotLine {
     let (sin, cos) = azimuth.sin_cos();
     let dir = [cos, sin];
@@ -205,7 +223,8 @@ pub fn shot_line(
             match target {
                 Some(target) => {
                     let u = unit(sub(target.pos, ghost));
-                    let object_hit = cast(spec, geom, balls, target.pos, u, &[CUE, id]);
+                    let out = object_direction(spec, dir, u, tip_side);
+                    let object_hit = cast(spec, geom, balls, target.pos, out, &[CUE, id]);
                     let cut = cross(dir, u).atan2(dot(dir, u));
                     // What the cue ball keeps is the component across the
                     // object ball's line, so the stub is that share of a
@@ -253,13 +272,16 @@ pub fn shot_line(
 }
 
 /// The pots on offer for `target` from `from`: one per pocket the ball can be
-/// sent to along two clear straight lines at a playable cut, easiest first.
+/// sent to along two clear legs at a playable cut, easiest first. The bearing
+/// aims through the throw the cut produces, with the english `tip_side` the
+/// strike will carry, so a struck pot line pots.
 pub fn pot_lines(
     spec: &TableSpec,
     geom: &Geometry,
     balls: &[BallFrame],
     from: [f64; 2],
     target: u8,
+    tip_side: f64,
 ) -> Vec<PotLine> {
     let Some(ball) = balls.iter().find(|ball| ball.id == target && !ball.potted) else {
         return Vec::new();
@@ -270,9 +292,20 @@ pub fn pot_lines(
         .enumerate()
         .filter_map(|(index, pocket)| {
             let to_pocket = unit(sub(pocket.center, ball.pos));
-            let ghost = sub(ball.pos, scale(to_pocket, 2.0 * spec.ball_radius));
+            // The line of centres that sends the ball to the pocket is the
+            // pocket's direction turned back against the throw. The throw
+            // depends on the cut and the cut on where the ghost ball ends
+            // up, so walk it: start on the pocket line and refine.
+            let mut centres = to_pocket;
+            for _ in 0..THROW_ITERS {
+                let ghost = sub(ball.pos, scale(centres, 2.0 * spec.ball_radius));
+                let dir = unit(sub(ghost, from));
+                let thrown = collide::throw(spec, dir, centres, side_spin(tip_side));
+                centres = rotate(to_pocket, -thrown);
+            }
+            let ghost = sub(ball.pos, scale(centres, 2.0 * spec.ball_radius));
             let dir = unit(sub(ghost, from));
-            let cut = dot(dir, to_pocket).clamp(-1.0, 1.0).acos();
+            let cut = dot(dir, centres).clamp(-1.0, 1.0).acos();
             if cut > MAX_POT_CUT {
                 return None;
             }
@@ -280,7 +313,8 @@ pub fn pot_lines(
             if !matches!(cue_leg, Hit::Ball { id, .. } if id == target) {
                 return None;
             }
-            let object_leg = cast(spec, geom, balls, ball.pos, to_pocket, &[CUE, target]);
+            let out = object_direction(spec, dir, centres, tip_side);
+            let object_leg = cast(spec, geom, balls, ball.pos, out, &[CUE, target]);
             if !matches!(object_leg, Hit::Pocket { index: hit, .. } if hit == index as u8) {
                 return None;
             }
@@ -296,8 +330,35 @@ pub fn pot_lines(
     lines
 }
 
+/// Where the object ball leaves from a contact along the line of centres
+/// `centres`, struck by a cue ball travelling along `dir` with `tip_side`
+/// english: the line of centres turned by the throw.
+pub fn object_direction(
+    spec: &TableSpec,
+    dir: [f64; 2],
+    centres: [f64; 2],
+    tip_side: f64,
+) -> [f64; 2] {
+    rotate(
+        centres,
+        collide::throw(spec, dir, centres, side_spin(tip_side)),
+    )
+}
+
+/// The cue ball's english at contact as the collision model wants it,
+/// `R·ωz / V`, from the tip offset the strike is given. Taken as it leaves
+/// the tip: the spin decays far more slowly than the ball travels to any
+/// object ball it can reach.
+fn side_spin(tip_side: f64) -> f64 {
+    -SPIN_PER_TIP * tip_side
+}
+
 /// The first thing a ball's centre reaches travelling along `dir` from
 /// `from`, ignoring the balls in `ignore`.
+///
+/// A cushion is its segment *and* its two ends: the physics treats a jaw tip
+/// as a point bumper a ball clips when its centre passes within a radius, so
+/// the line does too, or it reports a clean drop where the table rattles.
 pub fn cast(
     spec: &TableSpec,
     geom: &Geometry,
@@ -327,23 +388,41 @@ pub fn cast(
         })
         .min_by(|a, b| a.0.total_cmp(&b.0));
 
-    let cushion_hit = geom
+    let rail_hit = geom.cushions.iter().filter_map(|cushion| {
+        let approach = dot(dir, cushion.normal);
+        if approach >= -1e-12 {
+            return None;
+        }
+        let clearance = dot(sub(from, cushion.a), cushion.normal);
+        let t = ((radius - clearance) / approach).max(0.0);
+        let at = add(from, scale(dir, t));
+        // Past the end of the rail is the pocket mouth, not the rail.
+        let ab = sub(cushion.b, cushion.a);
+        let s = dot(sub(at, cushion.a), ab) / dot(ab, ab);
+        (0.0..=1.0).contains(&s).then_some((t, cushion.normal))
+    });
+    // The jaw tips, as bumpers of one radius; the rebound is radial off the
+    // tip, the way the resolver sends it.
+    let jaw_hit = geom
         .cushions
         .iter()
-        .filter_map(|cushion| {
-            let approach = dot(dir, cushion.normal);
-            if approach >= -1e-12 {
+        .flat_map(|cushion| [cushion.a, cushion.b])
+        .filter_map(|tip| {
+            let to = sub(tip, from);
+            let along = dot(to, dir);
+            if along <= 0.0 {
                 return None;
             }
-            let clearance = dot(sub(from, cushion.a), cushion.normal);
-            let t = ((radius - clearance) / approach).max(0.0);
+            let perp2 = dot(to, to) - along * along;
+            if perp2 >= radius * radius {
+                return None;
+            }
+            let back = (radius * radius - perp2).sqrt();
+            let t = (along - back).max(0.0);
             let at = add(from, scale(dir, t));
-            // Past the end of the rail is the pocket mouth, not the rail.
-            let ab = sub(cushion.b, cushion.a);
-            let s = dot(sub(at, cushion.a), ab) / dot(ab, ab);
-            (0.0..=1.0).contains(&s).then_some((t, cushion.normal))
-        })
-        .min_by(|a, b| a.0.total_cmp(&b.0));
+            Some((t, unit(sub(at, tip))))
+        });
+    let cushion_hit = rail_hit.chain(jaw_hit).min_by(|a, b| a.0.total_cmp(&b.0));
 
     // Where the centre leaves the playfield if nothing stops it. A ray that
     // reaches this without meeting a rail went through a pocket mouth.
@@ -429,4 +508,10 @@ fn unit(v: [f64; 2]) -> [f64; 2] {
     } else {
         scale(v, 1.0 / len)
     }
+}
+
+/// `v` turned by `angle` radians, positive toward `ẑ × v`.
+fn rotate(v: [f64; 2], angle: f64) -> [f64; 2] {
+    let (sin, cos) = angle.sin_cos();
+    [v[0] * cos - v[1] * sin, v[0] * sin + v[1] * cos]
 }

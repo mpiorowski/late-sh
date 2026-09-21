@@ -23,8 +23,8 @@ use super::{
     state::{ClickAction, Heading, InvAction, MapMode, Panel, State, inv_action},
     stats::{POINT_EVERY_LEVELS, SCORE_CAP, Score},
     svc::{
-        InvView, LeaderboardEntry, LogKind, MobView, PetView, PlayerView, QuestKind, QuestView,
-        SectionRow, ShopView,
+        CraftView, InvView, LeaderboardEntry, LogKind, MobView, PetView, PlayerView, QuestKind,
+        QuestView, SectionRow, ShopView,
     },
     world::{Dir, MapCell, MiniMap, RoomId},
 };
@@ -62,6 +62,25 @@ fn side_width(total_width: u16) -> u16 {
         return SIDE_NARROW;
     }
     (total_width / 4).clamp(SIDE_WIDE, SIDE_MAX)
+}
+
+/// Whether the field layout's message feed rides in the side rail instead of
+/// the full-width strip under the field.
+///
+/// The strip is the better shape when there are rows to spend on it: log lines
+/// are sentences, and sentences want width. On a short terminal - a phone held
+/// sideways is twenty rows if you are lucky - it is the wrong trade, because
+/// the strip's `height / 3` is taken off the one thing that cannot be scrolled
+/// back to: the live field. Below this the events move into the rail, which is
+/// already a column of wrapped text, and the field keeps the full height.
+fn events_in_rail(total_height: u16) -> bool {
+    total_height < 24
+}
+
+/// Rows the rail's events block gets: its bottom third, so the room summary
+/// above it keeps the larger share of a rail that is already narrow.
+fn rail_log_height(rail_height: u16) -> u16 {
+    (rail_height / 3).clamp(3, 10)
 }
 
 // ---- Screen entry: which layout this terminal gets -----------------------
@@ -172,6 +191,24 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         draw_inventory_screen(frame, area, &state.inv_rows(), &view, state.cursor());
         return;
     }
+    // The forge is the third of them: a craft is a gear decision like a
+    // purchase is, and it has an ingredient list on top of everything a
+    // listing carries.
+    if state.panel() == Panel::Crafting && area.width >= 100 && area.height >= 20 {
+        match &view.crafting {
+            Some(craft) => {
+                draw_craft_screen(frame, area, &state.craft_rows(), craft, state.cursor())
+            }
+            None => frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "No crafting station here.",
+                    Style::default().fg(theme::TEXT_DIM()),
+                ))),
+                area,
+            ),
+        }
+        return;
+    }
 
     let side_w = side_width(area.width);
     // Wide terminals get the live field with the message log as a full-width
@@ -180,16 +217,37 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     // Below this width the field folds away and the classic log + side view
     // stands in (the minimap still rides in the side panel there).
     if state.panel() == Panel::Room && view.rpg_mode && area.width >= 96 {
-        let log_h = log_strip_height(area.height);
-        let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(log_h)]).split(area);
+        // A tall terminal spends rows on the full-width strip; a short one
+        // gives them back to the field and pushes the events into the rail.
+        let strip = match events_in_rail(area.height) {
+            true => None,
+            false => {
+                let log_h = log_strip_height(area.height);
+                let rows =
+                    Layout::vertical([Constraint::Min(3), Constraint::Length(log_h)]).split(area);
+                Some((rows[0], rows[1]))
+            }
+        };
+        let field_area = strip.map_or(area, |(top, _)| top);
         let cols = Layout::horizontal([
             Constraint::Min(24),        // live field (fills the middle)
             Constraint::Length(side_w), // room summary + foes
         ])
-        .split(rows[0]);
+        .split(field_area);
         draw_field(frame, cols[0], &view);
-        draw_room_side(frame, cols[1], state, &view, usernames, false);
-        draw_log_strip(frame, rows[1], &view);
+        match strip {
+            Some((_, log_area)) => {
+                draw_room_side(frame, cols[1], state, &view, usernames, false);
+                draw_log_strip(frame, log_area, &view);
+            }
+            None => {
+                let log_h = rail_log_height(cols[1].height);
+                let rail = Layout::vertical([Constraint::Min(4), Constraint::Length(log_h)])
+                    .split(cols[1]);
+                draw_room_side(frame, rail[0], state, &view, usernames, false);
+                draw_log_strip(frame, rail[1], &view);
+            }
+        }
         return;
     }
 
@@ -359,6 +417,9 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     // Last frame's clickable chips are stale now; a bar that isn't drawn this
     // frame (map open, cramped view) must leave nothing behind to click.
     state.clear_combat_hits();
+    // Tell the state what this frame could actually draw, so `m` never cycles
+    // into a page this terminal has to fall back out of.
+    state.set_lands_available(lands_fit(body));
     let land_page = state.map_open() && state.map_mode() == MapMode::Lands;
     if view.classed && land_page && lands_fit(body) {
         draw_land_map(frame, body, state, &view);
@@ -423,10 +484,6 @@ fn stair_style() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// The smallest area the graphical world map is worth drawing in. Header,
-/// inspector, and footer cost 4 rows before a single cell of map, and the
-/// legend needs the width. Below this, `draw_game` takes over: the text atlas
-/// in the side panel down to 50x9, then compact mode.
 /// The land map needs enough width to hold a branch chip, the trunk, and
 /// another branch chip side by side; narrower than that and the picture clips
 /// instead of informing, so the text atlas serves instead. Height is looser,
@@ -435,11 +492,95 @@ fn lands_fit(area: Rect) -> bool {
     area.width >= 76 && area.height >= 12
 }
 
+/// The smallest area the graphical world map is worth drawing in.
+///
+/// This used to be 50x14, and everything smaller was handed the text atlas in
+/// the side rail instead - which meant a phone-sized terminal never saw the
+/// map at all. The one view that answers "where am I" was the one view a phone
+/// could not open. What did not fit was never the map: it was the seven rows of
+/// header, inspector, controls and legends stacked around it, and `MapChrome`
+/// now sheds those instead (see there). What is left is a floor the map body
+/// itself needs - a handful of rows of world and enough columns for the
+/// player's own neighbourhood to read.
 fn map_fits(area: Rect) -> bool {
-    // The footer grew by two lines (the symbol and marker legends split
-    // apart) to make room for a fuller legend; bump the floor to match, so
-    // the map body keeps the same minimum breathing room it always had.
-    area.width >= 50 && area.height >= 14
+    area.width >= MAP_MIN_W && area.height >= MAP_MIN_H
+}
+
+const MAP_MIN_W: u16 = 32;
+const MAP_MIN_H: u16 = 10;
+
+/// Which of the map's chrome rows this terminal can afford.
+///
+/// The rows are shed in reverse order of what they are worth to someone who is
+/// lost: the terrain key first (the biome colours are already on the map), then
+/// the marker legend, then the symbol legend, then the inspector's second row.
+/// The header, the crosshair's first row and the controls line stay to the
+/// floor, because between them they say where you are, what you are pointing
+/// at, and how to move the view.
+///
+/// Width sheds the legends too, and sheds them first: they are single
+/// unwrapped lines around 90 columns long, so on a narrow terminal they were
+/// never a legend at all - they were a sentence clipped mid-word at the edge,
+/// costing a row of map to say "known, el".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MapChrome {
+    /// Rows the crosshair inspector gets: 2 (region + what is there), 1
+    /// (region only), or 0 on the very smallest map.
+    inspector: u16,
+    controls: bool,
+    symbols: bool,
+    markers: bool,
+    terrain: bool,
+}
+
+/// The width a full legend line needs before it stops being clipped mid-word.
+const MAP_LEGEND_W: u16 = 92;
+
+impl MapChrome {
+    fn for_area(area: Rect) -> Self {
+        let legend_w = area.width >= MAP_LEGEND_W;
+        Self {
+            inspector: match area.height {
+                0..=11 => 1,
+                _ => 2,
+            },
+            controls: area.height >= 11,
+            symbols: legend_w && area.height >= 16,
+            markers: legend_w && area.height >= 18,
+            // The terrain key only names the biomes actually in view, so it is
+            // short enough to survive a narrower terminal than the legends.
+            terrain: area.width >= 60 && area.height >= 20,
+        }
+    }
+
+    /// The layout constraints for everything below the map body, in order.
+    fn footer_constraints(&self) -> Vec<Constraint> {
+        let mut rows = Vec::new();
+        if self.inspector > 0 {
+            rows.push(Constraint::Length(self.inspector));
+        }
+        for present in [self.controls, self.symbols, self.markers, self.terrain] {
+            if present {
+                rows.push(Constraint::Length(1));
+            }
+        }
+        rows
+    }
+}
+
+/// The map's control line, sized to the terminal. The full line is 78 columns,
+/// so on anything narrow it used to be clipped to "wasd pan · <> level · x mark
+/// destina" - the keys that close the map and mark a destination, the two a lost
+/// player most needs, were the ones that fell off the end.
+fn map_controls_line(width: u16) -> &'static str {
+    // Each arm's own width is the floor of the band above it, so the line
+    // always fits the columns it is painted into rather than being chopped.
+    match width {
+        0..=37 => "wasd pan · x mark · m close",
+        38..=66 => "wasd pan · x mark · q quests · m close",
+        67..=78 => "wasd pan · <> level · x mark · q quests · Enter re-centre · m close",
+        _ => "wasd pan · <> level · x mark destination · q quests · Enter re-centre · m close",
+    }
 }
 
 /// Per-biome map glyph and colour for the overhead world map.
@@ -1554,16 +1695,24 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     let panned = camera.scroll() != (0, 0) || level_offset != 0;
     let center = camera.center(player);
 
-    let rows = Layout::vertical([
+    // Header and map body are never negotiable; everything under them is shed
+    // in worst-first order by `MapChrome`, so a phone gets a map instead of a
+    // stack of clipped legends with four rows of world under it.
+    let chrome = MapChrome::for_area(area);
+    let mut constraints = vec![
         Constraint::Length(1), // header
         Constraint::Min(1),    // map body
-        Constraint::Length(2), // cell inspector (crosshair target)
-        Constraint::Length(1), // controls
-        Constraint::Length(1), // symbol legend (you, paths, cursor)
-        Constraint::Length(1), // marker legend (boss/tame/foe/gather/off-map)
-        Constraint::Length(1), // terrain key (biomes in view)
-    ])
-    .split(area);
+    ];
+    constraints.extend(chrome.footer_constraints());
+    let rows = Layout::vertical(constraints).split(area);
+    // Footer rects in the order `MapChrome` laid them out; each block below
+    // takes the next one only if its row survived the shed.
+    let mut footer = rows[2..].iter().copied();
+    let inspector_row = (chrome.inspector > 0).then(|| footer.next()).flatten();
+    let controls_row = chrome.controls.then(|| footer.next()).flatten();
+    let symbols_row = chrome.symbols.then(|| footer.next()).flatten();
+    let markers_row = chrome.markers.then(|| footer.next()).flatten();
+    let terrain_row = chrome.terrain.then(|| footer.next()).flatten();
 
     // Header: region name, where this zone sits in the region's chain, the
     // zone's own name, the danger tier, and the current level (z).
@@ -1941,79 +2090,102 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         inspect.truncate(1);
         inspect.push(Line::from(Span::styled(text, Style::default().fg(color))));
     }
-    frame.render_widget(Paragraph::new(inspect), rows[2]);
+    if let Some(rect) = inspector_row {
+        // On a one-row inspector something has to give. A heading outranks the
+        // region name - it is the line that says which way to walk - and with
+        // no heading the region name outranks the list of what is in the room,
+        // because "where is the crosshair" is the question the crosshair asks.
+        if chrome.inspector == 1 && inspect.len() > 1 {
+            match state.heading().is_some() {
+                true => drop(inspect.drain(..inspect.len() - 1)),
+                false => inspect.truncate(1),
+            }
+        }
+        frame.render_widget(Paragraph::new(inspect), rect);
+    }
 
-    // Footer line 1: controls.
     let dim = Style::default().fg(theme::TEXT_DIM());
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            "wasd pan · <> level · x mark destination · q quests · Enter re-centre · m close",
-            dim,
-        )])),
-        rows[3],
-    );
+    // Footer line 1: controls.
+    if let Some(rect) = controls_row {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![Span::styled(
+                map_controls_line(area.width),
+                dim,
+            )])),
+            rect,
+        );
+    }
 
     // Footer line 2: what the map's own symbols mean - the glyphs every map
     // shows regardless of what's actually nearby (rooms, corridors, the two
     // kinds of "more lies this way" stub, the look-here cursor). Stubs, never
     // arrows, on purpose: arrows read as controls here, a line just means
     // "walkable path".
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("@", player_style),
-            Span::styled(" you  ", dim),
-            Span::styled("\u{2500}\u{2502}", link_style),
-            Span::styled(" known path  ", dim),
-            Span::styled("\u{2500}\u{2502}", Style::default().fg(theme::TEXT_FAINT())),
-            Span::styled(" unexplored  ", dim),
-            Span::styled(
-                "\u{2500}\u{2502}",
-                Style::default()
-                    .fg(theme::AMBER_DIM())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" known, elsewhere  ", dim),
-            Span::styled("\u{21d3}\u{21d1}", stair_style()),
-            Span::styled(" way down/up  ", dim),
-            Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)),
-            Span::styled(" look here", dim),
-        ])),
-        rows[4],
-    );
+    if let Some(rect) = symbols_row {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("@", player_style),
+                Span::styled(" you  ", dim),
+                Span::styled("\u{2500}\u{2502}", link_style),
+                Span::styled(" known path  ", dim),
+                Span::styled("\u{2500}\u{2502}", Style::default().fg(theme::TEXT_FAINT())),
+                Span::styled(" unexplored  ", dim),
+                Span::styled(
+                    "\u{2500}\u{2502}",
+                    Style::default()
+                        .fg(theme::AMBER_DIM())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" known, elsewhere  ", dim),
+                Span::styled("\u{21d3}\u{21d1}", stair_style()),
+                Span::styled(" way down/up  ", dim),
+                Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)),
+                Span::styled(" look here", dim),
+            ])),
+            rect,
+        );
+    }
 
     // Footer line 3: marker legend (quests, bosses, tames, notable foes,
     // gather nodes, and the border arrow for an off-screen one of those).
-    let mut marker_legend = vec![
-        Span::styled("!", quest_style),
-        Span::styled(" quest  ", dim),
-        Span::styled("\u{2605}", Style::default().fg(Color::Rgb(250, 210, 90))),
-        Span::styled(" boss  ", dim),
-        Span::styled("\u{2665}", Style::default().fg(Color::Rgb(230, 140, 160))),
-        Span::styled(" tame  ", dim),
-        Span::styled("\u{25c6}", Style::default().fg(Color::Rgb(210, 120, 90))),
-        Span::styled(" notable foe  ", dim),
-        Span::styled("\u{2692}", Style::default().fg(Color::Rgb(150, 200, 120))),
-        Span::styled(" gather  ", dim),
-        Span::styled("\u{2192}", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" one of these, off-map  ", dim),
-        Span::styled("\u{2691}\u{2192}", quest_style),
-        Span::styled(" tracked", dim),
-    ];
-    if quests_beyond > 0 {
-        // An honest count instead of a dishonest arrow: these targets sit in
-        // other lands, where a border direction would mean nothing.
-        marker_legend.push(Span::styled(
-            format!(
-                "  \u{00b7} {quests_beyond} quest{} beyond this land (track: j)",
-                if quests_beyond == 1 { "" } else { "s" }
-            ),
-            Style::default().fg(theme::SUCCESS()),
-        ));
+    if let Some(rect) = markers_row {
+        let mut marker_legend = vec![
+            Span::styled("!", quest_style),
+            Span::styled(" quest  ", dim),
+            Span::styled("\u{2605}", Style::default().fg(Color::Rgb(250, 210, 90))),
+            Span::styled(" boss  ", dim),
+            Span::styled("\u{2665}", Style::default().fg(Color::Rgb(230, 140, 160))),
+            Span::styled(" tame  ", dim),
+            Span::styled("\u{25c6}", Style::default().fg(Color::Rgb(210, 120, 90))),
+            Span::styled(" notable foe  ", dim),
+            Span::styled("\u{2692}", Style::default().fg(Color::Rgb(150, 200, 120))),
+            Span::styled(" gather  ", dim),
+            Span::styled("\u{2192}", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" one of these, off-map  ", dim),
+            Span::styled("\u{2691}\u{2192}", quest_style),
+            Span::styled(" tracked", dim),
+        ];
+        if quests_beyond > 0 {
+            // An honest count instead of a dishonest arrow: these targets sit in
+            // other lands, where a border direction would mean nothing.
+            marker_legend.push(Span::styled(
+                format!(
+                    "  \u{00b7} {quests_beyond} quest{} beyond this land (track: j)",
+                    if quests_beyond == 1 { "" } else { "s" }
+                ),
+                Style::default().fg(theme::SUCCESS()),
+            ));
+        }
+        frame.render_widget(Paragraph::new(Line::from(marker_legend)), rect);
     }
-    frame.render_widget(Paragraph::new(Line::from(marker_legend)), rows[5]);
 
     // Footer line 4: terrain key, showing only the biomes actually in view so it
-    // stays legible instead of listing every biome in the world.
+    // stays legible instead of listing every biome in the world. Walking the
+    // whole canvas for it is only worth doing when there is a row to print it
+    // on.
+    let Some(terrain_rect) = terrain_row else {
+        return;
+    };
     use super::world::Biome;
     let mut present: Vec<Biome> = Vec::new();
     for row in &canvas {
@@ -2050,7 +2222,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         key.push(Span::styled(glyph.to_string(), Style::default().fg(color)));
         key.push(Span::styled(format!(" {label}  "), dim));
     }
-    frame.render_widget(Paragraph::new(Line::from(key)), rows[6]);
+    frame.render_widget(Paragraph::new(Line::from(key)), terrain_rect);
 }
 
 // ---- The one-time gates: class select and archetype select ---------------
@@ -3721,6 +3893,231 @@ fn draw_inventory_screen(
                 (false, false) => prompt_line(
                     format!("sells for {}g at a merchant", it.sell_price),
                     theme::TEXT_DIM(),
+                ),
+            });
+            detail
+        }
+    };
+    frame.render_widget(Paragraph::new(detail), cols[1]);
+}
+
+/// What the list column's money cell says for a recipe. Crafting has no price,
+/// and the cell it would sit in is the one thing a maker scanning the list
+/// actually wants: can I make this right now, and if not, what stops me.
+fn craft_status_cell(e: &super::svc::CraftEntryView) -> (String, Color) {
+    if e.craftable {
+        return ("ready".to_string(), theme::SUCCESS());
+    }
+    if e.skill_level < e.level_req {
+        // A hard gate: no amount of gathering opens it today.
+        return (format!("lvl {}", e.level_req), theme::ERROR());
+    }
+    // Soft: how many of the ingredient lines are covered. "1/2" reads as
+    // "go and get the other one", which "need materials" never did.
+    let held = e.ingredients.iter().filter(|i| i.have >= i.need).count();
+    (format!("{held}/{}", e.ingredients.len()), theme::AMBER())
+}
+
+/// The ingredient checklist of the detail pane: every line of the recipe with
+/// what is in the pack against what it costs. The sidebar panel collapses this
+/// to one "need materials" string, which names neither the material nor the
+/// shortfall.
+fn craft_material_lines(e: &super::svc::CraftEntryView) -> Vec<Line<'static>> {
+    let mut lines = vec![section("Materials")];
+    for ing in &e.ingredients {
+        let enough = ing.have >= ing.need;
+        let (mark, color) = if enough {
+            ("\u{2713}", theme::SUCCESS())
+        } else {
+            ("\u{2717}", theme::ERROR())
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {mark} "), Style::default().fg(color)),
+            Span::styled(
+                format!("{}x {}", ing.need, ing.name),
+                Style::default().fg(if enough {
+                    theme::TEXT()
+                } else {
+                    theme::TEXT_BRIGHT()
+                }),
+            ),
+            Span::styled(
+                format!("   you have {}", ing.have),
+                Style::default().fg(if enough { theme::TEXT_DIM() } else { color }),
+            ),
+        ]));
+    }
+    lines
+}
+
+/// The trade line: where the maker stands in this skill, what the recipe asks
+/// of it, and what making one is worth in xp.
+fn craft_skill_line(e: &super::svc::CraftEntryView) -> Line<'static> {
+    let gated = e.skill_level < e.level_req;
+    Line::from(vec![
+        Span::styled(
+            format!("  {} {}", e.skill, e.skill_level),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  \u{00b7}  needs {}", e.level_req),
+            Style::default().fg(if gated {
+                theme::ERROR()
+            } else {
+                theme::TEXT_DIM()
+            }),
+        ),
+        Span::styled(
+            format!("  \u{00b7}  +{} xp", e.xp),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ])
+}
+
+/// The craft station as a full screen, the shop's and the pack's third twin:
+/// every recipe worked here on one line (name, whether it can be made, the
+/// upgrade tag) under the collapsible skill headers, and the highlighted recipe
+/// on the right - the piece it makes stood against what is worn in its slot,
+/// the ingredient checklist with what is actually in the pack, and the trade
+/// gate.
+///
+/// The sidebar `crafting_panel` renders each recipe as a name row plus a
+/// wrapped ingredient row and no comparison at all, so a forge's stock of
+/// recipes becomes a scroll with nothing in it to decide on: a maker could not
+/// see whether the sword was better than the one on their hip, nor which of the
+/// four materials they were short of. Same rows, same cursor, same keys in both
+/// renderings; only the shape changes.
+///
+/// Takes its data rather than the `State` it is drawn from, so the layout can
+/// be rendered in a test without standing up a service.
+fn draw_craft_screen(
+    frame: &mut Frame,
+    area: Rect,
+    craft_rows: &[SectionRow],
+    craft: &CraftView,
+    cursor: usize,
+) {
+    let rows = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).split(area);
+
+    // The subtitle carries the trades themselves, not just the furniture: at a
+    // forge, "Smithing 12" is the number that decides what is on this list.
+    let mut trades: Vec<String> = Vec::new();
+    for e in &craft.entries {
+        let label = format!("{} {}", e.skill, e.skill_level);
+        if !trades.contains(&label) {
+            trades.push(label);
+        }
+    }
+    let subtitle = match trades.is_empty() {
+        true => craft.stations.clone(),
+        false => format!("{} - {}", craft.stations, trades.join(", ")),
+    };
+    frame.render_widget(
+        Paragraph::new(item_screen_header(
+            "Crafting",
+            &subtitle,
+            vec![hint("w/s", "select  Enter craft/fold  u back")],
+        )),
+        rows[0],
+    );
+
+    let cols =
+        Layout::horizontal([Constraint::Percentage(52), Constraint::Percentage(48)]).split(rows[1]);
+
+    // Left: one line a recipe - what it makes, whether it can be made, and
+    // whether it beats what is worn.
+    let list_w = cols[0].width as usize;
+    let mut list: Vec<Line> = Vec::new();
+    let mut sel = None;
+    if craft.entries.is_empty() {
+        list.push(Line::from(Span::styled(
+            "  Nothing is worked at this station.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    for (i, row) in craft_rows.iter().enumerate() {
+        let selected = i == cursor;
+        if selected {
+            sel = Some(list.len());
+        }
+        match row {
+            SectionRow::Header {
+                label,
+                count,
+                collapsed,
+                ..
+            } => list.push(section_header_line(label, *count, *collapsed, selected)),
+            SectionRow::Item { index } => {
+                let Some(e) = craft.entries.get(*index) else {
+                    continue;
+                };
+                let name = match e.qty > 1 {
+                    true => format!("{}x {}", e.qty, e.name),
+                    false => e.name.clone(),
+                };
+                list.push(item_row_line(
+                    &name,
+                    &e.rarity,
+                    selected,
+                    craft_status_cell(e),
+                    upgrade_tag(e.compare_pct),
+                    list_w,
+                ));
+            }
+        }
+    }
+    render_scrolled(frame, cols[0], list, sel);
+
+    // Right: what the highlighted recipe makes, what it costs, and what stands
+    // between the maker and it.
+    let detail_w = (cols[1].width as usize).saturating_sub(2);
+    let entry = craft_rows.get(cursor).and_then(|row| match row {
+        SectionRow::Item { index } => craft.entries.get(*index),
+        SectionRow::Header { .. } => None,
+    });
+    let detail = match entry {
+        None if craft.entries.is_empty() => Vec::new(),
+        None => vec![Line::from(Span::styled(
+            "  A trade. Enter folds it; w/s moves on.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ))],
+        Some(e) => {
+            let mut detail = item_detail_lines(
+                &ItemDetail {
+                    name: &e.name,
+                    rarity: &e.rarity,
+                    slot_line: e.slot.as_ref().map(|slot| format!("worn on the {slot}")),
+                    stats: &e.stats,
+                    // Only gear has a rival on your body; a draught or an
+                    // ingot has nothing to be stood against.
+                    compare_to_worn: e.slot.is_some(),
+                    slot: e.slot.as_deref(),
+                    worn_name: e.worn_name.as_deref(),
+                    worn_stats: e.worn_stats.as_deref(),
+                    compare: &e.compare,
+                    compare_pct: e.compare_pct,
+                    desc: e.desc,
+                },
+                detail_w,
+            );
+            detail.extend(craft_material_lines(e));
+            detail.push(Line::raw(""));
+            detail.push(craft_skill_line(e));
+            detail.push(Line::raw(""));
+            detail.push(match (e.craftable, e.skill_level < e.level_req) {
+                (true, _) => prompt_line("Enter to craft it".to_string(), theme::SUCCESS()),
+                (false, true) => prompt_line(
+                    format!(
+                        "{} {} first - you are {}",
+                        e.skill, e.level_req, e.skill_level
+                    ),
+                    theme::ERROR(),
+                ),
+                (false, false) => prompt_line(
+                    "gather the missing materials first".to_string(),
+                    theme::AMBER(),
                 ),
             });
             detail
@@ -5810,6 +6207,20 @@ fn crafting_panel(
                     ));
                 }
                 lines.push(Line::from(name_spans));
+                // What it makes. The panel used to list a name and a pile of
+                // ingredients and never once say what came out of them, so
+                // "Blessed Oil" or "Wyrmhide Mantle" told a maker nothing.
+                if !e.stats.is_empty() {
+                    let mut effect = vec![Span::styled(
+                        format!("    {}", e.stats),
+                        Style::default().fg(theme::AMBER()),
+                    )];
+                    if let Some(span) = compare_span(e.compare_pct) {
+                        effect.push(Span::raw("  "));
+                        effect.push(span);
+                    }
+                    lines.push(Line::from(effect));
+                }
                 // Ingredient row.
                 lines.push(Line::from(Span::styled(
                     format!("    {}", e.inputs),

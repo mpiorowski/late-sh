@@ -10,7 +10,9 @@
 //!
 //! What is left out is the part that needs a referee's judgement rather than a
 //! rule: the miss rule, and touching balls. Both turn on intent, and a
-//! correspondence game has nobody to ask.
+//! correspondence game has nobody to ask. Nothing is *added* either: snooker
+//! has no rule that a ball must reach a cushion after contact, so a roll-up
+//! that touches a red and stops is the legal safety it is on a real table.
 //!
 //! ## Nomination is inferred, not asked for
 //!
@@ -178,10 +180,6 @@ pub fn judge(state: &GameState, outcome: &ShotOutcome) -> Ruling {
         fault = Some(Foul::MultiplePotted);
         at_fault = at_fault.max(potted.iter().copied().map(value).max().unwrap_or(0));
     }
-    if fault.is_none() && potted.is_empty() && stalled_after_contact(outcome) {
-        fault = Some(Foul::NoRail);
-    }
-
     if let Some(foul) = fault {
         // Everything potted goes back up, except reds, which stay down even
         // when the shot was a foul.
@@ -261,11 +259,19 @@ pub fn judge(state: &GameState, outcome: &ShotOutcome) -> Ruling {
     }
 }
 
-/// Nothing potted and nothing reached a cushion: a foul in snooker as much as
-/// in pool, and for the same reason — a shot that does nothing is a shot that
-/// refuses to play.
-fn stalled_after_contact(outcome: &ShotOutcome) -> bool {
-    !outcome.cushion_after_contact
+/// What a snooker ball is called. A pool ball wears its number; these wear
+/// their colour, and a red is any red.
+pub fn name(id: u8) -> &'static str {
+    match id {
+        YELLOW => "yellow",
+        GREEN => "green",
+        BROWN => "brown",
+        BLUE => "blue",
+        PINK => "pink",
+        BLACK => "black",
+        id if is_red(id) => "red",
+        _ => unreachable!("not a snooker ball: {id}"),
+    }
 }
 
 /// Can the striker hit any ball that is on?

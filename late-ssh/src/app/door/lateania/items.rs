@@ -156,11 +156,52 @@ impl Item {
                 if restore != 0 {
                     parts.push(format!("+{restore} res"));
                 }
+                // A meal's lasting half. Without it a Feast of the Wilds reads
+                // as a slightly better draught, when what it actually buys is
+                // the regen that carries you through the next several fights.
+                if let Some(regen) = food_well_fed(self.id).or_else(|| fish_well_fed(self.id)) {
+                    parts.push(format!(
+                        "well fed: +{regen} hp a tick for {} ticks",
+                        super::svc::WELL_FED_TICKS
+                    ));
+                }
                 parts.join(" / ")
             }
-            ItemKind::Utility => format!("sell {}g", self.sell_price()),
+            // A coat says what it coats with. Every oil and poison in the game
+            // used to report its stat line as "sell 12g" - the one number that
+            // has nothing to do with using it - so a shelf of Sparkseed,
+            // Chillrime and Blessed Oil was unreadable: nothing on screen said
+            // which school each one added, how much, or for how long.
+            ItemKind::Utility => self
+                .coat_effect()
+                .unwrap_or_else(|| format!("sell {}g", self.sell_price())),
             ItemKind::Valuable => format!("valuable / sell {}g", self.sell_price()),
         }
+    }
+
+    /// What this item does when used, when that is not already in its stats:
+    /// the coat riders (oils and poisons). Derived from the very constants the
+    /// service applies in `use_item`/`coat_weapon`, so the shelf can never
+    /// promise a number combat does not deliver.
+    ///
+    /// Oil and poison are deliberately different shapes - the oil is the
+    /// sustain coat (a fifth of the auto bar for a whole boss fight), the
+    /// poison the burst one (about a third of the bar for five strikes) - and
+    /// that is the choice a maker is making, so both halves are named.
+    pub fn coat_effect(&self) -> Option<String> {
+        use super::svc::{OIL_CHARGES, OIL_PER_TICK, POISON_CHARGES, POISON_PER_TICK};
+        if let Some(tier) = poison_tier(self.id) {
+            let per = POISON_PER_TICK[(tier as usize).min(POISON_PER_TICK.len() - 1)];
+            return Some(format!(
+                "coat a weapon: +{per} poison a strike for {POISON_CHARGES} strikes"
+            ));
+        }
+        let (school, tier) = oil_school_tier(self.id)?;
+        let per = OIL_PER_TICK[(tier as usize).min(OIL_PER_TICK.len() - 1)];
+        Some(format!(
+            "coat a weapon: +{per} {} a strike for {OIL_CHARGES} strikes",
+            school.label()
+        ))
     }
 }
 
@@ -1827,6 +1868,14 @@ pub fn fish() -> &'static [Item] {
 /// The per-tick well-fed regen a special (legendary) fish grants when eaten, if
 /// it carries one - reuses the same `HealOverTime` self-effect as cooked food
 /// (see `use_item`). `None` for ordinary fish.
+/// The well-fed regen a cooked meal grants on top of its immediate heal, if
+/// `id` is one. Lives here beside `fish_well_fed` rather than inline in
+/// `svc::use_item`, so the number the pack promises and the number the tick
+/// applies are read from one place.
+pub fn food_well_fed(id: u32) -> Option<i32> {
+    food_tier(id).map(|t| 2 + t as i32)
+}
+
 pub fn fish_well_fed(id: u32) -> Option<i32> {
     if !(FISH_BASE..FISH_BASE + FISH_COUNT).contains(&id) {
         return None;

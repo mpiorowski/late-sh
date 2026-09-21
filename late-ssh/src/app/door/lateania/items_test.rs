@@ -698,3 +698,77 @@ fn oil_ids_roundtrip_school_and_tier() {
     }
     assert_eq!(oil_school_tier(poison_id(2)), None, "poisons are not oils");
 }
+
+#[test]
+fn a_coat_says_which_school_it_adds_and_for_how_long_not_what_it_sells() {
+    use super::super::svc::{OIL_CHARGES, OIL_PER_TICK, POISON_CHARGES, POISON_PER_TICK};
+    use super::{OIL_SCHOOLS, item, oil_id, poison_id};
+
+    // Every oil and poison used to report its stat line as "sell 12g" - the
+    // one number that has nothing to do with using it - so a shelf of
+    // Sparkseed, Chillrime and Blessed Oil said nothing about what separated
+    // them. Each one now names its school, its rider, and its window.
+    for (s, school) in OIL_SCHOOLS.iter().enumerate() {
+        for t in 0..6u32 {
+            let it = item(oil_id(s as u32, t)).expect("oil exists");
+            let summary = it.stat_summary();
+            assert!(
+                summary.contains(school.label()),
+                "{} names its school: {summary:?}",
+                it.name
+            );
+            assert!(
+                summary.contains(&format!("+{}", OIL_PER_TICK[t as usize])),
+                "{} names its rider: {summary:?}",
+                it.name
+            );
+            assert!(
+                summary.contains(&format!("{OIL_CHARGES} strikes")),
+                "{} names its window: {summary:?}",
+                it.name
+            );
+            assert!(
+                !summary.contains("sell"),
+                "{} describes using it, not selling it: {summary:?}",
+                it.name
+            );
+        }
+    }
+
+    // The poison is the other half of the same choice - a bigger rider over a
+    // shorter window - so it is stated in the same terms, or the two cannot be
+    // compared.
+    for t in 0..6u32 {
+        let it = item(poison_id(t)).expect("poison exists");
+        let summary = it.stat_summary();
+        assert!(
+            summary.contains("poison")
+                && summary.contains(&format!("+{}", POISON_PER_TICK[t as usize]))
+                && summary.contains(&format!("{POISON_CHARGES} strikes")),
+            "{} states its rider and window: {summary:?}",
+            it.name
+        );
+    }
+}
+
+#[test]
+fn a_cooked_meal_says_the_regen_it_leaves_behind_as_well_as_the_heal() {
+    use super::super::svc::WELL_FED_TICKS;
+    use super::{food_id, food_well_fed, item};
+
+    for t in 0..6u32 {
+        let it = item(food_id(t)).expect("meal exists");
+        let summary = it.stat_summary();
+        let regen = food_well_fed(food_id(t)).expect("a meal is well-fed food");
+        assert!(
+            summary.contains("heal "),
+            "{} still leads with the immediate heal: {summary:?}",
+            it.name
+        );
+        assert!(
+            summary.contains(&format!("+{regen} hp a tick for {WELL_FED_TICKS} ticks")),
+            "{} names the lasting half, or it reads as a worse draught: {summary:?}",
+            it.name
+        );
+    }
+}

@@ -361,3 +361,20 @@ fn only_snooker_scores() {
     let (small, big) = (SNOOKER_12FT.ball_radius, BAR_BOX_7FT.ball_radius);
     assert!(small < big, "{small} against {big}");
 }
+
+#[test]
+fn a_roll_up_with_nothing_to_a_cushion_is_a_legal_safety() {
+    // Snooker has no "a ball must reach a rail" rule. Rolling the cue ball
+    // up to a red so that nothing touches a cushion is an ordinary safety,
+    // and charging it four points was inventing a foul.
+    let state = frame();
+    let outcome = ShotOutcome {
+        first_contact: Some(RED_FIRST),
+        cushion_after_contact: false,
+        ..ShotOutcome::default()
+    };
+    let ruling = RULES.judge(&state, &outcome, None);
+    assert_eq!(ruling.foul, None, "a roll-up is not a foul: {ruling:?}");
+    assert_eq!(ruling.turn, Turn::Pass);
+    assert_eq!(ruling.penalty, 0);
+}

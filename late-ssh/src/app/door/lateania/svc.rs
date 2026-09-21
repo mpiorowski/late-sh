@@ -567,16 +567,61 @@ pub struct SkillView {
     pub xp_next: i64,
 }
 
+/// One ingredient line of a recipe, with how many the player is actually
+/// holding. The craft screen tells a maker *which* material they are short of;
+/// a single "need materials" string cannot, and sends them back to the shops
+/// guessing.
+#[derive(Clone, Debug)]
+pub struct CraftIngredientView {
+    pub name: String,
+    /// How many the recipe consumes.
+    pub need: u32,
+    /// How many are in the pack right now.
+    pub have: u32,
+}
+
 /// One recipe row in the crafting panel.
+///
+/// Carries what the output *is*, not just its name: a craft is a gear decision
+/// like a purchase is, so the screen stands the piece it would make against
+/// what is worn in its slot with the same `ItemDetail` the shop and the pack
+/// use (`stats`/`compare`/`compare_pct`/`worn_*`).
 #[derive(Clone, Debug)]
 pub struct CraftEntryView {
     /// Global recipe index, passed back to `craft`.
     pub recipe: usize,
+    /// The item id this recipe produces, for power-ordering the list.
+    pub item_id: u32,
     pub name: String,
+    pub rarity: String,
+    /// How many the craft yields; 1 for almost everything.
+    pub qty: u32,
     /// The craft skill it trains, e.g. "Smithing".
     pub skill: String,
+    /// The player's level in that skill, and the level the recipe wants.
+    pub skill_level: i32,
+    pub level_req: i32,
+    /// Craft xp the recipe grants.
+    pub xp: i32,
     /// Compact ingredient list, e.g. "3x Copper Ingot, 1x Oak Plank".
     pub inputs: String,
+    /// The same list itemised, with what is held against what is needed.
+    pub ingredients: Vec<CraftIngredientView>,
+    /// Compact stat summary of the output, e.g. "+16 atk".
+    pub stats: String,
+    /// How the output compares to what's worn in its slot (see `InvView::compare`).
+    pub compare: String,
+    /// The same comparison as a percent power change (see `InvView::compare_pct`).
+    pub compare_pct: Option<i32>,
+    /// The slot the output goes in, or None for consumables and materials.
+    pub slot: Option<String>,
+    /// What is worn in that slot right now, for the side-by-side.
+    pub worn_name: Option<String>,
+    pub worn_stats: Option<String>,
+    /// The output's flavor text.
+    pub desc: &'static str,
+    /// The collapsible category the output would sit in, for the detail pane.
+    pub category: &'static str,
     /// True when it can be made right now (station here, skilled enough, have
     /// the materials).
     pub craftable: bool,
@@ -3841,7 +3886,7 @@ pub(super) const OIL_CHARGES: u8 = 12;
 #[cfg(test)]
 pub(super) const AUTO_SHARE: f64 = 0.75;
 /// Ticks a cooked meal's well-fed regen lasts.
-const WELL_FED_TICKS: u8 = 8;
+pub(super) const WELL_FED_TICKS: u8 = 8;
 
 /// Percent of the caster's spell power an ability adds to its table
 /// magnitude, by effect. Instant hits get the most, a finisher more still,
@@ -7763,9 +7808,8 @@ impl WorldState {
         }
         // Cooked food grants a well-fed regen on top of its immediate heal, and
         // so do the rarest Sunderlakes fish (their "special" - see fish_well_fed).
-        let well_fed = super::items::food_tier(item_id)
-            .map(|t| 2 + t as i32)
-            .or_else(|| super::items::fish_well_fed(item_id));
+        let well_fed =
+            super::items::food_well_fed(item_id).or_else(|| super::items::fish_well_fed(item_id));
         if let Some(p) = self.players.get_mut(&user_id) {
             if let Some(pos) = p.inventory.iter().position(|i| *i == item_id) {
                 p.inventory.remove(pos);
@@ -10377,23 +10421,28 @@ impl WorldState {
                     let mut entries = Vec::new();
                     for &st in &stations {
                         let clevel = skill_level_for_xp(player.craft_xp(st));
+                        let first = entries.len();
                         for ri in recipe_indices_for(st) {
                             let Some(rc) = recipe(ri) else {
                                 continue;
                             };
-                            let inputs = rc
+                            let ingredients: Vec<CraftIngredientView> = rc
                                 .inputs
                                 .iter()
-                                .map(|ing| {
-                                    let n = item(ing.item).map(|i| i.name).unwrap_or("?");
-                                    format!("{}x {n}", ing.qty)
+                                .map(|ing| CraftIngredientView {
+                                    name: item(ing.item)
+                                        .map(|i| i.name.to_string())
+                                        .unwrap_or_else(|| "?".to_string()),
+                                    need: ing.qty,
+                                    have: player.item_count(ing.item),
                                 })
+                                .collect();
+                            let inputs = ingredients
+                                .iter()
+                                .map(|ing| format!("{}x {}", ing.need, ing.name))
                                 .collect::<Vec<_>>()
                                 .join(", ");
-                            let have_mats = rc
-                                .inputs
-                                .iter()
-                                .all(|ing| player.item_count(ing.item) >= ing.qty);
+                            let have_mats = ingredients.iter().all(|ing| ing.have >= ing.need);
                             let (craftable, reason) = if clevel < rc.level_req {
                                 (false, format!("needs {} {}", st.label(), rc.level_req))
                             } else if !have_mats {
@@ -10401,17 +10450,59 @@ impl WorldState {
                             } else {
                                 (true, String::new())
                             };
+                            // The output as a piece of gear, so the screen can
+                            // stand it against what is worn the way the shop
+                            // stands a listing against it.
+                            let out = item(rc.output);
+                            let worn = out
+                                .and_then(Item::slot)
+                                .and_then(|slot| player.equipped.get(&slot))
+                                .and_then(|id| item(*id))
+                                .filter(|worn| Some(worn.id) != out.map(|o| o.id));
                             entries.push(CraftEntryView {
                                 recipe: ri,
-                                name: item(rc.output)
-                                    .map(|i| i.name.to_string())
+                                item_id: rc.output,
+                                name: out.map(|i| i.name.to_string()).unwrap_or_default(),
+                                rarity: out
+                                    .map(|i| i.rarity.label().to_string())
                                     .unwrap_or_default(),
+                                qty: rc.output_qty,
                                 skill: st.label().to_string(),
+                                skill_level: clevel,
+                                level_req: rc.level_req,
+                                xp: rc.xp,
                                 inputs,
+                                ingredients,
+                                stats: out.map(Item::stat_summary).unwrap_or_default(),
+                                compare: out
+                                    .map(|i| compare_to_worn(&player.equipped, i))
+                                    .unwrap_or_default(),
+                                compare_pct: out.and_then(|i| player.compare_gear(i)),
+                                slot: out.and_then(Item::slot).map(|s| s.label().to_string()),
+                                worn_name: worn.map(|w| w.name.to_string()),
+                                worn_stats: worn.map(|w| w.stat_summary()),
+                                desc: out.map(|i| i.desc).unwrap_or(""),
+                                category: out.map(|i| item_category(&i.kind)).unwrap_or("Goods"),
                                 craftable,
                                 reason,
                             });
                         }
+                        // Best first inside this trade, the way the shop orders
+                        // its stock: the tier a maker is reaching for sits at
+                        // the top of its skill, not wherever the recipe table
+                        // happened to put it. `power` orders gear, the level
+                        // gate stands in for everything else (a deeper draught
+                        // wants a deeper skill), and the recipe index keeps it
+                        // stable. Sorted per station so the sections themselves
+                        // still appear in station order.
+                        entries[first..].sort_by(|a, b| {
+                            let power =
+                                |e: &CraftEntryView| item(e.item_id).map(Item::power).unwrap_or(0);
+                            power(b)
+                                .cmp(&power(a))
+                                .then(b.level_req.cmp(&a.level_req))
+                                .then(a.recipe.cmp(&b.recipe))
+                        });
                     }
                     Some(CraftView {
                         stations: stations

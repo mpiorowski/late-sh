@@ -243,7 +243,7 @@ impl PoolDraft {
             // has to be put back before anything else can happen; a ball in
             // hand from any other foul is something a player would take nine
             // times in ten, and arriving already holding it is how they find
-            // out they have it. Right click puts it back down untouched.
+            // out they have it. Right click puts it back where it lay.
             mode: if state.ball_in_hand.is_some() {
                 ShotMode::Place
             } else {
@@ -321,6 +321,7 @@ impl PoolDraft {
             &self.frames(state),
             from,
             self.azimuth,
+            self.tip[0],
         ))
     }
 
@@ -475,9 +476,17 @@ impl PoolDraft {
                 self.tip = [0.0, 0.0];
                 moved
             }
+            // Back where it lay: a potted cue ball has only its opening spot
+            // to go back to, one still on the table goes back to where it
+            // is, which is no placement at all.
             ShotMode::Place => {
                 let was = self.place;
-                self.place = opening_placement(state);
+                let back = if state.must_place() {
+                    opening_placement(state)
+                } else {
+                    None
+                };
+                self.carry(state, back);
                 self.place != was
             }
             ShotMode::Stroke(_) => self.cancel(),
@@ -664,7 +673,14 @@ impl PoolDraft {
         let Ok(spec) = state.spec() else {
             return false;
         };
-        let pots = aim::pot_lines(spec, &spec.geometry(), &self.frames(state), from, target);
+        let pots = aim::pot_lines(
+            spec,
+            &spec.geometry(),
+            &self.frames(state),
+            from,
+            target,
+            self.tip[0],
+        );
         if pots.is_empty() {
             return false;
         }
@@ -742,8 +758,27 @@ impl PoolDraft {
         let Some(spot) = pool_rules::free_spot(spec, &geom, &state.rack, at, zone) else {
             return false;
         };
-        self.place = Some(spot);
+        self.carry(state, Some(spot));
         true
+    }
+
+    /// Move the held cue ball to `spot` (`None` is where it lies) and keep
+    /// the line on the ball it was on.
+    ///
+    /// Ball in hand is played as pick the ball, then walk the cue ball until
+    /// the shot is straight. A bearing that stayed put while the ball moved
+    /// swung the line off onto a rail at every step, so the player was
+    /// aiming again instead of placing. The line is re-laid dead at the ball
+    /// it was sighted on; a line on a bare spot of cloth is a bearing and
+    /// stays one.
+    fn carry(&mut self, state: &DailyPoolState, spot: Option<[f64; 2]>) {
+        let followed = self.target(state);
+        self.place = spot;
+        if let Some(id) = followed
+            && let Some(ball) = state.rack.get(id).filter(|b| b.potted.is_none())
+        {
+            self.aim_at_point(state, ball.pos);
+        }
     }
 
     /// A click on the cloth while holding the ball: set it down, and put the

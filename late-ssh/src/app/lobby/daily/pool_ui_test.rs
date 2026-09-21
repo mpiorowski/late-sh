@@ -20,16 +20,26 @@ fn pool_state() -> DailyPoolState {
 }
 
 #[test]
-fn the_hint_row_fits_the_board_it_sits_under() {
-    // It is one centred line at the bottom of the screen; a hint wider than
-    // the minimum board is a hint that gets clipped exactly when a new player
-    // most needs to read it.
+fn the_status_line_fits_the_board_at_its_longest() {
+    // The status line is one centred row: whose shot, the armed mode with
+    // what the mouse does in it, whatever the rules are asking for, and the
+    // clock. Lay out every mode against every prompt with the longest clock
+    // and the whole thing must still fit the minimum board, or the guidance
+    // is clipped exactly when a new player most needs to read it.
+    let clock = "   23h 59m on the clock";
     for mode in ShotMode::ALL {
-        let width = mode.hint().chars().count();
-        assert!(
-            width <= MIN_WIDTH as usize,
-            "{mode:?} hint is {width} wide, past the {MIN_WIDTH}-column minimum"
-        );
+        for prompt in Prompt::ALL.into_iter().map(Some).chain([None]) {
+            let text: String = shooter_spans(mode, prompt)
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
+            let width = "Your shot".len() + text.chars().count() + clock.len();
+            assert!(
+                width <= MIN_WIDTH as usize,
+                "{mode:?} with {prompt:?} is {width} wide, past the {MIN_WIDTH}-column minimum: \
+                 Your shot{text}{clock}"
+            );
+        }
     }
 }
 
@@ -62,12 +72,7 @@ fn the_layout_still_works_at_the_smallest_board_we_accept() {
     // is fixed-width and the table takes the rest, so the minimum size is the
     // one place where growing a panel silently squeezes the table to nothing.
     let area = Rect::new(0, 0, MIN_WIDTH, MIN_HEIGHT);
-    let rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Fill(1),
-        Constraint::Length(1),
-    ])
-    .split(area);
+    let rows = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
     let cols =
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(PANEL_WIDTH)]).split(rows[1]);
     assert!(
@@ -79,12 +84,17 @@ fn the_layout_still_works_at_the_smallest_board_we_accept() {
 
     let (cue_rows, legend_rows) = column_split(cols[1].height);
     assert!(
-        cue_rows > READOUT_ROWS,
-        "the cue drawing needs rows of its own once the readouts have theirs"
+        cue_rows >= READOUT_ROWS + MIN_CUE_ROWS_WITH_LEGEND,
+        "the cue drawing keeps rows of its own once the readouts have theirs: {cue_rows}"
     );
     assert_eq!(
-        legend_rows, 0,
-        "the smallest board has no room to teach the keys without losing the cue"
+        legend_rows, LEGEND_ROWS,
+        "the legend is the only place the keys are taught, so the smallest board shows it"
+    );
+    assert_eq!(
+        INFO_ROWS + cue_rows + legend_rows,
+        cols[1].height,
+        "the column is spent to the last row"
     );
 }
 
@@ -103,12 +113,12 @@ fn a_tall_board_shows_the_whole_key_legend_and_caps_the_cue() {
     assert_eq!(
         LEGEND.len() as u16 + 1,
         LEGEND_ROWS,
-        "every row of the legend fits in the rows reserved for it"
+        "every row of the legend, plus the exit row, fits in the rows reserved for it"
     );
     // Two keys to a row in a panel this narrow: keys and labels must fit the
     // narrowest column, or the second one is clipped mid-word.
-    let inner = PANEL_WIDTH - 2;
-    for row in LEGEND {
+    let inner = PANEL_WIDTH - 1;
+    for row in LEGEND.into_iter().chain([exit_row(true), exit_row(false)]) {
         let width = format!(
             "{:<6}{:<10}{:<4}{:<10}",
             row[0].0, row[0].1, row[1].0, row[1].1
@@ -121,6 +131,41 @@ fn a_tall_board_shows_the_whole_key_legend_and_caps_the_cue() {
             "{row:?} is {width} wide, past the {inner}-column panel"
         );
     }
+}
+
+#[test]
+fn the_status_line_never_says_the_same_thing_twice() {
+    // Carrying the cue ball: the mode's hint is the placing instruction, so
+    // the prompt about placing it goes. Cue ball off the table and not yet
+    // picked up: the prompt is the one thing to do, so the aiming hint goes.
+    let text = |mode, prompt| -> String {
+        shooter_spans(mode, prompt)
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    };
+    let carrying = text(ShotMode::Place, Some(Prompt::MustPlace));
+    assert!(carrying.contains(ShotMode::Place.hint()), "{carrying}");
+    assert!(!carrying.contains("set the cue ball down"), "{carrying}");
+
+    let stranded = text(ShotMode::Idle, Some(Prompt::MustPlace));
+    assert!(stranded.contains("set the cue ball down"), "{stranded}");
+    assert!(!stranded.contains(ShotMode::Idle.hint()), "{stranded}");
+
+    // A pocket to call is news in every mode, and so is the hint.
+    let calling = text(ShotMode::Aim, Some(Prompt::CallPocket));
+    assert!(calling.contains(ShotMode::Aim.hint()), "{calling}");
+    assert!(calling.contains("call a pocket"), "{calling}");
+}
+
+#[test]
+fn the_exit_row_only_offers_chat_where_there_is_one() {
+    // `i` opens the match chat, and a match without a room has nothing for it
+    // to open. The lobby key stays either way.
+    assert!(exit_row(true).contains(&("i", "chat")));
+    assert!(!exit_row(false).iter().any(|(key, _)| *key == "i"));
+    assert!(exit_row(true).contains(&("Q", "lobby")));
+    assert!(exit_row(false).contains(&("Q", "lobby")));
 }
 
 #[test]

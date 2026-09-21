@@ -1001,6 +1001,7 @@ fn the_aim_overlay_changes_the_picture() {
                 &frames(),
                 [SPEC.length * 0.25, SPEC.width * 0.5],
                 0.0,
+                0.0,
             )),
             ..Overlay::default()
         },
