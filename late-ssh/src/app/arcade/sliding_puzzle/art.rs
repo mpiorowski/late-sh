@@ -58,7 +58,10 @@ pub struct ArtGrid {
 
 pub fn art_grid(art: &PuzzleArt, difficulty: Difficulty) -> ArtGrid {
     let dimension = board_dimension(difficulty);
-    let tile_width = art.width.div_ceil(dimension).max(usize::from(MIN_ART_TILE_GEOMETRY.width));
+    let tile_width = art
+        .width
+        .div_ceil(dimension)
+        .max(usize::from(MIN_ART_TILE_GEOMETRY.width));
     let tile_height = art
         .height
         .div_ceil(dimension)
@@ -131,7 +134,11 @@ fn glyph_style(fg: Option<dartboard_core::RgbColor>) -> Style {
 
 /// The cells of `tile` in its solved position: `tile` 1 is the top-left
 /// cut, the gap (0) has no art.
-pub fn tile_fragment(grid: &ArtGrid, difficulty: Difficulty, tile: u8) -> Option<Vec<Line<'static>>> {
+pub fn tile_fragment(
+    grid: &ArtGrid,
+    difficulty: Difficulty,
+    tile: u8,
+) -> Option<Vec<Line<'static>>> {
     let dimension = board_dimension(difficulty);
     if tile == 0 || usize::from(tile) >= dimension * dimension {
         return None;

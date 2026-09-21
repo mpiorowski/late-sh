@@ -298,11 +298,7 @@ pub struct ArcadeHubView<'a> {
 /// re-decided as a literal at each call site.
 pub const SHOW_GAME_BOTTOM_BAR: bool = true;
 
-pub fn draw_arcade_hub(
-    frame: &mut Frame,
-    area: Rect,
-    view: &ArcadeHubView<'_>,
-) {
+pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
     let show_bottom_bar = SHOW_GAME_BOTTOM_BAR;
     if view.is_playing_game {
         if view.game_selection == GAME_SELECTION_2048 {

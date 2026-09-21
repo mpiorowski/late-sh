@@ -17,8 +17,7 @@ fn hit_test_maps_every_tile_rect_to_its_board_index() {
     for art in [None, Some(ART)] {
         for &difficulty in Difficulty::ALL {
             let board_area = game_content_area(area, true, SHOW_GAME_BOTTOM_BAR);
-            let (grid, geometry) =
-                board_layout(board_area, difficulty, art).expect("board fits");
+            let (grid, geometry) = board_layout(board_area, difficulty, art).expect("board fits");
             assert_eq!(art.unwrap_or(NUMBERED_TILE_GEOMETRY), geometry);
             let dimension = board_dimension(difficulty);
 
@@ -65,8 +64,7 @@ fn art_that_does_not_fit_falls_back_to_the_numbered_grid() {
     assert_eq!(geometry, NUMBERED_TILE_GEOMETRY);
     assert_eq!(grid.width, 3 * NUMBERED_TILE_GEOMETRY.width);
 
-    let (grid, geometry) =
-        board_layout(board_area, Difficulty::Easy, Some(ART)).expect("art fits");
+    let (grid, geometry) = board_layout(board_area, Difficulty::Easy, Some(ART)).expect("art fits");
     assert_eq!(geometry, ART);
     assert_eq!(grid.width, 3 * ART.width);
 }

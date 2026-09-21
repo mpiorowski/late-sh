@@ -202,6 +202,7 @@ mod inner {
     };
 
     use super::ShareCardKind;
+    use super::SlidingPuzzleArtLoad;
     use super::XMediaLookup;
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
@@ -211,7 +212,6 @@ mod inner {
         SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
-    use super::SlidingPuzzleArtLoad;
     use crate::app::bonsai::state::BranchAction;
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -998,7 +998,10 @@ mod inner {
     pub fn record_sliding_puzzle_art(load: SlidingPuzzleArtLoad) {
         sliding_puzzle_art_loads_total().add(
             1,
-            &[KeyValue::new("outcome", sliding_puzzle_art_load_label(load))],
+            &[KeyValue::new(
+                "outcome",
+                sliding_puzzle_art_load_label(load),
+            )],
         );
     }
 
@@ -1420,6 +1423,7 @@ mod inner {
 #[cfg(not(feature = "otel"))]
 mod inner {
     use super::ShareCardKind;
+    use super::SlidingPuzzleArtLoad;
     use super::XMediaLookup;
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
@@ -1429,7 +1433,6 @@ mod inner {
         SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
-    use super::SlidingPuzzleArtLoad;
 
     pub fn record_ssh_connection() {}
     pub fn record_ssh_connection_rejected(_reason: SshRejectReason) {}

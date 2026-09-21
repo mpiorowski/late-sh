@@ -323,4 +323,48 @@ async fn the_board_lands_yesterdays_gallery_piece_as_its_art() {
             .map(|featured| featured.id),
         Some(piece.id)
     );
+
+    // A piece a mod pins today (`/mod artboard feature`) shows on the next
+    // open from the lobby, no reconnect needed.
+    let pinned = match ArtboardPiece::hang(
+        &client,
+        HangParams {
+            user_id: painter.id,
+            title: "pinned".to_string(),
+            width: 12,
+            height: 4,
+            canvas: json!({
+                "width": 12,
+                "height": 4,
+                "cells": [[{"x": 1, "y": 1}, {"Narrow": "@"}]],
+                "colors": [],
+            }),
+            provenance: json!({ "cells": [[{"x": 1, "y": 1}, "painter"]] }),
+            glyph_count: 40,
+            own_share_percent: 100,
+            content_hash: "hash-pinned".to_string(),
+        },
+    )
+    .await
+    .expect("hang")
+    {
+        HangOutcome::Hung(piece) => piece,
+        other => panic!("expected the piece to hang, got {other:?}"),
+    };
+    ArtboardPiece::feature_now(&client, pinned.id, state.puzzle_date())
+        .await
+        .expect("pin")
+        .expect("the piece is up");
+    state.open_daily(0);
+    assert_eq!(state.art_status(), ArtStatus::Loading);
+    wait_until(
+        || {
+            state.poll_art();
+            let landed = state.art_credit().as_deref()
+                == Some(format!("pinned by @{}", painter.username).as_str());
+            async move { landed }
+        },
+        "the pinned piece to land",
+    )
+    .await;
 }

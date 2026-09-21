@@ -81,7 +81,9 @@ enum ArtSlot {
     Ready(Box<ReadyArt>),
     /// Nothing in the gallery's backlog, or the gallery switched off.
     Empty,
-    Failed { retry_after: Instant },
+    Failed {
+        retry_after: Instant,
+    },
 }
 
 struct ReadyArt {
@@ -292,10 +294,9 @@ impl State {
             return None;
         }
         match &self.art {
-            ArtSlot::Ready(ready) => Some(format!(
-                "{} by @{}",
-                ready.art.title, ready.art.username
-            )),
+            ArtSlot::Ready(ready) => {
+                Some(format!("{} by @{}", ready.art.title, ready.art.username))
+            }
             _ => None,
         }
     }
@@ -353,8 +354,14 @@ impl State {
         self.mode == Mode::Daily
     }
 
+    /// Opening the board from the lobby asks for the day's art again, so a
+    /// piece pinned or taken down by a mod shows without a reconnect. One
+    /// cheap query per open; a load already in flight is left alone.
     pub fn open_daily(&mut self, difficulty_index: usize) {
         self.clear_reset_pending();
+        if !matches!(self.art, ArtSlot::Loading(_)) {
+            self.art = ArtSlot::Unrequested;
+        }
         self.mode = Mode::Daily;
         self.selected_difficulty = difficulty_index.min(DIFFICULTIES.len() - 1);
         self.message = self.board_message();

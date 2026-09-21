@@ -193,6 +193,14 @@ impl ListingCounts {
     }
 }
 
+/// What `feature_now` pinned: enough for the audit row and the receipt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FeaturedPiece {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub title: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemovedPiece {
     pub id: Uuid,
@@ -438,7 +446,10 @@ impl ArtboardPiece {
     /// switch (`artboard_gallery_enabled`) is in both statements, the way
     /// the paper's wall column obeys it. `None` is an empty backlog or the
     /// switch off.
-    pub async fn feature_for_day(client: &impl GenericClient, day: NaiveDate) -> Result<Option<Self>> {
+    pub async fn feature_for_day(
+        client: &impl GenericClient,
+        day: NaiveDate,
+    ) -> Result<Option<Self>> {
         if let Some(piece) = Self::featured_on(client, day).await? {
             return Ok(Some(piece));
         }
@@ -465,6 +476,37 @@ impl ArtboardPiece {
             Err(error) => return Err(error.into()),
         }
         Self::featured_on(client, day).await
+    }
+
+    /// A mod pins a piece as `day`'s puzzle art, whatever the queue would
+    /// have picked and however recently it was hung (the way to see a piece
+    /// on the board the day it was hung). Whatever held the day goes back
+    /// to the backlog unfeatured. `None` when the piece is down or missing.
+    pub async fn feature_now(
+        client: &impl GenericClient,
+        piece_id: Uuid,
+        day: NaiveDate,
+    ) -> Result<Option<FeaturedPiece>> {
+        client
+            .execute(
+                "UPDATE artboard_pieces SET featured_on = NULL
+                 WHERE featured_on = $1 AND id <> $2",
+                &[&day, &piece_id],
+            )
+            .await?;
+        let row = client
+            .query_opt(
+                "UPDATE artboard_pieces SET featured_on = $1
+                 WHERE id = $2 AND removed_at IS NULL
+                 RETURNING id, user_id, title",
+                &[&day, &piece_id],
+            )
+            .await?;
+        Ok(row.map(|row| FeaturedPiece {
+            id: row.get("id"),
+            user_id: row.get("user_id"),
+            title: row.get("title"),
+        }))
     }
 
     async fn featured_on(client: &impl GenericClient, day: NaiveDate) -> Result<Option<Self>> {

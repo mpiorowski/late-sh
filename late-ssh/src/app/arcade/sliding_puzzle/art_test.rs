@@ -2,7 +2,9 @@ use dartboard_core::{Canvas, Pos, RgbColor};
 use late_core::models::chips::Difficulty;
 use ratatui::style::Color;
 
-use super::art::{ArtGrid, MIN_ART_TILE_GEOMETRY, PuzzleArt, TileGeometry, art_grid, tile_fragment};
+use super::art::{
+    ArtGrid, MIN_ART_TILE_GEOMETRY, PuzzleArt, TileGeometry, art_grid, tile_fragment,
+};
 
 fn piece(width: usize, height: usize, paint: impl FnOnce(&mut Canvas)) -> PuzzleArt {
     let mut canvas = Canvas::with_size(width, height);
@@ -19,7 +21,12 @@ fn piece(width: usize, height: usize, paint: impl FnOnce(&mut Canvas)) -> Puzzle
 fn text(grid: &ArtGrid) -> Vec<String> {
     grid.lines
         .iter()
-        .map(|line| line.spans.iter().map(|span| span.content.as_ref()).collect())
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        })
         .collect()
 }
 
@@ -37,17 +44,18 @@ fn a_small_piece_is_padded_to_the_minimum_tile_and_centred() {
     assert!(rows.iter().all(|row| row.chars().count() == 18), "{rows:?}");
     assert_eq!(rows[2], "   #              ");
     assert_eq!(rows[5], "              @   ");
-    assert_eq!(
-        grid.lines[5].spans[14].style.fg,
-        Some(Color::Rgb(1, 2, 3))
-    );
+    assert_eq!(grid.lines[5].spans[14].style.fg, Some(Color::Rgb(1, 2, 3)));
 
     // Tile 1 is the top-left cut and carries the `#`; the gap has no art.
     let first = tile_fragment(&grid, Difficulty::Easy, 1).expect("tile 1");
     assert_eq!(
         first
             .iter()
-            .map(|line| line.spans.iter().map(|span| span.content.as_ref()).collect::<String>())
+            .map(|line| line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>())
             .collect::<Vec<_>>(),
         vec!["      ", "      ", "   #  "]
     );

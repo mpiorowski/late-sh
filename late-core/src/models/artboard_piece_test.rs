@@ -3,8 +3,8 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::models::artboard_piece::{
-    ApplauseOutcome, ArtboardPiece, HangOutcome, HangParams, ListingCounts, PIECE_DAILY_CAP,
-    PieceListing, PieceLookup, PodiumPiece, TakeDownOutcome,
+    ApplauseOutcome, ArtboardPiece, FeaturedPiece, HangOutcome, HangParams, ListingCounts,
+    PIECE_DAILY_CAP, PieceListing, PieceLookup, PodiumPiece, TakeDownOutcome,
 };
 use crate::models::profile_award::snapshot_previous_month_profile_awards;
 use crate::test_utils::{create_test_user, roll_artboard_pieces_back_a_month, test_db};
@@ -502,6 +502,43 @@ async fn puzzle_art_claims_the_most_applauded_backlog_piece_once_per_day() {
             .await
             .expect("claim")
             .is_none()
+    );
+
+    // A mod pins a piece for the day regardless of when it was hung; the
+    // day's previous holder goes back to the backlog.
+    let pinned = ArtboardPiece::feature_now(&client, fresh.id, day(1))
+        .await
+        .expect("pin")
+        .expect("the piece is up");
+    assert_eq!(
+        pinned,
+        FeaturedPiece {
+            id: fresh.id,
+            user_id: painter.id,
+            title: "fresh".to_string(),
+        }
+    );
+    assert_eq!(
+        ArtboardPiece::feature_for_day(&client, day(1))
+            .await
+            .expect("claim")
+            .map(|piece| piece.id),
+        Some(fresh.id)
+    );
+    assert_eq!(
+        ArtboardPiece::feature_for_day(&client, day(4))
+            .await
+            .expect("claim")
+            .map(|piece| piece.id),
+        Some(quiet.id),
+        "the displaced piece is back in the queue"
+    );
+    assert!(
+        ArtboardPiece::feature_now(&client, loud.id, day(1))
+            .await
+            .expect("pin")
+            .is_none(),
+        "a piece that is down cannot be pinned"
     );
 
     // The gallery's switch turns the puzzle's art off with everything else.

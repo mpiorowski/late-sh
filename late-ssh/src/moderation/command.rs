@@ -83,6 +83,11 @@ pub(crate) enum ModCommand {
         id_prefix: String,
         reason: String,
     },
+    /// Pin a gallery piece as today's Sliding Puzzle art, skipping the
+    /// queue and the hung-before-today rule.
+    ArtboardFeaturePiece {
+        id_prefix: String,
+    },
     /// The gallery's kill switch (`app_flags.artboard_gallery_enabled`).
     ArtboardGallery {
         enabled: bool,
@@ -738,7 +743,7 @@ fn required_slow_scope(value: &str, usage: &str) -> Result<SlowScope> {
 }
 
 fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
-    const USAGE: &str = "usage: artboard <restore|curate|remove|gallery> ...";
+    const USAGE: &str = "usage: artboard <restore|curate|remove|feature|gallery> ...";
     let Some(first) = parts.first().copied() else {
         anyhow::bail!(USAGE);
     };
@@ -746,6 +751,7 @@ fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
         "restore" => parse_artboard_restore_mod_command(&parts[1..]),
         "curate" => parse_artboard_curate_mod_command(&parts[1..]),
         "remove" => parse_artboard_remove_mod_command(&parts[1..]),
+        "feature" => parse_artboard_feature_mod_command(&parts[1..]),
         "gallery" => parse_artboard_gallery_mod_command(&parts[1..]),
         _ => anyhow::bail!(USAGE),
     }
@@ -753,21 +759,35 @@ fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
 
 fn parse_artboard_remove_mod_command(parts: &[&str]) -> Result<ModCommand> {
     const USAGE: &str = "usage: artboard remove <piece-id-prefix> [reason...]";
-    let Some(id_prefix) = parts.first().copied() else {
-        anyhow::bail!(USAGE);
+    let id_prefix = piece_id_prefix(parts.first().copied(), USAGE)?;
+    let reason = parts.get(1..).unwrap_or_default().join(" ");
+    Ok(ModCommand::ArtboardRemovePiece { id_prefix, reason })
+}
+
+fn parse_artboard_feature_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    const USAGE: &str = "usage: artboard feature <piece-id-prefix>";
+    match parts {
+        [id_prefix] => Ok(ModCommand::ArtboardFeaturePiece {
+            id_prefix: piece_id_prefix(Some(id_prefix), USAGE)?,
+        }),
+        _ => anyhow::bail!(USAGE),
+    }
+}
+
+/// At least the first eight characters of a piece id, as the piece view
+/// prints it, so a typo never reaches the database.
+fn piece_id_prefix(value: Option<&str>, usage: &str) -> Result<String> {
+    let Some(id_prefix) = value else {
+        anyhow::bail!(usage.to_string());
     };
     if id_prefix.chars().count() < late_core::models::artboard_piece::PIECE_ID_PREFIX_MIN_CHARS
         || !id_prefix
             .chars()
             .all(|ch| ch.is_ascii_hexdigit() || ch == '-')
     {
-        anyhow::bail!(USAGE);
+        anyhow::bail!(usage.to_string());
     }
-    let reason = parts.get(1..).unwrap_or_default().join(" ");
-    Ok(ModCommand::ArtboardRemovePiece {
-        id_prefix: id_prefix.to_ascii_lowercase(),
-        reason,
-    })
+    Ok(id_prefix.to_ascii_lowercase())
 }
 
 fn parse_artboard_gallery_mod_command(parts: &[&str]) -> Result<ModCommand> {
@@ -1018,6 +1038,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "artboard curate <live|YYYY-MM-DD> [reason...]",
             "artboard restore [YYYY-MM-DD] [reason...]",
             "artboard remove <piece-id-prefix> [reason...]",
+            "artboard feature <piece-id-prefix>",
             "artboard gallery <on|off>",
             "",
             "--- bans, etc. ---",
@@ -1222,10 +1243,19 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "artboard curate <live|YYYY-MM-DD> [reason...]",
             "artboard restore [YYYY-MM-DD] [reason...]",
             "artboard remove <piece-id-prefix> [reason...]",
+            "artboard feature <piece-id-prefix>",
             "artboard gallery <on|off>",
             "Curates live or daily Artboard snapshots, restores live Artboard from daily snapshots,",
-            "takes a gallery piece down (copied work, etc.), or flips the gallery's switch (admin).",
-            "Subtopics: help artboard curate, help artboard restore, help artboard remove.",
+            "takes a gallery piece down (copied work, etc.), pins a piece as today's Sliding Puzzle",
+            "art, or flips the gallery's switch (admin).",
+            "Subtopics: help artboard curate, help artboard restore, help artboard remove,",
+            "help artboard feature.",
+        ],
+        "artboard feature" => &[
+            "artboard feature <piece-id-prefix>",
+            "Pins a gallery piece as today's Sliding Puzzle art at once, skipping the queue and",
+            "the hung-before-today rule; whatever held today goes back into the queue. Boards",
+            "pick it up when next opened from the Arcade lobby. Same id prefix as artboard remove.",
         ],
         "artboard remove" => &[
             "artboard remove <piece-id-prefix> [reason...]",
