@@ -320,3 +320,44 @@ fn the_tv_holds_each_caption_for_a_while_and_cycles() {
     mine.note_activity("mira", "won a crown");
     assert_eq!(mine.last_activity(), Some("mira won a crown"));
 }
+
+#[test]
+fn the_tick_reports_when_the_bar_moved_so_a_frame_is_drawn() {
+    let seats = SharedSeats::new();
+    let wall = SharedWall::new();
+    let mut mine = State::new(
+        Some(seats.clone()),
+        Some(wall.clone()),
+        Uuid::from_u128(1),
+        "user001".to_string(),
+    );
+    assert!(!mine.refresh_snapshot(), "nothing has moved yet");
+
+    // Another patron sits down elsewhere: this session's next refresh
+    // must say so, or the stool stays empty on screen until a keypress.
+    seats.toggle_seat(Uuid::from_u128(2), "user002", 4);
+    assert!(mine.refresh_snapshot());
+    assert!(!mine.refresh_snapshot(), "settled: the same snapshot again");
+
+    // A carve lands on the shared wall from any session.
+    wall.set_carving(late_core::models::nightcap_carving::Carving {
+        stool: 4,
+        user_id: Some(Uuid::from_u128(2)),
+        username: Some("user002".to_string()),
+        body: "was here".to_string(),
+        updated: chrono::Utc::now(),
+    });
+    assert!(mine.refresh_snapshot());
+
+    // A settled outcome of our own is a change even when the snapshot is not.
+    assert!(!mine.drain_outcomes(), "empty channel, nothing drawn");
+    mine.outcome_sender()
+        .send(Outcome::CarveFailed)
+        .expect("receiver alive");
+    assert!(mine.drain_outcomes());
+
+    // The TV changing caption is the only clock-driven change here.
+    assert!(!mine.tick(1));
+    assert!(mine.tick(TV_DWELL_TICKS));
+    assert!(!mine.tick(TV_DWELL_TICKS + 1));
+}

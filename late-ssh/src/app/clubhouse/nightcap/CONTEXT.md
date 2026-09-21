@@ -81,7 +81,14 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   alongside `tick_clubhouse`) only evicts disconnected occupants; it never
   auto-seats anyone. Eviction runs only while a session is on the screen,
   and entering forces a refresh, so a stale stool is gone before anyone
-  sees it.
+  sees it. `tick_nightcap` returns whether the bar moved on screen (a
+  settled outcome, another patron's stool, a pour, a carve, the TV's next
+  caption) and `tick.rs` folds that into the frame decision: the screen
+  is on the idle cadence and draws nothing on its own, so without that
+  report a change from another session sits unrendered until a keypress.
+  `State::refresh_snapshot` compares stools by what the row prints (the
+  sitting time at the minute), not by raw duration, so an idle bar stays
+  clean.
 - **A stool is held only while its owner is in the room.** Leaving the
   screen by any route (Esc, `0`, Tab, a page digit) runs
   `State::leave_screen` from `App::set_screen`, which vacates the seat and

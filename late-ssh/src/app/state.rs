@@ -2744,13 +2744,15 @@ impl App {
     /// disconnected occupants — unlike the Clubhouse, nobody holds a seat
     /// until they press a number key, so there is no roster to seat people
     /// into.
-    pub(crate) fn tick_nightcap(&mut self) {
-        self.nightcap.tick(self.marquee_tick as u64);
+    /// Returns whether the bar changed on screen and a frame is owed: a
+    /// settled order or carve, another patron's stool, a pour, the TV.
+    pub(crate) fn tick_nightcap(&mut self) -> bool {
+        let mut changed = self.nightcap.tick(self.marquee_tick as u64);
         // Settled orders land whether or not the screen is up: the chips
         // moved either way, and the footer should say so on the next visit.
-        self.nightcap.drain_outcomes();
+        changed |= self.nightcap.drain_outcomes();
         if self.screen != Screen::Nightcap {
-            return;
+            return false;
         }
 
         if self.nightcap.roster_refresh_due() {
@@ -2767,7 +2769,8 @@ impl App {
             self.nightcap.refresh_roster(&roster);
         }
 
-        self.nightcap.refresh_snapshot();
+        changed |= self.nightcap.refresh_snapshot();
+        changed
     }
 
     /// A seated Nightcap patron orders from the house menu. `State::pick`

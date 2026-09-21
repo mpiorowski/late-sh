@@ -172,8 +172,13 @@ impl State {
         self.refresh_snapshot();
     }
 
-    pub fn tick(&mut self, anim_tick: u64) {
+    /// Advance the clock. Returns whether the TV moved to its next caption,
+    /// the one clock-driven change on this screen, so the app can ask for a
+    /// frame. Everything else here changes on input or on a settled outcome.
+    pub fn tick(&mut self, anim_tick: u64) -> bool {
+        let before = self.anim_tick / TV_DWELL_TICKS;
         self.anim_tick = anim_tick;
+        before != anim_tick / TV_DWELL_TICKS
     }
 
     pub fn roster_refresh_due(&mut self) -> bool {
@@ -195,13 +200,27 @@ impl State {
         }
     }
 
-    pub fn refresh_snapshot(&mut self) {
+    /// Copy the shared seats and wall. Returns whether anything the screen
+    /// shows moved (another patron sat down, a pour landed, a carve), so
+    /// the app can ask for a frame; without that report a change made by
+    /// another session sits unrendered until this one presses a key.
+    pub fn refresh_snapshot(&mut self) -> bool {
+        let mut changed = false;
         if let Some(lobby) = &self.lobby {
-            self.snapshot = lobby.snapshot();
+            let next = lobby.snapshot();
+            if !seats_look_the_same(&self.snapshot, &next) {
+                changed = true;
+            }
+            self.snapshot = next;
         }
         if let Some(wall) = &self.wall {
-            self.wall_snapshot = wall.snapshot();
+            let next = wall.snapshot();
+            if self.wall_snapshot != next {
+                changed = true;
+            }
+            self.wall_snapshot = next;
         }
+        changed
     }
 
     pub fn snapshot(&self) -> &[Option<SeatView>; SEAT_COUNT] {
@@ -388,11 +407,15 @@ impl State {
         self.outcome_tx.clone()
     }
 
-    /// Pull every settled outcome off the channel; each tick call.
-    pub fn drain_outcomes(&mut self) {
+    /// Pull every settled outcome off the channel; each tick call. Returns
+    /// whether anything landed, since each one changes the footer.
+    pub fn drain_outcomes(&mut self) -> bool {
+        let mut drained = false;
         while let Ok(outcome) = self.outcome_rx.try_recv() {
             self.apply_outcome(outcome);
+            drained = true;
         }
+        drained
     }
 
     pub fn apply_outcome(&mut self, outcome: Outcome) {
@@ -448,6 +471,26 @@ impl State {
         });
         self.refresh_snapshot();
     }
+}
+
+/// Whether two seat snapshots draw the same. The sitting time is compared
+/// at the minute the row prints, not the instant the snapshot was taken:
+/// comparing raw durations would call every tick a change and buy a frame
+/// for nothing.
+fn seats_look_the_same(
+    a: &[Option<SeatView>; SEAT_COUNT],
+    b: &[Option<SeatView>; SEAT_COUNT],
+) -> bool {
+    a.iter().zip(b.iter()).all(|(a, b)| match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            a.user_id == b.user_id
+                && a.username == b.username
+                && a.drinks == b.drinks
+                && a.seated_for.as_secs() / 60 == b.seated_for.as_secs() / 60
+        }
+        _ => false,
+    })
 }
 
 #[cfg(test)]
