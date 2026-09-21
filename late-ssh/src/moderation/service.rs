@@ -284,6 +284,10 @@ impl ModerationService {
                 self.artboard_remove_piece(actor_user_id, permissions, id_prefix, reason)
                     .await
             }
+            ModCommand::ArtboardFeaturePiece { id_prefix } => {
+                self.artboard_feature_piece(actor_user_id, permissions, id_prefix)
+                    .await
+            }
             ModCommand::ArtboardGallery { enabled } => {
                 self.artboard_gallery_switch(actor_user_id, permissions, enabled)
                     .await
@@ -1626,6 +1630,50 @@ impl ModerationService {
         Ok(vec![format!(
             "took down gallery piece {piece_id} (\"{}\")",
             removed.title
+        )])
+    }
+
+    /// Pin a piece as today's Sliding Puzzle art. Same lookup as a removal;
+    /// the stamp is `ArtboardPiece::feature_now`, so every replica's next
+    /// board open reads it.
+    async fn artboard_feature_piece(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        id_prefix: String,
+    ) -> Result<Vec<String>> {
+        ensure_has(permissions, Caps::RESTORE_ARTBOARD)?;
+        let mut client = self.db.get().await?;
+        let piece_id = match ArtboardPiece::lookup_by_id_prefix(&client, &id_prefix).await? {
+            PieceLookup::One(piece_id) => piece_id,
+            PieceLookup::NotFound => anyhow::bail!("no gallery piece starts with {id_prefix}"),
+            PieceLookup::Ambiguous(count) => {
+                anyhow::bail!("{count} gallery pieces start with {id_prefix}; give more of the id")
+            }
+        };
+        let today = chrono::Utc::now().date_naive();
+        let tx = client.transaction().await?;
+        let Some(featured) = ArtboardPiece::feature_now(&tx, piece_id, today).await? else {
+            anyhow::bail!("gallery piece {piece_id} is down");
+        };
+        ModerationAuditLog::record(
+            &tx,
+            actor_user_id,
+            "artboard_feature_piece",
+            "artboard_piece",
+            Some(featured.user_id),
+            json!({
+                "piece_id": piece_id.to_string(),
+                "title": featured.title.clone(),
+                "featured_on": today.to_string(),
+            }),
+        )
+        .await?;
+        tx.commit().await?;
+
+        Ok(vec![format!(
+            "gallery piece {piece_id} (\"{}\") is today's Sliding Puzzle art; reopen the board from the lobby to see it",
+            featured.title
         )])
     }
 

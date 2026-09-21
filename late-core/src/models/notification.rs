@@ -200,7 +200,10 @@ impl Notification {
     ///
     /// For DM rooms, only resolves usernames that belong to one of the two DM
     /// participants. For private rooms, only resolves usernames that are
-    /// members of the room. Public rooms resolve against all users.
+    /// members of the room. Public rooms resolve against all users, except
+    /// the hidden kinds (`chat_room::HIDDEN_ROOM_KINDS`), where a name said
+    /// out loud mentions nobody: the room is only ever seen from its own
+    /// screen, so a mention would point at a place the rail cannot open.
     pub async fn resolve_mentioned_user_ids(
         client: &Client,
         usernames: &[String],
@@ -229,12 +232,18 @@ impl Notification {
                         )
                    ) \
                    AND r.kind <> 'game' \
+                   AND r.kind <> ALL($4::text[]) \
                    AND (
                         (r.kind = 'dm' AND u.id IN (r.dm_user_a, r.dm_user_b))
                         OR (r.kind <> 'dm' AND r.visibility = 'private' AND m.user_id IS NOT NULL)
                         OR (r.kind <> 'dm' AND r.visibility = 'public')
                    )",
-                &[&lower, &exclude_user_id, &room_id],
+                &[
+                    &lower,
+                    &exclude_user_id,
+                    &room_id,
+                    &crate::models::chat_room::HIDDEN_ROOM_KINDS,
+                ],
             )
             .await?;
 

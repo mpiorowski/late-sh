@@ -1845,13 +1845,14 @@ pub fn item(id: u32) -> Option<&'static Item> {
         .or_else(|| frontier_items().iter().find(|i| i.id == id))
         .or_else(|| reaches_items().iter().find(|i| i.id == id))
         .or_else(|| kaelmyr_items().iter().find(|i| i.id == id))
+        .or_else(|| archipelago_items().iter().find(|i| i.id == id))
         .or_else(|| regional_finds().iter().find(|i| i.id == id))
         .or_else(|| materials().iter().find(|i| i.id == id))
         .or_else(|| crafted().iter().find(|i| i.id == id))
         .or_else(|| fish().iter().find(|i| i.id == id))
 }
 
-// ---- Generated catalogs (Frontier and Sundered Reaches) ------------------
+// ---- Generated catalogs (Frontier, Sundered Reaches, Kaelmyr, Archipelago) --
 //
 // The frontier expansion (see world::extend_frontier) is too large to author
 // item-by-item, so its loot is generated: one tier per zone - twenty tiers x ten
@@ -1860,7 +1861,12 @@ pub fn item(id: u32) -> Option<&'static Item> {
 // the same `item(id)` lookup as the hand-authored `ITEMS`. Frontier IDs live in
 // 3000..3200; the Sundered Reaches continue the same curve in 3200..3400, with
 // Reaches tier 0 picking up just above Frontier tier 19 so the new continent
-// is a real gear step past the King.
+// is a real gear step past the King. Kaelmyr continues it again in 3400..3600.
+// The Shattered Archipelago is the fourth and final generated realm, in
+// 5000..5200: every island now has its own 200-item catalog instead of just
+// re-dropping the Reaches' table, continuing the curve one more step past
+// Kaelmyr (power_offset 60, so Archipelago tier 0 lands just above Kaelmyr tier
+// 19 - the same t=61.. curve the Archipelago's own regional finds already ride).
 
 /// Number of frontier loot tiers - one per zone (see world::FRONTIER_ZONES_DATA).
 pub const FRONTIER_TIERS: usize = 20;
@@ -1871,12 +1877,19 @@ pub const REACHES_TIERS: usize = 20;
 /// Number of Kaelmyr loot tiers - one per zone (see world::KAELMYR_ZONES_DATA).
 pub const KAELMYR_TIERS: usize = 20;
 
+/// Number of Archipelago loot tiers - one per island (see `archipelago::ISLANDS`).
+pub const ARCHIPELAGO_TIERS: usize = 20;
+
 const FRONTIER_ITEM_BASE: u32 = 3000;
 const REACHES_ITEM_BASE: u32 = 3200;
 /// Kaelmyr, the Ashen Reach: a third generated continent, its gear one clear
 /// step past the drowned Reaches. IDs live in the free 3400..3600 band (authored
 /// items top out well below 3000; materials start at 4000).
 pub const KAELMYR_ITEM_BASE: u32 = 3400;
+/// The Shattered Archipelago: a fourth generated continent, its gear one clear
+/// step past Kaelmyr. IDs live in the free 5000..5200 band (fish top out at
+/// 4640; nothing else claims 4640..5000 or above 5200).
+pub const ARCHIPELAGO_ITEM_BASE: u32 = 5000;
 /// The Cinderfall Shore relic (Kaelmyr tier-0 relic), dropped on the ashen shore
 /// and collected for the ash-cairn board's opening bounty.
 pub const KAELMYR_SHORE_RELIC_ID: u32 = KAELMYR_ITEM_BASE + 9;
@@ -1897,6 +1910,12 @@ pub fn reaches_items() -> &'static [Item] {
 pub fn kaelmyr_items() -> &'static [Item] {
     static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
     CATALOG.get_or_init(build_kaelmyr_items)
+}
+
+/// The full generated Archipelago item catalog (200 items).
+pub fn archipelago_items() -> &'static [Item] {
+    static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
+    CATALOG.get_or_init(build_archipelago_items)
 }
 
 /// The drop table for a frontier zone (tier 0..FRONTIER_TIERS): representative
@@ -1922,6 +1941,37 @@ pub fn kaelmyr_loot(tier: usize) -> &'static [u32] {
     static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
     let tables = TABLES.get_or_init(|| generated_loot_tables(KAELMYR_ITEM_BASE, KAELMYR_TIERS));
     tables[tier.min(KAELMYR_TIERS - 1)].as_slice()
+}
+
+/// The drop table for a 1-based realm tier (1..=[`MARKET_TIER_MAX`]), walking
+/// the three realm ladders in the order their power curves continue each
+/// other, exactly as [`market_item_id`] does: Frontier 1-20, Reaches 21-40,
+/// Kaelmyr 41-60. Out-of-range tiers clamp to the ends.
+///
+/// A land whose own level band runs past one realm's ladder asks for a tier
+/// here instead of picking a single catalog and clamping inside it. Clamping
+/// is what left four of the side lands paying the Frontier's table across
+/// their whole depth: the clamp is invisible at the call site, so ground that
+/// had outgrown the Frontier kept quietly drawing from it.
+pub fn realm_loot(tier: i32) -> &'static [u32] {
+    let t = tier.clamp(1, MARKET_TIER_MAX);
+    let frontier = FRONTIER_TIERS as i32;
+    let reaches = frontier + REACHES_TIERS as i32;
+    match t {
+        t if t <= frontier => frontier_loot((t - 1) as usize),
+        t if t <= reaches => reaches_loot((t - frontier - 1) as usize),
+        t => kaelmyr_loot((t - reaches - 1) as usize),
+    }
+}
+
+/// The drop table for an Archipelago island (tier 0..ARCHIPELAGO_TIERS), same
+/// shape as `kaelmyr_loot` but drawn from the Archipelago's own catalog instead
+/// of re-dropping the Reaches' table.
+pub fn archipelago_loot(tier: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables =
+        TABLES.get_or_init(|| generated_loot_tables(ARCHIPELAGO_ITEM_BASE, ARCHIPELAGO_TIERS));
+    tables[tier.min(ARCHIPELAGO_TIERS - 1)].as_slice()
 }
 
 fn generated_loot_tables(base_id: u32, tiers: usize) -> Vec<Vec<u32>> {
@@ -2087,21 +2137,75 @@ fn build_kaelmyr_items() -> Vec<Item> {
     })
 }
 
-// ---- Regional finds: Sunderlakes, Broceliande, Archipelago (Wildbound) ---
+fn build_archipelago_items() -> Vec<Item> {
+    // One wreck-cursed material per island, low to high - matched to
+    // `archipelago::ISLANDS`. Distinct wording from `ARCHIPELAGO_ZONE_WORDS`
+    // below (the existing find names): this is a second, separate catalog, and
+    // sharing a word would mean two different items called the same thing.
+    const MATERIALS: [&str; ARCHIPELAGO_TIERS] = [
+        "Wavecursed",
+        "Squallbound",
+        "Foamwrought",
+        "Undertow",
+        "Shipbane",
+        "Barnacled",
+        "Kelpforged",
+        "Gullcursed",
+        "Driftwrecked",
+        "Wreckborne",
+        "Palewater",
+        "Deepfathom",
+        "Lodestorm",
+        "Sirensteel",
+        "Wavewrought",
+        "Maelcursed",
+        "Farflung",
+        "Lastshore",
+        "Worldbreaker",
+        "Voidreef",
+    ];
+    // The deadliest ground in the world, so every tier reads as endgame gear.
+    const TIER_RARITY: [Rarity; ARCHIPELAGO_TIERS] = [Rarity::Legendary; ARCHIPELAGO_TIERS];
+    build_generated_items(GeneratedRealm {
+        base_id: ARCHIPELAGO_ITEM_BASE,
+        // Continue the power curve one full continent past Kaelmyr: Archipelago
+        // tier 0 lands just above Kaelmyr tier 19, exactly where the
+        // Archipelago's own regional finds (t=61..) already pick up.
+        power_offset: (FRONTIER_TIERS + REACHES_TIERS + KAELMYR_TIERS) as i32,
+        materials: &MATERIALS,
+        rarities: &TIER_RARITY,
+        gear_desc: |type_name| {
+            format!(
+                "Wreck-forged {type_name}, salvaged from the Shattered Archipelago and still cold with the deep it drowned in."
+            )
+        },
+        draught_desc: "A bitter salt-cure pressed from storm-kelp and drowned amber.",
+        relic_desc: "A relic of the Shattered Archipelago with no combat use; only the boldest collectors go looking for these.",
+    })
+}
+
+// ---- Regional finds: Sunderlakes, Broceliande, Thornveil Falls, Archipelago -
 //
-// Three continents had no gear identity of their own: the Sunderlakes traded
+// Four continents had no gear identity of their own: the Sunderlakes traded
 // purely in fish, Broceliande just borrowed a slice of the Frontier's own
-// catalog, and every Archipelago boss dropped from the Reaches table again -
-// so exploring them for combat gear had nothing to offer past what the
-// Frontier already gave you. Every zone/island's notable now also has a
-// genuine shot at two uniquely named finds of its own: modest for the two
-// gentler continents (never outclassing the Frontier's own top tier), and a
-// real step past Kaelmyr for the Archipelago, which rides Kaelmyr's own
-// endgame curve. 14 + 20 + 20 zones x 2 pieces = 108 new pieces of loot.
+// catalog, Thornveil Falls is new and needs its own identity from the start,
+// and every Archipelago boss dropped from the Reaches table again (fixed
+// properly in Part B above - the Archipelago now has its own 200-item
+// catalog, `archipelago_loot`, for its base drops; these finds are its
+// signature *bonus* pieces on top of that). Every zone/island's notable now
+// also has a genuine shot at two uniquely named finds of its own: modest for
+// the two gentler continents (never outclassing the Frontier's own top tier),
+// comparable to Kaelmyr's own gear for Thornveil Falls (a parallel endgame
+// track, not a strictly weaker one), and a real step past Kaelmyr for the
+// Archipelago, which rides the deepest curve in the game.
+// 14 + 20 + 12 + 20 zones x 2 pieces = 132 new pieces of loot.
 
 pub const SUNDERLAKES_FIND_BASE: u32 = 3600;
 pub const BROCELIANDE_FIND_BASE: u32 = 3700;
 pub const ARCHIPELAGO_FIND_BASE: u32 = 3800;
+/// Thornveil Falls' own regional finds. Lives in the free 3900..3999 gap
+/// between the Archipelago finds (3800..3840 used) and `MATERIAL_BASE` (4000).
+pub const THORNVEIL_FIND_BASE: u32 = 3900;
 
 const SUNDERLAKES_ZONE_WORDS: [&str; 14] = [
     "Reedwrought",
@@ -2334,13 +2438,60 @@ fn build_archipelago_finds() -> Vec<Item> {
         .collect()
 }
 
-/// All 108 regional finds together, built once and leaked to 'static so they
+const THORNVEIL_ZONE_WORDS: [&str; 12] = [
+    "Cascadewrought",
+    "Mistbound",
+    "Fernforged",
+    "Hollowfall",
+    "Boughwrought",
+    "Cataractborn",
+    "Willowmist",
+    "Rootbound",
+    "Spraywrought",
+    "Duskfall",
+    "Canopybound",
+    "Stillfall",
+];
+
+fn build_thornveil_finds() -> Vec<Item> {
+    // Shares `realm_slot_stats` with the realm ladders, same as
+    // `build_archipelago_finds`: at the same t, a Thornveil find is exactly as
+    // strong as a Kaelmyr drop. A hand-mirrored copy of that table lived here
+    // and had already drifted on the ring line (26 + t * 4 / 1 + t / 2 against
+    // the real 30 + t * 4 / 2 + t / 2), which is the second time that copy has
+    // gone stale; pinned exactly now by
+    // `thornveil_finds_ride_the_shared_realm_slot_curve`.
+    (0..THORNVEIL_ZONE_WORDS.len())
+        .flat_map(|zone| {
+            // z=0..11 -> t=41..52: starts exactly at Kaelmyr's own item-power
+            // floor (Kaelmyr tier 0 sits at t=41, see `build_kaelmyr_items`)
+            // and climbs through its lower half, so a Thornveil find reads as
+            // real Kaelmyr-comparable gear, not a weaker echo of it. Mirrors
+            // `extend_thornveil`'s mob tier (30..41) overlapping Kaelmyr's own
+            // mob tier (32..51) the same way, one level in each direction.
+            let t = 40 + zone as i32 + 1;
+            build_regional_pair(
+                THORNVEIL_FIND_BASE,
+                zone,
+                THORNVEIL_ZONE_WORDS[zone],
+                t,
+                Rarity::Legendary,
+                (220 + t * 85) as i64,
+                "A find from Thornveil Falls, water-cut and root-bound, and every bit as fell as anything Kaelmyr offers.",
+                realm_slot_stats,
+            )
+        })
+        .collect()
+}
+
+/// All 132 regional finds together, built once and leaked to 'static so they
 /// slot into the same `item(id)` lookup as everything else.
 pub fn regional_finds() -> &'static [Item] {
     static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
     CATALOG.get_or_init(|| {
         let mut out = build_sunderlakes_finds();
         out.extend(build_broceliande_finds());
+        out.extend(build_thornveil_finds());
         out.extend(build_archipelago_finds());
         out
     })
@@ -2362,6 +2513,12 @@ pub fn broceliande_find_ids(zone: usize) -> [u32; 2] {
         BROCELIANDE_FIND_BASE + z * 2,
         BROCELIANDE_FIND_BASE + z * 2 + 1,
     ]
+}
+
+/// The two regional-find ids for a Thornveil Falls zone's notable.
+pub fn thornveil_find_ids(zone: usize) -> [u32; 2] {
+    let z = zone.min(THORNVEIL_ZONE_WORDS.len() - 1) as u32;
+    [THORNVEIL_FIND_BASE + z * 2, THORNVEIL_FIND_BASE + z * 2 + 1]
 }
 
 /// The two regional-find ids for an Archipelago island's boss.
@@ -2388,8 +2545,23 @@ const GENERATED_SLOTS: [(Slot, &str); 8] = [
 ];
 
 /// The deepest tier a shop will ever stock: Kaelmyr's last tier, the deepest
-/// full eight-slot set that exists. Past it only the Archipelago's finds climb,
-/// and those cover four slots, so there is nothing to sell.
+/// gear on the *road*.
+///
+/// It is no longer the deepest gear that exists. `archipelago_items` is a full
+/// eight-slot set twenty tiers past it (t=61..80, Legendary at every tier).
+/// This ceiling used to be justified by there being nothing above t=60 worth
+/// selling, and that stopped being true the moment that catalog landed. The
+/// ceiling stays anyway, now for a design reason rather than an availability
+/// one: the Archipelago is off-road, grants no title, and is where the best
+/// gear is *earned*. `PlayerState::market_title_cap` already makes that
+/// structural, since it ladders on the three gate titles and there is no
+/// Archipelago title to unlock a fourth rung, so raising this alone would
+/// stock nothing.
+///
+/// Raising it means teaching `market_tier_base` the Archipelago catalog too.
+/// Today its last arm assumes every tier past the Reaches is Kaelmyr's, and a
+/// tier of 70 would index 30 blocks into a 20-block catalog and hand back
+/// whatever ids follow it. This constant is the only thing holding that shut.
 pub const MARKET_TIER_MAX: i32 = (FRONTIER_TIERS + REACHES_TIERS + KAELMYR_TIERS) as i32;
 
 /// The generated-catalog id for `slot` at a 1-based market tier

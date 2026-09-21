@@ -119,13 +119,18 @@ async fn main() -> anyhow::Result<()> {
     let db = Db::new(&config.db).context("failed to initialize database")?;
     db.health().await.context("database health check failed")?;
     db.migrate().await.context("database migration failed")?;
-    {
+    let nightcap_room_id = {
         let client = db.get().await.context("failed to get db client")?;
         let lounge = ChatRoom::ensure_lounge(&client)
             .await
             .context("failed to ensure lounge chat room")?;
         tracing::info!(room_id = %lounge.id, "ensured lounge chat room");
-    }
+        let nightcap = ChatRoom::ensure_nightcap(&client)
+            .await
+            .context("failed to ensure nightcap chat room")?;
+        tracing::info!(room_id = %nightcap.id, "ensured nightcap chat room");
+        nightcap.id
+    };
     tracing::info!("database initialized and migrations applied");
 
     // Initialize shared state
@@ -367,6 +372,11 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     let clubhouse_lobby = late_ssh::app::clubhouse::lobby::SharedLobby::new();
+    let nightcap_lobby = late_ssh::app::clubhouse::nightcap::lobby::SharedSeats::new();
+    let nightcap_house = late_ssh::app::clubhouse::nightcap::svc::NightcapHouse::new(
+        db.clone(),
+        late_ssh::app::clubhouse::nightcap::wall::SharedWall::new(),
+    );
     let scratchpad_registry = late_ssh::app::scratchpad::registry::SharedScratchpadRegistry::new();
     let mention_ladders = late_ssh::app::ai::ladder::MentionLadders::new();
     let ghost_service = GhostService::new(
@@ -379,6 +389,7 @@ async fn main() -> anyhow::Result<()> {
         chip_service.clone(),
         clubhouse_lobby.clone(),
         mention_ladders.clone(),
+        nightcap_room_id,
     );
     let ssh_attempt_limiter = IpRateLimiter::new(
         config.ssh_max_attempts_per_ip,
@@ -442,6 +453,8 @@ async fn main() -> anyhow::Result<()> {
         pair_ws_counts: Arc::new(Mutex::new(HashMap::new())),
         active_users,
         clubhouse_lobby,
+        nightcap_lobby,
+        nightcap_house: nightcap_house.clone(),
         mention_ladders,
         scratchpad_registry,
         username_directory: username_directory.clone(),
@@ -465,6 +478,10 @@ async fn main() -> anyhow::Result<()> {
     let session_shutdown = CancellationToken::new();
     let accept_shutdown = CancellationToken::new();
     let singleton_shutdown = CancellationToken::new();
+    // The bar out back's wall (the TV captions, the tab board, the
+    // carvings): one slow reader for the whole process.
+    let _nightcap_wall_task = nightcap_house.spawn_wall_refresh_task(singleton_shutdown.clone());
+
     let _username_directory_refresh_task = late_ssh::usernames::start_refresh_task(
         db.clone(),
         username_directory,

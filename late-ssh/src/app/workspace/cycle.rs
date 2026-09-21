@@ -101,6 +101,8 @@ fn is_game_side(screen: Screen) -> bool {
         | Screen::Profiles
         | Screen::Leaderboard
         | Screen::Clubhouse
+        | Screen::Nightcap
+        | Screen::City
         | Screen::Zen
         | Screen::Scratchpad => false,
     }

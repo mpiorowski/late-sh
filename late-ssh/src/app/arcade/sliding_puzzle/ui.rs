@@ -4,16 +4,12 @@ use ratatui::{
     layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
-use uuid::Uuid;
 
 use super::{
-    image::{
-        ImageStatus, ImageTileGeometry, NativePuzzleImageSet, TileView, image_tile_geometry,
-        tile_fragment,
-    },
-    state::{State, board_dimension},
+    art::{TileGeometry, tile_fragment},
+    state::{ArtStatus, State, board_dimension},
 };
 use crate::app::{
     arcade::ui::{
@@ -21,21 +17,15 @@ use crate::app::{
         draw_game_overlay_anchored, game_content_area, keys_line, status_line, tip_line,
     },
     common::theme,
-    files::terminal_image::{TerminalImageFrame, TerminalImagePlacement, TerminalImageProtocol},
 };
 
-const NUMBER_TILE_WIDTH: u16 = 7;
-const NUMBER_TILE_HEIGHT: u16 = 3;
+const NUMBERED_TILE_GEOMETRY: TileGeometry = TileGeometry {
+    width: 7,
+    height: 3,
+};
 const FULL_CONTROL_HINTS_WIDTH: u16 = 89;
 
-pub fn draw_game(
-    frame: &mut Frame,
-    area: Rect,
-    state: &State,
-    show_bottom_bar: bool,
-    terminal_image_protocol: Option<TerminalImageProtocol>,
-    terminal_images: &mut TerminalImageFrame,
-) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bool) {
     let (reward, reward_color) = match state.reward_chips() {
         Some(chips) => (format!("{chips} chips"), theme::AMBER_GLOW()),
         None => ("none".to_string(), theme::TEXT_DIM()),
@@ -59,13 +49,33 @@ pub fn draw_game(
             ("q", "exit"),
         ]
     };
-    let tip = match state.image_status() {
-        ImageStatus::Loading => "Loading art; numbered fallback remains playable.".to_string(),
-        ImageStatus::Failed if area.width >= FULL_CONTROL_HINTS_WIDTH => {
+    let board_area = game_content_area(area, true, show_bottom_bar);
+    let difficulty = state.difficulty();
+    let art_geometry = state.art_tile_geometry();
+    let layout = board_layout(board_area, difficulty, art_geometry);
+    let art_fits = layout.is_some_and(|(_, geometry)| Some(geometry) == art_geometry);
+    // A pending two-press confirm is the one line the player must see, so
+    // it wins over the art-status tips: a second `r` wipes the board.
+    let tip = match state.art_status() {
+        _ if state.reset_pending() => state.message().to_string(),
+        ArtStatus::Loading => "Loading today's art; numbered tiles until it lands.".to_string(),
+        ArtStatus::Empty => {
+            "No gallery art yet: hang a piece on the Artboard and it shows here tomorrow."
+                .to_string()
+        }
+        ArtStatus::Failed if area.width >= FULL_CONTROL_HINTS_WIDTH => {
             "Art unavailable; numbered fallback active. Press i twice to retry.".to_string()
         }
-        ImageStatus::Failed => "Art unavailable; i twice to retry.".to_string(),
-        ImageStatus::Numbered | ImageStatus::Ready => state.message().to_string(),
+        ArtStatus::Failed => "Art unavailable; i twice to retry.".to_string(),
+        ArtStatus::Ready if !art_fits => match art_geometry {
+            Some(geometry) => format!(
+                "Today's art needs a {}×{} board; numbered tiles until the terminal grows.",
+                geometry.width * board_dimension(difficulty) as u16,
+                geometry.height * board_dimension(difficulty) as u16
+            ),
+            None => state.message().to_string(),
+        },
+        ArtStatus::Numbered | ArtStatus::Ready => state.message().to_string(),
     };
     let bottom = GameBottomBar {
         status: status_line(vec![
@@ -88,59 +98,55 @@ pub fn draw_game(
         tip: Some(tip_line(tip)),
     };
     let board_area = draw_game_frame(frame, area, "Sliding Puzzle", bottom, show_bottom_bar);
-    let dimension = board_dimension(state.difficulty()) as u16;
-    let view = state.tile_view();
-    let show_image_numbers = !state.is_solved();
-    let Some((grid, geometry)) = grid_layout(board_area, state.difficulty(), view) else {
+    let dimension = board_dimension(difficulty) as u16;
+    let Some((grid, geometry)) = layout else {
         frame.render_widget(
             Paragraph::new("Terminal too small for Sliding Puzzle").alignment(Alignment::Center),
             board_area,
         );
         return;
     };
+    let art = if art_fits { state.art_grid() } else { None };
+    let show_art_numbers = !state.is_solved();
 
-    let native_tiles = native_placement(area, state, terminal_image_protocol, show_bottom_bar)
-        .filter(|(_, placement)| *placement == grid)
-        .map(|(images, _)| images);
-    if let Some(images) = native_tiles {
-        frame.render_widget(Clear, grid);
-        for (index, image) in (0..state.board().len()).filter_map(|index| {
-            images
-                .cell_image(state.board(), index)
-                .map(|image| (index, image))
-        }) {
-            terminal_images.push(TerminalImagePlacement {
-                message_id: native_tile_message_id(index, image.cache_key()),
-                area: tile_area(grid, geometry, dimension, index),
-                data: image.clone(),
-            });
-        }
-    } else {
-        for (index, tile) in state.board().iter().copied().enumerate() {
-            let tile_area = tile_area(grid, geometry, dimension, index);
-            if tile == 0 {
-                frame.render_widget(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme::AMBER_DIM())),
-                    tile_area,
-                );
-            } else if view == TileView::Image
-                && let Some(mut fragment) = state.image_preview().and_then(|preview| {
-                    tile_fragment(preview, usize::from(dimension), tile, geometry)
-                })
-            {
-                if show_image_numbers {
-                    add_image_tile_number(&mut fragment, tile, geometry);
-                }
-                frame.render_widget(Paragraph::new(fragment), tile_area);
-            } else {
-                draw_numbered_tile(frame, tile_area, tile);
+    for (index, tile) in state.board().iter().copied().enumerate() {
+        let tile_area = tile_area(grid, geometry, dimension, index);
+        if tile == 0 {
+            frame.render_widget(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme::AMBER_DIM())),
+                tile_area,
+            );
+        } else if let Some(mut fragment) =
+            art.and_then(|grid| tile_fragment(grid, difficulty, tile))
+        {
+            if show_art_numbers {
+                add_art_tile_number(&mut fragment, tile, geometry);
             }
+            frame.render_widget(Paragraph::new(fragment), tile_area);
+        } else {
+            draw_numbered_tile(frame, tile_area, tile);
         }
     }
 
-    if state.is_solved() && state.has_started() && native_tiles.is_none() {
+    // The credit sits under the grid when the board has a spare row; the
+    // tip line stays the game's own messages.
+    if let Some(credit) = state.art_credit()
+        && art.is_some()
+        && grid.bottom() < board_area.bottom()
+    {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                credit,
+                Style::default().fg(theme::TEXT_DIM()),
+            )))
+            .alignment(Alignment::Center),
+            Rect::new(board_area.x, grid.bottom(), board_area.width, 1),
+        );
+    }
+
+    if state.is_solved() && state.has_started() {
         let subtext = match state.reward_chips() {
             Some(chips) => format!("{} moves · {chips} chips", state.moves()),
             None => format!("{} moves · no reward · n for new", state.moves()),
@@ -156,23 +162,44 @@ pub fn draw_game(
     }
 }
 
-fn add_image_tile_number(fragment: &mut [Line<'static>], tile: u8, geometry: ImageTileGeometry) {
+/// A faint tile number over the art while the board is unsolved: sparse
+/// ASCII pieces have tiles that look alike, and the number is what keeps
+/// them playable.
+fn add_art_tile_number(fragment: &mut [Line<'static>], tile: u8, geometry: TileGeometry) {
     let Some(line) = fragment.get_mut(usize::from(geometry.height / 2)) else {
         return;
     };
     let label = tile.to_string();
     let label_width = label.len();
-    let start = usize::from(geometry.width).saturating_sub(label_width) / 2;
-    let end = start + label_width;
+    let mut start = usize::from(geometry.width).saturating_sub(label_width) / 2;
+    let mut end = start + label_width;
+    // The grid pairs a wide glyph with a zero-width placeholder span. A
+    // digit over either half alone would change the row's width, so the
+    // range grows to cover the whole pair and the spare cell goes blank.
+    if line
+        .spans
+        .get(start)
+        .is_some_and(|span| span.content.is_empty())
+    {
+        start -= 1;
+    }
+    if line.spans.get(end - 1).is_some_and(|span| span.width() > 1) {
+        end += 1;
+    }
     if line.spans.len() < end {
         return;
     }
-    for (span, digit) in line.spans[start..end].iter_mut().zip(label.chars()) {
+    let mut digits = label.chars();
+    for span in &mut line.spans[start..end] {
         let style = span
             .style
             .fg(theme::AMBER_DIM())
             .remove_modifier(Modifier::BOLD);
-        *span = Span::styled(digit.to_string(), style);
+        let cell = match digits.next() {
+            Some(digit) => digit.to_string(),
+            None => " ".to_string(),
+        };
+        *span = Span::styled(cell, style);
     }
 }
 
@@ -194,26 +221,29 @@ fn draw_numbered_tile(frame: &mut Frame, tile_area: Rect, tile: u8) {
     );
 }
 
-fn grid_layout(
+/// The grid the board draws into and its tile size: the art's tiles when
+/// the art view has a piece that fits the area, numbered tiles otherwise.
+/// The draw path and mouse hit-testing both go through here so a click
+/// lands on the tile the frame drew.
+pub(crate) fn board_layout(
     board_area: Rect,
     difficulty: Difficulty,
-    view: TileView,
-) -> Option<(Rect, ImageTileGeometry)> {
+    art: Option<TileGeometry>,
+) -> Option<(Rect, TileGeometry)> {
     let dimension = board_dimension(difficulty) as u16;
-    let geometry = match view {
-        TileView::Numbered => ImageTileGeometry {
-            width: NUMBER_TILE_WIDTH,
-            height: NUMBER_TILE_HEIGHT,
-        },
-        TileView::Image => image_tile_geometry(board_area, difficulty)?,
+    let fit = |geometry: TileGeometry| {
+        let width = dimension.saturating_mul(geometry.width);
+        let height = dimension.saturating_mul(geometry.height);
+        (board_area.width >= width && board_area.height >= height)
+            .then(|| (centered_rect(board_area, width, height), geometry))
     };
-    let width = dimension.saturating_mul(geometry.width);
-    let height = dimension.saturating_mul(geometry.height);
-    (board_area.width >= width && board_area.height >= height)
-        .then(|| (centered_rect(board_area, width, height), geometry))
+    match art.and_then(fit) {
+        Some(layout) => Some(layout),
+        None => fit(NUMBERED_TILE_GEOMETRY),
+    }
 }
 
-fn tile_area(grid: Rect, geometry: ImageTileGeometry, dimension: u16, index: usize) -> Rect {
+fn tile_area(grid: Rect, geometry: TileGeometry, dimension: u16, index: usize) -> Rect {
     let row = index as u16 / dimension;
     let column = index as u16 % dimension;
     Rect::new(
@@ -224,106 +254,15 @@ fn tile_area(grid: Rect, geometry: ImageTileGeometry, dimension: u16, index: usi
     )
 }
 
-fn native_tiles_fit_grid(geometry: ImageTileGeometry, grid: Rect, dimension: u16) -> bool {
-    geometry.width.saturating_mul(dimension) == grid.width
-        && geometry.height.saturating_mul(dimension) == grid.height
-}
-
-fn native_tile_message_id(destination: usize, cache_key: u64) -> Uuid {
-    let destination = u64::try_from(destination).unwrap_or(u64::MAX);
-    Uuid::from_u128(
-        0x5a13_1d1e_5a13_1d1e_0000_0000_0000_0000
-            ^ (u128::from(destination) << 64)
-            ^ u128::from(cache_key),
-    )
-}
-
-fn native_tiles_placement_area(
-    area: Rect,
-    difficulty: Difficulty,
-    show_bottom_bar: bool,
-    images: &NativePuzzleImageSet,
-) -> Option<Rect> {
-    let board_area = game_content_area(area, true, show_bottom_bar);
-    let (grid, _) = grid_layout(board_area, difficulty, TileView::Image)?;
-    native_tiles_fit_grid(images.geometry(), grid, board_dimension(difficulty) as u16)
-        .then_some(grid)
-}
-
-/// The native cell set this game will place and the grid it will land on, or
-/// `None` when the frame falls back to Chafa fragments or numbered tiles.
-/// Both the draw path and the pre-frame raster wipe go through here so they
-/// cannot disagree about whether a raster is on screen.
-fn native_placement(
-    arcade_area: Rect,
-    state: &State,
-    protocol: Option<TerminalImageProtocol>,
-    show_bottom_bar: bool,
-) -> Option<(&NativePuzzleImageSet, Rect)> {
-    let protocol = protocol?;
-    // `display_native_tiles` already answers `None` outside the image view.
-    let images = state.display_native_tiles()?;
-    if !images.supports_protocol(protocol) {
-        return None;
-    }
-    let board = state.board();
-    if !(0..board.len()).all(|index| images.cell_image(board, index).is_some()) {
-        return None;
-    }
-    let grid =
-        native_tiles_placement_area(arcade_area, state.difficulty(), show_bottom_bar, images)?;
-    Some((images, grid))
-}
-
-/// Identity of the native raster this game will place into `arcade_area` on
-/// the next frame: its grid rect combined with the content of every cell.
-/// `None` when it will place nothing.
-///
-/// The pre-frame wipe that consumes this runs *before* `terminal.draw`, so it
-/// cannot observe what the frame drew and has to predict it. Keeping the
-/// prediction here — beside the code it predicts, and sharing
-/// `native_placement` with it — is what stops the two from drifting apart;
-/// the render loop only decides whether to ask.
-pub(crate) fn persistent_raster_tag(
-    arcade_area: Rect,
-    state: &State,
-    protocol: Option<TerminalImageProtocol>,
-) -> Option<u64> {
-    let (images, placement) = native_placement(arcade_area, state, protocol, SHOW_GAME_BOTTOM_BAR)?;
-    let board = state.board();
-    // An opaque set draws the same pixels wherever a cell lands, so its own
-    // identity is enough. A set that is not opaque shows whatever sits under
-    // the transparent pixels, which depends on the arrangement.
-    let cache_key = if images.is_opaque() {
-        images.cache_key()
-    } else {
-        images.cache_key_for_board(board)?
-    };
-    Some(crate::app::files::terminal_image::persistent_raster_tag(
-        placement, cache_key,
-    ))
-}
-
-fn hit_layout(
-    area: Rect,
-    difficulty: Difficulty,
-    view: TileView,
-) -> Option<(Rect, ImageTileGeometry)> {
-    grid_layout(
-        game_content_area(area, true, SHOW_GAME_BOTTOM_BAR),
-        difficulty,
-        view,
-    )
-}
-
 pub fn hit_test(
     area: Rect,
     difficulty: Difficulty,
-    view: TileView,
+    art: Option<TileGeometry>,
     x: u16,
     y: u16,
 ) -> Option<usize> {
-    let (grid, geometry) = hit_layout(area, difficulty, view)?;
+    let board_area = game_content_area(area, true, SHOW_GAME_BOTTOM_BAR);
+    let (grid, geometry) = board_layout(board_area, difficulty, art)?;
     if x < grid.x
         || x >= grid.x.saturating_add(grid.width)
         || y < grid.y

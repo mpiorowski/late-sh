@@ -444,6 +444,7 @@ Moderation modal commands:
 - `artboard curate <live|YYYY-MM-DD> [reason...]`
 - `artboard restore [YYYY-MM-DD] [reason...]`
 - `artboard remove <piece-id-prefix> [reason...]` (takes a gallery piece down; the first 13 characters of the id are printed on the key line of the piece's full-frame view, 8+ are needed, must match one piece)
+- `artboard feature <piece-id-prefix>` (pins a piece as today's Sliding Puzzle art at once, `ArtboardPiece::feature_now`; the day's previous holder returns to the queue; same prefix rule as remove)
 - `artboard gallery <on|off>` (admin; the `artboard_gallery_enabled` switch)
 - `room-voice <#room> <on|off>`
 - `kick <server|voice|#room> @name [reason...]`

@@ -477,6 +477,15 @@ fn parses_artboard_gallery_commands() {
         ModCommand::ArtboardGallery { enabled: true }
     );
     assert!(parse_mod_command("artboard gallery maybe").is_err());
+    assert_eq!(
+        parse_mod_command("artboard feature 0192ABCD-1234").unwrap(),
+        ModCommand::ArtboardFeaturePiece {
+            id_prefix: "0192abcd-1234".to_string(),
+        }
+    );
+    assert!(parse_mod_command("artboard feature 0192").is_err());
+    assert!(parse_mod_command("artboard feature 0192abcd-1234 extra").is_err());
+    assert!(parse_mod_command("artboard feature").is_err());
 }
 
 #[test]
@@ -606,6 +615,7 @@ fn primary_username(command: &ModCommand) -> &str {
         | ModCommand::ArtboardRestore { .. }
         | ModCommand::ArtboardCurate { .. }
         | ModCommand::ArtboardRemovePiece { .. }
+        | ModCommand::ArtboardFeaturePiece { .. }
         | ModCommand::ArtboardGallery { .. } => {
             panic!("command does not have a primary username: {command:?}")
         }

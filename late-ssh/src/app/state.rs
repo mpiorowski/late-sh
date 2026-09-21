@@ -357,6 +357,10 @@ pub struct SessionConfig {
     /// Process-global clubhouse presence (seats, walkers, emotes). `None`
     /// on headless/test paths, which keeps the room session-local.
     pub clubhouse_lobby: Option<crate::app::clubhouse::lobby::SharedLobby>,
+    /// Process-global Nightcap seats. `None` on headless/test paths, same
+    /// as `clubhouse_lobby`.
+    pub nightcap_lobby: Option<crate::app::clubhouse::nightcap::lobby::SharedSeats>,
+    pub nightcap_house: Option<crate::app::clubhouse::nightcap::svc::NightcapHouse>,
     /// Process-global ghost-bot mention cooldown ladders, peeked at composer
     /// submit for the cooldown banner. Tests pass a fresh instance.
     pub mention_ladders: crate::app::ai::ladder::MentionLadders,
@@ -533,6 +537,12 @@ pub struct App {
     >,
     /// Admin-gated clubhouse tavern (page `0`): avatar, crowd, animations.
     pub(crate) clubhouse: crate::app::clubhouse::state::State,
+    /// Nightcap: the small bar reachable with `n` from the clubhouse.
+    pub(crate) nightcap: crate::app::clubhouse::nightcap::state::State,
+    pub(crate) nightcap_house: Option<crate::app::clubhouse::nightcap::svc::NightcapHouse>,
+    /// The night city page (`app/deadchannel/city`): where the runner
+    /// stands, the open shop panel, the street's last line.
+    pub(crate) city: crate::app::deadchannel::city::state::State,
     /// Chips backend, kept for the clubhouse's on-the-house welcome pour.
     pub(crate) chip_service: crate::app::games::chips::svc::ChipService,
     /// Staff bot ids from the active-users map, for speech bubbles and the
@@ -937,6 +947,15 @@ pub(super) fn listen_url(web_url: &str) -> String {
 }
 
 impl App {
+    /// A runner: this session's user has a `deadchannel_runners` row, the
+    /// one thing `/join #deadchannel` creates and nothing else does. The
+    /// gate for everything under the clubhouse (the undercity today). Read
+    /// from the owned looks map, so it costs nothing on the hot path and
+    /// follows a join on the next tick edge, on every replica.
+    pub fn is_runner(&self) -> bool {
+        self.runner_looks.contains_key(&self.user_id)
+    }
+
     pub fn is_running(&self) -> bool {
         self.running
     }
@@ -1050,6 +1069,8 @@ impl App {
             Screen::Dashboard => self.chat.selected_room_id,
             // The clubhouse pins the embedded chat to #lounge.
             Screen::Clubhouse => self.chat.lounge_room_id(),
+            // The bar out back reads and writes its own hidden room.
+            Screen::Nightcap => self.chat.nightcap_room_id(),
             // The daily board's match chat; None while spectating or before
             // the row loads.
             Screen::DailyMatch => self.daily.board_chat_room_id(),
@@ -1433,6 +1454,14 @@ impl App {
                 config.username.clone(),
                 !config.clubhouse_tutorial_done,
             ),
+            nightcap: crate::app::clubhouse::nightcap::state::State::new(
+                config.nightcap_lobby.clone(),
+                config.nightcap_house.as_ref().map(|house| house.wall()),
+                config.user_id,
+                config.username.clone(),
+            ),
+            nightcap_house: config.nightcap_house,
+            city: crate::app::deadchannel::city::state::State::new(),
             chip_service: config.chip_service,
             clubhouse_bartender_id: None,
             clubhouse_graybeard_id: None,
@@ -2267,6 +2296,16 @@ impl App {
             self.house.close();
         }
 
+        // A Nightcap stool is held only while its owner is in the room.
+        // There are six of them and sitting is the room's one verb, so a
+        // seat kept across a screen change is a claim that outlives the
+        // visit: six such claims close the bar for the rest of those
+        // sessions. `SharedSeats::sync` cannot clean this up, since it only
+        // evicts users who left `active_users`, which means disconnected.
+        if self.screen == Screen::Nightcap && screen != Screen::Nightcap {
+            self.nightcap.leave_screen();
+        }
+
         if self.screen == Screen::Scratchpad && screen != Screen::Scratchpad {
             // Dropping `scratchpad` here (rather than an explicit
             // `leave_scratchpad` method) runs `ScratchpadState`'s `Drop`
@@ -2698,6 +2737,70 @@ impl App {
             lounge_messages,
             chrono::Utc::now(),
         );
+    }
+
+    /// Sync Nightcap's seats with the active-users map about once a second
+    /// while the screen is up, same cadence as `tick_clubhouse`. Only drops
+    /// disconnected occupants — unlike the Clubhouse, nobody holds a seat
+    /// until they press a number key, so there is no roster to seat people
+    /// into.
+    /// Returns whether the bar changed on screen and a frame is owed: a
+    /// settled order or carve, another patron's stool, a pour, the TV.
+    pub(crate) fn tick_nightcap(&mut self) -> bool {
+        let mut changed = self.nightcap.tick(self.marquee_tick as u64);
+        // Settled orders land whether or not the screen is up: the chips
+        // moved either way, and the footer should say so on the next visit.
+        changed |= self.nightcap.drain_outcomes();
+        if self.screen != Screen::Nightcap {
+            return false;
+        }
+
+        if self.nightcap.roster_refresh_due() {
+            let mut roster = Vec::new();
+            if let Some(active_users) = &self.active_users {
+                let active_users = active_users.lock_recover();
+                for (user_id, user) in active_users.iter() {
+                    if user.fingerprint.is_none() {
+                        continue; // ghost bots don't hold a seat
+                    }
+                    roster.push((*user_id, user.username.clone()));
+                }
+            }
+            self.nightcap.refresh_roster(&roster);
+        }
+
+        changed |= self.nightcap.refresh_snapshot();
+        changed
+    }
+
+    /// A seated Nightcap patron orders from the house menu. `State::pick`
+    /// gates it (a stool, one order at a time); `nightcap::svc` moves the
+    /// chips off-thread on the same rails as the tavern's bartender and
+    /// reports back over the session's outcome channel.
+    pub(crate) fn nightcap_order(&mut self, order: crate::app::clubhouse::nightcap::state::Order) {
+        let Some(order) = self.nightcap.pick(order) else {
+            return;
+        };
+        let Some(seats) = self.nightcap.seats_handle() else {
+            return;
+        };
+        crate::app::clubhouse::nightcap::svc::spawn_order(
+            self.chip_service.clone(),
+            self.clubhouse.lobby_handle(),
+            seats,
+            self.user_id,
+            order,
+            self.nightcap.outcome_sender(),
+        );
+    }
+
+    /// A seated Nightcap patron carves a line into their stool. `State::take_carving`
+    /// gated it; the house writes it and updates the shared wall in place.
+    pub(crate) fn nightcap_carve(&mut self, stool: usize, body: String) {
+        let Some(house) = self.nightcap_house.clone() else {
+            return;
+        };
+        house.spawn_carve(self.user_id, stool, body, self.nightcap.outcome_sender());
     }
 
     /// Persist "the clubhouse tutorial ran" (fire-and-forget).

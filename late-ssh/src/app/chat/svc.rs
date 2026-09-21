@@ -4881,9 +4881,10 @@ impl ChatService {
         tracing::info!(user_id = %user_id, username = %user.username, room_id = %room.id, "deadchannel joined by invitation");
         // Consent creates the character (GAME.md, Phase 2): the runner row,
         // wearing a random starter look. A conditional insert, so a second
-        // device or a rejoin finds the runner already there and keeps its
-        // face; only a fresh row counts as the ladder's last beat, and the
-        // insert itself says which this was.
+        // device finds the runner already there and keeps its face, and a
+        // runner who left comes back wearing the same one; only a fresh row
+        // counts as the ladder's last beat, and the statements say which
+        // this was.
         let look = crate::app::deadchannel::runner::state::Look::random(&mut rand::thread_rng());
         let (runner, origin) =
             late_core::models::deadchannel_runner::DeadchannelRunner::ensure_for_user(
@@ -4898,6 +4899,10 @@ impl ChatService {
                 crate::metrics::record_first_contact_beat(
                     crate::metrics::FirstContactBeat::RunnerCreated,
                 );
+            }
+            late_core::models::deadchannel_runner::RunnerOrigin::Returned => {
+                tracing::info!(user_id = %user_id, username = %user.username, runner_id = %runner.id, "runner returned");
+                crate::metrics::record_runner_door(crate::metrics::RunnerDoor::Returned);
             }
             late_core::models::deadchannel_runner::RunnerOrigin::Existing => {}
         }
@@ -5163,6 +5168,21 @@ impl ChatService {
             anyhow::bail!("Cannot leave #{name} (permanent room)");
         }
         ChatRoomMember::leave(&client, room_id, user_id).await?;
+        // Leaving #deadchannel closes the undercity gate, on this replica
+        // and every other: the stamp fires `deadchannel_runner_changed`, so
+        // the runner drops out of each replica's looks directory and out of
+        // `App::is_runner` on the next tick edge. The character survives the
+        // leave, so an invited rejoin gets the same face back.
+        if room.kind == late_core::models::chat_room::DEADCHANNEL_KIND {
+            let left = late_core::models::deadchannel_runner::DeadchannelRunner::mark_left(
+                &client, user_id,
+            )
+            .await?;
+            if left {
+                tracing::info!(user_id = %user_id, "runner left the deadchannel");
+                crate::metrics::record_runner_door(crate::metrics::RunnerDoor::Left);
+            }
+        }
         Ok(())
     }
 

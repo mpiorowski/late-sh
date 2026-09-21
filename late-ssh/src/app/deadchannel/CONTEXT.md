@@ -4,11 +4,14 @@
 - Domain: the deadchannel game (GAME.md): its onboarding, the
   first-contact haunting ladder, in the `haunt/` subdomain, and the
   start of the character layer, the runner and its look, in `runner/`
-  (phase 2, build order step 1). Built for
+  (phase 2, build order step 1), and the night city street in `city/`
+  (the wallet, GAME.md "The three surfaces"; art and walkable street
+  first, under the clubhouse on a second `0`, runners only, no
+  transactions yet). Built for
   several replicas (root CONTEXT.md, multi-replica rule); gated behind
   the `haunt_live` fuse, unlit, so only staff (admins and moderators)
   are haunted today, and only they can finish the ladder and join.
-- Last updated: 2026-09-14 (the breakthrough plays only on a send from
+- Last updated: 2026-09-19 (the city moved under the clubhouse: `0` on the clubhouse goes down, runners only; the tile register won and the drawn one left the live script; the street went long, with walkers and running; the renderer lights the street from every lamp and sign, fades it with distance and shadows the walls, in the city's own fixed palette; §3b). Before that, 2026-09-18 (the night city exists: the generated street, the runner as its mark, landmarks with popovers, shop panels showing catalogs without tills). Before that, 2026-09-14 (the breakthrough plays only on a send from
   its own session and swallows keys ahead of door games; the static rolls
   slower, scene lengths unchanged). Before that, 2026-09-13 (stage 3
   plays on its own clock: the static
@@ -106,6 +109,11 @@ number of replicas spend one AI call per text.
 | `runner/state.rs` | The look: `PIECES` (the closed starter table, one five-cell row per piece, `Slot` hood/eyes/coat), `Tint` (the closed palette, gold deliberately absent), `Look` + `Worn` (typed, table references), `Look::random` (the join's dice), `Look::to_json` / `Look::parse` (the JSON contract on the runner row; unknown codes are a `LookError`, never a blank), `PORTRAIT_WIDTH` / `PORTRAIT_HEIGHT`. No I/O. `state_test` asserts every row is five single-width cells. |
 | `runner/ui.rs` | `portrait_spans`: the look as three styled spans, one per worn piece in its tint; `tint_color` maps the palette onto the theme. Pure. |
 | `runner/svc.rs` | `RunnerLookService`: the process-shared look directory (`watch<Arc<HashMap<Uuid, Look>>>`), seeded and refreshed from `deadchannel_runners` on the `deadchannel_runner_changed` LISTEN, the `app/flags` shape. A look that fails to parse is logged and skipped. `fixed_looks_rx` for test apps. |
+| `city/map.rs` | **Generated** by `scripts/gen_city_map.py --write` (never hand-edited): the 232x52 `MAP` literal, the `SOLID` collision bitmap, `SPAWN`, every zone (`SIGNS`, `BANNERS`, `CART_SIGNS`, `AWNINGS`, `WINDOWS`, `VENTS`, `PUDDLES`, `LAMPS`, `DROP_LIGHTS`, `SCREEN_FACE`, `WIRE`, ...), the closed `Neon` palette, `Landmark` + `nearest_landmark` (reach zones), `walkable`, `grid`/`char_at`. |
+| `city/state.rs` | Per-session view state: the runner's cell, the animation clock, the open panel, the pinned street line. `walk`, `nearby`, `Landmark::on_enter` (`Enter::Panel` for shops, `Enter::Line` for carts and the screen, `Enter::Leave` for the wire). Pure. |
+| `city/data.rs` | The city's copy and catalogs: the gear ladder (`COST_LADDER`, `WEAPONS`, `ARMOR`: LoGD numbers, GAME.md names), `BANDS` with draft move names, `NOTICES`, `DRINKS`, `TAILOR_PRICES`, the per-landmark `lines` pools, `title` and `pitch`. |
+| `city/input.rs` | Arrows/hjkl walk; Enter at a landmark; Enter closes a panel or the ledge view, Esc too through the root's `dispatch_escape` (walk keys are swallowed while one is open). Returns `false` for globals. |
+| `city/ui.rs` | Renderer: base styling by zone, the ambience pass (rain, puddles reflecting the nearest sign, neon shorts and dropped letters, window flicker, the screen's static and test pattern with rare glyph frames, steam, lamps, the drop's lights, the blimp, the mast, the bits machine, the wire's pulse), the runner as its mark, the popover, the street line, the shop panels. |
 
 Root integration is deliberately thin: `App.haunt` (the one field),
 `haunt::svc::tick(self)` in `tick.rs` (plus the splash block consulting
@@ -141,7 +149,9 @@ payload, and parse), and `metrics::record_first_contact_beat` /
 The runner's seams are as thin: `ChatService::join_deadchannel_room`
 creates the row (`DeadchannelRunner::ensure_for_user`, a conditional
 insert, so two devices joining at once share one face; a fresh row is
-the `RunnerCreated` beat), `State.runner_looks` holds the directory
+the `RunnerCreated` beat, a return the `RunnerDoor::Returned` one),
+`ChatService::leave_room` stamps the leave for the `deadchannel` kind
+(`mark_left`, the `RunnerDoor::Left` beat), `State.runner_looks` holds the directory
 service (`main.rs` starts its listener), `App.runner_looks` is the
 session's owned copy refreshed on the 1 Hz edge in `tick.rs` (bumping
 `chat_ctx_epoch`, so the rows rebuild once per change), and chat's rows
@@ -301,15 +311,169 @@ lines carry no face; every other room renders exactly as before.
    `visual_order_for_rooms` and both rail builders in `chat/ui.rs`).
    Copy and name face design review before real users ever see them.
 
+## 3b. The night city (the undercity under `0`, the wallet; art first)
+
+GAME.md, "The three surfaces": the city is a full-screen destination
+where nothing happens that you could miss; transactions only. What exists
+is the street and its doors, none of the tills: the design pass that fixes
+the art before a single purchase is wired.
+
+- **Where it is reached.** Under the clubhouse: `0` lands on the
+  clubhouse, `0` again on the clubhouse goes down to the undercity, `0`
+  on the undercity comes back up. Runners only (`App::is_runner`: a look
+  in `App.runner_looks` for this user, so a `deadchannel_runners` row
+  without a leave stamp; the app-wide gate for everything under the
+  clubhouse, not an `app_flags` switch, which are process-wide, not per
+  user); anyone else stays on the clubhouse. The gate guards the descent,
+  so the standing there is guarded on the 1 Hz edge in `tick.rs`: when the
+  directory changes and this user is no longer in it, a session on
+  `Screen::City` is walked back up to the clubhouse. That is the only
+  place in the process that can notice a leave taken on another session or
+  another replica. Not in the Tab cycle
+  (`Screen::City.next()`/`prev()` return the clubhouse), no tab of its
+  own, the clubhouse tab stays lit under it, title "Undercity". Enter at
+  the wire goes back up to the clubhouse. The wiring is thin on purpose
+  (`Screen::City`, `App.city`, one dispatch line each in `input.rs`,
+  `render.rs`, `tick.rs`).
+- **The register (decided 2026-09-19): tiles.** Top-down, one tile per
+  thing, the Dwarf Fortress register. `#` walls, `+` doors, `╬` windows
+  that flicker, `=` counters, `)` blades, `[` plate, `"` marks, `!`
+  bottles, `%` bowls, `∩` lockers, `▬` beds, `▪` crates, `▓` shutters and
+  cabinets, `≈` water, `@` people, `c` cats, `r` rats, `>` stairs, `*`
+  lamps, `°` lanterns, `≡` grates that steam. The first pass drew the
+  street front-on with multi-cell facades; it read as a plaza and was
+  dropped (git history has it). A 440-column street in three legs with a dogleg between
+  each (the camera scrolls), four tiles wide, alleys one to three wide
+  running off it (dead ends, a hidden court with a shrine and a plant, a
+  back lane behind the second leg reached from its two end alleys and the
+  arcade's back door), rooms you walk into, stalls of five tiles against
+  the walls, a canal under the first two legs (a walkway, two bridges,
+  warehouses on the far bank), the ledge with the railing and the wire
+  stairs (`>` in the gap, the spawn) along the third leg, a small yard
+  and the screen as three tiles of static closing the street. The shops
+  are the landmarks; everything else is there to be there: tenements
+  (`tenement()` lays out corridor, rooms, beds and a sleeper from a
+  seed), a lockup, a pawn shop, a clinic, the baths, a motel,
+  the arcade, a shrine, a market hall, a garage, a dock, a chop shop, a
+  video store, an aerial lot. **Walkers** (`map::WALKERS`,
+  `ui::walkers`): people, cats and rats pacing a stretch of floor as a
+  pure function of the tick, no state; the generator and `map_test`
+  prove every path is open floor. Rule: every shop with a sign has a
+  door somewhere in its walls (the generator refuses a signed shop
+  without one); what happens inside can be shuffled or removed later.
+- **Light (2026-09-19).** Blade Runner, not cyberpunk: the street is
+  dark and every color has a source. `map::LIGHTS` is every light on the
+  street, found by the generator scanning the finished grid (a `*` is a
+  lamp, a `°` a lantern, `$` `♪` `?` machines, `_` candles, `>` stairs)
+  plus the signs, the shops' doorways, the windows and the screen, each
+  with a kind, a `Neon` and a radius. Each frame `ui::Scene` spreads
+  every light over the floor it reaches (Dial's buckets: a column costs
+  one, a row two, light crosses open ground and doorways, lands on walls
+  and stops) at the level `light_level` gives it this tick (lamps
+  flicker, signs short out and their light with them, windows go dark
+  for a while, the screen pulses with its static), and adds the
+  spinner's searchlight passing over. A **visibility map** fades
+  everything with distance from the runner (`SEE_FULL` columns in full,
+  black-ish by `SEE_END`) and keeps a room at `INSIDE_DARK` until the
+  runner is at its door. Every cell is a `Surface`: lit (its color times
+  ambient plus the light on it, wet things more, halved in the shadow
+  under a wall) or emissive (neon, lamps, windows: they burn on their
+  own and only fade with distance). Height is faked: the top wall of a
+  building against the dark draws as `▀`, the floor south of any wall is
+  in shadow. Rain takes the color of the light it falls through, in that
+  light's color. The runner carries a light (`CARRY_RADIUS`): where you
+  stand is always the best lit place on the street. Light crosses flat
+  water, so the canal and the puddles take the bank's lanterns. Every
+  sign smears its color a few rows into the wet ground in front of it
+  (`reflections`, shimmering). The fixed lights' footprints are computed
+  once (`footprints`), as is every cell's base surface (`base_map`) and
+  which room it is in (`inside_map`): a debug frame is ~30ms, not 130.
+- **Traffic, billboards, splashes.** All pure in the tick. A car runs the
+  length of the street (`car_route`: the three legs through both
+  doglegs, `ui_test` proves every cell is open) as two cells, tail red,
+  head white, with the pool of its headlights running ahead of it in the
+  light map; it draws only on open floor, so it passes behind whatever
+  is in the road. The monorail crosses the sky row (`TRACK_Y`, a dashed
+  track across the top of the map), eastbound one run and westbound the
+  next, windows amber and cyan, flickering. `map::BILLBOARDS` are nine
+  one-row strips the generator leaves blank (five over the rooftops in
+  the sky row, four on the towers below the ledge); the renderer edges
+  each in dark steel and scrolls a line of street copy across it in the
+  board's neon (`BILLBOARD_LINES`, one line per `BILLBOARD_CYCLE`, dark
+  for a moment between, a letter flickering); each is a
+  `LightKind::Billboard` in the light map. The first cut was two rows of
+  the glyph script and read as floating blocks of noise. Raindrops
+  landing on a puddle throw an `o`. Rain falls in two columns of three
+  on every bare cell under the sky, the street, the drop and the void
+  between the blocks alike, dim where the light is dim, and never inside
+  a room (`inside_map`) or on a prop.
+- **The ledge (`Landmark::Ledge`, `city/ledge.rs`).** Standing at the
+  railing anywhere along it (one row north of `RAIL_Y`, not on the wire
+  stairs) the popover says "look over"; Enter swaps the street for the
+  lower city, all the way down: a perspective picture at half-block
+  resolution (two colors per cell, `▀` with fg and bg), towers in four
+  depths from the far hazed ones on the horizon to the near black ones
+  standing below the frame, windows lit at random and flickering, the
+  city's script in neon bands across the near towers, antenna lights
+  blinking, the spinner's beam crossing, rain in the sky. Pure in the
+  area's size and the tick; the same size always draws the same city.
+  Enter or Esc steps back. `State::at_ledge` gates the walk keys like a
+  panel does.
+- **Own palette, not the theme.** The city does not follow the person's
+  theme at all: one look, tuned once (`ui::NIGHT` painted under every
+  cell and overlay, `ui::neon_rgb`, the surface constants, the `INK_*`
+  greys of the overlay text, all fixed RGB). A hundred palettes cannot
+  all be lit well, and a light canvas showing through the street breaks
+  the night. Nothing in `city/ui.rs` reads the theme module; the mirror
+  in the tailor's panel recolors the tints through `ui::tint_rgb`.
+- **The runner** is its mark (GAME.md, "The look"; `@` for a session
+  without a runner row), name label above. Single-width glyphs
+  only; the generator refuses wide and combining characters and
+  `map_test` asserts it again.
+- **Landmarks.** Enter at a shop (armorer, tailor, lockers, bands, bar,
+  patch, board, bits machine) opens a centered panel with its catalog and
+  a line saying the till is not open: the armorer lists all fifteen
+  tiers with bits prices, the tailor shows your portrait in the mirror
+  and the whole starter rack (every piece row, the ten marks, the five
+  tints) plus the placeholder chip prices, bands shows the three bands
+  with draft move names. Enter at a cart, the screen, or the stairs pins
+  a line from that landmark's pool top-left for ~8s. Enter at the wire
+  leaves, back up to the Clubhouse.
+- **Animation** rides the clubhouse's `anim_half` edge (~7.5fps,
+  `tick.rs`), the wake tier is `ANIM_HALF_TICK` on this screen, and every
+  effect is a pure function of `marquee_tick` and the cell, so nothing
+  accumulates. The ambience never paints over a prop (`put_if_floor`, and
+  `ui_test` checks the signs and the board survive a frame).
+- **The camera looks north** (`LOOK_NORTH`, 8 rows): it centers above the
+  runner so a 24-row terminal at the spawn shows shopfronts and street,
+  not the drop.
+- **Nothing is persisted, nothing is shared.** No lobby, no crowd, no DB:
+  the city is one runner on one street per session by design (transactions
+  only; presence would make standing here beat standing in chat).
+
 ## 4. Persistence (`users.settings`, late-core `User`; `app_flags`; `deadchannel_runners`)
 
 - `deadchannel_runners` (migration 172, model
   `late-core/src/models/deadchannel_runner.rs`): one row per user
   (`user_id` unique, cascade on delete), `look` JSONB in the shape
-  `{"hood": {"piece", "tint"}, "eyes": ..., "coat": ..., "mark": {"glyph"}}`.
-  Created only by the invited join; phase 2 grows it column by column.
-  Insert and update fire `deadchannel_runner_changed` (payload: the user
-  id, for logs only; listeners re-read every look).
+  `{"hood": {"piece", "tint"}, "eyes": ..., "coat": ..., "mark": {"glyph"}}`,
+  and `left_at` (migration 187), the leave stamp. Created only by the
+  invited join; phase 2 grows it column by column. Insert and update fire
+  `deadchannel_runner_changed` (payload: the user id, for logs only;
+  listeners re-read every look).
+  - `/leave #deadchannel` stamps `left_at` (`mark_left`, conditional on
+    the stamp being absent, so leaving twice writes and notifies once) and
+    never deletes: the character keeps its row, its id, and its face, and
+    an invited rejoin clears the stamp and gets that face back
+    (`ensure_for_user`, whose `RunnerOrigin` is `Created`, `Returned`, or
+    `Existing`, one statement per outcome). A stamp is also what keeps the
+    directory honest, because the trigger fires on insert and update only:
+    a delete would notify nobody and leave the undercity open on every
+    replica that missed it.
+  - `list_looks` serves only rows with `left_at IS NULL`, so one write
+    closes the gate and drops the portrait everywhere. A runner who left
+    disappears from the #deadchannel gutter retroactively, old messages
+    included: going dark takes the face with it.
 
 - `first_contact_glitch_hits` (int) + `first_contact_glitch_day`
   (YYYY-MM-DD) + `first_contact_glitch_day_hits` (int): stage-1 bursts.
@@ -483,6 +647,13 @@ Drained by `haunt::svc::tick`.
   deploy zeroes the live value; every panel there sums per-instance
   high-water marks instead. The row ships to prod with the dashboard
   ConfigMap, on a `-infra` release (`infra/monitoring.tf`), not on merge.
+- The city map is generated: hand edits to `city/map.rs` are clobbered by
+  the next `scripts/gen_city_map.py --write`. Move a prop in the script
+  and its zone, reach, and animation cells move with it. The literal
+  arrays carry `#[rustfmt::skip]`, so `cargo fmt` and `--write` agree.
+- The city's copy (`city/data.rs`: shop lines, cart lines, draft move
+  names, notices) is placeholder content at feed-template quality
+  standards and faces design review with the rest of the phase 2 copy.
 - Piece rows are five cells with no wide glyph; the state test guards
   that and nothing more. The rows are block, box-drawing, and shape
   glyphs (`◈ ◌ ●` and their kin), which are East Asian ambiguous width

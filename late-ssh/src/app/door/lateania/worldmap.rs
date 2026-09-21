@@ -476,8 +476,16 @@ fn build_pois() -> HashMap<RoomId, Poi> {
         e.monsters.push(spawn.name);
         if spawn.boss {
             e.boss = Some(spawn.name);
+            // `reward` is the set of names the inspector lists, while `loot` is
+            // a weighted table: a boss that should drop its signature finds
+            // more often carries those ids two or four times over (see
+            // `world::archipelago_boss_loot`). Weighting belongs in the roll,
+            // not in the readout, so dedupe here rather than listing the same
+            // find four times.
             for &item_id in spawn.loot {
-                if let Some(item) = super::items::item(item_id) {
+                if let Some(item) = super::items::item(item_id)
+                    && !e.reward.contains(&item.name)
+                {
                     e.reward.push(item.name);
                 }
             }

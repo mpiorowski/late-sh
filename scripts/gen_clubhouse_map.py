@@ -154,6 +154,22 @@ doors = [
 stamp(DOORS_X, DOORS_Y, doors, transparent=True)
 DOORS_ZONE = (DOORS_X, DOORS_Y, DOORS_X + DW - 1, DOORS_Y + 5)
 
+# ---------------------------------------------------------------- the back door
+# Out back to Nightcap, the quiet bar (app/clubhouse/nightcap): a plain door
+# in the back wall just past the end of the counter. Enter in front of it
+# steps outside; `n` does the same from anywhere in the tavern.
+# Four-letter words in a four-wide frame sit dead center; one cell of air
+# on each side keeps it off the wall and the window frame.
+BACK_DOOR_X, BACK_DOOR_Y = 58, 1
+back_door = [
+    '╭────╮',
+    '│back│',
+    '│door│',
+    '│   ○│',
+]
+stamp(BACK_DOOR_X, BACK_DOOR_Y, back_door, transparent=False)
+BACK_DOOR_ZONE = (BACK_DOOR_X, BACK_DOOR_Y, BACK_DOOR_X + 5, BACK_DOOR_Y + 3)
+
 # ---------------------------------------------------------------- arcade cabinet
 ARC_X, ARC_Y = 142, 1
 arcade = [
@@ -277,8 +293,38 @@ stool(POK_X + 21, POK_Y + 6, True)
 stool(POK_X - 3, POK_Y + 2)
 stool(POK_X + PW + 2, POK_Y + 2)
 
+# ---------------------------------------------------------------- pool table
+# Directly under the poker table, because they are the same errand: the poker
+# table opens the Lobby and this one opens it on a fresh pool challenge.
+POOL_X, POOL_Y = 148, 25
+PLW = 26
+pool_rail = list('▒' * (PLW - 2))
+for i in (0, (PLW - 2) // 2, PLW - 3):
+    pool_rail[i] = '●'                      # the pockets, on the long rails
+pool_felt = list('▒' * (PLW - 2))
+label = 'POOL'
+lstart = (len(pool_felt) - len(label)) // 2
+for i, ch in enumerate(label):
+    pool_felt[lstart + i] = ch
+pool_felt[3] = '◦'                          # a couple of balls on the cloth
+pool_felt[len(pool_felt) - 4] = '◦'
+pool = [
+    '╭' + '─' * (PLW - 2) + '╮',
+    '│' + ''.join(pool_rail) + '│',
+    '│' + ''.join(pool_felt) + '│',
+    '│' + ''.join(pool_rail) + '│',
+    '╰' + '─' * (PLW - 2) + '╯',
+]
+for r in pool:
+    assert len(r) == PLW, (len(r), r)
+stamp(POOL_X, POOL_Y, pool, transparent=True)
+POOL_ZONE = (POOL_X, POOL_Y, POOL_X + PLW - 1, POOL_Y + 4)
+stool(POOL_X + 7, POOL_Y - 2)
+stool(POOL_X + 16, POOL_Y - 2)
+stool(POOL_X + 7, POOL_Y + 6, True)
+stool(POOL_X + 16, POOL_Y + 6, True)
+
 # a couple more tables in the games corner, south-east
-table(148, 26)
 table(166, 36)
 table(148, 38)
 
@@ -344,7 +390,8 @@ def zone_near_reachable(z, dist):
 
 zones = [('bar', (1, 9, BAR_X1, 10), 2), ('juke', JUKEBOX_ZONE, 2),
          ('doors', DOORS_ZONE, 2), ('arcade', ARCADE_ZONE, 2),
-         ('poker', POKER_ZONE, 2), ('easel', EASEL_ZONE, 2),
+         ('poker', POKER_ZONE, 2), ('pool', POOL_ZONE, 2),
+         ('easel', EASEL_ZONE, 2),
          ('fire', FIREPLACE_ZONE, 2)]
 for name, z, d in zones:
     assert zone_near_reachable(z, d), name
@@ -500,6 +547,14 @@ pub const POKER_TABLE: Zone = Zone {
     x1: 176,
     y1: 17,
 };
+/// The pool table under the big table: the Lobby again, on a fresh pool
+/// challenge (Tables, page 4).
+pub const POOL_TABLE: Zone = Zone {
+    x0: 148,
+    y0: 25,
+    x1: 173,
+    y1: 29,
+};
 /// The easel (the Artboard, page 5).
 pub const EASEL: Zone = Zone {
     x0: 4,
@@ -606,6 +661,7 @@ pub enum Interactive {
     Arcade,
     Doors,
     Poker,
+    Pool,
     Easel,
     Dog,
     Fireplace,
@@ -627,6 +683,9 @@ pub fn nearest_interactive(x: u16, y: u16) -> Option<Interactive> {
     }
     if POKER_TABLE.distance(x, y) <= 2 {
         return Some(Interactive::Poker);
+    }
+    if POOL_TABLE.distance(x, y) <= 2 {
+        return Some(Interactive::Pool);
     }
     if EASEL.distance(x, y) <= 2 {
         return Some(Interactive::Easel);
@@ -785,6 +844,8 @@ mod tests {
         assert_eq!(nearest_interactive(130, 8), Some(Interactive::Doors));
         // Walking up to the poker table.
         assert_eq!(nearest_interactive(145, 15), Some(Interactive::Poker));
+        // And to the pool table under it.
+        assert_eq!(nearest_interactive(146, 27), Some(Interactive::Pool));
         // Admiring the easel.
         assert_eq!(nearest_interactive(19, 33), Some(Interactive::Easel));
         // Petting distance.
@@ -823,7 +884,8 @@ if '--write' in sys.argv or '--emit' in sys.argv:
         ('rug tables, three rows of three (N/S/W/E stools each)', 36),
         ('the quiet table off the rug, south-west', 4),
         ('poker table', 6),
-        ('games-corner tables, south-east', 12),
+        ('pool table', 4),
+        ('games-corner tables, south-east', 8),
     ]
     assert sum(n for _, n in groups) == len(seat_lines), (sum(n for _, n in groups), len(seat_lines))
     out_seats = []
@@ -844,7 +906,8 @@ if '--write' in sys.argv or '--emit' in sys.argv:
     print('BAR_COUNTER', (1, 9, BAR_X1, 10), 'BACK_BAR', (1, 2, BAR_X1 - 1, 5))
     print('JUKEBOX', JUKEBOX_ZONE, 'EQ', JUKEBOX_EQ)
     print('DOORS', DOORS_ZONE, 'ARCADE', ARCADE_ZONE, 'SCREEN', ARCADE_SCREEN)
-    print('POKER', POKER_ZONE, 'EASEL', EASEL_ZONE)
+    print('BACK_DOOR', BACK_DOOR_ZONE)
+    print('POKER', POKER_ZONE, 'POOL', POOL_ZONE, 'EASEL', EASEL_ZONE)
     print('FIREPLACE', FIREPLACE_ZONE, 'FIRE_CELLS', FIRE_CELLS)
     print('CANDLES', CANDLES + MANTLE_CANDLES)
     print('NEON', NEON_ZONE, 'WINDOWS', WINDOW_A, WINDOW_B)

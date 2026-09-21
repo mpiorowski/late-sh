@@ -14,6 +14,22 @@
         font-display: block;
     }
 
+    @font-face {
+        font-family: "Noto Sans Symbols 2";
+        src:
+            url("/static/fonts/NotoSansSymbols2-Regular.woff2") format("woff2"),
+            url("/static/fonts/NotoSansSymbols2-Regular.ttf") format("truetype");
+        font-style: normal;
+        font-weight: 400;
+        font-display: block;
+        /* The face's own symbol coverage (cmap), so the download only happens when the
+           snapshot contains a glyph it can render; plain text never fetches it. */
+        unicode-range: U+21AF-2219, U+2299-22C6, U+2316-232B, U+237B-244A, U+25A0-27BE,
+            U+2800-28FF, U+2981-29EB, U+2B00-2BFF, U+4DC0-4DFF, U+10140-101FD, U+102E0-102FB,
+            U+10E60-10E7E, U+1D2C0-1D378, U+1F000-1F10F, U+1F16D-1F1AD, U+1F30D-1F336,
+            U+1F378-1F5FA, U+1F650-1F6FC, U+1F774-1F8B1, U+1F900-1F946, U+1FA00-1FBF9;
+    }
+
     :root {
         --gallery-font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Symbols Nerd Font", "Noto Sans Symbols 2", "Noto Sans Symbols", "Apple Color Emoji", "Segoe UI Emoji", monospace;
     }
@@ -215,6 +231,11 @@
         height: 14px;
     }
 
+    .gal-btn-sm {
+        width: 1.9rem;
+        height: 1.9rem;
+    }
+
     .gal-status {
         position: absolute;
         left: 0.85rem;
@@ -264,6 +285,25 @@
 
         .gal-status {
             font-size: 0.65rem;
+            max-width: calc(100% - 7rem);
+        }
+
+        .gal-btn,
+        .gal-btn-sm {
+            width: 2.6rem;
+            height: 2.6rem;
+            font-size: 1.1rem;
+        }
+
+        .gal-btn svg {
+            width: 18px;
+            height: 18px;
+        }
+
+        .gal-toolbar {
+            gap: 0.4rem;
+            right: 0.65rem;
+            bottom: 0.65rem;
         }
     }
 </style>
@@ -271,7 +311,7 @@
 <div class="gal-root" x-data="gallery()" x-init="init()" @keydown.window="onKey($event)">
 
     <header class="gal-topbar">
-        <button type="button" class="gal-btn" style="width: 1.9rem; height: 1.9rem;"
+        <button type="button" class="gal-btn gal-btn-sm"
             @click="sidebarHidden = !sidebarHidden" aria-label="toggle snapshots panel" title="toggle list (s)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                 stroke-linejoin="round">
@@ -353,8 +393,9 @@
 
         <div class="gal-stage" :class="[panning && 'is-panning', !hasSelected && 'is-empty']" x-ref="stage"
             @mousedown="onMouseDown($event)" @mousemove="onMouseMove($event)" @mouseleave="onMouseLeave()"
-            @wheel.prevent="onWheel($event)" @dblclick="fitToView()">
-
+            @wheel.prevent="onWheel($event)" @dblclick="fitToView()"
+            @touchstart.passive="onTouchStart($event)" @touchmove.passive="onTouchMove($event)"
+            @touchend.passive="onTouchEnd($event)" @touchcancel.passive="onTouchEnd($event)">
             {% if has_selected %}
             <div class="gal-frame" x-ref="frame">
                 <canvas id="gallery-canvas" aria-label="{{ selected_title }}"></canvas>
@@ -399,9 +440,20 @@
             panStartY: 0,
             panStartTx: 0,
             panStartTy: 0,
+            touchDist: 0,
+            touchMidX: 0,
+            touchMidY: 0,
+            touchPanning: false,
+            touchStartTime: 0,
+            touchStartX: 0,
+            touchStartY: 0,
+            tapCandidate: false,
+            lastTapTime: 0,
+            lastTapX: 0,
+            lastTapY: 0,
             zoomLabel: '100%',
-            statusText: 'drag to pan · scroll to zoom · double-click to fit',
-            defaultStatus: 'drag to pan · scroll to zoom · double-click to fit',
+            statusText: 'drag or swipe to pan · scroll or pinch to zoom',
+            defaultStatus: 'drag or swipe to pan · scroll or pinch to zoom',
             cellW: 8,
             cellH: 16,
             fontSize: 14,
@@ -452,8 +504,13 @@
 
             async renderWhenFontsReady() {
                 if (!document.fonts) return;
+                // Passing the snapshot's characters lets unicode-range gate the fetch.
+                const text = Array.from(new Set(this.cells.map((cell) => cell.ch))).join('');
                 try {
-                    await document.fonts.load(this.fontSize + 'px "Symbols Nerd Font"');
+                    await Promise.allSettled([
+                        document.fonts.load(this.fontSize + 'px "Symbols Nerd Font"'),
+                        document.fonts.load(this.fontSize + 'px "Noto Sans Symbols 2"', text)
+                    ]);
                     this.renderSnapshot();
                 } catch (_) {
                     // Keep the initial render if the browser blocks or cannot load the webfont.
@@ -555,6 +612,99 @@
             },
 
             endPan() {this.panning = false;},
+            onTouchStart(e) {
+                if (e.target.closest('.gal-toolbar')) return;
+                const touches = e.touches;
+                if (touches.length === 1) {
+                    const t = touches[0];
+                    const now = Date.now();
+                    const nearLastTap =
+                        Math.hypot(t.clientX - this.lastTapX, t.clientY - this.lastTapY) < 30;
+                    if (now - this.lastTapTime < 300 && nearLastTap) {
+                        this.fitToView();
+                        this.lastTapTime = 0;
+                        this.tapCandidate = false;
+                    } else {
+                        this.tapCandidate = true;
+                    }
+                    this.touchStartTime = now;
+                    this.touchStartX = t.clientX;
+                    this.touchStartY = t.clientY;
+                    this.beginTouchPan(t);
+                    this.updateStatus(t);
+                } else if (touches.length >= 2) {
+                    this.touchPanning = false;
+                    this.tapCandidate = false;
+                    const dx = touches[0].clientX - touches[1].clientX;
+                    const dy = touches[0].clientY - touches[1].clientY;
+                    this.touchDist = Math.hypot(dx, dy);
+                    const mid = this.touchMidpoint(touches);
+                    this.touchMidX = mid.x;
+                    this.touchMidY = mid.y;
+                }
+            },
+
+            onTouchMove(e) {
+                const touches = e.touches;
+                if (touches.length === 1 && this.touchPanning) {
+                    const t = touches[0];
+                    if (Math.hypot(t.clientX - this.touchStartX, t.clientY - this.touchStartY) >= 10) {
+                        this.tapCandidate = false;
+                    }
+                    this.tx = this.panStartTx + (t.clientX - this.panStartX);
+                    this.ty = this.panStartTy + (t.clientY - this.panStartY);
+                    this.applyTransform();
+                    this.updateStatus(t);
+                } else if (touches.length >= 2 && this.touchDist > 0) {
+                    const dx = touches[0].clientX - touches[1].clientX;
+                    const dy = touches[0].clientY - touches[1].clientY;
+                    const newDist = Math.hypot(dx, dy);
+                    if (newDist === 0) return;
+                    // Follow the fingers: translate by the midpoint drift, then zoom about
+                    // the fresh midpoint so the content stays under the grip.
+                    const mid = this.touchMidpoint(touches);
+                    this.tx += mid.x - this.touchMidX;
+                    this.ty += mid.y - this.touchMidY;
+                    this.applyTransform();
+                    this.zoomAt(newDist / this.touchDist, mid.x, mid.y);
+                    this.touchDist = newDist;
+                    this.touchMidX = mid.x;
+                    this.touchMidY = mid.y;
+                }
+            },
+
+            onTouchEnd(e) {
+                if (e.touches.length === 0) {
+                    const held = Date.now() - this.touchStartTime;
+                    if (this.tapCandidate && held < 250) {
+                        this.lastTapTime = Date.now();
+                        this.lastTapX = this.touchStartX;
+                        this.lastTapY = this.touchStartY;
+                    }
+                    this.tapCandidate = false;
+                    this.touchPanning = false;
+                    this.touchDist = 0;
+                } else if (e.touches.length === 1) {
+                    this.beginTouchPan(e.touches[0]);
+                    this.touchDist = 0;
+                }
+            },
+
+            beginTouchPan(t) {
+                this.touchPanning = true;
+                this.panStartX = t.clientX;
+                this.panStartY = t.clientY;
+                this.panStartTx = this.tx;
+                this.panStartTy = this.ty;
+            },
+
+            touchMidpoint(touches) {
+                const rect = this.stageRect();
+                return {
+                    x: (touches[0].clientX + touches[1].clientX) / 2 - rect.left,
+                    y: (touches[0].clientY + touches[1].clientY) / 2 - rect.top,
+                };
+            },
 
             onWheel(e) {
                 const rect = this.stageRect();

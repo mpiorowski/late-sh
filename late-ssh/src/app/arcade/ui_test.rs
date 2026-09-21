@@ -66,11 +66,15 @@ async fn sliding_puzzle_card_renders_rewards_and_launches() {
 
     app.handle_input(b"\r");
     assert!(app.is_playing_game);
+    // The art view is the default; an empty gallery backlog says so and
+    // keeps the numbered tiles playable.
+    app.sliding_puzzle_state
+        .set_art_for_test(crate::app::arcade::sliding_puzzle::svc::ArtLoad::Empty);
     let launched = render_plain(&mut app);
-    assert!(
-        launched.contains("Slide a tile into the gap: direction key or click."),
-        "{launched}"
-    );
+    assert!(launched.contains("No gallery art yet"), "{launched}");
+    app.handle_input(b"i");
+    let numbered = render_plain(&mut app);
+    assert!(numbered.contains("Numbered tiles."), "{numbered}");
 
     app.handle_input(b"]");
     app.resize(120, 30).expect("resize wide game terminal");
@@ -100,49 +104,38 @@ async fn sliding_puzzle_card_renders_rewards_and_launches() {
     assert!(narrow.contains("│24│"), "{narrow}");
     assert!(!narrow.contains("Terminal too small"), "{narrow}");
 
+    // Back to the art view: a failed load keeps the numbered tiles and says
+    // how to retry; a landed piece replaces them, credited under the grid.
     app.handle_input(b"i");
-    app.reset_render();
-    let loading_image = strip_ansi(&String::from_utf8_lossy(
-        &app.render().expect("render loading image view"),
-    ));
-    assert!(loading_image.contains("Loading art"), "{loading_image}");
-    assert!(loading_image.contains("│24│"), "{loading_image}");
-    assert!(
-        !loading_image.contains("Terminal too small"),
-        "{loading_image}"
-    );
-
     app.sliding_puzzle_state
-        .apply_image_result_for_test(Err("source unavailable".to_string()));
+        .set_art_for_test(crate::app::arcade::sliding_puzzle::svc::ArtLoad::Failed);
     app.reset_render();
-    let failed_image = strip_ansi(&String::from_utf8_lossy(
-        &app.render().expect("render failed image view"),
+    let failed_art = strip_ansi(&String::from_utf8_lossy(
+        &app.render().expect("render failed art view"),
     ));
     assert!(
-        failed_image.contains("Art unavailable; i twice to retry."),
-        "{failed_image}"
+        failed_art.contains("Art unavailable; i twice to retry."),
+        "{failed_art}"
     );
-    assert!(failed_image.contains("│24│"), "{failed_image}");
+    assert!(failed_art.contains("│24│"), "{failed_art}");
 
-    let dimension = 5;
-    let geometry = crate::app::arcade::sliding_puzzle::image::MIN_IMAGE_TILE_GEOMETRY;
-    let image_width = dimension * usize::from(geometry.width);
-    let image_height = dimension * usize::from(geometry.height);
-    let preview = (0..image_height)
-        .map(|row| {
-            ratatui::text::Line::from(
-                (0..image_width)
-                    .map(|column| {
-                        let source_cell = row / usize::from(geometry.height) * dimension
-                            + column / usize::from(geometry.width);
-                        ratatui::text::Span::raw(char::from(b'A' + source_cell as u8).to_string())
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .collect();
-    app.sliding_puzzle_state
-        .apply_image_result_for_test(Ok(preview));
+    let mut canvas = dartboard_core::Canvas::with_size(12, 4);
+    for y in 0..4 {
+        for x in 0..12 {
+            canvas.set(dartboard_core::Pos { x, y }, '#');
+        }
+    }
+    app.sliding_puzzle_state.set_art_for_test(
+        crate::app::arcade::sliding_puzzle::svc::ArtLoad::Featured(
+            crate::app::arcade::sliding_puzzle::art::PuzzleArt {
+                title: "sunset".to_string(),
+                username: "painter".to_string(),
+                canvas,
+                width: 12,
+                height: 4,
+            },
+        ),
+    );
     let mut unsolved = (1..=24).chain(std::iter::once(0)).collect::<Vec<_>>();
     unsolved.swap(0, 1);
     app.sliding_puzzle_state.set_board_for_test(
@@ -151,13 +144,12 @@ async fn sliding_puzzle_card_renders_rewards_and_launches() {
         1,
     );
     app.reset_render();
-    let ready_image = strip_ansi(&String::from_utf8_lossy(
-        &app.render().expect("render ready image view"),
+    let ready_art = strip_ansi(&String::from_utf8_lossy(
+        &app.render().expect("render ready art view"),
     ));
-    assert!(ready_image.contains("AAAAAA"), "{ready_image}");
-    assert!(ready_image.contains("XX24XX"), "{ready_image}");
-    assert!(ready_image.contains("┌────┐"), "{ready_image}");
-    assert!(!ready_image.contains("│24│"), "{ready_image}");
+    assert!(ready_art.contains("############"), "{ready_art}");
+    assert!(ready_art.contains("sunset by @painter"), "{ready_art}");
+    assert!(!ready_art.contains("│24│"), "{ready_art}");
 
     let solved = (1..=24).chain(std::iter::once(0)).collect();
     app.sliding_puzzle_state.set_board_for_test(
@@ -166,13 +158,13 @@ async fn sliding_puzzle_card_renders_rewards_and_launches() {
         2,
     );
     app.reset_render();
-    let solved_image = strip_ansi(&String::from_utf8_lossy(
-        &app.render().expect("render solved image view"),
+    let solved_art = strip_ansi(&String::from_utf8_lossy(
+        &app.render().expect("render solved art view"),
     ));
-    assert!(!solved_image.contains("XX24XX"), "{solved_image}");
+    assert!(solved_art.contains("SOLVED"), "{solved_art}");
 
     app.handle_input(b"I");
-    assert!(render_plain(&mut app).contains("Numbered tile view."));
+    assert!(render_plain(&mut app).contains("Numbered tiles."));
 
     app.handle_input(b"p");
     let personal = render_plain(&mut app);

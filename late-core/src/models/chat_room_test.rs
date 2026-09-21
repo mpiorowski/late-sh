@@ -35,6 +35,62 @@ async fn test_chat_room_lounge_and_language() {
 }
 
 #[tokio::test]
+async fn ensure_nightcap_is_idempotent_and_auto_joined() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let first = ChatRoom::ensure_nightcap(&client)
+        .await
+        .expect("ensure nightcap");
+    let again = ChatRoom::ensure_nightcap(&client)
+        .await
+        .expect("ensure nightcap again");
+
+    assert_eq!(first.id, again.id);
+    assert_eq!(first.kind, "nightcap");
+    assert_eq!(first.slug.as_deref(), Some("nightcap"));
+    assert_eq!(first.visibility, "public");
+    assert!(first.auto_join);
+    assert!(first.permanent);
+
+    // Auto-joined like #lounge: a fresh user holds the room at login
+    // without any per-visit membership write.
+    let patron = create_test_user(&test_db.db, "nightcap_patron").await;
+    ChatRoomMember::auto_join_public_rooms(&client, patron.id)
+        .await
+        .expect("auto join");
+    let rooms = ChatRoom::list_for_user(&client, patron.id)
+        .await
+        .expect("rooms for user");
+    assert!(rooms.iter().any(|room| room.id == first.id));
+}
+
+#[tokio::test]
+async fn ensure_nightcap_seats_accounts_that_predate_the_room() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    // Auto-join only runs when an account is created, so an account from
+    // before the bar opened never joined it. The startup ensure has to
+    // hand every existing account the room, or its owner sits down and
+    // finds no room to speak into.
+    let regular = create_test_user(&test_db.db, "nightcap_regular").await;
+    let before = ChatRoom::list_for_user(&client, regular.id)
+        .await
+        .expect("rooms before");
+    assert!(before.iter().all(|room| room.kind != "nightcap"));
+
+    let room = ChatRoom::ensure_nightcap(&client)
+        .await
+        .expect("ensure nightcap");
+
+    let after = ChatRoom::list_for_user(&client, regular.id)
+        .await
+        .expect("rooms after");
+    assert!(after.iter().any(|joined| joined.id == room.id));
+}
+
+#[tokio::test]
 async fn test_chat_room_public_and_private_topics() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");

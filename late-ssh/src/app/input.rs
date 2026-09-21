@@ -91,7 +91,7 @@ fn screen_has_chat_pane(screen: Screen) -> bool {
 /// plus the Clubhouse, which composes into #lounge (speech bubbles) without
 /// drawing a pane. Used for the composer-priority gate and chat overlays.
 fn screen_composes_chat(screen: Screen) -> bool {
-    screen_has_chat_pane(screen) || screen == Screen::Clubhouse
+    screen_has_chat_pane(screen) || matches!(screen, Screen::Clubhouse | Screen::Nightcap)
 }
 
 fn is_chat_composer_context(ctx: InputContext) -> bool {
@@ -1607,6 +1607,14 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return crate::app::clubhouse::input::handle_event(app, event);
     }
 
+    if ctx.screen == Screen::Nightcap {
+        return crate::app::clubhouse::nightcap::input::handle_event(app, event);
+    }
+
+    if ctx.screen == Screen::City {
+        return crate::app::deadchannel::city::input::handle_event(app, event);
+    }
+
     if ctx.screen == Screen::Zen {
         return crate::app::zen::input::handle_event(app, event);
     }
@@ -2316,6 +2324,15 @@ fn dispatch_escape(app: &mut App) {
         app.set_screen(Screen::Dashboard);
         return;
     }
+    // Esc from Nightcap peels the drink menu if it is open, else steps back
+    // outside to the Clubhouse.
+    if ctx.screen == Screen::Nightcap {
+        if app.nightcap.cancel_carving() || app.nightcap.close_menu() {
+            return;
+        }
+        app.set_screen(Screen::Clubhouse);
+        return;
+    }
     // Esc from a Lateania world (or its reset prompt) returns to the Games hub
     // that launched it, not to a standalone landing page.
     if ctx.screen == Screen::Lateania {
@@ -2357,6 +2374,12 @@ fn dispatch_escape(app: &mut App) {
             return;
         }
         crate::app::door::darkroom::screen::GAME.handle_key(app, 0x1B);
+        return;
+    }
+    // Esc in the city closes an open shop panel or steps back from the
+    // ledge; on the street it means nothing (the wire is the way out).
+    if ctx.screen == Screen::City && (app.city.panel().is_some() || app.city.at_ledge()) {
+        app.city.dismiss();
         return;
     }
     // Esc from the Games hub closes the rc config modal, cancels a pending
@@ -3158,6 +3181,10 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         // Walk-mode arrows are consumed in handle_dedicated_screen_input;
         // composing-mode arrows are swallowed by the shared composer gate.
         Screen::Clubhouse => false,
+        // Nightcap has no arrow use (seats are picked by number key).
+        Screen::Nightcap => false,
+        // City arrows walk the runner in handle_dedicated_screen_input.
+        Screen::City => false,
         // Daily board arrows are consumed in handle_dedicated_screen_input.
         Screen::DailyMatch => false,
         // House table arrows are consumed in handle_dedicated_screen_input.
@@ -3743,7 +3770,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     // While the reaction leader is armed, every digit belongs to it: `1`-`9`
     // are the quick reactions and `0` opens the custom icon picker. Let them
     // fall through to the chat message-action handler instead of the global
-    // page switch (`0` now lands on the Clubhouse, `1`-`7` on other pages).
+    // page switch (`0` now lands on the Clubhouse, `1`-`6` on other pages).
     if matches!(
         byte,
         b'0' | b'1' | b'2' | b'3' | b'4' | b'5' | b'6' | b'7' | b'8' | b'9'
@@ -3947,9 +3974,21 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.set_screen(Screen::Leaderboard);
             true
         }
+        // `0` is the clubhouse. Pressed again on the clubhouse it goes
+        // down to the undercity (deadchannel's street), runners only;
+        // from the undercity it comes back up. A descent always lands on
+        // the street: a panel or the ledge left open on the way up does
+        // not carry over.
         b'0' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Clubhouse);
+            let target = match ctx.screen {
+                Screen::Clubhouse if app.is_runner() => {
+                    app.city.dismiss();
+                    Screen::City
+                }
+                _ => Screen::Clubhouse,
+            };
+            app.set_screen(target);
             true
         }
         b'\t' if artboard_rail_takes_tab(app, ctx.screen) => {
@@ -4085,6 +4124,13 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
             // Clubhouse keys are handled in handle_dedicated_screen_input
             // (walking, chat routing, interactions); no-op here.
         }
+        Screen::Nightcap => {
+            // Nightcap keys (seat picks, drink, Esc) are handled in
+            // handle_dedicated_screen_input; no-op here.
+        }
+        Screen::City => {
+            // City keys are handled in handle_dedicated_screen_input.
+        }
         Screen::DailyMatch => {
             // Daily board keys are handled in handle_dedicated_screen_input.
         }
@@ -4107,10 +4153,11 @@ pub(crate) fn try_open_icon_picker(app: &mut App) {
         return;
     }
     if !ctx.chat_composing {
-        let room_id = if ctx.screen == Screen::Clubhouse {
-            app.chat.lounge_room_id()
-        } else {
-            embedded_chat_room_id(app, ctx.screen)
+        let room_id = match ctx.screen {
+            Screen::Clubhouse => app.chat.lounge_room_id(),
+            // Only a seated patron has a composer to feed.
+            Screen::Nightcap => crate::app::clubhouse::nightcap::input::compose_room(app),
+            _ => embedded_chat_room_id(app, ctx.screen),
         };
         // No room on show (synthetic Home entry, chatless table) — nothing
         // for the picker to feed, so don't open it.

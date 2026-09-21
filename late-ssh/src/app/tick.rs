@@ -113,6 +113,7 @@ impl App {
 
         self.sync_visible_chat_room();
         self.tick_clubhouse();
+        changed |= self.tick_nightcap();
         changed |= crate::app::scratchpad::pair::poll(self);
         if let Some(scratchpad) = self.scratchpad.as_mut()
             && scratchpad.sync_from_shared()
@@ -165,6 +166,13 @@ impl App {
             // heartbeat keeps the ambience moving at half the hot cost, and
             // every discrete change (input, chat bubbles, door events)
             // still lands within 132ms of its tick.
+            changed = true;
+        }
+        if self.screen == Screen::City && anim_half {
+            // Rain, neon, steam and the screen's static ride the same
+            // ~7.5fps ambience edge as the clubhouse; the runner's steps
+            // are input-driven.
+            self.city.tick(self.marquee_tick as u64);
             changed = true;
         }
 
@@ -224,22 +232,7 @@ impl App {
             && self.is_playing_game
             && self.game_selection == GAME_SELECTION_SLIDING_PUZZLE
         {
-            let board_area = crate::app::arcade::ui::game_content_area(
-                self.content_area(),
-                true,
-                crate::app::arcade::ui::SHOW_GAME_BOTTOM_BAR,
-            );
-            changed |= self.sliding_puzzle_state.poll_image_tiles(
-                inline_image_render_settings,
-                board_area,
-                self.terminal_image_protocol,
-            );
-        } else {
-            // `poll_image_tiles` is the only thing that evicts this game's
-            // rasters, and it stops running the moment the board is not the
-            // open screen. Free them here or a session that played once holds
-            // them until it disconnects.
-            changed |= self.sliding_puzzle_state.release_image_tiles();
+            changed |= self.sliding_puzzle_state.poll_art();
         }
         changed |= self.chat.poll_terminal_images();
         for output in self.chat.take_mod_outputs() {
@@ -775,6 +768,15 @@ impl App {
             if self.runner_looks_rx.has_changed().unwrap_or(false) {
                 self.runner_looks = self.runner_looks_rx.borrow_and_update().clone();
                 self.chat_ctx_epoch += 1;
+                // Leaving #deadchannel on one session closes the undercity
+                // for every session the runner has open, here and on every
+                // other replica. This edge is the only place in the process
+                // that can notice: the gate on `0` guards the descent, not
+                // the standing there.
+                if self.screen == Screen::City && !self.is_runner() {
+                    self.set_screen(Screen::Clubhouse);
+                    changed = true;
+                }
             }
             // The pot resolves on the same edge, and for the same reason:
             // the panel reads owned values, and only a change the viewer can
@@ -1008,6 +1010,8 @@ impl App {
         let mut refresh_floor = false;
         if let Some(rx) = &mut self.activity_feed_rx {
             while let Ok(event) = rx.try_recv() {
+                // The bar out back's TV shows the last thing that happened.
+                self.nightcap.note_activity(&event.username, &event.action);
                 let Some(user_id) = event.user_id else {
                     continue;
                 };
@@ -1268,7 +1272,11 @@ impl App {
             || self.last_input_at.elapsed() < POST_INPUT_HOT_WINDOW
             || self.ultimate_state.has_active_effect()
             || self.screen == Screen::HouseTable
-            || (self.screen == Screen::Arcade && self.is_playing_game);
+            || (self.screen == Screen::Arcade && self.is_playing_game)
+            // A pool shot is the daily board's only animation: while one is
+            // rolling it wants the same 15fps as a live table, and the moment
+            // it settles the board goes back to being event-driven.
+            || (self.screen == Screen::DailyMatch && self.daily.pool_is_animating());
         if hot {
             return HOT_TICK;
         }
@@ -1280,6 +1288,7 @@ impl App {
         // Zen music or visualizer tile paints its eq on that edge too; left
         // to the aquarium's quarter tier it drops to ~3.8fps.
         if self.screen == Screen::Clubhouse
+            || self.screen == Screen::City
             || self.right_sidebar_visible()
             || (self.screen == Screen::Zen && self.zen.shows_equalizer())
             || self.last_pet_frame.get().is_some()

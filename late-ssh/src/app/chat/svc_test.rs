@@ -5166,6 +5166,44 @@ async fn deadchannel_join_requires_the_invitation() {
             .expect("runner still there");
     assert_eq!(again.id, runner.id);
     assert_eq!(again.look, runner.look);
+
+    // Leaving closes the gate: the runner drops out of the directory every
+    // replica reads, so `App::is_runner` goes false on all of them, and the
+    // portrait goes with it.
+    service.leave_room_task(user.id, room_id, "deadchannel".to_string());
+    match timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event")
+    {
+        ChatEvent::RoomLeft { user_id, .. } => assert_eq!(user_id, user.id),
+        other => panic!("expected RoomLeft, got {other:?}"),
+    }
+    assert!(
+        late_core::models::deadchannel_runner::DeadchannelRunner::list_looks(&client)
+            .await
+            .expect("list looks")
+            .is_empty()
+    );
+
+    // The character waits: rejoining gets the same face back, not a new one.
+    service.open_public_room_task(user.id, "deadchannel".to_string());
+    match timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event")
+    {
+        ChatEvent::RoomJoined { user_id, .. } => assert_eq!(user_id, user.id),
+        other => panic!("expected RoomJoined, got {other:?}"),
+    }
+    let returned =
+        late_core::models::deadchannel_runner::DeadchannelRunner::find_by_user(&client, user.id)
+            .await
+            .expect("find returned runner")
+            .expect("runner came back");
+    assert_eq!(returned.id, runner.id);
+    assert_eq!(returned.look, runner.look);
+    assert!(returned.left_at.is_none());
 }
 
 #[tokio::test]

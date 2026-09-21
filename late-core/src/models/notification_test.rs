@@ -136,3 +136,33 @@ async fn marking_read_is_scoped_to_the_mentioned_user() {
         .expect("mark again");
     assert_eq!(cleared, 0, "an already-read mention is a no-op");
 }
+
+/// A name said at the bar out back mentions nobody. The room is one of
+/// `chat_room::HIDDEN_ROOM_KINDS`: it is public and seats every account,
+/// so the public-room arm would otherwise resolve the name and hand the
+/// recipient a mention the rail cannot open.
+#[tokio::test]
+async fn a_name_said_in_a_hidden_room_mentions_nobody() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let bar = ChatRoom::ensure_nightcap(&client)
+        .await
+        .expect("ensure nightcap");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge");
+    let speaker = create_test_user(&test_db.db, "bar-speaker").await;
+    let named = create_test_user(&test_db.db, "bar-named").await;
+    let names = vec![named.username.clone()];
+
+    let at_the_bar = Notification::resolve_mentioned_user_ids(&client, &names, speaker.id, bar.id)
+        .await
+        .expect("resolve at the bar");
+    assert!(at_the_bar.is_empty(), "the bar mentioned {at_the_bar:?}");
+
+    let in_the_lounge =
+        Notification::resolve_mentioned_user_ids(&client, &names, speaker.id, lounge.id)
+            .await
+            .expect("resolve in the lounge");
+    assert_eq!(in_the_lounge, vec![named.id]);
+}

@@ -1,4 +1,4 @@
-use std::{cell::Cell, collections::HashMap, collections::HashSet, sync::Arc};
+use std::{cell::Cell, collections::HashMap, collections::HashSet, sync::Arc, time::Instant};
 
 use chrono::{DateTime, Utc};
 use cozy_chess::{BitBoard, Board};
@@ -9,10 +9,18 @@ use uuid::Uuid;
 
 use crate::app::{
     common::primitives::{Banner, Screen},
-    games::chess_core::{
-        board_ui::Tier,
-        cursor, rules,
-        types::{ChessColor, ChessMoveSpec, ChessPiece, ChessPieceRenderMode},
+    games::{
+        chess_core::{
+            board_ui::Tier,
+            cursor, rules,
+            types::{ChessColor, ChessMoveSpec, ChessPiece, ChessPieceRenderMode},
+        },
+        pool_core::{
+            cue::{PowerBand, ShotMode},
+            shot::{Shot, Timeline},
+            sim,
+            table_3d::Eye,
+        },
     },
     notify::{Notification, Notifier},
 };
@@ -24,6 +32,8 @@ use super::{
     checkers::DailyCheckersState,
     connect4::DailyConnect4State,
     games::DailyGame,
+    pool::{DailyPoolState, PoolAimShare},
+    pool_draft::{PoolCueHit, PoolDetail, PoolDraft, PoolPlayback, should_share_aim},
     reversi::DailyReversiState,
     svc::{
         DAILY_MAX_ACTIVE_ENTRIES, DAILY_WIN_MIN_MOVES, DailyChallengeItem, DailyChessState,
@@ -96,6 +106,49 @@ pub struct DailyState {
 }
 
 /// Full-screen correspondence board (`Screen::DailyMatch`).
+/// What one event off the daily feed did to this session.
+///
+/// The feed is process-wide: every session on the replica receives every
+/// event, and most of them are about matches this session is not in and is
+/// not watching. So an event reports whether it moved something *here*, and
+/// the tick repaints on that rather than on an event having arrived at all.
+///
+/// The distinction only started to matter when pool added `AimChanged`, which
+/// is the first event on this feed that arrives many times a second: repainting
+/// every session for one of them means one player lining up a shot rebuilds a
+/// frame for everybody on the replica, eight times a second, most of whom are
+/// in a chat room or a door game.
+struct EventEffect {
+    banner: Option<Banner>,
+    changed: bool,
+}
+
+impl EventEffect {
+    /// Nothing this session draws is any different for having seen it.
+    fn ignored() -> Self {
+        Self {
+            banner: None,
+            changed: false,
+        }
+    }
+
+    /// Something moved, and there is a banner to raise for it.
+    fn raising(banner: Banner) -> Self {
+        Self {
+            banner: Some(banner),
+            changed: true,
+        }
+    }
+
+    /// Something may have moved, with nothing to say about it.
+    fn touched(changed: bool) -> Self {
+        Self {
+            banner: None,
+            changed,
+        }
+    }
+}
+
 pub struct DailyBoardState {
     pub match_id: Uuid,
     /// You aren't a player in this match: the board is read-only. No cursor,
@@ -125,6 +178,30 @@ pub struct DailyBoardState {
     /// Last drawn battleship target-grid rect (cells only, no labels), same
     /// render-recorded contract as `board_geometry`.
     pub target_geometry: Cell<Option<Rect>>,
+    /// Where the pool cue ball was last drawn in the cue panel, so a click can
+    /// be turned into a tip placement on its face.
+    pub cue_geometry: Cell<Option<PoolCueHit>>,
+    /// Shots already animated on this board. `None` until the first load seeds
+    /// it, so opening a match does not replay the shot that happened before
+    /// you got there — only what arrives while you are watching.
+    pub pool_animated: Option<usize>,
+    /// A shot being re-simulated for playback on a blocking thread. The tick
+    /// path does not run physics (root `CONTEXT.md` §2.5), so the animation is
+    /// asked for here and collected a tick or two later.
+    timeline_rx: Option<oneshot::Receiver<Timeline>>,
+    /// The last aim this session broadcast, and when. Kept so an unchanged
+    /// draft costs nothing and a changing one is rate-limited.
+    pub pool_shared: Option<PoolAimShare>,
+    pub pool_shared_at: Option<Instant>,
+    /// Looking down the shot rather than at the table from above. A view
+    /// preference, so it lives on the board and survives the reloads that
+    /// rebuild the detail — losing your camera every time the opponent moves
+    /// would make it unusable.
+    pub pool_eye: bool,
+    /// Where the eye stood in the last render, so a click can be turned back
+    /// into a spot on the cloth. Same render-recorded contract as
+    /// `target_geometry`; `None` whenever the overview is the one on screen.
+    pub pool_eye_geometry: Cell<Option<Eye>>,
 }
 
 /// Canonical match detail derived from one `daily_matches` row: the row
@@ -145,6 +222,13 @@ pub enum DailyGameDetail {
     Checkers(CheckersDetail),
     Backgammon(BackgammonDetail),
     Briscola(BriscolaDetail),
+    /// Both pool games share one detail, one state type and one renderer; only
+    /// the ruleset differs, and that rides inside `DailyPoolState`. Two
+    /// variants rather than one so `kind()` can still answer honestly — the
+    /// same shape Chess and Chess960 use.
+    EightBall(PoolDetail),
+    NineBall(PoolDetail),
+    Snooker(PoolDetail),
 }
 
 impl DailyGameDetail {
@@ -159,6 +243,9 @@ impl DailyGameDetail {
             Self::Checkers(_) => DailyGame::Checkers,
             Self::Backgammon(_) => DailyGame::Backgammon,
             Self::Briscola(_) => DailyGame::Briscola,
+            Self::EightBall(_) => DailyGame::EightBall,
+            Self::NineBall(_) => DailyGame::NineBall,
+            Self::Snooker(_) => DailyGame::Snooker,
         }
     }
 }
@@ -249,6 +336,32 @@ impl ChessDetail {
     }
 }
 
+/// Hand a shot that is still playing over to the detail replacing it.
+///
+/// A reload rebuilds `PoolDetail` from the row, and a fresh one has no
+/// playback — so a reload that lands mid-animation *deletes the animation*.
+/// That is not hypothetical and it is not rare: the shot that ends a rack
+/// publishes two events, `MovePlayed` and `MatchFinished`, each of which asks
+/// for a reload. The first reload starts the shot playing and the second wiped
+/// it a few milliseconds later, which is exactly the "the game just ends,
+/// there is no shot" it looked like.
+///
+/// Safe to carry unconditionally: the frames were simulated from a rack that
+/// is already history, and if the reload brought a *newer* shot,
+/// `start_pool_playback` runs straight after this and replaces it.
+fn carry_pool_playback(previous: Option<&mut DailyMatchDetail>, fresh: &mut DailyMatchDetail) {
+    let Some(previous) = previous else {
+        return;
+    };
+    let Some(was) = previous.pool_mut() else {
+        return;
+    };
+    let Some(now) = fresh.pool_mut() else {
+        return;
+    };
+    now.adopt(was);
+}
+
 impl DailyMatchDetail {
     fn from_row(row: DailyMatch) -> Result<Self, String> {
         let game = match DailyGame::from_kind(&row.game_kind) {
@@ -281,6 +394,21 @@ impl DailyMatchDetail {
                 state: DailyBriscolaState::parse(&row.state).map_err(|e| e.to_string())?,
                 play_in_flight: false,
             }),
+            Some(game @ (DailyGame::EightBall | DailyGame::NineBall | DailyGame::Snooker)) => {
+                let state = DailyPoolState::parse(&row.state).map_err(|e| e.to_string())?;
+                let detail = PoolDetail {
+                    draft: PoolDraft::new(&state),
+                    state,
+                    shot_in_flight: false,
+                    playback: None,
+                    watching: None,
+                };
+                match game {
+                    DailyGame::NineBall => DailyGameDetail::NineBall(detail),
+                    DailyGame::Snooker => DailyGameDetail::Snooker(detail),
+                    _ => DailyGameDetail::EightBall(detail),
+                }
+            }
             None => return Err(format!("unknown daily game: {}", row.game_kind)),
         };
         Ok(Self { row, game })
@@ -342,6 +470,27 @@ impl DailyMatchDetail {
         }
     }
 
+    /// The pool detail, mutably. Paired with `pool` so the list of pool detail
+    /// variants is written once — every hand-copied version of it so far has
+    /// eventually forgotten a game.
+    pub fn pool_mut(&mut self) -> Option<&mut PoolDetail> {
+        match &mut self.game {
+            DailyGameDetail::EightBall(pool)
+            | DailyGameDetail::NineBall(pool)
+            | DailyGameDetail::Snooker(pool) => Some(pool),
+            _ => None,
+        }
+    }
+
+    pub fn pool(&self) -> Option<&PoolDetail> {
+        match &self.game {
+            DailyGameDetail::EightBall(pool)
+            | DailyGameDetail::NineBall(pool)
+            | DailyGameDetail::Snooker(pool) => Some(pool),
+            _ => None,
+        }
+    }
+
     pub fn color_of(&self, user_id: Uuid) -> Option<ChessColor> {
         self.chess().and_then(|chess| chess.state.color_of(user_id))
     }
@@ -382,7 +531,7 @@ impl DailyState {
     /// (board, lobby glow, turn markers).
     pub fn tick(&mut self) -> DailyTick {
         let mut banner = None;
-        let mut changed = !self.event_rx.is_empty();
+        let mut changed = false;
         if self.snapshot_rx.has_changed().unwrap_or(false) {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
             self.notify_turn_edges();
@@ -391,7 +540,15 @@ impl DailyState {
         loop {
             match self.event_rx.try_recv() {
                 Ok(event) => {
-                    if let Some(b) = self.apply_event(event) {
+                    // Each event says whether it moved anything *this* session
+                    // draws, and the repaint follows that rather than the mere
+                    // arrival of an event. The feed is process-wide, so most of
+                    // what lands here is somebody else's match — and an aim
+                    // update, the one event that arrives many times a second,
+                    // is visible only to the session holding that board.
+                    let effect = self.apply_event(event);
+                    changed |= effect.changed;
+                    if let Some(b) = effect.banner {
                         banner = Some(b);
                     }
                 }
@@ -406,6 +563,12 @@ impl DailyState {
         if self.poll_board_load() {
             changed = true;
         }
+        if self.poll_pool_timeline() {
+            changed = true;
+        }
+        if self.drive_pool_playback() {
+            changed = true;
+        }
         DailyTick {
             banner,
             changed,
@@ -414,7 +577,7 @@ impl DailyState {
         }
     }
 
-    fn apply_event(&mut self, event: DailyEvent) -> Option<Banner> {
+    fn apply_event(&mut self, event: DailyEvent) -> EventEffect {
         match event {
             DailyEvent::Error { user_id, message } if user_id == self.user_id => {
                 // A rejected action (a refused optimistic move, an expired
@@ -424,14 +587,14 @@ impl DailyState {
                     self.request_board_reload();
                 }
                 // svc errors are lowercase; the banner keeps sentence case.
-                Some(Banner::error(&format!("Daily games: {message}")))
+                EventEffect::raising(Banner::error(&format!("Daily games: {message}")))
             }
             DailyEvent::ChallengePosted {
                 game,
                 challenger_id,
                 target_username,
                 ..
-            } if challenger_id == self.user_id => Some(match target_username {
+            } if challenger_id == self.user_id => EventEffect::raising(match target_username {
                 Some(name) => {
                     Banner::success(&format!("Daily {} challenge sent to @{name}", game.label()))
                 }
@@ -448,11 +611,13 @@ impl DailyState {
                 outcome,
                 result,
             } => {
+                let mut reloaded = false;
                 if self.board.as_ref().is_some_and(|b| b.match_id == match_id) {
                     self.request_board_reload();
+                    reloaded = true;
                 }
                 let playing = challenger_id == self.user_id || opponent_id == Some(self.user_id);
-                match outcome {
+                let banner = match outcome {
                     DailyFinishOutcome::Won { user_id, payout } if user_id == self.user_id => {
                         self.own_win = true;
                         // The payout was settled before this event was sent,
@@ -493,16 +658,50 @@ impl DailyState {
                         game.label()
                     ))),
                     DailyFinishOutcome::Won { .. } | DailyFinishOutcome::Draw => None,
+                };
+                // A match you are not in, finishing while you are not watching
+                // it, is news for the lobby snapshot and not for this frame.
+                let changed = reloaded || banner.is_some();
+                EventEffect { banner, changed }
+            }
+            // Somebody is lining up a shot on a table this session has open.
+            // Only the *other* player's aim is worth drawing: your own board
+            // already has your draft, and echoing your own broadcast back over
+            // it would fight the input you are giving it right now.
+            DailyEvent::AimChanged {
+                match_id,
+                by_user_id,
+                aim,
+            } => {
+                let mut drawn_on = false;
+                if by_user_id != self.user_id
+                    && let Some(board) = &mut self.board
+                    && board.match_id == match_id
+                    && let Some(detail) = &mut board.detail
+                    && let DailyGameDetail::EightBall(pool)
+                    | DailyGameDetail::NineBall(pool)
+                    | DailyGameDetail::Snooker(pool) = &mut detail.game
+                {
+                    pool.watching = Some(aim);
+                    drawn_on = true;
                 }
+                // The write and the repaint are one value on purpose: an aim
+                // that repaints without being drawn is the storm, and one
+                // drawn without a repaint is an opponent's cue frozen mid-shot.
+                EventEffect::touched(drawn_on)
             }
             DailyEvent::MovePlayed { match_id, .. }
             | DailyEvent::ChallengeClaimed { match_id, .. } => {
-                if self.board.as_ref().is_some_and(|b| b.match_id == match_id) {
+                let mine = self.board.as_ref().is_some_and(|b| b.match_id == match_id);
+                if mine {
                     self.request_board_reload();
                 }
-                None
+                EventEffect::touched(mine)
             }
-            _ => None,
+            // Everything else on the feed is somebody else's match. The lobby
+            // panel and the modal read the snapshot, not this feed, and the
+            // snapshot raises its own flag at the top of the tick.
+            _ => EventEffect::ignored(),
         }
     }
 
@@ -647,8 +846,22 @@ impl DailyState {
 
     /// `c` / `C` in the modal: open the challenge picker overlay.
     pub fn begin_challenge_draft(&mut self, directed: bool) {
+        self.begin_challenge_draft_for(DailyGame::ALL[0], directed);
+    }
+
+    /// The same picker, opened with the cursor already on one game.
+    ///
+    /// For the ways in that already say which game they mean — walking up to
+    /// the Lounge's pool table is asking for pool, not for a list. The picker
+    /// still opens rather than posting outright, so the choice of variant and
+    /// the prize are in front of the player before anything is committed.
+    pub fn begin_challenge_draft_for(&mut self, game: DailyGame, directed: bool) {
+        let selected = DailyGame::ALL
+            .iter()
+            .position(|candidate| *candidate == game)
+            .unwrap_or(0);
         self.challenge_draft = Some(ChallengeDraft {
-            selected: 0,
+            selected,
             directed,
             username: None,
         });
@@ -766,6 +979,9 @@ impl DailyState {
                 DailyGame::Backgammon => backgammon::SLOT_COLS + 9,
                 // The briscola cursor is a slot in your own hand.
                 DailyGame::Briscola => 0,
+                // Pool aims in table coordinates, not cells; the cursor is
+                // unused and the draft carries the aim.
+                DailyGame::EightBall | DailyGame::NineBall | DailyGame::Snooker => 0,
             },
             selected: None,
             piece_render_mode: ChessPieceRenderMode::Graphics,
@@ -778,6 +994,13 @@ impl DailyState {
             chat_join_requested: false,
             board_geometry: Cell::new(None),
             target_geometry: Cell::new(None),
+            cue_geometry: Cell::new(None),
+            pool_animated: None,
+            timeline_rx: None,
+            pool_shared: None,
+            pool_shared_at: None,
+            pool_eye: false,
+            pool_eye_geometry: Cell::new(None),
         });
         self.request_board_reload();
     }
@@ -862,10 +1085,12 @@ impl DailyState {
             Ok(Ok(Some(row))) => {
                 board.load_rx = None;
                 match DailyMatchDetail::from_row(row) {
-                    Ok(detail) => {
+                    Ok(mut detail) => {
+                        carry_pool_playback(board.detail.as_mut(), &mut detail);
                         board.detail = Some(detail);
                         board.load_error = None;
                         self.drop_stale_board_selection();
+                        self.start_pool_playback();
                     }
                     Err(message) => board.load_error = Some(message),
                 }
@@ -916,6 +1141,15 @@ impl DailyState {
     pub fn board_move_cursor(&mut self, dx: isize, dy: isize) {
         let orientation = self.board_orientation();
         let user_id = self.user_id;
+        // Pool aims in metres rather than cells and the arrows mean different
+        // things per armed mode, so it takes the whole state, not the cursor.
+        if self.pool_board() {
+            if let Some(board) = &mut self.board {
+                board.resign_confirm = false;
+            }
+            self.pool_move_cursor(dx, dy);
+            return;
+        }
         let Some(board) = &mut self.board else {
             return;
         };
@@ -994,6 +1228,15 @@ impl DailyState {
     pub fn board_select_or_move(&mut self) {
         let user_id = self.user_id;
         let svc = self.svc.clone();
+        // Pool's confirm fires the shot, which needs the whole state; every
+        // other game only needs its board.
+        if self.pool_board() {
+            if let Some(board) = &mut self.board {
+                board.resign_confirm = false;
+            }
+            self.pool_confirm();
+            return;
+        }
         let Some(board) = &mut self.board else {
             return;
         };
@@ -1016,7 +1259,22 @@ impl DailyState {
             DailyGame::Checkers => Self::checkers_select(board, user_id, &svc),
             DailyGame::Backgammon => Self::backgammon_select(board, user_id, &svc),
             DailyGame::Briscola => Self::briscola_play(board, user_id, &svc),
+            // Routed above: firing needs `self`, not just the board.
+            DailyGame::EightBall | DailyGame::NineBall | DailyGame::Snooker => {}
         }
+    }
+
+    /// Whether the open board is a pool board.
+    /// Whether the open board is a cue game — asked of `pool()`, which is the
+    /// one list of pool detail variants, rather than of a second one written
+    /// out here. Snooker was missing from the copy that used to live here, and
+    /// this gate fronts the arrows, Space and the `v` camera.
+    fn pool_board(&self) -> bool {
+        self.board
+            .as_ref()
+            .and_then(|board| board.detail.as_ref())
+            .and_then(DailyMatchDetail::pool)
+            .is_some()
     }
 
     fn chess_select_or_move(board: &mut DailyBoardState, user_id: Uuid, svc: &DailyService) {
@@ -1402,6 +1660,14 @@ impl DailyState {
                 bg.pending.clear();
                 true
             }
+            // Esc puts the cue down and restores what the mode changed, so an
+            // adjustment made by mistake is one key to undo. With nothing
+            // armed it falls through and Esc leaves, like every other game.
+            // (Right click is the other half of the pair: it *zeroes* the
+            // armed value and stays in the mode.)
+            DailyGameDetail::EightBall(pool)
+            | DailyGameDetail::NineBall(pool)
+            | DailyGameDetail::Snooker(pool) => pool.draft.cancel(),
             _ => false,
         }
     }
@@ -1430,6 +1696,254 @@ impl DailyState {
         } else {
             board.resign_confirm = true;
         }
+    }
+
+    /// Start playing back any shot this session has not shown yet.
+    ///
+    /// Both sides run through here on reload, which is why there is only one
+    /// code path: your own shot animates when the canonical row comes back,
+    /// and so does the opponent's. Simulating locally the moment you fire
+    /// would be faster by a round trip and would put a second copy of the
+    /// physics in the loop, which is exactly what the server-as-referee split
+    /// exists to avoid.
+    fn start_pool_playback(&mut self) {
+        let Some(board) = &mut self.board else {
+            return;
+        };
+        let Some(detail) = &mut board.detail else {
+            return;
+        };
+        let (DailyGameDetail::EightBall(pool)
+        | DailyGameDetail::NineBall(pool)
+        | DailyGameDetail::Snooker(pool)) = &mut detail.game
+        else {
+            return;
+        };
+        let played = pool.state.move_count();
+        // The canonical row is back, so whatever was in flight has landed.
+        if board.pool_animated.is_some_and(|seen| played > seen) {
+            pool.shot_in_flight = false;
+        }
+        match board.pool_animated {
+            // First load: take the history as already seen. Opening a match
+            // should show you the table as it stands, not replay the shot that
+            // happened before you arrived.
+            None => board.pool_animated = Some(played),
+            Some(seen) if played > seen => {
+                board.pool_animated = Some(played);
+                // Gathering the inputs is local memory; running the shot is
+                // not, so it goes to a blocking thread and comes back through
+                // `poll_pool_timeline`. A newer shot landing first simply
+                // replaces the receiver and the older animation is dropped,
+                // which is the same thing the board would do anyway.
+                if let Some((spec, start, strike)) = pool.state.last_shot_sim() {
+                    let (tx, rx) = oneshot::channel();
+                    tokio::task::spawn_blocking(move || {
+                        let geom = spec.geometry();
+                        let _ = tx.send(sim::simulate(spec, &geom, &start, &strike).timeline);
+                    });
+                    board.timeline_rx = Some(rx);
+                }
+            }
+            Some(_) => {}
+        }
+    }
+
+    /// Collect a shot that finished re-simulating and start it playing.
+    /// Returns whether anything changed, like the other tick drains.
+    fn poll_pool_timeline(&mut self) -> bool {
+        let Some(board) = &mut self.board else {
+            return false;
+        };
+        let Some(rx) = &mut board.timeline_rx else {
+            return false;
+        };
+        let timeline = match rx.try_recv() {
+            Ok(timeline) => timeline,
+            Err(oneshot::error::TryRecvError::Empty) => return false,
+            // The worker is gone, so no animation is coming. The board still
+            // shows the settled rack, which is the truth either way.
+            Err(oneshot::error::TryRecvError::Closed) => {
+                board.timeline_rx = None;
+                return false;
+            }
+        };
+        board.timeline_rx = None;
+        let Some(detail) = &mut board.detail else {
+            return false;
+        };
+        let (DailyGameDetail::EightBall(pool)
+        | DailyGameDetail::NineBall(pool)
+        | DailyGameDetail::Snooker(pool)) = &mut detail.game
+        else {
+            return false;
+        };
+        pool.playback = Some(PoolPlayback::new(timeline));
+        true
+    }
+
+    /// Retire a finished playback. Returns whether the board is animating, so
+    /// the render loop keeps repainting while it is.
+    fn drive_pool_playback(&mut self) -> bool {
+        let Some(board) = &mut self.board else {
+            return false;
+        };
+        let Some(detail) = &mut board.detail else {
+            return false;
+        };
+        let (DailyGameDetail::EightBall(pool)
+        | DailyGameDetail::NineBall(pool)
+        | DailyGameDetail::Snooker(pool)) = &mut detail.game
+        else {
+            return false;
+        };
+        match &pool.playback {
+            Some(playback) if playback.finished() => {
+                pool.playback = None;
+                // The last frame differs from the settled rack, so the swap
+                // back is itself a repaint.
+                true
+            }
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    /// Whether the open board is mid-shot. Drives the render loop's hot tick.
+    pub fn pool_is_animating(&self) -> bool {
+        self.board
+            .as_ref()
+            .and_then(|board| board.detail.as_ref())
+            .and_then(DailyMatchDetail::pool)
+            .is_some_and(|pool| pool.playback.is_some())
+    }
+
+    // ── Pool input ─────────────────────────────────────────────
+
+    /// The draft, but only while this player may actually change it.
+    pub(crate) fn pool_draft_mut(&mut self) -> Option<(&mut PoolDraft, &DailyPoolState)> {
+        let user_id = self.user_id;
+        let board = self.board.as_mut()?;
+        if board.spectating {
+            return None;
+        }
+        let detail = board.detail.as_mut()?;
+        if !detail.is_active() || detail.row.turn_user_id != Some(user_id) {
+            return None;
+        }
+        let (DailyGameDetail::EightBall(pool)
+        | DailyGameDetail::NineBall(pool)
+        | DailyGameDetail::Snooker(pool)) = &mut detail.game
+        else {
+            return None;
+        };
+        // Nothing is adjustable while the last shot is still rolling or the
+        // next one is already on its way to the server.
+        if pool.shot_in_flight || pool.playback.is_some() {
+            return None;
+        }
+        Some((&mut pool.draft, &pool.state))
+    }
+
+    /// Arrows and wasd on a pool board. What they do depends on the stage,
+    /// which is why the hint row is rewritten for each one.
+    fn pool_move_cursor(&mut self, dx: isize, dy: isize) {
+        let Some((draft, state)) = self.pool_draft_mut() else {
+            return;
+        };
+        draft.key_step(state, dx, dy);
+    }
+
+    /// Broadcast what this player is lining up, if anything has changed.
+    /// Called after every pool input, and cheap when nothing moved.
+    ///
+    /// Throttled, because pointer motion arrives per terminal cell and one
+    /// sweep across the board is a couple of dozen reports a second. A change
+    /// of mode jumps the queue: "they have armed the stroke" is the update
+    /// whose *timing* carries meaning, and it is the one worth a wasted send.
+    pub fn pool_publish_aim(&mut self) {
+        let Some((draft, _)) = self.pool_draft_mut() else {
+            return;
+        };
+        let share = draft.share();
+        let user_id = self.user_id;
+        let svc = self.svc.clone();
+        let Some(board) = &mut self.board else {
+            return;
+        };
+        if !should_share_aim(board.pool_shared, board.pool_shared_at, share) {
+            return;
+        }
+        board.pool_shared = Some(share);
+        board.pool_shared_at = Some(Instant::now());
+        svc.publish_aim(board.match_id, user_id, share);
+    }
+
+    /// Space or Enter, the keyboard twin of a left click.
+    ///
+    /// Fires when a band is armed, commits whatever else is, and from an idle
+    /// board arms the normal band — so the least-informed possible keypress
+    /// still walks toward a sensible shot rather than doing nothing.
+    pub fn pool_confirm(&mut self) {
+        let fires = match self.pool_draft_mut() {
+            Some((draft, _)) => match draft.mode {
+                ShotMode::Stroke(_) => true,
+                ShotMode::Idle => {
+                    draft.toggle_mode(ShotMode::Stroke(PowerBand::Normal));
+                    false
+                }
+                ShotMode::Aim | ShotMode::Spin | ShotMode::Place => {
+                    draft.commit();
+                    false
+                }
+            },
+            None => return,
+        };
+        if fires {
+            self.pool_fire();
+        }
+    }
+
+    /// Send the shot. Split out of `pool_advance` so the mouse can fire
+    /// without walking the stage machine.
+    pub(crate) fn pool_fire(&mut self) {
+        let Some(shot) = self
+            .board
+            .as_ref()
+            .and_then(|board| board.detail.as_ref())
+            .and_then(DailyMatchDetail::pool)
+            .and_then(|pool| pool.draft.shot(&pool.state))
+        else {
+            return;
+        };
+        self.pool_send(shot);
+    }
+
+    /// Put a move on the wire and block the board until it comes back.
+    ///
+    /// Shared by the stroke and by snooker's hand-it-back, because they are
+    /// the same kind of thing: one move, one turn, one round trip.
+    pub(crate) fn pool_send(&mut self, shot: Shot) {
+        let user_id = self.user_id;
+        let svc = self.svc.clone();
+        let Some(board) = &mut self.board else {
+            return;
+        };
+        let match_id = board.match_id;
+        let Some(detail) = &mut board.detail else {
+            return;
+        };
+        let (DailyGameDetail::EightBall(pool)
+        | DailyGameDetail::NineBall(pool)
+        | DailyGameDetail::Snooker(pool)) = &mut detail.game
+        else {
+            return;
+        };
+        if pool.shot_in_flight || pool.playback.is_some() {
+            return;
+        }
+        pool.shot_in_flight = true;
+        svc.play_pool_shot_task(user_id, match_id, shot);
     }
 
     fn drop_stale_board_selection(&mut self) {
@@ -1479,6 +1993,10 @@ pub fn result_phrase(result: &str) -> &'static str {
         DailyMatch::RESULT_NO_MOVES => "no moves left",
         DailyMatch::RESULT_BORNE_OFF => "borne off",
         DailyMatch::RESULT_MOST_POINTS => "most points",
+        DailyMatch::RESULT_EIGHT_POTTED => "eight ball",
+        DailyMatch::RESULT_EARLY_EIGHT => "early eight",
+        DailyMatch::RESULT_NINE_POTTED => "nine ball",
+        DailyMatch::RESULT_FRAME_WON => "frame won",
         _ => "finished",
     }
 }

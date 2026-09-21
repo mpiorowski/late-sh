@@ -326,6 +326,15 @@ fn base_style(ch: char, x: u16, y: u16) -> Style {
             _ => signpost_text(ch).unwrap_or_else(|| Style::default().fg(theme::ERROR())),
         };
     }
+    if map::POOL_TABLE.contains(x, y) {
+        return match ch {
+            '▒' => Style::default().fg(theme::SUCCESS()),
+            // The pockets, and the two balls left loose on the cloth.
+            '●' => Style::default().fg(theme::TEXT_DIM()),
+            '◦' => Style::default().fg(theme::TEXT_BRIGHT()),
+            _ => signpost_text(ch).unwrap_or_else(|| Style::default().fg(theme::AMBER_DIM())),
+        };
+    }
     if map::EASEL.contains(x, y) {
         // The title row is the ARTBOARD·5 signpost; the rest of the canvas
         // is paint splatter.
@@ -1317,6 +1326,10 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                     Span::styled("[?] ", key),
                     Span::styled("the full guide", text),
                 ]),
+                Line::from(vec![
+                    Span::styled("[n] ", key),
+                    Span::styled("step outside to Nightcap for a quiet drink", text),
+                ]),
                 Line::default(),
                 Line::from(Span::styled(
                     "psst: see the bar glowing, northwest? walk over.",
@@ -1833,6 +1846,20 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
                 Line::from(Span::styled("daily puzzles, high scores, chips", dim)),
             ],
         ),
+        map::Interactive::BackDoor => (
+            " ○ the back door ",
+            interactive,
+            vec![
+                Line::from(vec![
+                    Span::styled("[Enter] ", key),
+                    Span::styled("step out to Nightcap, the quiet bar", text),
+                ]),
+                Line::from(Span::styled(
+                    "six stools · the seated may speak · n from anywhere in here",
+                    dim,
+                )),
+            ],
+        ),
         map::Interactive::Doors => (
             " ○ the heavy door ",
             interactive,
@@ -1857,6 +1884,20 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
                 ]),
                 Line::from(Span::styled(
                     "poker · blackjack · asterion · tron, chips on the line",
+                    dim,
+                )),
+            ],
+        ),
+        map::Interactive::Pool => (
+            " ◦ the pool table ",
+            interactive,
+            vec![
+                Line::from(vec![
+                    Span::styled("[Enter] ", key),
+                    Span::styled("rack them up: a new pool challenge", text),
+                ]),
+                Line::from(Span::styled(
+                    "eight-ball or nine-ball, one shot a day, 400 chips",
                     dim,
                 )),
             ],

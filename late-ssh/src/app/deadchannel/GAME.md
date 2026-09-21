@@ -964,7 +964,11 @@ model, the multi-replica rule throughout: the day roll and every spend
 are conditional claims on the row (`WHERE day < $today`, `WHERE
 rations_left > 0 ... RETURNING`), so several replicas and two devices of
 one person always agree. The invited join creates the row with a random
-starter look and no band. Piece ownership rides `user_purchases` with a
+starter look and no band. Leaving #deadchannel never deletes it: the row
+carries a `left_at` stamp, so the gate shuts and the portrait goes dark
+while the character (its look, and everything phase 2 grows beside it)
+waits for an invited rejoin, which clears the stamp and hands back the
+same face. Piece ownership rides `user_purchases` with a
 new catalog category; the mark reaches the chat author line through the
 existing chat label query, never a second directory.
 
@@ -1021,6 +1025,80 @@ loop's engine. Names and copy belong to the city pass.
    the locker, the band choice, the ration ritual against glyphs.
 4. Piece catalog v1: starter sets, the first rack, the first earned
    pieces.
+
+## The city pass: the street (2026-09-18)
+
+Status: **built, art only, under the clubhouse.** The night city exists
+(`late-ssh/src/app/deadchannel/city/`, see `CONTEXT.md` §3b beside this
+file). It is the undercity: `0` is the clubhouse, `0` again goes down,
+runners only (2026-09-19; it was a dedicated page `7` for a day). Two art
+registers are built and one is still to be chosen. Decisions this pass
+fixed:
+
+- **One glyph per person, in either register.** The runner walks the
+  street as its mark (the one-cell avatar decided in the phase 2 pass).
+  The clubhouse's three-row figures were considered and rejected for the
+  city: at that zoom a terminal shows two shopfronts.
+- **Two registers to choose between (2026-09-19).** The first pass drew
+  the street front-on, Rangedrifter-style: multi-cell facades, carts,
+  a skyline. It read as a plaza: symmetrical, wide, no corridors. The
+  second is pure Dwarf Fortress: top-down, one tile per thing, nothing
+  drawn larger than a cell. A side street four tiles wide that doglegs,
+  alleys one to three wide, rooms you walk into, stalls of five tiles,
+  a ledge over the drop, and room on the floor for cats and NPCs later.
+  **Tiles won**, the same day: it went long (440 columns, three legs, a
+  canal, a back lane), gained walkers pacing the street, and the drawn
+  one left the live script (git history has it).
+- **Blade Runner, not cyberpunk.** Dark, wet, few strong light sources,
+  warm sodium against cold neon, everything else in silhouette. Not
+  saturated everywhere: terminal cells cannot blend, so color on every
+  cell reads as noise. So the street is lit: every lamp, sign, doorway
+  and window is a light source with falloff stopped by walls, the
+  street fades to black with distance, rooms are dark until you are at
+  the door, walls throw shadows, rain shows only in light. And the city
+  has **its own palette**: it does not follow the person's theme, not
+  even for the background or the overlay text. A hundred palettes
+  cannot all be lit well; one look, tuned once.
+- **Alive without state.** The street's extras, the people pacing it,
+  the cats, the rats, the rain, the searchlight, are all pure functions
+  of the tick. Nothing moves that could desync across replicas, nothing
+  is persisted. Real NPCs and cats with behavior come later; the walkers
+  are the placeholder that makes the street read as inhabited now.
+- **The street is one block.** Stairs down, the armorer, the tailor, the
+  lockers, bands, the bar, the screen, patch; carts and stalls against
+  the walls; the board and the bits machine; the railing and the lower
+  city's lights; the way up to the wire in a gap of the rail, where you
+  arrive and where you leave. The tile register adds what has no
+  function, on purpose: two tenements, a lockup with a guard, a pawn shop
+  with its shutter down and its sign still burning, a motel called
+  SLEEP, a hidden court with a shrine. The map is generated from stamps
+  (`scripts/gen_city_map.py`), never hand-drawn, so it can grow a second
+  block without redrawing the first.
+- **Names.** The street sign reads `STATIC ROW`; the bar is `DEAD AIR`
+  (the signal is warm in here); repairs are `PATCH`; the giant screen has
+  no sign and needs none. All pass the screenshot test. Banners in the
+  glyph alphabet hang off the buildings: the city's own script, and
+  nobody can read it, which is the point.
+- **No function behind anything yet, and the panels say so.** Every shop
+  opens and shows its real catalog (the fifteen gear tiers at LoGD prices,
+  the whole starter rack with the runner's portrait in the mirror, the
+  three bands) under a line in the voice saying the till is not open. The
+  street answers Enter at a cart with a line from a small pool. Placeholder
+  copy, design review pending: the draft **move names** (tuner: retune,
+  siphon, carrier, clear channel; jammer: hiss, jam, wither, blackout;
+  ghost: smear, from behind, unseen, vanish), the board's four notices, the
+  bar's drink list, the reader's lines (which point at the haunting).
+- **Nothing shared, nothing timed.** No crowd on the street (the design
+  says the city must never beat chat for standing around), no spawns, no
+  clock. The screen's static and the rain are render-only ambience.
+
+Done since: the signs smear into the wet ground, a car runs the street
+with its headlights ahead of it, the monorail crosses the sky,
+billboards cycle the glyph script, rain splashes on the puddles, and at
+the railing Enter looks over the ledge at the lower city (a half-block
+perspective picture, the showpiece). Next on this surface, in order:
+the armorer's till (bits, the day roll), the tailor's mirror as the
+editor (pick, not draw), the locker, the band choice.
 
 ## Experiment framing
 

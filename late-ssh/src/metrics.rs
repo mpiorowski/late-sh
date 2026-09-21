@@ -5,17 +5,16 @@ use late_core::models::media_queue_item::SongQueueReward;
 
 use crate::app::activity::event::ActivityGame;
 use crate::app::arcade::share::ShareCardKind;
-use crate::app::arcade::sliding_puzzle::image::{
-    SlidingPuzzleImageOutcome, SlidingPuzzleImageStage,
-};
+use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleArtLoad;
 use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::chat::news::svc::XMediaLookup;
 use crate::app::chat::svc::GildRefusal;
+use crate::app::clubhouse::nightcap::svc::NightcapOrderResult;
 use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::games::chips::svc::RoundRefusal;
-use crate::app::lobby::daily::svc::DailyWinPayout;
+use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome};
 use crate::app::pot::svc::PotRefusal;
 
 /// Why the render loop drew a frame. The loop can only distinguish its two
@@ -141,6 +140,17 @@ pub enum FirstContactBeat {
     RunnerCreated,
 }
 
+/// A runner going through the door after the ladder is done. Leaving keeps
+/// the character (the row stays, `left_at` is stamped), so the two sides
+/// are one counter: the gap between them is how many runners are standing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunnerDoor {
+    /// `/leave #deadchannel`: the gate closed on every replica.
+    Left,
+    /// An invited rejoin brought a runner who had left back, same look.
+    Returned,
+}
+
 /// How one bio screen (the first-contact eligibility gate's AI leg)
 /// resolved. `Passed` and `Failed` are the verdicts that spent an API call
 /// and landed; the rest are the reasons a claim produced no verdict.
@@ -193,16 +203,16 @@ mod inner {
     };
 
     use super::ShareCardKind;
+    use super::SlidingPuzzleArtLoad;
     use super::XMediaLookup;
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
-        GildTier, NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult,
-        PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult, VizWireBands,
+        GildTier, NewsShareReward, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
+        PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, RunnerDoor,
+        SongQueueReward, SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
-    use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
     use crate::app::bonsai::state::BranchAction;
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -544,6 +554,25 @@ mod inner {
         })
     }
 
+    fn nightcap_order_label(result: NightcapOrderResult) -> &'static str {
+        match result {
+            NightcapOrderResult::Poured => "poured",
+            NightcapOrderResult::Comped => "comped",
+            NightcapOrderResult::Bounced => "bounced",
+            NightcapOrderResult::Failed => "failed",
+        }
+    }
+
+    fn nightcap_orders_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_nightcap_orders_total")
+                .with_description("Single-drink orders at the Nightcap bar, by how they settled")
+                .build()
+        })
+    }
+
     fn pot_refusal_label(refusal: PotRefusal) -> &'static str {
         match refusal {
             PotRefusal::Closed => "closed",
@@ -644,6 +673,18 @@ mod inner {
         })
     }
 
+    fn pool_shots_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pool_shots_total")
+                .with_description(
+                    "Daily pool shots by how they ended. `truncated` is a physics bug reaching production: the simulator gave up at its guard rails and the half-played rack was still written as the match",
+                )
+                .build()
+        })
+    }
+
     fn news_shares_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -716,6 +757,16 @@ mod inner {
         })
     }
 
+    fn runner_door_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_runner_door_total")
+                .with_description("Runners leaving and returning to #deadchannel, by direction")
+                .build()
+        })
+    }
+
     fn first_contact_bio_screens_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -761,6 +812,13 @@ mod inner {
         }
     }
 
+    fn runner_door_label(door: RunnerDoor) -> &'static str {
+        match door {
+            RunnerDoor::Left => "left",
+            RunnerDoor::Returned => "returned",
+        }
+    }
+
     fn bio_screen_outcome_label(outcome: BioScreenOutcome) -> &'static str {
         match outcome {
             BioScreenOutcome::Passed => "passed",
@@ -775,6 +833,10 @@ mod inner {
     pub fn record_first_contact_beat(beat: FirstContactBeat) {
         first_contact_beats_total()
             .add(1, &[KeyValue::new("beat", first_contact_beat_label(beat))]);
+    }
+
+    pub fn record_runner_door(door: RunnerDoor) {
+        runner_door_total().add(1, &[KeyValue::new("direction", runner_door_label(door))]);
     }
 
     pub fn record_first_contact_bio_screen(outcome: BioScreenOutcome) {
@@ -932,45 +994,34 @@ mod inner {
         share_cards_total().add(1, &[KeyValue::new("card", share_card_kind_label(kind))]);
     }
 
-    fn sliding_puzzle_image_stage_label(stage: SlidingPuzzleImageStage) -> &'static str {
-        match stage {
-            SlidingPuzzleImageStage::Preview => "preview",
-            SlidingPuzzleImageStage::Native => "native",
+    fn sliding_puzzle_art_load_label(load: SlidingPuzzleArtLoad) -> &'static str {
+        match load {
+            SlidingPuzzleArtLoad::Featured => "featured",
+            SlidingPuzzleArtLoad::Empty => "empty",
+            SlidingPuzzleArtLoad::Failed => "failed",
         }
     }
 
-    fn sliding_puzzle_image_outcome_label(outcome: SlidingPuzzleImageOutcome) -> &'static str {
-        match outcome {
-            SlidingPuzzleImageOutcome::Rendered => "rendered",
-            SlidingPuzzleImageOutcome::Cached => "cached",
-            SlidingPuzzleImageOutcome::Failed => "failed",
-        }
-    }
-
-    fn sliding_puzzle_images_total() -> &'static Counter<u64> {
+    fn sliding_puzzle_art_loads_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
             meter()
-                .u64_counter("late_ssh_sliding_puzzle_images_total")
+                .u64_counter("late_ssh_sliding_puzzle_art_loads_total")
                 .with_description(
-                    "Sliding Puzzle image stages finished; a run of failed is the artwork CDN refusing us",
+                    "Sliding Puzzle daily art loads: a gallery piece featured, an empty backlog, or a failure",
                 )
                 .build()
         })
     }
 
-    /// One Sliding Puzzle image stage (Chafa preview or native cell set)
-    /// finished, from the cache or the encoder, or failed.
-    pub fn record_sliding_puzzle_image(
-        stage: SlidingPuzzleImageStage,
-        outcome: SlidingPuzzleImageOutcome,
-    ) {
-        sliding_puzzle_images_total().add(
+    /// One session asked for the day's Sliding Puzzle art.
+    pub fn record_sliding_puzzle_art(load: SlidingPuzzleArtLoad) {
+        sliding_puzzle_art_loads_total().add(
             1,
-            &[
-                KeyValue::new("stage", sliding_puzzle_image_stage_label(stage)),
-                KeyValue::new("outcome", sliding_puzzle_image_outcome_label(outcome)),
-            ],
+            &[KeyValue::new(
+                "outcome",
+                sliding_puzzle_art_load_label(load),
+            )],
         );
     }
 
@@ -987,6 +1038,25 @@ mod inner {
         daily_win_payouts_total().add(
             1,
             &[KeyValue::new("outcome", daily_win_payout_label(payout))],
+        );
+    }
+
+    fn pool_shot_outcome_label(outcome: PoolShotOutcome) -> &'static str {
+        match outcome {
+            PoolShotOutcome::Settled => "settled",
+            PoolShotOutcome::Truncated => "truncated",
+            PoolShotOutcome::Rejected => "rejected",
+        }
+    }
+
+    /// One daily pool shot reached the end of the only path it has. `settled`
+    /// is the denominator the other two are read against: a little `rejected`
+    /// is players and clients disagreeing, a rising `rejected` is a desync,
+    /// and any `truncated` at all is the physics.
+    pub fn record_pool_shot(outcome: PoolShotOutcome) {
+        pool_shots_total().add(
+            1,
+            &[KeyValue::new("outcome", pool_shot_outcome_label(outcome))],
         );
     }
 
@@ -1085,6 +1155,12 @@ mod inner {
 
     pub fn record_round_refused(refusal: RoundRefusal) {
         rounds_refused_total().add(1, &[KeyValue::new("reason", round_refusal_label(refusal))]);
+    }
+
+    /// A pour ordered off the Nightcap menu (rounds count under
+    /// `record_round_bought`, whichever bar they were bought at).
+    pub fn record_nightcap_order(result: NightcapOrderResult) {
+        nightcap_orders_total().add(1, &[KeyValue::new("result", nightcap_order_label(result))]);
     }
 
     /// A patron walked up and drank a credit somebody else paid for.
@@ -1373,20 +1449,21 @@ mod inner {
 #[cfg(not(feature = "otel"))]
 mod inner {
     use super::ShareCardKind;
+    use super::SlidingPuzzleArtLoad;
     use super::XMediaLookup;
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
-        GildTier, NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult,
-        PotRefusal, RenderReason, RoundRefusal, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult, VizWireBands,
+        GildTier, NewsShareReward, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
+        PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, RunnerDoor,
+        SongQueueReward, SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
-    use super::{SlidingPuzzleImageOutcome, SlidingPuzzleImageStage};
 
     pub fn record_ssh_connection() {}
     pub fn record_ssh_connection_rejected(_reason: SshRejectReason) {}
     pub fn record_first_contact_beat(_beat: FirstContactBeat) {}
+    pub fn record_runner_door(_door: RunnerDoor) {}
     pub fn record_first_contact_bio_screen(_outcome: BioScreenOutcome) {}
     pub fn record_first_contact_gate(_verdict: GateVerdict, _staff: bool) {}
     pub fn record_render(_reason: RenderReason) {}
@@ -1404,12 +1481,9 @@ mod inner {
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}
     pub fn record_share_card(_kind: ShareCardKind) {}
-    pub fn record_sliding_puzzle_image(
-        _stage: SlidingPuzzleImageStage,
-        _outcome: SlidingPuzzleImageOutcome,
-    ) {
-    }
+    pub fn record_sliding_puzzle_art(_load: SlidingPuzzleArtLoad) {}
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
+    pub fn record_pool_shot(_outcome: PoolShotOutcome) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
@@ -1420,6 +1494,7 @@ mod inner {
     pub fn record_crown_take_refused(_refusal: CrownRefusal) {}
     pub fn record_round_bought(_patrons: i64, _chips: i64) {}
     pub fn record_round_refused(_refusal: RoundRefusal) {}
+    pub fn record_nightcap_order(_result: NightcapOrderResult) {}
     pub fn record_round_drink_cashed() {}
     pub fn record_pot_tickets_bought(_tickets: i64, _chips: i64) {}
     pub fn record_pot_buy_refused(_refusal: PotRefusal) {}

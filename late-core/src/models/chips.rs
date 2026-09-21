@@ -202,6 +202,9 @@ chip_moves!(
     DailyCheckersWin,
     DailyBackgammonWin,
     DailyBriscolaWin,
+    DailyEightBallWin,
+    DailyNineBallWin,
+    DailySnookerWin,
     TronWin,
     /// A Super Snake seat that came out ahead, banked when the player stands
     /// up. The arena keeps the running total in memory: one row per visit,
@@ -280,6 +283,9 @@ impl ChipMove {
             Self::DailyCheckersWin => "daily_checkers_win",
             Self::DailyBackgammonWin => "daily_backgammon_win",
             Self::DailyBriscolaWin => "daily_briscola_win",
+            Self::DailyEightBallWin => "daily_eightball_win",
+            Self::DailyNineBallWin => "daily_nineball_win",
+            Self::DailySnookerWin => "daily_snooker_win",
             Self::TronWin => "tron_win",
             Self::SsnakeArenaEarned => "ssnake_arena_earned",
             Self::SsnakeArenaLost => "ssnake_arena_lost",
@@ -332,6 +338,9 @@ impl ChipMove {
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
+            | Self::DailyEightBallWin
+            | Self::DailyNineBallWin
+            | Self::DailySnookerWin
             | Self::TronWin
             | Self::GreendragonDragonSlain
             | Self::DarkroomEscape
@@ -377,6 +386,9 @@ impl ChipMove {
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
+            | Self::DailyEightBallWin
+            | Self::DailyNineBallWin
+            | Self::DailySnookerWin
             | Self::TronWin
             | Self::SsnakeArenaEarned
             | Self::GreendragonDragonSlain
@@ -460,6 +472,9 @@ impl ChipMove {
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
+            | Self::DailyEightBallWin
+            | Self::DailyNineBallWin
+            | Self::DailySnookerWin
             | Self::TronWin
             | Self::SsnakeArenaEarned
             | Self::GreendragonDragonSlain
@@ -512,6 +527,15 @@ impl ChipLedgerEntry {
     pub fn chip_move(&self) -> Option<ChipMove> {
         ChipMove::from_reason(&self.reason)
     }
+}
+
+/// One line of the tab board, from [`UserChips::top_round_buyers`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoundBuyer {
+    pub user_id: Uuid,
+    pub username: String,
+    pub rounds: i64,
+    pub chips: i64,
 }
 
 /// A user's chips this UTC month, from [`UserChips::month_figures`].
@@ -913,6 +937,33 @@ impl UserChips {
             earned: row.get("earned"),
             net: row.get("net"),
         })
+    }
+
+    /// The house's biggest round buyers, all time, by chips spent: the tab
+    /// board at the bar out back. Every `round_purchase` row counts,
+    /// whichever bar sold the round; the ledger does not say which.
+    pub async fn top_round_buyers(client: &Client, limit: i64) -> Result<Vec<RoundBuyer>> {
+        let rows = client
+            .query(
+                "SELECT l.user_id, u.username, count(*) AS rounds, sum(-l.delta)::BIGINT AS chips
+                 FROM chip_ledger l
+                 JOIN users u ON u.id = l.user_id
+                 WHERE l.reason = $1
+                 GROUP BY l.user_id, u.username
+                 ORDER BY chips DESC, rounds DESC, u.username ASC
+                 LIMIT $2",
+                &[&ChipMove::RoundPurchase.reason(), &limit],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| RoundBuyer {
+                user_id: row.get("user_id"),
+                username: row.get("username"),
+                rounds: row.get("rounds"),
+                chips: row.get("chips"),
+            })
+            .collect())
     }
 
     /// All user chip balances (for per-user lookup in leaderboard refresh).
