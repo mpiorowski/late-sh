@@ -2872,15 +2872,15 @@ fn the_world_pass_redistributes_grind_rates_but_never_rebalances_a_class() {
     // share of the attack bar, converted to a share of total output. The mean
     // is the right input because the model asks what routing is worth to a
     // player, not what the worst-rounded tier looks like - and no tier can
-    // hide behind it, because `the_coat_curves_stay_inside_their_share_of_the
+    // hide behind it, because `the_coat_curve_stays_inside_its_share_of_the
     // _bar` pins every tier to a tight band on the same two constants.
-    let oil_rider = (0..6)
+    let coat_rider = (0..6)
         .map(|t| COAT_PER_TICK[t] as f64 / TIER_ATTACK_BAR[t] as f64 * AUTO_SHARE)
         .sum::<f64>()
         / 6.0;
     assert!(
-        oil_rider <= 0.16,
-        "the oil rider is worth {oil_rider:.3} of output: past what this budget was written for"
+        coat_rider <= 0.16,
+        "the coat rider is worth {coat_rider:.3} of output: past what this budget was written for"
     );
     let oil_schools = super::super::items::OIL_SCHOOLS;
 
@@ -2936,10 +2936,10 @@ fn the_world_pass_redistributes_grind_rates_but_never_rebalances_a_class() {
                     .iter()
                     .map(|s| mult(*theme, *s))
                     .fold(0.0f64, f64::max);
-                let rate = AUTO + ABILITIES_SHARE * ability_mult(*theme) + oil_rider * coat_best;
+                let rate = AUTO + ABILITIES_SHARE * ability_mult(*theme) + coat_rider * coat_best;
                 region_best = region_best.max(rate);
             }
-            let edge = region_best / (1.0 + oil_rider);
+            let edge = region_best / (1.0 + coat_rider);
             assert!(
                 edge >= 1.05,
                 "{class:?} in {region}: best routed edge {edge:.3} is under the +5% floor"

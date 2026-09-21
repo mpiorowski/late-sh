@@ -7795,6 +7795,12 @@ impl WorldState {
     /// highest tier, then whatever you picked last. With no foe locked on,
     /// nothing is known about the matchup and it falls through to tier and
     /// habit, which is the right answer at a gate.
+    ///
+    /// A healthy coat already on the weapon is never thrown away on a whim:
+    /// the key refuses while more than `COAT_TOPUP_AT` strikes remain, of any
+    /// school, unless the locked-on foe makes the switch worth it (weak to
+    /// the pick, or resists what the weapon carries). A nearly spent coat
+    /// tops up, or switches, freely.
     fn coat_best(&mut self, user_id: Uuid) {
         let Some(p) = self.players.get(&user_id) else {
             return;
@@ -7825,22 +7831,30 @@ impl WorldState {
             );
             return;
         };
-        // Refuse rather than throw a healthy coat's strikes away. A nearly
-        // spent one is a different matter: topping up before a fight is the
-        // reasonable thing to want, so that goes through.
+        // Refuse rather than throw a healthy coat's strikes away, whatever
+        // school it is. The one thing worth those strikes is a matchup the
+        // foe in front of you answers: weak to the pick, or resisting what
+        // the weapon carries. A nearly spent coat is a different matter:
+        // topping up before a fight is the reasonable thing to want, so that
+        // goes through.
         if let Some((live_school, _, charges)) = live
-            && live_school == school
             && charges > COAT_TOPUP_AT
         {
-            self.log_to(
-                user_id,
-                LogKind::System,
-                format!(
-                    "Your weapon already carries {} ({charges} strikes left).",
-                    school.label()
-                ),
-            );
-            return;
+            let upgrade = profile.is_some_and(|pr| {
+                (pr.weak == Some(school) && live_school != school)
+                    || (pr.resist == Some(live_school) && pr.resist != Some(school))
+            });
+            if !upgrade {
+                self.log_to(
+                    user_id,
+                    LogKind::System,
+                    format!(
+                        "Your weapon already carries {} ({charges} strikes left).",
+                        live_school.label()
+                    ),
+                );
+                return;
+            }
         }
         self.use_item(user_id, id);
     }

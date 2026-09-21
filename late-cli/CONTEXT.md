@@ -3,7 +3,6 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh (plus the sibling `late-webview` helper crate)
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-09-14 (The analyzer runs a 2048-sample FFT into 16 log bands on a dB scale, and on Linux `src/audio/loopback.rs` records the `late-webview` helper's tagged audio stream with `pw-dump` and `pw-record`, so YouTube sends `viz` frames too. The server accepts 8 or 16 bands, so it deploys before the CLI. See §6 and §7.)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -18,7 +17,6 @@ This file is the working context for `late-cli`. The root project context lives 
 - Keep root `CONTEXT.md` limited to project-wide contracts and pointers; put CLI-specific detail here.
 
 ### Quick update checklist
-- Refresh `Last updated`
 - Validate SSH mode, token-handshake, audio, and WebSocket pairing invariants
 - Update CLI flags/env vars when `config.rs` changes
 - Update installer/distribution notes when `scripts/install.*` or `.github/workflows/deploy_cli.yml` changes

@@ -354,8 +354,9 @@ fn draw_action_bar(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVi
                 .fg(theme::AMBER_GLOW())
                 .add_modifier(Modifier::BOLD),
             ClickAction::Quaff => Style::default().fg(theme::SUCCESS()),
-            // Dim once a coat is live: the chip is then a readout of what's
-            // left, not something to press.
+            // Dim once a coat is live: the chip is then mostly a readout of
+            // what's left. It stays clickable, because a nearly spent coat
+            // still tops up (`coat_best`).
             ClickAction::Coat if chip.ready => Style::default().fg(theme::AMBER()),
             ClickAction::Coat => Style::default().fg(theme::TEXT_DIM()),
             ClickAction::Flee => Style::default().fg(theme::TEXT_DIM()),

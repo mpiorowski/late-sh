@@ -4993,6 +4993,9 @@ impl ChatService {
                 .send_system_message(system_user_id, room_id, body)
                 .await
             {
+                crate::metrics::record_nightcap_house_failure(
+                    crate::app::clubhouse::nightcap::svc::NightcapHouseFailure::HouseLine,
+                );
                 tracing::warn!(error = ?error, room_id = %room_id, "failed to post a house line");
             }
         });

@@ -149,6 +149,18 @@ pub enum NightcapOrderResult {
     Failed,
 }
 
+/// Which piece of the house's fire-and-forget work failed. Neither is an
+/// order, and nothing upstream waits on either, so a failure here is the
+/// only place it shows: the menu's free-drink count stays stale, or the bar
+/// goes quiet in the room while pours keep settling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NightcapHouseFailure {
+    /// `spawn_credit_check` could not count the patron's banked drinks.
+    CreditCount,
+    /// `ChatService::send_house_line_task` could not post the pour to the room.
+    HouseLine,
+}
+
 /// The house's voice in the room: every drink that lands is said out loud
 /// as a `system` line on the wall, so the other stools can see who is
 /// drinking what and how hard it hits. The footer only ever talks to the
@@ -201,6 +213,7 @@ pub fn spawn_credit_check(
                 let _ = outcome_tx.send(Outcome::Credits { waiting });
             }
             Err(error) => {
+                metrics::record_nightcap_house_failure(NightcapHouseFailure::CreditCount);
                 tracing::warn!(error = ?error, user_id = %user_id, "nightcap credit count failed");
             }
         }

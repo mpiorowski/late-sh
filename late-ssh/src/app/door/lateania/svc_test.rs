@@ -500,6 +500,92 @@ fn the_coat_key_refuses_to_throw_away_a_healthy_coat_of_the_same_school() {
 }
 
 #[test]
+fn the_coat_key_keeps_a_healthy_coat_of_another_school_when_nothing_calls_for_a_switch() {
+    // The cross-school version of the same promise. A better vial in the bag
+    // is not a reason to throw away thirty-nine strikes: with no foe locked
+    // on, or a foe that is neutral to both, the key refuses and spends
+    // nothing.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let top_fire = super::super::items::oil_id(0, 5);
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.inventory.push(top_fire);
+        p.weapon_coat = Some((DamageType::Frost, COAT_PER_TICK[0], COAT_CHARGES - 1));
+    }
+    s.coat_best(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].weapon_coat,
+        Some((DamageType::Frost, COAT_PER_TICK[0], COAT_CHARGES - 1)),
+        "with no foe to read, the healthy frost coat stays"
+    );
+    assert!(
+        s.players[&uid(1)].inventory.contains(&top_fire),
+        "and the fire oil is still in the bag"
+    );
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("already carries frost")),
+        "and the refusal names the coat that is on the weapon"
+    );
+
+    // A foe neutral to both schools is no better a reason.
+    let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
+    s.mobs.get_mut(&mob_id).unwrap().spawn.profile =
+        DamageProfile::new(DamageType::Physical, None, None);
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.inventory.push(top_fire);
+        p.weapon_coat = Some((DamageType::Frost, COAT_PER_TICK[0], COAT_CHARGES - 1));
+    }
+    s.coat_best(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].weapon_coat.map(|(school, _, c)| (school, c)),
+        Some((DamageType::Frost, COAT_CHARGES - 1)),
+        "a neutral foe leaves the healthy coat alone too"
+    );
+}
+
+#[test]
+fn the_coat_key_switches_a_healthy_coat_only_when_the_foe_calls_for_it() {
+    // The two matchup upgrades that are worth a coat's remaining strikes: the
+    // foe is weak to what the bag holds, or resists what the weapon carries.
+    let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
+    s.mobs.get_mut(&mob_id).unwrap().spawn.profile =
+        DamageProfile::new(DamageType::Physical, None, Some(DamageType::Fire));
+    let fire = super::super::items::oil_id(0, 2);
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.inventory.push(fire);
+        p.weapon_coat = Some((DamageType::Frost, COAT_PER_TICK[5], COAT_CHARGES));
+    }
+    s.coat_best(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].weapon_coat,
+        Some((DamageType::Fire, COAT_PER_TICK[2], COAT_CHARGES)),
+        "a foe weak to fire is worth dropping a full frost coat for"
+    );
+
+    let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
+    s.mobs.get_mut(&mob_id).unwrap().spawn.profile =
+        DamageProfile::new(DamageType::Physical, Some(DamageType::Frost), None);
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.inventory.push(fire);
+        p.weapon_coat = Some((DamageType::Frost, COAT_PER_TICK[5], COAT_CHARGES));
+    }
+    s.coat_best(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].weapon_coat,
+        Some((DamageType::Fire, COAT_PER_TICK[2], COAT_CHARGES)),
+        "a foe that resists the live coat is worth replacing it over"
+    );
+}
+
+#[test]
 fn the_coat_key_says_so_when_the_bag_is_empty_instead_of_coating_nothing() {
     let mut s = world();
     s.join(uid(1));

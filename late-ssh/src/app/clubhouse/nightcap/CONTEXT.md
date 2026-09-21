@@ -163,9 +163,13 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   the failure was logged in `svc.rs`.
 - Telemetry: `metrics::record_nightcap_order` (poured/comped/bounced/failed)
   for single pours; rounds count under the shared `record_round_bought` /
-  `record_round_refused`, whichever bar sold them. A round bought here does
-  not post to the activity feed (the feed's sender is not threaded into the
-  session); the tavern's bartender round does.
+  `record_round_refused`, whichever bar sold them. The house's off-thread
+  work has its own counter, `record_nightcap_house_failure`
+  (credit_count/house_line): a stale free-drink count or a house line that
+  never posted is invisible to the order counter, which keeps looking
+  healthy. A round bought here does not post to the activity feed (the
+  feed's sender is not threaded into the session); the tavern's bartender
+  round does.
 
 ## 5.1 The house says what it pours
 
