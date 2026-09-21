@@ -380,13 +380,6 @@ impl ArtboardPiece {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
-    /// Last month's podium, `ART1` first: the `artboard` award rows the
-    /// snapshot minted for the month, each with its hanger's best piece
-    /// still up (applause, then the earlier hang: the award's own order,
-    /// so it is the piece that won unless a mod took that one down). The
-    /// place travels with the row, so a removal leaves a gap instead of
-    /// promoting whoever stood behind; a hanger with nothing left up is
-    /// off the podium. Empty until the award pass has run.
     /// The newest piece still hanging, by title and artist: the line the
     /// Nightcap wall shows. No viewer, so no applause read.
     pub async fn newest_hung(client: &impl GenericClient) -> Result<Option<NewestPiece>> {
@@ -407,6 +400,13 @@ impl ArtboardPiece {
         }))
     }
 
+    /// Last month's podium, `ART1` first: the `artboard` award rows the
+    /// snapshot minted for the month, each with its hanger's best piece
+    /// still up (applause, then the earlier hang: the award's own order,
+    /// so it is the piece that won unless a mod took that one down). The
+    /// place travels with the row, so a removal leaves a gap instead of
+    /// promoting whoever stood behind; a hanger with nothing left up is
+    /// off the podium. Empty until the award pass has run.
     pub async fn previous_month_podium(client: &impl GenericClient) -> Result<Vec<PodiumPiece>> {
         let rows = client
             .query(

@@ -1075,6 +1075,12 @@ pub const DEADCHANNEL_KIND: &str = "deadchannel";
 /// construction; see `late-ssh/src/app/clubhouse/nightcap/CONTEXT.md`.
 pub const NIGHTCAP_SLUG: &str = "nightcap";
 pub const NIGHTCAP_KIND: &str = "nightcap";
+/// Kinds no cross-room reader may surface, whatever membership or
+/// visibility would allow: message search, history paging, and mention
+/// resolution all bind this as `kind <> ALL($n::text[])`. A hidden room is
+/// only ever seen from its own screen; membership alone is no gate, since
+/// the nightcap room seats every account.
+pub const HIDDEN_ROOM_KINDS: &[&str] = &[NIGHTCAP_KIND];
 
 pub fn canonical_dm_pair(user_a: Uuid, user_b: Uuid) -> (Uuid, Uuid) {
     if user_a.as_u128() < user_b.as_u128() {

@@ -2,7 +2,6 @@
 
 ## Metadata
 - Domain: a small bar out back of the Clubhouse, a sub-slice of the Clubhouse domain with its own `Screen::Nightcap` (contextual, not in the Tab cycle)
-- Last updated: 2026-09-21 (the wall: a muted TV, the tab board, lines carved into the stools; a back door on the tavern map)
 - Status: Active
 
 ## 1. Summary
@@ -43,6 +42,17 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   Home's selection fallbacks, and the visual order. Browse lists only
   `topic` rooms and IRC projects only lounge/language/topic, so those skip
   it by construction. The slug is reserved from user creation.
+- Membership is no gate here, since every account holds the room, so the
+  cross-room readers that would otherwise admit it exclude the kind
+  explicitly through `chat_room::HIDDEN_ROOM_KINDS`: message search
+  (`ChatMessage::search_for_user`), history paging
+  (`ChatMessage::list_page_for_viewer`, which the search modal's context
+  window and the history modal ride), and mention resolution
+  (`Notification::resolve_mentioned_user_ids`, so an @name said at the bar
+  mentions nobody and never creates a row the rail could not open). A new
+  hidden kind goes into that one list. Pinned by
+  `chat_message_test.rs::search_and_history_never_read_a_hidden_room` and
+  `notification_test.rs::a_name_said_in_a_hidden_room_mentions_nobody`.
 - The screen is the only surface. `App::current_visible_chat_room_id` pins
   it while the screen is up (read cursor and tail request ride that, same
   as the Clubhouse pins #lounge). `render.rs` hands `ui.rs` the room's tail
@@ -119,7 +129,10 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   the room: the pour shows as `●` marks on the stool row and a footer line.
 - `svc::spawn_order` runs every order on the same service calls
   `ai/ghost.rs` uses for `@bartender`: a banked round credit is cashed
-  first (`ChipService::cash_round_drink`), else `buy_drink` debits
+  first (`ChipService::cash_round_drink`), but only for the house beer
+  (`Drink::on_the_round`), since a credit pours the flat round measure and
+  a priced pick names a drink the credit would contradict; otherwise
+  `buy_drink` debits
   (ledger reason `drink_purchase`, source_ref = drink name) atomically with
   the `user_drinks` buzz upsert; a round is `buy_round` with the seated
   roster minus the buyer as candidates. Each success mirrors the buzz into

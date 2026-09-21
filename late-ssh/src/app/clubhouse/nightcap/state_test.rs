@@ -361,3 +361,14 @@ fn the_tick_reports_when_the_bar_moved_so_a_frame_is_drawn() {
     assert!(mine.tick(TV_DWELL_TICKS));
     assert!(!mine.tick(TV_DWELL_TICKS + 1));
 }
+
+#[test]
+fn only_the_house_beer_comes_off_a_round_credit() {
+    // A credit buys the house measure, so a priced pick must not cash it:
+    // the footer names the drink ordered, and the credit would pour
+    // something else.
+    assert!(Drink::HouseBeer.on_the_round());
+    assert!(!Drink::WhiskeyNeat.on_the_round());
+    assert!(!Drink::OldFashioned.on_the_round());
+    assert!(!Drink::TopShelf.on_the_round());
+}

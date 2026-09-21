@@ -175,8 +175,15 @@ async fn order_drink(
     user_id: Uuid,
     drink: super::state::Drink,
 ) -> Outcome {
-    // A banked round credit pays first, as it does at the counter.
-    match chip_service.cash_round_drink(user_id).await {
+    // A banked round credit pays first, as it does at the counter, but only
+    // for the house measure it bought (`Drink::on_the_round`): a priced
+    // pick is debited as ordered and the credit stays banked.
+    let credit = if drink.on_the_round() {
+        chip_service.cash_round_drink(user_id).await
+    } else {
+        Ok(None)
+    };
+    match credit {
         Ok(Some(comped)) => {
             if let Some(lobby) = drunk_lobby {
                 lobby.record_drink(user_id, comped.drunk_points, comped.last_drink_at);

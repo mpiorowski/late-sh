@@ -63,6 +63,19 @@ impl Drink {
             Drink::TopShelf => 1_000,
         }
     }
+
+    /// Whether a banked round credit pays for this pour. A round buys the
+    /// house measure (`cash_round_drink` records a flat
+    /// `ROUND_DRINK_POINTS`, whatever was asked for), so only the house
+    /// beer comes off it. An explicitly priced drink is debited even with a
+    /// credit waiting: the patron named a price, and the footer names the
+    /// drink they get, so the credit must not quietly pour something else.
+    pub fn on_the_round(self) -> bool {
+        match self {
+            Drink::HouseBeer => true,
+            Drink::WhiskeyNeat | Drink::OldFashioned | Drink::TopShelf => false,
+        }
+    }
 }
 
 /// What a seated patron asked the house for.

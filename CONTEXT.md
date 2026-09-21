@@ -3,7 +3,6 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-09-21 (Nightcap, the bar out back of the Clubhouse, is a Clubhouse sub-slice with a hidden `nightcap` room kind, real drinks on the chip rails, a process-global wall, and a no-AI rule in the ghost service; §1 index, §7 rows, and `late-ssh/src/app/clubhouse/nightcap/CONTEXT.md`.)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -16,11 +15,11 @@ This file is the primary working context for the entire late.sh project.
 - LLM agents should treat this as a living document and update it whenever meaningful behavior changes.
 - If code and this file diverge, prefer updating this file quickly so future work stays reliable.
 - Temporary or branch-specific behavior should be documented here with clear cleanup notes.
-- **KEEP THIS THING THIN.** This file (and every local `CONTEXT.md`) is loaded into LLM context on every task — it is not a changelog. `Last updated` gets *overwritten* with the newest change only; never append "Previous update ...", "Same day ...", or "Previously ..." chains onto it. Describe current-state behavior, not the history of how it got that way: no "now", "no longer", "used to", "replaces the old", "since <date>", "migration N added" in prose. If a sentence only makes sense to someone who knew the previous version, delete it. The only sanctioned running log is the Incident log (§10.5) — everything else should read as if written fresh today.
+- **KEEP THIS THING THIN.** This file (and every local `CONTEXT.md`) is loaded into LLM context on every task — it is not a changelog. There is no `Last updated` line and no dated entry; git log says when something changed. Describe current-state behavior, not the history of how it got that way: no "now", "no longer", "used to", "replaces the old", "since <date>", "migration N added" in prose. If a sentence only makes sense to someone who knew the previous version, delete it. The only sanctioned running log is the Incident log (§10.5) — everything else should read as if written fresh today.
 - **Ideas do not live here.** Roadmap items, "future work", parked designs, research notes, and "we could" belong in `PLAN.md` (root, Backlog section) or a domain design doc (`GAME.md`, `DIGEST.md`, `SCALE.md`). A context file records what exists and how it behaves; an open gap is recorded as a fact ("X does not do Y"), and the proposal to close it goes to `PLAN.md`.
 
 ### Quick update checklist
-- Overwrite `Last updated` with only the newest change (no history chain)
+- No `Last updated` line and no dated entries anywhere in a context file: a doc says what is true now, git log says when it changed
 - Review `Current Work`; move any idea that crept in to `PLAN.md`
 - Validate `Critical Invariants`
 - Update telemetry references if operation/event names changed
@@ -734,7 +733,7 @@ overwrite its own layout on every reconnect.
 
 **Key enums:**
 - `Screen`: `Dashboard`, `Arcade`, `Games`, `Artboard`, `Lateania`, `Rebels`, `Nethack`, `Dopewars`, `Bashquest`, `Codekeep`, `GreenDragon`, `Profiles`, `Clubhouse`, `Nightcap`, `City` (the undercity, deadchannel's street, under the Clubhouse: `0` pressed again on the Clubhouse, runners only, not in the Tab cycle; see `late-ssh/src/app/deadchannel/CONTEXT.md`), `DailyMatch`, `HouseTable` (the door-game screens — Lateania/Rebels/Nethack/Dopewars/Bashquest/Codekeep/GreenDragon — are reached only through the Games hub, and `DailyMatch`/`HouseTable` only from the Lobby modal; none are in the tab cycle. `Profiles` is the people list (one row per user with projects or a work card) on key `5` (rendered by the `directory` slice); `Clubhouse` is the tavern on key `0`, first in the Tab cycle and the landing screen for every session — see `late-ssh/src/app/clubhouse/`. `Nightcap` is the small bar reached with `n` from the Clubhouse or Enter at the back door past the counter, Esc back; also absent from the tab cycle — see `late-ssh/src/app/clubhouse/nightcap/`). `Dashboard` is rendered as Home and owns the chat room rail/center. News, Mentions, RSS, Voice, and Discover are synthetic room-like entries within Home chat. Showcase/Projects and Work data still use chat-adjacent services and unread cursors, but their UI lives on the Profiles page 5, not the Home rail or room jump picker.
-- `ChatRoom.kind`: `lounge` (slug=lounge), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair), `game` (chat attached to a game surface: public house-table rooms, private daily match chats)
+- `ChatRoom.kind`: `lounge` (slug=lounge), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair), `game` (chat attached to a game surface: public house-table rooms, private daily match chats), `deadchannel` (the game's home channel, `late-ssh/src/app/deadchannel/CONTEXT.md`), `nightcap` (the bar out back, hidden from every cross-room reader through `chat_room::HIDDEN_ROOM_KINDS`; `late-ssh/src/app/clubhouse/nightcap/CONTEXT.md`)
 - `ChatRoom.visibility`: `public`, `private`, `dm`
 - `GameKind`: Rust enum in `late-core::models::game_room`; the house-table roster `Asterion`, `Blackjack`, `Poker`, `Tron`. Persisted as `TEXT` in `chat_rooms.game_kind` to keep future game-kind changes/migrations simple.
 

@@ -2,7 +2,6 @@
 
 ## Metadata
 - Domain: the Late Lounge tavern, top-level screen `0`, the default landing screen (always the landing for a first-ever session)
-- Last updated: 2026-09-21 (the back door past the end of the counter, `map::BACK_DOOR` / `Interactive::BackDoor`, steps out to Nightcap on Enter; `n` does the same from anywhere and the frame title says so. Nightcap itself is the `nightcap/` sub-slice, §2.)
 - Status: Active
 
 ## 1. Summary
