@@ -2,7 +2,6 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/leaderboard` — the top-level Leaderboards page (screen `6`) and `LeaderboardService` — plus the roster-generated data model in `late-core/src/models/leaderboard.rs` and the monthly `profile_awards` snapshot machinery it drives.
-- Last updated: 2026-09-18 (Late Time's monthly first place gets the rankless `LATE` badge from the month-end snapshot, settled once per month; no chips.)
 - Purpose: local working context for everything leaderboard: the refresh service and its cost rules, the board rosters and queries, the door log pipe that fills the door boards, the page, monthly profile awards, and the local seed script.
 - Parent context: `../../../../CONTEXT.md`
 

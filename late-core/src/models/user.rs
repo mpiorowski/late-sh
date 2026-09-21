@@ -694,6 +694,7 @@ impl User {
                               WHEN 'tetris' THEN 'LA'
                               WHEN 'twenty_forty_eight' THEN '24#'
                               WHEN 'snake' THEN 'SN'
+                              WHEN 'artboard' THEN 'ART'
                               ELSE 'LB'
                             END
                           ) || rank::text

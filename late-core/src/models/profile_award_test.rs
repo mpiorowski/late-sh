@@ -7,13 +7,12 @@ use crate::models::crown::CrownReign;
 use crate::models::leaderboard::{OnlineTimeIncrement, apply_online_time_batch};
 use crate::models::profile_award::{
     CROWN_AWARD_CATEGORY, DARKROOM_BEACON_AWARD_CATEGORY, GALLERY_AWARD_CATEGORY,
-    LATE_TIME_AWARD_CATEGORY,
-    LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
-    LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY, LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY,
-    NETHACK_AMULET_AWARD_CATEGORY, NETHACK_ASCENSION_AWARD_CATEGORY, award_badge,
-    award_category_label, find_profile_awards_by_ids, format_score_value, is_milestone_award,
-    is_rankless_award, list_profile_awards_for_user, snapshot_previous_month_profile_awards,
-    top_badge_per_game,
+    LATE_TIME_AWARD_CATEGORY, LATEANIA_ARCHDEMON_AWARD_CATEGORY,
+    LATEANIA_FRONTIER_KING_AWARD_CATEGORY, LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY,
+    LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, NETHACK_AMULET_AWARD_CATEGORY,
+    NETHACK_ASCENSION_AWARD_CATEGORY, award_badge, award_category_label,
+    find_profile_awards_by_ids, format_score_value, is_milestone_award, is_rankless_award,
+    list_profile_awards_for_user, snapshot_previous_month_profile_awards, top_badge_per_game,
 };
 use crate::models::rubiks_cube::DailyWin as RubiksCubeDailyWin;
 use crate::models::sliding_puzzle::DailyWin as SlidingPuzzleDailyWin;
