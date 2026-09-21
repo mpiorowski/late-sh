@@ -23,6 +23,7 @@ use late_core::api_types::NowPlaying;
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::drinks::drunk_label_word;
 
+use crate::app::common::composer::build_composer_rows;
 use crate::app::common::primitives::thousands;
 use crate::app::common::theme;
 use crate::usernames::UsernameLookup;
@@ -31,7 +32,7 @@ use super::lobby::SEAT_COUNT;
 use super::state::{Drink, State};
 
 /// The most lines the bar keeps on the wall, whatever the height.
-const MAX_LINES: usize = 8;
+const MAX_LINES: usize = 10;
 /// The tab board: a title row plus `TAB_BOARD_SIZE` lines.
 const TAB_BOARD_ROWS: u16 = 1 + super::wall::TAB_BOARD_SIZE as u16;
 
@@ -302,39 +303,71 @@ pub(crate) fn seated_label(seated_for: Duration) -> String {
     }
 }
 
-/// The last few lines said at the bar, oldest at the top so the newest sits
-/// nearest the composer. One line per message, cut to the width; a bar wall
-/// has no room for paragraphs.
+/// The last few things said at the bar, oldest at the top so the newest
+/// sits nearest the composer. Each message wraps the way the composer
+/// wraps it (word breaks, newlines kept), continuation rows indented under
+/// the name; the newest messages take the rows there are, up to
+/// `MAX_LINES` messages.
 fn draw_lines(frame: &mut Frame, area: Rect, view: &NightcapView<'_>) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let keep = (area.height as usize).min(MAX_LINES);
-    let width = area.width as usize;
-    let name_style = Style::default().fg(theme::TEXT_DIM());
-    let body_style = Style::default().fg(theme::TEXT_BRIGHT());
-    let lines: Vec<Line> = view
-        .messages
-        .iter()
-        .take(keep)
-        .rev()
-        .map(|message| {
-            let name = view
-                .usernames
-                .get(&message.user_id)
-                .map(String::as_str)
-                .unwrap_or("someone");
-            let body = message.body.lines().next().unwrap_or("");
-            let prefix = format!("{name}  ");
-            let room = width.saturating_sub(prefix.chars().count());
-            let body: String = body.chars().take(room).collect();
-            Line::from(vec![
-                Span::styled(prefix, name_style),
-                Span::styled(body, body_style),
-            ])
-        })
-        .collect();
+    let now = chrono::Utc::now();
+    let budget = area.height as usize;
+    // Newest first, each message's rows as a block; stop once the next
+    // block would not fit whole. Blocks are reversed at the end so the
+    // oldest shown sits at the top.
+    let mut blocks: Vec<Vec<Line>> = Vec::new();
+    let mut used = 0;
+    for message in view.messages.iter().take(MAX_LINES) {
+        let (name_style, body_style) = age_styles(now - message.created);
+        let name = view
+            .usernames
+            .get(&message.user_id)
+            .map(String::as_str)
+            .unwrap_or("someone");
+        let prefix = format!("{name}  ");
+        let indent = " ".repeat(prefix.chars().count());
+        let body_width = (area.width as usize)
+            .saturating_sub(prefix.chars().count())
+            .max(1);
+        let rows = build_composer_rows(message.body.trim_end(), body_width);
+        if used + rows.len() > budget {
+            break;
+        }
+        used += rows.len();
+        let block: Vec<Line> = rows
+            .into_iter()
+            .enumerate()
+            .map(|(idx, row)| {
+                let lead = if idx == 0 {
+                    Span::styled(prefix.clone(), name_style)
+                } else {
+                    Span::raw(indent.clone())
+                };
+                Line::from(vec![lead, Span::styled(row.text, body_style)])
+            })
+            .collect();
+        blocks.push(block);
+    }
+    let lines: Vec<Line> = blocks.into_iter().rev().flatten().collect();
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// How a line on the wall is lit by its age. No clock anywhere: what was
+/// said in the last hour is bright, older than that dims, older than a day
+/// fades to the same faint as the carvings, so an old conversation reads
+/// as old instead of pretending to be live.
+fn age_styles(age: chrono::Duration) -> (Style, Style) {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    if age < chrono::Duration::hours(1) {
+        (dim, Style::default().fg(theme::TEXT_BRIGHT()))
+    } else if age < chrono::Duration::days(1) {
+        (Style::default().fg(theme::TEXT_FAINT()), dim)
+    } else {
+        let faint = Style::default().fg(theme::TEXT_FAINT());
+        (faint, faint.add_modifier(Modifier::ITALIC))
+    }
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, state: &State) {

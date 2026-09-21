@@ -56,7 +56,7 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   the seat map (process-global, like the seats themselves) is the only path
   in. A server-side check in the send path is the next step if a second
   client ever reaches the room.
-- **No AI out back.** `GhostService` takes the room id at construction
+- **No AI out back.** The subtitle says so on the screen. `GhostService` takes the room id at construction
   (`main.rs`, from the startup ensure) and every bot listener (`@bot`,
   `@graybeard`, `@bartender`) drops a message from this room before any
   other check (`is_silent_room`): no reply, no ladder step, no DB read. A
@@ -66,9 +66,14 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   `/summary` and the like cannot target the room from its own screen, and
   it is not selectable anywhere else.
 - **The wall keeps the last lines only.** `ui.rs` draws at most `MAX_LINES`
-  (8) of the tail, oldest at the top, one line each. There is no scrollback
-  on this screen and no other screen shows the room, so what is said here
-  scrolls off it. Storage is ordinary chat.
+  (10) messages of the tail, oldest at the top, each word-wrapped the way
+  the composer wraps it (`build_composer_rows`, newlines kept) with
+  continuation rows indented under the name; the newest messages take the
+  rows there are. No timestamps: a line is lit by its age (`age_styles`),
+  bright within the hour, dim within the day, faint and italic after that,
+  so a slow night's old lines read as old. There is no scrollback on this
+  screen and no other screen shows the room, so what is said here scrolls
+  off it. Storage is ordinary chat.
 
 ## 4. The shared seats (multiplayer contract)
 
@@ -178,8 +183,9 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   auto-joined, and seating accounts older than the room;
   `nightcap_carving_test.rs`, `chips_test.rs` (the tab board) and
   `artboard_piece_test.rs` (the newest piece) cover the wall's reads.
-- `clubhouse/map_test.rs` probes the back door (`BACK_DOOR`, Enter in
-  front of it steps out here).
+- `clubhouse/map_test.rs` probes the back door (`BACK_DOOR`, a 6-wide
+  door at the end of the counter with one cell of air on each side; Enter
+  in front of it steps out here).
 - No `ui_test.rs`/`input_test.rs`/`svc_test.rs`: the chip paths are covered
   by `games/chips/svc_test.rs`, and the rest is thin enough that the
   behavior it carries is asserted a layer down.
