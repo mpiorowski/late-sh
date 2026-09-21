@@ -253,6 +253,74 @@ async fn ensure_writes_the_stipend_once() {
     assert_eq!(rows[0].get::<_, &str>("source_ref"), user.id.to_string());
 }
 
+#[tokio::test]
+async fn the_tab_board_ranks_round_buyers_by_chips_spent() {
+    let test_db = test_db().await;
+    let generous = create_test_user(&test_db.db, "tab-generous").await;
+    let modest = create_test_user(&test_db.db, "tab-modest").await;
+    let client = test_db.db.get().await.expect("db client");
+    for user in [generous.id, modest.id] {
+        UserChips::ensure(&client, user).await.expect("ensure");
+    }
+
+    UserChips::apply(
+        &**client,
+        generous.id,
+        ChipMove::RoundPurchase,
+        300,
+        "round-a",
+    )
+    .await
+    .expect("round a")
+    .expect("affordable");
+    UserChips::apply(
+        &**client,
+        generous.id,
+        ChipMove::RoundPurchase,
+        100,
+        "round-b",
+    )
+    .await
+    .expect("round b")
+    .expect("affordable");
+    UserChips::apply(
+        &**client,
+        modest.id,
+        ChipMove::RoundPurchase,
+        200,
+        "round-c",
+    )
+    .await
+    .expect("round c")
+    .expect("affordable");
+    // A drink is not a round: it stays off the board.
+    UserChips::apply(
+        &**client,
+        modest.id,
+        ChipMove::DrinkPurchase,
+        500,
+        "top shelf",
+    )
+    .await
+    .expect("drink")
+    .expect("affordable");
+
+    let board = UserChips::top_round_buyers(&client, 3)
+        .await
+        .expect("board");
+    let names: Vec<(&str, i64, i64)> = board
+        .iter()
+        .map(|row| (row.username.as_str(), row.rounds, row.chips))
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            (generous.username.as_str(), 2, 400),
+            (modest.username.as_str(), 1, 200),
+        ]
+    );
+}
+
 /// A gift's two rows each name the other party, so either side of the
 /// ledger says who the chips went to or came from.
 #[tokio::test]

@@ -1846,6 +1846,20 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
                 Line::from(Span::styled("daily puzzles, high scores, chips", dim)),
             ],
         ),
+        map::Interactive::BackDoor => (
+            " ○ the back door ",
+            interactive,
+            vec![
+                Line::from(vec![
+                    Span::styled("[Enter] ", key),
+                    Span::styled("step out to Nightcap, the quiet bar", text),
+                ]),
+                Line::from(Span::styled(
+                    "six stools · the seated may speak · n from anywhere in here",
+                    dim,
+                )),
+            ],
+        ),
         map::Interactive::Doors => (
             " ○ the heavy door ",
             interactive,

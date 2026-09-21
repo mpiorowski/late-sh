@@ -4,14 +4,15 @@ use crate::models::artboard_piece::{ApplauseOutcome, ArtboardPiece, HangOutcome,
 use crate::models::artboard_piece_test::hang_params;
 use crate::models::chips::{ChipMove, Difficulty, UserChips};
 use crate::models::crown::CrownReign;
+use crate::models::leaderboard::{OnlineTimeIncrement, apply_online_time_batch};
 use crate::models::profile_award::{
     CROWN_AWARD_CATEGORY, DARKROOM_BEACON_AWARD_CATEGORY, GALLERY_AWARD_CATEGORY,
-    LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
-    LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY, LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY,
-    NETHACK_AMULET_AWARD_CATEGORY, NETHACK_ASCENSION_AWARD_CATEGORY, award_badge,
-    award_category_label, find_profile_awards_by_ids, format_score_value, is_milestone_award,
-    is_rankless_award, list_profile_awards_for_user, snapshot_previous_month_profile_awards,
-    top_badge_per_game,
+    LATE_TIME_AWARD_CATEGORY, LATEANIA_ARCHDEMON_AWARD_CATEGORY,
+    LATEANIA_FRONTIER_KING_AWARD_CATEGORY, LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY,
+    LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, NETHACK_AMULET_AWARD_CATEGORY,
+    NETHACK_ASCENSION_AWARD_CATEGORY, award_badge, award_category_label,
+    find_profile_awards_by_ids, format_score_value, is_milestone_award, is_rankless_award,
+    list_profile_awards_for_user, snapshot_previous_month_profile_awards, top_badge_per_game,
 };
 use crate::models::rubiks_cube::DailyWin as RubiksCubeDailyWin;
 use crate::models::sliding_puzzle::DailyWin as SlidingPuzzleDailyWin;
@@ -179,6 +180,99 @@ async fn the_months_last_crown_holder_gets_the_badge_once() {
             .any(|award| award.category == CROWN_AWARD_CATEGORY),
         "only the month's last holder is crowned"
     );
+}
+
+#[test]
+fn the_late_time_badge_carries_no_rank_digit_and_is_not_a_milestone() {
+    assert_eq!(award_badge(LATE_TIME_AWARD_CATEGORY, 1), "LATE");
+    assert_eq!(award_category_label(LATE_TIME_AWARD_CATEGORY), "Late Time");
+    // 37h 12m 59s: minutes are floored, never rounded up.
+    assert_eq!(
+        format_score_value(LATE_TIME_AWARD_CATEGORY, 133_979_000),
+        "37h 12m online"
+    );
+    assert!(is_rankless_award(LATE_TIME_AWARD_CATEGORY));
+    assert!(!is_milestone_award(LATE_TIME_AWARD_CATEGORY));
+}
+
+/// Only last month's first place gets the badge, and the month settles on
+/// the first pass: time that spills into last month after the rollover
+/// cannot crown a second player on a later pass.
+#[tokio::test]
+async fn late_time_first_place_gets_the_badge_once_per_month() {
+    let test_db = test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let leader = create_test_user(&test_db.db, "late-time-leader").await;
+    let runner_up = create_test_user(&test_db.db, "late-time-runner-up").await;
+
+    let this_month = Utc::now().date_naive().with_day(1).expect("first of month");
+    let last_month = this_month
+        .checked_sub_months(Months::new(1))
+        .expect("previous month");
+    let hours = |count: i64| count * 3_600_000;
+    apply_online_time_batch(
+        &client,
+        uuid::Uuid::now_v7(),
+        &[
+            OnlineTimeIncrement {
+                user_id: leader.id,
+                month_start: last_month,
+                milliseconds: hours(40),
+            },
+            OnlineTimeIncrement {
+                user_id: runner_up.id,
+                month_start: last_month,
+                milliseconds: hours(30),
+            },
+            // This month's time is not last month's standings.
+            OnlineTimeIncrement {
+                user_id: runner_up.id,
+                month_start: this_month,
+                milliseconds: hours(100),
+            },
+        ],
+    )
+    .await
+    .expect("online time");
+
+    snapshot_previous_month_profile_awards(&mut client)
+        .await
+        .expect("snapshot");
+    // The runner-up overtakes in last month's post-rollover spill.
+    apply_online_time_batch(
+        &client,
+        uuid::Uuid::now_v7(),
+        &[OnlineTimeIncrement {
+            user_id: runner_up.id,
+            month_start: last_month,
+            milliseconds: hours(20),
+        }],
+    )
+    .await
+    .expect("spill");
+    snapshot_previous_month_profile_awards(&mut client)
+        .await
+        .expect("snapshot again");
+
+    let won: Vec<_> = list_profile_awards_for_user(&client, leader.id)
+        .await
+        .expect("awards")
+        .into_iter()
+        .filter(|award| award.category == LATE_TIME_AWARD_CATEGORY)
+        .collect();
+    assert_eq!(won.len(), 1, "the daily snapshot must grant once");
+    assert_eq!(won[0].rank, 1);
+    assert_eq!(won[0].period_month, last_month);
+    assert_eq!(won[0].score_value, hours(40));
+    assert_eq!(won[0].badge(), "LATE");
+
+    let lost: Vec<_> = list_profile_awards_for_user(&client, runner_up.id)
+        .await
+        .expect("awards")
+        .into_iter()
+        .filter(|award| award.category == LATE_TIME_AWARD_CATEGORY)
+        .collect();
+    assert!(lost.is_empty(), "only first place gets the badge: {lost:?}");
 }
 
 /// The persisted Arcade Wins award must score the same roster as the live

@@ -71,8 +71,8 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         Line::from(Span::styled(
             "Snapshotted at month end from last month's totals on the boards to the left. Top 3 only, \
              rank digit 1-3 (AW1 is that month's #1). Prestige only, no chips of their own, with two \
-             exceptions: the crown has one holder, so no digit; and the Artboard gallery pays its \
-             three places 20,000 / 10,000 / 5,000 chips.",
+             exceptions: the crown and Late Time each have one holder, so no digit; and the Artboard \
+             gallery pays its three places 40,000 / 15,000 / 10,000 chips.",
             dim,
         )),
         Line::from(""),
@@ -95,6 +95,11 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
             "CRWN",
             "The Crown",
             "wore the crown when last month ended (/crown)",
+        ),
+        (
+            "LATE",
+            "Late Time",
+            "most time online last month, first place only (Late Time board)",
         ),
         (
             "ART",

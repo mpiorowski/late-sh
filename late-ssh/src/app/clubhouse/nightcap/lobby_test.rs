@@ -72,21 +72,39 @@ fn out_of_range_seat_is_rejected() {
 }
 
 #[test]
-fn ordering_a_drink_requires_a_seat() {
+fn a_pour_for_someone_who_stood_up_has_no_stool_to_land_on() {
     let seats = SharedSeats::new();
     let (id, _) = user(1);
-    assert_eq!(seats.order_drink(id), None);
+    assert_eq!(seats.record_pour(id), None);
 }
 
 #[test]
-fn ordering_drinks_counts_up_per_round() {
+fn pours_count_up_for_the_sitting() {
     let seats = SharedSeats::new();
     let (id, name) = user(1);
     seats.toggle_seat(id, &name, 0);
 
-    assert_eq!(seats.order_drink(id), Some(1));
-    assert_eq!(seats.order_drink(id), Some(2));
+    assert_eq!(seats.record_pour(id), Some(1));
+    assert_eq!(seats.record_pour(id), Some(2));
     assert_eq!(seats.snapshot()[0].as_ref().map(|s| s.drinks), Some(2));
+}
+
+#[test]
+fn a_round_is_for_the_other_stools_only() {
+    let seats = SharedSeats::new();
+    let (buyer, buyer_name) = user(1);
+    let (a, name_a) = user(2);
+    let (b, name_b) = user(3);
+    seats.toggle_seat(buyer, &buyer_name, 0);
+    seats.toggle_seat(a, &name_a, 2);
+    seats.toggle_seat(b, &name_b, 5);
+
+    let mut patrons = seats.seated_ids_excluding(buyer);
+    patrons.sort();
+    let mut expected = vec![a, b];
+    expected.sort();
+    assert_eq!(patrons, expected);
+    assert!(seats.seated_ids_excluding(a).contains(&buyer));
 }
 
 #[test]
@@ -160,8 +178,8 @@ fn sync_keeps_the_drink_count_while_relabelling() {
     let seats = SharedSeats::new();
     let (id, name) = user(1);
     seats.toggle_seat(id, &name, 0);
-    seats.order_drink(id);
-    seats.order_drink(id);
+    seats.record_pour(id);
+    seats.record_pour(id);
 
     seats.sync(&roster(&[(id, "renamed".to_string())]));
 

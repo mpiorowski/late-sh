@@ -34,6 +34,10 @@ const SIDE_NARROW: u16 = 28;
 /// The widest the side rail grows on a big terminal. Past this the room text
 /// stops reading as a column and the main view starts paying for it.
 const SIDE_MAX: u16 = 60;
+/// Columns the standing-key block is indented by. Anything sized against the
+/// rail has to subtract it, or the line it builds is a couple of columns wider
+/// than the space it is painted into and gets chopped at the edge.
+const RAIL_INDENT: usize = 2;
 
 /// How many rows the bottom log strip gets on a terminal this tall.
 ///
@@ -4100,13 +4104,6 @@ fn room_panel(
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
-    // A personal waypoint, if one is set: a reminder it's there to warp to.
-    if view.waypoint_set {
-        lines.push(Line::from(Span::styled(
-            "  \u{2691} waypoint set (/ to warp)".to_string(),
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-    }
     // Your companion, if any: glyph, name, level, and health.
     if let Some(pet) = &view.pet {
         let name_color = if pet.downed {
@@ -6608,6 +6605,19 @@ fn footer_hints(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
         (false, true) => chips.push("> down"),
         (false, false) => {}
     }
+    // The waypoint used to cost the room panel a standing line ("waypoint set
+    // (/ to warp)") that never changed once fixed. It says more here, for no
+    // line at all: the warp chip names the zone `/` lands in. `f follow` gives
+    // up its place - it is a two-player convoy key that reads fine in the `?`
+    // guide, where the waypoint's destination could never be shown.
+    let warp = match &view.waypoint {
+        Some(zone) => {
+            let room = "/ warp ";
+            let budget = width.saturating_sub(RAIL_INDENT + room.chars().count());
+            format!("{room}{}", truncate(zone, budget))
+        }
+        None => "/ warp".to_string(),
+    };
     chips.extend([
         "c sheet",
         "v abilities",
@@ -6619,8 +6629,7 @@ fn footer_hints(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
         "r recall",
         "; haven",
         ": waypoint",
-        "/ warp",
-        "f follow",
+        warp.as_str(),
     ]);
     // What the room promoted into "You can" does not repeat down here.
     let promoted = room_action_entries(view);
@@ -6647,8 +6656,7 @@ fn footer_hints(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
 /// and a 60-column one, just in more or fewer lines.
 fn pack_hint_chips(chips: &[&str], width: usize) -> Vec<String> {
     const SEP: &str = " · ";
-    const INDENT: usize = 2;
-    let budget = width.saturating_sub(INDENT).max(1);
+    let budget = width.saturating_sub(RAIL_INDENT).max(1);
     let mut lines: Vec<String> = Vec::new();
     let mut current = String::new();
     for chip in chips {

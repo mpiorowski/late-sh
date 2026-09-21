@@ -3,8 +3,8 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::models::artboard_piece::{
-    ApplauseOutcome, ArtboardPiece, HangOutcome, HangParams, ListingCounts, PIECE_DAILY_CAP,
-    PieceListing, PieceLookup, PodiumPiece, TakeDownOutcome,
+    ApplauseOutcome, ArtboardPiece, FeaturedPiece, HangOutcome, HangParams, ListingCounts,
+    PIECE_DAILY_CAP, PieceListing, PieceLookup, PodiumPiece, TakeDownOutcome,
 };
 use crate::models::profile_award::snapshot_previous_month_profile_awards;
 use crate::test_utils::{create_test_user, roll_artboard_pieces_back_a_month, test_db};
@@ -419,4 +419,160 @@ async fn the_podium_and_the_wall_read_best_first_and_break_ties_by_hang() {
         .await
         .expect("podium");
     assert_eq!(places(podium), vec![(2, late.id)]);
+}
+
+/// The puzzle's daily art: yesterday's most applauded piece, claimed once
+/// for the day however many sessions ask, then the rest of the backlog one
+/// piece a day. A piece hung today waits for tomorrow; a removal frees the
+/// day for the next in line; the gallery's switch turns the art off.
+#[tokio::test]
+async fn puzzle_art_claims_the_most_applauded_backlog_piece_once_per_day() {
+    use crate::models::app_flag::{AppFlag, AppFlags};
+
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let other = test_db.db.get().await.expect("db client");
+    let painter = create_test_user(&test_db.db, "puzzle-art-painter").await;
+    let fan = create_test_user(&test_db.db, "puzzle-art-fan").await;
+    let today = Utc::now().date_naive();
+    let day = |offset: i64| today + chrono::Duration::days(offset);
+
+    let quiet = hang(&client, hang_params(painter.id, "quiet", "hash-quiet")).await;
+    let loud = hang(&client, hang_params(painter.id, "loud", "hash-loud")).await;
+    let fresh = hang(&client, hang_params(painter.id, "fresh", "hash-fresh")).await;
+    client
+        .execute(
+            "UPDATE artboard_pieces SET created = created - INTERVAL '1 day' WHERE id = ANY($1)",
+            &[&vec![quiet.id, loud.id]],
+        )
+        .await
+        .expect("backdate yesterday's pieces");
+    assert_eq!(
+        ArtboardPiece::toggle_applause(&client, loud.id, fan.id)
+            .await
+            .expect("applaud"),
+        ApplauseOutcome::Applauded(1)
+    );
+
+    // Two sessions opening the puzzle at once agree on the day's piece.
+    let (first, second) = tokio::join!(
+        ArtboardPiece::feature_for_day(&client, today),
+        ArtboardPiece::feature_for_day(&other, today),
+    );
+    let first = first.expect("claim").expect("a piece for today");
+    let second = second.expect("claim").expect("a piece for today");
+    assert_eq!(first.id, loud.id);
+    assert_eq!(second.id, loud.id);
+    assert_eq!(first.applause, 1);
+    assert_eq!(first.username, painter.username);
+
+    // The backlog drains one piece a day: yesterday's other piece first,
+    // then the one hung today, then nothing.
+    let next = ArtboardPiece::feature_for_day(&client, day(1))
+        .await
+        .expect("claim")
+        .expect("tomorrow's piece");
+    assert_eq!(next.id, quiet.id);
+    let after = ArtboardPiece::feature_for_day(&client, day(2))
+        .await
+        .expect("claim")
+        .expect("the day after's piece");
+    assert_eq!(after.id, fresh.id);
+    assert!(
+        ArtboardPiece::feature_for_day(&client, day(3))
+            .await
+            .expect("claim")
+            .is_none()
+    );
+
+    // A day keeps its piece on every later ask.
+    let again = ArtboardPiece::feature_for_day(&client, day(1))
+        .await
+        .expect("claim")
+        .expect("tomorrow's piece again");
+    assert_eq!(again.id, quiet.id);
+
+    // Taking today's piece down frees the day; the backlog is empty by now,
+    // so today goes without.
+    ArtboardPiece::remove(&client, loud.id)
+        .await
+        .expect("remove");
+    assert!(
+        ArtboardPiece::feature_for_day(&client, today)
+            .await
+            .expect("claim")
+            .is_none()
+    );
+
+    // A mod pins a piece for the day regardless of when it was hung; the
+    // day's previous holder goes back to the backlog.
+    let pinned = ArtboardPiece::feature_now(&client, fresh.id, day(1))
+        .await
+        .expect("pin")
+        .expect("the piece is up");
+    assert_eq!(
+        pinned,
+        FeaturedPiece {
+            id: fresh.id,
+            user_id: painter.id,
+            title: "fresh".to_string(),
+        }
+    );
+    assert_eq!(
+        ArtboardPiece::feature_for_day(&client, day(1))
+            .await
+            .expect("claim")
+            .map(|piece| piece.id),
+        Some(fresh.id)
+    );
+    assert_eq!(
+        ArtboardPiece::feature_for_day(&client, day(4))
+            .await
+            .expect("claim")
+            .map(|piece| piece.id),
+        Some(quiet.id),
+        "the displaced piece is back in the queue"
+    );
+    assert!(
+        ArtboardPiece::feature_now(&client, loud.id, day(1))
+            .await
+            .expect("pin")
+            .is_none(),
+        "a piece that is down cannot be pinned"
+    );
+
+    // The gallery's switch turns the puzzle's art off with everything else.
+    AppFlags::set(&client, AppFlag::ArtboardGalleryEnabled, false)
+        .await
+        .expect("switch off");
+    assert!(
+        ArtboardPiece::feature_for_day(&client, day(1))
+            .await
+            .expect("claim")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn the_newest_hanging_piece_names_its_artist() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    assert_eq!(
+        ArtboardPiece::newest_hung(&client)
+            .await
+            .expect("empty wall"),
+        None
+    );
+
+    let first = create_test_user(&test_db.db, "newest-first").await;
+    let second = create_test_user(&test_db.db, "newest-second").await;
+    hang(&client, hang_params(first.id, "dawn", "hash-dawn")).await;
+    let latest = hang(&client, hang_params(second.id, "dusk", "hash-dusk")).await;
+
+    let newest = ArtboardPiece::newest_hung(&client)
+        .await
+        .expect("newest")
+        .expect("something hangs");
+    assert_eq!(newest.title, latest.title);
+    assert_eq!(newest.artist, second.username);
 }

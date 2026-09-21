@@ -76,7 +76,7 @@ pub enum Screen {
     Profiles,
     Leaderboard,
     Clubhouse,
-    /// A small bar out back of the Clubhouse (`app/nightcap`): a handful of
+    /// A small bar out back of the Clubhouse (`app/clubhouse/nightcap`): a handful of
     /// sittable seats and a round of drinks, no walking. Entered with `n`
     /// from the Clubhouse, absent from the Tab cycle; Esc returns there.
     Nightcap,

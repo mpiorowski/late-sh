@@ -216,7 +216,7 @@ pub enum ComposerCommands {
 impl ComposerCommands {
     pub fn for_screen(screen: Screen) -> Self {
         match screen {
-            Screen::Clubhouse => Self::Disabled,
+            Screen::Clubhouse | Screen::Nightcap => Self::Disabled,
             Screen::Dashboard
             | Screen::Arcade
             | Screen::Games
@@ -234,7 +234,6 @@ impl ComposerCommands {
             | Screen::Artboard
             | Screen::Profiles
             | Screen::Leaderboard
-            | Screen::Nightcap
             | Screen::City
             | Screen::Zen
             | Screen::DailyMatch
@@ -722,7 +721,9 @@ fn room_membership_command_target(
 }
 
 pub(crate) fn is_chat_list_room(room: &ChatRoom) -> bool {
-    if room.kind == "game" {
+    // The small bar out back is only ever seen from its own screen: never
+    // on the rail, in the picker, or as a Home selection.
+    if room.kind == "game" || is_nightcap_room(room) {
         return false;
     }
 
@@ -735,6 +736,13 @@ pub(crate) fn is_chat_list_room(room: &ChatRoom) -> bool {
 /// `visual_order_for_rooms` all key off this.
 pub(crate) fn is_deadchannel_room(room: &ChatRoom) -> bool {
     room.kind == late_core::models::chat_room::DEADCHANNEL_KIND
+}
+
+/// The small bar out back of the Clubhouse (`app/clubhouse/nightcap`):
+/// auto-joined like #lounge, but hidden from every Home surface by
+/// `is_chat_list_room`. Its screen composes into it and draws its tail.
+pub(crate) fn is_nightcap_room(room: &ChatRoom) -> bool {
+    room.kind == late_core::models::chat_room::NIGHTCAP_KIND
 }
 
 /// Whether a room's message list keeps the portrait gutter and paints
@@ -3095,6 +3103,15 @@ impl ChatState {
                 .find(|(room, _)| room.kind == "lounge" && room.slug.as_deref() == Some("lounge"))
                 .map(|(room, _)| room.id)
         })
+    }
+
+    /// The nightcap room, once the snapshot carries it (auto-joined, so
+    /// every session has it after the first room load).
+    pub fn nightcap_room_id(&self) -> Option<Uuid> {
+        self.rooms
+            .iter()
+            .find(|(room, _)| is_nightcap_room(room))
+            .map(|(room, _)| room.id)
     }
 
     pub(crate) fn set_favorite_room_ids(&mut self, favorite_room_ids: Vec<Uuid>) {

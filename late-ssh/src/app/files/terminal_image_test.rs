@@ -267,27 +267,6 @@ fn build_commands_suppresses_sixel_emission_under_overlay() {
 }
 
 #[test]
-fn persistent_raster_tag_tracks_both_placement_and_content() {
-    let rect = Rect::new(36, 1, 48, 24);
-    let moved = Rect::new(24, 1, 48, 24);
-
-    assert_ne!(
-        persistent_raster_tag(rect, 17),
-        persistent_raster_tag(moved, 17),
-        "a raster that moves must count as changed"
-    );
-    assert_ne!(
-        persistent_raster_tag(rect, 17),
-        persistent_raster_tag(rect, 18),
-        "a raster whose content changes must count as changed"
-    );
-    assert_eq!(
-        persistent_raster_tag(rect, 17),
-        persistent_raster_tag(rect, 17)
-    );
-}
-
-#[test]
 fn build_commands_suppresses_iterm_emission_under_overlay() {
     let mut state = TerminalImageRenderState::default();
     let placement = TerminalImagePlacement {

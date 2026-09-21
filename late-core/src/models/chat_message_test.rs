@@ -2,12 +2,12 @@ use uuid::Uuid;
 
 use crate::{
     models::{
-        chat_message::{ChatMessage, ChatMessageParams, escape_like_pattern},
+        chat_message::{ChatMessage, ChatMessageParams, HistoryDirection, escape_like_pattern},
         chat_message_reaction::{ChatMessageReaction, ChatMessageReactionAction},
         chat_room::ChatRoom,
         user::{User, UserParams},
     },
-    test_utils::test_db,
+    test_utils::{create_test_user, test_db},
 };
 
 #[test]
@@ -330,7 +330,6 @@ async fn search_and_context_exclude_replies_to_ignored_users() {
 /// back empty rather than with content.
 #[tokio::test]
 async fn history_pages_admit_public_rooms_but_not_private_ones_to_non_members() {
-    use crate::models::chat_message::HistoryDirection;
     use crate::models::chat_room_member::ChatRoomMember;
 
     let test_db = test_db().await;
@@ -404,7 +403,6 @@ async fn history_pages_admit_public_rooms_but_not_private_ones_to_non_members() 
 /// a `created`-only cursor gets wrong.
 #[tokio::test]
 async fn history_pages_walk_the_room_without_gaps_or_repeats() {
-    use crate::models::chat_message::HistoryDirection;
     use crate::models::chat_room_member::ChatRoomMember;
 
     let test_db = test_db().await;
@@ -810,4 +808,65 @@ async fn list_public_room_between_with_author_reads_the_window_oldest_first_for_
             .await
             .unwrap();
     assert!(hidden.is_empty());
+}
+
+/// The bar out back (`chat_room::HIDDEN_ROOM_KINDS`) seats every account,
+/// so membership is no gate there. Neither the cross-room search nor the
+/// history pager may read it: what is said at the bar is only ever seen
+/// from its own screen.
+#[tokio::test]
+async fn search_and_history_never_read_a_hidden_room() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    // Accounts first, then the ensure: its backfill seats both of them,
+    // so the viewer is a member and membership alone would let them read.
+    let patron = create_test_user(&test_db.db, "hidden-patron").await;
+    let viewer = create_test_user(&test_db.db, "hidden-viewer").await;
+    let bar = ChatRoom::ensure_nightcap(&client)
+        .await
+        .expect("ensure nightcap");
+
+    let said = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: bar.id,
+            user_id: patron.id,
+            body: "nightcap secret handshake".to_string(),
+        },
+    )
+    .await
+    .expect("say it at the bar");
+
+    let hits = ChatMessage::search_for_user(&client, viewer.id, "secret handshake", None, &[], 50)
+        .await
+        .expect("search");
+    assert!(hits.is_empty(), "search surfaced the bar: {hits:?}");
+
+    let page = ChatMessage::list_page_for_viewer(
+        &client,
+        bar.id,
+        viewer.id,
+        None,
+        HistoryDirection::Older,
+        &[],
+        10,
+    )
+    .await
+    .expect("page");
+    assert!(page.is_empty(), "history paged the bar: {page:?}");
+    assert!(
+        ChatMessage::list_page_for_viewer(
+            &client,
+            bar.id,
+            patron.id,
+            Some((said.created, said.id)),
+            HistoryDirection::Newer,
+            &[],
+            10,
+        )
+        .await
+        .expect("page newer")
+        .is_empty(),
+        "the speaker gets no scrollback either"
+    );
 }

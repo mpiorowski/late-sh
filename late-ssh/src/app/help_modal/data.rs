@@ -184,7 +184,7 @@ pub(crate) fn bot_app_context() -> String {
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
         - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, chat badge, chat flag, burn milestone, then the LIVE tag and your /status. The crown prints immediately after the name, and a rented title after that, ahead of the whole stack, as \"name \u{1F451}, the night clerk\".\n\
-        - The Clubhouse (page 0, the Late Lounge tavern) is the landing screen: a walkable ASCII room where everyone online is present. Arrows/hjkl walk, i says something (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark. This is where you (@bartender) keep the bar.\n\
+        - The Clubhouse (page 0, the Late Lounge tavern) is the landing screen: a walkable ASCII room where everyone online is present. Arrows/hjkl walk, i says something (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark. This is where you (@bartender) keep the bar. Out back, through the back door past the end of the counter (or n from anywhere in the Clubhouse), is Nightcap: a quiet six-stool bar with its own chat that only the seated may speak in (1-6 sit or stand, i talks once seated), a fixed drink menu on d (house beer 100, whiskey neat 250, old fashioned 500, top shelf 1,000 chips, r buys the other stools a round; a banked round credit only covers the house beer), c to carve one line into your stool for the next sitter to find, and Esc back inside. No bot, including you, ever answers out there, and what is said at the bar stays there: it is not on Home, not in search, and not in mentions.\n\
         - @bartender pours drinks for Late Chips: mention him (or press t at the bar) to order. There is no fixed menu; he invents each drink's name and prices it 100-1000 chips, never more than the patron can spend while keeping a 100-chip floor untouched. A brand-new patron's first-ever drink is free. He only ever pours for the patron who mentioned him: he never charges a drink onto someone else, and points anyone who wants to buy another user a round or a drink at \"/gift @user <n>\" instead, since gifted chips do not carry the drunk-text effect onto someone who did not choose to drink.\n\
         - Drinking builds a buzz that levels up: 0 sober, 1 tipsy, 2 buzzed, 3 sloshed, 4 wasted. Every non-sober level prints its word beside the name. Once wasted, the bartender cuts a patron off to water or coffee instead of more drinks.\n\
         - The buzz sobers up on its own over time, no action needed, whether the patron is online or not: it decays 334 points an hour, so reaching wasted wears off in about six hours and even a maxed-out binge is fully sober again half a day later.\n\
@@ -231,6 +231,7 @@ pub(crate) fn bartender_app_context() -> String {
     - Home's room rail also holds RSS, News, Cyberspace, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"N unread mentions\" counter in the top-right corner.\n\
     - A DM with unread messages jumps to an \"unread dms\" group directly under core in that rail, so nobody has to scroll to the bottom to find it; it drops back down to \"dms\" once it has been read and you move on.\n\
     - In the Clubhouse: arrows/hjkl walk, i talks (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark.\n\
+    - Nightcap, the quiet bar out back: n from anywhere in the Clubhouse, or Enter at the back door past the end of the counter. Six stools, 1-6 sit or stand, only the seated may speak (i), d opens a fixed drink menu paid in chips, c carves a line into your stool, Esc comes back inside. No bartender and no bot answers out there.\n\
     - Pressing ? anywhere opens the full in-app guide, with a tab per topic.\n\
     - For anything past basic directions (commands, game rules, settings, IRC, account stuff) don't guess: tell the patron to go ask @bot, that's what he's for.\n"
         .to_string()
@@ -549,7 +550,7 @@ fn chips_help_lines() -> Vec<String> {
         "  The one title on sale is Your Own Title (1,000 / 24h, 40,000 / 30d): you write it, up to 20 characters.".to_string(),
         "  It is screened before the chips move, so a refused title costs you nothing.".to_string(),
         "  A rebuy replaces whatever is live in that slot and restarts its clock; when a rental lapses the slot simply empties.".to_string(),
-        "  @bartender drinks in the Clubhouse.".to_string(),
+        "  @bartender drinks in the Clubhouse, and the fixed menu at Nightcap, the bar out back (n from the Clubhouse; a round there is for the stools).".to_string(),
         "  Poker and Blackjack bets.".to_string(),
         "  Gifts you send.".to_string(),
         "  Gilds you buy on other people's messages.".to_string(),
@@ -997,7 +998,7 @@ fn arcade_help_lines() -> Vec<String> {
         "",
         "Notes",
         "  Game-specific controls appear inside the Arcade page.",
-        "  Sliding Puzzle: i toggles numbered and image tiles; this view is session only and keeps the same board and rewards.",
+        "  Sliding Puzzle: the tiles are a gallery piece, yesterday's most applauded first, one piece a day. i toggles numbered tiles; the view is session only and keeps the same board and rewards.",
         "  Daily puzzle completions, run scores, chips, payouts, and leaderboards are covered in Economy.",
         "",
         "Leaderboard badges",
@@ -1010,9 +1011,11 @@ fn arcade_help_lines() -> Vec<String> {
         "  [24#]     2048",
         "  [SN]      Snake",
         "  [CRWN]    The Crown, to whoever wore it when the month ended.",
-        "            It is the one monthly badge with no rank digit: the crown has one holder.",
+        "            No rank digit: the crown has one holder.",
+        "  [LATE]    Late Time, to whoever spent the most time online that month.",
+        "            First place only, so no rank digit either.",
         "  [ART]     Artboard Gallery: your most applauded piece of the month. Top 3 by best piece,",
-        "            3 applause to count, and the one ranked badge that pays: 20,000 / 10,000 / 5,000 chips.",
+        "            3 applause to count, and the one ranked badge that pays: 40,000 / 15,000 / 10,000 chips.",
         "  The door badges are one-off feats, shown with no rank digit. The badge lands the first",
         "  time; the chips land again on the gate shown here. Full guide on the Leaderboards page.",
         "  [LMG]     Lateania Archdemon             10,000 chips  per character, 7-day gap",
@@ -1237,6 +1240,9 @@ fn overview_lines() -> Vec<String> {
         "Landmarks answer Enter: the cabinet, the door and the easel walk you to",
         "their pages, the big table opens the Lobby, and the pool table under it",
         "opens the Lobby on a fresh eight-ball challenge.",
+        "n (or Enter at the back door past the counter) steps out to Nightcap,",
+        "the quiet bar: 1-6 sit or stand, i talks once you hold a stool, d opens",
+        "the drink menu, c carves a line into your stool, Esc comes back inside.",
         "",
         "The Games hub is a grouped sidebar: arrow keys or j/k move between its",
         "games; Enter launches the selected game; Ctrl+J/K or Ctrl+Down/Up scroll a",

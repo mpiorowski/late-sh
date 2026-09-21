@@ -790,6 +790,30 @@ fn make_room(
 }
 
 #[test]
+fn the_nightcap_room_is_never_a_list_room() {
+    // Permanent, public, auto-joined: every other predicate would list it.
+    // The kind alone keeps the bar out back off the rail and the picker.
+    let (nightcap, _) = make_room(
+        Uuid::from_u128(30),
+        late_core::models::chat_room::NIGHTCAP_KIND,
+        "public",
+        true,
+        Some("nightcap"),
+    );
+    let (lounge, _) = make_room(
+        Uuid::from_u128(10),
+        "lounge",
+        "public",
+        true,
+        Some("lounge"),
+    );
+
+    assert!(is_nightcap_room(&nightcap));
+    assert!(!is_chat_list_room(&nightcap));
+    assert!(is_chat_list_room(&lounge));
+}
+
+#[test]
 fn visual_order_matches_cozy_rail_grouping() {
     let me = Uuid::from_u128(1);
     let alice = Uuid::from_u128(2);

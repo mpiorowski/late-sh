@@ -113,7 +113,7 @@ impl App {
 
         self.sync_visible_chat_room();
         self.tick_clubhouse();
-        self.tick_nightcap();
+        changed |= self.tick_nightcap();
         changed |= crate::app::scratchpad::pair::poll(self);
         if let Some(scratchpad) = self.scratchpad.as_mut()
             && scratchpad.sync_from_shared()
@@ -232,22 +232,7 @@ impl App {
             && self.is_playing_game
             && self.game_selection == GAME_SELECTION_SLIDING_PUZZLE
         {
-            let board_area = crate::app::arcade::ui::game_content_area(
-                self.content_area(),
-                true,
-                crate::app::arcade::ui::SHOW_GAME_BOTTOM_BAR,
-            );
-            changed |= self.sliding_puzzle_state.poll_image_tiles(
-                inline_image_render_settings,
-                board_area,
-                self.terminal_image_protocol,
-            );
-        } else {
-            // `poll_image_tiles` is the only thing that evicts this game's
-            // rasters, and it stops running the moment the board is not the
-            // open screen. Free them here or a session that played once holds
-            // them until it disconnects.
-            changed |= self.sliding_puzzle_state.release_image_tiles();
+            changed |= self.sliding_puzzle_state.poll_art();
         }
         changed |= self.chat.poll_terminal_images();
         for output in self.chat.take_mod_outputs() {
@@ -1025,6 +1010,8 @@ impl App {
         let mut refresh_floor = false;
         if let Some(rx) = &mut self.activity_feed_rx {
             while let Ok(event) = rx.try_recv() {
+                // The bar out back's TV shows the last thing that happened.
+                self.nightcap.note_activity(&event.username, &event.action);
                 let Some(user_id) = event.user_id else {
                     continue;
                 };

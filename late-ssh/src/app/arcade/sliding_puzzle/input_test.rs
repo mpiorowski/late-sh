@@ -7,7 +7,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use super::{
-    image::TileView,
+    art::TileView,
     input::{handle_arrow, handle_key},
     state::{Mode, State},
     svc::SlidingPuzzleService,
@@ -31,17 +31,17 @@ fn state_with_board(board: Vec<u8>) -> State {
 }
 
 #[test]
-fn sliding_puzzle_lowercase_and_uppercase_i_toggle_image_tiles() {
+fn sliding_puzzle_lowercase_and_uppercase_i_toggle_art_tiles() {
     let mut state = state_with_board(CENTER_BLANK.to_vec());
-    assert_eq!(state.tile_view(), TileView::Numbered);
+    assert_eq!(state.tile_view(), TileView::Art);
 
     assert!(handle_key(&mut state, b'i'));
-    assert_eq!(state.tile_view(), TileView::Image);
+    assert_eq!(state.tile_view(), TileView::Numbered);
     assert_eq!(state.board(), CENTER_BLANK);
     assert_eq!(state.moves(), 0);
 
     assert!(handle_key(&mut state, b'I'));
-    assert_eq!(state.tile_view(), TileView::Numbered);
+    assert_eq!(state.tile_view(), TileView::Art);
     assert_eq!(state.board(), CENTER_BLANK);
     assert_eq!(state.moves(), 0);
 }

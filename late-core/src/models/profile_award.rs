@@ -35,6 +35,10 @@ pub const CROWN_AWARD_CATEGORY: &str = "crown";
 /// pays chips ([`gallery_prize_chips`]). A user needs a piece with at least
 /// [`GALLERY_AWARD_MIN_APPLAUSE`] to be ranked at all.
 pub const GALLERY_AWARD_CATEGORY: &str = "artboard";
+/// The Late Time board's monthly winner: whoever was online longest last
+/// month. First place only, so rankless like the crown (`LATE`, never
+/// `LATE1`). The score is the month's online time in milliseconds.
+pub const LATE_TIME_AWARD_CATEGORY: &str = "late_time";
 
 /// The chip prize behind each gallery placement. Paid inside the snapshot
 /// transaction, once per award row.
@@ -80,12 +84,18 @@ pub fn is_milestone_award(category: &str) -> bool {
     MILESTONE_AWARD_CATEGORIES.contains(&category)
 }
 
-/// Whether an award's badge is printed without a rank digit. Every milestone
-/// qualifies, and so does the crown, which is monthly but has exactly one
-/// holder. The chat-label SQL in `user.rs` spells the same split: this list
-/// is the arm that skips `|| rank::text`.
+/// The monthly awards with a single holder: earned again every month and
+/// shown only for the month after, like the ranked boards, but a `#1` on the
+/// badge would be noise. The badge legends are tested against this list
+/// alongside [`MILESTONE_AWARD_CATEGORIES`].
+pub static SINGLE_HOLDER_AWARD_CATEGORIES: [&str; 2] =
+    [CROWN_AWARD_CATEGORY, LATE_TIME_AWARD_CATEGORY];
+
+/// Whether an award's badge is printed without a rank digit: every milestone
+/// and every single-holder monthly award. The chat-label SQL in `user.rs`
+/// spells the same split: this list is the arm that skips `|| rank::text`.
 pub fn is_rankless_award(category: &str) -> bool {
-    is_milestone_award(category) || category == CROWN_AWARD_CATEGORY
+    is_milestone_award(category) || SINGLE_HOLDER_AWARD_CATEGORIES.contains(&category)
 }
 
 /// The milestone ladders, one per game, weakest first. Chat author labels show
@@ -227,6 +237,7 @@ pub async fn list_profile_awards_for_user(
                         WHEN 'snake' THEN 4
                         WHEN 'crown' THEN 5
                         WHEN 'artboard' THEN 6
+                        WHEN 'late_time' THEN 7
                         ELSE 99
                       END,
                       awarded_at DESC",
@@ -384,6 +395,31 @@ pub async fn snapshot_previous_month_profile_awards(
                   )
                 ORDER BY p.user_id, applause.count DESC, p.created ASC
              ),
+             -- Late Time's first place. A segment is attributed to the
+             -- month it began, so last month's totals can still grow for
+             -- one checkpoint (five minutes) past the rollover. Settled
+             -- once like the gallery: without the `NOT EXISTS` a later
+             -- pass (the 24h fallback, a restart) could crown a second
+             -- user who overtook in that spill, and `ON CONFLICT` would
+             -- not stop it because the conflict key includes the user.
+             -- RANK, so an exact-millisecond tie shares first place.
+             late_time_leader AS (
+                SELECT user_id, value, rank
+                FROM (
+                    SELECT online.user_id,
+                           online.total_milliseconds AS value,
+                           RANK() OVER (ORDER BY online.total_milliseconds DESC) AS rank
+                    FROM user_online_time_monthly online, bounds
+                    WHERE online.month_start = bounds.period_month
+                      AND online.total_milliseconds > 0
+                      AND NOT EXISTS (
+                        SELECT 1 FROM profile_awards
+                        WHERE category = 'late_time'
+                          AND period_month = bounds.period_month
+                      )
+                ) standings
+                WHERE rank = 1
+             ),
              ranked AS (
                 SELECT user_id,
                        'top_chips'::text AS category,
@@ -411,6 +447,13 @@ pub async fn snapshot_previous_month_profile_awards(
                        value,
                        1::bigint AS rank
                 FROM crown_holder
+                UNION ALL
+                -- First place only; `award_badge` prints it bare.
+                SELECT user_id,
+                       'late_time'::text AS category,
+                       value,
+                       rank
+                FROM late_time_leader
                 UNION ALL
                 -- ROW_NUMBER, not RANK: this is the one arm that mints
                 -- chips, and RANK would hand every hanger tied at the top
@@ -528,6 +571,7 @@ pub fn award_category_code(category: &str) -> &'static str {
         DARKROOM_BEACON_AWARD_CATEGORY => "ADB",
         CROWN_AWARD_CATEGORY => "CRWN",
         GALLERY_AWARD_CATEGORY => "ART",
+        LATE_TIME_AWARD_CATEGORY => "LATE",
         _ => "LB",
     }
 }
@@ -554,6 +598,7 @@ pub fn award_category_label(category: &str) -> &'static str {
         DARKROOM_BEACON_AWARD_CATEGORY => "A Dark Room Homefleet",
         CROWN_AWARD_CATEGORY => "The Crown",
         GALLERY_AWARD_CATEGORY => "Artboard Gallery",
+        LATE_TIME_AWARD_CATEGORY => "Late Time",
         _ => "Leaderboard",
     }
 }
@@ -564,6 +609,7 @@ pub fn award_category_priority(category: &str) -> i32 {
         "top_chips" => 1,
         CROWN_AWARD_CATEGORY => 5,
         GALLERY_AWARD_CATEGORY => 6,
+        LATE_TIME_AWARD_CATEGORY => 7,
         "tetris" => 2,
         "twenty_forty_eight" => 3,
         "snake" => 4,
@@ -617,6 +663,10 @@ pub fn format_score_value(category: &str, value: i64) -> String {
         // The crown's score is what the final holder burned to take it.
         CROWN_AWARD_CATEGORY => format!("{value} chips"),
         GALLERY_AWARD_CATEGORY => format!("{value} applause"),
+        LATE_TIME_AWARD_CATEGORY => {
+            let minutes = value / 60_000;
+            format!("{}h {}m online", minutes / 60, minutes % 60)
+        }
         _ => format!("{value} score"),
     }
 }

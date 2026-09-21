@@ -6,6 +6,7 @@ use chrono::NaiveDate;
 use late_core::{
     db::Db,
     models::{
+        artboard_piece::ArtboardPiece,
         chips::Difficulty,
         profile::fetch_username,
         sliding_puzzle::{DailyWin, Game, GameParams},
@@ -14,7 +15,28 @@ use late_core::{
 use tokio::sync::{broadcast, mpsc, oneshot};
 use uuid::Uuid;
 
-use crate::app::activity::event::{ActivityEvent, ActivityGame};
+use super::art::PuzzleArt;
+use crate::{
+    app::activity::event::{ActivityEvent, ActivityGame},
+    metrics,
+};
+
+/// How one day's art load ended, for `metrics::record_sliding_puzzle_art`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SlidingPuzzleArtLoad {
+    Featured,
+    Empty,
+    Failed,
+}
+
+/// What the state gets back from [`SlidingPuzzleService::load_daily_art_task`].
+/// The failure is already logged and counted by the task; the state only
+/// needs to know to fall back and retry later.
+pub enum ArtLoad {
+    Featured(PuzzleArt),
+    Empty,
+    Failed,
+}
 
 /// How long a session load waits for the shared save queue to drain before
 /// reading the database anyway. The queue is process-wide, so without a bound
@@ -50,6 +72,34 @@ impl SlidingPuzzleService {
 
     pub fn today(&self) -> NaiveDate {
         chrono::Utc::now().date_naive()
+    }
+
+    /// The gallery piece featured on `day`, claimed for the day if nobody
+    /// has yet (`ArtboardPiece::feature_for_day`), decoded off the tick.
+    /// The task owns the load's logging and metrics; the receiver gets a
+    /// tagged outcome.
+    pub(crate) fn load_daily_art_task(&self, day: NaiveDate) -> oneshot::Receiver<ArtLoad> {
+        let (tx, rx) = oneshot::channel();
+        let db = self.db.clone();
+        tokio::spawn(async move {
+            let load = match load_daily_art(&db, day).await {
+                Ok(Some(art)) => {
+                    metrics::record_sliding_puzzle_art(SlidingPuzzleArtLoad::Featured);
+                    ArtLoad::Featured(art)
+                }
+                Ok(None) => {
+                    metrics::record_sliding_puzzle_art(SlidingPuzzleArtLoad::Empty);
+                    ArtLoad::Empty
+                }
+                Err(error) => {
+                    tracing::warn!(error = ?error, %day, "failed to load Sliding Puzzle art");
+                    metrics::record_sliding_puzzle_art(SlidingPuzzleArtLoad::Failed);
+                    ArtLoad::Failed
+                }
+            };
+            let _ = tx.send(load);
+        });
+        rx
     }
 
     pub async fn load_games(&self, user_id: Uuid) -> Result<Vec<Game>> {
@@ -204,6 +254,24 @@ async fn run_game_save_worker(
             }
         }
     }
+}
+
+async fn load_daily_art(db: &Db, day: NaiveDate) -> Result<Option<PuzzleArt>> {
+    let client = db.get().await?;
+    let Some(piece) = ArtboardPiece::feature_for_day(&client, day).await? else {
+        return Ok(None);
+    };
+    let canvas = serde_json::from_value(piece.canvas)
+        .with_context(|| format!("decoding canvas of artboard piece {}", piece.id))?;
+    let width = usize::try_from(piece.width).context("artboard piece width")?;
+    let height = usize::try_from(piece.height).context("artboard piece height")?;
+    Ok(Some(PuzzleArt {
+        title: piece.title,
+        username: piece.username,
+        canvas,
+        width,
+        height,
+    }))
 }
 
 async fn save_game(db: &Db, params: GameParams) -> Result<()> {

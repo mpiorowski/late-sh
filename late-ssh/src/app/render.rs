@@ -243,7 +243,7 @@ struct DrawContext<'a> {
     directory_state: &'a crate::app::directory::state::DirectoryState,
     clubhouse_state: &'a crate::app::clubhouse::state::State,
     clubhouse_own_username: &'a str,
-    nightcap_state: &'a crate::app::nightcap::state::State,
+    nightcap_state: &'a crate::app::clubhouse::nightcap::state::State,
     /// Resolved name flair (color style and rented title) for clubhouse name
     /// labels.
     clubhouse_name_flair: &'a std::collections::HashMap<
@@ -257,6 +257,14 @@ struct DrawContext<'a> {
     clubhouse_bot_id: Option<uuid::Uuid>,
     /// The clubhouse composer footer; built only on that screen.
     clubhouse_composer: Option<chat::ui::ComposerBlockView<'a>>,
+    /// The nightcap room's tail for the bar's last lines; empty off that
+    /// screen.
+    nightcap_messages: &'a [late_core::models::chat_message::ChatMessage],
+    /// The nightcap composer footer; built only on that screen, and only
+    /// while this session holds a stool.
+    nightcap_composer: Option<chat::ui::ComposerBlockView<'a>>,
+    /// The tavern's drunk map (`App.drunk_levels`), for stool labels.
+    drunk_levels: &'a std::collections::HashMap<uuid::Uuid, u8>,
     /// The night city page: the runner's spot and its look.
     city_state: &'a crate::app::deadchannel::city::state::State,
     city_look: Option<&'a crate::app::deadchannel::runner::state::Look>,
@@ -1122,7 +1130,22 @@ impl App {
             clubhouse_lounge_id
                 .map(|lounge_id| self.chat.messages_for_room(lounge_id))
                 .unwrap_or(&[]);
-        let clubhouse_composer = clubhouse_lounge_id.map(|_| chat::ui::ComposerBlockView {
+        // The bar out back is the same shape: its hidden room's tail on the
+        // wall, and the composer only once this session holds a stool.
+        let nightcap_room_id = if screen == Screen::Nightcap {
+            self.chat.nightcap_room_id()
+        } else {
+            None
+        };
+        let nightcap_messages: &[late_core::models::chat_message::ChatMessage] = nightcap_room_id
+            .map(|room_id| self.chat.messages_for_room(room_id))
+            .unwrap_or(&[]);
+        let embedded_composer_room = match screen {
+            Screen::Clubhouse => clubhouse_lounge_id,
+            Screen::Nightcap => nightcap_room_id.filter(|_| self.nightcap.compose_allowed()),
+            _ => None,
+        };
+        let embedded_composer = embedded_composer_room.map(|_| chat::ui::ComposerBlockView {
             composer: self.chat.composer(),
             composing: self.chat.composing,
             selected_message: false,
@@ -1137,6 +1160,11 @@ impl App {
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             inert: false,
         });
+        let (clubhouse_composer, nightcap_composer) = match screen {
+            Screen::Clubhouse => (embedded_composer, None),
+            Screen::Nightcap => (None, embedded_composer),
+            _ => (None, None),
+        };
         let mut terminal_image_frame = TerminalImageFrame::default();
 
         // Persistent raster cleanup, pre-frame phase. iTerm2/Sixel — unlike
@@ -1193,21 +1221,9 @@ impl App {
             || self.booth_modal_state.is_open()
             || self.stream_modal.is_some()
             || self.chat.history_modal.is_open();
-        // Which screen owns a non-modal raster is decided here; what that
-        // raster will look like is the screen's own business.
-        let non_modal_image_tag = (screen == Screen::Arcade
-            && self.is_playing_game
-            && self.game_selection == crate::app::state::GAME_SELECTION_SLIDING_PUZZLE)
-            .then(|| {
-                let inner = app_frame_inner_area(area);
-                let (content_area, _) = app_content_and_sidebar_areas(inner, show_right_sidebar);
-                crate::app::arcade::sliding_puzzle::ui::persistent_raster_tag(
-                    content_area,
-                    &self.sliding_puzzle_state,
-                    self.terminal_image_protocol,
-                )
-            })
-            .flatten();
+        // No screen places a non-modal persistent raster today; the slot
+        // stays so a screen that does can tag its raster here.
+        let non_modal_image_tag: Option<u64> = None;
         let pre_wipe = self
             .terminal_image_render_state
             .pre_frame_persistent_raster_wipe_bytes(
@@ -1308,6 +1324,9 @@ impl App {
                         clubhouse_graybeard_id: self.clubhouse_graybeard_id,
                         clubhouse_bot_id: self.clubhouse_bot_id,
                         clubhouse_composer,
+                        nightcap_messages,
+                        nightcap_composer,
+                        drunk_levels: &self.drunk_levels,
                         city_state: &self.city,
                         city_look: self.runner_looks.get(&self.user_id),
                         clubhouse_overlay: self.chat.overlay(),
@@ -1851,8 +1870,6 @@ impl App {
                     session_daily_completion: ctx.session_daily_wins.today(),
                     quest_state: ctx.quest_state,
                 },
-                ctx.terminal_image_protocol,
-                terminal_images,
             ),
             Screen::Leaderboard => crate::app::leaderboard::ui::draw(
                 frame,
@@ -1887,11 +1904,16 @@ impl App {
                     look: ctx.city_look,
                 },
             ),
-            Screen::Nightcap => crate::app::nightcap::ui::draw(
+            Screen::Nightcap => crate::app::clubhouse::nightcap::ui::draw(
                 frame,
                 content_area,
-                crate::app::nightcap::ui::NightcapView {
+                crate::app::clubhouse::nightcap::ui::NightcapView {
                     state: ctx.nightcap_state,
+                    messages: ctx.nightcap_messages,
+                    usernames: ctx.usernames,
+                    drunk_levels: ctx.drunk_levels,
+                    now_playing: ctx.now_playing,
+                    composer: ctx.nightcap_composer.take(),
                 },
             ),
             Screen::Zen => {
@@ -2523,7 +2545,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     if screen == Screen::Clubhouse {
         spans.push(Span::styled(
             format!(
-                "· {} inside · Tab/0-5 pages · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance ",
+                "· {} inside · Tab/0-5 pages · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance · n out back ",
                 ctx.clubhouse_state.headcount()
             ),
             Style::default().fg(theme::TEXT_DIM()),

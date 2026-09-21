@@ -1098,8 +1098,11 @@ pub struct PlayerView {
     pub nearby_players: Vec<RoomId>,
     /// The live-map RPG view preference, persisted with the character.
     pub rpg_mode: bool,
-    /// Whether a personal waypoint is set (see `set_waypoint`/`warp_to_waypoint`).
-    pub waypoint_set: bool,
+    /// The zone a personal waypoint is fixed in, if one is set (see
+    /// `set_waypoint`/`warp_to_waypoint`). Carries the place name rather than a
+    /// bare flag so the standing-key rail can say where `/` lands without
+    /// spending a room-panel line on it.
+    pub waypoint: Option<String>,
     pub occupants: Vec<OccupantView>,
     /// The companion this player is auto-following, if any (for the UI tag).
     pub following: Option<Uuid>,
@@ -1243,7 +1246,7 @@ impl PlayerView {
             nearby_foes: Vec::new(),
             nearby_players: Vec::new(),
             rpg_mode: true,
-            waypoint_set: false,
+            waypoint: None,
             occupants: Vec::new(),
             following: None,
             wildlife: Vec::new(),
@@ -10860,7 +10863,10 @@ impl WorldState {
                     nearby_foes,
                     nearby_players,
                     rpg_mode: player.rpg_mode,
-                    waypoint_set: player.waypoint.is_some(),
+                    waypoint: player
+                        .waypoint
+                        .and_then(|room| self.world.room(room))
+                        .map(|room| room.zone.to_string()),
                     occupants,
                     following: player.following,
                     wildlife,

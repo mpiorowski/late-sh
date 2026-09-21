@@ -48,9 +48,10 @@ fn bot_context_includes_hub_guide_facts() {
 }
 
 #[test]
-fn sliding_puzzle_guide_documents_the_session_only_image_view() {
+fn sliding_puzzle_guide_documents_the_gallery_art_and_the_session_only_toggle() {
     let arcade = lines_for(HelpTopic::Arcade, false, "").join("\n");
-    assert!(arcade.contains("i toggles numbered and image tiles"));
+    assert!(arcade.contains("the tiles are a gallery piece"));
+    assert!(arcade.contains("i toggles numbered tiles"));
     assert!(arcade.contains("session only"));
     assert!(arcade.contains("same board and rewards"));
 }

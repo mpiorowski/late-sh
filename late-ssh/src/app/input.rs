@@ -91,7 +91,7 @@ fn screen_has_chat_pane(screen: Screen) -> bool {
 /// plus the Clubhouse, which composes into #lounge (speech bubbles) without
 /// drawing a pane. Used for the composer-priority gate and chat overlays.
 fn screen_composes_chat(screen: Screen) -> bool {
-    screen_has_chat_pane(screen) || screen == Screen::Clubhouse
+    screen_has_chat_pane(screen) || matches!(screen, Screen::Clubhouse | Screen::Nightcap)
 }
 
 fn is_chat_composer_context(ctx: InputContext) -> bool {
@@ -1608,7 +1608,7 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     }
 
     if ctx.screen == Screen::Nightcap {
-        return crate::app::nightcap::input::handle_event(app, event);
+        return crate::app::clubhouse::nightcap::input::handle_event(app, event);
     }
 
     if ctx.screen == Screen::City {
@@ -2324,9 +2324,12 @@ fn dispatch_escape(app: &mut App) {
         app.set_screen(Screen::Dashboard);
         return;
     }
-    // Esc from Nightcap just steps back outside to the Clubhouse; there is
-    // no in-room state to peel first (no chat pane, no pending move).
+    // Esc from Nightcap peels the drink menu if it is open, else steps back
+    // outside to the Clubhouse.
     if ctx.screen == Screen::Nightcap {
+        if app.nightcap.cancel_carving() || app.nightcap.close_menu() {
+            return;
+        }
         app.set_screen(Screen::Clubhouse);
         return;
     }
@@ -4150,10 +4153,11 @@ pub(crate) fn try_open_icon_picker(app: &mut App) {
         return;
     }
     if !ctx.chat_composing {
-        let room_id = if ctx.screen == Screen::Clubhouse {
-            app.chat.lounge_room_id()
-        } else {
-            embedded_chat_room_id(app, ctx.screen)
+        let room_id = match ctx.screen {
+            Screen::Clubhouse => app.chat.lounge_room_id(),
+            // Only a seated patron has a composer to feed.
+            Screen::Nightcap => crate::app::clubhouse::nightcap::input::compose_room(app),
+            _ => embedded_chat_room_id(app, ctx.screen),
         };
         // No room on show (synthetic Home entry, chatless table) — nothing
         // for the picker to feed, so don't open it.

@@ -1974,6 +1974,33 @@ fn what_this_room_offers_leads_the_panel_and_the_standing_keys_stay_short() {
     // The waypoint pair is a standing key: mark a spot, warp back to it later.
     assert!(footer_text.contains(": waypoint"), "got {footer_text}");
     assert!(footer_text.contains("/ warp"), "got {footer_text}");
+    // `f follow` gave its place up to the waypoint and lives in the `?` guide.
+    assert!(!footer_text.contains("f follow"), "got {footer_text}");
+
+    // Once a waypoint is fixed, the warp chip names the zone it lands in - the
+    // room panel no longer spends a standing line saying one is set. The zone
+    // is world data of any length, so it is trimmed to the rail it is painted
+    // into rather than chopped at the edge.
+    let mut marked = town.clone();
+    marked.waypoint = Some("The Verdant Highlands".to_string());
+    assert!(
+        footer_hints(&marked, SIDE_MAX as usize).iter().any(|l| l
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>()
+            .contains("/ warp The Verdant Highlands")),
+        "a wide rail should name the waypoint's zone in full"
+    );
+    for width in [SIDE_NARROW as usize, SIDE_WIDE as usize, SIDE_MAX as usize] {
+        for line in footer_hints(&marked, width) {
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(
+                UnicodeWidthStr::width(text.as_str()) <= width,
+                "at width {width} the waypoint chip is clipped: {text:?}"
+            );
+        }
+    }
     // Chat, ranks and leaving live in the `?` guide, not the standing block.
     for gone in ["' say", "! ranks", "Esc leave"] {
         assert!(

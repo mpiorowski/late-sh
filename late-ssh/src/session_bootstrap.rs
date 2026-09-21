@@ -540,6 +540,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         active_users: Some(state.active_users.clone()),
         clubhouse_lobby: Some(state.clubhouse_lobby.clone()),
         nightcap_lobby: Some(state.nightcap_lobby.clone()),
+        nightcap_house: Some(state.nightcap_house.clone()),
         mention_ladders: state.mention_ladders.clone(),
         files: state.config.files.clone(),
         scratchpad_registry: Some(state.scratchpad_registry.clone()),

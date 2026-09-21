@@ -80,6 +80,11 @@ pub struct GhostService {
     chip_service: ChipService,
     clubhouse_lobby: SharedLobby,
     mention_ladders: MentionLadders,
+    /// The bar out back (`app/clubhouse/nightcap`). No AI is allowed in
+    /// it: every listener here drops a message from this room before any
+    /// other check, so the bots never answer, never spend a ladder step,
+    /// and never open a DB connection over what is said there.
+    nightcap_room_id: Uuid,
 }
 
 #[derive(Clone)]
@@ -237,6 +242,7 @@ impl GhostService {
         chip_service: ChipService,
         clubhouse_lobby: SharedLobby,
         mention_ladders: MentionLadders,
+        nightcap_room_id: Uuid,
     ) -> Self {
         Self {
             db,
@@ -248,6 +254,7 @@ impl GhostService {
             chip_service,
             clubhouse_lobby,
             mention_ladders,
+            nightcap_room_id,
         }
     }
 
@@ -379,6 +386,9 @@ impl GhostService {
                 recv_result = events.recv() => {
                     match recv_result {
                         Ok(ChatEvent::MessageCreated { message, target_user_ids, .. }) => {
+                            if self.is_silent_room(message.room_id) {
+                                continue;
+                            }
                             if message.user_id == bot.id || Some(message.user_id) == bartender_id {
                                 continue;
                             }
@@ -419,6 +429,12 @@ impl GhostService {
                 }
             }
         }
+    }
+
+    /// Rooms no bot ever answers in. Today that is the Nightcap bar alone:
+    /// a mention there is just a patron saying a name into a quiet room.
+    fn is_silent_room(&self, room_id: Uuid) -> bool {
+        room_id == self.nightcap_room_id
     }
 
     async fn handle_bot_mention(&self, bot: BotUser, trigger_message: ChatMessage) -> Result<()> {
@@ -563,6 +579,9 @@ impl GhostService {
                 recv_result = events.recv() => {
                     match recv_result {
                         Ok(ChatEvent::MessageCreated { message, target_user_ids, .. }) => {
+                            if self.is_silent_room(message.room_id) {
+                                continue;
+                            }
                             if let Some(targets) = target_user_ids
                                 && !targets.contains(&gb.id)
                             {
@@ -693,6 +712,9 @@ impl GhostService {
                 recv_result = events.recv() => {
                     match recv_result {
                         Ok(ChatEvent::MessageCreated { message, target_user_ids, .. }) => {
+                            if self.is_silent_room(message.room_id) {
+                                continue;
+                            }
                             if message.user_id == bartender.id {
                                 continue;
                             }

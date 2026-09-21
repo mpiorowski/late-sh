@@ -157,7 +157,8 @@ pub struct State {
     /// Process-global clubhouse presence: who sits where, who is walking.
     pub clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby,
     /// Process-global Nightcap seats.
-    pub nightcap_lobby: crate::app::nightcap::lobby::SharedSeats,
+    pub nightcap_lobby: crate::app::clubhouse::nightcap::lobby::SharedSeats,
+    pub nightcap_house: crate::app::clubhouse::nightcap::svc::NightcapHouse,
     /// Process-global ghost-bot mention cooldown ladders: ghost responder
     /// loops step them, sessions peek for the composer cooldown banner.
     pub mention_ladders: crate::app::ai::ladder::MentionLadders,
