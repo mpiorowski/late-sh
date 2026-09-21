@@ -1,20 +1,31 @@
 //! Nightcap's per-session state: which seat (if any) this user holds, the
-//! latest shared snapshot for rendering, the drink menu, the one order in
-//! flight, and the roster-refresh cadence. Pure: the chips move in
-//! `svc.rs`, whose outcome comes back through `outcome_sender` and lands
-//! here on the next tick. See `lobby.rs` for the actual shared seat state.
+//! latest shared snapshots for rendering (seats and wall), the drink menu,
+//! the carving field, the one order in flight, and the roster-refresh
+//! cadence. Pure: the chips and the carvings move in `svc.rs`, whose
+//! outcome comes back through `outcome_sender` and lands here on the next
+//! tick. See `lobby.rs` for the shared seats and `wall.rs` for the wall.
 
+use ratatui_textarea::{TextArea, WrapMode};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use uuid::Uuid;
 
+use late_core::models::nightcap_carving::CARVING_MAX_CHARS;
+
+use crate::app::common::composer::new_themed_textarea;
 use crate::app::common::primitives::thousands;
 use crate::app::games::chips::svc::RoundRefusal;
 
 use super::lobby::{SEAT_COUNT, SeatChange, SeatView, SharedSeats};
+use super::wall::{SharedWall, WallSnapshot};
 
 /// How often (in `tick` calls) the live roster is reconciled against the
 /// shared seats, mirroring the Clubhouse's own cadence.
 const ROSTER_REFRESH_TICKS: u64 = 20;
+
+/// How long the muted TV holds one caption before the next, in world
+/// ticks: about half a minute. Slow on purpose; it is a TV in the corner,
+/// not a ticker.
+const TV_DWELL_TICKS: u64 = 450;
 
 /// The house menu: four fixed pours, priced across the same 100..1000 band
 /// the tavern's bartender quotes, so a drink here buys exactly the buzz it
@@ -62,10 +73,10 @@ pub enum Order {
     Round,
 }
 
-/// How an order settled, as `svc.rs` reports it back. Plain data: the
-/// failure has already been logged where it happened.
+/// How something the house was asked for settled, as `svc.rs` reports it
+/// back. Plain data: the failure has already been logged where it happened.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OrderOutcome {
+pub enum Outcome {
     Poured {
         drink: Drink,
         balance: i64,
@@ -86,36 +97,55 @@ pub enum OrderOutcome {
     },
     RoundRefused(RoundRefusal),
     Failed,
+    Carved {
+        stool: usize,
+    },
+    CarveFailed,
 }
 
 pub struct State {
     lobby: Option<SharedSeats>,
+    wall: Option<SharedWall>,
     user_id: Uuid,
     username: String,
     anim_tick: u64,
     last_roster_tick: u64,
     force_roster_refresh: bool,
     snapshot: [Option<SeatView>; SEAT_COUNT],
+    wall_snapshot: WallSnapshot,
+    /// The last thing that happened on late.sh, for the TV: "name action".
+    last_activity: Option<String>,
     menu_open: bool,
+    /// The line being carved into this session's stool, while `c` is open.
+    carving: Option<TextArea<'static>>,
     order_in_flight: bool,
-    outcome_tx: UnboundedSender<OrderOutcome>,
-    outcome_rx: UnboundedReceiver<OrderOutcome>,
+    outcome_tx: UnboundedSender<Outcome>,
+    outcome_rx: UnboundedReceiver<Outcome>,
     /// Flavor line shown in the footer after the last seat/drink action.
     pub last_message: Option<String>,
 }
 
 impl State {
-    pub fn new(lobby: Option<SharedSeats>, user_id: Uuid, username: String) -> Self {
+    pub fn new(
+        lobby: Option<SharedSeats>,
+        wall: Option<SharedWall>,
+        user_id: Uuid,
+        username: String,
+    ) -> Self {
         let (outcome_tx, outcome_rx) = unbounded_channel();
         Self {
             lobby,
+            wall,
             user_id,
             username,
             anim_tick: 0,
             last_roster_tick: 0,
             force_roster_refresh: true,
             snapshot: std::array::from_fn(|_| None),
+            wall_snapshot: WallSnapshot::default(),
+            last_activity: None,
             menu_open: false,
+            carving: None,
             order_in_flight: false,
             outcome_tx,
             outcome_rx,
@@ -137,6 +167,7 @@ impl State {
             lobby.vacate(self.user_id);
         }
         self.menu_open = false;
+        self.carving = None;
         self.last_message = None;
         self.refresh_snapshot();
     }
@@ -165,14 +196,20 @@ impl State {
     }
 
     pub fn refresh_snapshot(&mut self) {
-        let Some(lobby) = &self.lobby else {
-            return;
-        };
-        self.snapshot = lobby.snapshot();
+        if let Some(lobby) = &self.lobby {
+            self.snapshot = lobby.snapshot();
+        }
+        if let Some(wall) = &self.wall {
+            self.wall_snapshot = wall.snapshot();
+        }
     }
 
     pub fn snapshot(&self) -> &[Option<SeatView>; SEAT_COUNT] {
         &self.snapshot
+    }
+
+    pub fn wall(&self) -> &WallSnapshot {
+        &self.wall_snapshot
     }
 
     pub fn seats_handle(&self) -> Option<SharedSeats> {
@@ -181,6 +218,25 @@ impl State {
 
     pub fn my_seat(&self) -> Option<usize> {
         self.lobby.as_ref()?.seat_of(self.user_id)
+    }
+
+    /// Something happened on late.sh; the TV may show it next.
+    pub fn note_activity(&mut self, username: &str, action: &str) {
+        self.last_activity = Some(format!("{username} {action}"));
+    }
+
+    pub fn last_activity(&self) -> Option<&str> {
+        self.last_activity.as_deref()
+    }
+
+    /// Which of `n` captions the TV is showing right now. The renderer
+    /// assembles the captions it has (some sources are empty some nights)
+    /// and asks for the one to draw.
+    pub fn tv_pick(&self, n: usize) -> usize {
+        if n == 0 {
+            return 0;
+        }
+        ((self.anim_tick / TV_DWELL_TICKS) % n as u64) as usize
     }
 
     /// Only the seated speak here. The composer never opens otherwise, and
@@ -217,9 +273,11 @@ impl State {
             // caller, not just this one.
             SeatChange::OutOfRange => None,
         };
-        // Standing up takes the menu with it: there is no bar to order from.
+        // Standing up takes the menu and the knife with it: there is no bar
+        // to order from and no stool to carve.
         if self.my_seat().is_none() {
             self.menu_open = false;
+            self.carving = None;
         }
         self.refresh_snapshot();
     }
@@ -247,6 +305,63 @@ impl State {
         was_open
     }
 
+    /// `c`: open the carving field for this session's stool. Needs a stool;
+    /// the line goes into the wood under you, nowhere else.
+    pub fn start_carving(&mut self) {
+        if self.my_seat().is_none() {
+            self.note_compose_needs_seat();
+            return;
+        }
+        self.menu_open = false;
+        self.last_message = None;
+        self.carving = Some(new_themed_textarea(
+            "carve a line into the stool",
+            WrapMode::None,
+            true,
+        ));
+    }
+
+    pub fn carving_mut(&mut self) -> Option<&mut TextArea<'static>> {
+        self.carving.as_mut()
+    }
+
+    /// The draft as typed, for the footer while the knife is out.
+    pub fn carving_text(&self) -> Option<String> {
+        self.carving.as_ref().map(|field| field.lines().join(""))
+    }
+
+    /// Put the knife down without carving. Returns whether it was out, so
+    /// Esc can peel it before leaving the room.
+    pub fn cancel_carving(&mut self) -> bool {
+        let was_out = self.carving.is_some();
+        self.carving = None;
+        was_out
+    }
+
+    /// Enter on the carving field: hand the line to the house. `Some` means
+    /// the caller should spawn it (`NightcapHouse::spawn_carve`); `None`
+    /// means there was nothing to carve or no stool under the knife.
+    pub fn take_carving(&mut self) -> Option<(usize, String)> {
+        let field = self.carving.take()?;
+        let body: String = field
+            .lines()
+            .join("")
+            .trim()
+            .chars()
+            .take(CARVING_MAX_CHARS)
+            .collect();
+        if body.is_empty() {
+            self.last_message = Some("nothing to carve.".to_string());
+            return None;
+        }
+        let Some(stool) = self.my_seat() else {
+            self.note_compose_needs_seat();
+            return None;
+        };
+        self.last_message = Some("you carve it into the wood.".to_string());
+        Some((stool, body))
+    }
+
     /// Hand an order to the house. `Some` means the caller should spawn it
     /// (`svc::spawn_order`); `None` means the footer already said why not.
     /// One order at a time: the chips move off-thread and a second press
@@ -269,40 +384,44 @@ impl State {
         Some(order)
     }
 
-    pub fn outcome_sender(&self) -> UnboundedSender<OrderOutcome> {
+    pub fn outcome_sender(&self) -> UnboundedSender<Outcome> {
         self.outcome_tx.clone()
     }
 
-    /// Pull every settled order off the channel; each tick call.
+    /// Pull every settled outcome off the channel; each tick call.
     pub fn drain_outcomes(&mut self) {
         while let Ok(outcome) = self.outcome_rx.try_recv() {
             self.apply_outcome(outcome);
         }
     }
 
-    pub fn apply_outcome(&mut self, outcome: OrderOutcome) {
-        self.order_in_flight = false;
+    pub fn apply_outcome(&mut self, outcome: Outcome) {
+        // A carve is not an order: it never held the one-order-at-a-time
+        // slot, so it must not release one that a pour still holds.
+        if !matches!(outcome, Outcome::Carved { .. } | Outcome::CarveFailed) {
+            self.order_in_flight = false;
+        }
         self.last_message = Some(match outcome {
-            OrderOutcome::Poured { drink, balance } => format!(
+            Outcome::Poured { drink, balance } => format!(
                 "{}, {} chips. {} left on the tab.",
                 drink.name(),
                 thousands(drink.price()),
                 thousands(balance)
             ),
-            OrderOutcome::Comped {
+            Outcome::Comped {
                 drink,
                 remaining: 0,
             } => {
                 format!("{}, on somebody's round.", drink.name())
             }
-            OrderOutcome::Comped { drink, remaining } => format!(
+            Outcome::Comped { drink, remaining } => format!(
                 "{}, on somebody's round. {remaining} more waiting.",
                 drink.name()
             ),
-            OrderOutcome::Bounced { drink } => {
+            Outcome::Bounced { drink } => {
                 format!("your tab won't cover the {}.", drink.name())
             }
-            OrderOutcome::RoundBought {
+            Outcome::RoundBought {
                 patrons,
                 total,
                 balance,
@@ -311,19 +430,21 @@ impl State {
                 thousands(total),
                 thousands(balance)
             ),
-            OrderOutcome::RoundRefused(RoundRefusal::EmptyHouse) => {
+            Outcome::RoundRefused(RoundRefusal::EmptyHouse) => {
                 "nobody else on a stool to buy for.".to_string()
             }
-            OrderOutcome::RoundRefused(RoundRefusal::AllHolding) => {
+            Outcome::RoundRefused(RoundRefusal::AllHolding) => {
                 "everyone here still has a drink coming.".to_string()
             }
-            OrderOutcome::RoundRefused(RoundRefusal::InsufficientChips { patrons, total }) => {
+            Outcome::RoundRefused(RoundRefusal::InsufficientChips { patrons, total }) => {
                 format!(
                     "a round for {patrons} runs {} chips. not tonight.",
                     thousands(total)
                 )
             }
-            OrderOutcome::Failed => "the tap sputtered. try again.".to_string(),
+            Outcome::Failed => "the tap sputtered. try again.".to_string(),
+            Outcome::Carved { stool } => format!("carved into stool {}.", stool + 1),
+            Outcome::CarveFailed => "the knife slipped. try again.".to_string(),
         });
         self.refresh_snapshot();
     }

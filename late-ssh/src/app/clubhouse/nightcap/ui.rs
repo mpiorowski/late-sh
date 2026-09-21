@@ -19,6 +19,7 @@ use ratatui::{
 };
 use uuid::Uuid;
 
+use late_core::api_types::NowPlaying;
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::drinks::drunk_label_word;
 
@@ -31,6 +32,8 @@ use super::state::{Drink, State};
 
 /// The most lines the bar keeps on the wall, whatever the height.
 const MAX_LINES: usize = 8;
+/// The tab board: a title row plus `TAB_BOARD_SIZE` lines.
+const TAB_BOARD_ROWS: u16 = 1 + super::wall::TAB_BOARD_SIZE as u16;
 
 pub(crate) struct NightcapView<'a> {
     pub state: &'a State,
@@ -39,6 +42,8 @@ pub(crate) struct NightcapView<'a> {
     pub usernames: &'a UsernameLookup<'a>,
     /// The tavern's drunk map, so a stool shows the same `(word)` chat does.
     pub drunk_levels: &'a HashMap<Uuid, u8>,
+    /// What the jukebox is playing, one of the TV's captions.
+    pub now_playing: Option<&'a NowPlaying>,
     /// The shared composer block, pinned under the bar. `Some` only while
     /// this session holds a stool: the footer appearing is the "you may
     /// speak" signal.
@@ -73,9 +78,23 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: NightcapView<'_>) {
 }
 
 fn draw_bar(frame: &mut Frame, area: Rect, view: &NightcapView<'_>) {
-    let [header, seats, _gap, lines, footer] = Layout::vertical([
+    let [
+        header,
+        tv,
+        _gap_a,
+        seats,
+        _gap_b,
+        tab,
+        _gap_c,
+        lines,
+        footer,
+    ] = Layout::vertical([
         Constraint::Length(2),
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Length(SEAT_COUNT as u16),
+        Constraint::Length(1),
+        Constraint::Length(TAB_BOARD_ROWS),
         Constraint::Length(1),
         Constraint::Fill(1),
         Constraint::Length(1),
@@ -98,9 +117,82 @@ fn draw_bar(frame: &mut Frame, area: Rect, view: &NightcapView<'_>) {
         header,
     );
 
+    draw_tv(frame, tv, view);
     draw_seats(frame, seats, view);
+    draw_tab_board(frame, tab, view);
     draw_lines(frame, lines, view);
     draw_footer(frame, footer, view.state);
+}
+
+/// The muted TV in the corner: one caption at a time, held for a while,
+/// from whatever the house knows tonight. Nothing here is posted or said;
+/// it is something to look at, and maybe something to talk about.
+fn draw_tv(frame: &mut Frame, area: Rect, view: &NightcapView<'_>) {
+    let mut captions: Vec<String> = Vec::new();
+    if let Some(now) = view.now_playing {
+        captions.push(format!("♪ {}", now.track));
+    }
+    if let Some(activity) = view.state.last_activity() {
+        captions.push(activity.to_string());
+    }
+    let wall = view.state.wall();
+    if let Some(headline) = &wall.headline {
+        captions.push(format!("tonight's paper: {headline}"));
+    }
+    if let Some(piece) = &wall.newest_piece {
+        captions.push(format!(
+            "new on the artboard: \"{}\" by {}",
+            piece.title, piece.artist
+        ));
+    }
+    let caption = match captions.get(view.state.tv_pick(captions.len())) {
+        Some(caption) => caption.clone(),
+        None => "static".to_string(),
+    };
+    let width = area.width.saturating_sub(6) as usize;
+    let caption: String = caption.chars().take(width).collect();
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("▢ tv  ", Style::default().fg(theme::TEXT_FAINT())),
+            Span::styled(caption, Style::default().fg(theme::TEXT_DIM())),
+        ])),
+        area,
+    );
+}
+
+/// The tab board: who has bought the house the most rounds, all time.
+fn draw_tab_board(frame: &mut Frame, area: Rect, view: &NightcapView<'_>) {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let faint = Style::default().fg(theme::TEXT_FAINT());
+    let mut lines = vec![Line::from(Span::styled("the tab · rounds bought", faint))];
+    let tab = &view.state.wall().tab;
+    if tab.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "nobody has bought the stools a round yet.",
+            Style::default()
+                .fg(theme::TEXT_FAINT())
+                .add_modifier(Modifier::ITALIC),
+        )));
+    }
+    for (idx, buyer) in tab.iter().enumerate() {
+        let rounds = if buyer.rounds == 1 { "round" } else { "rounds" };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{} ", idx + 1), faint),
+            Span::styled(
+                buyer.username.clone(),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            ),
+            Span::styled(
+                format!(
+                    "  {} {rounds}  {} chips",
+                    buyer.rounds,
+                    thousands(buyer.chips)
+                ),
+                dim,
+            ),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn draw_seats(frame: &mut Frame, area: Rect, view: &NightcapView<'_>) {
@@ -160,24 +252,43 @@ fn draw_seats(frame: &mut Frame, area: Rect, view: &NightcapView<'_>) {
                     format!("  {}", seated_label(occupant.seated_for)),
                     Style::default().fg(theme::TEXT_FAINT()),
                 ));
+                push_carving(&mut spans, view, idx);
                 Line::from(spans)
             }
-            None => Line::from(vec![
-                Span::styled(
-                    format!("{seat_num} "),
-                    Style::default().fg(theme::TEXT_DIM()),
-                ),
-                Span::styled("○", Style::default().fg(theme::BORDER_DIM())),
-                Span::styled(
-                    " empty stool",
-                    Style::default()
-                        .fg(theme::TEXT_FAINT())
-                        .add_modifier(Modifier::ITALIC),
-                ),
-            ]),
+            None => {
+                let mut spans = vec![
+                    Span::styled(
+                        format!("{seat_num} "),
+                        Style::default().fg(theme::TEXT_DIM()),
+                    ),
+                    Span::styled("○", Style::default().fg(theme::BORDER_DIM())),
+                    Span::styled(
+                        " empty stool",
+                        Style::default()
+                            .fg(theme::TEXT_FAINT())
+                            .add_modifier(Modifier::ITALIC),
+                    ),
+                ];
+                push_carving(&mut spans, view, idx);
+                Line::from(spans)
+            }
         };
         frame.render_widget(Paragraph::new(line), layout[idx]);
     }
+}
+
+/// What is carved into a stool, trailing its row. The wood belongs to the
+/// stool, not the sitter: it shows whether or not anyone is on it.
+fn push_carving(spans: &mut Vec<Span<'static>>, view: &NightcapView<'_>, stool: usize) {
+    let Some(Some(carving)) = view.state.wall().carvings.get(stool) else {
+        return;
+    };
+    spans.push(Span::styled(
+        format!("  ✎ {}", carving.body),
+        Style::default()
+            .fg(theme::TEXT_FAINT())
+            .add_modifier(Modifier::ITALIC),
+    ));
 }
 
 /// How long a stool has been held, coarse on purpose: nobody at a quiet bar
@@ -229,7 +340,17 @@ fn draw_lines(frame: &mut Frame, area: Rect, view: &NightcapView<'_>) {
 fn draw_footer(frame: &mut Frame, area: Rect, state: &State) {
     let key = Style::default().fg(theme::AMBER_DIM());
     let hint = Style::default().fg(theme::TEXT_DIM());
-    let spans = if state.menu_open() {
+    let spans = if let Some(draft) = state.carving_text() {
+        vec![
+            Span::styled("✎ ", key),
+            Span::styled(draft, Style::default().fg(theme::TEXT_BRIGHT())),
+            Span::styled("▏", Style::default().fg(theme::AMBER())),
+            Span::styled("  Enter", key),
+            Span::styled(" carve  ", hint),
+            Span::styled("Esc", key),
+            Span::styled(" drop the knife", hint),
+        ]
+    } else if state.menu_open() {
         let mut spans = Vec::new();
         for (idx, drink) in Drink::MENU.iter().enumerate() {
             spans.push(Span::styled(format!("{} ", idx + 1), key));
@@ -258,6 +379,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &State) {
             Span::styled(" say  ", hint),
             Span::styled("d", key),
             Span::styled(" drinks  ", hint),
+            Span::styled("c", key),
+            Span::styled(" carve  ", hint),
             Span::styled("Esc", key),
             Span::styled(" back to the clubhouse", hint),
         ]

@@ -1912,6 +1912,7 @@ impl App {
                     messages: ctx.nightcap_messages,
                     usernames: ctx.usernames,
                     drunk_levels: ctx.drunk_levels,
+                    now_playing: ctx.now_playing,
                     composer: ctx.nightcap_composer.take(),
                 },
             ),
@@ -2544,7 +2545,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     if screen == Screen::Clubhouse {
         spans.push(Span::styled(
             format!(
-                "· {} inside · Tab/0-5 pages · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance ",
+                "· {} inside · Tab/0-5 pages · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance · n out back ",
                 ctx.clubhouse_state.headcount()
             ),
             Style::default().fg(theme::TEXT_DIM()),

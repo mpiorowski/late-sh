@@ -5,6 +5,7 @@ use crate::app::games::chips::svc::RoundRefusal;
 fn session(seats: &SharedSeats, n: u128) -> State {
     State::new(
         Some(seats.clone()),
+        None,
         Uuid::from_u128(n),
         format!("user{n:03}"),
     )
@@ -102,7 +103,7 @@ fn one_order_at_a_time_until_the_house_answers() {
 
     // The settled order comes back over the channel svc.rs writes to.
     mine.outcome_sender()
-        .send(OrderOutcome::Poured {
+        .send(Outcome::Poured {
             drink: Drink::WhiskeyNeat,
             balance: 1_750,
         })
@@ -122,27 +123,27 @@ fn every_outcome_reads_in_the_footer() {
     let mut mine = session(&seats, 1);
     let cases = [
         (
-            OrderOutcome::Comped {
+            Outcome::Comped {
                 drink: Drink::HouseBeer,
                 remaining: 0,
             },
             "house beer, on somebody's round.",
         ),
         (
-            OrderOutcome::Comped {
+            Outcome::Comped {
                 drink: Drink::TopShelf,
                 remaining: 2,
             },
             "top shelf, on somebody's round. 2 more waiting.",
         ),
         (
-            OrderOutcome::Bounced {
+            Outcome::Bounced {
                 drink: Drink::OldFashioned,
             },
             "your tab won't cover the old fashioned.",
         ),
         (
-            OrderOutcome::RoundBought {
+            Outcome::RoundBought {
                 patrons: 3,
                 total: 300,
                 balance: 12_000,
@@ -150,21 +151,21 @@ fn every_outcome_reads_in_the_footer() {
             "a round for 3, 300 chips. 12,000 left on the tab.",
         ),
         (
-            OrderOutcome::RoundRefused(RoundRefusal::EmptyHouse),
+            Outcome::RoundRefused(RoundRefusal::EmptyHouse),
             "nobody else on a stool to buy for.",
         ),
         (
-            OrderOutcome::RoundRefused(RoundRefusal::AllHolding),
+            Outcome::RoundRefused(RoundRefusal::AllHolding),
             "everyone here still has a drink coming.",
         ),
         (
-            OrderOutcome::RoundRefused(RoundRefusal::InsufficientChips {
+            Outcome::RoundRefused(RoundRefusal::InsufficientChips {
                 patrons: 5,
                 total: 500,
             }),
             "a round for 5 runs 500 chips. not tonight.",
         ),
-        (OrderOutcome::Failed, "the tap sputtered. try again."),
+        (Outcome::Failed, "the tap sputtered. try again."),
     ];
     for (outcome, expected) in cases {
         mine.apply_outcome(outcome);
@@ -228,4 +229,94 @@ fn a_disconnected_patron_loses_their_stool_on_refresh() {
 
     assert_eq!(mine.my_seat(), Some(0));
     assert_eq!(gone.my_seat(), None);
+}
+
+#[test]
+fn the_knife_needs_a_stool_and_carves_one_trimmed_line() {
+    let seats = SharedSeats::new();
+    let mut mine = session(&seats, 1);
+    mine.start_carving();
+    assert_eq!(mine.carving_text(), None);
+    assert_eq!(mine.last_message.as_deref(), Some("take a seat first."));
+
+    mine.toggle_seat(3);
+    mine.start_carving();
+    let field = mine.carving_mut().expect("knife out");
+    field.insert_str("  late again  ");
+    assert_eq!(mine.carving_text().as_deref(), Some("  late again  "));
+
+    assert_eq!(mine.take_carving(), Some((3, "late again".to_string())));
+    assert_eq!(
+        mine.carving_text(),
+        None,
+        "the knife goes back after a carve"
+    );
+    assert_eq!(
+        mine.last_message.as_deref(),
+        Some("you carve it into the wood.")
+    );
+
+    mine.start_carving();
+    assert_eq!(mine.take_carving(), None, "an empty line is not carved");
+    assert_eq!(mine.last_message.as_deref(), Some("nothing to carve."));
+}
+
+#[test]
+fn standing_up_or_esc_drops_the_knife() {
+    let seats = SharedSeats::new();
+    let mut mine = session(&seats, 1);
+    mine.toggle_seat(0);
+    mine.start_carving();
+    assert!(mine.cancel_carving());
+    assert!(!mine.cancel_carving(), "nothing left to drop");
+
+    mine.start_carving();
+    mine.toggle_seat(0);
+    assert_eq!(mine.carving_text(), None, "no stool, nothing to carve");
+}
+
+#[test]
+fn a_carve_settling_never_frees_a_pour_still_in_flight() {
+    let seats = SharedSeats::new();
+    let mut mine = session(&seats, 1);
+    mine.toggle_seat(0);
+    assert_eq!(
+        mine.pick(Order::Drink(Drink::HouseBeer)),
+        Some(Order::Drink(Drink::HouseBeer))
+    );
+
+    mine.apply_outcome(Outcome::Carved { stool: 0 });
+    assert_eq!(mine.last_message.as_deref(), Some("carved into stool 1."));
+    assert_eq!(
+        mine.pick(Order::Round),
+        None,
+        "the pour is still with the house"
+    );
+
+    mine.apply_outcome(Outcome::CarveFailed);
+    assert_eq!(
+        mine.last_message.as_deref(),
+        Some("the knife slipped. try again.")
+    );
+    mine.apply_outcome(Outcome::Bounced {
+        drink: Drink::HouseBeer,
+    });
+    assert_eq!(mine.pick(Order::Round), Some(Order::Round));
+}
+
+#[test]
+fn the_tv_holds_each_caption_for_a_while_and_cycles() {
+    let seats = SharedSeats::new();
+    let mut mine = session(&seats, 1);
+    assert_eq!(mine.tv_pick(0), 0, "no captions, nothing to pick");
+    assert_eq!(mine.tv_pick(3), 0);
+    mine.tick(TV_DWELL_TICKS - 1);
+    assert_eq!(mine.tv_pick(3), 0);
+    mine.tick(TV_DWELL_TICKS);
+    assert_eq!(mine.tv_pick(3), 1);
+    mine.tick(TV_DWELL_TICKS * 3);
+    assert_eq!(mine.tv_pick(3), 0, "wraps around");
+
+    mine.note_activity("mira", "won a crown");
+    assert_eq!(mine.last_activity(), Some("mira won a crown"));
 }

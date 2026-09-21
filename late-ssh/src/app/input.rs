@@ -2327,7 +2327,7 @@ fn dispatch_escape(app: &mut App) {
     // Esc from Nightcap peels the drink menu if it is open, else steps back
     // outside to the Clubhouse.
     if ctx.screen == Screen::Nightcap {
-        if app.nightcap.close_menu() {
+        if app.nightcap.cancel_carving() || app.nightcap.close_menu() {
             return;
         }
         app.set_screen(Screen::Clubhouse);

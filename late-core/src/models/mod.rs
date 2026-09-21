@@ -115,6 +115,7 @@ mod minesweeper_test;
 pub mod moderation_audit_log;
 pub mod mud_character;
 pub mod mud_world_state;
+pub mod nightcap_carving;
 pub mod nonogram;
 pub mod notification;
 #[cfg(test)]

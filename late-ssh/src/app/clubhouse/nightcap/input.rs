@@ -1,11 +1,14 @@
 //! Nightcap input: number keys 1-6 sit in or stand from a seat, `i` (or
 //! Enter) opens the room's composer for a seated patron, `d` opens the house
-//! menu, where `1`-`4` order a pour and `r` buys the other stools a round.
-//! No walking, no mouse handling. Esc is handled centrally by
-//! `app/input.rs::dispatch_escape` (closes the menu, else returns to the
-//! Clubhouse), same as every other contextual screen: it never reaches this
-//! handler. Composing input never reaches it either: the shared composer
-//! gate in `app/input.rs` intercepts first (`screen_composes_chat`).
+//! menu (where `1`-`4` order a pour and `r` buys the other stools a round),
+//! and `c` takes the knife out to carve a line into your stool. While the
+//! knife is out every key goes to that one-line field until Enter carves
+//! or Esc drops it. No walking, no mouse handling. Esc is handled centrally
+//! by `app/input.rs::dispatch_escape` (drops the knife, closes the menu,
+//! else returns to the Clubhouse), same as every other contextual screen:
+//! it never reaches this handler. Composing input never reaches it either:
+//! the shared composer gate in `app/input.rs` intercepts first
+//! (`screen_composes_chat`).
 //!
 //! Unlike the Clubhouse and the Undercity, this screen does claim keys the
 //! global handler wants (`1`-`6` are the page digits, and `v` arms a music
@@ -15,6 +18,9 @@
 
 use uuid::Uuid;
 
+use late_core::models::nightcap_carving::CARVING_MAX_CHARS;
+
+use crate::app::common::textarea_input::{EditOutcome, handle_single_line_edit};
 use crate::app::input::ParsedInput;
 use crate::app::state::App;
 
@@ -32,6 +38,24 @@ pub fn compose_room(app: &App) -> Option<Uuid> {
 }
 
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
+    // The knife is out: the field owns every key. Digits are text here,
+    // not stools, and `?` is a character, not the help guide.
+    if let Some(field) = app.nightcap.carving_mut() {
+        app.music_prefix_armed = false;
+        match handle_single_line_edit(field, event, CARVING_MAX_CHARS) {
+            EditOutcome::Submit => {
+                if let Some((stool, body)) = app.nightcap.take_carving() {
+                    app.nightcap_carve(stool, body);
+                }
+            }
+            EditOutcome::Cancel => {
+                app.nightcap.cancel_carving();
+            }
+            EditOutcome::Handled | EditOutcome::Ignored => {}
+        }
+        return true;
+    }
+
     let Some(byte) = event_byte(event) else {
         return false;
     };
@@ -48,6 +72,11 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         b'd' | b'D' => {
             app.music_prefix_armed = false;
             app.nightcap.toggle_menu();
+            true
+        }
+        b'c' | b'C' => {
+            app.music_prefix_armed = false;
+            app.nightcap.start_carving();
             true
         }
         b'1'..=b'6' if app.nightcap.menu_open() => {

@@ -529,6 +529,15 @@ impl ChipLedgerEntry {
     }
 }
 
+/// One line of the tab board, from [`UserChips::top_round_buyers`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoundBuyer {
+    pub user_id: Uuid,
+    pub username: String,
+    pub rounds: i64,
+    pub chips: i64,
+}
+
 /// A user's chips this UTC month, from [`UserChips::month_figures`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MonthChips {
@@ -928,6 +937,33 @@ impl UserChips {
             earned: row.get("earned"),
             net: row.get("net"),
         })
+    }
+
+    /// The house's biggest round buyers, all time, by chips spent: the tab
+    /// board at the bar out back. Every `round_purchase` row counts,
+    /// whichever bar sold the round; the ledger does not say which.
+    pub async fn top_round_buyers(client: &Client, limit: i64) -> Result<Vec<RoundBuyer>> {
+        let rows = client
+            .query(
+                "SELECT l.user_id, u.username, count(*) AS rounds, sum(-l.delta)::BIGINT AS chips
+                 FROM chip_ledger l
+                 JOIN users u ON u.id = l.user_id
+                 WHERE l.reason = $1
+                 GROUP BY l.user_id, u.username
+                 ORDER BY chips DESC, rounds DESC, u.username ASC
+                 LIMIT $2",
+                &[&ChipMove::RoundPurchase.reason(), &limit],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| RoundBuyer {
+                user_id: row.get("user_id"),
+                username: row.get("username"),
+                rounds: row.get("rounds"),
+                chips: row.get("chips"),
+            })
+            .collect())
     }
 
     /// All user chip balances (for per-user lookup in leaderboard refresh).

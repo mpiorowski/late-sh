@@ -132,6 +132,13 @@ pub enum ApplauseOutcome {
     Closed,
 }
 
+/// The newest hanging piece, from [`ArtboardPiece::newest_hung`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NewestPiece {
+    pub title: String,
+    pub artist: String,
+}
+
 /// One place on last month's podium: the rank the award minted (1 is
 /// `ART1`) and the piece that hangs for it.
 #[derive(Clone, Debug, PartialEq)]
@@ -380,6 +387,26 @@ impl ArtboardPiece {
     /// place travels with the row, so a removal leaves a gap instead of
     /// promoting whoever stood behind; a hanger with nothing left up is
     /// off the podium. Empty until the award pass has run.
+    /// The newest piece still hanging, by title and artist: the line the
+    /// Nightcap wall shows. No viewer, so no applause read.
+    pub async fn newest_hung(client: &impl GenericClient) -> Result<Option<NewestPiece>> {
+        let row = client
+            .query_opt(
+                "SELECT p.title, u.username
+                 FROM artboard_pieces p
+                 JOIN users u ON u.id = p.user_id
+                 WHERE p.removed_at IS NULL
+                 ORDER BY p.created DESC
+                 LIMIT 1",
+                &[],
+            )
+            .await?;
+        Ok(row.map(|row| NewestPiece {
+            title: row.get("title"),
+            artist: row.get("username"),
+        }))
+    }
+
     pub async fn previous_month_podium(client: &impl GenericClient) -> Result<Vec<PodiumPiece>> {
         let rows = client
             .query(

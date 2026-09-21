@@ -21,10 +21,10 @@ pub const MAP_H: u16 = 50;
 #[rustfmt::skip]
 pub const MAP: [&str; MAP_H as usize] = [
     "╔═══════════════════════════════════════════════════════════════════════════════╡ ☾ THE LATE LOUNGE ☽ ╞════════════════════════════════════════════════════════════════════════════════╗",
-    "║▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔         ╭──────┬──────╮     ╭───────────╮                         ╭───────────╮     ╔═════════╗   ╭──────┬──────╮            ║",
-    "║   ¡   !   ¡   °   !   ¡   !   °   ¡   !   ¡   °   !   ▐         │  ·   │    · │   ╭╯ ♪ JUKEBOX ♪ ╰╮  ╭────────────────╮ ╭╯   DOORS·3   ╰╮   ║ARCADE·2 ║   │  ·   │    · │      ♣♣♣   ║",
-    "║   █   █   █   █   █   █   █   █   █   █   █   █   █   ▐         │    ☾ │  ·   │   │   ▂▄▆█▇▆▄▂    │  │ ☾ late·sh 24/7 │ │   ║ │ ▒ │ ║   │   ║╭───────╮║   │ ·    │    · │     ♣♣♣♣♣  ║",
-    "║ ───────────────────────────────────────────────────── ▐         ├──────┼──────┤   │   [·······]   │  ╰────────────────╯ │   ║ │ ○ │ ║   │   ║│ ▄▀▄ · │║   ├──────┼──────┤      ♣♣♣   ║",
+    "║▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔╭─────╮  ╭──────┬──────╮     ╭───────────╮                         ╭───────────╮     ╔═════════╗   ╭──────┬──────╮            ║",
+    "║   ¡   !   ¡   °   !   ¡   !   °   ¡   !   ¡   °   !   ▐│ out │  │  ·   │    · │   ╭╯ ♪ JUKEBOX ♪ ╰╮  ╭────────────────╮ ╭╯   DOORS·3   ╰╮   ║ARCADE·2 ║   │  ·   │    · │      ♣♣♣   ║",
+    "║   █   █   █   █   █   █   █   █   █   █   █   █   █   ▐│ back│  │    ☾ │  ·   │   │   ▂▄▆█▇▆▄▂    │  │ ☾ late·sh 24/7 │ │   ║ │ ▒ │ ║   │   ║╭───────╮║   │ ·    │    · │     ♣♣♣♣♣  ║",
+    "║ ───────────────────────────────────────────────────── ▐│  ○  │  ├──────┼──────┤   │   [·······]   │  ╰────────────────╯ │   ║ │ ○ │ ║   │   ║│ ▄▀▄ · │║   ├──────┼──────┤      ♣♣♣   ║",
     "║      Y     Y     Y     Y     Y     Y     Y     Y      ▐         │ ·    │   ·  │   │   ▞▚ ▞▚ ▞▚    │                     │   ║ │ ▒ │ ║   │   ║╰───────╯║   │ ·    │   ·  │      ╰─╯   ║",
     "║                                               [$]     ▐         │      │ ·    │   ╰───○───────○───╯                     ╰───────────────╯   ║ ┃  ● ●  ║   │      │ ·    │            ║",
     "║                                                       ▐ ╭──╮    ╰──────┴──────╯                                                             ╚═════════╝   ╰──────┴──────╯            ║",
@@ -269,6 +269,14 @@ pub const JUKEBOX: Zone = Zone {
     x1: 100,
     y1: 6,
 };
+/// The back door, just past the end of the counter: out to Nightcap, the
+/// quiet bar (`nightcap/`).
+pub const BACK_DOOR: Zone = Zone {
+    x0: 57,
+    y0: 1,
+    x1: 63,
+    y1: 4,
+};
 /// The big wooden door to the door games (page 3).
 pub const DOORS: Zone = Zone {
     x0: 122,
@@ -406,6 +414,8 @@ impl Zone {
 /// Interactive props, in popover priority order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Interactive {
+    /// The back door out to Nightcap.
+    BackDoor,
     Bartender,
     Jukebox,
     Arcade,
@@ -420,6 +430,11 @@ pub enum Interactive {
 /// The prop the player is close enough to interact with, if any. The dog
 /// wanders (lobby state), so its current body-center cell is passed in.
 pub fn nearest_interactive(x: u16, y: u16, dog: (u16, u16)) -> Option<Interactive> {
+    // Before the bar: the door sits at the counter's end, and the counter's
+    // approach apron reaches the cells in front of it.
+    if BACK_DOOR.distance(x, y) <= 2 {
+        return Some(Interactive::BackDoor);
+    }
     if BAR_APPROACH.distance(x, y) <= 2 {
         return Some(Interactive::Bartender);
     }

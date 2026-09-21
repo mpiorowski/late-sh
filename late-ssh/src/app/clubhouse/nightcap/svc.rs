@@ -10,17 +10,130 @@
 //! be cashed in either room. Only the ordering differs: a fixed menu, no
 //! conversation.
 
+use std::time::Duration;
+
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
+use late_core::db::Db;
+use late_core::models::artboard_piece::ArtboardPiece;
+use late_core::models::article::Article;
+use late_core::models::chips::UserChips;
 use late_core::models::drink_round::ROUND_PRICE_PER_PATRON;
+use late_core::models::nightcap_carving::Carving;
+use late_core::shutdown::CancellationToken;
 
 use crate::app::clubhouse::lobby::SharedLobby;
 use crate::app::games::chips::svc::{ChipService, RoundError};
 use crate::metrics;
 
 use super::lobby::SharedSeats;
-use super::state::{Order, OrderOutcome};
+use super::state::{Order, Outcome};
+use super::wall::{SharedWall, TAB_BOARD_SIZE, WallSnapshot};
+
+/// How often the wall is re-read for the whole process. The TV, the tab
+/// board and the carvings all move slowly; a carve shows at once anyway.
+pub const WALL_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
+
+/// The house's process-global handle: the DB and the shared wall. Built in
+/// `main.rs`, threaded into sessions like the seats, and the only thing at
+/// this bar that can read or write a table.
+#[derive(Clone)]
+pub struct NightcapHouse {
+    db: Db,
+    wall: SharedWall,
+}
+
+impl NightcapHouse {
+    pub fn new(db: Db, wall: SharedWall) -> Self {
+        Self { db, wall }
+    }
+
+    pub fn wall(&self) -> SharedWall {
+        self.wall.clone()
+    }
+
+    /// Re-read the wall now and then every [`WALL_REFRESH_INTERVAL`] until
+    /// shutdown. One task per process.
+    pub fn spawn_wall_refresh_task(
+        self,
+        shutdown: CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(WALL_REFRESH_INTERVAL);
+            tracing::info!("nightcap wall refresher started");
+            loop {
+                tokio::select! {
+                    _ = shutdown.cancelled() => {
+                        tracing::info!("nightcap wall refresher shutting down");
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        if let Err(error) = self.refresh_wall().await {
+                            tracing::warn!(error = ?error, "failed to refresh the nightcap wall");
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    async fn refresh_wall(&self) -> anyhow::Result<()> {
+        let client = self.db.get().await?;
+        let headline = Article::list_recent(&client, 1)
+            .await?
+            .into_iter()
+            .next()
+            .map(|article| article.title);
+        let newest_piece = ArtboardPiece::newest_hung(&client).await?;
+        let tab = UserChips::top_round_buyers(&client, TAB_BOARD_SIZE).await?;
+        let mut carvings: [Option<Carving>; super::lobby::SEAT_COUNT] =
+            std::array::from_fn(|_| None);
+        for carving in Carving::list(&client).await? {
+            if let Some(slot) = carvings.get_mut(carving.stool as usize) {
+                *slot = Some(carving);
+            }
+        }
+        self.wall.set(WallSnapshot {
+            headline,
+            newest_piece,
+            tab,
+            carvings,
+        });
+        Ok(())
+    }
+
+    /// Carve a seated patron's line into their stool. Fire-and-forget from
+    /// the input path; the outcome arrives on `outcome_tx`, and the wall is
+    /// updated in place so every session sees the line at once.
+    pub fn spawn_carve(
+        self,
+        user_id: Uuid,
+        stool: usize,
+        body: String,
+        outcome_tx: UnboundedSender<Outcome>,
+    ) {
+        tokio::spawn(async move {
+            let outcome = match self.carve(user_id, stool, &body).await {
+                Ok(carving) => {
+                    tracing::info!(user_id = %user_id, stool, body = %carving.body, "nightcap stool carved");
+                    self.wall.set_carving(carving);
+                    Outcome::Carved { stool }
+                }
+                Err(error) => {
+                    tracing::error!(error = ?error, user_id = %user_id, stool, "nightcap carve failed");
+                    Outcome::CarveFailed
+                }
+            };
+            let _ = outcome_tx.send(outcome);
+        });
+    }
+
+    async fn carve(&self, user_id: Uuid, stool: usize, body: &str) -> anyhow::Result<Carving> {
+        let client = self.db.get().await?;
+        Carving::carve(&client, stool as i16, user_id, body).await
+    }
+}
 
 /// How a single-drink order settled, for the counter's label.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,7 +153,7 @@ pub fn spawn_order(
     seats: SharedSeats,
     user_id: Uuid,
     order: Order,
-    outcome_tx: UnboundedSender<OrderOutcome>,
+    outcome_tx: UnboundedSender<Outcome>,
 ) {
     tokio::spawn(async move {
         let outcome = match order {
@@ -61,7 +174,7 @@ async fn order_drink(
     seats: &SharedSeats,
     user_id: Uuid,
     drink: super::state::Drink,
-) -> OrderOutcome {
+) -> Outcome {
     // A banked round credit pays first, as it does at the counter.
     match chip_service.cash_round_drink(user_id).await {
         Ok(Some(comped)) => {
@@ -78,7 +191,7 @@ async fn order_drink(
                 remaining = comped.remaining,
                 "nightcap poured against a round credit"
             );
-            return OrderOutcome::Comped {
+            return Outcome::Comped {
                 drink,
                 remaining: comped.remaining,
             };
@@ -87,7 +200,7 @@ async fn order_drink(
         Err(error) => {
             metrics::record_nightcap_order(NightcapOrderResult::Failed);
             tracing::error!(error = ?error, user_id = %user_id, "nightcap credit check failed");
-            return OrderOutcome::Failed;
+            return Outcome::Failed;
         }
     }
 
@@ -108,7 +221,7 @@ async fn order_drink(
                 new_balance = purchase.balance,
                 "nightcap poured a drink"
             );
-            OrderOutcome::Poured {
+            Outcome::Poured {
                 drink,
                 balance: purchase.balance,
             }
@@ -116,12 +229,12 @@ async fn order_drink(
         // The floor guard refused the pour. Nothing charged, nothing poured.
         Ok(None) => {
             metrics::record_nightcap_order(NightcapOrderResult::Bounced);
-            OrderOutcome::Bounced { drink }
+            Outcome::Bounced { drink }
         }
         Err(error) => {
             metrics::record_nightcap_order(NightcapOrderResult::Failed);
             tracing::error!(error = ?error, user_id = %user_id, drink = drink.name(), "nightcap pour failed");
-            OrderOutcome::Failed
+            Outcome::Failed
         }
     }
 }
@@ -131,7 +244,7 @@ async fn order_round(
     drunk_lobby: Option<&SharedLobby>,
     seats: &SharedSeats,
     buyer_id: Uuid,
-) -> OrderOutcome {
+) -> Outcome {
     // A round here is for the stools, not for everyone online: the buyer
     // can see exactly who they are buying for.
     let patrons = seats.seated_ids_excluding(buyer_id);
@@ -153,7 +266,7 @@ async fn order_round(
                 new_balance = purchase.balance,
                 "nightcap patron bought the stools a round"
             );
-            OrderOutcome::RoundBought {
+            Outcome::RoundBought {
                 patrons: purchase.patrons,
                 total: purchase.total_chips,
                 balance: purchase.balance,
@@ -161,11 +274,11 @@ async fn order_round(
         }
         Err(RoundError::Refused(refusal)) => {
             metrics::record_round_refused(refusal);
-            OrderOutcome::RoundRefused(refusal)
+            Outcome::RoundRefused(refusal)
         }
         Err(RoundError::Failed(error)) => {
             tracing::error!(error = ?error, user_id = %buyer_id, "nightcap round failed");
-            OrderOutcome::Failed
+            Outcome::Failed
         }
     }
 }

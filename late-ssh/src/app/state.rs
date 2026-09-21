@@ -360,6 +360,7 @@ pub struct SessionConfig {
     /// Process-global Nightcap seats. `None` on headless/test paths, same
     /// as `clubhouse_lobby`.
     pub nightcap_lobby: Option<crate::app::clubhouse::nightcap::lobby::SharedSeats>,
+    pub nightcap_house: Option<crate::app::clubhouse::nightcap::svc::NightcapHouse>,
     /// Process-global ghost-bot mention cooldown ladders, peeked at composer
     /// submit for the cooldown banner. Tests pass a fresh instance.
     pub mention_ladders: crate::app::ai::ladder::MentionLadders,
@@ -538,6 +539,7 @@ pub struct App {
     pub(crate) clubhouse: crate::app::clubhouse::state::State,
     /// Nightcap: the small bar reachable with `n` from the clubhouse.
     pub(crate) nightcap: crate::app::clubhouse::nightcap::state::State,
+    pub(crate) nightcap_house: Option<crate::app::clubhouse::nightcap::svc::NightcapHouse>,
     /// The night city page (`app/deadchannel/city`): where the runner
     /// stands, the open shop panel, the street's last line.
     pub(crate) city: crate::app::deadchannel::city::state::State,
@@ -1454,9 +1456,11 @@ impl App {
             ),
             nightcap: crate::app::clubhouse::nightcap::state::State::new(
                 config.nightcap_lobby.clone(),
+                config.nightcap_house.as_ref().map(|house| house.wall()),
                 config.user_id,
                 config.username.clone(),
             ),
+            nightcap_house: config.nightcap_house,
             city: crate::app::deadchannel::city::state::State::new(),
             chip_service: config.chip_service,
             clubhouse_bartender_id: None,
@@ -2785,6 +2789,15 @@ impl App {
             order,
             self.nightcap.outcome_sender(),
         );
+    }
+
+    /// A seated Nightcap patron carves a line into their stool. `State::take_carving`
+    /// gated it; the house writes it and updates the shared wall in place.
+    pub(crate) fn nightcap_carve(&mut self, stool: usize, body: String) {
+        let Some(house) = self.nightcap_house.clone() else {
+            return;
+        };
+        house.spawn_carve(self.user_id, stool, body, self.nightcap.outcome_sender());
     }
 
     /// Persist "the clubhouse tutorial ran" (fire-and-forget).

@@ -1010,6 +1010,8 @@ impl App {
         let mut refresh_floor = false;
         if let Some(rx) = &mut self.activity_feed_rx {
             while let Ok(event) = rx.try_recv() {
+                // The bar out back's TV shows the last thing that happened.
+                self.nightcap.note_activity(&event.username, &event.action);
                 let Some(user_id) = event.user_id else {
                     continue;
                 };

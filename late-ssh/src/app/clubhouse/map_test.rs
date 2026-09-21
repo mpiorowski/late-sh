@@ -129,6 +129,12 @@ fn interactives_resolve_by_proximity() {
         Some(Interactive::Bartender)
     );
     assert_eq!(nearest_interactive(28, 16, DOG_HOME), None);
+    // In front of the back door, past the end of the counter.
+    assert_eq!(
+        nearest_interactive(60, 6, DOG_HOME),
+        Some(Interactive::BackDoor)
+    );
+    assert!(walkable(60, 6));
     // Next to the jukebox.
     assert_eq!(
         nearest_interactive(82, 4, DOG_HOME),

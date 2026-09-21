@@ -154,6 +154,20 @@ doors = [
 stamp(DOORS_X, DOORS_Y, doors, transparent=True)
 DOORS_ZONE = (DOORS_X, DOORS_Y, DOORS_X + DW - 1, DOORS_Y + 5)
 
+# ---------------------------------------------------------------- the back door
+# Out back to Nightcap, the quiet bar (app/clubhouse/nightcap): a plain door
+# in the back wall just past the end of the counter. Enter in front of it
+# steps outside; `n` does the same from anywhere in the tavern.
+BACK_DOOR_X, BACK_DOOR_Y = 57, 1
+back_door = [
+    '╭─────╮',
+    '│ out │',
+    '│ back│',
+    '│  ○  │',
+]
+stamp(BACK_DOOR_X, BACK_DOOR_Y, back_door, transparent=False)
+BACK_DOOR_ZONE = (BACK_DOOR_X, BACK_DOOR_Y, BACK_DOOR_X + 6, BACK_DOOR_Y + 3)
+
 # ---------------------------------------------------------------- arcade cabinet
 ARC_X, ARC_Y = 142, 1
 arcade = [
@@ -890,6 +904,7 @@ if '--write' in sys.argv or '--emit' in sys.argv:
     print('BAR_COUNTER', (1, 9, BAR_X1, 10), 'BACK_BAR', (1, 2, BAR_X1 - 1, 5))
     print('JUKEBOX', JUKEBOX_ZONE, 'EQ', JUKEBOX_EQ)
     print('DOORS', DOORS_ZONE, 'ARCADE', ARCADE_ZONE, 'SCREEN', ARCADE_SCREEN)
+    print('BACK_DOOR', BACK_DOOR_ZONE)
     print('POKER', POKER_ZONE, 'POOL', POOL_ZONE, 'EASEL', EASEL_ZONE)
     print('FIREPLACE', FIREPLACE_ZONE, 'FIRE_CELLS', FIRE_CELLS)
     print('CANDLES', CANDLES + MANTLE_CANDLES)

@@ -552,3 +552,27 @@ async fn puzzle_art_claims_the_most_applauded_backlog_piece_once_per_day() {
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn the_newest_hanging_piece_names_its_artist() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    assert_eq!(
+        ArtboardPiece::newest_hung(&client)
+            .await
+            .expect("empty wall"),
+        None
+    );
+
+    let first = create_test_user(&test_db.db, "newest-first").await;
+    let second = create_test_user(&test_db.db, "newest-second").await;
+    hang(&client, hang_params(first.id, "dawn", "hash-dawn")).await;
+    let latest = hang(&client, hang_params(second.id, "dusk", "hash-dusk")).await;
+
+    let newest = ArtboardPiece::newest_hung(&client)
+        .await
+        .expect("newest")
+        .expect("something hangs");
+    assert_eq!(newest.title, latest.title);
+    assert_eq!(newest.artist, second.username);
+}
