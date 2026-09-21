@@ -7,7 +7,7 @@
 //! easel jump to their app pages (2/3/4), the poker table opens the Lobby
 //! modal and the pool table opens it on a fresh pool challenge, the jukebox
 //! opens the Music Booth, and the dog gets petted where everyone can see it.
-//! `n` steps outside to Nightcap, the small bar out back (`app/nightcap`).
+//! `n` steps outside to Nightcap, the small bar out back (`app/clubhouse/nightcap`).
 //! Returns `false` for anything it does not own so global keys (numbers,
 //! Tab, `q`, `?`, `v` music chords, ...) keep working. Composing and
 //! chat-overlay input never reaches this handler: the shared composer and

@@ -35,6 +35,37 @@ async fn test_chat_room_lounge_and_language() {
 }
 
 #[tokio::test]
+async fn ensure_nightcap_is_idempotent_and_auto_joined() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let first = ChatRoom::ensure_nightcap(&client)
+        .await
+        .expect("ensure nightcap");
+    let again = ChatRoom::ensure_nightcap(&client)
+        .await
+        .expect("ensure nightcap again");
+
+    assert_eq!(first.id, again.id);
+    assert_eq!(first.kind, "nightcap");
+    assert_eq!(first.slug.as_deref(), Some("nightcap"));
+    assert_eq!(first.visibility, "public");
+    assert!(first.auto_join);
+    assert!(first.permanent);
+
+    // Auto-joined like #lounge: a fresh user holds the room at login
+    // without any per-visit membership write.
+    let patron = create_test_user(&test_db.db, "nightcap_patron").await;
+    ChatRoomMember::auto_join_public_rooms(&client, patron.id)
+        .await
+        .expect("auto join");
+    let rooms = ChatRoom::list_for_user(&client, patron.id)
+        .await
+        .expect("rooms for user");
+    assert!(rooms.iter().any(|room| room.id == first.id));
+}
+
+#[tokio::test]
 async fn test_chat_room_public_and_private_topics() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");

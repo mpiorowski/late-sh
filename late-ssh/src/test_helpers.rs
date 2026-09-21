@@ -298,7 +298,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         pair_ws_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
         active_users,
         clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby::with_seed(7),
-        nightcap_lobby: crate::app::nightcap::lobby::SharedSeats::new(),
+        nightcap_lobby: crate::app::clubhouse::nightcap::lobby::SharedSeats::new(),
         mention_ladders: crate::app::ai::ladder::MentionLadders::new(),
         scratchpad_registry: crate::app::scratchpad::registry::SharedScratchpadRegistry::new(),
         app_flags: crate::app::flags::svc::AppFlagService::new(db.clone()),

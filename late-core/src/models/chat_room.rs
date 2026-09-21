@@ -63,6 +63,28 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
+    /// The small bar out back of the Clubhouse (migration 189): its own
+    /// kind, auto-joined and permanent like #lounge so every session holds
+    /// the room without a membership write per visit, and excluded from
+    /// every listing by kind so it is only ever seen from its own screen.
+    pub async fn ensure_nightcap(client: &Client) -> Result<Self> {
+        let row = client
+            .query_one(
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, permanent, slug)
+                 VALUES ('nightcap', 'public', true, true, $1)
+                 ON CONFLICT (slug) WHERE kind = 'nightcap'
+                 DO UPDATE
+                    SET visibility = 'public',
+                        auto_join = true,
+                        permanent = true,
+                        updated = current_timestamp
+                 RETURNING *",
+                &[&NIGHTCAP_SLUG],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
     pub async fn find_lounge(client: &Client) -> Result<Option<Self>> {
         let row = client
             .query_opt(
@@ -1033,6 +1055,11 @@ pub const DEADCHANNEL_SLUG: &str = "deadchannel";
 /// so every kind whitelist (browse, IRC, the rail's sections) excludes or
 /// places it by construction rather than by slug.
 pub const DEADCHANNEL_KIND: &str = "deadchannel";
+/// The small bar's slug and `chat_rooms.kind` (migration 189), owned by
+/// `ensure_nightcap`. Its own kind so every listing skips it by
+/// construction; see `late-ssh/src/app/clubhouse/nightcap/CONTEXT.md`.
+pub const NIGHTCAP_SLUG: &str = "nightcap";
+pub const NIGHTCAP_KIND: &str = "nightcap";
 
 pub fn canonical_dm_pair(user_a: Uuid, user_b: Uuid) -> (Uuid, Uuid) {
     if user_a.as_u128() < user_b.as_u128() {
@@ -1046,6 +1073,9 @@ fn normalize_topic_slug(slug: &str) -> Result<String> {
     let slug = normalize_room_slug(slug)?;
     if slug == "lounge" {
         bail!("cannot create room with reserved name 'lounge'");
+    }
+    if slug == NIGHTCAP_SLUG {
+        bail!("cannot create room with reserved name 'nightcap'");
     }
     if slug == DEADCHANNEL_SLUG {
         // The game's home channel (GAME.md, First contact): the invitation

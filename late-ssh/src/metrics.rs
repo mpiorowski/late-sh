@@ -10,6 +10,7 @@ use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::chat::news::svc::XMediaLookup;
 use crate::app::chat::svc::GildRefusal;
+use crate::app::clubhouse::nightcap::svc::NightcapOrderResult;
 use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::games::chips::svc::RoundRefusal;
@@ -207,9 +208,9 @@ mod inner {
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
-        GildTier, NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult,
-        PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, RunnerDoor, SongQueueReward,
-        SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
+        GildTier, NewsShareReward, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
+        PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, RunnerDoor,
+        SongQueueReward, SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -549,6 +550,25 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_rounds_refused_total")
                 .with_description("Rounds refused, by reason (none were charged)")
+                .build()
+        })
+    }
+
+    fn nightcap_order_label(result: NightcapOrderResult) -> &'static str {
+        match result {
+            NightcapOrderResult::Poured => "poured",
+            NightcapOrderResult::Comped => "comped",
+            NightcapOrderResult::Bounced => "bounced",
+            NightcapOrderResult::Failed => "failed",
+        }
+    }
+
+    fn nightcap_orders_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_nightcap_orders_total")
+                .with_description("Single-drink orders at the Nightcap bar, by how they settled")
                 .build()
         })
     }
@@ -1137,6 +1157,12 @@ mod inner {
         rounds_refused_total().add(1, &[KeyValue::new("reason", round_refusal_label(refusal))]);
     }
 
+    /// A pour ordered off the Nightcap menu (rounds count under
+    /// `record_round_bought`, whichever bar they were bought at).
+    pub fn record_nightcap_order(result: NightcapOrderResult) {
+        nightcap_orders_total().add(1, &[KeyValue::new("result", nightcap_order_label(result))]);
+    }
+
     /// A patron walked up and drank a credit somebody else paid for.
     pub fn record_round_drink_cashed() {
         round_drinks_cashed_total().add(1, &[]);
@@ -1428,9 +1454,9 @@ mod inner {
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
-        GildTier, NewsShareReward, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult,
-        PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, RunnerDoor, SongQueueReward,
-        SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
+        GildTier, NewsShareReward, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
+        PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, RunnerDoor,
+        SongQueueReward, SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
@@ -1468,6 +1494,7 @@ mod inner {
     pub fn record_crown_take_refused(_refusal: CrownRefusal) {}
     pub fn record_round_bought(_patrons: i64, _chips: i64) {}
     pub fn record_round_refused(_refusal: RoundRefusal) {}
+    pub fn record_nightcap_order(_result: NightcapOrderResult) {}
     pub fn record_round_drink_cashed() {}
     pub fn record_pot_tickets_bought(_tickets: i64, _chips: i64) {}
     pub fn record_pot_buy_refused(_refusal: PotRefusal) {}

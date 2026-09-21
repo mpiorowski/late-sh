@@ -125,6 +125,10 @@ async fn main() -> anyhow::Result<()> {
             .await
             .context("failed to ensure lounge chat room")?;
         tracing::info!(room_id = %lounge.id, "ensured lounge chat room");
+        let nightcap = ChatRoom::ensure_nightcap(&client)
+            .await
+            .context("failed to ensure nightcap chat room")?;
+        tracing::info!(room_id = %nightcap.id, "ensured nightcap chat room");
     }
     tracing::info!("database initialized and migrations applied");
 
@@ -367,7 +371,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     let clubhouse_lobby = late_ssh::app::clubhouse::lobby::SharedLobby::new();
-    let nightcap_lobby = late_ssh::app::nightcap::lobby::SharedSeats::new();
+    let nightcap_lobby = late_ssh::app::clubhouse::nightcap::lobby::SharedSeats::new();
     let scratchpad_registry = late_ssh::app::scratchpad::registry::SharedScratchpadRegistry::new();
     let mention_ladders = late_ssh::app::ai::ladder::MentionLadders::new();
     let ghost_service = GhostService::new(

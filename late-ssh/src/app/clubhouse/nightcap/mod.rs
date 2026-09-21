@@ -5,4 +5,5 @@
 pub mod input;
 pub mod lobby;
 pub mod state;
+pub mod svc;
 pub mod ui;

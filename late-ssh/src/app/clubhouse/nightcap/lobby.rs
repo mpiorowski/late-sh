@@ -1,12 +1,13 @@
 //! Shared seat state for Nightcap, the small bar out back of the Clubhouse.
 //! Deliberately much smaller than the Clubhouse's `SharedLobby`: there is no
-//! walking, no floor plan, no drunk-decay tracking against the DB — just a
-//! fixed row of seats, who is in which one, and a per-session drink count
-//! for flavor. Wiring "order a drink" into the real chip economy
-//! (`app::games::chips::svc::ChipService::buy_drink`) is a natural
-//! follow-up if this room earns its keep; for now it is cosmetic.
+//! walking, no floor plan, and no drunk map of its own (the tavern's
+//! `SharedLobby` carries drunk state for both rooms). Just a fixed row of
+//! seats, who is in which one, when they sat down, and how many drinks the
+//! house has actually poured them this sitting (`svc.rs` records a pour
+//! only once the chips have moved).
 
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use late_core::MutexRecover;
 use uuid::Uuid;
@@ -16,6 +17,7 @@ pub const SEAT_COUNT: usize = 6;
 struct Occupant {
     user_id: Uuid,
     username: String,
+    sat_at: Instant,
     drinks: u32,
 }
 
@@ -33,9 +35,12 @@ impl SeatsInner {
 }
 
 /// One seat's occupant as shown to the renderer.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SeatView {
+    pub user_id: Uuid,
     pub username: String,
+    /// How long they have held the stool, as of the snapshot.
+    pub seated_for: Duration,
     pub drinks: u32,
 }
 
@@ -127,6 +132,7 @@ impl SharedSeats {
         inner.seats[seat] = Some(Occupant {
             user_id,
             username: username.to_string(),
+            sat_at: Instant::now(),
             drinks: 0,
         });
         SeatChange::SatDown
@@ -136,8 +142,11 @@ impl SharedSeats {
         self.inner.lock_recover().seat_of(user_id)
     }
 
-    /// Order a round. Only works while seated; returns the new drink count.
-    pub fn order_drink(&self, user_id: Uuid) -> Option<u32> {
+    /// A drink landed for this patron (chips moved, or a credit was cashed).
+    /// Returns the new count for the sitting, or `None` when they stood up
+    /// while the order was in flight: the drink still happened, the stool
+    /// just has nobody to show it on.
+    pub fn record_pour(&self, user_id: Uuid) -> Option<u32> {
         let mut inner = self.inner.lock_recover();
         let seat = inner.seat_of(user_id)?;
         let occupant = inner.seats[seat].as_mut()?;
@@ -145,11 +154,26 @@ impl SharedSeats {
         Some(occupant.drinks)
     }
 
+    /// Everyone else on a stool right now: who a round at this bar is for.
+    pub fn seated_ids_excluding(&self, user_id: Uuid) -> Vec<Uuid> {
+        let inner = self.inner.lock_recover();
+        inner
+            .seats
+            .iter()
+            .flatten()
+            .map(|o| o.user_id)
+            .filter(|id| *id != user_id)
+            .collect()
+    }
+
     pub fn snapshot(&self) -> [Option<SeatView>; SEAT_COUNT] {
         let inner = self.inner.lock_recover();
+        let now = Instant::now();
         std::array::from_fn(|i| {
             inner.seats[i].as_ref().map(|o| SeatView {
+                user_id: o.user_id,
                 username: o.username.clone(),
+                seated_for: now.saturating_duration_since(o.sat_at),
                 drinks: o.drinks,
             })
         })

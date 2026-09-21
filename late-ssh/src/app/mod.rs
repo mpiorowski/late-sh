@@ -26,7 +26,6 @@ mod input_flow_test;
 pub(crate) mod leaderboard;
 pub mod lobby;
 pub(crate) mod mod_modal;
-pub mod nightcap;
 pub(crate) mod notify;
 pub mod paper;
 pub mod pet;

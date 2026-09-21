@@ -23,6 +23,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
 | `state.rs` | Per-session view state: camera target, animation clock, latest `LobbySnapshot`, arrival/departure door events, the `Tutorial` state machine. |
 | `input.rs` | Walking (arrows/hjkl), `i` composer, `w`/`x` emotes, `t` bartender mention, Enter on landmarks/dog, tutorial Enter. Returns `false` for globals. |
 | `ui.rs` | Renderer: camera pan, base-grid styling, animations, crowd placement, emote frames, speech bubbles, door ambience, tutorial overlays, prop popovers, composer footer, and any chat overlay that lands here (a `/summary` or reaction list requested on Home; it owns input via `screen_composes_chat`, so it must be drawn). |
+| `nightcap/` | Nightcap, the small bar out back (`n` from the tavern, Esc back): its own `Screen::Nightcap`, `SharedSeats`, and `CONTEXT.md`. A sub-slice, not a sibling domain. |
 
 ## 3. The shared lobby (multiplayer contract)
 
