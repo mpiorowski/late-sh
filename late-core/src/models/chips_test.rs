@@ -1,4 +1,7 @@
 use crate::models::chips::*;
+use crate::models::drink_round::{
+    Bar, DrinkRound, MAX_OPEN_CREDITS, ROUND_CREDIT_TTL_HOURS, ROUND_PRICE_PER_PATRON,
+};
 use crate::test_utils::{create_test_user, test_db};
 use std::collections::HashSet;
 use std::future::poll_fn;
@@ -253,47 +256,51 @@ async fn ensure_writes_the_stipend_once() {
     assert_eq!(rows[0].get::<_, &str>("source_ref"), user.id.to_string());
 }
 
+/// A round at `bar`, charged the way `ChipService::buy_round` charges it:
+/// the ledger row is keyed on the round's id, and that row is the only
+/// thing tying the chips to the bar that sold them.
+async fn buy_round_at(db: &crate::db::Db, buyer: Uuid, bar: Bar, chips: i64, patrons: &[Uuid]) {
+    let mut client = db.get().await.expect("db client");
+    let tx = client.transaction().await.expect("transaction");
+    let grant = DrinkRound::open(
+        &tx,
+        buyer,
+        ROUND_PRICE_PER_PATRON,
+        bar,
+        patrons,
+        ROUND_CREDIT_TTL_HOURS,
+        MAX_OPEN_CREDITS,
+    )
+    .await
+    .expect("round");
+    UserChips::apply(
+        &*tx,
+        buyer,
+        ChipMove::RoundPurchase,
+        chips,
+        &grant.round.id.to_string(),
+    )
+    .await
+    .expect("charge")
+    .expect("affordable");
+    tx.commit().await.expect("commit");
+}
+
+/// The tab board is one bar's own leaderboard: biggest spender first, and
+/// only the rounds that bar sold. A tavern round is bought for everyone
+/// online, so counting it out back would own the board forever.
 #[tokio::test]
-async fn the_tab_board_ranks_round_buyers_by_chips_spent() {
+async fn the_tab_board_ranks_round_buyers_at_its_own_bar() {
     let test_db = test_db().await;
     let generous = create_test_user(&test_db.db, "tab-generous").await;
     let modest = create_test_user(&test_db.db, "tab-modest").await;
+    let patron = create_test_user(&test_db.db, "tab-patron").await;
     let client = test_db.db.get().await.expect("db client");
-    for user in [generous.id, modest.id] {
+    for user in [generous.id, modest.id, patron.id] {
         UserChips::ensure(&client, user).await.expect("ensure");
     }
 
-    UserChips::apply(
-        &**client,
-        generous.id,
-        ChipMove::RoundPurchase,
-        300,
-        "round-a",
-    )
-    .await
-    .expect("round a")
-    .expect("affordable");
-    UserChips::apply(
-        &**client,
-        generous.id,
-        ChipMove::RoundPurchase,
-        100,
-        "round-b",
-    )
-    .await
-    .expect("round b")
-    .expect("affordable");
-    UserChips::apply(
-        &**client,
-        modest.id,
-        ChipMove::RoundPurchase,
-        200,
-        "round-c",
-    )
-    .await
-    .expect("round c")
-    .expect("affordable");
-    // A drink is not a round: it stays off the board.
+    // A drink is not a round: it stays off the board whatever it cost.
     UserChips::apply(
         &**client,
         modest.id,
@@ -304,21 +311,38 @@ async fn the_tab_board_ranks_round_buyers_by_chips_spent() {
     .await
     .expect("drink")
     .expect("affordable");
+    drop(client);
 
-    let board = UserChips::top_round_buyers(&client, 3)
+    buy_round_at(&test_db.db, generous.id, Bar::Nightcap, 300, &[patron.id]).await;
+    buy_round_at(&test_db.db, generous.id, Bar::Nightcap, 100, &[patron.id]).await;
+    buy_round_at(&test_db.db, modest.id, Bar::Nightcap, 200, &[patron.id]).await;
+    // The same buyer's tavern round: off the Nightcap's board entirely.
+    buy_round_at(&test_db.db, generous.id, Bar::Tavern, 400, &[patron.id]).await;
+
+    let client = test_db.db.get().await.expect("db client");
+    let board = UserChips::top_round_buyers(&client, Bar::Nightcap, 3)
         .await
         .expect("board");
-    let names: Vec<(&str, i64, i64)> = board
+    let rows: Vec<(&str, i64, i64)> = board
         .iter()
         .map(|row| (row.username.as_str(), row.rounds, row.chips))
         .collect();
     assert_eq!(
-        names,
+        rows,
         vec![
             (generous.username.as_str(), 2, 400),
             (modest.username.as_str(), 1, 200),
         ]
     );
+
+    let tavern = UserChips::top_round_buyers(&client, Bar::Tavern, 3)
+        .await
+        .expect("tavern board");
+    let rows: Vec<(&str, i64, i64)> = tavern
+        .iter()
+        .map(|row| (row.username.as_str(), row.rounds, row.chips))
+        .collect();
+    assert_eq!(rows, vec![(generous.username.as_str(), 1, 400)]);
 }
 
 /// A gift's two rows each name the other party, so either side of the

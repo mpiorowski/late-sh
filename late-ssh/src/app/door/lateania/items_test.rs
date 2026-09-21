@@ -701,7 +701,7 @@ fn oil_ids_roundtrip_school_and_tier() {
 
 #[test]
 fn a_coat_says_which_school_it_adds_and_for_how_long_not_what_it_sells() {
-    use super::super::svc::{OIL_CHARGES, OIL_PER_TICK, POISON_CHARGES, POISON_PER_TICK};
+    use super::super::svc::{COAT_CHARGES, COAT_PER_TICK};
     use super::{OIL_SCHOOLS, item, oil_id, poison_id};
 
     // Every oil and poison used to report its stat line as "sell 12g" - the
@@ -718,12 +718,12 @@ fn a_coat_says_which_school_it_adds_and_for_how_long_not_what_it_sells() {
                 it.name
             );
             assert!(
-                summary.contains(&format!("+{}", OIL_PER_TICK[t as usize])),
+                summary.contains(&format!("+{}", COAT_PER_TICK[t as usize])),
                 "{} names its rider: {summary:?}",
                 it.name
             );
             assert!(
-                summary.contains(&format!("{OIL_CHARGES} strikes")),
+                summary.contains(&format!("{COAT_CHARGES} strikes")),
                 "{} names its window: {summary:?}",
                 it.name
             );
@@ -735,16 +735,15 @@ fn a_coat_says_which_school_it_adds_and_for_how_long_not_what_it_sells() {
         }
     }
 
-    // The poison is the other half of the same choice - a bigger rider over a
-    // shorter window - so it is stated in the same terms, or the two cannot be
-    // compared.
+    // The poison vial is a coat like any other - same rider, same window, its
+    // own school - so it is stated in exactly the same terms.
     for t in 0..6u32 {
         let it = item(poison_id(t)).expect("poison exists");
         let summary = it.stat_summary();
         assert!(
             summary.contains("poison")
-                && summary.contains(&format!("+{}", POISON_PER_TICK[t as usize]))
-                && summary.contains(&format!("{POISON_CHARGES} strikes")),
+                && summary.contains(&format!("+{}", COAT_PER_TICK[t as usize]))
+                && summary.contains(&format!("{COAT_CHARGES} strikes")),
             "{} states its rider and window: {summary:?}",
             it.name
         );

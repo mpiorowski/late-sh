@@ -2788,8 +2788,33 @@ impl App {
             self.chip_service.clone(),
             self.clubhouse.lobby_handle(),
             seats,
+            self.nightcap_voice(),
             self.user_id,
             order,
+            self.nightcap.outcome_sender(),
+        );
+    }
+
+    /// How the Nightcap announces a drink that landed: a `system` line in
+    /// the room, so the other stools see who ordered what. `None` before the
+    /// session's snapshot carries the room, or without a username directory
+    /// to name the drinkers.
+    fn nightcap_voice(&self) -> Option<crate::app::clubhouse::nightcap::svc::HouseVoice> {
+        Some(crate::app::clubhouse::nightcap::svc::HouseVoice::new(
+            self.chat.service.clone(),
+            self.chat.nightcap_room_id()?,
+            self.username_directory.clone()?,
+        ))
+    }
+
+    /// Re-count the drinks this patron has banked from other people's
+    /// rounds, for the menu's `free x2` label. Asked when the menu opens:
+    /// that is the only place the count is printed, and a round bought by
+    /// somebody else can land at any time.
+    pub(crate) fn nightcap_check_credits(&mut self) {
+        crate::app::clubhouse::nightcap::svc::spawn_credit_check(
+            self.chip_service.clone(),
+            self.user_id,
             self.nightcap.outcome_sender(),
         );
     }

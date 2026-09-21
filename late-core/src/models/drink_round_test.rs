@@ -1,7 +1,7 @@
 use crate::{
     models::drink_round::{
-        DrinkCredit, DrinkRound, MAX_OPEN_CREDITS, ROUND_CREDIT_TTL_HOURS, ROUND_PHRASES,
-        ROUND_PRICE_PER_PATRON, contains_round_request, round_phrase_spans,
+        Bar, DrinkCredit, DrinkRound, MAX_OPEN_CREDITS, ROUND_CREDIT_TTL_HOURS, ROUND_DRINK_POINTS,
+        ROUND_PHRASES, ROUND_PRICE_PER_PATRON, contains_round_request, round_phrase_spans,
     },
     test_utils::{create_test_user, test_db},
 };
@@ -99,6 +99,7 @@ async fn credits_stack_to_the_cap_and_no_further() {
             &tx,
             buyer.id,
             ROUND_PRICE_PER_PATRON,
+            Bar::Tavern,
             &[patron.id],
             ROUND_CREDIT_TTL_HOURS,
             MAX_OPEN_CREDITS,
@@ -118,6 +119,7 @@ async fn credits_stack_to_the_cap_and_no_further() {
         &tx,
         buyer.id,
         ROUND_PRICE_PER_PATRON,
+        Bar::Tavern,
         &[patron.id],
         ROUND_CREDIT_TTL_HOURS,
         MAX_OPEN_CREDITS,
@@ -165,6 +167,7 @@ async fn a_banked_tab_is_drunk_one_at_a_time() {
             &tx,
             buyer.id,
             ROUND_PRICE_PER_PATRON,
+            Bar::Tavern,
             &[patron.id],
             ROUND_CREDIT_TTL_HOURS,
             MAX_OPEN_CREDITS,
@@ -223,6 +226,7 @@ async fn a_credit_is_drunk_once_and_expires_on_its_own() {
         &tx,
         buyer.id,
         ROUND_PRICE_PER_PATRON,
+        Bar::Tavern,
         &[patron.id, latecomer.id],
         ROUND_CREDIT_TTL_HOURS,
         MAX_OPEN_CREDITS,
@@ -276,6 +280,64 @@ async fn a_credit_is_drunk_once_and_expires_on_its_own() {
     );
 }
 
+/// What a free drink is worth is set by the bar that bought the round, not
+/// by where it is drunk: a credit is good at either bar. A Nightcap round
+/// pours exactly what its buyer paid a head, because it was bought for the
+/// patrons on the stools who will drink it; the tavern's pours the premium
+/// that covers the room it was bought for and never walks up.
+#[tokio::test]
+async fn a_credit_pours_what_the_bar_that_bought_it_pours() {
+    let test_db = test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let buyer = create_test_user(&test_db.db, "round-bar-buyer").await;
+    let patron = create_test_user(&test_db.db, "round-bar-patron").await;
+
+    let tx = client.transaction().await.expect("tx");
+    DrinkRound::open(
+        &tx,
+        buyer.id,
+        ROUND_PRICE_PER_PATRON,
+        Bar::Nightcap,
+        &[patron.id],
+        ROUND_CREDIT_TTL_HOURS,
+        MAX_OPEN_CREDITS,
+    )
+    .await
+    .expect("a nightcap round");
+    tx.commit().await.expect("commit");
+
+    assert_eq!(
+        DrinkCredit::count_open(&client, patron.id)
+            .await
+            .expect("count"),
+        1,
+        "the menu counts the drink they are holding"
+    );
+
+    let cashed = DrinkCredit::cash(&client, patron.id)
+        .await
+        .expect("cash")
+        .expect("a drink");
+    assert_eq!(cashed.bar, Bar::Nightcap);
+    assert_eq!(
+        cashed.bar.drink_points(),
+        ROUND_PRICE_PER_PATRON,
+        "a nightcap round pours chips to points 1:1"
+    );
+    assert_eq!(
+        Bar::Tavern.drink_points(),
+        ROUND_DRINK_POINTS,
+        "the tavern's round still pours its premium"
+    );
+    assert_eq!(
+        DrinkCredit::count_open(&client, patron.id)
+            .await
+            .expect("count"),
+        0,
+        "the drink they drank is not one they are holding"
+    );
+}
+
 /// An expired credit is still an uncashed row, and under the old
 /// one-per-patron index it went on occupying the patron's only slot. The cap
 /// counts what a patron can actually drink, so a round the patron slept
@@ -292,6 +354,7 @@ async fn an_expired_credit_does_not_block_the_next_round() {
         &tx,
         buyer.id,
         ROUND_PRICE_PER_PATRON,
+        Bar::Tavern,
         &[patron.id],
         ROUND_CREDIT_TTL_HOURS,
         MAX_OPEN_CREDITS,
@@ -314,6 +377,7 @@ async fn an_expired_credit_does_not_block_the_next_round() {
         &tx,
         buyer.id,
         ROUND_PRICE_PER_PATRON,
+        Bar::Tavern,
         &[patron.id],
         ROUND_CREDIT_TTL_HOURS,
         MAX_OPEN_CREDITS,
@@ -345,6 +409,7 @@ async fn rounds_resolve_by_id() {
         &tx,
         buyer.id,
         ROUND_PRICE_PER_PATRON,
+        Bar::Tavern,
         &[patron.id],
         ROUND_CREDIT_TTL_HOURS,
         MAX_OPEN_CREDITS,

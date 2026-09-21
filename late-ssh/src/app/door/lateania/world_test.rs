@@ -2865,7 +2865,7 @@ fn the_world_pass_redistributes_grind_rates_but_never_rebalances_a_class() {
     // coat curve against the real attack bar (both pinned to a live character
     // by svc_test), at the tier where the coat weighs heaviest - so if anyone
     // retunes a coat, this budget moves with it.
-    use super::super::svc::{AUTO_SHARE, OIL_PER_TICK, TIER_ATTACK_BAR};
+    use super::super::svc::{AUTO_SHARE, COAT_PER_TICK, TIER_ATTACK_BAR};
     const AUTO: f64 = AUTO_SHARE;
     const ABILITIES_SHARE: f64 = 1.0 - AUTO_SHARE;
     // The rider a typical coated character carries: the coat curve's mean
@@ -2875,7 +2875,7 @@ fn the_world_pass_redistributes_grind_rates_but_never_rebalances_a_class() {
     // hide behind it, because `the_coat_curves_stay_inside_their_share_of_the
     // _bar` pins every tier to a tight band on the same two constants.
     let oil_rider = (0..6)
-        .map(|t| OIL_PER_TICK[t] as f64 / TIER_ATTACK_BAR[t] as f64 * AUTO_SHARE)
+        .map(|t| COAT_PER_TICK[t] as f64 / TIER_ATTACK_BAR[t] as f64 * AUTO_SHARE)
         .sum::<f64>()
         / 6.0;
     assert!(

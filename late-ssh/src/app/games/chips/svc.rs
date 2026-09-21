@@ -3,8 +3,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::chips::{ChipMove, UserChips};
 use late_core::models::drink_round::{
-    DrinkCredit, DrinkRound, MAX_OPEN_CREDITS, OpenCredit, ROUND_CREDIT_TTL_HOURS,
-    ROUND_DRINK_POINTS,
+    Bar, DrinkCredit, DrinkRound, MAX_OPEN_CREDITS, OpenCredit, ROUND_CREDIT_TTL_HOURS,
 };
 use late_core::models::drinks::UserDrinks;
 use late_core::models::game_payout::{
@@ -204,9 +203,10 @@ impl ChipService {
     /// promised nor promise drinks nobody paid for.
     ///
     /// The buyer is the one person a round can pour into without asking: they
-    /// typed the order. Their drink is the same flat
-    /// [`ROUND_DRINK_POINTS`] every patron's credit cashes for, and it rides
-    /// on the round's price rather than adding a head to it.
+    /// typed the order. Their drink is worth the same as every patron's
+    /// credit off this round ([`Bar::drink_points`], which is why the bar is
+    /// named here), and it rides on the round's price rather than adding a
+    /// head to it.
     ///
     /// `candidates` is the buyer's own presence read, minus the buyer: this
     /// takes the roster it is given and never asks who is online, so the
@@ -218,6 +218,7 @@ impl ChipService {
         &self,
         buyer_id: Uuid,
         price_per_patron: i64,
+        bar: Bar,
         candidates: &[Uuid],
     ) -> Result<RoundPurchase, RoundError> {
         if candidates.is_empty() {
@@ -233,6 +234,7 @@ impl ChipService {
             &tx,
             buyer_id,
             price_per_patron,
+            bar,
             candidates,
             ROUND_CREDIT_TTL_HOURS,
             MAX_OPEN_CREDITS,
@@ -253,7 +255,7 @@ impl ChipService {
                 total,
             }));
         };
-        let drinks = UserDrinks::record_comped_pour(&tx, buyer_id, ROUND_DRINK_POINTS).await?;
+        let drinks = UserDrinks::record_comped_pour(&tx, buyer_id, bar.drink_points()).await?;
         tx.commit().await.context("committing the round")?;
 
         Ok(RoundPurchase {
@@ -275,18 +277,26 @@ impl ChipService {
         DrinkCredit::find_open(&client, user_id).await
     }
 
+    /// How many drinks the patron is holding: the count the Nightcap menu
+    /// prints beside the house beer, the one pour a credit pays for.
+    pub async fn open_round_credits(&self, user_id: Uuid) -> anyhow::Result<i64> {
+        let client = self.db.get().await?;
+        DrinkCredit::count_open(&client, user_id).await
+    }
+
     /// Pour against a round's credit: spend the one closest to expiring and
-    /// record a flat [`ROUND_DRINK_POINTS`] of buzz, with no chip debit
-    /// anywhere. One transaction, so the credit cannot be spent without the
-    /// drink landing. `None` means there was nothing to spend, and the caller
-    /// charges for the pour as usual.
+    /// record the buzz the bar that bought it pours ([`Bar::drink_points`]),
+    /// with no chip debit anywhere. One transaction, so the credit cannot be
+    /// spent without the drink landing. `None` means there was nothing to
+    /// spend, and the caller charges for the pour as usual.
     pub async fn cash_round_drink(&self, user_id: Uuid) -> anyhow::Result<Option<CompedDrink>> {
         let mut client = self.db.get().await?;
         let tx = client.transaction().await?;
         let Some(credit) = DrinkCredit::cash(&tx, user_id).await? else {
             return Ok(None);
         };
-        let drinks = UserDrinks::record_comped_pour(&tx, user_id, ROUND_DRINK_POINTS).await?;
+        let drinks =
+            UserDrinks::record_comped_pour(&tx, user_id, credit.bar.drink_points()).await?;
         tx.commit().await?;
         Ok(Some(CompedDrink {
             round_id: credit.round_id,

@@ -23,9 +23,9 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
 | `lobby.rs` | `SharedSeats`, the process-global `Arc<Mutex<..>>` seat state: who sits where, since when, pours landed this sitting, the seated roster a round is for. |
 | `state.rs` | Per-session view state: seat snapshot, roster-refresh cadence, the `Drink` menu, the one `Order` in flight, the outcome channel, the footer line. Pure; never touches chips. |
 | `wall.rs` | `SharedWall`, the process-global wall snapshot: the TV's headline and newest Artboard piece, the tab board, the carvings by stool. Read-only for sessions. |
-| `svc.rs` | Orchestration: `NightcapHouse` (the DB and the wall) runs the one wall refresh task per process and writes carvings; `spawn_order` places an order off-thread on the chip service, mirrors the buzz into the tavern's drunk map, logs and counts. Both report an `Outcome` back. |
+| `svc.rs` | Orchestration: `NightcapHouse` (the DB and the wall) runs the one wall refresh task per process and writes carvings; `spawn_order` places an order off-thread on the chip service, mirrors the buzz into the tavern's drunk map, says the drink out loud through `HouseVoice`, logs and counts; `spawn_credit_check` counts the drinks a patron is holding. All report an `Outcome` back. |
 | `input.rs` | `1`-`6` sit/stand, `i`/Enter compose (seated only), `d` menu (`1`-`4` pour, `r` a round), `c` the knife; while the knife is out every key goes to the one-line field. `compose_room` is the seat gate the icon picker also asks. |
-| `ui.rs` | Renderer: title, the TV line, stool rows (name, drunk word, pour marks, time on the stool, the carving), the tab board, the last lines, footer or menu or carving field, and the composer block while this session holds a stool. |
+| `ui.rs` | Renderer: title, the TV line, stool rows (name, drunk word, pour marks, time on the stool, the carving), the tab board, the last lines, the notice row, then the key hints (or the menu, or the carving field), and the composer block while this session holds a stool. |
 
 ## 3. The room (chat contract)
 
@@ -125,12 +125,18 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
 
 - The menu is four fixed pours (`state::Drink`, 100 to 1000 chips, the
   same band the tavern's bartender quotes) plus `r`, a round for the other
-  stools at `ROUND_PRICE_PER_PATRON`. No AI, no haggling, nothing posted to
-  the room: the pour shows as `●` marks on the stool row and a footer line.
+  stools at `ROUND_PRICE_PER_PATRON`. No AI and no haggling: the pour shows
+  as `●` marks on the stool row, a footer line for the patron who ordered,
+  and one `system` line in the room for everyone else (§5.1). The house
+  beer's row in the menu carries `(free xN)` while the patron is holding
+  banked drinks; the count is read when the menu opens
+  (`svc::spawn_credit_check`, `DrinkCredit::count_open`) and again from
+  every comped pour's `remaining`, since only the house measure comes off a
+  credit.
 - `svc::spawn_order` runs every order on the same service calls
   `ai/ghost.rs` uses for `@bartender`: a banked round credit is cashed
   first (`ChipService::cash_round_drink`), but only for the house beer
-  (`Drink::on_the_round`), since a credit pours the flat round measure and
+  (`Drink::on_the_round`), since a credit pours the round's flat measure and
   a priced pick names a drink the credit would contradict; otherwise
   `buy_drink` debits
   (ledger reason `drink_purchase`, source_ref = drink name) atomically with
@@ -139,6 +145,16 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   the tavern's `SharedLobby::record_drink`, so the wobble, the passed-out
   figure, and the chat `(word)` follow the patron back inside, and a credit
   bought at either bar can be cashed at either bar.
+- **A round here is priced for a bar that will drink it.** `drink_rounds`
+  carries the bar that sold it (`drink_round::Bar`, migration 191), and the
+  buzz one drink off a round is worth follows it (`Bar::drink_points`): the
+  tavern pours a flat `ROUND_DRINK_POINTS` (400), because it buys for
+  everyone online and most of them never walk up, while a round bought here
+  pours `ROUND_PRICE_PER_PATRON` (100), chips to points 1:1 like every
+  other drink at this bar, because it buys for the patrons on the stools,
+  who are sitting at the bar and will drink it. The credit itself is good
+  at either bar; what it pours is set where it was bought, not where it is
+  drunk.
 - One order at a time per session: `State::pick` refuses while one is in
   flight ("the house is on it."), because the chips move off-thread and a
   second press would double-charge. The outcome returns over the session's
@@ -151,6 +167,30 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   not post to the activity feed (the feed's sender is not threaded into the
   session); the tavern's bartender round does.
 
+## 5.1 The house says what it pours
+
+- Every drink that lands is announced in the room as an ordinary message
+  from the `system` author (`svc::HouseVoice`,
+  `ChatService::send_house_line_task`): `mat orders the whiskey neat
+  (stiff).`, `mat orders the house beer (easy), on mossy's round.`, `mat
+  buys the stools a round: 3 drinks, 300 chips.` The strength word is
+  `Drink::strength`, which follows the price because the price is the buzz.
+  A bounced or failed order says nothing: no chips moved. The footer only
+  ever talks to the patron who ordered; this is how the other stools see
+  it.
+- No `· ` prefix. A prefixed line is an ambient #lounge feed line that
+  `chat/state.rs::filter_messages` strips out of every room's messages and
+  diverts into the activity ticker, so a prefixed line here would never
+  reach the wall it was written for.
+- The author is the same `system` bot the #lounge feed uses, ensured at
+  startup by `activity::lounge::start_lounge_feed_task`; before that lands
+  (or before this session's snapshot carries the room) the house says
+  nothing and the drink still pours. It is not an AI, and the bot listeners
+  never see it: they drop this room before any other check. The comped line
+  names the buyer from `CompedDrink.buyer_user_id`, so a patron always
+  knows whose round they are drinking, and reads "somebody" once that
+  account is gone.
+
 ## 6. The wall (something to look at)
 
 - **The muted TV.** One caption under the title, held about half a minute
@@ -161,9 +201,12 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   newest article's title, and the newest piece hanging on the Artboard.
   Never posted, never spoken. `State::tv_pick` is the clock; `ui.rs`
   assembles the captions it has and asks for one.
-- **The tab board.** The house's three biggest round buyers, all time, by
-  chips (`UserChips::top_round_buyers`, every `round_purchase` ledger row,
-  whichever bar sold it: the ledger does not say which).
+- **The tab board.** This bar's three biggest round buyers, all time, by
+  chips (`UserChips::top_round_buyers(Bar::Nightcap, ..)`). The ledger row
+  does not say which bar took the order, so the round it is keyed on does:
+  the query joins `drink_rounds` on `source_ref` and counts only what was
+  sold here. A tavern round reaches everyone online, so at the same price a
+  head it costs an order of magnitude more and would own the board forever.
 - **Carved into the bar.** Each stool has one line in the wood
   (`nightcap_carvings`, migration 190, `late_core::models::nightcap_carving`),
   written by whoever sits there with `c`, one trimmed line of at most 60
@@ -185,17 +228,21 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   the round roster, roster eviction and relabelling. Pure `SharedSeats`.
 - `state_test.rs`: the seat is given back on `leave_screen`, a taken stool
   reports itself, seated-only compose and order, one order in flight until
-  the channel answers, every `Outcome` footer line, the menu closing on
-  stand/leave, the knife (needs a stool, trims, refuses an empty line,
-  drops on stand/Esc, never frees a pour in flight), the TV clock, the
-  roster cadence. `State::new` takes an
+  the channel answers, every `Outcome` footer line, the banked-drink count
+  (never speaks, never frees a pour, follows a comped pour's `remaining`),
+  the menu closing on stand/leave, the knife (needs a stool, trims, refuses
+  an empty line, drops on stand/Esc, never frees a pour in flight), the TV
+  clock, the roster cadence. `State::new` takes an
   `Option<SharedSeats>`, a `Uuid` and a name, so neither file needs an
   `App` fixture.
 - `chat/state_internal_test.rs` pins that the room is never a list room;
   `late-core` `chat_room_test.rs` pins `ensure_nightcap` as idempotent,
   auto-joined, and seating accounts older than the room;
-  `nightcap_carving_test.rs`, `chips_test.rs` (the tab board) and
-  `artboard_piece_test.rs` (the newest piece) cover the wall's reads.
+  `nightcap_carving_test.rs`, `chips_test.rs` (the tab board counts one
+  bar's rounds and ranks them by chips), `drink_round_test.rs` (a credit
+  pours what the bar that bought it pours, and the open count the menu
+  prints) and `artboard_piece_test.rs` (the newest piece) cover the wall's
+  reads and the round's rails.
 - `clubhouse/map_test.rs` probes the back door (`BACK_DOOR`, a 6-wide
   door at the end of the counter with one cell of air on each side; Enter
   in front of it steps out here).

@@ -94,6 +94,8 @@ pub enum Panel {
 pub enum ClickAction {
     Attack,
     Quaff,
+    /// Coat the weapon with the best-matched coat in the bag.
+    Coat,
     Flee,
     Ability(u8),
     /// Lock onto the foe with this spawn id (a click on its roster row).
@@ -891,6 +893,15 @@ impl State {
         }
     }
 
+    /// Coat the weapon without leaving the combat view, picking the coat the
+    /// foe in front of you likes least. The inventory panel still works; this
+    /// is so a coat doesn't cost a panel and a scroll every forty strikes.
+    pub fn coat(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.coat_task(self.user_id);
+        }
+    }
+
     /// Drop last frame's action-bar hit-map. Called at the top of every draw so a
     /// bar that isn't shown this frame (map open, etc.) leaves nothing clickable.
     pub fn clear_combat_hits(&self) {
@@ -916,6 +927,7 @@ impl State {
         match action {
             ClickAction::Attack => self.attack(),
             ClickAction::Quaff => self.quaff(),
+            ClickAction::Coat => self.coat(),
             ClickAction::Flee => self.flee(),
             ClickAction::Ability(slot) => self.use_ability(slot),
             ClickAction::AttackMob(mob_id) => self.attack_mob(mob_id),

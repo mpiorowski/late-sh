@@ -36,14 +36,68 @@ use uuid::Uuid;
 /// a round is a lot of small kindnesses, not one grand one.
 pub const ROUND_PRICE_PER_PATRON: i64 = 100;
 
-/// The buzz a cashed round drink records, regardless of what the bartender
+/// The buzz a cashed tavern round records, regardless of what the bartender
 /// named or priced the pour at. Four times what the buyer paid for it, and
 /// sized against `drinks::DRUNK_LEVEL_THRESHOLDS`: buzzed starts at 300, so a
 /// flat 300 landed exactly on the line and the first decay tick (334 an hour)
 /// dropped the drinker back to tipsy within seconds of the pour. 400 buys
 /// about eighteen minutes of the level the round is meant to hand out, and is
 /// still gone in a bit over an hour like any other drink.
+///
+/// It is the tavern's number because a tavern round is bought for everyone
+/// online: the buyer pays for twenty and maybe three walk up, so the pours
+/// that do land carry the ones that never happen. See [`Bar::drink_points`].
 pub const ROUND_DRINK_POINTS: i64 = 400;
+
+/// Which bar sold a round (migration 191). Closed, because every read that
+/// branches on it has to say what a Nightcap round means as well as a
+/// tavern one: the two are priced the same a head and buy very different
+/// things.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bar {
+    /// The Clubhouse tavern: @bartender sold it, and it was bought for
+    /// everyone online.
+    Tavern,
+    /// The Nightcap out back: the menu sold it, and it was bought for the
+    /// six stools.
+    Nightcap,
+}
+
+impl Bar {
+    /// The persisted `drink_rounds.bar` value.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Tavern => "tavern",
+            Self::Nightcap => "nightcap",
+        }
+    }
+
+    /// A bar the database wrote. A value outside the CHECK constraint is
+    /// impossible, so this crashes rather than inventing a room.
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "tavern" => Self::Tavern,
+            "nightcap" => Self::Nightcap,
+            other => panic!("unknown drink round bar in the database: {other}"),
+        }
+    }
+
+    /// The buzz one drink off this round records: the buyer's own pour and
+    /// every credit cashed against it.
+    ///
+    /// The tavern pours [`ROUND_DRINK_POINTS`], a flat premium over the
+    /// price a head, because most of the room it was bought for will never
+    /// come and collect. The Nightcap pours exactly what the buyer paid a
+    /// head, chips to points 1:1 like every other drink at that bar: it was
+    /// bought for the patrons on the stools, who are sitting at the bar and
+    /// will drink it.
+    pub const fn drink_points(self) -> i64 {
+        match self {
+            Self::Tavern => ROUND_DRINK_POINTS,
+            Self::Nightcap => ROUND_PRICE_PER_PATRON,
+        }
+    }
+}
 
 /// How many unclaimed drinks one patron may have waiting at once.
 ///
@@ -166,6 +220,9 @@ pub struct DrinkRound {
     /// outlive them.
     pub buyer_user_id: Option<Uuid>,
     pub price_per_patron: i64,
+    /// Where it was bought: what the tab board counts and what a credit off
+    /// it pours ([`Bar::drink_points`]).
+    pub bar: Bar,
     pub created: DateTime<Utc>,
 }
 
@@ -175,6 +232,7 @@ impl From<Row> for DrinkRound {
             id: row.get("id"),
             buyer_user_id: row.get("buyer_user_id"),
             price_per_patron: row.get("price_per_patron"),
+            bar: Bar::from_db(row.get("bar")),
             created: row.get("created"),
         }
     }
@@ -222,6 +280,10 @@ impl From<Row> for OpenCredit {
 pub struct CashedCredit {
     pub round_id: Uuid,
     pub buyer_user_id: Option<Uuid>,
+    /// The bar that bought the round, which decides what this pour is worth
+    /// ([`Bar::drink_points`]). A credit is good at either bar; what it
+    /// pours is set by where it was bought, not where it is drunk.
+    pub bar: Bar,
     /// Open credits still on the patron's tab after this pour. The bartender
     /// says this number out loud, so it is counted by the same statement that
     /// spends the credit rather than read back after it.
@@ -233,6 +295,7 @@ impl From<Row> for CashedCredit {
         Self {
             round_id: row.get("round_id"),
             buyer_user_id: row.get("buyer_user_id"),
+            bar: Bar::from_db(row.get("bar")),
             remaining: row.get("remaining"),
         }
     }
@@ -288,6 +351,7 @@ impl DrinkRound {
         tx: &Transaction<'_>,
         buyer_user_id: Uuid,
         price_per_patron: i64,
+        bar: Bar,
         candidates: &[Uuid],
         ttl_hours: i64,
         max_open: i64,
@@ -300,10 +364,10 @@ impl DrinkRound {
 
         let row = tx
             .query_one(
-                "INSERT INTO drink_rounds (buyer_user_id, price_per_patron)
-                 VALUES ($1, $2)
+                "INSERT INTO drink_rounds (buyer_user_id, price_per_patron, bar)
+                 VALUES ($1, $2, $3)
                  RETURNING *",
-                &[&buyer_user_id, &price_per_patron],
+                &[&buyer_user_id, &price_per_patron, &bar.as_str()],
             )
             .await?;
         let round = Self::from(row);
@@ -361,6 +425,24 @@ impl DrinkCredit {
         Ok(row.map(OpenCredit::from))
     }
 
+    /// How many drinks the patron has waiting, right now: the number the
+    /// Nightcap menu prints next to the house beer, so a patron can see the
+    /// free pours they are holding instead of finding out by ordering.
+    /// Expired credits are not drinks; they are not counted.
+    pub async fn count_open(client: &impl GenericClient, user_id: Uuid) -> Result<i64> {
+        let row = client
+            .query_one(
+                "SELECT count(*)::BIGINT AS open
+                 FROM drink_credits
+                 WHERE user_id = $1
+                   AND cashed_at IS NULL
+                   AND expires_at > current_timestamp",
+                &[&user_id],
+            )
+            .await?;
+        Ok(row.get("open"))
+    }
+
     /// Spend one of the patron's open credits on the drink in front of them:
     /// the one closest to expiring, so a banked drink is never lost to the
     /// clock while a fresher one sits behind it.
@@ -399,6 +481,7 @@ impl DrinkCredit {
                  SELECT
                      cashed.round_id,
                      r.buyer_user_id,
+                     r.bar,
                      (SELECT count(*)
                       FROM drink_credits held
                       WHERE held.user_id = $1
