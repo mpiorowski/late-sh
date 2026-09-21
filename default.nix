@@ -21,6 +21,7 @@
   mold,
   webkitgtk_4_1 ? null,
   xcbuild ? null,
+  xorg ? null,
 }: let
   packageVersion = (builtins.fromTOML (builtins.readFile ./late-ssh/Cargo.toml)).package.version;
   gstPluginsBadNoLv2 =
@@ -164,10 +165,12 @@ in
     # sandbox. `late` itself no longer links WebKitGTK on Linux, but it is
     # still wrapped: the spawned late-webview child inherits these variables.
     postFixup = lib.optionalString stdenv.isLinux ''
-      # WebRTC's voice audio device dlopen()s libpulse.so.0 at runtime, so the
-      # linker never records it and shrink-rpath would drop it. Add it after
-      # fixup, before wrapping, or voice init fails on NixOS.
-      patchelf --add-rpath "${lib.makeLibraryPath [libpulseaudio]}" "$out/bin/late"
+      # WebRTC's voice audio device dlopen()s libpulse.so.0, and the same ADM
+      # Init() then dlopen()s libX11.so.6 for typing detection. The linker
+      # records neither and shrink-rpath would drop them. Add both after
+      # fixup, before wrapping: without libpulse voice init returns an error,
+      # without libX11 the generated trampoline abort()s the whole CLI.
+      patchelf --add-rpath "${lib.makeLibraryPath [libpulseaudio xorg.libX11]}" "$out/bin/late"
 
       for bin in late late-cli late-webview; do
         if [ -x "$out/bin/$bin" ]; then
