@@ -67,6 +67,11 @@ impl ChatRoom {
     /// kind, auto-joined and permanent like #lounge so every session holds
     /// the room without a membership write per visit, and excluded from
     /// every listing by kind so it is only ever seen from its own screen.
+    ///
+    /// Also seats every existing account. Auto-join runs only when an
+    /// account is created, so accounts from before the bar opened would
+    /// otherwise never hold the room, and their owners would sit down with
+    /// nothing to speak into. Idempotent: a conflict is a member already.
     pub async fn ensure_nightcap(client: &Client) -> Result<Self> {
         let row = client
             .query_one(
@@ -82,7 +87,17 @@ impl ChatRoom {
                 &[&NIGHTCAP_SLUG],
             )
             .await?;
-        Ok(Self::from(row))
+        let room = Self::from(row);
+        client
+            .execute(
+                "INSERT INTO chat_room_members (room_id, user_id, last_read_at)
+                 SELECT $1, u.id, current_timestamp
+                 FROM users u
+                 ON CONFLICT (room_id, user_id) DO NOTHING",
+                &[&room.id],
+            )
+            .await?;
+        Ok(room)
     }
 
     pub async fn find_lounge(client: &Client) -> Result<Option<Self>> {

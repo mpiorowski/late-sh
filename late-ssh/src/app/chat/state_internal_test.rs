@@ -800,7 +800,13 @@ fn the_nightcap_room_is_never_a_list_room() {
         true,
         Some("nightcap"),
     );
-    let (lounge, _) = make_room(Uuid::from_u128(10), "lounge", "public", true, Some("lounge"));
+    let (lounge, _) = make_room(
+        Uuid::from_u128(10),
+        "lounge",
+        "public",
+        true,
+        Some("lounge"),
+    );
 
     assert!(is_nightcap_room(&nightcap));
     assert!(!is_chat_list_room(&nightcap));

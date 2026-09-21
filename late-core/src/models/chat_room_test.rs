@@ -66,6 +66,31 @@ async fn ensure_nightcap_is_idempotent_and_auto_joined() {
 }
 
 #[tokio::test]
+async fn ensure_nightcap_seats_accounts_that_predate_the_room() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    // Auto-join only runs when an account is created, so an account from
+    // before the bar opened never joined it. The startup ensure has to
+    // hand every existing account the room, or its owner sits down and
+    // finds no room to speak into.
+    let regular = create_test_user(&test_db.db, "nightcap_regular").await;
+    let before = ChatRoom::list_for_user(&client, regular.id)
+        .await
+        .expect("rooms before");
+    assert!(before.iter().all(|room| room.kind != "nightcap"));
+
+    let room = ChatRoom::ensure_nightcap(&client)
+        .await
+        .expect("ensure nightcap");
+
+    let after = ChatRoom::list_for_user(&client, regular.id)
+        .await
+        .expect("rooms after");
+    assert!(after.iter().any(|joined| joined.id == room.id));
+}
+
+#[tokio::test]
 async fn test_chat_room_public_and_private_topics() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");

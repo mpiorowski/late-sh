@@ -193,6 +193,12 @@ impl State {
         self.last_message = Some("take a seat first.".to_string());
     }
 
+    /// Seated, but the chat snapshot has not carried the room in yet (the
+    /// first second of a session). Say so; "take a seat" would be a lie.
+    pub fn note_room_not_loaded(&mut self) {
+        self.last_message = Some("the bar is still opening up. try again.".to_string());
+    }
+
     /// Sit in / stand from the given 0-based seat, reporting what the press
     /// did. A stool someone else holds is the press this room bounces most
     /// often, and saying nothing there is indistinguishable from a key that

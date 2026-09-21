@@ -40,6 +40,7 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             app.music_prefix_armed = false;
             match compose_room(app) {
                 Some(room_id) => app.chat.start_composing_in_room(room_id),
+                None if app.nightcap.compose_allowed() => app.nightcap.note_room_not_loaded(),
                 None => app.nightcap.note_compose_needs_seat(),
             }
             true

@@ -29,9 +29,12 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
 
 - `chat_rooms.kind = 'nightcap'` (migration 189), slug `nightcap`, public,
   auto-joined and permanent like #lounge, seeded at startup by
-  `ChatRoom::ensure_nightcap` next to `ensure_lounge` (`main.rs`). Every
-  session holds the room after its first room load; a visit never writes a
-  membership row.
+  `ChatRoom::ensure_nightcap` next to `ensure_lounge` (`main.rs`). The
+  ensure also inserts a membership for every existing account, because
+  auto-join runs only at account creation: without it, accounts older than
+  the bar would sit down with no room to speak into. Every session holds
+  the room after its first room load; a visit never writes a membership
+  row. `i` before that load says "the bar is still opening up."
 - Hidden by kind, not by slug: `chat/state.rs::is_chat_list_room` returns
   false for `is_nightcap_room`, which keeps it off the rail, the picker,
   Home's selection fallbacks, and the visual order. Browse lists only
