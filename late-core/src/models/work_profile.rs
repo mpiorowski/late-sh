@@ -1,9 +1,5 @@
-use std::error::Error;
-
 use anyhow::Result;
-use bytes::BytesMut;
 use tokio_postgres::Client;
-use tokio_postgres::types::{FromSql, IsNull, ToSql, Type, to_sql_checked};
 use uuid::Uuid;
 
 /// Whether the person wants to hear about work (migration 041). Closed: the
@@ -155,42 +151,8 @@ impl WorkType {
     }
 }
 
-/// Both enums travel as their `TEXT` column: the model macro reads every
-/// field with `row.get` and writes every param as `&dyn ToSql`, so the
-/// parse and print live here at the row boundary and nowhere else.
-macro_rules! text_column_enum {
-    ($name:ident) => {
-        impl<'a> FromSql<'a> for $name {
-            fn from_sql(ty: &Type, raw: &'a [u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
-                let value = <&str as FromSql>::from_sql(ty, raw)?;
-                Ok(Self::from_db(value))
-            }
-
-            fn accepts(ty: &Type) -> bool {
-                <&str as FromSql>::accepts(ty)
-            }
-        }
-
-        impl ToSql for $name {
-            fn to_sql(
-                &self,
-                ty: &Type,
-                out: &mut BytesMut,
-            ) -> Result<IsNull, Box<dyn Error + Sync + Send>> {
-                <&str as ToSql>::to_sql(&self.as_str(), ty, out)
-            }
-
-            fn accepts(ty: &Type) -> bool {
-                <&str as ToSql>::accepts(ty)
-            }
-
-            to_sql_checked!();
-        }
-    };
-}
-
-text_column_enum!(WorkStatus);
-text_column_enum!(WorkType);
+crate::text_column_enum!(WorkStatus);
+crate::text_column_enum!(WorkType);
 
 // `skills` is what the person wrote, for display; `skills_tags` is the
 // same list run through the tag vocabulary, for the job matcher.

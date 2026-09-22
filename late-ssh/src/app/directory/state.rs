@@ -7,8 +7,8 @@ use super::super::chat::{showcase::svc::ShowcaseFeedItem, work::svc::WorkFeedIte
 use crate::app::common::primitives::format_relative_time_short;
 use late_core::models::{profile::Profile, work_profile::WorkStatus};
 
-/// The two shelves of the work page. Jobs is the remote job feed
-/// (JOBS.md, step 2); until it lands the shelf explains itself.
+/// The two shelves of the work page: the people, and the remote job feed
+/// (`app/jobs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Shelf {
     People,
@@ -196,7 +196,11 @@ impl DirectoryState {
     }
 
     pub(crate) fn toggle_shelf(&mut self) {
-        self.shelf = self.shelf.other();
+        self.set_shelf(self.shelf.other());
+    }
+
+    pub(crate) fn set_shelf(&mut self, shelf: Shelf) {
+        self.shelf = shelf;
         self.detail_open = false;
         self.exit_search();
     }

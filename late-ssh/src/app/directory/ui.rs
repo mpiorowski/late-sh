@@ -19,6 +19,10 @@ use crate::app::{
         editor::ui::{status_color, status_glyph},
         state::{DirectoryState, PersonEntry, PersonFocus, Shelf, person_entries, person_row},
     },
+    jobs::{
+        state::{FOR_YOU_LIMIT, JobsState, matches, viewer_tags, wants_matches},
+        ui::{JobsShelfView, draw_jobs_shelf, footer_note, for_you_lines, shelf_count},
+    },
 };
 
 const PEOPLE_HINTS: &[(&str, &str)] = &[
@@ -50,7 +54,6 @@ const DETAIL_NARROW_HINTS: &[(&str, &str)] = &[
     ("d", "delete"),
     ("o", "card"),
 ];
-const JOBS_HINTS: &[(&str, &str)] = &[("Space", "people"), ("w", "your profile"), ("/", "for me")];
 
 /// Below this width the list and the detail stack instead of sitting side
 /// by side.
@@ -60,6 +63,9 @@ const SHORT_BELOW_HEIGHT: u16 = 24;
 
 pub(crate) struct DirectoryPageView<'a> {
     pub(crate) directory: &'a DirectoryState,
+    pub(crate) jobs: &'a JobsState,
+    /// The viewer's languages from their profile, part of their match tags.
+    pub(crate) viewer_langs: &'a [String],
     pub(crate) projects: &'a [ShowcaseFeedItem],
     pub(crate) people: &'a [WorkFeedItem],
     pub(crate) work_marker: Option<DateTime<Utc>>,
@@ -71,7 +77,9 @@ pub(crate) struct DirectoryPageView<'a> {
 pub(crate) fn draw_directory_page(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>) {
     let narrow = area.width < STACK_BELOW_WIDTH;
     view.directory.set_narrow(narrow);
+    view.jobs.set_narrow(narrow);
     let short = area.height < SHORT_BELOW_HEIGHT;
+    let own_tags = own_viewer_tags(&view);
 
     let search_height = if view.directory.search_mode() { 3 } else { 0 };
     let [strip, search, body, footer] = Layout::vertical([
@@ -94,25 +102,36 @@ pub(crate) fn draw_directory_page(frame: &mut Frame, area: Rect, view: Directory
         .selected()
         .min(entries.len().saturating_sub(1));
 
-    draw_shelf_strip(frame, strip, &view, entries.len());
+    draw_shelf_strip(frame, strip, &view, entries.len(), &own_tags);
     if view.directory.search_mode() {
         draw_search_box(frame, search, view.directory.search_query());
     }
 
     match view.directory.shelf() {
         Shelf::Jobs => {
-            draw_jobs_shelf(frame, body, &view);
-            frame.render_widget(Paragraph::new(hint_line(JOBS_HINTS)), footer);
+            let shelf = JobsShelfView {
+                jobs: view.jobs,
+                viewer_tags: &own_tags,
+                narrow,
+                short,
+            };
+            draw_jobs_shelf(frame, body, &shelf);
+            let line = row_with_hint(
+                hint_line(crate::app::jobs::ui::hints(&shelf)).spans,
+                footer_note(view.jobs),
+                footer.width as usize,
+            );
+            frame.render_widget(Paragraph::new(line), footer);
         }
         Shelf::People => {
             let hints = if !narrow {
                 let cols = Layout::horizontal([Constraint::Percentage(42), Constraint::Fill(1)])
                     .split(body);
                 draw_people_list(frame, cols[0], &view, &entries, selected, short);
-                draw_person_detail(frame, cols[1], &view, entries.get(selected));
+                draw_person_detail(frame, cols[1], &view, entries.get(selected), &own_tags);
                 PEOPLE_HINTS
             } else if view.directory.detail_open() {
-                draw_person_detail(frame, body, &view, entries.get(selected));
+                draw_person_detail(frame, body, &view, entries.get(selected), &own_tags);
                 DETAIL_NARROW_HINTS
             } else {
                 draw_people_list(frame, body, &view, &entries, selected, short);
@@ -134,9 +153,26 @@ pub(crate) fn draw_directory_page(frame: &mut Frame, area: Rect, view: Directory
     }
 }
 
-/// `people 12 · jobs`, the active shelf bright, with the search or the
-/// mine-only filter named on the right when one is on.
-fn draw_shelf_strip(frame: &mut Frame, area: Rect, view: &DirectoryPageView<'_>, people: usize) {
+/// The viewer's match tags: their own card's normalized skills plus their
+/// profile languages.
+fn own_viewer_tags(view: &DirectoryPageView<'_>) -> Vec<String> {
+    let card = view
+        .people
+        .iter()
+        .find(|item| item.profile.user_id == view.current_user_id)
+        .map(|item| &item.profile);
+    viewer_tags(card, view.viewer_langs)
+}
+
+/// `people 12 · jobs 31`, the active shelf bright, with the search named
+/// on the right while it is open.
+fn draw_shelf_strip(
+    frame: &mut Frame,
+    area: Rect,
+    view: &DirectoryPageView<'_>,
+    people: usize,
+    own_tags: &[String],
+) {
     let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
     for (idx, shelf) in [Shelf::People, Shelf::Jobs].into_iter().enumerate() {
         if idx > 0 {
@@ -156,7 +192,7 @@ fn draw_shelf_strip(frame: &mut Frame, area: Rect, view: &DirectoryPageView<'_>,
         spans.push(Span::styled(shelf.title(), style));
         let count = match shelf {
             Shelf::People => Some(people),
-            Shelf::Jobs => None,
+            Shelf::Jobs => shelf_count(view.jobs, own_tags),
         };
         if let Some(count) = count {
             spans.push(Span::styled(
@@ -200,63 +236,6 @@ fn draw_search_box(frame: &mut Frame, area: Rect, query: &str) {
         ])),
         inner,
     );
-}
-
-/// The Jobs shelf before the feed exists: what will be here and how to be
-/// ready for it.
-fn draw_jobs_shelf(frame: &mut Frame, area: Rect, view: &DirectoryPageView<'_>) {
-    let has_card = view
-        .people
-        .iter()
-        .any(|item| item.profile.user_id == view.current_user_id);
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    let mut lines = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "  Remote postings land here.",
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  A daily pull from feeds built to be read: Ask HN Who is hiring,",
-            dim,
-        )),
-        Line::from(Span::styled(
-            "  We Work Remotely, and Jobicy. Remote only, one card a posting, a link out.",
-            dim,
-        )),
-        Line::from(""),
-    ];
-    if has_card {
-        lines.push(Line::from(vec![
-            Span::styled("  Your card is in. ", Style::default().fg(theme::SUCCESS())),
-            Span::styled(
-                "The skills on it are what postings get matched against;",
-                dim,
-            ),
-        ]));
-        lines.push(Line::from(Span::styled(
-            "  the ones the vocabulary knows show under the skills row when you edit.",
-            dim,
-        )));
-    } else {
-        lines.push(Line::from(vec![
-            Span::styled("  Press ", dim),
-            Span::styled(
-                "w",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                " to fill your card: the skills on it are what postings get matched against.",
-                dim,
-            ),
-        ]));
-    }
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
 fn draw_people_list(
@@ -443,6 +422,7 @@ fn draw_person_detail(
     area: Rect,
     view: &DirectoryPageView<'_>,
     entry: Option<&PersonEntry<'_>>,
+    own_tags: &[String],
 ) {
     let block = Block::default()
         .borders(Borders::LEFT)
@@ -581,6 +561,20 @@ fn draw_person_detail(
             let focused = focused_project == Some(item.showcase.id);
             lines.extend(project_lines(item, focused));
         }
+        lines.push(Line::from(""));
+    }
+
+    // FOR YOU: the viewer's own open or casual card gets its matches off
+    // the shelf; anyone else's card, and a not-looking one, does not.
+    if entry.user_id == view.current_user_id
+        && let Some(item) = entry.work
+        && wants_matches(item.profile.status)
+        && view.jobs.enabled()
+        && view.jobs.loaded
+    {
+        let found = matches(&view.jobs.items, own_tags, FOR_YOU_LIMIT);
+        lines.push(section_heading("for you", false));
+        lines.extend(for_you_lines(&found, width));
         lines.push(Line::from(""));
     }
 

@@ -222,7 +222,6 @@ pub(crate) fn normalize(skills: &[String], limit: usize) -> Normalized {
 }
 
 /// Every tag the vocabulary knows, for the job press's extraction schema.
-#[cfg(test)]
 pub(crate) fn all_tags() -> impl Iterator<Item = &'static str> {
     VOCAB.iter().map(|(tag, _)| *tag)
 }

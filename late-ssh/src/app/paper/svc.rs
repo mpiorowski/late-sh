@@ -34,11 +34,13 @@ use late_core::models::artboard_piece::ArtboardPiece;
 use late_core::models::article::Article;
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::chat_room::ChatRoom;
+use late_core::models::job_posting::JobPosting;
 use late_core::models::paper::{
     ANNOUNCEMENTS_SLUG, PaperCandidate, PaperEdition, PaperRoomEdition, PaperRoomPage,
     PaperSection, PaperSectionKind, PaperSectionRow, PaperStatus,
 };
-use late_core::models::user::User;
+use late_core::models::user::{User, extract_langs};
+use late_core::models::work_profile::WorkProfile;
 use tokio::sync::{broadcast, oneshot, watch};
 use tokio_postgres::Client;
 use tracing::Instrument;
@@ -46,12 +48,13 @@ use uuid::Uuid;
 
 use super::state::{
     PAPER_ANNOUNCEMENTS_LIMIT, PAPER_WALL_PIECES, PaperAnnouncement, PaperCommand, PaperLayout,
-    PaperModal, PaperState, PaperWall, PendingFlagWrite,
+    PaperModal, PaperState, PaperWall, PaperWork, PendingFlagWrite,
 };
 use crate::app::ai::ghost::GRAYBEARD_PERSONA;
 use crate::app::ai::svc::AiService;
 use crate::app::artboard::gallery::{svc::GalleryPiece, ui::piece_paint_lines};
 use crate::app::common::primitives::Banner;
+use crate::app::jobs::state::{PAPER_MATCHES, matches, viewer_tags};
 use crate::app::state::App;
 use crate::metrics::{self, PaperOpenResult, PaperPrintResult};
 
@@ -205,6 +208,7 @@ pub struct PaperIssue {
     pub edition: PaperEdition,
     pub announcements: Vec<PaperAnnouncement>,
     pub wall: Vec<PaperWall>,
+    pub work: PaperWork,
 }
 
 #[derive(Clone, Debug)]
@@ -258,6 +262,7 @@ impl PaperService {
             paper_enabled: false,
             paper_outside_enabled: false,
             artboard_gallery_enabled: false,
+            jobs_enabled: false,
         })
     }
 
@@ -888,10 +893,20 @@ impl PaperService {
                 })
                 .collect()
         };
+        // NEW WORK is the paper's one per-reader read: yesterday's
+        // released postings (rows already, printed once for everyone by
+        // the job press), picked against this reader's card. The job
+        // feed's kill switch drops the section.
+        let work = if !self.flags().jobs_enabled {
+            PaperWork::none()
+        } else {
+            read_work(&client, user_id, covered).await?
+        };
         let issue = PaperIssue {
             edition,
             announcements,
             wall,
+            work,
         };
         match trigger {
             PaperTrigger::Login => {
@@ -912,6 +927,30 @@ impl PaperService {
             PaperTrigger::Command => Ok(Opened::Ready(issue)),
         }
     }
+}
+
+/// Yesterday's job releases against one reader: their card (status and
+/// normalized skills) and their profile languages decide the matches.
+async fn read_work(client: &Client, user_id: Uuid, day: NaiveDate) -> anyhow::Result<PaperWork> {
+    let released = JobPosting::list_released_on(client, day).await?;
+    if released.is_empty() {
+        return Ok(PaperWork::none());
+    }
+    let card = WorkProfile::find_by_user_id(client, user_id).await?;
+    let langs = match User::get(client, user_id).await? {
+        Some(user) => extract_langs(&user.settings),
+        None => Vec::new(),
+    };
+    let tags = viewer_tags(card.as_ref(), &langs);
+    let picked: Vec<JobPosting> = matches(&released, &tags, PAPER_MATCHES)
+        .into_iter()
+        .cloned()
+        .collect();
+    Ok(PaperWork {
+        released: released.len(),
+        card: card.map(|card| card.status),
+        matches: picked,
+    })
 }
 
 /// Every `#announcements` post inside `[floor, ceiling)`, oldest first,
@@ -1278,6 +1317,7 @@ fn drain_events(app: &mut App) -> bool {
                                 edition,
                                 announcements,
                                 wall: Vec::new(),
+                                work: PaperWork::none(),
                             },
                         ));
                         Banner::success(&format!("Preview, not printed. {line}"))
@@ -1349,6 +1389,7 @@ fn edition_modal(app: &App, issue: &PaperIssue) -> PaperModal {
         edition: &issue.edition,
         announcements: &issue.announcements,
         wall: &issue.wall,
+        work: &issue.work,
         rail_order: &rail_order,
         member_room_ids: &member_room_ids,
         bumped_labels: &bumped_labels,

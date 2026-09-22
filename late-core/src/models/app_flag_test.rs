@@ -17,6 +17,7 @@ async fn the_seed_loads_and_a_set_flips_one_switch() {
             paper_enabled: true,
             paper_outside_enabled: true,
             artboard_gallery_enabled: true,
+            jobs_enabled: true,
         }
     );
 
@@ -34,6 +35,7 @@ async fn the_seed_loads_and_a_set_flips_one_switch() {
             paper_enabled: true,
             paper_outside_enabled: true,
             artboard_gallery_enabled: true,
+            jobs_enabled: true,
         }
     );
 }
