@@ -1279,12 +1279,10 @@ fn track_aim_always_aims_inside_the_players_land() {
     );
 }
 
-// A tracked destination inside the viewport but never walked used to get
-// nothing at all: `quest_arrows` handed it to the canvas, and the canvas
-// leaves an unvisited room in fog. The whole Sunken Catacombs is one flat
-// 12x8 grid, so every room in it is always on screen and the green arrow
-// could never fire anywhere inside the dungeon - exactly where a player
-// tracking the Bonewright Lich needs it.
+// A tracked destination inside the viewport but never walked gets an arrow:
+// the canvas leaves an unvisited room in fog, so nothing else would mark it.
+// The whole Sunken Catacombs is one flat 12x8 grid, always on screen, which
+// is exactly where a player tracking the Bonewright Lich needs it.
 #[test]
 fn a_tracked_room_still_in_fog_gets_an_arrow_even_on_screen() {
     use std::collections::HashSet;
@@ -1329,4 +1327,25 @@ fn a_tracked_room_still_in_fog_gets_an_arrow_even_on_screen() {
         arrows.is_empty(),
         "a walked room on screen is the canvas's own job"
     );
+}
+
+// Panning the crosshair onto a fogged tracked room (e.g. right after marking
+// it with `x`) leaves no direction to point: the crosshair already marks the
+// cell, so no arrow is drawn there.
+#[test]
+fn a_tracked_room_under_the_crosshair_gets_no_arrow() {
+    use std::collections::HashSet;
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let lich = world
+        .spawns
+        .iter()
+        .find(|s| s.name == "The Bonewright Lich")
+        .expect("the lich spawns")
+        .home;
+    let visited: HashSet<RoomId> = HashSet::from([5000]);
+    let (arrows, beyond) =
+        super::quest_arrows(&coords, coords[&lich], 150, 50, &[lich], &visited);
+    assert_eq!(beyond, 0);
+    assert!(arrows.is_empty(), "got {arrows:?}");
 }

@@ -99,10 +99,9 @@ fn the_summit_is_level_one_hundred() {
     }
 }
 
-// Element choice is a real lever - mobs halve one school and take +50% from
-// another - but the ability rows used to say only what an ability costs and
-// whether it damages, so the half of the matchup the player controls was
-// invisible while the foe panel named the other half out loud.
+// Element choice is a real lever: mobs halve one school and take +50% from
+// another. The foe panel names the foe's half of that matchup, so the ability
+// rows name the half the player controls.
 #[test]
 fn a_damaging_ability_says_which_school_it_lands_in() {
     let named = |name: &str| {

@@ -934,11 +934,6 @@ pub fn map_canvas(
 pub struct MapArrow {
     pub row: usize,
     pub col: usize,
-    /// The signum pair `glyph` draws: which way the target lies from the
-    /// camera. `ui::hug_poi_arrows` needs it to place the arrow outside the
-    /// explored cluster on the side the target is actually on, which the cell
-    /// alone cannot say once the target sits inside that cluster's own box.
-    pub dir: (i32, i32),
     pub glyph: char,
     pub boss: bool,
 }
@@ -953,7 +948,7 @@ fn arrow_glyph(dx: i32, dy: i32) -> char {
         (1, -1) => '\u{2197}',  // ↗
         (-1, 1) => '\u{2199}',  // ↙
         (1, 1) => '\u{2198}',   // ↘
-        _ => '\u{2022}',        // • (shouldn't happen for off-screen)
+        _ => '\u{2022}',        // • (callers skip a zero delta)
     }
 }
 
@@ -971,7 +966,7 @@ pub fn poi_arrows(
     }
     let cx = cols / 2;
     let cy = rows / 2;
-    let mut by_cell: BTreeMap<(usize, usize), ((i32, i32), char, bool)> = BTreeMap::new();
+    let mut by_cell: BTreeMap<(usize, usize), (char, bool)> = BTreeMap::new();
     for (room, poi) in pois() {
         let is_boss = poi.boss.is_some();
         if !is_boss && poi.tameable.is_none() {
@@ -999,23 +994,21 @@ pub fn poi_arrows(
         if (0..cols).contains(&sc) && (0..rows).contains(&sr) {
             continue; // on-screen: the canvas (or fog) handles it
         }
-        let dir = ((c.x - center.x).signum(), (c.y - center.y).signum());
-        let glyph = arrow_glyph(dir.0, dir.1);
+        let glyph = arrow_glyph(c.x - center.x, c.y - center.y);
         let key = (
             sr.clamp(0, rows - 1) as usize,
             sc.clamp(0, cols - 1) as usize,
         );
-        let entry = by_cell.entry(key).or_insert((dir, glyph, is_boss));
-        if is_boss && !entry.2 {
-            *entry = (dir, glyph, true); // a boss outranks a tame arrow on the same cell
+        let entry = by_cell.entry(key).or_insert((glyph, is_boss));
+        if is_boss && !entry.1 {
+            *entry = (glyph, true); // a boss outranks a tame arrow on the same cell
         }
     }
     by_cell
         .into_iter()
-        .map(|((row, col), (dir, glyph, boss))| MapArrow {
+        .map(|((row, col), (glyph, boss))| MapArrow {
             row,
             col,
-            dir,
             glyph,
             boss,
         })
@@ -1043,7 +1036,7 @@ pub fn quest_arrows(
     }
     let cx = cols / 2;
     let cy = rows / 2;
-    let mut by_cell: BTreeMap<(usize, usize), ((i32, i32), char)> = BTreeMap::new();
+    let mut by_cell: BTreeMap<(usize, usize), char> = BTreeMap::new();
     let mut beyond = 0usize;
     for room in targets {
         let Some(&c) = coords.get(room) else {
@@ -1064,25 +1057,28 @@ pub fn quest_arrows(
         // it. On screen but still in fog the canvas draws nothing at all -
         // `map_canvas` emits a `Tile::Room` for visited rooms only - and that
         // is exactly the case tracking exists to serve, a boss you have never
-        // reached. It gets an arrow like any off-screen target.
+        // reached. It gets an arrow like any off-screen target, except under
+        // the crosshair itself, which already marks the cell and leaves no
+        // direction to point.
         if (0..cols).contains(&sc) && (0..rows).contains(&sr) && visited.contains(room) {
             continue;
         }
-        let dir = ((c.x - center.x).signum(), (c.y - center.y).signum());
-        let glyph = arrow_glyph(dir.0, dir.1);
+        if c.x == center.x && c.y == center.y {
+            continue;
+        }
+        let glyph = arrow_glyph(c.x - center.x, c.y - center.y);
         by_cell
             .entry((
                 sr.clamp(0, rows - 1) as usize,
                 sc.clamp(0, cols - 1) as usize,
             ))
-            .or_insert((dir, glyph));
+            .or_insert(glyph);
     }
     let arrows = by_cell
         .into_iter()
-        .map(|((row, col), (dir, glyph))| MapArrow {
+        .map(|((row, col), glyph)| MapArrow {
             row,
             col,
-            dir,
             glyph,
             boss: false,
         })
