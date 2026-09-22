@@ -28,6 +28,7 @@ pub(crate) fn posting(company: &str, tags: &[&str]) -> JobPosting {
         released_on: Some(NaiveDate::from_ymd_opt(2026, 9, 21).unwrap()),
         first_seen: at,
         last_seen: at,
+        posted_by: None,
     }
 }
 
@@ -135,6 +136,11 @@ fn the_jobs_command_parses_its_words_and_gates_the_press() {
         parse_jobs_command("/jobs off"),
         Some(Some(JobsCommand::Off))
     );
+    assert_eq!(
+        parse_jobs_command("/jobs post"),
+        Some(Some(JobsCommand::Post))
+    );
+    assert!(!JobsCommand::Post.admin_only());
     assert_eq!(parse_jobs_command("/jobs now"), Some(None));
     assert_eq!(parse_jobs_command("/jobsboard"), None);
     assert_eq!(parse_jobs_command("hello /jobs"), None);

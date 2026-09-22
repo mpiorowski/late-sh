@@ -2,14 +2,15 @@ use late_core::models::work_profile::WorkProfile;
 use uuid::Uuid;
 
 use super::state::{
-    EscapeOutcome, FieldKind, Page, ProjectRow, ProjectsView, Save, Scope, about_onto_profile,
-    projects_of,
+    EscapeOutcome, Field, FieldKind, Page, ProjectRow, ProjectsView, Save, Scope,
+    about_onto_profile, projects_of,
 };
 use crate::app::common::textarea_input::{
     EditOutcome, handle_multiline_edit, handle_single_line_edit,
 };
 use crate::app::input::{MouseButton, MouseEventKind, ParsedInput};
 use crate::app::state::App;
+use crate::app::tag_picker::{self, state::TagPickerTarget};
 
 const CTRL_S: u8 = 0x13;
 
@@ -169,7 +170,7 @@ fn handle_typing(app: &mut App, event: &ParsedInput) {
         FieldKind::Multi => {
             handle_multiline_edit(app.directory_editor.field_mut(field), event, max)
         }
-        FieldKind::Choice => EditOutcome::Ignored,
+        FieldKind::Choice | FieldKind::Tags => EditOutcome::Ignored,
     };
     match outcome {
         EditOutcome::Handled => {}
@@ -198,7 +199,12 @@ fn handle_row_key(app: &mut App, event: &ParsedInput) {
         ParsedInput::Byte(b'k' | b'K') | ParsedInput::Arrow(b'A') => editor.move_row(-1),
         ParsedInput::Byte(b'h' | b'H') | ParsedInput::Arrow(b'D') => editor.cycle_choice(false),
         ParsedInput::Byte(b'l' | b'L') | ParsedInput::Arrow(b'C') => editor.cycle_choice(true),
-        ParsedInput::Byte(b'\r' | b'e' | b'E' | b'i' | b'I') => editor.start_editing(),
+        // A tag row opens the picker; every other row edits in place.
+        ParsedInput::Byte(b'\r' | b'e' | b'E' | b'i' | b'I') => match editor.active_field() {
+            Some(Field::Skills) => tag_picker::input::open(app, TagPickerTarget::EditorSkills),
+            Some(Field::Langs) => tag_picker::input::open(app, TagPickerTarget::EditorLangs),
+            Some(_) | None => editor.start_editing(),
+        },
         ParsedInput::Byte(0x1B) => {
             let _ = editor.escape();
         }

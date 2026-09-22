@@ -2,10 +2,11 @@ use chrono::{Duration, NaiveDate, Utc};
 use tokio_postgres::Client;
 
 use crate::models::job_posting::{
-    FetchedPosting, JobPosting, JobPressRun, JobRead, JobSource, JobStatus, PressCounts,
-    RemoteKind, Settle, Upsert,
+    FetchedPosting, JobPosting, JobPressRun, JobRead, JobSource, JobStatus, NewPosting,
+    PressCounts, RemoteKind, Retract, Settle, Upsert,
 };
 use crate::test_utils::test_db;
+use uuid::Uuid;
 
 const MAX_ATTEMPTS: i32 = 3;
 
@@ -366,5 +367,101 @@ async fn the_daily_run_is_claimed_once_and_reclaimed_only_when_stale_or_failed()
         )
         .await
         .expect("done stays done")
+    );
+}
+
+/// A posting written on the shelf is active at once, counts against its
+/// writer, and comes down for its writer or a moderator, never for
+/// anyone else; a feed row is out of the take-down's reach.
+#[tokio::test]
+async fn a_posting_written_here_is_active_at_once_and_only_its_writer_or_a_moderator_takes_it_down()
+{
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let writer = Uuid::now_v7();
+    let stranger = Uuid::now_v7();
+    let new = NewPosting {
+        posted_by: writer,
+        url: "https://acme.example/jobs/1".to_string(),
+        company: "Acme".to_string(),
+        title: "Rust Engineer".to_string(),
+        remote_kind: RemoteKind::Regions,
+        regions: vec!["EU".to_string()],
+        tags: vec!["rust".to_string()],
+        pay: "€90k".to_string(),
+        excerpt: "Acme builds tools.".to_string(),
+    };
+    let row = JobPosting::post(&client, &new, day(22))
+        .await
+        .expect("post");
+    assert_eq!(row.source, JobSource::Late);
+    assert_eq!(row.status, JobStatus::Active);
+    assert_eq!(row.released_on, Some(day(22)));
+    assert_eq!(row.posted_by, Some(writer));
+    assert_eq!(row.external_id, row.id.to_string());
+    assert_eq!(
+        JobPosting::count_active_by(&client, writer)
+            .await
+            .expect("count"),
+        1
+    );
+    assert_eq!(
+        JobPosting::count_active_by(&client, stranger)
+            .await
+            .expect("count"),
+        0
+    );
+    let shelf = JobPosting::list_active(&client, 10).await.expect("shelf");
+    assert_eq!(shelf.len(), 1);
+
+    assert_eq!(
+        JobPosting::retract(&client, row.id, stranger, false)
+            .await
+            .expect("retract"),
+        Retract::NotYours
+    );
+    assert_eq!(
+        status_of(&client, JobSource::Late, &row.external_id).await,
+        JobStatus::Active
+    );
+    assert_eq!(
+        JobPosting::retract(&client, row.id, writer, false)
+            .await
+            .expect("retract"),
+        Retract::Gone
+    );
+    assert_eq!(
+        status_of(&client, JobSource::Late, &row.external_id).await,
+        JobStatus::Expired
+    );
+    assert_eq!(
+        JobPosting::count_active_by(&client, writer)
+            .await
+            .expect("count"),
+        0
+    );
+
+    // A moderator takes down anyone's; a feed row is never a take-down's.
+    let second = JobPosting::post(&client, &new, day(22))
+        .await
+        .expect("post");
+    assert_eq!(
+        JobPosting::retract(&client, second.id, stranger, true)
+            .await
+            .expect("retract"),
+        Retract::Gone
+    );
+    JobPosting::upsert_fetched(&client, &fetched(JobSource::Wwr, "wwr-1", 22))
+        .await
+        .expect("fetch");
+    let feed = JobPosting::find_by_external_id(&client, JobSource::Wwr, "wwr-1")
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!(
+        JobPosting::retract(&client, feed.id, stranger, true)
+            .await
+            .expect("retract"),
+        Retract::NotYours
     );
 }

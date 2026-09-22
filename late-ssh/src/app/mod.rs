@@ -49,6 +49,7 @@ pub mod state;
 mod state_test;
 pub(crate) mod status_picker;
 pub mod stream;
+pub(crate) mod tag_picker;
 pub(crate) mod terminal_backend;
 #[cfg(test)]
 mod terminal_backend_test;

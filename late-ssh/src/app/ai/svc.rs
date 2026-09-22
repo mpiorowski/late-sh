@@ -246,7 +246,11 @@ impl AiService {
             }),
         };
 
-        let res = self.client.post(&url).json(&req).send_traced().await?;
+        // The URL carries the key; a status error must not print it.
+        let res = match self.client.post(&url).json(&req).send_traced().await {
+            Ok(res) => res,
+            Err(error) => return Err(error.without_url().into()),
+        };
         if !res.status().is_success() {
             let status = res.status();
             let text = res.text().await.unwrap_or_default();
@@ -306,7 +310,11 @@ impl AiService {
             }]),
         };
 
-        let res = self.client.post(&url).json(&req).send_traced().await?;
+        // The URL carries the key; a status error must not print it.
+        let res = match self.client.post(&url).json(&req).send_traced().await {
+            Ok(res) => res,
+            Err(error) => return Err(error.without_url().into()),
+        };
         if !res.status().is_success() {
             let status = res.status();
             let text = res.text().await.unwrap_or_default();
@@ -367,7 +375,11 @@ impl AiService {
             tools: None,
         };
 
-        let res = self.client.post(&url).json(&req).send_traced().await?;
+        // The URL carries the key; a status error must not print it.
+        let res = match self.client.post(&url).json(&req).send_traced().await {
+            Ok(res) => res,
+            Err(error) => return Err(error.without_url().into()),
+        };
         if !res.status().is_success() {
             let status = res.status();
             let text = res.text().await.unwrap_or_default();

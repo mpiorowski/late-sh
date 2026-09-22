@@ -892,7 +892,7 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - Edited in the profile editor's card page (`app/directory/editor`); this state only lists, saves (`save(params, editing)`), and deletes (`delete_card(id)`).
 - `status` is `WorkStatus` (open, casual, not-looking) and `work_type` is `WorkType` (full-time, contract, freelance, part-time, any), both text columns parsed at the row boundary in `late_core::models::work_profile`.
 - Links require `http://` or `https://`, cap at 6, and are stored for later web rendering.
-- Skills normalize lowercase, split on comma/whitespace, strip leading `#`, allow ASCII alnum plus `-_.`, cap each skill at 24 chars and total skills at 12; `skills_tags` is the same list folded onto the tag vocabulary (`app/jobs/vocab.rs`) for the job matcher.
+- Skills are canonical tags from the vocabulary (`late_core::vocab`), picked in the tag picker, twelve at most; `skills_tags` holds the same list, the array the job matcher joins on.
 - Public profiles show bio, late.fetch fields, and showcases when the author has data for them. The composer does not expose include toggles. `WorkFeedItem` carries the owner `Profile` projection so the Directory detail panel can preview the same public-page sections without per-row DB calls.
 - Snapshot is global and lists recent work profiles by latest update; unread count is per user through `work_feed_reads`.
 

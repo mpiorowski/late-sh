@@ -344,6 +344,7 @@ struct DrawContext<'a> {
     room_info_modal_open: bool,
     room_info_modal_state: &'a room_info_modal::state::RoomInfoModalState,
     directory_editor: &'a crate::app::directory::editor::state::EditorState,
+    tag_picker: &'a crate::app::tag_picker::state::TagPickerState,
     /// The showcase feed, for the editor's projects page.
     showcase_items: &'a [chat::showcase::svc::ShowcaseFeedItem],
     booth_modal_open: bool,
@@ -439,6 +440,7 @@ impl App {
         let ultimate_effects = self.ultimate_state.active_theme_effects();
         self.chat.refresh_composer_theme();
         self.directory_editor.refresh_theme();
+        self.jobs.post.refresh_theme();
 
         // Synchronize terminal background color with theme bg_canvas if enabled
         let enabled = if self.show_settings {
@@ -1403,6 +1405,7 @@ impl App {
                         room_info_modal_open: self.room_info_modal_state.is_open(),
                         room_info_modal_state: &self.room_info_modal_state,
                         directory_editor: &self.directory_editor,
+                        tag_picker: &self.tag_picker,
                         showcase_items: self.chat.showcase.all_items(),
                         booth_modal_open: self.booth_modal_state.is_open(),
                         booth_modal_state: &self.booth_modal_state,
@@ -2240,6 +2243,16 @@ impl App {
                     viewer_name: ctx.clubhouse_own_username,
                 },
             );
+        }
+
+        if ctx.jobs_state.post.is_open() {
+            crate::app::jobs::ui::draw_post_form(frame, inner, &ctx.jobs_state.post);
+        }
+
+        // Over the settings modal, the profile editor, and the post form,
+        // whichever opened it.
+        if ctx.tag_picker.is_open() {
+            crate::app::tag_picker::ui::draw(frame, inner, ctx.tag_picker);
         }
 
         if ctx.booth_modal_open {

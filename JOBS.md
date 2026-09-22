@@ -19,10 +19,12 @@ Status: step 1 built; steps 2 and 3 design. Decisions marked OPEN need Mat.
   normalization. Adding and editing both feel like filling a form in a chat
   box.
 - People ask for a careers page. The community is too small for a job board
-  people post to: an empty board reads as abandoned. What we can do is pull
-  remote postings from feeds that exist to be consumed, keep the page moving
-  every day, and tell each person which of them fit their own card. The AI
-  we already run reads postings; it never finds them.
+  people post to alone: an empty board reads as abandoned. What we can do is
+  pull remote postings from feeds that exist to be consumed, keep the page
+  moving every day, and tell each person which of them fit their own card;
+  then let anyone add their own on top, so a full shelf is never the
+  reason someone's posting is missing. The AI we already run reads
+  postings; it never finds them.
 - The paper's ON THE WALL column is the wrong place for gallery pieces: the
   paper is read once, scrolled past, and the pieces compete with the columns.
   The splash is a full screen that every login sees first.
@@ -103,11 +105,12 @@ Closed fields stop being typed:
 - `type`: `WorkType { FullTime, Contract, Freelance, PartTime, Any }`,
   `←/→` cycles. "Open to any" is the fifth variant so the column is never
   null; existing free text folded onto the closest value (migration 192).
-- `skills`: typed as text, normalized on save into the tag vocabulary
-  (`jobs/vocab.rs`, step 2). The row shows the normalized tags live under
-  the input, and what did not match the vocabulary stays as a free tag,
-  shown dim. Both are stored: `skills` as written, `skills_tags` as the
-  normalized array the matcher joins on.
+- `skills`: picked from the tag vocabulary (`late-core/src/vocab.rs`) in
+  the tag picker (`app/tag_picker/`), never typed: `Enter` on the row
+  opens a filtered multi-select, twelve tags at most. `skills` and
+  `skills_tags` hold the same canonical list. Langs on the about page and
+  in Settings go through the same picker, its language group alone, so a
+  match is one closed list against itself.
 - `summary`: the one multi-line field, a tall row.
 - `headline` is required; the form refuses to save without it and says so
   on the row.
@@ -189,7 +192,7 @@ reader decides.
 |---|---|
 | `svc.rs` | `JobsService`: the nightly press (fetch, read, release, expire) under the day's run claim, the replica's shelf snapshot, `/jobs` on demand; `tick`: the session side (snapshot copy, `/jobs`, the admin's banners). Owns logs and metrics. |
 | `sources.rs` | The three feed parsers, pure: bytes in, `FetchedPosting`s out. |
-| `vocab.rs` | The tag vocabulary: a closed list of canonical tags with aliases (`typescript` ← `ts`, `go` ← `golang`, `postgres` ← `postgresql`). The read's schema enum and the work card editor share it. |
+| `late-core/src/vocab.rs` | The tag vocabulary: a closed list of canonical tags in groups with aliases (`typescript` ← `ts`, `go` ← `golang`, `postgres` ← `postgresql`). The read's prompt, the matcher, and the tag picker share it. |
 | `state.rs` | The Jobs shelf's session state, `/jobs` parsing, the viewer's tag set, the match score, the match line. Pure. |
 | `ui.rs` | The shelf (list beside detail, stacked under 100 columns) and the FOR YOU lines under a person's own card. |
 | `input.rs` | Keys on the shelf. |
@@ -316,8 +319,8 @@ through `late_core::error_span!` with source and external id.
 ### Matching
 
 A match is tag overlap, computed in memory over the snapshot: the viewer's
-tags are their card's `skills_tags` plus their profile `langs`, both folded
-through the vocabulary, and a posting scores the number of those tags it
+tags are their card's `skills_tags` plus their profile `langs`, both picked
+from the vocabulary, and a posting scores the number of those tags it
 carries. Best score first, newest release inside a tie. The paper reads
 the covered day's released rows and the reader's card and langs at open
 time and scores the same way. Region against country and timezone is a
@@ -350,10 +353,18 @@ later refinement, once `regions` has been seen in the wild for a month.
    - Card `not-looking`: nothing. They said so.
    - Zero postings released, or the switch off: the section is absent.
    `PaperIssue` carries `work: PaperWork`; a preview has none.
-4. **The web `/jobs` page** in `late-web`: not built. The same active rows,
+4. **The post form** (`n` on the shelf, `/jobs post` from anywhere): a
+   modal with the card's fields: company, role, link, where (the three
+   remote kinds, cycled), regions, stack (the tag picker), pay, excerpt
+   (400 characters). `Ctrl+S` saves through the service and the posting is
+   `active` at once, source `late`, `posted_by` the writer, released on
+   the day; the shelf shows it `via late.sh` and the card says so. Three
+   live postings a person; `d` on your own (or on any, for a moderator)
+   takes it down. It expires like every other row, thirty days on.
+5. **The web `/jobs` page** in `late-web`: not built. The same active rows,
    public, with a source line per card and the `/profiles` link; the
    traffic door, not the feature.
-5. No lounge bot card. The paper is the channel.
+6. No lounge bot card. The paper is the channel.
 
 ### Tests
 
