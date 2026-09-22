@@ -5,3 +5,4 @@ pub mod svc;
 #[cfg(test)]
 mod svc_test;
 pub mod ui;
+pub mod win_anim;

@@ -6,15 +6,14 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::state::{Card, Focus, Mode, Selection, State, Suit, TableauCard};
+use super::state::{Card, Focus, Mode, Selection, State, Suit, TableauCard, to_playing_card};
+use super::win_anim::{Viewport, WinAnimation};
 use crate::app::arcade::ui::{
     GameBottomBar, draw_game_frame, draw_game_overlay, game_content_area, keys_line, status_line,
     tip_line,
 };
 use crate::app::common::theme;
-use crate::app::games::cards::{
-    AsciiCardTheme, CardRank, CardSuit, OUTLINE_CARD_WIDTH, PlayingCard,
-};
+use crate::app::games::cards::{AsciiCardTheme, OUTLINE_CARD_WIDTH};
 
 const SOLITAIRE_CARD_THEME: AsciiCardTheme = AsciiCardTheme::Outline;
 const FACE_DOWN_PEEK_LINES: usize = 1;
@@ -64,6 +63,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
 
     let board_area = draw_game_frame(frame, area, "Solitaire", bottom, show_bottom_bar);
     let board_rect = solitaire_board_rect(board_area);
+    // The cascade aims at the cells the board is drawn in; recorded every
+    // frame so it is already right on the tick that follows the winning move.
+    state.win_view.set(Viewport {
+        width: board_area.width,
+        height: board_area.height,
+        origin_x: board_rect.x.saturating_sub(board_area.x),
+    });
     let lines = board_lines(state);
     let lines: Vec<_> = lines
         .into_iter()
@@ -71,12 +77,40 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         .collect();
     frame.render_widget(Paragraph::new(lines).alignment(Alignment::Left), board_rect);
 
-    if state.is_game_over {
+    if let Some(anim) = state.win_anim.as_ref() {
+        draw_win_cascade(frame, board_area, anim);
+    }
+
+    // The `YOU WON!` card waits for the last card to land, so the cascade
+    // plays over a clear board instead of through a box.
+    if state.is_game_over && !state.win_cascade_running() {
         let subtext = match state.mode {
             Mode::Daily => "Change diff via [ ]",
             Mode::Personal => "n for new",
         };
         draw_game_overlay(frame, board_area, "YOU WON!", subtext, theme::SUCCESS());
+    }
+}
+
+/// Blit the cascade's canvas straight onto the frame. It has to be a buffer
+/// write rather than a widget: only the cells the cards have actually touched
+/// are painted, so the board keeps showing through the gaps.
+fn draw_win_cascade(frame: &mut Frame, area: Rect, anim: &WinAnimation) {
+    let view = anim.viewport();
+    let red = theme::ERROR();
+    let black = theme::TEXT_BRIGHT();
+    let buf = frame.buffer_mut();
+    for row in 0..area.height.min(view.height) {
+        for col in 0..area.width.min(view.width) {
+            let Some(ink) = anim.ink(col, row) else {
+                continue;
+            };
+            let Some(cell) = buf.cell_mut((area.x + col, area.y + row)) else {
+                continue;
+            };
+            cell.set_char(ink.ch);
+            cell.set_style(Style::default().fg(if ink.red { red } else { black }));
+        }
     }
 }
 
@@ -304,37 +338,37 @@ fn board_lines_multiline(state: &State) -> Vec<Line<'static>> {
             "F1",
             matches!(state.cursor, Focus::Foundation(0)),
             matches!(state.selection, Some(Selection::Foundation(0))),
-            state.foundation_top(0).map(|card| card.suit),
+            state.displayed_foundation_top(0).map(|card| card.suit),
         ),
         Span::raw(gap),
         header_span(
             "F2",
             matches!(state.cursor, Focus::Foundation(1)),
             matches!(state.selection, Some(Selection::Foundation(1))),
-            state.foundation_top(1).map(|card| card.suit),
+            state.displayed_foundation_top(1).map(|card| card.suit),
         ),
         Span::raw(gap),
         header_span(
             "F3",
             matches!(state.cursor, Focus::Foundation(2)),
             matches!(state.selection, Some(Selection::Foundation(2))),
-            state.foundation_top(2).map(|card| card.suit),
+            state.displayed_foundation_top(2).map(|card| card.suit),
         ),
         Span::raw(gap),
         header_span(
             "F4",
             matches!(state.cursor, Focus::Foundation(3)),
             matches!(state.selection, Some(Selection::Foundation(3))),
-            state.foundation_top(3).map(|card| card.suit),
+            state.displayed_foundation_top(3).map(|card| card.suit),
         ),
     ]));
 
     let stock_lines = SOLITAIRE_CARD_THEME.render_stock_count_lines(state.stock.len());
     let foundation_lines = [
-        pile_lines(state.foundation_top(0)),
-        pile_lines(state.foundation_top(1)),
-        pile_lines(state.foundation_top(2)),
-        pile_lines(state.foundation_top(3)),
+        pile_lines(state.displayed_foundation_top(0)),
+        pile_lines(state.displayed_foundation_top(1)),
+        pile_lines(state.displayed_foundation_top(2)),
+        pile_lines(state.displayed_foundation_top(3)),
     ];
 
     for idx in 0..SOLITAIRE_CARD_THEME.card_height() {
@@ -354,28 +388,28 @@ fn board_lines_multiline(state: &State) -> Vec<Line<'static>> {
                 foundation_lines[0][idx].clone(),
                 matches!(state.cursor, Focus::Foundation(0)),
                 matches!(state.selection, Some(Selection::Foundation(0))),
-                state.foundation_top(0).map(|card| card.suit),
+                state.displayed_foundation_top(0).map(|card| card.suit),
             ),
             Span::raw(gap),
             styled_span(
                 foundation_lines[1][idx].clone(),
                 matches!(state.cursor, Focus::Foundation(1)),
                 matches!(state.selection, Some(Selection::Foundation(1))),
-                state.foundation_top(1).map(|card| card.suit),
+                state.displayed_foundation_top(1).map(|card| card.suit),
             ),
             Span::raw(gap),
             styled_span(
                 foundation_lines[2][idx].clone(),
                 matches!(state.cursor, Focus::Foundation(2)),
                 matches!(state.selection, Some(Selection::Foundation(2))),
-                state.foundation_top(2).map(|card| card.suit),
+                state.displayed_foundation_top(2).map(|card| card.suit),
             ),
             Span::raw(gap),
             styled_span(
                 foundation_lines[3][idx].clone(),
                 matches!(state.cursor, Focus::Foundation(3)),
                 matches!(state.selection, Some(Selection::Foundation(3))),
-                state.foundation_top(3).map(|card| card.suit),
+                state.displayed_foundation_top(3).map(|card| card.suit),
             ),
         ]);
         lines.push(Line::from(row));
@@ -639,20 +673,6 @@ fn block_style(focused: bool, selected: bool, suit: Option<Suit>) -> Style {
     }
 }
 
-fn to_playing_card(card: Card) -> PlayingCard {
-    PlayingCard {
-        suit: match card.suit {
-            Suit::Hearts => CardSuit::Hearts,
-            Suit::Diamonds => CardSuit::Diamonds,
-            Suit::Clubs => CardSuit::Clubs,
-            Suit::Spades => CardSuit::Spades,
-        },
-        rank: match card.rank {
-            1 => CardRank::Ace,
-            11 => CardRank::Jack,
-            12 => CardRank::Queen,
-            13 => CardRank::King,
-            n => CardRank::Number(n),
-        },
-    }
-}
+#[cfg(test)]
+#[path = "ui_test.rs"]
+mod ui_test;
