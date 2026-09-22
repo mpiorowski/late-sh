@@ -269,7 +269,9 @@ row waits for the next night; at the cap it is `dropped`. One `HEAD` at
 the link before the row settles: a 404 or 410, or no host to talk to, is
 `dead`; anything else (a bot wall's 403, a 405 on HEAD, a timeout) keeps
 the link, since the reader's browser may well get through. At most
-`JOBS_READ_LIMIT` = 400 reads a run.
+`JOBS_READ_LIMIT` = 400 reads a run. Each row settles and goes on the
+shelf as it is read, not at the end of the run, and one failed HN
+comment or Jobicy tag is skipped rather than failing its source.
 
 Cost: about 260 HN posts, 350 WWR items, and 250 Jobicy rows a month, on
 the same Flash model as the paper. About a dollar.

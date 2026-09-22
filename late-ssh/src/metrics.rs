@@ -91,6 +91,9 @@ pub enum PaperOpenResult {
 pub enum JobsFetchResult {
     Fetched,
     Failed,
+    /// One item of a source (an HN comment, a Jobicy tag) that failed and
+    /// was skipped; the rest of the source still lands.
+    ItemSkipped,
 }
 
 /// How one posting's model read ended. Every variant but `Failed` settles
@@ -1369,6 +1372,7 @@ mod inner {
         match result {
             JobsFetchResult::Fetched => "fetched",
             JobsFetchResult::Failed => "failed",
+            JobsFetchResult::ItemSkipped => "item_skipped",
         }
     }
 

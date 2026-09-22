@@ -25,8 +25,8 @@ use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Utc};
 use late_core::db::Db;
 use late_core::models::app_flag::{AppFlag, AppFlags};
 use late_core::models::job_posting::{
-    FetchedPosting, JobPosting, JobPressRun, JobRead, JobSource, NewPosting, PressCounts,
-    RemoteKind, Retract, Settle, Upsert,
+    FetchedPosting, JobPosting, JobPressRun, JobRead, JobSource, JobStatus, NewPosting,
+    PressCounts, RemoteKind, Retract, Settle, Upsert,
 };
 use late_core::telemetry::TracedExt;
 use late_core::vocab;
@@ -202,6 +202,8 @@ pub struct PressTally {
     pub fetched: usize,
     pub seen: usize,
     pub fetch_failed: Vec<JobSource>,
+    /// Items skipped inside a source that otherwise landed.
+    pub fetch_skipped: usize,
     pub queued: usize,
     pub active: usize,
     pub dropped: usize,
@@ -237,6 +239,9 @@ impl PressTally {
                 .map(|source| source.as_str())
                 .collect();
             line.push_str(&format!(" · fetch failed: {}", names.join(", ")));
+        }
+        if self.fetch_skipped > 0 {
+            line.push_str(&format!(" · {} skipped in fetch", self.fetch_skipped));
         }
         line
     }
@@ -281,6 +286,20 @@ struct Extracted {
     url: String,
     #[serde(default)]
     excerpt: String,
+}
+
+/// One source's pull: what parsed, and the items that failed on the way
+/// (an HN comment, a Jobicy tag), skipped so one bad item never costs the
+/// rest of the source.
+#[derive(Default)]
+struct Fetched {
+    postings: Vec<FetchedPosting>,
+    skipped: Vec<SkippedItem>,
+}
+
+struct SkippedItem {
+    item: String,
+    error: anyhow::Error,
 }
 
 /// What a `HEAD` at the posting's link said.
@@ -479,10 +498,10 @@ impl JobsService {
                 // Written on the shelf, never fetched.
                 JobSource::Late => continue,
             };
-            let postings = match fetched {
-                Ok(postings) => {
+            let Fetched { postings, skipped } = match fetched {
+                Ok(fetched) => {
                     metrics::record_jobs_fetch(source, JobsFetchResult::Fetched);
-                    postings
+                    fetched
                 }
                 Err(error) => {
                     metrics::record_jobs_fetch(source, JobsFetchResult::Failed);
@@ -496,6 +515,17 @@ impl JobsService {
                     continue;
                 }
             };
+            for SkippedItem { item, error } in &skipped {
+                metrics::record_jobs_fetch(source, JobsFetchResult::ItemSkipped);
+                late_core::error_span!(
+                    "jobs_fetch_item_failed",
+                    error = ?error,
+                    source = source.as_str(),
+                    item = %item,
+                    "failed to fetch one item of a job source, skipped"
+                );
+            }
+            tally.fetch_skipped += skipped.len();
             let client = self.db.get().await?;
             for posting in &postings {
                 match JobPosting::upsert_fetched(&client, posting).await? {
@@ -506,6 +536,7 @@ impl JobsService {
             tracing::info!(
                 source = source.as_str(),
                 count = postings.len(),
+                skipped = skipped.len(),
                 "job source fetched"
             );
         }
@@ -513,8 +544,9 @@ impl JobsService {
     }
 
     /// The month's thread: the account's newest submissions, the one
-    /// titled "Who is hiring?", its top-level comments one by one.
-    async fn fetch_hn(&self) -> anyhow::Result<Vec<FetchedPosting>> {
+    /// titled "Who is hiring?", its top-level comments one by one. A
+    /// comment that fails is skipped; only missing the thread fails HN.
+    async fn fetch_hn(&self) -> anyhow::Result<Fetched> {
         let user = self.get_text(HN_WHOISHIRING_URL).await?;
         let submitted = sources::parse_hn_submitted(&user)?;
         let mut kids = None;
@@ -528,36 +560,60 @@ impl JobsService {
         let Some(kids) = kids else {
             bail!("no who-is-hiring thread among the newest submissions");
         };
-        let mut postings = Vec::with_capacity(kids.len());
+        let mut fetched = Fetched::default();
         for id in kids {
-            let json = self.get_text(&sources::hn_item_url(id)).await?;
-            if let Some(posting) = sources::parse_hn_comment(&json)? {
-                postings.push(posting);
+            match self.fetch_hn_comment(id).await {
+                Ok(Some(posting)) => fetched.postings.push(posting),
+                // Deleted, dead, or empty.
+                Ok(None) => {}
+                Err(error) => fetched.skipped.push(SkippedItem {
+                    item: format!("hn comment {id}"),
+                    error,
+                }),
             }
         }
-        Ok(postings)
+        Ok(fetched)
     }
 
-    async fn fetch_wwr(&self) -> anyhow::Result<Vec<FetchedPosting>> {
+    async fn fetch_hn_comment(&self, id: i64) -> anyhow::Result<Option<FetchedPosting>> {
+        let json = self.get_text(&sources::hn_item_url(id)).await?;
+        sources::parse_hn_comment(&json)
+    }
+
+    async fn fetch_wwr(&self) -> anyhow::Result<Fetched> {
         let xml = self.get_text(WWR_RSS_URL).await?;
         let postings = sources::parse_wwr_rss(&xml);
         if postings.is_empty() {
             bail!("the wwr feed parsed to no items");
         }
-        Ok(postings)
+        Ok(Fetched {
+            postings,
+            skipped: Vec::new(),
+        })
     }
 
-    async fn fetch_jobicy(&self) -> anyhow::Result<Vec<FetchedPosting>> {
-        let mut postings = Vec::new();
+    /// One request per tag; a tag that fails is skipped and the others
+    /// still land.
+    async fn fetch_jobicy(&self) -> anyhow::Result<Fetched> {
+        let mut fetched = Fetched::default();
         for (query, title_words) in JOBICY_TAGS {
             let url = reqwest::Url::parse_with_params(
                 JOBICY_API_URL,
                 [("tag", *query), ("count", JOBICY_COUNT)],
             )?;
-            let json = self.get_text(url.as_str()).await?;
-            postings.extend(sources::parse_jobicy(&json, query, title_words)?);
+            let page = match self.get_text(url.as_str()).await {
+                Ok(json) => sources::parse_jobicy(&json, query, title_words),
+                Err(error) => Err(error),
+            };
+            match page {
+                Ok(postings) => fetched.postings.extend(postings),
+                Err(error) => fetched.skipped.push(SkippedItem {
+                    item: format!("jobicy tag {query}"),
+                    error,
+                }),
+            }
         }
-        Ok(postings)
+        Ok(fetched)
     }
 
     async fn get_text(&self, url: &str) -> anyhow::Result<String> {
@@ -582,12 +638,7 @@ impl JobsService {
         };
         for posting in pending {
             let read = self.read_one(&posting, day).await;
-            note_read(tally, &posting, &read);
-            let client = self.db.get().await?;
-            match read {
-                Ok(settle) => JobPosting::settle(&client, posting.id, settle).await?,
-                Err(_) => JobPosting::note_read_failure(&client, posting.id).await?,
-            }
+            self.settle_read(&posting, read, tally).await?;
         }
         let client = self.db.get().await?;
         let exhausted = JobPosting::drop_exhausted(&client, JOBS_MAX_READ_ATTEMPTS).await?;
@@ -595,6 +646,53 @@ impl JobsService {
             tracing::info!(count = exhausted, "unreadable job postings tombstoned");
         }
         Ok(())
+    }
+
+    /// One read's outcome, all the way through: the tally, the row, and
+    /// the shelf. A row that went active is on this replica's shelf before
+    /// the next posting is read, so a long run, or one that fails later,
+    /// never holds back what it already read.
+    pub(crate) async fn settle_read(
+        &self,
+        posting: &JobPosting,
+        read: anyhow::Result<Settle>,
+        tally: &mut PressTally,
+    ) -> anyhow::Result<()> {
+        note_read(tally, posting, &read);
+        let client = self.db.get().await?;
+        match read {
+            Ok(settle) => {
+                let row = JobPosting::settle(&client, posting.id, settle).await?;
+                match row.status {
+                    JobStatus::Active => self.shelve(row),
+                    // HN waits for its slice; the rest never list.
+                    JobStatus::Queued
+                    | JobStatus::Dead
+                    | JobStatus::Dropped
+                    | JobStatus::Pending
+                    | JobStatus::Expired => {}
+                }
+            }
+            Err(_) => JobPosting::note_read_failure(&client, posting.id).await?,
+        }
+        Ok(())
+    }
+
+    /// A row that just went active joins this replica's snapshot at once,
+    /// in the order `list_active` reads; the other replicas pick it up at
+    /// their next refresh. The kill switch keeps the shelf empty.
+    fn shelve(&self, row: JobPosting) {
+        if !self.enabled() {
+            return;
+        }
+        self.snapshot_tx.send_modify(|snapshot| {
+            snapshot.items.retain(|item| item.id != row.id);
+            snapshot.items.push(row);
+            snapshot.items.sort_by(|a, b| {
+                (b.released_on, b.posted_at, b.id).cmp(&(a.released_on, a.posted_at, a.id))
+            });
+            snapshot.items.truncate(JOBS_SHELF_LIMIT as usize);
+        });
     }
 
     /// One posting through the model and one `HEAD` at its link.
@@ -873,13 +971,13 @@ impl JobsService {
                 PressOutcome::Released { day, count }
             }),
         };
+        // Refreshed on failure too: a slice or an expiry may have landed
+        // before the step that broke.
+        if let Err(error) = self.refresh_snapshot().await {
+            tracing::warn!(error = ?error, "jobs shelf snapshot refresh failed after the press");
+        }
         match outcome {
-            Ok(outcome) => {
-                if let Err(error) = self.refresh_snapshot().await {
-                    tracing::warn!(error = ?error, "jobs shelf snapshot refresh failed after the press");
-                }
-                outcome
-            }
+            Ok(outcome) => outcome,
             Err(error) => {
                 late_core::error_span!(
                     "jobs_press_on_demand_failed",

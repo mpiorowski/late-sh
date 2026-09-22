@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use super::svc::{
     JOBS_DRIP_DAYS, JOBS_POSTS_PER_USER, JobsEvent, PostOutcome, PressJob, PressOutcome,
-    RetractOutcome, drip_slice, press_due_day, tidy_excerpt,
+    PressTally, RetractOutcome, drip_slice, press_due_day, tidy_excerpt,
 };
 use crate::moderation::policy::Permissions;
 use crate::test_helpers::{chat_compose_app, wait_for_render_contains};
@@ -140,6 +140,89 @@ async fn a_release_lands_on_the_shelf_through_the_snapshot() {
     wait_for_render_contains(&mut app, "Quobyte").await;
     wait_for_render_contains(&mut app, "Fastly").await;
     wait_for_render_contains(&mut app, "remote worldwide").await;
+}
+
+async fn seed_pending(
+    db: &late_core::db::Db,
+    source: JobSource,
+    external_id: &str,
+    remote_kind: Option<RemoteKind>,
+) -> JobPosting {
+    let client = db.get().await.expect("db client");
+    let fetched = FetchedPosting {
+        source,
+        external_id: external_id.to_string(),
+        url: format!("https://jobs.example/{external_id}"),
+        raw: format!("{external_id} | Engineer | REMOTE"),
+        posted_at: day(20).and_hms_opt(9, 0, 0).unwrap().and_utc(),
+        remote_kind,
+        regions: Vec::new(),
+        dropped: false,
+    };
+    JobPosting::upsert_fetched(&client, &fetched)
+        .await
+        .expect("insert");
+    JobPosting::find_by_external_id(&client, source, external_id)
+        .await
+        .expect("find")
+        .expect("row")
+}
+
+fn job_read(company: &str) -> JobRead {
+    JobRead {
+        url: format!("https://{}.example/careers", company.to_ascii_lowercase()),
+        company: company.to_string(),
+        title: "Backend Engineer".to_string(),
+        remote_kind: RemoteKind::Worldwide,
+        regions: Vec::new(),
+        tags: vec!["typescript".to_string()],
+        pay: String::new(),
+        excerpt: format!("{company} builds things."),
+    }
+}
+
+/// The press shelves each posting as its read settles, not at the end of
+/// the run: an active read is in the replica's snapshot before the next
+/// posting is read, while an HN read stays off it until its slice.
+#[tokio::test]
+async fn a_read_that_settles_active_is_on_the_shelf_before_the_run_ends() {
+    let (test_db, app) = chat_compose_app("jobs-shelve").await;
+    let service = app.jobs.service.clone();
+    let snapshot = service.subscribe_snapshot();
+    let wwr = seed_pending(
+        &test_db.db,
+        JobSource::Wwr,
+        "wwr-1",
+        Some(RemoteKind::Worldwide),
+    )
+    .await;
+    let hn = seed_pending(&test_db.db, JobSource::Hn, "hn-1", None).await;
+    let mut tally = PressTally::default();
+
+    service
+        .settle_read(
+            &wwr,
+            Ok(Settle::Active(job_read("Acme"), day(22))),
+            &mut tally,
+        )
+        .await
+        .expect("settle active");
+    service
+        .settle_read(&hn, Ok(Settle::Queued(job_read("Quobyte"))), &mut tally)
+        .await
+        .expect("settle queued");
+
+    let shelf: Vec<(String, JobStatus, Option<NaiveDate>)> = snapshot
+        .borrow()
+        .items
+        .iter()
+        .map(|row| (row.company.clone(), row.status, row.released_on))
+        .collect();
+    assert_eq!(
+        shelf,
+        vec![("Acme".to_string(), JobStatus::Active, Some(day(22)))]
+    );
+    assert_eq!((tally.active, tally.queued), (1, 1));
 }
 
 #[tokio::test]
