@@ -324,6 +324,15 @@ async fn main() -> anyhow::Result<()> {
         app_flag_service.subscribe(),
     );
     let _paper_sweeper_task = paper_service.start_sweeper_task();
+    // The job feed's press: once a night, the run row decides which
+    // replica; every replica keeps its own shelf snapshot. See
+    // `app/jobs/svc.rs`.
+    let jobs_service = late_ssh::app::jobs::svc::JobsService::new(
+        db.clone(),
+        ai_service.clone(),
+        app_flag_service.subscribe(),
+    );
+    let _jobs_press_task = jobs_service.start_press_task();
     // The Artboard gallery: every replica re-reads last month's winner for
     // the splash; nothing here writes. See `app/artboard/gallery/svc.rs`.
     let gallery_service = late_ssh::app::artboard::gallery::svc::GalleryService::new(
@@ -407,6 +416,7 @@ async fn main() -> anyhow::Result<()> {
         translation_service: translation_service.clone(),
         summary_service: summary_service.clone(),
         paper_service: paper_service.clone(),
+        jobs_service: jobs_service.clone(),
         audio_service: audio_service.clone(),
         voice_service,
         stream_service,

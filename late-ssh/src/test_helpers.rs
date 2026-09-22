@@ -241,6 +241,11 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         ai_service.clone(),
         test_app_flags_rx(),
     );
+    let jobs_service = crate::app::jobs::svc::JobsService::new(
+        db.clone(),
+        ai_service.clone(),
+        test_app_flags_rx(),
+    );
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let feed_service = crate::app::chat::feeds::svc::FeedService::new(db.clone());
     let showcase_service = crate::app::chat::showcase::svc::ShowcaseService::new(db.clone());
@@ -328,6 +333,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         translation_service,
         summary_service,
         paper_service,
+        jobs_service,
         article_service,
         feed_service,
         cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
@@ -513,6 +519,11 @@ fn make_app_with_chat_service_and_permissions(
             AiService::new(false, None),
         ),
         paper_service: crate::app::paper::svc::PaperService::new(
+            db.clone(),
+            AiService::new(false, None),
+            test_app_flags_rx(),
+        ),
+        jobs_service: crate::app::jobs::svc::JobsService::new(
             db.clone(),
             AiService::new(false, None),
             test_app_flags_rx(),
@@ -769,6 +780,11 @@ pub fn make_app_with_paired_client(
             AiService::new(false, None),
         ),
         paper_service: crate::app::paper::svc::PaperService::new(
+            db.clone(),
+            AiService::new(false, None),
+            test_app_flags_rx(),
+        ),
+        jobs_service: crate::app::jobs::svc::JobsService::new(
             db.clone(),
             AiService::new(false, None),
             test_app_flags_rx(),
@@ -1176,6 +1192,7 @@ pub fn test_app_flags_rx()
         paper_enabled: true,
         paper_outside_enabled: false,
         artboard_gallery_enabled: true,
+        jobs_enabled: true,
     }));
     rx
 }

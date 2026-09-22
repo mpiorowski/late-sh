@@ -1,0 +1,67 @@
+{
+ "apiVersion": "2.2.16",
+ "jobCount": 3,
+ "jobs": [
+  {
+   "id": 151197,
+   "url": "https://jobicy.com/jobs/151197-c-rust-graphics-and-windowing-system-software-engineer-mir",
+   "jobSlug": "151197-c-rust-graphics-and-windowing-system-software-engineer-mir",
+   "jobTitle": "C++/Rust Graphics and Windowing System Software Engineer - Mir",
+   "companyName": "Canonical",
+   "companyLogo": "https://jobicy.com/data/server-nyc0409/galaxy/mercury/2025/06/b4d068a9-221-1.png",
+   "jobIndustry": [
+    "Software Engineering"
+   ],
+   "jobType": [
+    "Full-Time"
+   ],
+   "jobGeo": "APAC,  EMEA",
+   "jobLevel": "Any",
+   "jobExcerpt": "Canonical is a leading provider of open source software and operating systems to the global enterprise and technology markets. Our platform, Ubuntu, is very widely used in breakthrough enterprise initiatives such as public cloud, data science, AI, engineering innovation, and IoT. Our customers include the world's leading public cloud and silicon providers, and industry leaders&hellip;",
+   "jobDescription": "<p>Canonical is a leading provider of open source software and operating systems to the global enterprise and technology markets. Our platform, Ubuntu, is very widely used in breakthrough enterprise initiatives such as public cloud, data science, AI, engineering innovation, and IoT. Our customers include the world's leading public cloud and silicon providers, and industry leaders in many sectors. The company is a pioneer of global distributed collaboration, with 1200+ colleagues in 75+ countries and very few office-based roles. Teams meet two to four times yearly in person, in interesting locations around the world, to align on strategy and execution.</p><p>The company is founder-led, profitable, and growing.</p><p>We are hiring a <strong>C++/Rust Graphics and Windowing System Software Engineer.</strong></p><p>We build <a href=\"https://mir-server.io/\" rel=\"nofollow ugc noopener\" target=\"_blank\">Mir</a> \u2013 a high-performance, high-efficiency technology stack for window managers, display subsystems and solutions built on top of it, like Ubuntu Frame. Leading with vision, we shape the technology stack that empowers communities to realize a world where apps work seamlessly in every graphical environment.\u00a0</p><p>Our goal is to enable the whole spectrum of graphics from single-purpose screens through edge devices to full desktop environments. We also set the pace for graphics enablement across the Ubuntu certified hardware ecosystem. Our daily drill includes design, development and ",
+   "pubDate": "2026-09-21T03:10:11+00:00"
+  },
+  {
+   "id": 152447,
+   "url": "https://jobicy.com/jobs/152447-blockchain-security-engineer-senior-level-solidity-rust-golang",
+   "jobSlug": "152447-blockchain-security-engineer-senior-level-solidity-rust-golang",
+   "jobTitle": "Blockchain Security Engineer - Senior Level (Solidity / Rust / Golang )",
+   "companyName": "CertiK",
+   "companyLogo": "https://jobicy.com/data/server-nyc0409/galaxy/mercury/2021/03/Jobicy-210308091023-955845.jpg",
+   "jobIndustry": [
+    "Cybersecurity"
+   ],
+   "jobType": [
+    "Full-Time"
+   ],
+   "jobGeo": "USA",
+   "jobLevel": "Senior",
+   "jobExcerpt": "About the Role: We are seeking a Senior Blockchain Security Engineer with a strong security mindset and deep technical expertise across smart contracts, blockchain nodes, and decentralized infrastructure. You will play a critical role in safeguarding Web3 projects by auditing code, building security tools, and driving research. If you have hands-on experience in Web3 and&hellip;",
+   "jobDescription": "<p><b>About the Role:</b></p>\n<p>We are seeking a Senior Blockchain Security Engineer with a strong security mindset and deep technical expertise across smart contracts, blockchain nodes, and decentralized infrastructure. You will play a critical role in safeguarding Web3 projects by auditing code, building security tools, and driving research. If you have hands-on experience in Web3 and are passionate about advancing the security of decentralized technologies, we\u2019d love to hear from you.</p>\n<h3>Responsibilities</h3>\n<ul>\n<li>Audit and review codebases for smart contracts, blockchain protocols, and decentralized applications (dApps) to identify and remediate vulnerabilities.</li>\n<li>Work closely with external blockchain teams to enhance the security of their products by providing expert security consultation and implementing remediation strategies. </li>\n<li>Conduct independent security research, explore new attack vectors, and deliver actionable insights. </li>\n<li>Design, develop, and maintain internal security tools and frameworks to strengthen our security services. </li>\n<li>Continuously improve internal processes, methodologies, and service offerings while ensuring high client satisfaction and long-term partnerships.</li>\n</ul>\n<h3>Requirements</h3>\n<ul>\n<li>Bachelor\u2019s, Master\u2019s, or PhD in Mathematics, Computer Science, or Information Security. </li>\n<li>Minimum 3 years of professional experience as a Software Engineer, Security Engineer, or in a related role. </li>\n<",
+   "pubDate": "2026-09-03T17:40:02+00:00",
+   "salaryMin": 102000,
+   "salaryMax": 180000,
+   "salaryCurrency": "USD",
+   "salaryPeriod": "yearly"
+  },
+  {
+   "id": 153163,
+   "url": "https://jobicy.com/jobs/153163-senior-software-engineer-trust",
+   "jobSlug": "153163-senior-software-engineer-trust",
+   "jobTitle": "Senior Software Engineer (Trust)",
+   "companyName": "Veriff",
+   "companyLogo": "https://jobicy.com/data/server-nyc0409/galaxy/mercury/2025/06/4f972095-221.jpg",
+   "jobIndustry": [
+    "Software Engineering"
+   ],
+   "jobType": [
+    "Full-Time"
+   ],
+   "jobGeo": "Estonia,  Spain",
+   "jobLevel": "Senior",
+   "jobExcerpt": "Beneath a simple yet elegant user interface lies a complex system of functionalities. Our AI-powered product uses advanced image recognition, facial verification, face recognition, facial anti-spoofing (liveness detection), and behavior analysis to make identity decisions. We help our partners build onboarding processes that ensure good people get things done and bad folks get stopped. But&hellip;",
+   "jobDescription": "<p>Beneath a simple yet elegant user interface lies a complex system of functionalities. Our AI-powered product uses advanced image recognition, facial verification, face recognition, facial anti-spoofing (liveness detection), and behavior analysis to make identity decisions. We help our partners build onboarding processes that ensure good people get things done and bad folks get stopped.</p>\n<p>But knowing who someone is only gets you halfway. The next question is whether they can be trusted \u2014 and answering it means checking a person's identity data against the authoritative sources that hold the truth. Every country does this differently: a different registry, a different database, a different set of rules about what can be checked and how.</p>\n<p>To take our platform to the next level, we're looking for a Senior Software Engineer to join the Trust team. This team builds and operates the services that validate a person's identity data against country-specific authoritative sources \u2014 government registries, national databases, AML and sanctions screening \u2014 and turns that patchwork of very different upstreams into a single, dependable trust signal our customers can act on. Alongside sibling teams like Trust Registries and Trusted Documents, your work directly determines how many countries we can cover, how fast we can launch a new one, and how much our partners can rely on the answer we give them.</p>\n<p><strong>YOU'LL HELP US PROTECT HONEST PEOPLE ONLINE BY:</strong></p>\n<ul>",
+   "pubDate": "2026-09-13T11:53:09+00:00"
+  }
+ ]
+}

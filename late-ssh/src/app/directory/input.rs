@@ -163,17 +163,8 @@ pub(crate) fn handle_idle_byte(app: &mut App, byte: u8) -> bool {
     }
 }
 
-/// The Jobs shelf has nothing to select yet; `/` says why.
 fn handle_jobs_byte(app: &mut App, byte: u8) -> bool {
-    match byte {
-        b'/' => {
-            app.banner = Some(Banner::info(
-                "Job matches arrive with the job feed; fill your card with w meanwhile.",
-            ));
-            true
-        }
-        _ => false,
-    }
+    crate::app::jobs::input::handle_byte(app, byte)
 }
 
 fn handle_people_byte(app: &mut App, byte: u8) -> bool {
@@ -286,19 +277,21 @@ fn copy_focused_link(app: &mut App) {
 
 /// Idle page-sized selection jumps on the people feed.
 pub(crate) fn move_idle_selection(app: &mut App, delta: isize) {
-    if app.directory_state.shelf() != Shelf::People {
-        return;
+    match app.directory_state.shelf() {
+        Shelf::Jobs => crate::app::jobs::input::move_selection(app, delta),
+        Shelf::People => {
+            let len = entry_len(app);
+            app.directory_state.move_selection(delta, len);
+        }
     }
-    let len = entry_len(app);
-    app.directory_state.move_selection(delta, len);
 }
 
 /// Idle arrow keys: up/down move between people, left/right move the detail
 /// focus across the selected person's card and projects (or, stacked, open
 /// and close the detail pane).
 pub(crate) fn handle_idle_arrow(app: &mut App, key: u8) -> bool {
-    if app.directory_state.shelf() != Shelf::People {
-        return false;
+    if app.directory_state.shelf() == Shelf::Jobs {
+        return crate::app::jobs::input::handle_arrow(app, key);
     }
     match key {
         b'A' => handle_people_byte(app, b'k'),
@@ -311,6 +304,9 @@ pub(crate) fn handle_idle_arrow(app: &mut App, key: u8) -> bool {
 
 /// Esc on the page: leave search, or close the stacked detail pane.
 pub(crate) fn handle_escape(app: &mut App) -> bool {
+    if app.directory_state.shelf() == Shelf::Jobs {
+        return crate::app::jobs::input::handle_escape(app);
+    }
     if app.directory_state.search_mode() {
         app.directory_state.exit_search();
         return true;

@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use super::{
     PAPER_ELSEWHERE_LIMIT, PaperAnnouncement, PaperCommand, PaperInk, PaperLayout, PaperLine,
-    PaperWall, lay_out, parse_paper_command,
+    PaperWall, PaperWork, lay_out, parse_paper_command,
 };
 use crate::app::artboard::gallery::ui::PaintRun;
 
@@ -117,6 +117,7 @@ fn the_paper_follows_the_rail_then_elsewhere_then_the_back_pages() {
     let lines = plain(&lay_out(PaperLayout {
         announcements: &announcements,
         wall: &[],
+        work: &PaperWork::none(),
         edition: &edition,
         rail_order: &rail_order,
         member_room_ids: &member_room_ids,
@@ -182,6 +183,7 @@ fn a_member_room_missing_from_the_rail_still_gets_its_column() {
     let lines = plain(&lay_out(PaperLayout {
         announcements: &[],
         wall: &[],
+        work: &PaperWork::none(),
         edition: &edition,
         rail_order: &[],
         member_room_ids: &member_room_ids,
@@ -285,6 +287,7 @@ fn the_wall_prints_every_piece_in_colour_most_applauded_first() {
     let laid = lay_out(PaperLayout {
         announcements: &[],
         wall: &wall,
+        work: &PaperWork::none(),
         edition: &edition,
         rail_order: &[],
         member_room_ids: &HashSet::new(),
@@ -345,6 +348,7 @@ fn an_empty_wall_prints_no_column() {
     let lines = plain(&lay_out(PaperLayout {
         announcements: &[],
         wall: &[],
+        work: &PaperWork::none(),
         edition: &edition,
         rail_order: &[],
         member_room_ids: &HashSet::new(),

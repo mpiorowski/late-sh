@@ -241,6 +241,9 @@ struct DrawContext<'a> {
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
     scratchpad: Option<&'a crate::app::scratchpad::state::ScratchpadState>,
     directory_state: &'a crate::app::directory::state::DirectoryState,
+    jobs_state: &'a crate::app::jobs::state::JobsState,
+    /// The viewer's languages from their profile, for the job matcher.
+    viewer_langs: &'a [String],
     clubhouse_state: &'a crate::app::clubhouse::state::State,
     clubhouse_own_username: &'a str,
     nightcap_state: &'a crate::app::clubhouse::nightcap::state::State,
@@ -1316,6 +1319,8 @@ impl App {
                         dartboard_state: self.dartboard_state.as_ref(),
                         scratchpad: self.scratchpad.as_ref(),
                         directory_state: &self.directory_state,
+                        jobs_state: &self.jobs,
+                        viewer_langs: &self.profile_state.profile().langs,
                         clubhouse_state: &self.clubhouse,
                         clubhouse_own_username: self.profile_state.profile().username.as_str(),
                         nightcap_state: &self.nightcap,
@@ -1838,6 +1843,8 @@ impl App {
                     content_area,
                     crate::app::directory::ui::DirectoryPageView {
                         directory: ctx.directory_state,
+                        jobs: ctx.jobs_state,
+                        viewer_langs: ctx.viewer_langs,
                         projects: ctx.chat_view.showcase_view.items,
                         people: ctx.chat_view.work_view.items,
                         work_marker: ctx.chat_view.work_view.marker_read_at,

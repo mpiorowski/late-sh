@@ -1052,6 +1052,7 @@ pub struct ChatState {
     requested_haunt: Option<crate::app::deadchannel::haunt::state::HauntCommand>,
     /// Set by `/paper`; consumed by `paper::svc::tick` every tick.
     requested_paper: Option<crate::app::paper::state::PaperCommand>,
+    requested_jobs: Option<crate::app::jobs::state::JobsCommand>,
     /// The just-landed echo of this session's own send, and the room it
     /// landed in, for the stage-2 name flicker; consumed by
     /// `deadchannel::haunt::svc` every tick. The room travels with it
@@ -1391,6 +1392,7 @@ impl ChatState {
             requested_pot: None,
             requested_haunt: None,
             requested_paper: None,
+            requested_jobs: None,
             own_message_landed: None,
             own_send_succeeded: false,
             witnessed_hit_landed: None,
@@ -2161,6 +2163,10 @@ impl ChatState {
         &mut self,
     ) -> Option<crate::app::paper::state::PaperCommand> {
         self.requested_paper.take()
+    }
+
+    pub(crate) fn take_requested_jobs(&mut self) -> Option<crate::app::jobs::state::JobsCommand> {
+        self.requested_jobs.take()
     }
 
     pub(crate) fn take_requested_haunt(
@@ -3818,6 +3824,22 @@ impl ChatState {
                 return Some(Banner::error("Only admins can touch the presses"));
             }
             self.requested_paper = Some(command);
+            return None;
+        }
+
+        // `/jobs` opens the Jobs shelf for anyone; the press behind it is
+        // admin-only and says so.
+        if let Some(parsed) = crate::app::jobs::state::parse_jobs_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(command) = parsed else {
+                return Some(Banner::error(
+                    "Usage: /jobs, or /jobs pull|release|on|off",
+                ));
+            };
+            if command.admin_only() && !self.is_admin {
+                return Some(Banner::error("Only admins can run the job press"));
+            }
+            self.requested_jobs = Some(command);
             return None;
         }
 
