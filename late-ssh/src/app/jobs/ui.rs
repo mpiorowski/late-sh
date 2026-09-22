@@ -500,7 +500,7 @@ pub(crate) fn draw_post_form(frame: &mut Frame, area: Rect, form: &PostForm) {
     let faint = Style::default().fg(theme::TEXT_FAINT());
     frame.render_widget(
         on_canvas(Line::from(Span::styled(
-            "Live on the shelf at once, for 30 days. Three live postings a person; d on yours takes it down.",
+            "Live at once, for 30 days. Three a person; d on yours takes it down.",
             faint,
         ))),
         indent(note_row),
@@ -654,7 +654,9 @@ fn draw_post_row(frame: &mut Frame, area: Rect, form: &PostForm, field: PostFiel
                         .collect()
                 };
                 frame.render_widget(
-                    Paragraph::new(lines).style(Style::default().bg(theme::BG_CANVAS())),
+                    Paragraph::new(lines)
+                        .wrap(Wrap { trim: false })
+                        .style(Style::default().bg(theme::BG_CANVAS())),
                     value_col,
                 );
             }
