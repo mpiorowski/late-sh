@@ -20,9 +20,12 @@
 //! refused (`ApplauseOutcome::Closed`), and so is its hanger's take-down
 //! (`TakeDownOutcome::Closed`). That is what keeps the hall of fame, which
 //! reads live applause, in step with the award that was minted from the
-//! same counts. The splash podium reads the award rows themselves
-//! ([`ArtboardPiece::previous_month_podium`]), so a mod removal after the
-//! month settled leaves a gap rather than moving anyone up.
+//! same counts.
+//!
+//! Every piece hung also takes one day over the door: the splash wall
+//! ([`ArtboardPiece::splash_for_day`]) stamps `splash_on` (migration 193)
+//! one piece per UTC day in hang order, the day after the piece was hung
+//! at the earliest.
 
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
@@ -36,7 +39,7 @@ use super::app_flag::AppFlag;
 /// Fewest non-blank glyphs a frame may hold. A smiley is not a piece.
 pub const PIECE_MIN_GLYPHS: usize = 40;
 /// Largest frame, in cells. Every piece fits a terminal, which is what makes
-/// the splash, the paper, and the profile able to show one without cropping.
+/// the splash and the profile able to show one without cropping.
 pub const PIECE_MAX_WIDTH: usize = 120;
 pub const PIECE_MAX_HEIGHT: usize = 40;
 /// The share of a frame's glyphs the hanger must have painted, per cell
@@ -48,9 +51,6 @@ pub const PIECE_TITLE_MAX_CHARS: usize = 40;
 /// Applause a piece needs before it counts toward the monthly award at all.
 /// Two friends clapping is not a competition.
 pub const GALLERY_AWARD_MIN_APPLAUSE: i64 = 3;
-/// The month's podium: the places the award prints (`ART1`-`ART3`) and
-/// the pieces the splash hangs over the door, one per login, in order.
-pub const GALLERY_PODIUM_SIZE: i64 = 3;
 /// How many pieces one listing returns. The month's board and the newest
 /// list both stop here; the gallery is a wall, not an archive.
 pub const GALLERY_LISTING_LIMIT: i64 = 100;
@@ -137,14 +137,6 @@ pub enum ApplauseOutcome {
 pub struct NewestPiece {
     pub title: String,
     pub artist: String,
-}
-
-/// One place on last month's podium: the rank the award minted (1 is
-/// `ART1`) and the piece that hangs for it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PodiumPiece {
-    pub place: i64,
-    pub piece: ArtboardPiece,
 }
 
 /// How the hanger's own take-down ended.
@@ -400,64 +392,81 @@ impl ArtboardPiece {
         }))
     }
 
-    /// Last month's podium, `ART1` first: the `artboard` award rows the
-    /// snapshot minted for the month, each with its hanger's best piece
-    /// still up (applause, then the earlier hang: the award's own order,
-    /// so it is the piece that won unless a mod took that one down). The
-    /// place travels with the row, so a removal leaves a gap instead of
-    /// promoting whoever stood behind; a hanger with nothing left up is
-    /// off the podium. Empty until the award pass has run.
-    pub async fn previous_month_podium(client: &impl GenericClient) -> Result<Vec<PodiumPiece>> {
-        let rows = client
-            .query(
-                &format!(
-                    "SELECT pieces.*, award.rank::bigint AS place
-                     FROM profile_awards award
-                     JOIN LATERAL (
-                        SELECT * FROM ({PIECE_VIEW_SQL}) pieces
-                        WHERE pieces.user_id = award.user_id
-                          AND pieces.period_month = award.period_month
-                        ORDER BY pieces.applause DESC, pieces.created ASC
-                        LIMIT 1
-                     ) pieces ON true
-                     WHERE award.category = 'artboard'
-                       AND award.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
-                       AND award.rank <= $2::bigint
-                     ORDER BY award.rank ASC"
-                ),
-                &[&Uuid::nil(), &GALLERY_PODIUM_SIZE],
-            )
-            .await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| PodiumPiece {
-                place: row.get("place"),
-                piece: Self::from(row),
-            })
-            .collect())
-    }
-
-    /// The most applauded pieces hung on one UTC day, best first, at most
-    /// `limit` of them: the paper's wall column. Any applause count
-    /// qualifies, a quiet day is empty.
-    pub async fn most_applauded_hung_on(
+    /// The splash wall's piece for one UTC day: the piece stamped
+    /// `splash_on` that day, or, when no piece holds the day yet, the
+    /// oldest piece never shown and hung before that day, claimed by
+    /// stamping it. Hang order, nothing else: two pieces hung the same day
+    /// take the next two days in the order they went up, and a busy
+    /// weekend spills into the week.
+    ///
+    /// The claim is one `UPDATE` racing on the partial unique index over
+    /// `splash_on` (migration 193): the loser's stamp is refused and it
+    /// reads the winner's row back. A piece taken down leaves the index,
+    /// so a removal after the day was assigned leaves the day without a
+    /// piece (the cup); nothing is promoted into the gap. The gallery's
+    /// kill switch (`artboard_gallery_enabled`) is in both statements, so
+    /// a day the gallery was off assigns nothing and burns no piece.
+    /// `None` is an empty queue or the switch off.
+    pub async fn splash_for_day(
         client: &impl GenericClient,
         day: NaiveDate,
-        limit: i64,
-    ) -> Result<Vec<Self>> {
-        let rows = client
-            .query(
-                &format!(
-                    "SELECT * FROM ({PIECE_VIEW_SQL}) pieces
-                     WHERE created >= ($2::date AT TIME ZONE 'UTC')
-                       AND created < (($2::date + INTERVAL '1 day') AT TIME ZONE 'UTC')
-                     ORDER BY applause DESC, created ASC
-                     LIMIT $3"
-                ),
-                &[&Uuid::nil(), &day, &limit],
+    ) -> Result<Option<Self>> {
+        if let Some(piece) = Self::splash_on(client, day).await? {
+            return Ok(Some(piece));
+        }
+        let claimed = client
+            .execute(
+                "UPDATE artboard_pieces
+                 SET splash_on = $1
+                 WHERE id = (
+                    SELECT p.id FROM artboard_pieces p
+                    WHERE p.removed_at IS NULL
+                      AND p.splash_on IS NULL
+                      AND p.created < ($1::date AT TIME ZONE 'UTC')
+                    ORDER BY p.created ASC
+                    LIMIT 1
+                 )
+                 AND EXISTS (SELECT 1 FROM app_flags WHERE key = $2 AND enabled)",
+                &[&day, &AppFlag::ArtboardGalleryEnabled.key()],
+            )
+            .await;
+        match claimed {
+            Ok(_) => {}
+            Err(error) if error.code() == Some(&SqlState::UNIQUE_VIOLATION) => {}
+            Err(error) => return Err(error.into()),
+        }
+        Self::splash_on(client, day).await
+    }
+
+    /// How many pieces still up are waiting for a day over the door as of
+    /// `day`: hung before it, never shown. The refresh logs it, so the
+    /// backlog is measurable before anyone decides on a cap.
+    pub async fn splash_queue_depth(client: &impl GenericClient, day: NaiveDate) -> Result<i64> {
+        let row = client
+            .query_one(
+                "SELECT count(*) AS depth
+                 FROM artboard_pieces
+                 WHERE removed_at IS NULL
+                   AND splash_on IS NULL
+                   AND created < ($1::date AT TIME ZONE 'UTC')",
+                &[&day],
             )
             .await?;
-        Ok(rows.into_iter().map(Self::from).collect())
+        Ok(row.get("depth"))
+    }
+
+    async fn splash_on(client: &impl GenericClient, day: NaiveDate) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                &format!(
+                    "{PIECE_VIEW_SQL}
+                     WHERE p.splash_on = $2
+                       AND EXISTS (SELECT 1 FROM app_flags WHERE key = $3 AND enabled)"
+                ),
+                &[&Uuid::nil(), &day, &AppFlag::ArtboardGalleryEnabled.key()],
+            )
+            .await?;
+        Ok(row.map(Self::from))
     }
 
     /// Sliding Puzzle's art for one UTC day: the piece stamped `featured_on`
@@ -471,7 +480,7 @@ impl ArtboardPiece {
     /// reads the winner's row back. A piece taken down leaves the index, so
     /// a removal frees the day for the next in line. The gallery's kill
     /// switch (`artboard_gallery_enabled`) is in both statements, the way
-    /// the paper's wall column obeys it. `None` is an empty backlog or the
+    /// the splash wall obeys it. `None` is an empty backlog or the
     /// switch off.
     pub async fn feature_for_day(
         client: &impl GenericClient,

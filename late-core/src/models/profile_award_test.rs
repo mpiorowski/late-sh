@@ -462,15 +462,7 @@ async fn the_gallery_award_ranks_best_pieces_and_pays_once() {
         (GALLERY_AWARD_CATEGORY, 1)
     );
 
-    // Last month's podium is what the splash and the hall of fame show,
-    // the winner first.
-    let podium = ArtboardPiece::previous_month_podium(&client)
-        .await
-        .expect("podium");
-    assert_eq!(
-        podium.first().map(|entry| (entry.place, entry.piece.id)),
-        Some((1, best.id))
-    );
+    // The hall of fame shows the winner first.
     let hall = ArtboardPiece::list(&client, winner.id, PieceListing::HallOfFame)
         .await
         .expect("hall of fame");

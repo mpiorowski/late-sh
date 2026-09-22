@@ -768,63 +768,43 @@ async fn paper_shown_claim_wins_once_per_edition_and_only_moves_forward() {
 }
 
 #[tokio::test]
-async fn splash_podium_claim_hands_out_the_places_then_the_cup() {
+async fn splash_wall_claim_hands_out_one_view_a_day_then_the_cup() {
     let (client, _test_db) = setup_db().await;
     let user = create_first_contact_user(&client, json!({})).await;
-    let july = chrono::NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
-    let august = chrono::NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
-    let september = chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
+    let monday = chrono::NaiveDate::from_ymd_opt(2026, 9, 21).unwrap();
+    let tuesday = chrono::NaiveDate::from_ymd_opt(2026, 9, 22).unwrap();
+    let sunday = chrono::NaiveDate::from_ymd_opt(2026, 9, 20).unwrap();
 
-    // Three places, three logins, in order; the fourth login is the cup
+    // The first login of the day gets the piece; the second is the cup
     // and writes nothing.
-    for place in 1..=3 {
-        assert_eq!(
-            User::claim_splash_podium_slot(&client, user.id, august, 3)
-                .await
-                .unwrap(),
-            Some(place)
-        );
-    }
-    assert_eq!(
-        User::claim_splash_podium_slot(&client, user.id, august, 3)
+    assert!(
+        User::claim_splash_shown(&client, user.id, monday)
             .await
-            .unwrap(),
-        None
+            .unwrap()
+    );
+    assert!(
+        !User::claim_splash_shown(&client, user.id, monday)
+            .await
+            .unwrap()
     );
     // A replica behind the calendar never resets the stamp.
-    assert_eq!(
-        User::claim_splash_podium_slot(&client, user.id, july, 3)
+    assert!(
+        !User::claim_splash_shown(&client, user.id, sunday)
             .await
-            .unwrap(),
-        None
+            .unwrap()
     );
-    // The next month starts over, and a two-piece podium stops at two.
-    assert_eq!(
-        User::claim_splash_podium_slot(&client, user.id, september, 2)
+    // The next day is a new claim.
+    assert!(
+        User::claim_splash_shown(&client, user.id, tuesday)
             .await
-            .unwrap(),
-        Some(1)
+            .unwrap()
     );
-    assert_eq!(
-        User::claim_splash_podium_slot(&client, user.id, september, 2)
-            .await
-            .unwrap(),
-        Some(2)
-    );
-    assert_eq!(
-        User::claim_splash_podium_slot(&client, user.id, september, 2)
-            .await
-            .unwrap(),
-        None
-    );
-    // One key, overwritten in place: the row holds this month, not a history.
+    // One key, overwritten in place: the row holds the last day, not a
+    // history.
     let settings: serde_json::Value = client
         .query_one("SELECT settings FROM users WHERE id = $1", &[&user.id])
         .await
         .unwrap()
         .get("settings");
-    assert_eq!(
-        settings["splash_podium"],
-        json!({ "month": "2026-09", "shown": 2 })
-    );
+    assert_eq!(settings["splash_shown_on"], json!("2026-09-22"));
 }

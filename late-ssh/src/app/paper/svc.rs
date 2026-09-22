@@ -30,7 +30,6 @@ use std::time::Duration;
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::app_flag::{AppFlag, AppFlags};
-use late_core::models::artboard_piece::ArtboardPiece;
 use late_core::models::article::Article;
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::chat_room::ChatRoom;
@@ -45,12 +44,11 @@ use tracing::Instrument;
 use uuid::Uuid;
 
 use super::state::{
-    PAPER_ANNOUNCEMENTS_LIMIT, PAPER_WALL_PIECES, PaperAnnouncement, PaperCommand, PaperLayout,
-    PaperModal, PaperState, PaperWall, PendingFlagWrite,
+    PAPER_ANNOUNCEMENTS_LIMIT, PaperAnnouncement, PaperCommand, PaperLayout, PaperModal,
+    PaperState, PendingFlagWrite,
 };
 use crate::app::ai::ghost::GRAYBEARD_PERSONA;
 use crate::app::ai::svc::AiService;
-use crate::app::artboard::gallery::{svc::GalleryPiece, ui::piece_paint_lines};
 use crate::app::common::primitives::Banner;
 use crate::app::state::App;
 use crate::metrics::{self, PaperOpenResult, PaperPrintResult};
@@ -153,8 +151,7 @@ pub enum PressOutcome {
         tally: PrintTally,
     },
     /// The preview edition, for the admin's own modal: the columns over
-    /// today so far, plus today's announcements so far. No wall: the
-    /// pieces are yesterday's rows, and a preview has no yesterday.
+    /// today so far, plus today's announcements so far.
     Previewed {
         edition: PaperEdition,
         announcements: Vec<PaperAnnouncement>,
@@ -198,13 +195,12 @@ impl PrintTally {
 }
 
 /// Today's paper as the newsstand hands it over: the edition's rows plus
-/// the pages read at open time with no claim, since they are rows
-/// already (yesterday's announcements verbatim, the wall).
+/// yesterday's announcements, read at open time with no claim since they
+/// are rows already, verbatim.
 #[derive(Clone, Debug)]
 pub struct PaperIssue {
     pub edition: PaperEdition,
     pub announcements: Vec<PaperAnnouncement>,
-    pub wall: Vec<PaperWall>,
 }
 
 #[derive(Clone, Debug)]
@@ -862,36 +858,9 @@ impl PaperService {
         if !edition.has_print() && announcements.is_empty() {
             return Ok(Opened::Empty);
         }
-        // The wall is a plain read too: the pieces are rows already,
-        // printed in their own colours. A decode failure loses that piece,
-        // not the column. The gallery's kill switch drops the column: a
-        // piece that has to come down fast must not keep printing at every
-        // login.
-        let covered = today.pred_opt().unwrap_or(today);
-        let wall = if !self.flags().artboard_gallery_enabled {
-            Vec::new()
-        } else {
-            ArtboardPiece::most_applauded_hung_on(&client, covered, PAPER_WALL_PIECES)
-                .await?
-                .into_iter()
-                .filter_map(|piece| match GalleryPiece::decode(piece) {
-                    Ok(piece) => Some(PaperWall {
-                        title: piece.title.clone(),
-                        username: piece.username.clone(),
-                        applause: piece.applause,
-                        lines: piece_paint_lines(&piece.canvas, piece.width, piece.height),
-                    }),
-                    Err(error) => {
-                        tracing::warn!(error = ?error, "paper wall piece could not be decoded");
-                        None
-                    }
-                })
-                .collect()
-        };
         let issue = PaperIssue {
             edition,
             announcements,
-            wall,
         };
         match trigger {
             PaperTrigger::Login => {
@@ -1277,7 +1246,6 @@ fn drain_events(app: &mut App) -> bool {
                             &PaperIssue {
                                 edition,
                                 announcements,
-                                wall: Vec::new(),
                             },
                         ));
                         Banner::success(&format!("Preview, not printed. {line}"))
@@ -1348,7 +1316,6 @@ fn edition_modal(app: &App, issue: &PaperIssue) -> PaperModal {
     PaperModal::edition(PaperLayout {
         edition: &issue.edition,
         announcements: &issue.announcements,
-        wall: &issue.wall,
         rail_order: &rail_order,
         member_room_ids: &member_room_ids,
         bumped_labels: &bumped_labels,

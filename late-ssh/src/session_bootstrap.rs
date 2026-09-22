@@ -390,9 +390,9 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             None
         }
     };
-    // The door: the next of last month's podium pieces this account has
-    // not seen, or the cup. One claim per login, the gallery logs its
-    // own failures.
+    // The door: the day's wall piece if this account has not seen it
+    // yet, or the cup. One claim per login, the gallery logs its own
+    // failures.
     let splash_piece = state.gallery_service.claim_splash_piece(user_id).await;
     let initial_door_rcs = match state.door_rc_service.list(user_id).await {
         Ok(rcs) => rcs,

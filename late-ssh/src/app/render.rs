@@ -324,9 +324,9 @@ struct DrawContext<'a> {
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
-    /// This login's podium piece, hung over the splash when it fits; the
+    /// The day's wall piece, hung over the splash when it fits; the
     /// coffee cup otherwise, and always once the account has seen the
-    /// podium this month.
+    /// day's piece.
     splash_piece: Option<&'a crate::app::artboard::gallery::svc::SplashPiece>,
     /// One frame of first-contact whisper theater over the splash, `None`
     /// unless the door is held this frame. See `app/deadchannel`.
@@ -1515,7 +1515,7 @@ impl App {
                 text.push(' ');
             }
 
-            // The login's podium piece takes the cup's place when the
+            // The day's wall piece takes the cup's place when the
             // terminal has room for it; the typed line stays under either.
             let piece_area = ratatui::layout::Layout::vertical([
                 ratatui::layout::Constraint::Min(0),

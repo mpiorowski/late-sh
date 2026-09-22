@@ -255,9 +255,9 @@ pub struct SessionConfig {
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: crate::app::artboard::provenance::SharedArtboardProvenance,
     pub artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService,
-    /// The Artboard gallery: listings, hanging, applause, the splash podium.
+    /// The Artboard gallery: listings, hanging, applause, the splash wall.
     pub gallery_service: crate::app::artboard::gallery::svc::GalleryService,
-    /// The podium piece this login shows over the door, claimed at
+    /// The wall piece this login shows over the door, claimed at
     /// bootstrap (`GalleryService::claim_splash_piece`); `None` is the
     /// coffee cup.
     pub splash_piece: Option<crate::app::artboard::gallery::svc::SplashPiece>,
@@ -887,7 +887,7 @@ pub struct App {
     pub(crate) dartboard_provenance: crate::app::artboard::provenance::SharedArtboardProvenance,
     pub(crate) artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService,
     pub(crate) gallery_service: crate::app::artboard::gallery::svc::GalleryService,
-    /// The podium piece over this session's splash, claimed once at
+    /// The wall piece over this session's splash, claimed once at
     /// bootstrap; `None` draws the coffee cup.
     pub(crate) splash_piece: Option<crate::app::artboard::gallery::svc::SplashPiece>,
     pub(crate) username: String,

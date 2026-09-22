@@ -4,9 +4,8 @@ use uuid::Uuid;
 
 use crate::models::artboard_piece::{
     ApplauseOutcome, ArtboardPiece, FeaturedPiece, HangOutcome, HangParams, ListingCounts,
-    PIECE_DAILY_CAP, PieceListing, PieceLookup, PodiumPiece, TakeDownOutcome,
+    PIECE_DAILY_CAP, PieceListing, PieceLookup, TakeDownOutcome,
 };
-use crate::models::profile_award::snapshot_previous_month_profile_awards;
 use crate::test_utils::{create_test_user, roll_artboard_pieces_back_a_month, test_db};
 
 pub(crate) fn hang_params(user_id: Uuid, title: &str, content_hash: &str) -> HangParams {
@@ -327,98 +326,121 @@ async fn listing_counts_answer_without_listing() {
     );
 }
 
+/// The splash wall: every piece hung takes one UTC day over the door, in
+/// hang order, the day after it was hung at the earliest. Two replicas
+/// refreshing at once agree on the day's piece; a removal after the day
+/// was assigned leaves the day empty, nothing moves up; the gallery's
+/// switch turns the wall off.
 #[tokio::test]
-async fn the_podium_and_the_wall_read_best_first_and_break_ties_by_hang() {
+async fn the_splash_wall_shows_each_piece_one_day_in_hang_order() {
+    use crate::models::app_flag::{AppFlag, AppFlags};
+
     let test_db = test_db().await;
-    let mut client = test_db.db.get().await.expect("db client");
-    let painter = create_test_user(&test_db.db, "podium-painter").await;
-    // The daily cap is three, so the fourth piece is somebody else's.
-    let other = create_test_user(&test_db.db, "podium-other").await;
-    let mut fans = Vec::new();
-    for index in 0..4 {
-        fans.push(create_test_user(&test_db.db, &format!("podium-fan-{index}")).await);
-    }
-
-    // Four pieces the same day: `early` and `late` tie at three, `best`
-    // has four, `quiet` has none. `late` is the other hanger's.
-    let early = hang(&client, hang_params(painter.id, "early", "hash-early")).await;
-    let best = hang(&client, hang_params(painter.id, "best", "hash-best")).await;
-    let late = hang(&client, hang_params(other.id, "late", "hash-late")).await;
-    let quiet = hang(&client, hang_params(other.id, "quiet", "hash-quiet")).await;
-    for (piece, hands) in [(&early, 3), (&best, 4), (&late, 3)] {
-        for fan in &fans[..hands] {
-            ArtboardPiece::toggle_applause(&client, piece.id, fan.id)
-                .await
-                .expect("applaud");
-        }
-    }
-
-    // The paper's wall: best first, the tie to the earlier hang, and any
-    // count qualifies, so `quiet` would be fourth.
+    let client = test_db.db.get().await.expect("db client");
+    let other = test_db.db.get().await.expect("db client");
+    let painter = create_test_user(&test_db.db, "splash-wall-painter").await;
+    let fan = create_test_user(&test_db.db, "splash-wall-fan").await;
     let today = Utc::now().date_naive();
-    let wall = ArtboardPiece::most_applauded_hung_on(&client, today, 3)
+    let day = |offset: i64| today + chrono::Duration::days(offset);
+
+    // Two pieces hung yesterday, the louder one second; one hung today.
+    let first = hang(&client, hang_params(painter.id, "first", "hash-first")).await;
+    let second = hang(&client, hang_params(painter.id, "second", "hash-second")).await;
+    let fresh = hang(&client, hang_params(painter.id, "fresh", "hash-fresh")).await;
+    client
+        .execute(
+            "UPDATE artboard_pieces SET created = created - INTERVAL '1 day' WHERE id = ANY($1)",
+            &[&vec![first.id, second.id]],
+        )
         .await
-        .expect("wall");
+        .expect("backdate yesterday's pieces");
     assert_eq!(
-        wall.iter().map(|piece| piece.id).collect::<Vec<_>>(),
-        vec![best.id, early.id, late.id]
-    );
-    let whole_day = ArtboardPiece::most_applauded_hung_on(&client, today, 10)
-        .await
-        .expect("wall");
-    assert_eq!(whole_day.last().map(|piece| piece.id), Some(quiet.id));
-    let yesterday = today.pred_opt().unwrap();
-    assert!(
-        ArtboardPiece::most_applauded_hung_on(&client, yesterday, 3)
+        ArtboardPiece::toggle_applause(&client, second.id, fan.id)
             .await
-            .expect("wall")
-            .is_empty(),
-        "a day that hung nothing is an empty wall"
+            .expect("applaud"),
+        ApplauseOutcome::Applauded(1)
+    );
+    assert_eq!(
+        ArtboardPiece::splash_queue_depth(&client, today)
+            .await
+            .expect("depth"),
+        2,
+        "yesterday's two pieces wait; today's is not eligible yet"
     );
 
-    // Last month's podium is the award's: nothing until the month rolls
-    // and the snapshot mints it, then one place per hanger in the award's
-    // order (`early` is the painter's second best, so it is not on it),
-    // and the floor keeps `quiet` off it.
-    roll_artboard_pieces_back_a_month(&client).await;
-    assert!(
-        ArtboardPiece::previous_month_podium(&client)
-            .await
-            .expect("podium")
-            .is_empty(),
-        "no podium before the award pass"
+    // Two replicas refreshing at once agree on the day's piece, and it is
+    // the earlier hang, applause or not.
+    let (one, two) = tokio::join!(
+        ArtboardPiece::splash_for_day(&client, today),
+        ArtboardPiece::splash_for_day(&other, today),
     );
-    snapshot_previous_month_profile_awards(&mut client)
-        .await
-        .expect("snapshot");
-    let places = |podium: Vec<PodiumPiece>| {
-        podium
-            .into_iter()
-            .map(|entry| (entry.place, entry.piece.id))
-            .collect::<Vec<_>>()
-    };
-    let podium = ArtboardPiece::previous_month_podium(&client)
-        .await
-        .expect("podium");
-    assert_eq!(places(podium), vec![(1, best.id), (2, late.id)]);
+    let one = one.expect("claim").expect("a piece for today");
+    let two = two.expect("claim").expect("a piece for today");
+    assert_eq!(one.id, first.id);
+    assert_eq!(two.id, first.id);
+    assert_eq!(one.username, painter.username);
+    assert_eq!(
+        ArtboardPiece::splash_queue_depth(&client, today)
+            .await
+            .expect("depth"),
+        1
+    );
 
-    // A mod removal after the month settled keeps the places: the winner's
-    // next piece hangs for `ART1`, and once nothing of theirs is left the
-    // place is a gap, not a promotion.
-    ArtboardPiece::remove(&client, best.id)
+    // The queue drains one a day in hang order: yesterday's second piece,
+    // then the one hung today, then nothing.
+    let next = ArtboardPiece::splash_for_day(&client, day(1))
+        .await
+        .expect("claim")
+        .expect("tomorrow's piece");
+    assert_eq!(next.id, second.id);
+    let after = ArtboardPiece::splash_for_day(&client, day(2))
+        .await
+        .expect("claim")
+        .expect("the day after's piece");
+    assert_eq!(after.id, fresh.id);
+    assert!(
+        ArtboardPiece::splash_for_day(&client, day(3))
+            .await
+            .expect("claim")
+            .is_none()
+    );
+
+    // A day keeps its piece on every later ask.
+    let again = ArtboardPiece::splash_for_day(&client, day(1))
+        .await
+        .expect("claim")
+        .expect("tomorrow's piece again");
+    assert_eq!(again.id, second.id);
+
+    // A mod removal after the day was assigned leaves the day empty;
+    // nothing is promoted into the gap and the day after keeps its piece.
+    ArtboardPiece::remove(&client, second.id)
         .await
         .expect("remove");
-    let podium = ArtboardPiece::previous_month_podium(&client)
+    assert!(
+        ArtboardPiece::splash_for_day(&client, day(1))
+            .await
+            .expect("claim")
+            .is_none()
+    );
+    assert_eq!(
+        ArtboardPiece::splash_for_day(&client, day(2))
+            .await
+            .expect("claim")
+            .map(|piece| piece.id),
+        Some(fresh.id)
+    );
+
+    // The gallery's switch turns the wall off with everything else.
+    AppFlags::set(&client, AppFlag::ArtboardGalleryEnabled, false)
         .await
-        .expect("podium");
-    assert_eq!(places(podium), vec![(1, early.id), (2, late.id)]);
-    ArtboardPiece::remove(&client, early.id)
-        .await
-        .expect("remove");
-    let podium = ArtboardPiece::previous_month_podium(&client)
-        .await
-        .expect("podium");
-    assert_eq!(places(podium), vec![(2, late.id)]);
+        .expect("switch off");
+    assert!(
+        ArtboardPiece::splash_for_day(&client, day(2))
+            .await
+            .expect("claim")
+            .is_none()
+    );
 }
 
 /// The puzzle's daily art: yesterday's most applauded piece, claimed once

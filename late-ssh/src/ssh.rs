@@ -854,9 +854,9 @@ impl russh::server::Handler for ClientHandler {
                 None
             }
         };
-        // The door: the next of last month's podium pieces this account has
-        // not seen, or the cup. One claim per login, the gallery logs its
-        // own failures.
+        // The door: the day's wall piece if this account has not seen it
+        // yet, or the cup. One claim per login, the gallery logs its own
+        // failures.
         let splash_piece = self.state.gallery_service.claim_splash_piece(user_id).await;
         let key_fingerprint = self.auth_fingerprint.clone();
         let device = crate::session_bootstrap::load_device_state(
