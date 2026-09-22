@@ -8,7 +8,7 @@ use late_core::models::moderation_audit_log::ModerationAuditLog;
 use uuid::Uuid;
 
 use super::svc::{
-    JOBS_DRIP_DAYS, JOBS_POSTS_PER_USER, JobsEvent, PostOutcome, PressJob, PressOutcome,
+    JOBS_DRIP_DAYS, JOBS_POSTS_PER_USER, JobsEvent, Link, PostOutcome, PressJob, PressOutcome,
     PressTally, RetractOutcome, drip_slice, press_due_day, tidy_excerpt,
 };
 use crate::moderation::policy::Permissions;
@@ -385,5 +385,40 @@ async fn a_moderator_take_down_is_audited_and_the_writers_own_is_not() {
             Some(modded_id),
             Some(writer_id.as_str()),
         )]
+    );
+}
+
+/// The link check never reaches a private address: a link the model
+/// quoted from a posting that points into the network late.sh runs in is
+/// dead, and the server behind it gets no request.
+#[tokio::test]
+async fn the_link_check_never_reaches_a_private_address() {
+    let (_test_db, app) = chat_compose_app("jobs-link-guard").await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind a local server");
+    let port = listener.local_addr().expect("local addr").port();
+    let reached = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let server_reached = reached.clone();
+    tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+        while let Ok((mut socket, _)) = listener.accept().await {
+            server_reached.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = socket
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+                .await;
+        }
+    });
+
+    let link = app
+        .jobs
+        .service
+        .check_link(&format!("http://127.0.0.1:{port}/careers"))
+        .await;
+
+    assert_eq!(link, Link::Dead);
+    assert!(
+        !reached.load(std::sync::atomic::Ordering::SeqCst),
+        "the local server was requested"
     );
 }

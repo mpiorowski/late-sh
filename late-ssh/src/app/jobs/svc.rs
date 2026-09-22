@@ -43,6 +43,7 @@ use super::state::{JobsCommand, JobsState, PendingFlagWrite};
 use crate::app::ai::svc::{AI_MODEL, AiService};
 use crate::app::common::primitives::{Banner, Screen};
 use crate::app::directory::state::Shelf;
+use crate::app::files::image_upload::{self, HeadCheck};
 use crate::app::state::App;
 use crate::metrics::{self, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult};
 
@@ -304,7 +305,8 @@ struct SkippedItem {
 }
 
 /// What a `HEAD` at the posting's link said.
-enum Link {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Link {
     Alive,
     Dead,
 }
@@ -663,15 +665,18 @@ impl JobsService {
         let client = self.db.get().await?;
         match read {
             Ok(settle) => {
-                let row = JobPosting::settle(&client, posting.id, settle).await?;
-                match row.status {
-                    JobStatus::Active => self.shelve(row),
-                    // HN waits for its slice; the rest never list.
-                    JobStatus::Queued
-                    | JobStatus::Dead
-                    | JobStatus::Dropped
-                    | JobStatus::Pending
-                    | JobStatus::Expired => {}
+                match JobPosting::settle(&client, posting.id, settle).await? {
+                    Some(row) => match row.status {
+                        JobStatus::Active => self.shelve(row),
+                        // HN waits for its slice; the rest never list.
+                        JobStatus::Queued
+                        | JobStatus::Dead
+                        | JobStatus::Dropped
+                        | JobStatus::Pending
+                        | JobStatus::Expired => {}
+                    },
+                    // An overlapping run settled it first; theirs stands.
+                    None => {}
                 }
             }
             Err(_) => JobPosting::note_read_failure(&client, posting.id).await?,
@@ -752,23 +757,20 @@ impl JobsService {
         })
     }
 
-    /// Dead means gone: a 404 or 410, or no host to talk to. Anything
-    /// else (a bot wall's 403, a 405 on HEAD, a slow server) keeps the
+    /// Dead means gone: a 404 or 410, or no host to talk to. A link into
+    /// a private network is refused before any request (the posting is
+    /// untrusted text) and counts as dead too. Anything else (a bot
+    /// wall's 403, a 405 on HEAD, a redirect, a slow server) keeps the
     /// link, since the reader's browser may well get through.
-    async fn check_link(&self, url: &str) -> Link {
-        let response = self
-            .http
-            .head(url)
-            .timeout(URL_CHECK_TIMEOUT)
-            .send_traced()
-            .await;
-        match response {
-            Ok(response) => match response.status().as_u16() {
+    pub(crate) async fn check_link(&self, url: &str) -> Link {
+        match image_upload::head_url(url, URL_CHECK_TIMEOUT).await {
+            HeadCheck::Refused => Link::Dead,
+            HeadCheck::Answered(status) => match status.as_u16() {
                 404 | 410 => Link::Dead,
                 _ => Link::Alive,
             },
-            Err(error) if error.is_connect() => Link::Dead,
-            Err(_) => Link::Alive,
+            HeadCheck::Failed(error) if error.is_connect() => Link::Dead,
+            HeadCheck::Failed(_) => Link::Alive,
         }
     }
 

@@ -1087,6 +1087,13 @@ impl App {
                 });
                 crate::app::zen::ui::ZenChatTile {
                     label: label.clone(),
+                    stream_badge: room_id.and_then(|room_id| {
+                        self.chat
+                            .live_streams
+                            .iter()
+                            .find(|stream| stream.room_id == room_id)
+                            .map(chat::ui::stream_count_badge)
+                    }),
                     view,
                 }
             })

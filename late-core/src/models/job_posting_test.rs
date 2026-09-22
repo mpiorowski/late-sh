@@ -465,3 +465,39 @@ async fn a_posting_written_here_is_active_at_once_and_only_its_writer_or_a_moder
         Retract::NotYours
     );
 }
+
+/// Only a pending row settles. A second read of the same posting (an
+/// overlapping run) landing after the first was released leaves the row
+/// active on its release day, not queued for a second release.
+#[tokio::test]
+async fn a_late_second_settle_leaves_a_released_row_alone() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    JobPosting::upsert_fetched(&client, &fetched(JobSource::Hn, "twice", 1))
+        .await
+        .expect("insert");
+    let row = JobPosting::find_by_external_id(&client, JobSource::Hn, "twice")
+        .await
+        .expect("find")
+        .expect("row");
+    JobPosting::settle(&client, row.id, Settle::Queued(read("First", &["rust"])))
+        .await
+        .expect("settle queued");
+    JobPosting::release_slice(&client, JobSource::Hn, 1, day(10))
+        .await
+        .expect("release");
+
+    let second = JobPosting::settle(&client, row.id, Settle::Queued(read("Second", &["go"])))
+        .await
+        .expect("second settle");
+    assert_eq!(second, None, "a settled row is not settled again");
+
+    let row = JobPosting::find_by_external_id(&client, JobSource::Hn, "twice")
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!(
+        (row.status, row.released_on, row.company.as_str()),
+        (JobStatus::Active, Some(day(10)), "First")
+    );
+}

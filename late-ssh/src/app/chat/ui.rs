@@ -4682,6 +4682,17 @@ fn stream_on_air_view(
     crate::app::voice::ui::OnAirView { live: stream.live }
 }
 
+/// A stream's watcher count in brackets, `[3]` (zero included), or `[…]`
+/// while it is pending: the watch count only means something once frames
+/// flow. Shared by the rail row and the Zen chat tile title, so the two
+/// surfaces read the same number the same way.
+pub(crate) fn stream_count_badge(stream: &crate::app::stream::registry::LiveStreamView) -> String {
+    match stream.live {
+        true => format!("[{}]", stream.watching),
+        false => "[…]".to_string(),
+    }
+}
+
 /// The rail row label for one stream: `▶ mat [3]`, the bracket being the
 /// watcher count (zero included). The title lives in the room's stream
 /// header, not here: the row already carries the unread badge on its right,
@@ -4698,10 +4709,7 @@ fn stream_rail_label(
     stream: &crate::app::stream::registry::LiveStreamView,
     max_width: usize,
 ) -> String {
-    let count = match stream.live {
-        true => format!("[{}]", stream.watching),
-        false => "[…]".to_string(),
-    };
+    let count = stream_count_badge(stream);
     // `▶ ` before the name, one space before the count.
     let name_budget = max_width.saturating_sub(3 + UnicodeWidthStr::width(count.as_str()));
     let name = truncate_cells(&stream.username, name_budget);

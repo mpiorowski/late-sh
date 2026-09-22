@@ -319,10 +319,12 @@ impl JobPosting {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
-    /// Settle a read and return the row as it now stands, so the press
-    /// can shelve an active one without a re-read. The source text goes
-    /// with it; the excerpt is all the shelf ever shows.
-    pub async fn settle(client: &Client, id: Uuid, settle: Settle) -> Result<Self> {
+    /// Settle a pending row's read and return it as it now stands, so the
+    /// press can shelve an active one without a re-read. `None`: the row
+    /// had settled already (an overlapping run read it too), and nothing
+    /// changed. The source text goes with it; the excerpt is all the shelf
+    /// ever shows.
+    pub async fn settle(client: &Client, id: Uuid, settle: Settle) -> Result<Option<Self>> {
         let (status, read, released_on): (JobStatus, Option<JobRead>, Option<NaiveDate>) =
             match settle {
                 Settle::Queued(read) => (JobStatus::Queued, Some(read), None),
@@ -333,12 +335,12 @@ impl JobPosting {
         let row = match read {
             Some(read) => {
                 client
-                    .query_one(
+                    .query_opt(
                         "UPDATE job_postings
                          SET status = $2, url = $3, company = $4, title = $5, remote_kind = $6,
                              regions = $7, tags = $8, pay = $9, excerpt = $10, raw = '',
                              released_on = $11
-                         WHERE id = $1
+                         WHERE id = $1 AND status = 'pending'
                          RETURNING *",
                         &[
                             &id,
@@ -358,16 +360,16 @@ impl JobPosting {
             }
             None => {
                 client
-                    .query_one(
+                    .query_opt(
                         "UPDATE job_postings SET status = $2, raw = ''
-                         WHERE id = $1
+                         WHERE id = $1 AND status = 'pending'
                          RETURNING *",
                         &[&id, &status],
                     )
                     .await?
             }
         };
-        Ok(Self::from(row))
+        Ok(row.map(Self::from))
     }
 
     /// A failed read: count it, keep the row pending for the next run.

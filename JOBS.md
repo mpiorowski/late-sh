@@ -167,7 +167,8 @@ Not doing, with the reason measured:
   link on a jobs page costs trust faster than an empty page.
 
 Everything ingested is an API or feed published for consumption. No HTML
-page is fetched for content, and the URL check is a `HEAD`.
+page is fetched for content, and the URL check is a `HEAD` through the
+same SSRF guard as chat's downloads, redirects not followed.
 
 ### Remote only
 
