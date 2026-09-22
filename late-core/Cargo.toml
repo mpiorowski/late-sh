@@ -33,6 +33,7 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 deadpool-postgres.workspace = true
 tokio-postgres = { workspace = true }
+bytes = { workspace = true }
 
 # Crypto / RNG
 getrandom = { workspace = true }

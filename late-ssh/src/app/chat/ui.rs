@@ -3027,12 +3027,10 @@ pub struct ChatRenderInput<'a> {
     pub showcase_unread_count: i64,
     pub showcase_view: super::showcase::ui::ShowcaseListView<'a>,
     pub showcase_state: Option<&'a super::showcase::state::State>,
-    pub showcase_composing: bool,
     pub work_selected: bool,
     pub work_unread_count: i64,
     pub work_view: super::work::ui::WorkListView<'a>,
     pub work_state: Option<&'a super::work::state::State>,
-    pub work_composing: bool,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -3415,15 +3413,10 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
             lines: chat_composer_lines_for_height(view.news_composer, composer_text_width),
             max_lines: 8,
         }
-    } else if view.showcase_selected {
+    } else if view.showcase_selected || view.work_selected {
         ChatSelectionMode::Composer {
-            lines: if view.showcase_composing { 8 } else { 1 },
-            max_lines: 8,
-        }
-    } else if view.work_selected {
-        ChatSelectionMode::Composer {
-            lines: if view.work_composing { 9 } else { 1 },
-            max_lines: 9,
+            lines: 1,
+            max_lines: 1,
         }
     } else {
         ChatSelectionMode::Composer {
@@ -4689,6 +4682,17 @@ fn stream_on_air_view(
     crate::app::voice::ui::OnAirView { live: stream.live }
 }
 
+/// A stream's watcher count in brackets, `[3]` (zero included), or `[…]`
+/// while it is pending: the watch count only means something once frames
+/// flow. Shared by the rail row and the Zen chat tile title, so the two
+/// surfaces read the same number the same way.
+pub(crate) fn stream_count_badge(stream: &crate::app::stream::registry::LiveStreamView) -> String {
+    match stream.live {
+        true => format!("[{}]", stream.watching),
+        false => "[…]".to_string(),
+    }
+}
+
 /// The rail row label for one stream: `▶ mat [3]`, the bracket being the
 /// watcher count (zero included). The title lives in the room's stream
 /// header, not here: the row already carries the unread badge on its right,
@@ -4705,10 +4709,7 @@ fn stream_rail_label(
     stream: &crate::app::stream::registry::LiveStreamView,
     max_width: usize,
 ) -> String {
-    let count = match stream.live {
-        true => format!("[{}]", stream.watching),
-        false => "[…]".to_string(),
-    };
+    let count = stream_count_badge(stream);
     // `▶ ` before the name, one space before the count.
     let name_budget = max_width.saturating_sub(3 + UnicodeWidthStr::width(count.as_str()));
     let name = truncate_cells(&stream.username, name_budget);
@@ -5310,24 +5311,21 @@ fn draw_selected_content(
         )))
         .block(hint_block);
         frame.render_widget(hint_text, composer_area);
-    } else if view.showcase_selected {
-        if let Some(showcase_state) = view.showcase_state {
-            super::showcase::ui::draw_showcase_composer(
-                frame,
-                composer_area,
-                &super::showcase::ui::ShowcaseComposerView {
-                    state: showcase_state,
-                },
-            );
-        }
-    } else if view.work_selected {
-        if let Some(work_state) = view.work_state {
-            super::work::ui::draw_work_composer(
-                frame,
-                composer_area,
-                &super::work::ui::WorkComposerView { state: work_state },
-            );
-        }
+    } else if view.showcase_selected || view.work_selected {
+        let hint_block = Block::default()
+            .title(if view.work_selected {
+                " Work "
+            } else {
+                " Projects "
+            })
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme::BORDER()));
+        let hint_text = Paragraph::new(Line::from(Span::styled(
+            " j/k navigate · Enter copy link · i edit yours on Profiles (5) · e edit · d delete",
+            Style::default().fg(theme::TEXT_DIM()),
+        )))
+        .block(hint_block);
+        frame.render_widget(hint_text, composer_area);
     } else if view.discover_selected {
         if view.discover_view.filtering {
             let filter_block = Block::default()

@@ -2185,7 +2185,7 @@ pub fn extract_langs(settings: &Value) -> Vec<String> {
         Vec::new()
     };
 
-    normalize_profile_tags(raw_tags.iter().map(String::as_str))
+    crate::vocab::normalize_langs(raw_tags.iter().map(String::as_str))
 }
 
 fn extract_trimmed_profile_text(settings: &Value, key: &str) -> Option<String> {
@@ -2195,30 +2195,6 @@ fn extract_trimmed_profile_text(settings: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
-}
-
-fn normalize_profile_tags<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    let mut out = Vec::new();
-    for value in values {
-        for raw in value.split(|c: char| c == ',' || c.is_whitespace()) {
-            let tag: String = raw
-                .trim()
-                .trim_matches('#')
-                .to_ascii_lowercase()
-                .chars()
-                .filter(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | '_' | '.'))
-                .collect();
-            if tag.is_empty() || tag.len() > 24 || !seen.insert(tag.clone()) {
-                continue;
-            }
-            out.push(tag);
-            if out.len() >= 8 {
-                return out;
-            }
-        }
-    }
-    out
 }
 
 pub fn sanitize_username_input(username: &str) -> String {

@@ -209,6 +209,8 @@ pub struct SessionConfig {
     pub summary_service: crate::app::ai::summary::SummaryService,
     /// The Late Edition (`app/paper`): the newsstand this session reads from.
     pub paper_service: crate::app::paper::svc::PaperService,
+    /// The job feed (`app/jobs`): the shelf snapshot this session copies.
+    pub jobs_service: crate::app::jobs::svc::JobsService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
     pub feed_service: crate::app::chat::feeds::svc::FeedService,
@@ -492,6 +494,9 @@ pub struct App {
     pub(crate) ultimate_cooldown_was_running: bool,
     /// The Late Edition: its modal, the login pop, and the `/paper` drain.
     pub(crate) paper: crate::app::paper::state::PaperState,
+    /// The Jobs shelf: the replica's active postings, the selection, and
+    /// the `/jobs` drain.
+    pub(crate) jobs: crate::app::jobs::state::JobsState,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState,
     pub(crate) aquarium_state: hub::aquarium::state::AquariumState,
@@ -676,6 +681,10 @@ pub struct App {
     /// The `/status` picker overlay.
     pub(crate) status_picker: crate::app::status_picker::state::StatusPickerState,
     pub(crate) room_info_modal_state: crate::app::room_info_modal::state::RoomInfoModalState,
+    /// The profile editor opened from page 5 (`app/directory/editor`).
+    pub(crate) directory_editor: crate::app::directory::editor::state::EditorState,
+    /// The tag picker the settings modal and the profile editor open.
+    pub(crate) tag_picker: super::tag_picker::state::TagPickerState,
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
     /// Server-authoritative audio source for the paired playback surface.
     /// Mirrors `users.settings.audio_source`. v+x flips this, persists it to
@@ -1419,6 +1428,7 @@ impl App {
                 config.paper_service,
                 config.paper_at_login,
             ),
+            jobs: crate::app::jobs::state::JobsState::new(config.jobs_service),
             help_modal_state: help_modal::state::HelpModalState::new(),
             leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState::new(),
             aquarium_state,
@@ -1572,6 +1582,8 @@ impl App {
             status_picker: crate::app::status_picker::state::StatusPickerState::default(),
             room_info_modal_state: crate::app::room_info_modal::state::RoomInfoModalState::default(
             ),
+            directory_editor: crate::app::directory::editor::state::EditorState::default(),
+            tag_picker: super::tag_picker::state::TagPickerState::default(),
             booth_modal_state: crate::app::audio::booth::state::BoothModalState::default(),
             paired_source: config.initial_audio_source,
             selected_icecast_stream: config.initial_icecast_stream,

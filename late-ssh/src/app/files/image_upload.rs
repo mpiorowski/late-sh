@@ -6,6 +6,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use chrono::{Datelike, Utc};
 use hmac::{Hmac, Mac};
+use late_core::telemetry::TracedExt;
 use reqwest::{Url, redirect::Policy};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -106,10 +107,49 @@ pub(crate) async fn download_url_bytes_following_redirects(
     bail!("too many redirects");
 }
 
+/// What a guarded `HEAD` at a user-supplied URL came to.
+pub(crate) enum HeadCheck {
+    /// Refused before any request: not http(s), no host, it did not
+    /// resolve, or it resolves into a private network.
+    Refused,
+    /// The server answered. Redirects are not followed, so a 3xx is an
+    /// answer too.
+    Answered(reqwest::StatusCode),
+    /// The request itself failed (connect, timeout, TLS).
+    Failed(reqwest::Error),
+}
+
+/// A `HEAD` at a user-supplied URL under the same guard as the downloads:
+/// private and reserved addresses refused, DNS pinned, no redirects.
+pub(crate) async fn head_url(raw_url: &str, timeout: Duration) -> HeadCheck {
+    let validated = match validate_download_url(raw_url).await {
+        Ok(validated) => validated,
+        Err(_) => return HeadCheck::Refused,
+    };
+    let client = match pinned_client(&validated, timeout) {
+        Ok(client) => client,
+        Err(error) => return HeadCheck::Failed(error),
+    };
+    match client.head(validated.url.clone()).send_traced().await {
+        Ok(response) => HeadCheck::Answered(response.status()),
+        Err(error) => HeadCheck::Failed(error),
+    }
+}
+
 async fn send_validated_get(
     validated: &ValidatedDownloadUrl,
     timeout: Duration,
 ) -> Result<reqwest::Response> {
+    let client = pinned_client(validated, timeout)?;
+    Ok(client.get(validated.url.clone()).send().await?)
+}
+
+/// A client that follows no redirect and talks only to the addresses the
+/// validation checked.
+fn pinned_client(
+    validated: &ValidatedDownloadUrl,
+    timeout: Duration,
+) -> reqwest::Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder()
         .timeout(timeout)
         .user_agent(USER_AGENT)
@@ -121,8 +161,7 @@ async fn send_validated_get(
         builder = builder.resolve_to_addrs(&validated.host, &validated.addrs);
     }
 
-    let client = builder.build()?;
-    Ok(client.get(validated.url.clone()).send().await?)
+    builder.build()
 }
 
 pub async fn upload_image_bytes(files: &FilesConfig, data: Vec<u8>, mime: &str) -> Result<String> {

@@ -10,7 +10,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use super::state::{ComposerField, State};
 use super::svc::ShowcaseFeedItem;
 
 #[derive(Clone, Copy)]
@@ -201,127 +200,6 @@ fn description_summary_lines(
     }
 
     (out, truncated)
-}
-
-pub struct ShowcaseComposerView<'a> {
-    pub state: &'a State,
-}
-
-pub fn draw_showcase_composer(frame: &mut Frame, area: Rect, view: &ShowcaseComposerView<'_>) {
-    let editing = view.state.editing();
-    let composing = view.state.composing();
-    let active = view.state.active_field();
-
-    let title = if !composing {
-        " Showcase "
-    } else if editing {
-        " Editing · Tab/S+Tab switch · Enter submit · Alt+Enter/Ctrl+J newline · Esc cancel "
-    } else {
-        " New showcase · Tab/S+Tab switch · Enter submit · Alt+Enter/Ctrl+J newline · Esc cancel "
-    };
-    let border_style = if composing {
-        Style::default().fg(theme::BORDER_ACTIVE())
-    } else {
-        Style::default().fg(theme::BORDER())
-    };
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(border_style);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if !composing {
-        let hint = Paragraph::new(Line::from(Span::styled(
-            " j/k navigate · Enter copy URL · i compose · e edit own · d delete own · / filter mine",
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-        frame.render_widget(hint, inner);
-        return;
-    }
-
-    // Four-row form: 3 single-line fields then a multi-line description.
-    // Description gets the remaining space.
-    let constraints = [
-        Constraint::Length(2), // title
-        Constraint::Length(2), // url
-        Constraint::Length(2), // tags
-        Constraint::Min(2),    // description
-    ];
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(inner);
-
-    draw_field(frame, rows[0], view.state, ComposerField::Title, active);
-    draw_field(frame, rows[1], view.state, ComposerField::Url, active);
-    draw_field(frame, rows[2], view.state, ComposerField::Tags, active);
-    draw_field(
-        frame,
-        rows[3],
-        view.state,
-        ComposerField::Description,
-        active,
-    );
-}
-
-fn draw_field(
-    frame: &mut Frame,
-    area: Rect,
-    state: &State,
-    field: ComposerField,
-    active: ComposerField,
-) {
-    let is_active = field == active;
-    let label_style = if is_active {
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::TEXT_DIM())
-    };
-    let label_w: u16 = 18;
-    let split = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(label_w),
-            Constraint::Length(1),
-            Constraint::Min(1),
-        ])
-        .split(area);
-    let prefix = if is_active { "▸ " } else { "  " };
-    let label = Paragraph::new(Line::from(Span::styled(
-        format!("{prefix}{}:", field.label()),
-        label_style,
-    )));
-    frame.render_widget(label, split[0]);
-    frame.render_widget(Paragraph::new(" "), split[1]);
-    if state.field_is_empty(field) {
-        draw_empty_placeholder(frame, split[2], field.placeholder(), is_active);
-    } else {
-        frame.render_widget(state.field_textarea(field), split[2]);
-    }
-}
-
-fn draw_empty_placeholder(frame: &mut Frame, area: Rect, placeholder: &str, active: bool) {
-    let mut chars = placeholder.chars();
-    let Some(first) = chars.next() else {
-        return;
-    };
-    let rest = chars.collect::<String>();
-    let first = if active {
-        Span::styled(
-            first.to_string(),
-            theme::punch_through(theme::TEXT_DIM()).add_modifier(Modifier::BOLD),
-        )
-    } else {
-        Span::styled(first.to_string(), Style::default().fg(theme::TEXT_DIM()))
-    };
-    let line = Line::from(vec![
-        first,
-        Span::styled(rest, Style::default().fg(theme::TEXT_DIM())),
-    ]);
-    frame.render_widget(Paragraph::new(line).wrap(Wrap { trim: false }), area);
 }
 
 #[cfg(test)]

@@ -416,13 +416,16 @@ fn display_author(profile: Option<&Profile>, user_id: Uuid) -> String {
 pub fn parse_words(input: &str, limit: usize) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
+    // A leading `#` is a hashtag and goes; `+` and a trailing `#` are part
+    // of a language's name (c++, c#), which the tag vocabulary spells the
+    // same way.
     for raw in input.split(|c: char| c == ',' || c.is_whitespace()) {
         let tag: String = raw
             .trim()
-            .trim_matches('#')
+            .trim_start_matches('#')
             .to_ascii_lowercase()
             .chars()
-            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | '_' | '.' | '+' | '#'))
             .collect();
         if tag.is_empty() || tag.len() > 24 {
             continue;
@@ -458,4 +461,11 @@ pub fn parse_links(input: &str) -> Vec<String> {
 pub fn looks_like_url(s: &str) -> bool {
     let s = s.trim();
     s.starts_with("http://") || s.starts_with("https://")
+}
+
+/// A fresh public slug for a new card: `w_` and twelve lowercase hex chars
+/// of a v7 id, which the `work_profiles.slug` CHECK expects.
+pub fn generate_public_slug() -> String {
+    let id = Uuid::now_v7().simple().to_string();
+    format!("w_{}", &id[..12])
 }
