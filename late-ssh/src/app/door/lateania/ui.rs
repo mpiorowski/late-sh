@@ -1947,15 +1947,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     let quests_beyond = if quest_targets.is_empty() {
         0
     } else {
-        super::worldmap::quest_arrows(
-            coords,
-            center,
-            cols,
-            height,
-            &quest_targets,
-            &view.visited,
-        )
-        .1
+        super::worldmap::quest_arrows(coords, center, cols, height, &quest_targets, &view.visited).1
     };
 
     // Land labels: name each explored region once, near the centroid of its

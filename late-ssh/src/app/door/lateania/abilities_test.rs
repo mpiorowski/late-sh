@@ -114,10 +114,7 @@ fn a_damaging_ability_says_which_school_it_lands_in() {
     // The Runemaster's opening five, the kit in the screenshot: one Fire
     // among four Arcane, which is exactly what the rows have to distinguish.
     assert_eq!(named("Force Rune").effect_label(), "arcane damage");
-    assert_eq!(
-        named("Graven Rune").effect_label(),
-        "fire damage over time"
-    );
+    assert_eq!(named("Graven Rune").effect_label(), "fire damage over time");
     assert_eq!(named("Binding Rune").effect_label(), "arcane stun");
 
     // A stun still lands its hit through `damage_target`, so it keeps a

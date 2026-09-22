@@ -1127,8 +1127,7 @@ fn quest_arrows_stay_honest_across_reserved_blocks() {
     );
 
     let visited = std::collections::HashSet::from([world.start_room]);
-    let (arrows, beyond) =
-        super::quest_arrows(&coords, center, cols, rows, &[near, far], &visited);
+    let (arrows, beyond) = super::quest_arrows(&coords, center, cols, rows, &[near, far], &visited);
     assert_eq!(beyond, 1, "the cross-block target is counted, not drawn");
     for a in &arrows {
         assert!(a.row < rows as usize && a.col < cols as usize);
@@ -1317,7 +1316,8 @@ fn a_tracked_room_still_in_fog_gets_an_arrow_even_on_screen() {
         "a tracked room still in fog gets a direction arrow"
     );
     assert!(
-        "\u{2190}\u{2191}\u{2192}\u{2193}\u{2196}\u{2197}\u{2198}\u{2199}".contains(arrows[0].glyph)
+        "\u{2190}\u{2191}\u{2192}\u{2193}\u{2196}\u{2197}\u{2198}\u{2199}"
+            .contains(arrows[0].glyph)
     );
 
     // Once it is walked the canvas draws the flag itself, so the arrow stops.
@@ -1344,8 +1344,7 @@ fn a_tracked_room_under_the_crosshair_gets_no_arrow() {
         .expect("the lich spawns")
         .home;
     let visited: HashSet<RoomId> = HashSet::from([5000]);
-    let (arrows, beyond) =
-        super::quest_arrows(&coords, coords[&lich], 150, 50, &[lich], &visited);
+    let (arrows, beyond) = super::quest_arrows(&coords, coords[&lich], 150, 50, &[lich], &visited);
     assert_eq!(beyond, 0);
     assert!(arrows.is_empty(), "got {arrows:?}");
 }
