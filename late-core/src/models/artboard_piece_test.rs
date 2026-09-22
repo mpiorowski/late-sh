@@ -386,34 +386,22 @@ async fn the_splash_wall_shows_each_piece_one_day_in_hang_order() {
         1
     );
 
-    // The queue drains one a day in hang order: yesterday's second piece,
-    // then the one hung today, then nothing.
+    // The queue drains one a day in hang order: yesterday's second piece
+    // next, and a day keeps its piece on every later ask.
     let next = ArtboardPiece::splash_for_day(&client, day(1))
         .await
         .expect("claim")
         .expect("tomorrow's piece");
     assert_eq!(next.id, second.id);
-    let after = ArtboardPiece::splash_for_day(&client, day(2))
-        .await
-        .expect("claim")
-        .expect("the day after's piece");
-    assert_eq!(after.id, fresh.id);
-    assert!(
-        ArtboardPiece::splash_for_day(&client, day(3))
-            .await
-            .expect("claim")
-            .is_none()
-    );
-
-    // A day keeps its piece on every later ask.
     let again = ArtboardPiece::splash_for_day(&client, day(1))
         .await
         .expect("claim")
         .expect("tomorrow's piece again");
     assert_eq!(again.id, second.id);
 
-    // A mod removal after the day was assigned leaves the day empty;
-    // nothing is promoted into the gap and the day after keeps its piece.
+    // A mod removal after the day was assigned leaves the day empty, even
+    // with a piece still waiting: nothing is promoted into the gap, and the
+    // waiting piece keeps its turn for the day after.
     ArtboardPiece::remove(&client, second.id)
         .await
         .expect("remove");
@@ -424,11 +412,22 @@ async fn the_splash_wall_shows_each_piece_one_day_in_hang_order() {
             .is_none()
     );
     assert_eq!(
-        ArtboardPiece::splash_for_day(&client, day(2))
+        ArtboardPiece::splash_queue_depth(&client, day(1))
+            .await
+            .expect("depth"),
+        1,
+        "the piece hung today still waits"
+    );
+    let after = ArtboardPiece::splash_for_day(&client, day(2))
+        .await
+        .expect("claim")
+        .expect("the day after's piece");
+    assert_eq!(after.id, fresh.id);
+    assert!(
+        ArtboardPiece::splash_for_day(&client, day(3))
             .await
             .expect("claim")
-            .map(|piece| piece.id),
-        Some(fresh.id)
+            .is_none()
     );
 
     // The gallery's switch turns the wall off with everything else.

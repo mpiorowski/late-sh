@@ -240,7 +240,7 @@ mod inner {
 
     use opentelemetry::{
         KeyValue, global,
-        metrics::{Counter, UpDownCounter},
+        metrics::{Counter, Gauge, UpDownCounter},
     };
 
     use super::ShareCardKind;
@@ -1558,6 +1558,22 @@ mod inner {
         );
     }
 
+    fn gallery_splash_queue_depth() -> &'static Gauge<u64> {
+        static METRIC: OnceLock<Gauge<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_gauge("late_ssh_artboard_gallery_splash_queue_depth")
+                .with_description(
+                    "Artboard gallery pieces still waiting for a day on the splash wall",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_gallery_splash_queue_depth(depth: i64) {
+        gallery_splash_queue_depth().record(depth as u64, &[]);
+    }
+
     fn gallery_applause_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -1713,6 +1729,7 @@ mod inner {
     pub fn record_gallery_hang(_result: GalleryHangResult) {}
     pub fn record_gallery_applause(_result: GalleryApplauseResult) {}
     pub fn record_gallery_take_down(_result: GalleryTakeDownResult) {}
+    pub fn record_gallery_splash_queue_depth(_depth: i64) {}
     pub fn record_door_ingest_line(_game: DoorGame) {}
     pub fn record_door_ingest_session_failure(_game: DoorGame) {}
     pub fn record_online_time_flush(_result: OnlineTimeFlushResult) {}

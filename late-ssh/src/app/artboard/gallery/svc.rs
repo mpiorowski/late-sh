@@ -61,13 +61,18 @@ impl SplashPiece {
     }
 }
 
-/// What one refresh found: the day's piece, and how many pieces still
-/// wait for a day (hung before it, never shown). The count is logged so
-/// the backlog is measurable before anyone decides on a cap.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct SplashRefresh {
-    pub piece: Option<SplashPiece>,
-    pub queued: i64,
+/// What one refresh found. `Off` is no database or the gallery's switch
+/// off: nothing was read, so there is no queue to count. `Wall` is the
+/// day's piece (`None` on an empty queue) and how many pieces still wait
+/// for a day (hung before it, never shown), recorded as a gauge so the
+/// backlog is measurable before anyone decides on a cap.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SplashRefresh {
+    Off,
+    Wall {
+        piece: Option<SplashPiece>,
+        queued: i64,
+    },
 }
 
 /// A piece as the page draws it: the row decoded into a canvas, with the
@@ -283,19 +288,28 @@ impl GalleryService {
             loop {
                 interval.tick().await;
                 match service.refresh_splash(Utc::now().date_naive()).await {
-                    Ok(SplashRefresh {
+                    Ok(SplashRefresh::Off) => {
+                        tracing::debug!("artboard gallery splash wall is off")
+                    }
+                    Ok(SplashRefresh::Wall {
                         piece: None,
                         queued,
-                    }) => tracing::debug!(queued, "artboard gallery has no splash piece today"),
-                    Ok(SplashRefresh {
+                    }) => {
+                        metrics::record_gallery_splash_queue_depth(queued);
+                        tracing::debug!(queued, "artboard gallery has no splash piece today")
+                    }
+                    Ok(SplashRefresh::Wall {
                         piece: Some(piece),
                         queued,
-                    }) => tracing::debug!(
-                        piece_id = %piece.piece.id,
-                        shown_on = %piece.shown_on,
-                        queued,
-                        "artboard gallery splash wall refreshed"
-                    ),
+                    }) => {
+                        metrics::record_gallery_splash_queue_depth(queued);
+                        tracing::debug!(
+                            piece_id = %piece.piece.id,
+                            shown_on = %piece.shown_on,
+                            queued,
+                            "artboard gallery splash wall refreshed"
+                        )
+                    }
                     Err(error) => tracing::warn!(
                         error = ?error,
                         "artboard gallery splash refresh failed"
@@ -313,11 +327,11 @@ impl GalleryService {
     /// `/mod artboard remove`, and no day is assigned while it is off.
     pub async fn refresh_splash(&self, day: NaiveDate) -> Result<SplashRefresh> {
         let Some(db) = self.db.as_ref() else {
-            return Ok(SplashRefresh::default());
+            return Ok(SplashRefresh::Off);
         };
         if !self.is_enabled() {
             let _ = self.splash_tx.send(None);
-            return Ok(SplashRefresh::default());
+            return Ok(SplashRefresh::Off);
         }
         let client = db.get().await?;
         let piece = match ArtboardPiece::splash_for_day(&client, day).await? {
@@ -326,7 +340,7 @@ impl GalleryService {
         };
         let queued = ArtboardPiece::splash_queue_depth(&client, day).await?;
         let _ = self.splash_tx.send(piece.clone());
-        Ok(SplashRefresh { piece, queued })
+        Ok(SplashRefresh::Wall { piece, queued })
     }
 
     /// The rail's numbers, one query. Without a database everything is

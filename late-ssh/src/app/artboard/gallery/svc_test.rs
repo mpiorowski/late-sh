@@ -43,7 +43,10 @@ async fn the_refresh_publishes_todays_piece_and_the_claim_shows_it_once() {
     // Nothing hung before today: the watch is empty and the door is the cup.
     assert_eq!(
         service.refresh_splash(today).await.expect("refresh"),
-        SplashRefresh::default()
+        SplashRefresh::Wall {
+            piece: None,
+            queued: 0
+        }
     );
     assert_eq!(service.splash_wall(), None);
     assert_eq!(service.claim_splash_piece(viewer.id).await, None);
@@ -57,12 +60,16 @@ async fn the_refresh_publishes_todays_piece_and_the_claim_shows_it_once() {
         HangOutcome::Hung(piece) => piece,
         other => panic!("expected the piece to hang, got {other:?}"),
     };
-    let refreshed = service.refresh_splash(tomorrow).await.expect("refresh");
-    let published = refreshed.piece.expect("tomorrow's piece");
+    let published = match service.refresh_splash(tomorrow).await.expect("refresh") {
+        SplashRefresh::Wall {
+            piece: Some(piece),
+            queued: 0,
+        } => piece,
+        other => panic!("expected tomorrow's piece and an empty queue, got {other:?}"),
+    };
     assert_eq!(published.piece.id, hung.id);
     assert_eq!(published.piece.title, "dawn");
     assert_eq!(published.shown_on, tomorrow);
-    assert_eq!(refreshed.queued, 0);
     assert_eq!(service.splash_wall(), Some(published.clone()));
 
     // The first login of the day gets it, the next is the cup.
@@ -90,7 +97,7 @@ async fn the_refresh_publishes_todays_piece_and_the_claim_shows_it_once() {
     let off = GalleryService::new(test_db.db.clone(), flags_rx);
     assert_eq!(
         off.refresh_splash(tomorrow).await.expect("refresh"),
-        SplashRefresh::default()
+        SplashRefresh::Off
     );
     assert_eq!(off.splash_wall(), None);
     let bystander = create_test_user(&test_db.db, "splash-refresh-bystander").await;

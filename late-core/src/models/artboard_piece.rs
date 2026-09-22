@@ -23,7 +23,7 @@
 //! same counts.
 //!
 //! Every piece hung also takes one day over the door: the splash wall
-//! ([`ArtboardPiece::splash_for_day`]) stamps `splash_on` (migration 193)
+//! ([`ArtboardPiece::splash_for_day`]) stamps `splash_on` (migration 195)
 //! one piece per UTC day in hang order, the day after the piece was hung
 //! at the earliest.
 
@@ -400,10 +400,12 @@ impl ArtboardPiece {
     /// weekend spills into the week.
     ///
     /// The claim is one `UPDATE` racing on the partial unique index over
-    /// `splash_on` (migration 193): the loser's stamp is refused and it
-    /// reads the winner's row back. A piece taken down leaves the index,
-    /// so a removal after the day was assigned leaves the day without a
-    /// piece (the cup); nothing is promoted into the gap. The gallery's
+    /// `splash_on` (migration 195): the loser's stamp is refused and it
+    /// reads the winner's row back. A piece taken down leaves the index
+    /// but keeps its stamp, and the claim refuses any day a row (removed
+    /// or not) already holds, so a removal after the day was assigned
+    /// leaves the day without a piece (the cup); nothing is promoted into
+    /// the gap. The gallery's
     /// kill switch (`artboard_gallery_enabled`) is in both statements, so
     /// a day the gallery was off assigns nothing and burns no piece.
     /// `None` is an empty queue or the switch off.
@@ -426,6 +428,7 @@ impl ArtboardPiece {
                     ORDER BY p.created ASC
                     LIMIT 1
                  )
+                 AND NOT EXISTS (SELECT 1 FROM artboard_pieces WHERE splash_on = $1)
                  AND EXISTS (SELECT 1 FROM app_flags WHERE key = $2 AND enabled)",
                 &[&day, &AppFlag::ArtboardGalleryEnabled.key()],
             )
