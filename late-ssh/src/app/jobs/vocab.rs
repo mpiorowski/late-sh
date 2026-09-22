@@ -212,7 +212,7 @@ pub(crate) fn normalize(skills: &[String], limit: usize) -> Normalized {
             }
             None => {
                 let free = skill.trim().trim_start_matches('#').to_ascii_lowercase();
-                if !free.is_empty() && !out.free.iter().any(|known| *known == free) {
+                if !free.is_empty() && !out.free.contains(&free) {
                     out.free.push(free);
                 }
             }

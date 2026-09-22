@@ -322,7 +322,7 @@ pub(crate) struct ProjectDraft {
 /// What the projects page is showing: the list, or one project's form.
 pub(crate) enum ProjectsView {
     List { selected: usize },
-    Form(ProjectDraft),
+    Form(Box<ProjectDraft>),
 }
 
 /// What a save writes, in the order the input layer dispatches it. Pure
@@ -560,6 +560,7 @@ impl EditorState {
         self.status
     }
 
+    #[cfg(test)]
     pub(crate) fn work_type(&self) -> WorkType {
         self.work_type
     }
@@ -615,7 +616,7 @@ impl EditorState {
         project: &ProjectRow,
     ) {
         self.open_own(viewer, card, profile, Page::Projects);
-        self.projects_view = ProjectsView::Form(ProjectDraft::from_row(project, 0));
+        self.projects_view = ProjectsView::Form(Box::new(ProjectDraft::from_row(project, 0)));
         self.sync_cursors();
     }
 
@@ -647,7 +648,7 @@ impl EditorState {
         self.viewer = viewer;
         self.scope = Scope::ProjectOf { owner, username };
         self.page = Page::Projects;
-        self.projects_view = ProjectsView::Form(ProjectDraft::from_row(project, 0));
+        self.projects_view = ProjectsView::Form(Box::new(ProjectDraft::from_row(project, 0)));
         self.open = true;
         self.sync_cursors();
     }
@@ -1029,7 +1030,7 @@ impl EditorState {
 
     /// A new project lands at the top of the list, so the form returns there.
     pub(crate) fn start_new_project(&mut self) {
-        self.projects_view = ProjectsView::Form(ProjectDraft::new(0));
+        self.projects_view = ProjectsView::Form(Box::new(ProjectDraft::new(0)));
         self.row = 0;
         self.error = None;
         self.start_editing();
@@ -1037,7 +1038,8 @@ impl EditorState {
 
     pub(crate) fn start_editing_project(&mut self, project: &ProjectRow) {
         let list_index = self.project_selected();
-        self.projects_view = ProjectsView::Form(ProjectDraft::from_row(project, list_index));
+        self.projects_view =
+            ProjectsView::Form(Box::new(ProjectDraft::from_row(project, list_index)));
         self.row = 0;
         self.editing = false;
         self.error = None;

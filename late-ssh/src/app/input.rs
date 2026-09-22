@@ -1874,12 +1874,8 @@ fn handle_directory_catalog_input(app: &mut App, event: &ParsedInput) -> bool {
             true
         }
         ParsedInput::Byte(byte) => crate::app::directory::input::handle_idle_byte(app, *byte),
-        ParsedInput::Char(ch) => {
-            if ch.is_ascii() {
-                crate::app::directory::input::handle_idle_byte(app, *ch as u8)
-            } else {
-                false
-            }
+        ParsedInput::Char(ch) if ch.is_ascii() => {
+            crate::app::directory::input::handle_idle_byte(app, *ch as u8)
         }
         _ => false,
     }
