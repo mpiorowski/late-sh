@@ -31,14 +31,25 @@ pub(crate) fn hn_comment_url(id: i64) -> String {
     format!("https://news.ycombinator.com/item?id={id}")
 }
 
-/// The Jobicy tag queries, one request each. The API's tag match is a
-/// substring one (`rust` returns "trust"), so every row is rechecked on
-/// word boundaries against the words beside its query.
+/// The Jobicy tag queries, one request each, the newest `JOBICY_COUNT`
+/// rows of each. The API's tag match is a substring one (`rust` returns
+/// "trust"), so every row is rechecked: the query word must appear whole
+/// somewhere in the posting, or one of the title words whole in the
+/// title. "Go" is the title word for `golang` because a description says
+/// "go" as a verb in every other sentence. JS and TS are the volume
+/// (about four a day each); rust, go, and elixir a handful a month.
 pub(crate) const JOBICY_TAGS: &[(&str, &[&str])] = &[
     ("rust", &["rust"]),
     ("golang", &["go", "golang"]),
     ("elixir", &["elixir"]),
+    ("typescript", &["typescript", "ts"]),
+    ("javascript", &["javascript", "js", "node", "react"]),
 ];
+
+/// Rows asked of Jobicy per tag per night: the fetch runs nightly and the
+/// busiest tag posts four a day, so the newest thirty always cover the
+/// gap, even after a missed night or two.
+pub(crate) const JOBICY_COUNT: &str = "30";
 
 #[derive(serde::Deserialize)]
 struct HnUser {
@@ -180,10 +191,15 @@ struct JobicyJob {
     pub_date: String,
 }
 
-/// One Jobicy tag query's page. A row whose text does not carry one of
-/// `needles` as a whole word is the substring match's false positive and
-/// comes back `dropped`, so it is tombstoned rather than read.
-pub(crate) fn parse_jobicy(json: &str, needles: &[&str]) -> Result<Vec<FetchedPosting>> {
+/// One Jobicy tag query's page. A row that carries neither `query` as a
+/// whole word anywhere nor one of `title_words` whole in its title is the
+/// substring match's false positive and comes back `dropped`, so it is
+/// tombstoned rather than read.
+pub(crate) fn parse_jobicy(
+    json: &str,
+    query: &str,
+    title_words: &[&str],
+) -> Result<Vec<FetchedPosting>> {
     let page: JobicyPage = serde_json::from_str(json).context("parsing a jobicy page")?;
     let mut out = Vec::new();
     for job in page.jobs {
@@ -200,7 +216,8 @@ pub(crate) fn parse_jobicy(json: &str, needles: &[&str]) -> Result<Vec<FetchedPo
         }
         let description = html_to_text(&job.description);
         let haystack = format!("{} {} {}", job.title, job.excerpt, description);
-        let dropped = !needles.iter().any(|needle| word_match(&haystack, needle));
+        let dropped = !word_match(&haystack, query)
+            && !title_words.iter().any(|word| word_match(&job.title, word));
         let (remote_kind, regions) = jobicy_scope(&job.geo);
         let kind = match &job.kind {
             serde_json::Value::Array(kinds) => kinds
@@ -258,11 +275,7 @@ pub(crate) fn word_match(text: &str, word: &str) -> bool {
     while let Some(at) = text[from..].find(&word) {
         let start = from + at;
         let end = start + word.len();
-        let before_ok = start == 0
-            || !text[..start]
-                .chars()
-                .next_back()
-                .is_some_and(is_word_char);
+        let before_ok = start == 0 || !text[..start].chars().next_back().is_some_and(is_word_char);
         let after_ok = end == text.len() || !text[end..].chars().next().is_some_and(is_word_char);
         if before_ok && after_ok {
             return true;

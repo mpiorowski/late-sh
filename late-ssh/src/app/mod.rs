@@ -23,7 +23,7 @@ pub(crate) mod icon_picker;
 pub mod input;
 #[cfg(test)]
 mod input_flow_test;
-pub(crate) mod jobs;
+pub mod jobs;
 pub(crate) mod leaderboard;
 pub mod lobby;
 pub(crate) mod mod_modal;

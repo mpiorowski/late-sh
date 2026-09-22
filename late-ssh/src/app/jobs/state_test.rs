@@ -4,8 +4,7 @@ use late_core::models::work_profile::{WorkProfile, WorkStatus, WorkType};
 use uuid::Uuid;
 
 use super::state::{
-    JobsCommand, match_line, matches, parse_jobs_command, scope_label, viewer_tags,
-    wants_matches,
+    JobsCommand, match_line, matches, parse_jobs_command, scope_label, viewer_tags, wants_matches,
 };
 
 pub(crate) fn posting(company: &str, tags: &[&str]) -> JobPosting {
@@ -57,7 +56,11 @@ fn the_viewer_is_matched_on_card_tags_and_langs_through_the_vocabulary() {
     let card = card(WorkStatus::Open, &["rust", "postgres"]);
     // Langs come as the profile spells them; `Golang` folds to `go`, an
     // unknown word is left out, a repeat is one tag.
-    let langs = ["Golang".to_string(), "rust".to_string(), "brainfuck".to_string()];
+    let langs = [
+        "Golang".to_string(),
+        "rust".to_string(),
+        "brainfuck".to_string(),
+    ];
     assert_eq!(
         viewer_tags(Some(&card), &langs),
         vec!["rust", "postgres", "go"]
@@ -100,7 +103,10 @@ fn a_match_reads_as_one_line() {
     item.pay.clear();
     item.tags.clear();
     assert_eq!(scope_label(&item), "remote worldwide");
-    assert_eq!(match_line(&item, 3), "Acme · Backend Engineer · remote worldwide");
+    assert_eq!(
+        match_line(&item, 3),
+        "Acme · Backend Engineer · remote worldwide"
+    );
     item.remote_kind = Some(RemoteKind::Hybrid);
     item.regions = vec!["Berlin".to_string()];
     assert_eq!(scope_label(&item), "hybrid · Berlin");
@@ -125,7 +131,10 @@ fn the_jobs_command_parses_its_words_and_gates_the_press() {
         Some(Some(JobsCommand::Release))
     );
     assert_eq!(parse_jobs_command("/jobs on"), Some(Some(JobsCommand::On)));
-    assert_eq!(parse_jobs_command("/jobs off"), Some(Some(JobsCommand::Off)));
+    assert_eq!(
+        parse_jobs_command("/jobs off"),
+        Some(Some(JobsCommand::Off))
+    );
     assert_eq!(parse_jobs_command("/jobs now"), Some(None));
     assert_eq!(parse_jobs_command("/jobsboard"), None);
     assert_eq!(parse_jobs_command("hello /jobs"), None);

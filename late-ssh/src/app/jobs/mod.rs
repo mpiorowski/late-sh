@@ -6,14 +6,14 @@
 pub(crate) mod input;
 pub(crate) mod sources;
 pub(crate) mod state;
-pub(crate) mod svc;
+pub mod svc;
 pub(crate) mod ui;
 pub(crate) mod vocab;
 
 #[cfg(test)]
 mod sources_test;
 #[cfg(test)]
-mod state_test;
+pub(crate) mod state_test;
 #[cfg(test)]
 mod svc_test;
 #[cfg(test)]

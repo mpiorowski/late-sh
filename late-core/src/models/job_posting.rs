@@ -237,7 +237,11 @@ impl JobPosting {
         } else {
             JobStatus::Pending
         };
-        let raw = if posting.dropped { "" } else { posting.raw.as_str() };
+        let raw = if posting.dropped {
+            ""
+        } else {
+            posting.raw.as_str()
+        };
         let row = client
             .query_one(
                 "INSERT INTO job_postings
@@ -499,7 +503,11 @@ impl JobPressRun {
 
     /// Whether the day's run is over for good: done, or failed at the cap.
     /// A replica that reads `true` stops asking for that day.
-    pub async fn is_finished(client: &Client, run_on: NaiveDate, max_attempts: i32) -> Result<bool> {
+    pub async fn is_finished(
+        client: &Client,
+        run_on: NaiveDate,
+        max_attempts: i32,
+    ) -> Result<bool> {
         let row = client
             .query_opt(
                 "SELECT status, attempts FROM job_press_runs WHERE run_on = $1",

@@ -3832,9 +3832,7 @@ impl ChatState {
         if let Some(parsed) = crate::app::jobs::state::parse_jobs_command(&body) {
             self.clear_composer_after_submit();
             let Some(command) = parsed else {
-                return Some(Banner::error(
-                    "Usage: /jobs, or /jobs pull|release|on|off",
-                ));
+                return Some(Banner::error("Usage: /jobs, or /jobs pull|release|on|off"));
             };
             if command.admin_only() && !self.is_admin {
                 return Some(Banner::error("Only admins can run the job press"));

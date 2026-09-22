@@ -114,13 +114,26 @@ async fn a_read_settles_the_row_and_failures_count_up_to_the_cap() {
         .expect("pending");
     let ids: Vec<&str> = pending.iter().map(|row| row.external_id.as_str()).collect();
     assert!(ids.contains(&"read-a") && ids.contains(&"read-b") && ids.contains(&"read-c"));
-    let a = pending.iter().find(|row| row.external_id == "read-a").unwrap();
-    let b = pending.iter().find(|row| row.external_id == "read-b").unwrap();
-    let c = pending.iter().find(|row| row.external_id == "read-c").unwrap();
+    let a = pending
+        .iter()
+        .find(|row| row.external_id == "read-a")
+        .unwrap();
+    let b = pending
+        .iter()
+        .find(|row| row.external_id == "read-b")
+        .unwrap();
+    let c = pending
+        .iter()
+        .find(|row| row.external_id == "read-c")
+        .unwrap();
 
-    JobPosting::settle(&client, a.id, Settle::Active(read("Acme", &["rust"]), day(22)))
-        .await
-        .expect("settle active");
+    JobPosting::settle(
+        &client,
+        a.id,
+        Settle::Active(read("Acme", &["rust"]), day(22)),
+    )
+    .await
+    .expect("settle active");
     JobPosting::settle(&client, b.id, Settle::Dead(read("Gone", &["go"])))
         .await
         .expect("settle dead");
@@ -140,7 +153,10 @@ async fn a_read_settles_the_row_and_failures_count_up_to_the_cap() {
     assert_eq!(a.remote_kind, Some(RemoteKind::Regions));
     assert_eq!(a.released_on, Some(day(22)));
     assert_eq!(a.raw, "");
-    assert_eq!(status_of(&client, JobSource::Wwr, "read-b").await, JobStatus::Dead);
+    assert_eq!(
+        status_of(&client, JobSource::Wwr, "read-b").await,
+        JobStatus::Dead
+    );
 
     // At the cap the row stops being listed, and the sweep tombstones it.
     assert!(
@@ -229,21 +245,22 @@ async fn the_drip_releases_the_oldest_slice_and_expiry_clears_the_shelf() {
         .await
         .expect("find")
         .expect("row");
-    JobPosting::settle(&client, row.id, Settle::Active(read("Old", &["go"]), day(22)))
-        .await
-        .expect("settle");
+    JobPosting::settle(
+        &client,
+        row.id,
+        Settle::Active(read("Old", &["go"]), day(22)),
+    )
+    .await
+    .expect("settle");
     let none =
         JobPosting::expire_unseen_since(&client, JobSource::Wwr, Utc::now() - Duration::days(7))
             .await
             .expect("expire unseen");
     assert_eq!(none, 0, "seen just now");
-    let some = JobPosting::expire_unseen_since(
-        &client,
-        JobSource::Wwr,
-        Utc::now() + Duration::seconds(1),
-    )
-    .await
-    .expect("expire unseen");
+    let some =
+        JobPosting::expire_unseen_since(&client, JobSource::Wwr, Utc::now() + Duration::seconds(1))
+            .await
+            .expect("expire unseen");
     assert_eq!(some, 1);
     assert_eq!(
         status_of(&client, JobSource::Wwr, "unseen-1").await,
@@ -314,9 +331,14 @@ async fn the_daily_run_is_claimed_once_and_reclaimed_only_when_stale_or_failed()
             .expect("claim")
     );
     assert!(
-        JobPressRun::claim(&client, other, Utc::now() + Duration::seconds(1), MAX_ATTEMPTS)
-            .await
-            .expect("take over stale")
+        JobPressRun::claim(
+            &client,
+            other,
+            Utc::now() + Duration::seconds(1),
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("take over stale")
     );
     JobPressRun::finish(
         &client,
@@ -336,8 +358,13 @@ async fn the_daily_run_is_claimed_once_and_reclaimed_only_when_stale_or_failed()
             .expect("finished")
     );
     assert!(
-        !JobPressRun::claim(&client, other, Utc::now() + Duration::seconds(1), MAX_ATTEMPTS)
-            .await
-            .expect("done stays done")
+        !JobPressRun::claim(
+            &client,
+            other,
+            Utc::now() + Duration::seconds(1),
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("done stays done")
     );
 }

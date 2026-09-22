@@ -183,18 +183,19 @@ reader decides.
 
 ### Domain
 
-`late-ssh/src/app/jobs/`:
+`late-ssh/src/app/jobs/` (local `CONTEXT.md` there):
 
 | File | Role |
 |---|---|
-| `svc.rs` | `JobsService`: the press (fetch, extract, release, expire; one sweeper per replica) and the shelf reads. Owns logs and metrics. |
-| `vocab.rs` | The tag vocabulary: a closed list of canonical tags with aliases (`typescript` ← `ts`, `go` ← `golang`, `postgres` ← `postgresql`). Used by extraction (the schema's enum) and by the work card editor (step 1). |
-| `state.rs` | The Jobs shelf state: rows, selection, the for-me filter. Pure. |
-| `ui.rs` | Shelf rows and the detail pane section. |
+| `svc.rs` | `JobsService`: the nightly press (fetch, read, release, expire) under the day's run claim, the replica's shelf snapshot, `/jobs` on demand; `tick`: the session side (snapshot copy, `/jobs`, the admin's banners). Owns logs and metrics. |
+| `sources.rs` | The three feed parsers, pure: bytes in, `FetchedPosting`s out. |
+| `vocab.rs` | The tag vocabulary: a closed list of canonical tags with aliases (`typescript` ← `ts`, `go` ← `golang`, `postgres` ← `postgresql`). The read's schema enum and the work card editor share it. |
+| `state.rs` | The Jobs shelf's session state, `/jobs` parsing, the viewer's tag set, the match score, the match line. Pure. |
+| `ui.rs` | The shelf (list beside detail, stacked under 100 columns) and the FOR YOU lines under a person's own card. |
 | `input.rs` | Keys on the shelf. |
-| `late-core/src/models/job_posting.rs` | Every read and write of `job_postings`. |
+| `late-core/src/models/job_posting.rs` | Every read and write of `job_postings` and `job_press_runs` (migration 193). |
 
-`job_postings` (migration):
+`job_postings`:
 
 | Column | Meaning |
 |---|---|
@@ -202,135 +203,171 @@ reader decides.
 | `source` | `hn`, `wwr`, `jobicy` (closed enum, text column) |
 | `external_id` | HN comment id, WWR guid, Jobicy id. Unique with `source` |
 | `status` | `pending` (fetched, not read), `queued` (read, waiting for release), `active`, `expired`, `dead`, `dropped` |
-| `extract_attempts`, `extracting_since` | The read claim, same contract as `paper_room_editions`: claim, at most `JOBS_MAX_ATTEMPTS` = 3, stale after 20 min |
-| `url`, `company`, `title` | From extraction |
-| `remote_kind`, `regions` | As above |
+| `read_attempts` | Model reads spent; at `JOBS_MAX_READ_ATTEMPTS` = 3 the row is tombstoned |
+| `url`, `company`, `title` | From the read (WWR and Jobicy keep the feed's link) |
+| `remote_kind`, `regions` | Set at fetch when the feed says so, by the read for HN; never null on the shelf |
 | `tags` | Canonical tags from the vocabulary only |
 | `pay` | As written, or empty |
 | `excerpt` | At most 400 chars, plain text |
+| `raw` | The source text the read works from, cleared on settle |
 | `posted_at` | The source's date |
 | `released_on` | The UTC day the row went active, null while queued |
 | `first_seen`, `last_seen` | Fetcher stamps |
+
+`job_press_runs`: one row per UTC day (`run_on` PK), `status` running /
+done / failed, `attempts`, `claimed_at`, `finished_at`, and the run's
+counts. The row is the claim.
 
 Nothing beyond the excerpt is stored. A card links out and names its source
 (`via news.ycombinator.com`, `via weworkremotely.com`, `via jobicy.com`).
 
 ### The press
 
-Every replica runs the sweeper (`JOBS_SWEEP_INTERVAL`, 30 min). A sweep is:
-fetch each source, read pending rows, release the day's slice, expire.
-Rows are the claims, so N replicas do each unit of work once.
+Once a day, not on a sweep: the run is due at `JOBS_PRESS_TIME` = 23:30
+UTC, half an hour before the paper prints, so the day's releases are rows
+when NEW WORK reads them. Every replica checks every `JOBS_CHECK_INTERVAL`
+(5 min) whether the due day's run is unclaimed (`press_due_day`: today
+after 23:30, yesterday before it, so a replica that was down at 23:30
+catches up and still stamps the day the slice belongs to), claims the
+`job_press_runs` row, and only the winner works. A replica that saw the
+day finished memoizes it and asks nothing until the next day. A failed run
+marks its row and is claimed again until `JOBS_MAX_RUN_ATTEMPTS` = 3; a
+`running` row older than `JOBS_STALE_RUN` (90 min) is a dead replica's and
+is taken over.
 
-**Fetch.** Insert `pending` rows with `ON CONFLICT (source, external_id) DO
-UPDATE SET last_seen`, so a repeat is a stamp and nothing else.
+**Fetch.** `ON CONFLICT (source, external_id) DO UPDATE SET last_seen`, so
+a repeat is a stamp and nothing else.
 
-- HN: on days 1 to 4 of the month, every sweep resolves the month's thread
-  (the `whoishiring` submissions whose title starts with `Ask HN: Who is
-  hiring?`) and inserts its top-level comment ids. Deleted and dead
-  comments are skipped. After day 4 the thread is left alone; late posts
-  are not worth the calls.
-- WWR: every sweep reads `remote-jobs.rss`; the region tag lands in
-  `regions` at fetch time, and the description, stripped to text and cut
-  at 4,000 chars, is what extraction reads.
-- Jobicy: every fourth sweep, three requests (`rust`, `golang`, `elixir`).
-  A row whose title and excerpt fail a word-boundary match on its tag is
-  inserted as `dropped`.
+- HN: on days 1 to 4 of the month the run opens `whoishiring`'s newest
+  submissions, finds the one titled `Ask HN: Who is hiring?`, and inserts
+  its top-level comments one by one, `pending`, with the HTML turned into
+  text and cut at 4,000 chars. Deleted and dead comments are skipped.
+  After day 4 the thread is left alone; late posts are not worth the calls.
+- WWR: every run reads `remote-jobs.rss`; the region tag decides
+  `remote_kind` and `regions` at fetch time ("Anywhere in the World" is
+  worldwide, "Europe Only" is a region).
+- Jobicy: every run, five requests (`rust`, `golang`, `elixir`,
+  `typescript`, `javascript`), the newest 30 rows each. The API's tag
+  match is a substring match, so a row is kept only when the query word
+  appears whole somewhere, or a title word (`Go` for `golang`, `React`
+  for `javascript`) whole in the title; the rest are inserted `dropped`.
+  `jobGeo` decides the scope. JS/TS is where Jobicy has volume (about
+  four a day per tag, all real); rust, go, and elixir are a handful a
+  month. HN and WWR carry JS/TS without a filter.
 
 **Read.** One `AiService::generate_json` call per `pending` row, schema
-enforced, no grounding: `remote` (bool), `remote_kind`, `regions`,
-`company`, `title`, `tags` (enum over the vocabulary), `pay`, `url`,
-`excerpt`. `remote = false` settles the row `dropped`. A usable answer
-settles `queued` (HN) or goes straight to `active` with `released_on =
-today` (WWR, Jobicy: these sources are already spread over the week). A
-failed call keeps the attempt count and is claimed again next sweep until
-the cap, then `dropped`. The URL is checked with one `HEAD` before the row
-leaves `pending`; anything but a 2xx or 3xx is `dead`.
+enforced, no grounding: `remote`, `remote_kind`, `regions`, `company`,
+`title`, `tags` (enum over the vocabulary), `pay`, `url`, `excerpt`. The
+model decides remote only for HN; the feeds already said. `remote = false`
+settles the row `dropped`. A usable answer settles `queued` (HN) or
+`active` with `released_on = the run's day` (WWR, Jobicy: these sources
+are already spread over the week). A failed call counts an attempt and the
+row waits for the next night; at the cap it is `dropped`. One `HEAD` at
+the link before the row settles: a 404 or 410, or no host to talk to, is
+`dead`; anything else (a bot wall's 403, a 405 on HEAD, a timeout) keeps
+the link, since the reader's browser may well get through. At most
+`JOBS_READ_LIMIT` = 400 reads a run.
 
-Cost: about 260 HN posts, 350 WWR items, and 30 Jobicy rows a month, on
-the same Flash model as the paper. Under a dollar.
+Cost: about 260 HN posts, 350 WWR items, and 250 Jobicy rows a month, on
+the same Flash model as the paper. About a dollar.
 
 **Release, the drip.** HN rows go active over `JOBS_DRIP_DAYS` = 14 from
-the thread's day. Each UTC day the first sweep claims a slice:
+the earliest queued post. The run releases one slice:
 
 ```
-n = ceil(queued_hn_rows / days_left_in_window)
-UPDATE job_postings SET status = 'active', released_on = $today
+n = ceil(queued_hn_rows / days_left_in_window)   (at least 1 day left)
+UPDATE job_postings SET status = 'active', released_on = $day
 WHERE id IN (SELECT id FROM job_postings
              WHERE source = 'hn' AND status = 'queued'
-             ORDER BY posted_at LIMIT n FOR UPDATE SKIP LOCKED)
+             ORDER BY posted_at, id LIMIT n FOR UPDATE SKIP LOCKED)
 RETURNING id
 ```
 
-A row released leaves the set, so a second replica's sweep finds fewer
-rows and a smaller `n`; the day's slice is never released twice. Past the
-window everything still queued is released at once. With 130 remote posts
-a month this is 9 or 10 a day, next to WWR's 11.
+Past the window everything still queued goes at once. With 130 remote
+posts a month this is 9 or 10 a day, next to WWR's 11. The slice is
+released only under the day's claim, so `/jobs pull` on a day that already
+ran fetches and reads but releases nothing.
 
 **Expire.** `active` rows become `expired` 30 days after `released_on`, or
-when a WWR guid has been absent from the feed for 7 days. Expired and dead
-rows leave every listing and stay for the tombstone.
+when a WWR guid has been absent from the feed for 7 days. Expired, dead,
+and dropped rows leave every listing and stay as tombstones.
+
+**The shelf snapshot.** Readers never query. Each replica keeps the active
+rows in a `watch` (`JobsSnapshot`, newest release first), re-read after
+its own press and every `JOBS_SNAPSHOT_REFRESH` (15 min), and every
+session copies it in `tick`. The kill switch empties the snapshot on the
+next refresh.
 
 **Switches and commands.** `jobs_enabled` (`app_flags`, kill switch, seeded
-on; the sweeper does nothing while it is off and the shelf says so).
-Admin: `/jobs pull` runs a sweep now, `/jobs release` releases today's
-slice now, `/jobs on|off`. Each answers with a tally banner from the one
-place that logs, counts, and reports (`note_sweep`).
+on; the press does nothing while it is off, the shelf says so, the paper
+prints no NEW WORK). `/jobs` opens the shelf for anyone. Admin: `/jobs
+pull` runs the press now (the whole run when the day's claim is free,
+fetch and read only when the day already ran), `/jobs release` releases a
+slice on top of whatever the day did, `/jobs on|off`. Each answers with a
+tally banner; `note_read` is the one place a read's outcome becomes a
+tally line, a metric, and a log line.
 
-**Telemetry.** `record_jobs_fetch(JobsSource, JobsFetchResult)`,
+**Telemetry.** `record_jobs_fetch(JobSource, JobsFetchResult)`,
 `record_jobs_read(JobsReadResult)` (queued / active / dropped / dead /
-lost / failed), `record_jobs_release(count)`, `record_jobs_open(JobsOpenResult)`
-for the shelf and the paper section. Fetch and read failures log through
-`late_core::error_span!` with source and external id.
+failed), `record_jobs_press(JobsPressResult)` (ran / lost / failed),
+`record_jobs_released(count)`. Fetch, read, claim, and run failures log
+through `late_core::error_span!` with source and external id.
 
 ### Matching
 
-A match is tag overlap: `job_postings.tags && work_profiles.skills_tags`
-or `&& profiles.langs` (langs are already lowercase names that the vocabulary
-covers), scored by overlap count, ties newest first. The query lives in
-`job_posting.rs` and takes the reader's user id; it never returns rows
-outside `active` or, for the paper, outside `released_on = D - 1`. Region
-against country and timezone is a later refinement, once `regions` has
-been seen in the wild for a month.
+A match is tag overlap, computed in memory over the snapshot: the viewer's
+tags are their card's `skills_tags` plus their profile `langs`, both folded
+through the vocabulary, and a posting scores the number of those tags it
+carries. Best score first, newest release inside a tie. The paper reads
+the covered day's released rows and the reader's card and langs at open
+time and scores the same way. Region against country and timezone is a
+later refinement, once `regions` has been seen in the wild for a month.
 
 ### Surfaces
 
-1. **The Jobs shelf** on page `5`: every `active` row, newest release
-   first. Row: `Company · Role` / `remote scope · tags · pay` / `source ·
-   age`. `Enter` copies the link, `o` opens the detail pane section with
-   the excerpt. `/` filters to matches for my card and says "open a work
-   card to filter" when I have none.
-2. **The Late Edition**, section NEW WORK, after ANNOUNCEMENTS and before
+1. **The Jobs shelf** on page `5` (`Space` from People, or `/jobs` from
+   anywhere): every `active` row, newest release first, the list beside a
+   detail pane (stacked under 100 columns: `l` opens the card, `h`
+   returns). Row: `Company · Role` with the age at the right / `scope ·
+   pay` / `tags` with `via <site>` at the right. The card: company, role,
+   where, stack, pay, link, via, the excerpt. `Enter` copies the link. `/`
+   keeps postings that carry the viewer's tags and says what to fill in
+   when they have none. The strip counts the visible rows.
+2. **FOR YOU** under the viewer's own card on the People shelf, when the
+   card is open or casual: up to five matches as one line each, then a
+   pointer at the shelf. Not-looking gets nothing; other people's cards
+   never show it.
+3. **The Late Edition**, section NEW WORK, after ANNOUNCEMENTS and before
    YOUR ROOMS. Covers postings with `released_on = D - 1`, read at open
-   time with no claim and no model, the way ON THE WALL is read today.
+   time with no claim and no model, the way ON THE WALL is read.
    - Card `open` or `casual`: up to three matches, one line each,
-     `company · role · remote scope · tags · pay`, then a dim line
-     naming the total released and pointing at page `5`.
-   - No card: one line, "11 remote postings landed yesterday. Open a work
-     card on page 5 and the paper will pick yours." That line is the whole
-     incentive to fill the card.
+     `Company · role · scope · tags · pay`, then a dim line naming the
+     total released and pointing at page `5`; with no match on the tags, a
+     line saying so.
+   - No card: one line, "11 postings landed yesterday, remote only. Open a
+     work card on page 5 and the paper will pick yours." That line is the
+     whole incentive to fill the card.
    - Card `not-looking`: nothing. They said so.
-   - Zero postings released: the section is absent.
-   `PaperIssue` gains `work: PaperWork` (the reader's matches, the count),
-   `lay_out` gains the section, `state_test.rs` extends the whole-modal
-   assertion. `NEW WORK` is the one per-reader selection in the paper; the
-   rows it selects from were printed once for everyone.
-3. **The web `/jobs` page** in `late-web`: the same active rows, public,
-   with a source line per card and the `/profiles` link. Comes after the
-   shelf and the paper section; it is the traffic door, not the feature.
-4. No lounge bot card. The paper is the channel.
+   - Zero postings released, or the switch off: the section is absent.
+   `PaperIssue` carries `work: PaperWork`; a preview has none.
+4. **The web `/jobs` page** in `late-web`: not built. The same active rows,
+   public, with a source line per card and the `/profiles` link; the
+   traffic door, not the feature.
+5. No lounge bot card. The paper is the channel.
 
 ### Tests
 
-`jobs/svc_test.rs` (the press against a real DB: fetch dedupe through the
-unique pair, a read claim and its stale takeover, the drip's `n` over a
-window with two replicas sweeping, expiry), `jobs/state_test.rs` (shelf
-rows, the for-me filter), `job_posting_test.rs` (the match query scoped by
-user, the release claim, the tombstone rules), `paper/state_test.rs` (the
-section for a reader with a card, without, and not looking),
-`paper/svc_test.rs` (the section reads `D - 1` only), `late-web`
-`jobs_test.rs` (the page lists active rows only). The HN parser gets a
-fixture from `tmp/jobs-probe/hn_49522897_comments.jsonl` trimmed to ten
-posts, checked in beside the test.
+`job_posting_test.rs` (upsert as a stamp, tombstones, settle, the attempt
+cap, the drip slice and its order, expiry by age and by absence, the daily
+claim with reclaim and stale takeover), `jobs/sources_test.rs` (the three
+parsers over trimmed real pulls in `jobs/fixtures/`, the word-boundary
+recheck, HTML to text), `jobs/state_test.rs` (the viewer's tags, the match
+ranking, the match line, `/jobs` parsing), `jobs/svc_test.rs` (the due
+day, the drip arithmetic, the excerpt cut, a release landing on the shelf
+through the snapshot and `/jobs`, the admin gate), `directory/ui_test.rs`
+(the shelf drawn empty, with rows, and filtered), `paper/state_test.rs`
+(NEW WORK for a reader with a card, without, not looking, and on a day
+with nothing).
 
 ---
 
@@ -411,9 +448,9 @@ piece and none on an empty day).
 1. Step 1, the page. Two PRs: the typed card and the editor first (model,
    migration, form modal, web index), then the rows, the detail pane, and
    the shelf strip with the Jobs shelf empty behind it.
-2. Step 2, the pull. Three PRs: the model, the press, and the admin
-   commands (nothing visible); the shelf and the detail section; the paper
-   section. The web `/jobs` page is a fourth, whenever.
+2. Step 2, the pull: the model, the press, the shelf, the FOR YOU lines,
+   and the paper section in one branch. The web `/jobs` page is a
+   follow-up, whenever.
 3. Step 3, the wall. One PR.
 
 ## Open decisions

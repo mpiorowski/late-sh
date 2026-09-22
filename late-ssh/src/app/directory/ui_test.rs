@@ -93,7 +93,28 @@ fn fixture() -> Fixture {
     }
 }
 
+/// A shelf state over a pool that is never opened: the page draws the
+/// People shelf here and only asks the jobs state whether it is on.
+fn jobs_state_for_tests() -> crate::app::jobs::state::JobsState {
+    let db = late_core::db::Db::new(&late_core::db::DbConfig::default()).expect("lazy pool");
+    crate::app::jobs::state::JobsState::new(crate::app::jobs::svc::JobsService::new(
+        db,
+        crate::app::ai::svc::AiService::new(false, None),
+        crate::test_helpers::test_app_flags_rx(),
+    ))
+}
+
 fn render(fixture: &Fixture, state: &DirectoryState, width: u16, height: u16) -> Vec<String> {
+    render_with_jobs(fixture, state, &jobs_state_for_tests(), width, height)
+}
+
+fn render_with_jobs(
+    fixture: &Fixture,
+    state: &DirectoryState,
+    jobs: &crate::app::jobs::state::JobsState,
+    width: u16,
+    height: u16,
+) -> Vec<String> {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("terminal");
     terminal
@@ -103,6 +124,8 @@ fn render(fixture: &Fixture, state: &DirectoryState, width: u16, height: u16) ->
                 frame.area(),
                 DirectoryPageView {
                     directory: state,
+                    jobs,
+                    viewer_langs: &["rust".to_string()],
                     projects: &fixture.projects,
                     people: &fixture.people,
                     work_marker: Some(Utc::now()),
@@ -236,20 +259,70 @@ fn a_narrow_frame_stacks_and_l_opens_the_detail_over_the_list() {
 }
 
 #[test]
-fn the_jobs_shelf_explains_itself_until_the_feed_lands() {
+fn the_jobs_shelf_lists_postings_and_the_for_me_filter_keeps_the_viewers_tags() {
+    use crate::app::jobs::state_test::posting;
+
     let fixture = fixture();
     let mut state = DirectoryState::new();
     state.toggle_shelf();
-    let lines = render(&fixture, &state, 120, 30);
-    let text = lines.join("\n");
+
+    // Before the replica has read the shelf, and once it has read nothing.
+    let mut jobs = jobs_state_for_tests();
+    let lines = render_with_jobs(&fixture, &state, &jobs, 120, 30);
     assert_eq!(lines[0], " people 2  ·  jobs");
     assert!(
-        row_of(&lines, "Remote postings land here.").is_some(),
+        row_of(&lines, "Reading the shelf…").is_some(),
+        "{}",
+        lines.join("\n")
+    );
+    jobs.loaded = true;
+    let lines = render_with_jobs(&fixture, &state, &jobs, 120, 30);
+    assert_eq!(lines[0], " people 2  ·  jobs 0");
+    assert!(
+        row_of(&lines, "No postings on the shelf yet.").is_some(),
+        "{}",
+        lines.join("\n")
+    );
+
+    // Two postings: the list on the left, the first one's card on the right.
+    jobs.items = vec![
+        posting("Acme", &["rust", "postgres"]),
+        posting("Gopher", &["go"]),
+    ];
+    let lines = render_with_jobs(&fixture, &state, &jobs, 120, 30);
+    let text = lines.join("\n");
+    assert_eq!(lines[0], " people 2  ·  jobs 2");
+    let acme = row_of(&lines, "Acme · Backend Engineer").expect("acme row");
+    let gopher = row_of(&lines, "Gopher · Backend Engineer").expect("gopher row");
+    assert!(acme < gopher, "{text}");
+    assert!(lines[acme].starts_with("▎"), "selected gutter:\n{text}");
+    assert!(row_of(&lines, "remote · EU · €80k").is_some(), "{text}");
+    assert!(row_of(&lines, "rust · postgres").is_some(), "{text}");
+    assert!(row_of(&lines, "via weworkremotely.com").is_some(), "{text}");
+    // The detail pane: the stack, the link, the excerpt.
+    assert!(
+        row_of(&lines, "stack    rust · postgres").is_some(),
         "{text}"
     );
     assert!(
-        row_of(&lines, "Press w to fill your card").is_some(),
-        "no card yet:\n{text}"
+        row_of(&lines, "link     acme.example/jobs/1").is_some(),
+        "{text}"
     );
+    assert!(row_of(&lines, "Builds the backend.").is_some(), "{text}");
     assert!(lines[lines.len() - 1].contains("Space people"), "{text}");
+
+    // `/`: the viewer's langs say rust, so only Acme stays.
+    jobs.toggle_for_me();
+    let lines = render_with_jobs(&fixture, &state, &jobs, 120, 30);
+    let text = lines.join("\n");
+    assert_eq!(lines[0], " people 2  ·  jobs 1");
+    assert!(
+        row_of(&lines, "Acme · Backend Engineer").is_some(),
+        "{text}"
+    );
+    assert!(
+        row_of(&lines, "Gopher · Backend Engineer").is_none(),
+        "{text}"
+    );
+    assert!(lines[lines.len() - 1].contains("for me"), "{text}");
 }
