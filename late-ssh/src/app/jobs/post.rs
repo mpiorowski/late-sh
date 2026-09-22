@@ -80,7 +80,7 @@ impl PostField {
             Self::Tags => "Enter picks tags from the list",
             Self::Pay => "€90k to €120k, or empty",
             Self::Excerpt => {
-                "What the company does and what the role is, in the third person (Alt+Enter for a new line)"
+                "What the company does and what the role is (Alt+Enter for a new line)"
             }
         }
     }
