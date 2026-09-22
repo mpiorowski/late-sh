@@ -1,9 +1,12 @@
 use chrono::{Duration, Utc};
 use uuid::Uuid;
 
-use super::state::{DirectoryState, PersonFocus, person_entries};
+use super::state::{DirectoryState, PersonFocus, Shelf, person_entries, person_row};
 use crate::app::chat::{showcase::svc::ShowcaseFeedItem, work::svc::WorkFeedItem};
-use late_core::models::{showcase::Showcase, work_profile::WorkProfile};
+use late_core::models::{
+    showcase::Showcase,
+    work_profile::{WorkProfile, WorkStatus, WorkType},
+};
 
 fn project(user_id: Uuid, title: &str, age_minutes: i64) -> ShowcaseFeedItem {
     let now = Utc::now();
@@ -31,12 +34,13 @@ fn person(user_id: Uuid, headline: &str, age_minutes: i64) -> WorkFeedItem {
             user_id,
             slug: "w_abcdef123456".to_string(),
             headline: headline.to_string(),
-            status: "open".to_string(),
-            work_type: "contract".to_string(),
+            status: WorkStatus::Open,
+            work_type: WorkType::Contract,
             location: "remote".to_string(),
             contact: String::new(),
             links: Vec::new(),
             skills: vec!["go".to_string()],
+            skills_tags: vec!["go".to_string()],
             summary: format!("{headline} summary"),
             created: now - Duration::minutes(age_minutes),
             updated: now - Duration::minutes(age_minutes),
@@ -227,4 +231,69 @@ fn search_query_is_active_only_in_search_mode() {
     state.exit_search();
     assert_eq!(state.active_query(), "");
     assert!(!state.search_mode());
+}
+
+#[test]
+fn space_switches_shelves_and_drops_the_stacked_detail() {
+    let mut state = DirectoryState::new();
+    assert_eq!(state.shelf(), Shelf::People);
+    state.open_detail();
+    state.toggle_shelf();
+    assert_eq!(state.shelf(), Shelf::Jobs);
+    assert!(
+        !state.detail_open(),
+        "the detail belongs to the people shelf"
+    );
+    state.toggle_shelf();
+    assert_eq!(state.shelf(), Shelf::People);
+}
+
+#[test]
+fn row_model_for_card_only_projects_only_and_both() {
+    let with_card = Uuid::now_v7();
+    let with_projects = Uuid::now_v7();
+    let with_both = Uuid::now_v7();
+    let projects = vec![
+        project(with_projects, "newest", 5),
+        project(with_projects, "older", 50),
+        project(with_both, "side", 20),
+    ];
+    let mut people = vec![
+        person(with_card, "Card holder", 1),
+        person(with_both, "Both", 2),
+    ];
+    people[1].profile.skills = ["a", "b", "c", "d", "e", "f"].map(str::to_string).to_vec();
+    let entries = person_entries(&projects, &people, false, with_card, "");
+    let after = Some(Utc::now());
+    let row_for = |user: Uuid| {
+        let entry = entries.iter().find(|entry| entry.user_id == user).unwrap();
+        person_row(entry, with_card, after, after)
+    };
+
+    let card = row_for(with_card);
+    assert_eq!(card.status, Some(WorkStatus::Open));
+    assert_eq!(card.project_count, 0);
+    assert_eq!(card.second, "Card holder");
+    assert_eq!(card.tags, vec!["go"]);
+    assert!(card.own && !card.unread);
+    assert_eq!(card.age, "1m");
+
+    let projects_only = row_for(with_projects);
+    assert_eq!(projects_only.status, None);
+    assert_eq!(projects_only.project_count, 2);
+    assert_eq!(
+        projects_only.second, "newest",
+        "the newest project titles the row"
+    );
+    assert_eq!(projects_only.tags, vec!["rust"]);
+
+    let both = row_for(with_both);
+    assert_eq!(both.status, Some(WorkStatus::Open));
+    assert_eq!(both.project_count, 1);
+    assert_eq!(both.second, "Both", "the headline wins over the project");
+    assert_eq!(
+        both.tags,
+        vec!["a", "b", "c", "d", "e"],
+        "five tags at most"
+    );
 }

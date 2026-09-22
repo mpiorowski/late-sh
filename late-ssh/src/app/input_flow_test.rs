@@ -533,17 +533,78 @@ async fn profiles_page_keys_drive_the_merged_feed() {
     app.handle_input(b"5");
     wait_for_render_contains(&mut app, " Profiles ").await;
 
-    // `i` opens the project (showcase) composer, Esc closes it.
+    // `i` opens the profile editor on a blank project form. The form's first
+    // row is already being typed into, so one Esc stops typing and a second
+    // leaves the untouched form for the projects list; a third closes.
     app.handle_input(b"i");
-    wait_for_render_contains(&mut app, " New showcase ").await;
+    wait_for_render_contains(&mut app, " Your profile ").await;
+    assert!(app.directory_editor.editing());
     app.handle_input(b"\x1b");
-    wait_for_esc_effect(&mut app, |app| !app.chat.showcase.composing(), "showcase").await;
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.directory_editor.editing(),
+        "stop typing",
+    )
+    .await;
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| {
+            matches!(
+                app.directory_editor.projects_view(),
+                crate::app::directory::editor::state::ProjectsView::List { .. }
+            )
+        },
+        "back to the list",
+    )
+    .await;
 
-    // `w` opens the work-card composer, Esc closes it.
-    app.handle_input(b"w");
-    wait_for_render_contains(&mut app, " New work profile ").await;
+    // `a` on the list opens a fresh project form; the letter arrives through
+    // the real parser, so this pins the list keys end to end. Esc twice
+    // returns to the list and closes the editor.
+    app.handle_input(b"a");
+    assert!(app.directory_editor.editing(), "`a` should open a new project form");
     app.handle_input(b"\x1b");
-    wait_for_esc_effect(&mut app, |app| !app.chat.work.composing(), "work").await;
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.directory_editor.editing(),
+        "stop typing again",
+    )
+    .await;
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| {
+            matches!(
+                app.directory_editor.projects_view(),
+                crate::app::directory::editor::state::ProjectsView::List { .. }
+            )
+        },
+        "back to the list again",
+    )
+    .await;
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.directory_editor.is_open(),
+        "editor closed",
+    )
+    .await;
+
+    // `w` opens the same editor on the card page, Esc closes it untouched.
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, " Your profile ").await;
+    assert_eq!(
+        app.directory_editor.page(),
+        crate::app::directory::editor::state::Page::Card
+    );
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.directory_editor.is_open(),
+        "editor closed",
+    )
+    .await;
 
     // `s` opens feed search, Esc dismisses it.
     app.handle_input(b"s");

@@ -11,7 +11,10 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use late_core::models::{
-    profile::Profile, showcase::Showcase, user::User, work_profile::WorkProfile,
+    profile::Profile,
+    showcase::Showcase,
+    user::User,
+    work_profile::{WorkProfile, WorkStatus},
 };
 
 use crate::{AppState, error::AppError, metrics};
@@ -90,12 +93,12 @@ struct IndexItem {
     work_type: String,
     location: String,
     skills: Vec<String>,
-    summary_preview: String,
     updated: String,
 }
 
 const PROFILE_LIST_LIMIT: i64 = 100;
-const SUMMARY_PREVIEW_CHARS: usize = 180;
+/// The index row shows the same five tags the terminal row does.
+const INDEX_ROW_TAGS: usize = 5;
 
 #[tracing::instrument(skip(state))]
 async fn handler(
@@ -144,9 +147,9 @@ async fn handler(
     let page = Page {
         headline: work.headline,
         username: user_profile.username.clone(),
-        status_id: status_id(&work.status),
-        status_label: status_label(&work.status),
-        work_type: work.work_type,
+        status_id: work.status.as_str(),
+        status_label: status_label(work.status),
+        work_type: work.work_type.label().to_string(),
         location: work.location,
         show_contact,
         contact: work.contact,
@@ -189,12 +192,11 @@ async fn index_handler(State(state): State<AppState>) -> Result<Response, AppErr
         .await
         .context("failed to get db client for profiles index")?;
 
-    let mut profiles = WorkProfile::list_recent(&client, PROFILE_LIST_LIMIT)
+    // Open first, then casual, then not looking, freshest first inside each:
+    // the model sorts by the status enum's rank.
+    let profiles = WorkProfile::list_index(&client, PROFILE_LIST_LIMIT)
         .await
         .context("failed to list work profiles")?;
-    // Open first, then casual, then not-looking. Within each bucket the model
-    // already orders by updated DESC, so we just need a stable sort_by_key.
-    profiles.sort_by_key(|p| status_priority(&p.status));
 
     let user_ids: Vec<_> = profiles
         .iter()
@@ -212,22 +214,21 @@ async fn index_handler(State(state): State<AppState>) -> Result<Response, AppErr
     let items: Vec<IndexItem> = profiles
         .into_iter()
         .map(|p| {
-            match p.status.as_str() {
-                "open" => open_count += 1,
-                "casual" => casual_count += 1,
-                _ => closed_count += 1,
+            match p.status {
+                WorkStatus::Open => open_count += 1,
+                WorkStatus::Casual => casual_count += 1,
+                WorkStatus::NotLooking => closed_count += 1,
             }
             IndexItem {
                 username: usernames
                     .get(&p.user_id)
                     .cloned()
                     .unwrap_or_else(|| p.user_id.to_string()[..8].to_string()),
-                status_id: status_id(&p.status),
-                status_label: status_label(&p.status),
-                work_type: p.work_type,
+                status_id: p.status.as_str(),
+                status_label: status_label(p.status),
+                work_type: p.work_type.label().to_string(),
                 location: p.location,
-                skills: p.skills,
-                summary_preview: summary_preview(&p.summary, SUMMARY_PREVIEW_CHARS),
+                skills: p.skills.into_iter().take(INDEX_ROW_TAGS).collect(),
                 updated: format_date(p.updated),
                 headline: p.headline,
                 slug: p.slug,
@@ -244,43 +245,12 @@ async fn index_handler(State(state): State<AppState>) -> Result<Response, AppErr
     Ok(Html(page.render()?).into_response())
 }
 
-fn status_priority(status: &str) -> u8 {
+/// The long form of the status for the web, where there is room for it.
+fn status_label(status: WorkStatus) -> &'static str {
     match status {
-        "open" => 0,
-        "casual" => 1,
-        "not-looking" => 2,
-        _ => 3,
-    }
-}
-
-fn summary_preview(text: &str, max_chars: usize) -> String {
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.chars().count() <= max_chars {
-        return collapsed;
-    }
-    let mut out: String = collapsed.chars().take(max_chars).collect();
-    if let Some(idx) = out.rfind(' ') {
-        out.truncate(idx);
-    }
-    out.push('…');
-    out
-}
-
-fn status_id(status: &str) -> &'static str {
-    match status {
-        "open" => "open",
-        "casual" => "casual",
-        "not-looking" => "not-looking",
-        _ => "unknown",
-    }
-}
-
-fn status_label(status: &str) -> &'static str {
-    match status {
-        "open" => "open to work",
-        "casual" => "casually listening",
-        "not-looking" => "not looking",
-        _ => "unknown",
+        WorkStatus::Open => "open to work",
+        WorkStatus::Casual => "casually listening",
+        WorkStatus::NotLooking => "not looking",
     }
 }
 

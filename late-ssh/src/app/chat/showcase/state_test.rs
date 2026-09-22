@@ -1,19 +1,4 @@
-use super::{ComposerField, clamp_index, looks_like_url, move_index};
-
-#[test]
-fn field_cycles_forward_and_back() {
-    assert_eq!(ComposerField::Title.next(), ComposerField::Url);
-    assert_eq!(ComposerField::Description.next(), ComposerField::Title);
-    assert_eq!(ComposerField::Title.prev(), ComposerField::Description);
-}
-
-#[test]
-fn url_validation_requires_scheme() {
-    assert!(looks_like_url("https://late.sh"));
-    assert!(looks_like_url("http://example.com"));
-    assert!(!looks_like_url("late.sh"));
-    assert!(!looks_like_url("ftp://x"));
-}
+use super::{clamp_index, move_index};
 
 #[test]
 fn clamp_index_handles_empty_list() {

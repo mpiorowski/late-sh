@@ -676,6 +676,8 @@ pub struct App {
     /// The `/status` picker overlay.
     pub(crate) status_picker: crate::app::status_picker::state::StatusPickerState,
     pub(crate) room_info_modal_state: crate::app::room_info_modal::state::RoomInfoModalState,
+    /// The profile editor opened from page 5 (`app/directory/editor`).
+    pub(crate) directory_editor: crate::app::directory::editor::state::EditorState,
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
     /// Server-authoritative audio source for the paired playback surface.
     /// Mirrors `users.settings.audio_source`. v+x flips this, persists it to
@@ -1572,6 +1574,7 @@ impl App {
             status_picker: crate::app::status_picker::state::StatusPickerState::default(),
             room_info_modal_state: crate::app::room_info_modal::state::RoomInfoModalState::default(
             ),
+            directory_editor: crate::app::directory::editor::state::EditorState::default(),
             booth_modal_state: crate::app::audio::booth::state::BoothModalState::default(),
             paired_source: config.initial_audio_source,
             selected_icecast_stream: config.initial_icecast_stream,

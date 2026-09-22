@@ -6,7 +6,7 @@ section that matches those jobs to people, and moving the Artboard wall from
 the paper to the splash. Three steps, delivered in order. Each step is a PR
 or a small series; nothing in a later step is needed by an earlier one.
 
-Status: design. Decisions marked OPEN need Mat. Everything else is decided.
+Status: step 1 built; steps 2 and 3 design. Decisions marked OPEN need Mat.
 
 ---
 
@@ -53,9 +53,8 @@ The page becomes the work page: two shelves in the same frame, People and
 Jobs, one detail pane, one editor style.
 
 **Shelves.** A strip under the page title: `people` and `jobs`, the active
-one highlighted with its count. `Space` switches shelves. OPEN: `Space` is
-free on this page; confirm against the keybinding checklist in
-`CONTEXT.md` §11 before wiring. `/` keeps its meaning per shelf: on People
+one highlighted with its count. `Space` switches shelves (free on this
+page; nothing global claims it). `/` keeps its meaning per shelf: on People
 it filters to mine, on Jobs it filters to postings that match my card.
 
 **People rows.** Three lines, fixed roles, so the eye can scan a column:
@@ -87,18 +86,23 @@ shows the project count on line 1 and the newest title on line 2.
 5. late.fetch (country, langs, ide, os, terminal) moves to the bottom of the
    pane as a dim block. It is context, not the point of the page.
 
-**The editor.** One modal for both the work card and a project, replacing
-the in-pane composers. Rows are `label  value`, the active row highlighted,
-`j/k` or `Tab`/`Shift+Tab` move between rows, `Enter` on a row starts
-editing it, `Esc` stops editing the row, `Ctrl+S` saves the form, `Esc` on
-the form asks to discard when dirty. The hint line names those keys.
+**The editor.** One modal for everything a person shows on the page,
+replacing the in-pane composers: three pages, `card`, `about` (bio and the
+late.fetch rows, the same ones Settings edits, saved through the same
+profile call so Settings keeps them too), and `projects` (the list, each
+project a small form). `Tab` switches pages. Rows are `label  value`, the
+active row highlighted, `j/k` move between rows, `Enter` on a row starts
+editing it (Enter or Tab commits and steps to the next), `Esc` stops
+editing the row, `Ctrl+S` saves every dirty page and closes (on a project
+form, saves that project and returns to the list), `Esc` on the form asks
+to discard when dirty. The hint line names those keys.
 
 Closed fields stop being typed:
 
 - `status`: `WorkStatus { Open, Casual, NotLooking }`, `←/→` cycles.
-- `type`: `WorkType { FullTime, Contract, Freelance, PartTime }`, `←/→`
-  cycles. OPEN: whether "open to any" is a fifth variant or the absence of
-  a choice; recommend a fifth variant so the column is never null.
+- `type`: `WorkType { FullTime, Contract, Freelance, PartTime, Any }`,
+  `←/→` cycles. "Open to any" is the fifth variant so the column is never
+  null; existing free text folded onto the closest value (migration 192).
 - `skills`: typed as text, normalized on save into the tag vocabulary
   (`jobs/vocab.rs`, step 2). The row shows the normalized tags live under
   the input, and what did not match the vocabulary stays as a free tag,
@@ -414,7 +418,5 @@ piece and none on an empty day).
 
 ## Open decisions
 
-1. The shelf key (`Space`) against the keybinding checklist.
-2. `WorkType`: a fifth "any" variant or none.
-3. The podium's place on the daily splash wall.
-4. A cap on the splash queue, after measuring the hang rate.
+1. The podium's place on the daily splash wall.
+2. A cap on the splash queue, after measuring the hang rate.

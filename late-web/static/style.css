@@ -436,9 +436,6 @@
       margin-block-end: calc(calc(var(--spacing) * 3) * calc(1 - var(--tw-space-y-reverse)));
     }
   }
-  .gap-x-2 {
-    column-gap: calc(var(--spacing) * 2);
-  }
   .gap-x-2\.5 {
     column-gap: calc(var(--spacing) * 2.5);
   }
@@ -645,6 +642,9 @@
   .text-\[0\.65rem\] {
     font-size: 0.65rem;
   }
+  .text-\[0\.75rem\] {
+    font-size: 0.75rem;
+  }
   .leading-loose {
     --tw-leading: var(--leading-loose);
     line-height: var(--leading-loose);
@@ -824,6 +824,11 @@
       @media (hover: hover) {
         color: var(--color-green-500);
       }
+    }
+  }
+  .sm\:inline {
+    @media (width >= 40rem) {
+      display: inline;
     }
   }
   .sm\:grid-cols-2 {

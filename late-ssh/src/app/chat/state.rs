@@ -1437,8 +1437,6 @@ impl ChatState {
     pub(crate) fn refresh_composer_theme(&mut self) {
         composer::apply_themed_textarea_style(&mut self.composer, self.composing);
         self.news.refresh_composer_theme();
-        self.showcase.refresh_composer_theme();
-        self.work.refresh_composer_theme();
     }
 
     pub fn is_composing(&self) -> bool {

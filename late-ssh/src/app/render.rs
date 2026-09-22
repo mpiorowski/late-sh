@@ -340,6 +340,9 @@ struct DrawContext<'a> {
     status_picker: &'a status_picker::state::StatusPickerState,
     room_info_modal_open: bool,
     room_info_modal_state: &'a room_info_modal::state::RoomInfoModalState,
+    directory_editor: &'a crate::app::directory::editor::state::EditorState,
+    /// The showcase feed, for the editor's projects page.
+    showcase_items: &'a [chat::showcase::svc::ShowcaseFeedItem],
     booth_modal_open: bool,
     booth_modal_state: &'a crate::app::audio::booth::state::BoothModalState,
     booth_snapshot: crate::app::audio::svc::QueueSnapshot,
@@ -432,6 +435,7 @@ impl App {
         theme::set_text_brightness_adjustment(text_brightness_adjustment);
         let ultimate_effects = self.ultimate_state.active_theme_effects();
         self.chat.refresh_composer_theme();
+        self.directory_editor.refresh_theme();
 
         // Synchronize terminal background color with theme bg_canvas if enabled
         let enabled = if self.show_settings {
@@ -720,7 +724,6 @@ impl App {
             mine_only: self.chat.showcase.mine_only(),
         };
         let showcase_unread_count = self.chat.showcase.unread_count();
-        let showcase_composing = self.chat.showcase.composing();
         let web_base_url = self.web_url.as_str();
         let listen_url = crate::app::state::listen_url(&self.web_url);
         let work_view = chat::work::ui::WorkListView {
@@ -733,7 +736,6 @@ impl App {
             mine_only: self.chat.work.mine_only(),
         };
         let work_unread_count = self.chat.work.unread_count();
-        let work_composing = self.chat.work.composing();
         let news_modal = self
             .chat
             .news_modal()
@@ -843,12 +845,10 @@ impl App {
             showcase_unread_count,
             showcase_view,
             showcase_state: Some(&self.chat.showcase),
-            showcase_composing,
             work_selected: self.chat.work_selected,
             work_unread_count,
             work_view,
             work_state: Some(&self.chat.work),
-            work_composing,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
             composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -1397,6 +1397,8 @@ impl App {
                         status_picker: &self.status_picker,
                         room_info_modal_open: self.room_info_modal_state.is_open(),
                         room_info_modal_state: &self.room_info_modal_state,
+                        directory_editor: &self.directory_editor,
+                        showcase_items: self.chat.showcase.all_items(),
                         booth_modal_open: self.booth_modal_state.is_open(),
                         booth_modal_state: &self.booth_modal_state,
                         booth_snapshot: self.audio.queue_snapshot(),
@@ -1836,14 +1838,10 @@ impl App {
                     content_area,
                     crate::app::directory::ui::DirectoryPageView {
                         directory: ctx.directory_state,
-                        work_state: ctx
-                            .chat_view
-                            .work_state
-                            .expect("directory work state is always present"),
-                        showcase_state: ctx
-                            .chat_view
-                            .showcase_state
-                            .expect("directory showcase state is always present"),
+                        projects: ctx.chat_view.showcase_view.items,
+                        people: ctx.chat_view.work_view.items,
+                        work_marker: ctx.chat_view.work_view.marker_read_at,
+                        showcase_marker: ctx.chat_view.showcase_view.marker_read_at,
                         current_user_id: ctx.chat_view.work_view.current_user_id,
                         profile_base_url: ctx.chat_view.work_view.profile_base_url,
                     },
@@ -2221,6 +2219,20 @@ impl App {
 
         if ctx.room_info_modal_open {
             room_info_modal::ui::draw(frame, inner, ctx.room_info_modal_state);
+        }
+
+        if ctx.directory_editor.is_open() {
+            let projects =
+                crate::app::directory::editor::state::projects_of(ctx.showcase_items, ctx.user_id);
+            crate::app::directory::editor::ui::draw(
+                frame,
+                inner,
+                &crate::app::directory::editor::ui::EditorView {
+                    state: ctx.directory_editor,
+                    projects: &projects,
+                    viewer_name: ctx.clubhouse_own_username,
+                },
+            );
         }
 
         if ctx.booth_modal_open {

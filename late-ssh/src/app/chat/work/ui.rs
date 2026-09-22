@@ -11,7 +11,6 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::state::{ComposerField, State, status_label};
 use super::svc::WorkFeedItem;
 
 const META_SEP: &str = " · ";
@@ -90,8 +89,8 @@ pub fn draw_work_list(frame: &mut Frame, area: Rect, view: &WorkListView<'_>) {
         // Row 2: meta — `@user · status · type · location · just now`
         lines.push(build_meta_line(
             &item.author_username,
-            status_label(&p.status),
-            &p.work_type,
+            p.status.label(),
+            p.work_type.label(),
             &p.location,
             &format_relative_time(p.updated),
             inner_w,
@@ -311,129 +310,6 @@ fn summary_lines(summary: &str, width: usize, max_lines: usize) -> (Vec<String>,
         }
     }
     (out, truncated)
-}
-
-pub struct WorkComposerView<'a> {
-    pub state: &'a State,
-}
-
-pub fn draw_work_composer(frame: &mut Frame, area: Rect, view: &WorkComposerView<'_>) {
-    let editing = view.state.editing();
-    let composing = view.state.composing();
-    let active = view.state.active_field();
-
-    let title = if !composing {
-        " Work "
-    } else if editing {
-        " Editing work profile - Tab/S+Tab switch - Enter submit - Alt+Enter/Ctrl+J newline - Esc cancel "
-    } else {
-        " New work profile - Tab/S+Tab switch - Enter submit - Alt+Enter/Ctrl+J newline - Esc cancel "
-    };
-    let border_style = if composing {
-        Style::default().fg(theme::BORDER_ACTIVE())
-    } else {
-        Style::default().fg(theme::BORDER())
-    };
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(border_style);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if !composing {
-        let hint = Paragraph::new(Line::from(Span::styled(
-            " j/k navigate - Enter/c copy profile - i create/edit yours - e edit selected - d delete own - / filter mine",
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-        frame.render_widget(hint, inner);
-        return;
-    }
-
-    let constraints = [
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Min(2),
-    ];
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(inner);
-
-    draw_field(frame, rows[0], view.state, ComposerField::Headline, active);
-    draw_field(frame, rows[1], view.state, ComposerField::Status, active);
-    draw_field(frame, rows[2], view.state, ComposerField::Type, active);
-    draw_field(frame, rows[3], view.state, ComposerField::Location, active);
-    draw_field(frame, rows[4], view.state, ComposerField::Contact, active);
-    draw_field(frame, rows[5], view.state, ComposerField::Links, active);
-    draw_field(frame, rows[6], view.state, ComposerField::Skills, active);
-    draw_field(frame, rows[7], view.state, ComposerField::Summary, active);
-}
-
-fn draw_field(
-    frame: &mut Frame,
-    area: Rect,
-    state: &State,
-    field: ComposerField,
-    active: ComposerField,
-) {
-    let is_active = field == active;
-    let label_style = if is_active {
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::TEXT_DIM())
-    };
-    let label_w: u16 = 14;
-    let split = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(label_w),
-            Constraint::Length(1),
-            Constraint::Min(1),
-        ])
-        .split(area);
-    let prefix = if is_active { "> " } else { "  " };
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!("{prefix}{}:", field.label()),
-            label_style,
-        ))),
-        split[0],
-    );
-    frame.render_widget(Paragraph::new(" "), split[1]);
-    if state.field_is_empty(field) {
-        draw_empty_placeholder(frame, split[2], field.placeholder(), is_active);
-    } else {
-        frame.render_widget(state.field_textarea(field), split[2]);
-    }
-}
-
-fn draw_empty_placeholder(frame: &mut Frame, area: Rect, placeholder: &str, active: bool) {
-    let mut chars = placeholder.chars();
-    let Some(first) = chars.next() else {
-        return;
-    };
-    let rest = chars.collect::<String>();
-    let first = if active {
-        Span::styled(
-            first.to_string(),
-            theme::punch_through(theme::TEXT_DIM()).add_modifier(Modifier::BOLD),
-        )
-    } else {
-        Span::styled(first.to_string(), Style::default().fg(theme::TEXT_DIM()))
-    };
-    let line = Line::from(vec![
-        first,
-        Span::styled(rest, Style::default().fg(theme::TEXT_DIM())),
-    ]);
-    frame.render_widget(Paragraph::new(line).wrap(Wrap { trim: false }), area);
 }
 
 #[cfg(test)]

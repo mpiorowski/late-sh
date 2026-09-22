@@ -3,7 +3,7 @@ use late_core::{
     models::{
         moderation_audit_log::ModerationAuditLog,
         work_feed_read::WorkFeedRead,
-        work_profile::{WorkProfile, WorkProfileParams},
+        work_profile::{WorkProfile, WorkProfileParams, WorkStatus, WorkType},
     },
     test_utils::create_test_user,
 };
@@ -17,12 +17,13 @@ fn params(user_id: Uuid, headline: &str, summary: &str, slug: &str) -> WorkProfi
         user_id,
         slug: slug.to_string(),
         headline: headline.to_string(),
-        status: "open".to_string(),
-        work_type: "full-time".to_string(),
+        status: WorkStatus::Open,
+        work_type: WorkType::FullTime,
         location: "remote".to_string(),
         contact: "work@example.com".to_string(),
         links: vec!["https://github.com/late-sh".to_string()],
         skills: vec!["rust".to_string(), "postgres".to_string()],
+        skills_tags: vec!["rust".to_string(), "postgres".to_string()],
         summary: summary.to_string(),
     }
 }

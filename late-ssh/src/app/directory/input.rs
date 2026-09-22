@@ -1,15 +1,15 @@
 use crate::app::common::primitives::Banner;
+use crate::app::directory::editor;
 use crate::app::{input::ParsedInput, state::App};
 
-use super::state::{PersonFocus, person_entries};
+use super::state::{PersonFocus, Shelf, person_entries};
 
-/// The focused item of the selected person, resolved to an index into the
-/// owning chat state's `all_items()` so actions can delegate through
-/// `select_index`. Owned values, so the caller can mutate `app` afterwards.
+/// The focused item of the selected person: their card or one of their
+/// projects, by id. Owned values, so the caller can mutate `app` afterwards.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FocusedItem {
-    Card(usize),
-    Project(usize),
+    Card(uuid::Uuid),
+    Project(uuid::Uuid),
 }
 
 pub(crate) struct Selection {
@@ -74,24 +74,8 @@ pub(crate) fn resolve_selection(app: &App) -> Option<Selection> {
         .focus()
         .min(entry.focus_len().saturating_sub(1));
     let focused = match entry.focus_target(focus)? {
-        PersonFocus::Card(item) => {
-            let idx = app
-                .chat
-                .work
-                .all_items()
-                .iter()
-                .position(|candidate| candidate.profile.id == item.profile.id)?;
-            FocusedItem::Card(idx)
-        }
-        PersonFocus::Project(item) => {
-            let idx = app
-                .chat
-                .showcase
-                .all_items()
-                .iter()
-                .position(|candidate| candidate.showcase.id == item.showcase.id)?;
-            FocusedItem::Project(idx)
-        }
+        PersonFocus::Card(item) => FocusedItem::Card(item.profile.id),
+        PersonFocus::Project(item) => FocusedItem::Project(item.showcase.id),
     };
     Some(Selection {
         focused,
@@ -146,11 +130,55 @@ fn submit_search(app: &mut App) {
     let index = user_id
         .and_then(|user_id| entries.iter().position(|entry| entry.user_id == user_id))
         .unwrap_or(0);
-    app.directory_state.select(index);
+    app.directory_state.select_and_open(index);
 }
 
-/// Idle (not composing, not searching) keys for the people feed.
+/// Keys that work on either shelf.
+fn handle_shelf_byte(app: &mut App, byte: u8) -> bool {
+    match byte {
+        b' ' => {
+            app.directory_state.toggle_shelf();
+            true
+        }
+        b'w' | b'W' => {
+            editor::input::open_own(app, editor::state::Page::Card);
+            true
+        }
+        b'i' | b'I' => {
+            editor::input::open_own_new_project(app);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Idle (not searching) keys for the page.
 pub(crate) fn handle_idle_byte(app: &mut App, byte: u8) -> bool {
+    if handle_shelf_byte(app, byte) {
+        return true;
+    }
+    match app.directory_state.shelf() {
+        Shelf::Jobs => handle_jobs_byte(app, byte),
+        Shelf::People => handle_people_byte(app, byte),
+    }
+}
+
+/// The Jobs shelf has nothing to select yet; `/` says why.
+fn handle_jobs_byte(app: &mut App, byte: u8) -> bool {
+    match byte {
+        b'/' => {
+            app.banner = Some(Banner::info(
+                "Job matches arrive with the job feed; fill your card with w meanwhile.",
+            ));
+            true
+        }
+        _ => false,
+    }
+}
+
+fn handle_people_byte(app: &mut App, byte: u8) -> bool {
+    let narrow = app.directory_state.narrow();
+    let detail = !narrow || app.directory_state.detail_open();
     match byte {
         b'j' | b'J' => {
             let len = entry_len(app);
@@ -163,21 +191,21 @@ pub(crate) fn handle_idle_byte(app: &mut App, byte: u8) -> bool {
             true
         }
         b'h' | b'H' => {
-            let len = focus_len(app);
-            app.directory_state.move_focus(-1, len);
+            if narrow && app.directory_state.detail_open() {
+                app.directory_state.close_detail();
+            } else {
+                let len = focus_len(app);
+                app.directory_state.move_focus(-1, len);
+            }
             true
         }
         b'l' | b'L' => {
-            let len = focus_len(app);
-            app.directory_state.move_focus(1, len);
-            true
-        }
-        b'i' | b'I' => {
-            app.chat.showcase.start_composing();
-            true
-        }
-        b'w' | b'W' => {
-            app.chat.work.start_composing();
+            if narrow && !app.directory_state.detail_open() {
+                app.directory_state.open_detail();
+            } else {
+                let len = focus_len(app);
+                app.directory_state.move_focus(1, len);
+            }
             true
         }
         b's' | b'S' => {
@@ -191,60 +219,33 @@ pub(crate) fn handle_idle_byte(app: &mut App, byte: u8) -> bool {
             true
         }
         b'e' | b'E' => {
-            match resolve_selection(app).map(|selection| selection.focused) {
-                Some(FocusedItem::Project(idx)) => {
-                    app.chat.showcase.select_index(idx);
-                    if !app.chat.showcase.start_editing_selected() {
-                        app.banner = Some(Banner::error("not your project"));
-                    }
-                }
-                Some(FocusedItem::Card(idx)) => {
-                    app.chat.work.select_index(idx);
-                    if !app.chat.work.start_editing_selected() {
-                        app.banner = Some(Banner::error("not your work card"));
-                    }
-                }
-                None => {}
+            let opened = match resolve_selection(app).map(|selection| selection.focused) {
+                Some(FocusedItem::Project(id)) => Some(editor::input::open_project(app, id)),
+                Some(FocusedItem::Card(id)) => Some(editor::input::open_card(app, id)),
+                None => None,
+            };
+            if opened == Some(false) {
+                app.banner = Some(Banner::error("not yours to edit"));
             }
             true
         }
         b'd' | b'D' => {
-            match resolve_selection(app).map(|selection| selection.focused) {
-                Some(FocusedItem::Project(idx)) => {
-                    app.chat.showcase.select_index(idx);
-                    if let Some(banner) = app.chat.showcase.delete_selected() {
-                        app.banner = Some(banner);
-                    }
-                }
-                Some(FocusedItem::Card(idx)) => {
-                    app.chat.work.select_index(idx);
-                    if let Some(banner) = app.chat.work.delete_selected() {
-                        app.banner = Some(banner);
-                    }
-                }
-                None => {}
+            let banner = match resolve_selection(app).map(|selection| selection.focused) {
+                Some(FocusedItem::Project(id)) => app.chat.showcase.delete_project(id),
+                Some(FocusedItem::Card(id)) => app.chat.work.delete_card(id),
+                None => None,
+            };
+            if let Some(banner) = banner {
+                app.banner = Some(banner);
             }
             true
         }
         b'\r' | b'\n' | b'c' | b'C' => {
-            match resolve_selection(app).map(|selection| selection.focused) {
-                Some(FocusedItem::Project(idx)) => {
-                    app.chat.showcase.select_index(idx);
-                    if let Some(url) = app.chat.showcase.copy_selected_url() {
-                        app.pending_clipboard = Some(url);
-                        app.banner = Some(Banner::success("Project link copied!"));
-                    }
-                }
-                Some(FocusedItem::Card(idx)) => {
-                    let base_url = app.web_url.clone();
-                    app.chat.work.select_index(idx);
-                    if let Some(url) = app.chat.work.copy_selected_profile_url(&base_url) {
-                        app.pending_clipboard = Some(url);
-                        app.banner = Some(Banner::success("Profile link copied!"));
-                    }
-                }
-                None => {}
+            if !detail {
+                app.directory_state.open_detail();
+                return true;
             }
+            copy_focused_link(app);
             true
         }
         b'/' => {
@@ -261,36 +262,62 @@ pub(crate) fn handle_idle_byte(app: &mut App, byte: u8) -> bool {
     }
 }
 
+/// Enter on the focused item: the project's URL, or the card's public page.
+fn copy_focused_link(app: &mut App) {
+    match resolve_selection(app).map(|selection| selection.focused) {
+        Some(FocusedItem::Project(id)) => {
+            if let Some(item) = app.chat.showcase.project(id) {
+                let url = item.showcase.url.clone();
+                app.pending_clipboard = Some(url);
+                app.banner = Some(Banner::success("Project link copied!"));
+            }
+        }
+        Some(FocusedItem::Card(id)) => {
+            if let Some(item) = app.chat.work.card(id) {
+                let url =
+                    super::super::chat::work::state::profile_url(&app.web_url, &item.profile.slug);
+                app.pending_clipboard = Some(url);
+                app.banner = Some(Banner::success("Profile link copied!"));
+            }
+        }
+        None => {}
+    }
+}
+
 /// Idle page-sized selection jumps on the people feed.
 pub(crate) fn move_idle_selection(app: &mut App, delta: isize) {
+    if app.directory_state.shelf() != Shelf::People {
+        return;
+    }
     let len = entry_len(app);
     app.directory_state.move_selection(delta, len);
 }
 
 /// Idle arrow keys: up/down move between people, left/right move the detail
-/// focus across the selected person's card and projects.
+/// focus across the selected person's card and projects (or, stacked, open
+/// and close the detail pane).
 pub(crate) fn handle_idle_arrow(app: &mut App, key: u8) -> bool {
+    if app.directory_state.shelf() != Shelf::People {
+        return false;
+    }
     match key {
-        b'A' => {
-            let len = entry_len(app);
-            app.directory_state.move_selection(-1, len);
-            true
-        }
-        b'B' => {
-            let len = entry_len(app);
-            app.directory_state.move_selection(1, len);
-            true
-        }
-        b'D' => {
-            let len = focus_len(app);
-            app.directory_state.move_focus(-1, len);
-            true
-        }
-        b'C' => {
-            let len = focus_len(app);
-            app.directory_state.move_focus(1, len);
-            true
-        }
+        b'A' => handle_people_byte(app, b'k'),
+        b'B' => handle_people_byte(app, b'j'),
+        b'D' => handle_people_byte(app, b'h'),
+        b'C' => handle_people_byte(app, b'l'),
         _ => false,
     }
+}
+
+/// Esc on the page: leave search, or close the stacked detail pane.
+pub(crate) fn handle_escape(app: &mut App) -> bool {
+    if app.directory_state.search_mode() {
+        app.directory_state.exit_search();
+        return true;
+    }
+    if app.directory_state.narrow() && app.directory_state.detail_open() {
+        app.directory_state.close_detail();
+        return true;
+    }
+    false
 }

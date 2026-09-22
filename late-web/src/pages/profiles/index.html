@@ -94,46 +94,32 @@
     <div class="space-y-3">
         {% for item in items %}
         <a href="/profiles/{{ item.slug }}"
-           class="stagger stagger-3 list-item group block w-full text-left border border-gray-600 hover:border-green-700 px-5 py-4 transition-colors duration-200 bg-gray-900/20">
+           class="stagger stagger-3 list-item group block w-full text-left border border-gray-600 hover:border-green-700 px-5 py-3 transition-colors duration-200 bg-gray-900/20">
 
-            <!-- top row: status pill + updated -->
-            <div class="flex items-center justify-between gap-3 mb-2">
-                <span class="inline-flex items-center border px-2 py-0.5 text-[0.65rem] tracking-wide uppercase pill-{{ item.status_id }}">
+            <!-- line 1: who, how open, when -->
+            <div class="flex items-center gap-3 text-sm">
+                <span class="text-green-400 shrink-0">@{{ item.username }}</span>
+                <span class="inline-flex items-center text-[0.65rem] tracking-wide uppercase pill-{{ item.status_id }} border px-2 py-0.5">
                     {% if item.status_id == "open" %}<span class="pulse-dot"></span>{% endif %}
                     {{ item.status_label }}
                 </span>
-                <span class="shrink-0 text-[0.7rem] text-gray-400">{{ item.updated }}</span>
+                <span class="text-gray-500 hidden sm:inline">·</span>
+                <span class="text-xs text-gray-400 hidden sm:inline">{{ item.work_type }}</span>
+                <span class="ml-auto shrink-0 text-[0.7rem] text-gray-400">{{ item.updated }}</span>
             </div>
 
-            <!-- headline -->
-            <div class="text-base sm:text-lg text-gray-100 group-hover:text-green-400 transition-colors leading-snug truncate mb-1">
+            <!-- line 2: the headline -->
+            <div class="mt-1 text-base sm:text-lg text-gray-100 group-hover:text-green-400 transition-colors leading-snug truncate">
                 {{ item.headline }}
             </div>
 
-            <!-- meta -->
-            <div class="text-xs text-gray-300 flex flex-wrap items-center gap-x-2 gap-y-1 mb-3">
-                <span class="text-green-400">@{{ item.username }}</span>
-                <span class="text-gray-500">·</span>
-                <span>{{ item.work_type }}</span>
-                <span class="text-gray-500">·</span>
-                <span>{{ item.location }}</span>
+            <!-- line 3: skills, and where -->
+            <div class="mt-1 flex items-center gap-x-3 text-[0.75rem]">
+                <span class="text-gray-400 truncate">
+                    {% for skill in item.skills %}{% if !loop.first %}<span class="text-gray-600"> · </span>{% endif %}{{ skill }}{% endfor %}
+                </span>
+                <span class="ml-auto shrink-0 text-gray-500">{{ item.location }}</span>
             </div>
-
-            <!-- summary preview -->
-            {% if item.summary_preview.is_empty() %}{% else %}
-            <div class="text-xs text-gray-300 leading-relaxed mb-3">
-                {{ item.summary_preview }}
-            </div>
-            {% endif %}
-
-            <!-- skills -->
-            {% if item.skills.is_empty() %}{% else %}
-            <div class="flex flex-wrap gap-x-2.5 gap-y-1 text-[0.7rem] text-gray-400">
-                {% for skill in item.skills %}
-                <span>#{{ skill }}</span>
-                {% endfor %}
-            </div>
-            {% endif %}
         </a>
         {% endfor %}
     </div>

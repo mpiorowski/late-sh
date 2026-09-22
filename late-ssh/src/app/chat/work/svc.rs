@@ -459,3 +459,10 @@ pub fn looks_like_url(s: &str) -> bool {
     let s = s.trim();
     s.starts_with("http://") || s.starts_with("https://")
 }
+
+/// A fresh public slug for a new card: `w_` and twelve lowercase hex chars
+/// of a v7 id, which the `work_profiles.slug` CHECK expects.
+pub fn generate_public_slug() -> String {
+    let id = Uuid::now_v7().simple().to_string();
+    format!("w_{}", &id[..12])
+}

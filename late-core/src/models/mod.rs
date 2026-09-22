@@ -168,3 +168,5 @@ pub mod username_effect;
 pub mod voice_channel;
 pub mod work_feed_read;
 pub mod work_profile;
+#[cfg(test)]
+mod work_profile_test;
