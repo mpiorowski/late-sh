@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use chrono::{NaiveDate, TimeZone, Utc};
 use late_core::models::chat_message_gild::GildParties;
 use late_core::models::chips::ChipLedgerEntry;
-use late_core::models::drink_round::DrinkRound;
+use late_core::models::drink_round::{Bar, DrinkRound};
 use late_core::models::game_payout::GamePayoutSource;
 use late_core::models::pot::{Pot, PotStatus};
 use late_core::models::profile_award::ProfileAward;
@@ -130,6 +130,7 @@ fn every_pointer_kind_resolves_from_its_source() {
                 id: round_id,
                 buyer_user_id: Some(alice),
                 price_per_patron: 400,
+                bar: Bar::Tavern,
                 created: Utc::now(),
             },
         )]),

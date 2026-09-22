@@ -45,7 +45,7 @@ use late_core::{
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         chips::{CHIP_FLOOR, UserChips},
-        drink_round::{ROUND_PRICE_PER_PATRON, contains_round_request},
+        drink_round::{Bar, ROUND_PRICE_PER_PATRON, contains_round_request},
         drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, UserDrinks, drunk_level_word},
         user::{User, UserParams},
     },
@@ -1039,7 +1039,12 @@ impl GhostService {
 
         let body = match self
             .chip_service
-            .buy_round(buyer_id, ROUND_PRICE_PER_PATRON, &patrons_present)
+            .buy_round(
+                buyer_id,
+                ROUND_PRICE_PER_PATRON,
+                Bar::Tavern,
+                &patrons_present,
+            )
             .await
         {
             Ok(purchase) => {

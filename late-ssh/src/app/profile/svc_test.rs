@@ -17,7 +17,9 @@ use late_core::models::{
     chat_room::ChatRoom,
     chips::{ChipMove, INITIAL_CHIP_BALANCE, UserChips},
     crown::{CROWN_MIN_PRICE, CrownReign, next_price},
-    drink_round::{DrinkRound, MAX_OPEN_CREDITS, ROUND_CREDIT_TTL_HOURS, ROUND_PRICE_PER_PATRON},
+    drink_round::{
+        Bar, DrinkRound, MAX_OPEN_CREDITS, ROUND_CREDIT_TTL_HOURS, ROUND_PRICE_PER_PATRON,
+    },
     game_payout::GamePayout,
     media_queue_item::MediaQueueItem,
     moderation_audit_log::ModerationAuditLog,
@@ -243,6 +245,7 @@ async fn find_profile_resolves_the_house_rows() {
         &tx,
         user.id,
         ROUND_PRICE_PER_PATRON,
+        Bar::Tavern,
         &[patron.id],
         ROUND_CREDIT_TTL_HOURS,
         MAX_OPEN_CREDITS,

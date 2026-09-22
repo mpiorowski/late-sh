@@ -71,7 +71,11 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         }
         b'd' | b'D' => {
             app.music_prefix_armed = false;
-            app.nightcap.toggle_menu();
+            // Opening the menu is the one moment the banked-drinks count is
+            // read: it is the only place that count is printed.
+            if app.nightcap.toggle_menu() {
+                app.nightcap_check_credits();
+            }
             true
         }
         b'c' | b'C' => {

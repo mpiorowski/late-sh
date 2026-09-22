@@ -6,7 +6,8 @@
 //     > or . down (also shown as a hint in-game when a room has a vertical exit).
 //   - Combat: space/x attack; 1-9 use the ability in that action-bar slot (0 is
 //     slot 10; deeper rosters cast from the Abilities panel); Q quaffs the best
-//     healing potion without leaving the view; z flee.
+//     healing potion without leaving the view; C coats your weapon with the
+//     coat the foe in front of you likes least; z flee.
 //   - Companion care: G feeds and tends your own companion from anywhere
 //     (20g; four loyalty-raising meals a UTC day, and past them it still
 //     mends). ~ does the same, except that if a wild
@@ -32,7 +33,8 @@
 //   - ! opens the Leaderboard: top adventurers currently online by level,
 //     pvp kills, and gold (read-only). Not `?`, which late.sh reserves
 //     globally for a cross-door help overlay.
-//   - Panels: c character, v abilities, o look, b shop, t inventory ("things"),
+//   - Panels: c character (lowercase only - C coats a weapon), v abilities,
+//     o look, b shop, t inventory ("things"),
 //     p the Stable (companion vendor) where one stands. In the Stable, Enter
 //     buys the selected beast and x feeds/tends the one you have. q opens the
 //     Animal Taming panel where a tameable wild beast roams (Enter attempts the
@@ -306,8 +308,15 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
 
     match byte {
         // Panels.
-        b'c' | b'C' => {
+        b'c' => {
             state.toggle_panel(Panel::Character);
+            InputAction::Handled
+        }
+        b'C' => {
+            // Coat the weapon in one keystroke, the sibling of `Q`. Shift-c no
+            // longer opens the character sheet; plain `c` still does, and the
+            // game already splits three other pairs this way (q/Q, g/G, m/M).
+            state.coat();
             InputAction::Handled
         }
         b'v' | b'V' => {

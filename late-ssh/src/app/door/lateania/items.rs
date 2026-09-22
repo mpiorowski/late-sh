@@ -184,22 +184,15 @@ impl Item {
     /// service applies in `use_item`/`coat_weapon`, so the shelf can never
     /// promise a number combat does not deliver.
     ///
-    /// Oil and poison are deliberately different shapes - the oil is the
-    /// sustain coat (a fifth of the auto bar for a whole boss fight), the
-    /// poison the burst one (about a third of the bar for five strikes) - and
-    /// that is the choice a maker is making, so both halves are named.
+    /// Every coat reads the same way because every coat *is* the same, bar its
+    /// school: the shelf's whole job here is to name which school you are
+    /// buying, which is the only decision left to make.
     pub fn coat_effect(&self) -> Option<String> {
-        use super::svc::{OIL_CHARGES, OIL_PER_TICK, POISON_CHARGES, POISON_PER_TICK};
-        if let Some(tier) = poison_tier(self.id) {
-            let per = POISON_PER_TICK[(tier as usize).min(POISON_PER_TICK.len() - 1)];
-            return Some(format!(
-                "coat a weapon: +{per} poison a strike for {POISON_CHARGES} strikes"
-            ));
-        }
-        let (school, tier) = oil_school_tier(self.id)?;
-        let per = OIL_PER_TICK[(tier as usize).min(OIL_PER_TICK.len() - 1)];
+        use super::svc::{COAT_CHARGES, COAT_PER_TICK};
+        let (school, tier) = coat_school_tier(self.id)?;
+        let per = COAT_PER_TICK[(tier as usize).min(COAT_PER_TICK.len() - 1)];
         Some(format!(
-            "coat a weapon: +{per} {} a strike for {OIL_CHARGES} strikes",
+            "coat a weapon: +{per} {} a strike for {COAT_CHARGES} strikes",
             school.label()
         ))
     }
@@ -1377,13 +1370,25 @@ pub const fn oil_id(school: u32, tier: u32) -> u32 {
     CRAFTED_BASE + 300 + school * 20 + tier
 }
 
-/// The four oil schools, in `oil_id` family order. Deliberately not all seven:
-/// Shadow, Arcane, and Poison stay caster-and-poison-flavored lanes.
+/// The four oil schools, in `oil_id` family order. Poison is the fifth coat
+/// school but keeps its own item family (`poison_id`) rather than becoming
+/// `oil_id(4, t)`, because those ids sit in players' saved inventories.
+/// Shadow and Arcane stay caster lanes with no coat at all.
 pub const OIL_SCHOOLS: [DamageType; 4] = [
     DamageType::Fire,
     DamageType::Frost,
     DamageType::Holy,
     DamageType::Lightning,
+];
+
+/// Every school a weapon coat can carry: the four oils plus the poison vial.
+/// What a coat *is*, now that the rider and the charge count are one curve.
+pub const COAT_SCHOOLS: [DamageType; 5] = [
+    DamageType::Fire,
+    DamageType::Frost,
+    DamageType::Holy,
+    DamageType::Lightning,
+    DamageType::Poison,
 ];
 
 /// The tier of a poison item id, if `id` is one (used to route it to the
@@ -1392,8 +1397,8 @@ pub fn poison_tier(id: u32) -> Option<u32> {
     (0..6).find(|&t| poison_id(t) == id)
 }
 
-/// The school and tier of a weapon-oil item id, if `id` is one (used to route
-/// it to the weapon-coating action, same as `poison_tier`).
+/// The school and tier of a weapon-oil item id, if `id` is one. Prefer
+/// `coat_school_tier` unless you specifically mean an oil and not a vial.
 pub fn oil_school_tier(id: u32) -> Option<(DamageType, u32)> {
     for (s, school) in OIL_SCHOOLS.iter().enumerate() {
         if let Some(t) = (0..6).find(|&t| oil_id(s as u32, t) == id) {
@@ -1401,6 +1406,16 @@ pub fn oil_school_tier(id: u32) -> Option<(DamageType, u32)> {
         }
     }
     None
+}
+
+/// The school and tier of any weapon coat, oil or poison vial. The one lookup
+/// `use_item` routes on and `coat_best` picks with, so nothing downstream has
+/// to know that the two families keep separate item ids.
+pub fn coat_school_tier(id: u32) -> Option<(DamageType, u32)> {
+    if let Some(t) = poison_tier(id) {
+        return Some((DamageType::Poison, t));
+    }
+    oil_school_tier(id)
 }
 
 /// The tier of a cooked-food item id, if `id` is one (food grants a well-fed
@@ -1567,8 +1582,9 @@ fn build_crafted() -> Vec<Item> {
     const JERKIN_PRICE: [i64; 6] = [50, 120, 230, 400, 640, 1020];
     const POTION_HEAL: [i32; 6] = [25, 45, 75, 120, 180, 270];
     const POTION_PRICE: [i64; 6] = [20, 45, 90, 160, 260, 400];
-    const POISON_PRICE: [i64; 6] = [15, 40, 80, 140, 220, 350];
-    const OIL_PRICE: [i64; 6] = [20, 50, 100, 170, 260, 400];
+    // One curve for every coat: same rider, same charges, same price. Only the
+    // school differs, and the world's resist/weak board prices that already.
+    const COAT_PRICE: [i64; 6] = [20, 50, 100, 170, 260, 400];
     const FOOD_HEAL: [i32; 6] = [20, 35, 55, 85, 130, 195];
     const FOOD_REST: [i32; 6] = [10, 20, 35, 55, 85, 130];
     const FOOD_PRICE: [i64; 6] = [15, 35, 70, 120, 190, 300];
@@ -1660,7 +1676,7 @@ fn build_crafted() -> Vec<Item> {
             POISON_NAMES[t],
             "A stoppered vial of poison, meant to coat a blade.",
             FINAL_RARITY[t],
-            POISON_PRICE[t],
+            COAT_PRICE[t],
         ));
         for s in 0..4usize {
             out.push(utility(
@@ -1668,7 +1684,7 @@ fn build_crafted() -> Vec<Item> {
                 OIL_NAMES[s][t],
                 OIL_DESCS[s],
                 FINAL_RARITY[t],
-                OIL_PRICE[t],
+                COAT_PRICE[t],
             ));
         }
         out.push(consumable(

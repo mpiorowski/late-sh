@@ -5,6 +5,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use tokio_postgres::{Client, GenericClient, Transaction};
 use uuid::Uuid;
 
+use crate::models::drink_round::Bar;
+
 pub const CHIP_FLOOR: i64 = 100;
 pub const INITIAL_CHIP_BALANCE: i64 = 1_000;
 pub const CHIP_USER_CHANGED_CHANNEL: &str = "chip_user_changed";
@@ -939,20 +941,28 @@ impl UserChips {
         })
     }
 
-    /// The house's biggest round buyers, all time, by chips spent: the tab
-    /// board at the bar out back. Every `round_purchase` row counts,
-    /// whichever bar sold the round; the ledger does not say which.
-    pub async fn top_round_buyers(client: &Client, limit: i64) -> Result<Vec<RoundBuyer>> {
+    /// The biggest round buyers at one bar, all time, by chips spent: the
+    /// tab board out back counts what the Nightcap sold and nothing else.
+    /// The ledger row does not say which bar took the order, so the round it
+    /// is keyed on does ([`Bar`], `source_ref` = the round id). Rounds
+    /// bought before that column exists read as the tavern's.
+    pub async fn top_round_buyers(
+        client: &Client,
+        bar: Bar,
+        limit: i64,
+    ) -> Result<Vec<RoundBuyer>> {
         let rows = client
             .query(
                 "SELECT l.user_id, u.username, count(*) AS rounds, sum(-l.delta)::BIGINT AS chips
                  FROM chip_ledger l
+                 JOIN drink_rounds r ON r.id::TEXT = l.source_ref
                  JOIN users u ON u.id = l.user_id
                  WHERE l.reason = $1
+                   AND r.bar = $2
                  GROUP BY l.user_id, u.username
                  ORDER BY chips DESC, rounds DESC, u.username ASC
-                 LIMIT $2",
-                &[&ChipMove::RoundPurchase.reason(), &limit],
+                 LIMIT $3",
+                &[&ChipMove::RoundPurchase.reason(), &bar.as_str(), &limit],
             )
             .await?;
         Ok(rows

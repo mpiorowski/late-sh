@@ -4973,6 +4973,34 @@ impl ChatService {
         Ok(())
     }
 
+    /// Say a house line into `room_id` as the `system` author, off-thread.
+    /// The Nightcap's one caller (`clubhouse/nightcap/svc.rs`) announces
+    /// every drink the bar pours; nothing waits on it, so a failure is
+    /// logged here and nowhere else.
+    ///
+    /// No `· ` prefix: a prefixed line is an ambient #lounge feed line the
+    /// TUI diverts into the activity ticker and strips out of every room's
+    /// messages, and this one has to read as a message on the wall out back.
+    /// The system user is ensured at startup by the lounge feed task; before
+    /// that lands (or with the feed disabled) the house says nothing.
+    pub fn send_house_line_task(&self, room_id: Uuid, body: String) {
+        let Some(system_user_id) = self.system_user_id() else {
+            return;
+        };
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = service
+                .send_system_message(system_user_id, room_id, body)
+                .await
+            {
+                crate::metrics::record_nightcap_house_failure(
+                    crate::app::clubhouse::nightcap::svc::NightcapHouseFailure::HouseLine,
+                );
+                tracing::warn!(error = ?error, room_id = %room_id, "failed to post a house line");
+            }
+        });
+    }
+
     /// Post `body` into `room_id` as the system bot, joining it to the room
     /// first: `send_message` requires membership of every author.
     async fn send_system_message(

@@ -10,7 +10,7 @@ use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::chat::news::svc::XMediaLookup;
 use crate::app::chat::svc::GildRefusal;
-use crate::app::clubhouse::nightcap::svc::NightcapOrderResult;
+use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::games::chips::svc::RoundRefusal;
@@ -208,9 +208,10 @@ mod inner {
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
-        GildTier, NewsShareReward, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
-        PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, RunnerDoor,
-        SongQueueReward, SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
+        GildTier, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
+        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
+        RenderReason, RoundRefusal, RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult,
+        TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -569,6 +570,25 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_nightcap_orders_total")
                 .with_description("Single-drink orders at the Nightcap bar, by how they settled")
+                .build()
+        })
+    }
+
+    fn nightcap_house_failure_label(failure: NightcapHouseFailure) -> &'static str {
+        match failure {
+            NightcapHouseFailure::CreditCount => "credit_count",
+            NightcapHouseFailure::HouseLine => "house_line",
+        }
+    }
+
+    fn nightcap_house_failures_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_nightcap_house_failures_total")
+                .with_description(
+                    "Nightcap off-thread work that failed (a stale free-drink count, a house line never posted), by which",
+                )
                 .build()
         })
     }
@@ -1168,6 +1188,16 @@ mod inner {
         round_drinks_cashed_total().add(1, &[]);
     }
 
+    /// The house's off-thread work at the Nightcap failed. Orders are counted
+    /// under `record_nightcap_order`; this is what a healthy order counter
+    /// cannot see: a quiet bar or a stale menu.
+    pub fn record_nightcap_house_failure(failure: NightcapHouseFailure) {
+        nightcap_house_failures_total().add(
+            1,
+            &[KeyValue::new("work", nightcap_house_failure_label(failure))],
+        );
+    }
+
     /// A settled buy. Two counters, because the burn is only visible as the
     /// gap between what went in and what came out.
     pub fn record_pot_tickets_bought(tickets: i64, chips: i64) {
@@ -1454,9 +1484,10 @@ mod inner {
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
-        GildTier, NewsShareReward, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
-        PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, RunnerDoor,
-        SongQueueReward, SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
+        GildTier, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
+        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
+        RenderReason, RoundRefusal, RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult,
+        TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
@@ -1495,6 +1526,7 @@ mod inner {
     pub fn record_round_bought(_patrons: i64, _chips: i64) {}
     pub fn record_round_refused(_refusal: RoundRefusal) {}
     pub fn record_nightcap_order(_result: NightcapOrderResult) {}
+    pub fn record_nightcap_house_failure(_failure: NightcapHouseFailure) {}
     pub fn record_round_drink_cashed() {}
     pub fn record_pot_tickets_bought(_tickets: i64, _chips: i64) {}
     pub fn record_pot_buy_refused(_refusal: PotRefusal) {}

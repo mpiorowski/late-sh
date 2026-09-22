@@ -768,7 +768,11 @@ reads a chat message, and `chat/slur.rs` has to leave that phrase alone.
   rows and cash from anywhere. Excluding the buyer is what makes "nobody to buy for" a real
   refusal rather than a round bought for one.
 - **Only the buyer is poured into**, on the spot, `ROUND_DRINK_POINTS` in the
-  purchase transaction: they typed the order. Everyone else gets a
+  purchase transaction: they typed the order. That number is the tavern's,
+  a premium over the price a head because this round buys for everyone
+  online and most of them never walk up; the Nightcap's round is tagged
+  `bar='nightcap'` and pours 1:1 instead (`Bar::drink_points`,
+  `clubhouse/nightcap/CONTEXT.md` §5). Everyone else gets a
   `drink_credits` row, not a drink, because a pour makes someone type drunk in
   public and they did not ask. It is cashed only by ordering from @bartender,
   24h to claim.

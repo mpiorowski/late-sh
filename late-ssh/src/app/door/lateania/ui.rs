@@ -267,9 +267,9 @@ struct Chip {
 }
 
 /// Build the action-bar chips left to right within `max_width`: Attack first,
-/// then as many ability slots as fit, always keeping room for Quaff and Flee on
-/// the end (the two a wounded player reaches for most). Kept pure so the layout
-/// is unit-testable.
+/// then as many ability slots as fit, always keeping room for Coat, Quaff and
+/// Flee on the end (the three that shouldn't cost a panel to reach). Kept pure
+/// so the layout is unit-testable.
 fn combat_chips(view: &PlayerView, max_width: u16) -> Vec<Chip> {
     let width_of = |s: &str| UnicodeWidthStr::width(s) as u16;
     let attack = Chip {
@@ -282,14 +282,26 @@ fn combat_chips(view: &PlayerView, max_width: u16) -> Vec<Chip> {
         action: ClickAction::Quaff,
         ready: true,
     };
+    // Shows the strikes left rather than the school: the school is already on
+    // the effects line directly above, and the number is the part that decides
+    // whether you press it.
+    let coat = Chip {
+        label: match &view.coat {
+            Some(c) => format!("\u{2697} x{}", c.charges), // ⚗
+            None => "\u{2697} Coat".to_string(),
+        },
+        action: ClickAction::Coat,
+        ready: view.coat.is_none(),
+    };
     let flee = Chip {
         label: "\u{2691} Flee".to_string(), // ⚑
         action: ClickAction::Flee,
         ready: true,
     };
-    // Reserve the trailing Quaff/Flee (plus a space before each) so abilities in
-    // the middle never crowd them off the row.
-    let reserved = width_of(&quaff.label) + 1 + width_of(&flee.label) + 1;
+    // Reserve the trailing Coat/Quaff/Flee (plus a space before each) so
+    // abilities in the middle never crowd them off the row.
+    let reserved =
+        width_of(&coat.label) + 1 + width_of(&quaff.label) + 1 + width_of(&flee.label) + 1;
     let mut chips = vec![attack];
     let mut used = width_of(&chips[0].label);
     for a in &view.abilities {
@@ -307,6 +319,7 @@ fn combat_chips(view: &PlayerView, max_width: u16) -> Vec<Chip> {
             ready: a.ready,
         });
     }
+    chips.push(coat);
     chips.push(quaff);
     chips.push(flee);
     chips
@@ -341,6 +354,11 @@ fn draw_action_bar(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVi
                 .fg(theme::AMBER_GLOW())
                 .add_modifier(Modifier::BOLD),
             ClickAction::Quaff => Style::default().fg(theme::SUCCESS()),
+            // Dim once a coat is live: the chip is then mostly a readout of
+            // what's left. It stays clickable, because a nearly spent coat
+            // still tops up (`coat_best`).
+            ClickAction::Coat if chip.ready => Style::default().fg(theme::AMBER()),
+            ClickAction::Coat => Style::default().fg(theme::TEXT_DIM()),
             ClickAction::Flee => Style::default().fg(theme::TEXT_DIM()),
             ClickAction::Ability(_) if chip.ready => Style::default().fg(theme::AMBER()),
             ClickAction::Ability(_) => Style::default().fg(theme::TEXT_FAINT()),
@@ -4924,7 +4942,7 @@ fn battle_side_panel(
         effects.push(format!("empowered +{}", view.empower));
     }
     if let Some(coat) = &view.coat {
-        effects.push(coat.clone());
+        effects.push(format!("{} coat x{}", coat.school, coat.charges));
     }
     if view.stunned {
         effects.push("stunned".to_string());
@@ -5031,6 +5049,7 @@ fn battle_side_panel(
     lines.push(Line::raw(""));
     lines.push(hint("space/x", "strike  z flee"));
     lines.push(hint("Q", "quaff a potion"));
+    lines.push(hint("C", "coat your weapon"));
     (lines, hits)
 }
 
@@ -7312,7 +7331,7 @@ fn battle_context(view: &PlayerView, width: usize) -> Option<Vec<Line<'static>>>
         effects.push(format!("empowered +{}", view.empower));
     }
     if let Some(coat) = &view.coat {
-        effects.push(coat.clone());
+        effects.push(format!("{} coat x{}", coat.school, coat.charges));
     }
     if view.stunned {
         effects.push("stunned".to_string());

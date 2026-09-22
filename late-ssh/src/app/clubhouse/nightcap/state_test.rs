@@ -372,3 +372,47 @@ fn only_the_house_beer_comes_off_a_round_credit() {
     assert!(!Drink::OldFashioned.on_the_round());
     assert!(!Drink::TopShelf.on_the_round());
 }
+
+#[test]
+fn the_menu_counts_the_drinks_waiting_without_saying_anything() {
+    let seats = SharedSeats::new();
+    let mut mine = session(&seats, 1);
+    assert!(
+        !mine.toggle_menu(),
+        "no stool, no menu, and nothing to count"
+    );
+    mine.toggle_seat(0);
+    assert_eq!(mine.free_drinks(), 0);
+    assert!(mine.toggle_menu(), "opening the menu asks for the count");
+
+    mine.outcome_sender()
+        .send(Outcome::Credits { waiting: 3 })
+        .expect("session receiver alive");
+    mine.drain_outcomes();
+
+    assert_eq!(mine.free_drinks(), 3);
+    assert_eq!(mine.last_message, None, "a count is not a footer line");
+    assert!(mine.menu_open(), "and it never closes the menu");
+
+    // A count landing mid-order is not the answer to that order.
+    assert_eq!(
+        mine.pick(Order::Drink(Drink::HouseBeer)),
+        Some(Order::Drink(Drink::HouseBeer))
+    );
+    mine.apply_outcome(Outcome::Credits { waiting: 2 });
+    assert_eq!(mine.free_drinks(), 2);
+    assert_eq!(mine.pick(Order::Round), None, "the pour is still in flight");
+    assert_eq!(mine.last_message.as_deref(), Some("the house is on it."));
+
+    // The comped pour spends one and says what is left in the same breath,
+    // so the menu needs no second read.
+    mine.apply_outcome(Outcome::Comped {
+        drink: Drink::HouseBeer,
+        remaining: 1,
+    });
+    assert_eq!(mine.free_drinks(), 1);
+    assert_eq!(
+        mine.last_message.as_deref(),
+        Some("house beer, on somebody's round. 1 more waiting.")
+    );
+}

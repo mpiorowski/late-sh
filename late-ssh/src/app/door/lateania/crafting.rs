@@ -137,7 +137,7 @@ fn build_recipes() -> Vec<Recipe> {
             inputs: vec![ing(leather_id(t), 3)],
         });
 
-        // ---- Alchemy: a healing draught and a coating poison ------------
+        // ---- Alchemy: a healing draught and the venom coat ---------------
         r.push(Recipe {
             output: potion_id(t),
             output_qty: 1,
@@ -146,23 +146,23 @@ fn build_recipes() -> Vec<Recipe> {
             xp: craft,
             inputs: vec![ing(herb(t), 2)],
         });
-        // Two herbs against the oils' three items: the poison is the budget
-        // coat, buying about three quarters of an oil's damage for two thirds
-        // of the materials, in a burst shape and in the one school no oil
-        // covers. Cheaper, shorter, sharper - not simply worse.
+        // The venom coat: same rider, same charges, same price as an oil, and
+        // priced in materials the same way too - two herbs and one beast part,
+        // which is what ties its Beastwild lane to the skinner's trade.
         r.push(Recipe {
             output: poison_id(t),
             output_qty: 1,
             skill: Alchemy,
             level_req: gate,
             xp: craft,
-            inputs: vec![ing(herb(t), 2)],
+            inputs: vec![ing(herb(t), 2), ing(hide(t), 1)],
         });
 
         // ---- Alchemy: the four weapon oils (the martial lever of the
         // world resist/weak pass). Each family's second ingredient ties its
         // school to a gathering trade: ore for fire, deep fish for frost,
-        // timber resin for lightning; the blessed oil is pure herbcraft.
+        // timber resin for lightning, hide for the venom above; the blessed
+        // oil is pure herbcraft.
         r.push(Recipe {
             output: oil_id(0, t),
             output_qty: 1,
