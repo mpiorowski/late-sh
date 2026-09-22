@@ -59,8 +59,8 @@ fn poi_arrows_hug_the_explored_cluster_with_boss_priority() {
 #[test]
 fn an_arrow_inside_the_explored_cluster_stays_on_its_target() {
     let mut canvas = vec![vec![Tile::Empty; 30]; 10];
-    for c in 0..=20 {
-        canvas[5][c] = Tile::Room(c as u32);
+    for (c, tile) in canvas[5].iter_mut().enumerate().take(21) {
+        *tile = Tile::Room(c as u32);
     }
     canvas[4][0] = Tile::Room(100);
 

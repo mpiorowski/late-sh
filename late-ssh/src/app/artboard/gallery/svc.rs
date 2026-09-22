@@ -70,7 +70,7 @@ impl SplashPiece {
 pub enum SplashRefresh {
     Off,
     Wall {
-        piece: Option<SplashPiece>,
+        piece: Option<Box<SplashPiece>>,
         queued: i64,
     },
 }
@@ -340,7 +340,10 @@ impl GalleryService {
         };
         let queued = ArtboardPiece::splash_queue_depth(&client, day).await?;
         let _ = self.splash_tx.send(piece.clone());
-        Ok(SplashRefresh::Wall { piece, queued })
+        Ok(SplashRefresh::Wall {
+            piece: piece.map(Box::new),
+            queued,
+        })
     }
 
     /// The rail's numbers, one query. Without a database everything is

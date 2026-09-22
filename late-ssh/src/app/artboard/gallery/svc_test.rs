@@ -64,7 +64,7 @@ async fn the_refresh_publishes_todays_piece_and_the_claim_shows_it_once() {
         SplashRefresh::Wall {
             piece: Some(piece),
             queued: 0,
-        } => piece,
+        } => *piece,
         other => panic!("expected tomorrow's piece and an empty queue, got {other:?}"),
     };
     assert_eq!(published.piece.id, hung.id);
