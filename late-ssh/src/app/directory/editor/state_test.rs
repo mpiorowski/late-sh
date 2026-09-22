@@ -80,13 +80,14 @@ fn opening_your_own_profile_seeds_every_page_and_is_clean() {
             location: "EU remote".to_string(),
             contact: "me@example.com".to_string(),
             links: "https://github.com/me".to_string(),
-            skills: "rust, cobol".to_string(),
+            // cobol is not in the vocabulary: gone at open, not at save.
+            skills: vec!["rust".to_string()],
             summary: "Terminal software.".to_string(),
         }
     );
     assert_eq!(editor.about_values().bio, "hello");
     assert_eq!(editor.about_values().ide, "nvim");
-    assert_eq!(editor.about_values().langs, "rust");
+    assert_eq!(editor.about_values().langs, vec!["rust"]);
     assert!(!editor.dirty(), "nothing typed yet");
     assert_eq!(editor.escape(), EscapeOutcome::Closed);
     assert!(!editor.is_open());
@@ -135,7 +136,7 @@ fn saving_without_a_headline_names_the_row_and_saves_nothing() {
 }
 
 #[test]
-fn a_full_card_saves_with_normalized_tags_and_closes() {
+fn a_full_card_saves_the_picked_tags_in_both_columns_and_closes() {
     let viewer = Uuid::now_v7();
     let mut editor = EditorState::default();
     editor.open_own(viewer, None, &profile(), Page::Card);
@@ -145,14 +146,18 @@ fn a_full_card_saves_with_normalized_tags_and_closes() {
         editor.field_mut(Field::Links),
         "https://late.sh, not-a-link",
     );
-    type_into(
-        editor.field_mut(Field::Skills),
-        "Elixir, PostgreSQL, ts, cobol, elixir",
+    // What the picker hands back on Esc.
+    editor.set_tags(
+        Field::Skills,
+        ["elixir", "postgres", "typescript"]
+            .map(str::to_string)
+            .to_vec(),
+    );
+    assert_eq!(
+        editor.field_text(Field::Skills),
+        "elixir · postgres · typescript"
     );
     type_into(editor.field_mut(Field::Summary), "Ship things.");
-    let preview = editor.skills_preview();
-    assert_eq!(preview.tags, vec!["elixir", "postgres", "typescript"]);
-    assert_eq!(preview.free, vec!["cobol"]);
 
     let saves = editor.save().expect("valid card");
     assert!(!editor.is_open(), "a save closes the modal");
@@ -168,11 +173,8 @@ fn a_full_card_saves_with_normalized_tags_and_closes() {
     );
     assert_eq!(params.headline, "Elixir engineer");
     assert_eq!(params.links, vec!["https://late.sh"]);
-    assert_eq!(params.skills, vec!["elixir", "postgresql", "ts", "cobol"]);
-    assert_eq!(
-        params.skills_tags,
-        vec!["elixir", "postgres", "typescript", "cobol"]
-    );
+    assert_eq!(params.skills, vec!["elixir", "postgres", "typescript"]);
+    assert_eq!(params.skills_tags, params.skills);
     assert_eq!(params.status, WorkStatus::Open);
     assert_eq!(params.work_type, WorkType::Any);
 }
@@ -187,7 +189,7 @@ fn editing_an_existing_card_keeps_its_id_and_slug_and_saves_the_about_page_too()
     editor.switch_page(true);
     assert_eq!(editor.page(), Page::About);
     type_into(editor.field_mut(Field::Bio), "new bio");
-    type_into(editor.field_mut(Field::Langs), "Rust, go, rust");
+    editor.set_tags(Field::Langs, ["rust", "go"].map(str::to_string).to_vec());
 
     let saves = editor.save().expect("valid");
     assert_eq!(saves.len(), 2, "{saves:?}");
@@ -201,7 +203,7 @@ fn editing_an_existing_card_keeps_its_id_and_slug_and_saves_the_about_page_too()
         panic!("about second: {saves:?}");
     };
     assert_eq!(about.bio, "new bio");
-    assert_eq!(about.langs, "Rust, go, rust");
+    assert_eq!(about.langs, vec!["rust", "go"]);
 }
 
 #[test]
@@ -351,19 +353,30 @@ fn click_rects_follow_a_scrolled_list() {
     assert_eq!(editor.row_at(3, 20), None);
 }
 
+/// A card written before the picker holds typed skills; opening it keeps
+/// what the vocabulary knows, folded, and the save writes only that.
 #[test]
-fn cpp_and_csharp_keep_their_symbols_and_fold_onto_their_tags() {
+fn a_card_typed_before_the_picker_opens_and_saves_with_only_known_tags() {
+    let viewer = Uuid::now_v7();
+    let mut legacy = card(viewer);
+    legacy.skills = ["C++", "c#", "#rust", "cobol"].map(str::to_string).to_vec();
+    let mut editor = EditorState::default();
+    editor.open_own(viewer, Some(&legacy), &profile(), Page::Card);
+    assert_eq!(editor.tags(Field::Skills), ["cpp", "csharp", "rust"]);
+
     let values = CardValues {
         headline: "Systems".to_string(),
         location: "remote".to_string(),
         links: "https://a.example".to_string(),
-        skills: "C++, c#, #rust, cobol".to_string(),
+        skills: ["cpp", "csharp", "rust", "cobol"]
+            .map(str::to_string)
+            .to_vec(),
         summary: "yes".to_string(),
         ..CardValues::default()
     };
     let params = validate_card(&values).expect("valid card");
-    assert_eq!(params.skills, vec!["c++", "c#", "rust", "cobol"]);
-    assert_eq!(params.skills_tags, vec!["cpp", "csharp", "rust", "cobol"]);
+    assert_eq!(params.skills, vec!["cpp", "csharp", "rust"]);
+    assert_eq!(params.skills_tags, params.skills);
 }
 
 #[test]

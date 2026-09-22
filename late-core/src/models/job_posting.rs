@@ -1,29 +1,33 @@
-//! The job feed's rows (migration 193): every read and write of
+//! The job feed's rows (migrations 193 and 194): every read and write of
 //! `job_postings` and `job_press_runs`. The press in `late-ssh/app/jobs`
-//! drives them; the shelf and the paper only read.
+//! drives the feed rows and the post form writes the `late` ones; the
+//! shelf and the paper only read.
 
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-/// Where a posting came from. Closed: the fetcher has one parser per
-/// variant and the card names the site.
+/// Where a posting came from. Closed: the fetcher has one parser per feed
+/// variant, the card names the site, and `Late` is written by a person on
+/// the Jobs shelf rather than pulled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JobSource {
     Hn,
     Wwr,
     Jobicy,
+    Late,
 }
 
 impl JobSource {
-    pub const ALL: [Self; 3] = [Self::Hn, Self::Wwr, Self::Jobicy];
+    pub const ALL: [Self; 4] = [Self::Hn, Self::Wwr, Self::Jobicy, Self::Late];
 
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Hn => "hn",
             Self::Wwr => "wwr",
             Self::Jobicy => "jobicy",
+            Self::Late => "late",
         }
     }
 
@@ -33,6 +37,7 @@ impl JobSource {
             Self::Hn => "news.ycombinator.com",
             Self::Wwr => "weworkremotely.com",
             Self::Jobicy => "jobicy.com",
+            Self::Late => "late.sh",
         }
     }
 
@@ -41,6 +46,7 @@ impl JobSource {
             "hn" => Self::Hn,
             "wwr" => Self::Wwr,
             "jobicy" => Self::Jobicy,
+            "late" => Self::Late,
             other => panic!("unknown job source in the database: {other}"),
         }
     }
@@ -150,6 +156,8 @@ pub struct JobPosting {
     pub released_on: Option<NaiveDate>,
     pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
+    /// Who wrote a `Late` row; a feed row has nobody.
+    pub posted_by: Option<Uuid>,
 }
 
 impl From<tokio_postgres::Row> for JobPosting {
@@ -173,8 +181,34 @@ impl From<tokio_postgres::Row> for JobPosting {
             released_on: row.get("released_on"),
             first_seen: row.get("first_seen"),
             last_seen: row.get("last_seen"),
+            posted_by: row.get("posted_by"),
         }
     }
+}
+
+/// A posting written on the shelf itself, already checked by the form:
+/// every field is what the card prints, and it goes active at once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NewPosting {
+    pub posted_by: Uuid,
+    pub url: String,
+    pub company: String,
+    pub title: String,
+    pub remote_kind: RemoteKind,
+    pub regions: Vec<String>,
+    pub tags: Vec<String>,
+    pub pay: String,
+    pub excerpt: String,
+}
+
+/// What a take-down did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Retract {
+    /// The row left the shelf.
+    Gone,
+    /// Not an active `late` row of that person's (or of anyone's, for a
+    /// moderator): nothing changed.
+    NotYours,
 }
 
 /// One posting as the fetcher hands it over. `remote_kind` and `regions`
@@ -419,6 +453,68 @@ impl JobPosting {
             )
             .await?;
         Ok(expired)
+    }
+
+    /// A posting written on the shelf: active now, released on `day`, its
+    /// own id as the pair's external id. Returns the new row.
+    pub async fn post(client: &Client, posting: &NewPosting, day: NaiveDate) -> Result<Self> {
+        let id = Uuid::now_v7();
+        let row = client
+            .query_one(
+                "INSERT INTO job_postings
+                    (id, source, external_id, status, url, company, title, remote_kind,
+                     regions, tags, pay, excerpt, posted_at, released_on, posted_by)
+                 VALUES ($1, 'late', $2, 'active', $3, $4, $5, $6, $7, $8, $9, $10,
+                         current_timestamp, $11, $12)
+                 RETURNING *",
+                &[
+                    &id,
+                    &id.to_string(),
+                    &posting.url,
+                    &posting.company,
+                    &posting.title,
+                    &posting.remote_kind,
+                    &posting.regions,
+                    &posting.tags,
+                    &posting.pay,
+                    &posting.excerpt,
+                    &day,
+                    &posting.posted_by,
+                ],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
+    /// Take a shelf-written posting down: the writer's own, or any for a
+    /// moderator. Feed rows are never touched here. Owner scope is in the
+    /// query.
+    pub async fn retract(client: &Client, id: Uuid, by: Uuid, moderator: bool) -> Result<Retract> {
+        let changed = client
+            .execute(
+                "UPDATE job_postings SET status = 'expired'
+                 WHERE id = $1 AND source = 'late' AND status = 'active'
+                   AND (posted_by = $2 OR $3)",
+                &[&id, &by, &moderator],
+            )
+            .await?;
+        Ok(if changed == 1 {
+            Retract::Gone
+        } else {
+            Retract::NotYours
+        })
+    }
+
+    /// How many postings of `user_id`'s are on the shelf, for the cap.
+    pub async fn count_active_by(client: &Client, user_id: Uuid) -> Result<i64> {
+        let row = client
+            .query_one(
+                "SELECT count(*) FROM job_postings
+                 WHERE status = 'active' AND posted_by = $1",
+                &[&user_id],
+            )
+            .await?;
+        Ok(row.get(0))
     }
 
     /// The shelf: every active row, newest release first.

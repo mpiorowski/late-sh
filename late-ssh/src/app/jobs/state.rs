@@ -7,10 +7,11 @@ use std::cell::Cell;
 use late_core::models::app_flag::AppFlag;
 use late_core::models::job_posting::{JobPosting, RemoteKind};
 use late_core::models::work_profile::{WorkProfile, WorkStatus};
+use late_core::vocab;
 use tokio::sync::{broadcast, oneshot, watch};
 
+use super::post::PostForm;
 use super::svc::{JobsEvent, JobsService, JobsSnapshot};
-use super::vocab;
 
 /// Matches shown under a person's own card, and in the paper.
 pub(crate) const FOR_YOU_LIMIT: usize = 5;
@@ -33,6 +34,8 @@ pub(crate) struct JobsState {
     detail_open: bool,
     narrow: Cell<bool>,
     pub(super) pending_flag_writes: Vec<PendingFlagWrite>,
+    /// The post form, open over the page from `n` or `/jobs post`.
+    pub(crate) post: PostForm,
 }
 
 /// An admin's flag write in flight, answered with a banner in tick.
@@ -58,6 +61,7 @@ impl JobsState {
             detail_open: false,
             narrow: Cell::new(false),
             pending_flag_writes: Vec::new(),
+            post: PostForm::default(),
         }
     }
 
@@ -134,12 +138,14 @@ pub(crate) enum JobsCommand {
     On,
     /// `/jobs off`: no press, an empty shelf that says so, no NEW WORK.
     Off,
+    /// `/jobs post`: the shelf with the post form open.
+    Post,
 }
 
 impl JobsCommand {
     pub(crate) fn admin_only(self) -> bool {
         match self {
-            Self::Open => false,
+            Self::Open | Self::Post => false,
             Self::Pull | Self::Release | Self::On | Self::Off => true,
         }
     }
@@ -158,6 +164,7 @@ pub(crate) fn parse_jobs_command(body: &str) -> Option<Option<JobsCommand>> {
         ["release"] => Some(JobsCommand::Release),
         ["on"] => Some(JobsCommand::On),
         ["off"] => Some(JobsCommand::Off),
+        ["post"] => Some(JobsCommand::Post),
         _ => None,
     })
 }

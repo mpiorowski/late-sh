@@ -812,6 +812,18 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    // Drawn over the settings modal and the profile editor, so it owns
+    // input ahead of both.
+    if app.tag_picker.is_open() {
+        crate::app::tag_picker::input::handle_input(app, event);
+        return;
+    }
+
+    if app.jobs.post.is_open() {
+        crate::app::jobs::input::handle_post_input(app, &event);
+        return;
+    }
+
     if app.directory_editor.is_open() {
         crate::app::directory::editor::input::handle_input(app, &event);
         return;
@@ -2038,6 +2050,14 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.icon_picker_open {
         close_icon_picker(app);
+        return;
+    }
+    if app.tag_picker.is_open() {
+        crate::app::tag_picker::input::close(app);
+        return;
+    }
+    if app.jobs.post.is_open() {
+        crate::app::jobs::input::handle_post_escape(app);
         return;
     }
     if app.room_info_modal_state.is_open() {

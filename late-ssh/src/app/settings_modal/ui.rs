@@ -601,11 +601,11 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             Row::Langs,
             width,
             "Langs",
-            system_field_value(
-                state,
-                Row::Langs,
-                (!state.draft().langs.is_empty()).then(|| format_lang_tags(&state.draft().langs)),
-            ),
+            if state.draft().langs.is_empty() {
+                value_span("pick from the list…", theme::TEXT_FAINT())
+            } else {
+                value_with_picker_hint(format_lang_tags(&state.draft().langs))
+            },
         )),
         sections[10],
     );
@@ -2559,7 +2559,6 @@ fn system_field_value(state: &SettingsModalState, row: Row, value: Option<String
             .filter(|value| !value.is_empty())
         {
             Some(value) => value_span(value.to_string(), theme::TEXT_BRIGHT()),
-            None if row == Row::Langs => value_span("comma sep…", theme::TEXT_FAINT()),
             None => value_span("not set", theme::TEXT_FAINT()),
         }
     }

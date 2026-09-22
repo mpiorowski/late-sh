@@ -1,20 +1,22 @@
 //! The Jobs shelf on the Profiles page: a list of postings beside a
-//! detail pane, the same frame the People shelf uses, and the "for you"
-//! lines a person's own card prints.
+//! detail pane, the same frame the People shelf uses, the "for you"
+//! lines a person's own card prints, and the post form over the page.
 
-use late_core::models::job_posting::JobPosting;
+use late_core::models::job_posting::{JobPosting, JobSource};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
+use super::post::{POST_FIELDS, PostField, PostForm, PostKind, scope_choice_label};
 use super::state::{JobsState, match_line, scope_label};
+use crate::app::common::composer::placeholder_with_cursor;
 use crate::app::common::primitives::{
-    format_relative_time, format_relative_time_short, row_with_hint,
+    format_relative_time, format_relative_time_short, hint_line, row_with_hint,
 };
 use crate::app::common::theme;
 
@@ -22,6 +24,8 @@ pub(crate) const JOBS_HINTS: &[(&str, &str)] = &[
     ("j/k", "jobs"),
     ("Enter", "copy link"),
     ("/", "for me"),
+    ("n", "post a job"),
+    ("d", "take down"),
     ("w", "your profile"),
     ("Space", "people"),
 ];
@@ -29,11 +33,16 @@ pub(crate) const JOBS_NARROW_HINTS: &[(&str, &str)] = &[
     ("j/k", "jobs"),
     ("l", "open"),
     ("/", "for me"),
+    ("n", "post"),
     ("w", "your profile"),
     ("Space", "people"),
 ];
-pub(crate) const JOBS_DETAIL_NARROW_HINTS: &[(&str, &str)] =
-    &[("h", "back"), ("Enter", "copy link"), ("Space", "people")];
+pub(crate) const JOBS_DETAIL_NARROW_HINTS: &[(&str, &str)] = &[
+    ("h", "back"),
+    ("Enter", "copy link"),
+    ("d", "take down"),
+    ("Space", "people"),
+];
 
 /// Tags on a list row.
 const ROW_TAGS: usize = 4;
@@ -325,7 +334,14 @@ fn draw_detail(frame: &mut Frame, area: Rect, posting: &JobPosting) {
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "Enter copies the link. Nothing beyond this card is stored here; the posting lives on its site.",
+        match posting.source {
+            JobSource::Late => {
+                "Posted here on late.sh. Enter copies the link; d takes it down, for its writer or a moderator."
+            }
+            JobSource::Hn | JobSource::Wwr | JobSource::Jobicy => {
+                "Enter copies the link. Nothing beyond this card is stored here; the posting lives on its site."
+            }
+        },
         faint,
     )));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
@@ -425,4 +441,235 @@ pub(crate) fn footer_note(jobs: &JobsState) -> Vec<Span<'static>> {
     } else {
         Vec::new()
     }
+}
+
+// The post form
+
+/// Label column, then a space, then the value.
+const POST_LABEL_W: u16 = 9;
+const POST_GUTTER: u16 = 2;
+const POST_MODAL_W: u16 = 84;
+
+/// The post form centred over the page: the rows, a line on what a
+/// posting is here for, the error, the keys.
+pub(crate) fn draw_post_form(frame: &mut Frame, area: Rect, form: &PostForm) {
+    let rows_height: u16 = POST_FIELDS.iter().map(|field| field.height()).sum();
+    // frame(2) + padding(2) + rows + blank(1) + note(1) + error(1) + keys(1)
+    let wanted = rows_height + 8;
+    let width = POST_MODAL_W.min(area.width);
+    let height = wanted.min(area.height);
+    let popup = Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(Span::styled(
+            " Post a job ",
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()))
+        .padding(Padding::new(2, 2, 1, 1))
+        .style(Style::default().bg(theme::BG_CANVAS()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let [body, _, note_row, error_row, keys_row] = Layout::vertical([
+        Constraint::Length(rows_height),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+
+    let constraints: Vec<Constraint> = POST_FIELDS
+        .iter()
+        .map(|field| Constraint::Length(field.height()))
+        .collect();
+    let rows = Layout::vertical(constraints).split(body);
+    for (idx, (field, row_area)) in POST_FIELDS.iter().zip(rows.iter().copied()).enumerate() {
+        draw_post_row(frame, row_area, form, *field, idx == form.row());
+    }
+
+    let faint = Style::default().fg(theme::TEXT_FAINT());
+    frame.render_widget(
+        on_canvas(Line::from(Span::styled(
+            "Live on the shelf at once, for 30 days. Three live postings a person; d on yours takes it down.",
+            faint,
+        ))),
+        indent(note_row),
+    );
+    if let Some(error) = form.error() {
+        frame.render_widget(
+            on_canvas(Line::from(Span::styled(
+                format!("✗ {}", error.message),
+                Style::default().fg(theme::ERROR()),
+            ))),
+            indent(error_row),
+        );
+    }
+    let keys = if form.pending() {
+        Line::from(Span::styled("Saving…", faint))
+    } else if form.editing() {
+        let mut hints: Vec<(&str, &str)> = vec![("Enter/Tab", "next row"), ("Esc", "done")];
+        if form.active_field().kind() == PostKind::Multi {
+            hints.push(("Alt+Enter", "new line"));
+        }
+        hints.push(("Ctrl+S", "post"));
+        hint_line(&hints)
+    } else {
+        hint_line(&[
+            ("Enter", "edit row"),
+            ("j/k", "rows"),
+            ("←/→", "cycle"),
+            ("Ctrl+S", "post"),
+            ("Esc", "close"),
+        ])
+    };
+    frame.render_widget(on_canvas(keys), keys_row);
+}
+
+fn draw_post_row(frame: &mut Frame, area: Rect, form: &PostForm, field: PostField, active: bool) {
+    let typing = active && form.editing();
+    let [gutter, label_col, _, value_col] = Layout::horizontal([
+        Constraint::Length(POST_GUTTER),
+        Constraint::Length(POST_LABEL_W),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .areas(area);
+
+    let bar_style = if active {
+        Style::default().fg(theme::BORDER_ACTIVE())
+    } else {
+        Style::default().fg(theme::BORDER_DIM())
+    };
+    let bars: Vec<Line> = (0..gutter.height)
+        .map(|_| Line::from(Span::styled("\u{258f}", bar_style)))
+        .collect();
+    frame.render_widget(
+        Paragraph::new(bars).style(Style::default().bg(theme::BG_CANVAS())),
+        gutter,
+    );
+
+    let errored = form.error().is_some_and(|error| error.field == Some(field));
+    let label_style = if errored {
+        Style::default()
+            .fg(theme::ERROR())
+            .add_modifier(Modifier::BOLD)
+    } else if active {
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+    frame.render_widget(
+        on_canvas(Line::from(Span::styled(field.label(), label_style))),
+        label_col,
+    );
+
+    let faint = Style::default().fg(theme::TEXT_FAINT());
+    match field.kind() {
+        PostKind::Choice => {
+            let spans = vec![Span::styled(
+                scope_choice_label(form.scope()).to_string(),
+                Style::default()
+                    .fg(if active {
+                        theme::TEXT_BRIGHT()
+                    } else {
+                        theme::TEXT()
+                    })
+                    .add_modifier(Modifier::BOLD),
+            )];
+            let right = if active {
+                vec![Span::styled("←/→ cycle", faint)]
+            } else {
+                Vec::new()
+            };
+            frame.render_widget(
+                on_canvas(row_with_hint(spans, right, value_col.width as usize)),
+                value_col,
+            );
+        }
+        PostKind::Tags => {
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            if form.tags().is_empty() {
+                spans.push(Span::styled(field.placeholder().to_string(), faint));
+            }
+            for (idx, tag) in form.tags().iter().enumerate() {
+                if idx > 0 {
+                    spans.push(Span::styled(" · ", faint));
+                }
+                spans.push(Span::styled(
+                    tag.clone(),
+                    Style::default().fg(if active {
+                        theme::AMBER()
+                    } else {
+                        theme::AMBER_DIM()
+                    }),
+                ));
+            }
+            if active {
+                spans.push(Span::styled("   Enter pick", faint));
+            }
+            frame.render_widget(
+                Paragraph::new(Line::from(spans))
+                    .wrap(Wrap { trim: false })
+                    .style(Style::default().bg(theme::BG_CANVAS())),
+                value_col,
+            );
+        }
+        PostKind::Text | PostKind::Multi => {
+            if typing && form.field_text(field).is_empty() {
+                frame.render_widget(
+                    Paragraph::new(placeholder_with_cursor(field.placeholder()))
+                        .style(Style::default().bg(theme::BG_CANVAS())),
+                    value_col,
+                );
+            } else if typing {
+                frame.render_widget(form.field(field), value_col);
+            } else {
+                let text = form.field_text(field);
+                let lines: Vec<Line<'static>> = if text.is_empty() {
+                    vec![Line::from(Span::styled(
+                        field.placeholder().to_string(),
+                        faint,
+                    ))]
+                } else {
+                    let style = Style::default().fg(if active {
+                        theme::TEXT_BRIGHT()
+                    } else {
+                        theme::TEXT()
+                    });
+                    text.lines()
+                        .take(value_col.height as usize)
+                        .map(|line| Line::from(Span::styled(line.to_string(), style)))
+                        .collect()
+                };
+                frame.render_widget(
+                    Paragraph::new(lines).style(Style::default().bg(theme::BG_CANVAS())),
+                    value_col,
+                );
+            }
+        }
+    }
+}
+
+fn indent(area: Rect) -> Rect {
+    Rect {
+        x: area.x + POST_GUTTER,
+        width: area.width.saturating_sub(POST_GUTTER),
+        ..area
+    }
+}
+
+fn on_canvas(line: Line<'static>) -> Paragraph<'static> {
+    Paragraph::new(line).style(Style::default().bg(theme::BG_CANVAS()))
 }

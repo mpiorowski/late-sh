@@ -1,34 +1,33 @@
 use std::cell::Cell;
 
 use late_core::models::{
-    profile::{Profile, normalize_profile_tags},
+    profile::Profile,
     showcase::ShowcaseParams,
     work_profile::{WorkProfile, WorkProfileParams, WorkStatus, WorkType},
 };
+use late_core::vocab;
 use ratatui::layout::Rect;
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 use uuid::Uuid;
 
 use crate::app::chat::{showcase::svc::ShowcaseFeedItem, work::svc};
 use crate::app::common::composer::{new_themed_textarea, set_themed_textarea_cursor_visible};
-use crate::app::jobs::vocab;
 
 /// The card column caps (migration 041) and the profile's (settings modal).
 pub(crate) const HEADLINE_MAX: usize = 120;
 pub(crate) const LOCATION_MAX: usize = 120;
 pub(crate) const CONTACT_MAX: usize = 200;
 pub(crate) const LINKS_MAX: usize = 600;
-pub(crate) const SKILLS_MAX: usize = 300;
 pub(crate) const SUMMARY_MAX: usize = 1000;
 pub(crate) const BIO_MAX: usize = 1000;
 pub(crate) const SYSTEM_FIELD_MAX: usize = 48;
-pub(crate) const LANGS_MAX: usize = 200;
 pub(crate) const TITLE_MAX: usize = 120;
 pub(crate) const URL_MAX: usize = 2000;
 pub(crate) const TAGS_MAX: usize = 200;
 pub(crate) const DESCRIPTION_MAX: usize = 800;
-/// `skills` and `skills_tags` both cap at 12 (migrations 041 and 192).
-pub(crate) const SKILLS_LIMIT: usize = 12;
+/// `skills` and `skills_tags` both cap at 12 (migrations 041 and 192), the
+/// vocabulary's cap.
+pub(crate) const SKILLS_LIMIT: usize = vocab::TAG_LIMIT;
 
 /// The most rows any page draws; the click map is sized to it.
 pub(crate) const MAX_ROWS: usize = 8;
@@ -92,12 +91,14 @@ pub(crate) enum Field {
     Description,
 }
 
-/// How a row is edited: typed on one line, typed over several, or cycled.
+/// How a row is edited: typed on one line, typed over several, cycled, or
+/// picked from the tag vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FieldKind {
     Text,
     Multi,
     Choice,
+    Tags,
 }
 
 pub(crate) const CARD_FIELDS: [Field; 8] = [
@@ -150,13 +151,13 @@ impl Field {
             Self::Location => "EU remote, Warsaw, US overlap",
             Self::Contact => "email, @handle, or DM on late.sh",
             Self::Links => "https://github.com/you, https://cv.example",
-            Self::Skills => "rust, postgres, axum",
+            Self::Skills => "Enter picks tags from the list",
             Self::Summary => "What work are you looking for? (Alt+Enter for a new line)",
             Self::Bio => "A few lines about you, Markdown welcome (Alt+Enter for a new line)",
             Self::Ide => "nvim, vscode",
             Self::Terminal => "alacritty",
             Self::Os => "nixos 26.11",
-            Self::Langs => "rust, elixir, go",
+            Self::Langs => "Enter picks languages from the list",
             Self::Title => "Project name",
             Self::Url => "https://...",
             Self::Tags => "rust, cli, game",
@@ -167,16 +168,15 @@ impl Field {
     pub(crate) const fn kind(self) -> FieldKind {
         match self {
             Self::Status | Self::Type => FieldKind::Choice,
+            Self::Skills | Self::Langs => FieldKind::Tags,
             Self::Summary | Self::Bio | Self::Description => FieldKind::Multi,
             Self::Headline
             | Self::Location
             | Self::Contact
             | Self::Links
-            | Self::Skills
             | Self::Ide
             | Self::Terminal
             | Self::Os
-            | Self::Langs
             | Self::Title
             | Self::Url
             | Self::Tags => FieldKind::Text,
@@ -186,15 +186,13 @@ impl Field {
     pub(crate) const fn max_len(self) -> usize {
         match self {
             Self::Headline => HEADLINE_MAX,
-            Self::Status | Self::Type => 0,
+            Self::Status | Self::Type | Self::Skills | Self::Langs => 0,
             Self::Location => LOCATION_MAX,
             Self::Contact => CONTACT_MAX,
             Self::Links => LINKS_MAX,
-            Self::Skills => SKILLS_MAX,
             Self::Summary => SUMMARY_MAX,
             Self::Bio => BIO_MAX,
             Self::Ide | Self::Terminal | Self::Os => SYSTEM_FIELD_MAX,
-            Self::Langs => LANGS_MAX,
             Self::Title => TITLE_MAX,
             Self::Url => URL_MAX,
             Self::Tags => TAGS_MAX,
@@ -202,11 +200,11 @@ impl Field {
         }
     }
 
-    /// Rows the field takes on screen: a typed line, a tag preview under the
-    /// skills, or a short block for the long fields.
+    /// Rows the field takes on screen: a typed line, two for a tag list,
+    /// or a short block for the long fields.
     pub(crate) const fn height(self) -> u16 {
         match self {
-            Self::Skills => 2,
+            Self::Skills | Self::Langs => 2,
             Self::Summary | Self::Description => 4,
             Self::Bio => 5,
             Self::Headline
@@ -218,7 +216,6 @@ impl Field {
             | Self::Ide
             | Self::Terminal
             | Self::Os
-            | Self::Langs
             | Self::Title
             | Self::Url
             | Self::Tags => 1,
@@ -271,7 +268,8 @@ pub(crate) struct CardValues {
     pub(crate) location: String,
     pub(crate) contact: String,
     pub(crate) links: String,
-    pub(crate) skills: String,
+    /// Canonical tags from the vocabulary, as the picker left them.
+    pub(crate) skills: Vec<String>,
     pub(crate) summary: String,
 }
 
@@ -284,7 +282,7 @@ impl Default for CardValues {
             location: String::new(),
             contact: String::new(),
             links: String::new(),
-            skills: String::new(),
+            skills: Vec::new(),
             summary: String::new(),
         }
     }
@@ -296,7 +294,8 @@ pub(crate) struct AboutValues {
     pub(crate) ide: String,
     pub(crate) terminal: String,
     pub(crate) os: String,
-    pub(crate) langs: String,
+    /// Canonical language tags, as the picker left them.
+    pub(crate) langs: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -368,7 +367,7 @@ pub(crate) struct EditorState {
     location: TextArea<'static>,
     contact: TextArea<'static>,
     links: TextArea<'static>,
-    skills: TextArea<'static>,
+    skills: Vec<String>,
     summary: TextArea<'static>,
     card_baseline: CardValues,
     // about
@@ -376,7 +375,7 @@ pub(crate) struct EditorState {
     ide: TextArea<'static>,
     terminal: TextArea<'static>,
     os: TextArea<'static>,
-    langs: TextArea<'static>,
+    langs: Vec<String>,
     about_baseline: AboutValues,
     // projects
     projects_view: ProjectsView,
@@ -388,7 +387,7 @@ pub(crate) struct EditorState {
 fn text_input(field: Field) -> TextArea<'static> {
     let wrap = match field.kind() {
         FieldKind::Multi => WrapMode::Word,
-        FieldKind::Text | FieldKind::Choice => WrapMode::None,
+        FieldKind::Text | FieldKind::Choice | FieldKind::Tags => WrapMode::None,
     };
     new_themed_textarea(field.placeholder(), wrap, false)
 }
@@ -510,14 +509,14 @@ impl Default for EditorState {
             location: text_input(Field::Location),
             contact: text_input(Field::Contact),
             links: text_input(Field::Links),
-            skills: text_input(Field::Skills),
+            skills: Vec::new(),
             summary: text_input(Field::Summary),
             card_baseline: CardValues::default(),
             bio: text_input(Field::Bio),
             ide: text_input(Field::Ide),
             terminal: text_input(Field::Terminal),
             os: text_input(Field::Os),
-            langs: text_input(Field::Langs),
+            langs: Vec::new(),
             about_baseline: AboutValues::default(),
             projects_view: ProjectsView::List { selected: 0 },
             row_rects: Cell::new([None; MAX_ROWS]),
@@ -671,7 +670,9 @@ impl EditorState {
             self.location = seeded(Field::Location, &card.location);
             self.contact = seeded(Field::Contact, &card.contact);
             self.links = seeded(Field::Links, &card.links.join(", "));
-            self.skills = seeded(Field::Skills, &card.skills.join(", "));
+            // A card written before the picker may hold free text; only
+            // what the vocabulary knows comes back.
+            self.skills = vocab::normalize(&card.skills, SKILLS_LIMIT).tags;
             self.summary = seeded(Field::Summary, &card.summary);
         }
         self.card_baseline = self.card_values();
@@ -682,7 +683,7 @@ impl EditorState {
         self.ide = seeded(Field::Ide, profile.ide.as_deref().unwrap_or(""));
         self.terminal = seeded(Field::Terminal, profile.terminal.as_deref().unwrap_or(""));
         self.os = seeded(Field::Os, profile.os.as_deref().unwrap_or(""));
-        self.langs = seeded(Field::Langs, &profile.langs.join(", "));
+        self.langs = profile.langs.clone();
         self.about_baseline = self.about_values();
     }
 
@@ -694,7 +695,7 @@ impl EditorState {
             location: joined(&self.location, " "),
             contact: joined(&self.contact, " "),
             links: joined(&self.links, ","),
-            skills: joined(&self.skills, ","),
+            skills: self.skills.clone(),
             summary: joined(&self.summary, "\n"),
         }
     }
@@ -705,7 +706,7 @@ impl EditorState {
             ide: joined(&self.ide, " "),
             terminal: joined(&self.terminal, " "),
             os: joined(&self.os, " "),
-            langs: joined(&self.langs, ","),
+            langs: self.langs.clone(),
         }
     }
 
@@ -729,13 +730,51 @@ impl EditorState {
         self.card_dirty() || self.about_dirty() || self.project_form_dirty()
     }
 
-    /// The typed skills as the vocabulary reads them right now, for the
-    /// preview under the skills row.
-    pub(crate) fn skills_preview(&self) -> vocab::Normalized {
-        vocab::normalize(
-            &svc::parse_words(&joined(&self.skills, ","), SKILLS_LIMIT),
-            SKILLS_LIMIT,
-        )
+    /// A tag row's list: the card's skills or the profile's langs.
+    pub(crate) fn tags(&self, field: Field) -> &[String] {
+        match field {
+            Field::Skills => &self.skills,
+            Field::Langs => &self.langs,
+            Field::Headline
+            | Field::Status
+            | Field::Type
+            | Field::Location
+            | Field::Contact
+            | Field::Links
+            | Field::Summary
+            | Field::Bio
+            | Field::Ide
+            | Field::Terminal
+            | Field::Os
+            | Field::Title
+            | Field::Url
+            | Field::Tags
+            | Field::Description => panic!("{} is not a tag row", field.label()),
+        }
+    }
+
+    /// What the picker chose for a tag row.
+    pub(crate) fn set_tags(&mut self, field: Field, tags: Vec<String>) {
+        self.error = None;
+        match field {
+            Field::Skills => self.skills = tags,
+            Field::Langs => self.langs = tags,
+            Field::Headline
+            | Field::Status
+            | Field::Type
+            | Field::Location
+            | Field::Contact
+            | Field::Links
+            | Field::Summary
+            | Field::Bio
+            | Field::Ide
+            | Field::Terminal
+            | Field::Os
+            | Field::Title
+            | Field::Url
+            | Field::Tags
+            | Field::Description => panic!("{} is not a tag row", field.label()),
+        }
     }
 
     // Rows
@@ -761,13 +800,11 @@ impl EditorState {
             Field::Location => &self.location,
             Field::Contact => &self.contact,
             Field::Links => &self.links,
-            Field::Skills => &self.skills,
             Field::Summary => &self.summary,
             Field::Bio => &self.bio,
             Field::Ide => &self.ide,
             Field::Terminal => &self.terminal,
             Field::Os => &self.os,
-            Field::Langs => &self.langs,
             Field::Title | Field::Url | Field::Tags | Field::Description => match &self
                 .projects_view
             {
@@ -775,6 +812,7 @@ impl EditorState {
                 ProjectsView::List { .. } => panic!("project field read without a project form"),
             },
             Field::Status | Field::Type => panic!("choice fields have no text"),
+            Field::Skills | Field::Langs => panic!("tag fields have no text"),
         }
     }
 
@@ -784,13 +822,11 @@ impl EditorState {
             Field::Location => &mut self.location,
             Field::Contact => &mut self.contact,
             Field::Links => &mut self.links,
-            Field::Skills => &mut self.skills,
             Field::Summary => &mut self.summary,
             Field::Bio => &mut self.bio,
             Field::Ide => &mut self.ide,
             Field::Terminal => &mut self.terminal,
             Field::Os => &mut self.os,
-            Field::Langs => &mut self.langs,
             Field::Title | Field::Url | Field::Tags | Field::Description => match &mut self
                 .projects_view
             {
@@ -798,6 +834,7 @@ impl EditorState {
                 ProjectsView::List { .. } => panic!("project field written without a project form"),
             },
             Field::Status | Field::Type => panic!("choice fields have no text"),
+            Field::Skills | Field::Langs => panic!("tag fields have no text"),
         }
     }
 
@@ -811,6 +848,7 @@ impl EditorState {
             },
             FieldKind::Text => joined(self.field(field), " "),
             FieldKind::Multi => joined(self.field(field), "\n"),
+            FieldKind::Tags => self.tags(field).join(" · "),
         }
     }
 
@@ -835,7 +873,8 @@ impl EditorState {
         self.fields().len()
     }
 
-    /// Start typing into the active row; a choice row cycles instead.
+    /// Start typing into the active row; a choice row cycles instead, and a
+    /// tag row is the input layer's to open the picker on.
     pub(crate) fn start_editing(&mut self) {
         let Some(field) = self.active_field() else {
             return;
@@ -843,6 +882,7 @@ impl EditorState {
         self.error = None;
         match field.kind() {
             FieldKind::Choice => self.cycle_choice(true),
+            FieldKind::Tags => {}
             FieldKind::Text | FieldKind::Multi => {
                 self.editing = true;
                 self.field_mut(field).move_cursor(CursorMove::End);
@@ -881,9 +921,9 @@ impl EditorState {
                 self.row = row;
                 match self.active_field().map(Field::kind) {
                     Some(FieldKind::Text | FieldKind::Multi) => self.start_editing(),
-                    // A choice row cycles on an explicit Enter, never from
-                    // being landed on.
-                    Some(FieldKind::Choice) | None => self.sync_cursors(),
+                    // A choice row cycles, and a tag row opens its picker,
+                    // on an explicit Enter, never from being landed on.
+                    Some(FieldKind::Choice | FieldKind::Tags) | None => self.sync_cursors(),
                 }
             }
             None => self.sync_cursors(),
@@ -936,7 +976,7 @@ impl EditorState {
             None
         };
         for field in CARD_FIELDS.into_iter().chain(ABOUT_FIELDS) {
-            if field.kind() != FieldKind::Choice {
+            if matches!(field.kind(), FieldKind::Text | FieldKind::Multi) {
                 let visible = active == Some(field);
                 set_themed_textarea_cursor_visible(self.field_mut(field), visible);
             }
@@ -960,7 +1000,7 @@ impl EditorState {
             None
         };
         for field in CARD_FIELDS.into_iter().chain(ABOUT_FIELDS) {
-            if field.kind() != FieldKind::Choice {
+            if matches!(field.kind(), FieldKind::Text | FieldKind::Multi) {
                 let visible = active == Some(field);
                 crate::app::common::composer::apply_themed_textarea_style(
                     self.field_mut(field),
@@ -1238,10 +1278,10 @@ pub(crate) fn validate_card(
     if values.summary.chars().count() > SUMMARY_MAX {
         return Err((Field::Summary, "summary too long (max 1000)"));
     }
-    let skills = svc::parse_words(&values.skills, SKILLS_LIMIT);
-    let normalized = vocab::normalize(&skills, SKILLS_LIMIT);
-    let mut skills_tags = normalized.tags;
-    skills_tags.extend(normalized.free);
+    // The picker hands over canonical tags; folding once more is the
+    // boundary, so both columns hold the vocabulary and nothing else.
+    let skills = vocab::normalize(&values.skills, SKILLS_LIMIT).tags;
+    let skills_tags = skills.clone();
     Ok(WorkProfileParams {
         user_id: Uuid::nil(),
         slug: String::new(),
@@ -1303,6 +1343,6 @@ pub(crate) fn about_onto_profile(
     params.ide = opt(&values.ide);
     params.terminal = opt(&values.terminal);
     params.os = opt(&values.os);
-    params.langs = normalize_profile_tags([values.langs.as_str()]);
+    params.langs = values.langs.clone();
     params
 }

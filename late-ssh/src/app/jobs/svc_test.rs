@@ -2,11 +2,13 @@ use std::time::Duration;
 
 use chrono::{NaiveDate, TimeZone, Utc};
 use late_core::models::job_posting::{
-    FetchedPosting, JobPosting, JobRead, JobSource, JobStatus, RemoteKind, Settle,
+    FetchedPosting, JobPosting, JobRead, JobSource, JobStatus, NewPosting, RemoteKind, Settle,
 };
+use uuid::Uuid;
 
 use super::svc::{
-    JOBS_DRIP_DAYS, JobsEvent, PressJob, PressOutcome, drip_slice, press_due_day, tidy_excerpt,
+    JOBS_DRIP_DAYS, JOBS_POSTS_PER_USER, JobsEvent, PostOutcome, PressJob, PressOutcome,
+    RetractOutcome, drip_slice, press_due_day, tidy_excerpt,
 };
 use crate::moderation::policy::Permissions;
 use crate::test_helpers::{chat_compose_app, wait_for_render_contains};
@@ -120,6 +122,9 @@ async fn a_release_lands_on_the_shelf_through_the_snapshot() {
             PressOutcome::Released { count, .. } => assert_eq!(count, 2),
             other => panic!("expected a release, got {other:?}"),
         },
+        other @ (JobsEvent::Posted { .. } | JobsEvent::Retracted { .. }) => {
+            panic!("expected a press event, got {other:?}")
+        }
     }
     {
         let client = test_db.db.get().await.expect("db client");
@@ -148,4 +153,82 @@ async fn a_non_admin_cannot_run_the_press_and_an_admin_gets_its_banner() {
     // pretending to run.
     app.handle_input(b"/jobs pull\r");
     wait_for_render_contains(&mut app, "AI is not configured here").await;
+}
+
+fn new_posting(by: Uuid, company: &str) -> NewPosting {
+    NewPosting {
+        posted_by: by,
+        url: format!("https://{}.example/jobs", company.to_ascii_lowercase()),
+        company: company.to_string(),
+        title: "Rust Engineer".to_string(),
+        remote_kind: RemoteKind::Worldwide,
+        regions: Vec::new(),
+        tags: vec!["rust".to_string()],
+        pay: String::new(),
+        excerpt: format!("{company} builds things."),
+    }
+}
+
+async fn next_event(events: &mut tokio::sync::broadcast::Receiver<JobsEvent>) -> JobsEvent {
+    tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .expect("jobs event in time")
+        .expect("jobs event")
+}
+
+/// A posting written on the shelf goes live through the same snapshot the
+/// press feeds, the fourth is refused at the cap, and `d` on your own
+/// brings it down; a stranger's `d` changes nothing.
+#[tokio::test]
+async fn a_posting_written_here_lands_on_the_shelf_caps_per_person_and_comes_down() {
+    let (test_db, mut app) = chat_compose_app("jobs-post").await;
+    let mut events = app.jobs.service.subscribe_events();
+    let me = app.user_id;
+    for n in 0..JOBS_POSTS_PER_USER {
+        app.jobs
+            .service
+            .request_post(new_posting(me, &format!("Acme{n}")));
+        match next_event(&mut events).await {
+            JobsEvent::Posted { outcome, .. } => assert_eq!(
+                outcome,
+                PostOutcome::Posted {
+                    company: format!("Acme{n}"),
+                    title: "Rust Engineer".to_string()
+                }
+            ),
+            other => panic!("expected a post, got {other:?}"),
+        }
+    }
+    app.jobs.service.request_post(new_posting(me, "Fourth"));
+    match next_event(&mut events).await {
+        JobsEvent::Posted { outcome, .. } => assert_eq!(outcome, PostOutcome::AtCap),
+        other => panic!("expected the cap, got {other:?}"),
+    }
+
+    app.handle_input(b"/jobs\r");
+    wait_for_render_contains(&mut app, "Acme0").await;
+    wait_for_render_contains(&mut app, "via late.sh").await;
+
+    let (first_id, _) = {
+        let client = test_db.db.get().await.expect("db client");
+        let shelf = JobPosting::list_active(&client, 10).await.expect("shelf");
+        assert_eq!(shelf.len(), JOBS_POSTS_PER_USER as usize);
+        assert!(shelf.iter().all(|row| row.posted_by == Some(me)));
+        (shelf[0].id, ())
+    };
+    let stranger = Uuid::now_v7();
+    app.jobs.service.request_retract(stranger, first_id, false);
+    match next_event(&mut events).await {
+        JobsEvent::Retracted { outcome, .. } => assert_eq!(outcome, RetractOutcome::NotYours),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    app.jobs.service.request_retract(me, first_id, false);
+    match next_event(&mut events).await {
+        JobsEvent::Retracted { outcome, .. } => assert_eq!(outcome, RetractOutcome::Gone),
+        other => panic!("expected a take-down, got {other:?}"),
+    }
+    let client = test_db.db.get().await.expect("db client");
+    let shelf = JobPosting::list_active(&client, 10).await.expect("shelf");
+    assert_eq!(shelf.len(), JOBS_POSTS_PER_USER as usize - 1);
+    assert!(shelf.iter().all(|row| row.id != first_id));
 }

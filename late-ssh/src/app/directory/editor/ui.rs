@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph},
+    widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -225,31 +225,65 @@ fn draw_field_row(frame: &mut Frame, area: Rect, state: &EditorState, field: Fie
                 value_col,
             );
         }
+        FieldKind::Tags => draw_tags_value(frame, value_col, state, field, active),
         FieldKind::Text | FieldKind::Multi => {
-            let text_rows = if field == Field::Skills {
-                let [input, preview] =
-                    Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
-                        .areas(value_col);
-                draw_skills_preview(frame, preview, state);
-                input
-            } else {
-                value_col
-            };
             if typing && state.field_text(field).is_empty() {
                 // The block cursor sits on the hint's first letter; a bare
                 // `TextArea` would draw it in a cell of its own before it.
                 frame.render_widget(
                     Paragraph::new(placeholder_with_cursor(field.placeholder()))
                         .style(Style::default().bg(theme::BG_CANVAS())),
-                    text_rows,
+                    value_col,
                 );
             } else if typing {
-                frame.render_widget(state.field(field), text_rows);
+                frame.render_widget(state.field(field), value_col);
             } else {
-                draw_static_value(frame, text_rows, state, field, active);
+                draw_static_value(frame, value_col, state, field, active);
             }
         }
     }
+}
+
+/// A tag row: the picked tags in amber, wrapped over the row's lines, with
+/// the picker hint on the right when the row is active; the placeholder
+/// dim when nothing is picked.
+fn draw_tags_value(frame: &mut Frame, area: Rect, state: &EditorState, field: Field, active: bool) {
+    let tags = state.tags(field);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    if tags.is_empty() {
+        spans.push(Span::styled(
+            field.placeholder().to_string(),
+            Style::default().fg(theme::TEXT_FAINT()),
+        ));
+    }
+    for (idx, tag) in tags.iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::styled(
+                " · ",
+                Style::default().fg(theme::TEXT_FAINT()),
+            ));
+        }
+        spans.push(Span::styled(
+            tag.clone(),
+            Style::default().fg(if active {
+                theme::AMBER()
+            } else {
+                theme::AMBER_DIM()
+            }),
+        ));
+    }
+    if active {
+        spans.push(Span::styled(
+            "   Enter pick",
+            Style::default().fg(theme::TEXT_FAINT()),
+        ));
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(spans))
+            .wrap(Wrap { trim: false })
+            .style(Style::default().bg(theme::BG_CANVAS())),
+        area,
+    );
 }
 
 /// A row not being typed: its text, or the placeholder dim when empty.
@@ -281,54 +315,6 @@ fn draw_static_value(
         Paragraph::new(lines).style(Style::default().bg(theme::BG_CANVAS())),
         area,
     );
-}
-
-/// Under the skills row: what the vocabulary made of them, known tags in
-/// amber and the rest dim, so the person sees what a job match will use.
-fn draw_skills_preview(frame: &mut Frame, area: Rect, state: &EditorState) {
-    let preview = state.skills_preview();
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    if preview.tags.is_empty() && preview.free.is_empty() {
-        spans.push(Span::styled(
-            "tags matched against job postings show here",
-            Style::default().fg(theme::TEXT_FAINT()),
-        ));
-    }
-    for (idx, tag) in preview.tags.iter().enumerate() {
-        if idx > 0 {
-            spans.push(Span::styled(
-                " · ",
-                Style::default().fg(theme::TEXT_FAINT()),
-            ));
-        }
-        spans.push(Span::styled(
-            tag.clone(),
-            Style::default().fg(theme::AMBER_DIM()),
-        ));
-    }
-    for free in &preview.free {
-        if !spans.is_empty() {
-            spans.push(Span::styled(
-                " · ",
-                Style::default().fg(theme::TEXT_FAINT()),
-            ));
-        }
-        spans.push(Span::styled(
-            free.clone(),
-            Style::default().fg(theme::TEXT_FAINT()),
-        ));
-    }
-    let line = Line::from(spans);
-    let width = area.width as usize;
-    let truncated = if line.width() > width {
-        Line::from(Span::styled(
-            truncate(&line.to_string(), width),
-            Style::default().fg(theme::TEXT_FAINT()),
-        ))
-    } else {
-        line
-    };
-    frame.render_widget(on_canvas(truncated), area);
 }
 
 /// The projects page's list: one line a project, `title  tags  age`, the

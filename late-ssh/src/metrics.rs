@@ -114,6 +114,16 @@ pub enum JobsPressResult {
     Failed,
 }
 
+/// How a person's own write on the Jobs shelf ended: a posting saved, one
+/// taken down, refused at the per-person cap, or failed in the database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobsPostResult {
+    Posted,
+    Retracted,
+    AtCap,
+    Failed,
+}
+
 /// How a hang attempt on the Artboard gallery ended. `Hung` is the row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GalleryHangResult {
@@ -236,10 +246,11 @@ mod inner {
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
-        GildTier, JobsFetchResult, JobsPressResult, JobsReadResult, NewsShareReward,
-        NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
-        PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, RunnerDoor,
-        SongQueueReward, SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
+        GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
+        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult,
+        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal,
+        RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult, TranslationResult,
+        VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -1450,6 +1461,32 @@ mod inner {
         jobs_released_total().add(count as u64, &[]);
     }
 
+    fn jobs_post_result_label(result: JobsPostResult) -> &'static str {
+        match result {
+            JobsPostResult::Posted => "posted",
+            JobsPostResult::Retracted => "retracted",
+            JobsPostResult::AtCap => "at_cap",
+            JobsPostResult::Failed => "failed",
+        }
+    }
+
+    fn jobs_posts_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_jobs_posts_total")
+                .with_description("Job postings written or taken down on the shelf by result")
+                .build()
+        })
+    }
+
+    pub fn record_jobs_post(result: JobsPostResult) {
+        jobs_posts_total().add(
+            1,
+            &[KeyValue::new("result", jobs_post_result_label(result))],
+        );
+    }
+
     fn gallery_hang_result_label(result: GalleryHangResult) -> &'static str {
         match result {
             GalleryHangResult::Hung => "hung",
@@ -1608,10 +1645,11 @@ mod inner {
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
-        GildTier, JobsFetchResult, JobsPressResult, JobsReadResult, NewsShareReward,
-        NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
-        PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, RunnerDoor,
-        SongQueueReward, SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
+        GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
+        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult,
+        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal,
+        RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult, TranslationResult,
+        VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
@@ -1667,6 +1705,7 @@ mod inner {
     pub fn record_jobs_read(_result: JobsReadResult) {}
     pub fn record_jobs_press(_result: JobsPressResult) {}
     pub fn record_jobs_released(_count: usize) {}
+    pub fn record_jobs_post(_result: JobsPostResult) {}
     pub fn record_gallery_hang(_result: GalleryHangResult) {}
     pub fn record_gallery_applause(_result: GalleryApplauseResult) {}
     pub fn record_gallery_take_down(_result: GalleryTakeDownResult) {}
