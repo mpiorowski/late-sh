@@ -4,7 +4,20 @@ use crate::app::input::{MouseButton, MouseEvent, MouseEventKind};
 
 use super::state::{ResetKind, State};
 
+fn dismiss_win_anim(state: &mut State) -> bool {
+    if let Some(anim) = &mut state.win_anim {
+        if anim.active && !anim.completed {
+            anim.completed = true;
+            return true;
+        }
+    }
+    false
+}
+
 pub fn handle_key(state: &mut State, byte: u8) -> bool {
+    if dismiss_win_anim(state) {
+        return true;
+    }
     match byte {
         b'n' | b'N' => {
             if state.request_reset(ResetKind::NewBoard) {
@@ -77,6 +90,9 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
 }
 
 pub fn handle_mouse(state: &mut State, area: Rect, mouse: MouseEvent) -> bool {
+    if dismiss_win_anim(state) {
+        return true;
+    }
     match mouse.kind {
         MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
             let Some(x) = mouse.x.checked_sub(1) else {
@@ -139,6 +155,9 @@ fn mouse_over_board(area: Rect, mouse: MouseEvent) -> bool {
 }
 
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
+    if dismiss_win_anim(state) {
+        return true;
+    }
     match key {
         b'A' => {
             state.move_vertical(-1);

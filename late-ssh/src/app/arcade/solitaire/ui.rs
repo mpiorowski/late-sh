@@ -58,7 +58,17 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         ),
         tip: Some(tip_line(match state.reset_pending {
             Some(kind) => kind.confirm_tip(),
-            None => "Pick a face-down card to grab the visible stack; pick a column to place it.",
+            None => {
+                if state
+                    .win_anim
+                    .as_ref()
+                    .is_some_and(|a| a.active && !a.completed)
+                {
+                    "Press any key to skip animation."
+                } else {
+                    "Pick a face-down card to grab the visible stack; pick a column to place it."
+                }
+            }
         })),
     };
 
@@ -71,7 +81,71 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         .collect();
     frame.render_widget(Paragraph::new(lines).alignment(Alignment::Left), board_rect);
 
-    if state.is_game_over {
+    if let Some(anim) = &state.win_anim {
+        anim.viewport_height
+            .store(board_rect.height, std::sync::atomic::Ordering::Relaxed);
+        let buf = frame.buffer_mut();
+
+        for dy in 0..board_rect.height {
+            let canvas_y = dy as usize + state.scroll_offset as usize;
+            if canvas_y >= BOARD_HEIGHT as usize {
+                continue;
+            }
+            for dx in 0..board_rect.width {
+                let canvas_x = dx as usize;
+                if canvas_x >= BOARD_WIDTH as usize {
+                    continue;
+                }
+                if let Some(stamp) = &anim.stamp_canvas[canvas_y][canvas_x] {
+                    let screen_x = board_rect.x + dx;
+                    let screen_y = board_rect.y + dy;
+                    if let Some(cell) = buf.cell_mut((screen_x, screen_y)) {
+                        cell.set_symbol(&stamp.symbol);
+                        let fg = match stamp.suit {
+                            Some(Suit::Hearts | Suit::Diamonds) => theme::ERROR(),
+                            Some(_) => theme::TEXT_BRIGHT(),
+                            None => theme::TEXT(),
+                        };
+                        cell.set_fg(fg);
+                        cell.set_bg(theme::BG_CANVAS());
+                    }
+                }
+            }
+        }
+
+        if let Some(bouncing_card) = &anim.current_card {
+            let card_x = bouncing_card.x.round() as isize;
+            let card_y = bouncing_card.y.round() as isize - state.scroll_offset as isize;
+            let face_lines =
+                AsciiCardTheme::Outline.render_face_lines(bouncing_card.card.to_playing_card());
+
+            for (line_idx, line_str) in face_lines.iter().enumerate() {
+                let target_dy = card_y + line_idx as isize;
+                if target_dy < 0 || target_dy >= board_rect.height as isize {
+                    continue;
+                }
+                for (col_idx, ch) in line_str.chars().enumerate() {
+                    let target_dx = card_x + col_idx as isize;
+                    if target_dx < 0 || target_dx >= board_rect.width as isize {
+                        continue;
+                    }
+                    let screen_x = board_rect.x + target_dx as u16;
+                    let screen_y = board_rect.y + target_dy as u16;
+                    if let Some(cell) = buf.cell_mut((screen_x, screen_y)) {
+                        cell.set_symbol(&ch.to_string());
+                        let fg = match bouncing_card.card.suit {
+                            Suit::Hearts | Suit::Diamonds => theme::ERROR(),
+                            Suit::Clubs | Suit::Spades => theme::TEXT_BRIGHT(),
+                        };
+                        cell.set_fg(fg);
+                        cell.set_bg(theme::BG_CANVAS());
+                    }
+                }
+            }
+        }
+    }
+
+    if state.is_game_over && state.win_anim.as_ref().is_none_or(|a| a.completed) {
         let subtext = match state.mode {
             Mode::Daily => "Change diff via [ ]",
             Mode::Personal => "n for new",

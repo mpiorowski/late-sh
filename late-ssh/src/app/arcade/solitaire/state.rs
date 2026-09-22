@@ -1,4 +1,8 @@
-use std::{array, collections::HashMap};
+use std::{
+    array,
+    collections::HashMap,
+    sync::atomic::{AtomicU16, Ordering},
+};
 
 use chrono::NaiveDate;
 use rand_core::{OsRng, RngCore};
@@ -6,9 +10,16 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::svc::SolitaireService;
+use crate::app::games::cards::{
+    AsciiCardTheme, CardRank, CardSuit, OUTLINE_CARD_WIDTH, PlayingCard,
+};
 use late_core::models::solitaire::{Game, GameParams};
 
 pub const DIFFICULTIES: [&str; 2] = ["draw-1", "draw-3"];
+pub const BOARD_WIDTH: usize = 78;
+pub const BOARD_HEIGHT: usize = 44;
+pub const CARD_WIDTH: usize = OUTLINE_CARD_WIDTH;
+pub const CARD_HEIGHT: usize = 5;
 
 /// Which destructive action a pending confirmation is armed for. Tracking the
 /// kind keeps the two reset keys distinct: pressing `n` then `r` re-arms for
@@ -83,6 +94,24 @@ impl Card {
     fn can_stack_on(self, target: Card) -> bool {
         self.rank + 1 == target.rank && self.suit.is_red() != target.suit.is_red()
     }
+
+    pub fn to_playing_card(self) -> PlayingCard {
+        PlayingCard {
+            suit: match self.suit {
+                Suit::Hearts => CardSuit::Hearts,
+                Suit::Diamonds => CardSuit::Diamonds,
+                Suit::Clubs => CardSuit::Clubs,
+                Suit::Spades => CardSuit::Spades,
+            },
+            rank: match self.rank {
+                1 => CardRank::Ace,
+                11 => CardRank::Jack,
+                12 => CardRank::Queen,
+                13 => CardRank::King,
+                n => CardRank::Number(n),
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +150,171 @@ pub enum Selection {
     Tableau { col: usize, row: usize },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StampCell {
+    pub symbol: String,
+    pub suit: Option<Suit>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BouncingCard {
+    pub card: Card,
+    pub x: f32,
+    pub y: f32,
+    pub vx: f32,
+    pub vy: f32,
+}
+
+#[derive(Debug)]
+pub struct WinAnimationState {
+    pub active: bool,
+    pub completed: bool,
+    pub current_card: Option<BouncingCard>,
+    pub pending_cards: Vec<(Card, f32, f32, usize)>,
+    pub unpeeled_counts: [usize; 4],
+    pub stamp_canvas: Vec<Vec<Option<StampCell>>>,
+    pub viewport_height: AtomicU16,
+    seed: u64,
+}
+
+impl Clone for WinAnimationState {
+    fn clone(&self) -> Self {
+        Self {
+            active: self.active,
+            completed: self.completed,
+            current_card: self.current_card.clone(),
+            pending_cards: self.pending_cards.clone(),
+            unpeeled_counts: self.unpeeled_counts,
+            stamp_canvas: self.stamp_canvas.clone(),
+            viewport_height: AtomicU16::new(self.viewport_height.load(Ordering::Relaxed)),
+            seed: self.seed,
+        }
+    }
+}
+
+impl WinAnimationState {
+    pub fn new(foundations: &[Vec<Card>; 4], seed: u64) -> Self {
+        let mut pending_cards = Vec::with_capacity(52);
+        for rank in (1..=13).rev() {
+            for (f_idx, pile) in foundations.iter().enumerate().take(4) {
+                if let Some(card) = pile.iter().find(|c| c.rank == rank) {
+                    let start_x = (20 + f_idx * 10) as f32;
+                    let start_y = 1.0;
+                    pending_cards.push((*card, start_x, start_y, f_idx));
+                }
+            }
+        }
+        pending_cards.reverse();
+
+        let unpeeled_counts = [
+            foundations[0].len(),
+            foundations[1].len(),
+            foundations[2].len(),
+            foundations[3].len(),
+        ];
+
+        let stamp_canvas = vec![vec![None; BOARD_WIDTH]; BOARD_HEIGHT];
+
+        let mut anim = Self {
+            active: true,
+            completed: false,
+            current_card: None,
+            pending_cards,
+            unpeeled_counts,
+            stamp_canvas,
+            viewport_height: AtomicU16::new(BOARD_HEIGHT as u16),
+            seed,
+        };
+        anim.spawn_next_card();
+        anim
+    }
+
+    pub fn spawn_next_card(&mut self) {
+        if let Some((card, start_x, start_y, f_idx)) = self.pending_cards.pop() {
+            self.unpeeled_counts[f_idx] = self.unpeeled_counts[f_idx].saturating_sub(1);
+            self.seed = self.seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let dir = if (self.seed & 1) == 0 { -1.0 } else { 1.0 };
+            let speed = 0.85 + (((self.seed >> 4) % 100) as f32 / 100.0) * 1.35;
+            let vx = dir * speed;
+            let vy = -0.3 - (((self.seed >> 12) % 50) as f32 / 100.0) * 0.5;
+            self.current_card = Some(BouncingCard {
+                card,
+                x: start_x,
+                y: start_y,
+                vx,
+                vy,
+            });
+        } else {
+            self.current_card = None;
+            self.completed = true;
+        }
+    }
+
+    pub fn step(&mut self) -> bool {
+        if self.completed || !self.active {
+            return false;
+        }
+
+        if let Some(mut card) = self.current_card.take() {
+            self.stamp_card(&card);
+
+            const GRAVITY: f32 = 0.28;
+            const RESTITUTION: f32 = -0.80;
+
+            card.vy += GRAVITY;
+            card.x += card.vx;
+            card.y += card.vy;
+
+            let view_h = (self.viewport_height.load(Ordering::Relaxed) as usize)
+                .min(BOARD_HEIGHT)
+                .max(CARD_HEIGHT + 2);
+            let floor_y = (view_h.saturating_sub(CARD_HEIGHT)) as f32;
+
+            if card.y >= floor_y {
+                card.y = floor_y;
+                card.vy *= RESTITUTION;
+                if card.vy.abs() < 0.25 {
+                    card.vy = 0.0;
+                }
+            }
+
+            let offscreen = card.x < -(CARD_WIDTH as f32) || card.x > (BOARD_WIDTH as f32);
+            if offscreen {
+                self.spawn_next_card();
+            } else {
+                self.current_card = Some(card);
+            }
+            true
+        } else {
+            self.spawn_next_card();
+            self.current_card.is_some()
+        }
+    }
+
+    fn stamp_card(&mut self, card: &BouncingCard) {
+        let card_x = card.x.round() as isize;
+        let card_y = card.y.round() as isize;
+        let face_lines = AsciiCardTheme::Outline.render_face_lines(card.card.to_playing_card());
+
+        for (line_idx, line_str) in face_lines.iter().enumerate() {
+            let target_y = card_y + line_idx as isize;
+            if target_y < 0 || target_y >= BOARD_HEIGHT as isize {
+                continue;
+            }
+            for (col_idx, ch) in line_str.chars().enumerate() {
+                let target_x = card_x + col_idx as isize;
+                if target_x < 0 || target_x >= BOARD_WIDTH as isize {
+                    continue;
+                }
+                self.stamp_canvas[target_y as usize][target_x as usize] = Some(StampCell {
+                    symbol: ch.to_string(),
+                    suit: Some(card.card.suit),
+                });
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Snapshot {
     seed: u64,
@@ -145,6 +339,7 @@ pub struct State {
     pub is_game_over: bool,
     pub scroll_offset: u16,
     pub reset_pending: Option<ResetKind>,
+    pub win_anim: Option<WinAnimationState>,
     undo_stack: Vec<Snapshot>,
     daily_snapshots: HashMap<String, Snapshot>,
     /// The UTC date `daily_snapshots` was built for. A session that never
@@ -195,6 +390,7 @@ impl State {
             is_game_over: false,
             scroll_offset: 0,
             reset_pending: None,
+            win_anim: None,
             undo_stack: Vec::new(),
             daily_snapshots,
             daily_date: today,
@@ -224,6 +420,7 @@ impl State {
             self.reset_pending = None;
             self.undo_stack.clear();
             self.load_mode_snapshot_for_selected_difficulty();
+            self.win_anim = None;
         }
         true
     }
@@ -412,6 +609,7 @@ impl State {
             self.tableau = snapshot.tableau;
             self.is_game_over = snapshot.is_game_over;
             self.selection = None;
+            self.win_anim = None;
             self.store_active_snapshot();
             self.save_async();
             true
@@ -576,10 +774,30 @@ impl State {
     }
 
     pub fn foundation_top(&self, idx: usize) -> Option<Card> {
+        if let Some(anim) = &self.win_anim {
+            let count = anim.unpeeled_counts[idx];
+            if count == 0 {
+                return None;
+            }
+            return self
+                .foundations
+                .get(idx)
+                .and_then(|pile| pile.get(count - 1))
+                .copied();
+        }
         self.foundations
             .get(idx)
             .and_then(|pile| pile.last())
             .copied()
+    }
+
+    pub fn tick(&mut self) -> bool {
+        if let Some(anim) = &mut self.win_anim {
+            if anim.active && !anim.completed {
+                return anim.step();
+            }
+        }
+        false
     }
 
     pub fn card_text(card: Card) -> String {
@@ -755,8 +973,15 @@ impl State {
 
     fn check_for_win(&mut self) {
         if self.foundations.iter().all(|pile| pile.len() == 13) {
+            let was_game_over = self.is_game_over;
             self.is_game_over = true;
-            if self.mode == Mode::Daily {
+            if !was_game_over {
+                self.win_anim = Some(WinAnimationState::new(
+                    &self.foundations,
+                    self.seed.wrapping_add(1),
+                ));
+            }
+            if self.mode == Mode::Daily && !was_game_over {
                 self.svc.record_win_task(
                     self.user_id,
                     self.difficulty_key().to_string(),
@@ -831,6 +1056,7 @@ impl State {
         self.scroll_offset = 0;
         self.undo_stack.clear();
         self.clamp_cursor();
+        self.win_anim = None;
     }
 
     fn save_async(&self) {
