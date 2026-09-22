@@ -318,9 +318,10 @@ impl JobPosting {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
-    /// Settle a read. The source text goes with it; the excerpt is all
-    /// the shelf ever shows.
-    pub async fn settle(client: &Client, id: Uuid, settle: Settle) -> Result<()> {
+    /// Settle a read and return the row as it now stands, so the press
+    /// can shelve an active one without a re-read. The source text goes
+    /// with it; the excerpt is all the shelf ever shows.
+    pub async fn settle(client: &Client, id: Uuid, settle: Settle) -> Result<Self> {
         let (status, read, released_on): (JobStatus, Option<JobRead>, Option<NaiveDate>) =
             match settle {
                 Settle::Queued(read) => (JobStatus::Queued, Some(read), None),
@@ -328,15 +329,16 @@ impl JobPosting {
                 Settle::Dead(read) => (JobStatus::Dead, Some(read), None),
                 Settle::Dropped => (JobStatus::Dropped, None, None),
             };
-        match read {
+        let row = match read {
             Some(read) => {
                 client
-                    .execute(
+                    .query_one(
                         "UPDATE job_postings
                          SET status = $2, url = $3, company = $4, title = $5, remote_kind = $6,
                              regions = $7, tags = $8, pay = $9, excerpt = $10, raw = '',
                              released_on = $11
-                         WHERE id = $1",
+                         WHERE id = $1
+                         RETURNING *",
                         &[
                             &id,
                             &status,
@@ -351,18 +353,20 @@ impl JobPosting {
                             &released_on,
                         ],
                     )
-                    .await?;
+                    .await?
             }
             None => {
                 client
-                    .execute(
-                        "UPDATE job_postings SET status = $2, raw = '' WHERE id = $1",
+                    .query_one(
+                        "UPDATE job_postings SET status = $2, raw = ''
+                         WHERE id = $1
+                         RETURNING *",
                         &[&id, &status],
                     )
-                    .await?;
+                    .await?
             }
-        }
-        Ok(())
+        };
+        Ok(Self::from(row))
     }
 
     /// A failed read: count it, keep the row pending for the next run.
