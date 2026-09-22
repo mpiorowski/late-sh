@@ -363,7 +363,8 @@ async fn a_moderator_take_down_is_audited_and_the_writers_own_is_not() {
 
     let client = test_db.db.get().await.expect("db client");
     let audit = ModerationAuditLog::all(&client).await.expect("audit log");
-    let entries: Vec<(Uuid, &str, &str, Option<Uuid>, Option<&str>)> = audit
+    type AuditEntry<'a> = (Uuid, &'a str, &'a str, Option<Uuid>, Option<&'a str>);
+    let entries: Vec<AuditEntry> = audit
         .iter()
         .map(|entry| {
             (

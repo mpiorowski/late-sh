@@ -666,15 +666,22 @@ impl JobsService {
         match read {
             Ok(settle) => {
                 match JobPosting::settle(&client, posting.id, settle).await? {
-                    Some(row) => match row.status {
-                        JobStatus::Active => self.shelve(row),
-                        // HN waits for its slice; the rest never list.
-                        JobStatus::Queued
-                        | JobStatus::Dead
-                        | JobStatus::Dropped
-                        | JobStatus::Pending
-                        | JobStatus::Expired => {}
-                    },
+                    Some(
+                        row @ JobPosting {
+                            status: JobStatus::Active,
+                            ..
+                        },
+                    ) => self.shelve(row),
+                    // HN waits for its slice; the rest never list.
+                    Some(JobPosting {
+                        status:
+                            JobStatus::Queued
+                            | JobStatus::Dead
+                            | JobStatus::Dropped
+                            | JobStatus::Pending
+                            | JobStatus::Expired,
+                        ..
+                    }) => {}
                     // An overlapping run settled it first; theirs stands.
                     None => {}
                 }
