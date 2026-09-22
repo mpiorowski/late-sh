@@ -731,11 +731,12 @@ fn is_service_room(id: u32) -> bool {
         })
 }
 
-/// Pull off-screen POI arrows in from the widget border so they hug the
-/// explored cluster instead of floating at the panel's far edge, where nothing
-/// ties them to the map they annotate. Arrows collapsing onto the same cell
-/// keep boss priority. Atlas only: the live field draws no POI arrows, so a
-/// glyph next to `@` can never masquerade as a movement affordance.
+/// Sit every direction arrow on the explored cluster's boundary, so it reads
+/// against the map it annotates. An arrow from the widget border is pulled in;
+/// an arrow whose target lies *inside* the cluster's own box is pushed out.
+/// Arrows collapsing onto the same cell keep boss priority. Atlas only: the
+/// live field draws no POI arrows, so a glyph next to `@` can never
+/// masquerade as a movement affordance.
 fn hug_poi_arrows(
     arrows: Vec<super::worldmap::MapArrow>,
     canvas: &[Vec<super::worldmap::Tile>],
@@ -762,8 +763,29 @@ fn hug_poi_arrows(
     let mut hugged: std::collections::BTreeMap<(usize, usize), MapArrow> =
         std::collections::BTreeMap::new();
     for a in arrows {
-        let row = a.row.clamp(r0.saturating_sub(1), (r1 + 1).min(max_r));
-        let col = a.col.clamp(c0.saturating_sub(1), (c1 + 1).min(max_c));
+        let mut row = a.row.clamp(r0.saturating_sub(1), (r1 + 1).min(max_r));
+        let mut col = a.col.clamp(c0.saturating_sub(1), (c1 + 1).min(max_c));
+        // A target inside the cluster's own box - a room a few cells off that
+        // simply has not been walked - would land the arrow on the very cell
+        // it stands in for, revealing the room and reading as a marker rather
+        // than a direction. Push it out to the boundary on the side the
+        // target lies. An axis the target does not lie along keeps its
+        // clamped position, so a due-east target still leaves on its own row.
+        if (r0..=r1).contains(&row) && (c0..=c1).contains(&col) {
+            let (dx, dy) = a.dir;
+            if dx != 0 {
+                col = match dx > 0 {
+                    true => (c1 + 1).min(max_c),
+                    false => c0.saturating_sub(1),
+                };
+            }
+            if dy != 0 {
+                row = match dy > 0 {
+                    true => (r1 + 1).min(max_r),
+                    false => r0.saturating_sub(1),
+                };
+            }
+        }
         let moved = MapArrow { row, col, ..a };
         let e = hugged.entry((row, col)).or_insert(moved);
         if a.boss && !e.boss {
@@ -1920,7 +1942,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         };
         if let Some(aim) = aim {
             let (dest_arrows, _) =
-                super::worldmap::quest_arrows(coords, center, cols, height, &[aim]);
+                super::worldmap::quest_arrows(coords, center, cols, height, &[aim], &view.visited);
             for arrow in hug_poi_arrows(dest_arrows, &canvas) {
                 if let Some(cell) = cells.get_mut(arrow.row).and_then(|r| r.get_mut(arrow.col)) {
                     *cell = (arrow.glyph.to_string(), quest_style);
@@ -1943,7 +1965,15 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     let quests_beyond = if quest_targets.is_empty() {
         0
     } else {
-        super::worldmap::quest_arrows(coords, center, cols, height, &quest_targets).1
+        super::worldmap::quest_arrows(
+            coords,
+            center,
+            cols,
+            height,
+            &quest_targets,
+            &view.visited,
+        )
+        .1
     };
 
     // Land labels: name each explored region once, near the centroid of its

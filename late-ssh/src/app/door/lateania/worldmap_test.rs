@@ -1126,7 +1126,9 @@ fn quest_arrows_stay_honest_across_reserved_blocks() {
         "test premise: the Frontier target lies beyond the pan range"
     );
 
-    let (arrows, beyond) = super::quest_arrows(&coords, center, cols, rows, &[near, far]);
+    let visited = std::collections::HashSet::from([world.start_room]);
+    let (arrows, beyond) =
+        super::quest_arrows(&coords, center, cols, rows, &[near, far], &visited);
     assert_eq!(beyond, 1, "the cross-block target is counted, not drawn");
     for a in &arrows {
         assert!(a.row < rows as usize && a.col < cols as usize);
@@ -1274,5 +1276,57 @@ fn track_aim_always_aims_inside_the_players_land() {
     assert!(
         far > 0,
         "test premise: some destinations lie beyond the start's land"
+    );
+}
+
+// A tracked destination inside the viewport but never walked used to get
+// nothing at all: `quest_arrows` handed it to the canvas, and the canvas
+// leaves an unvisited room in fog. The whole Sunken Catacombs is one flat
+// 12x8 grid, so every room in it is always on screen and the green arrow
+// could never fire anywhere inside the dungeon - exactly where a player
+// tracking the Bonewright Lich needs it.
+#[test]
+fn a_tracked_room_still_in_fog_gets_an_arrow_even_on_screen() {
+    use std::collections::HashSet;
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let lich = world
+        .spawns
+        .iter()
+        .find(|s| s.name == "The Bonewright Lich")
+        .expect("the lich spawns")
+        .home;
+    let mouth: RoomId = 5000;
+    assert!(world.rooms[&mouth].name.contains("Mouth of the Crypt"));
+
+    // A roomy terminal: the whole maze fits with cells to spare.
+    let (cols, rows) = (150, 50);
+    let center = coords[&mouth];
+    let c = coords[&lich];
+    assert!(
+        (0..cols).contains(&(cols / 2 + 2 * (c.x - center.x)))
+            && (0..rows).contains(&(rows / 2 + 2 * (c.y - center.y))),
+        "test premise: the lich's room lies inside the viewport"
+    );
+
+    // Standing at the mouth, with nothing below it walked yet.
+    let visited: HashSet<RoomId> = HashSet::from([mouth]);
+    let (arrows, beyond) = super::quest_arrows(&coords, center, cols, rows, &[lich], &visited);
+    assert_eq!(beyond, 0, "the lich lies in the player's own land");
+    assert_eq!(
+        arrows.len(),
+        1,
+        "a tracked room still in fog gets a direction arrow"
+    );
+    assert!(
+        "\u{2190}\u{2191}\u{2192}\u{2193}\u{2196}\u{2197}\u{2198}\u{2199}".contains(arrows[0].glyph)
+    );
+
+    // Once it is walked the canvas draws the flag itself, so the arrow stops.
+    let visited: HashSet<RoomId> = HashSet::from([mouth, lich]);
+    let (arrows, _) = super::quest_arrows(&coords, center, cols, rows, &[lich], &visited);
+    assert!(
+        arrows.is_empty(),
+        "a walked room on screen is the canvas's own job"
     );
 }

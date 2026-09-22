@@ -98,3 +98,63 @@ fn the_summit_is_level_one_hundred() {
         );
     }
 }
+
+// Element choice is a real lever - mobs halve one school and take +50% from
+// another - but the ability rows used to say only what an ability costs and
+// whether it damages, so the half of the matchup the player controls was
+// invisible while the foe panel named the other half out loud.
+#[test]
+fn a_damaging_ability_says_which_school_it_lands_in() {
+    let named = |name: &str| {
+        ABILITIES
+            .iter()
+            .find(|a| a.name == name)
+            .unwrap_or_else(|| panic!("{name} is in the roster"))
+    };
+
+    // The Runemaster's opening five, the kit in the screenshot: one Fire
+    // among four Arcane, which is exactly what the rows have to distinguish.
+    assert_eq!(named("Force Rune").effect_label(), "arcane damage");
+    assert_eq!(
+        named("Graven Rune").effect_label(),
+        "fire damage over time"
+    );
+    assert_eq!(named("Binding Rune").effect_label(), "arcane stun");
+
+    // A stun still lands its hit through `damage_target`, so it keeps a
+    // school; a ward and an empower never do, so claiming one would be a lie.
+    assert_eq!(named("Ward Rune").school(), None);
+    assert_eq!(named("Ward Rune").effect_label(), "shield");
+    assert_eq!(named("Overcharge").school(), None);
+    assert_eq!(named("Overcharge").effect_label(), "empower");
+}
+
+// The school shown must be the school the combat runtime actually resolves.
+// `damage_type` is a plain field on every ability, healers and wards
+// included, so only the effects that reach `damage_target` may report one.
+#[test]
+fn only_the_effects_that_resolve_damage_carry_a_school() {
+    for a in ABILITIES {
+        let resolves = matches!(
+            a.effect,
+            AbilityEffect::Strike
+                | AbilityEffect::DamageOverTime
+                | AbilityEffect::Stun
+                | AbilityEffect::Finisher
+        );
+        assert_eq!(
+            a.school().is_some(),
+            resolves,
+            "{} ({:?}) disagrees with the combat runtime about its school",
+            a.name,
+            a.effect
+        );
+        // A school that is shown is always shown the same way: in front of
+        // the effect, so the row reads as one phrase.
+        let expected = match a.school() {
+            Some(school) => format!("{} {}", school.label(), a.effect.label()),
+            None => a.effect.label().to_string(),
+        };
+        assert_eq!(a.effect_label(), expected, "{}", a.name);
+    }
+}

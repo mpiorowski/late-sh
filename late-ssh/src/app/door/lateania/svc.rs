@@ -817,6 +817,8 @@ pub struct AbilityView {
     pub name: String,
     pub cost: i32,
     pub ready: bool,
+    /// What it does, school included where the school is real
+    /// (`Ability::effect_label`): "fire damage over time", "shield".
     pub effect: String,
 }
 
@@ -10641,7 +10643,7 @@ impl WorldState {
                         cost: a.cost,
                         ready: player.cooldowns.get(&a.id).copied().unwrap_or(0) == 0
                             && player.resource >= a.cost,
-                        effect: a.effect.label().to_string(),
+                        effect: a.effect_label(),
                     })
                     .collect(),
                 None => Vec::new(),

@@ -3746,6 +3746,40 @@ fn loading_saved_character_reconciles_level_from_xp() {
     );
 }
 
+// The rows that pick a spell are where the school has to be: the battle panel
+// already names the foe's attack school and its weak/resist, and both ability
+// lists (`v` and the battle side panel) render this one string.
+#[test]
+fn the_ability_rows_a_player_sees_carry_the_school_they_land_in() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Runemaster);
+    let mut saved = s.export_saved(uid(1)).expect("character saves");
+    saved.level = 1;
+    saved.xp = xp_for_level(16);
+    s.hydrate(uid(1), &saved);
+
+    let snap = s.snapshot();
+    let view = snap.players.get(&uid(1)).expect("player view");
+    let row = |name: &str| {
+        view.abilities
+            .iter()
+            .find(|a| a.name == name)
+            .unwrap_or_else(|| panic!("a level 16 Runemaster knows {name}"))
+            .effect
+            .clone()
+    };
+
+    // One Fire among four Arcane - the whole reason the row has to say it.
+    assert_eq!(row("Force Rune"), "arcane damage");
+    assert_eq!(row("Graven Rune"), "fire damage over time");
+    assert_eq!(row("Binding Rune"), "arcane stun");
+    // A ward and an empower never reach `damage_target`, so their rows claim
+    // no school rather than showing the inert one the roster carries.
+    assert_eq!(row("Ward Rune"), "shield");
+    assert_eq!(row("Overcharge"), "empower");
+}
+
 #[test]
 fn gold_math_keeps_rewards_and_death_loss_predictable() {
     assert_eq!(gold_for_kill(80, false), 19);

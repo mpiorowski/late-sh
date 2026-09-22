@@ -19,6 +19,7 @@ fn poi_arrows_hug_the_explored_cluster_with_boss_priority() {
         MapArrow {
             row: 0,
             col: 9,
+            dir: (1, -1),
             glyph: '\u{2197}',
             boss: false,
         },
@@ -26,6 +27,7 @@ fn poi_arrows_hug_the_explored_cluster_with_boss_priority() {
         MapArrow {
             row: 2,
             col: 9,
+            dir: (1, 0),
             glyph: '\u{2192}',
             boss: true,
         },
@@ -44,12 +46,52 @@ fn poi_arrows_hug_the_explored_cluster_with_boss_priority() {
         vec![MapArrow {
             row: 0,
             col: 9,
+            dir: (1, -1),
             glyph: '\u{2197}',
             boss: false,
         }],
         &empty,
     );
     assert_eq!((kept[0].row, kept[0].col), (0, 9));
+}
+
+// An arrow for something inside the explored cluster's own box - a room a few
+// cells away that simply has not been walked - must not be stamped on the very
+// cell it stands in for. It gets pushed out to the boundary on the side it
+// lies, so it reads as a direction like every other arrow and still reveals
+// no room.
+#[test]
+fn an_arrow_inside_the_explored_cluster_is_pushed_out_to_its_edge() {
+    // The cluster occupies rows/cols 4..=5 of a 10x10 canvas.
+    let mut canvas = vec![vec![Tile::Empty; 10]; 10];
+    canvas[4][4] = Tile::Room(1);
+    canvas[5][5] = Tile::Room(2);
+
+    // Due east of the camera and inside the box: same row, out past the edge.
+    let east = hug_poi_arrows(
+        vec![MapArrow {
+            row: 5,
+            col: 5,
+            dir: (1, 0),
+            glyph: '\u{2192}',
+            boss: false,
+        }],
+        &canvas,
+    );
+    assert_eq!((east[0].row, east[0].col), (5, 6));
+
+    // South-east: both axes lie outside the box, so it takes the corner.
+    let south_east = hug_poi_arrows(
+        vec![MapArrow {
+            row: 4,
+            col: 4,
+            dir: (1, 1),
+            glyph: '\u{2198}',
+            boss: false,
+        }],
+        &canvas,
+    );
+    assert_eq!((south_east[0].row, south_east[0].col), (6, 6));
 }
 
 #[test]
