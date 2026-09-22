@@ -428,7 +428,7 @@ async fn a_posting_written_here_is_active_at_once_and_only_its_writer_or_a_moder
         JobPosting::retract(&client, row.id, writer, false)
             .await
             .expect("retract"),
-        Retract::Gone
+        Retract::Gone { posted_by: writer }
     );
     assert_eq!(
         status_of(&client, JobSource::Late, &row.external_id).await,
@@ -449,7 +449,7 @@ async fn a_posting_written_here_is_active_at_once_and_only_its_writer_or_a_moder
         JobPosting::retract(&client, second.id, stranger, true)
             .await
             .expect("retract"),
-        Retract::Gone
+        Retract::Gone { posted_by: writer }
     );
     JobPosting::upsert_fetched(&client, &fetched(JobSource::Wwr, "wwr-1", 22))
         .await

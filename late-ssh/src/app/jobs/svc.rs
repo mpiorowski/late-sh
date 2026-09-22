@@ -28,6 +28,7 @@ use late_core::models::job_posting::{
     FetchedPosting, JobPosting, JobPressRun, JobRead, JobSource, JobStatus, NewPosting,
     PressCounts, RemoteKind, Retract, Settle, Upsert,
 };
+use late_core::models::moderation_audit_log::ModerationAuditLog;
 use late_core::telemetry::TracedExt;
 use late_core::vocab;
 use tokio::sync::{broadcast, oneshot, watch};
@@ -907,14 +908,32 @@ impl JobsService {
         }
     }
 
+    /// The take-down, its audit entry when a moderator removes someone
+    /// else's posting, the metric, and the log line.
     async fn retract(&self, user_id: Uuid, posting_id: Uuid, moderator: bool) -> RetractOutcome {
         let result = async {
             let client = self.db.get().await?;
-            JobPosting::retract(&client, posting_id, user_id, moderator).await
+            let retract = JobPosting::retract(&client, posting_id, user_id, moderator).await?;
+            match retract {
+                Retract::Gone { posted_by } => {
+                    ModerationAuditLog::record_if(
+                        &client,
+                        posted_by != user_id,
+                        user_id,
+                        "job_posting_take_down",
+                        "job_posting",
+                        Some(posting_id),
+                        serde_json::json!({ "target_user_id": posted_by }),
+                    )
+                    .await?;
+                }
+                Retract::NotYours => {}
+            }
+            Ok::<_, anyhow::Error>(retract)
         }
         .await;
         match result {
-            Ok(Retract::Gone) => {
+            Ok(Retract::Gone { .. }) => {
                 metrics::record_jobs_post(JobsPostResult::Retracted);
                 tracing::info!(%user_id, %posting_id, moderator, "job posting taken down");
                 self.refresh_after_write().await;

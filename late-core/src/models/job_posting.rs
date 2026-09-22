@@ -204,8 +204,9 @@ pub struct NewPosting {
 /// What a take-down did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Retract {
-    /// The row left the shelf.
-    Gone,
+    /// The row left the shelf; `posted_by` wrote it, for the audit of a
+    /// moderator's take-down.
+    Gone { posted_by: Uuid },
     /// Not an active `late` row of that person's (or of anyone's, for a
     /// moderator): nothing changed.
     NotYours,
@@ -494,18 +495,20 @@ impl JobPosting {
     /// moderator. Feed rows are never touched here. Owner scope is in the
     /// query.
     pub async fn retract(client: &Client, id: Uuid, by: Uuid, moderator: bool) -> Result<Retract> {
-        let changed = client
-            .execute(
+        let row = client
+            .query_opt(
                 "UPDATE job_postings SET status = 'expired'
                  WHERE id = $1 AND source = 'late' AND status = 'active'
-                   AND (posted_by = $2 OR $3)",
+                   AND (posted_by = $2 OR $3)
+                 RETURNING posted_by",
                 &[&id, &by, &moderator],
             )
             .await?;
-        Ok(if changed == 1 {
-            Retract::Gone
-        } else {
-            Retract::NotYours
+        Ok(match row {
+            Some(row) => Retract::Gone {
+                posted_by: row.get("posted_by"),
+            },
+            None => Retract::NotYours,
         })
     }
 

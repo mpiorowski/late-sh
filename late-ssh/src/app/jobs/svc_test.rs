@@ -4,6 +4,7 @@ use chrono::{NaiveDate, TimeZone, Utc};
 use late_core::models::job_posting::{
     FetchedPosting, JobPosting, JobRead, JobSource, JobStatus, NewPosting, RemoteKind, Settle,
 };
+use late_core::models::moderation_audit_log::ModerationAuditLog;
 use uuid::Uuid;
 
 use super::svc::{
@@ -12,6 +13,7 @@ use super::svc::{
 };
 use crate::moderation::policy::Permissions;
 use crate::test_helpers::{chat_compose_app, wait_for_render_contains};
+use late_core::test_utils::create_test_user;
 
 fn day(d: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 9, d).unwrap()
@@ -314,4 +316,74 @@ async fn a_posting_written_here_lands_on_the_shelf_caps_per_person_and_comes_dow
     let shelf = JobPosting::list_active(&client, 10).await.expect("shelf");
     assert_eq!(shelf.len(), JOBS_POSTS_PER_USER as usize - 1);
     assert!(shelf.iter().all(|row| row.id != first_id));
+}
+
+/// A moderator taking down someone else's posting leaves an audit entry
+/// naming the writer; a writer taking down their own leaves none.
+#[tokio::test]
+async fn a_moderator_take_down_is_audited_and_the_writers_own_is_not() {
+    let (test_db, app) = chat_compose_app("jobs-retract-audit").await;
+    let mut events = app.jobs.service.subscribe_events();
+    let writer = app.user_id;
+    let moderator = create_test_user(&test_db.db, "jobs-moderator").await;
+    for company in ["Mine", "Theirs"] {
+        app.jobs.service.request_post(new_posting(writer, company));
+        match next_event(&mut events).await {
+            JobsEvent::Posted { outcome, .. } => {
+                assert!(matches!(outcome, PostOutcome::Posted { .. }))
+            }
+            other => panic!("expected a post, got {other:?}"),
+        }
+    }
+    let (own_id, modded_id) = {
+        let client = test_db.db.get().await.expect("db client");
+        let shelf = JobPosting::list_active(&client, 10).await.expect("shelf");
+        let id_of = |company: &str| {
+            shelf
+                .iter()
+                .find(|row| row.company == company)
+                .expect("posting on the shelf")
+                .id
+        };
+        (id_of("Mine"), id_of("Theirs"))
+    };
+
+    app.jobs.service.request_retract(writer, own_id, false);
+    match next_event(&mut events).await {
+        JobsEvent::Retracted { outcome, .. } => assert_eq!(outcome, RetractOutcome::Gone),
+        other => panic!("expected a take-down, got {other:?}"),
+    }
+    app.jobs
+        .service
+        .request_retract(moderator.id, modded_id, true);
+    match next_event(&mut events).await {
+        JobsEvent::Retracted { outcome, .. } => assert_eq!(outcome, RetractOutcome::Gone),
+        other => panic!("expected a take-down, got {other:?}"),
+    }
+
+    let client = test_db.db.get().await.expect("db client");
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let entries: Vec<(Uuid, &str, &str, Option<Uuid>, Option<&str>)> = audit
+        .iter()
+        .map(|entry| {
+            (
+                entry.actor_user_id,
+                entry.action.as_str(),
+                entry.target_kind.as_str(),
+                entry.target_id,
+                entry.metadata["target_user_id"].as_str(),
+            )
+        })
+        .collect();
+    let writer_id = writer.to_string();
+    assert_eq!(
+        entries,
+        vec![(
+            moderator.id,
+            "job_posting_take_down",
+            "job_posting",
+            Some(modded_id),
+            Some(writer_id.as_str()),
+        )]
+    );
 }

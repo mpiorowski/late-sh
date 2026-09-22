@@ -34,7 +34,7 @@ The directory page (`app/directory`) owns the shelf strip and the `Space`/`w`/`i
 - Expire: `active` older than `JOBS_EXPIRE_DAYS` = 30 since release, and WWR rows unseen for `JOBS_WWR_ABSENT_DAYS` = 7.
 - Switch: `jobs_enabled` (`app_flags`, seeded on). Off: no press, an empty snapshot on the next refresh, the shelf says so, no NEW WORK.
 - Clients are scoped to each query; nothing holds a pooled connection across a model call or a fetch.
-- A shelf write (`request_post`, `request_retract`) is fire-and-forget through the service: the cap check and the insert, then this replica's snapshot refreshes at once and the others catch it within `JOBS_SNAPSHOT_REFRESH`; the answer comes back as a `JobsEvent` for the form and a banner. The take-down's owner scope is in the query (`posted_by = $2 OR moderator`); feed rows are out of its reach.
+- A shelf write (`request_post`, `request_retract`) is fire-and-forget through the service: the cap check and the insert, then this replica's snapshot refreshes at once and the others catch it within `JOBS_SNAPSHOT_REFRESH`; the answer comes back as a `JobsEvent` for the form and a banner. The take-down's owner scope is in the query (`posted_by = $2 OR moderator`); feed rows are out of its reach. A moderator's take-down of someone else's posting writes a `job_posting_take_down` entry to `moderation_audit_log` naming the writer.
 
 ## The shelf
 
