@@ -543,7 +543,9 @@ fn the_coat_key_keeps_a_healthy_coat_of_another_school_when_nothing_calls_for_a_
     }
     s.coat_best(uid(1));
     assert_eq!(
-        s.players[&uid(1)].weapon_coat.map(|(school, _, c)| (school, c)),
+        s.players[&uid(1)]
+            .weapon_coat
+            .map(|(school, _, c)| (school, c)),
         Some((DamageType::Frost, COAT_CHARGES - 1)),
         "a neutral foe leaves the healthy coat alone too"
     );

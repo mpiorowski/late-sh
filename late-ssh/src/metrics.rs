@@ -209,9 +209,9 @@ mod inner {
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
         GildTier, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
-        OnlineTimeFlushResult, PaperOpenResult,
-        PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, RunnerDoor,
-        SongQueueReward, SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
+        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
+        RenderReason, RoundRefusal, RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult,
+        TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -1485,9 +1485,9 @@ mod inner {
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
         GildTier, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
-        OnlineTimeFlushResult, PaperOpenResult,
-        PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, RunnerDoor,
-        SongQueueReward, SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
+        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
+        RenderReason, RoundRefusal, RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult,
+        TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
