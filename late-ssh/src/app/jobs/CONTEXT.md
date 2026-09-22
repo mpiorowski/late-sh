@@ -2,7 +2,7 @@
 
 ## Metadata
 - Domain: the Jobs shelf of the Profiles page (`5`, `Space` from People, `/jobs` from anywhere), the post form on it (`n`, `/jobs post`), the FOR YOU lines under a person's own card, and the NEW WORK section of The Late Edition. Remote postings pulled once a night from feeds published to be read, read into a card by the model, plus postings people write on the shelf themselves, matched to work cards by tag.
-- Status: Active. The design and the measured source numbers are in `JOBS.md` (Step 2).
+- Status: Active.
 
 ## What it is
 
@@ -57,4 +57,4 @@ The directory page (`app/directory`) owns the shelf strip and the `Space`/`w`/`i
 - The read's schema names no enum for `tags`: Gemini answers 400 (`INVALID_ARGUMENT`, no detail in the body) to an enum of the vocabulary's size on an array item. The list rides in the system prompt and `vocab::normalize` drops anything outside it.
 - A tag added to the vocabulary reaches new reads only; rows read before it keep their tags.
 - The run row is the only claim; postings have no per-row claim. Two replicas can never read the same posting because only one holds the day.
-- The web `/jobs` page is not built (JOBS.md, Surfaces).
+- The web `/jobs` page is not built.

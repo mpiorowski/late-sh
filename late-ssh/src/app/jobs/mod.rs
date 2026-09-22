@@ -2,7 +2,7 @@
 // nightly press and the shelf snapshot, `sources.rs` the feed parsers,
 // `state.rs` the shelf's session state and the match score, `ui.rs` and
 // `input.rs` the shelf itself. The tag vocabulary the read, the matcher,
-// and the tag picker share is `late_core::vocab`. See JOBS.md.
+// and the tag picker share is `late_core::vocab`. See CONTEXT.md here.
 pub(crate) mod input;
 pub(crate) mod post;
 pub(crate) mod sources;
