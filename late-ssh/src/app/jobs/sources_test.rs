@@ -45,10 +45,7 @@ fn hn_comments_become_postings_and_deleted_or_dead_ones_do_not() {
     assert!(!quobyte.raw.contains("&#x2F;"));
     assert!(!quobyte.raw.contains("<p>"));
     assert!(quobyte.raw.contains("\nAt Quobyte we are working"));
-    assert_eq!(
-        quobyte.posted_at.to_rfc3339(),
-        "2026-09-01T15:53:18+00:00"
-    );
+    assert_eq!(quobyte.posted_at.to_rfc3339(), "2026-09-01T15:53:18+00:00");
 }
 
 #[test]
@@ -83,7 +80,11 @@ fn wwr_items_carry_their_region_and_land_pending() {
     assert_eq!(first.remote_kind, Some(RemoteKind::Worldwide));
     assert!(first.regions.is_empty());
     assert!(!first.dropped);
-    assert!(first.raw.starts_with("Anthropic: Anthropic Fellows Program"));
+    assert!(
+        first
+            .raw
+            .starts_with("Anthropic: Anthropic Fellows Program")
+    );
     assert!(first.raw.contains("Region: Anywhere in the World"));
     assert!(first.raw.contains("Type: Full-Time"));
     // The description was entity-encoded HTML; it reads as text now.
@@ -95,28 +96,47 @@ fn wwr_items_carry_their_region_and_land_pending() {
 
 #[test]
 fn jobicy_rows_are_rechecked_on_word_boundaries() {
-    let postings = parse_jobicy(JOBICY_RUST, &["rust"]).expect("parse");
+    let postings = parse_jobicy(JOBICY_RUST, "rust", &["rust"]).expect("parse");
     assert_eq!(postings.len(), 3);
     let canonical = &postings[0];
     assert_eq!(canonical.source, JobSource::Jobicy);
     assert_eq!(canonical.external_id, "151197");
     assert_eq!(
         canonical.url,
-        "https://jobicy.com/jobs/151197-c-rust-graphics-and-windowing-system-software-eng"
+        "https://jobicy.com/jobs/151197-c-rust-graphics-and-windowing-system-software-engineer-mir"
     );
     assert_eq!(canonical.remote_kind, Some(RemoteKind::Regions));
     assert_eq!(canonical.regions, vec!["APAC", "EMEA"]);
     assert!(!canonical.dropped);
-    assert!(canonical.raw.starts_with("C++/Rust Graphics and Windowing System Software Engineer - Mir\nCompany: Canonical\n"));
+    assert!(canonical.raw.starts_with(
+        "C++/Rust Graphics and Windowing System Software Engineer - Mir\nCompany: Canonical\n"
+    ));
     assert_eq!(postings[1].regions, vec!["USA"]);
     assert!(!postings[1].dropped);
     // "trust", not "rust": a tombstone, never read.
     assert!(postings[2].dropped, "{}", postings[2].raw);
     assert_eq!(postings[2].regions, vec!["Estonia", "Spain"]);
 
-    // `golang` rows count when they say "Go" on its own.
-    let golang = parse_jobicy(JOBICY_RUST, &["go", "golang"]).expect("parse");
-    assert!(golang.iter().all(|p| p.dropped));
+    // The JS query over the rust page: nothing here says JavaScript, or
+    // React in a title, so every row is a tombstone.
+    let js = parse_jobicy(
+        JOBICY_RUST,
+        "javascript",
+        &["javascript", "js", "node", "react"],
+    )
+    .expect("parse");
+    assert!(js.iter().all(|p| p.dropped), "no js on the rust page");
+
+    // The same page rechecked for the golang query: only CertiK, whose
+    // text says "Golang", survives; "go" as a verb in a description does
+    // not count, only "Go" in a title would.
+    let golang = parse_jobicy(JOBICY_RUST, "golang", &["go", "golang"]).expect("parse");
+    let kept: Vec<&str> = golang
+        .iter()
+        .filter(|p| !p.dropped)
+        .map(|p| p.external_id.as_str())
+        .collect();
+    assert_eq!(kept, vec!["152447"]);
 }
 
 #[test]
@@ -133,9 +153,14 @@ fn word_match_is_whole_word_and_case_blind() {
 #[test]
 fn html_becomes_plain_lines() {
     assert_eq!(
-        html_to_text("Acme | Rust | REMOTE<p>We build &quot;things&quot; at <a href=\"https:&#x2F;&#x2F;acme.io\">https:&#x2F;&#x2F;acme.io</a><p><p>Pay: 100k &amp; equity"),
+        html_to_text(
+            "Acme | Rust | REMOTE<p>We build &quot;things&quot; at <a href=\"https:&#x2F;&#x2F;acme.io\">https:&#x2F;&#x2F;acme.io</a><p><p>Pay: 100k &amp; equity"
+        ),
         "Acme | Rust | REMOTE\nWe build \"things\" at https://acme.io\n\nPay: 100k & equity"
     );
-    assert_eq!(html_to_text("&lt;p&gt;double&lt;/p&gt; encoded"), "double encoded");
+    assert_eq!(
+        html_to_text("&lt;p&gt;double&lt;/p&gt; encoded"),
+        "double encoded"
+    );
     assert_eq!(html_to_text("a &unknown; b & c"), "a &unknown; b & c");
 }

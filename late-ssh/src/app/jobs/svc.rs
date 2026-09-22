@@ -34,7 +34,8 @@ use tracing::Instrument;
 use uuid::Uuid;
 
 use super::sources::{
-    self, HN_SUBMISSIONS_TO_CHECK, HN_WHOISHIRING_URL, JOBICY_API_URL, JOBICY_TAGS, WWR_RSS_URL,
+    self, HN_SUBMISSIONS_TO_CHECK, HN_WHOISHIRING_URL, JOBICY_API_URL, JOBICY_COUNT, JOBICY_TAGS,
+    WWR_RSS_URL,
 };
 use super::state::{JobsCommand, JobsState, PendingFlagWrite};
 use super::vocab;
@@ -141,13 +142,22 @@ pub enum PressJob {
 
 #[derive(Clone, Debug)]
 pub enum JobsEvent {
-    Press { user_id: Uuid, outcome: PressOutcome },
+    Press {
+        user_id: Uuid,
+        outcome: PressOutcome,
+    },
 }
 
 #[derive(Clone, Debug)]
 pub enum PressOutcome {
-    Ran { day: NaiveDate, tally: PressTally },
-    Released { day: NaiveDate, count: usize },
+    Ran {
+        day: NaiveDate,
+        tally: PressTally,
+    },
+    Released {
+        day: NaiveDate,
+        count: usize,
+    },
     /// The kill switch is off, or AI is unconfigured here.
     Unavailable,
     Failed,
@@ -504,10 +514,13 @@ impl JobsService {
 
     async fn fetch_jobicy(&self) -> anyhow::Result<Vec<FetchedPosting>> {
         let mut postings = Vec::new();
-        for (tag, needles) in JOBICY_TAGS {
-            let url = reqwest::Url::parse_with_params(JOBICY_API_URL, [("tag", *tag)])?;
+        for (query, title_words) in JOBICY_TAGS {
+            let url = reqwest::Url::parse_with_params(
+                JOBICY_API_URL,
+                [("tag", *query), ("count", JOBICY_COUNT)],
+            )?;
             let json = self.get_text(url.as_str()).await?;
-            postings.extend(sources::parse_jobicy(&json, needles)?);
+            postings.extend(sources::parse_jobicy(&json, query, title_words)?);
         }
         Ok(postings)
     }
@@ -553,12 +566,7 @@ impl JobsService {
     async fn read_one(&self, posting: &JobPosting, day: NaiveDate) -> anyhow::Result<Settle> {
         let answer = self
             .ai
-            .generate_json(
-                AI_MODEL,
-                &read_system_prompt(),
-                &posting.raw,
-                read_schema(),
-            )
+            .generate_json(AI_MODEL, &read_system_prompt(), &posting.raw, read_schema())
             .await?
             .context("the model answered with no text")?;
         let extracted: Extracted =
@@ -675,9 +683,7 @@ impl JobsService {
         tokio::spawn(
             async move {
                 let outcome = service.press_on_demand(job).await;
-                let _ = service
-                    .event_tx
-                    .send(JobsEvent::Press { user_id, outcome });
+                let _ = service.event_tx.send(JobsEvent::Press { user_id, outcome });
             }
             .instrument(tracing::info_span!("jobs.press_on_demand", user_id = %user_id, ?job)),
         );
@@ -688,11 +694,13 @@ impl JobsService {
     /// reads only, so the slice is never released twice. `/jobs release`
     /// releases a slice on top of whatever the day did, on purpose.
     async fn press_on_demand(&self, job: PressJob) -> PressOutcome {
-        if !self.enabled() || !self.ai.is_enabled() {
+        if !self.enabled() {
             return PressOutcome::Unavailable;
         }
         let day = press_due_day(Utc::now());
         let outcome = match job {
+            // Only the read needs the model; a release is a row update.
+            PressJob::Pull if !self.ai.is_enabled() => return PressOutcome::Unavailable,
             PressJob::Pull => match self.claim_run(day).await {
                 Ok(true) => self
                     .run_claimed(day)
@@ -908,7 +916,9 @@ fn tick_commands(app: &mut App) -> bool {
         }
         JobsCommand::Release => {
             app.banner = Some(Banner::info("Releasing a slice of the HN queue…"));
-            app.jobs.service.request_press(app.user_id, PressJob::Release);
+            app.jobs
+                .service
+                .request_press(app.user_id, PressJob::Release);
         }
         JobsCommand::On => set_flag(app, AppFlag::JobsEnabled, true, "Job press running"),
         JobsCommand::Off => set_flag(

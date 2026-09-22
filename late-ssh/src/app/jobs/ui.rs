@@ -13,7 +13,9 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use super::state::{JobsState, match_line, scope_label};
-use crate::app::common::primitives::{format_relative_time, format_relative_time_short, row_with_hint};
+use crate::app::common::primitives::{
+    format_relative_time, format_relative_time_short, row_with_hint,
+};
 use crate::app::common::theme;
 
 pub(crate) const JOBS_HINTS: &[(&str, &str)] = &[
@@ -72,7 +74,8 @@ pub(crate) fn draw_jobs_shelf(frame: &mut Frame, area: Rect, view: &JobsShelfVie
         return;
     }
     if !view.narrow {
-        let cols = Layout::horizontal([Constraint::Percentage(42), Constraint::Fill(1)]).split(area);
+        let cols =
+            Layout::horizontal([Constraint::Percentage(42), Constraint::Fill(1)]).split(area);
         draw_list(frame, cols[0], &visible, selected, view.short);
         draw_detail(frame, cols[1], visible[selected]);
     } else if view.jobs.detail_open() {
@@ -135,13 +138,7 @@ fn draw_notice(frame: &mut Frame, area: Rect, head: &str, rest: &[&str]) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
-fn draw_list(
-    frame: &mut Frame,
-    area: Rect,
-    visible: &[&JobPosting],
-    selected: usize,
-    short: bool,
-) {
+fn draw_list(frame: &mut Frame, area: Rect, visible: &[&JobPosting], selected: usize, short: bool) {
     // Three content lines plus the rule under each row; two when short.
     let item_height: u16 = if short { 3 } else { 4 };
     let visible_items = ((area.height / item_height).max(1)) as usize;
@@ -170,7 +167,12 @@ fn draw_list(
 
 /// Line 1: company, role, age at the right. Line 2: scope, pay. Line 3:
 /// tags, the source at the right.
-fn row_lines(posting: &JobPosting, selected: bool, short: bool, width: usize) -> Vec<Line<'static>> {
+fn row_lines(
+    posting: &JobPosting,
+    selected: bool,
+    short: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
     let gutter = if selected { "▎" } else { " " };
     let gutter_style = Style::default().fg(theme::BORDER_ACTIVE());
     let faint = Style::default().fg(theme::TEXT_FAINT());
@@ -218,7 +220,10 @@ fn row_lines(posting: &JobPosting, selected: bool, short: bool, width: usize) ->
     ]));
 
     if !short {
-        let right = vec![Span::styled(format!("via {} ", posting.source.site()), faint)];
+        let right = vec![Span::styled(
+            format!("via {} ", posting.source.site()),
+            faint,
+        )];
         let right_width: usize = right.iter().map(|span| span.content.width()).sum();
         let tags_budget = width.saturating_sub(1 + right_width + 2);
         let tags = posting
@@ -313,7 +318,10 @@ fn draw_detail(frame: &mut Frame, area: Rect, posting: &JobPosting) {
     ]));
     if !posting.excerpt.trim().is_empty() {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(posting.excerpt.trim().to_string(), body)));
+        lines.push(Line::from(Span::styled(
+            posting.excerpt.trim().to_string(),
+            body,
+        )));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(

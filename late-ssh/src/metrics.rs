@@ -236,11 +236,10 @@ mod inner {
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
-        GildTier, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
-        JobsFetchResult, JobsPressResult, JobsReadResult, OnlineTimeFlushResult, PaperOpenResult,
-        PaperPrintResult, PoolShotOutcome, PotRefusal,
-        RenderReason, RoundRefusal, RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult, VizWireBands,
+        GildTier, JobsFetchResult, JobsPressResult, JobsReadResult, NewsShareReward,
+        NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
+        PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, RunnerDoor,
+        SongQueueReward, SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -1406,7 +1405,10 @@ mod inner {
     }
 
     pub fn record_jobs_read(result: JobsReadResult) {
-        jobs_reads_total().add(1, &[KeyValue::new("result", jobs_read_result_label(result))]);
+        jobs_reads_total().add(
+            1,
+            &[KeyValue::new("result", jobs_read_result_label(result))],
+        );
     }
 
     fn jobs_press_result_label(result: JobsPressResult) -> &'static str {
@@ -1606,11 +1608,10 @@ mod inner {
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
-        GildTier, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
-        JobsFetchResult, JobsPressResult, JobsReadResult, OnlineTimeFlushResult, PaperOpenResult,
-        PaperPrintResult, PoolShotOutcome, PotRefusal,
-        RenderReason, RoundRefusal, RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult, VizWireBands,
+        GildTier, JobsFetchResult, JobsPressResult, JobsReadResult, NewsShareReward,
+        NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
+        PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal, RunnerDoor,
+        SongQueueReward, SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 

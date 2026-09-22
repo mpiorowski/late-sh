@@ -356,3 +356,90 @@ fn an_empty_wall_prints_no_column() {
     }));
     assert!(!lines.iter().any(|line| line == "ON THE WALL"));
 }
+
+#[test]
+fn new_work_speaks_to_the_card_the_reader_has() {
+    use late_core::models::work_profile::WorkStatus;
+
+    use crate::app::jobs::state_test::posting;
+
+    let edition = PaperEdition {
+        edition: NaiveDate::from_ymd_opt(2026, 9, 3).unwrap(),
+        rooms: Vec::new(),
+        sections: Vec::new(),
+    };
+    let lay = |work: &PaperWork| {
+        plain(&lay_out(PaperLayout {
+            announcements: &[],
+            wall: &[],
+            work,
+            edition: &edition,
+            rail_order: &[],
+            member_room_ids: &HashSet::new(),
+            bumped_labels: &[],
+        }))
+    };
+    let byline = "by @graybeard · covers Wed Sep 2 (UTC) · he read it all so you would not have to";
+
+    // No card: the one line that sells the card.
+    let nobody = PaperWork {
+        released: 11,
+        card: None,
+        matches: Vec::new(),
+    };
+    assert_eq!(
+        lay(&nobody),
+        vec![
+            byline,
+            "",
+            "NEW WORK",
+            "11 postings landed yesterday, remote only. Open a work card on page 5 and the paper will pick yours.",
+        ]
+    );
+
+    // An open card with matches: the matches, then the count.
+    let matched = PaperWork {
+        released: 11,
+        card: Some(WorkStatus::Open),
+        matches: vec![
+            posting("Acme", &["rust", "postgres"]),
+            posting("Fastly", &["go"]),
+        ],
+    };
+    assert_eq!(
+        lay(&matched),
+        vec![
+            byline,
+            "",
+            "NEW WORK",
+            "Acme · Backend Engineer · remote · EU · rust, postgres · €80k",
+            "Fastly · Backend Engineer · remote · EU · go · €80k",
+            "    11 postings released yesterday; the rest on page 5, / there keeps yours",
+        ]
+    );
+
+    // A casual card with nothing on its tags still hears the count.
+    let unmatched = PaperWork {
+        released: 1,
+        card: Some(WorkStatus::Casual),
+        matches: Vec::new(),
+    };
+    assert_eq!(
+        lay(&unmatched),
+        vec![
+            byline,
+            "",
+            "NEW WORK",
+            "1 posting landed yesterday, none on your tags; the shelf on page 5 has them all.",
+        ]
+    );
+
+    // Not looking said so; and a day with no release has no section.
+    let not_looking = PaperWork {
+        released: 11,
+        card: Some(WorkStatus::NotLooking),
+        matches: Vec::new(),
+    };
+    assert_eq!(lay(&not_looking), vec![byline]);
+    assert_eq!(lay(&PaperWork::none()), vec![byline]);
+}
