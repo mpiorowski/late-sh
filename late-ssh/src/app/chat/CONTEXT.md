@@ -37,7 +37,7 @@ Included here:
 - Home chat rooms, DMs, public/private topic rooms, synthetic entries, and game-backed room chat.
 - Home/Dashboard chat center, room rail, and the embedded game-chat surfaces (house tables, daily match boards).
 - Message composer, replies, edits, deletes, reactions, ignores, overlays, and autocomplete.
-- Synthetic chat entries: RSS, News, Mentions/Notifications, and Discover. Voice is not a synthetic room slot: the dedicated `#voice` room is a real, permanent, public chat room pinned at the bottom of Core (above Discover). Any voice-enabled chat/game room (including `#voice`) renders an embedded voice strip and exposes `/voice`/`/mute` controls while you are inside it. Showcase/Projects and Work/Profiles still use chat-adjacent services/state, but their UI is hosted on Directory page 5.
+- Synthetic chat entries: RSS, News, Mentions/Notifications, and Discover. Voice is not a synthetic room slot: the dedicated `#voice` room is a real, permanent, public chat room pinned at the bottom of Core (above Discover). Any voice-enabled chat/game room (including `#voice`) renders an embedded voice strip and exposes `/voice`/`/mute` controls while you are inside it. Showcase/Projects and Work/Profiles keep their feed services and state here, but their UI and their editor (`app/directory/editor`) live on Profiles page 5.
 - Chat service refresh/tail/event contracts, DB model constraints, keybindings, tests, and gotchas.
 
 Global SSH, audio, games, profile, rooms/blackjack, observability, and repo-wide test policy stay in the root context.
@@ -326,7 +326,7 @@ The main composer is a `ratatui_textarea::TextArea<'static>`.
 
 The rows carry `OverlayInk` (`common/overlay.rs`), never colours. The overlay is built in `drain_events`, which runs during the session tick, and `theme`'s palette lives in a thread local that `App::render` sets afterwards, on whatever worker thread the session woke on: styling the spans here painted the member list in whichever session last rendered on that thread. `draw_overlay` resolves ink inside the draw. `app/paper` had the same bug and the same cure.
 
-Directory page 5 uses the Work/Profiles and Showcase/Projects substates from chat. Its local `directory::state` search mode is independent of Home room search: `s` opens a case-insensitive substring search on Profiles or Projects, arrows move the filtered selection, `Enter` selects the underlying Work/Showcase item, and `Esc` exits search.
+Profiles page 5 reads the Work and Showcase feed states from chat and writes through their `save`/`delete_*` calls; the forms themselves are the profile editor modal in `app/directory/editor`. The page's search (`s`) is independent of Home room search.
 
 Starting compose in a room:
 - Clears message selection.
@@ -878,9 +878,8 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 
 - Backed by persisted `showcases`.
 - It is a separate feed and does not mirror posts into chat messages.
-- Composer fields: title, URL, tags, description.
-- `i` creates; `e` edits selected owned/admin entry; `d` deletes owned/admin entry; Enter copies selected URL when not composing.
-- Validation requires title, `http://` or `https://` URL, and description.
+- Edited in the profile editor's projects page (`app/directory/editor`); this state only lists, saves (`save(params, editing)`), and deletes (`delete_project(id)`).
+- Validation (in the editor) requires title, `http://` or `https://` URL, and description.
 - Title max is 120 chars; description max is 800 chars.
 - Tags normalize lowercase, split on comma/whitespace, strip leading `#`, allow ASCII alnum plus `-_.`, cap each tag at 24 chars and total tags at 8.
 - Snapshot is global and lists recent showcases; unread count is per user through `showcase_feed_reads`.
@@ -890,12 +889,11 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - Backed by persisted `work_profiles` and `work_feed_reads`.
 - It is a separate feed and does not mirror posts into chat messages.
 - Each user has at most one work profile; creating again updates the existing profile and preserves its public random slug (`w_` plus 12 lowercase alphanumeric chars).
-- Composer fields: headline, status, type, location, contact, links, skills, summary.
-- Status must be `open`, `casual`, or `not-looking`; aliases normalize in `work/state.rs`.
+- Edited in the profile editor's card page (`app/directory/editor`); this state only lists, saves (`save(params, editing)`), and deletes (`delete_card(id)`).
+- `status` is `WorkStatus` (open, casual, not-looking) and `work_type` is `WorkType` (full-time, contract, freelance, part-time, any), both text columns parsed at the row boundary in `late_core::models::work_profile`.
 - Links require `http://` or `https://`, cap at 6, and are stored for later web rendering.
-- Skills normalize lowercase, split on comma/whitespace, strip leading `#`, allow ASCII alnum plus `-_.`, cap each skill at 24 chars and total skills at 12.
+- Skills are canonical tags from the vocabulary (`late_core::vocab`), picked in the tag picker, twelve at most; `skills_tags` holds the same list, the array the job matcher joins on.
 - Public profiles show bio, late.fetch fields, and showcases when the author has data for them. The composer does not expose include toggles. `WorkFeedItem` carries the owner `Profile` projection so the Directory detail panel can preview the same public-page sections without per-row DB calls.
-- `i` creates or edits the caller's own profile; `e` edits selected owned/admin entry; `d` deletes owned/admin entry; Enter or `c` copies the selected public work profile link when not composing.
 - Snapshot is global and lists recent work profiles by latest update; unread count is per user through `work_feed_reads`.
 
 ### Cyberspace

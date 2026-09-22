@@ -179,7 +179,7 @@ impl ProfileState {
     }
 }
 
-fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
+pub(crate) fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
     ProfileParams {
         username: profile.username.clone(),
         bio: profile.bio.clone(),

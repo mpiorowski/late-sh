@@ -70,6 +70,39 @@ pub struct Ability {
     pub duration: u8,
 }
 
+impl Ability {
+    /// The school this ability actually lands in, or None where it lands in
+    /// none. `damage_type` is a plain field on every row of the roster, so a
+    /// ward or a heal carries one too, but only these four effects reach
+    /// `svc::damage_target` - the rest never consult it. Showing an inert
+    /// school would read as a tactical fact and be a lie, so the two are
+    /// separated here rather than at each call site.
+    pub fn school(&self) -> Option<DamageType> {
+        match self.effect {
+            AbilityEffect::Strike
+            | AbilityEffect::DamageOverTime
+            | AbilityEffect::Stun
+            | AbilityEffect::Finisher => Some(self.damage_type),
+            AbilityEffect::Heal
+            | AbilityEffect::HealOverTime
+            | AbilityEffect::Empower
+            | AbilityEffect::Ward => None,
+        }
+    }
+
+    /// What the ability does, as every ability list says it: the school in
+    /// front of the effect ("fire damage over time"), or the bare effect
+    /// where no school applies ("shield"). Mobs halve one school and take
+    /// +50% from another, and the battle panel already names a foe's, so the
+    /// rows that choose a spell have to carry the other half of that matchup.
+    pub fn effect_label(&self) -> String {
+        match self.school() {
+            Some(school) => format!("{} {}", school.label(), self.effect.label()),
+            None => self.effect.label().to_string(),
+        }
+    }
+}
+
 /// The full ability roster. Ordered by class, then unlock level.
 pub const ABILITIES: &[Ability] = &[
     // ---- Warrior (Rage) -------------------------------------------------

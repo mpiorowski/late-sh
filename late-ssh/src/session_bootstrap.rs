@@ -424,6 +424,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         translation_service: state.translation_service.clone(),
         summary_service: state.summary_service.clone(),
         paper_service: state.paper_service.clone(),
+        jobs_service: state.jobs_service.clone(),
         notification_service: state.notification_service.clone(),
         article_service: state.article_service.clone(),
         feed_service: state.feed_service.clone(),

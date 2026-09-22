@@ -86,6 +86,47 @@ pub enum PaperOpenResult {
     Failed,
 }
 
+/// How one source's fetch in the nightly job press (`app/jobs`) went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobsFetchResult {
+    Fetched,
+    Failed,
+    /// One item of a source (an HN comment, a Jobicy tag) that failed and
+    /// was skipped; the rest of the source still lands.
+    ItemSkipped,
+}
+
+/// How one posting's model read ended. Every variant but `Failed` settles
+/// the row; `Failed` keeps it pending for the next night.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobsReadResult {
+    Queued,
+    Active,
+    Dropped,
+    Dead,
+    Failed,
+}
+
+/// How a replica's check of the day's press run ended. `Ran` is the one
+/// that spent the calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobsPressResult {
+    Ran,
+    /// Another replica holds or held the day's claim; nothing spent.
+    Lost,
+    Failed,
+}
+
+/// How a person's own write on the Jobs shelf ended: a posting saved, one
+/// taken down, refused at the per-person cap, or failed in the database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobsPostResult {
+    Posted,
+    Retracted,
+    AtCap,
+    Failed,
+}
+
 /// How a hang attempt on the Artboard gallery ended. `Hung` is the row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GalleryHangResult {
@@ -208,10 +249,11 @@ mod inner {
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
-        GildTier, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
-        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
-        RenderReason, RoundRefusal, RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult, VizWireBands,
+        GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
+        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult,
+        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal,
+        RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult, TranslationResult,
+        VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -1326,6 +1368,129 @@ mod inner {
         );
     }
 
+    fn jobs_fetch_result_label(result: JobsFetchResult) -> &'static str {
+        match result {
+            JobsFetchResult::Fetched => "fetched",
+            JobsFetchResult::Failed => "failed",
+            JobsFetchResult::ItemSkipped => "item_skipped",
+        }
+    }
+
+    fn jobs_fetches_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_jobs_fetches_total")
+                .with_description("Job feed source fetches by source and result")
+                .build()
+        })
+    }
+
+    pub fn record_jobs_fetch(
+        source: late_core::models::job_posting::JobSource,
+        result: JobsFetchResult,
+    ) {
+        jobs_fetches_total().add(
+            1,
+            &[
+                KeyValue::new("source", source.as_str()),
+                KeyValue::new("result", jobs_fetch_result_label(result)),
+            ],
+        );
+    }
+
+    fn jobs_read_result_label(result: JobsReadResult) -> &'static str {
+        match result {
+            JobsReadResult::Queued => "queued",
+            JobsReadResult::Active => "active",
+            JobsReadResult::Dropped => "dropped",
+            JobsReadResult::Dead => "dead",
+            JobsReadResult::Failed => "failed",
+        }
+    }
+
+    fn jobs_reads_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_jobs_reads_total")
+                .with_description("Job postings read by the model, by how the row settled")
+                .build()
+        })
+    }
+
+    pub fn record_jobs_read(result: JobsReadResult) {
+        jobs_reads_total().add(
+            1,
+            &[KeyValue::new("result", jobs_read_result_label(result))],
+        );
+    }
+
+    fn jobs_press_result_label(result: JobsPressResult) -> &'static str {
+        match result {
+            JobsPressResult::Ran => "ran",
+            JobsPressResult::Lost => "lost",
+            JobsPressResult::Failed => "failed",
+        }
+    }
+
+    fn jobs_press_runs_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_jobs_press_runs_total")
+                .with_description("Nightly job press runs by result")
+                .build()
+        })
+    }
+
+    pub fn record_jobs_press(result: JobsPressResult) {
+        jobs_press_runs_total().add(
+            1,
+            &[KeyValue::new("result", jobs_press_result_label(result))],
+        );
+    }
+
+    fn jobs_released_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_jobs_released_total")
+                .with_description("HN job postings released onto the shelf by the drip")
+                .build()
+        })
+    }
+
+    pub fn record_jobs_released(count: usize) {
+        jobs_released_total().add(count as u64, &[]);
+    }
+
+    fn jobs_post_result_label(result: JobsPostResult) -> &'static str {
+        match result {
+            JobsPostResult::Posted => "posted",
+            JobsPostResult::Retracted => "retracted",
+            JobsPostResult::AtCap => "at_cap",
+            JobsPostResult::Failed => "failed",
+        }
+    }
+
+    fn jobs_posts_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_jobs_posts_total")
+                .with_description("Job postings written or taken down on the shelf by result")
+                .build()
+        })
+    }
+
+    pub fn record_jobs_post(result: JobsPostResult) {
+        jobs_posts_total().add(
+            1,
+            &[KeyValue::new("result", jobs_post_result_label(result))],
+        );
+    }
+
     fn gallery_hang_result_label(result: GalleryHangResult) -> &'static str {
         match result {
             GalleryHangResult::Hung => "hung",
@@ -1484,10 +1649,11 @@ mod inner {
     use super::{
         ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
-        GildTier, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
-        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
-        RenderReason, RoundRefusal, RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult, VizWireBands,
+        GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
+        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult,
+        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal,
+        RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult, TranslationResult,
+        VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
@@ -1535,6 +1701,15 @@ mod inner {
     pub fn record_chat_summary(_result: SummaryResult) {}
     pub fn record_paper_print(_result: PaperPrintResult) {}
     pub fn record_paper_open(_result: PaperOpenResult) {}
+    pub fn record_jobs_fetch(
+        _source: late_core::models::job_posting::JobSource,
+        _result: JobsFetchResult,
+    ) {
+    }
+    pub fn record_jobs_read(_result: JobsReadResult) {}
+    pub fn record_jobs_press(_result: JobsPressResult) {}
+    pub fn record_jobs_released(_count: usize) {}
+    pub fn record_jobs_post(_result: JobsPostResult) {}
     pub fn record_gallery_hang(_result: GalleryHangResult) {}
     pub fn record_gallery_applause(_result: GalleryApplauseResult) {}
     pub fn record_gallery_take_down(_result: GalleryTakeDownResult) {}

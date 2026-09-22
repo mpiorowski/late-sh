@@ -1,7 +1,7 @@
 use std::cell::Cell;
 
 use chrono::{DateTime, Utc};
-use late_core::models::profile::{Profile, ProfileParams, normalize_profile_tags};
+use late_core::models::profile::{Profile, ProfileParams};
 use late_core::models::rss_feed::RssFeed;
 use late_core::models::user::{
     RightSidebarComponentSetting, RightSidebarMode, RoomListMode,
@@ -149,7 +149,6 @@ pub(crate) enum SystemField {
     Ide,
     Terminal,
     Os,
-    Langs,
 }
 
 impl SystemField {
@@ -158,7 +157,6 @@ impl SystemField {
             Row::Ide => Some(Self::Ide),
             Row::Terminal => Some(Self::Terminal),
             Row::Os => Some(Self::Os),
-            Row::Langs => Some(Self::Langs),
             _ => None,
         }
     }
@@ -168,7 +166,6 @@ impl SystemField {
             Self::Ide => profile.ide.clone(),
             Self::Terminal => profile.terminal.clone(),
             Self::Os => profile.os.clone(),
-            Self::Langs => (!profile.langs.is_empty()).then(|| profile.langs.join(", ")),
         }
     }
 
@@ -177,9 +174,6 @@ impl SystemField {
             Self::Ide => profile.ide = normalize_optional_text(&text),
             Self::Terminal => profile.terminal = normalize_optional_text(&text),
             Self::Os => profile.os = normalize_optional_text(&text),
-            Self::Langs => {
-                profile.langs = normalize_profile_tags([text.as_str()]);
-            }
         }
     }
 }
@@ -1793,6 +1787,16 @@ impl SettingsModalState {
 
     pub(crate) fn close_picker(&mut self) {
         self.picker = PickerState::default();
+    }
+
+    /// The tag picker closed on the langs row: canonical language tags,
+    /// saved at once like every other row here.
+    pub(crate) fn set_langs(&mut self, langs: Vec<String>) {
+        if self.draft.langs == langs {
+            return;
+        }
+        self.draft.langs = langs;
+        self.save();
     }
 
     pub(crate) fn filtered_countries(&self) -> Vec<&'static CountryOption> {

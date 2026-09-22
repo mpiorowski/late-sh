@@ -7,11 +7,14 @@ use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 use late_core::models::app_flag::AppFlag;
+use late_core::models::job_posting::JobPosting;
 use late_core::models::paper::{PaperEdition, PaperRoomPage, PaperSectionKind, PaperStatus};
+use late_core::models::work_profile::WorkStatus;
 use tokio::sync::{broadcast, oneshot};
 use uuid::Uuid;
 
 use super::svc::{PaperEvent, PaperService, PaperTrigger};
+use crate::app::jobs::state::{PAPER_MATCHES, match_tail, posting_count_label, wants_matches};
 
 /// Rooms the reader is not in that make the paper: the top few by
 /// activity, bumped rooms first. A cap, so the paper stays a paper and
@@ -171,8 +174,32 @@ pub struct PaperAnnouncement {
     pub body: String,
 }
 
+/// NEW WORK as read for one reader: what went active on the covered day,
+/// and this reader's card and matches. The one per-reader selection in
+/// the paper; the rows it selects from were released once for everyone.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaperWork {
+    /// Postings released on the covered day, on the shelf now.
+    pub released: usize,
+    /// The reader's card status, or none without a card.
+    pub card: Option<WorkStatus>,
+    /// The reader's best matches among them, up to `PAPER_MATCHES`.
+    pub matches: Vec<JobPosting>,
+}
+
+impl PaperWork {
+    /// A paper with no NEW WORK: the press is off, or a preview.
+    pub fn none() -> Self {
+        Self {
+            released: 0,
+            card: None,
+            matches: Vec::new(),
+        }
+    }
+}
+
 /// Everything the layout needs from the session: the edition's rows, the
-/// announcements read at open time, and how this
+/// pages read at open time (announcements, new work), and how this
 /// reader's rail is ordered (favorites first, as the rail draws them),
 /// which rooms they are in, and which rooms carry a shop bump.
 pub(crate) struct PaperLayout<'a> {
@@ -180,6 +207,8 @@ pub(crate) struct PaperLayout<'a> {
     /// Yesterday's announcements, oldest first; empty on a day the
     /// operator said nothing.
     pub announcements: &'a [PaperAnnouncement],
+    /// Yesterday's job releases as they concern this reader.
+    pub work: &'a PaperWork,
     /// Member rooms in rail order; rooms the edition has no page for are
     /// skipped, rooms missing from the rail follow by activity.
     pub rail_order: &'a [Uuid],
@@ -286,6 +315,7 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<PaperLine> {
     let PaperLayout {
         edition,
         announcements,
+        work,
         rail_order,
         member_room_ids,
         bumped_labels,
@@ -314,6 +344,54 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<PaperLine> {
                 ),
             ]);
             lines.extend(column_lines(&announcement.body));
+        }
+    }
+
+    // NEW WORK: yesterday's releases, as they concern this reader. No
+    // card gets the one line that is the whole incentive to fill one; a
+    // not-looking card said so and gets nothing; an open or casual card
+    // gets its matches, or a pointer at the shelf when none carried its
+    // tags. A day with no release has no section.
+    if work.released > 0 {
+        let count = posting_count_label(work.released);
+        match work.card {
+            None => {
+                lines.push(PaperLine::new());
+                lines.push(heading("NEW WORK"));
+                lines.push(vec![PaperSpan::new(
+                    format!(
+                        "{count} landed yesterday, remote only. Open a work card on page 5 and the paper will pick yours."
+                    ),
+                    PaperInk::Body,
+                )]);
+            }
+            Some(status) if !wants_matches(status) => {}
+            Some(_) => {
+                lines.push(PaperLine::new());
+                lines.push(heading("NEW WORK"));
+                if work.matches.is_empty() {
+                    lines.push(vec![PaperSpan::new(
+                        format!(
+                            "{count} landed yesterday, none on your tags; the shelf on page 5 has them all."
+                        ),
+                        PaperInk::Body,
+                    )]);
+                } else {
+                    for posting in &work.matches {
+                        lines.push(vec![
+                            PaperSpan::new(posting.company.clone(), PaperInk::Title),
+                            PaperSpan::new(
+                                format!(" · {}", match_tail(posting, PAPER_MATCHES)),
+                                PaperInk::Meta,
+                            ),
+                        ]);
+                    }
+                    lines.push(vec![PaperSpan::new(
+                        format!("    {count} released yesterday; the rest on page 5, / there keeps yours"),
+                        PaperInk::Faint,
+                    )]);
+                }
+            }
         }
     }
 

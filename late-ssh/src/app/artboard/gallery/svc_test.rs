@@ -85,6 +85,7 @@ async fn the_refresh_publishes_todays_piece_and_the_claim_shows_it_once() {
         paper_enabled: true,
         paper_outside_enabled: false,
         artboard_gallery_enabled: false,
+        jobs_enabled: false,
     }));
     let off = GalleryService::new(test_db.db.clone(), flags_rx);
     assert_eq!(

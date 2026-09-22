@@ -731,11 +731,14 @@ fn is_service_room(id: u32) -> bool {
         })
 }
 
-/// Pull off-screen POI arrows in from the widget border so they hug the
-/// explored cluster instead of floating at the panel's far edge, where nothing
-/// ties them to the map they annotate. Arrows collapsing onto the same cell
-/// keep boss priority. Atlas only: the live field draws no POI arrows, so a
-/// glyph next to `@` can never masquerade as a movement affordance.
+/// Pull direction arrows in from the widget border so they hug the explored
+/// cluster instead of floating at the panel's far edge, where nothing ties
+/// them to the map they annotate. An arrow already inside the cluster's box
+/// (a fogged tracked room among walked ones) stays on its target's own cell:
+/// anywhere else would put it beyond the room it points at. Arrows collapsing
+/// onto the same cell keep boss priority. Atlas only: the live field draws no
+/// POI arrows, so a glyph next to `@` can never masquerade as a movement
+/// affordance.
 fn hug_poi_arrows(
     arrows: Vec<super::worldmap::MapArrow>,
     canvas: &[Vec<super::worldmap::Tile>],
@@ -1894,8 +1897,9 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     // The green arrow is the one you chose, and it works exactly like the
     // amber ones: a straight-line direction, drawn only within `PAN_LIMIT`
     // (same land, where the coordinate delta is a real spatial relationship).
-    // Crucially this needs no `visited` at all, so it points at a boss you
-    // have never found - which is the whole job of tracking a quest. Drawn
+    // Working out the direction needs no `visited`, so it points at a boss
+    // you have never found, which is the whole job of tracking a quest.
+    // `visited` only skips on-screen rooms the canvas already draws. Drawn
     // after (over) the amber arrows: a border cell can only say one thing,
     // and where-you're-going beats where-a-boss-is.
     //
@@ -1920,7 +1924,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         };
         if let Some(aim) = aim {
             let (dest_arrows, _) =
-                super::worldmap::quest_arrows(coords, center, cols, height, &[aim]);
+                super::worldmap::quest_arrows(coords, center, cols, height, &[aim], &view.visited);
             for arrow in hug_poi_arrows(dest_arrows, &canvas) {
                 if let Some(cell) = cells.get_mut(arrow.row).and_then(|r| r.get_mut(arrow.col)) {
                     *cell = (arrow.glyph.to_string(), quest_style);
@@ -1943,7 +1947,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     let quests_beyond = if quest_targets.is_empty() {
         0
     } else {
-        super::worldmap::quest_arrows(coords, center, cols, height, &quest_targets).1
+        super::worldmap::quest_arrows(coords, center, cols, height, &quest_targets, &view.visited).1
     };
 
     // Land labels: name each explored region once, near the centroid of its

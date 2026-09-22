@@ -1,7 +1,6 @@
-use super::{
-    dash_or, parse_contacts, render_markdown, split_paragraphs, status_id, status_label,
-    status_priority, summary_preview,
-};
+use late_core::models::work_profile::WorkStatus;
+
+use super::{dash_or, parse_contacts, render_markdown, split_paragraphs, status_label};
 
 #[test]
 fn paragraphs_drop_empty_and_trim() {
@@ -10,10 +9,10 @@ fn paragraphs_drop_empty_and_trim() {
 }
 
 #[test]
-fn status_helpers_map_known_values() {
-    assert_eq!(status_id("open"), "open");
-    assert_eq!(status_id("nope"), "unknown");
-    assert_eq!(status_label("not-looking"), "not looking");
+fn status_label_spells_out_every_status() {
+    assert_eq!(status_label(WorkStatus::Open), "open to work");
+    assert_eq!(status_label(WorkStatus::Casual), "casually listening");
+    assert_eq!(status_label(WorkStatus::NotLooking), "not looking");
 }
 
 #[test]
@@ -21,23 +20,6 @@ fn dash_or_handles_blank() {
     assert_eq!(dash_or(None), "—");
     assert_eq!(dash_or(Some("   ")), "—");
     assert_eq!(dash_or(Some(" rust ")), "rust");
-}
-
-#[test]
-fn status_priority_orders_open_first() {
-    let mut statuses = vec!["not-looking", "open", "casual", "weird"];
-    statuses.sort_by_key(|s| status_priority(s));
-    assert_eq!(statuses, vec!["open", "casual", "not-looking", "weird"]);
-}
-
-#[test]
-fn summary_preview_collapses_whitespace_and_truncates_on_word() {
-    assert_eq!(
-        summary_preview("hello\n\n  there  friend", 80),
-        "hello there friend"
-    );
-    let preview = summary_preview("alpha beta gamma delta epsilon zeta", 18);
-    assert_eq!(preview, "alpha beta gamma…");
 }
 
 #[test]

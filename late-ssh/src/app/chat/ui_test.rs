@@ -1072,7 +1072,6 @@ fn chat_view<'a>(
             mine_only: false,
         },
         showcase_state: None,
-        showcase_composing: false,
         work_selected: false,
         work_unread_count: 0,
         work_view: crate::app::chat::work::ui::WorkListView {
@@ -1085,7 +1084,6 @@ fn chat_view<'a>(
             mine_only: false,
         },
         work_state: None,
-        work_composing: false,
         keep_composer_focused: false,
         composer_rect_slot: None,
         composer_viewport_top_slot: None,
