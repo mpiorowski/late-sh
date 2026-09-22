@@ -16,11 +16,11 @@ This file is the primary working context for the entire late.sh project.
 - If code and this file diverge, prefer updating this file quickly so future work stays reliable.
 - Temporary or branch-specific behavior should be documented here with clear cleanup notes.
 - **KEEP THIS THING THIN.** This file (and every local `CONTEXT.md`) is loaded into LLM context on every task — it is not a changelog. There is no `Last updated` line and no dated entry; git log says when something changed. Describe current-state behavior, not the history of how it got that way: no "now", "no longer", "used to", "replaces the old", "since <date>", "migration N added" in prose. If a sentence only makes sense to someone who knew the previous version, delete it. The only sanctioned running log is the Incident log (§10.5) — everything else should read as if written fresh today.
-- **Ideas do not live here.** Roadmap items, "future work", parked designs, research notes, and "we could" belong in `PLAN.md` (root, Backlog section) or a domain design doc (`GAME.md`, `DIGEST.md`, `SCALE.md`). A context file records what exists and how it behaves; an open gap is recorded as a fact ("X does not do Y"), and the proposal to close it goes to `PLAN.md`.
+- **Ideas do not live here.** Roadmap items, "future work", parked designs, research notes, and "we could" belong in a design doc (`GAME.md`, `DIGEST.md`, `SCALE.md`, `JOBS.md`). A context file records what exists and how it behaves; an open gap is recorded as a fact ("X does not do Y"), and the proposal to close it goes to a design doc.
 
 ### Quick update checklist
 - No `Last updated` line and no dated entries anywhere in a context file: a doc says what is true now, git log says when it changed
-- Review `Current Work`; move any idea that crept in to `PLAN.md`
+- Review `Current Work`; move any idea that crept in to a design doc
 - Validate `Critical Invariants`
 - Update telemetry references if operation/event names changed
 - Remove obsolete notes
@@ -122,7 +122,7 @@ Routing rules for future LLM agents:
 - Update a local context file when behavior changes inside that domain.
 - Update this root file when a contract is global, crosses crate/domain boundaries, changes keybindings/screens, or adds/removes a local `CONTEXT.md`.
 - If code and context disagree, trust the code, then patch the relevant context before handing off.
-- Ideas and roadmap go to `PLAN.md`, never to a context file (see §0).
+- Ideas and roadmap go to a design doc, never to a context file (see §0).
 - No local context exists for `late-core`, profile, pet companion, the Profiles page, infra, or AI modules; use this root file plus the code until one is added.
 
 ---
@@ -469,7 +469,7 @@ Detailed track lists and source URLs live in [`MUSIC.md`](MUSIC.md).
 - Lofi: 50 tracks, mixed `CC0` and `CC-BY 4.0`
 - Ambient: 20 curated `CC-BY 4.0` tracks from Amarent, Ketsa, and The Imperfectionist
 - Classical: 40 curated public-domain tracks from Musopen / Internet Archive
-- Jazz: the thinnest genre (candidate sources and the removal question sit in `PLAN.md`, Backlog)
+- Jazz: the thinnest genre
 
 Playlist generation uses curated manifests in `scripts/fetch_cc_music.py`, preserves `duration` in `annotate:` metadata, and can intentionally limit a playlist to the curated set even if older files still exist on disk.
 
@@ -778,20 +778,19 @@ overwrite its own layout on every reconnect.
 ## 6. Current Work [VOLATILE]
 
 - **deadchannel** (`late-ssh/src/app/deadchannel/`): the character layer of late.sh. First contact, the haunting ladder that onboards a person without a tutorial, is built and staff-scoped behind the unlit `haunt_live` fuse; phase 2, the runner, is at build-order step 1 (row, random starter look, portrait in the #deadchannel gutter). Design in `GAME.md` and `DIGEST.md` beside the code; status and contracts in that directory's `CONTEXT.md`.
-- **Spectate and bet, and the share loop** (`PLAN.md` §A-§C): two growth bets at proposal stage, nothing built.
-- Everything else that might be built is in `PLAN.md` (Backlog). Domain-level in-progress work is described in the local `CONTEXT.md` it belongs to (see the Context Directory in §0).
+- Domain-level in-progress work is described in the local `CONTEXT.md` it belongs to (see the Context Directory in §0).
 
 ---
 
 ## 7. Known Risks and Multi-replica Readiness [VOLATILE]
 
-Known gaps and risks (facts; the proposals to close them live in `PLAN.md`):
+Known gaps and risks (facts):
 - Online/listener metrics are app-level presence (`active_users`, includes @bot and @graybeard), not true Icecast listener analytics
 - Time remaining is approximate (up to 5s polling delay on track change)
 - No external metrics or alerting system
 - **Single-replica assumption:** Several older structures are purely in-memory and not shared across processes (see the table below). New work follows the multi-replica rule in §0.
 - **SSH pod drain window:** `infra/service-ssh.tf` sets `termination_grace_period_seconds = 21600` (6h) so rolling updates can stop new connections while allowing existing SSH sessions to drain for a long window before Kubernetes sends SIGKILL.
-- **SSH ingress reload risk:** `ssh late.sh` reaches `late-ssh` through RKE2 ingress-nginx TCP passthrough (`infra/ssh-tcp.tf`, port `22 -> service-ssh-sv:2222::PROXY`). Long-lived SSH sessions can be dropped after any ingress-nginx config reload because old workers are terminated after `worker_shutdown_timeout` (240s; cert-manager certificate renewals are a recurring reload trigger). The fix direction (SSH off ingress-nginx) is in `PLAN.md`, Backlog, Infra.
+- **SSH ingress reload risk:** `ssh late.sh` reaches `late-ssh` through RKE2 ingress-nginx TCP passthrough (`infra/ssh-tcp.tf`, port `22 -> service-ssh-sv:2222::PROXY`). Long-lived SSH sessions can be dropped after any ingress-nginx config reload because old workers are terminated after `worker_shutdown_timeout` (240s; cert-manager certificate renewals are a recurring reload trigger). The fix direction is SSH off ingress-nginx: a dedicated TCP LoadBalancer, NodePort, or host proxy for port 22.
 - **IPv6 ingress status:** RKE2/CNI `hostPort` exposes the ingress-nginx path for IPv4 only; do not switch the main ingress controller to `hostNetwork` without a rollout plan. Public IPv6 is handled by the separate `kube-system/ipv6-proxy` HAProxy DaemonSet in `infra/ipv6-proxy.tf`, binding `2a01:4f9:c013:2ae1::1` on `80`, `443`, and `22`; HTTP(S) forwards to localhost ingress hostPorts, while SSH forwards to `service-ssh-sv:2222` with PROXY protocol. `Network is unreachable` during `ssh -6 late.sh` means the client lacks IPv6 egress.
 - **Stateful VT parsing in `late-ssh/src/app/input.rs`:** SSH input runs through a persistent `vte::Parser`, so CSI/SS3 sequences and bracketed paste survive split russh reads instead of assuming the whole escape sequence lands in one chunk. Two pragmatic layers sit on top: `is_likely_paste` heuristically treats large printable unmarked chunks as paste for terminals without bracketed paste, and `sanitize_paste_markers`/`strip_paste_markers` scrub stored residue defensively when copying URLs from state polluted by older builds. Standalone `Esc` is resolved on a short tick delay so split escape sequences are not mistaken for cancel keys.
 
