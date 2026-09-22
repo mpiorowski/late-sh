@@ -2,7 +2,6 @@
 
 ## Metadata
 - Domain: @graybeard's daily paper: one edition per UTC day, printed once per public room and read by every login.
-- Last updated: 2026-09-11 (ANNOUNCEMENTS: the login `#announcements` modal is gone (`app/announcements.rs` deleted, nothing on `App`); the paper prints every `#announcements` post from the covered day verbatim at the top, read at open time with no claim and no press (`ChatMessage::list_public_room_between_with_author`, newest `PAPER_ANNOUNCEMENTS_LIMIT` = 50), `#announcements` is excluded from the room columns in `list_candidates`, and a day with an announcement and no column still counts as a paper: `/paper` shows it at once, the login pop waits for the sweep (`PaperEdition::is_swept`). A post lands in the next day's edition, never the same day's. `PaperOutcome::Ready` carries a `PaperIssue` (edition, announcements, wall). Earlier, 2026-09-06: ON THE WALL is one rule now: up to `PAPER_WALL_PIECES` = 3 of yesterday's pieces, most applauded first, no applause floor and no line budget. Earlier, 2026-09-05: the modal's lines carry `PaperInk` and `ui.rs` picks the colours in the draw, so the paper stops printing in whichever session last rendered on this thread; ON THE WALL: yesterday's most applauded Artboard gallery pieces, up to `PAPER_WALL_PIECES` = 3, read at open time with no claim (`ArtboardPiece::most_applauded_hung_on`), printed in their own colours under the Outside page; `PaperOutcome::Ready` carries the `Vec<PaperWall>`.)
 - Status: Active
 
 ## What it is
