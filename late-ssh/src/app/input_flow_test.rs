@@ -563,7 +563,10 @@ async fn profiles_page_keys_drive_the_merged_feed() {
     // the real parser, so this pins the list keys end to end. Esc twice
     // returns to the list and closes the editor.
     app.handle_input(b"a");
-    assert!(app.directory_editor.editing(), "`a` should open a new project form");
+    assert!(
+        app.directory_editor.editing(),
+        "`a` should open a new project form"
+    );
     app.handle_input(b"\x1b");
     wait_for_esc_effect(
         &mut app,
@@ -605,6 +608,34 @@ async fn profiles_page_keys_drive_the_merged_feed() {
         "editor closed",
     )
     .await;
+
+    // A touched card asks before closing. Only `y` discards: Enter, the key
+    // a hand lands on by reflex, keeps the question up.
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, " Your profile ").await;
+    app.handle_input(b"\rx");
+    assert!(app.directory_editor.dirty(), "typed into the headline");
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.directory_editor.editing(),
+        "stop typing the headline",
+    )
+    .await;
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| app.directory_editor.confirm_discard(),
+        "asked to discard",
+    )
+    .await;
+    app.handle_input(b"\r");
+    assert!(
+        app.directory_editor.confirm_discard() && app.directory_editor.is_open(),
+        "enter must not discard"
+    );
+    app.handle_input(b"y");
+    assert!(!app.directory_editor.is_open(), "y discards and closes");
 
     // `s` opens feed search, Esc dismisses it.
     app.handle_input(b"s");

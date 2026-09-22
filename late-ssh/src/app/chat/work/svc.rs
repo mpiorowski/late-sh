@@ -416,13 +416,16 @@ fn display_author(profile: Option<&Profile>, user_id: Uuid) -> String {
 pub fn parse_words(input: &str, limit: usize) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
+    // A leading `#` is a hashtag and goes; `+` and a trailing `#` are part
+    // of a language's name (c++, c#), which the tag vocabulary spells the
+    // same way.
     for raw in input.split(|c: char| c == ',' || c.is_whitespace()) {
         let tag: String = raw
             .trim()
-            .trim_matches('#')
+            .trim_start_matches('#')
             .to_ascii_lowercase()
             .chars()
-            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | '_' | '.' | '+' | '#'))
             .collect();
         if tag.is_empty() || tag.len() > 24 {
             continue;

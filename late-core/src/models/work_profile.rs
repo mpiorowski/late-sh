@@ -119,15 +119,18 @@ impl WorkType {
         }
     }
 
-    /// A type the database wrote; see [`WorkStatus::from_db`].
+    /// A type the database wrote. Unlike [`WorkStatus::from_db`] this is
+    /// total: `late-web` never runs migrations, so a web pod can decode
+    /// rows before `late-ssh` has applied migration 192, while the column
+    /// still holds the free text the old composer wrote. That reads as
+    /// `Any`, the same value the migration folds it onto.
     pub fn from_db(value: &str) -> Self {
         match value {
             "full-time" => Self::FullTime,
             "contract" => Self::Contract,
             "freelance" => Self::Freelance,
             "part-time" => Self::PartTime,
-            "any" => Self::Any,
-            other => panic!("unknown work profile type in the database: {other}"),
+            _ => Self::Any,
         }
     }
 
@@ -233,7 +236,8 @@ impl WorkProfile {
                  ORDER BY CASE status
                      WHEN 'open' THEN 0
                      WHEN 'casual' THEN 1
-                     ELSE 2
+                     WHEN 'not-looking' THEN 2
+                     ELSE 3
                  END, updated DESC, created DESC, id DESC
                  LIMIT $1",
                 &[&limit],

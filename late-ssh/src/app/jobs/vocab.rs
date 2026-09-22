@@ -85,7 +85,7 @@ pub(crate) const VOCAB: &[(&str, &[&str])] = &[
     ("clickhouse", &["clickhouse"]),
     ("graphql", &["graphql", "gql"]),
     ("grpc", &["grpc", "protobuf"]),
-    ("rest", &["rest", "restful", "api", "apis"]),
+    ("rest", &["rest", "restful"]),
     // infra
     (
         "linux",
@@ -122,7 +122,7 @@ pub(crate) const VOCAB: &[(&str, &[&str])] = &[
     ("embedded", &["embedded", "firmware", "rtos", "arduino"]),
     // practice
     ("backend", &["backend", "back-end", "server-side"]),
-    ("frontend", &["frontend", "front-end", "web"]),
+    ("frontend", &["frontend", "front-end"]),
     ("fullstack", &["fullstack", "full-stack"]),
     ("mobile", &["mobile"]),
     ("devops", &["devops", "platform"]),

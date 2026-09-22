@@ -209,7 +209,19 @@ impl Field {
             Self::Skills => 2,
             Self::Summary | Self::Description => 4,
             Self::Bio => 5,
-            _ => 1,
+            Self::Headline
+            | Self::Status
+            | Self::Type
+            | Self::Location
+            | Self::Contact
+            | Self::Links
+            | Self::Ide
+            | Self::Terminal
+            | Self::Os
+            | Self::Langs
+            | Self::Title
+            | Self::Url
+            | Self::Tags => 1,
         }
     }
 }
@@ -298,6 +310,8 @@ pub(crate) struct ProjectValues {
 /// One project being written: a new one, or an existing one by id.
 pub(crate) struct ProjectDraft {
     pub(crate) editing: Option<Uuid>,
+    /// The list row to return to when the form closes.
+    list_index: usize,
     title: TextArea<'static>,
     url: TextArea<'static>,
     tags: TextArea<'static>,
@@ -366,9 +380,9 @@ pub(crate) struct EditorState {
     about_baseline: AboutValues,
     // projects
     projects_view: ProjectsView,
-    /// Screen rects of the current page's rows, recorded each frame so a
-    /// click can land on one.
-    row_rects: Cell<[Option<Rect>; MAX_ROWS]>,
+    /// Screen rects of the rows on screen this frame, each with the index it
+    /// stands for, so a click lands on the right row of a scrolled list.
+    row_rects: Cell<[Option<(usize, Rect)>; MAX_ROWS]>,
 }
 
 fn text_input(field: Field) -> TextArea<'static> {
@@ -393,9 +407,10 @@ fn joined(ta: &TextArea<'static>, sep: &str) -> String {
 }
 
 impl ProjectDraft {
-    fn new() -> Self {
+    fn new(list_index: usize) -> Self {
         Self {
             editing: None,
+            list_index,
             title: text_input(Field::Title),
             url: text_input(Field::Url),
             tags: text_input(Field::Tags),
@@ -404,9 +419,10 @@ impl ProjectDraft {
         }
     }
 
-    fn from_row(row: &ProjectRow) -> Self {
+    fn from_row(row: &ProjectRow, list_index: usize) -> Self {
         let mut draft = Self {
             editing: Some(row.id),
+            list_index,
             title: seeded(Field::Title, &row.title),
             url: seeded(Field::Url, &row.url),
             tags: seeded(Field::Tags, &row.tags.join(", ")),
@@ -436,7 +452,19 @@ impl ProjectDraft {
             Field::Url => Some(&self.url),
             Field::Tags => Some(&self.tags),
             Field::Description => Some(&self.description),
-            _ => None,
+            Field::Headline
+            | Field::Status
+            | Field::Type
+            | Field::Location
+            | Field::Contact
+            | Field::Links
+            | Field::Skills
+            | Field::Summary
+            | Field::Bio
+            | Field::Ide
+            | Field::Terminal
+            | Field::Os
+            | Field::Langs => None,
         }
     }
 
@@ -446,7 +474,19 @@ impl ProjectDraft {
             Field::Url => Some(&mut self.url),
             Field::Tags => Some(&mut self.tags),
             Field::Description => Some(&mut self.description),
-            _ => None,
+            Field::Headline
+            | Field::Status
+            | Field::Type
+            | Field::Location
+            | Field::Contact
+            | Field::Links
+            | Field::Skills
+            | Field::Summary
+            | Field::Bio
+            | Field::Ide
+            | Field::Terminal
+            | Field::Os
+            | Field::Langs => None,
         }
     }
 }
@@ -520,6 +560,10 @@ impl EditorState {
         self.status
     }
 
+    pub(crate) fn work_type(&self) -> WorkType {
+        self.work_type
+    }
+
     pub(crate) fn projects_view(&self) -> &ProjectsView {
         &self.projects_view
     }
@@ -571,7 +615,7 @@ impl EditorState {
         project: &ProjectRow,
     ) {
         self.open_own(viewer, card, profile, Page::Projects);
-        self.projects_view = ProjectsView::Form(ProjectDraft::from_row(project));
+        self.projects_view = ProjectsView::Form(ProjectDraft::from_row(project, 0));
         self.sync_cursors();
     }
 
@@ -603,7 +647,7 @@ impl EditorState {
         self.viewer = viewer;
         self.scope = Scope::ProjectOf { owner, username };
         self.page = Page::Projects;
-        self.projects_view = ProjectsView::Form(ProjectDraft::from_row(project));
+        self.projects_view = ProjectsView::Form(ProjectDraft::from_row(project, 0));
         self.open = true;
         self.sync_cursors();
     }
@@ -834,7 +878,12 @@ impl EditorState {
         match next {
             Some(row) => {
                 self.row = row;
-                self.start_editing();
+                match self.active_field().map(Field::kind) {
+                    Some(FieldKind::Text | FieldKind::Multi) => self.start_editing(),
+                    // A choice row cycles on an explicit Enter, never from
+                    // being landed on.
+                    Some(FieldKind::Choice) | None => self.sync_cursors(),
+                }
             }
             None => self.sync_cursors(),
         }
@@ -842,22 +891,39 @@ impl EditorState {
 
     /// `←/→` on a status or type row.
     pub(crate) fn cycle_choice(&mut self, forward: bool) {
-        match self.active_field() {
-            Some(Field::Status) => {
+        let Some(field) = self.active_field() else {
+            return;
+        };
+        match field {
+            Field::Status => {
                 self.status = if forward {
                     self.status.next()
                 } else {
                     self.status.prev()
                 };
             }
-            Some(Field::Type) => {
+            Field::Type => {
                 self.work_type = if forward {
                     self.work_type.next()
                 } else {
                     self.work_type.prev()
                 };
             }
-            _ => {}
+            Field::Headline
+            | Field::Location
+            | Field::Contact
+            | Field::Links
+            | Field::Skills
+            | Field::Summary
+            | Field::Bio
+            | Field::Ide
+            | Field::Terminal
+            | Field::Os
+            | Field::Langs
+            | Field::Title
+            | Field::Url
+            | Field::Tags
+            | Field::Description => {}
         }
     }
 
@@ -961,23 +1027,29 @@ impl EditorState {
         }
     }
 
+    /// A new project lands at the top of the list, so the form returns there.
     pub(crate) fn start_new_project(&mut self) {
-        self.projects_view = ProjectsView::Form(ProjectDraft::new());
+        self.projects_view = ProjectsView::Form(ProjectDraft::new(0));
         self.row = 0;
         self.error = None;
         self.start_editing();
     }
 
     pub(crate) fn start_editing_project(&mut self, project: &ProjectRow) {
-        self.projects_view = ProjectsView::Form(ProjectDraft::from_row(project));
+        let list_index = self.project_selected();
+        self.projects_view = ProjectsView::Form(ProjectDraft::from_row(project, list_index));
         self.row = 0;
         self.editing = false;
         self.error = None;
         self.sync_cursors();
     }
 
-    /// Back from a project's form to the list, keeping the list's place.
-    fn leave_project_form(&mut self, selected: usize) {
+    /// Back from a project's form to the list row it was opened from.
+    fn leave_project_form(&mut self) {
+        let selected = match &self.projects_view {
+            ProjectsView::Form(draft) => draft.list_index,
+            ProjectsView::List { selected } => *selected,
+        };
         self.projects_view = ProjectsView::List { selected };
         self.row = 0;
         self.editing = false;
@@ -1003,7 +1075,7 @@ impl EditorState {
                 self.confirm_discard = true;
                 return EscapeOutcome::AskedToDiscard;
             }
-            self.leave_project_form(0);
+            self.leave_project_form();
             return EscapeOutcome::LeftProjectForm;
         }
         if self.dirty() {
@@ -1022,7 +1094,7 @@ impl EditorState {
             && matches!(self.projects_view, ProjectsView::Form(_))
             && self.project_form_dirty()
         {
-            self.leave_project_form(0);
+            self.leave_project_form();
             return EscapeOutcome::LeftProjectForm;
         }
         self.close();
@@ -1054,7 +1126,7 @@ impl EditorState {
                     };
                     let save = Save::Project { params, editing };
                     match self.scope {
-                        Scope::Own => self.leave_project_form(0),
+                        Scope::Own => self.leave_project_form(),
                         Scope::CardOf { .. } | Scope::ProjectOf { .. } => self.close(),
                     }
                     self.sync_cursors();
@@ -1111,12 +1183,13 @@ impl EditorState {
 
     // Click map
 
+    /// Record that `row` is drawn at `rect`. The map holds one entry per
+    /// row on screen; a ninth is a draw bug and is dropped.
     pub(crate) fn record_row_rect(&self, row: usize, rect: Rect) {
-        if row >= MAX_ROWS {
-            return;
-        }
         let mut rects = self.row_rects.get();
-        rects[row] = Some(rect);
+        if let Some(slot) = rects.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some((row, rect));
+        }
         self.row_rects.set(rects);
     }
 
@@ -1125,16 +1198,12 @@ impl EditorState {
     }
 
     pub(crate) fn row_at(&self, x: u16, y: u16) -> Option<usize> {
-        self.row_rects
-            .get()
-            .iter()
-            .enumerate()
-            .find_map(|(row, rect)| match rect {
-                Some(r) if x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height => {
-                    Some(row)
-                }
-                _ => None,
-            })
+        self.row_rects.get().iter().find_map(|slot| match slot {
+            Some((row, r)) if x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height => {
+                Some(*row)
+            }
+            Some(_) | None => None,
+        })
     }
 }
 

@@ -108,6 +108,9 @@ fn enums_cycle_and_print() {
     for work_type in WorkType::ALL {
         assert_eq!(WorkType::from_db(work_type.as_str()), work_type);
     }
+    // A `late-web` pod can decode rows before `late-ssh` has run migration
+    // 192, when the column still holds free text: that reads as `Any`.
+    assert_eq!(WorkType::from_db("contract, full-time"), WorkType::Any);
     assert_eq!(WorkType::Any.label(), "open to any");
     assert_eq!(WorkStatus::NotLooking.label(), "not looking");
 }

@@ -240,16 +240,27 @@ fn escape_asks_before_losing_typed_work_and_y_discards() {
 fn enter_walks_the_rows_and_stops_at_the_last() {
     let viewer = Uuid::now_v7();
     let mut editor = EditorState::default();
-    editor.open_own(viewer, None, &profile(), Page::Card);
+    editor.open_own(viewer, Some(&card(viewer)), &profile(), Page::Card);
     editor.start_editing();
     assert!(editor.editing());
     editor.commit_and_advance(true);
     assert_eq!(editor.active_field(), Some(Field::Status));
     assert!(!editor.editing(), "a choice row is not typed into");
+    assert_eq!(
+        editor.status(),
+        WorkStatus::Casual,
+        "landing on the status row must not cycle it"
+    );
     editor.commit_and_advance(true);
+    assert_eq!(
+        editor.work_type(),
+        WorkType::Contract,
+        "landing on the type row must not cycle it"
+    );
     editor.commit_and_advance(true);
     assert_eq!(editor.active_field(), Some(Field::Location));
     assert!(editor.editing());
+    assert!(!editor.dirty(), "walking the rows changes nothing");
     editor.set_row(7);
     editor.start_editing();
     editor.commit_and_advance(true);
@@ -297,6 +308,62 @@ fn the_projects_page_lists_then_forms_then_lists_again() {
     assert_eq!(params.tags, vec!["rust", "tui"]);
     assert!(editor.is_open(), "saving a project returns to the list");
     assert!(matches!(editor.projects_view(), ProjectsView::List { .. }));
+}
+
+#[test]
+fn leaving_a_project_form_returns_to_the_row_it_came_from() {
+    let viewer = Uuid::now_v7();
+    let mut editor = EditorState::default();
+    editor.open_own(viewer, None, &profile(), Page::Projects);
+    editor.set_project_selection(3, 5);
+    editor.start_editing_project(&project());
+    assert_eq!(editor.escape(), EscapeOutcome::LeftProjectForm);
+    assert_eq!(editor.project_selected(), 3, "esc keeps the list's place");
+
+    editor.start_editing_project(&project());
+    type_into(editor.field_mut(Field::Title), "renamed");
+    editor.save().expect("valid project");
+    assert_eq!(editor.project_selected(), 3, "save keeps the list's place");
+
+    // A new project lands at the top of the list, so the cursor goes there.
+    editor.start_new_project();
+    editor.stop_editing();
+    assert_eq!(editor.escape(), EscapeOutcome::LeftProjectForm);
+    assert_eq!(editor.project_selected(), 0);
+}
+
+#[test]
+fn click_rects_follow_a_scrolled_list() {
+    let editor = EditorState::default();
+    let rect = |y: u16| ratatui::layout::Rect {
+        x: 0,
+        y,
+        width: 10,
+        height: 1,
+    };
+    // The projects list scrolled past its first eight rows: the on-screen
+    // rows are projects 8 to 15, and a click must land on the right one.
+    for index in 8..16 {
+        editor.record_row_rect(index, rect(index as u16));
+    }
+    assert_eq!(editor.row_at(3, 9), Some(9));
+    assert_eq!(editor.row_at(3, 15), Some(15));
+    assert_eq!(editor.row_at(3, 20), None);
+}
+
+#[test]
+fn cpp_and_csharp_keep_their_symbols_and_fold_onto_their_tags() {
+    let values = CardValues {
+        headline: "Systems".to_string(),
+        location: "remote".to_string(),
+        links: "https://a.example".to_string(),
+        skills: "C++, c#, #rust, cobol".to_string(),
+        summary: "yes".to_string(),
+        ..CardValues::default()
+    };
+    let params = validate_card(&values).expect("valid card");
+    assert_eq!(params.skills, vec!["c++", "c#", "rust", "cobol"]);
+    assert_eq!(params.skills_tags, vec!["cpp", "csharp", "rust", "cobol"]);
 }
 
 #[test]

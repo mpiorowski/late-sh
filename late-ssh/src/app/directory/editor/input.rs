@@ -114,7 +114,7 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
 
     if app.directory_editor.confirm_discard() {
         match key {
-            ParsedInput::Byte(b'y' | b'Y' | b'\r') => {
+            ParsedInput::Byte(b'y' | b'Y') => {
                 let _ = app.directory_editor.confirm_discard_yes();
             }
             ParsedInput::Byte(b'n' | b'N' | 0x1B) => {

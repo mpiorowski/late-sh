@@ -362,6 +362,12 @@ async fn unread_count_uses_work_read_cursor() {
 fn parse_words_normalizes_and_caps() {
     let raw = "Rust, CLI rust, web-dev extra one two three four five six seven";
     assert_eq!(parse_words(raw, 3), vec!["rust", "cli", "web-dev"]);
+    // A leading `#` is a hashtag and goes; `+` and a trailing `#` are the
+    // language's name and stay, so the vocabulary can see c++ and c#.
+    assert_eq!(
+        parse_words("C++, c#, #rust, c++", 5),
+        vec!["c++", "c#", "rust"]
+    );
 }
 
 #[test]
