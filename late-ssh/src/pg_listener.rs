@@ -36,6 +36,31 @@ use tokio::sync::mpsc;
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
+/// How long a domain waits before retrying a failed re-read.
+const RETRY_DELAY: Duration = Duration::from_secs(5);
+
+/// Run a domain's re-read until it succeeds. The read after a resync is
+/// the only thing that seeds a domain's shared state after a (re)connect,
+/// and nothing else fires until the next write, so a failure here retries
+/// every [`RETRY_DELAY`] instead of leaving the replica stale (or, at
+/// startup, empty). Signals that arrive meanwhile stay queued; the caller
+/// drains or applies them once this returns.
+pub async fn read_until_ok<F, Fut>(what: &'static str, mut read: F)
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    loop {
+        match read().await {
+            Ok(()) => return,
+            Err(error) => {
+                tracing::warn!(error = ?error, what, "re-read failed, retrying");
+                tokio::time::sleep(RETRY_DELAY).await;
+            }
+        }
+    }
+}
+
 /// Every notify channel the process listens on. Closed: a new channel
 /// breaks the build here until it has a name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,7 +149,9 @@ impl PgListener {
         }
     }
 
-    /// One queue for one domain, carrying only the channels it names.
+    /// One queue for one domain, carrying only the channels it names. A
+    /// domain names them in a `CHANNELS` const next to its worker, so the
+    /// subscription and the worker's match cannot drift apart.
     pub fn subscribe(&mut self, channels: &[Channel]) -> mpsc::UnboundedReceiver<Signal> {
         let (tx, rx) = mpsc::unbounded_channel();
         self.subscribers.push(Subscriber {

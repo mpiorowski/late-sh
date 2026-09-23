@@ -4121,11 +4121,15 @@ impl ChatService {
         );
     }
 
+    /// What the notify worker subscribes to.
+    pub const CHANNELS: &'static [Channel] =
+        &[Channel::ChatMessageGilded, Channel::DeadchannelNameHit];
+
     /// Keep every replica's per-message markers in step: gilds and
-    /// deadchannel name hits (both subscribed in `main.rs`) are rebroadcast
-    /// to this replica's sessions. Nothing is re-read on a resync: while the
-    /// listener reconnects, gild markers only lag until the next room tail
-    /// load, and a name hit fired meanwhile is simply not witnessed here.
+    /// deadchannel name hits are rebroadcast to this replica's sessions.
+    /// Nothing is re-read on a resync: while the listener reconnects, gild
+    /// markers only lag until the next room tail load, and a name hit fired
+    /// meanwhile is simply not witnessed here.
     pub fn start_notify_worker(
         &self,
         mut signals: mpsc::UnboundedReceiver<Signal>,

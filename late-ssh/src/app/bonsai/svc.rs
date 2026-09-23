@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::app::activity::event::ActivityEvent;
 use crate::app::bonsai::state::{Applied, BonsaiCommand, BonsaiState};
-use crate::pg_listener::Signal;
+use crate::pg_listener::{Channel, Signal};
 
 pub(crate) const WATER_CHIP_BONUS: i64 = 200;
 
@@ -302,11 +302,14 @@ impl BonsaiService {
         Ok(tree.map(|tree| (tree, decay_protection)))
     }
 
-    /// Fan `bonsai_changed` out to this replica's sessions (subscribed in
-    /// `main.rs`). A change committed while the listener was reconnecting is
-    /// not replayed: the mirror of an idle second session lags until its
-    /// owner's next action or change, which both carry the stored tree, so
-    /// a resync has nothing to re-read.
+    /// What the notify worker subscribes to.
+    pub const CHANNELS: &'static [Channel] = &[Channel::BonsaiChanged];
+
+    /// Fan `bonsai_changed` out to this replica's sessions. A change
+    /// committed while the listener was reconnecting is not replayed: the
+    /// mirror of an idle second session lags until its owner's next action
+    /// or change, which both carry the stored tree, so a resync has nothing
+    /// to re-read.
     pub fn start_notify_worker(
         &self,
         mut signals: mpsc::UnboundedReceiver<Signal>,

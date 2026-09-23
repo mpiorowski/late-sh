@@ -329,8 +329,7 @@ async fn a_listening_replica_learns_the_holder_and_tells_the_deposed() {
     let seller = CrownService::new(test_db.db.clone());
     let other_replica = CrownService::new(test_db.db.clone());
     let mut pg_listener = crate::pg_listener::PgListener::new();
-    let _worker = other_replica
-        .start_notify_worker(pg_listener.subscribe(&[crate::pg_listener::Channel::CrownChanged]));
+    let _worker = other_replica.start_notify_worker(pg_listener.subscribe(CrownService::CHANNELS));
     let _listener = pg_listener.start(test_db.db.config().clone());
     let mut holder_rx = other_replica.subscribe_holder();
     let mut events_rx = other_replica.subscribe_events();

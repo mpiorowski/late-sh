@@ -94,6 +94,18 @@ fn a_refresh_that_only_reorders_or_drops_is_not_announced() {
     ));
 }
 
+/// The snapshot is capped, so deleting one of its articles pulls an older
+/// one in. That article's id was never seen, but it is not news.
+#[test]
+fn an_older_article_backfilling_a_delete_is_not_announced() {
+    let previous = [article(3, OTHER, 30), article(2, OTHER, 20)];
+    let next = [article(3, OTHER, 30), article(1, OTHER, 10)];
+
+    assert!(!has_fresh_unread_from_others(
+        &previous, &next, None, READER
+    ));
+}
+
 #[test]
 fn the_first_snapshot_a_session_sees_is_not_announced() {
     let next = [article(2, OTHER, 20), article(1, OTHER, 10)];

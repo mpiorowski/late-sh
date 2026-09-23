@@ -193,7 +193,7 @@ pub const NEWS_MARKER: &str = "---NEWS---";
 pub const NEWS_FEED_LIMIT: i64 = 20;
 
 /// Cross-process refresh channel. Any write to `articles` fires it (migration
-/// 196 statement trigger, empty payload); every replica's listener re-reads
+/// 198 statement trigger, empty payload); every replica's listener re-reads
 /// the newest [`NEWS_FEED_LIMIT`] articles into its shared snapshot.
 pub const ARTICLES_CHANGED_CHANNEL: &str = "articles_changed";
 

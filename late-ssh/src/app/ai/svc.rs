@@ -246,7 +246,8 @@ impl AiService {
             }),
         };
 
-        // The URL carries the key; a status error must not print it.
+        // The key travels in the `x-goog-api-key` header, never the URL;
+        // `without_url()` stays as defense in depth for a status error's text.
         let res = match self
             .client
             .post(&url)
@@ -317,7 +318,8 @@ impl AiService {
             }]),
         };
 
-        // The URL carries the key; a status error must not print it.
+        // The key travels in the `x-goog-api-key` header, never the URL;
+        // `without_url()` stays as defense in depth for a status error's text.
         let res = match self
             .client
             .post(&url)
@@ -389,7 +391,8 @@ impl AiService {
             tools: None,
         };
 
-        // The URL carries the key; a status error must not print it.
+        // The key travels in the `x-goog-api-key` header, never the URL;
+        // `without_url()` stays as defense in depth for a status error's text.
         let res = match self
             .client
             .post(&url)

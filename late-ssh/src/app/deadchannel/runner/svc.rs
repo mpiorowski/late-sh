@@ -19,7 +19,7 @@ use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use super::state::Look;
-use crate::pg_listener::Signal;
+use crate::pg_listener::{Channel, Signal, read_until_ok};
 
 /// What the directory serves: user id to look, shared by `Arc` so a
 /// session's tick copy is a pointer bump.
@@ -63,9 +63,13 @@ impl RunnerLookService {
         Ok(())
     }
 
-    /// Keep every replica's looks in step with `deadchannel_runner_changed`
-    /// (subscribed in `main.rs`). A resync and a notify are the same
-    /// re-read, and a burst of changes collapses into one.
+    /// What the notify worker subscribes to.
+    pub const CHANNELS: &'static [Channel] = &[Channel::DeadchannelRunnerChanged];
+
+    /// Keep every replica's looks in step with `deadchannel_runner_changed`.
+    /// A resync and a notify are the same re-read, a burst of changes
+    /// collapses into one, and a failed read retries until it lands: the
+    /// resync read is what seeds this replica, so it may not be dropped.
     pub fn start_notify_worker(
         &self,
         mut signals: mpsc::UnboundedReceiver<Signal>,
@@ -74,11 +78,7 @@ impl RunnerLookService {
         tokio::spawn(async move {
             while signals.recv().await.is_some() {
                 while signals.try_recv().is_ok() {}
-                // A failed re-read is this replica lagging until the next
-                // change or reconnect.
-                if let Err(error) = service.refresh().await {
-                    tracing::warn!(error = ?error, "failed to refresh runner looks");
-                }
+                read_until_ok("runner looks", || service.refresh()).await;
             }
         })
     }

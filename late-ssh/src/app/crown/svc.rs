@@ -28,8 +28,10 @@ use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
 use crate::{
-    app::activity::publisher::ActivityPublisher, app::common::primitives::thousands, metrics,
-    pg_listener::Signal,
+    app::activity::publisher::ActivityPublisher,
+    app::common::primitives::thousands,
+    metrics,
+    pg_listener::{Channel, Signal, read_until_ok},
 };
 
 /// Command answers are per-session and short-lived; a session that falls this
@@ -235,8 +237,11 @@ impl CrownService {
         Ok(())
     }
 
-    /// Keep every replica's glyph in step with `crown_changed` (subscribed
-    /// in `main.rs`). A resync re-reads the holder, so a take committed
+    /// What the notify worker subscribes to.
+    pub const CHANNELS: &'static [Channel] = &[Channel::CrownChanged];
+
+    /// Keep every replica's glyph in step with `crown_changed`. A resync
+    /// re-reads the holder, retrying until it lands, so a take committed
     /// while the listener was reconnecting is not lost; every notify is
     /// applied in order, since its payload names who was deposed.
     pub fn start_notify_worker(
@@ -248,11 +253,7 @@ impl CrownService {
             while let Some(signal) = signals.recv().await {
                 match signal {
                     Signal::Resync => {
-                        // A failed re-read is this replica's glyph lagging
-                        // until the next notify or reconnect.
-                        if let Err(error) = service.refresh_holder().await {
-                            tracing::warn!(error = ?error, "failed to refresh the crown holder");
-                        }
+                        read_until_ok("crown holder", || service.refresh_holder()).await;
                     }
                     Signal::Notify { payload, .. } => service.apply_change(&payload).await,
                 }

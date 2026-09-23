@@ -33,8 +33,10 @@ use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
 use crate::{
-    app::activity::publisher::ActivityPublisher, app::common::primitives::thousands, metrics,
-    pg_listener::Signal,
+    app::activity::publisher::ActivityPublisher,
+    app::common::primitives::thousands,
+    metrics,
+    pg_listener::{Channel, Signal, read_until_ok},
 };
 
 use super::state::short_duration;
@@ -385,10 +387,13 @@ impl PotService {
         }
     }
 
-    /// Keep every replica's pot in step with `pot_changed` (subscribed in
-    /// `main.rs`). A resync re-reads the pot, so a buy committed while the
-    /// listener was reconnecting is not lost; every notify is applied in
-    /// order, since a draw's payload names the winner.
+    /// What the notify worker subscribes to.
+    pub const CHANNELS: &'static [Channel] = &[Channel::PotChanged];
+
+    /// Keep every replica's pot in step with `pot_changed`. A resync
+    /// re-reads the pot, retrying until it lands, so a buy committed while
+    /// the listener was reconnecting is not lost; every notify is applied
+    /// in order, since a draw's payload names the winner.
     pub fn start_notify_worker(
         &self,
         mut signals: mpsc::UnboundedReceiver<Signal>,
@@ -398,11 +403,7 @@ impl PotService {
             while let Some(signal) = signals.recv().await {
                 match signal {
                     Signal::Resync => {
-                        // A failed re-read is this replica's badge lagging
-                        // until the next notify or reconnect.
-                        if let Err(error) = service.refresh().await {
-                            tracing::warn!(error = ?error, "failed to refresh the pot");
-                        }
+                        read_until_ok("pot", || service.refresh()).await;
                     }
                     Signal::Notify { payload, .. } => service.apply_change(&payload).await,
                 }

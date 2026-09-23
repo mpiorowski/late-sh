@@ -306,7 +306,7 @@ async fn a_listening_replica_picks_up_shares_and_deletes_from_the_notify() {
     let other_replica = make_article_service(test_db.db.clone());
     let mut pg_listener = crate::pg_listener::PgListener::new();
     let _worker = other_replica.start_notify_worker(
-        pg_listener.subscribe(&[crate::pg_listener::Channel::ArticlesChanged]),
+        pg_listener.subscribe(crate::app::chat::news::svc::ArticleService::CHANNELS),
     );
     let _listener = pg_listener.start(test_db.db.config().clone());
     let mut snapshot_rx = other_replica.subscribe_snapshot();

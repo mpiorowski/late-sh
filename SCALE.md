@@ -204,7 +204,7 @@ The rule: never compute per-user state for every registered user and publish it 
 What exists now:
 
 - **Work and Showcase:** no fan-out at all. The badge is read once at session start (`refresh_unread_count`) and zeroed on visiting Profiles page 5. It does not move live when someone else posts; these pages are visited rarely, so that was the accepted trade.
-- **News:** stays live and is replica-ready. Every `articles` write fires `articles_changed` (migration 196); each replica's `ArticleService::start_notify_worker` (fed by the one process listener) re-reads the newest 20 articles into its shared `watch`. Each session counts its own badge from that snapshot against its `article_feed_reads` cursor (`news::state::unread_in_snapshot`), so the badge saturates at `20+`. A write costs one list query per replica, independent of registered users and concurrent sessions.
+- **News:** stays live and is replica-ready. Every `articles` write fires `articles_changed` (migration 198); each replica's `ArticleService::start_notify_worker` (fed by the one process listener) re-reads the newest 20 articles into its shared `watch`. Each session counts its own badge from that snapshot against its `article_feed_reads` cursor (`news::state::unread_in_snapshot`), so the badge saturates at `20+`. A write costs one list query per replica, independent of registered users and concurrent sessions.
 - The remaining `Lagged` arms warn once per lag and keep draining instead of breaking.
 
 **Verify after deploy:** `stats by (_msg) count()` in VictoriaLogs over 48 h should show no `failed to receive work event` / `showcase event` / `article event` lines and no `event receiver lagged` warns.

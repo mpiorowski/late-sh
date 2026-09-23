@@ -62,24 +62,24 @@ pub(crate) fn news_unread_label(unread: i64) -> String {
 }
 
 /// Whether a refreshed snapshot brought this reader something to announce:
-/// an article the previous snapshot did not hold, still unread, shared by
-/// someone else. The first snapshot a session sees is its starting state,
-/// not news, so it never announces.
+/// an article newer than anything the previous snapshot held, still
+/// unread, shared by someone else. Newer by `created`, not by id: the
+/// snapshot is capped, so a delete backfills an older article whose id was
+/// never seen, and that is not news. The first snapshot a session sees is
+/// its starting state, not news, so it never announces.
 pub(crate) fn has_fresh_unread_from_others(
     previous: &[ArticleFeedItem],
     next: &[ArticleFeedItem],
     last_read_at: Option<DateTime<Utc>>,
     reader: Uuid,
 ) -> bool {
-    if previous.is_empty() {
+    let Some(newest_seen) = previous.iter().map(|item| item.article.created).max() else {
         return false;
-    }
+    };
     next.iter().any(|item| {
-        item.article.user_id != reader
+        item.article.created > newest_seen
+            && item.article.user_id != reader
             && is_unread(item, last_read_at)
-            && !previous
-                .iter()
-                .any(|seen| seen.article.id == item.article.id)
     })
 }
 

@@ -23,9 +23,8 @@ use late_core::{
             PurchaseResult, PurchaseStatus, PurchaseWithEffectResult, TankActiveStatus,
             TankStockKind, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND, UserPurchase,
             adjust_aquarium_active_by_sku, is_sprout_row, is_welcome_fish,
-            purchase_item_by_sku_with_chat_effect,
-            purchase_item_by_sku_with_custom_title, purchase_item_by_sku_with_username_effect,
-            rental_duration_secs,
+            purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_custom_title,
+            purchase_item_by_sku_with_username_effect, rental_duration_secs,
         },
         milestone::{MILESTONE_BADGE_ITEM_KIND, MilestoneBadge},
         rental::{
@@ -40,7 +39,7 @@ use late_core::{
 use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
 
-use crate::pg_listener::{Channel, Signal};
+use crate::pg_listener::{Channel, Signal, read_until_ok};
 
 use super::entitlements::ShopEntitlements;
 use crate::app::ai::screen::{TitleScreen, screen_custom_title};
@@ -1280,11 +1279,18 @@ impl ShopService {
         self.ai_service.as_ref().is_some_and(AiService::is_enabled)
     }
 
+    /// What the notify worker subscribes to.
+    pub const CHANNELS: &'static [Channel] = &[
+        Channel::ShopUserChanged,
+        Channel::ChipUserChanged,
+        Channel::ShopCatalogChanged,
+    ];
+
     /// Keep this replica's flair and open shop panels in step with
-    /// `shop_user_changed`, `chip_user_changed`, and `shop_catalog_changed`
-    /// (subscribed in `main.rs`). A resync reconciles the whole flair
-    /// directory, and so does any failed notify: the update is recovered
-    /// by the full read instead of dropped.
+    /// `shop_user_changed`, `chip_user_changed`, and `shop_catalog_changed`.
+    /// A resync reconciles the whole flair directory, and so does any
+    /// failed signal, retrying until it lands: the update is recovered by
+    /// the full read instead of dropped.
     pub fn start_notify_worker(
         &self,
         mut signals: mpsc::UnboundedReceiver<Signal>,
@@ -1295,10 +1301,8 @@ impl ShopService {
                 let Err(error) = svc.apply_signal(signal).await else {
                     continue;
                 };
-                tracing::warn!(error = ?error, "shop notify failed; reconciling flair directory");
-                if let Err(error) = svc.reconcile_flair_directory().await {
-                    tracing::warn!(error = ?error, "failed to reconcile shop flair directory");
-                }
+                tracing::warn!(error = ?error, "shop notify failed, reconciling flair directory");
+                read_until_ok("shop flair directory", || svc.reconcile_flair_directory()).await;
             }
         })
     }

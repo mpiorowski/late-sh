@@ -17,7 +17,7 @@ use serde_json::Value;
 use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
 
-use crate::pg_listener::{Channel, Signal};
+use crate::pg_listener::{Channel, Signal, read_until_ok};
 
 use crate::app::activity::{
     channel::ActivitySender,
@@ -240,11 +240,15 @@ impl QuestService {
         Ok(())
     }
 
+    /// What the notify worker subscribes to.
+    pub const CHANNELS: &'static [Channel] =
+        &[Channel::QuestUserChanged, Channel::QuestAssignmentsChanged];
+
     /// Keep this replica's open quest boards in step with
-    /// `quest_user_changed` and `quest_assignments_changed` (subscribed in
-    /// `main.rs`). A resync, and any failed notify, re-reads every active
-    /// user's board, so a change missed while the listener reconnected is
-    /// caught up.
+    /// `quest_user_changed` and `quest_assignments_changed`. A resync, and
+    /// any failed signal, re-reads every active user's board, retrying
+    /// until it lands, so a change missed while the listener reconnected
+    /// is caught up.
     pub fn start_notify_worker(
         &self,
         mut signals: mpsc::UnboundedReceiver<Signal>,
@@ -255,10 +259,8 @@ impl QuestService {
                 let Err(error) = svc.apply_signal(signal).await else {
                     continue;
                 };
-                tracing::warn!(error = ?error, "quest notify failed; refreshing active users");
-                if let Err(error) = svc.refresh_active_users().await {
-                    tracing::warn!(error = ?error, "failed to refresh active quest boards");
-                }
+                tracing::warn!(error = ?error, "quest notify failed, refreshing active users");
+                read_until_ok("active quest boards", || svc.refresh_active_users()).await;
             }
         })
     }

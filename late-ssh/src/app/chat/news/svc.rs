@@ -3,7 +3,7 @@ use crate::app::{
     chat::svc::{ChatService, SendLoungeMessageTask},
 };
 use crate::metrics;
-use crate::pg_listener::Signal;
+use crate::pg_listener::{Channel, Signal, read_until_ok};
 use anyhow::{Context, Result};
 use late_core::models::article::{
     ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_FEED_LIMIT, NEWS_MARKER,
@@ -128,11 +128,16 @@ impl ArticleService {
         });
     }
 
+    /// What the notify worker subscribes to.
+    pub const CHANNELS: &'static [Channel] = &[Channel::ArticlesChanged];
+
     /// Keep this replica's shared news snapshot in step with `articles`.
-    /// Every write fires `articles_changed` (migration 196), routed here by
+    /// Every write fires `articles_changed` (migration 198), routed here by
     /// the process listener (`crate::pg_listener`), so a share or a delete
     /// on any replica reaches every session. A resync and a notify are the
-    /// same re-read, and a burst of writes collapses into one.
+    /// same re-read, a burst of writes collapses into one, and a failed
+    /// read retries until it lands: the resync read is what seeds this
+    /// replica, so it may not be dropped.
     pub fn start_notify_worker(
         &self,
         mut signals: mpsc::UnboundedReceiver<Signal>,
@@ -141,11 +146,7 @@ impl ArticleService {
         tokio::spawn(async move {
             while signals.recv().await.is_some() {
                 while signals.try_recv().is_ok() {}
-                // A failed re-read is this replica's feed lagging until the
-                // next write or reconnect.
-                if let Err(error) = service.do_list_articles().await {
-                    tracing::warn!(error = ?error, "failed to refresh articles");
-                }
+                read_until_ok("articles", || service.do_list_articles()).await;
             }
         })
     }

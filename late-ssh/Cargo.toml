@@ -89,3 +89,4 @@ nix = { workspace = true, features = ["term", "process"] }
 [dev-dependencies]
 late-core = { workspace = true, features = ["testing"] }
 rstest.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

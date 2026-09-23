@@ -14,7 +14,7 @@ use late_core::db::Db;
 use late_core::models::app_flag::{AppFlag, AppFlags};
 use tokio::sync::{mpsc, oneshot, watch};
 
-use crate::pg_listener::Signal;
+use crate::pg_listener::{Channel, Signal, read_until_ok};
 use tracing::{Instrument, info_span};
 
 #[derive(Clone)]
@@ -44,9 +44,13 @@ impl AppFlagService {
         Ok(())
     }
 
-    /// Keep this replica's switches in step with `app_flag_changed`
-    /// (subscribed in `main.rs`). A resync and a notify are the same
-    /// re-read, and a burst of flips collapses into one.
+    /// What the notify worker subscribes to.
+    pub const CHANNELS: &'static [Channel] = &[Channel::AppFlagChanged];
+
+    /// Keep this replica's switches in step with `app_flag_changed`. A
+    /// resync and a notify are the same re-read, a burst of flips collapses
+    /// into one, and a failed read retries until it lands: the resync read
+    /// is what seeds this replica, so it may not be dropped.
     pub fn start_notify_worker(
         &self,
         mut signals: mpsc::UnboundedReceiver<Signal>,
@@ -55,11 +59,7 @@ impl AppFlagService {
         tokio::spawn(async move {
             while signals.recv().await.is_some() {
                 while signals.try_recv().is_ok() {}
-                // A failed re-read is this replica lagging until the next
-                // flip or reconnect.
-                if let Err(error) = service.refresh().await {
-                    tracing::warn!(error = ?error, "failed to refresh app flags");
-                }
+                read_until_ok("app flags", || service.refresh()).await;
             }
         })
     }

@@ -1,9 +1,32 @@
+use std::cell::Cell;
 use std::collections::HashSet;
 
 use tokio::time::{Duration, timeout};
 
-use crate::pg_listener::{Channel, PgListener, Signal};
+use crate::pg_listener::{Channel, PgListener, Signal, read_until_ok};
 use crate::test_helpers::new_test_db;
+
+/// The read after a resync is the only thing that seeds a domain, so a
+/// failure retries (paused time skips the backoff) instead of leaving the
+/// replica empty until the next write.
+#[tokio::test(start_paused = true)]
+async fn a_failed_re_read_is_retried_until_it_succeeds() {
+    let attempts = Cell::new(0);
+
+    read_until_ok("test", || {
+        attempts.set(attempts.get() + 1);
+        let attempt = attempts.get();
+        async move {
+            if attempt < 3 {
+                anyhow::bail!("not yet");
+            }
+            Ok(())
+        }
+    })
+    .await;
+
+    assert_eq!(attempts.get(), 3);
+}
 
 #[test]
 fn every_channel_round_trips_through_its_unique_postgres_name() {
