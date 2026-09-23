@@ -79,14 +79,14 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
     ];
     for (item_code, name, source) in [
         (
-            "CHIP",
-            "Top Chips",
-            "last month's chips earned (Top Chips board; table money, gifts, and spending ignored)",
-        ),
-        (
             "AW",
             "Arcade Wins",
             "last month's daily-puzzle points (Arcade Wins board)",
+        ),
+        (
+            "CHIP",
+            "Top Chips",
+            "last month's chips earned (Top Chips board; table money, gifts, and spending ignored)",
         ),
         ("LA", "Lateris", "best Tetris score last month"),
         ("24#", "2048", "best 2048 score last month"),
@@ -97,14 +97,14 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
             "wore the crown when last month ended (/crown)",
         ),
         (
-            "LATE",
-            "Late Time",
-            "most time online last month, first place only (Late Time board)",
-        ),
-        (
             "ART",
             "Artboard Gallery",
             "last month's most applauded piece, one per hanger, 3 applause to count (Artboard page, Hang a piece); pays 40,000 / 15,000 / 10,000 chips",
+        ),
+        (
+            "LATE",
+            "Late Time",
+            "most time online last month, first place only (Late Time board)",
         ),
     ] {
         lines.push(entry_line(item_code, name, source, code, text, dim));
@@ -150,6 +150,11 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
             "ascend to demigodhood (40,000 chips per run, 7-day gap)",
         ),
         (
+            "GDS",
+            "Green Dragon Slayer",
+            "slay the green dragon (10,000 chips, every kill)",
+        ),
+        (
             "DCO",
             "DCSS Orb of Zot",
             "pick up the Orb of Zot (20,000 chips per run, 7-day gap)",
@@ -168,11 +173,6 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
             "BRM",
             "Brogue Mastery",
             "the Dungeons of Doom's super-victory (40,000 chips per run, 7-day gap)",
-        ),
-        (
-            "GDS",
-            "Green Dragon Slayer",
-            "slay the green dragon (10,000 chips, every kill)",
         ),
         (
             "ADE",

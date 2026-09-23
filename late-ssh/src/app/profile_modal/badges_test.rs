@@ -5,7 +5,8 @@
 //! what happened when A Dark Room's second ending was added.
 
 use late_core::models::profile_award::{
-    MILESTONE_AWARD_CATEGORIES, SINGLE_HOLDER_AWARD_CATEGORIES, award_badge,
+    MILESTONE_AWARD_CATEGORIES, SINGLE_HOLDER_AWARD_CATEGORIES, all_award_categories,
+    award_badge, award_category_code,
 };
 
 /// Every badge granted outside the ranked monthly boards. The milestones are
@@ -36,18 +37,40 @@ fn guide_text() -> String {
         .join("\n")
 }
 
+/// Every badge a chat label can carry, ranked monthly boards included. The
+/// settings modal's Chat badges picker is built from the same list
+/// (`chat_badge_rows`), so it is never missing one; the guide is written by
+/// hand and this is what keeps it level with the picker.
 #[test]
-fn the_leaderboards_guide_explains_every_milestone_badge() {
+fn the_leaderboards_guide_explains_every_badge() {
     let guide = guide_text();
-    let missing: Vec<String> = undocumentable_badges()
+    let missing: Vec<&str> = all_award_categories()
         .into_iter()
-        .filter(|code| !guide.contains(code.as_str()))
+        .map(award_category_code)
+        .filter(|code| !guide.contains(code))
         .collect();
 
     assert!(
         missing.is_empty(),
         "these badges are granted but absent from the Leaderboards badge guide: {missing:?}"
     );
+}
+
+/// The guide reads in the picker's order (the order a chat label stacks
+/// badges), so the two lists line up row for row.
+#[test]
+fn the_leaderboards_guide_lists_badges_in_the_pickers_order() {
+    let guide = guide_text();
+    let entry_codes: Vec<&str> = guide
+        .lines()
+        .filter_map(|line| line.strip_prefix("  "))
+        .filter_map(|entry| entry.split_whitespace().next())
+        .collect();
+    let picker_codes: Vec<&str> = all_award_categories()
+        .into_iter()
+        .map(award_category_code)
+        .collect();
+    assert_eq!(entry_codes, picker_codes);
 }
 
 /// Every help topic's text, since the badge legend is one page of many.

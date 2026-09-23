@@ -323,9 +323,17 @@ async fn main() -> anyhow::Result<()> {
         pg_listener.subscribe(late_ssh::app::chat::svc::ChatService::CHANNELS),
     );
     // Process-wide switches (the haunt kill switch and fuse) cross replicas
-    // over Postgres; the listener seeds this replica on every (re)connect.
+    // over Postgres; loaded once here, then the listener re-reads them on
+    // every (re)connect and notify.
     // See `app/flags/svc.rs`.
     let app_flag_service = late_ssh::app::flags::svc::AppFlagService::new(db.clone());
+    // Loaded before any service starts, so no startup pass (the splash
+    // wall, the jobs shelf, the paper press) reads the switches as off.
+    // Switches nobody can read are not worth booting over.
+    app_flag_service
+        .refresh()
+        .await
+        .context("failed to load app flags")?;
     let _app_flag_notify_task = app_flag_service.start_notify_worker(
         pg_listener.subscribe(late_ssh::app::flags::svc::AppFlagService::CHANNELS),
     );
@@ -346,8 +354,8 @@ async fn main() -> anyhow::Result<()> {
         app_flag_service.subscribe(),
     );
     let _jobs_press_task = jobs_service.start_press_task();
-    // The Artboard gallery: every replica re-reads last month's winner for
-    // the splash; nothing here writes. See `app/artboard/gallery/svc.rs`.
+    // The Artboard gallery's splash wall: every replica re-reads the day's
+    // piece hourly; the first replica awake on a day assigns it. See `app/artboard/gallery/svc.rs`.
     let gallery_service = late_ssh::app::artboard::gallery::svc::GalleryService::new(
         db.clone(),
         app_flag_service.subscribe(),
