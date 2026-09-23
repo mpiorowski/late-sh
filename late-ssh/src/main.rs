@@ -26,6 +26,7 @@ use late_ssh::{
     app::voice::svc::VoiceService,
     config::Config,
     moderation::service::ModerationInfra,
+    pg_listener::Channel as PgChannel,
     session::SessionRegistry,
     ssh,
     state::State,
@@ -117,6 +118,11 @@ async fn main() -> anyhow::Result<()> {
 
     // Init database connection pool
     let db = Db::new(&config.db).context("failed to initialize database")?;
+    // The one Postgres LISTEN connection this process holds. Every domain
+    // that reacts to a cross-replica notify subscribes below and runs its
+    // own worker; the listener starts once all of them are subscribed. See
+    // `pg_listener.rs`.
+    let mut pg_listener = late_ssh::pg_listener::PgListener::new();
     db.health().await.context("database health check failed")?;
     db.migrate().await.context("database migration failed")?;
     let nightcap_room_id = {
@@ -197,6 +203,8 @@ async fn main() -> anyhow::Result<()> {
         .with_session_registry(session_registry.clone())
         .with_irc_registry(irc_registry.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
+    let _article_notify_task =
+        article_service.start_notify_worker(pg_listener.subscribe(&[PgChannel::ArticlesChanged]));
     let feed_service = FeedService::new(db.clone());
     feed_service.start_poll_task();
     let cyberspace_service = late_ssh::app::chat::cyberspace::svc::CyberspaceService::new(
@@ -277,7 +285,8 @@ async fn main() -> anyhow::Result<()> {
     );
     let bonsai_service =
         late_ssh::app::bonsai::svc::BonsaiService::new(db.clone(), activity_tx.clone());
-    let _bonsai_listener_task = bonsai_service.start_listener_task(config.db.clone());
+    let _bonsai_notify_task =
+        bonsai_service.start_notify_worker(pg_listener.subscribe(&[PgChannel::BonsaiChanged]));
     let pet_service = late_ssh::app::pet::svc::PetService::new(db.clone(), activity_tx.clone());
     let aquarium_service = late_ssh::app::AquariumService::new(db.clone(), activity_tx.clone());
     let initial_dartboard = match late_ssh::dartboard::load_persisted_artboard(&db).await {
@@ -309,13 +318,16 @@ async fn main() -> anyhow::Result<()> {
         .with_activity(activity_publisher.clone());
     // Gild markers and stage-2 name hits cross replicas over Postgres, not
     // over this process's chat broadcast; see
-    // `ChatService::start_message_listener_task`.
-    let _chat_message_listener_task = chat_service.start_message_listener_task(config.db.clone());
+    // `ChatService::start_notify_worker`.
+    let _chat_notify_task = chat_service.start_notify_worker(
+        pg_listener.subscribe(&[PgChannel::ChatMessageGilded, PgChannel::DeadchannelNameHit]),
+    );
     // Process-wide switches (the haunt kill switch and fuse) cross replicas
     // over Postgres; the listener seeds this replica on every (re)connect.
     // See `app/flags/svc.rs`.
     let app_flag_service = late_ssh::app::flags::svc::AppFlagService::new(db.clone());
-    let _app_flag_listener_task = app_flag_service.start_listener_task(config.db.clone());
+    let _app_flag_notify_task =
+        app_flag_service.start_notify_worker(pg_listener.subscribe(&[PgChannel::AppFlagChanged]));
     // The Late Edition's press: every replica sweeps, the rows decide who
     // prints. See `app/paper/svc.rs`.
     let paper_service = late_ssh::app::paper::svc::PaperService::new(
@@ -345,19 +357,22 @@ async fn main() -> anyhow::Result<()> {
     // `app/deadchannel/runner/svc.rs`.
     let runner_look_service =
         late_ssh::app::deadchannel::runner::svc::RunnerLookService::new(db.clone());
-    let _runner_look_listener_task = runner_look_service.start_listener_task(config.db.clone());
+    let _runner_look_notify_task = runner_look_service
+        .start_notify_worker(pg_listener.subscribe(&[PgChannel::DeadchannelRunnerChanged]));
     // The crown's glyph crosses replicas over Postgres, not over any
     // in-process broadcast; the listener also seeds this replica's holder on
     // every (re)connect. See `app/crown/svc.rs`.
     let crown_service = late_ssh::app::crown::svc::CrownService::new(db.clone())
         .with_activity(activity_publisher.clone());
-    let _crown_listener_task = crown_service.start_listener_task(config.db.clone());
+    let _crown_notify_task =
+        crown_service.start_notify_worker(pg_listener.subscribe(&[PgChannel::CrownChanged]));
     // The pot's panel and its winner banner cross replicas over Postgres,
     // and the draw is settled by a status transition so exactly one replica
     // pays however many are sweeping. See `app/pot/svc.rs`.
     let pot_service = late_ssh::app::pot::svc::PotService::new(db.clone())
         .with_activity(activity_publisher.clone());
-    let _pot_listener_task = pot_service.start_listener_task(config.db.clone());
+    let _pot_notify_task =
+        pot_service.start_notify_worker(pg_listener.subscribe(&[PgChannel::PotChanged]));
     let _pot_sweeper_task = pot_service.start_sweeper_task();
     let leaderboard_service = late_ssh::app::LeaderboardService::new(db.clone());
     let _profile_award_snapshot_task = leaderboard_service
@@ -365,13 +380,22 @@ async fn main() -> anyhow::Result<()> {
         .start_profile_award_snapshot_loop();
     let quest_service = late_ssh::app::QuestService::new(db.clone(), activity_tx.clone());
     let _quest_activity_task = quest_service.start_activity_task();
-    let _quest_listener_task = quest_service.start_listener_task(config.db.clone());
+    let _quest_notify_task = quest_service.start_notify_worker(pg_listener.subscribe(&[
+        PgChannel::QuestUserChanged,
+        PgChannel::QuestAssignmentsChanged,
+    ]));
     let flair_directory = late_ssh::app::common::username_effect::new_directory();
     let shop_service = late_ssh::app::ShopService::new(db.clone())
         .with_flair_directory(flair_directory.clone())
         .with_activity(activity_publisher.clone())
         .with_ai_service(ai_service.clone());
-    let _shop_listener_task = shop_service.start_listener_task(config.db.clone());
+    let _shop_notify_task = shop_service.start_notify_worker(pg_listener.subscribe(&[
+        PgChannel::ShopUserChanged,
+        PgChannel::ChipUserChanged,
+        PgChannel::ShopCatalogChanged,
+    ]));
+    // Every notify-driven domain is subscribed by now.
+    let _pg_listener_task = pg_listener.start(config.db.clone());
     let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
     let nonogram_library = match late_ssh::app::arcade::nonogram::state::load_default_library() {
         Ok(library) => library,

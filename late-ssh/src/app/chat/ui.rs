@@ -3706,7 +3706,7 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         let label = if view.news_unread_count > 0 {
             format!(
                 "{prefix}news ({})",
-                format_unread_badge(view.news_unread_count)
+                super::news::state::news_unread_label(view.news_unread_count)
             )
         } else {
             format!("{prefix}news")
@@ -4592,15 +4592,18 @@ fn format_unread_badge(unread: i64) -> String {
 }
 
 /// The badge text for a slot. Rooms saturate at their SQL cap (`99+`), while
-/// the cyberspace feeds row saturates far earlier: it counts unread entries
-/// out of a probe page of ten, so a full page means "at least this many" and
-/// the badge has to read as a floor rather than name a total it cannot stand
-/// behind.
+/// the cyberspace feeds row and the news row saturate far earlier: each counts
+/// unread entries out of a bounded page (ten probed entries, the twenty-article
+/// news snapshot), so a full page means "at least this many" and the badge has
+/// to read as a floor rather than name a total it cannot stand behind.
 fn room_slot_badge(view: &ChatRoomListView<'_>, slot: RoomSlot, unread: i64) -> String {
     match slot {
-        // Only the feeds row saturates: the notifications count comes from
-        // their own counter endpoint and is exact.
+        // The notifications count comes from its own counter endpoint and is
+        // exact.
         RoomSlot::Cyberspace if view.cyberspace_unread_saturated => "9+".to_string(),
+        // Counted from the shared news snapshot, so it saturates at that
+        // snapshot's size.
+        RoomSlot::News => super::news::state::news_unread_label(unread),
         // A dot, never a number: their roster names a room's last_message_at
         // but counting would take a per-room history fetch every poll.
         RoomSlot::CyberspaceRoom(_) => "●".to_string(),

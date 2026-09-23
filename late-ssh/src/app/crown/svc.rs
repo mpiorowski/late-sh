@@ -12,28 +12,24 @@
 //! over the `crown_changed` Postgres notify, so there is exactly one code
 //! path that moves the glyph.
 
-use std::time::Duration;
-
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::{
-    db::{Db, DbConfig},
+    db::Db,
     models::{
         chips::{ChipMove, UserChips},
-        crown::{
-            CROWN_CHANGED_CHANNEL, CrownChange, CrownReign, crown_month, listen_for_crown_changes,
-            next_price,
-        },
+        crown::{CrownChange, CrownReign, crown_month, next_price},
         profile::fetch_username,
         user::User,
     },
 };
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
 use crate::{
     app::activity::publisher::ActivityPublisher, app::common::primitives::thousands, metrics,
+    pg_listener::Signal,
 };
 
 /// Command answers are per-session and short-lived; a session that falls this
@@ -239,69 +235,29 @@ impl CrownService {
         Ok(())
     }
 
-    /// Keep every replica's glyph in step. One long-lived Postgres
-    /// connection LISTENs on [`CROWN_CHANGED_CHANNEL`]; a dropped connection
-    /// reconnects after five seconds and re-seeds, so a take committed
-    /// during the gap is not lost. Same shape as
-    /// `ChatService::start_message_listener_task`.
-    pub fn start_listener_task(&self, db_config: DbConfig) -> tokio::task::JoinHandle<()> {
+    /// Keep every replica's glyph in step with `crown_changed` (subscribed
+    /// in `main.rs`). A resync re-reads the holder, so a take committed
+    /// while the listener was reconnecting is not lost; every notify is
+    /// applied in order, since its payload names who was deposed.
+    pub fn start_notify_worker(
+        &self,
+        mut signals: mpsc::UnboundedReceiver<Signal>,
+    ) -> tokio::task::JoinHandle<()> {
         let service = self.clone();
         tokio::spawn(async move {
-            loop {
-                if let Err(error) = service.listen_once(&db_config).await {
-                    tracing::warn!(error = ?error, "crown postgres listener stopped");
+            while let Some(signal) = signals.recv().await {
+                match signal {
+                    Signal::Resync => {
+                        // A failed re-read is this replica's glyph lagging
+                        // until the next notify or reconnect.
+                        if let Err(error) = service.refresh_holder().await {
+                            tracing::warn!(error = ?error, "failed to refresh the crown holder");
+                        }
+                    }
+                    Signal::Notify { payload, .. } => service.apply_change(&payload).await,
                 }
-                tokio::time::sleep(Duration::from_secs(5)).await;
             }
         })
-    }
-
-    async fn listen_once(&self, db_config: &DbConfig) -> Result<()> {
-        let mut config = tokio_postgres::Config::new();
-        config.host(&db_config.host);
-        config.port(db_config.port);
-        config.user(&db_config.user);
-        config.password(&db_config.password);
-        config.dbname(&db_config.dbname);
-
-        let (client, mut connection) = config.connect(tokio_postgres::NoTls).await?;
-        let listen = listen_for_crown_changes(&client);
-        tokio::pin!(listen);
-        loop {
-            tokio::select! {
-                result = &mut listen => {
-                    result?;
-                    break;
-                }
-                message = std::future::poll_fn(|cx| connection.poll_message(cx)) => {
-                    let Some(message) = message else {
-                        return Ok(());
-                    };
-                    self.handle_notification(message?).await;
-                }
-            }
-        }
-
-        // Seeded after the LISTEN is live, so a take committed between the
-        // two is caught by this read rather than dropped.
-        self.refresh_holder().await?;
-
-        loop {
-            let Some(message) = std::future::poll_fn(|cx| connection.poll_message(cx)).await else {
-                return Ok(());
-            };
-            self.handle_notification(message?).await;
-        }
-    }
-
-    async fn handle_notification(&self, message: tokio_postgres::AsyncMessage) {
-        let tokio_postgres::AsyncMessage::Notification(notification) = message else {
-            return;
-        };
-        if notification.channel() != CROWN_CHANGED_CHANNEL {
-            return;
-        }
-        self.apply_change(notification.payload()).await;
     }
 
     /// One `crown_changed` notify, on every replica including the one that
@@ -309,8 +265,7 @@ impl CrownService {
     /// holder who took it if they are connected here.
     ///
     /// A failed re-read is this replica's glyph lagging until the next
-    /// take, not a reason to drop the LISTEN connection: propagating it
-    /// would lose every take committed during the reconnect window. A
+    /// take or resync, so it is logged and the worker keeps going. A
     /// payload that does not parse is logged for the same reason; the
     /// re-read does not depend on it.
     pub(super) async fn apply_change(&self, payload: &str) {

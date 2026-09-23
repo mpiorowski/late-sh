@@ -219,10 +219,12 @@ impl State {
                 }) if user_id == self.user_id => {}
                 Ok(_) => {}
                 Err(broadcast::error::TryRecvError::Empty) => break,
-                Err(e) => {
-                    tracing::error!(%e, "failed to receive feed event");
-                    break;
+                // Skipped events are gone; the receiver resumes at the oldest
+                // one still buffered, so keep draining.
+                Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                    tracing::warn!(skipped, "feed event receiver lagged");
                 }
+                Err(broadcast::error::TryRecvError::Closed) => break,
             }
         }
         banner
@@ -286,10 +288,12 @@ impl State {
                 }
                 Ok(_) => {}
                 Err(broadcast::error::TryRecvError::Empty) => break,
-                Err(e) => {
-                    tracing::error!(%e, "failed to receive article event in feeds state");
-                    break;
+                // Skipped events are gone; the receiver resumes at the oldest
+                // one still buffered, so keep draining.
+                Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                    tracing::warn!(skipped, "article event receiver lagged in feeds state");
                 }
+                Err(broadcast::error::TryRecvError::Closed) => break,
             }
         }
         banner

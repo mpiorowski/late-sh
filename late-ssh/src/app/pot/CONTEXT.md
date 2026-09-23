@@ -95,9 +95,10 @@ re-evaluates its `WHERE status = 'open'`, finds nothing, and refuses with
 `pot_changed` is the Postgres notify channel, and it carries a `PotChange`
 (`Bought` / `Drawn { .. }` / `Rolled`).
 
-- Every replica LISTENs (`PotService::start_listener_task`), re-reads the open
-  pot on any payload, and re-seeds after a reconnect, so a buy committed
-  during the gap is not lost.
+- Every replica gets `pot_changed` from the process listener
+  (`PotService::start_notify_worker` over `pg_listener.rs`), re-reads the
+  open pot on any payload, and re-reads on the resync after a reconnect, so
+  a buy committed during the gap is not lost.
 - The **winner's banner** rides the notify, not the sweeping replica's own
   broadcast, so it reaches the winner on whichever replica they are connected
   to and there is one code path for it. Same reasoning as the crown's deposed

@@ -5,7 +5,6 @@ use late_core::{
     models::{
         moderation_audit_log::ModerationAuditLog,
         profile::Profile,
-        user::User,
         work_feed_read::WorkFeedRead,
         work_profile::{WorkProfile, WorkProfileParams},
     },
@@ -49,10 +48,6 @@ pub enum WorkEvent {
         user_id: Uuid,
         unread_count: i64,
         last_read_at: Option<DateTime<Utc>>,
-    },
-    NewWorkProfilesAvailable {
-        user_id: Uuid,
-        unread_count: i64,
     },
 }
 
@@ -158,20 +153,7 @@ impl WorkService {
                 .await;
 
                 match result {
-                    Ok(event) => {
-                        let announce_new = matches!(event, WorkEvent::Created { .. });
-                        service.publish_event(event);
-                        if let Err(e) = service
-                            .publish_unread_updates_for_all(announce_new, Some(user_id))
-                            .await
-                        {
-                            late_core::error_span!(
-                                "work_unread_broadcast_failed",
-                                error = ?e,
-                                "failed to publish work unread updates after save"
-                            );
-                        }
-                    }
+                    Ok(event) => service.publish_event(event),
                     Err(e) => {
                         late_core::error_span!(
                             "work_create_failed",
@@ -232,16 +214,7 @@ impl WorkService {
                 .await;
 
                 match result {
-                    Ok(()) => {
-                        service.publish_event(WorkEvent::Updated { user_id });
-                        if let Err(e) = service.publish_unread_updates_for_all(false, None).await {
-                            late_core::error_span!(
-                                "work_unread_broadcast_failed",
-                                error = ?e,
-                                "failed to publish work unread updates after update"
-                            );
-                        }
-                    }
+                    Ok(()) => service.publish_event(WorkEvent::Updated { user_id }),
                     Err(e) => {
                         late_core::error_span!(
                             "work_update_failed",
@@ -295,16 +268,7 @@ impl WorkService {
                 .await;
 
                 match result {
-                    Ok(()) => {
-                        service.publish_event(WorkEvent::Deleted { user_id });
-                        if let Err(e) = service.publish_unread_updates_for_all(false, None).await {
-                            late_core::error_span!(
-                                "work_unread_broadcast_failed",
-                                error = ?e,
-                                "failed to publish work unread updates after delete"
-                            );
-                        }
-                    }
+                    Ok(()) => service.publish_event(WorkEvent::Deleted { user_id }),
                     Err(e) => {
                         late_core::error_span!(
                             "work_delete_failed",
@@ -377,30 +341,6 @@ impl WorkService {
             unread_count: 0,
             last_read_at,
         });
-        Ok(())
-    }
-
-    async fn publish_unread_updates_for_all(
-        &self,
-        announce_new: bool,
-        actor_user_id: Option<Uuid>,
-    ) -> Result<()> {
-        let client = self.db.get().await?;
-        for user_id in User::list_ids(&client).await? {
-            let unread_count = WorkFeedRead::unread_count_for_user(&client, user_id).await?;
-            let last_read_at = WorkFeedRead::last_read_at(&client, user_id).await?;
-            self.publish_event(WorkEvent::UnreadCountUpdated {
-                user_id,
-                unread_count,
-                last_read_at,
-            });
-            if announce_new && Some(user_id) != actor_user_id && unread_count > 0 {
-                self.publish_event(WorkEvent::NewWorkProfilesAvailable {
-                    user_id,
-                    unread_count,
-                });
-            }
-        }
         Ok(())
     }
 }

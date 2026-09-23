@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use deadpool_postgres::GenericClient;
 use serde::{Deserialize, Serialize};
-use tokio_postgres::{Client, Row, Transaction};
+use tokio_postgres::{Row, Transaction};
 use uuid::Uuid;
 
 /// Cross-process refresh channel. A take lands on whichever replica the
@@ -43,13 +43,6 @@ impl CrownChange {
     pub fn parse(payload: &str) -> Result<Self> {
         serde_json::from_str(payload).context("parsing crown_changed payload")
     }
-}
-
-pub async fn listen_for_crown_changes(client: &Client) -> Result<()> {
-    client
-        .batch_execute(&format!("LISTEN {CROWN_CHANGED_CHANNEL};"))
-        .await?;
-    Ok(())
 }
 
 /// What a vacant crown costs, and the floor every ratchet is clamped to.

@@ -19,22 +19,22 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use late_core::{
-    db::{Db, DbConfig},
+    db::Db,
     models::{
         chips::{ChipMove, UserChips},
         pot::{
-            POT_CHANGED_CHANNEL, POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE, Pot, PotChange,
-            PotDraw, PotTicket, PotTicketHolder, draw_from_seed, listen_for_pot_changes,
-            next_draw_at,
+            POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE, Pot, PotChange, PotDraw, PotTicket,
+            PotTicketHolder, draw_from_seed, next_draw_at,
         },
     },
 };
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
 use crate::{
     app::activity::publisher::ActivityPublisher, app::common::primitives::thousands, metrics,
+    pg_listener::Signal,
 };
 
 use super::state::short_duration;
@@ -345,68 +345,29 @@ impl PotService {
         }
     }
 
-    /// Keep every replica's pot in step. One long-lived Postgres connection
-    /// LISTENs on [`POT_CHANGED_CHANNEL`]; a dropped connection reconnects
-    /// after five seconds and re-seeds, so a buy committed during the gap is
-    /// not lost. Same shape as `CrownService::start_listener_task`.
-    pub fn start_listener_task(&self, db_config: DbConfig) -> tokio::task::JoinHandle<()> {
+    /// Keep every replica's pot in step with `pot_changed` (subscribed in
+    /// `main.rs`). A resync re-reads the pot, so a buy committed while the
+    /// listener was reconnecting is not lost; every notify is applied in
+    /// order, since a draw's payload names the winner.
+    pub fn start_notify_worker(
+        &self,
+        mut signals: mpsc::UnboundedReceiver<Signal>,
+    ) -> tokio::task::JoinHandle<()> {
         let service = self.clone();
         tokio::spawn(async move {
-            loop {
-                if let Err(error) = service.listen_once(&db_config).await {
-                    tracing::warn!(error = ?error, "pot postgres listener stopped");
+            while let Some(signal) = signals.recv().await {
+                match signal {
+                    Signal::Resync => {
+                        // A failed re-read is this replica's badge lagging
+                        // until the next notify or reconnect.
+                        if let Err(error) = service.refresh().await {
+                            tracing::warn!(error = ?error, "failed to refresh the pot");
+                        }
+                    }
+                    Signal::Notify { payload, .. } => service.apply_change(&payload).await,
                 }
-                tokio::time::sleep(Duration::from_secs(5)).await;
             }
         })
-    }
-
-    async fn listen_once(&self, db_config: &DbConfig) -> Result<()> {
-        let mut config = tokio_postgres::Config::new();
-        config.host(&db_config.host);
-        config.port(db_config.port);
-        config.user(&db_config.user);
-        config.password(&db_config.password);
-        config.dbname(&db_config.dbname);
-
-        let (client, mut connection) = config.connect(tokio_postgres::NoTls).await?;
-        let listen = listen_for_pot_changes(&client);
-        tokio::pin!(listen);
-        loop {
-            tokio::select! {
-                result = &mut listen => {
-                    result?;
-                    break;
-                }
-                message = std::future::poll_fn(|cx| connection.poll_message(cx)) => {
-                    let Some(message) = message else {
-                        return Ok(());
-                    };
-                    self.handle_notification(message?).await;
-                }
-            }
-        }
-
-        // Seeded after the LISTEN is live, so a buy committed between the two
-        // is caught by this read rather than dropped.
-        self.refresh().await?;
-
-        loop {
-            let Some(message) = std::future::poll_fn(|cx| connection.poll_message(cx)).await else {
-                return Ok(());
-            };
-            self.handle_notification(message?).await;
-        }
-    }
-
-    async fn handle_notification(&self, message: tokio_postgres::AsyncMessage) {
-        let tokio_postgres::AsyncMessage::Notification(notification) = message else {
-            return;
-        };
-        if notification.channel() != POT_CHANGED_CHANNEL {
-            return;
-        }
-        self.apply_change(notification.payload()).await;
     }
 
     /// One `pot_changed` notify, on every replica including the one that
@@ -414,10 +375,9 @@ impl PotService {
     /// are connected here.
     ///
     /// A failed re-read is this replica's badge lagging until the next
-    /// notify, not a reason to drop the LISTEN connection: propagating it
-    /// would lose every buy committed during the reconnect window. A payload
-    /// that does not parse is logged for the same reason; the re-read does
-    /// not depend on it.
+    /// notify or resync, so it is logged and the worker keeps going. A
+    /// payload that does not parse is logged for the same reason; the
+    /// re-read does not depend on it.
     pub(super) async fn apply_change(&self, payload: &str) {
         if let Err(error) = self.refresh().await {
             tracing::warn!(error = ?error, "failed to refresh the pot");

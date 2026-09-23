@@ -3,8 +3,11 @@ use crate::app::{
     chat::svc::{ChatService, SendLoungeMessageTask},
 };
 use crate::metrics;
+use crate::pg_listener::Signal;
 use anyhow::{Context, Result};
-use late_core::models::article::{ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_MARKER};
+use late_core::models::article::{
+    ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_FEED_LIMIT, NEWS_MARKER,
+};
 use late_core::{
     db::Db,
     models::{
@@ -19,7 +22,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
@@ -84,15 +87,15 @@ impl ArticleService {
         }
     }
 
-    pub fn refresh_unread_count_task(&self, user_id: Uuid) {
+    pub fn load_read_cursor_task(&self, user_id: Uuid) {
         let service = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = service.publish_unread_count(user_id).await {
+            if let Err(e) = service.publish_read_cursor(user_id).await {
                 late_core::error_span!(
-                    "article_unread_refresh_failed",
+                    "article_read_cursor_load_failed",
                     error = ?e,
                     user_id = %user_id,
-                    "failed to refresh article unread count"
+                    "failed to load article read cursor"
                 );
             }
         });
@@ -125,10 +128,32 @@ impl ArticleService {
         });
     }
 
+    /// Keep this replica's shared news snapshot in step with `articles`.
+    /// Every write fires `articles_changed` (migration 196), routed here by
+    /// the process listener (`crate::pg_listener`), so a share or a delete
+    /// on any replica reaches every session. A resync and a notify are the
+    /// same re-read, and a burst of writes collapses into one.
+    pub fn start_notify_worker(
+        &self,
+        mut signals: mpsc::UnboundedReceiver<Signal>,
+    ) -> tokio::task::JoinHandle<()> {
+        let service = self.clone();
+        tokio::spawn(async move {
+            while signals.recv().await.is_some() {
+                while signals.try_recv().is_ok() {}
+                // A failed re-read is this replica's feed lagging until the
+                // next write or reconnect.
+                if let Err(error) = service.do_list_articles().await {
+                    tracing::warn!(error = ?error, "failed to refresh articles");
+                }
+            }
+        })
+    }
+
     #[tracing::instrument(skip(self))]
     async fn do_list_articles(&self) -> Result<()> {
         let db_client = self.db.get().await?;
-        let articles = Article::list_recent(&db_client, 20).await?;
+        let articles = Article::list_recent(&db_client, NEWS_FEED_LIMIT).await?;
         let user_ids = articles
             .iter()
             .map(|article| article.user_id)
@@ -152,13 +177,11 @@ impl ArticleService {
         Ok(())
     }
 
-    async fn publish_unread_count(&self, user_id: Uuid) -> Result<()> {
+    async fn publish_read_cursor(&self, user_id: Uuid) -> Result<()> {
         let db_client = self.db.get().await?;
-        let unread_count = ArticleFeedRead::unread_count_for_user(&db_client, user_id).await?;
         let last_read_at = ArticleFeedRead::last_read_at(&db_client, user_id).await?;
-        self.publish_event(ArticleEvent::UnreadCountUpdated {
+        self.publish_event(ArticleEvent::ReadCursorLoaded {
             user_id,
-            unread_count,
             last_read_at,
         });
         Ok(())
@@ -168,35 +191,10 @@ impl ArticleService {
         let db_client = self.db.get().await?;
         ArticleFeedRead::mark_read_now(&db_client, user_id).await?;
         let last_read_at = ArticleFeedRead::last_read_at(&db_client, user_id).await?;
-        self.publish_event(ArticleEvent::UnreadCountUpdated {
+        self.publish_event(ArticleEvent::ReadCursorLoaded {
             user_id,
-            unread_count: 0,
             last_read_at,
         });
-        Ok(())
-    }
-
-    async fn publish_unread_updates_for_all(
-        &self,
-        announce_new: bool,
-        actor_user_id: Option<Uuid>,
-    ) -> Result<()> {
-        let db_client = self.db.get().await?;
-        for user_id in User::list_ids(&db_client).await? {
-            let unread_count = ArticleFeedRead::unread_count_for_user(&db_client, user_id).await?;
-            let last_read_at = ArticleFeedRead::last_read_at(&db_client, user_id).await?;
-            self.publish_event(ArticleEvent::UnreadCountUpdated {
-                user_id,
-                unread_count,
-                last_read_at,
-            });
-            if announce_new && Some(user_id) != actor_user_id && unread_count > 0 {
-                self.publish_event(ArticleEvent::NewArticlesAvailable {
-                    user_id,
-                    unread_count,
-                });
-            }
-        }
         Ok(())
     }
 
@@ -250,8 +248,6 @@ impl ArticleService {
                         );
                     }
 
-                    service.do_list_articles().await?;
-                    service.publish_unread_updates_for_all(false, None).await?;
                     Ok::<_, anyhow::Error>(())
                 }
                 .await;
@@ -399,26 +395,8 @@ impl ArticleService {
                 failure_log: "failed to share news in lounge chat",
             });
 
-        // Refresh the shared feed snapshot immediately so clients see the new item
-        // without waiting for the periodic poll tick.
-        if let Err(e) = self.do_list_articles().await {
-            late_core::error_span!(
-                "article_refresh_failed",
-                error = ?e,
-                "failed to refresh article snapshot after create"
-            );
-        }
-
-        if let Err(e) = self
-            .publish_unread_updates_for_all(true, Some(user_id))
-            .await
-        {
-            late_core::error_span!(
-                "article_unread_broadcast_failed",
-                error = ?e,
-                "failed to publish article unread updates after create"
-            );
-        }
+        // The insert fired `articles_changed`; every replica's listener,
+        // this one included, refreshes the shared snapshot from it.
 
         // 5. Publish Event
         tracing::info!(%url, "publishing ArticleEvent::Created");

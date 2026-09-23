@@ -46,13 +46,6 @@ impl NameHitSignal {
     }
 }
 
-pub async fn listen_for_name_hits(client: &Client) -> Result<()> {
-    client
-        .batch_execute(&format!("LISTEN {DEADCHANNEL_NAME_HIT_CHANNEL};"))
-        .await?;
-    Ok(())
-}
-
 /// Fire the beat at every replica, this one included: the publisher's
 /// pooled connection is not the listener's, so the local sessions hear it
 /// over the same wire everyone else does. One path, one place to look.

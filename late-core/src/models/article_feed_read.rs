@@ -53,19 +53,4 @@ impl ArticleFeedRead {
             .await?;
         Ok(row.map(|row| row.get("last_read_at")).unwrap_or(None))
     }
-
-    pub async fn unread_count_for_user(client: &Client, user_id: Uuid) -> Result<i64> {
-        let row = client
-            .query_one(
-                "SELECT COUNT(a.id)::bigint AS unread_count
-                 FROM articles a
-                 LEFT JOIN article_feed_reads afr ON afr.user_id = $1
-                 WHERE
-                   afr.user_id IS NULL
-                   OR a.created > COALESCE(afr.last_read_at, '-infinity'::timestamptz)",
-                &[&user_id],
-            )
-            .await?;
-        Ok(row.get("unread_count"))
-    }
 }

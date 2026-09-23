@@ -8,8 +8,7 @@ use uuid::Uuid;
 use crate::{
     models::pot::{
         POT_CHANGED_CHANNEL, POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE, Pot, PotChange, PotDraw,
-        PotStatus, PotTicket, PotTicketHolder, draw_from_seed, listen_for_pot_changes,
-        next_draw_at, payout_for,
+        PotStatus, PotTicket, PotTicketHolder, draw_from_seed, next_draw_at, payout_for,
     },
     test_utils::{create_test_user, test_db},
 };
@@ -337,7 +336,8 @@ async fn a_draw_notifies_every_replica() {
         .connect(NoTls)
         .await
         .expect("listener connection");
-    let listen = listen_for_pot_changes(&listener);
+    let listen_statement = format!("LISTEN {POT_CHANGED_CHANNEL};");
+    let listen = listener.batch_execute(&listen_statement);
     tokio::pin!(listen);
     let mut listen_done = false;
     while !listen_done {

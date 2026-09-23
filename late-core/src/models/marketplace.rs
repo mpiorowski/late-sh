@@ -223,16 +223,6 @@ impl UserPurchase {
     }
 }
 
-pub async fn listen_for_shop_changes(client: &Client) -> Result<()> {
-    client
-        .batch_execute(&format!(
-            "LISTEN {SHOP_USER_CHANGED_CHANNEL};
-             LISTEN {SHOP_CATALOG_CHANGED_CHANNEL};"
-        ))
-        .await?;
-    Ok(())
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PurchaseStatus {
     Purchased,

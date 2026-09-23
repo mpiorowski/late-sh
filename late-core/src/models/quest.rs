@@ -174,16 +174,6 @@ pub struct DailyQuestStreakReward {
     pub reward_chips: i64,
 }
 
-pub async fn listen_for_quest_changes(client: &Client) -> Result<()> {
-    client
-        .batch_execute(&format!(
-            "LISTEN {QUEST_USER_CHANGED_CHANNEL};
-             LISTEN {QUEST_ASSIGNMENTS_CHANGED_CHANNEL};"
-        ))
-        .await?;
-    Ok(())
-}
-
 pub fn daily_period(date: NaiveDate) -> (NaiveDate, NaiveDate) {
     (
         date,

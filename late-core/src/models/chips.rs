@@ -18,13 +18,6 @@ pub const MONTH_TS_FILTER: &str =
 /// How many ledger rows a profile shows.
 pub const PROFILE_LEDGER_ROWS: i64 = 40;
 
-pub async fn listen_for_chip_changes(client: &Client) -> Result<()> {
-    client
-        .batch_execute(&format!("LISTEN {CHIP_USER_CHANGED_CHANNEL};"))
-        .await?;
-    Ok(())
-}
-
 /// The three daily-puzzle difficulty tiers. One enum owns both reward
 /// scales: the chip bonus a daily win pays (mirrored in seeded
 /// `reward_templates` rows) and the Arcade Wins leaderboard points, so the

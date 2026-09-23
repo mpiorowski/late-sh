@@ -258,28 +258,15 @@ impl State {
                             self.marker_read_at = last_read_at;
                         }
                     }
-                    ShowcaseEvent::NewShowcasesAvailable {
-                        user_id,
-                        unread_count,
-                    } if self.user_id == user_id => {
-                        let increased = unread_count > self.unread_count;
-                        self.unread_count = unread_count;
-                        if increased {
-                            let noun = if unread_count == 1 {
-                                "showcase"
-                            } else {
-                                "showcases"
-                            };
-                            banner = Some(Banner::success(&format!("{unread_count} new {noun}")));
-                        }
-                    }
                     _ => {}
                 },
                 Err(broadcast::error::TryRecvError::Empty) => break,
-                Err(e) => {
-                    tracing::error!(%e, "failed to receive showcase event");
-                    break;
+                // Skipped events are gone; the receiver resumes at the oldest
+                // one still buffered, so keep draining.
+                Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                    tracing::warn!(skipped, "showcase event receiver lagged");
                 }
+                Err(broadcast::error::TryRecvError::Closed) => break,
             }
         }
         banner

@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use deadpool_postgres::GenericClient;
-use tokio_postgres::{Client, Row, Transaction};
+use tokio_postgres::{Row, Transaction};
 use uuid::Uuid;
 
 /// Cross-process repaint channel. A gild lands on whichever replica the
@@ -24,13 +24,6 @@ use uuid::Uuid;
 /// payload is `<message id>:<room id>`, so a listener repaints without first
 /// having to look the message up.
 pub const CHAT_MESSAGE_GILDED_CHANNEL: &str = "chat_message_gilded";
-
-pub async fn listen_for_gild_changes(client: &Client) -> Result<()> {
-    client
-        .batch_execute(&format!("LISTEN {CHAT_MESSAGE_GILDED_CHANNEL};"))
-        .await?;
-    Ok(())
-}
 
 /// The gilded message and the room it is in, as parsed from a
 /// [`CHAT_MESSAGE_GILDED_CHANNEL`] payload. `None` for anything that is not

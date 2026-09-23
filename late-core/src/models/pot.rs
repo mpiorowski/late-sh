@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, Duration, Utc, Weekday};
 use serde::{Deserialize, Serialize};
-use tokio_postgres::{Client, GenericClient, Row, Transaction};
+use tokio_postgres::{GenericClient, Row, Transaction};
 use uuid::Uuid;
 
 /// Cross-process refresh channel. A buy or a draw lands on one replica; every
@@ -134,13 +134,6 @@ impl PotChange {
     pub fn parse(payload: &str) -> Result<Self> {
         serde_json::from_str(payload).context("parsing pot_changed payload")
     }
-}
-
-pub async fn listen_for_pot_changes(client: &Client) -> Result<()> {
-    client
-        .batch_execute(&format!("LISTEN {POT_CHANGED_CHANNEL};"))
-        .await?;
-    Ok(())
 }
 
 /// One pot. The settled fields are all `None` while it is open, and the

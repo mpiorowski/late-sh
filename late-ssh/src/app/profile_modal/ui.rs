@@ -15,6 +15,7 @@
 
 use chrono::Utc;
 use late_core::models::chat_message_gild::{GildCounts, GildTier};
+use late_core::models::showcase::Showcase;
 use ratatui::{
     Frame,
     buffer::Buffer,
@@ -28,7 +29,6 @@ use ratatui::{
 
 use crate::app::{
     bonsai::render::{PREVIEW_WIDTH, apply_sway, center_lines, render_preview_lines},
-    chat::showcase::svc::ShowcaseFeedItem,
     common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
     hub::aquarium::{state::AquariumState, ui as aquarium_ui},
     pet::ui::portrait_lines as pet_portrait_lines,
@@ -249,7 +249,7 @@ fn build_segments(
     }
 
     // ── showcases ──
-    let showcases = state.showcases_for_viewed();
+    let showcases = state.showcases();
     if !showcases.is_empty() {
         let mut lines = section_lines(&format!("showcases ({})", showcases.len()), width_usize);
         for (index, item) in showcases.iter().enumerate() {
@@ -616,8 +616,7 @@ fn gild_spans(counts: GildCounts) -> Vec<Span<'static>> {
     spans
 }
 
-fn showcase_markdown(item: &ShowcaseFeedItem) -> String {
-    let s = &item.showcase;
+fn showcase_markdown(s: &Showcase) -> String {
     let mut out = String::new();
     out.push_str("### ");
     out.push_str(s.title.trim());

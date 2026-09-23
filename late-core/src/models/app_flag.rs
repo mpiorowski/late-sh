@@ -114,13 +114,6 @@ impl AppFlags {
     }
 }
 
-pub async fn listen_for_app_flag_changes(client: &Client) -> Result<()> {
-    client
-        .batch_execute(&format!("LISTEN {APP_FLAG_CHANGED_CHANNEL};"))
-        .await?;
-    Ok(())
-}
-
 #[cfg(test)]
 #[path = "app_flag_test.rs"]
 mod app_flag_test;

@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    future::poll_fn,
     sync::{Arc, Mutex},
 };
 
@@ -8,17 +7,17 @@ use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::{
     MutexRecover,
-    db::{Db, DbConfig},
+    db::Db,
     models::quest::{
-        DailyQuestStreakSnapshot, QUEST_ASSIGNMENTS_CHANGED_CHANNEL, QUEST_USER_CHANGED_CHANNEL,
-        QuestProgressUpdate, QuestSnapshotRow, apply_progress_event, ensure_current_assignments,
-        get_daily_quest_streak_snapshot, list_active_snapshot_rows, listen_for_quest_changes,
+        DailyQuestStreakSnapshot, QuestProgressUpdate, QuestSnapshotRow, apply_progress_event,
+        ensure_current_assignments, get_daily_quest_streak_snapshot, list_active_snapshot_rows,
     },
 };
 use serde_json::Value;
-use tokio::sync::{broadcast, watch};
-use tokio_postgres::{AsyncMessage, NoTls};
+use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
+
+use crate::pg_listener::{Channel, Signal};
 
 use crate::app::activity::{
     channel::ActivitySender,
@@ -241,69 +240,47 @@ impl QuestService {
         Ok(())
     }
 
-    pub fn start_listener_task(&self, db_config: DbConfig) -> tokio::task::JoinHandle<()> {
+    /// Keep this replica's open quest boards in step with
+    /// `quest_user_changed` and `quest_assignments_changed` (subscribed in
+    /// `main.rs`). A resync, and any failed notify, re-reads every active
+    /// user's board, so a change missed while the listener reconnected is
+    /// caught up.
+    pub fn start_notify_worker(
+        &self,
+        mut signals: mpsc::UnboundedReceiver<Signal>,
+    ) -> tokio::task::JoinHandle<()> {
         let svc = self.clone();
         tokio::spawn(async move {
-            loop {
-                if let Err(error) = svc.listen_once(&db_config).await {
-                    tracing::warn!(error = ?error, "quest postgres listener stopped");
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            while let Some(signal) = signals.recv().await {
+                let Err(error) = svc.apply_signal(signal).await else {
+                    continue;
+                };
+                tracing::warn!(error = ?error, "quest notify failed; refreshing active users");
+                if let Err(error) = svc.refresh_active_users().await {
+                    tracing::warn!(error = ?error, "failed to refresh active quest boards");
                 }
             }
         })
     }
 
-    async fn listen_once(&self, db_config: &DbConfig) -> Result<()> {
-        let mut config = tokio_postgres::Config::new();
-        config.host(&db_config.host);
-        config.port(db_config.port);
-        config.user(&db_config.user);
-        config.password(&db_config.password);
-        config.dbname(&db_config.dbname);
-
-        let (client, mut connection) = config.connect(NoTls).await?;
-        let listen = listen_for_quest_changes(&client);
-        tokio::pin!(listen);
-        loop {
-            tokio::select! {
-                result = &mut listen => {
-                    result?;
-                    break;
-                }
-                message = poll_fn(|cx| connection.poll_message(cx)) => {
-                    let Some(message) = message else {
-                        return Ok(());
-                    };
-                    self.handle_async_message(message?).await?;
+    async fn apply_signal(&self, signal: Signal) -> Result<()> {
+        match signal {
+            Signal::Resync => self.refresh_active_users().await?,
+            Signal::Notify {
+                channel: Channel::QuestUserChanged,
+                payload,
+            } => {
+                if let Ok(user_id) = payload.parse::<Uuid>() {
+                    self.refresh_user_if_active(user_id).await?;
                 }
             }
-        }
-
-        loop {
-            let Some(message) = poll_fn(|cx| connection.poll_message(cx)).await else {
-                return Ok(());
-            };
-            self.handle_async_message(message?).await?;
-        }
-    }
-
-    async fn handle_async_message(&self, message: AsyncMessage) -> Result<()> {
-        match message {
-            AsyncMessage::Notification(notification) => match notification.channel() {
-                QUEST_USER_CHANGED_CHANNEL => {
-                    if let Ok(user_id) = notification.payload().parse::<Uuid>() {
-                        self.refresh_user_if_active(user_id).await?;
-                    }
-                }
-                QUEST_ASSIGNMENTS_CHANGED_CHANNEL => {
-                    self.refresh_active_users().await?;
-                }
-                _ => {}
-            },
-            AsyncMessage::Notice(notice) => {
-                tracing::debug!(notice = ?notice, "postgres quest listener notice");
+            Signal::Notify {
+                channel: Channel::QuestAssignmentsChanged,
+                ..
+            } => self.refresh_active_users().await?,
+            Signal::Notify { channel, .. } => {
+                unreachable!("quests subscribed only to quest channels, got {channel:?}")
             }
-            _ => {}
         }
         Ok(())
     }

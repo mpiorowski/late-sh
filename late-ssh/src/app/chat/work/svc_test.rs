@@ -32,8 +32,7 @@ async fn recv_work_event(events: &mut tokio::sync::broadcast::Receiver<WorkEvent
     timeout(Duration::from_secs(2), async {
         loop {
             match events.recv().await.expect("work event") {
-                WorkEvent::UnreadCountUpdated { .. }
-                | WorkEvent::NewWorkProfilesAvailable { .. } => continue,
+                WorkEvent::UnreadCountUpdated { .. } => continue,
                 event => return event,
             }
         }

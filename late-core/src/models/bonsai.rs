@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
-use tokio_postgres::{Client, GenericClient};
+use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
 crate::user_scoped_model! {
@@ -28,13 +28,6 @@ crate::user_scoped_model! {
 /// Carries the owner's user id as its payload: the row is re-read by
 /// whoever cares, never trusted from a serialized copy.
 pub const BONSAI_CHANGED_CHANNEL: &str = "bonsai_changed";
-
-pub async fn listen_for_bonsai_changes(client: &Client) -> Result<()> {
-    client
-        .batch_execute(&format!("LISTEN {BONSAI_CHANGED_CHANNEL};"))
-        .await?;
-    Ok(())
-}
 
 /// Everything `Tree::store` writes. No revision: the row owns that.
 #[derive(Clone, Debug)]

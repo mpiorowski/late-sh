@@ -148,13 +148,6 @@ impl DeadchannelRunner {
     }
 }
 
-pub async fn listen_for_deadchannel_runner_changes(client: &Client) -> Result<()> {
-    client
-        .batch_execute(&format!("LISTEN {DEADCHANNEL_RUNNER_CHANGED_CHANNEL};"))
-        .await?;
-    Ok(())
-}
-
 #[cfg(test)]
 #[path = "deadchannel_runner_test.rs"]
 mod deadchannel_runner_test;

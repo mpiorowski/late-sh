@@ -5,8 +5,8 @@
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
 - Last updated: 2026-09-05 (stage 2 of the haunting is witnessed by the
   room: `ChatEvent::NameHit` comes off the `deadchannel_name_hit` Postgres
-  notify on the same listener as the gild markers, now
-  `ChatService::start_message_listener_task`; `push_message` promotes a
+  notify on the same worker as the gild markers,
+  `ChatService::start_notify_worker`; `push_message` promotes a
   held beat when its message lands, and `take_witnessed_hit_landed` hands
   it to the haunting. Before that, 2026-09-04: the `/members` overlay carries `OverlayInk` instead of baked colours, so it stops painting in whichever session last rendered on this thread; every deadchannel log line now carries `username`; first-contact seams: the admin-only `/haunt`
   command in §8 (parsed only when `is_admin`, so a non-admin's `/haunt`
@@ -550,8 +550,8 @@ session. `late-core/src/models/chat_message_gild.rs` owns the table
   count, `pg_notify`, commit. Any early return drops the transaction.
 - **Repaint is DB-backed, not broadcast-backed.** The gild transaction
   notifies `chat_message_gilded` with a `<message id>:<room id>` payload;
-  `ChatService::start_message_listener_task` (one connection per process,
-  wired in `main.rs`, reconnecting after 5s; it also carries the
+  `ChatService::start_notify_worker` (fed by the process listener,
+  `pg_listener.rs`, subscribed in `main.rs`; it also carries the
   haunting's `deadchannel_name_hit` channel) turns each notification into
   a local `ChatEvent::MessageGildsUpdated`. This process is not special-cased: it
   learns about its own gilds the same way a second replica does, so there is
@@ -661,8 +661,8 @@ its own domain; only the command and the glyph are chat's.
 - **Distribution.** `CrownService` holds a process-shared
   `watch<Option<CrownHolder>>` (user id plus month), seeded by the listener
   and refreshed on the `crown_changed` notify
-  (`start_listener_task`, one connection per process, wired in `main.rs`,
-  reconnecting and re-seeding after 5s). The notify payload is a
+  (`start_notify_worker` over the process listener, `pg_listener.rs`,
+  resyncing after a reconnect). The notify payload is a
   `CrownChange` (taker name, price, deposed id): the holder is re-read from
   the table, and the deposed holder's banner is raised from the payload as a
   `CrownEvent::Deposed`, so it lands on whichever replica they are on. The
@@ -872,7 +872,8 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - Rendering/parsing of announcement cards lives in `ui_text.rs`.
 - Delete removes the article and deletes matching news announcements by marker/user/url, then broadcasts silent `MessageRemoved` chat events so active #lounge views drop the generated card without showing a second message-delete banner; article deletion can still succeed if chat cleanup only logs a warning.
 - URL processing has a 5-minute timeout. Image ASCII fetch has byte, pixel, and time limits.
-- News snapshot is global and lists recent articles; unread count is per user through `article_feed_reads`.
+- News snapshot is global: the newest `NEWS_FEED_LIMIT` (20) articles, one `watch` per replica. It is refreshed only by `ArticleService::start_notify_worker` (subscribed in `main.rs`), fed `articles_changed` (migration 196, a statement trigger on any `articles` write, empty payload) by the process listener (`pg_listener.rs`); it re-reads on the resync after LISTEN is live and on every notify, a burst collapsing into one read. Share and delete never refresh it directly; the notify brings the change back to the writing replica like any other.
+- The News badge is counted in the session, not in SQL: `news::state::unread_in_snapshot` counts snapshot articles newer than the reader's `article_feed_reads` cursor (no row = all unread, own shares included), and `news_unread_label` renders a full snapshot as `20+`. The cursor arrives as `ArticleEvent::ReadCursorLoaded` (at session start and after `mark_read`); until then `ReadCursor::Loading` keeps the badge empty. The "N new articles in news" banner fires when a refreshed snapshot holds an unread article by someone else that the previous snapshot did not (`has_fresh_unread_from_others`); a session's first snapshot never announces. No per-user event is ever published for other users, so a write costs one list query per replica whatever the users table holds.
 
 ### Showcase
 
@@ -882,7 +883,8 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - Validation (in the editor) requires title, `http://` or `https://` URL, and description.
 - Title max is 120 chars; description max is 800 chars.
 - Tags normalize lowercase, split on comma/whitespace, strip leading `#`, allow ASCII alnum plus `-_.`, cap each tag at 24 chars and total tags at 8.
-- Snapshot is global and lists recent showcases; unread count is per user through `showcase_feed_reads`.
+- Snapshot is global and lists recent showcases; unread count is per user through `showcase_feed_reads`, loaded once at session start (`refresh_unread_count`) and zeroed on visiting Profiles page 5. It does not move live when someone else posts: that needs a fresh session. Writes publish only the writer's own `Created`/`Updated`/`Deleted`/`Failed` event.
+- The profile modal does not read this snapshot: `ProfileSnapshot::showcases` carries every showcase of the viewed user, newest first (`Showcase::list_by_user_id`), loaded with the rest of the profile on open.
 
 ### Work
 
@@ -894,7 +896,7 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - Links require `http://` or `https://`, cap at 6, and are stored for later web rendering.
 - Skills are canonical tags from the vocabulary (`late_core::vocab`), picked in the tag picker, twelve at most; `skills_tags` holds the same list, the array the job matcher joins on.
 - Public profiles show bio, late.fetch fields, and showcases when the author has data for them. The composer does not expose include toggles. `WorkFeedItem` carries the owner `Profile` projection so the Directory detail panel can preview the same public-page sections without per-row DB calls.
-- Snapshot is global and lists recent work profiles by latest update; unread count is per user through `work_feed_reads`.
+- Snapshot is global and lists recent work profiles by latest update; unread count is per user through `work_feed_reads`, loaded once at session start and zeroed on visiting Profiles page 5, the same as Showcase: no live bump when someone else posts.
 
 ### Cyberspace
 
@@ -1226,7 +1228,7 @@ Test gaps:
 - Ignore filtering covers all rooms including DMs, and also hides bot replies whose `reply_to_user_id` is ignored. DMs with an ignored peer are hidden from the room rail entirely.
 - `#announcements` admin-only currently depends on the provided `room_slug`; stale/missing slug is a fragile path.
 - Reaction tasks are async; UI should not assume optimistic success.
-- A gild marker repaints off the Postgres notify, not off `evt_tx`. If `start_message_listener_task` is not running (tests, or a process wired without it) the marker only appears on the next room tail load. Do not "fix" that by broadcasting locally as well: two paths would mean two repaints and a marker that behaves differently on the replica that sold it.
+- A gild marker repaints off the Postgres notify, not off `evt_tx`. If `start_notify_worker` and the process listener are not running (tests, or a process wired without it) the marker only appears on the next room tail load. Do not "fix" that by broadcasting locally as well: two paths would mean two repaints and a marker that behaves differently on the replica that sold it.
 - Poll create/vote tasks are async; `ChatEvent::PollUpdated` patches the local active-poll map and `ChatSnapshot.active_polls` refreshes authoritative visibility. Successful poll creation spawns a sleep-until-expiry finalizer that atomically claims the expired poll in Postgres, marks it inactive, and posts compact results into the room as the poll creator. `ChatService::start_poll_finalizer_recovery_task` runs a coarse 10-minute recovery scan for expired active polls so restarts/redeploys do not strand result posts; the DB claim is the cross-replica duplicate guard.
 - Poll vote shortcuts use `va/vb/vc` when the selected/visible real room has an active poll, leaving music `v1/v2/v3` selectors available.
 - Room visual order must stay consistent between state and UI hit-testing/row-building.

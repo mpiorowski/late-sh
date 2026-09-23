@@ -9,7 +9,7 @@ use crate::{
         chat_message::{ChatMessage, ChatMessageParams},
         chat_message_gild::{
             CHAT_MESSAGE_GILDED_CHANNEL, ChatMessageGild, ChatMessageGildSummary, GildCounts,
-            GildParties, GildPlacement, GildTier, listen_for_gild_changes, parse_gilded_payload,
+            GildParties, GildPlacement, GildTier, parse_gilded_payload,
         },
         chat_room::ChatRoom,
     },
@@ -80,7 +80,8 @@ async fn gilding_notifies_every_replica() {
         .connect(NoTls)
         .await
         .expect("listener connection");
-    let listen = listen_for_gild_changes(&listener);
+    let listen_statement = format!("LISTEN {CHAT_MESSAGE_GILDED_CHANNEL};");
+    let listen = listener.batch_execute(&listen_statement);
     tokio::pin!(listen);
     let mut listen_done = false;
     while !listen_done {
