@@ -410,3 +410,39 @@ async fn pots_resolve_by_id() {
         Some(POT_TICKET_PRICE)
     );
 }
+
+/// Every replica sweeps; the stamp is what makes the reminder post once, and
+/// only inside the window before the draw.
+#[tokio::test]
+async fn the_reminder_is_claimed_once_inside_its_window() {
+    let test_db = test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let now = Utc::now();
+    let draws_at = now + chrono::Duration::minutes(20);
+
+    let tx = client.transaction().await.expect("tx");
+    let pot = Pot::open_in_tx(&tx, draws_at, POT_TICKET_PRICE)
+        .await
+        .expect("open");
+    tx.commit().await.expect("commit");
+
+    // Too early: the window ends ten minutes from now, the draw is twenty.
+    assert_eq!(
+        Pot::claim_reminder(&**client, now, now + chrono::Duration::minutes(10))
+            .await
+            .expect("early claim"),
+        None
+    );
+    let claimed = Pot::claim_reminder(&**client, now, now + chrono::Duration::minutes(30))
+        .await
+        .expect("claim")
+        .expect("the first sweeper inside the window gets the pot");
+    assert_eq!(claimed.id, pot.id);
+    assert_eq!(
+        Pot::claim_reminder(&**client, now, now + chrono::Duration::minutes(30))
+            .await
+            .expect("second claim"),
+        None,
+        "a second sweeper must not remind again"
+    );
+}

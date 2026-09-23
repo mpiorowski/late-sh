@@ -367,10 +367,12 @@ async fn main() -> anyhow::Result<()> {
     let _quest_activity_task = quest_service.start_activity_task();
     let _quest_listener_task = quest_service.start_listener_task(config.db.clone());
     let flair_directory = late_ssh::app::common::username_effect::new_directory();
+    let clubhouse_lobby = late_ssh::app::clubhouse::lobby::SharedLobby::new();
     let shop_service = late_ssh::app::ShopService::new(db.clone())
         .with_flair_directory(flair_directory.clone())
         .with_activity(activity_publisher.clone())
-        .with_ai_service(ai_service.clone());
+        .with_ai_service(ai_service.clone())
+        .with_clubhouse_lobby(clubhouse_lobby.clone());
     let _shop_listener_task = shop_service.start_listener_task(config.db.clone());
     let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
     let nonogram_library = match late_ssh::app::arcade::nonogram::state::load_default_library() {
@@ -380,7 +382,6 @@ async fn main() -> anyhow::Result<()> {
             late_ssh::app::arcade::nonogram::state::Library::default()
         }
     };
-    let clubhouse_lobby = late_ssh::app::clubhouse::lobby::SharedLobby::new();
     let nightcap_lobby = late_ssh::app::clubhouse::nightcap::lobby::SharedSeats::new();
     let nightcap_house = late_ssh::app::clubhouse::nightcap::svc::NightcapHouse::new(
         db.clone(),

@@ -157,7 +157,7 @@ fn session_lines() -> Vec<String> {
         "  Ctrl+\\            toggle owner overlay",
         "",
         "View-mode controls",
-        "  arrows             move the viewport focus",
+        "  arrows / h j k l   move the viewport focus",
         "  Alt+arrows         pan",
         "  right-drag         pan with the mouse",
         "  mouse wheel        pan over the canvas",

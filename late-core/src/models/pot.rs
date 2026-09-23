@@ -301,6 +301,30 @@ impl Pot {
         Ok(row.map(Self::from))
     }
 
+    /// Claim the open pot's closing-soon reminder: the pot draws after `now`
+    /// and no later than `remind_until`, and nobody has reminded for it yet.
+    /// Stamps `reminded_at`, so exactly one sweeper across every replica gets
+    /// the row and the rest get `None`.
+    pub async fn claim_reminder(
+        client: &impl GenericClient,
+        now: DateTime<Utc>,
+        remind_until: DateTime<Utc>,
+    ) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "UPDATE pots
+                 SET reminded_at = $1
+                 WHERE status = 'open'
+                   AND reminded_at IS NULL
+                   AND draws_at > $1
+                   AND draws_at <= $2
+                 RETURNING *",
+                &[&now, &remind_until],
+            )
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
     /// Open a pot that draws at `draws_at`. The caller decides the hour (the
     /// service from [`next_draw_at`], a test from whatever it needs), because
     /// a default here would silently pick when money moves.

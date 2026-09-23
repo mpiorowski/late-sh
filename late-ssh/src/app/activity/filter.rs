@@ -131,10 +131,12 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // by price (each take is 1.5x the last), so this is the story the
         // crown exists to ship.
         ActivityKind::CrownTaken { .. } => true,
-        // The pot's one line: once a week when it draws. The size itself
-        // rides the status HUD all week, so there is nothing to nudge about
-        // before that.
+        // The pot's draw: once a week. The size itself rides the status HUD
+        // all week; the only nudge before the draw is the one last call below.
         ActivityKind::PotDrawn { .. } => true,
+        // The other pot line: half an hour before the draw, once per pot,
+        // so anyone who meant to buy in still can.
+        ActivityKind::PotClosing { .. } => true,
         // Publishing on cyberspace: our user's own action, rare by their API
         // rate limits (15 entries/day), and the funnel that advertises the
         // integration ("wait, you can post to cyberspace from here?").
@@ -222,6 +224,21 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
                 thousands(*total_tickets)
             ))
         }
+        // The last call, worded like `/pot` itself so the command to buy in
+        // is right there. No `@`: nobody is being told anything personally.
+        ActivityKind::PotClosing {
+            size,
+            total_tickets,
+            ticket_price,
+            draws_in_secs,
+            ..
+        } => Some(format!(
+            "\u{1F3B0} Pot {} on {} tickets, draws in {}. /pot buy N at {} each.",
+            thousands(*size),
+            thousands(*total_tickets),
+            crate::app::pot::state::short_duration(*draws_in_secs),
+            thousands(*ticket_price)
+        )),
         // A stream on air is an invitation that outlives the ticker: who,
         // what they called it (`action` already carries the mention-safe
         // title), and where to watch, on its own row so the URL is easy to

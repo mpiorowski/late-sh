@@ -140,7 +140,7 @@ Absent before the first refresh and in a process with no pot service.
 
 ## 8. Feed lines
 
-Two `ActivityKind` arms, both explicit in `filter::lounge_includes`:
+Three `ActivityKind` arms, all explicit in `filter::lounge_includes`:
 
 - `PotDrawn { pot_id, payout, winner_tickets, total_tickets }` -> "mira won
   67,360 chips from the pot on 3 of 312 tickets". It is also the second arm of
@@ -149,11 +149,21 @@ Two `ActivityKind` arms, both explicit in `filter::lounge_includes`:
   winner reconnects. The headline names the winner as `@mira` so the draw
   also reaches them as a mention notification; the ticker line keeps the
   bare name.
+- `PotClosing { pot_id, size, total_tickets, ticket_price, draws_in_secs }`
+  -> ticker "pot draws in 30m: 34,700 chips on 347 tickets" plus the headline
+  "🎰 Pot 34,700 on 347 tickets, draws in 30m. /pot buy N at 100 each.", the
+  last call (`POT_REMINDER_LEAD_SECS`, 30 minutes). Every sweep tries
+  `Pot::claim_reminder`, a guarded UPDATE stamping `pots.reminded_at`
+  (migration 196), so exactly one sweeper across every replica posts it, and
+  only inside the window. The event has no user (`username` "pot"), and the
+  headline carries no `@`, so nobody is notified. A pot with no tickets gets
+  no reminder (the claim is still spent).
 A pot that rolls empty announces nothing: no chips moved and nobody lost.
 
-There are no mid-week size lines any more (migration 162 dropped
-`pots.announced_threshold`, 2026-08-27): the size sits in the status HUD on
-every screen all week, so a #lounge nudge only repeated what the border said.
+There are no mid-week size lines (migration 162 dropped
+`pots.announced_threshold`): the size sits in the status HUD on every screen
+all week, so a #lounge nudge only repeated what the border said. The last
+call above is the one exception, because it is about time, not size.
 
 ## 9. Telemetry
 

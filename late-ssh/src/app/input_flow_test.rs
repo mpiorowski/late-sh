@@ -1103,6 +1103,17 @@ async fn artboard_view_help_and_active_input_share_one_lifecycle() {
     app.handle_input(b"\x1b[C");
     wait_for_render_contains(&mut app, "Cursor     1,0").await;
 
+    // Vim keys move the view-mode cursor like the arrows, and never paint.
+    app.handle_input(b"l");
+    wait_for_render_contains(&mut app, "Cursor     2,0").await;
+    app.handle_input(b"j");
+    wait_for_render_contains(&mut app, "Cursor     2,1").await;
+    app.handle_input(b"k");
+    wait_for_render_contains(&mut app, "Cursor     2,0").await;
+    app.handle_input(b"h");
+    wait_for_render_contains(&mut app, "Cursor     1,0").await;
+    wait_for_render_contains(&mut app, "Mode       view").await;
+
     app.handle_input(b"\x10");
     wait_for_render_contains(&mut app, "Two modes").await;
     assert!(
@@ -3963,4 +3974,52 @@ async fn f_favorites_the_mentions_entry() {
     app.handle_input(b"f");
     wait_for_render_contains(&mut app, "Removed from favorites").await;
     assert!(!app.chat.favorite_room_ids().contains(&mentions_id));
+}
+
+/// The Chat badges picker lists every badge; a game's ladder is one row, and
+/// hiding it stores every rung so no lower one takes its place.
+#[tokio::test]
+async fn chat_badges_picker_hides_a_whole_game_ladder() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "badge-picker-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "badge-picker-flow-it");
+
+    app.handle_input(b"\x0f");
+    wait_for_render_contains(&mut app, "badge-picker-it").await;
+    app.handle_input(b"\t\t\t");
+    wait_for_render_contains(&mut app, "Chat badges").await;
+    wait_for_render_contains(&mut app, "all shown").await;
+    // Tweaks rows: background, brightness, right rail, room rail, composer,
+    // flag fallback, terminal images, then Chat badges.
+    app.handle_input(b"jjjjjjj\r");
+    wait_for_render_contains(&mut app, "If you can earn it, you can hide it").await;
+    wait_for_render_contains(&mut app, "LMG LKN LYS LKA").await;
+
+    // Picker rows in label order: the eight monthly rows, then Lateania.
+    app.handle_input(b"jjjjjjjj\r");
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move {
+                let client = db.get().await.expect("db client");
+                let stored = User::get(&client, user.id)
+                    .await
+                    .expect("load user")
+                    .expect("user exists");
+                late_core::models::user::extract_hidden_award_categories(&stored.settings)
+                    == vec![
+                        "lateania_archdemon".to_string(),
+                        "lateania_frontier_king".to_string(),
+                        "lateania_sundering_deep".to_string(),
+                        "lateania_kaethyr_ascendant".to_string(),
+                    ]
+            }
+        },
+        "the whole Lateania ladder to be hidden",
+    )
+    .await;
+
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "1 hidden").await;
 }

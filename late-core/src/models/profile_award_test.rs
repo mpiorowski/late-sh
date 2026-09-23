@@ -468,3 +468,93 @@ async fn the_gallery_award_ranks_best_pieces_and_pays_once() {
         .expect("hall of fame");
     assert_eq!(hall.first().map(|piece| piece.id), Some(best.id));
 }
+
+/// The Settings badge picker covers every badge a label can show, each
+/// category exactly once, with every game ladder folded into a single row.
+#[test]
+fn chat_badge_rows_cover_every_category_once_with_one_row_per_ladder() {
+    use crate::models::profile_award::{BADGE_LADDERS, all_award_categories, chat_badge_rows};
+
+    let rows = chat_badge_rows();
+    let mut covered: Vec<&str> = rows
+        .iter()
+        .flat_map(|row| row.categories.iter().copied())
+        .collect();
+    covered.sort_unstable();
+    let mut all = all_award_categories();
+    all.sort_unstable();
+    assert_eq!(covered, all);
+
+    for ladder in BADGE_LADDERS {
+        let owning: Vec<_> = rows
+            .iter()
+            .filter(|row| ladder.iter().any(|rung| row.categories.contains(rung)))
+            .collect();
+        assert_eq!(owning.len(), 1, "one row per ladder");
+        assert_eq!(owning[0].categories, ladder.to_vec());
+    }
+    let lateania = rows
+        .iter()
+        .find(|row| row.label == "Lateania bosses")
+        .expect("lateania row");
+    assert_eq!(lateania.codes, "LMG LKN LYS LKA");
+}
+
+/// Hiding a game's row hides every rung of it on the chat label, and the
+/// filter lives in the label query itself, not in app code afterwards.
+#[tokio::test]
+async fn hidden_award_categories_leave_the_chat_label() {
+    use crate::models::profile_award::{
+        CROWN_AWARD_CATEGORY, LATEANIA_ARCHDEMON_AWARD_CATEGORY,
+        LATEANIA_FRONTIER_KING_AWARD_CATEGORY, NETHACK_AMULET_AWARD_CATEGORY,
+        grant_unique_milestone_award,
+    };
+    use crate::models::user::User;
+
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "hide-badges").await;
+    for category in [
+        LATEANIA_ARCHDEMON_AWARD_CATEGORY,
+        LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
+        NETHACK_AMULET_AWARD_CATEGORY,
+    ] {
+        grant_unique_milestone_award(&client, user.id, category, 1)
+            .await
+            .expect("grant");
+    }
+    let label = |rows: Vec<crate::models::user::ChatAuthorMetadata>| {
+        rows.into_iter()
+            .next()
+            .expect("author row")
+            .profile_award_badges
+    };
+
+    let shown = User::list_chat_author_metadata(&client, &[user.id])
+        .await
+        .expect("metadata");
+    assert_eq!(label(shown).as_deref(), Some("LKN NHA"), "top rung only");
+
+    client
+        .execute(
+            "UPDATE users SET settings = settings || jsonb_build_object(
+                 'hidden_award_categories', $2::jsonb)
+             WHERE id = $1",
+            &[
+                &user.id,
+                &serde_json::json!([
+                    LATEANIA_ARCHDEMON_AWARD_CATEGORY,
+                    LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
+                    "lateania_sundering_deep",
+                    "lateania_kaethyr_ascendant",
+                    CROWN_AWARD_CATEGORY,
+                ]),
+            ],
+        )
+        .await
+        .expect("hide lateania");
+    let hidden = User::list_chat_author_metadata(&client, &[user.id])
+        .await
+        .expect("metadata");
+    assert_eq!(label(hidden).as_deref(), Some("NHA"));
+}

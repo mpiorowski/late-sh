@@ -100,7 +100,7 @@ Local state:
 - `late-ssh/src/app/artboard/page.rs`
   - Page-level integration with `crate::app::state::App`.
   - Distinguishes view mode from active Artboard interaction.
-  - View mode supports cursor movement, page/home/end, Alt-arrow panning, right-drag pan, `Ctrl+P` local help (`?` is the global guide), Esc to the rail, and `i`/Enter activation.
+  - View mode supports cursor movement (arrows or `h`/`j`/`k`/`l`; edit mode spends the letters on paint), page/home/end, Alt-arrow panning, right-drag pan, `Ctrl+P` local help (`?` is the global guide), Esc to the rail, and `i`/Enter activation.
   - Active/help/glyph modes delegate to `input.rs`; the rail, listings, archive lists, and the hang flow to `gallery/input.rs`, whose `Ignored` falls through to the view-mode keys so `i` and the Ctrl keys work from the rail; framing and the title prompt let Ctrl+P through too.
   - Converts `InputAction::Copy` into `app.pending_clipboard` and `InputAction::Leave` into edit-mode deactivation.
 

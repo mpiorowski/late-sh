@@ -47,6 +47,21 @@ const POT_EVENT_CAP: usize = 32;
 /// to re-read the snapshot as a backstop for a missed notify.
 const POT_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
+/// How long before the draw #lounge gets the pot's last call.
+const POT_REMINDER_LEAD_SECS: i64 = 30 * 60;
+
+/// The closing-soon line, as the sweeper that claimed it hands it to #lounge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PotReminder {
+    pub pot_id: Uuid,
+    pub size: i64,
+    pub total_tickets: i64,
+    pub ticket_price: i64,
+    /// Rounded up to the minute: the sweeper lands a few seconds inside the
+    /// window, and "draws in 29m" for a half-hour call reads like a typo.
+    pub draws_in_secs: i64,
+}
+
 /// One player's place in the pot, as the snapshot hands it to that player.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PotHolding {
@@ -340,6 +355,13 @@ impl PotService {
                 );
             }
         }
+        match self.claim_reminder().await {
+            Ok(None) => {}
+            Ok(Some(reminder)) => self.announce_reminder(reminder),
+            Err(error) => {
+                tracing::warn!(error = ?error, "failed to claim the pot reminder");
+            }
+        }
         if let Err(error) = self.refresh().await {
             tracing::warn!(error = ?error, "failed to refresh the pot");
         }
@@ -624,6 +646,44 @@ impl PotService {
         Pot::open_in_tx(&tx, next_draw_at(now), POT_TICKET_PRICE).await?;
         tx.commit().await?;
         Ok(Some(settlement))
+    }
+
+    /// Claim the open pot's closing-soon reminder if its window has come.
+    /// The stamp in the table is the claim, so one sweeper across every
+    /// replica gets it. A pot nobody has bought into gets no reminder: it
+    /// rolls silently, and a last call for an empty pot is noise.
+    pub(super) async fn claim_reminder(&self) -> Result<Option<PotReminder>> {
+        let now = Utc::now();
+        let remind_until = now + chrono::Duration::seconds(POT_REMINDER_LEAD_SECS);
+        let client = self.db.get().await?;
+        let Some(pot) = Pot::claim_reminder(&**client, now, remind_until).await? else {
+            return Ok(None);
+        };
+        let holders = PotTicket::holders(&**client, pot.id).await?;
+        let total_tickets: i64 = holders.iter().map(|holder| holder.tickets).sum();
+        if total_tickets == 0 {
+            return Ok(None);
+        }
+        let secs_left = (pot.draws_at - now).num_seconds();
+        Ok(Some(PotReminder {
+            pot_id: pot.id,
+            size: total_tickets.saturating_mul(pot.ticket_price),
+            total_tickets,
+            ticket_price: pot.ticket_price,
+            draws_in_secs: (secs_left + 59) / 60 * 60,
+        }))
+    }
+
+    fn announce_reminder(&self, reminder: PotReminder) {
+        if let Some(activity) = &self.activity {
+            activity.pot_closing(
+                reminder.pot_id,
+                reminder.size,
+                reminder.total_tickets,
+                reminder.ticket_price,
+                reminder.draws_in_secs,
+            );
+        }
     }
 
     /// Everything a settled draw has to tell. The winner's own banner is not

@@ -1,8 +1,9 @@
 use late_core::models::{
     marketplace::{
         AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_PLANT_ITEM_KIND,
-        AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND, CHAT_CONSUMABLE_ITEM_KIND,
-        COMPANION_CONSUMABLE_ITEM_KIND, PET_COMPANION_SKU, USERNAME_EFFECT_ITEM_KIND,
+        AQUARIUM_SKU, BAR_CONSUMABLE_ITEM_KIND, BONSAI_CONSUMABLE_ITEM_KIND,
+        CHAT_CONSUMABLE_ITEM_KIND, COMPANION_CONSUMABLE_ITEM_KIND, PET_COMPANION_SKU,
+        USERNAME_EFFECT_ITEM_KIND,
     },
     rental::TITLE_RENTAL_ITEM_KIND,
 };
@@ -52,8 +53,12 @@ impl ShopCategory {
                     || item.item_kind == AQUARIUM_FISH_ITEM_KIND
                     || item.item_kind == AQUARIUM_PLANT_ITEM_KIND
             }
+            // The hangover pill is a bar consumable, not a chat one (it
+            // targets the buyer, not a room), but it is about your typing, so
+            // it lists here under Consumables.
             Self::Chat => {
                 item.item_kind == CHAT_CONSUMABLE_ITEM_KIND
+                    || item.item_kind == BAR_CONSUMABLE_ITEM_KIND
                     || item.item_kind == USERNAME_EFFECT_ITEM_KIND
                     || item.item_kind == TITLE_RENTAL_ITEM_KIND
             }

@@ -385,21 +385,20 @@ impl GhostService {
                 }
                 recv_result = events.recv() => {
                     match recv_result {
-                        Ok(ChatEvent::MessageCreated { message, target_user_ids, .. }) => {
+                        Ok(ChatEvent::MessageCreated { message, .. }) => {
                             if self.is_silent_room(message.room_id) {
                                 continue;
                             }
                             if message.user_id == bot.id || Some(message.user_id) == bartender_id {
                                 continue;
                             }
-                            if !should_handle_bot_mention_event(
+                            let Some(address) = bot_address(
                                 &message.body,
-                                target_user_ids.as_deref(),
-                                bot.id,
+                                message.reply_to_message_id,
                                 &bot.username,
-                            ) {
+                            ) else {
                                 continue;
-                            }
+                            };
                             // Read-only pre-filter so a hammering patron costs
                             // a map lookup here instead of a pooled connection
                             // and two queries inside the task. Rooms he never
@@ -415,7 +414,7 @@ impl GhostService {
                             let svc = self.clone();
                             let bot = bot.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = svc.handle_bot_mention(bot, message).await {
+                                if let Err(e) = svc.handle_bot_mention(bot, message, address).await {
                                     tracing::error!(error = ?e, "failed to handle @bot mention");
                                 }
                             });
@@ -437,8 +436,33 @@ impl GhostService {
         room_id == self.nightcap_room_id
     }
 
-    async fn handle_bot_mention(&self, bot: BotUser, trigger_message: ChatMessage) -> Result<()> {
+    /// A mention stands on its own. A reply counts only when the message it
+    /// answers really was the bot's; a deleted parent is no longer a reply.
+    async fn address_is_confirmed(
+        &self,
+        client: &tokio_postgres::Client,
+        address: BotAddress,
+        bot_id: Uuid,
+    ) -> Result<bool> {
+        match address {
+            BotAddress::Mention => Ok(true),
+            BotAddress::Reply { parent_id } => match ChatMessage::get(client, parent_id).await? {
+                Some(parent) => Ok(parent.user_id == bot_id),
+                None => Ok(false),
+            },
+        }
+    }
+
+    async fn handle_bot_mention(
+        &self,
+        bot: BotUser,
+        trigger_message: ChatMessage,
+        address: BotAddress,
+    ) -> Result<()> {
         let client = self.db.get().await?;
+        if !self.address_is_confirmed(&client, address, bot.id).await? {
+            return Ok(());
+        }
         ChatRoomMember::auto_join_public_rooms(&client, bot.id).await?;
         let room = ChatRoom::get(&client, trigger_message.room_id)
             .await?
@@ -494,7 +518,7 @@ impl GhostService {
             history_str.push_str(&format!("{author}: {}\n", msg.body));
         }
         history_str.push_str(
-            "---\nThe latest message explicitly mentioned @bot. Reply with only your message content.",
+            "---\nThe latest message mentioned or replied to @bot. Reply with only your message content.",
         );
 
         let reply_target = mention_target_for_user(
@@ -723,9 +747,13 @@ impl GhostService {
                             {
                                 continue;
                             }
-                            if !contains_mention(&message.body, &bartender.username) {
+                            let Some(address) = bot_address(
+                                &message.body,
+                                message.reply_to_message_id,
+                                &bartender.username,
+                            ) else {
                                 continue;
-                            }
+                            };
                             // Read-only pre-filter, same reasoning as @bot's:
                             // throttled mentions never reach the DB, and rooms
                             // he is not in hold no state for this to read. A
@@ -747,7 +775,7 @@ impl GhostService {
                             let svc = self.clone();
                             let bartender = bartender.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = svc.bartender_mention_reply(bartender, message).await {
+                                if let Err(e) = svc.bartender_mention_reply(bartender, message, address).await {
                                     tracing::error!(error = ?e, "bartender mention reply failed");
                                 }
                             });
@@ -767,9 +795,16 @@ impl GhostService {
         &self,
         bartender: BotUser,
         trigger_message: ChatMessage,
+        address: BotAddress,
     ) -> Result<()> {
         {
             let client = self.db.get().await?;
+            if !self
+                .address_is_confirmed(&client, address, bartender.id)
+                .await?
+            {
+                return Ok(());
+            }
             ChatRoomMember::auto_join_public_rooms(&client, bartender.id).await?;
 
             if !ChatRoomMember::is_member(&client, trigger_message.room_id, bartender.id).await? {
@@ -889,7 +924,7 @@ impl GhostService {
         );
 
         let history_with_prompt = format!(
-            "{history_str}---\nThe latest message mentioned @{}. Decide your action and return the JSON.",
+            "{history_str}---\nThe latest message mentioned or replied to @{}. Decide your action and return the JSON.",
             bartender.username
         );
 
@@ -1545,6 +1580,40 @@ fn short_user_id(user_id: Uuid) -> String {
     id[..id.len().min(8)].to_string()
 }
 
+/// How a chat message calls on a bot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BotAddress {
+    /// `@handle` in the message's own text (the reply quote never counts).
+    Mention,
+    /// A reply whose quote line names the bot. The quote is only the cheap
+    /// pre-filter; the handler confirms the replied-to message's author
+    /// before answering, so a hand-typed `> @bot:` line cannot fake one.
+    Reply { parent_id: Uuid },
+}
+
+fn bot_address(body: &str, reply_to_message_id: Option<Uuid>, handle: &str) -> Option<BotAddress> {
+    if contains_mention(body, handle) {
+        return Some(BotAddress::Mention);
+    }
+    let parent_id = reply_to_message_id?;
+    let quoted = quoted_reply_author(body)?;
+    match quoted.eq_ignore_ascii_case(handle.trim().trim_start_matches('@')) {
+        true => Some(BotAddress::Reply { parent_id }),
+        false => None,
+    }
+}
+
+/// The author named by the composer's reply quote, `> @name: preview`, on
+/// the first line of a reply body (`chat/state.rs` writes it).
+fn quoted_reply_author(body: &str) -> Option<&str> {
+    let (first_line, rest) = body.split_once('\n')?;
+    if rest.trim().is_empty() {
+        return None;
+    }
+    let (name, _) = first_line.trim().strip_prefix("> @")?.split_once(':')?;
+    Some(name)
+}
+
 fn text_for_mention_detection(text: &str) -> &str {
     match text.split_once('\n') {
         Some((first_line, rest))
@@ -1614,24 +1683,6 @@ fn is_mention_char(c: char) -> bool {
 
 fn is_dm_room(kind: &str, visibility: &str) -> bool {
     kind == "dm" || visibility == "dm"
-}
-
-fn should_handle_bot_mention_event(
-    body: &str,
-    target_user_ids: Option<&[Uuid]>,
-    _bot_user_id: Uuid,
-    bot_username: &str,
-) -> bool {
-    if !contains_mention(body, bot_username) {
-        return false;
-    }
-
-    match target_user_ids {
-        // Private rooms and DMs restrict target_user_ids to current members.
-        // An explicit @bot mention is the bootstrap path that lets @bot join.
-        Some(_targets) => true,
-        None => true,
-    }
 }
 
 struct TinyRng {

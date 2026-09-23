@@ -766,3 +766,40 @@ async fn paper_shown_claim_wins_once_per_edition_and_only_moves_forward() {
             .unwrap()
     );
 }
+
+#[test]
+fn terminal_images_tweak_reads_back_and_defaults_to_auto() {
+    use crate::models::user::{TerminalImagesMode, extract_terminal_images};
+    for mode in [
+        TerminalImagesMode::Auto,
+        TerminalImagesMode::Off,
+        TerminalImagesMode::Sixel,
+    ] {
+        assert_eq!(
+            extract_terminal_images(&json!({ "terminal_images": mode.as_str() })),
+            mode
+        );
+        // Cycling forward then back lands where it started.
+        assert_eq!(mode.cycle(true).cycle(false), mode);
+    }
+    assert_eq!(
+        extract_terminal_images(&json!({})),
+        TerminalImagesMode::Auto
+    );
+    assert_eq!(
+        extract_terminal_images(&json!({ "terminal_images": "kitty" })),
+        TerminalImagesMode::Auto
+    );
+}
+
+#[test]
+fn hidden_award_categories_keep_only_real_badges() {
+    use crate::models::user::extract_hidden_award_categories;
+    assert_eq!(
+        extract_hidden_award_categories(&json!({
+            "hidden_award_categories": ["crown", "not_a_badge", 7, "lateania_archdemon"]
+        })),
+        vec!["crown".to_string(), "lateania_archdemon".to_string()]
+    );
+    assert!(extract_hidden_award_categories(&json!({})).is_empty());
+}

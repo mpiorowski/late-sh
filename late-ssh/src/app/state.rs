@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use late_core::models::leaderboard::LeaderboardData;
 use late_core::models::profile::Profile;
-use late_core::models::user::{LandingPage, RightSidebarMode, RoomListMode};
+use late_core::models::user::{LandingPage, RightSidebarMode, RoomListMode, TerminalImagesMode};
 use late_core::models::user_ssh_key::KeyLayout;
 
 use crate::{
@@ -909,7 +909,10 @@ pub struct App {
     /// Terminal control sequences that should be emitted after the frame diff.
     pub(crate) pending_terminal_commands: Vec<Vec<u8>>,
 
-    pub(crate) terminal_image_protocol: Option<TerminalImageProtocol>,
+    /// What the terminal reported (TERM, env hints, XTVERSION, DA1). Read
+    /// through [`App::terminal_image_protocol`], which applies the user's
+    /// Terminal images tweak on top.
+    pub(crate) detected_image_protocol: Option<TerminalImageProtocol>,
     pub(crate) terminal_images_disabled: bool,
     pub(crate) inline_image_symbol_mode: InlineImageSymbolMode,
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
@@ -1134,7 +1137,7 @@ impl App {
         let terminal = Terminal::with_options(backend, TerminalOptions { viewport })
             .context("failed to create terminal backend")?;
         let terminal_images_disabled = term_disables_terminal_images(&config.term);
-        let terminal_image_protocol = if terminal_images_disabled {
+        let detected_image_protocol = if terminal_images_disabled {
             None
         } else {
             protocol_from_term(&config.term)
@@ -1725,7 +1728,7 @@ impl App {
             chip_balance: config.initial_chip_balance,
             pending_clipboard: None,
             pending_terminal_commands,
-            terminal_image_protocol,
+            detected_image_protocol,
             terminal_images_disabled,
             inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),
@@ -2443,7 +2446,7 @@ impl App {
             return;
         }
         if let Some(protocol) = protocol_from_env_hint(name, value) {
-            self.terminal_image_protocol = Some(protocol);
+            self.detected_image_protocol = Some(protocol);
         }
     }
 
@@ -2459,7 +2462,7 @@ impl App {
             return;
         }
         if let Some(protocol) = protocol_from_xtversion(value) {
-            self.terminal_image_protocol = Some(protocol);
+            self.detected_image_protocol = Some(protocol);
         }
     }
 
@@ -2474,14 +2477,25 @@ impl App {
             return;
         }
         if let Some(protocol) = protocol_from_terminal_features(value) {
-            self.terminal_image_protocol = Some(protocol);
+            self.detected_image_protocol = Some(protocol);
+        }
+    }
+
+    /// The protocol inline images are drawn with: the detected one, unless
+    /// the user's Terminal images tweak overrides it. Read live, so flipping
+    /// the tweak takes effect on the next frame.
+    pub(crate) fn terminal_image_protocol(&self) -> Option<TerminalImageProtocol> {
+        match self.profile_state.profile().terminal_images {
+            TerminalImagesMode::Auto => self.detected_image_protocol,
+            TerminalImagesMode::Off => None,
+            TerminalImagesMode::Sixel => Some(TerminalImageProtocol::Sixel),
         }
     }
 
     pub(crate) fn apply_primary_device_attributes(&mut self, attrs: &[u16]) {
         tracing::trace!(
             ?attrs,
-            current_protocol = ?self.terminal_image_protocol,
+            current_protocol = ?self.detected_image_protocol,
             images_disabled = self.terminal_images_disabled,
             "terminal DA1 reply"
         );
@@ -2492,11 +2506,11 @@ impl App {
         // advertise sixel here while supporting richer iTerm2 graphics, so
         // never displace a protocol detected from TERM, env hints, XTVERSION,
         // or the iTerm2 capabilities reply.
-        if self.terminal_image_protocol.is_some() {
+        if self.detected_image_protocol.is_some() {
             return;
         }
         if let Some(protocol) = protocol_from_device_attributes(attrs) {
-            self.terminal_image_protocol = Some(protocol);
+            self.detected_image_protocol = Some(protocol);
         }
     }
 
@@ -3762,7 +3776,7 @@ impl App {
         let _ = crossterm::execute!(shared, terminal::Clear(ClearType::All));
         self.terminal.swap_buffers();
         self.terminal.swap_buffers();
-        if self.terminal_image_protocol == Some(TerminalImageProtocol::Kitty) {
+        if self.terminal_image_protocol() == Some(TerminalImageProtocol::Kitty) {
             self.pending_terminal_commands
                 .extend(kitty_cleanup_commands());
         }

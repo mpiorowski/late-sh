@@ -48,6 +48,15 @@ impl PieceKind {
     }
 }
 
+/// One rendered board cell. The ghost is the landing preview for the piece
+/// in play, drawn only where nothing else is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cell {
+    Empty,
+    Ghost(PieceKind),
+    Block(PieceKind),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ActivePiece {
     pub kind: PieceKind,
@@ -264,16 +273,44 @@ impl State {
         }
     }
 
-    pub fn board_with_active_piece(&self) -> Board {
-        let mut board = self.board;
-        if !self.is_game_over {
-            for (row, col) in piece_cells(self.current) {
+    /// What each cell shows: settled blocks, then the ghost where a hard drop
+    /// would land the piece, then the piece itself on top (so a ghost that
+    /// overlaps the piece, i.e. it is already resting, never shows).
+    pub fn view_cells(&self) -> [[Cell; BOARD_WIDTH]; BOARD_HEIGHT] {
+        let mut cells = self.board.map(|row| {
+            row.map(|cell| match cell {
+                Some(kind) => Cell::Block(kind),
+                None => Cell::Empty,
+            })
+        });
+        if self.is_game_over {
+            return cells;
+        }
+        let mut paint = |piece: ActivePiece, cell: Cell| {
+            for (row, col) in piece_cells(piece) {
                 if row >= 0 && row < BOARD_HEIGHT as i32 && col >= 0 && col < BOARD_WIDTH as i32 {
-                    board[row as usize][col as usize] = Some(self.current.kind);
+                    cells[row as usize][col as usize] = cell;
                 }
             }
+        };
+        paint(self.ghost_piece(), Cell::Ghost(self.current.kind));
+        paint(self.current, Cell::Block(self.current.kind));
+        cells
+    }
+
+    /// Where the current piece would lock if hard-dropped right now.
+    pub fn ghost_piece(&self) -> ActivePiece {
+        let mut ghost = self.current;
+        loop {
+            let below = ActivePiece {
+                row: ghost.row + 1,
+                ..ghost
+            };
+            if self.collides(below) {
+                return ghost;
+            }
+            ghost = below;
         }
-        board
     }
 
     pub fn gravity_ticks(&self) -> u32 {
