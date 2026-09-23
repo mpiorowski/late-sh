@@ -178,6 +178,15 @@ impl From<Row> for Pot {
     }
 }
 
+/// The pot a sweeper just claimed the last call for, with the ticket total
+/// the same statement read (see [`Pot::claim_reminder`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PotReminderClaim {
+    pub pot: Pot,
+    /// At least one: an empty pot is never claimed.
+    pub total_tickets: i64,
+}
+
 /// One player's holding in one pot: the shape the draw walks and the
 /// snapshot indexes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -302,14 +311,18 @@ impl Pot {
     }
 
     /// Claim the open pot's closing-soon reminder: the pot draws after `now`
-    /// and no later than `remind_until`, and nobody has reminded for it yet.
-    /// Stamps `reminded_at`, so exactly one sweeper across every replica gets
-    /// the row and the rest get `None`.
+    /// and no later than `remind_until`, somebody holds a ticket, and nobody
+    /// has reminded for it yet. Stamps `reminded_at`, so exactly one sweeper
+    /// across every replica gets the row and the rest get `None`. The ticket
+    /// total rides the same statement: the stamp and the numbers it announces
+    /// land together, so a failure between them cannot spend the claim. An
+    /// empty pot is never claimed, so a buy later in the window still gets
+    /// its last call.
     pub async fn claim_reminder(
         client: &impl GenericClient,
         now: DateTime<Utc>,
         remind_until: DateTime<Utc>,
-    ) -> Result<Option<Self>> {
+    ) -> Result<Option<PotReminderClaim>> {
         let row = client
             .query_opt(
                 "UPDATE pots
@@ -318,11 +331,18 @@ impl Pot {
                    AND reminded_at IS NULL
                    AND draws_at > $1
                    AND draws_at <= $2
-                 RETURNING *",
+                   AND EXISTS (SELECT 1 FROM pot_tickets WHERE pot_id = pots.id)
+                 RETURNING *,
+                     (SELECT COALESCE(SUM(count), 0)::BIGINT
+                      FROM pot_tickets
+                      WHERE pot_id = pots.id) AS total_tickets",
                 &[&now, &remind_until],
             )
             .await?;
-        Ok(row.map(Self::from))
+        Ok(row.map(|row| PotReminderClaim {
+            total_tickets: row.get("total_tickets"),
+            pot: Self::from(row),
+        }))
     }
 
     /// Open a pot that draws at `draws_at`. The caller decides the hour (the

@@ -15,7 +15,7 @@ use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::games::chips::svc::RoundRefusal;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome};
-use crate::app::pot::svc::PotRefusal;
+use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 
 /// Why the render loop drew a frame. The loop can only distinguish its two
 /// wake sources; event-driven renders currently ride the world tick, so they
@@ -251,9 +251,9 @@ mod inner {
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
         GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult,
-        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal,
-        RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult, TranslationResult,
-        VizWireBands,
+        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
+        RenderReason, RoundRefusal, RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult,
+        TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -699,6 +699,25 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_pot_chips_out_total")
                 .with_description("Chips paid out by pot draws; the gap to chips_in is the burn")
+                .build()
+        })
+    }
+
+    fn pot_reminder_label(outcome: PotReminderOutcome) -> &'static str {
+        match outcome {
+            PotReminderOutcome::Posted => "posted",
+            PotReminderOutcome::Failed => "failed",
+        }
+    }
+
+    fn pot_reminders_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pot_reminders_total")
+                .with_description(
+                    "The pot's last call in #lounge, by outcome; a quiet week with no posted line is a reminder that never fired",
+                )
                 .build()
         })
     }
@@ -1260,6 +1279,12 @@ mod inner {
         pot_chips_out_total().add(payout.max(0) as u64, &[]);
     }
 
+    /// The sweep's reminder arm. Only the claims that happened or errored
+    /// count; a sweep with no pot in its window is silence, not an outcome.
+    pub fn record_pot_reminder(outcome: PotReminderOutcome) {
+        pot_reminders_total().add(1, &[KeyValue::new("outcome", pot_reminder_label(outcome))]);
+    }
+
     fn translation_result_label(result: TranslationResult) -> &'static str {
         match result {
             TranslationResult::CacheHit => "cache_hit",
@@ -1667,9 +1692,9 @@ mod inner {
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
         GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult,
-        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, RenderReason, RoundRefusal,
-        RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult, TranslationResult,
-        VizWireBands,
+        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
+        RenderReason, RoundRefusal, RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult,
+        TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
@@ -1713,6 +1738,7 @@ mod inner {
     pub fn record_pot_tickets_bought(_tickets: i64, _chips: i64) {}
     pub fn record_pot_buy_refused(_refusal: PotRefusal) {}
     pub fn record_pot_drawn(_payout: i64, _tickets: i64) {}
+    pub fn record_pot_reminder(_outcome: PotReminderOutcome) {}
     pub fn record_chat_translation(_result: TranslationResult) {}
     pub fn record_chat_summary(_result: SummaryResult) {}
     pub fn record_paper_print(_result: PaperPrintResult) {}

@@ -155,9 +155,11 @@ Three `ActivityKind` arms, all explicit in `filter::lounge_includes`:
   last call (`POT_REMINDER_LEAD_SECS`, 30 minutes). Every sweep tries
   `Pot::claim_reminder`, a guarded UPDATE stamping `pots.reminded_at`
   (migration 196), so exactly one sweeper across every replica posts it, and
-  only inside the window. The event has no user (`username` "pot"), and the
-  headline carries no `@`, so nobody is notified. A pot with no tickets gets
-  no reminder (the claim is still spent).
+  only inside the window. The same statement reads the ticket total, so the
+  stamp and the numbers land together and nothing can fail in between. A pot
+  with no tickets is not claimed at all: a buy later in the window still
+  gets its last call. The event has no user (`username` "pot"), and the
+  headline carries no `@`, so nobody is notified.
 A pot that rolls empty announces nothing: no chips moved and nobody lost.
 
 There are no mid-week size lines (migration 162 dropped
@@ -168,9 +170,13 @@ call above is the one exception, because it is about time, not size.
 ## 9. Telemetry
 
 `late-ssh/src/metrics.rs`: `record_pot_tickets_bought`,
-`record_pot_buy_refused` (labelled by `PotRefusal`),
-`record_pot_drawn`. Five counters, and the burn is readable as the gap between
-`late_ssh_pot_chips_in_total` and `late_ssh_pot_chips_out_total`.
+`record_pot_buy_refused` (labelled by `PotRefusal`), `record_pot_drawn`,
+`record_pot_reminder` (labelled by `PotReminderOutcome`: `posted` or
+`failed`; a sweep with no pot in its window records nothing). Seven counters,
+and the burn is readable as the gap between `late_ssh_pot_chips_in_total` and
+`late_ssh_pot_chips_out_total`. A failed reminder claim also reports through
+`error_span!("pot_reminder_failed")`, like a failed draw; the stamp is not
+spent on a failure, so the next sweep retries.
 
 ## 10. Gotchas
 
