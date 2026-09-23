@@ -1191,10 +1191,12 @@ pub fn draw_dashboard_chat_card(
     let lines: Vec<Line<'static>>;
     let mut chat_hits: Option<Vec<ChatRowHit>> = None;
     if view.messages.is_empty() {
-        lines = vec![Line::from(Span::styled(
-            "No messages yet.",
-            Style::default().fg(theme::TEXT_DIM()),
-        ))];
+        // The pad cell every message row opens with, so the placeholder
+        // sits in the message text's column.
+        lines = vec![Line::from(vec![
+            Span::raw(" "),
+            Span::styled("No messages yet.", Style::default().fg(theme::TEXT_DIM())),
+        ])];
     } else {
         let height = messages_area.height.max(1) as usize;
         let width = messages_area.width.max(1) as usize;
@@ -3191,6 +3193,46 @@ pub struct EmbeddedRoomChatView<'a> {
     pub selection_scroll: Option<&'a SelectionScroll>,
 }
 
+/// Where an embedded chat's pieces go inside its messages area: the voice
+/// strip (when the chat has a voice channel) on the top row, the messages
+/// below it. Both sit inside the same `messages_inset`, and the strip also
+/// skips the rows' pad cell, so its text starts in the message text's column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EmbeddedChatLayout {
+    pub voice_strip: Option<Rect>,
+    pub messages: Rect,
+}
+
+pub(crate) fn embedded_chat_layout(
+    area: Rect,
+    messages_inset: u16,
+    has_voice: bool,
+) -> EmbeddedChatLayout {
+    let area = horizontal_inset(area, messages_inset);
+    let strip_height = match has_voice {
+        true => crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(area.height),
+        false => 0,
+    };
+    // The strip's text skips the pad cell message rows open with, and
+    // keeps the same cell clear on the right.
+    let voice_strip = has_voice.then_some(horizontal_inset(
+        Rect {
+            height: strip_height,
+            ..area
+        },
+        1,
+    ));
+    let messages_area = Rect {
+        y: area.y + strip_height,
+        height: area.height.saturating_sub(strip_height),
+        ..area
+    };
+    EmbeddedChatLayout {
+        voice_strip,
+        messages: messages_area,
+    }
+}
+
 pub fn draw_embedded_room_chat(
     frame: &mut Frame,
     area: Rect,
@@ -3218,11 +3260,16 @@ pub fn draw_embedded_room_chat(
             composer_text_width,
         ));
     let composer_height = total_composer_lines.min(4) as u16 + 2;
-    let (mut messages_area, composer_area) = split_chat_and_composer(area, composer_height);
+    let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
+    let layout = embedded_chat_layout(
+        messages_area,
+        view.messages_inset,
+        view.voice_channel_id.is_some(),
+    );
 
     // A voice channel shows the compact voice strip at the top of the chat
     // panel; text-only views render unchanged.
-    if let Some(voice_channel_id) = view.voice_channel_id {
+    if let (Some(voice_channel_id), Some(strip)) = (view.voice_channel_id, layout.voice_strip) {
         let voice_view = crate::app::voice::ui::VoiceRoomView {
             snapshot: view.voice_snapshot,
             room_id: voice_channel_id,
@@ -3232,20 +3279,10 @@ pub fn draw_embedded_room_chat(
             on_air: None,
             paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
         };
-        let strip_height = crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
-        let strip = Rect {
-            height: strip_height,
-            ..messages_area
-        };
         crate::app::voice::ui::draw_voice_strip(frame, strip, &voice_view);
-        messages_area = Rect {
-            y: messages_area.y + strip_height,
-            height: messages_area.height.saturating_sub(strip_height),
-            ..messages_area
-        };
     }
 
-    let messages_text_area = horizontal_inset(messages_area, view.messages_inset);
+    let messages_text_area = layout.messages;
 
     let height = messages_text_area.height.max(1) as usize;
     let width = messages_text_area.width.max(1) as usize;
@@ -3288,10 +3325,12 @@ pub fn draw_embedded_room_chat(
     );
     let chat_hits = visible.hits;
     let lines = if visible.lines.is_empty() {
-        vec![Line::from(Span::styled(
-            "No messages yet",
-            Style::default().fg(theme::TEXT_DIM()),
-        ))]
+        // The pad cell every message row opens with, so the placeholder
+        // sits in the message text's column.
+        vec![Line::from(vec![
+            Span::raw(" "),
+            Span::styled("No messages yet", Style::default().fg(theme::TEXT_DIM())),
+        ])]
     } else {
         visible.lines
     };
@@ -4937,24 +4976,35 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
     if height == 0 || area.height <= height {
         return area;
     }
-    let width = area.width.max(1) as usize;
+    let rule_width = area.width.max(1) as usize;
+    // Text rows keep the messages' side padding: they skip the pad cell
+    // every message row opens with (the selection bar's column) and leave
+    // the same one cell clear on the right. The rules run edge to edge.
+    let width = rule_width.saturating_sub(2).max(1);
+    let padded = |line: Line<'static>| {
+        let mut spans = vec![Span::raw(" ")];
+        spans.extend(line.spans);
+        Line::from(spans)
+    };
 
     let rule = || {
         Line::from(Span::styled(
-            "\u{2500}".repeat(width),
+            "\u{2500}".repeat(rule_width),
             Style::default().fg(theme::BORDER_DIM()),
         ))
     };
 
     let mut lines: Vec<Line> = Vec::new();
     if let Some(stream) = header.stream {
-        lines.push(stream_header_line(stream, width));
+        lines.push(padded(stream_header_line(stream, width)));
     }
     if header.stream.is_some() && (header.voice.is_some() || header.topic.is_some()) {
         lines.push(rule());
     }
     if let Some(voice) = &header.voice {
-        lines.push(crate::app::voice::ui::voice_strip_line(voice, width));
+        lines.push(padded(crate::app::voice::ui::voice_strip_line(
+            voice, width,
+        )));
     }
     if header.voice.is_some() && header.topic.is_some() {
         lines.push(rule());
@@ -4971,14 +5021,14 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
         // The topic is clipped to whatever the hint leaves, so a long topic
         // never pushes `/rules` off the row.
         let room_for_topic = width.saturating_sub(if header.has_rules { 8 } else { 0 });
-        lines.push(row_with_hint(
+        lines.push(padded(row_with_hint(
             vec![Span::styled(
                 truncate_cells(topic, room_for_topic),
                 Style::default().fg(theme::TEXT_DIM()),
             )],
             hint,
             width,
-        ));
+        )));
     }
     // Closes the block off from the conversation below it.
     lines.push(rule());
@@ -5181,10 +5231,12 @@ fn draw_selected_content(
             chat_hits = Some(visible.hits);
 
             if visible.lines.is_empty() {
-                vec![Line::from(Span::styled(
-                    "No messages yet",
-                    Style::default().fg(theme::TEXT_DIM()),
-                ))]
+                // The pad cell every message row opens with, so the
+                // placeholder sits in the message text's column.
+                vec![Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("No messages yet", Style::default().fg(theme::TEXT_DIM())),
+                ])]
             } else {
                 visible.lines
             }

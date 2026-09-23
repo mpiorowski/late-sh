@@ -269,7 +269,7 @@ fn room_head(page: &PaperRoomPage, elsewhere: bool, bumped: bool) -> PaperLine {
                 " · {} message{} · {} {people}",
                 page.message_count,
                 if page.message_count == 1 { "" } else { "s" },
-                page.member_count
+                member_count_label(page.member_count)
             ),
             PaperInk::Meta,
         ),
@@ -284,6 +284,16 @@ fn room_head(page: &PaperRoomPage, elsewhere: bool, bumped: bool) -> PaperLine {
         ));
     }
     spans
+}
+
+/// Most accounts in the big rooms are long inactive, so an exact count
+/// oversells the crowd. Past a hundred it prints "100+".
+fn member_count_label(count: i64) -> String {
+    if count > 100 {
+        "100+".to_string()
+    } else {
+        count.to_string()
+    }
 }
 
 fn column_lines(text: &str) -> Vec<PaperLine> {

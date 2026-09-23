@@ -37,10 +37,12 @@ use crate::app::games::pool_core::{
 /// so the cue panel keeps showing the ball while the aim is walked off its
 /// edge rather than snapping to the rail behind it.
 pub const SIGHT_REACH: f64 = 2.4;
-/// How far the object ball's drawn leg reaches from its centre, in ball
-/// radii: about three ball widths, enough to read the direction and too
-/// short to line up a pocket across the table.
-pub const OBJECT_GUIDE_REACH: f64 = 6.0;
+/// How far the object ball's drawn leg reaches from its centre, as a share
+/// of the playfield's length: enough to read the direction and too short to
+/// line up a pocket across the table. Measured against the table rather than
+/// the ball, because every table is scaled to fit the same panel: in ball
+/// radii the snooker guide drew half the bar box's length on screen.
+pub const OBJECT_GUIDE_REACH: f64 = 0.13;
 /// Length of the drawn stun line, in ball radii, for a cue ball leaving a
 /// full-speed contact at right angles. Scaled down by the sine of the cut,
 /// since that is the share of its speed the cue ball keeps.
@@ -76,8 +78,9 @@ impl Hit {
 pub struct ObjectLeg {
     pub id: u8,
     pub from: [f64; 2],
-    /// Where the drawn leg ends: `OBJECT_GUIDE_REACH` radii along the
-    /// object ball's line, or sooner where its centre meets something.
+    /// Where the drawn leg ends: `OBJECT_GUIDE_REACH` of the table's length
+    /// along the object ball's line, or sooner where its centre meets
+    /// something.
     pub to: [f64; 2],
     /// The cut angle, signed: positive sends the object ball to the right of
     /// the shot line as seen from behind the cue ball, negative to the left.
@@ -211,7 +214,7 @@ pub fn shot_line(
                     let u = unit(sub(target.pos, ghost));
                     let out = object_direction(spec, dir, u, tip_side);
                     let object_hit = cast(spec, geom, balls, target.pos, out, &[CUE, id]);
-                    let guide = OBJECT_GUIDE_REACH * radius;
+                    let guide = OBJECT_GUIDE_REACH * spec.length;
                     let to = if distance(target.pos, object_hit.at()) < guide {
                         object_hit.at()
                     } else {
