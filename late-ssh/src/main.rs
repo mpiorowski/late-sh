@@ -385,10 +385,12 @@ async fn main() -> anyhow::Result<()> {
         PgChannel::QuestAssignmentsChanged,
     ]));
     let flair_directory = late_ssh::app::common::username_effect::new_directory();
+    let clubhouse_lobby = late_ssh::app::clubhouse::lobby::SharedLobby::new();
     let shop_service = late_ssh::app::ShopService::new(db.clone())
         .with_flair_directory(flair_directory.clone())
         .with_activity(activity_publisher.clone())
-        .with_ai_service(ai_service.clone());
+        .with_ai_service(ai_service.clone())
+        .with_clubhouse_lobby(clubhouse_lobby.clone());
     let _shop_notify_task = shop_service.start_notify_worker(pg_listener.subscribe(&[
         PgChannel::ShopUserChanged,
         PgChannel::ChipUserChanged,
@@ -404,7 +406,6 @@ async fn main() -> anyhow::Result<()> {
             late_ssh::app::arcade::nonogram::state::Library::default()
         }
     };
-    let clubhouse_lobby = late_ssh::app::clubhouse::lobby::SharedLobby::new();
     let nightcap_lobby = late_ssh::app::clubhouse::nightcap::lobby::SharedSeats::new();
     let nightcap_house = late_ssh::app::clubhouse::nightcap::svc::NightcapHouse::new(
         db.clone(),

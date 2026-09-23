@@ -210,6 +210,8 @@ pub(crate) fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         start_with_music_muted: profile.start_with_music_muted,
         landing_page: profile.landing_page,
         paper_at_login: profile.paper_at_login,
+        terminal_images: profile.terminal_images,
+        hidden_award_categories: profile.hidden_award_categories.clone(),
         show_flag_fallback: profile.show_flag_fallback,
         translate_to: profile.translate_to,
         auto_translate: profile.auto_translate,

@@ -41,6 +41,9 @@ pub(super) struct Config {
     pub(super) audio_base_url: String,
     pub(super) audio_output_device: Option<String>,
     pub(super) api_base_url: String,
+    /// Publish playback to the Linux desktop over MPRIS. Off leaves media keys
+    /// and widgets to other players.
+    pub(super) mpris: bool,
     pub(super) verbose: bool,
 }
 
@@ -55,6 +58,7 @@ struct ConfigLayer {
     audio_base_url: Option<String>,
     audio_output_device: Option<String>,
     api_base_url: Option<String>,
+    mpris: Option<bool>,
     verbose: Option<bool>,
 }
 
@@ -83,6 +87,7 @@ fn resolve_config(
         audio_base_url: DEFAULT_AUDIO_BASE_URL.to_string(),
         audio_output_device: None,
         api_base_url: DEFAULT_API_BASE_URL.to_string(),
+        mpris: true,
         verbose: false,
     };
     apply_layer(&mut config, file_layer);
@@ -118,6 +123,9 @@ fn apply_layer(config: &mut Config, layer: ConfigLayer) {
     }
     if let Some(value) = layer.api_base_url {
         config.api_base_url = value;
+    }
+    if let Some(value) = layer.mpris {
+        config.mpris = value;
     }
     if let Some(value) = layer.verbose {
         config.verbose = value;
@@ -172,6 +180,7 @@ fn parse_arg_layer(
                 layer.audio_output_device = Some(value);
             }
             "--api-base-url" => layer.api_base_url = Some(next_value(&mut args, "--api-base-url")?),
+            "--no-mpris" => layer.mpris = Some(false),
             "--verbose" | "-v" => layer.verbose = Some(true),
             "--help" | "-h" => {
                 print_help();
@@ -217,6 +226,7 @@ fn env_config_layer() -> Result<ConfigLayer> {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()),
         api_base_url: env::var("LATE_API_BASE_URL").ok(),
+        mpris: env_flag("LATE_NO_MPRIS").then_some(false),
         verbose: None,
     })
 }
@@ -317,6 +327,7 @@ fn print_help() {
            --audio-base-url <url>     Audio base URL, without or with /stream\n\
            --audio-output-device <n>  Audio output device name (default: system default)\n\
            --api-base-url <url>       API base URL used for /api/ws/pair\n\
+           --no-mpris                 Don't publish playback to Linux desktop media (MPRIS)\n\
            -v, --verbose              Enable debug logging (file-backed on interactive terminals)\n\
            -V, --version              Print version and exit\n\
          \n\
@@ -387,6 +398,7 @@ fn parse_config_layer(text: &str) -> Result<ConfigLayer> {
                 }
                 layer.audio_output_device = Some(value);
             }
+            "mpris" => layer.mpris = Some(parse_toml_bool(raw_value, line_number)?),
             "verbose" => layer.verbose = Some(parse_toml_bool(raw_value, line_number)?),
             other => anyhow::bail!("line {line_number}: unsupported config key '{other}'"),
         }

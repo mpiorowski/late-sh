@@ -723,7 +723,7 @@ fn handle_image_modal_input(app: &mut App, event: &ParsedInput) {
 
 fn close_image_modal(app: &mut App) {
     let needs_full_repaint = matches!(
-        app.terminal_image_protocol,
+        app.terminal_image_protocol(),
         Some(TerminalImageProtocol::Iterm2 | TerminalImageProtocol::Sixel)
     );
     app.chat.close_image_modal();

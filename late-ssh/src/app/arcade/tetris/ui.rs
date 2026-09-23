@@ -6,7 +6,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::state::{BOARD_HEIGHT, BOARD_WIDTH, PieceKind, State};
+use super::state::{BOARD_HEIGHT, BOARD_WIDTH, Cell, PieceKind, State};
 use crate::app::arcade::ui::{
     GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
 };
@@ -82,7 +82,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
 }
 
 fn board_lines(state: &State) -> Vec<Line<'static>> {
-    let board = state.board_with_active_piece();
+    let board = state.view_cells();
     let mut lines = Vec::with_capacity(BOARD_HEIGHT + 2);
     lines.push(Line::from(Span::styled(
         format!("┌{}┐", "─".repeat(BOARD_WIDTH * 2)),
@@ -112,15 +112,21 @@ fn board_lines(state: &State) -> Vec<Line<'static>> {
     lines
 }
 
-fn cell_span(cell: Option<PieceKind>) -> Span<'static> {
+fn cell_span(cell: Cell) -> Span<'static> {
     match cell {
-        Some(kind) => Span::styled(
+        Cell::Block(kind) => Span::styled(
             "██",
             Style::default()
                 .fg(piece_color(kind))
                 .add_modifier(Modifier::BOLD),
         ),
-        None => Span::styled("  ", Style::default().bg(theme::BG_SELECTION())),
+        Cell::Ghost(kind) => Span::styled(
+            "░░",
+            Style::default()
+                .fg(piece_color(kind))
+                .bg(theme::BG_SELECTION()),
+        ),
+        Cell::Empty => Span::styled("  ", Style::default().bg(theme::BG_SELECTION())),
     }
 }
 

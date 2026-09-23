@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use super::{
     chips::{ChipMove, UserChips},
+    drinks::UserDrinks,
     rental::{
         BADGE_RENTAL_ITEM_KIND, BadgeRental, CustomTitle, RENTAL_DAY_SECS, TITLE_EFFECT_KIND,
         TITLE_RENTAL_ITEM_KIND, is_custom_title, title_from_payload,
@@ -92,6 +93,11 @@ pub const AQUARIUM_SHIELD_KIND: &str = "aquarium_shield";
 /// Default shield window when an item payload omits `duration_secs`: 14 days.
 pub const AQUARIUM_SHIELD_DURATION_SECS: i64 = 1_209_600;
 pub const CHAT_CONSUMABLE_ITEM_KIND: &str = "chat_consumable";
+/// Consumables that act on the buyer's night at the bar (migration 197).
+/// Not a chat consumable: those must target a room.
+pub const BAR_CONSUMABLE_ITEM_KIND: &str = "bar_consumable";
+/// Zeroes the buyer's drunk points; refused uncharged while already sober.
+pub const HANGOVER_PILL_SKU: &str = "hangover_pill";
 pub const USERNAME_EFFECT_ITEM_KIND: &str = "username_effect";
 pub const CHAT_BADGE_SLOT: &str = "chat_badge";
 pub const CHAT_FLAG_SLOT: &str = "chat_flag";
@@ -234,6 +240,8 @@ pub enum PurchaseStatus {
     /// A fish or plant the user already owns the cap of
     /// (`TankStockKind::cap`), in the water and parked together.
     OwnedCapReached,
+    /// A hangover pill for a buyer with nothing to sober up from.
+    AlreadySober,
 }
 
 #[derive(Debug, Clone)]
@@ -436,6 +444,32 @@ async fn purchase_item_by_sku_inner(
         }
     }
 
+    if item.sku == HANGOVER_PILL_SKU && !UserDrinks::is_drunk_in_tx(&tx, user_id).await? {
+        let (quantity, active_quantity) = match &existing {
+            Some(row) => (
+                row.get::<_, i32>("quantity"),
+                row.get::<_, i32>("active_quantity"),
+            ),
+            None => (0, 0),
+        };
+        tx.commit().await?;
+        return Ok(PurchaseWithEffectResult {
+            purchase: Some(PurchaseResult {
+                status: PurchaseStatus::AlreadySober,
+                item,
+                balance,
+                quantity,
+                active_quantity,
+            }),
+            refresh_all_active_users: false,
+            username_effect: None,
+            bonsai_decay_protection: None,
+            aquarium_shield: None,
+            badge_rental: None,
+            title_rental: None,
+        });
+    }
+
     if let Some(existing) = existing {
         let quantity = existing.get::<_, i32>("quantity");
         let active_quantity = existing.get::<_, i32>("active_quantity");
@@ -527,6 +561,7 @@ async fn purchase_item_by_sku_inner(
         let activated_badge_rental = activate_badge_rental_in_tx(&tx, user_id, &item).await?;
         let activated_title_rental =
             activate_title_rental_in_tx(&tx, user_id, &item, custom_title).await?;
+        activate_hangover_pill_in_tx(&tx, user_id, &item).await?;
         let payload = user_id.to_string();
         tx.execute(
             "SELECT pg_notify($1, $2)",
@@ -649,6 +684,7 @@ async fn purchase_item_by_sku_inner(
     let activated_badge_rental = activate_badge_rental_in_tx(&tx, user_id, &item).await?;
     let activated_title_rental =
         activate_title_rental_in_tx(&tx, user_id, &item, custom_title).await?;
+    activate_hangover_pill_in_tx(&tx, user_id, &item).await?;
     let payload = user_id.to_string();
     tx.execute(
         "SELECT pg_notify($1, $2)",
@@ -897,7 +933,21 @@ fn is_repeatable_purchase_item(item: &MarketplaceItem) -> bool {
             | AQUARIUM_CONSUMABLE_ITEM_KIND
             | BADGE_RENTAL_ITEM_KIND
             | TITLE_RENTAL_ITEM_KIND
+            | BAR_CONSUMABLE_ITEM_KIND
     )
+}
+
+/// Sobers the buyer up when this transaction bought a hangover pill. The
+/// refusal above already made sure there was something to sober up from.
+async fn activate_hangover_pill_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+    item: &MarketplaceItem,
+) -> Result<()> {
+    if item.sku != HANGOVER_PILL_SKU {
+        return Ok(());
+    }
+    UserDrinks::sober_up_in_tx(tx, user_id).await
 }
 
 /// Activates the chat consumable bought in this transaction. Returns whether

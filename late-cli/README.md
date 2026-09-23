@@ -103,6 +103,7 @@ use your normal `~/.ssh/config`, agent, and default identity discovery.
 --audio-base-url <url>     Audio stream URL
 --audio-output-device <n>  Audio output device name (default: system default)
 --api-base-url <url>       API URL for WebSocket pairing
+--no-mpris                 Don't publish playback to Linux desktop media (MPRIS)
 -v, --verbose              Debug logging (file-backed on interactive terminals)
 ```
 
@@ -122,7 +123,7 @@ verbose = false
 ```
 
 Supported file keys are `ssh-target`, `ssh-port`, `ssh-user`, `ssh-mode`, `key`,
-`audio-base-url`, `api-base-url`, `audio-output-device`, and `verbose`.
+`audio-base-url`, `api-base-url`, `audio-output-device`, `mpris`, and `verbose`.
 TUI keybinds, themes, sidebar settings, and other in-app preferences are saved
 server-side, not in the CLI config file.
 
@@ -136,7 +137,9 @@ On Linux desktops, `late` publishes the selected YouTube, Icecast, or radio
 track over MPRIS, including title, artist, duration, and source details when the
 server provides them. This is read-only: playback remains controlled from the
 paired late.sh TUI. If no desktop D-Bus session is available (for example, in a
-headless shell), the CLI continues normally without MPRIS.
+headless shell), the CLI continues normally without MPRIS. To keep media keys
+and widgets for another player, turn it off with `--no-mpris`, `LATE_NO_MPRIS=1`,
+or `mpris = false` in the config file.
 
 `--ssh-mode openssh` uses a system OpenSSH client with an internal ControlMaster
 connection. It is the recommended mode for YubiKey/FIDO security-key identities

@@ -19,6 +19,7 @@ fn test_config() -> Config {
         audio_base_url: "https://audio.example".to_string(),
         audio_output_device: None,
         api_base_url: "https://api.example".to_string(),
+        mpris: true,
         verbose: false,
     }
 }

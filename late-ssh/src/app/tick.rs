@@ -1237,7 +1237,7 @@ impl App {
         // frames), so requesting here needs no frames of its own; the
         // fetch completion reports through poll_terminal_images above.
         self.chat
-            .request_image_modal_terminal_image(self.terminal_image_protocol);
+            .request_image_modal_terminal_image(self.terminal_image_protocol());
         changed |= self.show_lobby_modal && one_hz;
         let ultimate_cooldown_running = self.ultimate_state.has_cooldown_running();
         changed |= self.show_ultimate_modal

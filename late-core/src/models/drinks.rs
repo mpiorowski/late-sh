@@ -1,9 +1,10 @@
 //! Per-user tavern drink tally backing the clubhouse drunkenness glow.
 //!
 //! `drunk_points` is the raw buzz recorded at `last_drink_at` (chips spent on
-//! drinks, capped at [`MAX_DRUNK_POINTS`]). Nothing ever writes a sober-up:
-//! readers apply [`decayed_points`] against elapsed wall-clock time, so a user
-//! dries out on their own and the row only changes when they buy again.
+//! drinks, capped at [`MAX_DRUNK_POINTS`]). Readers apply [`decayed_points`]
+//! against elapsed wall-clock time, so a user dries out on their own; the one
+//! write that sobers anyone up early is the Shop's hangover pill
+//! ([`UserDrinks::sober_up_in_tx`]).
 
 use std::collections::HashMap;
 
@@ -200,6 +201,35 @@ impl UserDrinks {
             )
             .await?;
         Ok(row.map(Self::from))
+    }
+
+    /// Whether the user is drunk at all right now (any level above sober),
+    /// read inside a purchase transaction.
+    pub async fn is_drunk_in_tx(
+        client: &impl tokio_postgres::GenericClient,
+        user_id: Uuid,
+    ) -> Result<bool> {
+        let row = client
+            .query_opt("SELECT * FROM user_drinks WHERE user_id = $1", &[&user_id])
+            .await?;
+        Ok(row
+            .map(Self::from)
+            .is_some_and(|drinks| drinks.level(Utc::now()) > 0))
+    }
+
+    /// The hangover pill: every point of buzz gone at once. The tab
+    /// (`lifetime_spent`, `drink_count`) stays, since the drinks were drunk.
+    pub async fn sober_up_in_tx(
+        client: &impl tokio_postgres::GenericClient,
+        user_id: Uuid,
+    ) -> Result<()> {
+        client
+            .execute(
+                "UPDATE user_drinks SET drunk_points = 0 WHERE user_id = $1",
+                &[&user_id],
+            )
+            .await?;
+        Ok(())
     }
 
     pub async fn find(client: &Client, user_id: Uuid) -> Result<Option<Self>> {

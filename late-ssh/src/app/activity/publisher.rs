@@ -254,6 +254,24 @@ impl ActivityPublisher {
         });
     }
 
+    /// No username to resolve: the reminder is the pot's own line.
+    pub fn pot_closing(
+        &self,
+        pot_id: Uuid,
+        size: i64,
+        total_tickets: i64,
+        ticket_price: i64,
+        draws_in_secs: i64,
+    ) {
+        let _ = self.tx.send(ActivityEvent::pot_closing(
+            pot_id,
+            size,
+            total_tickets,
+            ticket_price,
+            draws_in_secs,
+        ));
+    }
+
     pub fn went_live_task(&self, user_id: Uuid, title: Option<String>, watch_url: String) {
         let publisher = self.clone();
         tokio::spawn(async move {

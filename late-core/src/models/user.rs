@@ -247,6 +247,47 @@ impl LandingPage {
     }
 }
 
+/// Inline terminal image previews (Settings, Tweaks, Display). `Auto` trusts
+/// what the terminal reports. The other two override it for terminals that
+/// report wrong: tmux can pass on sixel support its host terminal lacks, and
+/// some terminals draw sixel without ever advertising it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalImagesMode {
+    Auto,
+    Off,
+    Sixel,
+}
+
+impl TerminalImagesMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Off => "off",
+            Self::Sixel => "sixel",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim() {
+            "auto" => Some(Self::Auto),
+            "off" => Some(Self::Off),
+            "sixel" => Some(Self::Sixel),
+            _ => None,
+        }
+    }
+
+    pub fn cycle(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::Auto, true) => Self::Off,
+            (Self::Off, true) => Self::Sixel,
+            (Self::Sixel, true) => Self::Auto,
+            (Self::Auto, false) => Self::Sixel,
+            (Self::Off, false) => Self::Auto,
+            (Self::Sixel, false) => Self::Off,
+        }
+    }
+}
+
 /// Master on/off for the Home room-list rail, the left column. Mirrors
 /// [`RightSidebarMode`], including `Auto`: the rail folds away on terminals too
 /// narrow to carry three columns.
@@ -413,6 +454,10 @@ const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const LANDING_PAGE_KEY: &str = "landing_page";
 const PAPER_AT_LOGIN_KEY: &str = "paper_at_login";
+const TERMINAL_IMAGES_KEY: &str = "terminal_images";
+/// Award categories the user keeps off their chat label. Read by the chat
+/// label SQL straight from `users.settings`, so the key is spelled there too.
+const HIDDEN_AWARD_CATEGORIES_KEY: &str = "hidden_award_categories";
 /// The edition (UTC date, ISO) whose login pop this account has had.
 const PAPER_SHOWN_ON_KEY: &str = "paper_shown_on";
 const TRANSLATE_TO_KEY: &str = "translate_to";
@@ -725,6 +770,10 @@ impl User {
                     FROM profile_awards pa
                     WHERE pa.user_id = u.id
                       AND pa.rank <= $4
+                      -- Badges the author hid in Settings, Tweaks, Chat badges
+                      -- (`extract_hidden_award_categories`). Hiding the top
+                      -- rung of a game ladder lets the next one show.
+                      AND NOT (COALESCE(u.settings->'hidden_award_categories', '[]'::jsonb) ? pa.category)
                       AND (
                         pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
                         OR pa.category = ANY($5)
@@ -1845,6 +1894,32 @@ pub fn extract_landing_page(settings: &Value) -> LandingPage {
     match settings.get(LANDING_PAGE_KEY).and_then(Value::as_str) {
         Some(key) => LandingPage::from_key(key).unwrap_or(LandingPage::Clubhouse),
         None => LandingPage::Clubhouse,
+    }
+}
+
+/// Tweak: the award badges hidden from the user's chat label. Unknown
+/// categories are dropped, so the stored list only ever names real badges.
+pub fn extract_hidden_award_categories(settings: &Value) -> Vec<String> {
+    let Some(entries) = settings
+        .get(HIDDEN_AWARD_CATEGORIES_KEY)
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    let known = super::profile_award::all_award_categories();
+    known
+        .into_iter()
+        .filter(|category| entries.iter().any(|entry| entry.as_str() == Some(category)))
+        .map(ToString::to_string)
+        .collect()
+}
+
+/// Tweak: how inline images reach the terminal. Absent or unreadable means
+/// `Auto`, the detected protocol.
+pub fn extract_terminal_images(settings: &Value) -> TerminalImagesMode {
+    match settings.get(TERMINAL_IMAGES_KEY).and_then(Value::as_str) {
+        Some(key) => TerminalImagesMode::from_key(key).unwrap_or(TerminalImagesMode::Auto),
+        None => TerminalImagesMode::Auto,
     }
 }
 

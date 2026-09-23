@@ -196,10 +196,23 @@ impl DesktopMedia {
         (media, commands_rx)
     }
 
+    /// The user turned MPRIS off (`--no-mpris`): no publisher task and no
+    /// session-bus connection, so other players keep the media keys. The
+    /// command sender is dropped at once, which the pair loop reads as a
+    /// closed queue, exactly as it does off-Linux.
+    pub(super) fn disabled() -> (Self, mpsc::Receiver<DesktopCommand>) {
+        let (_commands, commands_rx) = mpsc::channel(DESKTOP_COMMAND_QUEUE_CAP);
+        (Self::without_publisher(), commands_rx)
+    }
+
     /// No publisher task, so sends land in a channel nobody reads. Tests here
     /// cover metadata projection, which is pure.
     #[cfg(test)]
     fn for_test() -> Self {
+        Self::without_publisher()
+    }
+
+    fn without_publisher() -> Self {
         let (track, _) = watch::channel(None);
         Self {
             track,

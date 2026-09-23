@@ -575,6 +575,7 @@ impl App {
         // Presence values are recomputed on the ~1s tick cadence
         // (`tick.rs`), not per frame; reads here are owned-memory only.
         let online_count = self.online_count;
+        let terminal_image_protocol = self.terminal_image_protocol();
         let image_modal = self
             .chat
             .image_modal()
@@ -582,12 +583,12 @@ impl App {
                 message_id: modal.message_id,
                 url: modal.url.as_str(),
                 preview: self.chat.inline_image_cache.get(&modal.message_id),
-                terminal_image: self.terminal_image_protocol.and_then(|protocol| {
+                terminal_image: terminal_image_protocol.and_then(|protocol| {
                     self.chat
                         .terminal_image_for_message(modal.message_id)
                         .filter(|image| image.supports_protocol(protocol))
                 }),
-                terminal_image_protocol: self.terminal_image_protocol,
+                terminal_image_protocol,
             });
         let dashboard_room = shell_active_room.and_then(|room_id| self.chat.room_by_id(room_id));
         let dashboard_messages = shell_active_room
@@ -1243,7 +1244,7 @@ impl App {
                 overlay_blocks_raster,
                 screen as u16,
                 non_modal_image_tag,
-                self.terminal_image_protocol,
+                terminal_image_protocol,
             );
         if !pre_wipe.is_empty() {
             use std::io::Write;
@@ -1312,7 +1313,7 @@ impl App {
                         dopewars_state: dopewars_state_taken.as_mut(),
                         bashquest_state: bashquest_state_taken.as_mut(),
                         codekeep_state: codekeep_state_taken.as_mut(),
-                        terminal_image_protocol: self.terminal_image_protocol,
+                        terminal_image_protocol,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
                         snake_state: &self.snake_state,
@@ -1475,7 +1476,7 @@ impl App {
             .set_image_modal_capacity(terminal_image_frame.modal_capacity());
 
         let image_commands = self.terminal_image_render_state.build_commands(
-            self.terminal_image_protocol,
+            terminal_image_protocol,
             &terminal_image_frame,
             suppress_new_raster,
         );

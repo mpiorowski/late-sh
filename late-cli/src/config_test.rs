@@ -132,3 +132,21 @@ fn config_defaults_to_native_ssh_mode() {
     let config = Config::from_args(Vec::<String>::new()).unwrap();
     assert_eq!(config.ssh_mode, SshMode::Native);
 }
+
+#[test]
+fn mpris_is_on_until_a_layer_turns_it_off() {
+    let file_layer = parse_config_layer("mpris = false").unwrap();
+    let (_, arg_layer) = parse_arg_layer(["--no-mpris".to_string()]).unwrap();
+
+    let default = resolve_config(
+        ConfigLayer::default(),
+        ConfigLayer::default(),
+        ConfigLayer::default(),
+    );
+    let from_file = resolve_config(file_layer, ConfigLayer::default(), ConfigLayer::default());
+    let from_args = resolve_config(ConfigLayer::default(), ConfigLayer::default(), arg_layer);
+
+    assert!(default.mpris);
+    assert!(!from_file.mpris);
+    assert!(!from_args.mpris);
+}
