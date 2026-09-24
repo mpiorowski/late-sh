@@ -89,7 +89,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~\"$service\"}[5m]))",
+          "expr": "sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~\"$service\", span_kind=\"SPAN_KIND_SERVER\", http_route!~\"/api/health|/api/ws/pair|/api/listen|/listen/state\"}[5m]))",
           "legendFormat": "{{service_name}}"
         }
       ],
@@ -110,7 +110,8 @@
         "w": 8,
         "x": 0,
         "y": 1
-      }
+      },
+      "description": "HTTP requests only: server spans, without the readiness probe (/api/health answers 503 on purpose while an old pod drains) and the long-lived sockets and streams (/api/ws/pair, /api/listen, /listen/state), whose span lasts as long as the connection."
     },
     {
       "type": "timeseries",
@@ -122,7 +123,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~\"$service\", status_code=\"STATUS_CODE_ERROR\"}[5m])) / (sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~\"$service\"}[5m])) > 0) * 100",
+          "expr": "sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~\"$service\", span_kind=\"SPAN_KIND_SERVER\", http_route!~\"/api/health|/api/ws/pair|/api/listen|/listen/state\", status_code=\"STATUS_CODE_ERROR\"}[5m])) / (sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~\"$service\", span_kind=\"SPAN_KIND_SERVER\", http_route!~\"/api/health|/api/ws/pair|/api/listen|/listen/state\"}[5m])) > 0) * 100",
           "legendFormat": "{{service_name}}"
         }
       ],
@@ -143,7 +144,8 @@
         "w": 8,
         "x": 8,
         "y": 1
-      }
+      },
+      "description": "HTTP requests only: server spans, without the readiness probe (/api/health answers 503 on purpose while an old pod drains) and the long-lived sockets and streams (/api/ws/pair, /api/listen, /listen/state), whose span lasts as long as the connection."
     },
     {
       "type": "timeseries",
@@ -155,7 +157,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.99, sum by (le, service_name) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name=~\"$service\"}[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (le, service_name) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name=~\"$service\", span_kind=\"SPAN_KIND_SERVER\", http_route!~\"/api/health|/api/ws/pair|/api/listen|/listen/state\"}[5m])))",
           "legendFormat": "{{service_name}}"
         }
       ],
@@ -176,6 +178,141 @@
         "w": 8,
         "x": 16,
         "y": 1
+      },
+      "description": "HTTP requests only: server spans, without the readiness probe (/api/health answers 503 on purpose while an old pod drains) and the long-lived sockets and streams (/api/ws/pair, /api/listen, /listen/state), whose span lasts as long as the connection."
+    },
+    {
+      "type": "row",
+      "title": "Operations",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Slowest Operations (p95)",
+      "description": "p95 duration of every traced operation (HTTP routes, service tasks, outbound calls) over the range, operations with at least 20 calls. Session-long loops are left out: their span lasts as long as a session. A parent and its child span both appear (a task and the work it wraps).",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(15, histogram_quantile(0.95, sum by (le, service_name, span_name) (increase(traces_span_metrics_duration_milliseconds_bucket{service_name=~\"$service\", span_name!~\"chat.refresh_registration|chat.poll_finalizer|cyberspace.circ_stream|cyberspace.circ_presence|.*key=.*\"}[$__range]))) and on (service_name, span_name) (sum by (service_name, span_name) (increase(traces_span_metrics_calls_total{service_name=~\"$service\", span_name!~\"chat.refresh_registration|chat.poll_finalizer|cyberspace.circ_stream|cyberspace.circ_presence|.*key=.*\"}[$__range])) >= 20))",
+          "legendFormat": "{{service_name}} {{span_name}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 250
+              },
+              {
+                "color": "red",
+                "value": 1000
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Time Spent by Operation",
+      "description": "Total time inside each operation over the range (calls x average). Where the server's time goes, as opposed to what is slow: a fast operation called constantly ranks high here. Same exclusions as the p95 panel; nested spans count in both parent and child.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(15, sum by (service_name, span_name) (increase(traces_span_metrics_duration_milliseconds_sum{service_name=~\"$service\", span_name!~\"chat.refresh_registration|chat.poll_finalizer|cyberspace.circ_stream|cyberspace.circ_presence|.*key=.*\"}[$__range])) / 1000)",
+          "legendFormat": "{{service_name}} {{span_name}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 600
+              },
+              {
+                "color": "red",
+                "value": 3600
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 10
       }
     },
     {
@@ -191,7 +328,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 20
       }
     },
     {
@@ -245,7 +382,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 10
+        "y": 21
       }
     },
     {
@@ -295,7 +432,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 10
+        "y": 21
       }
     },
     {
@@ -349,7 +486,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 10
+        "y": 21
       }
     },
     {
@@ -463,7 +600,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 29
       }
     },
     {
@@ -495,7 +632,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 26
+        "y": 37
       }
     },
     {
@@ -527,7 +664,7 @@
         "h": 12,
         "w": 12,
         "x": 0,
-        "y": 38
+        "y": 49
       }
     },
     {
@@ -559,173 +696,7 @@
         "h": 12,
         "w": 12,
         "x": 12,
-        "y": 38
-      }
-    },
-    {
-      "type": "row",
-      "title": "Dependencies",
-      "collapsed": false,
-      "datasource": {
-        "uid": "victoriametrics",
-        "type": "victoriametrics-metrics-datasource"
-      },
-      "targets": [],
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 50
-      }
-    },
-    {
-      "type": "table",
-      "title": "Service Call Edges",
-      "description": "Request rate between services from the OTel servicegraph connector. Shows who calls whom.",
-      "datasource": {
-        "uid": "victoriametrics",
-        "type": "victoriametrics-metrics-datasource"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (client, server) (rate(traces_service_graph_request_total[$__rate_interval]))",
-          "legendFormat": "__auto",
-          "instant": true,
-          "format": "table"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true
-            },
-            "renameByName": {
-              "client": "Client",
-              "server": "Server",
-              "Value": "Requests/s"
-            }
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqps",
-          "custom": {
-            "align": "auto",
-            "displayMode": "auto",
-            "filterable": true
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Requests/s"
-            },
-            "properties": [
-              {
-                "id": "custom.displayMode",
-                "value": "gradient-gauge"
-              },
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "yellow",
-                      "value": 1
-                    },
-                    {
-                      "color": "red",
-                      "value": 10
-                    }
-                  ]
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "footer": {
-          "show": false
-        },
-        "sortBy": [
-          {
-            "displayName": "Requests/s",
-            "desc": true
-          }
-        ],
-        "cellHeight": "sm"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 51
-      }
-    },
-    {
-      "type": "bargauge",
-      "title": "Top Slowest Routes (p99)",
-      "description": "Slowest HTTP routes by p99 latency across all services",
-      "datasource": {
-        "uid": "victoriametrics",
-        "type": "victoriametrics-metrics-datasource"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "topk(10, histogram_quantile(0.99, sum by (le, service_name, http_request_method, http_route) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name=~\"$service\", http_route!=\"\"}[$__rate_interval]))))",
-          "legendFormat": "{{service_name}} {{http_request_method}} {{http_route}}",
-          "instant": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ms",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 100
-              },
-              {
-                "color": "red",
-                "value": 500
-              }
-            ]
-          },
-          "mappings": []
-        },
-        "overrides": []
-      },
-      "options": {
-        "orientation": "horizontal",
-        "displayMode": "gradient",
-        "showUnfilled": true,
-        "minVizWidth": 0,
-        "minVizHeight": 10
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 51
+        "y": 49
       }
     },
     {
@@ -741,7 +712,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 59
+        "y": 61
       }
     },
     {
@@ -814,7 +785,7 @@
         "h": 12,
         "w": 12,
         "x": 0,
-        "y": 60
+        "y": 62
       }
     },
     {
@@ -887,7 +858,7 @@
         "h": 12,
         "w": 12,
         "x": 12,
-        "y": 60
+        "y": 62
       }
     },
     {
@@ -960,7 +931,7 @@
         "h": 12,
         "w": 12,
         "x": 0,
-        "y": 72
+        "y": 74
       }
     },
     {
@@ -1033,7 +1004,7 @@
         "h": 12,
         "w": 12,
         "x": 12,
-        "y": 72
+        "y": 74
       }
     },
     {
@@ -1049,7 +1020,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 84
+        "y": 86
       }
     },
     {
@@ -1083,7 +1054,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 85
+        "y": 87
       }
     },
     {
@@ -1122,7 +1093,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 85
+        "y": 87
       }
     },
     {
@@ -1166,7 +1137,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 93
+        "y": 95
       }
     },
     {
@@ -1205,7 +1176,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 93
+        "y": 95
       }
     },
     {
@@ -1239,7 +1210,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 101
+        "y": 103
       }
     },
     {
@@ -1273,7 +1244,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 101
+        "y": 103
       }
     },
     {
@@ -1289,7 +1260,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 109
+        "y": 111
       }
     },
     {
@@ -1333,7 +1304,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 110
+        "y": 112
       },
       "description": "Boards solved on a session over the range, daily and personal apart. Counted where the board ends, so personal boards (never a GameWon) show here too."
     },
@@ -1378,7 +1349,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 110
+        "y": 112
       },
       "description": "Solved boards by difficulty, both modes. Le Word and Rubik's Cube have one board a day and are left out."
     },
@@ -1423,7 +1394,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 118
+        "y": 120
       },
       "description": "Share cards copied per fresh daily win. The number that says which daily people brag about."
     },
@@ -1468,7 +1439,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 118
+        "y": 120
       },
       "description": "Won over finished boards for the two dailies that can be lost (Le Word out of guesses, Minesweeper out of lives)."
     },
@@ -1513,7 +1484,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 126
+        "y": 128
       },
       "description": "Session time on each screen with a key pressed in the last five minutes. Idle terminals left open are counted apart (presence=idle)."
     },
@@ -1558,7 +1529,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 126
+        "y": 128
       },
       "description": "Active session time with an Arcade board open, by game (dailies and score runs)."
     },
@@ -1596,7 +1567,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 134
+        "y": 136
       },
       "description": "Seconds of active attention per second: the average number of active sessions looking at each screen."
     },
@@ -1641,7 +1612,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 134
+        "y": 136
       },
       "description": "Wins outside the Arcade dailies. Lateania is left out: its GameWon fires per mob kill (family=lateania), which would drown the rest."
     },
@@ -1653,7 +1624,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 142
+        "y": 144
       },
       "panels": []
     },
@@ -1693,7 +1664,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 143
+        "y": 145
       }
     },
     {
@@ -1729,7 +1700,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 143
+        "y": 145
       }
     },
     {
@@ -1763,7 +1734,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 151
+        "y": 153
       }
     },
     {
@@ -1802,7 +1773,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 151
+        "y": 153
       }
     },
     {
@@ -1818,7 +1789,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 159
+        "y": 161
       }
     },
     {
@@ -1875,7 +1846,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 160
+        "y": 162
       }
     },
     {
@@ -1932,7 +1903,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 160
+        "y": 162
       }
     },
     {
@@ -1989,7 +1960,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 160
+        "y": 162
       }
     },
     {
@@ -2042,7 +2013,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 168
+        "y": 170
       }
     },
     {
@@ -2179,7 +2150,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 176
+        "y": 178
       }
     },
     {
@@ -2265,7 +2236,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 185
+        "y": 187
       }
     },
     {
@@ -2297,7 +2268,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 195
+        "y": 197
       }
     }
   ]
