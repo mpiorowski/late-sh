@@ -29,7 +29,7 @@ use crate::app::common::{
     theme,
     username_effect::{CROWN_GLYPH, ResolvedName},
 };
-use crate::app::deadchannel::runner::state::{PORTRAIT_HEIGHT, PORTRAIT_WIDTH};
+use crate::app::deadchannel::runner::state::PORTRAIT_WIDTH;
 use crate::app::files::{
     inline_image::InlineImagePreview,
     terminal_image::{
@@ -1886,14 +1886,17 @@ fn ensure_chat_rows_cache(
             gild,
             translation,
         );
-        if let Some(rows) = portrait {
-            // The face starts level with the header and runs down the
-            // body; a short message grows blank rows so the coat fits.
-            // The blank separator above the block stays blank on purpose:
-            // with the hood seated there, a one-line message ends with its
-            // coat sitting on the next block's hood, and the faces down the
-            // wire read as one stuck column instead of one face per person.
-            attach_portrait(&mut wrapped.lines, rows, text_width);
+        if let Some([hood, eyes, coat]) = portrait {
+            // The face starts level with the header and wears as much as
+            // the entry has rows for: a one-liner (the header and one body
+            // row) shows the head only, anything taller the coat too, so
+            // no message grows a row for its face. The blank separator
+            // above the block stays blank on purpose: with the hood seated
+            // there, faces down the wire read as one stuck column.
+            match wrapped.lines.len() {
+                0..=2 => attach_portrait(&mut wrapped.lines, vec![hood, eyes], text_width),
+                _ => attach_portrait(&mut wrapped.lines, vec![hood, eyes, coat], text_width),
+            }
         }
         let line_count = wrapped.lines.len();
         all_rows.extend(wrapped.lines);
@@ -1963,14 +1966,10 @@ fn ensure_chat_rows_cache(
 /// one cell of air between it and the text.
 const PORTRAIT_GUTTER: usize = PORTRAIT_WIDTH + 1;
 
-/// Seat the portrait in the gutter beside an entry's first rows, one span
-/// per row, the hood level with the header. An entry shorter than the face
-/// grows blank body rows so the coat is never cut.
-fn attach_portrait(
-    lines: &mut Vec<Line<'static>>,
-    rows: [Span<'static>; PORTRAIT_HEIGHT],
-    text_width: usize,
-) {
+/// Seat portrait rows in the gutter beside an entry's first rows, one span
+/// per row, the first level with the header. An entry shorter than the rows
+/// it is handed grows blank body rows so no row is cut.
+fn attach_portrait(lines: &mut Vec<Line<'static>>, rows: Vec<Span<'static>>, text_width: usize) {
     while lines.len() < rows.len() {
         lines.push(Line::from(""));
     }

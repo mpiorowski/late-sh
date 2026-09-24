@@ -425,11 +425,12 @@ Admin commands:
   directory): the wire wraps every entry six cells short and seats the
   author's three-row portrait in that gutter beside a block-opening
   message: the hood level with the header, the eyes and the coat on the
-  body rows under it, a short message growing blank rows so the coat fits
-  (`attach_portrait` / `seat_portrait_row`). The blank separator above
-  the block stays blank and belongs to nobody, so two faces stacked down
-  the wire never touch; the mention wash and the jump highlight cover the
-  entry's rows, padded ones included. No other room changes. The domain
+  body rows under it, wearing what the entry has rows for (a one-liner
+  the head only, a taller message the coat too, so no message grows a
+  row for its face; `attach_portrait` / `seat_portrait_row`). The blank
+  separator above the block stays blank and belongs to nobody, so two
+  faces stacked down the wire never touch; the mention wash and the jump
+  highlight cover the entry's rows. No other room changes. The domain
   contract is `late-ssh/src/app/deadchannel/CONTEXT.md`.
 - `/create-room #room` creates a permanent auto-join room and bulk-adds existing users. It is idempotent on rooms that are already permanent, and it promotes an existing non-permanent public room to permanent + auto-join (`ChatRoom::ensure_permanent` UPDATEs the row, then the caller bulk-adds users) — this is how a user-created `/public #voice` room becomes the permanent `#voice` core room. Because promotion bulk-adds every user to a room nobody can leave, `/create-room` is admin-only and a mistyped slug will promote whatever public room matches it.
 - `/delete-room #room` deletes a permanent room.

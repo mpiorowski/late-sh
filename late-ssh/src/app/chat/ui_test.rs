@@ -3155,12 +3155,12 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
 }
 
 /// The #deadchannel portrait gutter (`app/deadchannel/runner`): a runner's
-/// face sits level with their header, the eyes and the coat on the body
-/// rows under it (a short message grows blank rows so the coat fits), the
+/// face sits level with their header and wears what the entry has rows
+/// for (a one-liner the head only, a taller message the coat too), the
 /// blank separator above the block stays blank so two faces never touch,
 /// the text wraps short of the gutter for every entry in the room, and a
-/// continuation shares the face above it. A mention's wash covers the
-/// padded rows too: the face is one block.
+/// continuation shares the face above it. A mention's wash covers every
+/// face row: the face is one block.
 #[test]
 fn the_wire_seats_a_runners_portrait_beside_their_message() {
     use crate::app::deadchannel::runner::state::Look;
@@ -3265,19 +3265,20 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
         })
         .collect();
 
-    // The list opens with dax's one-liner: the face takes the header, the
-    // body row, and one padded row under them, so the coat is never cut.
+    // The list opens with dax's one-liner: two rows, so the head only,
+    // the hood level with his name and the eyes on the body row, and no
+    // row grown under it for a coat.
     assert!(rendered[0].contains("dax"), "{rendered:?}");
     assert!(rendered[0].ends_with(" ╬═╬ "), "{rendered:?}");
     assert!(rendered[1].contains("o7"), "{rendered:?}");
     assert!(rendered[1].ends_with("▐◈ ◈▌"), "{rendered:?}");
-    assert_eq!(rendered[2].trim(), "▟▓▙", "{rendered:?}");
-    // Then the separator, blank all the way across: dax's coat and the
-    // next block's face never touch.
-    assert_eq!(rendered[3].trim(), "", "{rendered:?}");
-    // Mira's block sits below the civilian: the separator above her header
-    // stays blank, the hood sits level with her name, the eyes and the
-    // coat on her first two body rows.
+    // Then the separator, blank all the way across: dax's face and the
+    // next block's never touch.
+    assert_eq!(rendered[2].trim(), "", "{rendered:?}");
+    assert!(rendered[3].contains("afterglow"), "{rendered:?}");
+    // Mira's message wraps, so her block wears the whole face: the
+    // separator above her header stays blank, the hood sits level with
+    // her name, the eyes and the coat on her first two body rows.
     let mira = rendered
         .iter()
         .position(|row| row.contains("mira"))
@@ -3316,7 +3317,6 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
     for row in [
         &rendered[0],
         &rendered[1],
-        &rendered[2],
         &rendered[mira],
         &rendered[mira + 1],
         &rendered[mira + 2],
