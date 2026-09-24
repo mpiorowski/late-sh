@@ -5,8 +5,8 @@
 //! what happened when A Dark Room's second ending was added.
 
 use late_core::models::profile_award::{
-    MILESTONE_AWARD_CATEGORIES, SINGLE_HOLDER_AWARD_CATEGORIES, all_award_categories,
-    award_badge, award_category_code,
+    MILESTONE_AWARD_CATEGORIES, SINGLE_HOLDER_AWARD_CATEGORIES, all_award_categories, award_badge,
+    award_category_code,
 };
 
 /// Every badge granted outside the ranked monthly boards. The milestones are

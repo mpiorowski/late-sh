@@ -267,6 +267,26 @@ fn the_object_guide_is_the_same_share_of_every_table() {
 }
 
 #[test]
+fn the_stun_line_is_the_same_share_of_every_table() {
+    // Drawn beside the object ball's leg, so it has to scale the same way or
+    // the snooker stun line comes out half as long next to it.
+    let share = |spec: &TableSpec| {
+        let cue = [0.3, spec.width / 2.0];
+        let object = [0.9, spec.width / 2.0 + spec.ball_radius];
+        let balls = [ball(CUE, cue), ball(1, object)];
+        let line = aim::shot_line(spec, &spec.geometry(), &balls, cue, 0.0, 0.0);
+        let tangent = line.tangent.expect("a half-ball cut leaves a stun line");
+        distance(line.hit.at(), tangent) / spec.length
+    };
+    let bar_box = share(&BAR_BOX_7FT);
+    let snooker = share(&SNOOKER_12FT);
+    assert!(
+        (bar_box - snooker).abs() < 1e-9,
+        "bar box {bar_box} against snooker {snooker}"
+    );
+}
+
+#[test]
 fn the_line_stops_on_a_jaw_tip_like_the_physics_does() {
     // A rail ends at its jaw tip and the physics treats the tip as a point
     // bumper: a ball whose centre passes within a radius of it is clipped. A

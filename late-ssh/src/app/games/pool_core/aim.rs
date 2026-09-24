@@ -41,12 +41,17 @@ pub const SIGHT_REACH: f64 = 2.4;
 /// of the playfield's length: enough to read the direction and too short to
 /// line up a pocket across the table. Measured against the table rather than
 /// the ball, because every table is scaled to fit the same panel: in ball
-/// radii the snooker guide drew half the bar box's length on screen.
+/// radii the snooker guide drew half the bar box's length on screen. Longer
+/// than the six radii it replaced on purpose: about ten inches on the bar
+/// box, which reads as a direction at a glance and still stops well short
+/// of the far rail.
 pub const OBJECT_GUIDE_REACH: f64 = 0.13;
-/// Length of the drawn stun line, in ball radii, for a cue ball leaving a
-/// full-speed contact at right angles. Scaled down by the sine of the cut,
-/// since that is the share of its speed the cue ball keeps.
-const TANGENT_STUB: f64 = 8.0;
+/// Length of the drawn stun line, as a share of the playfield's length, for
+/// a cue ball leaving a full-speed contact at right angles. Scaled down by
+/// the sine of the cut, since that is the share of its speed the cue ball
+/// keeps. Measured against the table for the same reason as
+/// `OBJECT_GUIDE_REACH`, so the two lines keep their proportions on screen.
+const TANGENT_STUB: f64 = 0.115;
 
 /// What the cue ball's centre reaches first along the line.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -225,11 +230,12 @@ pub fn shot_line(
                     // object ball's line, so the stub is that share of a
                     // full stub. Under half a radius it is not worth a mark.
                     let keep = cut.sin().abs();
-                    let tangent = if keep * TANGENT_STUB < 0.5 {
+                    let stub = keep * TANGENT_STUB * spec.length;
+                    let tangent = if stub < 0.5 * radius {
                         None
                     } else {
                         let t = unit(sub(dir, scale(u, dot(dir, u))));
-                        Some(add(ghost, scale(t, keep * TANGENT_STUB * radius)))
+                        Some(add(ghost, scale(t, stub)))
                     };
                     (
                         Some(ObjectLeg {
