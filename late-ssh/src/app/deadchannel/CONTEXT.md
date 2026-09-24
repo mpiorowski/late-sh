@@ -9,7 +9,9 @@
   first, under the clubhouse on a second `0`, runners only, no
   transactions yet), and the fight in `fight/` (the runner's sheet on
   the row, the lazy day roll, the ration fight against a glyph at the
-  screen, the wire's news lines; §3c). Built for
+  screen, the wire's news lines, the armorer's till; §3c) and the
+  tailor in `tailor/` (the mirror as the look's editor, the look's writer
+  after the join; §3b). Built for
   several replicas (root CONTEXT.md, multi-replica rule); gated behind
   the `haunt_live` fuse, unlit, so only staff (admins and moderators)
   are haunted today, and only they can finish the ladder and join.
@@ -122,6 +124,11 @@ number of replicas spend one AI call per text.
 | `fight/session.rs` | `FightSession`, the session's side: the sheet mirror, the `Scene` over the street (lines, `over`, `waiting`), the `till` line (an answer that lands with no scene open), one action in flight, `open` / `close` / `clear_till` / `request` / `reload` / `tick`. Decides nothing. |
 | `fight/input.rs` | Keys while the scene is open: `a` attack, `r` run, Enter closes a finished scene; digits, Tab, `q`, `?` stay global, everything else is swallowed. |
 | `fight/ui.rs` | `draw_scene` (two portraits facing, each losing cells to static in proportion to its missing signal, `corrupt`; the bars; the exchange; the keys) and `draw_strip` (level, signal, rations, bits, top-right on the street). Pure. |
+| `tailor/state.rs` | `Draft`, the mirror's editor over one `Look`: four `Row`s (hood, eyes, coat, mark), `up` / `down`, `next` / `prev` around the row's rack (wrapping), `tint` around `TINTS` (nothing on the mark row: a colored mark is earned), `shuffle` (the join's dice). Pure. |
+| `tailor/svc.rs` | `TailorService`, the look's writer after the join: `wear_task` runs `DeadchannelRunner::store_look` (one statement, standing runner only, last write wins) and answers `TailorOutcome::{Worn, NoRunner, Failed}` on the session's `mpsc`; the metric, the log line per outcome. The change trigger carries the look to every replica's directory. |
+| `tailor/session.rs` | `TailorSession`: the `draft` while the panel is open, `worn` (what the row wears as far as this session knows), the tailor's `word`, one write in flight (`saving`); `open(look)` / `close` / `changed` / `wear` / `tick`. Decides nothing. |
+| `tailor/input.rs` | Keys while the tailor's panel is open: up/down (`k`/`j`) row, left/right (`h`/`l`) pick, `t` tint, `r` shuffle, `s` wear, Enter leaves; digits, Tab, `q`, `?` stay global, everything else is swallowed. |
+| `tailor/ui.rs` | `mirror_lines` for the city's panel: the draft as a portrait with the mark under it, four rack rows beside it (the cursor, the label, the tint's name, a window of five pieces around the worn one, bracketed; the whole alphabet on the mark row), the keys (`[s] wear it` lit only when the draft differs from what is worn), the tailor's word. Pure. |
 
 Root integration is deliberately thin: `App.haunt` (the one field),
 `haunt::svc::tick(self)` in `tick.rs` (plus the splash block consulting
@@ -445,13 +452,27 @@ till; every other counter is a catalog with its till shut.
   `map_test` asserts it again.
 - **Landmarks.** Enter at a shop (armorer, tailor, lockers, bands, bar,
   patch, board, bits machine) opens a centered panel with its catalog.
-  The armorer's till is open (§3c, "The armorer"); the others say their
-  till is not: the tailor shows your portrait in the mirror
-  and the whole starter rack (every piece row, the ten marks, the five
-  tints) plus the placeholder chip prices, bands shows the three bands
-  with draft move names. Enter at a cart, the screen, or the stairs pins
+  The armorer's till is open (§3c, "The armorer") and the tailor's
+  mirror edits (below); the others say their till is not: bands shows
+  the three bands with draft move names. Enter at a cart, the screen, or the stairs pins
   a line from that landmark's pool top-left for ~8s. Enter at the wire
   leaves, back up to the Clubhouse.
+- **The tailor.** Pick, not draw (GAME.md, "The look"): Enter at the
+  tailor opens the panel with the runner's look from the directory
+  (`App.runner_looks`; with no entry yet the mirror says nothing looks
+  back) as a `Draft` in `App.tailor`. The city's panel is the frame, every
+  key goes to `tailor/input.rs`: the cursor walks the four rows, left
+  and right walk the row's rack (a window of five around the worn piece,
+  wrapping; the ten marks all at once), `t` cycles the piece's tint, `r`
+  rolls the join's dice again, `s` wears it. Wearing is one write
+  (`TailorService::wear_task`, `store_look`: the standing runner only, no
+  lock, last write wins, since a look is one value), and the row's change
+  trigger carries the new face to every replica's look directory, so the
+  gutter portraits, the mark on the street, and the fight scene all
+  change on the next directory refresh; the panel's own mirror shows the
+  draft at once. Enter or Esc drops a draft not worn. The starter rack is
+  free, forever; every piece in `PIECES` is on it today, and the
+  ownership check for bought and earned pieces lands with them.
 - **Animation** rides the clubhouse's `anim_half` edge (~7.5fps,
   `tick.rs`), the wake tier is `ANIM_HALF_TICK` on this screen, and every
   effect is a pure function of `marquee_tick` and the cell, so nothing
@@ -537,9 +558,8 @@ service for `Command::Start`.
   the howler for 9.") and on the sheet. Bits only, no credit, no chips.
 - **Not yet:** bands and charge, the stash, operators and the Old Signal,
   the status HUD ration badge outside the city, the gear names on the
-  strip and the scene header, the `/haunt` status line for the sheet.
-  The tailor's rack (starter pieces re-picked for free, bought pieces for
-  chips) is still a catalog.
+  strip and the scene header, the `/haunt` status line for the sheet,
+  the tailor's bought rack (chips, seasonal stock) and earned pieces.
 
 ## 4. Persistence (`users.settings`, late-core `User`; `app_flags`; `deadchannel_runners`)
 
@@ -552,7 +572,9 @@ service for `Command::Start`.
   `rations_left`, `day` (the UTC date of the last roll), and `fight`
   (JSONB, the fight in progress or null). Created only by the invited
   join with the column defaults (level 1, signal 10, 50 bits, ten
-  rations, today). An insert, or an update of `look` or `left_at`, fires
+  rations, today). The look is written again only by the tailor's
+  mirror (`store_look`, standing runner only). An insert, or an update
+  of `look` or `left_at`, fires
   `deadchannel_runner_changed` (payload: the user id, for logs only;
   listeners re-read every look); a sheet write fires nothing, so ten
   fights a day per runner wake no directory.

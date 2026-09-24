@@ -96,3 +96,43 @@ async fn leaving_hides_the_runner_but_keeps_the_character() {
         vec![(user.id, look)]
     );
 }
+
+#[tokio::test]
+async fn the_tailor_dresses_a_standing_runner_only() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "runner-three").await;
+
+    let look = serde_json::json!({"hood": "hood.cross"});
+    DeadchannelRunner::ensure_for_user(&client, user.id, &look)
+        .await
+        .expect("ensure");
+
+    let new_look = serde_json::json!({"hood": "hood.plain"});
+    assert!(
+        DeadchannelRunner::store_look(&client, user.id, &new_look)
+            .await
+            .expect("store look")
+    );
+    assert_eq!(
+        DeadchannelRunner::list_looks(&client)
+            .await
+            .expect("list looks"),
+        vec![(user.id, new_look.clone())]
+    );
+
+    // A runner who left keeps the look they left in.
+    DeadchannelRunner::mark_left(&client, user.id)
+        .await
+        .expect("mark left");
+    assert!(
+        !DeadchannelRunner::store_look(&client, user.id, &look)
+            .await
+            .expect("store look after leaving")
+    );
+    let left = DeadchannelRunner::find_by_user(&client, user.id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!(left.look, new_look);
+}

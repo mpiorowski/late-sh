@@ -476,6 +476,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             state.db.clone(),
             state.chat_service.clone(),
         ),
+        tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(state.db.clone()),
         initial_bonsai_tree,
         initial_bonsai_decay_protection,
         pet_service: state.pet_service.clone(),

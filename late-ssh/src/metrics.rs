@@ -198,6 +198,16 @@ pub enum FightBeat {
     Failed,
 }
 
+/// A look written at the tailor's mirror (`app/deadchannel/tailor`):
+/// `Worn` landed, `NoRunner` found no standing runner to dress, `Failed`
+/// is the write not landing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TailorBeat {
+    Worn,
+    NoRunner,
+    Failed,
+}
+
 /// A runner going through the door after the ladder is done. Leaving keeps
 /// the character (the row stays, `left_at` is stamped), so the two sides
 /// are one counter: the gap between them is how many runners are standing.
@@ -270,7 +280,7 @@ mod inner {
         JobsReadResult, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
         OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
         PotReminderOutcome, RenderReason, RoundRefusal, RunnerDoor, SongQueueReward,
-        SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
+        SshRejectReason, SummaryResult, TailorBeat, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -865,6 +875,16 @@ mod inner {
         })
     }
 
+    fn deadchannel_tailor_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_deadchannel_tailor_total")
+                .with_description("deadchannel looks written at the tailor's mirror, by beat")
+                .build()
+        })
+    }
+
     fn runner_door_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -959,6 +979,18 @@ mod inner {
             FightBeat::Refused => "refused",
             FightBeat::Failed => "failed",
         }
+    }
+
+    fn tailor_beat_label(beat: TailorBeat) -> &'static str {
+        match beat {
+            TailorBeat::Worn => "worn",
+            TailorBeat::NoRunner => "no_runner",
+            TailorBeat::Failed => "failed",
+        }
+    }
+
+    pub fn record_deadchannel_tailor(beat: TailorBeat) {
+        deadchannel_tailor_total().add(1, &[KeyValue::new("beat", tailor_beat_label(beat))]);
     }
 
     pub fn record_deadchannel_fight(beat: FightBeat) {
@@ -1739,7 +1771,7 @@ mod inner {
         JobsReadResult, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
         OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
         PotReminderOutcome, RenderReason, RoundRefusal, RunnerDoor, SongQueueReward,
-        SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
+        SshRejectReason, SummaryResult, TailorBeat, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
@@ -1747,6 +1779,7 @@ mod inner {
     pub fn record_ssh_connection_rejected(_reason: SshRejectReason) {}
     pub fn record_first_contact_beat(_beat: FirstContactBeat) {}
     pub fn record_deadchannel_fight(_beat: FightBeat) {}
+    pub fn record_deadchannel_tailor(_beat: TailorBeat) {}
     pub fn record_runner_door(_door: RunnerDoor) {}
     pub fn record_first_contact_bio_screen(_outcome: BioScreenOutcome) {}
     pub fn record_first_contact_gate(_verdict: GateVerdict, _staff: bool) {}

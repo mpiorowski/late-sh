@@ -3,6 +3,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
 use crate::app::deadchannel::fight::state::Sheet;
+use crate::app::deadchannel::tailor::ui as tailor_ui;
 
 fn render(state: &State, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
@@ -20,6 +21,12 @@ fn render(state: &State, width: u16, height: u16) -> String {
                     sheet: None,
                     scene: None,
                     till: None,
+                    tailor: tailor_ui::MirrorView {
+                        draft: None,
+                        word: None,
+                        changed: false,
+                        saving: false,
+                    },
                 },
             );
         })
@@ -52,10 +59,10 @@ fn the_runner_and_the_wire_popover_render_at_the_spawn() {
 #[test]
 fn a_shop_panel_lists_its_catalog() {
     let mut state = State::new();
-    state.open_panel(Landmark::Tailor);
+    state.open_panel(Landmark::Bar);
     let screen = render(&state, 120, 40);
-    assert!(screen.contains("the tailor"), "{screen}");
-    assert!(screen.contains("the rack (starter set, free)"), "{screen}");
+    assert!(screen.contains("dead air"), "{screen}");
+    assert!(screen.contains("the signal is warm in here."), "{screen}");
 }
 
 #[test]
@@ -89,6 +96,12 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
                     sheet: Some(&sheet),
                     scene: None,
                     till: Some("the armorer hands over the box cutter. 225 bits."),
+                    tailor: tailor_ui::MirrorView {
+                        draft: None,
+                        word: None,
+                        changed: false,
+                        saving: false,
+                    },
                 },
             );
         })
@@ -193,6 +206,12 @@ fn every_cell_sits_on_the_city_night_not_the_theme_canvas() {
                     sheet: None,
                     scene: None,
                     till: None,
+                    tailor: tailor_ui::MirrorView {
+                        draft: None,
+                        word: None,
+                        changed: false,
+                        saving: false,
+                    },
                 },
             );
         })

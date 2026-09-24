@@ -267,6 +267,8 @@ pub struct SessionConfig {
     /// The runner's sheet writer (`app/deadchannel/fight`): the day roll
     /// and the fight loop, one transaction per command.
     pub fight_service: crate::app::deadchannel::fight::svc::FightService,
+    /// The look's writer after the join (`app/deadchannel/tailor`).
+    pub tailor_service: crate::app::deadchannel::tailor::svc::TailorService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_decay_protection:
         Option<late_core::models::bonsai_decay_protection::BonsaiDecayProtection>,
@@ -730,6 +732,9 @@ pub struct App {
     /// The runner's fight (`app/deadchannel/fight`): the sheet mirror and
     /// the scene over the street. Loaded on the descent into the city.
     pub(crate) fight: crate::app::deadchannel::fight::session::FightSession,
+    /// The tailor's mirror (`app/deadchannel/tailor`): the draft while
+    /// the panel is open, and the write that puts it on the row.
+    pub(crate) tailor: crate::app::deadchannel::tailor::session::TailorSession,
 
     /// Cat companion
     pub(crate) pet_state: crate::app::pet::state::PetState,
@@ -1300,6 +1305,10 @@ impl App {
             config.username.clone(),
             config.fight_service.clone(),
         );
+        let tailor = crate::app::deadchannel::tailor::session::TailorSession::new(
+            config.user_id,
+            config.tailor_service.clone(),
+        );
 
         let pet_state = if let Some(companion) = config.initial_pet {
             crate::app::pet::state::PetState::new(
@@ -1486,6 +1495,7 @@ impl App {
             nightcap_house: config.nightcap_house,
             city: crate::app::deadchannel::city::state::State::new(),
             fight,
+            tailor,
             chip_service: config.chip_service,
             clubhouse_bartender_id: None,
             clubhouse_graybeard_id: None,

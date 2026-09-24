@@ -37,8 +37,8 @@ use crate::app::deadchannel::fight::session::Scene as FightScene;
 use crate::app::deadchannel::fight::state::{Sheet, Slot as GearSlot, gear_name};
 use crate::app::deadchannel::fight::ui as fight_ui;
 use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
-use crate::app::deadchannel::runner::state::Tint;
-use crate::app::deadchannel::runner::state::{Look, Slot, pieces_for};
+use crate::app::deadchannel::runner::state::{Look, Tint};
+use crate::app::deadchannel::tailor::ui as tailor_ui;
 
 use super::data;
 use super::ledge;
@@ -130,6 +130,8 @@ pub(crate) struct CityView<'a> {
     pub scene: Option<&'a FightScene>,
     /// The armorer's last word (`fight/session.rs`), for its panel.
     pub till: Option<&'a str>,
+    /// The tailor's mirror (`tailor/session.rs`), for its panel.
+    pub tailor: tailor_ui::MirrorView<'a>,
 }
 
 type Cells = Vec<Vec<(char, Style)>>;
@@ -1545,71 +1547,7 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
     let blank = || Line::default();
     match landmark {
         Landmark::Armorer => lines.extend(armorer_lines(view)),
-        Landmark::Tailor => {
-            lines.push(Line::from(Span::styled("the mirror", head)));
-            match view.look {
-                Some(look) => {
-                    for worn in look.rows() {
-                        lines.push(Line::from(vec![
-                            Span::styled("   ", text),
-                            Span::styled(worn.piece.row, ink(tint_rgb(worn.tint))),
-                        ]));
-                    }
-                    lines.push(Line::from(vec![
-                        Span::styled("   ", text),
-                        Span::styled("mark ", dim_text),
-                        Span::styled(look.mark.to_string(), lit(Neon::Amber)),
-                    ]));
-                }
-                None => lines.push(Line::from(Span::styled(
-                    "   nothing looks back. you have no runner yet.",
-                    muted_text,
-                ))),
-            }
-            lines.push(blank());
-            lines.push(Line::from(Span::styled(
-                "the rack (starter set, free)",
-                head,
-            )));
-            for (label, slot) in [
-                ("hoods ", Slot::Hood),
-                ("eyes  ", Slot::Eyes),
-                ("coats ", Slot::Coat),
-            ] {
-                let mut spans = vec![Span::styled(label, dim_text)];
-                for (i, piece) in pieces_for(slot).enumerate() {
-                    let tint = TINT_CYCLE[i % TINT_CYCLE.len()];
-                    spans.push(Span::styled(piece.row, ink(tint_rgb(tint))));
-                    spans.push(Span::styled(" ", text));
-                }
-                lines.push(Line::from(spans));
-            }
-            let mut marks = vec![Span::styled("marks ", dim_text)];
-            for glyph in GLYPH_ALPHABET {
-                marks.push(Span::styled(format!("  {glyph}   "), glow(Neon::Amber)));
-            }
-            lines.push(Line::from(marks));
-            let mut tints = vec![Span::styled("tints ", dim_text)];
-            for tint in TINT_CYCLE {
-                tints.push(Span::styled(
-                    format!("{:?} ", tint).to_lowercase(),
-                    ink(tint_rgb(tint)),
-                ));
-            }
-            lines.push(Line::from(tints));
-            lines.push(blank());
-            lines.push(Line::from(Span::styled("coming to the rack", head)));
-            for (what, price) in data::TAILOR_PRICES {
-                lines.push(Line::from(vec![
-                    Span::styled(format!("  {what:<34}"), text),
-                    Span::styled(price, number),
-                ]));
-            }
-            lines.push(Line::from(Span::styled(
-                "bought pieces are permanent and leave the rack with the season. earned ones are never sold.",
-                dim_text,
-            )));
-        }
+        Landmark::Tailor => lines.extend(tailor_ui::mirror_lines(&view.tailor)),
         Landmark::Lockers => {
             lines.push(Line::from(vec![
                 Span::styled("on hand   ", dim_text),
@@ -1714,14 +1652,6 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
     }
     lines
 }
-
-const TINT_CYCLE: [Tint; 5] = [
-    Tint::Static,
-    Tint::Amber,
-    Tint::Phosphor,
-    Tint::White,
-    Tint::Red,
-];
 
 // -------------------------------------------------------------- helpers
 

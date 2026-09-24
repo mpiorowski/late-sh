@@ -1097,9 +1097,10 @@ with its headlights ahead of it, the monorail crosses the sky,
 billboards cycle the glyph script, rain splashes on the puddles, and at
 the railing Enter looks over the ledge at the lower city (a half-block
 perspective picture, the showpiece). The screen is the forest (the
-fight pass, next section). Still to come on the street: the armorer's
-till, the tailor's mirror as the editor (pick, not draw), the locker,
-the band choice.
+fight pass, next section). The armorer's till trades and the tailor's
+mirror edits the look (pick, not draw: rows, racks, tints, the mark, the
+join's dice again; the starter rack free forever). Still to come on the
+street: the locker, the band choice.
 
 ## The fight pass: where the ration goes (2026-09-24)
 
@@ -1156,10 +1157,216 @@ ritual is the city's, the wire is the log); this pass fixed the shape:
   items is a menu, and the city is not menus. Only up, never down: a
   runner selling their blade for cash is a LoGD loophole, not a scene.
 
-Next on this surface, in order: the ration count on the status HUD
-outside the city (the daily promise where the eyes are), the operators
-as the level gate, the band choice and charge, the dropped-signal mark
-in chat, the tailor's free re-pick of the starter rack.
+- **The tailor's mirror is the look's editor.** One write per `wear`,
+  no lock (a look is one value, never a sum, so two devices dressing at
+  once simply race and the last one is the face), through the same
+  change trigger the join uses, so every surface that paints the look
+  follows on the directory refresh. Nothing posts to the wire: the new
+  face rides the runner's next message there, which is the be-seen fuel
+  doing its own work. The rack is a window of five around the worn piece
+  rather than the whole row, so the panel fits eighty columns and the
+  eye stays on the piece.
+
+What comes next on this surface is decided in the next section, "The
+road pass": the exchange loop above is the placeholder it replaces.
+
+## The road pass: the daily run, the hand, and being seen (2026-09-24)
+
+Status: **decided, not built.** A design conversation after the fight,
+the armorer, and the tailor landed. Three threads: what the game must
+give people (visibility, ten times what the bonsai and the arcade give),
+what to do about PvP at forty people, and what the fight itself should
+be once it stops being LoGD.
+
+### The lesson of Le Word
+
+The arcade's runaway game is Le Word, and it is not because it is the
+best puzzle. It has five things at once that nothing else here has all
+of, and every one of them maps onto the diagnosis at the top of this
+file:
+
+- **Short and bounded.** Two minutes, six guesses, over. It cannot be
+  ground and it cannot eat an evening from people who are here to vibe
+  with music on. Sudoku asks twenty minutes of attention and gets it
+  from almost nobody.
+- **Everyone plays the same object.** One global word. Two people who
+  have played have something to say that nobody else can decode until
+  they have played too. Personal boards are a fact about you; a shared
+  board is a thing for the room.
+- **The share card is a story without a legend.** The grid shows luck,
+  skill, the near miss, the panic on row five, and yours differs from
+  mine in a way that invites comparison.
+- **Failing is content.** A 6/6 or an X is a better post than a 3/6.
+  Games where failure is silent produce fewer posts than games where
+  failure is a picture.
+- **No skill floor.** Everybody knows words. Nobody feels stupid.
+
+**Rule for everything below: deadchannel is the Le Word of RPGs, never
+the Sudoku of RPGs.** Same object for everyone each day, a hard visible
+bound, a picture at the end, loud fun failure, one key for the first-day
+runner. The number that tests the theory is share rate per completion
+per daily; the gap between Le Word and the rest is the whole brief.
+
+### Detached from LoGD
+
+The forest exchange loop (attack, run, the door's resolver) was the
+placeholder that got the ritual, the row, the scene, and the wire built.
+It stays only until the round below replaces it. Kept as is, because
+none of it cares what happens inside a round: the row as truth, rations,
+signal, the lazy day roll, the fixed scene panel, the wire's news, the
+armorer, the tailor, the level colors. Replaced: the resolver and the
+attack/run commands.
+
+### The round: ten cards, three energy, two intents
+
+A card fight, in the Slay the Spire shape, cut down until the balance
+fits in one head. Balatro's scoring (poker hands, multipliers) is the
+thing to resist longest: glorious, and a balance sink; it can arrive as
+a season beat once the loop stands.
+
+- **One deck, ten cards, no builds at v0.** Five strikes, three blocks,
+  two of the band's moves (the move names already drafted under
+  "Bands"). Everyone starts with the same ten. The weapon tier adds to
+  strike numbers, the armor tier to block numbers, so gear still matters
+  and the armorer still sells; the deck itself does not change. Balance
+  is a spreadsheet with two columns, and the gear ladder, already
+  priced, carries the power curve.
+- **Draw five, three energy, end turn.** Strike costs one, block costs
+  one, a band move costs two. Unplayed cards discard; the deck
+  reshuffles when empty.
+- **The foe telegraphs two intents.** Hit for N, or charge and hit for
+  2N next turn, shown before you play. "Block or race" is the whole
+  tactical question and it reads at a glance. Fifteen glyphs, one table
+  row each, the numbers they already have.
+- **Static corrupts the deck.** When a hit lands, one static card goes
+  into your discard: costs one, does nothing. The hand fills with noise
+  as the signal drops, the portrait corrupts the same way, and a dropped
+  signal is a hand you cannot play. One metaphor for health, deck, and
+  face; ours and nobody else's, and free on top of the loop above.
+- **Auto.** One key plays the obvious policy: strike unless the foe is
+  charging, block when it is, band move when the energy is there. The
+  daily floor for the ambient runner, and later the offline policy for
+  ambush and the arena for free.
+- **Balancing is a test.** Ten cards and two intents means every
+  matchup simulates: a seeded test drives the auto policy through a
+  thousand fights per level and asserts the win rate lands in a band.
+  Retuning a number is running that test, not a playtest.
+- **On the row:** the fight JSON grows a deck, a hand, a discard pile,
+  energy, and the foe's intent. Commands: play card N, end turn, run,
+  auto. The scene gets a hand row along the bottom, five compact cards
+  in the city palette, number keys to pick.
+
+Waits: jokers and multipliers, a card shop, relics, deck building, foe
+variety past two intents. Each is data once the loop stands, and each is
+a season beat, not a launch feature.
+
+### The road: ten rations, ten steps, one road for everyone
+
+The ration is a step down a branching road, not a fight. The road is the
+lower city the ledge already looks down at; the screen is where you step
+in. This is the piece that makes a daily run, and a run is what people
+talk about.
+
+- **One road per day, seeded by the UTC date, the same for everyone.**
+  The Le Word shape. "Did you take the left at four, the elite charges
+  on turn one" is where the talk comes from, and it makes the wire a
+  spoiler channel civilians overhear.
+- **Ten nodes, a hard bound.** About four fights out of ten; the rest
+  are one-key choices. Three minutes with auto, ten with the hand. If a
+  run ever runs past that, we built a sudoku.
+- **Node kinds:** fight (the round); elite (both intents live, a card
+  drop on the kill: where jokers enter later, one at a time, as rewards
+  rather than a shop); rest (clear static from the deck, or heal
+  signal: the one decision every Spire player argues about); cache
+  (bits, which walk back up to the armorer: the road is the faucet, the
+  street is the sink); event (a line and a choice, pure copy in the
+  voice, an afternoon each: the content slot that never runs dry).
+- **The row holds the run:** position, the deck as it stands, static in
+  it, bits found. The day roll starts a new road and wipes the old one
+  the way it wipes a hanging fight now. A dropped signal ends the run
+  where you stand; back tomorrow.
+- **The end of a run is a share card:** the road as a picture, ten
+  columns, the forks lit, the node you fell on marked. The arcade's
+  proven trick pointed at the game. Dying at seven is a better card
+  than clearing it.
+- **The wire gets one line per run,** not per fight: a run is a story
+  unit, a fight is not.
+- **The map render** is the one new surface: a small branching graph
+  in the city palette above the fight panel. The road comes from a pure
+  date-seeded generator with a whole-state test, like the city map and
+  the dailies, so a bad road is a failing test and not a bad day for
+  forty people.
+
+### Being seen: your color is your level
+
+The badge (mark plus level, `▚7`, decided 2026-09-02) is where the
+game's status lives in chat, and its color is earned, never bought:
+
+- **Level bands tint the badge.** Grey 1 to 4, amber 5 to 9, phosphor
+  10 to 14, white at 15; the earned tint only after an Old Signal kill.
+  The room learns the ladder in a week without a legend.
+- **The badge carries the level color; the username keeps the shop
+  color.** Username gradients are the shop's one hit. Both on one line
+  would fight; side by side they read as "has chips" and "did the
+  thing", the exact distinction "The look" draws.
+- **Tints in the tailor unlock by level band, not by price.** Bits stay
+  internal and buy gear; chips buy pieces. A tint you cannot pick yet
+  shows in the rack with its level: a reason to come back at five.
+- All of it in #deadchannel only until the public flip.
+
+### PvP at forty people
+
+The ranking under "Core design" holds: ambush is the story engine, the
+arena the spectacle and the chip sink, bounties the glue. Decisions from
+this pass:
+
+- **The deck is the preparation layer.** The arena's secret stances are
+  replaced by the deck: your build plays itself offline with the auto
+  policy, bettors read decks the way they were meant to read people,
+  and live fights and offline ones share one mechanism.
+- **Ambush is the first PvP to build,** because the fight machine and
+  the row already carry it: the defender is their sheet and deck, the
+  log lands on their row as "while you were gone", and the next descent
+  plays it back as the same scene with the attacker's portrait on the
+  other side. The login news screen made concrete without the digest
+  engine. On the road, a runner you meet is a node: "you crossed tom at
+  six", never a menu.
+- **The grief model, settled** (closes the open question's in-game
+  half; the "only a bounty opens you" idea starves ambush at this
+  population): an ambush costs a ration, so it competes with the road;
+  level band of plus or minus two, no punching down; one ambush per pair
+  per day and a runner is hit at most once per day, so the worst login
+  is one thing happened; the loser's signal drops and bits on hand go
+  (the locker ships before the ambush, so carrying is a choice); the
+  victim gets a revenge token, one answer within a day that costs no
+  ration, which turns a hit into a rivalry, the renewable middle of the
+  retention model.
+- **The arena stays as designed** minus stances (parimutuel bets, the
+  nightly card, the announcer ghost) and comes after ambush proves
+  people read the news, because betting is the big build.
+- **No clans, no guilds.** Anything that needs coordination starves
+  here, and a guild is a coordination machine. Bands are the tribe: pick
+  once, wear the word, a weekly tally on the wire ("tuners took the
+  week") for faction feeling with zero coordination. If bands work as
+  tribes, clans never need to exist.
+
+### Build order
+
+1. The round as a pure state machine with the seeded simulation test, a
+   fixed starter deck, three foes with intents, the hand row on the
+   existing panel. Staff play it for a week before anything else.
+2. The road with three node kinds (fight, rest, cache), the map render,
+   the run share card, the one wire line per run. Elites and events
+   follow as data.
+3. Level badge and color bands in #deadchannel, tints gated by level in
+   the tailor.
+4. The locker, then ambush with the replay and the revenge token.
+5. Arena and bets, then bounties. Bands as tribes when the band choice
+   ships.
+
+Telemetry is the prerequisite for reading any of it: game wins must be
+exported per game and split so the dashboard says what people actually
+do, and share rate per completion per daily is the first number to pull.
 
 ## Experiment framing
 

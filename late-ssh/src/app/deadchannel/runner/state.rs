@@ -220,7 +220,8 @@ pub enum Tint {
     Red,
 }
 
-const TINTS: [Tint; 5] = [
+/// The palette in rack order: what the tailor cycles through.
+pub const TINTS: [Tint; 5] = [
     Tint::Static,
     Tint::Amber,
     Tint::Phosphor,

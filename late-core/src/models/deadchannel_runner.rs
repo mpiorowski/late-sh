@@ -140,6 +140,30 @@ impl DeadchannelRunner {
         Ok(row.is_some())
     }
 
+    /// The tailor's mirror: the standing runner wears `look` from now on.
+    /// One statement, last write wins (a look is one value, never a sum,
+    /// so two devices dressing at once need no lock); the migration 172
+    /// trigger carries it to every replica's look directory. `false` when
+    /// there is no standing runner to dress: the door is shut, or was
+    /// never opened.
+    pub async fn store_look(
+        client: &Client,
+        user_id: Uuid,
+        look: &serde_json::Value,
+    ) -> Result<bool> {
+        let row = client
+            .query_opt(
+                "UPDATE deadchannel_runners
+                 SET look = $2, updated = current_timestamp
+                 WHERE user_id = $1 AND left_at IS NULL
+                 RETURNING id",
+                &[&user_id, look],
+            )
+            .await
+            .context("storing deadchannel runner look")?;
+        Ok(row.is_some())
+    }
+
     /// The standing runner's row under `FOR UPDATE`: every fight action and
     /// the lazy day roll run on the locked row, so two devices and any
     /// number of replicas act one after the other on the same truth. `None`

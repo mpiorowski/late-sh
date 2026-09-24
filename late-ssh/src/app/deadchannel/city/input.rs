@@ -1,7 +1,8 @@
 //! City input: roguelike walking (arrows/hjkl, Shift+arrow or HJKL to
 //! run), Enter at a landmark (a shop panel, a street line, the static at
 //! the screen, or the wire out), Enter to close a panel. The armorer's
-//! panel takes the till keys (`fight/state.rs`, `Command::Outfit`).
+//! panel takes the till keys (`fight/state.rs`, `Command::Outfit`); the
+//! tailor's hands every key to `tailor/input.rs`.
 //! While the fight scene is open every key goes to `fight/input.rs` first.
 //! Returns `false` for anything it does not own so global keys (page
 //! digits, Tab, `q`, `?`) keep working. While a panel is open, or the
@@ -37,6 +38,10 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             Enter::Panel(landmark) => {
                 app.city.open_panel(landmark);
                 app.fight.clear_till();
+                if landmark == Landmark::Tailor {
+                    let look = app.runner_looks.get(&app.user_id).copied();
+                    app.tailor.open(look);
+                }
             }
             Enter::Line(landmark) => {
                 let pool = data::lines(landmark);
@@ -58,6 +63,9 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
 /// buys the picked weapon and `a` the picked armor. Everything else
 /// (digits, Tab, `q`) falls through to the globals.
 fn handle_panel(app: &mut App, event: &ParsedInput) -> bool {
+    if app.city.panel() == Some(Landmark::Tailor) {
+        return crate::app::deadchannel::tailor::input::handle_event(app, event);
+    }
     if app.city.panel() == Some(Landmark::Armorer) {
         match event {
             ParsedInput::Arrow(b'A') | ParsedInput::Byte(b'k') | ParsedInput::Char('k') => {
