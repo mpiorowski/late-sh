@@ -550,7 +550,7 @@ fn refused(refusal: Refusal) -> Outcome {
 
 /// The wall: the name of `tier` in `slot`, `None` at tier 0.
 pub fn gear_name(slot: Slot, tier: i32) -> Option<&'static str> {
-    if tier < 1 || tier > MAX_TIER {
+    if !(1..=MAX_TIER).contains(&tier) {
         return None;
     }
     let names = match slot {

@@ -39,7 +39,7 @@ pub const EXP_TO_ADVANCE: [i64; 15] = [
 /// Exp needed to leave `level`. Past the top there is no next level; the
 /// Old Signal is the way up, and it is not here yet.
 pub fn exp_to_advance(level: i32) -> Option<i64> {
-    if level < 1 || level >= MAX_LEVEL {
+    if !(1..MAX_LEVEL).contains(&level) {
         return None;
     }
     Some(EXP_TO_ADVANCE[(level - 1) as usize])
