@@ -41,6 +41,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
                 ("h/j/k/l", "move"),
                 ("Space", "select/place"),
                 ("a/f", "auto"),
+                ("w", "test win"),
                 ("u", "undo"),
                 ("d/p/n", "new"),
                 ("[ ]", "draw"),
@@ -94,11 +95,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
 
 /// Blit the cascade's canvas straight onto the frame. It has to be a buffer
 /// write rather than a widget: only the cells the cards have actually touched
-/// are painted, so the board keeps showing through the gaps.
+/// are painted, so the board keeps showing through the gaps. Painted cells
+/// take the canvas background, so every stamped card reads as solid.
 fn draw_win_cascade(frame: &mut Frame, area: Rect, anim: &WinAnimation) {
     let view = anim.viewport();
     let red = theme::ERROR();
     let black = theme::TEXT_BRIGHT();
+    let bg = theme::BG_CANVAS();
     let buf = frame.buffer_mut();
     for row in 0..area.height.min(view.height) {
         for col in 0..area.width.min(view.width) {
@@ -109,7 +112,7 @@ fn draw_win_cascade(frame: &mut Frame, area: Rect, anim: &WinAnimation) {
                 continue;
             };
             cell.set_char(ink.ch);
-            cell.set_style(Style::default().fg(if ink.red { red } else { black }));
+            cell.set_style(Style::default().fg(if ink.red { red } else { black }).bg(bg));
         }
     }
 }

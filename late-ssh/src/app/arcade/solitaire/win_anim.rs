@@ -26,18 +26,20 @@ const FOUNDATION_Y: i32 = 1;
 /// every three ticks runs the cascade out in about ten seconds.
 const LAUNCH_INTERVAL: u32 = 3;
 /// A ceiling on cards in the air at once. Without it a wide board (where a
-/// card takes longer to leave) ends up with the whole deck in flight.
-const MAX_IN_FLIGHT: usize = 12;
+/// card takes longer to leave) ends up with the whole deck in flight. Cards
+/// drift slowly, so the cap sits high enough not to throttle the launches.
+const MAX_IN_FLIGHT: usize = 20;
 
-const GRAVITY: f32 = 0.38;
-const BOUNCE: f32 = 0.78;
-/// Initial hop, upward.
-const LAUNCH_VY: f32 = -1.5;
-const MIN_VX: f32 = 2.0;
-const VX_SPREAD: f32 = 2.0;
+const GRAVITY: f32 = 0.28;
+const BOUNCE: f32 = 0.80;
+/// Initial hop, upward: a small lift off the pile, then a long fall.
+const LAUNCH_VY: f32 = -0.3;
+const LAUNCH_VY_SPREAD: f32 = 0.25;
+const MIN_VX: f32 = 0.85;
+const VX_SPREAD: f32 = 1.35;
 /// A bounce this weak no longer lifts the card clear of the floor: let it
 /// slide out sideways instead of juddering in place, restamping one spot.
-const MIN_BOUNCE_VY: f32 = 0.9;
+const MIN_BOUNCE_VY: f32 = 0.25;
 
 /// A board too short to bounce in gets no cascade at all.
 const MIN_VIEW_HEIGHT: u16 = 9;
@@ -174,9 +176,17 @@ impl WinAnimation {
         let right_edge = self.view.width as f32;
         let mut stamps = Vec::new();
         self.flyers.retain_mut(|flyer| {
+            // Stamp where the card is before it moves, so the first image
+            // sits right on its pile.
+            let cell = (flyer.x.round() as i32, flyer.y.round() as i32);
+            if flyer.stamped != Some(cell) {
+                flyer.stamped = Some(cell);
+                stamps.push((flyer.card, cell));
+            }
+
+            flyer.vy += GRAVITY;
             flyer.x += flyer.vx;
             flyer.y += flyer.vy;
-            flyer.vy += GRAVITY;
 
             if flyer.y >= floor {
                 flyer.y = floor;
@@ -184,12 +194,6 @@ impl WinAnimation {
                 if flyer.vy > -MIN_BOUNCE_VY {
                     flyer.vy = 0.0;
                 }
-            }
-
-            let cell = (flyer.x.round() as i32, flyer.y.round() as i32);
-            if flyer.stamped != Some(cell) {
-                flyer.stamped = Some(cell);
-                stamps.push((flyer.card, cell));
             }
 
             flyer.x + CARD_W as f32 > 0.0 && flyer.x < right_edge
@@ -228,7 +232,7 @@ impl WinAnimation {
         self.launched[pile] += 1;
         let to_the_right = self.next_rand() & 1 == 0;
         let speed = MIN_VX + self.rand_unit() * VX_SPREAD;
-        let vy = LAUNCH_VY - self.rand_unit() * 0.6;
+        let vy = LAUNCH_VY - self.rand_unit() * LAUNCH_VY_SPREAD;
         self.flyers.push(Flyer {
             card,
             x: (self.view.origin_x as i32 + FOUNDATION_X + FOUNDATION_STEP * pile as i32) as f32,

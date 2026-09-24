@@ -813,6 +813,24 @@ impl State {
         self.save_async();
     }
 
+    /// TEMP (testing #623, do not merge): fill every foundation and fire the
+    /// win so the cascade plays. Personal boards only, and nothing is saved,
+    /// so no fake daily win or won snapshot reaches the DB.
+    pub fn debug_trigger_win(&mut self) -> bool {
+        if self.mode != Mode::Personal {
+            return false;
+        }
+        self.stock.clear();
+        self.waste.clear();
+        self.tableau = array::from_fn(|_| Vec::new());
+        self.foundations = [Suit::Hearts, Suit::Diamonds, Suit::Clubs, Suit::Spades]
+            .map(|suit| (1..=13).map(|rank| Card { suit, rank }).collect());
+        self.selection = None;
+        self.is_game_over = false;
+        self.check_for_win();
+        true
+    }
+
     fn check_for_win(&mut self) {
         if self.foundations.iter().all(|pile| pile.len() == 13) {
             // Cards can be pulled back off a full foundation and replaced, so
