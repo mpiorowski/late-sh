@@ -34,27 +34,67 @@ use late_core::models::{
 };
 use tokio::sync::mpsc;
 
+use crate::metrics::{self, RefreshOutcome};
+
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
 /// How long a domain waits before retrying a failed re-read.
 const RETRY_DELAY: Duration = Duration::from_secs(5);
+
+/// Every domain re-read that rides a notify. Closed: it is the metric
+/// label of `late_ssh_pg_refresh_seconds`, so a new worker names itself
+/// here before it can retry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refresh {
+    AppFlags,
+    RunnerLooks,
+    CrownHolder,
+    Pot,
+    Articles,
+    ActiveQuestBoards,
+    ShopFlairDirectory,
+}
+
+impl Refresh {
+    /// The log line's name for the read.
+    fn what(self) -> &'static str {
+        match self {
+            Refresh::AppFlags => "app flags",
+            Refresh::RunnerLooks => "runner looks",
+            Refresh::CrownHolder => "crown holder",
+            Refresh::Pot => "pot",
+            Refresh::Articles => "articles",
+            Refresh::ActiveQuestBoards => "active quest boards",
+            Refresh::ShopFlairDirectory => "shop flair directory",
+        }
+    }
+}
 
 /// Run a domain's re-read until it succeeds. The read after a resync is
 /// the only thing that seeds a domain's shared state after a (re)connect,
 /// and nothing else fires until the next write, so a failure here retries
 /// every [`RETRY_DELAY`] instead of leaving the replica stale (or, at
 /// startup, empty). Signals that arrive meanwhile stay queued; the caller
-/// drains or applies them once this returns.
-pub async fn read_until_ok<F, Fut>(what: &'static str, mut read: F)
+/// drains or applies them once this returns. Every attempt lands on the
+/// dashboard by domain and outcome: a replica stuck retrying is a stale
+/// replica, and that must be visible without reading its log.
+pub async fn read_until_ok<F, Fut>(what: Refresh, mut read: F)
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<()>>,
 {
     loop {
-        match read().await {
-            Ok(()) => return,
+        let started = std::time::Instant::now();
+        let result = read().await;
+        let took = started.elapsed().as_secs_f64();
+        match result {
+            Ok(()) => {
+                metrics::record_pg_refresh(what, RefreshOutcome::Ok, took);
+                return;
+            }
             Err(error) => {
-                tracing::warn!(error = ?error, what, "re-read failed, retrying");
+                metrics::record_pg_refresh(what, RefreshOutcome::Failed, took);
+                tracing::warn!(error = ?error, what = what.what(), "re-read failed, retrying");
                 tokio::time::sleep(RETRY_DELAY).await;
             }
         }

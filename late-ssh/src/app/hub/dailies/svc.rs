@@ -17,7 +17,7 @@ use serde_json::Value;
 use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
 
-use crate::pg_listener::{Channel, Signal, read_until_ok};
+use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 
 use crate::app::activity::{
     channel::ActivitySender,
@@ -260,7 +260,7 @@ impl QuestService {
                     continue;
                 };
                 tracing::warn!(error = ?error, "quest notify failed, refreshing active users");
-                read_until_ok("active quest boards", || svc.refresh_active_users()).await;
+                read_until_ok(Refresh::ActiveQuestBoards, || svc.refresh_active_users()).await;
             }
         })
     }

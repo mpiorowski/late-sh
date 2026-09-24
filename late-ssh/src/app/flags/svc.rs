@@ -14,7 +14,7 @@ use late_core::db::Db;
 use late_core::models::app_flag::{AppFlag, AppFlags};
 use tokio::sync::{mpsc, oneshot, watch};
 
-use crate::pg_listener::{Channel, Signal, read_until_ok};
+use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 use tracing::{Instrument, info_span};
 
 #[derive(Clone)]
@@ -59,7 +59,7 @@ impl AppFlagService {
         tokio::spawn(async move {
             while signals.recv().await.is_some() {
                 while signals.try_recv().is_ok() {}
-                read_until_ok("app flags", || service.refresh()).await;
+                read_until_ok(Refresh::AppFlags, || service.refresh()).await;
             }
         })
     }

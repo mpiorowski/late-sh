@@ -488,6 +488,62 @@
       }
     },
     {
+      "type": "timeseries",
+      "title": "Notify Re-reads",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "description": "Every notify-driven re-read of shared state (pg_listener::read_until_ok), by domain: p95 of one attempt, and failed attempts per second. A domain failing here is a replica serving stale state (or, right after a reconnect, none) and retrying every 5s until the read lands.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, domain) (rate(late_ssh_pg_refresh_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p95 {{domain}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (domain) (rate(late_ssh_pg_refresh_seconds_count{outcome=\"failed\"}[$__rate_interval]))",
+          "legendFormat": "failed/s {{domain}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ops"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      }
+    },
+    {
       "type": "row",
       "title": "Logs",
       "collapsed": false,
@@ -500,7 +556,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 28
+        "y": 36
       }
     },
     {
@@ -554,7 +610,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 29
+        "y": 37
       }
     },
     {
@@ -604,7 +660,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 29
+        "y": 37
       }
     },
     {
@@ -658,7 +714,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 29
+        "y": 37
       }
     },
     {
@@ -772,7 +828,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 37
+        "y": 45
       }
     },
     {
@@ -804,7 +860,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 45
+        "y": 53
       }
     },
     {
@@ -836,7 +892,7 @@
         "h": 12,
         "w": 12,
         "x": 0,
-        "y": 57
+        "y": 65
       }
     },
     {
@@ -868,7 +924,7 @@
         "h": 12,
         "w": 12,
         "x": 12,
-        "y": 57
+        "y": 65
       }
     },
     {
@@ -884,7 +940,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 69
+        "y": 77
       }
     },
     {
@@ -957,7 +1013,7 @@
         "h": 12,
         "w": 12,
         "x": 0,
-        "y": 70
+        "y": 78
       }
     },
     {
@@ -1030,7 +1086,7 @@
         "h": 12,
         "w": 12,
         "x": 12,
-        "y": 70
+        "y": 78
       }
     },
     {
@@ -1103,7 +1159,7 @@
         "h": 12,
         "w": 12,
         "x": 0,
-        "y": 82
+        "y": 90
       }
     },
     {
@@ -1176,7 +1232,7 @@
         "h": 12,
         "w": 12,
         "x": 12,
-        "y": 82
+        "y": 90
       }
     },
     {
@@ -1192,7 +1248,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 94
+        "y": 102
       }
     },
     {
@@ -1226,7 +1282,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 95
+        "y": 103
       }
     },
     {
@@ -1265,7 +1321,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 95
+        "y": 103
       }
     },
     {
@@ -1309,7 +1365,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 103
+        "y": 111
       }
     },
     {
@@ -1348,7 +1404,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 103
+        "y": 111
       }
     },
     {
@@ -1382,7 +1438,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 111
+        "y": 119
       }
     },
     {
@@ -1416,7 +1472,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 111
+        "y": 119
       }
     },
     {
@@ -1432,7 +1488,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 119
+        "y": 127
       }
     },
     {
@@ -1476,7 +1532,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 120
+        "y": 128
       },
       "description": "Boards solved on a session over the range, daily and personal apart. Counted where the board ends, so personal boards (never a GameWon) show here too."
     },
@@ -1521,7 +1577,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 120
+        "y": 128
       },
       "description": "Solved boards by difficulty, both modes. Le Word and Rubik's Cube have one board a day and are left out."
     },
@@ -1566,7 +1622,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 128
+        "y": 136
       },
       "description": "Share cards copied per fresh daily win. The number that says which daily people brag about."
     },
@@ -1611,7 +1667,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 128
+        "y": 136
       },
       "description": "Won over finished boards for the two dailies that can be lost (Le Word out of guesses, Minesweeper out of lives)."
     },
@@ -1656,7 +1712,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 136
+        "y": 144
       },
       "description": "Session time on each screen with a key pressed in the last five minutes. Idle terminals left open are counted apart (presence=idle)."
     },
@@ -1701,7 +1757,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 136
+        "y": 144
       },
       "description": "Active session time with an Arcade board open, by game (dailies and score runs)."
     },
@@ -1739,7 +1795,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 144
+        "y": 152
       },
       "description": "Seconds of active attention per second: the average number of active sessions looking at each screen."
     },
@@ -1784,7 +1840,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 144
+        "y": 152
       },
       "description": "Wins outside the Arcade dailies. Lateania is left out: its GameWon fires per mob kill (family=lateania), which would drown the rest."
     },
@@ -1796,7 +1852,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 152
+        "y": 160
       },
       "panels": []
     },
@@ -1836,7 +1892,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 153
+        "y": 161
       }
     },
     {
@@ -1872,7 +1928,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 153
+        "y": 161
       }
     },
     {
@@ -1906,7 +1962,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 161
+        "y": 169
       }
     },
     {
@@ -1945,7 +2001,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 161
+        "y": 169
       }
     },
     {
@@ -1961,7 +2017,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 169
+        "y": 177
       }
     },
     {
@@ -2018,7 +2074,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 170
+        "y": 178
       }
     },
     {
@@ -2075,7 +2131,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 170
+        "y": 178
       }
     },
     {
@@ -2132,7 +2188,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 170
+        "y": 178
       }
     },
     {
@@ -2185,7 +2241,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 178
+        "y": 186
       }
     },
     {
@@ -2322,7 +2378,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 186
+        "y": 194
       }
     },
     {
@@ -2408,7 +2464,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 195
+        "y": 203
       }
     },
     {
@@ -2440,7 +2496,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 205
+        "y": 213
       }
     }
   ]

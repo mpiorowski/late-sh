@@ -39,7 +39,7 @@ use late_core::{
 use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
 
-use crate::pg_listener::{Channel, Signal, read_until_ok};
+use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 
 use super::entitlements::ShopEntitlements;
 use crate::app::ai::screen::{TitleScreen, screen_custom_title};
@@ -1302,7 +1302,10 @@ impl ShopService {
                     continue;
                 };
                 tracing::warn!(error = ?error, "shop notify failed, reconciling flair directory");
-                read_until_ok("shop flair directory", || svc.reconcile_flair_directory()).await;
+                read_until_ok(Refresh::ShopFlairDirectory, || {
+                    svc.reconcile_flair_directory()
+                })
+                .await;
             }
         })
     }

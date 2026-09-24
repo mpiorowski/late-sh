@@ -19,7 +19,7 @@ use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use super::state::Look;
-use crate::pg_listener::{Channel, Signal, read_until_ok};
+use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 
 /// What the directory serves: user id to look, shared by `Arc` so a
 /// session's tick copy is a pointer bump.
@@ -70,17 +70,31 @@ impl RunnerLookService {
     /// A resync and a notify are the same re-read, a burst of changes
     /// collapses into one, and a failed read retries until it lands: the
     /// resync read is what seeds this replica, so it may not be dropped.
+    /// The payload (the user id, per the migration 172 trigger) is logged
+    /// and never trusted: the read is the truth.
     pub fn start_notify_worker(
         &self,
         mut signals: mpsc::UnboundedReceiver<Signal>,
     ) -> tokio::task::JoinHandle<()> {
         let service = self.clone();
         tokio::spawn(async move {
-            while signals.recv().await.is_some() {
-                while signals.try_recv().is_ok() {}
-                read_until_ok("runner looks", || service.refresh()).await;
+            while let Some(signal) = signals.recv().await {
+                log_signal(&signal);
+                while let Ok(signal) = signals.try_recv() {
+                    log_signal(&signal);
+                }
+                read_until_ok(Refresh::RunnerLooks, || service.refresh()).await;
             }
         })
+    }
+}
+
+fn log_signal(signal: &Signal) {
+    match signal {
+        Signal::Resync => tracing::debug!("runner looks resync"),
+        Signal::Notify { channel, payload } => {
+            tracing::debug!(channel = ?channel, user_id = %payload, "runner changed")
+        }
     }
 }
 

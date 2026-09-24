@@ -36,7 +36,7 @@ use crate::{
     app::activity::publisher::ActivityPublisher,
     app::common::primitives::thousands,
     metrics,
-    pg_listener::{Channel, Signal, read_until_ok},
+    pg_listener::{Channel, Refresh, Signal, read_until_ok},
 };
 
 use super::state::short_duration;
@@ -403,7 +403,7 @@ impl PotService {
             while let Some(signal) = signals.recv().await {
                 match signal {
                     Signal::Resync => {
-                        read_until_ok("pot", || service.refresh()).await;
+                        read_until_ok(Refresh::Pot, || service.refresh()).await;
                     }
                     Signal::Notify { payload, .. } => service.apply_change(&payload).await,
                 }

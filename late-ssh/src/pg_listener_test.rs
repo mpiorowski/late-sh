@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use tokio::time::{Duration, timeout};
 
-use crate::pg_listener::{Channel, PgListener, Signal, read_until_ok};
+use crate::pg_listener::{Channel, PgListener, Refresh, Signal, read_until_ok};
 use crate::test_helpers::new_test_db;
 
 /// The read after a resync is the only thing that seeds a domain, so a
@@ -13,7 +13,7 @@ use crate::test_helpers::new_test_db;
 async fn a_failed_re_read_is_retried_until_it_succeeds() {
     let attempts = Cell::new(0);
 
-    read_until_ok("test", || {
+    read_until_ok(Refresh::AppFlags, || {
         attempts.set(attempts.get() + 1);
         let attempt = attempts.get();
         async move {

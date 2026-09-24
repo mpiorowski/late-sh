@@ -3,7 +3,7 @@ use crate::app::{
     chat::svc::{ChatService, SendLoungeMessageTask},
 };
 use crate::metrics;
-use crate::pg_listener::{Channel, Signal, read_until_ok};
+use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 use anyhow::{Context, Result};
 use late_core::models::article::{
     ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_FEED_LIMIT, NEWS_MARKER,
@@ -146,7 +146,7 @@ impl ArticleService {
         tokio::spawn(async move {
             while signals.recv().await.is_some() {
                 while signals.try_recv().is_ok() {}
-                read_until_ok("articles", || service.do_list_articles()).await;
+                read_until_ok(Refresh::Articles, || service.do_list_articles()).await;
             }
         })
     }

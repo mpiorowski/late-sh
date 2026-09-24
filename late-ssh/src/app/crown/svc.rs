@@ -31,7 +31,7 @@ use crate::{
     app::activity::publisher::ActivityPublisher,
     app::common::primitives::thousands,
     metrics,
-    pg_listener::{Channel, Signal, read_until_ok},
+    pg_listener::{Channel, Refresh, Signal, read_until_ok},
 };
 
 /// Command answers are per-session and short-lived; a session that falls this
@@ -253,7 +253,7 @@ impl CrownService {
             while let Some(signal) = signals.recv().await {
                 match signal {
                     Signal::Resync => {
-                        read_until_ok("crown holder", || service.refresh_holder()).await;
+                        read_until_ok(Refresh::CrownHolder, || service.refresh_holder()).await;
                     }
                     Signal::Notify { payload, .. } => service.apply_change(&payload).await,
                 }

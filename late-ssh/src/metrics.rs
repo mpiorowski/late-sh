@@ -17,6 +17,7 @@ use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::games::chips::svc::RoundRefusal;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
+use crate::pg_listener::Refresh;
 
 /// Why the render loop drew a frame. The loop can only distinguish its two
 /// wake sources; event-driven renders currently ride the world tick, so they
@@ -267,6 +268,14 @@ pub enum Presence {
     Idle,
 }
 
+/// How one attempt of a notify-driven re-read (`pg_listener::read_until_ok`)
+/// ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshOutcome {
+    Ok,
+    Failed,
+}
+
 /// A runner going through the door after the ladder is done. Leaving keeps
 /// the character (the row stays, `left_at` is stamped), so the two sides
 /// are one counter: the gap between them is how many runners are standing.
@@ -341,9 +350,10 @@ mod inner {
         GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal, GildTier,
         JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
         NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
-        PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, RenderReason,
-        RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser, SongQueueReward,
-        SshRejectReason, SummaryResult, TailorBeat, TranslationResult, VizWireBands,
+        PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, Refresh,
+        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage,
+        SessionUser, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -918,6 +928,20 @@ mod inner {
         })
     }
 
+    fn pg_refresh_seconds() -> &'static Histogram<f64> {
+        static METRIC: OnceLock<Histogram<f64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .f64_histogram("late_ssh_pg_refresh_seconds")
+                .with_description(
+                    "Notify-driven re-reads of shared state, one attempt each, by domain and outcome",
+                )
+                .with_unit("s")
+                .with_boundaries(vec![0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0])
+                .build()
+        })
+    }
+
     fn session_start_seconds() -> &'static Histogram<f64> {
         static METRIC: OnceLock<Histogram<f64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -1267,6 +1291,35 @@ mod inner {
             &[
                 KeyValue::new("stage", session_start_stage_label(stage)),
                 KeyValue::new("user", session_user_label(user)),
+            ],
+        );
+    }
+
+    fn refresh_label(refresh: Refresh) -> &'static str {
+        match refresh {
+            Refresh::AppFlags => "app_flags",
+            Refresh::RunnerLooks => "runner_looks",
+            Refresh::CrownHolder => "crown_holder",
+            Refresh::Pot => "pot",
+            Refresh::Articles => "articles",
+            Refresh::ActiveQuestBoards => "active_quest_boards",
+            Refresh::ShopFlairDirectory => "shop_flair_directory",
+        }
+    }
+
+    fn refresh_outcome_label(outcome: RefreshOutcome) -> &'static str {
+        match outcome {
+            RefreshOutcome::Ok => "ok",
+            RefreshOutcome::Failed => "failed",
+        }
+    }
+
+    pub fn record_pg_refresh(refresh: Refresh, outcome: RefreshOutcome, seconds: f64) {
+        pg_refresh_seconds().record(
+            seconds,
+            &[
+                KeyValue::new("domain", refresh_label(refresh)),
+                KeyValue::new("outcome", refresh_outcome_label(outcome)),
             ],
         );
     }
@@ -2033,9 +2086,10 @@ mod inner {
         GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal, GildTier,
         JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
         NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
-        PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, RenderReason,
-        RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser, SongQueueReward,
-        SshRejectReason, SummaryResult, TailorBeat, TranslationResult, VizWireBands,
+        PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, Refresh,
+        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage,
+        SessionUser, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
@@ -2062,6 +2116,7 @@ mod inner {
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}
     pub fn record_session_start(_stage: SessionStartStage, _user: SessionUser, _seconds: f64) {}
+    pub fn record_pg_refresh(_refresh: Refresh, _outcome: RefreshOutcome, _seconds: f64) {}
     pub fn observe_chat_read_permits(
         _permits: std::sync::Arc<tokio::sync::Semaphore>,
         _total: usize,
