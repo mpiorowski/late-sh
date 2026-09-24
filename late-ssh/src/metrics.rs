@@ -250,22 +250,6 @@ pub enum ArcadeDifficulty {
     Single,
 }
 
-impl ArcadeDifficulty {
-    /// The difficulty behind a board's stored key. The keys come from each
-    /// game's own `DIFFICULTIES` table, so an unknown one is a new
-    /// difficulty that was never given a label: that should fail loudly.
-    pub fn from_key(key: &str) -> Self {
-        match key {
-            "easy" => Self::Easy,
-            "medium" => Self::Medium,
-            "hard" => Self::Hard,
-            "draw-1" => Self::DrawOne,
-            "draw-3" => Self::DrawThree,
-            other => unreachable!("arcade difficulty {other} has no metric label"),
-        }
-    }
-}
-
 /// How an Arcade board ended. Only Le Word (out of guesses) and
 /// Minesweeper (out of lives) can be lost; the rest end solved or not at
 /// all.

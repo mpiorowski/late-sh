@@ -56,6 +56,13 @@ pub const DIFFICULTIES: [NonogramDifficulty; 3] = [
         size_key: "20x20",
     },
 ];
+/// The metric label of each row of `DIFFICULTIES`, in the same order.
+/// Sized by the table, so a new difficulty must be labeled to build.
+const DIFFICULTY_METRICS: [ArcadeDifficulty; DIFFICULTIES.len()] = [
+    ArcadeDifficulty::Easy,
+    ArcadeDifficulty::Medium,
+    ArcadeDifficulty::Hard,
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -495,7 +502,7 @@ impl State {
             Mode::Daily => ArcadeMode::Daily,
             Mode::Personal => ArcadeMode::Personal,
         };
-        let difficulty = ArcadeDifficulty::from_key(self.difficulty_key());
+        let difficulty = DIFFICULTY_METRICS[self.selected_difficulty];
         self.svc.record_finish(mode, difficulty, finish);
     }
 

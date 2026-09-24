@@ -24,6 +24,13 @@ pub type Notes = [[u16; 9]; 9];
 const NOTE_MASK: u16 = 0x01ff;
 
 pub const DIFFICULTIES: [&str; 3] = ["easy", "medium", "hard"];
+/// The metric label of each row of `DIFFICULTIES`, in the same order.
+/// Sized by the table, so a new difficulty must be labeled to build.
+const DIFFICULTY_METRICS: [ArcadeDifficulty; DIFFICULTIES.len()] = [
+    ArcadeDifficulty::Easy,
+    ArcadeDifficulty::Medium,
+    ArcadeDifficulty::Hard,
+];
 const MAX_UNDO: usize = 50;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -481,7 +488,7 @@ impl State {
             Mode::Daily => ArcadeMode::Daily,
             Mode::Personal => ArcadeMode::Personal,
         };
-        let difficulty = ArcadeDifficulty::from_key(self.difficulty_key());
+        let difficulty = DIFFICULTY_METRICS[self.selected_difficulty];
         self.svc.record_finish(mode, difficulty, finish);
     }
 

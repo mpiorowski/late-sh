@@ -168,6 +168,27 @@ async fn a_key_press_runs_the_cascade_out() {
     assert!(!state.skip_win_animation());
 }
 
+/// An undo after the win, then the last card replayed, is not a second
+/// win: the finish is counted once and the cascade does not run again.
+#[tokio::test]
+async fn a_win_undone_and_replayed_is_not_a_second_finish() {
+    let mut state = almost_won_state();
+    assert!(state.auto_move());
+    assert!(state.is_game_over);
+    assert!(state.win_cascade_running());
+
+    assert!(state.undo());
+    assert!(!state.is_game_over);
+    assert!(!state.win_cascade_running());
+
+    assert!(state.auto_move());
+    assert!(state.is_game_over);
+    assert!(
+        !state.win_cascade_running(),
+        "the first crossing was already counted"
+    );
+}
+
 /// Dealing again clears the heap; a won board reloaded from its snapshot
 /// shows the win card without replaying the cascade.
 #[tokio::test]
