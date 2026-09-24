@@ -1,10 +1,8 @@
-use std::time::Duration;
-
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
-use late_core::db::{Db, DbConfig};
+use late_core::db::Db;
 use late_core::models::{
-    bonsai::{BONSAI_CHANGED_CHANNEL, Tree, listen_for_bonsai_changes},
+    bonsai::Tree,
     bonsai_decay_protection::BonsaiDecayProtection,
     chips::{ChipMove, UserChips},
 };
@@ -14,6 +12,7 @@ use uuid::Uuid;
 
 use crate::app::activity::event::ActivityEvent;
 use crate::app::bonsai::state::{Applied, BonsaiCommand, BonsaiState};
+use crate::pg_listener::{Channel, Signal};
 
 pub(crate) const WATER_CHIP_BONUS: i64 = 200;
 
@@ -303,66 +302,27 @@ impl BonsaiService {
         Ok(tree.map(|tree| (tree, decay_protection)))
     }
 
-    /// Fan `bonsai_changed` out to this replica's sessions. One long-lived
-    /// Postgres connection LISTENs; a dropped connection reconnects after
-    /// five seconds. A change committed during the gap is not replayed: the
+    /// What the notify worker subscribes to.
+    pub const CHANNELS: &'static [Channel] = &[Channel::BonsaiChanged];
+
+    /// Fan `bonsai_changed` out to this replica's sessions. A change
+    /// committed while the listener was reconnecting is not replayed: the
     /// mirror of an idle second session lags until its owner's next action
-    /// or change, which both carry the stored tree. Same shape as
-    /// `CrownService::start_listener_task`.
-    pub fn start_listener_task(&self, db_config: DbConfig) -> tokio::task::JoinHandle<()> {
+    /// or change, which both carry the stored tree, so a resync has nothing
+    /// to re-read.
+    pub fn start_notify_worker(
+        &self,
+        mut signals: mpsc::UnboundedReceiver<Signal>,
+    ) -> tokio::task::JoinHandle<()> {
         let service = self.clone();
         tokio::spawn(async move {
-            loop {
-                if let Err(error) = service.listen_once(&db_config).await {
-                    tracing::warn!(error = ?error, "bonsai postgres listener stopped");
+            while let Some(signal) = signals.recv().await {
+                match signal {
+                    Signal::Resync => {}
+                    Signal::Notify { payload, .. } => service.publish_change(&payload),
                 }
-                tokio::time::sleep(Duration::from_secs(5)).await;
             }
         })
-    }
-
-    async fn listen_once(&self, db_config: &DbConfig) -> Result<()> {
-        let mut config = tokio_postgres::Config::new();
-        config.host(&db_config.host);
-        config.port(db_config.port);
-        config.user(&db_config.user);
-        config.password(&db_config.password);
-        config.dbname(&db_config.dbname);
-
-        let (client, mut connection) = config.connect(tokio_postgres::NoTls).await?;
-        let listen = listen_for_bonsai_changes(&client);
-        tokio::pin!(listen);
-        loop {
-            tokio::select! {
-                result = &mut listen => {
-                    result?;
-                    break;
-                }
-                message = std::future::poll_fn(|cx| connection.poll_message(cx)) => {
-                    let Some(message) = message else {
-                        return Ok(());
-                    };
-                    self.handle_notification(message?);
-                }
-            }
-        }
-
-        loop {
-            let Some(message) = std::future::poll_fn(|cx| connection.poll_message(cx)).await else {
-                return Ok(());
-            };
-            self.handle_notification(message?);
-        }
-    }
-
-    fn handle_notification(&self, message: tokio_postgres::AsyncMessage) {
-        let tokio_postgres::AsyncMessage::Notification(notification) = message else {
-            return;
-        };
-        if notification.channel() != BONSAI_CHANGED_CHANNEL {
-            return;
-        }
-        self.publish_change(notification.payload());
     }
 
     pub(super) fn publish_change(&self, payload: &str) {

@@ -91,6 +91,9 @@ impl App {
         // The Late Edition: the login pop once the splash is down, `/paper`,
         // and the results of both.
         changed |= crate::app::paper::svc::tick(self);
+        // The job feed: the shelf snapshot copy, `/jobs`, and the admin's
+        // press banners.
+        changed |= crate::app::jobs::svc::tick(self);
 
         let mut messages = Vec::new();
         if let Some(rx) = &mut self.session_rx {
@@ -1239,7 +1242,7 @@ impl App {
         // frames), so requesting here needs no frames of its own; the
         // fetch completion reports through poll_terminal_images above.
         self.chat
-            .request_image_modal_terminal_image(self.terminal_image_protocol);
+            .request_image_modal_terminal_image(self.terminal_image_protocol());
         changed |= self.show_lobby_modal && one_hz;
         let ultimate_cooldown_running = self.ultimate_state.has_cooldown_running();
         changed |= self.show_ultimate_modal

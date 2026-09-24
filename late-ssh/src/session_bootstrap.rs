@@ -390,10 +390,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             None
         }
     };
-    // The door: the next of last month's podium pieces this account has
-    // not seen, or the cup. One claim per login, the gallery logs its
-    // own failures.
-    let splash_piece = state.gallery_service.claim_splash_piece(user_id).await;
+    // The door: the day's wall piece, or the cup.
+    let splash_piece = state.gallery_service.splash_piece();
     let initial_door_rcs = match state.door_rc_service.list(user_id).await {
         Ok(rcs) => rcs,
         Err(e) => {
@@ -424,6 +422,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         translation_service: state.translation_service.clone(),
         summary_service: state.summary_service.clone(),
         paper_service: state.paper_service.clone(),
+        jobs_service: state.jobs_service.clone(),
         notification_service: state.notification_service.clone(),
         article_service: state.article_service.clone(),
         feed_service: state.feed_service.clone(),

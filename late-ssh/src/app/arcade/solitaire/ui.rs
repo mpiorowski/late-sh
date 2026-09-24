@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -41,7 +41,6 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
                 ("h/j/k/l", "move"),
                 ("Space", "select/place"),
                 ("a/f", "auto"),
-                ("w", "test win"),
                 ("u", "undo"),
                 ("d/p/n", "new"),
                 ("[ ]", "draw"),
@@ -313,11 +312,11 @@ fn tableau_span(state: &State, col: usize, row: usize, card: Option<TableauCard>
         ),
         Some(_) => Span::styled(
             SOLITAIRE_CARD_THEME.render_back_compact().to_string(),
-            block_style(focused, selected, None).fg(theme::TEXT_DIM()),
+            muted_block_style(focused, selected, theme::TEXT_DIM()),
         ),
         None => Span::styled(
             SOLITAIRE_CARD_THEME.render_empty_compact().to_string(),
-            block_style(focused, selected, None).fg(theme::TEXT_FAINT()),
+            muted_block_style(focused, selected, theme::TEXT_FAINT()),
         ),
     }
 }
@@ -645,11 +644,11 @@ fn tableau_span_multiline(
         ),
         Some(_) => styled_span_with_style(
             SOLITAIRE_CARD_THEME.render_back_lines()[line_idx].clone(),
-            block_style(focused, selected, None).fg(theme::TEXT_DIM()),
+            muted_block_style(focused, selected, theme::TEXT_DIM()),
         ),
         None => styled_span_with_style(
             SOLITAIRE_CARD_THEME.render_empty_lines()[line_idx].clone(),
-            block_style(focused, selected, None).fg(theme::TEXT_FAINT()),
+            muted_block_style(focused, selected, theme::TEXT_FAINT()),
         ),
     }
 }
@@ -661,18 +660,26 @@ fn block_style(focused: bool, selected: bool, suit: Option<Suit>) -> Style {
         None => theme::TEXT(),
     };
 
-    // Focus beats selection, and the branches stay exclusive: the selection
-    // swap is a `REVERSED` modifier a later `.bg()` cannot clear. The suit
-    // color rides on after the swap so red stays red.
+    // Focus beats selection. Both are solid accent fills with the card
+    // punched through, amber for the cursor and green for the picked-up
+    // card: the old highlight and selection tints were too faint to find the
+    // cursor on several palettes. The suit glyph still names the suit on the
+    // two filled cards; every other card keeps its suit color.
     if focused {
-        Style::default()
-            .fg(fg)
-            .bg(theme::BG_HIGHLIGHT())
-            .add_modifier(Modifier::BOLD)
+        theme::punch_through(theme::AMBER()).add_modifier(Modifier::BOLD)
     } else if selected {
-        theme::selection_style().fg(fg).add_modifier(Modifier::BOLD)
+        theme::punch_through(theme::SUCCESS()).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(fg)
+    }
+}
+
+/// A card back or an empty slot: drawn in `muted` until the cursor or the
+/// selection fills it, where the fill must keep its own accent.
+fn muted_block_style(focused: bool, selected: bool, muted: Color) -> Style {
+    match focused || selected {
+        true => block_style(focused, selected, None),
+        false => Style::default().fg(muted),
     }
 }
 

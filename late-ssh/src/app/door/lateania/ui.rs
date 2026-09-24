@@ -267,9 +267,9 @@ struct Chip {
 }
 
 /// Build the action-bar chips left to right within `max_width`: Attack first,
-/// then as many ability slots as fit, always keeping room for Quaff and Flee on
-/// the end (the two a wounded player reaches for most). Kept pure so the layout
-/// is unit-testable.
+/// then as many ability slots as fit, always keeping room for Coat, Quaff and
+/// Flee on the end (the three that shouldn't cost a panel to reach). Kept pure
+/// so the layout is unit-testable.
 fn combat_chips(view: &PlayerView, max_width: u16) -> Vec<Chip> {
     let width_of = |s: &str| UnicodeWidthStr::width(s) as u16;
     let attack = Chip {
@@ -282,14 +282,26 @@ fn combat_chips(view: &PlayerView, max_width: u16) -> Vec<Chip> {
         action: ClickAction::Quaff,
         ready: true,
     };
+    // Shows the strikes left rather than the school: the school is already on
+    // the effects line directly above, and the number is the part that decides
+    // whether you press it.
+    let coat = Chip {
+        label: match &view.coat {
+            Some(c) => format!("\u{2697} x{}", c.charges), // ⚗
+            None => "\u{2697} Coat".to_string(),
+        },
+        action: ClickAction::Coat,
+        ready: view.coat.is_none(),
+    };
     let flee = Chip {
         label: "\u{2691} Flee".to_string(), // ⚑
         action: ClickAction::Flee,
         ready: true,
     };
-    // Reserve the trailing Quaff/Flee (plus a space before each) so abilities in
-    // the middle never crowd them off the row.
-    let reserved = width_of(&quaff.label) + 1 + width_of(&flee.label) + 1;
+    // Reserve the trailing Coat/Quaff/Flee (plus a space before each) so
+    // abilities in the middle never crowd them off the row.
+    let reserved =
+        width_of(&coat.label) + 1 + width_of(&quaff.label) + 1 + width_of(&flee.label) + 1;
     let mut chips = vec![attack];
     let mut used = width_of(&chips[0].label);
     for a in &view.abilities {
@@ -307,6 +319,7 @@ fn combat_chips(view: &PlayerView, max_width: u16) -> Vec<Chip> {
             ready: a.ready,
         });
     }
+    chips.push(coat);
     chips.push(quaff);
     chips.push(flee);
     chips
@@ -341,6 +354,11 @@ fn draw_action_bar(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVi
                 .fg(theme::AMBER_GLOW())
                 .add_modifier(Modifier::BOLD),
             ClickAction::Quaff => Style::default().fg(theme::SUCCESS()),
+            // Dim once a coat is live: the chip is then mostly a readout of
+            // what's left. It stays clickable, because a nearly spent coat
+            // still tops up (`coat_best`).
+            ClickAction::Coat if chip.ready => Style::default().fg(theme::AMBER()),
+            ClickAction::Coat => Style::default().fg(theme::TEXT_DIM()),
             ClickAction::Flee => Style::default().fg(theme::TEXT_DIM()),
             ClickAction::Ability(_) if chip.ready => Style::default().fg(theme::AMBER()),
             ClickAction::Ability(_) => Style::default().fg(theme::TEXT_FAINT()),
@@ -713,11 +731,14 @@ fn is_service_room(id: u32) -> bool {
         })
 }
 
-/// Pull off-screen POI arrows in from the widget border so they hug the
-/// explored cluster instead of floating at the panel's far edge, where nothing
-/// ties them to the map they annotate. Arrows collapsing onto the same cell
-/// keep boss priority. Atlas only: the live field draws no POI arrows, so a
-/// glyph next to `@` can never masquerade as a movement affordance.
+/// Pull direction arrows in from the widget border so they hug the explored
+/// cluster instead of floating at the panel's far edge, where nothing ties
+/// them to the map they annotate. An arrow already inside the cluster's box
+/// (a fogged tracked room among walked ones) stays on its target's own cell:
+/// anywhere else would put it beyond the room it points at. Arrows collapsing
+/// onto the same cell keep boss priority. Atlas only: the live field draws no
+/// POI arrows, so a glyph next to `@` can never masquerade as a movement
+/// affordance.
 fn hug_poi_arrows(
     arrows: Vec<super::worldmap::MapArrow>,
     canvas: &[Vec<super::worldmap::Tile>],
@@ -1876,8 +1897,9 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     // The green arrow is the one you chose, and it works exactly like the
     // amber ones: a straight-line direction, drawn only within `PAN_LIMIT`
     // (same land, where the coordinate delta is a real spatial relationship).
-    // Crucially this needs no `visited` at all, so it points at a boss you
-    // have never found - which is the whole job of tracking a quest. Drawn
+    // Working out the direction needs no `visited`, so it points at a boss
+    // you have never found, which is the whole job of tracking a quest.
+    // `visited` only skips on-screen rooms the canvas already draws. Drawn
     // after (over) the amber arrows: a border cell can only say one thing,
     // and where-you're-going beats where-a-boss-is.
     //
@@ -1902,7 +1924,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         };
         if let Some(aim) = aim {
             let (dest_arrows, _) =
-                super::worldmap::quest_arrows(coords, center, cols, height, &[aim]);
+                super::worldmap::quest_arrows(coords, center, cols, height, &[aim], &view.visited);
             for arrow in hug_poi_arrows(dest_arrows, &canvas) {
                 if let Some(cell) = cells.get_mut(arrow.row).and_then(|r| r.get_mut(arrow.col)) {
                     *cell = (arrow.glyph.to_string(), quest_style);
@@ -1925,7 +1947,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     let quests_beyond = if quest_targets.is_empty() {
         0
     } else {
-        super::worldmap::quest_arrows(coords, center, cols, height, &quest_targets).1
+        super::worldmap::quest_arrows(coords, center, cols, height, &quest_targets, &view.visited).1
     };
 
     // Land labels: name each explored region once, near the centroid of its
@@ -4924,7 +4946,7 @@ fn battle_side_panel(
         effects.push(format!("empowered +{}", view.empower));
     }
     if let Some(coat) = &view.coat {
-        effects.push(coat.clone());
+        effects.push(format!("{} coat x{}", coat.school, coat.charges));
     }
     if view.stunned {
         effects.push("stunned".to_string());
@@ -5031,6 +5053,7 @@ fn battle_side_panel(
     lines.push(Line::raw(""));
     lines.push(hint("space/x", "strike  z flee"));
     lines.push(hint("Q", "quaff a potion"));
+    lines.push(hint("C", "coat your weapon"));
     (lines, hits)
 }
 
@@ -7312,7 +7335,7 @@ fn battle_context(view: &PlayerView, width: usize) -> Option<Vec<Line<'static>>>
         effects.push(format!("empowered +{}", view.empower));
     }
     if let Some(coat) = &view.coat {
-        effects.push(coat.clone());
+        effects.push(format!("{} coat x{}", coat.school, coat.charges));
     }
     if view.stunned {
         effects.push("stunned".to_string());

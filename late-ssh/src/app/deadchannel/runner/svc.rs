@@ -1,7 +1,7 @@
 //! The runner look directory: every runner's look, served from Postgres to
 //! every replica (root CONTEXT.md, multi-replica rule). Same shape as
-//! `app/flags/svc.rs`: one long-lived connection LISTENs on
-//! `deadchannel_runner_changed` and re-reads every look on any change;
+//! `app/flags/svc.rs`: the process listener (`crate::pg_listener`) routes
+//! `deadchannel_runner_changed` here and every look is re-read on any change;
 //! sessions hold a `watch` receiver, copy it on the tick edge, and paint
 //! portraits from the owned copy.
 //!
@@ -11,17 +11,15 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Result;
-use late_core::db::{Db, DbConfig};
-use late_core::models::deadchannel_runner::{
-    DEADCHANNEL_RUNNER_CHANGED_CHANNEL, DeadchannelRunner, listen_for_deadchannel_runner_changes,
-};
-use tokio::sync::watch;
+use late_core::db::Db;
+use late_core::models::deadchannel_runner::DeadchannelRunner;
+use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use super::state::Look;
+use crate::pg_listener::{Channel, Signal, read_until_ok};
 
 /// What the directory serves: user id to look, shared by `Arc` so a
 /// session's tick copy is a pointer bump.
@@ -65,70 +63,24 @@ impl RunnerLookService {
         Ok(())
     }
 
-    /// Keep every replica's looks in step. A dropped connection reconnects
-    /// after five seconds and re-seeds.
-    pub fn start_listener_task(&self, db_config: DbConfig) -> tokio::task::JoinHandle<()> {
+    /// What the notify worker subscribes to.
+    pub const CHANNELS: &'static [Channel] = &[Channel::DeadchannelRunnerChanged];
+
+    /// Keep every replica's looks in step with `deadchannel_runner_changed`.
+    /// A resync and a notify are the same re-read, a burst of changes
+    /// collapses into one, and a failed read retries until it lands: the
+    /// resync read is what seeds this replica, so it may not be dropped.
+    pub fn start_notify_worker(
+        &self,
+        mut signals: mpsc::UnboundedReceiver<Signal>,
+    ) -> tokio::task::JoinHandle<()> {
         let service = self.clone();
         tokio::spawn(async move {
-            loop {
-                if let Err(error) = service.listen_once(&db_config).await {
-                    tracing::warn!(error = ?error, "runner look postgres listener stopped");
-                }
-                tokio::time::sleep(Duration::from_secs(5)).await;
+            while signals.recv().await.is_some() {
+                while signals.try_recv().is_ok() {}
+                read_until_ok("runner looks", || service.refresh()).await;
             }
         })
-    }
-
-    async fn listen_once(&self, db_config: &DbConfig) -> Result<()> {
-        let mut config = tokio_postgres::Config::new();
-        config.host(&db_config.host);
-        config.port(db_config.port);
-        config.user(&db_config.user);
-        config.password(&db_config.password);
-        config.dbname(&db_config.dbname);
-
-        let (client, mut connection) = config.connect(tokio_postgres::NoTls).await?;
-        let listen = listen_for_deadchannel_runner_changes(&client);
-        tokio::pin!(listen);
-        loop {
-            tokio::select! {
-                result = &mut listen => {
-                    result?;
-                    break;
-                }
-                message = std::future::poll_fn(|cx| connection.poll_message(cx)) => {
-                    let Some(message) = message else {
-                        return Ok(());
-                    };
-                    self.handle_notification(message?).await;
-                }
-            }
-        }
-
-        // Seeded after the LISTEN is live, so a join committed between the
-        // two is caught by this read rather than dropped.
-        self.refresh().await?;
-
-        loop {
-            let Some(message) = std::future::poll_fn(|cx| connection.poll_message(cx)).await else {
-                return Ok(());
-            };
-            self.handle_notification(message?).await;
-        }
-    }
-
-    async fn handle_notification(&self, message: tokio_postgres::AsyncMessage) {
-        let tokio_postgres::AsyncMessage::Notification(notification) = message else {
-            return;
-        };
-        if notification.channel() != DEADCHANNEL_RUNNER_CHANGED_CHANNEL {
-            return;
-        }
-        // A failed re-read is this replica lagging until the next change,
-        // not a reason to drop the LISTEN connection.
-        if let Err(error) = self.refresh().await {
-            tracing::warn!(error = ?error, user_id = notification.payload(), "failed to refresh runner looks");
-        }
     }
 }
 

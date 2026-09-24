@@ -258,7 +258,8 @@ jobs:
     needs: build_cli
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
-    # contents: write is for `gh release upload` of sha256sums.txt only.
+    # contents: write is for `gh release upload` of sha256sums.txt and the
+    # per-target archives only.
     permissions:
       contents: write
     concurrency:
@@ -385,6 +386,48 @@ jobs:
               exit 1
               ;;
           esac
+
+      # One archive per target on the GitHub Release, named by target triple,
+      # so `mise use -g github:mpiorowski/late-sh` can pick the right one.
+      # Runs after the checksum step, which already refused a rebuild that
+      # differs, so an asset that exists is left alone: tags are immutable.
+      - name: upload_release_archives_to_github
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p gh-assets
+          for target_dir in "publish/releases/${RELEASE_TAG}"/*/; do
+            target="$(basename "$target_dir")"
+            files=()
+            for binary_name in late late.exe late-webview; do
+              [[ -f "${target_dir}${binary_name}" ]] && files+=("$binary_name")
+            done
+            case "$target" in
+              *-windows-*)
+                archive="late-${target}.zip"
+                (cd "$target_dir" && zip -X -q "${OLDPWD}/gh-assets/${archive}" "${files[@]}")
+                ;;
+              *)
+                archive="late-${target}.tar.gz"
+                # upload-artifact drops the exec bit; restore it in the archive.
+                tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --mode=0755 \
+                  -C "$target_dir" -cf - "${files[@]}" | gzip -n > "gh-assets/${archive}"
+                ;;
+            esac
+          done
+
+          published="$(gh release view "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json assets \
+            --jq '.assets[].name')"
+          for archive in gh-assets/*; do
+            name="$(basename "$archive")"
+            if grep -qxF "$name" <<<"$published"; then
+              echo "${name} for ${RELEASE_TAG} is already published; leaving it"
+              continue
+            fi
+            gh release upload "${RELEASE_TAG}" "$archive" --repo "${GITHUB_REPOSITORY}"
+          done
 
       - name: upload_release_distribution
         run: |

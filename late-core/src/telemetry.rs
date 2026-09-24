@@ -246,6 +246,17 @@ macro_rules! error_span {
 // TracedExt — HTTP client with span propagation
 // ---------------------------------------------------------------------------
 
+/// The URL an outbound span may carry: scheme, host, port, and path only.
+/// Spans are stored in VictoriaTraces where anyone with Grafana reads them,
+/// and Google APIs take their key as `?key=`, so the query (and fragment)
+/// never leave this function.
+fn span_url(url: &reqwest::Url) -> String {
+    let mut url = url.clone();
+    url.set_query(None);
+    url.set_fragment(None);
+    url.to_string()
+}
+
 pub trait TracedExt {
     fn send_traced(
         self,
@@ -260,8 +271,8 @@ impl TracedExt for RequestBuilder {
         #[cfg(not(feature = "otel"))]
         let request = request?;
         let method = request.method().clone();
-        let url = request.url().clone();
-        let server_address = url.host_str().unwrap_or_default().to_owned();
+        let url = span_url(request.url());
+        let server_address = request.url().host_str().unwrap_or_default().to_owned();
         let span = tracing::info_span!(
             "http.client.request",
             "otel.name" = field::display(format!("{method} {url}")),
@@ -302,3 +313,7 @@ impl TracedExt for RequestBuilder {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "telemetry_test.rs"]
+mod telemetry_test;

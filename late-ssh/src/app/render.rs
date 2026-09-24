@@ -241,6 +241,9 @@ struct DrawContext<'a> {
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
     scratchpad: Option<&'a crate::app::scratchpad::state::ScratchpadState>,
     directory_state: &'a crate::app::directory::state::DirectoryState,
+    jobs_state: &'a crate::app::jobs::state::JobsState,
+    /// The viewer's languages from their profile, for the job matcher.
+    viewer_langs: &'a [String],
     clubhouse_state: &'a crate::app::clubhouse::state::State,
     clubhouse_own_username: &'a str,
     nightcap_state: &'a crate::app::clubhouse::nightcap::state::State,
@@ -324,9 +327,9 @@ struct DrawContext<'a> {
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
-    /// This login's podium piece, hung over the splash when it fits; the
+    /// The day's wall piece, hung over the splash when it fits; the
     /// coffee cup otherwise, and always once the account has seen the
-    /// podium this month.
+    /// day's piece.
     splash_piece: Option<&'a crate::app::artboard::gallery::svc::SplashPiece>,
     /// One frame of first-contact whisper theater over the splash, `None`
     /// unless the door is held this frame. See `app/deadchannel`.
@@ -340,6 +343,10 @@ struct DrawContext<'a> {
     status_picker: &'a status_picker::state::StatusPickerState,
     room_info_modal_open: bool,
     room_info_modal_state: &'a room_info_modal::state::RoomInfoModalState,
+    directory_editor: &'a crate::app::directory::editor::state::EditorState,
+    tag_picker: &'a crate::app::tag_picker::state::TagPickerState,
+    /// The showcase feed, for the editor's projects page.
+    showcase_items: &'a [chat::showcase::svc::ShowcaseFeedItem],
     booth_modal_open: bool,
     booth_modal_state: &'a crate::app::audio::booth::state::BoothModalState,
     booth_snapshot: crate::app::audio::svc::QueueSnapshot,
@@ -432,6 +439,8 @@ impl App {
         theme::set_text_brightness_adjustment(text_brightness_adjustment);
         let ultimate_effects = self.ultimate_state.active_theme_effects();
         self.chat.refresh_composer_theme();
+        self.directory_editor.refresh_theme();
+        self.jobs.post.refresh_theme();
 
         // Synchronize terminal background color with theme bg_canvas if enabled
         let enabled = if self.show_settings {
@@ -566,6 +575,7 @@ impl App {
         // Presence values are recomputed on the ~1s tick cadence
         // (`tick.rs`), not per frame; reads here are owned-memory only.
         let online_count = self.online_count;
+        let terminal_image_protocol = self.terminal_image_protocol();
         let image_modal = self
             .chat
             .image_modal()
@@ -573,12 +583,12 @@ impl App {
                 message_id: modal.message_id,
                 url: modal.url.as_str(),
                 preview: self.chat.inline_image_cache.get(&modal.message_id),
-                terminal_image: self.terminal_image_protocol.and_then(|protocol| {
+                terminal_image: terminal_image_protocol.and_then(|protocol| {
                     self.chat
                         .terminal_image_for_message(modal.message_id)
                         .filter(|image| image.supports_protocol(protocol))
                 }),
-                terminal_image_protocol: self.terminal_image_protocol,
+                terminal_image_protocol,
             });
         let dashboard_room = shell_active_room.and_then(|room_id| self.chat.room_by_id(room_id));
         let dashboard_messages = shell_active_room
@@ -720,7 +730,6 @@ impl App {
             mine_only: self.chat.showcase.mine_only(),
         };
         let showcase_unread_count = self.chat.showcase.unread_count();
-        let showcase_composing = self.chat.showcase.composing();
         let web_base_url = self.web_url.as_str();
         let listen_url = crate::app::state::listen_url(&self.web_url);
         let work_view = chat::work::ui::WorkListView {
@@ -733,7 +742,6 @@ impl App {
             mine_only: self.chat.work.mine_only(),
         };
         let work_unread_count = self.chat.work.unread_count();
-        let work_composing = self.chat.work.composing();
         let news_modal = self
             .chat
             .news_modal()
@@ -843,12 +851,10 @@ impl App {
             showcase_unread_count,
             showcase_view,
             showcase_state: Some(&self.chat.showcase),
-            showcase_composing,
             work_selected: self.chat.work_selected,
             work_unread_count,
             work_view,
             work_state: Some(&self.chat.work),
-            work_composing,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
             composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -1082,6 +1088,13 @@ impl App {
                 });
                 crate::app::zen::ui::ZenChatTile {
                     label: label.clone(),
+                    stream_badge: room_id.and_then(|room_id| {
+                        self.chat
+                            .live_streams
+                            .iter()
+                            .find(|stream| stream.room_id == room_id)
+                            .map(chat::ui::stream_count_badge)
+                    }),
                     view,
                 }
             })
@@ -1231,7 +1244,7 @@ impl App {
                 overlay_blocks_raster,
                 screen as u16,
                 non_modal_image_tag,
-                self.terminal_image_protocol,
+                terminal_image_protocol,
             );
         if !pre_wipe.is_empty() {
             use std::io::Write;
@@ -1300,7 +1313,7 @@ impl App {
                         dopewars_state: dopewars_state_taken.as_mut(),
                         bashquest_state: bashquest_state_taken.as_mut(),
                         codekeep_state: codekeep_state_taken.as_mut(),
-                        terminal_image_protocol: self.terminal_image_protocol,
+                        terminal_image_protocol,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
                         snake_state: &self.snake_state,
@@ -1316,6 +1329,8 @@ impl App {
                         dartboard_state: self.dartboard_state.as_ref(),
                         scratchpad: self.scratchpad.as_ref(),
                         directory_state: &self.directory_state,
+                        jobs_state: &self.jobs,
+                        viewer_langs: &self.profile_state.profile().langs,
                         clubhouse_state: &self.clubhouse,
                         clubhouse_own_username: self.profile_state.profile().username.as_str(),
                         nightcap_state: &self.nightcap,
@@ -1397,6 +1412,9 @@ impl App {
                         status_picker: &self.status_picker,
                         room_info_modal_open: self.room_info_modal_state.is_open(),
                         room_info_modal_state: &self.room_info_modal_state,
+                        directory_editor: &self.directory_editor,
+                        tag_picker: &self.tag_picker,
+                        showcase_items: self.chat.showcase.all_items(),
                         booth_modal_open: self.booth_modal_state.is_open(),
                         booth_modal_state: &self.booth_modal_state,
                         booth_snapshot: self.audio.queue_snapshot(),
@@ -1458,7 +1476,7 @@ impl App {
             .set_image_modal_capacity(terminal_image_frame.modal_capacity());
 
         let image_commands = self.terminal_image_render_state.build_commands(
-            self.terminal_image_protocol,
+            terminal_image_protocol,
             &terminal_image_frame,
             suppress_new_raster,
         );
@@ -1515,7 +1533,7 @@ impl App {
                 text.push(' ');
             }
 
-            // The login's podium piece takes the cup's place when the
+            // The day's wall piece takes the cup's place when the
             // terminal has room for it; the typed line stays under either.
             let piece_area = ratatui::layout::Layout::vertical([
                 ratatui::layout::Constraint::Min(0),
@@ -1836,14 +1854,12 @@ impl App {
                     content_area,
                     crate::app::directory::ui::DirectoryPageView {
                         directory: ctx.directory_state,
-                        work_state: ctx
-                            .chat_view
-                            .work_state
-                            .expect("directory work state is always present"),
-                        showcase_state: ctx
-                            .chat_view
-                            .showcase_state
-                            .expect("directory showcase state is always present"),
+                        jobs: ctx.jobs_state,
+                        viewer_langs: ctx.viewer_langs,
+                        projects: ctx.chat_view.showcase_view.items,
+                        people: ctx.chat_view.work_view.items,
+                        work_marker: ctx.chat_view.work_view.marker_read_at,
+                        showcase_marker: ctx.chat_view.showcase_view.marker_read_at,
                         current_user_id: ctx.chat_view.work_view.current_user_id,
                         profile_base_url: ctx.chat_view.work_view.profile_base_url,
                     },
@@ -2221,6 +2237,30 @@ impl App {
 
         if ctx.room_info_modal_open {
             room_info_modal::ui::draw(frame, inner, ctx.room_info_modal_state);
+        }
+
+        if ctx.directory_editor.is_open() {
+            let projects =
+                crate::app::directory::editor::state::projects_of(ctx.showcase_items, ctx.user_id);
+            crate::app::directory::editor::ui::draw(
+                frame,
+                inner,
+                &crate::app::directory::editor::ui::EditorView {
+                    state: ctx.directory_editor,
+                    projects: &projects,
+                    viewer_name: ctx.clubhouse_own_username,
+                },
+            );
+        }
+
+        if ctx.jobs_state.post.is_open() {
+            crate::app::jobs::ui::draw_post_form(frame, inner, &ctx.jobs_state.post);
+        }
+
+        // Over the settings modal, the profile editor, and the post form,
+        // whichever opened it.
+        if ctx.tag_picker.is_open() {
+            crate::app::tag_picker::ui::draw(frame, inner, ctx.tag_picker);
         }
 
         if ctx.booth_modal_open {

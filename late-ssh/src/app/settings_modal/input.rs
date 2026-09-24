@@ -32,6 +32,11 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.settings_modal_state.chat_badges_open() {
+        handle_chat_badges_input(app, event);
+        return;
+    }
+
     if app.settings_modal_state.picker_open() {
         handle_picker_input(app, event);
         return;
@@ -363,13 +368,17 @@ fn is_close_event(event: &ParsedInput) -> bool {
 fn activate_selected_row(app: &mut App) {
     match app.settings_modal_state.selected_row() {
         Row::Username => app.settings_modal_state.start_username_edit(),
-        Row::Ide | Row::Terminal | Row::Os | Row::Langs => {
+        Row::Ide | Row::Terminal | Row::Os => {
             if let Some(field) = crate::app::settings_modal::state::SystemField::from_row(
                 app.settings_modal_state.selected_row(),
             ) {
                 app.settings_modal_state.start_system_field_edit(field);
             }
         }
+        Row::Langs => crate::app::tag_picker::input::open(
+            app,
+            crate::app::tag_picker::state::TagPickerTarget::SettingsLangs,
+        ),
         Row::Theme
         | Row::TranslateTo
         | Row::AutoTranslate
@@ -411,6 +420,22 @@ fn handle_right_sidebar_components_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b' ' | b'\r') | ParsedInput::Char('e' | 'E') => {
             app.settings_modal_state.toggle_right_sidebar_component()
         }
+        _ => {}
+    }
+}
+
+fn handle_chat_badges_input(app: &mut App, event: ParsedInput) {
+    match event {
+        ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
+            app.settings_modal_state.close_chat_badges();
+        }
+        ParsedInput::Byte(b'j' | b'J')
+        | ParsedInput::Char('j' | 'J')
+        | ParsedInput::Arrow(b'B') => app.settings_modal_state.move_chat_badges_cursor(1),
+        ParsedInput::Byte(b'k' | b'K')
+        | ParsedInput::Char('k' | 'K')
+        | ParsedInput::Arrow(b'A') => app.settings_modal_state.move_chat_badges_cursor(-1),
+        ParsedInput::Byte(b' ' | b'\r') => app.settings_modal_state.toggle_chat_badge(),
         _ => {}
     }
 }

@@ -84,7 +84,11 @@ opened in, so when the focus lands where the active chat's room differs
 from the draft's, `zen::input::focus_moved` closes the draft rather than
 drawing it under another room's label (`input_flow_test.rs`). Zoomed, the
 one pane drawn takes the active chat's frame, not the first chat tile's
-(`draw_rice`).
+(`draw_rice`). A chat tile's title names its room, and a stream room's also
+carries the rail's watcher count, `chat · #mat-live [3]` (`[…]` while
+pending, `chat::ui::stream_count_badge`): the tile draws no stream header,
+so this is the page's only count. On a narrow tile the room label shortens,
+never the count (`chat_tile_title`, `ui_test.rs`).
 
 ## 2. File map
 

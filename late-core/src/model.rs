@@ -1,3 +1,43 @@
+/// A closed enum stored as a `TEXT` column. The model macros read every
+/// field with `row.get` and write every param as `&dyn ToSql`, so the
+/// parse (`from_db`) and the print (`as_str`) live on the enum and this
+/// macro puts them at the row boundary, nowhere else.
+#[macro_export]
+macro_rules! text_column_enum {
+    ($name:ident) => {
+        impl<'a> tokio_postgres::types::FromSql<'a> for $name {
+            fn from_sql(
+                ty: &tokio_postgres::types::Type,
+                raw: &'a [u8],
+            ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+                let value = <&str as tokio_postgres::types::FromSql>::from_sql(ty, raw)?;
+                Ok(Self::from_db(value))
+            }
+
+            fn accepts(ty: &tokio_postgres::types::Type) -> bool {
+                <&str as tokio_postgres::types::FromSql>::accepts(ty)
+            }
+        }
+
+        impl tokio_postgres::types::ToSql for $name {
+            fn to_sql(
+                &self,
+                ty: &tokio_postgres::types::Type,
+                out: &mut bytes::BytesMut,
+            ) -> Result<tokio_postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>>
+            {
+                <&str as tokio_postgres::types::ToSql>::to_sql(&self.as_str(), ty, out)
+            }
+
+            fn accepts(ty: &tokio_postgres::types::Type) -> bool {
+                <&str as tokio_postgres::types::ToSql>::accepts(ty)
+            }
+
+            tokio_postgres::types::to_sql_checked!();
+        }
+    };
+}
+
 #[macro_export]
 macro_rules! model {
     (

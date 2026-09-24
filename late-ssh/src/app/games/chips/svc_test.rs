@@ -6,7 +6,7 @@ use chrono::NaiveDate;
 use late_core::{
     models::{
         chips::{ChipMove, Difficulty, INITIAL_CHIP_BALANCE, UserChips},
-        drink_round::{MAX_OPEN_CREDITS, ROUND_DRINK_POINTS, ROUND_PRICE_PER_PATRON},
+        drink_round::{Bar, MAX_OPEN_CREDITS, ROUND_DRINK_POINTS, ROUND_PRICE_PER_PATRON},
         drinks::{UserDrinks, drunk_level},
         reward::{
             DARKROOM_ESCAPE_REWARD_KEY, DailyPuzzleRewardGame, GREENDRAGON_DRAGON_REWARD_KEY,
@@ -568,7 +568,12 @@ async fn a_round_charges_for_the_drinks_it_actually_pours() {
     chips.ensure_chips(earlier.id).await.expect("earlier chips");
     for _ in 0..MAX_OPEN_CREDITS {
         chips
-            .buy_round(earlier.id, ROUND_PRICE_PER_PATRON, &[holding.id])
+            .buy_round(
+                earlier.id,
+                ROUND_PRICE_PER_PATRON,
+                Bar::Tavern,
+                &[holding.id],
+            )
             .await
             .expect("an earlier round");
     }
@@ -577,6 +582,7 @@ async fn a_round_charges_for_the_drinks_it_actually_pours() {
         .buy_round(
             buyer.id,
             ROUND_PRICE_PER_PATRON,
+            Bar::Tavern,
             &[first.id, second.id, holding.id],
         )
         .await
@@ -637,7 +643,7 @@ async fn an_unaffordable_round_leaves_no_credits_and_no_charge() {
     chips.ensure_chips(buyer.id).await.expect("buyer chips");
 
     match chips
-        .buy_round(buyer.id, ROUND_PRICE_PER_PATRON, &patrons)
+        .buy_round(buyer.id, ROUND_PRICE_PER_PATRON, Bar::Tavern, &patrons)
         .await
     {
         Err(RoundError::Refused(RoundRefusal::InsufficientChips { patrons, total })) => {
@@ -675,7 +681,7 @@ async fn a_cashed_round_drink_costs_the_drinker_nothing() {
     let chips = ChipService::new(test_db.db.clone());
     chips.ensure_chips(buyer.id).await.expect("buyer chips");
     chips
-        .buy_round(buyer.id, ROUND_PRICE_PER_PATRON, &[patron.id])
+        .buy_round(buyer.id, ROUND_PRICE_PER_PATRON, Bar::Tavern, &[patron.id])
         .await
         .expect("the round settles");
 
@@ -731,7 +737,7 @@ async fn a_banked_round_is_drunk_one_at_a_time_with_the_rest_reported() {
     // pay: the second round is not swallowed by the first.
     for buyer in [first_buyer.id, second_buyer.id] {
         let purchase = chips
-            .buy_round(buyer, ROUND_PRICE_PER_PATRON, &[patron.id])
+            .buy_round(buyer, ROUND_PRICE_PER_PATRON, Bar::Tavern, &[patron.id])
             .await
             .expect("the round settles");
         assert_eq!(purchase.patrons, 1);

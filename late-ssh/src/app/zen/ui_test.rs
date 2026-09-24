@@ -1,6 +1,6 @@
 use super::{
-    Care, Chore, PulseView, care_bar_spans, draw_headlines_tile, draw_music_tile, draw_pulse_tile,
-    hint_line_fitting, station_text,
+    Care, Chore, PulseView, care_bar_spans, chat_tile_title, draw_headlines_tile, draw_music_tile,
+    draw_pulse_tile, hint_line_fitting, station_text,
 };
 use crate::app::audio::viz::EqState;
 use crate::app::common::{primitives::hint_line, theme};
@@ -8,6 +8,7 @@ use crate::app::hub::aquarium::state::CareBar;
 use crate::app::zen::rows::Headline;
 use late_core::models::aquarium_care::CARE_DAYS;
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+use unicode_width::UnicodeWidthStr;
 
 fn music_tile_rows(width: u16, height: u16) -> Vec<String> {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
@@ -221,4 +222,25 @@ fn the_footer_drops_whole_hints_instead_of_cutting_one_in_half() {
     let narrow = hint_line_fitting(&hints, two + 4);
     assert_eq!(narrow.width(), two);
     assert_eq!(hint_line_fitting(&hints, 3).width(), hint_line(&[]).width());
+}
+
+/// A stream room's tile carries the rail's watcher count after the room,
+/// and on a narrow tile the room label shortens so the count is never the
+/// part the border clips.
+#[test]
+fn a_stream_chat_tile_title_keeps_the_watcher_count_on_a_narrow_tile() {
+    assert_eq!(chat_tile_title("#lounge", None, 40), "chat · #lounge");
+    assert_eq!(
+        chat_tile_title("#mat-live", Some("[3]"), 40),
+        "chat · #mat-live [3]"
+    );
+    assert_eq!(
+        chat_tile_title("#mat-live", Some("[…]"), 40),
+        "chat · #mat-live […]"
+    );
+
+    // Four cells go to the corners and the title's padding spaces.
+    let title = chat_tile_title("#mat-live", Some("[12]"), 20);
+    assert_eq!(title, "chat · #ma… [12]");
+    assert_eq!(UnicodeWidthStr::width(title.as_str()), 16);
 }

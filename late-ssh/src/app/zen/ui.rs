@@ -44,12 +44,34 @@ use crate::app::{
     pet::ui::{Neighbours, PetPose, PetView, WatchTarget, draw_pet_box},
 };
 
-/// A chat tile's frame: its room's label and its view (`None` when the
-/// account has no room at all). The active tile's view carries the
-/// composer and the selection; the others only watch (`render.rs`).
+/// A chat tile's frame: its room's label, the watcher count badge when the
+/// room has a registered stream (`chat::ui::stream_count_badge`, the same
+/// `[3]` the rail shows), and its view (`None` when the account has no room
+/// at all). The active tile's view carries the composer and the selection;
+/// the others only watch (`render.rs`).
 pub(crate) struct ZenChatTile<'a> {
     pub label: String,
+    pub stream_badge: Option<String>,
     pub view: Option<EmbeddedRoomChatView<'a>>,
+}
+
+/// A chat tile's title: `Chat · #mat-live [3]`. The tile does not draw the
+/// room's stream header, so the badge is the page's only watcher count, and
+/// it must survive a narrow tile: the border clips a title from the right,
+/// which would drop the count first. So the room label is what shortens,
+/// never the badge. `width` is the tile's full width; the corners and the
+/// title's padding spaces take four cells of it.
+pub(crate) fn chat_tile_title(label: &str, stream_badge: Option<&str>, width: u16) -> String {
+    let kind = TileKind::Chat.label();
+    match stream_badge {
+        None => format!("{kind} · {label}"),
+        Some(badge) => {
+            let fixed = UnicodeWidthStr::width(kind) + " · ".width() + 1 + badge.width();
+            let budget = (width as usize).saturating_sub(4 + fixed);
+            let label = crate::app::chat::ui::truncate_cells(label, budget);
+            format!("{kind} · {label} {badge}")
+        }
+    }
 }
 
 /// Everything the Zen page reads, assembled once per frame in `render.rs`.
@@ -153,7 +175,9 @@ pub(crate) fn draw_rice(
             | TileKind::Blank => None,
         };
         let title = match (kind, &chat_tile) {
-            (TileKind::Chat, Some(tile)) => format!("{} · {}", kind.label(), tile.label),
+            (TileKind::Chat, Some(tile)) => {
+                chat_tile_title(&tile.label, tile.stream_badge.as_deref(), rect.width)
+            }
             (TileKind::Chat, None) => kind.label().to_string(),
             (
                 TileKind::Bonsai

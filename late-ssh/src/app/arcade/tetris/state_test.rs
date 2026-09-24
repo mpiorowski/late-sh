@@ -88,3 +88,63 @@ async fn a_held_piece_respawns_at_the_top_in_its_default_rotation() {
     assert_eq!(state.current.row, fresh.row);
     assert_eq!(state.current.col, fresh.col);
 }
+
+#[tokio::test]
+async fn ghost_sits_on_the_stack_below_the_piece() {
+    let mut state = test_state();
+    // A floor with one filled row; everything else empty.
+    state.board[BOARD_HEIGHT - 1] = [Some(PieceKind::O); BOARD_WIDTH];
+    state.current = ActivePiece {
+        kind: PieceKind::I,
+        rotation: 0,
+        row: 0,
+        col: 3,
+    };
+
+    let ghost = state.ghost_piece();
+    let cells = state.view_cells();
+
+    let ghost_cells = piece_cells(ghost);
+    let piece_cells_now = piece_cells(state.current);
+    // The ghost rests right on the floor row, never inside it.
+    assert!(
+        ghost_cells
+            .iter()
+            .all(|(r, _)| *r == BOARD_HEIGHT as i32 - 2)
+    );
+    for (row, line) in cells.iter().enumerate() {
+        for (col, cell) in line.iter().enumerate() {
+            let at = (row as i32, col as i32);
+            let expected = if row == BOARD_HEIGHT - 1 {
+                Cell::Block(PieceKind::O)
+            } else if piece_cells_now.contains(&at) {
+                Cell::Block(PieceKind::I)
+            } else if ghost_cells.contains(&at) {
+                Cell::Ghost(PieceKind::I)
+            } else {
+                Cell::Empty
+            };
+            assert_eq!(*cell, expected, "cell {at:?}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn resting_piece_hides_its_ghost() {
+    let mut state = test_state();
+    state.current = ActivePiece {
+        kind: PieceKind::O,
+        rotation: 0,
+        row: 0,
+        col: 4,
+    };
+    state.current = state.ghost_piece();
+
+    let ghosts = state
+        .view_cells()
+        .iter()
+        .flatten()
+        .filter(|cell| matches!(cell, Cell::Ghost(_)))
+        .count();
+    assert_eq!(ghosts, 0);
+}

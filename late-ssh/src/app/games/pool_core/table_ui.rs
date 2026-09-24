@@ -38,7 +38,7 @@ use crate::app::games::pool_core::{
     aim::{Leg, LegKind, ShotLine},
     ball::CUE,
     canvas::{Canvas, Rgb, mix},
-    rack,
+    rack, rules_snooker,
     shot::BallFrame,
     table::{Geometry, PocketKind, TableSpec},
 };
@@ -147,6 +147,27 @@ pub fn ball_colour(id: u8) -> Rgb {
 
 pub fn is_stripe(id: u8) -> bool {
     (9..=15).contains(&id)
+}
+
+/// What a ball wears printed on it: a pool ball its number, a snooker
+/// colour what it scores (yellow 2 through black 7). The cue ball and the
+/// reds carry nothing: fifteen `1`s would bury the colours that matter.
+pub fn printed_label(id: u8) -> Option<String> {
+    match id {
+        1..=15 => Some(id.to_string()),
+        id if rules_snooker::is_colour(id) => Some(rules_snooker::value(id).to_string()),
+        _ => None,
+    }
+}
+
+/// The ink a label is printed in: white on the two black balls, dark on
+/// everything else.
+pub fn label_ink(id: u8) -> Rgb {
+    if id == 8 || id == rules_snooker::BLACK {
+        WHITE
+    } else {
+        [16, 16, 18]
+    }
 }
 
 /// Chalk on the cloth: the baulk line, the D and the spots. Barely lighter
@@ -338,7 +359,9 @@ impl Overlay {
         BallLook {
             highlighted,
             dimmed: id != CUE && !self.legal.is_empty() && !legal,
-            numbered: highlighted || legal,
+            // A snooker colour always shows what it scores: the player plans
+            // the next colour while still on a red.
+            numbered: highlighted || legal || rules_snooker::is_colour(id),
         }
     }
 }
@@ -600,10 +623,9 @@ pub(super) fn paint_ball(canvas: &mut Canvas, x: f64, y: f64, r: f64, id: u8, lo
 /// balls whose identity is hardest to read from hue alone — were the ones
 /// wearing no number at all.
 fn write_number(canvas: &mut Canvas, x: f64, y: f64, r: f64, id: u8) {
-    if !(1..=15).contains(&id) {
+    let Some(text) = printed_label(id) else {
         return;
-    }
-    let text = id.to_string();
+    };
     // Big enough to paint the number out of pixels instead of borrowing the
     // terminal's font: a glyph is drawn at the cell's size whatever the ball
     // is, so on a large table the number stops growing with the ball it is on
@@ -617,8 +639,7 @@ fn write_number(canvas: &mut Canvas, x: f64, y: f64, r: f64, id: u8) {
     if r < DIGIT_BALL_PX.max(digits * 1.4) {
         return;
     }
-    // The eight is nearly black; everything else is light enough for ink.
-    let fg = if id == 8 { WHITE } else { [20, 20, 22] };
+    let fg = label_ink(id);
     let rows: &[f64] = if r >= REPEAT_BALL_PX {
         &[-2.0, 2.0]
     } else {
@@ -711,8 +732,8 @@ fn paint_number(canvas: &mut Canvas, x: f64, y: f64, r: f64, text: &str, id: u8)
     let scale = (1..=MAX_DIGIT_SCALE).rev().find(|k| fits(*k)).unwrap_or(1);
 
     // A painted digit lands on the ball's own colour, so it needs the contrast
-    // the rim gets: dark ink on everything but the black eight.
-    let fg = if id == 8 { WHITE } else { [16, 16, 18] };
+    // the rim gets: dark ink on everything but the black balls.
+    let fg = label_ink(id);
     let (w, h) = block(scale);
     let left = x - w / 2.0;
     let top = y - h / 2.0;

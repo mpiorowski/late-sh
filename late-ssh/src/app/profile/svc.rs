@@ -19,6 +19,7 @@ use late_core::models::profile_award::{
     ProfileAward, find_profile_awards_by_ids, list_profile_awards_for_user,
 };
 use late_core::models::quest;
+use late_core::models::showcase::Showcase;
 use late_core::models::user::{
     FirstContactHitCaps, FirstContactHitClaim, User, sanitize_username_input,
 };
@@ -80,6 +81,8 @@ pub struct ProfileSnapshot {
     pub chip_ledger: Vec<LedgerRow>,
     /// This UTC month's earned (the board's own figure) and net.
     pub chips_month: MonthChips,
+    /// Every showcase this profile's owner has posted, newest first.
+    pub showcases: Vec<Showcase>,
 }
 
 #[derive(Clone, Debug)]
@@ -263,6 +266,7 @@ impl ProfileService {
         let gallery_counts = ArtboardPiece::counts_for_user(&client, user_id).await?;
         let chip_ledger = UserChips::recent_ledger(&client, user_id, PROFILE_LEDGER_ROWS).await?;
         let chips_month = UserChips::month_figures(&client, user_id).await?;
+        let showcases = Showcase::list_by_user_id(&client, user_id).await?;
         // One batched lookup per table the ledger's refs point at, each a
         // primary-key or unique-index scan over at most PROFILE_LEDGER_ROWS
         // ids, and only when a profile is opened.
@@ -306,6 +310,7 @@ impl ProfileService {
                 gallery_counts,
                 chip_ledger,
                 chips_month,
+                showcases,
             },
         )?;
         Ok(())

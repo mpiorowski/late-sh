@@ -393,12 +393,12 @@ pub(crate) fn column_split(height: u16) -> (u16, u16) {
 /// of its keys depends on the match having a chat.
 pub(crate) const LEGEND: [[(&str, &str); 2]; 7] = [
     [("h l", "aim 1°"), ("[ ]", "ball")],
-    [("H L", "aim 0.1°"), ("{ }", "pot line")],
-    [("a", "mouse aim"), ("'", "lowest ball")],
-    [("e", "spin"), ("m", "ball in hand")],
-    [("x s w", "stroke"), ("p", "call pocket")],
-    [("c", "reset"), ("v", "eye view")],
-    [("Esc", "back"), ("r", "resign")],
+    [("H L", "aim 0.1°"), ("'", "lowest ball")],
+    [("a", "mouse aim"), ("m", "ball in hand")],
+    [("e", "spin"), ("p", "call pocket")],
+    [("x s w", "stroke"), ("v", "eye view")],
+    [("c", "reset"), ("r", "resign")],
+    [("Esc", "back"), ("", "")],
 ];
 
 /// The legend's exit row: the keys that leave the board rather than play on
@@ -529,9 +529,9 @@ fn info_lines(
     lines
 }
 
-/// What the line is on, in the language of the game: the ball and the cut,
-/// with the pocket when the object ball's own leg ends in one; the rail; a
-/// pocket the cue ball is headed straight for.
+/// What the line is on, in the language of the game: the ball and the cut;
+/// the rail; a pocket the cue ball is headed straight for. It never says
+/// where the object ball ends up: judging that is the shot.
 pub(crate) fn target_label(state: &DailyPoolState, line: Option<&ShotLine>) -> String {
     let Some(line) = line else {
         return "on: nothing".to_string();
@@ -550,14 +550,7 @@ pub(crate) fn target_label(state: &DailyPoolState, line: Option<&ShotLine>) -> S
             } else {
                 format!("cut {degrees:.0}° left")
             };
-            match object.hit {
-                Hit::Pocket { index, .. } => {
-                    format!("on: {name} · {cut} · {}", table::pocket_name(index))
-                }
-                Hit::Ball { .. } | Hit::Cushion { .. } | Hit::Nothing { .. } => {
-                    format!("on: {name} · {cut}")
-                }
-            }
+            format!("on: {name} · {cut}")
         }
         Hit::Cushion { .. } => match line.target() {
             Some(id) => format!("on: the rail, past {}", ball_name(state, id)),
@@ -568,12 +561,18 @@ pub(crate) fn target_label(state: &DailyPoolState, line: Option<&ShotLine>) -> S
     }
 }
 
-/// A ball as the striker would name it: its number, or its colour in snooker.
+/// A ball as the striker would name it: its number, or in snooker its colour
+/// and what it scores, which is the one thing a small ball has no room to
+/// print.
 fn ball_name(state: &DailyPoolState, id: u8) -> String {
     match state.rules {
         PoolRules::EightBall | PoolRules::NineBall => format!("the {id}"),
-        PoolRules::Snooker if rules_snooker::is_red(id) => "a red".to_string(),
-        PoolRules::Snooker => format!("the {}", rules_snooker::name(id)),
+        PoolRules::Snooker if rules_snooker::is_red(id) => "a red (1)".to_string(),
+        PoolRules::Snooker => format!(
+            "the {} ({})",
+            rules_snooker::name(id),
+            rules_snooker::value(id)
+        ),
     }
 }
 

@@ -38,8 +38,7 @@ async fn recv_article_event(
     timeout(Duration::from_secs(2), async {
         loop {
             match events.recv().await.expect("article event") {
-                ArticleEvent::UnreadCountUpdated { .. }
-                | ArticleEvent::NewArticlesAvailable { .. } => continue,
+                ArticleEvent::ReadCursorLoaded { .. } => continue,
                 event => return event,
             }
         }
@@ -294,4 +293,67 @@ async fn deleting_article_removes_lounge_news_announcement() {
         .await
         .expect("reload announcement");
     assert!(deleted.is_none());
+}
+
+/// News reaches every session through the `articles_changed` notify, so a
+/// replica that never ran the write itself (only listens) must end up with
+/// the new article in its shared snapshot, and lose it again on delete.
+#[tokio::test]
+async fn a_listening_replica_picks_up_shares_and_deletes_from_the_notify() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let author = create_test_user(&test_db.db, "article-notify-author").await;
+    let other_replica = make_article_service(test_db.db.clone());
+    let mut pg_listener = crate::pg_listener::PgListener::new();
+    let _worker = other_replica.start_notify_worker(
+        pg_listener.subscribe(crate::app::chat::news::svc::ArticleService::CHANNELS),
+    );
+    let _listener = pg_listener.start(test_db.db.config().clone());
+    let mut snapshot_rx = other_replica.subscribe_snapshot();
+
+    let article = Article::create_by_user_id(
+        &client,
+        author.id,
+        article_params(author.id, "https://example.com/notified", "Notified"),
+    )
+    .await
+    .expect("create article");
+
+    // Whether the LISTEN is live before or after this insert, the listener's
+    // seed read or the notify lands the article.
+    timeout(Duration::from_secs(10), async {
+        loop {
+            let has_article = snapshot_rx
+                .borrow_and_update()
+                .articles
+                .iter()
+                .any(|item| item.article.id == article.id);
+            if has_article {
+                return;
+            }
+            snapshot_rx.changed().await.expect("snapshot watch open");
+        }
+    })
+    .await
+    .expect("the listening replica sees the share");
+
+    Article::delete(&client, article.id)
+        .await
+        .expect("delete article");
+
+    timeout(Duration::from_secs(10), async {
+        loop {
+            snapshot_rx.changed().await.expect("snapshot watch open");
+            let has_article = snapshot_rx
+                .borrow_and_update()
+                .articles
+                .iter()
+                .any(|item| item.article.id == article.id);
+            if !has_article {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("the listening replica drops the deleted article");
 }

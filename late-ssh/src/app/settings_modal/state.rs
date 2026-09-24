@@ -1,7 +1,8 @@
 use std::cell::Cell;
 
 use chrono::{DateTime, Utc};
-use late_core::models::profile::{Profile, ProfileParams, normalize_profile_tags};
+use late_core::models::profile::{Profile, ProfileParams};
+use late_core::models::profile_award::{ChatBadgeRow, chat_badge_rows};
 use late_core::models::rss_feed::RssFeed;
 use late_core::models::user::{
     RightSidebarComponentSetting, RightSidebarMode, RoomListMode,
@@ -111,6 +112,8 @@ pub(crate) enum TweakRow {
     // and a second control here would be a second source of truth for them.
     ComposerKeepFocused,
     FlagFallback,
+    TerminalImages,
+    ChatBadges,
     LandingPage,
     PaperAtLogin,
     // Input group.
@@ -118,13 +121,15 @@ pub(crate) enum TweakRow {
 }
 
 impl TweakRow {
-    pub(crate) const ALL: [TweakRow; 9] = [
+    pub(crate) const ALL: [TweakRow; 11] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
         TweakRow::RoomListSidebar,
         TweakRow::ComposerKeepFocused,
         TweakRow::FlagFallback,
+        TweakRow::TerminalImages,
+        TweakRow::ChatBadges,
         TweakRow::LandingPage,
         TweakRow::PaperAtLogin,
         TweakRow::InteractionMode,
@@ -149,7 +154,6 @@ pub(crate) enum SystemField {
     Ide,
     Terminal,
     Os,
-    Langs,
 }
 
 impl SystemField {
@@ -158,7 +162,6 @@ impl SystemField {
             Row::Ide => Some(Self::Ide),
             Row::Terminal => Some(Self::Terminal),
             Row::Os => Some(Self::Os),
-            Row::Langs => Some(Self::Langs),
             _ => None,
         }
     }
@@ -168,7 +171,6 @@ impl SystemField {
             Self::Ide => profile.ide.clone(),
             Self::Terminal => profile.terminal.clone(),
             Self::Os => profile.os.clone(),
-            Self::Langs => (!profile.langs.is_empty()).then(|| profile.langs.join(", ")),
         }
     }
 
@@ -177,9 +179,6 @@ impl SystemField {
             Self::Ide => profile.ide = normalize_optional_text(&text),
             Self::Terminal => profile.terminal = normalize_optional_text(&text),
             Self::Os => profile.os = normalize_optional_text(&text),
-            Self::Langs => {
-                profile.langs = normalize_profile_tags([text.as_str()]);
-            }
         }
     }
 }
@@ -488,6 +487,8 @@ pub(crate) struct SettingsModalState {
     irc_token: IrcTokenDialogState,
     right_sidebar_components_open: bool,
     right_sidebar_components_index: usize,
+    chat_badges_open: bool,
+    chat_badges_index: usize,
     feeds: Vec<RssFeed>,
     feed_index: usize,
     editing_feed_url: bool,
@@ -555,6 +556,8 @@ impl SettingsModalState {
             irc_token: IrcTokenDialogState::new(),
             right_sidebar_components_open: false,
             right_sidebar_components_index: 0,
+            chat_badges_open: false,
+            chat_badges_index: 0,
             feeds: Vec::new(),
             feed_index: 0,
             editing_feed_url: false,
@@ -633,6 +636,8 @@ impl SettingsModalState {
         self.irc_token = IrcTokenDialogState::new();
         self.right_sidebar_components_open = false;
         self.right_sidebar_components_index = 0;
+        self.chat_badges_open = false;
+        self.chat_badges_index = 0;
         self.feed_service.list_task(self.user_id);
     }
 
@@ -780,6 +785,54 @@ impl SettingsModalState {
             (self.right_sidebar_components_index as isize + delta).clamp(0, last) as usize;
     }
 
+    pub(crate) fn chat_badges_open(&self) -> bool {
+        self.chat_badges_open
+    }
+
+    pub(crate) fn open_chat_badges(&mut self) {
+        self.chat_badges_open = true;
+        self.chat_badges_index = 0;
+    }
+
+    pub(crate) fn close_chat_badges(&mut self) {
+        self.chat_badges_open = false;
+    }
+
+    pub(crate) fn chat_badges_index(&self) -> usize {
+        self.chat_badges_index
+    }
+
+    pub(crate) fn move_chat_badges_cursor(&mut self, delta: isize) {
+        let last = chat_badge_rows().len().saturating_sub(1) as isize;
+        self.chat_badges_index = (self.chat_badges_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    /// Whether a picker row shows on the chat label: a row is hidden only
+    /// when every category it covers is hidden.
+    pub(crate) fn chat_badge_row_shown(&self, row: &ChatBadgeRow) -> bool {
+        !row.categories.iter().all(|category| {
+            self.draft
+                .hidden_award_categories
+                .iter()
+                .any(|hidden| hidden == category)
+        })
+    }
+
+    /// Flip the selected row: hiding stores every category the row covers
+    /// (all rungs of a game ladder), showing removes them all.
+    pub(crate) fn toggle_chat_badge(&mut self) {
+        let Some(row) = chat_badge_rows().into_iter().nth(self.chat_badges_index) else {
+            return;
+        };
+        let shown = self.chat_badge_row_shown(&row);
+        let hidden = &mut self.draft.hidden_award_categories;
+        hidden.retain(|category| !row.categories.contains(&category.as_str()));
+        if shown {
+            hidden.extend(row.categories.iter().map(ToString::to_string));
+        }
+        self.save();
+    }
+
     /// Toggle the on/off state of the selected component.
     pub(crate) fn toggle_right_sidebar_component(&mut self) {
         if let Some(setting) = self
@@ -849,6 +902,14 @@ impl SettingsModalState {
             TweakRow::FlagFallback => {
                 self.draft.show_flag_fallback ^= true;
             }
+            TweakRow::TerminalImages => {
+                self.draft.terminal_images = self.draft.terminal_images.cycle(true);
+            }
+            TweakRow::ChatBadges => {
+                // A list, not a value: Enter opens the picker instead.
+                self.open_chat_badges();
+                return;
+            }
             TweakRow::LandingPage => {
                 self.draft.landing_page = self.draft.landing_page.cycle(true);
             }
@@ -869,6 +930,10 @@ impl SettingsModalState {
             TweakRow::TextBrightness => self.cycle_text_brightness_adjustment(forward),
             TweakRow::LandingPage => {
                 self.draft.landing_page = self.draft.landing_page.cycle(forward);
+                self.save();
+            }
+            TweakRow::TerminalImages => {
+                self.draft.terminal_images = self.draft.terminal_images.cycle(forward);
                 self.save();
             }
             _ => self.toggle_selected_tweak(),
@@ -1795,6 +1860,16 @@ impl SettingsModalState {
         self.picker = PickerState::default();
     }
 
+    /// The tag picker closed on the langs row: canonical language tags,
+    /// saved at once like every other row here.
+    pub(crate) fn set_langs(&mut self, langs: Vec<String>) {
+        if self.draft.langs == langs {
+            return;
+        }
+        self.draft.langs = langs;
+        self.save();
+    }
+
     pub(crate) fn filtered_countries(&self) -> Vec<&'static CountryOption> {
         filter_countries(&self.picker.query)
     }
@@ -2212,6 +2287,8 @@ impl SettingsModalState {
                 start_with_music_muted: self.draft.start_with_music_muted,
                 landing_page: self.draft.landing_page,
                 paper_at_login: self.draft.paper_at_login,
+                terminal_images: self.draft.terminal_images,
+                hidden_award_categories: self.draft.hidden_award_categories.clone(),
                 show_flag_fallback: self.draft.show_flag_fallback,
                 translate_to: self.draft.translate_to,
                 auto_translate: self.draft.auto_translate,

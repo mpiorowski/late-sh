@@ -6,8 +6,7 @@ use tokio_postgres::{AsyncMessage, NoTls};
 
 use crate::{
     models::crown::{
-        CROWN_CHANGED_CHANNEL, CROWN_MIN_PRICE, CrownChange, CrownReign, crown_month,
-        listen_for_crown_changes, next_price,
+        CROWN_CHANGED_CHANNEL, CROWN_MIN_PRICE, CrownChange, CrownReign, crown_month, next_price,
     },
     test_utils::{create_test_user, test_db},
 };
@@ -176,7 +175,8 @@ async fn taking_the_crown_notifies_every_replica() {
         .connect(NoTls)
         .await
         .expect("listener connection");
-    let listen = listen_for_crown_changes(&listener);
+    let listen_statement = format!("LISTEN {CROWN_CHANGED_CHANNEL};");
+    let listen = listener.batch_execute(&listen_statement);
     tokio::pin!(listen);
     let mut listen_done = false;
     while !listen_done {

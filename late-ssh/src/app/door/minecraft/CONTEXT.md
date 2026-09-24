@@ -22,7 +22,7 @@ Minecraft is not a door. Nothing runs inside `late-ssh` and there is no proxy, P
 
 ## Server
 
-- Pod: `kubernetes_deployment_v1.minecraft`, image `itzg/minecraft-server:2026.9.0-java25` running `TYPE=PAPER`, `VERSION=26.2` (`local.minecraft_version`), 2G heap with Aikar's flags. Requests 500m / 2560Mi, limits 2 CPU / 3Gi.
+- Pod: `kubernetes_deployment_v1.minecraft`, image `itzg/minecraft-server:2026.9.1-java25` running `TYPE=PAPER`, `VERSION=26.2` (`local.minecraft_version`), 2G heap with Aikar's flags. Requests 500m / 2560Mi, limits 2 CPU / 3Gi.
 - `Recreate` strategy: one world, one RWO volume, one hostPort, so two pods can never coexist. Every restart is downtime.
 - 120 s termination grace: the image traps SIGTERM, runs `stop`, and waits for the world save. SIGKILL mid-save corrupts chunks.
 - Startup probe allows 10 minutes (first boot downloads Paper and the plugin). Liveness and readiness use `mc-health`.

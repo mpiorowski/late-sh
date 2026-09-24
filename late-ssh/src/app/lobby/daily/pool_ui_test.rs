@@ -234,6 +234,23 @@ fn the_readout_names_what_the_line_is_on() {
 }
 
 #[test]
+fn a_snooker_ball_is_named_with_what_it_scores() {
+    // On a small table the ball is too small to print its value, so the
+    // readout carries it.
+    use crate::app::games::pool_core::rules_snooker::{BLACK, RED_FIRST, YELLOW};
+
+    let snooker = DailyPoolState::new(PoolRules::Snooker, Uuid::new_v4(), Uuid::new_v4());
+    assert_eq!(ball_name(&snooker, RED_FIRST), "a red (1)");
+    assert_eq!(ball_name(&snooker, YELLOW), "the yellow (2)");
+    assert_eq!(ball_name(&snooker, BLACK), "the black (7)");
+    assert_eq!(
+        ball_name(&pool_state(), 8),
+        "the 8",
+        "pool keeps its numbers"
+    );
+}
+
+#[test]
 fn a_rack_hands_the_renderer_one_frame_per_ball() {
     let state = pool_state();
     let frames = PoolDraft::new(&state).frames(&state);

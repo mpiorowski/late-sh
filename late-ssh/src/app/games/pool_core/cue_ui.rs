@@ -185,12 +185,10 @@ fn reround(canvas: &mut Canvas, cx: f64, cy: f64, r: f64, colour: Rgb) {
 }
 
 fn write_number(canvas: &mut Canvas, x: f64, y: f64, id: u8) {
-    let fg = if id == 8 || (1..=7).contains(&id) {
-        if id == 8 { WHITE } else { [20, 20, 22] }
-    } else {
-        [20, 20, 22]
+    let Some(text) = table_ui::printed_label(id) else {
+        return;
     };
-    let text = id.to_string();
+    let fg = table_ui::label_ink(id);
     let start = x - (text.len() as f64) / 2.0;
     for (i, ch) in text.chars().enumerate() {
         canvas.glyph((start + i as f64).round() as i32, y.round() as i32, ch, fg);

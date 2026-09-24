@@ -5,12 +5,12 @@
 use std::f64::consts::PI;
 
 use crate::app::games::pool_core::{
-    aim::{self, Hit, LegKind, MAX_POT_CUT, SIGHT_REACH},
+    aim::{self, Hit, LegKind, OBJECT_GUIDE_REACH, SIGHT_REACH},
     ball::{Ball, CUE},
     cue::Strike,
     shot::{BallFrame, RackState},
     sim,
-    table::{BAR_BOX_7FT, TableSpec},
+    table::{BAR_BOX_7FT, SNOOKER_12FT, TableSpec},
 };
 
 const SPEC: TableSpec = BAR_BOX_7FT;
@@ -58,12 +58,30 @@ fn the_line_stops_at_the_first_ball_and_the_ghost_touches_it() {
     assert!(offset.abs() < 1e-9, "dead centre is offset zero");
 
     // A full ball sends the object ball straight on and stops the cue ball.
+    // Its guide is short: it shows the way the one leaves, and stops well
+    // before the two it will run into, so the line does not play the shot.
     let object = line.object.expect("the object ball has a leg");
     assert!(object.cut.abs() < 1e-9, "a full ball is no cut");
+    let reach = OBJECT_GUIDE_REACH * SPEC.length;
     assert!(
-        matches!(object.hit, Hit::Ball { id: 2, .. }),
-        "and it runs into the two: {:?}",
-        object.hit
+        distance(object.to, [near[0] + reach, near[1]]) < 1e-9,
+        "the guide runs its fixed reach straight on: {:?}",
+        object.to
+    );
+    assert!(
+        distance(object.to, far) > 2.0 * SPEC.ball_radius,
+        "and stops short of the two"
+    );
+
+    // Something inside the reach stops the guide where the balls touch.
+    let close = [near[0] + 3.0 * SPEC.ball_radius, near[1]];
+    let crowded = [ball(CUE, cue), ball(1, near), ball(2, close)];
+    let line = aim::shot_line(&SPEC, &SPEC.geometry(), &crowded, cue, 0.0, 0.0);
+    let object = line.object.expect("the object ball has a leg");
+    assert!(
+        distance(object.to, [close[0] - 2.0 * SPEC.ball_radius, close[1]]) < 1e-9,
+        "the guide ends on contact with the two: {:?}",
+        object.to
     );
     assert_eq!(line.tangent, None, "a stun full ball leaves no stun line");
     assert_eq!(line.rebound, None);
@@ -181,117 +199,90 @@ fn the_sighted_offset_and_the_cut_are_signed_to_the_screen() {
 }
 
 #[test]
-fn pot_lines_are_the_clear_pockets_easiest_first() {
-    let geom = SPEC.geometry();
-    let r = SPEC.ball_radius;
-    // The object ball a hand's width off the top-right corner, on its
-    // diagonal; the cue ball back down the table on the same diagonal, so
-    // that pocket is a full ball. The other pockets are behind or across.
-    let corner = geom.pockets[2].center;
-    let object = [corner[0] - 0.25, corner[1] - 0.25];
-    let cue = [corner[0] - 0.9, corner[1] - 0.9];
-    let balls = vec![ball(CUE, cue), ball(9, object)];
-
-    let lines = aim::pot_lines(&SPEC, &geom, &balls, cue, 9, 0.0);
-    assert!(!lines.is_empty(), "the corner is on");
-    assert_eq!(lines[0].pocket, 2, "the full-ball pocket comes first");
-    assert!(
-        lines[0].cut < 1e-6,
-        "and it is a full ball: {}",
-        lines[0].cut
-    );
-    assert!(
-        lines.windows(2).all(|pair| pair[0].cut <= pair[1].cut),
-        "easiest first"
-    );
-    assert!(
-        lines.iter().all(|line| line.cut <= MAX_POT_CUT),
-        "nothing steeper than a player would try"
-    );
-    // The bearing it hands back really is the pot: walk it and the object
-    // ball's own leg ends in that pocket.
-    let line = aim::shot_line(&SPEC, &geom, &balls, cue, lines[0].azimuth, 0.0);
-    let leg = line.object.expect("contact");
-    assert!(
-        matches!(leg.hit, Hit::Pocket { index: 2, .. }),
-        "the nine drops: {:?}",
-        leg.hit
-    );
-
-    // A ball parked on the line to the pocket takes that pot off the list.
-    let blocker = [object[0] + 0.12, object[1] + 0.12];
-    let mut blocked = balls.clone();
-    blocked.push(ball(4, blocker));
-    let lines = aim::pot_lines(&SPEC, &geom, &blocked, cue, 9, 0.0);
-    assert!(
-        lines.iter().all(|line| line.pocket != 2),
-        "the four is in the way: {lines:?}"
-    );
-
-    // And a ball between the cue ball and the ghost takes every pot off.
-    let in_front = [cue[0] + 2.0 * r + 0.05, cue[1] + 2.0 * r + 0.05];
-    let mut walled = balls.clone();
-    walled.push(ball(5, in_front));
-    let lines = aim::pot_lines(&SPEC, &geom, &walled, cue, 9, 0.0);
-    assert!(
-        lines.iter().all(|line| line.pocket != 2),
-        "the five is in the way of the cue ball: {lines:?}"
-    );
-}
-
-#[test]
-fn a_pot_line_on_a_cut_really_pots_under_the_physics() {
-    // The aid and the referee have to agree. A cut shot throws the object
+fn the_object_guide_points_where_the_physics_sends_the_ball() {
+    // The short guide has to point the right way. A cut throws the object
     // ball off the line of centres (ball-on-ball friction drags it along
-    // with the cue ball's sideways travel), and over a table's length that
-    // is more than a pocket forgives. So the bearing `pot_lines` hands back
-    // is checked against the simulator, not against its own geometry: strike
-    // along it and the ball must drop in the pocket it named.
+    // with the cue ball's sideways travel), so the guide is checked against
+    // the simulator, not against its own geometry: strike a thirty degree
+    // cut and the one leaves along the drawn leg.
     let geom = SPEC.geometry();
     let r = SPEC.ball_radius;
-    let pocket = geom.pockets[0].center;
-    let object = [1.0, 0.6];
-    let to_pocket = unit([pocket[0] - object[0], pocket[1] - object[1]]);
-    // A thirty degree cut from half a metre back, with over a metre of
-    // object-ball travel to the pocket to let the throw show.
-    let ghost = [
-        object[0] - 2.0 * r * to_pocket[0],
-        object[1] - 2.0 * r * to_pocket[1],
-    ];
-    let dir = rotate(to_pocket, -PI / 6.0);
+    let object = [SPEC.length / 2.0, SPEC.width / 2.0];
+    let centres = [1.0, 0.0];
+    let ghost = [object[0] - 2.0 * r, object[1]];
+    let dir = rotate(centres, -PI / 6.0);
     let cue = [ghost[0] - 0.5 * dir[0], ghost[1] - 0.5 * dir[1]];
+    let azimuth = dir[1].atan2(dir[0]);
     let balls = vec![ball(CUE, cue), ball(1, object)];
 
-    let lines = aim::pot_lines(&SPEC, &geom, &balls, cue, 1, 0.0);
-    let line = lines
-        .iter()
-        .find(|line| line.pocket == 0)
-        .unwrap_or_else(|| panic!("the corner is on: {lines:?}"));
+    let drawn = aim::shot_line(&SPEC, &geom, &balls, cue, azimuth, 0.0);
+    let leg = drawn.object.expect("contact");
     assert!(
-        (line.cut - PI / 6.0).abs() < 5.0f64.to_radians(),
-        "a thirty degree cut, give or take the throw: {}°",
-        line.cut.to_degrees()
+        (leg.cut.abs() - PI / 6.0).abs() < 1e-6,
+        "a thirty degree cut: {}°",
+        leg.cut.to_degrees()
     );
+    let guide = unit([leg.to[0] - leg.from[0], leg.to[1] - leg.from[1]]);
 
     let rack = RackState {
         balls: vec![Ball::resting(CUE, cue), Ball::resting(1, object)],
     };
-    let strike = Strike::new(line.azimuth, 0.0, 0.0, 2.5).expect("a playable stroke");
+    let strike = Strike::new(azimuth, 0.0, 0.0, 2.5).expect("a playable stroke");
     let result = sim::simulate(&SPEC, &geom, &rack, &strike);
-    assert_eq!(
-        result.outcome.pocket_of(1),
-        Some(0),
-        "struck along the pot line the one drops in the corner; it ended at {:?}",
-        result.rack.get(1).map(|b| b.pos)
-    );
-
-    // And the drawn object leg tells the same story as the bearing.
-    let drawn = aim::shot_line(&SPEC, &geom, &balls, cue, line.azimuth, 0.0);
-    let leg = drawn.object.expect("contact");
+    let reach = OBJECT_GUIDE_REACH * SPEC.length;
+    let travelled = (0..result.timeline.frame_count())
+        .map(|frame| result.timeline.sample(frame as f64 / result.timeline.hz))
+        .filter_map(|frames| frames.into_iter().find(|b| b.id == 1).map(|b| b.pos))
+        .find(|pos| distance(*pos, object) >= reach)
+        .expect("the one travels past the guide's reach");
+    let actual = unit([travelled[0] - object[0], travelled[1] - object[1]]);
+    let apart = (guide[0] * actual[1] - guide[1] * actual[0])
+        .atan2(guide[0] * actual[0] + guide[1] * actual[1])
+        .to_degrees();
     assert!(
-        matches!(leg.hit, Hit::Pocket { index: 0, .. }),
-        "the object leg ends in the same pocket: {:?}",
-        leg.hit
+        apart.abs() < 0.5,
+        "the one leaves along the guide, off by {apart}°"
+    );
+}
+
+#[test]
+fn the_object_guide_is_the_same_share_of_every_table() {
+    // The table is scaled to fit the same panel whatever the game, so a guide
+    // measured in ball radii came out half as long on the snooker table as on
+    // the bar box. Measured against the table it reads the same everywhere.
+    let share = |spec: &TableSpec| {
+        let cue = [0.3, spec.width / 2.0];
+        let object = [0.9, spec.width / 2.0];
+        let balls = [ball(CUE, cue), ball(1, object)];
+        let line = aim::shot_line(spec, &spec.geometry(), &balls, cue, 0.0, 0.0);
+        let leg = line.object.expect("the object ball has a leg");
+        distance(leg.from, leg.to) / spec.length
+    };
+    let bar_box = share(&BAR_BOX_7FT);
+    let snooker = share(&SNOOKER_12FT);
+    assert!(
+        (bar_box - snooker).abs() < 1e-9,
+        "bar box {bar_box} against snooker {snooker}"
+    );
+}
+
+#[test]
+fn the_stun_line_is_the_same_share_of_every_table() {
+    // Drawn beside the object ball's leg, so it has to scale the same way or
+    // the snooker stun line comes out half as long next to it.
+    let share = |spec: &TableSpec| {
+        let cue = [0.3, spec.width / 2.0];
+        let object = [0.9, spec.width / 2.0 + spec.ball_radius];
+        let balls = [ball(CUE, cue), ball(1, object)];
+        let line = aim::shot_line(spec, &spec.geometry(), &balls, cue, 0.0, 0.0);
+        let tangent = line.tangent.expect("a half-ball cut leaves a stun line");
+        distance(line.hit.at(), tangent) / spec.length
+    };
+    let bar_box = share(&BAR_BOX_7FT);
+    let snooker = share(&SNOOKER_12FT);
+    assert!(
+        (bar_box - snooker).abs() < 1e-9,
+        "bar box {bar_box} against snooker {snooker}"
     );
 }
 

@@ -438,6 +438,74 @@ fn balls_the_striker_may_not_hit_are_dimmed_and_bare() {
 }
 
 #[test]
+fn a_snooker_colour_always_wears_what_it_scores() {
+    // Snooker's colours are worth 2 (yellow) to 7 (black), and a player plans
+    // the next colour while still on a red, so a colour wears its value even
+    // when it is not the ball on. A red wears nothing: fifteen `1`s would
+    // bury the colours that matter.
+    use crate::app::games::pool_core::rules_snooker::{BLACK, GREEN, PINK, RED_FIRST, YELLOW};
+    use crate::app::games::pool_core::table_ui::{BallSet, printed_label};
+
+    assert_eq!(printed_label(YELLOW).as_deref(), Some("2"));
+    assert_eq!(printed_label(PINK).as_deref(), Some("6"));
+    assert_eq!(printed_label(BLACK).as_deref(), Some("7"));
+    assert_eq!(printed_label(RED_FIRST), None);
+    assert_eq!(printed_label(CUE), None);
+    assert_eq!(
+        printed_label(9).as_deref(),
+        Some("9"),
+        "pool keeps its numbers"
+    );
+
+    let mut c = Canvas::new(220, 60, CLOTH);
+    let view = View::fit(&SPEC, &c);
+    let at = |x: f64| [SPEC.length * x, SPEC.width * 0.5];
+    let balls = vec![
+        BallFrame {
+            id: RED_FIRST,
+            pos: at(0.2),
+            potted: false,
+        },
+        BallFrame {
+            id: GREEN,
+            pos: at(0.5),
+            potted: false,
+        },
+        BallFrame {
+            id: BLACK,
+            pos: at(0.8),
+            potted: false,
+        },
+    ];
+    // Reds are on: the colours are not legal to hit first.
+    let marks = Overlay {
+        line: None,
+        legal: BallSet::from_ids(&[RED_FIRST]),
+        called_pocket: None,
+    };
+    table_ui::draw(&mut c, &SPEC, &SPEC.geometry(), &view, &balls, &marks);
+
+    let has = |ball: &BallFrame, colour: [u8; 3]| {
+        let (bx, by) = view.to_px(ball.pos);
+        let reach = view.ball_px().ceil() as i32;
+        ((by.floor() as i32 - reach)..=(by.floor() as i32 + reach)).any(|y| {
+            ((bx.floor() as i32 - reach)..=(bx.floor() as i32 + reach))
+                .any(|x| c.get(x, y) == colour)
+        })
+    };
+    let ink = [16, 16, 18];
+    assert!(!has(&balls[0], ink), "a red wears no number");
+    assert!(
+        has(&balls[1], ink),
+        "the green wears its 3 while reds are on"
+    );
+    assert!(
+        has(&balls[2], table_ui::WHITE),
+        "the black wears its 7 in white ink"
+    );
+}
+
+#[test]
 fn overlapping_balls_keep_their_own_shape() {
     // Balls are drawn larger than life on true positions, so neighbours in a
     // rack overlap. Whatever separates them has to live *inside* each ball:

@@ -141,7 +141,7 @@ Target shape for 1000 users: a handful of SSH pods after the render-cost program
 
 **The app half of the problem (started 2026-09-02).** Session ownership and pair-WS routing are the transport half; the list above is the app half, and it only shrinks if features stop adding to it. Three things now hold that line:
 
-- **The rule.** Root CONTEXT.md §0 "Multi-replica rule": every new feature is designed as if several `late-ssh` processes were already running. Truth lives in Postgres, once-only actions are conditional `UPDATE ... WHERE` claims or advisory locks, cross-session fan-out is `LISTEN/NOTIFY`, background work dedupes through the DB, switches are rows. Presence is the one named exception and may not grow.
+- **The rule.** Root CONTEXT.md §0 "Multi-replica rule": every new feature is designed as if several `late-ssh` processes were already running. Truth lives in Postgres, once-only actions are conditional `UPDATE ... WHERE` claims or advisory locks, cross-session fan-out is `LISTEN/NOTIFY`, background work dedupes through the DB, switches are rows. Presence is the one named exception and may not grow. The rule is bounded by "Replica-ready, not over-engineered" in the same section: one user's sessions on different replicas need not sync live, and read-on-open counts as replica-ready.
 - **The primitive.** `app_flags` (migration 171, `late-core/src/models/app_flag.rs`, `late-ssh/src/app/flags/svc.rs`): process-wide on/off switches as rows, a trigger notify, one listener per replica re-reading the table into a shared `watch`. The haunt's kill switch and fuse are its first tenants; every remaining in-memory `AtomicBool` that someone wants to flip at runtime moves here as it is touched (a variant, a seed row, a field).
 
 - **The per-user shape (2026-09-17).** Root CONTEXT.md §0 "Reference shape: per-user state": pure rules, one writer under the row lock, a per-session render mirror, and a notify that carries only the owner's user id. Bonsai is the first migrated domain (`late-ssh/src/app/bonsai`) and the template for the pet, the tank, and per-account settings. Its cost per change is one notify per replica plus one UUID compare per local session on an existing tick, so it is nowhere near the 1000-user budget; it is the wrong shape for high-frequency shared surfaces (Artboard, house tables), which need room- or table-scoped routing instead.
@@ -193,45 +193,21 @@ Icecast now allows 300 clients, but it is still one pod. The second-node move (b
 
 App pools are currently per process through deadpool, with `max_pool_size: 16` in both prod profiles (`late-ssh/src/config.rs`, `late-web/src/config.rs`).
 
+Each `late-ssh` replica also holds exactly one LISTEN connection outside the pool (`late-ssh/src/pg_listener.rs`), so a replica costs 17 connections. PgBouncer in transaction mode cannot carry that one; it stays a direct connection.
+
 Postgres `max_connections=100`. This is acceptable while replicas are low, but scaling app replicas will multiply pools. PgBouncer should be introduced before many app replicas.
 
-### 6. Feed writes fan out over the entire users table (correctness, not capacity)
+### 6. Feed writes no longer fan out over the users table (fixed in code, verify after deploy)
 
-Found 2026-07-24 during a health check. Re-scoped 2026-07-26: measured against `pg_stat_statements`, all three fan-outs together are **307 s of DB time, 0.5% of the total**, because the per-user queries are sub-millisecond counts over small tables. The write burst is real and spikes Postgres CPU while it runs, but in aggregate this is not the capacity problem it was billed as. What it *is* is a correctness bug: every burst overflows the broadcast channel and every session silently loses its feed events.
+The rule: never compute per-user state for every registered user and publish it on a shared broadcast channel. Each session drains its receiver only once per world tick (66 ms hot, 500 ms idle), so an O(users) burst overflows a 256/512 channel in every idle session, and each one drops its own update. Measured cost of breaking it, 48 h to 2026-09-23: ~6.2k `channel lagged by N` errors across the work, showcase, and news receivers, bursting to 1,189/min on a single work-card save.
 
-There are **three identical copies** of this loop, not one:
+What exists now:
 
-- `WorkService::publish_unread_updates_for_all` (`app/chat/work/svc.rs:383`), called at `svc.rs:165`, `:237`, `:300`
-- `ShowcaseService::publish_unread_updates_for_all` (`app/chat/showcase/svc.rs:340`), called at `:149`, `:209`, `:262`
-- `ArticleService::publish_unread_updates_for_all` (`app/chat/news/svc.rs:168`), called at `:243`, `:383`
+- **Work and Showcase:** no fan-out at all. The badge is read once at session start (`refresh_unread_count`) and zeroed on visiting Profiles page 5. It does not move live when someone else posts; these pages are visited rarely, so that was the accepted trade.
+- **News:** stays live and is replica-ready. Every `articles` write fires `articles_changed` (migration 198); each replica's `ArticleService::start_notify_worker` (fed by the one process listener) re-reads the newest 20 articles into its shared `watch`. Each session counts its own badge from that snapshot against its `article_feed_reads` cursor (`news::state::unread_in_snapshot`), so the badge saturates at `20+`. A write costs one list query per replica, independent of registered users and concurrent sessions.
+- The remaining `Lagged` arms warn once per lag and keep draining instead of breaking.
 
-Each loops over `User::list_ids` (every row in `users`), runs two sequential queries per user, and publishes one or two events onto a broadcast channel (capacity 256 / 256 / 512).
-
-The receiving side makes it worse: all three states log the `Lagged` error and `break` out of the drain with no recovery (`work/state.rs:535`, `showcase/state.rs:483`, `news/state.rs:406`). Compare `ChatState`, which handles `Lagged` by reloading the visible room tail (`chat/state.rs:3796`). So dropped feed events are simply gone until an unrelated refresh happens to fix the count.
-
-At the 2026-07-24 table size of 14,156 users that is about 28,000 sequential round trips on one held pool connection per write, feeding a channel created with capacity 256 (`svc.rs:70`) that has one receiver per live session.
-
-Observed cost per write, at 59 sessions:
-
-- Postgres CPU 0.15 -> 0.45 cores (3x) for the duration
-- the burst runs 1 to 5 minutes wall clock
-- 800 to 950 `failed to receive work event e=channel lagged by ~230` errors/min (`app/chat/work/state.rs:535`), i.e. every session's receiver overflows and drops its work events, leaving stale unread badges until something else refreshes them
-- observed at 15:25-15:29, 15:40-15:41, 20:20, and 20:22 on 2026-07-24, so several times an hour
-
-Re-confirmed live 2026-08-18, still unfixed, exact same signature: `failed to receive work event, e=channel lagged by 450` at `work/state.rs:535`. Counts over the 7 days to 2026-08-18, split across all three copies:
-
-| receiver | errors / 7d |
-|---|---|
-| `failed to receive work event` (`work/state.rs:535`) | 6,153 |
-| `failed to receive showcase event` (`showcase/state.rs:483`) | 1,651 |
-| `failed to receive article event` (`news/state.rs:406`, both sites) | 1,422 |
-| **total feed events dropped** | **~9,226** |
-
-Daily rate ran 614 to 3,723, so this is happening continuously, not in rare bursts. It reads lower than the 800-950/min figure from 2026-07-24 only because concurrency was lower this week (22 average vs 59), and it scales with sessions × registered users, so both directions make it worse.
-
-Both halves scale with total registered users, not with concurrent sessions, so this gets worse with signups even if concurrency stays flat. It also gets worse per replica: every `service-ssh` pod would run its own copy of the loop.
-
-Fix direction (not yet implemented): the per-user unread count does not need a full-table scan. Either compute it only for currently connected sessions, or publish one broad `FeedChanged` event and let each session recompute its own count on receipt. Either shape removes the O(users) query loop and the O(users) channel sends at the same time. Whatever ships must land in all three services, and the `Lagged` arms should recover rather than `break`. Raising the channel capacity alone is not a fix; it only hides the drops.
+**Verify after deploy:** `stats by (_msg) count()` in VictoriaLogs over 48 h should show no `failed to receive work event` / `showcase event` / `article event` lines and no `event receiver lagged` warns.
 
 ### 7. The chat snapshot poll is the largest DB consumer, but it is no longer a scaling threat
 
@@ -464,7 +440,7 @@ Baseline taken 2026-07-26 from a `pg_stat_statements` window opened 2026-07-07 (
 | 3 | `list_discover_public_topic_rooms` | 5.6% | 6.0k | on demand, 510 ms mean | **open, REGRESSED to 771 ms** |
 | 4 | Artboard snapshot reads | 2.9% | 39k | on demand, 158 ms and 624 ms means | open, not worth it |
 | 5 | Chat username list scan | 1.9% | 66k | 30 s, process-global | **fixed, verified 2026-08-18** |
-| 6 | Feed fan-outs (Pain Point 6) | 0.5% | 3.6M | per feed write | open, correctness, ~9.2k drops/7d |
+| 6 | Feed fan-outs (Pain Point 6) | 0.5% | 3.6M | per feed write | **fixed in code**, verify after deploy |
 
 Notes on reading this table:
 
@@ -536,7 +512,7 @@ Added DB cost is at most one extra pass per 300 s window, and only on a process 
    - **Run the bundle less often.** Raising `CHAT_REFRESH_INTERVAL` is a one-constant change but costs badge latency, because the poll is the only writer of unread badges. It is only free if unread is incremented locally first, which introduces dual-maintenance of the unread rule. Weigh that tradeoff deliberately; it was rejected once already on those grounds.
 2. **`list_discover_public_topic_rooms`, 5.6%.** 510 ms mean and a 969 ms variant, on demand, so this is user-facing latency rather than background load: half a second to open Discover. Options unchanged from the DB Hot Queries section: denormalized `member_count`/`message_count`/`last_message_at` on `chat_rooms`, a short-TTL cache, or pre-aggregation.
 3. **The sequential session loop, no direct DB cost.** `refresh_registered_sessions` awaits one session at a time, so cycle time is N_sessions × snapshot latency and `MissedTickBehavior::Skip` hides the overrun. Harmless at 60 sessions, and the 2026-07-26 pipelining cut per-snapshot latency further, but it is still a latent cliff at 4 figures: the loop degrades silently into a continuous back-to-back cycle rather than erroring, and unread badges just get slower. Cheap to fix now that each snapshot is fast.
-4. **Feed fan-outs, 0.5%.** Fix for correctness, not capacity: three identical O(users) loops that overflow their broadcast channels and drop events in every live session. Pain Point 6.
+4. **Feed fan-outs, 0.5%.** Fixed in code (Pain Point 6): the O(users) loops are gone, News refreshes through `articles_changed`.
 5. **`UPDATE rss_entries`, 0.32%.** 982k writes because the poller updates every entry on every pass whether or not the content changed. A content compare before the write would remove nearly all of it. Small, but it is pure waste and the fix is local.
 
 Below this, nothing measured exceeds 0.2%. Re-rank after the deploy rather than working further down this list from the pre-fix baseline.
@@ -658,9 +634,8 @@ Started 2026-09-02. Nitpicks found while reviewing, none of them a problem at to
 | Where | What | Fix when touched |
 |---|---|---|
 | `late-core/src/models/user.rs`, `settings` jsonb | The first-contact haunting keeps ten keys on the user row (`first_contact_*`). jsonb has no in-place update, so every claim rewrites the row; harmless at a few claims per user per day, and the keys only appear once a claim wins. What actually grows on that row is the id arrays (`ignored_user_ids`, `friend_user_ids`, `favorite_room_ids`, `favorite_theme_ids`), not these scalars. | When a second funnel wants its own keys, move both into a `first_contact(user_id primary key, ...)` table with typed columns and the same conditional `UPDATE ... WHERE` claims. Leave `settings` for settings. |
-| `late-ssh/src/app/flags/svc.rs` and every `listen_once` copy (crown, pot, gild, shop, dailies, chips) | `handle_notification` awaits `refresh()` before polling the next message, so a burst of N notifies is N sequential re-reads on that replica. Self-healing (each read fetches current state) but the replica lags for the length of the burst. | Drain everything queued on the connection, dedupe by key or user id, then refresh once per distinct target. One function per listener, no new infrastructure. |
+| `start_notify_worker` in `app/hub/shop/svc.rs` and `app/hub/dailies/svc.rs` | Each worker handles its queue one notify at a time, and these two run a per-user query per notify (`chip_user_changed` fires on every chip move). Re-read-only workers (flags, news, runner looks) already collapse a burst into one read; crown and pot apply every payload in order by design. A chip-heavy burst lags only shop panels on that replica, never another domain, since each worker has its own queue. | Drain what is queued, dedupe by user id, then refresh once per distinct user. Local to each worker, no new infrastructure. |
 | Any listener for a stream-shaped table (chat messages, feeds, news, notifications) built during the Pain Point 2 app-half migration | The flags listener re-reads the whole table on every notify because the table is a handful of rows. That shape does not transfer to tables that grow. | Carry the row id in the payload as a hint, fetch rows with id greater than the last one seen (UUID v7 orders by time), and run the same query after a reconnect. The payload stays untrusted; the table stays the truth. |
-| Every `start_listener_task` (chat, shop, crown, pot, flags, bonsai) | One long-lived LISTEN connection per domain per replica, and the same ~80 lines of connect/select/reconnect copied per domain. Fine at one replica; at N replicas it is 6N mostly idle connections against `max_connections`, and PgBouncer cannot pool LISTEN in transaction mode. | One shared listener per process that LISTENs on every channel and routes by channel name to each domain's handler. Do it when the next domain would add a seventh. |
 | `late-core/src/models/marketplace.rs` (9 call sites), `quest.rs` (2), `crown.rs`, `pot.rs`, `chat_message_gild.rs`, `bonsai.rs` (`Tree::notify_changed`, one call site per write in `BonsaiService`) | App-side `SELECT pg_notify(...)` after the write. Migration 128 already records why this is fragile: a new write path forgets the notify and nobody notices until a replica is stale. `app_flags` and chips use a trigger instead. | Move each channel's notify into an `AFTER INSERT OR UPDATE` trigger as the model is touched, delete the app-side call, keep the channel name constant in the model. |
 | `late-ssh/src/app/deadchannel/haunt/svc.rs`, splash whisper | Two devices of one user on the held door in the same window both play the whisper; only one mark lands. Already in root CONTEXT.md §7. | Claim before play instead of after, at the cost of the door opening a round trip later. Only worth it if someone notices. |
 
@@ -787,7 +762,7 @@ Done 2026-07-24 (numbers in Pain Point 1): ~26.5 mcores/session, ~20% clean-skip
 
 ### 5. Fix the feed fan-outs
 
-Open. Re-scoped 2026-07-26 from "top code-level fix" to a correctness fix: 0.5% of DB time, but every burst drops feed events in every live session and the receivers do not recover. Three copies to fix, not one. Full description in Pain Point 6.
+Fixed in code, pending deploy verification. See Pain Point 6 for the shape and the log query that confirms it.
 
 ### 6. `pg_stat_statements` tracking
 
@@ -883,7 +858,6 @@ Residual risk (updated 2026-08-18, node layout 2026-09-13):
 
 - single control-plane node: `agent-1` carries support workloads, but etcd, the CNPG operator, and both Postgres instances live on `server-1`, so losing `server-1` stops the control plane and the database together (running pods on `agent-1` keep serving, nothing reschedules). etcd snapshots stay on `server-1`'s disk until the S3 upload is configured
 - single `service-ssh` pod for real session ownership
-- the feed fan-outs (Pain Point 6) drop feed events in every live session on each write. Measured at ~9,226 dropped events over 7 days, still unfixed, still three copies
 - Discover latency is a live product problem: 771 ms mean, 4.1 s max, and it regressed rather than improved. Likely a stale visibility map, fix untested
 - `otel-collector` restarts several times a week, punching holes in the telemetry that all of these judgements rest on
 - no node-exporter, so host-level NIC and socket-buffer pressure is invisible (blocks Pain Point 8 item 2)

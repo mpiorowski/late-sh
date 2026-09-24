@@ -19,6 +19,9 @@ pub mod rate_limit;
 mod rate_limit_test;
 pub mod shutdown;
 pub mod telemetry;
+pub mod vocab;
+#[cfg(test)]
+mod vocab_test;
 
 #[cfg(feature = "testing")]
 pub mod test_utils;

@@ -35,6 +35,10 @@ pub enum AppFlag {
     /// The Artboard gallery's kill switch (`/gallery on|off`): while off
     /// nothing can be hung or applauded and the rail hides the gallery.
     ArtboardGalleryEnabled,
+    /// The job feed's kill switch (`/jobs on|off`): while off the nightly
+    /// press does nothing, the Jobs shelf says so, and the paper prints
+    /// no NEW WORK.
+    JobsEnabled,
 }
 
 impl AppFlag {
@@ -45,6 +49,7 @@ impl AppFlag {
             Self::PaperEnabled => "paper_enabled",
             Self::PaperOutsideEnabled => "paper_outside_enabled",
             Self::ArtboardGalleryEnabled => "artboard_gallery_enabled",
+            Self::JobsEnabled => "jobs_enabled",
         }
     }
 }
@@ -58,6 +63,7 @@ pub struct AppFlags {
     pub paper_enabled: bool,
     pub paper_outside_enabled: bool,
     pub artboard_gallery_enabled: bool,
+    pub jobs_enabled: bool,
 }
 
 impl AppFlags {
@@ -82,6 +88,7 @@ impl AppFlags {
             paper_enabled: lookup(AppFlag::PaperEnabled)?,
             paper_outside_enabled: lookup(AppFlag::PaperOutsideEnabled)?,
             artboard_gallery_enabled: lookup(AppFlag::ArtboardGalleryEnabled)?,
+            jobs_enabled: lookup(AppFlag::JobsEnabled)?,
         })
     }
 
@@ -105,13 +112,6 @@ impl AppFlags {
         }
         Ok(())
     }
-}
-
-pub async fn listen_for_app_flag_changes(client: &Client) -> Result<()> {
-    client
-        .batch_execute(&format!("LISTEN {APP_FLAG_CHANGED_CHANNEL};"))
-        .await?;
-    Ok(())
 }
 
 #[cfg(test)]

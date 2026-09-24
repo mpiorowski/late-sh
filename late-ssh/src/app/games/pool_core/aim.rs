@@ -3,7 +3,7 @@
 //! An aim is a bearing from the cue ball. Everything else a player wants to
 //! know about it is *derived* by walking that bearing across the table: the
 //! first ball it reaches and where the cue ball will be when it touches it
-//! (the ghost ball), the line the object ball leaves on and where that ends,
+//! (the ghost ball), the first stretch of the line the object ball leaves on,
 //! the stun line the cue ball leaves on, or the cushion the cue ball meets
 //! first and where it comes off it. None of this is physics: it is the
 //! straight-line geometry every player draws in their head before a shot,
@@ -16,11 +16,10 @@
 //! same impulse model the simulator resolves the contact with, so the drawn
 //! leg is where the ball goes and not where a diagram says it should.
 //!
-//! The pot lines are the same geometry run backwards: for a target ball and
-//! a pocket, the ghost ball is fixed, so the bearing that pots it is one
-//! `atan2`, then walked a few fixed iterations to aim *through* the throw the
-//! cut produces. Whether the pot is *on* is whether the two legs are clear,
-//! which is the same cast again.
+//! The object ball's leg is drawn short on purpose (`OBJECT_GUIDE_REACH`):
+//! it shows which way the ball leaves, not where it ends up. Carried to the
+//! first thing it met, it said whether a shot pots before the shot was
+//! played, which is the part of the game the player is meant to judge.
 //!
 //! Surface-agnostic like the rest of the kernel: the board screen and a
 //! future live table draw the same line.
@@ -38,18 +37,21 @@ use crate::app::games::pool_core::{
 /// so the cue panel keeps showing the ball while the aim is walked off its
 /// edge rather than snapping to the rail behind it.
 pub const SIGHT_REACH: f64 = 2.4;
-/// Steeper than this and the object ball barely moves: not a pot anyone
-/// would offer.
-pub const MAX_POT_CUT: f64 = 80.0 * std::f64::consts::PI / 180.0;
-/// Length of the drawn stun line, in ball radii, for a cue ball leaving a
-/// full-speed contact at right angles. Scaled down by the sine of the cut,
-/// since that is the share of its speed the cue ball keeps.
-const TANGENT_STUB: f64 = 8.0;
-/// Fixed passes when aiming a pot through its own throw. The throw depends
-/// on the cut and the cut on the bearing, so the bearing is refined a few
-/// times; a handful is far past where it stops moving, and fixed rather than
-/// converged so the answer is a pure function of the table.
-const THROW_ITERS: u32 = 4;
+/// How far the object ball's drawn leg reaches from its centre, as a share
+/// of the playfield's length: enough to read the direction and too short to
+/// line up a pocket across the table. Measured against the table rather than
+/// the ball, because every table is scaled to fit the same panel: in ball
+/// radii the snooker guide drew half the bar box's length on screen. Longer
+/// than the six radii it replaced on purpose: about ten inches on the bar
+/// box, which reads as a direction at a glance and still stops well short
+/// of the far rail.
+pub const OBJECT_GUIDE_REACH: f64 = 0.13;
+/// Length of the drawn stun line, as a share of the playfield's length, for
+/// a cue ball leaving a full-speed contact at right angles. Scaled down by
+/// the sine of the cut, since that is the share of its speed the cue ball
+/// keeps. Measured against the table for the same reason as
+/// `OBJECT_GUIDE_REACH`, so the two lines keep their proportions on screen.
+const TANGENT_STUB: f64 = 0.115;
 
 /// What the cue ball's centre reaches first along the line.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -76,13 +78,15 @@ impl Hit {
     }
 }
 
-/// The object ball's own leg after contact.
+/// The object ball's own leg after contact, as far as it is drawn.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ObjectLeg {
     pub id: u8,
     pub from: [f64; 2],
-    /// What the object ball reaches first along its line.
-    pub hit: Hit,
+    /// Where the drawn leg ends: `OBJECT_GUIDE_REACH` of the table's length
+    /// along the object ball's line, or sooner where its centre meets
+    /// something.
+    pub to: [f64; 2],
     /// The cut angle, signed: positive sends the object ball to the right of
     /// the shot line as seen from behind the cue ball, negative to the left.
     pub cut: f64,
@@ -150,7 +154,7 @@ impl ShotLine {
         if let Some(object) = self.object {
             legs.push(Leg {
                 from: object.from,
-                to: object.hit.at(),
+                to: object.to,
                 kind: LegKind::Object(object.id),
             });
         }
@@ -170,16 +174,6 @@ impl ShotLine {
         }
         legs
     }
-}
-
-/// A bearing that sends `target` at a pocket, and how thin the cut is.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PotLine {
-    pub target: u8,
-    pub pocket: u8,
-    pub azimuth: f64,
-    /// Unsigned cut angle in radians. Zero is a full ball.
-    pub cut: f64,
 }
 
 /// Walk `azimuth` from `from` and report everything on the way. `tip_side`
@@ -225,22 +219,29 @@ pub fn shot_line(
                     let u = unit(sub(target.pos, ghost));
                     let out = object_direction(spec, dir, u, tip_side);
                     let object_hit = cast(spec, geom, balls, target.pos, out, &[CUE, id]);
+                    let guide = OBJECT_GUIDE_REACH * spec.length;
+                    let to = if distance(target.pos, object_hit.at()) < guide {
+                        object_hit.at()
+                    } else {
+                        add(target.pos, scale(out, guide))
+                    };
                     let cut = cross(dir, u).atan2(dot(dir, u));
                     // What the cue ball keeps is the component across the
                     // object ball's line, so the stub is that share of a
                     // full stub. Under half a radius it is not worth a mark.
                     let keep = cut.sin().abs();
-                    let tangent = if keep * TANGENT_STUB < 0.5 {
+                    let stub = keep * TANGENT_STUB * spec.length;
+                    let tangent = if stub < 0.5 * radius {
                         None
                     } else {
                         let t = unit(sub(dir, scale(u, dot(dir, u))));
-                        Some(add(ghost, scale(t, keep * TANGENT_STUB * radius)))
+                        Some(add(ghost, scale(t, stub)))
                     };
                     (
                         Some(ObjectLeg {
                             id,
                             from: target.pos,
-                            hit: object_hit,
+                            to,
                             cut,
                         }),
                         tangent,
@@ -269,67 +270,6 @@ pub fn shot_line(
         tangent,
         rebound,
     }
-}
-
-/// The pots on offer for `target` from `from`: one per pocket the ball can be
-/// sent to along two clear legs at a playable cut, easiest first. The bearing
-/// aims through the throw the cut produces, with the english `tip_side` the
-/// strike will carry, so a struck pot line pots.
-pub fn pot_lines(
-    spec: &TableSpec,
-    geom: &Geometry,
-    balls: &[BallFrame],
-    from: [f64; 2],
-    target: u8,
-    tip_side: f64,
-) -> Vec<PotLine> {
-    let Some(ball) = balls.iter().find(|ball| ball.id == target && !ball.potted) else {
-        return Vec::new();
-    };
-    let mut lines: Vec<PotLine> = geom
-        .pockets
-        .iter()
-        .enumerate()
-        .filter_map(|(index, pocket)| {
-            let to_pocket = unit(sub(pocket.center, ball.pos));
-            // The line of centres that sends the ball to the pocket is the
-            // pocket's direction turned back against the throw. The throw
-            // depends on the cut and the cut on where the ghost ball ends
-            // up, so walk it: start on the pocket line and refine.
-            let mut centres = to_pocket;
-            for _ in 0..THROW_ITERS {
-                let ghost = sub(ball.pos, scale(centres, 2.0 * spec.ball_radius));
-                let dir = unit(sub(ghost, from));
-                let thrown = collide::throw(spec, dir, centres, side_spin(tip_side));
-                centres = rotate(to_pocket, -thrown);
-            }
-            let ghost = sub(ball.pos, scale(centres, 2.0 * spec.ball_radius));
-            let dir = unit(sub(ghost, from));
-            let cut = dot(dir, centres).clamp(-1.0, 1.0).acos();
-            if cut > MAX_POT_CUT {
-                return None;
-            }
-            let cue_leg = cast(spec, geom, balls, from, dir, &[CUE]);
-            if !matches!(cue_leg, Hit::Ball { id, .. } if id == target) {
-                return None;
-            }
-            let out = object_direction(spec, dir, centres, tip_side);
-            let object_leg = cast(spec, geom, balls, ball.pos, out, &[CUE, target]);
-            if !matches!(object_leg, Hit::Pocket { index: hit, .. } if hit == index as u8) {
-                return None;
-            }
-            Some(PotLine {
-                target,
-                pocket: index as u8,
-                // Wrapped into [0, 2π) like every bearing a control sets, so
-                // a pot the aim is already on compares equal to itself.
-                azimuth: dir[1].atan2(dir[0]).rem_euclid(std::f64::consts::TAU),
-                cut,
-            })
-        })
-        .collect();
-    lines.sort_by(|a, b| a.cut.total_cmp(&b.cut));
-    lines
 }
 
 /// Where the object ball leaves from a contact along the line of centres

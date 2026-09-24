@@ -12,13 +12,12 @@ use uuid::Uuid;
 
 use late_core::{
     MutexRecover,
-    db::{Db, DbConfig},
+    db::Db,
     models::{
         character_sheet::{CharacterSheet, CharacterSheetParams},
         chat_message::{ChatMessage, ChatMessageParams, HistoryDirection},
         chat_message_gild::{
-            CHAT_MESSAGE_GILDED_CHANNEL, ChatMessageGild, ChatMessageGildSummary,
-            GILD_FEED_THRESHOLD, GildPlacement, GildTier, listen_for_gild_changes,
+            ChatMessageGild, ChatMessageGildSummary, GILD_FEED_THRESHOLD, GildPlacement, GildTier,
             parse_gilded_payload,
         },
         chat_message_reaction::{
@@ -30,10 +29,7 @@ use late_core::{
         chat_room_member::ChatRoomMember,
         chat_slow_mode::ChatSlowMode,
         chips::UserChips,
-        deadchannel_name_hit::{
-            DEADCHANNEL_NAME_HIT_CHANNEL, NameHitSignal, listen_for_name_hits, notify_name_hit,
-            parse_name_hit_payload,
-        },
+        deadchannel_name_hit::{NameHitSignal, notify_name_hit, parse_name_hit_payload},
         drinks::UserDrinks,
         message_translation::{TranslateLang, needs_translation},
         moderation_audit_log::ModerationAuditLog,
@@ -59,6 +55,7 @@ use crate::moderation::service::{
     target_tier_for_user_id,
 };
 use crate::moderation::session_effects::ModerationSessionEffects;
+use crate::pg_listener::{Channel, Signal};
 use crate::session::SessionRegistry;
 use crate::state::ActiveUsers;
 use crate::usernames::UsernameDirectory;
@@ -4124,98 +4121,60 @@ impl ChatService {
         );
     }
 
-    /// Keep every replica's per-message markers in step. One long-lived
-    /// Postgres connection LISTENs on [`CHAT_MESSAGE_GILDED_CHANNEL`] and
-    /// [`DEADCHANNEL_NAME_HIT_CHANNEL`] and rebroadcasts each notification
-    /// locally; a dropped connection reconnects after five seconds, and
-    /// until it does gild markers only lag until the next room tail load
-    /// (a name hit fired meanwhile is simply not witnessed here). Same
-    /// shape as `ShopService::start_listener_task`.
-    pub fn start_message_listener_task(&self, db_config: DbConfig) -> tokio::task::JoinHandle<()> {
+    /// What the notify worker subscribes to.
+    pub const CHANNELS: &'static [Channel] =
+        &[Channel::ChatMessageGilded, Channel::DeadchannelNameHit];
+
+    /// Keep every replica's per-message markers in step: gilds and
+    /// deadchannel name hits are rebroadcast to this replica's sessions.
+    /// Nothing is re-read on a resync: while the listener reconnects, gild
+    /// markers only lag until the next room tail load, and a name hit fired
+    /// meanwhile is simply not witnessed here.
+    pub fn start_notify_worker(
+        &self,
+        mut signals: mpsc::UnboundedReceiver<Signal>,
+    ) -> tokio::task::JoinHandle<()> {
         let service = self.clone();
         tokio::spawn(async move {
-            loop {
-                if let Err(error) = service.listen_for_message_events_once(&db_config).await {
-                    tracing::warn!(error = ?error, "chat message postgres listener stopped");
+            while let Some(signal) = signals.recv().await {
+                match signal {
+                    Signal::Resync => {}
+                    Signal::Notify {
+                        channel: Channel::ChatMessageGilded,
+                        payload,
+                    } => service.apply_gild_notification(&payload).await,
+                    Signal::Notify {
+                        channel: Channel::DeadchannelNameHit,
+                        payload,
+                    } => service.apply_name_hit(&payload),
+                    Signal::Notify { channel, .. } => {
+                        unreachable!("chat subscribed only to gilds and name hits, got {channel:?}")
+                    }
                 }
-                tokio::time::sleep(Duration::from_secs(5)).await;
             }
         })
     }
 
-    async fn listen_for_message_events_once(&self, db_config: &DbConfig) -> Result<()> {
-        let mut config = tokio_postgres::Config::new();
-        config.host(&db_config.host);
-        config.port(db_config.port);
-        config.user(&db_config.user);
-        config.password(&db_config.password);
-        config.dbname(&db_config.dbname);
-
-        let (client, mut connection) = config.connect(tokio_postgres::NoTls).await?;
-        let listen = async {
-            listen_for_gild_changes(&client).await?;
-            listen_for_name_hits(&client).await
-        };
-        tokio::pin!(listen);
-        loop {
-            tokio::select! {
-                result = &mut listen => {
-                    result?;
-                    break;
-                }
-                message = std::future::poll_fn(|cx| connection.poll_message(cx)) => {
-                    let Some(message) = message else {
-                        return Ok(());
-                    };
-                    self.handle_message_notification(message?).await?;
-                }
+    fn apply_name_hit(&self, payload: &str) {
+        match parse_name_hit_payload(payload) {
+            Some(signal) => {
+                let _ = self.evt_tx.send(ChatEvent::NameHit {
+                    room_id: signal.room_id,
+                    message_id: signal.message_id,
+                    seed: signal.seed,
+                });
             }
-        }
-
-        loop {
-            let Some(message) = std::future::poll_fn(|cx| connection.poll_message(cx)).await else {
-                return Ok(());
-            };
-            self.handle_message_notification(message?).await?;
+            None => tracing::warn!(payload, "unreadable deadchannel name hit payload"),
         }
     }
 
-    async fn handle_message_notification(
-        &self,
-        message: tokio_postgres::AsyncMessage,
-    ) -> Result<()> {
-        let tokio_postgres::AsyncMessage::Notification(notification) = message else {
-            return Ok(());
-        };
-        if notification.channel() == DEADCHANNEL_NAME_HIT_CHANNEL {
-            match parse_name_hit_payload(notification.payload()) {
-                Some(signal) => {
-                    let _ = self.evt_tx.send(ChatEvent::NameHit {
-                        room_id: signal.room_id,
-                        message_id: signal.message_id,
-                        seed: signal.seed,
-                    });
-                }
-                None => tracing::warn!(
-                    payload = notification.payload(),
-                    "unreadable deadchannel name hit payload"
-                ),
-            }
-            return Ok(());
-        }
-        if notification.channel() != CHAT_MESSAGE_GILDED_CHANNEL {
-            return Ok(());
-        }
-        let Some((message_id, room_id)) = parse_gilded_payload(notification.payload()) else {
-            tracing::warn!(
-                payload = notification.payload(),
-                "unparseable gild notification payload"
-            );
-            return Ok(());
+    async fn apply_gild_notification(&self, payload: &str) {
+        let Some((message_id, room_id)) = parse_gilded_payload(payload) else {
+            tracing::warn!(payload, "unparseable gild notification payload");
+            return;
         };
         // A failed lookup is this one marker lagging until the next tail
-        // load, not a reason to drop the LISTEN connection: propagating it
-        // would lose every gild committed during the reconnect window.
+        // load.
         let summary = match self.load_gild_summary(message_id).await {
             Ok(summary) => summary,
             Err(error) => {
@@ -4224,7 +4183,7 @@ impl ChatService {
                     message_id = %message_id,
                     "failed to load gild summary for notification"
                 );
-                return Ok(());
+                return;
             }
         };
         let _ = self.evt_tx.send(ChatEvent::MessageGildsUpdated {
@@ -4232,7 +4191,6 @@ impl ChatService {
             message_id,
             summary,
         });
-        Ok(())
     }
 
     async fn load_gild_summary(&self, message_id: Uuid) -> Result<Option<ChatMessageGildSummary>> {
@@ -4971,6 +4929,34 @@ impl ChatService {
             .await?;
         }
         Ok(())
+    }
+
+    /// Say a house line into `room_id` as the `system` author, off-thread.
+    /// The Nightcap's one caller (`clubhouse/nightcap/svc.rs`) announces
+    /// every drink the bar pours; nothing waits on it, so a failure is
+    /// logged here and nowhere else.
+    ///
+    /// No `· ` prefix: a prefixed line is an ambient #lounge feed line the
+    /// TUI diverts into the activity ticker and strips out of every room's
+    /// messages, and this one has to read as a message on the wall out back.
+    /// The system user is ensured at startup by the lounge feed task; before
+    /// that lands (or with the feed disabled) the house says nothing.
+    pub fn send_house_line_task(&self, room_id: Uuid, body: String) {
+        let Some(system_user_id) = self.system_user_id() else {
+            return;
+        };
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = service
+                .send_system_message(system_user_id, room_id, body)
+                .await
+            {
+                crate::metrics::record_nightcap_house_failure(
+                    crate::app::clubhouse::nightcap::svc::NightcapHouseFailure::HouseLine,
+                );
+                tracing::warn!(error = ?error, room_id = %room_id, "failed to post a house line");
+            }
+        });
     }
 
     /// Post `body` into `room_id` as the system bot, joining it to the room

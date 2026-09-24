@@ -5,12 +5,12 @@ use late_core::models::chat_message_gild::GildCounts;
 use late_core::models::chips::MonthChips;
 use late_core::models::profile::Profile;
 use late_core::models::profile_award::ProfileAward;
+use late_core::models::showcase::Showcase;
 use ratatui::layout::Rect;
 use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::app::bonsai::state::BonsaiState;
-use crate::app::chat::showcase::svc::{ShowcaseFeedItem, ShowcaseService, ShowcaseSnapshot};
 use crate::app::hub::aquarium::state::AquariumState;
 use crate::app::profile::ledger::LedgerRow;
 use crate::app::profile::svc::{ProfilePet, ProfileService, ProfileSnapshot};
@@ -34,9 +34,9 @@ impl ScrollExtent {
 
 pub(crate) struct ProfileModalState {
     profile_service: ProfileService,
-    showcase_service: ShowcaseService,
-    showcase_snapshot_rx: watch::Receiver<ShowcaseSnapshot>,
-    showcases: Vec<ShowcaseFeedItem>,
+    /// The viewed user's own showcases, newest first, loaded with the
+    /// profile rather than filtered out of the capped shared feed.
+    showcases: Vec<Showcase>,
     viewed_user_id: Option<Uuid>,
     fallback_name: String,
     profile: Option<Profile>,
@@ -77,14 +77,10 @@ impl Drop for ProfileModalState {
 }
 
 impl ProfileModalState {
-    pub(crate) fn new(profile_service: ProfileService, showcase_service: ShowcaseService) -> Self {
-        let showcase_snapshot_rx = showcase_service.subscribe_snapshot();
-        let showcases = showcase_snapshot_rx.borrow().items.clone();
+    pub(crate) fn new(profile_service: ProfileService) -> Self {
         Self {
             profile_service,
-            showcase_service,
-            showcase_snapshot_rx,
-            showcases,
+            showcases: Vec::new(),
             viewed_user_id: None,
             fallback_name: String::new(),
             profile: None,
@@ -128,7 +124,6 @@ impl ProfileModalState {
         snapshot_rx.mark_changed();
         self.snapshot_rx = Some(snapshot_rx);
         self.profile_service.find_profile(user_id);
-        self.showcase_service.list_task();
     }
 
     /// `/chips`: land on the chips section as soon as the body has been
@@ -160,28 +155,22 @@ impl ProfileModalState {
 
     /// Returns true when this tick drained a snapshot into the open modal.
     pub(crate) fn tick(&mut self) -> bool {
-        let mut changed = false;
-        if let Ok(true) = self.showcase_snapshot_rx.has_changed() {
-            self.showcases = self.showcase_snapshot_rx.borrow_and_update().items.clone();
-            changed = true;
-        }
-
         let Some(rx) = &mut self.snapshot_rx else {
-            return changed;
+            return false;
         };
 
         match rx.has_changed() {
             Ok(true) => {
                 let snapshot = rx.borrow_and_update().clone();
                 self.apply_snapshot(snapshot);
-                changed = true;
+                true
             }
-            Ok(false) => {}
+            Ok(false) => false,
             Err(e) => {
                 tracing::error!(%e, "failed to receive profile modal snapshot");
+                false
             }
         }
-        changed
     }
 
     /// True while the modal draws a live aquarium (the viewed profile owns
@@ -201,6 +190,7 @@ impl ProfileModalState {
             self.gallery_counts = GalleryCounts::default();
             self.chip_ledger.clear();
             self.chips_month = MonthChips::default();
+            self.showcases.clear();
             if !self.aquarium_fish.is_empty() {
                 self.aquarium_fish.clear();
                 *self.aquarium.get_mut() = None;
@@ -216,6 +206,7 @@ impl ProfileModalState {
         self.gallery_counts = snapshot.gallery_counts;
         self.chip_ledger = snapshot.chip_ledger;
         self.chips_month = snapshot.chips_month;
+        self.showcases = snapshot.showcases;
 
         if snapshot.aquarium_fish != self.aquarium_fish {
             self.aquarium_fish = snapshot.aquarium_fish;
@@ -232,14 +223,8 @@ impl ProfileModalState {
         };
     }
 
-    pub(crate) fn showcases_for_viewed(&self) -> Vec<&ShowcaseFeedItem> {
-        let Some(user_id) = self.viewed_user_id else {
-            return Vec::new();
-        };
-        self.showcases
-            .iter()
-            .filter(|item| item.showcase.user_id == user_id)
-            .collect()
+    pub(crate) fn showcases(&self) -> &[Showcase] {
+        &self.showcases
     }
 
     pub(crate) fn bonsai(&self) -> Option<&BonsaiState> {

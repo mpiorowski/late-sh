@@ -533,17 +533,109 @@ async fn profiles_page_keys_drive_the_merged_feed() {
     app.handle_input(b"5");
     wait_for_render_contains(&mut app, " Profiles ").await;
 
-    // `i` opens the project (showcase) composer, Esc closes it.
+    // `i` opens the profile editor on a blank project form. The form's first
+    // row is already being typed into, so one Esc stops typing and a second
+    // leaves the untouched form for the projects list; a third closes.
     app.handle_input(b"i");
-    wait_for_render_contains(&mut app, " New showcase ").await;
+    wait_for_render_contains(&mut app, " Your profile ").await;
+    assert!(app.directory_editor.editing());
     app.handle_input(b"\x1b");
-    wait_for_esc_effect(&mut app, |app| !app.chat.showcase.composing(), "showcase").await;
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.directory_editor.editing(),
+        "stop typing",
+    )
+    .await;
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| {
+            matches!(
+                app.directory_editor.projects_view(),
+                crate::app::directory::editor::state::ProjectsView::List { .. }
+            )
+        },
+        "back to the list",
+    )
+    .await;
 
-    // `w` opens the work-card composer, Esc closes it.
-    app.handle_input(b"w");
-    wait_for_render_contains(&mut app, " New work profile ").await;
+    // `a` on the list opens a fresh project form; the letter arrives through
+    // the real parser, so this pins the list keys end to end. Esc twice
+    // returns to the list and closes the editor.
+    app.handle_input(b"a");
+    assert!(
+        app.directory_editor.editing(),
+        "`a` should open a new project form"
+    );
     app.handle_input(b"\x1b");
-    wait_for_esc_effect(&mut app, |app| !app.chat.work.composing(), "work").await;
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.directory_editor.editing(),
+        "stop typing again",
+    )
+    .await;
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| {
+            matches!(
+                app.directory_editor.projects_view(),
+                crate::app::directory::editor::state::ProjectsView::List { .. }
+            )
+        },
+        "back to the list again",
+    )
+    .await;
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.directory_editor.is_open(),
+        "editor closed",
+    )
+    .await;
+
+    // `w` opens the same editor on the card page, Esc closes it untouched.
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, " Your profile ").await;
+    assert_eq!(
+        app.directory_editor.page(),
+        crate::app::directory::editor::state::Page::Card
+    );
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.directory_editor.is_open(),
+        "editor closed",
+    )
+    .await;
+
+    // A touched card asks before closing. Only `y` discards: Enter, the key
+    // a hand lands on by reflex, keeps the question up.
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, " Your profile ").await;
+    app.handle_input(b"\rx");
+    assert!(app.directory_editor.dirty(), "typed into the headline");
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.directory_editor.editing(),
+        "stop typing the headline",
+    )
+    .await;
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| app.directory_editor.confirm_discard(),
+        "asked to discard",
+    )
+    .await;
+    app.handle_input(b"\r");
+    assert!(
+        app.directory_editor.confirm_discard() && app.directory_editor.is_open(),
+        "enter must not discard"
+    );
+    app.handle_input(b"y");
+    assert!(!app.directory_editor.is_open(), "y discards and closes");
 
     // `s` opens feed search, Esc dismisses it.
     app.handle_input(b"s");
@@ -1010,6 +1102,17 @@ async fn artboard_view_help_and_active_input_share_one_lifecycle() {
     app.handle_input(b"\r");
     app.handle_input(b"\x1b[C");
     wait_for_render_contains(&mut app, "Cursor     1,0").await;
+
+    // Vim keys move the view-mode cursor like the arrows, and never paint.
+    app.handle_input(b"l");
+    wait_for_render_contains(&mut app, "Cursor     2,0").await;
+    app.handle_input(b"j");
+    wait_for_render_contains(&mut app, "Cursor     2,1").await;
+    app.handle_input(b"k");
+    wait_for_render_contains(&mut app, "Cursor     2,0").await;
+    app.handle_input(b"h");
+    wait_for_render_contains(&mut app, "Cursor     1,0").await;
+    wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"\x10");
     wait_for_render_contains(&mut app, "Two modes").await;
@@ -3871,4 +3974,53 @@ async fn f_favorites_the_mentions_entry() {
     app.handle_input(b"f");
     wait_for_render_contains(&mut app, "Removed from favorites").await;
     assert!(!app.chat.favorite_room_ids().contains(&mentions_id));
+}
+
+/// The Chat badges picker lists every badge; a game's ladder is one row, and
+/// hiding it stores every rung so no lower one takes its place.
+#[tokio::test]
+async fn chat_badges_picker_hides_a_whole_game_ladder() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "badge-picker-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "badge-picker-flow-it");
+
+    app.handle_input(b"\x0f");
+    wait_for_render_contains(&mut app, "badge-picker-it").await;
+    app.handle_input(b"\t\t\t");
+    wait_for_render_contains(&mut app, "Chat badges").await;
+    wait_for_render_contains(&mut app, "all shown").await;
+    // Tweaks rows: background, brightness, right rail, room rail, composer,
+    // flag fallback, terminal images, then Chat badges.
+    app.handle_input(b"jjjjjjj\r");
+    // The heading fits the dialog whole, not cut at its border.
+    wait_for_render_contains(&mut app, "Earn it, hide it. Games show their top badge.").await;
+    wait_for_render_contains(&mut app, "LMG LKN LYS LKA").await;
+
+    // Picker rows in label order: the eight monthly rows, then Lateania.
+    app.handle_input(b"jjjjjjjj\r");
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move {
+                let client = db.get().await.expect("db client");
+                let stored = User::get(&client, user.id)
+                    .await
+                    .expect("load user")
+                    .expect("user exists");
+                late_core::models::user::extract_hidden_award_categories(&stored.settings)
+                    == vec![
+                        "lateania_archdemon".to_string(),
+                        "lateania_frontier_king".to_string(),
+                        "lateania_sundering_deep".to_string(),
+                        "lateania_kaethyr_ascendant".to_string(),
+                    ]
+            }
+        },
+        "the whole Lateania ladder to be hidden",
+    )
+    .await;
+
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "1 hidden").await;
 }

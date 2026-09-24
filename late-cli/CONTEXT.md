@@ -3,7 +3,6 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh (plus the sibling `late-webview` helper crate)
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-09-14 (The analyzer runs a 2048-sample FFT into 16 log bands on a dB scale, and on Linux `src/audio/loopback.rs` records the `late-webview` helper's tagged audio stream with `pw-dump` and `pw-record`, so YouTube sends `viz` frames too. The server accepts 8 or 16 bands, so it deploys before the CLI. See §6 and §7.)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -18,7 +17,6 @@ This file is the working context for `late-cli`. The root project context lives 
 - Keep root `CONTEXT.md` limited to project-wide contracts and pointers; put CLI-specific detail here.
 
 ### Quick update checklist
-- Refresh `Last updated`
 - Validate SSH mode, token-handshake, audio, and WebSocket pairing invariants
 - Update CLI flags/env vars when `config.rs` changes
 - Update installer/distribution notes when `scripts/install.*` or `.github/workflows/deploy_cli.yml` changes
@@ -475,7 +473,7 @@ Nix flake outputs:
 - `apps.${system}.late` runs that CLI package for `nix run ...#late`
 - `packages.${system}.late-sh` remains the default multi-binary package with `mainProgram = "late-ssh"`
 - On Linux, the Nix package builds with WebKitGTK 4.1, GTK3, ALSA, glib-networking, and GStreamer base/good/bad/ugly/libav plugins. The GStreamer path uses `gstreamer.out`, and `gst-plugins-bad` is overridden with `-Dlv2=disabled` to avoid `libgstlv2.so` crashes during plugin scanning. The flake's `late` package builds both the `late` and `late-webview` binaries; the installed binaries are wrapped with a fixed `GST_PLUGIN_SYSTEM_PATH_1_0`, `GST_PLUGIN_SCANNER`, `GIO_EXTRA_MODULES`, and `LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS`; on Linux the webview helper adds those GStreamer store paths to WebKitGTK's web-process sandbox before creating the webview.
-- On Linux, `postFixup` adds `libpulseaudio` to the `late` binary's rpath with `patchelf --add-rpath`, before `wrapProgram`. WebRTC's voice audio device `dlopen()`s `libpulse.so.0` at runtime, so the linker never records it, fixup's shrink-rpath would drop it, and NixOS has no `/usr/lib` fallback. Without it, voice join fails with `PlatformAudio: failed to acquire Platform ADM`, the CLI reports `voice_state { joined: false }`, and the server removes the user from the room, which reads as an instant kick. Music is unaffected because cpal links `libasound` directly. It goes on the rpath rather than a wrapper `LD_LIBRARY_PATH` so child processes (`late-webview`, system `ssh`) do not inherit it.
+- On Linux, `postFixup` adds `libpulseaudio` and `xorg.libX11` to the `late` binary's rpath with `patchelf --add-rpath`, before `wrapProgram`. WebRTC's voice ADM `dlopen()`s both from `late` itself: `libpulse.so.0` for the device, then `libX11.so.6` from the same `AudioDeviceLinuxPulse::Init()` for typing detection (`XQueryKeymap`). The linker records neither, fixup's shrink-rpath would drop them, and NixOS has no `/usr/lib` fallback. They fail differently. Without libpulse, voice join fails with `PlatformAudio: failed to acquire Platform ADM`, the CLI reports `voice_state { joined: false }`, and the server removes the user from the room, which reads as an instant kick. Without libX11, the lazy-load trampoline that `webrtc-sys` compiles into the binary prints `implib-gen: libX11.so.6: failed to load library` and calls `abort()`, which kills the whole CLI mid-session and skips `RawModeGuard::drop`, leaving the terminal in raw mode. Once the library loads, a NULL display is handled, so headless and Wayland-only hosts need nothing further. The other lazily loaded libraries (`drm`, `gbm`, `Xfixes`, `Xdamage`, `Xrandr`, `Xcomposite`, `Xext`, `va`) serve desktop capture and VAAPI, which the CLI never calls. Music is unaffected because cpal links `libasound` directly. Both go on the rpath rather than a wrapper `LD_LIBRARY_PATH` so child processes (`late-webview`, system `ssh`) do not inherit them.
 - `default.nix` predeclares LiveKit's `webrtc-51ef663` WebRTC zip for all four voice-capable systems (`x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, `aarch64-darwin`) and exports `LK_CUSTOM_WEBRTC` during the Cargo build. This keeps `webrtc-sys` from trying to download WebRTC from GitHub inside the Nix sandbox. All four archives unpack to the same `{triple}/` layout, so `preBuild` asserts the same three files everywhere. Darwin builds also get `xcbuild` in `nativeBuildInputs` because `webrtc-sys` shells out to `xcrun` for the macOS SDK path. Bumping `webrtc-sys` means re-fetching every archive's hash, not just the Linux pair.
 
 ---

@@ -247,6 +247,47 @@ impl LandingPage {
     }
 }
 
+/// Inline terminal image previews (Settings, Tweaks, Display). `Auto` trusts
+/// what the terminal reports. The other two override it for terminals that
+/// report wrong: tmux can pass on sixel support its host terminal lacks, and
+/// some terminals draw sixel without ever advertising it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalImagesMode {
+    Auto,
+    Off,
+    Sixel,
+}
+
+impl TerminalImagesMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Off => "off",
+            Self::Sixel => "sixel",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim() {
+            "auto" => Some(Self::Auto),
+            "off" => Some(Self::Off),
+            "sixel" => Some(Self::Sixel),
+            _ => None,
+        }
+    }
+
+    pub fn cycle(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::Auto, true) => Self::Off,
+            (Self::Off, true) => Self::Sixel,
+            (Self::Sixel, true) => Self::Auto,
+            (Self::Auto, false) => Self::Sixel,
+            (Self::Off, false) => Self::Auto,
+            (Self::Sixel, false) => Self::Off,
+        }
+    }
+}
+
 /// Master on/off for the Home room-list rail, the left column. Mirrors
 /// [`RightSidebarMode`], including `Auto`: the rail folds away on terminals too
 /// narrow to carry three columns.
@@ -413,12 +454,12 @@ const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const LANDING_PAGE_KEY: &str = "landing_page";
 const PAPER_AT_LOGIN_KEY: &str = "paper_at_login";
+const TERMINAL_IMAGES_KEY: &str = "terminal_images";
+/// Award categories the user keeps off their chat label. Read by the chat
+/// label SQL straight from `users.settings`, so the key is spelled there too.
+const HIDDEN_AWARD_CATEGORIES_KEY: &str = "hidden_award_categories";
 /// The edition (UTC date, ISO) whose login pop this account has had.
 const PAPER_SHOWN_ON_KEY: &str = "paper_shown_on";
-/// `{"month": "YYYY-MM", "shown": n}`: how many of last month's podium
-/// pieces the splash has shown this account, and for which month. One
-/// key, overwritten in place; it never grows.
-const SPLASH_PODIUM_KEY: &str = "splash_podium";
 const TRANSLATE_TO_KEY: &str = "translate_to";
 const AUTO_TRANSLATE_KEY: &str = "auto_translate";
 const TRANSLATE_MINE_TO_EN_KEY: &str = "translate_mine_to_en";
@@ -729,6 +770,10 @@ impl User {
                     FROM profile_awards pa
                     WHERE pa.user_id = u.id
                       AND pa.rank <= $4
+                      -- Badges the author hid in Settings, Tweaks, Chat badges
+                      -- (`extract_hidden_award_categories`). Hiding the top
+                      -- rung of a game ladder lets the next one show.
+                      AND NOT (COALESCE(u.settings->'hidden_award_categories', '[]'::jsonb) ? pa.category)
                       AND (
                         pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
                         OR pa.category = ANY($5)
@@ -1513,46 +1558,6 @@ impl User {
         Ok(updated == 1)
     }
 
-    /// Claim the next of `podium_size` splash slots for `month` (the podium's
-    /// `period_month`): the first login of a month gets slot 1, the next
-    /// slot 2, and so on up to the podium's size, after which the door
-    /// shows the coffee cup and this returns `None` without writing. Wins
-    /// once per login across every device and replica, the way the paper's
-    /// stamp does: the row is the only judge. A stored month past `month`
-    /// (a replica behind the calendar) never resets and never counts.
-    pub async fn claim_splash_podium_slot(
-        client: &Client,
-        user_id: Uuid,
-        month: chrono::NaiveDate,
-        podium_size: i64,
-    ) -> Result<Option<i64>> {
-        let value = month.format("%Y-%m").to_string();
-        let row = client
-            .query_opt(
-                "UPDATE users
-                 SET settings = settings || jsonb_build_object(
-                         $1::text,
-                         jsonb_build_object(
-                             'month', $2::text,
-                             'shown', CASE
-                                 WHEN settings->$1->>'month' = $2
-                                 THEN (settings->$1->>'shown')::bigint + 1
-                                 ELSE 1::bigint
-                             END
-                         )
-                     ),
-                     updated = current_timestamp
-                 WHERE id = $3
-                   AND (COALESCE(settings->$1->>'month', '') < $2
-                        OR (settings->$1->>'month' = $2
-                            AND (settings->$1->>'shown')::bigint < $4))
-                 RETURNING (settings->$1->>'shown')::bigint AS slot",
-                &[&SPLASH_PODIUM_KEY, &value, &user_id, &podium_size],
-            )
-            .await?;
-        Ok(row.map(|row| row.get("slot")))
-    }
-
     /// Take the paper's login stamp off (the admin `/paper reset` hook), so
     /// the next session pops the paper again whatever edition is printed.
     pub async fn clear_paper_shown(client: &Client, user_id: Uuid) -> Result<()> {
@@ -1892,6 +1897,32 @@ pub fn extract_landing_page(settings: &Value) -> LandingPage {
     }
 }
 
+/// Tweak: the award badges hidden from the user's chat label. Unknown
+/// categories are dropped, so the stored list only ever names real badges.
+pub fn extract_hidden_award_categories(settings: &Value) -> Vec<String> {
+    let Some(entries) = settings
+        .get(HIDDEN_AWARD_CATEGORIES_KEY)
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    let known = super::profile_award::all_award_categories();
+    known
+        .into_iter()
+        .filter(|category| entries.iter().any(|entry| entry.as_str() == Some(category)))
+        .map(ToString::to_string)
+        .collect()
+}
+
+/// Tweak: how inline images reach the terminal. Absent or unreadable means
+/// `Auto`, the detected protocol.
+pub fn extract_terminal_images(settings: &Value) -> TerminalImagesMode {
+    match settings.get(TERMINAL_IMAGES_KEY).and_then(Value::as_str) {
+        Some(key) => TerminalImagesMode::from_key(key).unwrap_or(TerminalImagesMode::Auto),
+        None => TerminalImagesMode::Auto,
+    }
+}
+
 /// Tweak: open The Late Edition (the daily paper) once a day at login.
 /// Defaults to true; `/paper` still opens it by hand when off.
 pub fn extract_paper_at_login(settings: &Value) -> bool {
@@ -2185,7 +2216,7 @@ pub fn extract_langs(settings: &Value) -> Vec<String> {
         Vec::new()
     };
 
-    normalize_profile_tags(raw_tags.iter().map(String::as_str))
+    crate::vocab::normalize_langs(raw_tags.iter().map(String::as_str))
 }
 
 fn extract_trimmed_profile_text(settings: &Value, key: &str) -> Option<String> {
@@ -2195,30 +2226,6 @@ fn extract_trimmed_profile_text(settings: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
-}
-
-fn normalize_profile_tags<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    let mut out = Vec::new();
-    for value in values {
-        for raw in value.split(|c: char| c == ',' || c.is_whitespace()) {
-            let tag: String = raw
-                .trim()
-                .trim_matches('#')
-                .to_ascii_lowercase()
-                .chars()
-                .filter(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | '_' | '.'))
-                .collect();
-            if tag.is_empty() || tag.len() > 24 || !seen.insert(tag.clone()) {
-                continue;
-            }
-            out.push(tag);
-            if out.len() >= 8 {
-                return out;
-            }
-        }
-    }
-    out
 }
 
 pub fn sanitize_username_input(username: &str) -> String {

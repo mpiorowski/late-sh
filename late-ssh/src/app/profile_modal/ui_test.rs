@@ -12,7 +12,6 @@ use ratatui::{Terminal, backend::TestBackend};
 use tokio::time::{Duration, timeout};
 use uuid::Uuid;
 
-use crate::app::chat::showcase::svc::ShowcaseService;
 use crate::app::profile::svc::ProfileService;
 use crate::test_helpers::new_test_db;
 
@@ -62,7 +61,7 @@ async fn fixture(slug: &str) -> Fixture {
 
     let profile_service = ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new())));
     let mut snapshot_rx = profile_service.subscribe_snapshot(user.id);
-    let mut state = ProfileModalState::new(profile_service, ShowcaseService::new(db.clone()));
+    let mut state = ProfileModalState::new(profile_service);
     state.open(user.id, user.username.clone());
     timeout(Duration::from_secs(5), async {
         loop {

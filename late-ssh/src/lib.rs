@@ -11,6 +11,9 @@ pub mod ircd;
 pub mod metrics;
 pub mod moderation;
 pub mod paired_clients;
+pub mod pg_listener;
+#[cfg(test)]
+mod pg_listener_test;
 pub(crate) mod proxy_protocol;
 pub(crate) mod render_signal;
 pub mod session;

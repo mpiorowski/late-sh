@@ -149,6 +149,7 @@ async fn the_newsstand_answers_unavailable_empty_and_ready_and_claims_the_login_
             paper_enabled: false,
             paper_outside_enabled: false,
             artboard_gallery_enabled: true,
+            jobs_enabled: true,
         }));
     let dark = PaperService::new(test_db.db.clone(), AiService::new(false, None), stopped_rx);
     let mut dark_rx = dark.subscribe();

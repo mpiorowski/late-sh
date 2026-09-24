@@ -1,11 +1,10 @@
 # The Thundersmith, a class design
 
-Status: design only, not implemented. Drafted 2026-08-06; revised 2026-08-20
-twice: after a code-verified balance pass, and again the same day after the
-world resist/weak pass and the weapon oils landed (spec: `CONTEXT.md`, "The
-world resist/weak pass"). Every engine claim below reflects the landed world;
-the benchmark class is the Ranger (not the Rogue), measured at the Lv30-60
-band where the game is actually played, not at L100.
+Status: design only, not implemented. Every engine claim below reflects the
+landed world, including the world resist/weak pass and the weapon coats (spec:
+`CONTEXT.md`, "The world resist/weak pass" and "Crafting depth"). The benchmark
+class is the Ranger (not the Rogue), measured at the Lv30-60 band where the game
+is actually played, not at L100.
 
 *A bulky master smith with a storm-cell scattergun. He is not stronger than you.
 He is prepared, and that's worse.*
@@ -69,9 +68,19 @@ the gear curve instead, so tier-5 cells matter as much at the top as in the band
 | Storm-cells t1-t5 (signature) | Lightning | x1.10 / x1.15 / x1.20 / x1.27 / **x1.35** | crafted |
 | Counter-cells (ember / rime / blessed / gloom / rune / venom) | one line per remaining school | one notch below the same tier's storm | crafted |
 
-- Cells are consumed per shot. Combat runs one auto per 2s tick, so a 20-shot
-  cell is ~40 seconds of fighting; cells therefore craft in **bandoliers**
-  (batches), and cost is tuned as a rate, not a price (see §9).
+- Cells are consumed per shot. Combat runs one auto per 2s tick, so a **60-shot
+  cell is ~2 minutes of continuous fighting**, and a ~4-cell **bandolier** (cells
+  craft in batches) is ~8 minutes of fueled combat. Cost is tuned as a rate, not
+  a price (see §10): a cell three times longer costs three times the materials,
+  so the gold-per-fueled-hour bill is unchanged and only the rhythm moves.
+- **The unit of recurrence is the expedition, not the fight.** That is what §4
+  already describes - provision at the forge, march, execute - and it is what
+  keeps §1's contract intact while the cell is long. Cells were drafted at 20
+  shots, which made re-chambering a chore that read as upkeep rather than
+  preparation; the bill is identical and the feel is the loop the design wants.
+  What must never happen is the bandolier surviving the expedition that bought
+  it: if a single craft session fuels a night, the recurring cost is gone and
+  with it the class.
 - Tier-5 cells require Smithing ~50 and masterwork-grade materials. This is the
   power ceiling and the crafting system's endgame consumer.
 - Scrap keeps the dry state playable but honest, and it stings twice: x0.90 on
@@ -87,12 +96,15 @@ the gear curve instead, so tier-5 cells matter as much at the top as in the band
   the glass countries) against 6 Storm-zone resists. The brand school is
   also the best default cell, which keeps storm affinity honest.
 - **The rack covers all seven non-Physical schools, and that is the point.**
-  Oils deliberately cover four (fire/frost/holy/lightning) and the poison
-  vial owns the fifth, which leaves **Shadow and Arcane** - 22 and 17 of the
-  126 themed zones, and every foe in them - with no martial answer but his.
-  His counter-lines are also multipliers where coats are flat riders.
-  Together that is the capability gap that makes "everyone plays matchups,
-  he industrializes them" literal rather than rhetorical.
+  The coat family covers five - the four oils (fire/frost/holy/lightning) plus
+  the poison vial, now one curve and one price, differing only by school - which
+  leaves **Shadow and Arcane** - 22 and 17 of the 126 themed zones, and every
+  foe in them - with no martial answer but his. His counter-lines are also
+  multipliers where coats are flat riders, and they convert the auto's school
+  where coats only ride alongside it. Together that is the capability gap that
+  makes "everyone plays matchups, he industrializes them" literal rather than
+  rhetorical. **Coats got cheaper to fly, not broader**: the merge and the `C`
+  key moved convenience, never coverage, and these two lanes are the fence.
 
 ## 4. The loop (provision, march, execute)
 
@@ -144,11 +156,30 @@ ledger is §4's provisioning input and the auto-chamber key, not secret
 knowledge. Persisted as a small set of zone keys - still the only schema
 bump.
 
-**Auto-chamber (QoL):** on engage, if the zone is in the ledger and the
-counter-school is carried, it loads itself with one log line ("You know this
-plating. Ember rounds chamber with a click."). Priority: known weakness if
-carried > storm (affinity) > whatever is loaded > scrap. Zero keypresses;
-knowledge does the work.
+**Auto-chamber:** on engage, if the zone is in the ledger and the counter-school
+is carried, it loads itself with one log line ("You know this plating. Ember
+rounds chamber with a click."). Priority: known weakness if carried > storm
+(affinity) > whatever is loaded > scrap. Zero keypresses; knowledge does the
+work.
+
+**This is no longer a convenience advantage, and the design must not lean on it
+as one.** The `C` key (`svc::coat_best`) gives every class a one-keystroke coat
+picked by the same logic - the foe's weakness first, then a school it does not
+resist, then tier. Auto-chamber is now *faster*, not *unique*, and speed alone
+is not an identity. What stays his is the shape of the commitment:
+
+| | coated martial | Thundersmith |
+|---|---|---|
+| when it is chosen | once, then locked | **per engage** |
+| cost of switching school | up to 39 wasted strikes | nothing but the shot |
+| what it rides | a flat rider beside a Physical auto | the auto's own school and a multiplier |
+
+A `COAT_CHARGES`-long coat makes that commitment *more* binding than the old
+12-strike one did: a martial now picks a school at the zone gate and lives with
+it for the run, which is exactly the trade coats should make. He answers each
+foe. **Flexibility, not keystrokes, is the gap to protect** - so if auto-chamber
+is ever cut for scope, the class loses polish; if per-engage re-chambering is
+cut, the class loses its point.
 
 ## 6. Traits and systems
 
@@ -244,10 +275,13 @@ Druid's neighborhood while dry.
 
 Two post-pass caveats on this table, both re-verified at ship time:
 
-- **The bar is now the oiled Ranger.** The 382 figure predates the oils; a
-  matched oil is worth ~+6.5%, so in exactly the zones where prepared
-  players live the bar is ~405. The stated gaps must hold against that, or
-  they silently shrink by a third.
+- **The bar is the oiled Ranger, and the oil no longer lapses.** The 382
+  figure predates the coats; a matched one is worth ~+6.5%, so in exactly the
+  zones where prepared players live the bar is ~405. That was once an average
+  over a coat that ran dry and got forgotten; with `COAT_CHARGES` strikes and a
+  one-keystroke re-application it is the **sustained** state for anyone who
+  bothers. Measure against ~405 always, never against 382, or the stated gaps
+  silently shrink by a third.
 - **The top row's uptime is now standard, not a spike.** Every zone carries
   a weakness and auto-chamber loads it in known land, so "known weakness
   chambered" is his *sustained* state wherever the ledger reaches. Judge
@@ -266,7 +300,7 @@ Every cost is a recurring rate, never a one-time gate. Smithing ~50 is the
 | gate | what it costs |
 |---|---|
 | Smithing ~50 + masterwork materials | access to tier-5 cells, the ceiling |
-| Tier 2-3 upkeep | target ~10-15 min of gathering/smithing per hour of fueled combat |
+| Tier 2-3 upkeep | target ~10-15 min of gathering/smithing per hour of fueled combat - **the dial that must not move**, whatever shots-per-cell is set to |
 | Tier-5 upkeep | steep by design; rationed for bosses, not for grinding |
 | The first walk, per zone | survive reaching each land once to ledger it |
 | PvP | pure burn, no Scrapwright rebate |
@@ -281,12 +315,18 @@ Cheap where it counts, reusing existing patterns (all verified present):
 
 - Loaded ammo: its own transient field in the `weapon_coat` mold
   (`Some((school, mult_pct, shots))`), separate from `weapon_coat` itself -
-  but **the gun never holds a coat**: using a poison or oil as a
-  Thundersmith is refused ("the shardgun's heat would cook it off").
-  Stacking a matched oil rider on top of a matched cell shot was too much
-  buff on the one class that needs none; oils stay the mundane martial's
-  lever, cells stay his, and the two never combine. No save state for the
-  chambered cell; bandolier contents are inventory items.
+  but **the gun never holds a coat**: using any coat as a Thundersmith is
+  refused ("the shardgun's heat would cook it off"). Stacking a matched rider
+  on top of a matched cell shot was too much buff on the one class that needs
+  none; coats stay the mundane martial's lever, cells stay his, and the two
+  never combine. No save state for the chambered cell; bandolier contents are
+  inventory items.
+  - **Price this exclusion at what coats are now worth, not what they were.**
+    He is the only class that cannot press `C`, and what he declines has grown:
+    a `COAT_CHARGES`-strike auto-picked rider, not the twelve-strike one dug out
+    of a panel that this design was drafted against. That is the argument for a
+    generous shots-per-cell (§3) and against ever trimming the cell ladder to
+    close a gap - trim the multiplier or doorway advantage instead.
 - Cell application: the two auto-attack call sites (the combat round's mob strike
   and the pvp strike) swap `DamageType::Physical` for the chambered school and
   scale `attack()` by the cell's percent. Two call sites, one helper.
@@ -305,8 +345,11 @@ Cheap where it counts, reusing existing patterns (all verified present):
 
 ## 12. Open tuning knobs
 
-- Shots per cell (~20) x cells per bandolier craft (~5): together they set the
-  minutes-of-prep-per-fueled-hour rate, the single most important dial.
+- Shots per cell (~60) x cells per bandolier craft (~4): together they set the
+  minutes-of-prep-per-fueled-hour rate, the single most important dial. Move
+  them against each other, or against per-cell material cost, so §10's rate
+  holds; moving shots-per-cell alone is a straight buff or nerf wearing a
+  convenience costume.
 - The tier multiplier ladder (x1.10 to x1.35 proposed) and the counter-cell
   notch-below rule.
 - Doorway advantage: one denied strike, or two vs non-boss. First nerf lever.
@@ -322,9 +365,9 @@ Cheap where it counts, reusing existing patterns (all verified present):
 
 ## 13. The world resist/weak pass (landed)
 
-Formerly a full handoff brief; the pass shipped 2026-08-20, together with the
-weapon oils (promoted from follow-up once it was clear placement alone left
-the seven Physical-locked classes a mathematically zero matchup game). **The
+The pass shipped together with the weapon coats, which were promoted from
+follow-up once it was clear placement alone left the seven Physical-locked
+classes a mathematically zero matchup game. **The
 spec lives in `CONTEXT.md`, section "The world resist/weak pass"**: theme
 vocabulary and tables, the two Physical rules, census bands, the routed
 grind-rate budget, and the tests that are the contract. Its consequences for
@@ -335,12 +378,22 @@ model in §5, the oiled bar and uptime caveats in §9, the coat exclusion in
 
 ### What the class inherits
 
-- **The monopoly is fenced in code, and the fence runs both ways.** Oils
+- **The monopoly is fenced in code, and the fence runs both ways.** Coats
   are flat riders, never a conversion of the auto's school, never a
   multiplier on `attack()`; both levers remain reserved for the cells. In
   exchange he is the one class that cannot coat a weapon at all (§11).
   Everyone else plays matchups now; his edge stays legible as degree, not
   kind.
+- **The coat family merged, and it cost him convenience, not coverage.**
+  Poison and the four oils are now one curve, one charge count and one price,
+  separated only by school, and `C` applies the best-matched one in a
+  keystroke. Nothing in that touched the two fences above, and no school was
+  added, so Shadow and Arcane remain his alone. What it did take is the
+  *feel* of being the prepared one: every class now arrives at a zone gate
+  with the right school on its weapon. §5 answers that - his edge is
+  per-engage re-chambering against their locked-in choice - and §3's longer
+  cells answer the rest, by making the price he pays for the coat exclusion
+  proportional to what coats became.
 - **Every boss carries a weakness** (`every_boss_carries_a_weakness`):
   zone bosses inherit their zone's weak lane, authored crowns carry
   bespoke ones. For him that means the rack always has a boss answer -

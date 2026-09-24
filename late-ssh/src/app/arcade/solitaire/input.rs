@@ -53,8 +53,6 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
             }
             true
         }
-        // TEMP (testing #623, do not merge).
-        b'w' | b'W' => state.debug_trigger_win(),
         b'a' | b'A' => state.auto_move(),
         b'f' | b'F' => state.auto_foundation_all(),
         b'u' | b'U' => state.undo(),

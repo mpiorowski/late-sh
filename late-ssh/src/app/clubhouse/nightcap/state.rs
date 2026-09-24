@@ -64,10 +64,23 @@ impl Drink {
         }
     }
 
+    /// How hard the pour hits, in one word: what the house says out loud in
+    /// the room when the drink lands. It follows the price, because the
+    /// price is the buzz (`UserDrinks::record_purchase` records chips as
+    /// drunk points 1:1).
+    pub fn strength(self) -> &'static str {
+        match self {
+            Drink::HouseBeer => "easy",
+            Drink::WhiskeyNeat => "stiff",
+            Drink::OldFashioned => "strong",
+            Drink::TopShelf => "lethal",
+        }
+    }
+
     /// Whether a banked round credit pays for this pour. A round buys the
-    /// house measure (`cash_round_drink` records a flat
-    /// `ROUND_DRINK_POINTS`, whatever was asked for), so only the house
-    /// beer comes off it. An explicitly priced drink is debited even with a
+    /// house measure (`cash_round_drink` records what the bar that bought
+    /// the round pours, `Bar::drink_points`, whatever was asked for), so
+    /// only the house beer comes off it. An explicitly priced drink is debited even with a
     /// credit waiting: the patron named a price, and the footer names the
     /// drink they get, so the credit must not quietly pour something else.
     pub fn on_the_round(self) -> bool {
@@ -109,6 +122,12 @@ pub enum Outcome {
         balance: i64,
     },
     RoundRefused(RoundRefusal),
+    /// The house counted the drinks this patron is holding, for the menu's
+    /// `free x2` label. Not an order: it never took the in-flight slot and
+    /// it never speaks in the footer.
+    Credits {
+        waiting: i64,
+    },
     Failed,
     Carved {
         stool: usize,
@@ -132,6 +151,9 @@ pub struct State {
     /// The line being carved into this session's stool, while `c` is open.
     carving: Option<TextArea<'static>>,
     order_in_flight: bool,
+    /// Drinks banked from other people's rounds, as of the last count. Read
+    /// when the menu opens and re-read from every pour that settles.
+    free_drinks: i64,
     outcome_tx: UnboundedSender<Outcome>,
     outcome_rx: UnboundedReceiver<Outcome>,
     /// Flavor line shown in the footer after the last seat/drink action.
@@ -160,6 +182,7 @@ impl State {
             menu_open: false,
             carving: None,
             order_in_flight: false,
+            free_drinks: 0,
             outcome_tx,
             outcome_rx,
             last_message: None,
@@ -319,14 +342,21 @@ impl State {
     }
 
     /// `d`: open or close the house menu. Needs a stool, like everything
-    /// else the house does for you.
-    pub fn toggle_menu(&mut self) {
+    /// else the house does for you. Returns whether the menu just opened, so
+    /// the caller can re-count the banked drinks the menu prints.
+    pub fn toggle_menu(&mut self) -> bool {
         if self.my_seat().is_none() {
             self.note_compose_needs_seat();
-            return;
+            return false;
         }
         self.menu_open = !self.menu_open;
         self.last_message = None;
+        self.menu_open
+    }
+
+    /// Drinks waiting on somebody else's round, as last counted.
+    pub fn free_drinks(&self) -> i64 {
+        self.free_drinks
     }
 
     /// Close the menu if it is open. Returns whether there was one to close,
@@ -432,6 +462,17 @@ impl State {
     }
 
     pub fn apply_outcome(&mut self, outcome: Outcome) {
+        // A count is an answer to what the menu asked, not an order: it
+        // neither holds the footer nor frees a pour in flight.
+        if let Outcome::Credits { waiting } = outcome {
+            self.free_drinks = waiting;
+            return;
+        }
+        // A comped pour spent one of those drinks and the house counted what
+        // is left in the same statement, so the menu needs no re-read.
+        if let Outcome::Comped { remaining, .. } = outcome {
+            self.free_drinks = remaining;
+        }
         // A carve is not an order: it never held the one-order-at-a-time
         // slot, so it must not release one that a pour still holds.
         if !matches!(outcome, Outcome::Carved { .. } | Outcome::CarveFailed) {
@@ -478,6 +519,9 @@ impl State {
                     thousands(total)
                 )
             }
+            // Answered above; the match stays exhaustive so a new outcome
+            // still has to say what the footer does with it.
+            Outcome::Credits { .. } => return,
             Outcome::Failed => "the tap sputtered. try again.".to_string(),
             Outcome::Carved { stool } => format!("carved into stool {}.", stool + 1),
             Outcome::CarveFailed => "the knife slipped. try again.".to_string(),

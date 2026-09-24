@@ -2,14 +2,16 @@ use crate::{
     models::{
         aquarium_care::AquariumCare,
         chips::{ChipMove, UserChips},
+        drinks::UserDrinks,
         marketplace::{
             AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_PLANT_ITEM_KIND, AQUARIUM_SKU,
             AQUARIUM_SPROUT_SKU, AQUARIUM_WELCOME_FISH_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
             BONSAI_DECAY_PROTECTION_KIND, BONSAI_DECAY_SHIELD_SKU, CHAT_BADGE_SLOT,
             CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT, COMPANION_CONSUMABLE_ITEM_KIND,
-            MarketplaceItem, PET_COMPANION_SKU, PurchaseStatus, THEMATRIX_ULTIMATE_SKU,
-            TankActiveStatus, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND, UserPurchase,
-            WONDERLAND_ULTIMATE_SKU, adjust_aquarium_active_by_sku, purchase_durable_item_by_sku,
+            HANGOVER_PILL_SKU, MarketplaceItem, PET_COMPANION_SKU, PurchaseStatus,
+            THEMATRIX_ULTIMATE_SKU, TankActiveStatus, ULTIMATE_SPELL_KIND,
+            USERNAME_EFFECT_ITEM_KIND, UserPurchase, WONDERLAND_ULTIMATE_SKU,
+            adjust_aquarium_active_by_sku, purchase_durable_item_by_sku,
             purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_custom_title,
             purchase_item_by_sku_with_username_effect, rental_duration_secs,
         },
@@ -2116,4 +2118,48 @@ async fn bonsai_decay_shield_expired_rows_are_excluded_from_active_queries() {
             .len(),
         0
     );
+}
+
+/// A pill for nothing is refused before any chips move; a pill for a drunk
+/// buyer charges once and leaves them sober with their tab intact.
+#[tokio::test]
+async fn the_hangover_pill_sobers_a_drunk_buyer_and_refuses_a_sober_one() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "hangover-pill").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let funded = UserChips::admin_grant(&**client, user.id, 5_000)
+        .await
+        .expect("fund chips")
+        .balance;
+
+    let sober = purchase_durable_item_by_sku(&mut client, user.id, HANGOVER_PILL_SKU)
+        .await
+        .expect("sober purchase")
+        .expect("pill item");
+    assert_eq!(sober.status, PurchaseStatus::AlreadySober);
+    assert_eq!(sober.balance, funded, "a sober buyer is never charged");
+
+    UserDrinks::record_purchase(&client, user.id, 800)
+        .await
+        .expect("drink");
+    let drunk = UserDrinks::find(&client, user.id)
+        .await
+        .expect("find drinks")
+        .expect("drinks row");
+    assert!(drunk.level(chrono::Utc::now()) > 0, "the drink landed");
+
+    let taken = purchase_durable_item_by_sku(&mut client, user.id, HANGOVER_PILL_SKU)
+        .await
+        .expect("drunk purchase")
+        .expect("pill item");
+    assert_eq!(taken.status, PurchaseStatus::Purchased);
+    assert_eq!(taken.balance, funded - taken.item.price_chips);
+
+    let after = UserDrinks::find(&client, user.id)
+        .await
+        .expect("find drinks")
+        .expect("drinks row");
+    assert_eq!(after.drunk_points, 0);
+    assert_eq!(after.level(chrono::Utc::now()), 0);
+    assert_eq!(after.lifetime_spent, drunk.lifetime_spent, "the tab stays");
 }

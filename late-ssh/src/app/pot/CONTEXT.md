@@ -95,9 +95,10 @@ re-evaluates its `WHERE status = 'open'`, finds nothing, and refuses with
 `pot_changed` is the Postgres notify channel, and it carries a `PotChange`
 (`Bought` / `Drawn { .. }` / `Rolled`).
 
-- Every replica LISTENs (`PotService::start_listener_task`), re-reads the open
-  pot on any payload, and re-seeds after a reconnect, so a buy committed
-  during the gap is not lost.
+- Every replica gets `pot_changed` from the process listener
+  (`PotService::start_notify_worker` over `pg_listener.rs`), re-reads the
+  open pot on any payload, and re-reads on the resync after a reconnect, so
+  a buy committed during the gap is not lost.
 - The **winner's banner** rides the notify, not the sweeping replica's own
   broadcast, so it reaches the winner on whichever replica they are connected
   to and there is one code path for it. Same reasoning as the crown's deposed
@@ -140,7 +141,7 @@ Absent before the first refresh and in a process with no pot service.
 
 ## 8. Feed lines
 
-Two `ActivityKind` arms, both explicit in `filter::lounge_includes`:
+Three `ActivityKind` arms, all explicit in `filter::lounge_includes`:
 
 - `PotDrawn { pot_id, payout, winner_tickets, total_tickets }` -> "mira won
   67,360 chips from the pot on 3 of 312 tickets". It is also the second arm of
@@ -149,18 +150,34 @@ Two `ActivityKind` arms, both explicit in `filter::lounge_includes`:
   winner reconnects. The headline names the winner as `@mira` so the draw
   also reaches them as a mention notification; the ticker line keeps the
   bare name.
+- `PotClosing { pot_id, size, total_tickets, ticket_price, draws_in_secs }`
+  -> ticker "pot draws in 30m: 34,700 chips on 347 tickets" plus the headline
+  "🎰 Pot 34,700 on 347 tickets, draws in 30m. /pot buy N at 100 each.", the
+  last call (`POT_REMINDER_LEAD_SECS`, 30 minutes). Every sweep tries
+  `Pot::claim_reminder`, a guarded UPDATE stamping `pots.reminded_at`
+  (migration 196), so exactly one sweeper across every replica posts it, and
+  only inside the window. The same statement reads the ticket total, so the
+  stamp and the numbers land together and nothing can fail in between. A pot
+  with no tickets is not claimed at all: a buy later in the window still
+  gets its last call. The event has no user (`username` "pot"), and the
+  headline carries no `@`, so nobody is notified.
 A pot that rolls empty announces nothing: no chips moved and nobody lost.
 
-There are no mid-week size lines any more (migration 162 dropped
-`pots.announced_threshold`, 2026-08-27): the size sits in the status HUD on
-every screen all week, so a #lounge nudge only repeated what the border said.
+There are no mid-week size lines (migration 162 dropped
+`pots.announced_threshold`): the size sits in the status HUD on every screen
+all week, so a #lounge nudge only repeated what the border said. The last
+call above is the one exception, because it is about time, not size.
 
 ## 9. Telemetry
 
 `late-ssh/src/metrics.rs`: `record_pot_tickets_bought`,
-`record_pot_buy_refused` (labelled by `PotRefusal`),
-`record_pot_drawn`. Five counters, and the burn is readable as the gap between
-`late_ssh_pot_chips_in_total` and `late_ssh_pot_chips_out_total`.
+`record_pot_buy_refused` (labelled by `PotRefusal`), `record_pot_drawn`,
+`record_pot_reminder` (labelled by `PotReminderOutcome`: `posted` or
+`failed`; a sweep with no pot in its window records nothing). Seven counters,
+and the burn is readable as the gap between `late_ssh_pot_chips_in_total` and
+`late_ssh_pot_chips_out_total`. A failed reminder claim also reports through
+`error_span!("pot_reminder_failed")`, like a failed draw; the stamp is not
+spent on a failure, so the next sweep retries.
 
 ## 10. Gotchas
 

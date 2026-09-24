@@ -817,6 +817,8 @@ pub struct AbilityView {
     pub name: String,
     pub cost: i32,
     pub ready: bool,
+    /// What it does, school included where the school is real
+    /// (`Ability::effect_label`): "fire damage over time", "shield".
     pub effect: String,
 }
 
@@ -1081,6 +1083,15 @@ pub struct MudSnapshot {
     pub reset_versions: HashMap<Uuid, u64>,
 }
 
+/// A live weapon coat, for the effects line and the action-bar chip.
+#[derive(Clone, Debug)]
+pub struct CoatView {
+    /// The coat's school, lowercase ("fire", "poison").
+    pub school: String,
+    /// Strikes left before the coating is spent.
+    pub charges: u8,
+}
+
 #[derive(Clone, Debug)]
 pub struct PlayerView {
     pub joined: bool,
@@ -1164,8 +1175,10 @@ pub struct PlayerView {
     pub empower: i32,
     /// True while the player is stunned (skipping their actions).
     pub stunned: bool,
-    /// The active weapon coat as a display line ("fire coat x8"), if any.
-    pub coat: Option<String>,
+    /// The active weapon coat, if any. Kept as parts rather than a rendered
+    /// line so the effects row and the action-bar chip can each spend the
+    /// width they have without either one re-deriving the other's string.
+    pub coat: Option<CoatView>,
     pub abilities: Vec<AbilityView>,
     pub inventory: Vec<InvView>,
     pub shop: Option<ShopView>,
@@ -2263,6 +2276,10 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.quaff_best(user_id));
     }
 
+    pub fn coat_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.coat_best(user_id));
+    }
+
     pub fn toggle_rpg_mode_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| {
             if let Some(p) = s.players.get_mut(&user_id) {
@@ -2718,6 +2735,10 @@ struct PlayerState {
     /// leaves a DoT of the coat's school (through the foe's resist/weak
     /// profile) and spends one charge. Transient.
     weapon_coat: Option<(DamageType, i32, u8)>,
+    /// The last coat item this player applied, so the one-keystroke `coat_best`
+    /// can break a tie in favour of what they chose themselves rather than
+    /// silently switching schools on them. Transient, like the coat itself.
+    last_coat: Option<u32>,
     /// The friendly NPC the player is currently escorting, if any (transient).
     escort: Option<EscortState>,
     /// Transient warning gate for the start-room Frontier entrance.
@@ -3858,26 +3879,31 @@ pub(super) const TIER_ATTACK_BAR: [i32; 6] = [12, 31, 52, 77, 106, 148];
 /// measured at (mirrors `crafting::LEVEL_REQ`).
 #[cfg(test)]
 pub(super) const TIER_GATE_LEVEL: [i32; 6] = [1, 8, 16, 26, 38, 55];
-/// Poison damage per tick applied by a coated weapon, by poison tier (0..6).
-/// The burst half of the coat family: about 30% of the auto bar but only
-/// `POISON_CHARGES` strikes of it, so a vial is roughly three quarters of an
-/// oil's damage packed into half the window. Cheap, and the right answer when
-/// the fight will be over quickly.
-pub(super) const POISON_PER_TICK: [i32; 6] = [3, 9, 15, 23, 32, 45];
-/// Strikes a single weapon-coating lasts before the poison is spent.
-pub(super) const POISON_CHARGES: u8 = 5;
-/// Ticks each coated strike (poison or oil) festers in the foe. A coat re-seeds
-/// every landed strike and refreshes rather than stacks (see `DotSource`), so
-/// this is the wound's lifetime after the last swing, not a multiplier on it.
-pub(super) const POISON_DOT_TICKS: u8 = 3;
-/// Oil damage per tick, by oil tier (0..6). The sustain half: about a fifth of
-/// the auto bar, held for `OIL_CHARGES` strikes, which is the whole of a boss
-/// fight. Sized so a coated character gains roughly 15% of total output, the
-/// figure the world pass's routed budget is written against.
-pub(super) const OIL_PER_TICK: [i32; 6] = [2, 6, 10, 15, 21, 30];
-/// Strikes a single oil coating lasts. Several fights' worth, so choosing an
-/// oil is a route decision made at the zone gate, not per-fight busywork.
-pub(super) const OIL_CHARGES: u8 = 12;
+/// Coat damage per tick, by tier (0..6) - one curve for every coat in the
+/// game, poison vials and the four alchemy oils alike. About a fifth of the
+/// auto bar, held for `COAT_CHARGES` strikes.
+///
+/// The two used to be separate curves: the poison burst at ~30% of the bar for
+/// five strikes, the oil sustain at ~20% for twelve. That split was never
+/// designed - the vial shipped with crafting and the oils arrived with the
+/// world resist/weak pass, so poison was simply the older item's constants
+/// kept. All that separated them in the end was which school they carried, and
+/// a school is a real difference already. One curve, one charge count, one
+/// price; what a coat *is* is now its school and nothing else.
+pub(super) const COAT_PER_TICK: [i32; 6] = [2, 6, 10, 15, 21, 30];
+/// Strikes a single coating lasts. Sized so applying one is a decision made at
+/// a zone gate and then forgotten - a whole run of trash or three boss pulls -
+/// rather than per-fight busywork with the inventory panel.
+pub(super) const COAT_CHARGES: u8 = 40;
+/// Ticks each coated strike festers in the foe. A coat re-seeds every landed
+/// strike and refreshes rather than stacks (see `DotSource`), so this is the
+/// wound's lifetime after the last swing, not a multiplier on it.
+pub(super) const COAT_DOT_TICKS: u8 = 3;
+/// Charges at or below which `coat_best` will re-coat a weapon that already
+/// carries the school it picked. Above it the key refuses and spends nothing,
+/// because overwriting a healthy coat throws its remaining strikes away; below
+/// it, topping up before a fight is the reasonable thing to want.
+pub(super) const COAT_TOPUP_AT: u8 = COAT_CHARGES / 4;
 /// Share of a character's output that comes from the Physical auto-attack at
 /// band gear; the rest is abilities in the class's school mix. The routed
 /// grind-rate budget in `world_test.rs` splits output this way, and the coat
@@ -4058,6 +4084,7 @@ impl WorldState {
             rpg_mode: true,
             last_broadcast: None,
             weapon_coat: None,
+            last_coat: None,
             escort: None,
             frontier_descent_pending: false,
             resurrection_cap: 0,
@@ -7759,23 +7786,87 @@ impl WorldState {
         }
     }
 
-    fn use_item(&mut self, user_id: Uuid, item_id: u32) {
-        let Some(it) = item(item_id) else { return };
-        // Poisons and oils aren't drunk - they coat your weapon.
-        if let Some(tier) = super::items::poison_tier(item_id) {
-            let per_tick = POISON_PER_TICK[(tier as usize).min(POISON_PER_TICK.len() - 1)];
-            self.coat_weapon(
+    /// Coat the weapon in one keystroke, for use at a zone gate or mid-fight,
+    /// so a coat never means opening the inventory panel and scrolling.
+    ///
+    /// The pick is the whole point. Every coat in the game now carries the same
+    /// rider, so the only thing that separates two of them is the school and
+    /// the school is entirely a matchup question - which means a blind "use the
+    /// biggest vial" key would throw the system away. The order is: a coat the
+    /// current foe is *weak* to, then any coat it does not *resist*, then the
+    /// highest tier, then whatever you picked last. With no foe locked on,
+    /// nothing is known about the matchup and it falls through to tier and
+    /// habit, which is the right answer at a gate.
+    ///
+    /// A healthy coat already on the weapon is never thrown away on a whim:
+    /// the key refuses while more than `COAT_TOPUP_AT` strikes remain, of any
+    /// school, unless the locked-on foe makes the switch worth it (weak to
+    /// the pick, or resists what the weapon carries). A nearly spent coat
+    /// tops up, or switches, freely.
+    fn coat_best(&mut self, user_id: Uuid) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        // The foe's profile, when there is one. A duelling opponent has no
+        // resist/weak profile at all, so a pvp target reads as neutral and the
+        // pick falls through to tier - correct, not a gap.
+        let profile = p
+            .target
+            .and_then(|mob_id| self.mobs.get(&mob_id))
+            .map(|m| m.spawn.profile);
+        let last = p.last_coat;
+        let live = p.weapon_coat;
+        let best = p
+            .inventory
+            .iter()
+            .filter_map(|&id| super::items::coat_school_tier(id).map(|(s, t)| (id, s, t)))
+            .max_by_key(|&(id, school, tier)| {
+                let weak = profile.is_some_and(|pr| pr.weak == Some(school));
+                let unresisted = !profile.is_some_and(|pr| pr.resist == Some(school));
+                (weak, unresisted, tier, Some(id) == last)
+            });
+        let Some((id, school, _)) = best else {
+            self.log_to(
                 user_id,
-                item_id,
-                DamageType::Poison,
-                per_tick,
-                POISON_CHARGES,
+                LogKind::System,
+                "You have no coating in your bag.".to_string(),
             );
             return;
+        };
+        // Refuse rather than throw a healthy coat's strikes away, whatever
+        // school it is. The one thing worth those strikes is a matchup the
+        // foe in front of you answers: weak to the pick, or resisting what
+        // the weapon carries. A nearly spent coat is a different matter:
+        // topping up before a fight is the reasonable thing to want, so that
+        // goes through.
+        if let Some((live_school, _, charges)) = live
+            && charges > COAT_TOPUP_AT
+        {
+            let upgrade = profile.is_some_and(|pr| {
+                (pr.weak == Some(school) && live_school != school)
+                    || (pr.resist == Some(live_school) && pr.resist != Some(school))
+            });
+            if !upgrade {
+                self.log_to(
+                    user_id,
+                    LogKind::System,
+                    format!(
+                        "Your weapon already carries {} ({charges} strikes left).",
+                        live_school.label()
+                    ),
+                );
+                return;
+            }
         }
-        if let Some((school, tier)) = super::items::oil_school_tier(item_id) {
-            let per_tick = OIL_PER_TICK[(tier as usize).min(OIL_PER_TICK.len() - 1)];
-            self.coat_weapon(user_id, item_id, school, per_tick, OIL_CHARGES);
+        self.use_item(user_id, id);
+    }
+
+    fn use_item(&mut self, user_id: Uuid, item_id: u32) {
+        let Some(it) = item(item_id) else { return };
+        // Coats aren't drunk - poison vials and oils alike coat your weapon.
+        if let Some((school, tier)) = super::items::coat_school_tier(item_id) {
+            let per_tick = COAT_PER_TICK[(tier as usize).min(COAT_PER_TICK.len() - 1)];
+            self.coat_weapon(user_id, item_id, school, per_tick, COAT_CHARGES);
             return;
         }
         let ItemKind::Consumable { heal, restore } = it.kind else {
@@ -7856,6 +7947,7 @@ impl WorldState {
                 p.inventory.remove(pos);
             }
             p.weapon_coat = Some((school, per_tick, charges));
+            p.last_coat = Some(item_id);
         }
         self.log_to(
             user_id,
@@ -8343,7 +8435,7 @@ impl WorldState {
                     user_id,
                     per_tick,
                     school,
-                    POISON_DOT_TICKS,
+                    COAT_DOT_TICKS,
                     DotSource::Coat,
                     coat_source(school),
                 );
@@ -8610,7 +8702,7 @@ impl WorldState {
                     attacker_id,
                     per_tick,
                     school,
-                    POISON_DOT_TICKS,
+                    COAT_DOT_TICKS,
                     DotSource::Coat,
                     coat_source(school),
                 );
@@ -10551,7 +10643,7 @@ impl WorldState {
                         cost: a.cost,
                         ready: player.cooldowns.get(&a.id).copied().unwrap_or(0) == 0
                             && player.resource >= a.cost,
-                        effect: a.effect.label().to_string(),
+                        effect: a.effect_label(),
                     })
                     .collect(),
                 None => Vec::new(),
@@ -10967,9 +11059,10 @@ impl WorldState {
                     shield: player.shield,
                     empower: player.empower,
                     stunned: player.stunned > 0,
-                    coat: player
-                        .weapon_coat
-                        .map(|(school, _, charges)| format!("{} coat x{charges}", school.label())),
+                    coat: player.weapon_coat.map(|(school, _, charges)| CoatView {
+                        school: school.label().to_string(),
+                        charges,
+                    }),
                     abilities,
                     inventory,
                     shop,

@@ -8,8 +8,7 @@ use uuid::Uuid;
 use crate::{
     models::pot::{
         POT_CHANGED_CHANNEL, POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE, Pot, PotChange, PotDraw,
-        PotStatus, PotTicket, PotTicketHolder, draw_from_seed, listen_for_pot_changes,
-        next_draw_at, payout_for,
+        PotStatus, PotTicket, PotTicketHolder, draw_from_seed, next_draw_at, payout_for,
     },
     test_utils::{create_test_user, test_db},
 };
@@ -337,7 +336,8 @@ async fn a_draw_notifies_every_replica() {
         .connect(NoTls)
         .await
         .expect("listener connection");
-    let listen = listen_for_pot_changes(&listener);
+    let listen_statement = format!("LISTEN {POT_CHANGED_CHANNEL};");
+    let listen = listener.batch_execute(&listen_statement);
     tokio::pin!(listen);
     let mut listen_done = false;
     while !listen_done {
@@ -408,5 +408,59 @@ async fn pots_resolve_by_id() {
     assert_eq!(
         pots.get(&pot.id).map(|found| found.ticket_price),
         Some(POT_TICKET_PRICE)
+    );
+}
+
+/// Every replica sweeps; the stamp is what makes the reminder post once, and
+/// only inside the window before the draw. An empty pot is left unclaimed,
+/// so the first buy inside the window still gets its last call.
+#[tokio::test]
+async fn the_reminder_is_claimed_once_inside_its_window() {
+    let test_db = test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let buyer = create_test_user(&test_db.db, "pot-reminder-claim").await;
+    let now = Utc::now();
+    let draws_at = now + chrono::Duration::minutes(20);
+    let window = now + chrono::Duration::minutes(30);
+
+    let tx = client.transaction().await.expect("tx");
+    let pot = Pot::open_in_tx(&tx, draws_at, POT_TICKET_PRICE)
+        .await
+        .expect("open");
+    tx.commit().await.expect("commit");
+
+    // Nobody is in: no last call, and the claim is not spent.
+    assert_eq!(
+        Pot::claim_reminder(&**client, now, window)
+            .await
+            .expect("empty claim"),
+        None
+    );
+
+    let tx = client.transaction().await.expect("tx");
+    PotTicket::buy_in_tx(&tx, pot.id, buyer.id, 3, POT_MAX_TICKETS_PER_DAY)
+        .await
+        .expect("buy");
+    tx.commit().await.expect("commit");
+
+    // Too early: the window ends ten minutes from now, the draw is twenty.
+    assert_eq!(
+        Pot::claim_reminder(&**client, now, now + chrono::Duration::minutes(10))
+            .await
+            .expect("early claim"),
+        None
+    );
+    let claimed = Pot::claim_reminder(&**client, now, window)
+        .await
+        .expect("claim")
+        .expect("the first sweeper inside the window gets the pot");
+    assert_eq!(claimed.pot.id, pot.id);
+    assert_eq!(claimed.total_tickets, 3);
+    assert_eq!(
+        Pot::claim_reminder(&**client, now, window)
+            .await
+            .expect("second claim"),
+        None,
+        "a second sweeper must not remind again"
     );
 }

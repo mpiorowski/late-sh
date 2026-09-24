@@ -52,6 +52,30 @@ fn poi_arrows_hug_the_explored_cluster_with_boss_priority() {
     assert_eq!((kept[0].row, kept[0].col), (0, 9));
 }
 
+// A fogged tracked room inside the explored cluster's box: the player stands
+// at the west end of a long walked corridor and the room is a few cells east.
+// Its arrow stays on the room's own cell. Pushed out to the box edge it would
+// sit far past the room and still point east, sending the player beyond it.
+#[test]
+fn an_arrow_inside_the_explored_cluster_stays_on_its_target() {
+    let mut canvas = vec![vec![Tile::Empty; 30]; 10];
+    for (c, tile) in canvas[5].iter_mut().enumerate().take(21) {
+        *tile = Tile::Room(c as u32);
+    }
+    canvas[4][0] = Tile::Room(100);
+
+    let arrows = hug_poi_arrows(
+        vec![MapArrow {
+            row: 4,
+            col: 3,
+            glyph: '\u{2192}',
+            boss: false,
+        }],
+        &canvas,
+    );
+    assert_eq!((arrows[0].row, arrows[0].col), (4, 3));
+}
+
 #[test]
 fn rarity_color_uses_the_standard_rpg_palette() {
     assert_eq!(rarity_color("common"), Color::Rgb(0xff, 0xff, 0xff));

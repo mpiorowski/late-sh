@@ -1,9 +1,79 @@
 use chrono::{DateTime, Utc};
+use std::cell::Cell;
 use std::collections::HashMap;
 use uuid::Uuid;
 
 use super::super::chat::{showcase::svc::ShowcaseFeedItem, work::svc::WorkFeedItem};
-use late_core::models::profile::Profile;
+use crate::app::common::primitives::format_relative_time_short;
+use late_core::models::{profile::Profile, work_profile::WorkStatus};
+
+/// The two shelves of the work page: the people, and the remote job feed
+/// (`app/jobs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Shelf {
+    People,
+    Jobs,
+}
+
+impl Shelf {
+    pub(crate) const fn title(self) -> &'static str {
+        match self {
+            Self::People => "people",
+            Self::Jobs => "jobs",
+        }
+    }
+
+    pub(crate) const fn other(self) -> Self {
+        match self {
+            Self::People => Self::Jobs,
+            Self::Jobs => Self::People,
+        }
+    }
+}
+
+/// Up to this many tags on a person's row.
+pub(crate) const ROW_TAGS: usize = 5;
+
+/// A person's list row, three lines with fixed roles so the eye can scan a
+/// column: who and how open, what they do, what they know.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PersonRow {
+    pub(crate) name: String,
+    pub(crate) own: bool,
+    pub(crate) unread: bool,
+    /// The card's status, or none for a person with only projects.
+    pub(crate) status: Option<WorkStatus>,
+    pub(crate) project_count: usize,
+    pub(crate) age: String,
+    /// The headline, or the newest project's title without a card.
+    pub(crate) second: String,
+    /// Card skills, or the newest project's tags without a card.
+    pub(crate) tags: Vec<String>,
+}
+
+pub(crate) fn person_row(
+    entry: &PersonEntry<'_>,
+    viewer: Uuid,
+    work_marker: Option<DateTime<Utc>>,
+    showcase_marker: Option<DateTime<Utc>>,
+) -> PersonRow {
+    let newest_project = entry.projects.first();
+    let (second, tags) = match (entry.work, newest_project) {
+        (Some(item), _) => (item.profile.headline.clone(), item.profile.skills.clone()),
+        (None, Some(item)) => (item.showcase.title.clone(), item.showcase.tags.clone()),
+        (None, None) => (String::new(), Vec::new()),
+    };
+    PersonRow {
+        name: entry.username.to_string(),
+        own: entry.user_id == viewer,
+        unread: entry.is_unread(work_marker, showcase_marker),
+        status: entry.work.map(|item| item.profile.status),
+        project_count: entry.projects.len(),
+        age: format_relative_time_short(entry.latest_activity()),
+        second,
+        tags: tags.into_iter().take(ROW_TAGS).collect(),
+    }
+}
 
 /// One row of the Profiles feed: a person, aggregated from whatever they
 /// brought — a work card, projects, or both. Borrows from the two chat-side
@@ -93,6 +163,12 @@ impl<'a> PersonEntry<'a> {
 
 pub(crate) struct DirectoryState {
     pub(crate) mine_only: bool,
+    shelf: Shelf,
+    /// Under the stacked layout the detail pane opens over the list.
+    detail_open: bool,
+    /// Whether the last draw stacked the panes, recorded so the keys know
+    /// whether `l` opens the detail or moves the focus inside it.
+    narrow: Cell<bool>,
     selected: usize,
     /// Focus cursor inside the selected person's detail: 0 is their work
     /// card when present, projects follow. Reset whenever selection moves.
@@ -105,11 +181,50 @@ impl DirectoryState {
     pub(crate) fn new() -> Self {
         Self {
             mine_only: false,
+            shelf: Shelf::People,
+            detail_open: false,
+            narrow: Cell::new(false),
             selected: 0,
             focus: 0,
             search_mode: false,
             search_query: String::new(),
         }
+    }
+
+    pub(crate) fn shelf(&self) -> Shelf {
+        self.shelf
+    }
+
+    pub(crate) fn toggle_shelf(&mut self) {
+        self.set_shelf(self.shelf.other());
+    }
+
+    pub(crate) fn set_shelf(&mut self, shelf: Shelf) {
+        self.shelf = shelf;
+        self.detail_open = false;
+        self.exit_search();
+    }
+
+    pub(crate) fn set_narrow(&self, narrow: bool) {
+        self.narrow.set(narrow);
+    }
+
+    pub(crate) fn narrow(&self) -> bool {
+        self.narrow.get()
+    }
+
+    /// Whether the detail pane is the one on screen: always beside the list
+    /// when wide, over it when narrow and opened.
+    pub(crate) fn detail_open(&self) -> bool {
+        self.detail_open
+    }
+
+    pub(crate) fn open_detail(&mut self) {
+        self.detail_open = true;
+    }
+
+    pub(crate) fn close_detail(&mut self) {
+        self.detail_open = false;
     }
 
     pub(crate) fn toggle_mine_only(&mut self) {
@@ -127,6 +242,13 @@ impl DirectoryState {
             self.focus = 0;
         }
         self.selected = index;
+    }
+
+    /// The selection as a cursor set by a click or search: no focus reset
+    /// beyond what `select` does.
+    pub(crate) fn select_and_open(&mut self, index: usize) {
+        self.select(index);
+        self.detail_open = true;
     }
 
     pub(crate) fn move_selection(&mut self, delta: isize, len: usize) {

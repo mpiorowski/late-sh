@@ -60,10 +60,6 @@ pub(crate) fn pool_key(app: &mut App, byte: u8) -> bool {
     match byte {
         b'[' => pool_cycle_target(app, -1),
         b']' => pool_cycle_target(app, 1),
-        // Shifted brackets: the same hand again, one level up. A ball, then
-        // the pockets it can go in.
-        b'{' => pool_cycle_pot(app, -1),
-        b'}' => pool_cycle_pot(app, 1),
         // Next to the brackets on purpose: the same hand, the same job.
         b'\'' => pool_next_in_line(app),
         b'a' | b'A' => pool_toggle_mode(app, ShotMode::Aim),
@@ -286,17 +282,6 @@ pub(crate) fn pool_cycle_target(app: &mut App, delta: isize) -> bool {
         return false;
     };
     draft.cycle_target(state, delta);
-    true
-}
-
-/// `{` / `}`: step through the pots on offer for the ball the aim is on.
-/// Reports the key as handled even when there is no pot to offer, so it
-/// never falls through to something else on the board.
-pub(crate) fn pool_cycle_pot(app: &mut App, delta: isize) -> bool {
-    let Some((draft, state)) = draft_mut(app) else {
-        return false;
-    };
-    draft.cycle_pot(state, delta);
     true
 }
 

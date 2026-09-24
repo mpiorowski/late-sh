@@ -1191,10 +1191,12 @@ pub fn draw_dashboard_chat_card(
     let lines: Vec<Line<'static>>;
     let mut chat_hits: Option<Vec<ChatRowHit>> = None;
     if view.messages.is_empty() {
-        lines = vec![Line::from(Span::styled(
-            "No messages yet.",
-            Style::default().fg(theme::TEXT_DIM()),
-        ))];
+        // The pad cell every message row opens with, so the placeholder
+        // sits in the message text's column.
+        lines = vec![Line::from(vec![
+            Span::raw(" "),
+            Span::styled("No messages yet.", Style::default().fg(theme::TEXT_DIM())),
+        ])];
     } else {
         let height = messages_area.height.max(1) as usize;
         let width = messages_area.width.max(1) as usize;
@@ -3027,12 +3029,10 @@ pub struct ChatRenderInput<'a> {
     pub showcase_unread_count: i64,
     pub showcase_view: super::showcase::ui::ShowcaseListView<'a>,
     pub showcase_state: Option<&'a super::showcase::state::State>,
-    pub showcase_composing: bool,
     pub work_selected: bool,
     pub work_unread_count: i64,
     pub work_view: super::work::ui::WorkListView<'a>,
     pub work_state: Option<&'a super::work::state::State>,
-    pub work_composing: bool,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -3193,6 +3193,46 @@ pub struct EmbeddedRoomChatView<'a> {
     pub selection_scroll: Option<&'a SelectionScroll>,
 }
 
+/// Where an embedded chat's pieces go inside its messages area: the voice
+/// strip (when the chat has a voice channel) on the top row, the messages
+/// below it. Both sit inside the same `messages_inset`, and the strip also
+/// skips the rows' pad cell, so its text starts in the message text's column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EmbeddedChatLayout {
+    pub voice_strip: Option<Rect>,
+    pub messages: Rect,
+}
+
+pub(crate) fn embedded_chat_layout(
+    area: Rect,
+    messages_inset: u16,
+    has_voice: bool,
+) -> EmbeddedChatLayout {
+    let area = horizontal_inset(area, messages_inset);
+    let strip_height = match has_voice {
+        true => crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(area.height),
+        false => 0,
+    };
+    // The strip's text skips the pad cell message rows open with, and
+    // keeps the same cell clear on the right.
+    let voice_strip = has_voice.then_some(horizontal_inset(
+        Rect {
+            height: strip_height,
+            ..area
+        },
+        1,
+    ));
+    let messages_area = Rect {
+        y: area.y + strip_height,
+        height: area.height.saturating_sub(strip_height),
+        ..area
+    };
+    EmbeddedChatLayout {
+        voice_strip,
+        messages: messages_area,
+    }
+}
+
 pub fn draw_embedded_room_chat(
     frame: &mut Frame,
     area: Rect,
@@ -3220,11 +3260,16 @@ pub fn draw_embedded_room_chat(
             composer_text_width,
         ));
     let composer_height = total_composer_lines.min(4) as u16 + 2;
-    let (mut messages_area, composer_area) = split_chat_and_composer(area, composer_height);
+    let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
+    let layout = embedded_chat_layout(
+        messages_area,
+        view.messages_inset,
+        view.voice_channel_id.is_some(),
+    );
 
     // A voice channel shows the compact voice strip at the top of the chat
     // panel; text-only views render unchanged.
-    if let Some(voice_channel_id) = view.voice_channel_id {
+    if let (Some(voice_channel_id), Some(strip)) = (view.voice_channel_id, layout.voice_strip) {
         let voice_view = crate::app::voice::ui::VoiceRoomView {
             snapshot: view.voice_snapshot,
             room_id: voice_channel_id,
@@ -3234,20 +3279,10 @@ pub fn draw_embedded_room_chat(
             on_air: None,
             paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
         };
-        let strip_height = crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
-        let strip = Rect {
-            height: strip_height,
-            ..messages_area
-        };
         crate::app::voice::ui::draw_voice_strip(frame, strip, &voice_view);
-        messages_area = Rect {
-            y: messages_area.y + strip_height,
-            height: messages_area.height.saturating_sub(strip_height),
-            ..messages_area
-        };
     }
 
-    let messages_text_area = horizontal_inset(messages_area, view.messages_inset);
+    let messages_text_area = layout.messages;
 
     let height = messages_text_area.height.max(1) as usize;
     let width = messages_text_area.width.max(1) as usize;
@@ -3290,10 +3325,12 @@ pub fn draw_embedded_room_chat(
     );
     let chat_hits = visible.hits;
     let lines = if visible.lines.is_empty() {
-        vec![Line::from(Span::styled(
-            "No messages yet",
-            Style::default().fg(theme::TEXT_DIM()),
-        ))]
+        // The pad cell every message row opens with, so the placeholder
+        // sits in the message text's column.
+        vec![Line::from(vec![
+            Span::raw(" "),
+            Span::styled("No messages yet", Style::default().fg(theme::TEXT_DIM())),
+        ])]
     } else {
         visible.lines
     };
@@ -3415,15 +3452,10 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
             lines: chat_composer_lines_for_height(view.news_composer, composer_text_width),
             max_lines: 8,
         }
-    } else if view.showcase_selected {
+    } else if view.showcase_selected || view.work_selected {
         ChatSelectionMode::Composer {
-            lines: if view.showcase_composing { 8 } else { 1 },
-            max_lines: 8,
-        }
-    } else if view.work_selected {
-        ChatSelectionMode::Composer {
-            lines: if view.work_composing { 9 } else { 1 },
-            max_lines: 9,
+            lines: 1,
+            max_lines: 1,
         }
     } else {
         ChatSelectionMode::Composer {
@@ -3713,7 +3745,7 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         let label = if view.news_unread_count > 0 {
             format!(
                 "{prefix}news ({})",
-                format_unread_badge(view.news_unread_count)
+                super::news::state::news_unread_label(view.news_unread_count)
             )
         } else {
             format!("{prefix}news")
@@ -4599,15 +4631,18 @@ fn format_unread_badge(unread: i64) -> String {
 }
 
 /// The badge text for a slot. Rooms saturate at their SQL cap (`99+`), while
-/// the cyberspace feeds row saturates far earlier: it counts unread entries
-/// out of a probe page of ten, so a full page means "at least this many" and
-/// the badge has to read as a floor rather than name a total it cannot stand
-/// behind.
+/// the cyberspace feeds row and the news row saturate far earlier: each counts
+/// unread entries out of a bounded page (ten probed entries, the twenty-article
+/// news snapshot), so a full page means "at least this many" and the badge has
+/// to read as a floor rather than name a total it cannot stand behind.
 fn room_slot_badge(view: &ChatRoomListView<'_>, slot: RoomSlot, unread: i64) -> String {
     match slot {
-        // Only the feeds row saturates: the notifications count comes from
-        // their own counter endpoint and is exact.
+        // The notifications count comes from its own counter endpoint and is
+        // exact.
         RoomSlot::Cyberspace if view.cyberspace_unread_saturated => "9+".to_string(),
+        // Counted from the shared news snapshot, so it saturates at that
+        // snapshot's size.
+        RoomSlot::News => super::news::state::news_unread_label(unread),
         // A dot, never a number: their roster names a room's last_message_at
         // but counting would take a per-room history fetch every poll.
         RoomSlot::CyberspaceRoom(_) => "●".to_string(),
@@ -4689,6 +4724,17 @@ fn stream_on_air_view(
     crate::app::voice::ui::OnAirView { live: stream.live }
 }
 
+/// A stream's watcher count in brackets, `[3]` (zero included), or `[…]`
+/// while it is pending: the watch count only means something once frames
+/// flow. Shared by the rail row and the Zen chat tile title, so the two
+/// surfaces read the same number the same way.
+pub(crate) fn stream_count_badge(stream: &crate::app::stream::registry::LiveStreamView) -> String {
+    match stream.live {
+        true => format!("[{}]", stream.watching),
+        false => "[…]".to_string(),
+    }
+}
+
 /// The rail row label for one stream: `▶ mat [3]`, the bracket being the
 /// watcher count (zero included). The title lives in the room's stream
 /// header, not here: the row already carries the unread badge on its right,
@@ -4705,10 +4751,7 @@ fn stream_rail_label(
     stream: &crate::app::stream::registry::LiveStreamView,
     max_width: usize,
 ) -> String {
-    let count = match stream.live {
-        true => format!("[{}]", stream.watching),
-        false => "[…]".to_string(),
-    };
+    let count = stream_count_badge(stream);
     // `▶ ` before the name, one space before the count.
     let name_budget = max_width.saturating_sub(3 + UnicodeWidthStr::width(count.as_str()));
     let name = truncate_cells(&stream.username, name_budget);
@@ -4933,24 +4976,35 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
     if height == 0 || area.height <= height {
         return area;
     }
-    let width = area.width.max(1) as usize;
+    let rule_width = area.width.max(1) as usize;
+    // Text rows keep the messages' side padding: they skip the pad cell
+    // every message row opens with (the selection bar's column) and leave
+    // the same one cell clear on the right. The rules run edge to edge.
+    let width = rule_width.saturating_sub(2).max(1);
+    let padded = |line: Line<'static>| {
+        let mut spans = vec![Span::raw(" ")];
+        spans.extend(line.spans);
+        Line::from(spans)
+    };
 
     let rule = || {
         Line::from(Span::styled(
-            "\u{2500}".repeat(width),
+            "\u{2500}".repeat(rule_width),
             Style::default().fg(theme::BORDER_DIM()),
         ))
     };
 
     let mut lines: Vec<Line> = Vec::new();
     if let Some(stream) = header.stream {
-        lines.push(stream_header_line(stream, width));
+        lines.push(padded(stream_header_line(stream, width)));
     }
     if header.stream.is_some() && (header.voice.is_some() || header.topic.is_some()) {
         lines.push(rule());
     }
     if let Some(voice) = &header.voice {
-        lines.push(crate::app::voice::ui::voice_strip_line(voice, width));
+        lines.push(padded(crate::app::voice::ui::voice_strip_line(
+            voice, width,
+        )));
     }
     if header.voice.is_some() && header.topic.is_some() {
         lines.push(rule());
@@ -4967,14 +5021,14 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
         // The topic is clipped to whatever the hint leaves, so a long topic
         // never pushes `/rules` off the row.
         let room_for_topic = width.saturating_sub(if header.has_rules { 8 } else { 0 });
-        lines.push(row_with_hint(
+        lines.push(padded(row_with_hint(
             vec![Span::styled(
                 truncate_cells(topic, room_for_topic),
                 Style::default().fg(theme::TEXT_DIM()),
             )],
             hint,
             width,
-        ));
+        )));
     }
     // Closes the block off from the conversation below it.
     lines.push(rule());
@@ -5177,10 +5231,12 @@ fn draw_selected_content(
             chat_hits = Some(visible.hits);
 
             if visible.lines.is_empty() {
-                vec![Line::from(Span::styled(
-                    "No messages yet",
-                    Style::default().fg(theme::TEXT_DIM()),
-                ))]
+                // The pad cell every message row opens with, so the
+                // placeholder sits in the message text's column.
+                vec![Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("No messages yet", Style::default().fg(theme::TEXT_DIM())),
+                ])]
             } else {
                 visible.lines
             }
@@ -5310,24 +5366,21 @@ fn draw_selected_content(
         )))
         .block(hint_block);
         frame.render_widget(hint_text, composer_area);
-    } else if view.showcase_selected {
-        if let Some(showcase_state) = view.showcase_state {
-            super::showcase::ui::draw_showcase_composer(
-                frame,
-                composer_area,
-                &super::showcase::ui::ShowcaseComposerView {
-                    state: showcase_state,
-                },
-            );
-        }
-    } else if view.work_selected {
-        if let Some(work_state) = view.work_state {
-            super::work::ui::draw_work_composer(
-                frame,
-                composer_area,
-                &super::work::ui::WorkComposerView { state: work_state },
-            );
-        }
+    } else if view.showcase_selected || view.work_selected {
+        let hint_block = Block::default()
+            .title(if view.work_selected {
+                " Work "
+            } else {
+                " Projects "
+            })
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme::BORDER()));
+        let hint_text = Paragraph::new(Line::from(Span::styled(
+            " j/k navigate · Enter copy link · i edit yours on Profiles (5) · e edit · d delete",
+            Style::default().fg(theme::TEXT_DIM()),
+        )))
+        .block(hint_block);
+        frame.render_widget(hint_text, composer_area);
     } else if view.discover_selected {
         if view.discover_view.filtering {
             let filter_block = Block::default()

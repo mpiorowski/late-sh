@@ -30,28 +30,29 @@ use std::time::Duration;
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::app_flag::{AppFlag, AppFlags};
-use late_core::models::artboard_piece::ArtboardPiece;
 use late_core::models::article::Article;
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::chat_room::ChatRoom;
+use late_core::models::job_posting::JobPosting;
 use late_core::models::paper::{
     ANNOUNCEMENTS_SLUG, PaperCandidate, PaperEdition, PaperRoomEdition, PaperRoomPage,
     PaperSection, PaperSectionKind, PaperSectionRow, PaperStatus,
 };
-use late_core::models::user::User;
+use late_core::models::user::{User, extract_langs};
+use late_core::models::work_profile::WorkProfile;
 use tokio::sync::{broadcast, oneshot, watch};
 use tokio_postgres::Client;
 use tracing::Instrument;
 use uuid::Uuid;
 
 use super::state::{
-    PAPER_ANNOUNCEMENTS_LIMIT, PAPER_WALL_PIECES, PaperAnnouncement, PaperCommand, PaperLayout,
-    PaperModal, PaperState, PaperWall, PendingFlagWrite,
+    PAPER_ANNOUNCEMENTS_LIMIT, PaperAnnouncement, PaperCommand, PaperLayout, PaperModal,
+    PaperState, PaperWork, PendingFlagWrite,
 };
 use crate::app::ai::ghost::GRAYBEARD_PERSONA;
 use crate::app::ai::svc::AiService;
-use crate::app::artboard::gallery::{svc::GalleryPiece, ui::piece_paint_lines};
 use crate::app::common::primitives::Banner;
+use crate::app::jobs::state::{PAPER_MATCHES, matches, viewer_tags};
 use crate::app::state::App;
 use crate::metrics::{self, PaperOpenResult, PaperPrintResult};
 
@@ -153,8 +154,7 @@ pub enum PressOutcome {
         tally: PrintTally,
     },
     /// The preview edition, for the admin's own modal: the columns over
-    /// today so far, plus today's announcements so far. No wall: the
-    /// pieces are yesterday's rows, and a preview has no yesterday.
+    /// today so far, plus today's announcements so far.
     Previewed {
         edition: PaperEdition,
         announcements: Vec<PaperAnnouncement>,
@@ -198,13 +198,14 @@ impl PrintTally {
 }
 
 /// Today's paper as the newsstand hands it over: the edition's rows plus
-/// the pages read at open time with no claim, since they are rows
-/// already (yesterday's announcements verbatim, the wall).
+/// yesterday's announcements, read at open time with no claim since they
+/// are rows already, verbatim.
 #[derive(Clone, Debug)]
 pub struct PaperIssue {
     pub edition: PaperEdition,
     pub announcements: Vec<PaperAnnouncement>,
-    pub wall: Vec<PaperWall>,
+    /// NEW WORK for this reader; `None` while the job feed is off.
+    pub work: Option<PaperWork>,
 }
 
 #[derive(Clone, Debug)]
@@ -258,6 +259,7 @@ impl PaperService {
             paper_enabled: false,
             paper_outside_enabled: false,
             artboard_gallery_enabled: false,
+            jobs_enabled: false,
         })
     }
 
@@ -862,36 +864,20 @@ impl PaperService {
         if !edition.has_print() && announcements.is_empty() {
             return Ok(Opened::Empty);
         }
-        // The wall is a plain read too: the pieces are rows already,
-        // printed in their own colours. A decode failure loses that piece,
-        // not the column. The gallery's kill switch drops the column: a
-        // piece that has to come down fast must not keep printing at every
-        // login.
+        // NEW WORK is the paper's one per-reader read: yesterday's
+        // released postings (rows already, printed once for everyone by
+        // the job press), picked against this reader's card. The job
+        // feed's kill switch drops the section.
         let covered = today.pred_opt().unwrap_or(today);
-        let wall = if !self.flags().artboard_gallery_enabled {
-            Vec::new()
+        let work = if !self.flags().jobs_enabled {
+            None
         } else {
-            ArtboardPiece::most_applauded_hung_on(&client, covered, PAPER_WALL_PIECES)
-                .await?
-                .into_iter()
-                .filter_map(|piece| match GalleryPiece::decode(piece) {
-                    Ok(piece) => Some(PaperWall {
-                        title: piece.title.clone(),
-                        username: piece.username.clone(),
-                        applause: piece.applause,
-                        lines: piece_paint_lines(&piece.canvas, piece.width, piece.height),
-                    }),
-                    Err(error) => {
-                        tracing::warn!(error = ?error, "paper wall piece could not be decoded");
-                        None
-                    }
-                })
-                .collect()
+            Some(read_work(&client, user_id, covered).await?)
         };
         let issue = PaperIssue {
             edition,
             announcements,
-            wall,
+            work,
         };
         match trigger {
             PaperTrigger::Login => {
@@ -912,6 +898,27 @@ impl PaperService {
             PaperTrigger::Command => Ok(Opened::Ready(issue)),
         }
     }
+}
+
+/// Yesterday's job releases against one reader: their card (status and
+/// normalized skills) and their profile languages decide the matches.
+async fn read_work(client: &Client, user_id: Uuid, day: NaiveDate) -> anyhow::Result<PaperWork> {
+    let released = JobPosting::list_released_on(client, day).await?;
+    let card = WorkProfile::find_by_user_id(client, user_id).await?;
+    let langs = match User::get(client, user_id).await? {
+        Some(user) => extract_langs(&user.settings),
+        None => Vec::new(),
+    };
+    let tags = viewer_tags(card.as_ref(), &langs);
+    let picked: Vec<JobPosting> = matches(&released, &tags, PAPER_MATCHES)
+        .into_iter()
+        .cloned()
+        .collect();
+    Ok(PaperWork {
+        released: released.len(),
+        card: card.map(|card| card.status),
+        matches: picked,
+    })
 }
 
 /// Every `#announcements` post inside `[floor, ceiling)`, oldest first,
@@ -1277,7 +1284,7 @@ fn drain_events(app: &mut App) -> bool {
                             &PaperIssue {
                                 edition,
                                 announcements,
-                                wall: Vec::new(),
+                                work: None,
                             },
                         ));
                         Banner::success(&format!("Preview, not printed. {line}"))
@@ -1348,7 +1355,7 @@ fn edition_modal(app: &App, issue: &PaperIssue) -> PaperModal {
     PaperModal::edition(PaperLayout {
         edition: &issue.edition,
         announcements: &issue.announcements,
-        wall: &issue.wall,
+        work: issue.work.as_ref(),
         rail_order: &rail_order,
         member_room_ids: &member_room_ids,
         bumped_labels: &bumped_labels,

@@ -48,6 +48,12 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
             state.gallery_mut().focus_rail();
             true
         }
+        // Vim keys move the cursor, in view mode only: in edit mode every
+        // letter paints.
+        b'h' => handle_arrow(app, b'D'),
+        b'j' => handle_arrow(app, b'B'),
+        b'k' => handle_arrow(app, b'A'),
+        b'l' => handle_arrow(app, b'C'),
         b'i' | b'I' | b'\r' | b'\n' => {
             if state.is_archive_view_active() {
                 return true;

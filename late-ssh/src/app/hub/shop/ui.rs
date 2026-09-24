@@ -381,6 +381,7 @@ fn draw_item_detail(
     if item.owned
         && item.quantity > 0
         && item.item_kind != CHAT_CONSUMABLE_ITEM_KIND
+        && !item.is_hangover_pill()
         && !item.is_rental()
     {
         lines.push(Line::from(vec![
@@ -1213,6 +1214,7 @@ fn item_row(
             } else if item.is_consumable()
                 && item.item_kind != CHAT_CONSUMABLE_ITEM_KIND
                 && item.item_kind != BONSAI_CONSUMABLE_ITEM_KIND
+                && !item.is_hangover_pill()
                 && item.quantity > 0
             {
                 format!(" x{}", item.quantity)
@@ -1241,7 +1243,9 @@ fn rental_tier_suffix(item: &ShopCatalogItem) -> String {
 }
 
 fn consumable_action_label(item: &ShopCatalogItem, active: Option<bool>) -> &'static str {
-    if chat_room_bump_item(item) {
+    if item.is_hangover_pill() {
+        "take now"
+    } else if chat_room_bump_item(item) {
         "activate"
     } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && active == Some(true) {
         "active"
@@ -1255,7 +1259,9 @@ fn consumable_action_label(item: &ShopCatalogItem, active: Option<bool>) -> &'st
 }
 
 fn consumable_footer_label(item: &ShopCatalogItem) -> &'static str {
-    if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
+    if item.is_hangover_pill() {
+        "take"
+    } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
         "activate"
     } else {
         "buy"
@@ -1263,7 +1269,9 @@ fn consumable_footer_label(item: &ShopCatalogItem) -> &'static str {
 }
 
 fn consumable_row_status(item: &ShopCatalogItem, state: &ShopState) -> &'static str {
-    if chat_room_bump_item(item) {
+    if item.is_hangover_pill() {
+        "take"
+    } else if chat_room_bump_item(item) {
         "activate"
     } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && chat_consumable_active(item, state) {
         "active"
@@ -1316,7 +1324,9 @@ fn chat_consumable_active(item: &ShopCatalogItem, state: &ShopState) -> bool {
 }
 
 fn consumable_use_hint(item: &ShopCatalogItem) -> &'static str {
-    if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && item.requires_room {
+    if item.is_hangover_pill() {
+        "Enter takes it now; refused, and free, while you are sober"
+    } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && item.requires_room {
         "Enter activates it on the selected chat room"
     } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
         "Enter activates it immediately"

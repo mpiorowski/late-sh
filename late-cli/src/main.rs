@@ -303,11 +303,13 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
         audio.analyzer_tx.clone(),
     );
     let mut voice = voice::VoiceRuntimeState::default();
-    let (mut desktop_media, mut desktop_commands) =
-        mpris::DesktopMedia::new(mpris::AudioControls {
+    let (mut desktop_media, mut desktop_commands) = match config.mpris {
+        true => mpris::DesktopMedia::new(mpris::AudioControls {
             muted: Arc::clone(&muted),
             volume_percent: Arc::clone(&volume_percent),
-        });
+        }),
+        false => mpris::DesktopMedia::disabled(),
+    };
 
     let playback = PlaybackState {
         played_samples: &played_samples,

@@ -19,22 +19,24 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use late_core::{
-    db::{Db, DbConfig},
+    db::Db,
     models::{
         chips::{ChipMove, UserChips},
         pot::{
-            POT_CHANGED_CHANNEL, POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE, Pot, PotChange,
-            PotDraw, PotTicket, PotTicketHolder, draw_from_seed, listen_for_pot_changes,
-            next_draw_at,
+            POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE, Pot, PotChange, PotDraw, PotTicket,
+            PotTicketHolder, draw_from_seed, next_draw_at,
         },
     },
 };
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
 use crate::{
-    app::activity::publisher::ActivityPublisher, app::common::primitives::thousands, metrics,
+    app::activity::publisher::ActivityPublisher,
+    app::common::primitives::thousands,
+    metrics,
+    pg_listener::{Channel, Signal, read_until_ok},
 };
 
 use super::state::short_duration;
@@ -46,6 +48,31 @@ const POT_EVENT_CAP: usize = 32;
 /// How often the sweeper wakes: to open the first pot, to draw a due one, and
 /// to re-read the snapshot as a backstop for a missed notify.
 const POT_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
+
+/// How long before the draw #lounge gets the pot's last call.
+const POT_REMINDER_LEAD_SECS: i64 = 30 * 60;
+
+/// How a sweep's reminder arm ended, for the metric. A sweep that found no
+/// pot in its window records nothing: that is every other minute of the week.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PotReminderOutcome {
+    /// Claimed and handed to #lounge.
+    Posted,
+    /// The claim errored; the stamp was not spent, so the next sweep retries.
+    Failed,
+}
+
+/// The closing-soon line, as the sweeper that claimed it hands it to #lounge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PotReminder {
+    pub pot_id: Uuid,
+    pub size: i64,
+    pub total_tickets: i64,
+    pub ticket_price: i64,
+    /// Rounded up to the minute: the sweeper lands a few seconds inside the
+    /// window, and "draws in 29m" for a half-hour call reads like a typo.
+    pub draws_in_secs: i64,
+}
 
 /// One player's place in the pot, as the snapshot hands it to that player.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -340,73 +367,48 @@ impl PotService {
                 );
             }
         }
+        match self.claim_reminder().await {
+            Ok(None) => {}
+            Ok(Some(reminder)) => {
+                metrics::record_pot_reminder(PotReminderOutcome::Posted);
+                self.announce_reminder(reminder);
+            }
+            Err(error) => {
+                metrics::record_pot_reminder(PotReminderOutcome::Failed);
+                late_core::error_span!(
+                    "pot_reminder_failed",
+                    error = ?error,
+                    "failed to claim the pot reminder"
+                );
+            }
+        }
         if let Err(error) = self.refresh().await {
             tracing::warn!(error = ?error, "failed to refresh the pot");
         }
     }
 
-    /// Keep every replica's pot in step. One long-lived Postgres connection
-    /// LISTENs on [`POT_CHANGED_CHANNEL`]; a dropped connection reconnects
-    /// after five seconds and re-seeds, so a buy committed during the gap is
-    /// not lost. Same shape as `CrownService::start_listener_task`.
-    pub fn start_listener_task(&self, db_config: DbConfig) -> tokio::task::JoinHandle<()> {
+    /// What the notify worker subscribes to.
+    pub const CHANNELS: &'static [Channel] = &[Channel::PotChanged];
+
+    /// Keep every replica's pot in step with `pot_changed`. A resync
+    /// re-reads the pot, retrying until it lands, so a buy committed while
+    /// the listener was reconnecting is not lost; every notify is applied
+    /// in order, since a draw's payload names the winner.
+    pub fn start_notify_worker(
+        &self,
+        mut signals: mpsc::UnboundedReceiver<Signal>,
+    ) -> tokio::task::JoinHandle<()> {
         let service = self.clone();
         tokio::spawn(async move {
-            loop {
-                if let Err(error) = service.listen_once(&db_config).await {
-                    tracing::warn!(error = ?error, "pot postgres listener stopped");
+            while let Some(signal) = signals.recv().await {
+                match signal {
+                    Signal::Resync => {
+                        read_until_ok("pot", || service.refresh()).await;
+                    }
+                    Signal::Notify { payload, .. } => service.apply_change(&payload).await,
                 }
-                tokio::time::sleep(Duration::from_secs(5)).await;
             }
         })
-    }
-
-    async fn listen_once(&self, db_config: &DbConfig) -> Result<()> {
-        let mut config = tokio_postgres::Config::new();
-        config.host(&db_config.host);
-        config.port(db_config.port);
-        config.user(&db_config.user);
-        config.password(&db_config.password);
-        config.dbname(&db_config.dbname);
-
-        let (client, mut connection) = config.connect(tokio_postgres::NoTls).await?;
-        let listen = listen_for_pot_changes(&client);
-        tokio::pin!(listen);
-        loop {
-            tokio::select! {
-                result = &mut listen => {
-                    result?;
-                    break;
-                }
-                message = std::future::poll_fn(|cx| connection.poll_message(cx)) => {
-                    let Some(message) = message else {
-                        return Ok(());
-                    };
-                    self.handle_notification(message?).await;
-                }
-            }
-        }
-
-        // Seeded after the LISTEN is live, so a buy committed between the two
-        // is caught by this read rather than dropped.
-        self.refresh().await?;
-
-        loop {
-            let Some(message) = std::future::poll_fn(|cx| connection.poll_message(cx)).await else {
-                return Ok(());
-            };
-            self.handle_notification(message?).await;
-        }
-    }
-
-    async fn handle_notification(&self, message: tokio_postgres::AsyncMessage) {
-        let tokio_postgres::AsyncMessage::Notification(notification) = message else {
-            return;
-        };
-        if notification.channel() != POT_CHANGED_CHANNEL {
-            return;
-        }
-        self.apply_change(notification.payload()).await;
     }
 
     /// One `pot_changed` notify, on every replica including the one that
@@ -414,10 +416,9 @@ impl PotService {
     /// are connected here.
     ///
     /// A failed re-read is this replica's badge lagging until the next
-    /// notify, not a reason to drop the LISTEN connection: propagating it
-    /// would lose every buy committed during the reconnect window. A payload
-    /// that does not parse is logged for the same reason; the re-read does
-    /// not depend on it.
+    /// notify or resync, so it is logged and the worker keeps going. A
+    /// payload that does not parse is logged for the same reason; the
+    /// re-read does not depend on it.
     pub(super) async fn apply_change(&self, payload: &str) {
         if let Err(error) = self.refresh().await {
             tracing::warn!(error = ?error, "failed to refresh the pot");
@@ -624,6 +625,41 @@ impl PotService {
         Pot::open_in_tx(&tx, next_draw_at(now), POT_TICKET_PRICE).await?;
         tx.commit().await?;
         Ok(Some(settlement))
+    }
+
+    /// Claim the open pot's closing-soon reminder if its window has come.
+    /// The stamp in the table is the claim, so one sweeper across every
+    /// replica gets it, and the one statement that stamps it also reads the
+    /// ticket total, so nothing can fail between the claim and the numbers.
+    /// A pot nobody has bought into is left unclaimed: a last call for an
+    /// empty pot is noise, and a buy later in the window still gets one.
+    pub(super) async fn claim_reminder(&self) -> Result<Option<PotReminder>> {
+        let now = Utc::now();
+        let remind_until = now + chrono::Duration::seconds(POT_REMINDER_LEAD_SECS);
+        let client = self.db.get().await?;
+        let Some(claim) = Pot::claim_reminder(&**client, now, remind_until).await? else {
+            return Ok(None);
+        };
+        let secs_left = (claim.pot.draws_at - now).num_seconds();
+        Ok(Some(PotReminder {
+            pot_id: claim.pot.id,
+            size: claim.total_tickets.saturating_mul(claim.pot.ticket_price),
+            total_tickets: claim.total_tickets,
+            ticket_price: claim.pot.ticket_price,
+            draws_in_secs: (secs_left + 59) / 60 * 60,
+        }))
+    }
+
+    fn announce_reminder(&self, reminder: PotReminder) {
+        if let Some(activity) = &self.activity {
+            activity.pot_closing(
+                reminder.pot_id,
+                reminder.size,
+                reminder.total_tickets,
+                reminder.ticket_price,
+                reminder.draws_in_secs,
+            );
+        }
     }
 
     /// Everything a settled draw has to tell. The winner's own banner is not

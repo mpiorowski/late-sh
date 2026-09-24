@@ -927,9 +927,9 @@ pub fn map_canvas(
     canvas
 }
 
-/// An off-screen point of interest, projected to the map border as a direction
-/// arrow. Points the way without revealing the room, so an unexplored boss is a
-/// "that way" hint, not a spoiler.
+/// A point of interest the canvas is not drawing, projected onto the map as a
+/// direction arrow. Points the way without revealing the room, so an
+/// unexplored boss is a "that way" hint, not a spoiler.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct MapArrow {
     pub row: usize,
@@ -948,7 +948,7 @@ fn arrow_glyph(dx: i32, dy: i32) -> char {
         (1, -1) => '\u{2197}',  // ↗
         (-1, 1) => '\u{2199}',  // ↙
         (1, 1) => '\u{2198}',   // ↘
-        _ => '\u{2022}',        // • (shouldn't happen for off-screen)
+        _ => '\u{2022}',        // • (callers skip a zero delta)
     }
 }
 
@@ -1015,18 +1015,21 @@ pub fn poi_arrows(
         .collect()
 }
 
-/// Border arrows for active-quest target rooms that are off-screen on the
-/// viewed level, honoring the same `PAN_LIMIT` honesty filter as `poi_arrows`:
-/// a target in another reserved block gets no arrow at all, because across
-/// blocks the coordinate delta points nowhere real. The count of targets
-/// dropped that way is returned alongside, so the map can say "N marks lie
-/// beyond this land" instead of silently showing fewer quests than exist.
+/// Direction arrows for target rooms the canvas is not drawing on the viewed
+/// level: off-screen ones, and on-screen ones the player has never walked,
+/// which fog leaves blank. Honors the same `PAN_LIMIT` honesty filter as
+/// `poi_arrows`: a target in another reserved block gets no arrow at all,
+/// because across blocks the coordinate delta points nowhere real. The count
+/// of targets dropped that way is returned alongside, so the map can say "N
+/// marks lie beyond this land" instead of silently showing fewer quests than
+/// exist.
 pub fn quest_arrows(
     coords: &HashMap<RoomId, Coord>,
     center: Coord,
     cols: i32,
     rows: i32,
     targets: &[RoomId],
+    visited: &HashSet<RoomId>,
 ) -> (Vec<MapArrow>, usize) {
     if cols <= 0 || rows <= 0 {
         return (Vec::new(), targets.len());
@@ -1049,8 +1052,19 @@ pub fn quest_arrows(
         }
         let sc = cx + 2 * (c.x - center.x);
         let sr = cy + 2 * (c.y - center.y);
-        if (0..cols).contains(&sc) && (0..rows).contains(&sr) {
-            continue; // on-screen: the canvas draws the quest marker itself
+        // On screen *and* walked is the only case the canvas covers: it draws
+        // the marker on the room's own cell, so an arrow would just duplicate
+        // it. On screen but still in fog the canvas draws nothing at all -
+        // `map_canvas` emits a `Tile::Room` for visited rooms only - and that
+        // is exactly the case tracking exists to serve, a boss you have never
+        // reached. It gets an arrow like any off-screen target, except under
+        // the crosshair itself, which already marks the cell and leaves no
+        // direction to point.
+        if (0..cols).contains(&sc) && (0..rows).contains(&sr) && visited.contains(room) {
+            continue;
+        }
+        if c.x == center.x && c.y == center.y {
+            continue;
         }
         let glyph = arrow_glyph(c.x - center.x, c.y - center.y);
         by_cell

@@ -7,8 +7,10 @@
 //! (`ChipService::buy_drink`, `cash_round_drink`, `buy_round`, then
 //! `SharedLobby::record_drink`), so a drink here is exactly as drunk as a
 //! drink at the counter and a credit from a round bought in either room can
-//! be cashed in either room. Only the ordering differs: a fixed menu, no
-//! conversation.
+//! be cashed in either room. Two things are this bar's own: a round bought
+//! here pours chips to points 1:1 (`Bar::Nightcap`), because it is bought
+//! for the stools rather than for everyone online, and every drink that
+//! lands is said out loud in the room ([`HouseVoice`]).
 
 use std::time::Duration;
 
@@ -19,13 +21,16 @@ use late_core::db::Db;
 use late_core::models::artboard_piece::ArtboardPiece;
 use late_core::models::article::Article;
 use late_core::models::chips::UserChips;
-use late_core::models::drink_round::ROUND_PRICE_PER_PATRON;
+use late_core::models::drink_round::{Bar, ROUND_PRICE_PER_PATRON};
 use late_core::models::nightcap_carving::Carving;
 use late_core::shutdown::CancellationToken;
 
+use crate::app::chat::svc::ChatService;
 use crate::app::clubhouse::lobby::SharedLobby;
+use crate::app::common::primitives::thousands;
 use crate::app::games::chips::svc::{ChipService, RoundError};
 use crate::metrics;
+use crate::usernames::UsernameDirectory;
 
 use super::lobby::SharedSeats;
 use super::state::{Order, Outcome};
@@ -86,7 +91,7 @@ impl NightcapHouse {
             .next()
             .map(|article| article.title);
         let newest_piece = ArtboardPiece::newest_hung(&client).await?;
-        let tab = UserChips::top_round_buyers(&client, TAB_BOARD_SIZE).await?;
+        let tab = UserChips::top_round_buyers(&client, Bar::Nightcap, TAB_BOARD_SIZE).await?;
         let mut carvings: [Option<Carving>; super::lobby::SEAT_COUNT] =
             std::array::from_fn(|_| None);
         for carving in Carving::list(&client).await? {
@@ -144,13 +149,86 @@ pub enum NightcapOrderResult {
     Failed,
 }
 
+/// Which piece of the house's fire-and-forget work failed. Neither is an
+/// order, and nothing upstream waits on either, so a failure here is the
+/// only place it shows: the menu's free-drink count stays stale, or the bar
+/// goes quiet in the room while pours keep settling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NightcapHouseFailure {
+    /// `spawn_credit_check` could not count the patron's banked drinks.
+    CreditCount,
+    /// `ChatService::send_house_line_task` could not post the pour to the room.
+    HouseLine,
+}
+
+/// The house's voice in the room: every drink that lands is said out loud
+/// as a `system` line on the wall, so the other stools can see who is
+/// drinking what and how hard it hits. The footer only ever talks to the
+/// patron who ordered.
+///
+/// `None` at the call site when the session has not loaded the room yet; the
+/// drink still pours, the bar just says nothing about it.
+#[derive(Clone)]
+pub struct HouseVoice {
+    chat: ChatService,
+    room_id: Uuid,
+    usernames: UsernameDirectory,
+}
+
+impl HouseVoice {
+    pub fn new(chat: ChatService, room_id: Uuid, usernames: UsernameDirectory) -> Self {
+        Self {
+            chat,
+            room_id,
+            usernames,
+        }
+    }
+
+    /// A drinker's name for the line. The directory is the roster's own
+    /// names (root `CONTEXT.md` §8.1), so a rename reaches the wall; a
+    /// buyer who deleted their account is "somebody".
+    fn name_of(&self, user_id: Option<Uuid>) -> String {
+        user_id
+            .and_then(|id| crate::usernames::get(&self.usernames, id))
+            .unwrap_or_else(|| "somebody".to_string())
+    }
+
+    fn say(&self, body: String) {
+        self.chat.send_house_line_task(self.room_id, body);
+    }
+}
+
+/// Count the drinks this patron has banked from other people's rounds, for
+/// the menu's `free x2` label. Fire-and-forget: the count arrives on
+/// `outcome_tx` as [`Outcome::Credits`], and a read that fails leaves the
+/// label as it was rather than saying anything in the footer.
+pub fn spawn_credit_check(
+    chip_service: ChipService,
+    user_id: Uuid,
+    outcome_tx: UnboundedSender<Outcome>,
+) {
+    tokio::spawn(async move {
+        match chip_service.open_round_credits(user_id).await {
+            Ok(waiting) => {
+                let _ = outcome_tx.send(Outcome::Credits { waiting });
+            }
+            Err(error) => {
+                metrics::record_nightcap_house_failure(NightcapHouseFailure::CreditCount);
+                tracing::warn!(error = ?error, user_id = %user_id, "nightcap credit count failed");
+            }
+        }
+    });
+}
+
 /// Place a seated patron's order. Fire-and-forget from the input path; the
 /// outcome arrives on `outcome_tx`. `drunk_lobby` is the tavern's shared
-/// presence map, which carries drunk state for both rooms.
+/// presence map, which carries drunk state for both rooms, and `voice` is
+/// how the bar announces what landed.
 pub fn spawn_order(
     chip_service: ChipService,
     drunk_lobby: Option<SharedLobby>,
     seats: SharedSeats,
+    voice: Option<HouseVoice>,
     user_id: Uuid,
     order: Order,
     outcome_tx: UnboundedSender<Outcome>,
@@ -158,9 +236,26 @@ pub fn spawn_order(
     tokio::spawn(async move {
         let outcome = match order {
             Order::Drink(drink) => {
-                order_drink(&chip_service, drunk_lobby.as_ref(), &seats, user_id, drink).await
+                order_drink(
+                    &chip_service,
+                    drunk_lobby.as_ref(),
+                    &seats,
+                    voice.as_ref(),
+                    user_id,
+                    drink,
+                )
+                .await
             }
-            Order::Round => order_round(&chip_service, drunk_lobby.as_ref(), &seats, user_id).await,
+            Order::Round => {
+                order_round(
+                    &chip_service,
+                    drunk_lobby.as_ref(),
+                    &seats,
+                    voice.as_ref(),
+                    user_id,
+                )
+                .await
+            }
         };
         // A closed receiver means the session is gone; the chips have
         // already moved and were logged above, nothing to add.
@@ -172,6 +267,7 @@ async fn order_drink(
     chip_service: &ChipService,
     drunk_lobby: Option<&SharedLobby>,
     seats: &SharedSeats,
+    voice: Option<&HouseVoice>,
     user_id: Uuid,
     drink: super::state::Drink,
 ) -> Outcome {
@@ -189,6 +285,15 @@ async fn order_drink(
                 lobby.record_drink(user_id, comped.drunk_points, comped.last_drink_at);
             }
             seats.record_pour(user_id);
+            if let Some(voice) = voice {
+                voice.say(format!(
+                    "{} orders the {} ({}), on {}'s round.",
+                    voice.name_of(Some(user_id)),
+                    drink.name(),
+                    drink.strength(),
+                    voice.name_of(comped.buyer_user_id)
+                ));
+            }
             metrics::record_round_drink_cashed();
             metrics::record_nightcap_order(NightcapOrderResult::Comped);
             tracing::info!(
@@ -220,6 +325,14 @@ async fn order_drink(
                 lobby.record_drink(user_id, purchase.drunk_points, purchase.last_drink_at);
             }
             seats.record_pour(user_id);
+            if let Some(voice) = voice {
+                voice.say(format!(
+                    "{} orders the {} ({}).",
+                    voice.name_of(Some(user_id)),
+                    drink.name(),
+                    drink.strength()
+                ));
+            }
             metrics::record_nightcap_order(NightcapOrderResult::Poured);
             tracing::info!(
                 user_id = %user_id,
@@ -250,13 +363,14 @@ async fn order_round(
     chip_service: &ChipService,
     drunk_lobby: Option<&SharedLobby>,
     seats: &SharedSeats,
+    voice: Option<&HouseVoice>,
     buyer_id: Uuid,
 ) -> Outcome {
     // A round here is for the stools, not for everyone online: the buyer
     // can see exactly who they are buying for.
     let patrons = seats.seated_ids_excluding(buyer_id);
     match chip_service
-        .buy_round(buyer_id, ROUND_PRICE_PER_PATRON, &patrons)
+        .buy_round(buyer_id, ROUND_PRICE_PER_PATRON, Bar::Nightcap, &patrons)
         .await
     {
         Ok(purchase) => {
@@ -264,6 +378,19 @@ async fn order_round(
                 lobby.record_drink(buyer_id, purchase.drunk_points, purchase.last_drink_at);
             }
             seats.record_pour(buyer_id);
+            if let Some(voice) = voice {
+                let drinks = if purchase.patrons == 1 {
+                    "drink"
+                } else {
+                    "drinks"
+                };
+                voice.say(format!(
+                    "{} buys the stools a round: {} {drinks}, {} chips.",
+                    voice.name_of(Some(buyer_id)),
+                    purchase.patrons,
+                    thousands(purchase.total_chips)
+                ));
+            }
             metrics::record_round_bought(purchase.patrons, purchase.total_chips);
             tracing::info!(
                 user_id = %buyer_id,

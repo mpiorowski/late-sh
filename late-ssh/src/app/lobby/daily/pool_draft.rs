@@ -650,56 +650,6 @@ impl PoolDraft {
         self.azimuth != before
     }
 
-    /// `{` / `}`: step through the pots on offer for the ball the aim is on,
-    /// easiest first. Reports whether there was one to step to.
-    ///
-    /// The ball is the sighted one when it is legal to hit, and otherwise the
-    /// first legal target, so the key always answers about a ball the shot
-    /// could play. Which pot is "current" is read back off the bearing rather
-    /// than remembered: an aim that has since been turned by hand is not on
-    /// any of them, and the next press starts from the easiest again.
-    pub fn cycle_pot(&mut self, state: &DailyPoolState, delta: isize) -> bool {
-        let legal = state.legal_targets();
-        let target = match self.target(state) {
-            Some(id) if legal.contains(&id) => id,
-            Some(_) | None => match legal.first() {
-                Some(id) => *id,
-                None => return false,
-            },
-        };
-        let Some(from) = self.cue_ball(state) else {
-            return false;
-        };
-        let Ok(spec) = state.spec() else {
-            return false;
-        };
-        let pots = aim::pot_lines(
-            spec,
-            &spec.geometry(),
-            &self.frames(state),
-            from,
-            target,
-            self.tip[0],
-        );
-        if pots.is_empty() {
-            return false;
-        }
-        // Compared as bearings, a full turn apart being no distance at all.
-        let current = pots.iter().position(|pot| {
-            let apart = (pot.azimuth - self.azimuth + std::f64::consts::PI)
-                .rem_euclid(std::f64::consts::TAU)
-                - std::f64::consts::PI;
-            apart.abs() < 1e-9
-        });
-        let next = match current {
-            Some(index) => (index as isize + delta).rem_euclid(pots.len() as isize) as usize,
-            None if delta < 0 => pots.len() - 1,
-            None => 0,
-        };
-        self.azimuth = pots[next].azimuth;
-        true
-    }
-
     /// Step through the balls this player may legally hit first.
     ///
     /// Cycling rather than free-roaming a cursor: on a table drawn three

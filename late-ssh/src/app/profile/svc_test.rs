@@ -17,7 +17,9 @@ use late_core::models::{
     chat_room::ChatRoom,
     chips::{ChipMove, INITIAL_CHIP_BALANCE, UserChips},
     crown::{CROWN_MIN_PRICE, CrownReign, next_price},
-    drink_round::{DrinkRound, MAX_OPEN_CREDITS, ROUND_CREDIT_TTL_HOURS, ROUND_PRICE_PER_PATRON},
+    drink_round::{
+        Bar, DrinkRound, MAX_OPEN_CREDITS, ROUND_CREDIT_TTL_HOURS, ROUND_PRICE_PER_PATRON,
+    },
     game_payout::GamePayout,
     media_queue_item::MediaQueueItem,
     moderation_audit_log::ModerationAuditLog,
@@ -25,6 +27,7 @@ use late_core::models::{
     profile::{Profile, ProfileParams},
     room_ban::RoomBan,
     server_ban::{ServerBan, ServerBanActivation},
+    showcase::{Showcase, ShowcaseParams},
     user::{RightSidebarMode, User, UserParams, default_right_sidebar_components},
 };
 use late_core::test_utils::create_test_user;
@@ -99,6 +102,53 @@ async fn find_profile_publishes_stored_chip_balance() {
 
     assert_eq!(snapshot.user_id, Some(user.id));
     assert_eq!(snapshot.chip_balance, Some(chips.balance));
+}
+
+/// The profile modal shows the viewed user's showcases from this snapshot,
+/// so it carries every one of theirs, newest first, and nobody else's.
+#[tokio::test]
+async fn find_profile_publishes_only_the_owners_showcases_newest_first() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let owner = create_test_user(&test_db.db, "profile-showcase-owner").await;
+    let stranger = create_test_user(&test_db.db, "profile-showcase-stranger").await;
+    for (user_id, title) in [
+        (owner.id, "Older project"),
+        (stranger.id, "Someone else's project"),
+        (owner.id, "Newer project"),
+    ] {
+        Showcase::create_by_user_id(
+            &client,
+            user_id,
+            ShowcaseParams {
+                user_id,
+                title: title.to_string(),
+                url: "https://example.com/project".to_string(),
+                description: "A project.".to_string(),
+                tags: Vec::new(),
+            },
+        )
+        .await
+        .expect("create showcase");
+    }
+
+    let service = ProfileService::new(test_db.db.clone(), default_active_users());
+    let mut snapshot_rx = service.subscribe_snapshot(owner.id);
+
+    service.find_profile(owner.id);
+
+    timeout(Duration::from_secs(2), snapshot_rx.changed())
+        .await
+        .expect("snapshot timeout")
+        .expect("watch changed");
+    let snapshot = snapshot_rx.borrow_and_update().clone();
+
+    let titles: Vec<&str> = snapshot
+        .showcases
+        .iter()
+        .map(|showcase| showcase.title.as_str())
+        .collect();
+    assert_eq!(titles, ["Newer project", "Older project"]);
 }
 
 /// A gild in the viewed user's ledger comes with what the modal needs to
@@ -243,6 +293,7 @@ async fn find_profile_resolves_the_house_rows() {
         &tx,
         user.id,
         ROUND_PRICE_PER_PATRON,
+        Bar::Tavern,
         &[patron.id],
         ROUND_CREDIT_TTL_HOURS,
         MAX_OPEN_CREDITS,
@@ -409,6 +460,8 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            terminal_images: late_core::models::user::TerminalImagesMode::Auto,
+            hidden_award_categories: Vec::new(),
             show_flag_fallback: false,
             translate_to: late_core::models::message_translation::TranslateLang::En,
             auto_translate: false,
@@ -485,6 +538,8 @@ async fn edit_profile_normalizes_username_before_persisting() {
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            terminal_images: late_core::models::user::TerminalImagesMode::Auto,
+            hidden_award_categories: Vec::new(),
             show_flag_fallback: false,
             translate_to: late_core::models::message_translation::TranslateLang::En,
             auto_translate: false,
@@ -556,6 +611,8 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            terminal_images: late_core::models::user::TerminalImagesMode::Auto,
+            hidden_award_categories: Vec::new(),
             show_flag_fallback: false,
             translate_to: late_core::models::message_translation::TranslateLang::En,
             auto_translate: false,
@@ -838,6 +895,8 @@ async fn edit_profile_snapshots_stay_per_user() {
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            terminal_images: late_core::models::user::TerminalImagesMode::Auto,
+            hidden_award_categories: Vec::new(),
             show_flag_fallback: false,
             translate_to: late_core::models::message_translation::TranslateLang::En,
             auto_translate: false,

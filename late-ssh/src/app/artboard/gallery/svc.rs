@@ -8,12 +8,14 @@
 //! `late_core::models::artboard_piece` (the SQL rails) and `frame.rs` (the
 //! local ones).
 //!
-//! The splash podium (last month's `ART1`-`ART3`, from the award rows) is
-//! process-wide: one `watch` refreshed hourly; each login claims the next
-//! place for its account (`claim_splash_piece`) and the door shows that
-//! piece, or the coffee cup once the account has seen the podium. Reading
-//! the watch is all it does, so any number of replicas may run it (root
-//! CONTEXT.md, multi-replica rule).
+//! The splash wall (one hung piece a day over the door, in hang order)
+//! is process-wide: one `watch` holding today's piece, refreshed hourly.
+//! The refresh is also the assignment: the first replica awake on a UTC
+//! day stamps the queue's head with the day (`ArtboardPiece::splash_for_day`,
+//! a row claim on a unique index), the rest read it back, so any number of
+//! replicas may run it (root CONTEXT.md, multi-replica rule). Every login
+//! reads the day's piece off the watch (`splash_piece`) and the door shows
+//! it all day, or the coffee cup when there is none.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,9 +27,8 @@ use late_core::db::Db;
 use late_core::models::app_flag::AppFlags;
 use late_core::models::artboard_piece::{
     ApplauseOutcome, ArtboardPiece, HangOutcome, HangParams, ListingCounts, PieceListing,
-    PodiumPiece, TakeDownOutcome,
+    TakeDownOutcome,
 };
-use late_core::models::user::User;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
@@ -36,27 +37,40 @@ use crate::metrics::{self, GalleryApplauseResult, GalleryHangResult, GalleryTake
 
 use super::frame::{Credit, FramedPiece};
 
-/// How often the splash podium is re-read. It changes once a month, when
-/// the award pass mints it, and a mod removal is the only thing that could
-/// change it in between.
+/// How often the splash wall is re-read. It changes once a day, at UTC
+/// midnight, and a mod removal is the only thing that could change it in
+/// between; a replica is at most an hour behind either.
 const SPLASH_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
-/// One place on the podium, and what the door shows this session once it
-/// is claimed: the rank the award minted (1 is `ART1`) and the piece that
-/// hangs for it. Claimed once at bootstrap; the session never re-reads it.
+/// The day's piece over the door, and the UTC day it holds. Read once
+/// at bootstrap; the session never re-reads it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SplashPiece {
-    pub place: i64,
+    pub shown_on: NaiveDate,
     pub piece: GalleryPiece,
 }
 
 impl SplashPiece {
-    fn decode(entry: PodiumPiece) -> Result<Self> {
+    fn decode(shown_on: NaiveDate, piece: ArtboardPiece) -> Result<Self> {
         Ok(Self {
-            place: entry.place,
-            piece: GalleryPiece::decode(entry.piece)?,
+            shown_on,
+            piece: GalleryPiece::decode(piece)?,
         })
     }
+}
+
+/// What one refresh found. `Off` is no database or the gallery's switch
+/// off: nothing was read, so there is no queue to count. `Wall` is the
+/// day's piece (`None` on an empty queue) and how many pieces still wait
+/// for a day (hung before it, never shown), recorded as a gauge so the
+/// backlog is measurable before anyone decides on a cap.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SplashRefresh {
+    Off,
+    Wall {
+        piece: Option<Box<SplashPiece>>,
+        queued: i64,
+    },
 }
 
 /// A piece as the page draws it: the row decoded into a canvas, with the
@@ -186,13 +200,13 @@ pub enum GalleryResult {
 pub struct GalleryService {
     db: Option<Db>,
     flags_rx: watch::Receiver<Option<AppFlags>>,
-    splash_tx: Arc<watch::Sender<Vec<SplashPiece>>>,
-    splash_rx: watch::Receiver<Vec<SplashPiece>>,
+    splash_tx: Arc<watch::Sender<Option<SplashPiece>>>,
+    splash_rx: watch::Receiver<Option<SplashPiece>>,
 }
 
 impl GalleryService {
     pub fn new(db: Db, flags_rx: watch::Receiver<Option<AppFlags>>) -> Self {
-        let (splash_tx, splash_rx) = watch::channel(Vec::new());
+        let (splash_tx, splash_rx) = watch::channel(None);
         Self {
             db: Some(db),
             flags_rx,
@@ -204,7 +218,7 @@ impl GalleryService {
     /// No database and no switches: every listing is empty, nothing hangs.
     pub fn disabled() -> Self {
         let (_flags_tx, flags_rx) = watch::channel(None);
-        let (splash_tx, splash_rx) = watch::channel(Vec::new());
+        let (splash_tx, splash_rx) = watch::channel(None);
         Self {
             db: None,
             flags_rx,
@@ -223,58 +237,21 @@ impl GalleryService {
                 .is_some_and(|flags| flags.artboard_gallery_enabled)
     }
 
-    /// The podium as this replica last read it, `ART1` first. Tests and
-    /// the claim below read it; sessions get their piece through
-    /// `claim_splash_piece`.
-    pub fn splash_podium(&self) -> Vec<SplashPiece> {
-        self.splash_rx.borrow().clone()
-    }
-
-    /// The piece this login shows over the door, if the account has a
-    /// podium place left this month. One `UPDATE` per login while places
-    /// remain, none once the account has seen them all (the stamp's
-    /// `WHERE` fails and nothing is written). The claim counts entries,
-    /// not ranks: a podium with a gap (a mod removal) is shorter and the
-    /// caption still says the rank the award minted. A failed claim is the
-    /// cup: the door is not worth failing a login over.
-    pub async fn claim_splash_piece(&self, user_id: Uuid) -> Option<SplashPiece> {
-        let db = self.db.as_ref()?;
+    /// The day's piece over the door, as this replica last read it.
+    /// Every login shows it for the whole UTC day; `None` (switch off, no
+    /// database, empty queue) is the coffee cup. The switch is checked
+    /// here too, so flipping it off takes the piece off new logins at
+    /// once rather than at the next hourly refresh.
+    pub fn splash_piece(&self) -> Option<SplashPiece> {
         if !self.is_enabled() {
             return None;
         }
-        let podium = self.splash_podium();
-        let month = podium.first().map(|entry| entry.piece.period_month)?;
-        let claimed = async {
-            let client = db.get().await?;
-            User::claim_splash_podium_slot(&client, user_id, month, podium.len() as i64).await
-        }
-        .await;
-        match claimed {
-            Ok(Some(slot)) => match podium.into_iter().nth((slot - 1) as usize) {
-                Some(entry) => Some(entry),
-                None => {
-                    tracing::warn!(
-                        %user_id,
-                        slot,
-                        "artboard gallery splash claim landed past the podium"
-                    );
-                    None
-                }
-            },
-            Ok(None) => None,
-            Err(error) => {
-                tracing::warn!(
-                    error = ?error,
-                    %user_id,
-                    "artboard gallery splash claim failed"
-                );
-                None
-            }
-        }
+        self.splash_rx.borrow().clone()
     }
 
-    /// Hourly re-read of last month's podium for the splash. Runs at start
-    /// so the first login after a deploy already has it.
+    /// Hourly re-read of the splash wall, assigning the day's piece when
+    /// nobody has yet. Runs at start so the first login after a deploy
+    /// already has it.
     pub fn start_splash_refresh_task(&self) -> tokio::task::JoinHandle<()> {
         let service = self.clone();
         tokio::spawn(async move {
@@ -282,16 +259,29 @@ impl GalleryService {
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
-                match service.refresh_splash().await {
-                    Ok(podium) if podium.is_empty() => {
-                        tracing::debug!("artboard gallery has no splash podium")
+                match service.refresh_splash(Utc::now().date_naive()).await {
+                    Ok(SplashRefresh::Off) => {
+                        tracing::debug!("artboard gallery splash wall is off")
                     }
-                    Ok(podium) => tracing::debug!(
-                        first_piece_id = %podium[0].piece.id,
-                        first_place = podium[0].place,
-                        places = podium.len(),
-                        "artboard gallery splash podium refreshed"
-                    ),
+                    Ok(SplashRefresh::Wall {
+                        piece: None,
+                        queued,
+                    }) => {
+                        metrics::record_gallery_splash_queue_depth(queued);
+                        tracing::debug!(queued, "artboard gallery has no splash piece today")
+                    }
+                    Ok(SplashRefresh::Wall {
+                        piece: Some(piece),
+                        queued,
+                    }) => {
+                        metrics::record_gallery_splash_queue_depth(queued);
+                        tracing::debug!(
+                            piece_id = %piece.piece.id,
+                            shown_on = %piece.shown_on,
+                            queued,
+                            "artboard gallery splash wall refreshed"
+                        )
+                    }
                     Err(error) => tracing::warn!(
                         error = ?error,
                         "artboard gallery splash refresh failed"
@@ -301,26 +291,31 @@ impl GalleryService {
         })
     }
 
-    /// The kill switch covers this read too: while the gallery is off the
-    /// splash goes back to the coffee cup on the next refresh, so a piece
-    /// that has to come down fast is off the highest-traffic surface
-    /// within the hour without waiting for `/mod artboard remove`.
-    pub async fn refresh_splash(&self) -> Result<Vec<SplashPiece>> {
+    /// Read (and, on the first pass of the day, assign) `day`'s piece
+    /// into the watch. The kill switch covers this read too: while the
+    /// gallery is off the splash goes back to the coffee cup on the next
+    /// refresh, so a piece that has to come down fast is off the
+    /// highest-traffic surface within the hour without waiting for
+    /// `/mod artboard remove`, and no day is assigned while it is off.
+    pub async fn refresh_splash(&self, day: NaiveDate) -> Result<SplashRefresh> {
         let Some(db) = self.db.as_ref() else {
-            return Ok(Vec::new());
+            return Ok(SplashRefresh::Off);
         };
         if !self.is_enabled() {
-            let _ = self.splash_tx.send(Vec::new());
-            return Ok(Vec::new());
+            let _ = self.splash_tx.send(None);
+            return Ok(SplashRefresh::Off);
         }
         let client = db.get().await?;
-        let podium = ArtboardPiece::previous_month_podium(&client)
-            .await?
-            .into_iter()
-            .map(SplashPiece::decode)
-            .collect::<Result<Vec<_>>>()?;
-        let _ = self.splash_tx.send(podium.clone());
-        Ok(podium)
+        let piece = match ArtboardPiece::splash_for_day(&client, day).await? {
+            Some(piece) => Some(SplashPiece::decode(day, piece)?),
+            None => None,
+        };
+        let queued = ArtboardPiece::splash_queue_depth(&client, day).await?;
+        let _ = self.splash_tx.send(piece.clone());
+        Ok(SplashRefresh::Wall {
+            piece: piece.map(Box::new),
+            queued,
+        })
     }
 
     /// The rail's numbers, one query. Without a database everything is
@@ -580,3 +575,7 @@ impl GalleryService {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "svc_test.rs"]
+mod svc_test;
