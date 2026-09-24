@@ -124,7 +124,10 @@ pub enum Command {
     Run,
     /// Buy `tier` (1 to `MAX_TIER`) for `slot` at the armorer, handing
     /// back what the slot holds.
-    Outfit { slot: Slot, tier: i32 },
+    Outfit {
+        slot: Slot,
+        tier: i32,
+    },
 }
 
 /// Why nothing happened.
@@ -138,7 +141,9 @@ pub enum Refusal {
     /// carry (or is not on the wall at all).
     NotAnUpgrade,
     /// Bits short of the net price, by this much.
-    Short { by: i64 },
+    Short {
+        by: i64,
+    },
 }
 
 /// How one command settled. `Won`, `Lost`, and `Escaped` clear the fight.
@@ -161,7 +166,11 @@ pub enum Applied {
     },
     Escaped,
     /// A piece bought at the armorer for `paid` bits net of the trade-in.
-    Outfitted { slot: Slot, tier: i32, paid: i64 },
+    Outfitted {
+        slot: Slot,
+        tier: i32,
+        paid: i64,
+    },
 }
 
 /// One command's result: what settled, and the lines to show for it.

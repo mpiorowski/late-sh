@@ -11,6 +11,8 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::activity::event::{ActivityEvent, ActivityGame};
+use crate::metrics::{self, ArcadeDifficulty, ArcadeFinish, ArcadeMode};
+use late_core::models::leaderboard::DailyPuzzle;
 
 const ANSWER_POOL: &str = include_str!("../../../../assets/le_word/answer_pool.txt");
 const VALID_EXTRA: &str = include_str!("../../../../assets/le_word/valid_extra.txt");
@@ -25,6 +27,17 @@ pub struct LeWordService {
 }
 
 impl LeWordService {
+    /// A board ended on this session. Counted for the dashboard, nothing
+    /// stored: the daily win itself goes through `record_win_task`.
+    pub fn record_finish(
+        &self,
+        mode: ArcadeMode,
+        difficulty: ArcadeDifficulty,
+        finish: ArcadeFinish,
+    ) {
+        metrics::record_arcade_finish(DailyPuzzle::LeWord, mode, difficulty, finish);
+    }
+
     pub fn new(db: Db, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
         Self { db, activity_feed }
     }

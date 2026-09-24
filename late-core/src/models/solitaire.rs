@@ -63,6 +63,15 @@ impl Game {
     }
 }
 
+/// A recorded daily win and whether this call inserted it. A deal won
+/// again (an undo, then the last card replayed) only keeps the best
+/// score: `fresh` is false, and nothing downstream counts it twice.
+#[derive(Debug)]
+pub struct WinRecord {
+    pub win: DailyWin,
+    pub fresh: bool,
+}
+
 impl DailyWin {
     pub async fn record_win(
         client: &Client,
@@ -70,7 +79,7 @@ impl DailyWin {
         difficulty_key: String,
         puzzle_date: NaiveDate,
         score: i32,
-    ) -> Result<Self> {
+    ) -> Result<WinRecord> {
         let row = client
             .query_one(
                 &format!(
@@ -91,7 +100,11 @@ impl DailyWin {
                 &[&user_id, &difficulty_key, &puzzle_date, &score],
             )
             .await?;
-        Ok(Self::from(row))
+        let fresh = row.get("fresh_win");
+        Ok(WinRecord {
+            win: Self::from(row),
+            fresh,
+        })
     }
 
     pub async fn has_won_today(

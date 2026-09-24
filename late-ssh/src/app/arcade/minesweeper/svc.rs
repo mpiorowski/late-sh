@@ -5,6 +5,8 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::activity::event::{ActivityEvent, ActivityGame};
+use crate::metrics::{self, ArcadeDifficulty, ArcadeFinish, ArcadeMode};
+use late_core::models::leaderboard::DailyPuzzle;
 use late_core::models::minesweeper::{DailyWin, Game, GameParams};
 use late_core::models::profile::fetch_username;
 
@@ -15,6 +17,17 @@ pub struct MinesweeperService {
 }
 
 impl MinesweeperService {
+    /// A board ended on this session. Counted for the dashboard, nothing
+    /// stored: the daily win itself goes through `record_win_task`.
+    pub fn record_finish(
+        &self,
+        mode: ArcadeMode,
+        difficulty: ArcadeDifficulty,
+        finish: ArcadeFinish,
+    ) {
+        metrics::record_arcade_finish(DailyPuzzle::Minesweeper, mode, difficulty, finish);
+    }
+
     pub fn new(db: Db, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
         Self { db, activity_feed }
     }

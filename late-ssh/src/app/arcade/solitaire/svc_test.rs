@@ -74,3 +74,26 @@ async fn solitaire_daily_wins_keep_best_score() {
             .expect("won today")
     );
 }
+
+#[tokio::test]
+async fn a_daily_won_again_after_an_undo_publishes_one_win() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "solitaire-rewin-it").await;
+    let (feed, mut wins) = tokio::sync::broadcast::channel(8);
+    let svc = super::svc::SolitaireService::new(test_db.db.clone(), feed);
+    let today = chrono::Utc::now().date_naive();
+
+    svc.record_win_and_publish(user.id, "draw-1".to_string(), today, 40)
+        .await
+        .expect("first win");
+    svc.record_win_and_publish(user.id, "draw-1".to_string(), today, 52)
+        .await
+        .expect("the same deal won again");
+
+    let first = wins.try_recv().expect("the first win is published");
+    assert_eq!(first.action, "won Solitaire (draw-1)");
+    assert!(
+        wins.try_recv().is_err(),
+        "a repeat of a banked daily is not a second win"
+    );
+}

@@ -53,7 +53,11 @@ fn the_rack_wraps_both_ways_and_only_the_cursor_row_moves() {
 
     draft.prev();
     draft.prev();
-    assert_eq!(draft.look.hood.piece, hoods[hoods.len() - 1], "wraps backward");
+    assert_eq!(
+        draft.look.hood.piece,
+        hoods[hoods.len() - 1],
+        "wraps backward"
+    );
     draft.next();
     assert_eq!(draft.look, before, "and forward again");
 
@@ -78,7 +82,11 @@ fn tint_cycles_the_palette_and_never_touches_the_mark() {
     for _ in 0..4 {
         draft.tint();
     }
-    assert_eq!(draft.look.hood.tint, Tint::Static, "five tints, back around");
+    assert_eq!(
+        draft.look.hood.tint,
+        Tint::Static,
+        "five tints, back around"
+    );
 
     draft.down();
     draft.down();

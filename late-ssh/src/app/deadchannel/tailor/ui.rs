@@ -12,7 +12,9 @@ use ratatui::{
 
 use super::state::{Draft, Row};
 use crate::app::deadchannel::city::map::Neon;
-use crate::app::deadchannel::city::ui::{INK, INK_BRIGHT, INK_DIM, INK_MUTED, glow, ink, lit, tint_rgb};
+use crate::app::deadchannel::city::ui::{
+    INK, INK_BRIGHT, INK_DIM, INK_MUTED, glow, ink, lit, tint_rgb,
+};
 use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
 use crate::app::deadchannel::runner::state::pieces_for;
 

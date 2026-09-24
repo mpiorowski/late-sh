@@ -7,6 +7,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::svc::NonogramService;
+use crate::metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 use late_core::models::nonogram::{Game, GameParams};
 
 /// Shared, immutable puzzle library. The packs sit behind an `Arc` so the
@@ -488,6 +489,16 @@ impl State {
         self.save_async();
     }
 
+    /// Tell the dashboard this board ended.
+    fn record_finish(&self, finish: ArcadeFinish) {
+        let mode = match self.mode {
+            Mode::Daily => ArcadeMode::Daily,
+            Mode::Personal => ArcadeMode::Personal,
+        };
+        let difficulty = ArcadeDifficulty::from_key(self.difficulty_key());
+        self.svc.record_finish(mode, difficulty, finish);
+    }
+
     fn check_win(&mut self) {
         if self.is_game_over {
             return;
@@ -500,6 +511,7 @@ impl State {
 
         if solved {
             self.is_game_over = true;
+            self.record_finish(ArcadeFinish::Won);
             if self.mode == Mode::Daily {
                 self.svc.record_win_task(
                     self.user_id,

@@ -1,9 +1,9 @@
 use late_core::models::article::NewsShareReward;
 use late_core::models::chat_message_gild::GildTier;
-use late_core::models::leaderboard::DoorGame;
+use late_core::models::leaderboard::{DailyPuzzle, DoorGame};
 use late_core::models::media_queue_item::SongQueueReward;
 
-use crate::app::activity::event::ActivityGame;
+use crate::app::activity::event::{ActivityGame, GameFamily};
 use crate::app::arcade::share::ShareCardKind;
 use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleArtLoad;
 use crate::app::bonsai::state::BonsaiAction;
@@ -11,6 +11,7 @@ use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::chat::news::svc::XMediaLookup;
 use crate::app::chat::svc::GildRefusal;
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
+use crate::app::common::primitives::Screen;
 use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::games::chips::svc::RoundRefusal;
@@ -208,6 +209,58 @@ pub enum TailorBeat {
     Failed,
 }
 
+/// Which board of a daily puzzle ended: the shared daily or a personal one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArcadeMode {
+    Daily,
+    Personal,
+}
+
+/// The difficulty of a finished Arcade board. `Single` is a game with one
+/// board a day and no difficulty (Le Word, Rubik's Cube).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArcadeDifficulty {
+    Easy,
+    Medium,
+    Hard,
+    DrawOne,
+    DrawThree,
+    Single,
+}
+
+impl ArcadeDifficulty {
+    /// The difficulty behind a board's stored key. The keys come from each
+    /// game's own `DIFFICULTIES` table, so an unknown one is a new
+    /// difficulty that was never given a label: that should fail loudly.
+    pub fn from_key(key: &str) -> Self {
+        match key {
+            "easy" => Self::Easy,
+            "medium" => Self::Medium,
+            "hard" => Self::Hard,
+            "draw-1" => Self::DrawOne,
+            "draw-3" => Self::DrawThree,
+            other => unreachable!("arcade difficulty {other} has no metric label"),
+        }
+    }
+}
+
+/// How an Arcade board ended. Only Le Word (out of guesses) and
+/// Minesweeper (out of lives) can be lost; the rest end solved or not at
+/// all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArcadeFinish {
+    Won,
+    Lost,
+}
+
+/// Whether a session's second of attention had a key press behind it
+/// recently (`Active`) or is a terminal left open (`Idle`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Presence {
+    Active,
+    Idle,
+}
+
 /// A runner going through the door after the ladder is done. Leaving keeps
 /// the character (the row stays, `left_at` is stamped), so the two sides
 /// are one counter: the gap between them is how many runners are standing.
@@ -274,13 +327,14 @@ mod inner {
     use super::SlidingPuzzleArtLoad;
     use super::XMediaLookup;
     use super::{
-        ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FightBeat,
-        FirstContactBeat, GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult,
-        GateVerdict, GildRefusal, GildTier, JobsFetchResult, JobsPostResult, JobsPressResult,
-        JobsReadResult, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
-        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
-        PotReminderOutcome, RenderReason, RoundRefusal, RunnerDoor, SongQueueReward,
-        SshRejectReason, SummaryResult, TailorBeat, TranslationResult, VizWireBands,
+        ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, BioScreenOutcome, CrownRefusal,
+        DailyPuzzle, DailyWinPayout, DoorGame, FightBeat, FirstContactBeat, GalleryApplauseResult,
+        GalleryHangResult, GalleryTakeDownResult, GameFamily, GateVerdict, GildRefusal, GildTier,
+        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
+        NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
+        PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, RenderReason,
+        RoundRefusal, RunnerDoor, Screen, SongQueueReward, SshRejectReason, SummaryResult,
+        TailorBeat, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -850,7 +904,32 @@ mod inner {
         METRIC.get_or_init(|| {
             meter()
                 .u64_counter("late_ssh_game_wins_total")
-                .with_description("Games won by game name")
+                .with_description("Games won by game name and family (Lateania counts mob kills)")
+                .build()
+        })
+    }
+
+    fn arcade_finishes_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_arcade_finishes_total")
+                .with_description(
+                    "Arcade daily-puzzle boards ended on a session, by game, mode, difficulty and finish",
+                )
+                .build()
+        })
+    }
+
+    fn attention_seconds_total() -> &'static Counter<f64> {
+        static METRIC: OnceLock<Counter<f64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .f64_counter("late_ssh_attention_seconds_total")
+                .with_description(
+                    "Session seconds spent per screen (and Arcade game), split by recent input",
+                )
+                .with_unit("s")
                 .build()
         })
     }
@@ -1120,8 +1199,124 @@ mod inner {
         chat_messages_edited_total().add(1, &[]);
     }
 
+    fn game_family_label(family: GameFamily) -> &'static str {
+        match family {
+            GameFamily::ArcadeDaily => "arcade_daily",
+            GameFamily::ArcadeScore => "arcade_score",
+            GameFamily::Door => "door",
+            GameFamily::Lateania => "lateania",
+            GameFamily::Table => "table",
+            GameFamily::Match => "match",
+        }
+    }
+
     pub fn record_game_win(game: ActivityGame) {
-        game_wins_total().add(1, &[KeyValue::new("game", game_label(game))]);
+        game_wins_total().add(
+            1,
+            &[
+                KeyValue::new("game", game_label(game)),
+                KeyValue::new("family", game_family_label(game.family())),
+            ],
+        );
+    }
+
+    fn arcade_mode_label(mode: ArcadeMode) -> &'static str {
+        match mode {
+            ArcadeMode::Daily => "daily",
+            ArcadeMode::Personal => "personal",
+        }
+    }
+
+    fn arcade_difficulty_label(difficulty: ArcadeDifficulty) -> &'static str {
+        match difficulty {
+            ArcadeDifficulty::Easy => "easy",
+            ArcadeDifficulty::Medium => "medium",
+            ArcadeDifficulty::Hard => "hard",
+            ArcadeDifficulty::DrawOne => "draw_1",
+            ArcadeDifficulty::DrawThree => "draw_3",
+            ArcadeDifficulty::Single => "single",
+        }
+    }
+
+    fn arcade_finish_label(finish: ArcadeFinish) -> &'static str {
+        match finish {
+            ArcadeFinish::Won => "won",
+            ArcadeFinish::Lost => "lost",
+        }
+    }
+
+    pub fn record_arcade_finish(
+        puzzle: DailyPuzzle,
+        mode: ArcadeMode,
+        difficulty: ArcadeDifficulty,
+        finish: ArcadeFinish,
+    ) {
+        // `DailyPuzzle::key` is the roster's own exhaustive label map.
+        arcade_finishes_total().add(
+            1,
+            &[
+                KeyValue::new("game", puzzle.key()),
+                KeyValue::new("mode", arcade_mode_label(mode)),
+                KeyValue::new("difficulty", arcade_difficulty_label(difficulty)),
+                KeyValue::new("finish", arcade_finish_label(finish)),
+            ],
+        );
+    }
+
+    fn screen_label(screen: Screen) -> &'static str {
+        match screen {
+            Screen::Dashboard => "dashboard",
+            Screen::Arcade => "arcade",
+            Screen::Games => "games",
+            Screen::Lateania => "lateania",
+            Screen::Rebels => "rebels",
+            Screen::Nethack => "nethack",
+            Screen::Dcss => "dcss",
+            Screen::Brogue => "brogue",
+            Screen::Dopewars => "dopewars",
+            Screen::Bashquest => "bashquest",
+            Screen::Codekeep => "codekeep",
+            Screen::Usurper => "usurper",
+            Screen::GreenDragon => "greendragon",
+            Screen::Darkroom => "darkroom",
+            Screen::Artboard => "artboard",
+            Screen::Profiles => "profiles",
+            Screen::Leaderboard => "leaderboard",
+            Screen::Clubhouse => "clubhouse",
+            Screen::Nightcap => "nightcap",
+            Screen::City => "city",
+            Screen::Zen => "zen",
+            Screen::DailyMatch => "daily_match",
+            Screen::HouseTable => "house_table",
+            Screen::Scratchpad => "scratchpad",
+        }
+    }
+
+    fn presence_label(presence: Presence) -> &'static str {
+        match presence {
+            Presence::Active => "active",
+            Presence::Idle => "idle",
+        }
+    }
+
+    pub fn record_attention(
+        screen: Screen,
+        arcade_game: Option<ActivityGame>,
+        presence: Presence,
+        seconds: f64,
+    ) {
+        let game = match arcade_game {
+            Some(game) => game_label(game),
+            None => "none",
+        };
+        attention_seconds_total().add(
+            seconds,
+            &[
+                KeyValue::new("screen", screen_label(screen)),
+                KeyValue::new("game", game),
+                KeyValue::new("presence", presence_label(presence)),
+            ],
+        );
     }
 
     fn share_cards_total() -> &'static Counter<u64> {
@@ -1765,13 +1960,14 @@ mod inner {
     use super::SlidingPuzzleArtLoad;
     use super::XMediaLookup;
     use super::{
-        ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FightBeat,
-        FirstContactBeat, GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult,
-        GateVerdict, GildRefusal, GildTier, JobsFetchResult, JobsPostResult, JobsPressResult,
-        JobsReadResult, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
-        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
-        PotReminderOutcome, RenderReason, RoundRefusal, RunnerDoor, SongQueueReward,
-        SshRejectReason, SummaryResult, TailorBeat, TranslationResult, VizWireBands,
+        ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, BioScreenOutcome, CrownRefusal,
+        DailyPuzzle, DailyWinPayout, DoorGame, FightBeat, FirstContactBeat, GalleryApplauseResult,
+        GalleryHangResult, GalleryTakeDownResult, GameFamily, GateVerdict, GildRefusal, GildTier,
+        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
+        NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
+        PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, RenderReason,
+        RoundRefusal, RunnerDoor, Screen, SongQueueReward, SshRejectReason, SummaryResult,
+        TailorBeat, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
@@ -1797,6 +1993,20 @@ mod inner {
     pub fn record_chat_message_sent() {}
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}
+    pub fn record_arcade_finish(
+        _puzzle: DailyPuzzle,
+        _mode: ArcadeMode,
+        _difficulty: ArcadeDifficulty,
+        _finish: ArcadeFinish,
+    ) {
+    }
+    pub fn record_attention(
+        _screen: Screen,
+        _arcade_game: Option<ActivityGame>,
+        _presence: Presence,
+        _seconds: f64,
+    ) {
+    }
     pub fn record_share_card(_kind: ShareCardKind) {}
     pub fn record_sliding_puzzle_art(_load: SlidingPuzzleArtLoad) {}
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}

@@ -31,9 +31,15 @@ fn the_mirror_shows_the_draft_with_the_cursor_row_and_its_rack() {
         saving: false,
     }));
 
-    assert!(screen.contains(&format!(" {} ", look.hood.piece.row)), "{screen}");
+    assert!(
+        screen.contains(&format!(" {} ", look.hood.piece.row)),
+        "{screen}"
+    );
     assert!(screen.contains("amber"), "{screen}");
-    assert!(screen.contains("▸ eyes"), "the cursor on the second row\n{screen}");
+    assert!(
+        screen.contains("▸ eyes"),
+        "the cursor on the second row\n{screen}"
+    );
     assert!(!screen.contains("▸ hood"), "{screen}");
     assert!(
         screen.contains(&format!("[{}]", look.eyes.piece.row)),

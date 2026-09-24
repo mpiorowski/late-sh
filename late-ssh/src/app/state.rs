@@ -480,6 +480,9 @@ pub struct App {
     /// None = never fired (fire immediately so first frames have presence,
     /// directory, and clock state).
     pub(crate) last_one_hz_index: Option<usize>,
+    /// Where the attention metric last counted up to; the 1Hz edge adds
+    /// the seconds since then to the screen in front of the user.
+    pub(crate) attention_mark: Instant,
     pub(crate) splash_hint: String,
     pub(crate) show_quit_confirm: bool,
     pub(crate) show_help: bool,
@@ -1431,6 +1434,7 @@ impl App {
             started_at: Instant::now(),
             last_input_at: Instant::now(),
             last_one_hz_index: None,
+            attention_mark: Instant::now(),
             splash_hint,
             show_quit_confirm: false,
             show_help: false,

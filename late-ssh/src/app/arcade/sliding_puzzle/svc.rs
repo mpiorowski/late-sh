@@ -8,6 +8,7 @@ use late_core::{
     models::{
         artboard_piece::ArtboardPiece,
         chips::Difficulty,
+        leaderboard::DailyPuzzle,
         profile::fetch_username,
         sliding_puzzle::{DailyWin, Game, GameParams},
     },
@@ -18,7 +19,7 @@ use uuid::Uuid;
 use super::art::PuzzleArt;
 use crate::{
     app::activity::event::{ActivityEvent, ActivityGame},
-    metrics,
+    metrics::{self, ArcadeDifficulty, ArcadeFinish, ArcadeMode},
 };
 
 /// How one day's art load ended, for `metrics::record_sliding_puzzle_art`.
@@ -62,6 +63,17 @@ enum GameSaveCommand {
 }
 
 impl SlidingPuzzleService {
+    /// A board ended on this session. Counted for the dashboard, nothing
+    /// stored: the daily win itself goes through `record_win_task`.
+    pub fn record_finish(
+        &self,
+        mode: ArcadeMode,
+        difficulty: ArcadeDifficulty,
+        finish: ArcadeFinish,
+    ) {
+        metrics::record_arcade_finish(DailyPuzzle::SlidingPuzzle, mode, difficulty, finish);
+    }
+
     pub fn new(db: Db, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
         Self {
             db,

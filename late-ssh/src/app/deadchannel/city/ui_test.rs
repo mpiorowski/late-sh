@@ -77,7 +77,10 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
         "{screen}"
     );
 
-    let mut sheet = Sheet::fresh(uuid::Uuid::nil(), chrono::NaiveDate::from_ymd_opt(2026, 9, 24).unwrap());
+    let mut sheet = Sheet::fresh(
+        uuid::Uuid::nil(),
+        chrono::NaiveDate::from_ymd_opt(2026, 9, 24).unwrap(),
+    );
     sheet.bits = 300;
     sheet.weapon_tier = 2;
     state.pick_down();
@@ -117,12 +120,18 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
     assert!(screen.contains("on hand 300 bits"), "{screen}");
     assert!(screen.contains("weapon box cutter"), "{screen}");
     assert!(screen.contains("armor street clothes"), "{screen}");
-    assert!(screen.contains("▸    3  tire iron"), "the cursor on tier 3\n{screen}");
+    assert!(
+        screen.contains("▸    3  tire iron"),
+        "the cursor on tier 3\n{screen}"
+    );
     assert!(screen.contains("the last broadcast"), "{screen}");
     assert!(screen.contains("10350"), "{screen}");
     // Tier 3 weapon: 585 less 75% of 225. Tier 3 armor off street clothes: 585.
     assert!(screen.contains("[w] tire iron for 417 bits"), "{screen}");
-    assert!(screen.contains("[a] padded jacket for 585 bits"), "{screen}");
+    assert!(
+        screen.contains("[a] padded jacket for 585 bits"),
+        "{screen}"
+    );
     assert!(
         screen.contains("the armorer hands over the box cutter. 225 bits."),
         "the till line\n{screen}"

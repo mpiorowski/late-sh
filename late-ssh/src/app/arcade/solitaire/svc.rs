@@ -5,6 +5,8 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::activity::event::{ActivityEvent, ActivityGame};
+use crate::metrics::{self, ArcadeDifficulty, ArcadeFinish, ArcadeMode};
+use late_core::models::leaderboard::DailyPuzzle;
 use late_core::models::profile::fetch_username;
 use late_core::models::solitaire::{DailyWin, Game, GameParams};
 
@@ -15,6 +17,17 @@ pub struct SolitaireService {
 }
 
 impl SolitaireService {
+    /// A board ended on this session. Counted for the dashboard, nothing
+    /// stored: the daily win itself goes through `record_win_task`.
+    pub fn record_finish(
+        &self,
+        mode: ArcadeMode,
+        difficulty: ArcadeDifficulty,
+        finish: ArcadeFinish,
+    ) {
+        metrics::record_arcade_finish(DailyPuzzle::Solitaire, mode, difficulty, finish);
+    }
+
     pub fn new(db: Db, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
         Self { db, activity_feed }
     }
@@ -73,35 +86,16 @@ impl SolitaireService {
     ) {
         let svc = self.clone();
         tokio::spawn(async move {
-            match svc
-                .record_win(user_id, difficulty_key.clone(), puzzle_date, score)
+            if let Err(error) = svc
+                .record_win_and_publish(user_id, difficulty_key, puzzle_date, score)
                 .await
             {
-                Ok(()) => {}
-                Err(error) => {
-                    tracing::error!(error = ?error, "failed to record solitaire daily win");
-                    return;
-                }
-            };
-            let username = match svc.db.get().await {
-                Ok(client) => fetch_username(&client, user_id).await,
-                Err(error) => {
-                    tracing::warn!(%user_id, ?error, "publishing solitaire win with fallback username");
-                    "someone".to_string()
-                }
-            };
-            let _ = svc.activity_feed.send(ActivityEvent::game_won_at(
-                user_id,
-                username,
-                ActivityGame::Solitaire,
-                Some(difficulty_key.clone()),
-                Some(score),
-                ActivityEvent::occurred_on_utc_date(puzzle_date),
-            ));
+                tracing::error!(error = ?error, "failed to record solitaire daily win");
+            }
         });
     }
 
-    async fn record_win(
+    pub(crate) async fn record_win_and_publish(
         &self,
         user_id: Uuid,
         difficulty_key: String,
@@ -109,7 +103,21 @@ impl SolitaireService {
         score: i32,
     ) -> Result<()> {
         let client = self.db.get().await?;
-        DailyWin::record_win(&client, user_id, difficulty_key, puzzle_date, score).await?;
+        let result =
+            DailyWin::record_win(&client, user_id, difficulty_key.clone(), puzzle_date, score)
+                .await?;
+        if !result.fresh {
+            return Ok(());
+        }
+        let username = fetch_username(&client, user_id).await;
+        let _ = self.activity_feed.send(ActivityEvent::game_won_at(
+            user_id,
+            username,
+            ActivityGame::Solitaire,
+            Some(difficulty_key),
+            Some(score),
+            ActivityEvent::occurred_on_utc_date(puzzle_date),
+        ));
         Ok(())
     }
 }

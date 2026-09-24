@@ -3,6 +3,7 @@ use late_core::models::rubiks_cube::{Game, GameParams};
 use uuid::Uuid;
 
 use super::svc::RubiksCubeService;
+use crate::metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 
 pub const DAILY_WIN_REWARD_CHIPS: i64 = 500;
 
@@ -248,6 +249,11 @@ impl State {
             return;
         }
         self.solved_reported = true;
+        self.svc.record_finish(
+            ArcadeMode::Daily,
+            ArcadeDifficulty::Single,
+            ArcadeFinish::Won,
+        );
         self.svc.record_win_task(self.user_id, self.puzzle_date);
     }
 

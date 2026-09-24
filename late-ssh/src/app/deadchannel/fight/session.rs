@@ -140,7 +140,8 @@ impl FightSession {
                                 .push("the static is not answering. try again.".to_string());
                         }
                         None => {
-                            self.till = Some("the armorer is not answering. try again.".to_string());
+                            self.till =
+                                Some("the armorer is not answering. try again.".to_string());
                         }
                     }
                 }

@@ -11,6 +11,7 @@ use ratatui::{
 };
 
 use crate::app::{
+    activity::event::ActivityGame,
     common::theme,
     state::{
         GAME_SELECTION_2048, GAME_SELECTION_LE_WORD, GAME_SELECTION_MINESWEEPER,
@@ -269,6 +270,26 @@ pub fn game_title(selection: usize) -> &'static str {
         GAME_SELECTION_SLIDING_PUZZLE => "Sliding Puzzle",
         GAME_SELECTION_TRAFFIC => "Traffic",
         _ => "The Arcade",
+    }
+}
+
+/// The game behind a lobby selection, for the attention metric. The
+/// selections are the closed `GAME_SELECTION_*` set; any other index is a
+/// new game that was never given a name here.
+pub fn game_for_selection(selection: usize) -> ActivityGame {
+    match selection {
+        GAME_SELECTION_2048 => ActivityGame::TwentyFortyEight,
+        GAME_SELECTION_TETRIS => ActivityGame::Lateris,
+        GAME_SELECTION_LE_WORD => ActivityGame::LeWord,
+        GAME_SELECTION_SUDOKU => ActivityGame::Sudoku,
+        GAME_SELECTION_NONOGRAMS => ActivityGame::Nonogram,
+        GAME_SELECTION_MINESWEEPER => ActivityGame::Minesweeper,
+        GAME_SELECTION_SOLITAIRE => ActivityGame::Solitaire,
+        GAME_SELECTION_SNAKE => ActivityGame::Snake,
+        GAME_SELECTION_RUBIKS_CUBE => ActivityGame::RubiksCube,
+        GAME_SELECTION_SLIDING_PUZZLE => ActivityGame::SlidingPuzzle,
+        GAME_SELECTION_TRAFFIC => ActivityGame::Traffic,
+        other => unreachable!("arcade selection {other} has no game"),
     }
 }
 

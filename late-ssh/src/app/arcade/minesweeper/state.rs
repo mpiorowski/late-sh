@@ -5,6 +5,7 @@ use rand_core::{OsRng, RngCore};
 use uuid::Uuid;
 
 use super::svc::MinesweeperService;
+use crate::metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 use late_core::models::minesweeper::{Game, GameParams};
 
 const CELL_HIDDEN: u8 = 0;
@@ -378,6 +379,7 @@ impl State {
             self.lives = self.lives.saturating_sub(1);
             if self.lives == 0 {
                 self.is_game_over = true;
+                self.record_finish(ArcadeFinish::Lost);
                 // Reveal all mines on game over
                 for r in 0..diff.rows {
                     for c in 0..diff.cols {
@@ -430,6 +432,7 @@ impl State {
                 self.lives = self.lives.saturating_sub(1);
                 if self.lives == 0 {
                     self.is_game_over = true;
+                    self.record_finish(ArcadeFinish::Lost);
                     for rr in 0..diff.rows {
                         for cc in 0..diff.cols {
                             if self.mine_map[rr][cc] && self.player_grid[rr][cc] == CELL_HIDDEN {
@@ -482,12 +485,23 @@ impl State {
         self.reset_pending = false;
     }
 
+    /// Tell the dashboard this board ended.
+    fn record_finish(&self, finish: ArcadeFinish) {
+        let mode = match self.mode {
+            Mode::Daily => ArcadeMode::Daily,
+            Mode::Personal => ArcadeMode::Personal,
+        };
+        let difficulty = ArcadeDifficulty::from_key(self.difficulty_key());
+        self.svc.record_finish(mode, difficulty, finish);
+    }
+
     fn check_win(&mut self) {
         if self.is_game_over {
             return;
         }
         if self.revealed_count() == self.safe_cell_count() {
             self.is_game_over = true;
+            self.record_finish(ArcadeFinish::Won);
             if self.mode == Mode::Daily {
                 self.svc.record_win_task(
                     self.user_id,

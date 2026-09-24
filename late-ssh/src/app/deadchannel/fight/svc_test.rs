@@ -109,7 +109,10 @@ async fn a_purchase_at_the_armorer_lands_on_the_row() {
     let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
         panic!("a refusal answers with the sheet");
     };
-    assert!(matches!(outcome.applied, Applied::Refused(_)), "{outcome:?}");
+    assert!(
+        matches!(outcome.applied, Applied::Refused(_)),
+        "{outcome:?}"
+    );
 
     let client = test_db.db.get().await.expect("db client");
     let row = DeadchannelRunner::find_by_user(&client, user_id)

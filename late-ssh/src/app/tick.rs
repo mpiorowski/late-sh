@@ -26,6 +26,9 @@ pub(crate) const IDLE_TICK: Duration = Duration::from_millis(500);
 /// After any input, hold the hot cadence briefly so async responses to that
 /// input (menu DB loads, chat send echo) land at typing latency.
 const POST_INPUT_HOT_WINDOW: Duration = Duration::from_secs(2);
+/// A second of attention counts as `Active` when a key landed this
+/// recently; past it the terminal is only left open.
+const ATTENTION_ACTIVE_WINDOW: Duration = Duration::from_secs(300);
 
 impl App {
     /// Advance world time by one tick. Returns true when anything render-
@@ -64,6 +67,7 @@ impl App {
         // page is left), whatever the key repeat rate did to it.
         if one_hz {
             self.flush_zen_layout();
+            self.record_attention();
         }
         // Shared animation frame edges, both divisors of the one wall
         // clock. Half (132ms, ~7.5fps): pet, bonsai sway, clubhouse
@@ -1378,6 +1382,28 @@ impl App {
             )
         };
         enabled.then(|| packed_rgb(theme::preview_for_id(theme_id).bg_canvas))
+    }
+}
+
+impl App {
+    /// Add the seconds since the last mark to the screen in front of the
+    /// user (and the Arcade game, while a board is open). Rides the 1Hz
+    /// edge; a screen switched mid-second lands on the new screen.
+    fn record_attention(&mut self) {
+        let now = Instant::now();
+        let seconds = now.duration_since(self.attention_mark).as_secs_f64();
+        self.attention_mark = now;
+        let arcade_game = match (self.screen, self.is_playing_game) {
+            (Screen::Arcade, true) => Some(crate::app::arcade::ui::game_for_selection(
+                self.game_selection,
+            )),
+            _ => None,
+        };
+        let presence = match self.last_input_at.elapsed() < ATTENTION_ACTIVE_WINDOW {
+            true => crate::metrics::Presence::Active,
+            false => crate::metrics::Presence::Idle,
+        };
+        crate::metrics::record_attention(self.screen, arcade_game, presence, seconds);
     }
 }
 

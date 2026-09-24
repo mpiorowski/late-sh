@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::svc::LeWordService;
+use crate::metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 
 /// Mirrors the `le_word_daily_daily_win` reward template. Update both together.
 pub const DAILY_WIN_REWARD_CHIPS: i64 = 250;
@@ -210,6 +211,11 @@ impl State {
         if guess == self.answer {
             self.won = true;
             self.is_game_over = true;
+            self.svc.record_finish(
+                ArcadeMode::Daily,
+                ArcadeDifficulty::Single,
+                ArcadeFinish::Won,
+            );
             self.message = format!("Solved in {}.", self.guesses.len());
             self.save_async();
             self.svc
@@ -219,6 +225,11 @@ impl State {
 
         if self.guesses.len() >= MAX_GUESSES {
             self.is_game_over = true;
+            self.svc.record_finish(
+                ArcadeMode::Daily,
+                ArcadeDifficulty::Single,
+                ArcadeFinish::Lost,
+            );
             self.message = format!("The word was {}.", self.answer.to_uppercase());
         } else {
             self.message = "Try again.".to_string();

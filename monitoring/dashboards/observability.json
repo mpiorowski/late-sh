@@ -1294,7 +1294,7 @@
     },
     {
       "type": "bargauge",
-      "title": "Game Wins",
+      "title": "Daily Puzzle Wins by Mode",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -1302,8 +1302,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (game) (increase(late_ssh_game_wins_total[$__range]))",
-          "legendFormat": "{{game}}",
+          "expr": "sum by (game, mode) (increase(late_ssh_arcade_finishes_total{finish=\"won\"}[$__range]))",
+          "legendFormat": "{{game}} / {{mode}}",
           "instant": true
         }
       ],
@@ -1335,11 +1335,11 @@
         "x": 0,
         "y": 110
       },
-      "description": "Wins over the selected time range, keyed by the low-cardinality game label."
+      "description": "Boards solved on a session over the range, daily and personal apart. Counted where the board ends, so personal boards (never a GameWon) show here too."
     },
     {
-      "type": "timeseries",
-      "title": "Game Win Rate",
+      "type": "bargauge",
+      "title": "Daily Puzzle Wins by Difficulty",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -1347,21 +1347,32 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (game) (rate(late_ssh_game_wins_total[$__rate_interval]))",
-          "legendFormat": "{{game}}"
+          "expr": "sum by (game, difficulty) (increase(late_ssh_arcade_finishes_total{finish=\"won\",difficulty!=\"single\"}[$__range]))",
+          "legendFormat": "{{game}} / {{difficulty}}",
+          "instant": true
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
+          "unit": "short",
           "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 20,
-            "lineWidth": 1,
-            "showPoints": "auto"
+            "displayMode": "gradient",
+            "orientation": "horizontal"
           }
         },
         "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true
       },
       "gridPos": {
         "h": 8,
@@ -1369,7 +1380,270 @@
         "x": 12,
         "y": 110
       },
-      "description": "Per-second win rate by game."
+      "description": "Solved boards by difficulty, both modes. Le Word and Rubik's Cube have one board a day and are left out."
+    },
+    {
+      "type": "bargauge",
+      "title": "Share Rate per Daily Win (%)",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * sum by (game) (label_replace(increase(late_ssh_share_cards_total{card!=\"day\"}[$__range]), \"game\", \"$1\", \"card\", \"(.*)\")) / sum by (game) (increase(late_ssh_game_wins_total{family=\"arcade_daily\"}[$__range]))",
+          "legendFormat": "{{game}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "displayMode": "gradient",
+            "orientation": "horizontal"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 118
+      },
+      "description": "Share cards copied per fresh daily win. The number that says which daily people brag about."
+    },
+    {
+      "type": "bargauge",
+      "title": "Win Rate, Losable Dailies (%)",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * sum by (game, mode, difficulty) (increase(late_ssh_arcade_finishes_total{finish=\"won\",game=~\"le_word|minesweeper\"}[$__range])) / sum by (game, mode, difficulty) (increase(late_ssh_arcade_finishes_total{game=~\"le_word|minesweeper\"}[$__range]))",
+          "legendFormat": "{{game}} / {{mode}} / {{difficulty}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "displayMode": "gradient",
+            "orientation": "horizontal"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 118
+      },
+      "description": "Won over finished boards for the two dailies that can be lost (Le Word out of guesses, Minesweeper out of lives)."
+    },
+    {
+      "type": "bargauge",
+      "title": "Active Time by Screen",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (screen) (increase(late_ssh_attention_seconds_total{presence=\"active\"}[$__range]))",
+          "legendFormat": "{{screen}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "displayMode": "gradient",
+            "orientation": "horizontal"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 126
+      },
+      "description": "Session time on each screen with a key pressed in the last five minutes. Idle terminals left open are counted apart (presence=idle)."
+    },
+    {
+      "type": "bargauge",
+      "title": "Active Time by Arcade Game",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (game) (increase(late_ssh_attention_seconds_total{screen=\"arcade\",game!=\"none\",presence=\"active\"}[$__range]))",
+          "legendFormat": "{{game}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "displayMode": "gradient",
+            "orientation": "horizontal"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 126
+      },
+      "description": "Active session time with an Arcade board open, by game (dailies and score runs)."
+    },
+    {
+      "type": "timeseries",
+      "title": "Sessions per Screen (active)",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (screen) (rate(late_ssh_attention_seconds_total{presence=\"active\"}[$__rate_interval]))",
+          "legendFormat": "{{screen}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 1,
+            "showPoints": "auto",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 134
+      },
+      "description": "Seconds of active attention per second: the average number of active sessions looking at each screen."
+    },
+    {
+      "type": "bargauge",
+      "title": "Door, Table & Match Wins",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (family, game) (increase(late_ssh_game_wins_total{family=~\"door|table|match\"}[$__range]))",
+          "legendFormat": "{{family}} / {{game}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "displayMode": "gradient",
+            "orientation": "horizontal"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 134
+      },
+      "description": "Wins outside the Arcade dailies. Lateania is left out: its GameWon fires per mob kill (family=lateania), which would drown the rest."
     },
     {
       "type": "row",
@@ -1379,7 +1653,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 118
+        "y": 142
       },
       "panels": []
     },
@@ -1419,7 +1693,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 119
+        "y": 143
       }
     },
     {
@@ -1455,7 +1729,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 119
+        "y": 143
       }
     },
     {
@@ -1489,7 +1763,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 127
+        "y": 151
       }
     },
     {
@@ -1528,7 +1802,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 127
+        "y": 151
       }
     },
     {
@@ -1544,7 +1818,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 135
+        "y": 159
       }
     },
     {
@@ -1601,7 +1875,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 136
+        "y": 160
       }
     },
     {
@@ -1658,7 +1932,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 136
+        "y": 160
       }
     },
     {
@@ -1715,7 +1989,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 136
+        "y": 160
       }
     },
     {
@@ -1768,7 +2042,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 144
+        "y": 168
       }
     },
     {
@@ -1905,7 +2179,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 152
+        "y": 176
       }
     },
     {
@@ -1991,7 +2265,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 161
+        "y": 185
       }
     },
     {
@@ -2023,7 +2297,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 171
+        "y": 195
       }
     }
   ]

@@ -8,6 +8,7 @@ use uuid::Uuid;
 use super::svc::SolitaireService;
 use super::win_anim::{Viewport, WinAnimation};
 use crate::app::games::cards::{CardRank, CardSuit, PlayingCard};
+use crate::metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 use late_core::models::solitaire::{Game, GameParams};
 
 pub const DIFFICULTIES: [&str; 2] = ["draw-1", "draw-3"];
@@ -813,6 +814,16 @@ impl State {
         self.save_async();
     }
 
+    /// Tell the dashboard this board ended.
+    fn record_finish(&self, finish: ArcadeFinish) {
+        let mode = match self.mode {
+            Mode::Daily => ArcadeMode::Daily,
+            Mode::Personal => ArcadeMode::Personal,
+        };
+        let difficulty = ArcadeDifficulty::from_key(self.difficulty_key());
+        self.svc.record_finish(mode, difficulty, finish);
+    }
+
     fn check_for_win(&mut self) {
         if self.foundations.iter().all(|pile| pile.len() == 13) {
             // Cards can be pulled back off a full foundation and replaced, so
@@ -820,6 +831,7 @@ impl State {
             // gets a cascade.
             if !self.is_game_over {
                 self.win_anim = Some(WinAnimation::new(&self.foundations, self.seed));
+                self.record_finish(ArcadeFinish::Won);
             }
             self.is_game_over = true;
             if self.mode == Mode::Daily {

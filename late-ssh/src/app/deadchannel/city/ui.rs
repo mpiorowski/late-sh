@@ -1730,11 +1730,17 @@ fn armorer_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         Span::styled("      weapon ", dim_text),
         Span::styled(name_or(GearSlot::Weapon, "bare hands").to_string(), carried),
         Span::styled("      armor ", dim_text),
-        Span::styled(name_or(GearSlot::Armor, "street clothes").to_string(), carried),
+        Span::styled(
+            name_or(GearSlot::Armor, "street clothes").to_string(),
+            carried,
+        ),
     ]));
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
-        format!("  {:>4}  {:<20}{:<21}{:>7}", "tier", "weapon", "armor", "bits"),
+        format!(
+            "  {:>4}  {:<20}{:<21}{:>7}",
+            "tier", "weapon", "armor", "bits"
+        ),
         head,
     )));
     for (index, price) in data::COST_LADDER.iter().enumerate() {
@@ -1755,9 +1761,15 @@ fn armorer_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
             marker,
             Span::styled(format!("{tier:>4}  "), dim_text),
             cell(GearSlot::Weapon, data::WEAPONS[index]),
-            Span::styled(" ".repeat(20usize.saturating_sub(data::WEAPONS[index].chars().count())), text),
+            Span::styled(
+                " ".repeat(20usize.saturating_sub(data::WEAPONS[index].chars().count())),
+                text,
+            ),
             cell(GearSlot::Armor, data::ARMOR[index]),
-            Span::styled(" ".repeat(21usize.saturating_sub(data::ARMOR[index].chars().count())), text),
+            Span::styled(
+                " ".repeat(21usize.saturating_sub(data::ARMOR[index].chars().count())),
+                text,
+            ),
             Span::styled(format!("{price:>7}"), number),
         ]));
     }
@@ -1769,7 +1781,10 @@ fn armorer_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
             true => {
                 let price = sheet.outfit_price(slot, picked);
                 keys.push(Span::styled(
-                    format!("{} for ", gear_name(slot, picked).expect("a tier on the wall")),
+                    format!(
+                        "{} for ",
+                        gear_name(slot, picked).expect("a tier on the wall")
+                    ),
                     text,
                 ));
                 let style = match price > sheet.bits {

@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+use crate::metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode};
+
 use super::{
     art::{ArtGrid, PuzzleArt, TileGeometry, TileView, art_grid},
     svc::{ArtLoad, SlidingPuzzleService},
@@ -567,6 +569,17 @@ impl State {
 
         if solved {
             let moves = moves.min(i32::MAX as u32) as i32;
+            let mode = match self.mode {
+                Mode::Daily => ArcadeMode::Daily,
+                Mode::Personal => ArcadeMode::Personal,
+            };
+            let difficulty_label = match difficulty {
+                Difficulty::Easy => ArcadeDifficulty::Easy,
+                Difficulty::Medium => ArcadeDifficulty::Medium,
+                Difficulty::Hard => ArcadeDifficulty::Hard,
+            };
+            self.svc
+                .record_finish(mode, difficulty_label, ArcadeFinish::Won);
             if self.mode == Mode::Daily {
                 self.message = format!("Solved in {moves} moves.");
                 self.complete_async(difficulty, moves);

@@ -9,6 +9,7 @@ use rumenx_sudoku::{Board, Difficulty, set_rand_seed};
 use uuid::Uuid;
 
 use super::svc::SudokuService;
+use crate::metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 use late_core::models::sudoku::{Game, GameParams};
 
 pub type Grid = [[u8; 9]; 9];
@@ -474,6 +475,16 @@ impl State {
         self.daily_date
     }
 
+    /// Tell the dashboard this board ended.
+    fn record_finish(&self, finish: ArcadeFinish) {
+        let mode = match self.mode {
+            Mode::Daily => ArcadeMode::Daily,
+            Mode::Personal => ArcadeMode::Personal,
+        };
+        let difficulty = ArcadeDifficulty::from_key(self.difficulty_key());
+        self.svc.record_finish(mode, difficulty, finish);
+    }
+
     fn check_win(&mut self) {
         let mut s = String::with_capacity(81);
         for r in 0..9 {
@@ -491,6 +502,7 @@ impl State {
         {
             self.is_game_over = true;
             self.store_active_snapshot();
+            self.record_finish(ArcadeFinish::Won);
             if self.mode == Mode::Daily {
                 self.svc.record_win_task(
                     self.user_id,

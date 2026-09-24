@@ -26,15 +26,9 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     };
     match event {
         ParsedInput::Arrow(b'A') | ParsedInput::Byte(b'k') | ParsedInput::Char('k') => draft.up(),
-        ParsedInput::Arrow(b'B') | ParsedInput::Byte(b'j') | ParsedInput::Char('j') => {
-            draft.down()
-        }
-        ParsedInput::Arrow(b'C') | ParsedInput::Byte(b'l') | ParsedInput::Char('l') => {
-            draft.next()
-        }
-        ParsedInput::Arrow(b'D') | ParsedInput::Byte(b'h') | ParsedInput::Char('h') => {
-            draft.prev()
-        }
+        ParsedInput::Arrow(b'B') | ParsedInput::Byte(b'j') | ParsedInput::Char('j') => draft.down(),
+        ParsedInput::Arrow(b'C') | ParsedInput::Byte(b'l') | ParsedInput::Char('l') => draft.next(),
+        ParsedInput::Arrow(b'D') | ParsedInput::Byte(b'h') | ParsedInput::Char('h') => draft.prev(),
         ParsedInput::Byte(b't') | ParsedInput::Char('t') => draft.tint(),
         ParsedInput::Byte(b'r') | ParsedInput::Char('r') => draft.shuffle(&mut rand::thread_rng()),
         ParsedInput::Byte(b's') | ParsedInput::Char('s') => app.tailor.wear(),

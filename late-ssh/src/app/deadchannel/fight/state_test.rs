@@ -282,7 +282,11 @@ fn the_armorer_trades_up_and_refuses_down_or_short() {
             },
             &mut rng,
         );
-        assert_eq!(refused.applied, Applied::Refused(Refusal::NotAnUpgrade), "tier {tier}");
+        assert_eq!(
+            refused.applied,
+            Applied::Refused(Refusal::NotAnUpgrade),
+            "tier {tier}"
+        );
         assert_eq!(sheet, expected);
     }
 
