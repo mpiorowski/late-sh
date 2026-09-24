@@ -2,6 +2,8 @@ use super::*;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
+use crate::app::deadchannel::fight::state::Sheet;
+
 fn render(state: &State, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -15,6 +17,9 @@ fn render(state: &State, width: u16, height: u16) -> String {
                     state,
                     own_username: "mira",
                     look: None,
+                    sheet: None,
+                    scene: None,
+                    till: None,
                 },
             );
         })
@@ -47,12 +52,68 @@ fn the_runner_and_the_wire_popover_render_at_the_spawn() {
 #[test]
 fn a_shop_panel_lists_its_catalog() {
     let mut state = State::new();
+    state.open_panel(Landmark::Tailor);
+    let screen = render(&state, 120, 40);
+    assert!(screen.contains("the tailor"), "{screen}");
+    assert!(screen.contains("the rack (starter set, free)"), "{screen}");
+}
+
+#[test]
+fn the_armorer_prices_the_picked_row_against_the_sheet() {
+    let mut state = State::new();
     state.open_panel(Landmark::Armorer);
+    // Nothing to trade with until the sheet comes down the wire.
     let screen = render(&state, 120, 40);
     assert!(screen.contains("the armorer"), "{screen}");
-    assert!(screen.contains("bent antenna"), "{screen}");
+    assert!(
+        screen.contains("the sheet has not come down the wire yet."),
+        "{screen}"
+    );
+
+    let mut sheet = Sheet::fresh(uuid::Uuid::nil(), chrono::NaiveDate::from_ymd_opt(2026, 9, 24).unwrap());
+    sheet.bits = 300;
+    sheet.weapon_tier = 2;
+    state.pick_down();
+    state.pick_down();
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            draw(
+                frame,
+                frame.area(),
+                CityView {
+                    state: &state,
+                    own_username: "mira",
+                    look: None,
+                    sheet: Some(&sheet),
+                    scene: None,
+                    till: Some("the armorer hands over the box cutter. 225 bits."),
+                },
+            );
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut screen = String::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            screen.push_str(buffer[(x, y)].symbol());
+        }
+        screen.push('\n');
+    }
+    assert!(screen.contains("on hand 300 bits"), "{screen}");
+    assert!(screen.contains("weapon box cutter"), "{screen}");
+    assert!(screen.contains("armor street clothes"), "{screen}");
+    assert!(screen.contains("▸    3  tire iron"), "the cursor on tier 3\n{screen}");
     assert!(screen.contains("the last broadcast"), "{screen}");
     assert!(screen.contains("10350"), "{screen}");
+    // Tier 3 weapon: 585 less 75% of 225. Tier 3 armor off street clothes: 585.
+    assert!(screen.contains("[w] tire iron for 417 bits"), "{screen}");
+    assert!(screen.contains("[a] padded jacket for 585 bits"), "{screen}");
+    assert!(
+        screen.contains("the armorer hands over the box cutter. 225 bits."),
+        "the till line\n{screen}"
+    );
 }
 
 #[test]
@@ -129,6 +190,9 @@ fn every_cell_sits_on_the_city_night_not_the_theme_canvas() {
                     state: &state,
                     own_username: "mira",
                     look: None,
+                    sheet: None,
+                    scene: None,
+                    till: None,
                 },
             );
         })

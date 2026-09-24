@@ -54,6 +54,20 @@ fn panels_open_and_close() {
 }
 
 #[test]
+fn the_armorer_cursor_walks_the_wall_and_holds_at_the_ends() {
+    let mut state = State::new();
+    assert_eq!(state.picked_tier(), 1);
+    state.pick_up();
+    assert_eq!(state.picked_tier(), 1, "the top holds");
+    for _ in 0..40 {
+        state.pick_down();
+    }
+    assert_eq!(state.picked_tier(), 15, "the bottom holds");
+    state.pick_up();
+    assert_eq!(state.picked_tier(), 14);
+}
+
+#[test]
 fn a_street_line_expires_on_its_own() {
     let mut state = State::new();
     state.tick(100);
@@ -73,6 +87,20 @@ fn enter_routes_shops_to_panels_and_the_wire_out() {
     );
     assert_eq!(Landmark::Noodles.on_enter(), Enter::Line(Landmark::Noodles));
     assert_eq!(Landmark::Wire.on_enter(), Enter::Leave);
+}
+
+#[test]
+fn a_run_along_the_railing_does_not_stop_at_every_step() {
+    let mut state = State::new();
+    // One row north of the wire stairs and a few cells west, clear of
+    // the wire's reach, at the railing; running west stays at the railing
+    // the whole way.
+    state.player_x = map::SPAWN.0 - 5;
+    state.player_y = map::RAIL_Y - 1;
+    assert_eq!(state.nearby(), Some(Landmark::Ledge));
+    assert_eq!(state.run(-1, 0), RUN_STEPS);
+    assert_eq!(state.player_x, map::SPAWN.0 - 5 - RUN_STEPS);
+    assert_eq!(state.nearby(), Some(Landmark::Ledge));
 }
 
 #[test]

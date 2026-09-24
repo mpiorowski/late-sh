@@ -3063,6 +3063,49 @@ impl ChatService {
         claim_rx
     }
 
+    /// The wire (GAME.md, "The three surfaces"): the game's log posts into
+    /// #deadchannel as real messages, from the voice for now (the
+    /// announcer's own name is a design-review question). Fire-and-forget:
+    /// nobody upstream waits on a line, so the failure is logged here. The
+    /// voice joins the room on first use; the room seeds itself the same
+    /// way the invited join seeds it.
+    pub fn post_wire_line_task(&self, body: String) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let posted: anyhow::Result<()> = async {
+                    let voice = service.ensure_first_contact_voice().await?;
+                    let room_id = {
+                        let client = service.db.get().await?;
+                        let room = ChatRoom::get_or_create_deadchannel_room(&client).await?;
+                        ChatRoomMember::join(&client, room.id, voice.id).await?;
+                        room.id
+                    };
+                    service
+                        .send_message(SendMessageParams {
+                            user_id: voice.id,
+                            room_id,
+                            room_slug: None,
+                            body,
+                            reply_to_message_id: None,
+                            reply_to_user_id: None,
+                            is_admin: false,
+                        })
+                        .await
+                }
+                .await;
+                if let Err(error) = posted {
+                    late_core::error_span!(
+                        "deadchannel_wire_line_failed",
+                        error = ?error,
+                        "failed to post a line on the wire"
+                    );
+                }
+            }
+            .instrument(info_span!("chat.post_wire_line_task")),
+        );
+    }
+
     pub fn send_message_with_reply_task(&self, task: SendMessageTask) {
         let SendMessageTask {
             user_id,

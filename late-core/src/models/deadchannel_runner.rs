@@ -7,14 +7,15 @@
 //! boundary, and this module stays a storage layer.
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
-use tokio_postgres::Client;
+use chrono::{DateTime, NaiveDate, Utc};
+use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
-/// Cross-process refresh channel. Any insert or update on
-/// `deadchannel_runners` fires it (migration 172 trigger); a listener
-/// re-reads every look rather than trusting the payload, which only names
-/// the user for logs.
+/// Cross-process refresh channel. An insert, or an update of `look` or
+/// `left_at`, on `deadchannel_runners` fires it (migration 172 trigger,
+/// narrowed by 199); a listener re-reads every look rather than trusting
+/// the payload, which only names the user for logs. Sheet writes (the
+/// fight loop) fire nothing.
 pub const DEADCHANNEL_RUNNER_CHANGED_CHANNEL: &str = "deadchannel_runner_changed";
 
 crate::model! {
@@ -22,12 +23,38 @@ crate::model! {
     params = DeadchannelRunnerParams;
     struct DeadchannelRunner {
         @generated
-        pub left_at: Option<DateTime<Utc>>;
+        pub left_at: Option<DateTime<Utc>>,
+        pub level: i32,
+        pub exp: i64,
+        pub signal: i32,
+        pub weapon_tier: i32,
+        pub armor_tier: i32,
+        pub bits: i64,
+        pub rations_left: i32,
+        pub day: NaiveDate,
+        pub fight: Option<serde_json::Value>;
 
         @data
         pub user_id: Uuid,
         pub look: serde_json::Value,
     }
+}
+
+/// The sheet columns as one write (GAME.md, "The stat block"). The look
+/// and the leave stamp have their own writers; this is everything the
+/// fight loop and the day roll touch, stored whole under the row lock.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SheetWrite {
+    pub user_id: Uuid,
+    pub level: i32,
+    pub exp: i64,
+    pub signal: i32,
+    pub weapon_tier: i32,
+    pub armor_tier: i32,
+    pub bits: i64,
+    pub rations_left: i32,
+    pub day: NaiveDate,
+    pub fight: Option<serde_json::Value>,
 }
 
 /// What `ensure_for_user` found. The statements are the only witness of it,
@@ -111,6 +138,54 @@ impl DeadchannelRunner {
             .await
             .context("marking deadchannel runner left")?;
         Ok(row.is_some())
+    }
+
+    /// The standing runner's row under `FOR UPDATE`: every fight action and
+    /// the lazy day roll run on the locked row, so two devices and any
+    /// number of replicas act one after the other on the same truth. `None`
+    /// when there is no runner, or the runner has left (the door is shut;
+    /// the character waits, untouchable).
+    pub async fn lock_standing(client: &impl GenericClient, user_id: Uuid) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT * FROM deadchannel_runners
+                 WHERE user_id = $1 AND left_at IS NULL
+                 FOR UPDATE",
+                &[&user_id],
+            )
+            .await
+            .context("locking deadchannel runner")?;
+        Ok(row.map(Self::from))
+    }
+
+    /// Write the sheet back. Call it only while holding `lock_standing`.
+    /// The change trigger watches only `look` and `left_at` (migration
+    /// 199), so a sheet write wakes no look directory anywhere.
+    pub async fn store_sheet(client: &impl GenericClient, write: SheetWrite) -> Result<Self> {
+        let row = client
+            .query_one(
+                "UPDATE deadchannel_runners
+                 SET level = $2, exp = $3, signal = $4, weapon_tier = $5,
+                     armor_tier = $6, bits = $7, rations_left = $8, day = $9,
+                     fight = $10, updated = current_timestamp
+                 WHERE user_id = $1
+                 RETURNING *",
+                &[
+                    &write.user_id,
+                    &write.level,
+                    &write.exp,
+                    &write.signal,
+                    &write.weapon_tier,
+                    &write.armor_tier,
+                    &write.bits,
+                    &write.rations_left,
+                    &write.day,
+                    &write.fight,
+                ],
+            )
+            .await
+            .context("storing deadchannel runner sheet")?;
+        Ok(Self::from(row))
     }
 
     /// The row as it stands, whether or not the runner has left; read

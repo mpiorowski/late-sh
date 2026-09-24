@@ -943,6 +943,10 @@ impl russh::server::Handler for ClientHandler {
             splash_piece,
             username: user.username.clone(),
             bonsai_service: self.state.bonsai_service.clone(),
+            fight_service: crate::app::deadchannel::fight::svc::FightService::new(
+                self.state.db.clone(),
+                self.state.chat_service.clone(),
+            ),
             initial_bonsai_tree,
             initial_bonsai_decay_protection,
             pet_service: self.state.pet_service.clone(),

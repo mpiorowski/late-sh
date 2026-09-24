@@ -149,11 +149,6 @@ pub fn lines(landmark: Landmark) -> &'static [&'static str] {
             "\"come back when the clock stops glitching,\" she says, and does not explain.",
             "the tent smells of ozone. she does not look at you. she looks behind you.",
         ],
-        Landmark::Screen => &[
-            "tuned to a dead channel. sometimes the pattern comes on.",
-            "the static hums against your teeth. the whole street is watching it not watch back.",
-            "something is broadcasting at the bottom of the city. this is the top of it.",
-        ],
         Landmark::Stairs => &[
             "lower levels. the stair goes down further than the map.",
             "the lights below are somebody else's street.",
@@ -167,6 +162,7 @@ pub fn lines(landmark: Landmark) -> &'static [&'static str] {
         | Landmark::Repairs
         | Landmark::Board
         | Landmark::Bits
+        | Landmark::Screen
         | Landmark::Wire
         | Landmark::Ledge => &[],
     }
@@ -202,7 +198,7 @@ pub fn pitch(landmark: Landmark) -> &'static str {
         Landmark::Lockers => "the stash. what you leave here survives a dropped signal",
         Landmark::Bands => "tuner, jammer, ghost: the choice is made once",
         Landmark::Bar => "the signal is warm in here",
-        Landmark::Screen => "tuned to a dead channel",
+        Landmark::Screen => "tuned to a dead channel. the glyphs come out of it. a ration a step",
         Landmark::Repairs => "repairs, when there is something to repair",
         Landmark::Board => "standing orders. nothing posted yet",
         Landmark::Bits => "it hums. it has never once paid out",

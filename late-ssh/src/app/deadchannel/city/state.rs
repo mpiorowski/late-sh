@@ -6,6 +6,7 @@
 //! here that you could miss, so there is no shared lobby and no crowd. One
 //! runner, one street, the doors you walk up to.
 
+use super::data::COST_LADDER;
 use super::map::{self, Landmark};
 
 /// How long a street line (a vendor's remark) stays pinned, in
@@ -14,6 +15,8 @@ use super::map::{self, Landmark};
 const LINE_TICKS: u64 = 120;
 /// How far one run goes.
 pub const RUN_STEPS: u16 = 6;
+/// Rows on the armorer's wall.
+const TIERS: usize = COST_LADDER.len();
 
 /// What Enter does at the landmark within reach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +29,9 @@ pub enum Enter {
     Leave,
     /// Look over the ledge: the lower city fills the screen until Enter.
     Ledge,
+    /// Step into the static: the screen is the forest (`fight/`), a
+    /// ration spent against a glyph, the scene over the street.
+    Fight,
 }
 
 impl Landmark {
@@ -40,8 +46,8 @@ impl Landmark {
             | Landmark::Repairs
             | Landmark::Board
             | Landmark::Bits => Enter::Panel(self),
-            Landmark::Screen
-            | Landmark::Noodles
+            Landmark::Screen => Enter::Fight,
+            Landmark::Noodles
             | Landmark::Umbrellas
             | Landmark::Blades
             | Landmark::Reader
@@ -59,6 +65,9 @@ pub struct State {
     /// Wall-synced animation clock (`marquee_tick`), mirrored on each tick.
     pub anim_tick: u64,
     panel: Option<Landmark>,
+    /// The row under the cursor on the armorer's wall (tier index, 0 is
+    /// tier 1). Kept across visits.
+    pick: usize,
     /// Looking over the ledge: the lower city instead of the street.
     ledge: bool,
     /// A line the street said, and the tick it stops showing.
@@ -78,6 +87,7 @@ impl State {
             player_y: map::SPAWN.1,
             anim_tick: 0,
             panel: None,
+            pick: 0,
             ledge: false,
             line: None,
         }
@@ -107,17 +117,21 @@ impl State {
     }
 
     /// Several steps in one go (Shift+arrow, `HJKL`): up to `RUN_STEPS`,
-    /// stopping at anything solid and at the first landmark that comes
-    /// within reach, so a run never overshoots a door. Returns the steps
-    /// taken.
+    /// stopping at anything solid and at the first *new* landmark that
+    /// comes within reach, so a run never overshoots a door. The landmark
+    /// you set off from does not count: the railing runs the length of
+    /// the ledge, and a run along it must not stop every step. Returns
+    /// the steps taken.
     pub fn run(&mut self, dx: i32, dy: i32) -> u16 {
+        let from = self.nearby();
         let mut steps = 0;
         while steps < RUN_STEPS {
             if !self.walk(dx, dy) {
                 break;
             }
             steps += 1;
-            if self.nearby().is_some() {
+            let here = self.nearby();
+            if here.is_some() && here != from {
                 break;
             }
         }
@@ -135,6 +149,21 @@ impl State {
 
     pub fn open_panel(&mut self, landmark: Landmark) {
         self.panel = Some(landmark);
+    }
+
+    /// The tier under the cursor on the armorer's wall, 1 to 15.
+    pub fn picked_tier(&self) -> i32 {
+        self.pick as i32 + 1
+    }
+
+    /// Move the cursor up the wall (toward tier 1) or down it; the ends
+    /// hold.
+    pub fn pick_up(&mut self) {
+        self.pick = self.pick.saturating_sub(1);
+    }
+
+    pub fn pick_down(&mut self) {
+        self.pick = (self.pick + 1).min(TIERS - 1);
     }
 
     /// Whether the runner is looking over the ledge.

@@ -1096,9 +1096,70 @@ Done since: the signs smear into the wet ground, a car runs the street
 with its headlights ahead of it, the monorail crosses the sky,
 billboards cycle the glyph script, rain splashes on the puddles, and at
 the railing Enter looks over the ledge at the lower city (a half-block
-perspective picture, the showpiece). Next on this surface, in order:
-the armorer's till (bits, the day roll), the tailor's mirror as the
-editor (pick, not draw), the locker, the band choice.
+perspective picture, the showpiece). The screen is the forest (the
+fight pass, next section). Still to come on the street: the armorer's
+till, the tailor's mirror as the editor (pick, not draw), the locker,
+the band choice.
+
+## The fight pass: where the ration goes (2026-09-24)
+
+Status: **built as an experiment, staff only like the rest**
+(`late-ssh/src/app/deadchannel/fight/`, `CONTEXT.md` §3c beside this
+file). The question was where the daily fights happen and how anyone
+sees them. The three surfaces already answered half of it (the ration
+ritual is the city's, the wire is the log); this pass fixed the shape:
+
+- **The forest is the static at the end of Static Row.** The screen
+  closes the street as three tiles of static, and the whisper already
+  taught that static is where glyphs come from. Enter there spends a
+  ration. A fight only happens when you ask for it, so the city rule
+  holds: nothing there can be missed. No glyphs wandering the tiles: a
+  street worth standing in is exactly the failure the door-ceiling
+  diagnosis names, and the LoGD numbers are an exchange loop, not a
+  roguelike.
+- **The fight is a panel over the street, not a place.** Two five-by-three
+  portraits facing, yours and the glyph's, the exchange line by line in
+  the announcer's voice, three keys. The ASCII drama is the two faces
+  corrupting to static as signal drops (the wound renderer from "The
+  look", pointed at both). Five exchanges, twenty seconds, ten rations in
+  five minutes.
+- **Interactive like LORD, state on the row.** Attack, run (bands and
+  their moves come with the band choice). Each key is one transaction on
+  the locked runner row with the fight as a JSON column, so a dropped
+  session or a second device finds the same fight waiting; the ration was
+  spent when it started. Auto-resolving the whole fight in one claim with
+  a standing "bail under 30%" gambit (the arena's preparation idea) was
+  the thinner alternative and was passed over: `run` as a live decision
+  is what makes a forest a forest. The door's pure resolver is imported,
+  not copied; the door stays untouched.
+- **The wire sees the news, never the play-by-play.** Ten fights times
+  ten runners times five lines drowns the room under human chat, and
+  LORD's news screen never listed forest fights either. The wire gets a
+  dropped signal and a level gained (with the face); kills, rounds, and
+  runs post nothing. This tightens "every spawn and kill" above: every
+  *result worth a story*, as messages, as they happen.
+- **The fauna is one glyph per level,** fifteen of them, from the
+  flicker (barely there) to the interference (from somewhere below), each
+  a portrait in the runner's own format so a fight is two faces in one
+  register. Names, arrival lines, and the drop lines are placeholder
+  copy at feed-template standards, design review pending with the rest.
+- **Levels climb on exp in the fight, for now.** The operators are the
+  design (beaten once per level); until they exist this is the one
+  stated deviation, so the runner is not level 1 forever.
+- **The armorer's till is open.** The first bits sink, and the LoGD one:
+  a tier above what you carry, 75% back on the piece you hand in, no
+  credit. It runs through the fight's command path on the locked row
+  (one writer per row) rather than a second service, and the answer is
+  the armorer's line in the panel, not a wire post: a purchase is the
+  runner's business, and the piece does its own talking in the hit line.
+  The wall is a cursor and two keys because a numbered list of thirty
+  items is a menu, and the city is not menus. Only up, never down: a
+  runner selling their blade for cash is a LoGD loophole, not a scene.
+
+Next on this surface, in order: the ration count on the status HUD
+outside the city (the daily promise where the eyes are), the operators
+as the level gate, the band choice and charge, the dropped-signal mark
+in chat, the tailor's free re-pick of the starter rack.
 
 ## Experiment framing
 

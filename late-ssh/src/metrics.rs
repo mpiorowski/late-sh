@@ -181,6 +181,23 @@ pub enum FirstContactBeat {
     RunnerCreated,
 }
 
+/// One fight command settling on the runner row (`deadchannel/fight`).
+/// `Refused` is a command the row turned down (no rations, signal down,
+/// the armorer's no); `Outfitted` is a piece bought at the armorer;
+/// `Failed` is the write not landing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FightBeat {
+    Started,
+    Resumed,
+    Round,
+    Won,
+    Lost,
+    Escaped,
+    Outfitted,
+    Refused,
+    Failed,
+}
+
 /// A runner going through the door after the ladder is done. Leaving keeps
 /// the character (the row stays, `left_at` is stamped), so the two sides
 /// are one counter: the gap between them is how many runners are standing.
@@ -247,13 +264,13 @@ mod inner {
     use super::SlidingPuzzleArtLoad;
     use super::XMediaLookup;
     use super::{
-        ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
-        GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
-        GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
-        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult,
-        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
-        RenderReason, RoundRefusal, RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult, VizWireBands,
+        ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FightBeat,
+        FirstContactBeat, GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult,
+        GateVerdict, GildRefusal, GildTier, JobsFetchResult, JobsPostResult, JobsPressResult,
+        JobsReadResult, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
+        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
+        PotReminderOutcome, RenderReason, RoundRefusal, RunnerDoor, SongQueueReward,
+        SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -838,6 +855,16 @@ mod inner {
         })
     }
 
+    fn deadchannel_fights_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_deadchannel_fights_total")
+                .with_description("deadchannel fight commands settled on the runner row, by beat")
+                .build()
+        })
+    }
+
     fn runner_door_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -918,6 +945,24 @@ mod inner {
 
     pub fn record_runner_door(door: RunnerDoor) {
         runner_door_total().add(1, &[KeyValue::new("direction", runner_door_label(door))]);
+    }
+
+    fn fight_beat_label(beat: FightBeat) -> &'static str {
+        match beat {
+            FightBeat::Started => "started",
+            FightBeat::Resumed => "resumed",
+            FightBeat::Round => "round",
+            FightBeat::Won => "won",
+            FightBeat::Lost => "lost",
+            FightBeat::Escaped => "escaped",
+            FightBeat::Outfitted => "outfitted",
+            FightBeat::Refused => "refused",
+            FightBeat::Failed => "failed",
+        }
+    }
+
+    pub fn record_deadchannel_fight(beat: FightBeat) {
+        deadchannel_fights_total().add(1, &[KeyValue::new("beat", fight_beat_label(beat))]);
     }
 
     pub fn record_first_contact_bio_screen(outcome: BioScreenOutcome) {
@@ -1688,19 +1733,20 @@ mod inner {
     use super::SlidingPuzzleArtLoad;
     use super::XMediaLookup;
     use super::{
-        ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FirstContactBeat,
-        GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal,
-        GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
-        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult,
-        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
-        RenderReason, RoundRefusal, RunnerDoor, SongQueueReward, SshRejectReason, SummaryResult,
-        TranslationResult, VizWireBands,
+        ActivityGame, BioScreenOutcome, CrownRefusal, DailyWinPayout, DoorGame, FightBeat,
+        FirstContactBeat, GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult,
+        GateVerdict, GildRefusal, GildTier, JobsFetchResult, JobsPostResult, JobsPressResult,
+        JobsReadResult, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
+        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
+        PotReminderOutcome, RenderReason, RoundRefusal, RunnerDoor, SongQueueReward,
+        SshRejectReason, SummaryResult, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
     pub fn record_ssh_connection() {}
     pub fn record_ssh_connection_rejected(_reason: SshRejectReason) {}
     pub fn record_first_contact_beat(_beat: FirstContactBeat) {}
+    pub fn record_deadchannel_fight(_beat: FightBeat) {}
     pub fn record_runner_door(_door: RunnerDoor) {}
     pub fn record_first_contact_bio_screen(_outcome: BioScreenOutcome) {}
     pub fn record_first_contact_gate(_verdict: GateVerdict, _staff: bool) {}
