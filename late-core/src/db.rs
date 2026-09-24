@@ -9,6 +9,8 @@ use deadpool_postgres::{
 };
 use tokio_postgres::NoTls;
 
+use crate::telemetry::{self, DbCheckout};
+
 /// Database configuration loaded from environment.
 #[derive(Debug, Clone)]
 pub struct DbConfig {
@@ -76,10 +78,19 @@ impl Db {
     ///
     /// Times out after 5 seconds if no connection is available.
     pub async fn get(&self) -> Result<deadpool_postgres::Client> {
-        self.pool
-            .get()
-            .await
-            .context("failed to get database connection from pool")
+        let started = std::time::Instant::now();
+        let checkout = self.pool.get().await;
+        let waited = started.elapsed().as_secs_f64();
+        match checkout {
+            Ok(client) => {
+                telemetry::record_db_checkout(DbCheckout::Ok, waited);
+                Ok(client)
+            }
+            Err(error) => {
+                telemetry::record_db_checkout(DbCheckout::Failed, waited);
+                Err(error).context("failed to get database connection from pool")
+            }
+        }
     }
 
     /// Check if the database is reachable.

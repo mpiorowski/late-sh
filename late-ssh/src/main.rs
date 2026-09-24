@@ -117,6 +117,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Init database connection pool
     let db = Db::new(&config.db).context("failed to initialize database")?;
+    late_core::telemetry::observe_db_pool(db.pool().clone());
     // The one Postgres LISTEN connection this process holds. Every domain
     // that reacts to a cross-replica notify subscribes below and runs its
     // own worker; the listener starts once all of them are subscribed. See
@@ -316,6 +317,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .with_chip_service(chip_service.clone())
         .with_activity(activity_publisher.clone());
+    chat_service.observe_read_permits();
     // Gild markers and stage-2 name hits cross replicas over Postgres, not
     // over this process's chat broadcast; see
     // `ChatService::start_notify_worker`.

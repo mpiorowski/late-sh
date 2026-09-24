@@ -314,6 +314,103 @@ impl TracedExt for RequestBuilder {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Database pool checkout
+// ---------------------------------------------------------------------------
+
+/// How a pool checkout in `Db::get` ended: a connection came back, or the
+/// pool gave up (the 5s wait timeout, or a backend that would not connect).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DbCheckout {
+    Ok,
+    Failed,
+}
+
+#[cfg(feature = "otel")]
+mod db_metrics {
+    use std::sync::OnceLock;
+
+    use opentelemetry::{
+        KeyValue, global,
+        metrics::{Histogram, ObservableGauge},
+    };
+
+    use super::DbCheckout;
+
+    fn db_checkout_seconds() -> &'static Histogram<f64> {
+        static METRIC: OnceLock<Histogram<f64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            global::meter("late-core")
+                .f64_histogram("late_db_checkout_seconds")
+                .with_description(
+                    "Time waiting for a pooled Postgres connection in Db::get, by outcome",
+                )
+                .with_unit("s")
+                // The pool's wait timeout is 5s; the top bucket catches it.
+                .with_boundaries(vec![
+                    0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+                ])
+                .build()
+        })
+    }
+
+    fn db_checkout_label(outcome: DbCheckout) -> &'static str {
+        match outcome {
+            DbCheckout::Ok => "ok",
+            DbCheckout::Failed => "failed",
+        }
+    }
+
+    pub fn record_db_checkout(outcome: DbCheckout, seconds: f64) {
+        db_checkout_seconds().record(
+            seconds,
+            &[KeyValue::new("outcome", db_checkout_label(outcome))],
+        );
+    }
+
+    /// Report the pool's shape on every metric export: connections in use
+    /// and idle, the size ceiling, and futures queued for a connection. The
+    /// callbacks read `Pool::status`, a lock-free snapshot, so no task runs
+    /// between exports. Call once per process, after `init_telemetry`.
+    pub fn observe_db_pool(pool: deadpool_postgres::Pool) {
+        static GAUGES: OnceLock<(ObservableGauge<u64>, ObservableGauge<u64>)> = OnceLock::new();
+        let waiters_pool = pool.clone();
+        GAUGES.get_or_init(|| {
+            let meter = global::meter("late-core");
+            let connections = meter
+                .u64_observable_gauge("late_db_pool_connections")
+                .with_description("Pooled Postgres connections by state, and the pool ceiling")
+                .with_callback(move |observer| {
+                    let status = pool.status();
+                    let idle = status.available as u64;
+                    let in_use = (status.size - status.available) as u64;
+                    observer.observe(in_use, &[KeyValue::new("state", "in_use")]);
+                    observer.observe(idle, &[KeyValue::new("state", "idle")]);
+                    observer.observe(status.max_size as u64, &[KeyValue::new("state", "max")]);
+                })
+                .build();
+            let waiters = meter
+                .u64_observable_gauge("late_db_pool_waiters")
+                .with_description("Callers queued in Db::get for a pooled Postgres connection")
+                .with_callback(move |observer| {
+                    observer.observe(waiters_pool.status().waiting as u64, &[]);
+                })
+                .build();
+            (connections, waiters)
+        });
+    }
+}
+
+#[cfg(not(feature = "otel"))]
+mod db_metrics {
+    use super::DbCheckout;
+
+    pub fn record_db_checkout(_outcome: DbCheckout, _seconds: f64) {}
+    pub fn observe_db_pool(_pool: deadpool_postgres::Pool) {}
+}
+
+pub use db_metrics::{observe_db_pool, record_db_checkout};
+
 #[cfg(test)]
 #[path = "telemetry_test.rs"]
 mod telemetry_test;

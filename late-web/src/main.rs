@@ -18,6 +18,7 @@ async fn main() -> anyhow::Result<()> {
         .build()
         .context("failed to build HTTP client")?;
     let db = Db::new(&config.db).context("failed to initialize database pool")?;
+    late_core::telemetry::observe_db_pool(db.pool().clone());
 
     let port = config.port;
 

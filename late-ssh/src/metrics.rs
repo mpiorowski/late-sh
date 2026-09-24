@@ -3,7 +3,7 @@ use late_core::models::chat_message_gild::GildTier;
 use late_core::models::leaderboard::{DailyPuzzle, DoorGame};
 use late_core::models::media_queue_item::SongQueueReward;
 
-use crate::app::activity::event::{ActivityGame, GameFamily};
+use crate::app::activity::event::ActivityGame;
 use crate::app::arcade::share::ShareCardKind;
 use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleArtLoad;
 use crate::app::bonsai::state::BonsaiAction;
@@ -209,6 +209,28 @@ pub enum TailorBeat {
     Failed,
 }
 
+/// A stage of a session's start, from TCP accept to the first frame on
+/// the user's screen. `Total` is the whole span; the other three add up
+/// to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionStartStage {
+    /// Accept to key accepted: SSH handshake plus the user lookup.
+    Auth,
+    /// Key accepted to the `App` built: channel and pty requests plus every
+    /// preload in `pty_request`.
+    Bootstrap,
+    /// `App` built to the first frame written to the channel.
+    FirstFrame,
+    Total,
+}
+
+/// Whether the session's account was created by this connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionUser {
+    New,
+    Returning,
+}
+
 /// Which board of a daily puzzle ended: the shared daily or a personal one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArcadeMode {
@@ -316,12 +338,15 @@ pub enum VizWireBands {
 
 #[cfg(feature = "otel")]
 mod inner {
-    use std::sync::OnceLock;
+    use std::sync::{Arc, OnceLock};
 
     use opentelemetry::{
         KeyValue, global,
-        metrics::{Counter, Gauge, UpDownCounter},
+        metrics::{Counter, Gauge, Histogram, ObservableGauge, UpDownCounter},
     };
+    use tokio::sync::Semaphore;
+
+    use crate::app::activity::event::GameFamily;
 
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
@@ -329,12 +354,12 @@ mod inner {
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, BioScreenOutcome, CrownRefusal,
         DailyPuzzle, DailyWinPayout, DoorGame, FightBeat, FirstContactBeat, GalleryApplauseResult,
-        GalleryHangResult, GalleryTakeDownResult, GameFamily, GateVerdict, GildRefusal, GildTier,
+        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal, GildTier,
         JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
         NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
         PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, RenderReason,
-        RoundRefusal, RunnerDoor, Screen, SongQueueReward, SshRejectReason, SummaryResult,
-        TailorBeat, TranslationResult, VizWireBands,
+        RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -909,6 +934,22 @@ mod inner {
         })
     }
 
+    fn session_start_seconds() -> &'static Histogram<f64> {
+        static METRIC: OnceLock<Histogram<f64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .f64_histogram("late_ssh_session_start_seconds")
+                .with_description(
+                    "Time from TCP accept to the first frame on screen, by stage and new or returning user",
+                )
+                .with_unit("s")
+                .with_boundaries(vec![
+                    0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 30.0, 60.0,
+                ])
+                .build()
+        })
+    }
+
     fn arcade_finishes_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -1218,6 +1259,49 @@ mod inner {
                 KeyValue::new("family", game_family_label(game.family())),
             ],
         );
+    }
+
+    fn session_start_stage_label(stage: SessionStartStage) -> &'static str {
+        match stage {
+            SessionStartStage::Auth => "auth",
+            SessionStartStage::Bootstrap => "bootstrap",
+            SessionStartStage::FirstFrame => "first_frame",
+            SessionStartStage::Total => "total",
+        }
+    }
+
+    fn session_user_label(user: SessionUser) -> &'static str {
+        match user {
+            SessionUser::New => "new",
+            SessionUser::Returning => "returning",
+        }
+    }
+
+    pub fn record_session_start(stage: SessionStartStage, user: SessionUser, seconds: f64) {
+        session_start_seconds().record(
+            seconds,
+            &[
+                KeyValue::new("stage", session_start_stage_label(stage)),
+                KeyValue::new("user", session_user_label(user)),
+            ],
+        );
+    }
+
+    /// Report how many of chat's read permits are held on every metric
+    /// export. At `total` every room-tail and discover load queues behind
+    /// the semaphore. Call once per process.
+    pub fn observe_chat_read_permits(permits: Arc<Semaphore>, total: usize) {
+        static GAUGE: OnceLock<ObservableGauge<u64>> = OnceLock::new();
+        GAUGE.get_or_init(|| {
+            meter()
+                .u64_observable_gauge("late_ssh_chat_read_permits_in_use")
+                .with_description("Chat read permits held, out of the semaphore's fixed total")
+                .with_callback(move |observer| {
+                    let held = total.saturating_sub(permits.available_permits()) as u64;
+                    observer.observe(held, &[]);
+                })
+                .build()
+        });
     }
 
     fn arcade_mode_label(mode: ArcadeMode) -> &'static str {
@@ -1962,12 +2046,12 @@ mod inner {
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, BioScreenOutcome, CrownRefusal,
         DailyPuzzle, DailyWinPayout, DoorGame, FightBeat, FirstContactBeat, GalleryApplauseResult,
-        GalleryHangResult, GalleryTakeDownResult, GameFamily, GateVerdict, GildRefusal, GildTier,
+        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal, GildTier,
         JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
         NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
         PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, RenderReason,
-        RoundRefusal, RunnerDoor, Screen, SongQueueReward, SshRejectReason, SummaryResult,
-        TailorBeat, TranslationResult, VizWireBands,
+        RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
@@ -1993,6 +2077,12 @@ mod inner {
     pub fn record_chat_message_sent() {}
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}
+    pub fn record_session_start(_stage: SessionStartStage, _user: SessionUser, _seconds: f64) {}
+    pub fn observe_chat_read_permits(
+        _permits: std::sync::Arc<tokio::sync::Semaphore>,
+        _total: usize,
+    ) {
+    }
     pub fn record_arcade_finish(
         _puzzle: DailyPuzzle,
         _mode: ArcadeMode,

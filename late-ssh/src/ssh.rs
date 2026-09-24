@@ -146,6 +146,49 @@ struct ClientHandler {
     terminal_env_hints: Vec<(String, String)>,
     session_token: Option<String>,
     session_rx: Option<tokio::sync::mpsc::Receiver<crate::session::SessionMessage>>,
+
+    /// Session start marks for `metrics::record_session_start`: the accept,
+    /// then the key accepted, then (once the `App` is built) the marks the
+    /// render loop reports on its first drawn frame.
+    connected_at: Instant,
+    authed_at: Option<Instant>,
+    session_start: Option<SessionStart>,
+}
+
+/// The session's start, carried into the render loop and reported once,
+/// on the first frame actually drawn.
+struct SessionStart {
+    connected_at: Instant,
+    authed_at: Instant,
+    app_ready_at: Instant,
+    user: metrics::SessionUser,
+}
+
+impl SessionStart {
+    fn record_first_frame(self) {
+        let drawn_at = Instant::now();
+        let stages = [
+            (
+                metrics::SessionStartStage::Auth,
+                self.authed_at - self.connected_at,
+            ),
+            (
+                metrics::SessionStartStage::Bootstrap,
+                self.app_ready_at - self.authed_at,
+            ),
+            (
+                metrics::SessionStartStage::FirstFrame,
+                drawn_at - self.app_ready_at,
+            ),
+            (
+                metrics::SessionStartStage::Total,
+                drawn_at - self.connected_at,
+            ),
+        ];
+        for (stage, took) in stages {
+            metrics::record_session_start(stage, self.user, took.as_secs_f64());
+        }
+    }
 }
 
 pub fn load_or_generate_key(state: &State) -> anyhow::Result<PrivateKey> {
@@ -404,6 +447,9 @@ impl Server {
             terminal_env_hints: Vec::new(),
             session_token: None,
             session_rx: None,
+            connected_at: Instant::now(),
+            authed_at: None,
+            session_start: None,
         }
     }
 }
@@ -681,6 +727,7 @@ impl russh::server::Handler for ClientHandler {
             .state
             .activity_feed
             .send(ActivityEvent::joined(user_id, username));
+        self.authed_at = Some(Instant::now());
         Ok(Auth::Accept)
     }
 
@@ -1070,6 +1117,17 @@ impl russh::server::Handler for ClientHandler {
             app.apply_terminal_env_hint(name, value);
         }
         self.app = Some(Arc::new(TokioMutex::new(app)));
+        self.session_start = Some(SessionStart {
+            connected_at: self.connected_at,
+            authed_at: self
+                .authed_at
+                .expect("a pty session is built only after its key was accepted"),
+            app_ready_at: Instant::now(),
+            user: match self.is_new_user {
+                true => metrics::SessionUser::New,
+                false => metrics::SessionUser::Returning,
+            },
+        });
         self.input_tx = Some(input_tx);
         self.input_rx = Some(input_rx);
         match session.channel_success(channel) {
@@ -1217,6 +1275,7 @@ impl russh::server::Handler for ClientHandler {
                 budget: Arc::clone(&self.output_budget),
             };
             app.lock().await.set_repaint_signal(Arc::clone(&signal));
+            let mut session_start = self.session_start.take();
             tokio::spawn(async move {
                 let mut previous_render: Option<Instant> = None;
                 let mut input_pending = false;
@@ -1289,6 +1348,11 @@ impl russh::server::Handler for ClientHandler {
                     match render_once(&app, &mut input_rx, &ctx, advance_world).await {
                         Ok(outcome) => {
                             previous_render = Some(Instant::now());
+                            if outcome.drew
+                                && let Some(start) = session_start.take()
+                            {
+                                start.record_first_frame();
+                            }
                             if outcome.drew {
                                 stats_drawn += 1;
                             } else {

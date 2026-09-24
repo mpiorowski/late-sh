@@ -75,6 +75,9 @@ type HistoryPage = (Vec<ChatMessage>, HashMap<Uuid, String>);
 const MODERATORS_SLUG: &str = "moderators";
 
 const HISTORY_LIMIT: i64 = 500;
+/// Concurrent chat reads (room tails, discover) allowed at once; the rest
+/// queue on `read_permits`.
+const READ_PERMITS: usize = 8;
 const DELTA_LIMIT: i64 = 256;
 const CHAT_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const USERNAME_DIRECTORY_TTL: Duration = Duration::from_secs(30);
@@ -1180,9 +1183,15 @@ impl ChatService {
             refresh_scheduler_started: Arc::new(AtomicBool::new(false)),
             refresh_signal_tx,
             refresh_signal_rx: Arc::new(Mutex::new(Some(refresh_signal_rx))),
-            read_permits: Arc::new(Semaphore::new(8)),
+            read_permits: Arc::new(Semaphore::new(READ_PERMITS)),
             system_user_id: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Put the read-permit semaphore on the dashboard. Called once at
+    /// startup.
+    pub fn observe_read_permits(&self) {
+        metrics::observe_chat_read_permits(self.read_permits.clone(), READ_PERMITS);
     }
 
     /// Publish the #lounge feed bot's id. Called once at startup by
