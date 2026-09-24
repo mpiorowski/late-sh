@@ -40,8 +40,8 @@
   random starter look (pieces and
   tints from the closed table in `runner/state.rs`), and inside
   #deadchannel every runner's portrait sits in a six-cell gutter on the
-  right of their messages (hood on the separator row above the block,
-  eyes on the header, coat on the first body row); looks cross replicas
+  right of their messages (hood level with the header, eyes and coat on
+  the body rows under it); looks cross replicas
   through the `deadchannel_runner_changed` notify into a process-shared
   directory, `runner/svc.rs`)
 - Status: Active, staff only until `/haunt live on`
@@ -174,8 +174,11 @@ builder takes `runner_looks: Option<&HashMap>`, `Some` only while the
 rendered room is #deadchannel: every entry in the room wraps
 `PORTRAIT_GUTTER` (6) cells short, and a block-opening message by a
 runner gets `attach_portrait` (blank body rows added up to three, the
-face right-aligned on the first three rows). Continuations and system
-lines carry no face; every other room renders exactly as before.
+face right-aligned on the first three rows, the hood level with the
+header). The blank separator above a block stays blank, so two faces
+stacked down the wire never touch: a one-line message costs one padded
+row under its coat, and that is the price of the gap. Continuations and
+system lines carry no face; every other room renders exactly as before.
 
 ## 3. The four stages (behavior contract)
 
