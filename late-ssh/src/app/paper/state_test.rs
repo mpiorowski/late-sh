@@ -361,3 +361,38 @@ fn new_work_speaks_to_the_card_the_reader_has() {
         vec!["by @graybeard · covers Wed Sep 2 (UTC) · he read it all so you would not have to"]
     );
 }
+
+#[test]
+fn a_room_past_a_hundred_people_prints_a_capped_count() {
+    let crowded = PaperRoomPage {
+        member_count: 17755,
+        ..page(1, "lounge", PaperStatus::Ready, 417, Some("- a line"))
+    };
+    let exact = PaperRoomPage {
+        member_count: 100,
+        ..page(2, "rust", PaperStatus::Ready, 30, Some("- a line"))
+    };
+    let edition = PaperEdition {
+        edition: NaiveDate::from_ymd_opt(2026, 9, 3).unwrap(),
+        rooms: vec![crowded, exact],
+        sections: Vec::new(),
+    };
+    let rail_order = [Uuid::from_u128(1), Uuid::from_u128(2)];
+    let member_room_ids: HashSet<Uuid> = rail_order.into_iter().collect();
+    let lines = plain(&lay_out(PaperLayout {
+        announcements: &[],
+        work: None,
+        edition: &edition,
+        rail_order: &rail_order,
+        member_room_ids: &member_room_ids,
+        bumped_labels: &[],
+    }));
+    assert!(
+        lines.contains(&"#lounge · 417 messages · 100+ people".to_string()),
+        "{lines:#?}"
+    );
+    assert!(
+        lines.contains(&"#rust · 30 messages · 100 people".to_string()),
+        "{lines:#?}"
+    );
+}

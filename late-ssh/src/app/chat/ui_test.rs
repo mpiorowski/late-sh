@@ -2751,15 +2751,13 @@ fn room_header_puts_the_topic_left_and_the_rules_hint_right() {
     assert_eq!(remaining.y, 2, "the topic row plus the rule closing it off");
     assert_eq!(remaining.height, 18);
 
+    // Header rows keep the messages' side padding: the text starts in the
+    // column after the rows' pad cell, and the hint stops one short of the
+    // edge.
     let buf = terminal.backend().buffer();
-    let row = row_text(buf, 0, 40);
-    assert!(
-        row.starts_with("We read sci-fi"),
-        "topic reads from the left"
-    );
-    assert!(
-        row.trim_end().ends_with("/rules"),
-        "the hint is flushed right: {row}"
+    assert_eq!(
+        row_text(buf, 0, 40),
+        format!(" We read sci-fi{}/rules ", " ".repeat(18))
     );
     assert!(
         row_text(buf, 1, 40).starts_with('\u{2500}'),
@@ -3339,4 +3337,27 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
         .expect("civilian header");
     assert!(!rendered[civilian].contains('◈'), "{rendered:?}");
     assert!(!rendered[civilian + 1].contains('◈'), "{rendered:?}");
+}
+
+/// An embedded chat's voice row belongs to the same pane as its messages:
+/// inside the pane's inset it also skips the rows' pad cell, so its text
+/// starts in the message text's column, with the same clearance on the right.
+#[test]
+fn embedded_chat_voice_strip_is_padded_like_its_messages() {
+    let area = Rect::new(10, 5, 40, 12);
+    let layout = embedded_chat_layout(area, 1, true);
+    assert_eq!(
+        layout,
+        EmbeddedChatLayout {
+            voice_strip: Some(Rect::new(12, 5, 36, 1)),
+            messages: Rect::new(11, 6, 38, 11),
+        }
+    );
+    assert_eq!(
+        embedded_chat_layout(area, 1, false),
+        EmbeddedChatLayout {
+            voice_strip: None,
+            messages: Rect::new(11, 5, 38, 12),
+        }
+    );
 }

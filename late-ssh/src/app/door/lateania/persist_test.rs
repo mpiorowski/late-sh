@@ -47,6 +47,7 @@ fn round_trips_through_json() {
         pvp_kills: 6,
         starter_stage: 2,
         starter_kills: 1,
+        ability_order: vec![101, 100, 104],
     });
     let json = c.to_json();
     let back = SavedCharacter::from_json(&json).expect("parses");
@@ -88,6 +89,7 @@ fn round_trips_through_json() {
     assert_eq!(back.pvp_kills, 6);
     assert_eq!(back.starter_stage, 2);
     assert_eq!(back.starter_kills, 1);
+    assert_eq!(back.ability_order, vec![101, 100, 104]);
 }
 
 #[test]
@@ -110,6 +112,7 @@ fn missing_fields_fall_back_to_defaults() {
     assert!(c.inventory.is_empty());
     assert_eq!(c.starter_stage, 0);
     assert_eq!(c.starter_kills, 0);
+    assert!(c.ability_order.is_empty());
 }
 
 #[test]

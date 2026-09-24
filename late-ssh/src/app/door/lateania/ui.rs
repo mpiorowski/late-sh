@@ -2662,7 +2662,7 @@ fn draw_side(
     let (lines, selected) = match state.panel() {
         Panel::Room => unreachable!("room panel is rendered by draw_room_side"),
         Panel::Character => (character_panel(view), None),
-        Panel::Abilities => abilities_panel(view, state.cursor()),
+        Panel::Abilities => abilities_panel(view, state.cursor(), state.ability_swap_source()),
         Panel::Inventory => inventory_panel(&state.inv_rows(), view, state.cursor()),
         Panel::Shop => shop_panel(&state.shop_rows(), view, state.cursor()),
         Panel::Examine => examine_panel(view, state.cursor()),
@@ -5850,8 +5850,13 @@ fn examine_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Optio
     (lines, sel_line)
 }
 
-/// One compact line of the six ability scores with their modifiers.
-fn abilities_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+/// The Abilities panel: the player's action bar in order, with live costs and
+/// readiness. `x` arms the selected row for a swap (see `state::ability_swap_selection`).
+fn abilities_panel(
+    view: &PlayerView,
+    cursor: usize,
+    swap_source: Option<u8>,
+) -> (Vec<Line<'static>>, Option<usize>) {
     let mut lines = vec![section("Abilities")];
     let mut sel_line = None;
     if view.abilities.is_empty() {
@@ -5860,18 +5865,29 @@ fn abilities_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Opt
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
+    if let Some(source) = swap_source
+        && let Some(a) = view.abilities.iter().find(|a| a.slot == source)
+    {
+        lines.push(Line::from(Span::styled(
+            format!("  swap: {} - pick a target, then x", a.name),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
     for (i, a) in view.abilities.iter().enumerate() {
         let selected = i == cursor;
         if selected {
             sel_line = Some(lines.len());
         }
+        let armed = swap_source == Some(a.slot);
         let color = if a.ready {
             theme::TEXT_BRIGHT()
         } else {
             theme::TEXT_FAINT()
         };
         let marker = if selected { ">" } else { " " };
-        lines.push(Line::from(vec![
+        let mut spans = vec![
             Span::styled(
                 marker.to_string(),
                 Style::default()
@@ -5894,11 +5910,26 @@ fn abilities_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Opt
                 format!("  {}c {}", a.cost, a.effect),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
-        ]));
+        ];
+        if armed {
+            spans.push(Span::styled(
+                "  [swap]",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        lines.push(Line::from(spans));
     }
     lines.push(Line::raw(""));
     lines.push(hint("Enter", "cast selected  1-9 cast that slot"));
     lines.push(hint("0", "casts slot 10 while adventuring"));
+    if swap_source.is_some() {
+        lines.push(hint("x", "confirm target"));
+        lines.push(hint("r", "reset to natural order"));
+    } else {
+        lines.push(hint("x", "swap the selected ability"));
+    }
     lines.push(hint("v", "close"));
     (lines, sel_line)
 }

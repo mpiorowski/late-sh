@@ -79,6 +79,32 @@ fn wildbound_gives_every_class_ten_skills_past_fifty() {
 }
 
 #[test]
+fn ordered_for_applies_the_saved_order_and_appends_new_unlocks() {
+    let natural = unlocked_for(Class::Warrior, 50);
+    assert!(natural.len() >= 8, "a Warrior at 50 has a deep kit");
+
+    // A saved order comes first, in exactly that order.
+    let reversed: Vec<u32> = natural.iter().rev().map(|a| a.id).collect();
+    let ordered = ordered_for(natural.clone(), &reversed);
+    assert_eq!(ordered.len(), natural.len());
+    assert_eq!(ordered[0].id, natural.last().unwrap().id);
+    assert_eq!(ordered.last().unwrap().id, natural[0].id);
+
+    // An empty order is the natural roster.
+    let empty = ordered_for(natural.clone(), &[]);
+    assert_eq!(
+        empty.iter().map(|a| a.id).collect::<Vec<_>>(),
+        natural.iter().map(|a| a.id).collect::<Vec<_>>(),
+        "an empty order changes nothing"
+    );
+
+    // Unknown ids are dropped and known-but-unlisted abilities are appended.
+    let partial = ordered_for(natural.clone(), &[999_999]);
+    assert_eq!(partial.len(), natural.len());
+    assert_eq!(partial[0].id, natural[0].id);
+}
+
+#[test]
 fn the_summit_is_level_one_hundred() {
     assert_eq!(Class::MAX_LEVEL, 100);
     // The xp curve keeps growing monotonically to the new cap.

@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 20;
+const SCHEMA_VERSION: u32 = 21;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -67,6 +67,9 @@ pub struct SavedCharacterInit {
     /// Kills counted toward the current starter-chain stage, if it is a slay
     /// stage.
     pub starter_kills: u32,
+    /// The player's ability-bar order as ability ids. Empty means the natural
+    /// unlock order (see `abilities::ordered_for`).
+    pub ability_order: Vec<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -197,6 +200,10 @@ pub struct SavedCharacter {
     /// Kill progress within the current starter-chain stage; 0 for pre-v19 saves.
     #[serde(default)]
     pub starter_kills: u32,
+    /// The player's ability-bar order as ability ids; empty for pre-v21 saves,
+    /// which simply use the natural unlock order.
+    #[serde(default)]
+    pub ability_order: Vec<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -298,6 +305,7 @@ impl SavedCharacter {
             pvp_kills: init.pvp_kills,
             starter_stage: init.starter_stage,
             starter_kills: init.starter_kills,
+            ability_order: init.ability_order,
         }
     }
 

@@ -1126,6 +1126,8 @@ fn lateania_help_lines() -> Vec<String> {
         "  Space / Enter / x attack",
         "  1-9, 0            use ability slots 1-10 after choosing a class",
         "  v then Enter      cast any ability from the panel, however deep the roster",
+        "  v then x          swap two abilities: x arms one, x on another swaps",
+        "  v then x then r   reset the ability bar to its natural order",
         "  z                 flee combat",
         "",
         "Getting around",

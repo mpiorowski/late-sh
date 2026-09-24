@@ -1535,18 +1535,21 @@ impl App {
 
             // The day's wall piece takes the cup's place when the
             // terminal has room for it; the typed line stays under either.
+            // A held door (the haunt's whisper) always gets the cup: the
+            // piece layout leaves no row between the line and the hint for
+            // the voiced line.
             let piece_area = ratatui::layout::Layout::vertical([
                 ratatui::layout::Constraint::Min(0),
                 ratatui::layout::Constraint::Length(3),
             ])
             .split(area);
-            let piece_drawn = match ctx.splash_piece {
-                Some(piece) => crate::app::artboard::gallery::ui::draw_splash_piece(
+            let piece_drawn = match (ctx.splash_piece, &ctx.whisper) {
+                (Some(piece), None) => crate::app::artboard::gallery::ui::draw_splash_piece(
                     frame,
                     piece_area[0],
                     piece,
                 ),
-                None => false,
+                (Some(_), Some(_)) | (None, _) => false,
             };
 
             let splash_bottom = if piece_drawn {

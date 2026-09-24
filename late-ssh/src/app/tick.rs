@@ -1,8 +1,8 @@
 use std::time::{Duration, Instant};
 
 use super::state::{
-    App, GAME_SELECTION_SLIDING_PUZZLE, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS,
-    GAME_SELECTION_TRAFFIC,
+    App, GAME_SELECTION_SLIDING_PUZZLE, GAME_SELECTION_SNAKE, GAME_SELECTION_SOLITAIRE,
+    GAME_SELECTION_TETRIS, GAME_SELECTION_TRAFFIC,
 };
 use crate::app::activity::event::ActivityKind;
 use crate::app::common::primitives::Screen;
@@ -459,6 +459,11 @@ impl App {
                 }
                 GAME_SELECTION_TRAFFIC => {
                     changed |= self.traffic_state.tick();
+                }
+                // Solitaire is otherwise event-driven; only the win cascade
+                // has frames to spend, and it stops asking once it lands.
+                GAME_SELECTION_SOLITAIRE => {
+                    changed |= self.solitaire_state.tick_win_animation();
                 }
                 _ => (),
             }

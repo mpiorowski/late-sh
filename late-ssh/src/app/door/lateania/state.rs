@@ -168,6 +168,10 @@ pub struct State {
     join_requested_at: Instant,
     reset_version: u64,
     reset_elsewhere: bool,
+    /// In the Abilities panel: the 1-based slot armed for swapping (`x`), if
+    /// the player pressed `x` once and is now picking the target row. Local to
+    /// this session only; the persisted result is the reordered ability list.
+    ability_swap_source: Option<u8>,
     /// The chat line being composed, if the player is typing (Some = compose
     /// mode captures keys). Chat is world-local via the service's `say`, so it
     /// never leaks into late.sh's global feed.
@@ -236,6 +240,7 @@ impl State {
             join_requested_at,
             reset_version,
             reset_elsewhere: false,
+            ability_swap_source: None,
             chat_buffer: None,
             leave_confirm_until: None,
             map_camera: MapCamera::default(),
@@ -318,12 +323,19 @@ impl State {
         self.cursor
     }
 
+    /// The 1-based ability slot currently armed for swapping in the Abilities
+    /// panel, if any.
+    pub fn ability_swap_source(&self) -> Option<u8> {
+        self.ability_swap_source
+    }
+
     pub fn set_panel(&mut self, panel: Panel) {
         if self.panel != panel {
             self.panel = panel;
             self.cursor = 0;
             self.list_scroll.set(0);
             self.map_camera.recenter();
+            self.ability_swap_source = None;
         }
     }
 
@@ -336,6 +348,7 @@ impl State {
         self.cursor = 0;
         self.list_scroll.set(0);
         self.map_camera.recenter();
+        self.ability_swap_source = None;
     }
 
     /// True when the graphical overhead world map is the active panel.
@@ -877,6 +890,45 @@ impl State {
         if self.ensure_player_present() {
             self.svc.ability_task(self.user_id, slot);
         }
+    }
+
+    /// `x` inside the Abilities panel: the first press arms the highlighted row
+    /// as the swap source, the second press (on another row) swaps the two. A
+    /// second press on the same row cancels the swap.
+    pub fn ability_swap_selection(&mut self) {
+        if self.panel != Panel::Abilities {
+            return;
+        }
+        if !self.ensure_player_present() {
+            return;
+        }
+        let slot = match self.view().abilities.get(self.cursor) {
+            Some(a) => a.slot,
+            None => return,
+        };
+        match self.ability_swap_source {
+            None => self.ability_swap_source = Some(slot),
+            Some(source) => {
+                self.ability_swap_source = None;
+                if source != slot {
+                    self.svc.swap_ability_task(self.user_id, source, slot);
+                }
+            }
+        }
+    }
+
+    /// `r` while a swap source is armed in the Abilities panel: drop the saved
+    /// custom order and return the bar to its natural unlock order. Only offered
+    /// in swap mode so `r` keeps its recall meaning everywhere else.
+    pub fn ability_reset_order(&mut self) {
+        if self.panel != Panel::Abilities || self.ability_swap_source.is_none() {
+            return;
+        }
+        if !self.ensure_player_present() {
+            return;
+        }
+        self.ability_swap_source = None;
+        self.svc.reset_ability_order_task(self.user_id);
     }
 
     pub fn flee(&mut self) {

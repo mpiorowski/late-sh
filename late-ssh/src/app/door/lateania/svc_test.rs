@@ -925,6 +925,70 @@ fn abilities_scale_with_spell_power_and_the_auto_swings_by_calling() {
 }
 
 #[test]
+fn swapping_abilities_reorders_the_bar_and_survives_save_load() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Mage);
+    s.players.get_mut(&uid(1)).unwrap().level = 50;
+
+    let before = s.snapshot().players[&uid(1)].abilities.clone();
+    assert!(before.len() >= 8, "a Mage at 50 has a deep kit");
+    let first = before[0].name.clone();
+    let second = before[1].name.clone();
+    assert_ne!(first, second);
+
+    s.swap_abilities(uid(1), 1, 2);
+
+    let after = s.snapshot().players[&uid(1)].abilities.clone();
+    assert_eq!(after[0].name, second, "slot 1 now holds the old slot 2");
+    assert_eq!(after[1].name, first, "slot 2 now holds the old slot 1");
+
+    // The new order is part of the save and comes back after a reload.
+    let saved = s.export_saved(uid(1)).expect("classed characters export");
+    let mut s2 = world();
+    s2.join(uid(1));
+    s2.hydrate(uid(1), &saved);
+    let reloaded = s2.snapshot().players[&uid(1)].abilities.clone();
+    assert_eq!(reloaded[0].name, second, "the swap survives a save/load");
+    assert_eq!(reloaded[1].name, first, "both slots keep their new places");
+}
+
+#[test]
+fn resetting_the_ability_order_restores_natural_order() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Mage);
+    s.players.get_mut(&uid(1)).unwrap().level = 50;
+
+    let natural = s.snapshot().players[&uid(1)].abilities.clone();
+    assert!(natural.len() >= 8, "a Mage at 50 has a deep kit");
+
+    s.swap_abilities(uid(1), 1, 2);
+    let swapped = s.snapshot().players[&uid(1)].abilities.clone();
+    assert_ne!(swapped[0].name, natural[0].name, "the swap took effect");
+    assert!(
+        !s.players[&uid(1)].ability_order.is_empty(),
+        "a swap records a custom order"
+    );
+
+    s.reset_ability_order(uid(1));
+    let reset = s.snapshot().players[&uid(1)].abilities.clone();
+    assert_eq!(
+        reset.iter().map(|a| a.name.clone()).collect::<Vec<_>>(),
+        natural.iter().map(|a| a.name.clone()).collect::<Vec<_>>(),
+        "resetting returns the bar to the natural order"
+    );
+    assert!(
+        s.players[&uid(1)].ability_order.is_empty(),
+        "resetting clears the saved order"
+    );
+
+    // Idempotent: resetting an already-natural bar changes nothing.
+    s.reset_ability_order(uid(1));
+    assert!(s.players[&uid(1)].ability_order.is_empty());
+}
+
+#[test]
 fn an_ability_killing_blow_reaches_the_next_tick_output() {
     // Abilities land outside the tick (`mutate`), so their kill must survive
     // until the tick hands it to `publish_kill_outcome`, or a crown taken

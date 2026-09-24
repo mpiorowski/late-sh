@@ -41,8 +41,11 @@
 //     tame). n opens the housing ledger (buy a deed at the clerk, furnish a home
 //     you own from inside).
 //     In a list panel, 1-9 select a row, Enter activates (equip/use/buy),
-//     w/s move the cursor, x sells (inventory). List panels auto-scroll to
-//     follow the cursor; [ / ] scroll the cursor-less text panels.
+//     w/s move the cursor, x sells (inventory). In the Abilities panel x
+//     instead arms the selected ability for swapping (a second x swaps,
+//     x on the same row cancels), and while armed r restores the natural
+//     order. List panels auto-scroll to follow the cursor; [ / ] scroll
+//     the cursor-less text panels.
 //   - Chat: ' opens the say line, sent to the room by default. Lead the
 //     message with "/z " (or "/zone ") for everyone in the same named zone,
 //     or "/w " (or "/world ") for every adventurer in Lateania right now.
@@ -251,6 +254,18 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             }
             _ => {}
         }
+    }
+
+    // In the Abilities panel, `x` arms a row for swapping; while one is armed,
+    // `r` drops the custom order and returns the bar to its natural order. The
+    // capture runs before `r`'s recall binding so swap mode temporarily owns the
+    // key; anywhere else `r` still recalls.
+    if panel == Panel::Abilities
+        && state.ability_swap_source().is_some()
+        && (byte == b'r' || byte == b'R')
+    {
+        state.ability_reset_order();
+        return InputAction::Handled;
     }
 
     // The overhead world map captures pan keys (wasd/hjkl) and Enter (re-centre)
@@ -527,10 +542,13 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             } else if panel == Panel::Appearance {
                 // The secondary action cycles the trait the other way.
                 state.cycle_appearance(-1);
+            } else if panel == Panel::Abilities {
+                // First press arms the selected ability for swapping; the
+                // second press (on the target row) swaps them.
+                state.ability_swap_selection();
             } else if in_list {
                 state.sell_selection();
-            } else if panel == Panel::Room || panel == Panel::Character || panel == Panel::Abilities
-            {
+            } else if panel == Panel::Room || panel == Panel::Character {
                 state.attack();
             }
             InputAction::Handled

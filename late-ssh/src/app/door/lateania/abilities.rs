@@ -7,6 +7,8 @@
 // needs only one resolution path - the highest-leverage design choice in the
 // engine.
 
+use std::collections::HashSet;
+
 use super::classes::{Class, Resource};
 use super::damage::DamageType;
 
@@ -5219,6 +5221,32 @@ pub fn unlocked_for(class: Class, level: i32) -> Vec<&'static Ability> {
         .filter(|a| a.class == class && a.level_req <= level)
         .collect();
     out.sort_by_key(|a| a.level_req);
+    out
+}
+
+/// The unlocked roster in the player's saved action-bar order.
+///
+/// Abilities whose ids appear in `order` come first, in exactly that order;
+/// then any unlocked ability the order does not mention is appended in its
+/// natural unlock order. Unknown ids in `order` are dropped, so a save from
+/// before an ability was renamed/removed (or from a different class) still
+/// resolves cleanly. An empty `order` is the natural roster.
+pub fn ordered_for<'a>(known: Vec<&'a Ability>, order: &[u32]) -> Vec<&'a Ability> {
+    let mut out: Vec<&'a Ability> = Vec::with_capacity(known.len());
+    let mut placed: HashSet<u32> = HashSet::with_capacity(known.len());
+    for id in order {
+        if !placed.insert(*id) {
+            continue;
+        }
+        if let Some(a) = known.iter().find(|a| a.id == *id) {
+            out.push(*a);
+        }
+    }
+    for a in known {
+        if placed.insert(a.id) {
+            out.push(a);
+        }
+    }
     out
 }
 

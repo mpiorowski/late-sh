@@ -10,7 +10,7 @@ use crate::app::games::pool_core::{
     cue::Strike,
     shot::{BallFrame, RackState},
     sim,
-    table::{BAR_BOX_7FT, TableSpec},
+    table::{BAR_BOX_7FT, SNOOKER_12FT, TableSpec},
 };
 
 const SPEC: TableSpec = BAR_BOX_7FT;
@@ -62,7 +62,7 @@ fn the_line_stops_at_the_first_ball_and_the_ghost_touches_it() {
     // before the two it will run into, so the line does not play the shot.
     let object = line.object.expect("the object ball has a leg");
     assert!(object.cut.abs() < 1e-9, "a full ball is no cut");
-    let reach = OBJECT_GUIDE_REACH * SPEC.ball_radius;
+    let reach = OBJECT_GUIDE_REACH * SPEC.length;
     assert!(
         distance(object.to, [near[0] + reach, near[1]]) < 1e-9,
         "the guide runs its fixed reach straight on: {:?}",
@@ -229,7 +229,7 @@ fn the_object_guide_points_where_the_physics_sends_the_ball() {
     };
     let strike = Strike::new(azimuth, 0.0, 0.0, 2.5).expect("a playable stroke");
     let result = sim::simulate(&SPEC, &geom, &rack, &strike);
-    let reach = OBJECT_GUIDE_REACH * r;
+    let reach = OBJECT_GUIDE_REACH * SPEC.length;
     let travelled = (0..result.timeline.frame_count())
         .map(|frame| result.timeline.sample(frame as f64 / result.timeline.hz))
         .filter_map(|frames| frames.into_iter().find(|b| b.id == 1).map(|b| b.pos))
@@ -242,6 +242,47 @@ fn the_object_guide_points_where_the_physics_sends_the_ball() {
     assert!(
         apart.abs() < 0.5,
         "the one leaves along the guide, off by {apart}°"
+    );
+}
+
+#[test]
+fn the_object_guide_is_the_same_share_of_every_table() {
+    // The table is scaled to fit the same panel whatever the game, so a guide
+    // measured in ball radii came out half as long on the snooker table as on
+    // the bar box. Measured against the table it reads the same everywhere.
+    let share = |spec: &TableSpec| {
+        let cue = [0.3, spec.width / 2.0];
+        let object = [0.9, spec.width / 2.0];
+        let balls = [ball(CUE, cue), ball(1, object)];
+        let line = aim::shot_line(spec, &spec.geometry(), &balls, cue, 0.0, 0.0);
+        let leg = line.object.expect("the object ball has a leg");
+        distance(leg.from, leg.to) / spec.length
+    };
+    let bar_box = share(&BAR_BOX_7FT);
+    let snooker = share(&SNOOKER_12FT);
+    assert!(
+        (bar_box - snooker).abs() < 1e-9,
+        "bar box {bar_box} against snooker {snooker}"
+    );
+}
+
+#[test]
+fn the_stun_line_is_the_same_share_of_every_table() {
+    // Drawn beside the object ball's leg, so it has to scale the same way or
+    // the snooker stun line comes out half as long next to it.
+    let share = |spec: &TableSpec| {
+        let cue = [0.3, spec.width / 2.0];
+        let object = [0.9, spec.width / 2.0 + spec.ball_radius];
+        let balls = [ball(CUE, cue), ball(1, object)];
+        let line = aim::shot_line(spec, &spec.geometry(), &balls, cue, 0.0, 0.0);
+        let tangent = line.tangent.expect("a half-ball cut leaves a stun line");
+        distance(line.hit.at(), tangent) / spec.length
+    };
+    let bar_box = share(&BAR_BOX_7FT);
+    let snooker = share(&SNOOKER_12FT);
+    assert!(
+        (bar_box - snooker).abs() < 1e-9,
+        "bar box {bar_box} against snooker {snooker}"
     );
 }
 
