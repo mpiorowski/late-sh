@@ -3,7 +3,7 @@ use late_core::models::deadchannel_runner::DeadchannelRunner;
 use rand::{SeedableRng, rngs::StdRng};
 use uuid::Uuid;
 
-use super::{Applied, Command, Fight, Refusal, Sheet, SheetError, Slot};
+use super::{Applied, Command, Fight, News, Refusal, Sheet, SheetError, Slot};
 use crate::app::deadchannel::fight::data::{FOES, RATIONS_PER_DAY, START_BITS};
 
 fn day(d: u32) -> NaiveDate {
@@ -56,17 +56,30 @@ fn a_fight_to_the_end_with_fixed_dice_lands_on_one_state() {
     // one exact thing. A change here is a rules change; read it.
     assert_eq!(sheet.fight, None, "the fight leaves the row when it ends");
     match ended {
-        Applied::Won { bits, exp, leveled } => {
-            assert_eq!((bits, exp, leveled), (36, 14, None));
+        Applied::Won {
+            foe,
+            bits,
+            exp,
+            leveled,
+        } => {
+            assert_eq!((foe, bits, exp, leveled), ("flicker", 36, 14, None));
             assert_eq!(sheet.bits, START_BITS + 36);
             assert_eq!(sheet.exp, 14);
             assert!(sheet.signal > 0);
+            assert_eq!(
+                (sheet.kills, sheet.kills_today, sheet.runs_today),
+                (1, 1, 0)
+            );
         }
         Applied::Lost { bits_lost } => {
             assert_eq!(bits_lost, START_BITS);
             assert_eq!(sheet.bits, 0);
             assert_eq!(sheet.signal, 0);
             assert!(sheet.is_down());
+            assert_eq!(
+                (sheet.kills, sheet.kills_today, sheet.runs_today),
+                (0, 0, 0)
+            );
         }
         other => panic!("a fight ends won or lost, not {other:?}"),
     }
@@ -105,6 +118,7 @@ fn winning_past_the_threshold_levels_up() {
     assert_eq!(
         outcome.applied,
         Applied::Won {
+            foe: "flicker",
             bits: 36,
             exp: 14,
             leveled: Some(2)
@@ -138,6 +152,7 @@ fn running_gets_away_or_takes_a_free_strike() {
                 assert_eq!(sheet.fight, None);
                 assert_eq!(outcome.lines.len(), 1);
                 assert_eq!(sheet.bits, START_BITS, "running earns nothing");
+                assert_eq!(sheet.runs_today, 1);
             }
             Applied::Round => {
                 caught += 1;
@@ -192,6 +207,9 @@ fn the_day_roll_refills_everything_and_drops_a_hanging_fight() {
     sheet.level = 3;
     sheet.signal = 0;
     sheet.rations_left = 0;
+    sheet.kills = 12;
+    sheet.kills_today = 7;
+    sheet.runs_today = 2;
     sheet.fight = Some(Fight {
         kind: 2,
         foe_signal: 5,
@@ -211,8 +229,81 @@ fn the_day_roll_refills_everything_and_drops_a_hanging_fight() {
     assert_eq!(sheet.signal, 30);
     assert_eq!(sheet.rations_left, RATIONS_PER_DAY);
     assert_eq!(sheet.fight, None);
+    assert_eq!(
+        (sheet.kills_today, sheet.runs_today),
+        (0, 0),
+        "the day's tally rolls"
+    );
+    assert_eq!(sheet.kills, 12, "the lifetime count does not");
     assert!(!sheet.is_down());
     assert!(!sheet.settle(day(25)));
+}
+
+#[test]
+fn the_wire_hears_only_the_results_worth_a_story() {
+    let won = |leveled| Applied::Won {
+        foe: "hiss",
+        bits: 1,
+        exp: 1,
+        leveled,
+    };
+
+    // An ordinary kill mid-day: nothing.
+    let mut sheet = fresh();
+    sheet.kills = 4;
+    sheet.rations_left = 5;
+    assert_eq!(sheet.news(&won(None)), vec![]);
+    assert_eq!(sheet.news(&Applied::Escaped), vec![]);
+    assert_eq!(sheet.news(&Applied::Round), vec![]);
+
+    // The first glyph ever.
+    sheet.kills = 1;
+    assert_eq!(
+        sheet.news(&won(None)),
+        vec![News::FirstBlood { foe: "hiss" }]
+    );
+
+    // A win on the last of the signal; a level outranks it.
+    sheet.kills = 4;
+    sheet.signal = 2;
+    assert_eq!(
+        sheet.news(&won(None)),
+        vec![News::NearMiss {
+            foe: "hiss",
+            signal: 2
+        }]
+    );
+    assert_eq!(sheet.news(&won(Some(2))), vec![News::Leveled { level: 2 }]);
+
+    // The last ration's fight, won or escaped, closes the day with the
+    // card, after whatever story the win itself was.
+    sheet.rations_left = 0;
+    sheet.kills_today = 7;
+    sheet.runs_today = 2;
+    let card = News::LastRation {
+        kills: 7,
+        runs: 2,
+        signal: 2,
+        max_signal: 10,
+    };
+    assert_eq!(
+        sheet.news(&won(None)),
+        vec![
+            News::NearMiss {
+                foe: "hiss",
+                signal: 2
+            },
+            card.clone()
+        ]
+    );
+    assert_eq!(sheet.news(&Applied::Escaped), vec![card]);
+
+    // A dropped signal is its own line and the day's last word.
+    sheet.signal = 0;
+    assert_eq!(
+        sheet.news(&Applied::Lost { bits_lost: 30 }),
+        vec![News::Dropped { bits_lost: 30 }]
+    );
 }
 
 #[test]
@@ -366,6 +457,9 @@ fn a_row_naming_an_unknown_glyph_is_rejected() {
         bits: 50,
         rations_left: 9,
         day: day(24),
+        kills: 0,
+        kills_today: 0,
+        runs_today: 0,
         fight: Some(serde_json::json!({
             "kind": 99, "foe_signal": 1, "foe_max_signal": 1, "foe_attack": 1,
             "foe_defense": 1, "foe_bits": 1, "foe_exp": 1, "log": []

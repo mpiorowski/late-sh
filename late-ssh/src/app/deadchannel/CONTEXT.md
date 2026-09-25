@@ -112,6 +112,7 @@ number of replicas spend one AI call per text.
 | `haunt/ui.rs` | Pure render helpers: whisper frame + splash overlay + static surge, breakthrough frame + full-screen draw, `apply_clock_glitch`, `glitched_name`, `name_flicker_for`. Deterministic per burst seed, stateless like the sidebar equalizer. |
 | `runner/state.rs` | The look: `PIECES` (the closed starter table, one five-cell row per piece, `Slot` hood/eyes/coat), `Tint` (the closed palette, gold deliberately absent), `Look` + `Worn` (typed, table references), `Look::random` (the join's dice), `Look::to_json` / `Look::parse` (the JSON contract on the runner row; unknown codes are a `LookError`, never a blank), `PORTRAIT_WIDTH` / `PORTRAIT_HEIGHT`. No I/O. `state_test` asserts every row is five single-width cells. |
 | `runner/ui.rs` | `portrait_spans`: the look as three styled spans, one per worn piece in its tint; `tint_color` maps the palette onto the theme. Pure. |
+| `runner/data.rs` | `welcome`: the voice's welcome for a runner whose row was just created, one message, one paragraph per line (who is talking, the story so far, the keys down and back, the rules of the row, `/leave` and `/join #deadchannel`). Placeholder copy at feed-template standards. Pure. |
 | `runner/svc.rs` | `RunnerLookService`: the process-shared look directory (`watch<Arc<HashMap<Uuid, Look>>>`), seeded and refreshed from `deadchannel_runners` on the `deadchannel_runner_changed` LISTEN, the `app/flags` shape. A look that fails to parse is logged and skipped. `fixed_looks_rx` for test apps. |
 | `city/map.rs` | **Generated** by `scripts/gen_city_map.py --write` (never hand-edited): the 232x52 `MAP` literal, the `SOLID` collision bitmap, `SPAWN`, every zone (`SIGNS`, `BANNERS`, `CART_SIGNS`, `AWNINGS`, `WINDOWS`, `VENTS`, `PUDDLES`, `LAMPS`, `DROP_LIGHTS`, `SCREEN_FACE`, `WIRE`, ...), the closed `Neon` palette, `Landmark` + `nearest_landmark` (reach zones), `walkable`, `grid`/`char_at`. |
 | `city/state.rs` | Per-session view state: the runner's cell, the animation clock, the open panel, the cursor on the armorer's wall (`picked_tier`, `pick_up` / `pick_down`), the pinned street line. `walk`, `run`, `nearby`, `Landmark::on_enter` (`Enter::Panel` for shops, `Enter::Line` for carts, `Enter::Fight` at the screen, `Enter::Leave` for the wire). Pure. |
@@ -119,7 +120,7 @@ number of replicas spend one AI call per text.
 | `city/input.rs` | Arrows/hjkl walk; Enter at a landmark; Enter closes a panel or the ledge view, Esc too through the root's `dispatch_escape` (walk keys are swallowed while one is open). In the armorer's panel up/down walk the wall and `w` / `a` send `Command::Outfit` to `App.fight`. Returns `false` for globals. |
 | `city/ui.rs` | Renderer: base styling by zone, the ambience pass (rain, puddles reflecting the nearest sign, neon shorts and dropped letters, window flicker, the screen's static and test pattern with rare glyph frames, steam, lamps, the drop's lights, the blimp, the mast, the bits machine, the wire's pulse), the runner as its mark, the popover, the street line, the shop panels (`armorer_lines` is the live till: the wall with the cursor, what you carry lit, the two keys priced net of the trade-in, the armorer's last word); hands the sheet strip and the fight scene to `fight/ui.rs`. Its palette helpers (`ink`, `lit`, `glow`, `dim`, `tint_rgb`, the `INK_*` greys) are `pub(crate)` for that. |
 | `fight/data.rs` | The numbers (LoGD's, transcribed: `RATIONS_PER_DAY`, `SIGNAL_PER_LEVEL`, `START_BITS`, `EXP_KEEP_ON_DEATH`, `EXP_TO_ADVANCE`, `FOE_TIERS`, the run odds, `TRADE_IN_PERCENT`) and the fauna: `FOES`, fifteen glyphs, one per level, each with a name, a five-by-three portrait in the runner's format, and an arrival line; the kill, drop, and run line pools. |
-| `fight/state.rs` | The pure machine: `Sheet` (the row's stats, typed; `from_row` rejects an unreadable fight loudly), `Fight` (the foe and the last six lines, the JSON on the row), `settle(today)` (the lazy day roll), `apply(Command, rng)` over the door's `resolve_round` and `resolve_extra_foe_strike`, plus the armorer's till (`Command::Outfit`, `Slot`, `gear_name`, `outfit_price`, `MAX_TIER`), returning an `Outcome` (`Applied` plus the lines). No I/O, no clock. |
+| `fight/state.rs` | The pure machine: `Sheet` (the row's stats and tally, typed; `from_row` rejects an unreadable fight loudly), `Fight` (the foe and the last six lines, the JSON on the row), `settle(today)` (the lazy day roll), `apply(Command, rng)` over the door's `resolve_round` and `resolve_extra_foe_strike`, plus the armorer's till (`Command::Outfit`, `Slot`, `gear_name`, `outfit_price`, `MAX_TIER`), returning an `Outcome` (`Applied` plus the lines), and `news(&Applied)` (the closed `News` list the wire prints for it; §3c). No I/O, no clock. |
 | `fight/svc.rs` | `FightService`, the one writer: lock the standing row, settle, apply, store, commit; the metric, the log line per outcome, and the wire's news (a dropped signal, a level gained with the face) through `ChatService::post_wire_line_task`. `act_task` and `reload_task` answer on a session's `mpsc`. |
 | `fight/session.rs` | `FightSession`, the session's side: the sheet mirror, the `Scene` over the street (lines, `over`, `waiting`), the `till` line (an answer that lands with no scene open), one action in flight, `open` / `close` / `clear_till` / `request` / `reload` / `tick`. Decides nothing. |
 | `fight/input.rs` | Keys while the scene is open: `a` attack, `r` run, Enter closes a finished scene; digits, Tab, `q`, `?` stay global, everything else is swallowed. |
@@ -164,7 +165,10 @@ payload, and parse), and `metrics::record_first_contact_beat` /
 The runner's seams are as thin: `ChatService::join_deadchannel_room`
 creates the row (`DeadchannelRunner::ensure_for_user`, a conditional
 insert, so two devices joining at once share one face; a fresh row is
-the `RunnerCreated` beat, a return the `RunnerDoor::Returned` one),
+the `RunnerCreated` beat and posts the voice's welcome on the wire
+(`runner/data.rs::welcome` through `post_wire_line_task`, once per person
+because only the winning insert lands there; a second device or a return
+finds it in the room's history), a return the `RunnerDoor::Returned` one),
 `ChatService::leave_room` stamps the leave for the `deadchannel` kind
 (`mark_left`, the `RunnerDoor::Left` beat), `State.runner_looks` holds the directory
 service (`main.rs` starts its listener), `App.runner_looks` is the
@@ -529,13 +533,24 @@ service for `Command::Start`.
   until they exist, crossing `EXP_TO_ADVANCE[level - 1]` on a win levels
   you in the fight (signal +10 with the new max) and the wire says so.
   The operators replace this; it is the one stated deviation.
-- **The wire sees the news, never the play-by-play.** After the commit,
-  `Lost` posts "<name>'s signal dropped at the end of the row. the street
-  took N bits." and a level gained posts "<name> is level N." with the
-  portrait's three rows under it, as messages in #deadchannel from the
-  `afterglow` voice (`ChatService::post_wire_line_task`: ensures the
-  voice, joins it to the room, sends; a failure is logged there). Kills,
-  rounds, and runs post nothing.
+- **The wire sees the news, never the play-by-play.** `Sheet::news`
+  (pure) decides what one command was worth, `FightService::post_news`
+  words it, and `ChatService::post_wire_line_task` posts it in
+  #deadchannel from the `afterglow` voice (ensures the voice, joins it to
+  the room, sends; a failure is logged there). The lines: `Lost` posts
+  "<name>'s signal dropped at the end of the row. the street took N bits."
+  and nothing else; a win posts at most one story, the biggest of a level
+  gained ("<name> is level N." with the portrait's three rows under it),
+  the first kill ever ("<name> put down their first <foe>.", exact through
+  the row's `kills` count), or a near miss ("... with S signal left",
+  signal at or under `NEAR_MISS_SIGNAL` (3)); and a win or an escape that
+  spent the last ration adds the day's card ("<name> spent the last
+  ration. K glyphs down, R runs, signal S/M.", from `kills_today` and
+  `runs_today`). Ordinary kills, rounds, runs, and purchases post nothing.
+  Outside the fight, the join and the leave post too: the welcome on a
+  created runner, "<name> is back on the wire." on a `Returned` one, and
+  "<name> went dark." on the leave that stamps `left_at` (each once by
+  the same conditional statement that decides the beat).
 - **Where the mirror comes from.** `App.fight` (`FightSession`) reloads
   on every descent (`0` on the clubhouse), so the strip never shows
   yesterday's bars; each action answers with the stored sheet. Another
@@ -573,8 +588,10 @@ service for `Command::Start`.
   `{"hood": {"piece", "tint"}, "eyes": ..., "coat": ..., "mark": {"glyph"}}`,
   `left_at` (migration 187), the leave stamp, and the sheet (migration
   199): `level`, `exp`, `signal`, `weapon_tier`, `armor_tier`, `bits`,
-  `rations_left`, `day` (the UTC date of the last roll), and `fight`
-  (JSONB, the fight in progress or null). Created only by the invited
+  `rations_left`, `day` (the UTC date of the last roll), `fight`
+  (JSONB, the fight in progress or null), and the tally (migration 201):
+  `kills` (ever), `kills_today`, `runs_today` (zeroed by the day roll,
+  the last-ration line's numbers). Created only by the invited
   join with the column defaults (level 1, signal 10, 50 bits, ten
   rations, today). The look is written again only by the tailor's
   mirror (`store_look`, standing runner only). An insert, or an update
@@ -680,6 +697,8 @@ Drained by `haunt::svc::tick`.
 - `/haunt invite` - the next own send breaks through, skipping the delay;
   the DM follows exactly as for a real one.
 - `/haunt reset` - wipe every mark; the chain starts over.
+- `/haunt welcome` - post the runner's welcome on the wire for this user
+  now, exactly what a fresh invited join posts; nothing else changes.
 
 ## 6. Gotchas
 

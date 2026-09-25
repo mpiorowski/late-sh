@@ -634,6 +634,10 @@ fn haunt_commands_parse_the_fuse_words() {
         parse_haunt_command("/haunt  live   off "),
         Some(Some(HauntCommand::LiveOff))
     );
+    assert_eq!(
+        parse_haunt_command("/haunt welcome"),
+        Some(Some(HauntCommand::Welcome))
+    );
     assert_eq!(parse_haunt_command("/haunt live"), Some(None));
     assert_eq!(parse_haunt_command("/haunt on off"), Some(None));
     assert_eq!(parse_haunt_command("/haunted"), None);

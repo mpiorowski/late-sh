@@ -5201,12 +5201,30 @@ async fn deadchannel_join_requires_the_invitation() {
             .expect("find runner")
             .expect("runner created by the invited join");
     crate::app::deadchannel::runner::state::Look::parse(&runner.look).expect("stored look parses");
-    service.open_public_room_task(user.id, "deadchannel".to_string());
-    match timeout(Duration::from_secs(2), events.recv())
+
+    // The voice welcomes the new runner on the wire, by name, and tells
+    // them the way down and the way out.
+    let welcome = wait_for_message_containing(&test_db.db, room_id, "welcome to the wire").await;
+    assert!(welcome.starts_with("dc-hopeful."), "{welcome}");
+    assert!(welcome.contains("/leave"), "{welcome}");
+    assert!(welcome.contains("/join #deadchannel"), "{welcome}");
+    let voice = service
+        .ensure_first_contact_voice()
         .await
-        .expect("event timeout")
-        .expect("event")
-    {
+        .expect("voice exists after the welcome");
+    let voice_lines = |messages: &[ChatMessage]| {
+        messages
+            .iter()
+            .filter(|message| message.user_id == voice.id)
+            .count()
+    };
+    let messages = ChatMessage::list_recent(&client, room_id, 20)
+        .await
+        .expect("list messages");
+    assert_eq!(voice_lines(&messages), 1);
+
+    service.open_public_room_task(user.id, "deadchannel".to_string());
+    match next_room_event(&mut events).await {
         ChatEvent::RoomJoined { user_id, .. } => assert_eq!(user_id, user.id),
         other => panic!("expected RoomJoined, got {other:?}"),
     }
@@ -5222,11 +5240,7 @@ async fn deadchannel_join_requires_the_invitation() {
     // replica reads, so `App::is_runner` goes false on all of them, and the
     // portrait goes with it.
     service.leave_room_task(user.id, room_id, "deadchannel".to_string());
-    match timeout(Duration::from_secs(2), events.recv())
-        .await
-        .expect("event timeout")
-        .expect("event")
-    {
+    match next_room_event(&mut events).await {
         ChatEvent::RoomLeft { user_id, .. } => assert_eq!(user_id, user.id),
         other => panic!("expected RoomLeft, got {other:?}"),
     }
@@ -5236,14 +5250,12 @@ async fn deadchannel_join_requires_the_invitation() {
             .expect("list looks")
             .is_empty()
     );
+    // Going dark is news on the wire.
+    wait_for_message_containing(&test_db.db, room_id, "dc-hopeful went dark.").await;
 
     // The character waits: rejoining gets the same face back, not a new one.
     service.open_public_room_task(user.id, "deadchannel".to_string());
-    match timeout(Duration::from_secs(2), events.recv())
-        .await
-        .expect("event timeout")
-        .expect("event")
-    {
+    match next_room_event(&mut events).await {
         ChatEvent::RoomJoined { user_id, .. } => assert_eq!(user_id, user.id),
         other => panic!("expected RoomJoined, got {other:?}"),
     }
@@ -5255,6 +5267,30 @@ async fn deadchannel_join_requires_the_invitation() {
     assert_eq!(returned.id, runner.id);
     assert_eq!(returned.look, runner.look);
     assert!(returned.left_at.is_none());
+    // And so is coming back.
+    wait_for_message_containing(&test_db.db, room_id, "dc-hopeful is back on the wire.").await;
+
+    // Neither the duplicate join nor the return is a first time: the
+    // welcome was posted once; with the leave and the return the voice has
+    // said exactly three things.
+    let messages = ChatMessage::list_recent(&client, room_id, 20)
+        .await
+        .expect("list messages after the rejoins");
+    assert_eq!(voice_lines(&messages), 3);
+}
+
+/// The next chat event that is not a message landing: the voice's welcome
+/// rides the same broadcast as the room events these tests wait on.
+async fn next_room_event(events: &mut tokio::sync::broadcast::Receiver<ChatEvent>) -> ChatEvent {
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event timeout")
+            .expect("event");
+        if !matches!(event, ChatEvent::MessageCreated { .. }) {
+            return event;
+        }
+    }
 }
 
 #[tokio::test]

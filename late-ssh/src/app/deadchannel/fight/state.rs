@@ -30,9 +30,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::data::{
-    self, DROP_LINES, EXP_KEEP_ON_DEATH, FOES, FoeKind, KILL_LINES, RATIONS_PER_DAY,
-    RUN_FAILED_LINES, RUN_LINES, RUN_ODDS, RUN_ODDS_OUT_OF, SIGNAL_PER_LEVEL, START_BITS,
-    TRADE_IN_PERCENT,
+    self, DROP_LINES, EXP_KEEP_ON_DEATH, FOES, FoeKind, KILL_LINES, NEAR_MISS_SIGNAL,
+    RATIONS_PER_DAY, RUN_FAILED_LINES, RUN_LINES, RUN_ODDS, RUN_ODDS_OUT_OF, SIGNAL_PER_LEVEL,
+    START_BITS, TRADE_IN_PERCENT,
 };
 use crate::app::deadchannel::city::data::{ARMOR, COST_LADDER, WEAPONS};
 use crate::app::door::greendragon::combat::{Combatant, resolve_extra_foe_strike, resolve_round};
@@ -88,6 +88,12 @@ pub struct Sheet {
     pub rations_left: i32,
     pub day: NaiveDate,
     pub fight: Option<Fight>,
+    /// Glyphs put down, ever. Exact where exp is not: a death keeps most
+    /// of the exp, so exp alone cannot say "never won".
+    pub kills: i32,
+    /// Today's tally, zeroed by the day roll: the wire's last-ration line.
+    pub kills_today: i32,
+    pub runs_today: i32,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -156,6 +162,9 @@ pub enum Applied {
     /// One exchange, both still standing.
     Round,
     Won {
+        /// The glyph's name, for the wire: the fight leaves the row on a
+        /// win, so the answer carries it.
+        foe: &'static str,
         bits: i64,
         exp: i64,
         /// The level reached, if the exp crossed a threshold.
@@ -180,6 +189,30 @@ pub struct Outcome {
     pub lines: Vec<String>,
 }
 
+/// What the wire hears about one command (GAME.md, "The wire sees the
+/// news, never the play-by-play"): every result worth a story, and
+/// nothing else. A kill, a round, a run, a purchase are the runner's
+/// business. The service formats these; the sheet decides them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum News {
+    /// The signal dropped; the street took `bits_lost`.
+    Dropped { bits_lost: i64 },
+    /// A level gained: the line the face rides.
+    Leveled { level: i32 },
+    /// The runner's first glyph, ever.
+    FirstBlood { foe: &'static str },
+    /// A win with `signal` at or under [`NEAR_MISS_SIGNAL`].
+    NearMiss { foe: &'static str, signal: i32 },
+    /// The last ration of the day is spent and the fight it bought is
+    /// over: the day's card.
+    LastRation {
+        kills: i32,
+        runs: i32,
+        signal: i32,
+        max_signal: i32,
+    },
+}
+
 impl Sheet {
     /// A fresh runner's sheet: the column defaults of migration 199.
     pub fn fresh(user_id: Uuid, today: NaiveDate) -> Self {
@@ -194,6 +227,9 @@ impl Sheet {
             rations_left: RATIONS_PER_DAY,
             day: today,
             fight: None,
+            kills: 0,
+            kills_today: 0,
+            runs_today: 0,
         }
     }
 
@@ -226,6 +262,9 @@ impl Sheet {
             rations_left: row.rations_left,
             day: row.day,
             fight,
+            kills: row.kills,
+            kills_today: row.kills_today,
+            runs_today: row.runs_today,
         })
     }
 
@@ -244,6 +283,9 @@ impl Sheet {
                 .fight
                 .as_ref()
                 .map(|fight| serde_json::to_value(fight).expect("a fight serializes")),
+            kills: self.kills,
+            kills_today: self.kills_today,
+            runs_today: self.runs_today,
         }
     }
 
@@ -297,7 +339,53 @@ impl Sheet {
         self.signal = self.max_signal();
         self.rations_left = RATIONS_PER_DAY;
         self.fight = None;
+        self.kills_today = 0;
+        self.runs_today = 0;
         true
+    }
+
+    /// The news in `applied`, in the order the wire prints it. At most one
+    /// story line per win (a level, else first blood, else a near miss:
+    /// the biggest one), then the day's card if this was the last ration's
+    /// fight and it ended standing. A dropped signal is its own line and
+    /// ends the day by itself.
+    pub fn news(&self, applied: &Applied) -> Vec<News> {
+        let mut news = Vec::new();
+        match applied {
+            Applied::Lost { bits_lost } => {
+                news.push(News::Dropped {
+                    bits_lost: *bits_lost,
+                });
+                return news;
+            }
+            Applied::Won { foe, leveled, .. } => {
+                if let Some(level) = leveled {
+                    news.push(News::Leveled { level: *level });
+                } else if self.kills == 1 {
+                    news.push(News::FirstBlood { foe });
+                } else if self.signal <= NEAR_MISS_SIGNAL {
+                    news.push(News::NearMiss {
+                        foe,
+                        signal: self.signal,
+                    });
+                }
+            }
+            Applied::Escaped => {}
+            Applied::Refused(_)
+            | Applied::Started
+            | Applied::Resumed
+            | Applied::Round
+            | Applied::Outfitted { .. } => return news,
+        }
+        if self.rations_left == 0 {
+            news.push(News::LastRation {
+                kills: self.kills_today,
+                runs: self.runs_today,
+                signal: self.signal,
+                max_signal: self.max_signal(),
+            });
+        }
+        news
     }
 
     pub fn apply<R: Rng>(&mut self, command: Command, rng: &mut R) -> Outcome {
@@ -442,6 +530,7 @@ impl Sheet {
             return refused(Refusal::NoFight);
         };
         if rng.gen_range(0..RUN_ODDS_OUT_OF) < RUN_ODDS {
+            self.runs_today += 1;
             return Outcome {
                 applied: Applied::Escaped,
                 lines: vec![pick(rng, &RUN_LINES).to_string()],
@@ -487,6 +576,8 @@ impl Sheet {
     fn win<R: Rng>(&mut self, fight: Fight, rng: &mut R, mut lines: Vec<String>) -> Outcome {
         self.bits += fight.foe_bits;
         self.exp += fight.foe_exp;
+        self.kills += 1;
+        self.kills_today += 1;
         lines.push(format!(
             "{} +{} bits, +{} exp.",
             pick(rng, &KILL_LINES),
@@ -507,6 +598,7 @@ impl Sheet {
         }
         Outcome {
             applied: Applied::Won {
+                foe: fight.foe().name,
                 bits: fight.foe_bits,
                 exp: fight.foe_exp,
                 leveled,

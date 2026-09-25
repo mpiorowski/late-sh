@@ -32,7 +32,10 @@ crate::model! {
         pub bits: i64,
         pub rations_left: i32,
         pub day: NaiveDate,
-        pub fight: Option<serde_json::Value>;
+        pub fight: Option<serde_json::Value>,
+        pub kills: i32,
+        pub kills_today: i32,
+        pub runs_today: i32;
 
         @data
         pub user_id: Uuid,
@@ -55,6 +58,9 @@ pub struct SheetWrite {
     pub rations_left: i32,
     pub day: NaiveDate,
     pub fight: Option<serde_json::Value>,
+    pub kills: i32,
+    pub kills_today: i32,
+    pub runs_today: i32,
 }
 
 /// What `ensure_for_user` found. The statements are the only witness of it,
@@ -191,7 +197,8 @@ impl DeadchannelRunner {
                 "UPDATE deadchannel_runners
                  SET level = $2, exp = $3, signal = $4, weapon_tier = $5,
                      armor_tier = $6, bits = $7, rations_left = $8, day = $9,
-                     fight = $10, updated = current_timestamp
+                     fight = $10, kills = $11, kills_today = $12, runs_today = $13,
+                     updated = current_timestamp
                  WHERE user_id = $1
                  RETURNING *",
                 &[
@@ -205,6 +212,9 @@ impl DeadchannelRunner {
                     &write.rations_left,
                     &write.day,
                     &write.fight,
+                    &write.kills,
+                    &write.kills_today,
+                    &write.runs_today,
                 ],
             )
             .await
