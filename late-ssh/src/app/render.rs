@@ -308,6 +308,9 @@ struct DrawContext<'a> {
     mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
+    /// `App::is_runner` for this session: the profile modal's runner
+    /// section shows only to runners until the public flip.
+    viewer_is_runner: bool,
     show_sheet_modal: bool,
     sheet_modal_state: &'a sheet_modal::state::SheetModalState,
     show_poll_modal: bool,
@@ -1349,7 +1352,10 @@ impl App {
                         nightcap_composer,
                         drunk_levels: &self.drunk_levels,
                         city_state: &self.city,
-                        city_look: self.runner_looks.get(&self.user_id).map(|entry| &entry.look),
+                        city_look: self
+                            .runner_looks
+                            .get(&self.user_id)
+                            .map(|entry| &entry.look),
                         city_sheet: self.fight.sheet.as_ref(),
                         city_scene: self.fight.scene.as_ref(),
                         city_till: self.fight.till.as_deref(),
@@ -1386,6 +1392,7 @@ impl App {
                         mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
+                        viewer_is_runner: self.runner_looks.contains_key(&self.user_id),
                         show_sheet_modal: self.show_sheet_modal,
                         sheet_modal_state: &self.sheet_modal_state,
                         show_poll_modal: self.show_poll_modal,
@@ -2127,7 +2134,13 @@ impl App {
         }
 
         if ctx.show_profile_modal {
-            profile_modal::ui::draw(frame, inner, ctx.profile_modal_state, ctx.marquee_tick);
+            profile_modal::ui::draw(
+                frame,
+                inner,
+                ctx.profile_modal_state,
+                ctx.marquee_tick,
+                ctx.viewer_is_runner,
+            );
         }
 
         if ctx.show_sheet_modal {
@@ -3003,9 +3016,8 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
         let with_rations = format!(" rations {} · signal ", sheet.rations_left);
         let signal_only = " signal ".to_string();
         let head = [with_rations, signal_only].into_iter().find(|head| {
-            let width = UnicodeWidthStr::width(head.as_str())
-                + UnicodeWidthStr::width(signal.as_str())
-                + 1;
+            let width =
+                UnicodeWidthStr::width(head.as_str()) + UnicodeWidthStr::width(signal.as_str()) + 1;
             // The padding is already inside the head and the trailing space.
             fits(used, count, width.saturating_sub(2) as u16)
         })?;

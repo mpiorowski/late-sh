@@ -138,6 +138,89 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
     );
 }
 
+/// Patch prices the gap against the sheet and spells its refusals ahead
+/// of the key: a dropped signal is the roll's, a full one buys nothing.
+#[test]
+fn patch_prices_the_gap_and_says_when_there_is_nothing_to_buy() {
+    let mut state = State::new();
+    state.open_panel(Landmark::Repairs);
+    let render_with = |state: &State, sheet: Option<&Sheet>| {
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    frame.area(),
+                    CityView {
+                        state,
+                        own_username: "mira",
+                        look: None,
+                        sheet,
+                        scene: None,
+                        till: Some("patch works fast. +18 signal, back to full. 54 bits."),
+                        tailor: tailor_ui::MirrorView {
+                            draft: None,
+                            word: None,
+                            changed: false,
+                            saving: false,
+                        },
+                    },
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let mut screen = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                screen.push_str(buffer[(x, y)].symbol());
+            }
+            screen.push('\n');
+        }
+        screen
+    };
+
+    let screen = render_with(&state, None);
+    assert!(screen.contains(" patch "), "{screen}");
+    assert!(
+        screen.contains("the sheet has not come down the wire yet."),
+        "{screen}"
+    );
+
+    let mut sheet = Sheet::fresh(
+        uuid::Uuid::nil(),
+        chrono::NaiveDate::from_ymd_opt(2026, 9, 24).unwrap(),
+    );
+    sheet.level = 3;
+    sheet.signal = 12;
+    sheet.bits = 100;
+    let screen = render_with(&state, Some(&sheet));
+    assert!(
+        screen.contains("signal 12/30      on hand 100 bits"),
+        "{screen}"
+    );
+    assert!(screen.contains("[p] patch to full for 54 bits"), "{screen}");
+    assert!(
+        screen.contains("patch works fast. +18 signal, back to full. 54 bits."),
+        "{screen}"
+    );
+
+    sheet.signal = 30;
+    let screen = render_with(&state, Some(&sheet));
+    assert!(
+        screen.contains("nothing on you needs patching."),
+        "{screen}"
+    );
+    assert!(!screen.contains("[p] patch"), "{screen}");
+
+    sheet.signal = 0;
+    let screen = render_with(&state, Some(&sheet));
+    assert!(
+        screen.contains("your signal is down. nothing here brings it back before the roll."),
+        "{screen}"
+    );
+}
+
 #[test]
 fn the_street_line_pins_what_the_cart_said() {
     let mut state = State::new();

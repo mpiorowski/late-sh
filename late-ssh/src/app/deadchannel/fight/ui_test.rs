@@ -80,6 +80,7 @@ fn the_scene_shows_both_faces_the_exchange_and_the_keys() {
     }
     assert!(screen.contains("the end of the row"), "{screen}");
     assert!(screen.contains("mira  lv 1"), "{screen}");
+    assert!(screen.contains("bare hands · street clothes"), "{screen}");
     assert!(screen.contains("howler"), "{screen}");
     assert!(screen.contains("signal █████░░░░░░░ 4/10"), "{screen}");
     assert!(screen.contains("30/74 ░░░░░░░█████ signal"), "{screen}");

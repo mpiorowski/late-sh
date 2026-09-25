@@ -7,6 +7,7 @@ use late_core::models::bonsai_decay_protection::BonsaiDecayProtection;
 use late_core::models::chat_message_gild::{ChatMessageGild, GildCounts};
 use late_core::models::chips::{MonthChips, PROFILE_LEDGER_ROWS, UserChips};
 use late_core::models::crown::CrownReign;
+use late_core::models::deadchannel_runner::DeadchannelRunner;
 use late_core::models::drink_round::DrinkRound;
 use late_core::models::game_payout::GamePayout;
 use late_core::models::irc_token::IrcToken;
@@ -59,6 +60,17 @@ pub struct ProfilePet {
     pub name: Option<String>,
 }
 
+/// What a profile shows of a runner: the face and the sheet, for the
+/// runner section. Present only while the viewed user stands on the row
+/// (`deadchannel_runners.left_at` unset); a look or sheet the row cannot
+/// parse is logged and shown as no runner, the way the directory treats
+/// it, so one bad row never blanks a profile.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProfileRunner {
+    pub look: crate::app::deadchannel::runner::state::Look,
+    pub sheet: crate::app::deadchannel::fight::state::Sheet,
+}
+
 #[derive(Clone, Default)]
 pub struct ProfileSnapshot {
     pub user_id: Option<Uuid>,
@@ -70,6 +82,8 @@ pub struct ProfileSnapshot {
     /// The Pet Companion, for owners only, in the mood its owner's session
     /// last left it in.
     pub pet: Option<ProfilePet>,
+    /// The standing runner behind this profile, if any.
+    pub runner: Option<ProfileRunner>,
     pub profile_awards: Vec<ProfileAward>,
     /// Gilds this profile's owner has received, per tier.
     pub gild_counts: GildCounts,
@@ -261,6 +275,24 @@ impl ProfileService {
         } else {
             None
         };
+        let runner = match DeadchannelRunner::find_by_user(&client, user_id).await? {
+            Some(row) if row.left_at.is_none() => {
+                let look = crate::app::deadchannel::runner::state::Look::parse(&row.look);
+                let sheet = crate::app::deadchannel::fight::state::Sheet::from_row(&row);
+                match (look, sheet) {
+                    (Ok(look), Ok(sheet)) => Some(ProfileRunner { look, sheet }),
+                    (Err(error), _) => {
+                        tracing::error!(error = %error, user_id = %user_id, "runner look failed to parse; profile shows no runner");
+                        None
+                    }
+                    (_, Err(error)) => {
+                        tracing::error!(error = %error, user_id = %user_id, "runner sheet failed to parse; profile shows no runner");
+                        None
+                    }
+                }
+            }
+            Some(_) | None => None,
+        };
         let profile_awards = list_profile_awards_for_user(&client, user_id).await?;
         let gild_counts = ChatMessageGild::counts_for_author(&client, user_id).await?;
         let gallery_counts = ArtboardPiece::counts_for_user(&client, user_id).await?;
@@ -305,6 +337,7 @@ impl ProfileService {
                 bonsai_decay_protection,
                 aquarium_fish,
                 pet,
+                runner,
                 profile_awards,
                 gild_counts,
                 gallery_counts,

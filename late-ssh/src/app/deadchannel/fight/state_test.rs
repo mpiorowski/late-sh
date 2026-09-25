@@ -418,6 +418,66 @@ fn the_armorer_trades_up_and_refuses_down_or_short() {
     assert_eq!(sheet.bits, 358 - 48);
 }
 
+/// Patch sells the whole gap at a bit a point times the level, and turns
+/// away a dropped signal (the roll's business), a fight left waiting on
+/// the row, a full signal, and a short purse, changing nothing each time.
+#[test]
+fn patch_buys_the_signal_back_and_refuses_down_waiting_full_or_short() {
+    let mut rng = StdRng::seed_from_u64(1);
+
+    let mut sheet = fresh();
+    sheet.level = 3;
+    sheet.signal = 12;
+    sheet.bits = 100;
+    assert_eq!(sheet.patch_price(), 54);
+    let patched = sheet.apply(Command::Patch, &mut rng);
+    assert_eq!(
+        patched.applied,
+        Applied::Patched {
+            restored: 18,
+            paid: 54
+        }
+    );
+    assert_eq!(
+        patched.lines,
+        vec!["patch works fast. +18 signal, back to full. 54 bits.".to_string()]
+    );
+    assert_eq!((sheet.signal, sheet.bits), (30, 46));
+    assert!(sheet.news(&patched.applied).is_empty());
+
+    let full = sheet.apply(Command::Patch, &mut rng);
+    assert_eq!(full.applied, Applied::Refused(Refusal::NothingToPatch));
+    assert_eq!((sheet.signal, sheet.bits), (30, 46));
+
+    let mut down = fresh();
+    down.signal = 0;
+    let before = down.clone();
+    let outcome = down.apply(Command::Patch, &mut rng);
+    assert_eq!(outcome.applied, Applied::Refused(Refusal::SignalDown));
+    assert_eq!(down, before);
+
+    let mut waiting = fresh();
+    waiting.signal = 4;
+    waiting.apply(Command::Start, &mut rng);
+    assert!(waiting.fight.is_some());
+    let before = waiting.clone();
+    let outcome = waiting.apply(Command::Patch, &mut rng);
+    assert_eq!(outcome.applied, Applied::Refused(Refusal::FightWaiting));
+    assert_eq!(waiting, before);
+
+    let mut short = fresh();
+    short.signal = 1;
+    short.bits = 5;
+    let before = short.clone();
+    let outcome = short.apply(Command::Patch, &mut rng);
+    assert_eq!(outcome.applied, Applied::Refused(Refusal::Short { by: 4 }));
+    assert_eq!(
+        outcome.lines,
+        vec!["you are 4 bits short of a patch.".to_string()]
+    );
+    assert_eq!(short, before);
+}
+
 #[test]
 fn a_carried_weapon_is_named_in_the_hit_line() {
     let mut sheet = fresh();

@@ -351,7 +351,10 @@ fn status_hud_title_reads_the_runners_rations_and_signal() {
         draws_in: "3h12m".to_string(),
         open: true,
     };
-    let mut sheet = Sheet::fresh(uuid::Uuid::from_u128(1), chrono::NaiveDate::from_ymd_opt(2026, 9, 25).expect("date"));
+    let mut sheet = Sheet::fresh(
+        uuid::Uuid::from_u128(1),
+        chrono::NaiveDate::from_ymd_opt(2026, 9, 25).expect("date"),
+    );
     sheet.level = 2;
     sheet.signal = 12;
     sheet.rations_left = 7;
@@ -368,7 +371,8 @@ fn status_hud_title_reads_the_runners_rations_and_signal() {
         })
     };
     let full = " 05:00 building | 2 unread mentions | rations 7 · signal 12/20 | pot 84,200 · 3h12m | 1500 chips ";
-    let without_pot = " 05:00 building | 2 unread mentions | rations 7 · signal 12/20 | 1500 chips ";
+    let without_pot =
+        " 05:00 building | 2 unread mentions | rations 7 · signal 12/20 | 1500 chips ";
     let signal_only = " 05:00 building | 2 unread mentions | signal 12/20 | 1500 chips ";
     // With the readout gone the pot has room for its size again.
     let without_runner = " 05:00 building | 2 unread mentions | pot 84,200 | 1500 chips ";

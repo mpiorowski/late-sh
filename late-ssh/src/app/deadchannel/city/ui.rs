@@ -1781,17 +1781,13 @@ fn armorer_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         )));
         return lines;
     };
-    let name_or = |slot: GearSlot, bare: &'static str| sheet.gear_name(slot).unwrap_or(bare);
     lines.push(Line::from(vec![
         Span::styled("on hand ", dim_text),
         Span::styled(format!("{} bits", sheet.bits), number),
         Span::styled("      weapon ", dim_text),
-        Span::styled(name_or(GearSlot::Weapon, "bare hands").to_string(), carried),
+        Span::styled(fight_ui::weapon_name(sheet).to_string(), carried),
         Span::styled("      armor ", dim_text),
-        Span::styled(
-            name_or(GearSlot::Armor, "street clothes").to_string(),
-            carried,
-        ),
+        Span::styled(fight_ui::armor_name(sheet).to_string(), carried),
     ]));
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(

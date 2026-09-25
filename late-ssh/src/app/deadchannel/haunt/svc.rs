@@ -768,8 +768,24 @@ fn tick_commands(app: &mut App) -> bool {
                 false => "witness idle",
             };
             let gate = app.haunt.gate;
+            // The runner's sheet as this session mirrors it: what the
+            // strip and the frame HUD are painting from.
+            let sheet = match &app.fight.sheet {
+                Some(sheet) => format!(
+                    "runner lv {} · signal {}/{} · rations {}/{} · bits {} · {} · {}",
+                    sheet.level,
+                    sheet.signal,
+                    sheet.max_signal(),
+                    sheet.rations_left,
+                    crate::app::deadchannel::fight::data::RATIONS_PER_DAY,
+                    sheet.bits,
+                    crate::app::deadchannel::fight::ui::weapon_name(sheet),
+                    crate::app::deadchannel::fight::ui::armor_name(sheet),
+                ),
+                None => "no runner sheet".to_string(),
+            };
             app.banner = Some(Banner::info(&format!(
-                "Haunt {} · live {} · stage1 {} · chosen {} (active {}h, settings {}, bio {}ch {}) · {glitch} · glitch hits {}/{GLITCH_TOTAL_CAP} · name hits {}/{NAME_TOTAL_CAP} · {witness} · {door} · {whisper} · {invite}",
+                "Haunt {} · live {} · stage1 {} · chosen {} (active {}h, settings {}, bio {}ch {}) · {glitch} · glitch hits {}/{GLITCH_TOTAL_CAP} · name hits {}/{NAME_TOTAL_CAP} · {witness} · {door} · {whisper} · {invite} · {sheet}",
                 on_off(app.haunt.enabled()),
                 on_off(app.haunt.live()),
                 on_off(app.haunt.stage1),

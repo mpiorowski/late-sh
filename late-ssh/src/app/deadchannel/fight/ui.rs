@@ -18,7 +18,7 @@ use ratatui::{
 };
 
 use super::session::Scene;
-use super::state::{Fight, Sheet};
+use super::state::{Fight, Sheet, Slot};
 use crate::app::deadchannel::city::map::Neon;
 use crate::app::deadchannel::city::ui::{
     INK, INK_BRIGHT, INK_DIM, INK_MUTED, dim, glow, ink, lit, mix, tint_rgb,
@@ -177,6 +177,30 @@ fn pad(mut spans: Vec<Span<'static>>, width: usize, left: bool) -> Vec<Span<'sta
     spans
 }
 
+/// What the runner carries, in words: the row under the header, aligned
+/// under the stats column. Bare hands and street clothes are named as
+/// such, so a fresh runner reads what the armorer would change.
+fn gear_row(sheet: &Sheet) -> Line<'static> {
+    let dim_text = ink(INK_DIM);
+    let text = ink(INK);
+    Line::from(vec![
+        Span::styled(" ".repeat(2 + PORTRAIT_WIDTH + 3), text),
+        Span::styled(weapon_name(sheet).to_string(), text),
+        Span::styled(" · ", dim_text),
+        Span::styled(armor_name(sheet).to_string(), text),
+    ])
+}
+
+/// The carried weapon's name, `bare hands` at tier 0.
+pub(crate) fn weapon_name(sheet: &Sheet) -> &'static str {
+    sheet.gear_name(Slot::Weapon).unwrap_or("bare hands")
+}
+
+/// The carried armor's name, `street clothes` at tier 0.
+pub(crate) fn armor_name(sheet: &Sheet) -> &'static str {
+    sheet.gear_name(Slot::Armor).unwrap_or("street clothes")
+}
+
 /// The three header rows: your face and stats on the left, the glyph's
 /// on the right, the two bars facing each other.
 fn header(sheet: &Sheet, look: Option<&Look>, username: &str) -> Vec<Line<'static>> {
@@ -286,14 +310,17 @@ pub(crate) fn draw_scene(frame: &mut Frame, area: Rect, view: SceneView<'_>) {
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(fixed_rows + log_rows);
     lines.push(Line::default());
     match view.sheet {
-        Some(sheet) => lines.extend(header(sheet, view.look, view.own_username)),
+        Some(sheet) => {
+            lines.extend(header(sheet, view.look, view.own_username));
+            lines.push(gear_row(sheet));
+        }
         None => {
             lines.push(Line::from(Span::styled("  the static parts.", dim_text)));
             lines.push(Line::default());
             lines.push(Line::default());
+            lines.push(Line::default());
         }
     }
-    lines.push(Line::default());
     lines.push(Line::from(Span::styled(
         format!("  {}", "─".repeat(INNER.saturating_sub(4))),
         rule,
@@ -368,7 +395,7 @@ pub(crate) fn draw_scene(frame: &mut Frame, area: Rect, view: SceneView<'_>) {
     );
 }
 
-/// The sheet strip, top-right: the day's budget at a glance.
+/// The sheet strip, top-right: the day's budget and the kit at a glance.
 pub(crate) fn draw_strip(frame: &mut Frame, area: Rect, sheet: &Sheet) {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
@@ -392,6 +419,10 @@ pub(crate) fn draw_strip(frame: &mut Frame, area: Rect, sheet: &Sheet) {
     ));
     spans.push(Span::styled("  bits ", dim_text));
     spans.push(Span::styled(sheet.bits.to_string(), number));
+    spans.push(Span::styled("  weapon ", dim_text));
+    spans.push(Span::styled(weapon_name(sheet).to_string(), text));
+    spans.push(Span::styled("  armor ", dim_text));
+    spans.push(Span::styled(armor_name(sheet).to_string(), text));
     let line = Line::from(spans);
     let width = (line.width() + 2).min(usize::from(area.width).saturating_sub(2)) as u16;
     if area.height < 2 {
