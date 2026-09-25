@@ -4,6 +4,7 @@ use late_core::db::Db;
 use late_core::models::chips::{ChipMove, UserChips};
 use late_core::models::drink_round::{
     Bar, DrinkCredit, DrinkRound, MAX_OPEN_CREDITS, OpenCredit, ROUND_CREDIT_TTL_HOURS,
+    ROUND_PRICE_PER_PATRON,
 };
 use late_core::models::drinks::UserDrinks;
 use late_core::models::game_payout::{
@@ -63,6 +64,13 @@ pub struct RoundPurchase {
     /// The buyer's buzz after their own pour: "round on me" includes me.
     pub drunk_points: i64,
     pub last_drink_at: DateTime<Utc>,
+}
+
+/// One drink left on another patron's tab, without pouring the buyer one.
+#[derive(Debug, Clone, Copy)]
+pub struct GiftDrinkPurchase {
+    pub round_id: Uuid,
+    pub balance: i64,
 }
 
 /// Why a round did not happen. Every arm is uncharged: a refused round leaves
@@ -265,6 +273,58 @@ impl ChipService {
             balance: chips.balance,
             drunk_points: drinks.drunk_points,
             last_drink_at: drinks.last_drink_at,
+        })
+    }
+
+    /// Leave one drink for a named patron, online or not. The same grant lock,
+    /// three-credit cap, expiry and ledger reason as a house round apply, but
+    /// only the recipient may drink: buying a gift does not pour the buyer one.
+    pub async fn buy_drink_for(
+        &self,
+        buyer_id: Uuid,
+        recipient_id: Uuid,
+    ) -> Result<GiftDrinkPurchase, RoundError> {
+        if buyer_id == recipient_id {
+            return Err(RoundError::Failed(anyhow::anyhow!(
+                "cannot buy yourself a gift drink"
+            )));
+        }
+        let mut client = self.db.get().await?;
+        let tx = client
+            .transaction()
+            .await
+            .context("opening the gift drink transaction")?;
+        let grant = DrinkRound::open(
+            &tx,
+            buyer_id,
+            ROUND_PRICE_PER_PATRON,
+            Bar::Tavern,
+            &[recipient_id],
+            ROUND_CREDIT_TTL_HOURS,
+            MAX_OPEN_CREDITS,
+        )
+        .await?;
+        if grant.patron_count() == 0 {
+            return Err(RoundError::Refused(RoundRefusal::AllHolding));
+        }
+        let Some(chips) = UserChips::apply(
+            &*tx,
+            buyer_id,
+            ChipMove::RoundPurchase,
+            grant.total_chips(),
+            &grant.round.id.to_string(),
+        )
+        .await?
+        else {
+            return Err(RoundError::Refused(RoundRefusal::InsufficientChips {
+                patrons: 1,
+                total: ROUND_PRICE_PER_PATRON,
+            }));
+        };
+        tx.commit().await.context("committing the gift drink")?;
+        Ok(GiftDrinkPurchase {
+            round_id: grant.round.id,
+            balance: chips.balance,
         })
     }
 
