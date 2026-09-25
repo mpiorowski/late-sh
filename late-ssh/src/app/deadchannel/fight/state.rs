@@ -134,6 +134,8 @@ pub enum Command {
         slot: Slot,
         tier: i32,
     },
+    /// Buy the signal back to full at patch, for `Sheet::patch_price`.
+    Patch,
 }
 
 /// Why nothing happened.
@@ -150,6 +152,10 @@ pub enum Refusal {
     Short {
         by: i64,
     },
+    /// Patch with the signal already full.
+    NothingToPatch,
+    /// Patch with a glyph waiting on the row: the fight is the fight.
+    FightWaiting,
 }
 
 /// How one command settled. `Won`, `Lost`, and `Escaped` clear the fight.
@@ -178,6 +184,12 @@ pub enum Applied {
     Outfitted {
         slot: Slot,
         tier: i32,
+        paid: i64,
+    },
+    /// The signal bought back to full at patch: `restored` points for
+    /// `paid` bits.
+    Patched {
+        restored: i32,
         paid: i64,
     },
 }
@@ -326,6 +338,14 @@ impl Sheet {
         price(tier) - trade_in(self.tier_of(slot))
     }
 
+    /// What patch charges to bring the signal back to full: a bit a
+    /// point, times the level, so the price climbs with the glyphs that
+    /// did the damage. Zero with nothing missing; the panel shows it,
+    /// `Patch` charges it.
+    pub fn patch_price(&self) -> i64 {
+        i64::from(self.max_signal() - self.signal) * i64::from(self.level)
+    }
+
     /// The lazy day roll (GAME.md, "Three bars, one clock"): the first
     /// touch after midnight UTC refills signal and rations together, and
     /// nothing refills in between. A fight left hanging overnight is
@@ -375,7 +395,8 @@ impl Sheet {
             | Applied::Started
             | Applied::Resumed
             | Applied::Round
-            | Applied::Outfitted { .. } => return news,
+            | Applied::Outfitted { .. }
+            | Applied::Patched { .. } => return news,
         }
         if self.rations_left == 0 {
             news.push(News::LastRation {
@@ -394,6 +415,51 @@ impl Sheet {
             Command::Attack => self.attack_round(rng),
             Command::Run => self.run(rng),
             Command::Outfit { slot, tier } => self.outfit(slot, tier),
+            Command::Patch => self.patch(),
+        }
+    }
+
+    /// Patch. A signal that dropped stays down until the roll (the day
+    /// is the day), a fight waiting on the row is finished first, and a
+    /// full signal buys nothing; otherwise the whole gap, paid in full.
+    fn patch(&mut self) -> Outcome {
+        if self.is_down() {
+            return Outcome {
+                applied: Applied::Refused(Refusal::SignalDown),
+                lines: vec![
+                    "your signal is down. nothing here brings it back before the roll."
+                        .to_string(),
+                ],
+            };
+        }
+        if self.fight.is_some() {
+            return Outcome {
+                applied: Applied::Refused(Refusal::FightWaiting),
+                lines: vec!["not with a glyph waiting on you. finish it first.".to_string()],
+            };
+        }
+        let restored = self.max_signal() - self.signal;
+        if restored == 0 {
+            return Outcome {
+                applied: Applied::Refused(Refusal::NothingToPatch),
+                lines: vec!["nothing on you needs patching.".to_string()],
+            };
+        }
+        let paid = self.patch_price();
+        if paid > self.bits {
+            let by = paid - self.bits;
+            return Outcome {
+                applied: Applied::Refused(Refusal::Short { by }),
+                lines: vec![format!("you are {by} bits short of a patch.")],
+            };
+        }
+        self.bits -= paid;
+        self.signal = self.max_signal();
+        Outcome {
+            applied: Applied::Patched { restored, paid },
+            lines: vec![format!(
+                "patch works fast. +{restored} signal, back to full. {paid} bits."
+            )],
         }
     }
 
@@ -630,8 +696,11 @@ fn refused(refusal: Refusal) -> Outcome {
         Refusal::NoRations => "you are spent for today. the static will keep.",
         Refusal::SignalDown => "your signal is down. nothing in there can see you until tomorrow.",
         Refusal::NoFight => "there is nothing in front of you.",
-        Refusal::NotAnUpgrade | Refusal::Short { .. } => {
-            unreachable!("till refusals are lined in outfit")
+        Refusal::NotAnUpgrade
+        | Refusal::Short { .. }
+        | Refusal::NothingToPatch
+        | Refusal::FightWaiting => {
+            unreachable!("till refusals are lined in outfit and patch")
         }
     };
     Outcome {

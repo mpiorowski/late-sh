@@ -248,6 +248,7 @@ fn beat_for(applied: &Applied) -> FightBeat {
         Applied::Lost { .. } => FightBeat::Lost,
         Applied::Escaped => FightBeat::Escaped,
         Applied::Outfitted { .. } => FightBeat::Outfitted,
+        Applied::Patched { .. } => FightBeat::Patched,
     }
 }
 

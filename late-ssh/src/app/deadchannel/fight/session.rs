@@ -30,8 +30,9 @@ pub(crate) struct FightSession {
     /// no standing runner.
     pub sheet: Option<Sheet>,
     pub scene: Option<Scene>,
-    /// The armorer's last word: the answer to a command sent with no
-    /// scene open (a purchase, or its refusal), shown in the panel.
+    /// The counter's last word: the answer to a command sent with no
+    /// scene open (a purchase or a patch, or its refusal), shown in the
+    /// panel that asked.
     pub till: Option<String>,
     user_id: Uuid,
     username: String,
@@ -188,7 +189,7 @@ impl FightSession {
             }
             // The till is never asked from inside the scene; an answer
             // that lands here anyway is shown, not lost.
-            Applied::Outfitted { .. } => scene.lines.extend(lines),
+            Applied::Outfitted { .. } | Applied::Patched { .. } => scene.lines.extend(lines),
         }
         if scene.lines.len() > SCENE_KEEP {
             let drop = scene.lines.len() - SCENE_KEEP;

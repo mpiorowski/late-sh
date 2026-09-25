@@ -1607,18 +1607,7 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
                 dim_text,
             )));
         }
-        Landmark::Repairs => {
-            lines.push(Line::from(Span::styled(
-                "nothing on you is broken. yet.",
-                text,
-            )));
-            lines.push(blank());
-            lines.push(Line::from(Span::styled(
-                "gear keeps when your signal drops. patch is for the day the static gets its hands on it.",
-                dim_text,
-            )));
-            lines.push(Line::from(Span::styled("(not open yet)", muted_text)));
-        }
+        Landmark::Repairs => lines.extend(patch_lines(view)),
         Landmark::Board => {
             lines.push(Line::from(Span::styled("standing orders", head)));
             for notice in data::NOTICES.iter() {
@@ -1704,6 +1693,75 @@ pub(crate) fn mix(mut v: u64) -> u64 {
 /// The armorer's wall: the ladder with the cursor on it, what you carry
 /// lit, the two keys priced for the picked row net of the trade-in, and
 /// the last thing the armorer said.
+/// Patch: the signal, what bringing it back costs, and the one key. The
+/// price is `Sheet::patch_price`; the refusals the row would give are
+/// spelled out ahead of the key so nobody pays to read them.
+fn patch_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let muted_text = ink(INK_MUTED);
+    let number = glow(Neon::Amber);
+    let key = lit(Neon::Amber);
+    let short = dim(Neon::Red);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let Some(sheet) = view.sheet else {
+        lines.push(Line::from(Span::styled(
+            "the sheet has not come down the wire yet.",
+            muted_text,
+        )));
+        return lines;
+    };
+    lines.push(Line::from(vec![
+        Span::styled("signal ", dim_text),
+        Span::styled(
+            format!("{}/{}", sheet.signal, sheet.max_signal()),
+            match sheet.is_down() {
+                true => short,
+                false => text,
+            },
+        ),
+        Span::styled("      on hand ", dim_text),
+        Span::styled(format!("{} bits", sheet.bits), number),
+    ]));
+    lines.push(Line::default());
+    let price = sheet.patch_price();
+    if sheet.is_down() {
+        lines.push(Line::from(Span::styled(
+            "your signal is down. nothing here brings it back before the roll.",
+            text,
+        )));
+    } else if sheet.fight.is_some() {
+        lines.push(Line::from(Span::styled(
+            "not with a glyph waiting on you. finish it first.",
+            text,
+        )));
+    } else if price == 0 {
+        lines.push(Line::from(Span::styled(
+            "nothing on you needs patching.",
+            text,
+        )));
+    } else {
+        let style = match price > sheet.bits {
+            true => short,
+            false => number,
+        };
+        lines.push(Line::from(vec![
+            Span::styled("[p] ", key),
+            Span::styled("patch to full for ", text),
+            Span::styled(format!("{price} bits"), style),
+        ]));
+    }
+    lines.push(Line::from(Span::styled(
+        "a bit a point, times your level. a dropped signal is the roll's to fix, not patch's.",
+        dim_text,
+    )));
+    if let Some(till) = view.till {
+        lines.push(Line::from(Span::styled(till.to_string(), lit(Neon::Cyan))));
+    }
+    lines
+}
+
 fn armorer_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
