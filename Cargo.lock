@@ -6382,6 +6382,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "realm-mapgen"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+]
+
+[[package]]
 name = "reborrow"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

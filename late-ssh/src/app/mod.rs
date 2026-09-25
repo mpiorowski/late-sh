@@ -57,6 +57,7 @@ pub mod tick;
 #[cfg(test)]
 mod tick_test;
 pub(crate) mod ultimates;
+pub mod usermap;
 pub mod voice;
 pub mod workspace;
 pub mod zen;

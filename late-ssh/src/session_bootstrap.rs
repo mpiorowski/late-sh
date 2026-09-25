@@ -464,6 +464,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         door_rc_service: state.door_rc_service.clone(),
         initial_door_rcs,
         daily_service: state.daily_service.clone(),
+        realm_service: state.realm_service.clone(),
         house_registry: state.house_registry.clone(),
         dartboard_server: state.dartboard_server.clone(),
         dartboard_provenance: state.dartboard_provenance.clone(),

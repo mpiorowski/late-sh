@@ -218,6 +218,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_settings_modal() {
         open_settings_modal(app);
     }
+    if app.chat.take_requested_usermap() {
+        crate::app::input::open_usermap_globally(app);
+    }
     if app.chat.take_requested_shop_modal() {
         crate::app::input::open_shop_modal_globally(app);
     }

@@ -104,7 +104,7 @@ pub(crate) fn close_table(app: &mut App) {
     let return_screen = app.house.return_screen;
     leave_table(app, return_screen);
     app.show_lobby_modal = true;
-    app.lobby.mark_seen(&app.daily);
+    app.lobby.mark_seen(&app.daily, &app.realm);
 }
 
 /// Shared teardown: clear any lingering table-chat selection, close the

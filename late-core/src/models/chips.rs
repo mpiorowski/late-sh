@@ -200,6 +200,10 @@ chip_moves!(
     DailyEightBallWin,
     DailyNineBallWin,
     DailySnookerWin,
+    /// A Realm conquest payout: the winner (and, in bigger games, the
+    /// runner-up and third place) of a finished realm game. `source_ref` is
+    /// the realm game id, so each game pays each rank once.
+    RealmConquest,
     TronWin,
     /// A Super Snake seat that came out ahead, banked when the player stands
     /// up. The arena keeps the running total in memory: one row per visit,
@@ -281,6 +285,7 @@ impl ChipMove {
             Self::DailyEightBallWin => "daily_eightball_win",
             Self::DailyNineBallWin => "daily_nineball_win",
             Self::DailySnookerWin => "daily_snooker_win",
+            Self::RealmConquest => "realm_conquest",
             Self::TronWin => "tron_win",
             Self::SsnakeArenaEarned => "ssnake_arena_earned",
             Self::SsnakeArenaLost => "ssnake_arena_lost",
@@ -336,6 +341,7 @@ impl ChipMove {
             | Self::DailyEightBallWin
             | Self::DailyNineBallWin
             | Self::DailySnookerWin
+            | Self::RealmConquest
             | Self::TronWin
             | Self::GreendragonDragonSlain
             | Self::DarkroomEscape
@@ -384,6 +390,7 @@ impl ChipMove {
             | Self::DailyEightBallWin
             | Self::DailyNineBallWin
             | Self::DailySnookerWin
+            | Self::RealmConquest
             | Self::TronWin
             | Self::SsnakeArenaEarned
             | Self::GreendragonDragonSlain
@@ -470,6 +477,7 @@ impl ChipMove {
             | Self::DailyEightBallWin
             | Self::DailyNineBallWin
             | Self::DailySnookerWin
+            | Self::RealmConquest
             | Self::TronWin
             | Self::SsnakeArenaEarned
             | Self::GreendragonDragonSlain
