@@ -1109,7 +1109,7 @@ fixed:
   nobody can read it, which is the point.
 - **No function behind anything yet, and the panels say so.** Every shop
   opens and shows its real catalog (the fifteen gear tiers at LoGD prices,
-  the rack cut to the runner's level with the portrait in the mirror, the
+  the rack cut to the runner's peak level with the portrait in the mirror, the
   three bands) under a line in the voice saying the till is not open. The
   street answers Enter at a cart with a line from a small pool. Placeholder
   copy, design review pending: the draft **move names** (tuner: retune,
