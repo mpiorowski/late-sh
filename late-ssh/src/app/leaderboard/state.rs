@@ -1,8 +1,8 @@
 use late_core::models::{
     chips::Difficulty,
     leaderboard::{
-        DailyPuzzle, DoorGame, LATEANIA_LEVEL_CAP, LATEANIA_XP_PER_PARAGON_LEVEL,
-        LeaderboardData, RankedEntry, ScoreGame,
+        DailyPuzzle, DoorGame, LATEANIA_LEVEL_CAP, LATEANIA_XP_PER_PARAGON_LEVEL, LeaderboardData,
+        RankedEntry, ScoreGame,
     },
 };
 

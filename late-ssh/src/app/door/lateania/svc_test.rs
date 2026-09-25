@@ -326,7 +326,8 @@ fn the_craft_panel_leads_with_alchemy_and_counts_the_made_goods_you_hold() {
     {
         let p = s.players.get_mut(&uid(1)).unwrap();
         p.room = 3; // Embergate's crafters' row: all five stations
-        p.inventory.extend([potion_id(0), potion_id(0), potion_id(0)]);
+        p.inventory
+            .extend([potion_id(0), potion_id(0), potion_id(0)]);
         p.inventory.extend([ingot_id(0), ingot_id(0)]);
     }
     let craft = s.snapshot().players[&uid(1)]
@@ -1975,7 +1976,11 @@ fn reaching_the_level_cap_announces_the_real_cap() {
         .collect();
     let cap = format!("level {}", Class::MAX_LEVEL);
     let pinnacle: Vec<&String> = texts.iter().filter(|t| t.contains("pinnacle")).collect();
-    assert_eq!(pinnacle.len(), 2, "personal and world announcements: {texts:?}");
+    assert_eq!(
+        pinnacle.len(),
+        2,
+        "personal and world announcements: {texts:?}"
+    );
     assert!(
         pinnacle.iter().all(|t| t.contains(&cap)),
         "the pinnacle names the real cap: {pinnacle:?}"

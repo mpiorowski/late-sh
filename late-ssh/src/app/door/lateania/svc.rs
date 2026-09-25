@@ -69,8 +69,8 @@ use super::stats::{
 };
 use super::taming::{PetSkillEffect, beast_species, beasts_at, tame_chance, tame_xp};
 use super::world::{
-    CritterKind, Dir, FeatureKind, MobBehavior, MobSpawn, Perk, RegionProgress,
-    ResourceNode, RoomId, World, craft_stations_at, critter_index, critters_at, features_at,
+    CritterKind, Dir, FeatureKind, MobBehavior, MobSpawn, Perk, RegionProgress, ResourceNode,
+    RoomId, World, craft_stations_at, critter_index, critters_at, features_at,
     frontier_entrance_room, is_frontier_room, node_index, nodes_at, seed_world,
     tutorial_start_room,
 };

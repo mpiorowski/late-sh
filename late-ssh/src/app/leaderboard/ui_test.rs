@@ -281,9 +281,19 @@ fn lateania_rows_show_the_class_note_until_width_runs_short() {
     assert!(tight.ends_with("lvl 50"), "{tight}");
 
     // Past the cap the board counts paragon levels on top of it.
-    let paragon = text(&entry_line(&entry(1, "mat", viewer(), 137), board, false, 40));
+    let paragon = text(&entry_line(
+        &entry(1, "mat", viewer(), 137),
+        board,
+        false,
+        40,
+    ));
     assert!(paragon.ends_with("lvl 100 +37"), "{paragon}");
-    let capped = text(&entry_line(&entry(1, "mat", viewer(), 100), board, false, 40));
+    let capped = text(&entry_line(
+        &entry(1, "mat", viewer(), 100),
+        board,
+        false,
+        40,
+    ));
     assert!(capped.ends_with("lvl 100"), "{capped}");
 
     let kills = text(&entry_line(
