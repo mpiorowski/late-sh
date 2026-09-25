@@ -280,7 +280,14 @@ impl ProfileService {
                 let look = crate::app::deadchannel::runner::state::Look::parse(&row.look);
                 let sheet = crate::app::deadchannel::fight::state::Sheet::from_row(&row);
                 match (look, sheet) {
-                    (Ok(look), Ok(sheet)) => Some(ProfileRunner { look, sheet }),
+                    (Ok(look), Ok(mut sheet)) => {
+                        // The lazy day roll, applied to the view only: the
+                        // row rolls on the runner's next touch, and until
+                        // then it can hold yesterday's dead signal. Nothing
+                        // is written here; the fight service owns the row.
+                        sheet.settle(crate::app::deadchannel::fight::svc::FightService::today());
+                        Some(ProfileRunner { look, sheet })
+                    }
                     (Err(error), _) => {
                         tracing::error!(error = %error, user_id = %user_id, "runner look failed to parse; profile shows no runner");
                         None

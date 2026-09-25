@@ -952,8 +952,9 @@ fn chat_view<'a>(
     static NAME_STYLES: OnceLock<HashMap<Uuid, crate::app::common::username_effect::ResolvedName>> =
         OnceLock::new();
     static PEER_POMODOROS: OnceLock<HashMap<Uuid, String>> = OnceLock::new();
-    static RUNNER_LOOKS: OnceLock<HashMap<Uuid, crate::app::deadchannel::runner::svc::RunnerEntry>> =
-        OnceLock::new();
+    static RUNNER_LOOKS: OnceLock<
+        HashMap<Uuid, crate::app::deadchannel::runner::svc::RunnerEntry>,
+    > = OnceLock::new();
     static ROOM_VERSIONS: OnceLock<HashMap<Uuid, u64>> = OnceLock::new();
     static MESSAGE_GILDS: OnceLock<HashMap<Uuid, ChatMessageGildSummary>> = OnceLock::new();
 
@@ -2685,7 +2686,10 @@ fn header_prefix_leads_the_badge_stack_with_the_runner_badge() {
     // The badge is clickable like every other badge: it opens the profile.
     assert_eq!(segments.len(), 3);
     assert_eq!(segments[1].target, HeaderTarget::Profile);
-    assert_eq!(segments[1].start_col, 1 + "mira, the night clerk ".len() as u16);
+    assert_eq!(
+        segments[1].start_col,
+        1 + "mira, the night clerk ".len() as u16
+    );
 }
 
 #[test]

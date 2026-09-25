@@ -5233,27 +5233,33 @@ impl ChatService {
             let name = room.slug.as_deref().unwrap_or("this room");
             anyhow::bail!("Cannot leave #{name} (permanent room)");
         }
+        // The name for the wire's "went dark" line, read before anything
+        // is written: a lookup that fails here fails the leave whole, never
+        // after the membership and the stamp have already landed.
+        let deadchannel_username = match room.kind == late_core::models::chat_room::DEADCHANNEL_KIND
+        {
+            true => match User::get(&client, user_id).await? {
+                Some(user) => Some(user.username),
+                None => anyhow::bail!("user not found"),
+            },
+            false => None,
+        };
         ChatRoomMember::leave(&client, room_id, user_id).await?;
         // Leaving #deadchannel closes the undercity gate, on this replica
         // and every other: the stamp fires `deadchannel_runner_changed`, so
         // the runner drops out of each replica's looks directory and out of
         // `App::is_runner` on the next tick edge. The character survives the
         // leave, so an invited rejoin gets the same face back.
-        if room.kind == late_core::models::chat_room::DEADCHANNEL_KIND {
+        if let Some(username) = deadchannel_username {
             let left = late_core::models::deadchannel_runner::DeadchannelRunner::mark_left(
                 &client, user_id,
             )
             .await?;
             if left {
-                tracing::info!(user_id = %user_id, "runner left the deadchannel");
+                tracing::info!(user_id = %user_id, username = %username, "runner left the deadchannel");
                 crate::metrics::record_runner_door(crate::metrics::RunnerDoor::Left);
                 // Going dark is news, once: the conditional stamp says this
-                // was the leave that shut the door. The name comes from the
-                // row, since the leave path never loaded the user.
-                let username = match User::get(&client, user_id).await? {
-                    Some(user) => user.username,
-                    None => anyhow::bail!("user not found"),
-                };
+                // was the leave that shut the door.
                 self.post_wire_line_task(format!("{username} went dark."));
             }
         }

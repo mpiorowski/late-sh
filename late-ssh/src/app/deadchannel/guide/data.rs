@@ -59,7 +59,7 @@ pub const SECTIONS: &[Section] = &[
         title: "patch",
         lines: &[
             "p buys the signal back to full. a bit a point, times your level.",
-            "not while the signal is down, not with a glyph waiting on you, and not when there is nothing to fix.",
+            "not while the signal is down, not with a glyph waiting on you, not once you are spent for the day (the roll brings it back for nothing), and not when there is nothing to fix.",
         ],
     },
     Section {

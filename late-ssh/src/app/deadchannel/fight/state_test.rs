@@ -476,6 +476,20 @@ fn patch_buys_the_signal_back_and_refuses_down_waiting_full_or_short() {
         vec!["you are 4 bits short of a patch.".to_string()]
     );
     assert_eq!(short, before);
+
+    // Spent for the day with no glyph waiting: nothing can spend the
+    // signal before the roll refills it for free, so patch sells nothing.
+    let mut spent = fresh();
+    spent.signal = 4;
+    spent.rations_left = 0;
+    let before = spent.clone();
+    let outcome = spent.apply(Command::Patch, &mut rng);
+    assert_eq!(outcome.applied, Applied::Refused(Refusal::NoRations));
+    assert_eq!(
+        outcome.lines,
+        vec!["you are spent for today. the roll brings the signal back for nothing.".to_string()]
+    );
+    assert_eq!(spent, before);
 }
 
 #[test]

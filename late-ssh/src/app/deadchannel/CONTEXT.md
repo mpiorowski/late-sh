@@ -121,14 +121,14 @@ number of replicas spend one AI call per text.
 | `city/ui.rs` | Renderer: base styling by zone, the ambience pass (rain, puddles reflecting the nearest sign, neon shorts and dropped letters, window flicker, the screen's static and test pattern with rare glyph frames, steam, lamps, the drop's lights, the blimp, the mast, the bits machine, the wire's pulse), the runner as its mark, the popover, the street line, the shop panels (`armorer_lines` is the live till: the wall with the cursor, what you carry lit, the two keys priced net of the trade-in, the armorer's last word; `patch_lines` is the other: the signal, the price of the gap, the refusal spelled out ahead of the key); hands the sheet strip and the fight scene to `fight/ui.rs`. Its palette helpers (`ink`, `lit`, `glow`, `dim`, `tint_rgb`, the `INK_*` greys) are `pub(crate)` for that. |
 | `fight/data.rs` | The numbers (LoGD's, transcribed: `RATIONS_PER_DAY`, `SIGNAL_PER_LEVEL`, `START_BITS`, `EXP_KEEP_ON_DEATH`, `EXP_TO_ADVANCE`, `FOE_TIERS`, the run odds, `TRADE_IN_PERCENT`) and the fauna: `FOES`, fifteen glyphs, one per level, each with a name, a five-by-three portrait in the runner's format, and an arrival line; the kill, drop, and run line pools. |
 | `fight/state.rs` | The pure machine: `Sheet` (the row's stats and tally, typed; `from_row` rejects an unreadable fight loudly), `Fight` (the foe and the last six lines, the JSON on the row), `settle(today)` (the lazy day roll), `apply(Command, rng)` over the door's `resolve_round` and `resolve_extra_foe_strike`, plus the armorer's till (`Command::Outfit`, `Slot`, `gear_name`, `outfit_price`, `MAX_TIER`) and patch (`Command::Patch`, `patch_price`), returning an `Outcome` (`Applied` plus the lines), and `news(&Applied)` (the closed `News` list the wire prints for it; §3c). No I/O, no clock. |
-| `fight/svc.rs` | `FightService`, the one writer: lock the standing row, settle, apply, store, commit; the metric, the log line per outcome, and the wire's news (a dropped signal, a level gained with the face) through `ChatService::post_wire_line_task`. `act_task` and `reload_task` answer on a session's `mpsc`. |
+| `fight/svc.rs` | `FightService`, the one writer: lock the standing row, settle, apply, store, commit; the metric, the log line per outcome, and the wire's news (`post_news`: what `Sheet::news` decided, worded; a dropped signal, a level gained with the face, the first kill, a near miss, the last ration's card) through `ChatService::post_wire_line_task`. `act_task` and `reload_task` answer on a session's `mpsc`. |
 | `fight/session.rs` | `FightSession`, the session's side: the sheet mirror, the `Scene` over the street (lines, `over`, `waiting`), the `till` line (an answer that lands with no scene open), one action in flight, `open` / `close` / `clear_till` / `request` / `reload` / `drop_sheet` / `tick`. Decides nothing. |
-| `fight/input.rs` | Keys while the scene is open: `a` attack, `r` run, Enter closes a finished scene; digits, Tab, `q`, `?` stay global, everything else is swallowed. |
+| `fight/input.rs` | Keys while the scene is open: `a` attack, `r` run, Enter closes a finished scene; digits, Tab, `q` stay global (`?` is the guide's, taken in `city/input.rs` first), everything else is swallowed. |
 | `fight/ui.rs` | `draw_scene` (two portraits facing, each losing cells to static in proportion to its missing signal, `corrupt`; the bars; the exchange; the keys) and `draw_strip` (level, signal, rations, bits, the weapon and the armor by name, top-right on the street); `weapon_name` / `armor_name` (`bare hands`, `street clothes` at tier 0) for every readout that names the kit. Pure. |
 | `tailor/state.rs` | `Draft`, the mirror's editor over one `Look`: four `Row`s (hood, eyes, coat, mark), `up` / `down`, `next` / `prev` around the row's rack (wrapping), `tint` around `TINTS` (nothing on the mark row: a colored mark is earned), `shuffle` (the join's dice). Pure. |
 | `tailor/svc.rs` | `TailorService`, the look's writer after the join: `wear_task` runs `DeadchannelRunner::store_look` (one statement, standing runner only, last write wins) and answers `TailorOutcome::{Worn, NoRunner, Failed}` on the session's `mpsc`; the metric, the log line per outcome. The change trigger carries the look to every replica's directory. |
 | `tailor/session.rs` | `TailorSession`: the `draft` while the panel is open, `worn` (what the row wears as far as this session knows), the tailor's `word`, one write in flight (`saving`); `open(look)` / `close` / `changed` / `wear` / `tick`. Decides nothing. |
-| `tailor/input.rs` | Keys while the tailor's panel is open: up/down (`k`/`j`) row, left/right (`h`/`l`) pick, `t` tint, `r` shuffle, `s` wear, Enter leaves; digits, Tab, `q`, `?` stay global, everything else is swallowed. |
+| `tailor/input.rs` | Keys while the tailor's panel is open: up/down (`k`/`j`) row, left/right (`h`/`l`) pick, `t` tint, `r` shuffle, `s` wear, Enter leaves; digits, Tab, `q` stay global (`?` is the guide's, taken in `city/input.rs` first), everything else is swallowed. |
 | `guide/data.rs` | The undercity guide's copy: `SECTIONS`, a heading and its lines each, covering every key and rule of the street, the sheet, the static, the armorer, patch, the tailor, the rest of the row, and the wire. Kept out of `app/help_modal` on purpose (that one is fed to the bot). **Always current**: see §3b. Pure. |
 | `guide/state.rs` | `State`: open, scroll, and the page the renderer last measured (`record_page`, a `Cell`), so `scroll_by` holds at the end. Pure. |
 | `guide/svc.rs` | `GuideService`: `claim_first_descent_task` runs `DeadchannelRunner::mark_guide_seen` (one conditional update) and answers `GuideOutcome::{FirstDescent, SeenBefore}` on the session's `mpsc`; a failed claim answers nothing and logs. |
@@ -599,7 +599,12 @@ service for `Command::Start`.
   mirror too (`render.rs::status_hud_title`, `rations R · signal S/M`
   between the mentions and the pot, the signal red when down; sheds
   after the pot, the rations before the signal); `/haunt status` prints
-  the whole sheet as this session holds it.
+  the whole sheet as this session holds it. The mirror is not rolled at
+  midnight by itself: an idle session shows yesterday's bars until the
+  next reload (a descent, an action, or a directory edge), the accepted
+  case. The profile's runner section reads the row directly and settles
+  the parsed copy for the view (`ProfileService::do_find_profile`,
+  nothing written), so it never shows a dead signal after the roll.
 - **The armorer.** The same sheet, the same lock, one more command
   (`Command::Outfit { slot, tier }`), because the sheet has one writer.
   The panel (`city/ui.rs::armorer_lines`) is the wall: fifteen rows, a
@@ -624,7 +629,9 @@ service for `Command::Start`.
   (`Refusal::Short`). A dropped signal is the roll's, not patch's
   (`Refusal::SignalDown`: the day is the day), a fight waiting on the
   row is finished first (`Refusal::FightWaiting`: Esc out, patch, step
-  back in would be a free heal mid-fight), and a full signal buys nothing
+  back in would be a free heal mid-fight), a runner spent for the day is
+  sold nothing (`Refusal::NoRations`: no fight can spend the signal
+  before the roll refills it for free), and a full signal buys nothing
   (`Refusal::NothingToPatch`). `Applied::Patched { restored, paid }`, the
   `patched` beat, no news. The panel (`city/ui.rs::patch_lines`) shows
   the signal and the bits, spells the refusal that would come ahead of

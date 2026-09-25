@@ -58,7 +58,12 @@ impl RunnerLookService {
         let client = self.db.get().await?;
         let rows = DeadchannelRunner::list_standing(&client).await?;
         let mut looks = HashMap::with_capacity(rows.len());
-        for StandingRunner { user_id, look, level } in rows {
+        for StandingRunner {
+            user_id,
+            look,
+            level,
+        } in rows
+        {
             match Look::parse(&look) {
                 Ok(look) => {
                     looks.insert(user_id, RunnerEntry { look, level });

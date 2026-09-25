@@ -420,15 +420,16 @@ impl Sheet {
     }
 
     /// Patch. A signal that dropped stays down until the roll (the day
-    /// is the day), a fight waiting on the row is finished first, and a
-    /// full signal buys nothing; otherwise the whole gap, paid in full.
+    /// is the day), a fight waiting on the row is finished first, a
+    /// runner spent for the day is sold nothing (no fight can spend the
+    /// signal before the roll refills it for free), and a full signal
+    /// buys nothing; otherwise the whole gap, paid in full.
     fn patch(&mut self) -> Outcome {
         if self.is_down() {
             return Outcome {
                 applied: Applied::Refused(Refusal::SignalDown),
                 lines: vec![
-                    "your signal is down. nothing here brings it back before the roll."
-                        .to_string(),
+                    "your signal is down. nothing here brings it back before the roll.".to_string(),
                 ],
             };
         }
@@ -436,6 +437,15 @@ impl Sheet {
             return Outcome {
                 applied: Applied::Refused(Refusal::FightWaiting),
                 lines: vec!["not with a glyph waiting on you. finish it first.".to_string()],
+            };
+        }
+        if self.rations_left <= 0 {
+            return Outcome {
+                applied: Applied::Refused(Refusal::NoRations),
+                lines: vec![
+                    "you are spent for today. the roll brings the signal back for nothing."
+                        .to_string(),
+                ],
             };
         }
         let restored = self.max_signal() - self.signal;

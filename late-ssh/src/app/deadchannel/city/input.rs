@@ -102,11 +102,11 @@ fn handle_panel(app: &mut App, event: &ParsedInput) -> bool {
             _ => {}
         }
     }
-    if app.city.panel() == Some(Landmark::Repairs) {
-        if let ParsedInput::Byte(b'p') | ParsedInput::Char('p') = event {
-            app.fight.request(Command::Patch);
-            return true;
-        }
+    if app.city.panel() == Some(Landmark::Repairs)
+        && let ParsedInput::Byte(b'p') | ParsedInput::Char('p') = event
+    {
+        app.fight.request(Command::Patch);
+        return true;
     }
     match event {
         ParsedInput::Byte(b'\r') | ParsedInput::Byte(b'\n') => {

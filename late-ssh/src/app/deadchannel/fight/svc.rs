@@ -190,10 +190,10 @@ impl FightService {
         }
     }
 
-    /// Re-read the sheet for a session's mirror on the descent. Every
-    /// action answers with the locked row's sheet, so the mirror catches
-    /// up with a change made elsewhere on the next press; only the
-    /// descent needs a read of its own.
+    /// Re-read the sheet for a session's mirror: at connect for a standing
+    /// runner, on every directory edge, and on the descent. Every action
+    /// answers with the locked row's sheet, so between those the mirror
+    /// catches up with a change made elsewhere on the next press.
     pub(crate) fn reload_task(&self, user_id: Uuid, reply: mpsc::UnboundedSender<FightOutcome>) {
         let svc = self.clone();
         let span = info_span!("deadchannel.fight.reload_task", user_id = %user_id);

@@ -442,8 +442,10 @@ fn draw_footer(frame: &mut Frame, area: Rect, scrollable: bool) {
 
 /// The runner section's three rows: the portrait on the left, and beside
 /// it the level, signal and bits, the kit, and the glyphs put down. The
-/// rations are not here: they roll at midnight UTC on the runner's next
-/// touch, so a stored count can be yesterday's.
+/// sheet arrives settled for today (the service applies the day roll to
+/// the view), so the signal is what the runner would find on the row.
+/// Rations are not here: the street's strip and the frame HUD carry them
+/// for the runner themself.
 fn runner_lines(runner: &ProfileRunner) -> Vec<Line<'static>> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let text = Style::default().fg(theme::TEXT());

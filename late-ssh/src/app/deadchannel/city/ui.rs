@@ -1697,9 +1697,6 @@ pub(crate) fn mix(mut v: u64) -> u64 {
     v
 }
 
-/// The armorer's wall: the ladder with the cursor on it, what you carry
-/// lit, the two keys priced for the picked row net of the trade-in, and
-/// the last thing the armorer said.
 /// Patch: the signal, what bringing it back costs, and the one key. The
 /// price is `Sheet::patch_price`; the refusals the row would give are
 /// spelled out ahead of the key so nobody pays to read them.
@@ -1743,6 +1740,11 @@ fn patch_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
             "not with a glyph waiting on you. finish it first.",
             text,
         )));
+    } else if sheet.rations_left <= 0 {
+        lines.push(Line::from(Span::styled(
+            "you are spent for today. the roll brings the signal back for nothing.",
+            text,
+        )));
     } else if price == 0 {
         lines.push(Line::from(Span::styled(
             "nothing on you needs patching.",
@@ -1769,6 +1771,9 @@ fn patch_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     lines
 }
 
+/// The armorer's wall: the ladder with the cursor on it, what you carry
+/// lit, the two keys priced for the picked row net of the trade-in, and
+/// the last thing the armorer said.
 fn armorer_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);

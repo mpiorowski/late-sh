@@ -14,7 +14,8 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             app.tailor.close();
             return true;
         }
-        // Digits, Tab, `q`, `?` stay global.
+        // Digits, Tab, `q` stay global (`?` is the guide's, taken in
+        // `city/input.rs` before the mirror sees it).
         ParsedInput::Byte(b'0'..=b'9')
         | ParsedInput::Byte(b'\t')
         | ParsedInput::Byte(b'q')

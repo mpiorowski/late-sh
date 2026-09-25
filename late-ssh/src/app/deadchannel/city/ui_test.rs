@@ -223,6 +223,17 @@ fn patch_prices_the_gap_and_says_when_there_is_nothing_to_buy() {
         screen.contains("your signal is down. nothing here brings it back before the roll."),
         "{screen}"
     );
+
+    // Spent for the day: the roll refills for free, so the key is not
+    // offered.
+    sheet.signal = 12;
+    sheet.rations_left = 0;
+    let screen = render_with(&state, Some(&sheet));
+    assert!(
+        screen.contains("you are spent for today. the roll brings the signal back for nothing."),
+        "{screen}"
+    );
+    assert!(!screen.contains("[p] patch"), "{screen}");
 }
 
 #[test]
