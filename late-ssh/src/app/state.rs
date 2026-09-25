@@ -269,6 +269,8 @@ pub struct SessionConfig {
     pub fight_service: crate::app::deadchannel::fight::svc::FightService,
     /// The look's writer after the join (`app/deadchannel/tailor`).
     pub tailor_service: crate::app::deadchannel::tailor::svc::TailorService,
+    /// The first descent's claim (`app/deadchannel/guide`).
+    pub guide_service: crate::app::deadchannel::guide::svc::GuideService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_decay_protection:
         Option<late_core::models::bonsai_decay_protection::BonsaiDecayProtection>,
@@ -738,6 +740,9 @@ pub struct App {
     /// The tailor's mirror (`app/deadchannel/tailor`): the draft while
     /// the panel is open, and the write that puts it on the row.
     pub(crate) tailor: crate::app::deadchannel::tailor::session::TailorSession,
+    /// The undercity guide (`app/deadchannel/guide`): the box over the
+    /// street, opened by `?` and by itself on the first descent.
+    pub(crate) guide: crate::app::deadchannel::guide::session::GuideSession,
 
     /// Cat companion
     pub(crate) pet_state: crate::app::pet::state::PetState,
@@ -1310,12 +1315,20 @@ impl App {
         );
         // A standing runner's sheet is on the frame HUD from the first
         // frame, not from the first descent; the read also rolls the day.
-        if config.runner_looks_rx.borrow().contains_key(&config.user_id) {
+        if config
+            .runner_looks_rx
+            .borrow()
+            .contains_key(&config.user_id)
+        {
             fight.reload();
         }
         let tailor = crate::app::deadchannel::tailor::session::TailorSession::new(
             config.user_id,
             config.tailor_service.clone(),
+        );
+        let guide = crate::app::deadchannel::guide::session::GuideSession::new(
+            config.user_id,
+            config.guide_service.clone(),
         );
 
         let pet_state = if let Some(companion) = config.initial_pet {
@@ -1505,6 +1518,7 @@ impl App {
             city: crate::app::deadchannel::city::state::State::new(),
             fight,
             tailor,
+            guide,
             chip_service: config.chip_service,
             clubhouse_bartender_id: None,
             clubhouse_graybeard_id: None,

@@ -112,12 +112,12 @@ number of replicas spend one AI call per text.
 | `haunt/ui.rs` | Pure render helpers: whisper frame + splash overlay + static surge, breakthrough frame + full-screen draw, `apply_clock_glitch`, `glitched_name`, `name_flicker_for`. Deterministic per burst seed, stateless like the sidebar equalizer. |
 | `runner/state.rs` | The look: `PIECES` (the closed starter table, one five-cell row per piece, `Slot` hood/eyes/coat), `Tint` (the closed palette, gold deliberately absent), `Look` + `Worn` (typed, table references), `Look::random` (the join's dice), `Look::to_json` / `Look::parse` (the JSON contract on the runner row; unknown codes are a `LookError`, never a blank), `PORTRAIT_WIDTH` / `PORTRAIT_HEIGHT`. No I/O. `state_test` asserts every row is five single-width cells. |
 | `runner/ui.rs` | `portrait_spans`: the look as three styled spans, one per worn piece in its tint; `badge_text` (the mark and the level, `▚7`) and `level_color` (the level's band: static to 4, amber to 9, phosphor to 14, white at 15) for the wire's author header and the profile; `tint_color` maps the palette onto the theme. Pure. |
-| `runner/data.rs` | `welcome`: the voice's welcome for a runner whose row was just created, one message, one paragraph per line (who is talking, the story so far, the keys down and back, the rules of the row, `/leave` and `/join #deadchannel`). Placeholder copy at feed-template standards. Pure. |
+| `runner/data.rs` | `welcome`: the voice's welcome for a runner whose row was just created, one message, one paragraph per line (the runner mentioned by name, the story so far, `0` twice as the way down, `/leave` and `/join #deadchannel`). Names no key on the street: those are the guide's. Placeholder copy at feed-template standards. Pure. |
 | `runner/svc.rs` | `RunnerLookService`: the process-shared runner directory (`watch<Arc<HashMap<Uuid, RunnerEntry>>>`, an entry being the look and the level of a standing runner), seeded and refreshed from `deadchannel_runners` (`list_standing`) on the `deadchannel_runner_changed` LISTEN, the `app/flags` shape. A look that fails to parse is logged and skipped. `fixed_looks_rx` for test apps. |
 | `city/map.rs` | **Generated** by `scripts/gen_city_map.py --write` (never hand-edited): the 232x52 `MAP` literal, the `SOLID` collision bitmap, `SPAWN`, every zone (`SIGNS`, `BANNERS`, `CART_SIGNS`, `AWNINGS`, `WINDOWS`, `VENTS`, `PUDDLES`, `LAMPS`, `DROP_LIGHTS`, `SCREEN_FACE`, `WIRE`, ...), the closed `Neon` palette, `Landmark` + `nearest_landmark` (reach zones), `walkable`, `grid`/`char_at`. |
 | `city/state.rs` | Per-session view state: the runner's cell, the animation clock, the open panel, the cursor on the armorer's wall (`picked_tier`, `pick_up` / `pick_down`), the pinned street line. `walk`, `run`, `nearby`, `Landmark::on_enter` (`Enter::Panel` for shops, `Enter::Line` for carts, `Enter::Fight` at the screen, `Enter::Leave` for the wire). Pure. |
 | `city/data.rs` | The city's copy and catalogs: the gear ladder (`COST_LADDER`, `WEAPONS`, `ARMOR`: LoGD numbers, GAME.md names), `BANDS` with draft move names, `NOTICES`, `DRINKS`, `TAILOR_PRICES`, the per-landmark `lines` pools, `title` and `pitch`. |
-| `city/input.rs` | Arrows/hjkl walk; Enter at a landmark; Enter closes a panel or the ledge view, Esc too through the root's `dispatch_escape` (walk keys are swallowed while one is open). In the armorer's panel up/down walk the wall and `w` / `a` send `Command::Outfit` to `App.fight`; in patch's panel `p` sends `Command::Patch`. Returns `false` for globals. |
+| `city/input.rs` | While the guide is open every key goes to `guide/input.rs`, and `?` anywhere on the page opens it. Arrows/hjkl walk; Enter at a landmark; Enter closes a panel or the ledge view, Esc too through the root's `dispatch_escape` (walk keys are swallowed while one is open). In the armorer's panel up/down walk the wall and `w` / `a` send `Command::Outfit` to `App.fight`; in patch's panel `p` sends `Command::Patch`. Returns `false` for globals. |
 | `city/ui.rs` | Renderer: base styling by zone, the ambience pass (rain, puddles reflecting the nearest sign, neon shorts and dropped letters, window flicker, the screen's static and test pattern with rare glyph frames, steam, lamps, the drop's lights, the blimp, the mast, the bits machine, the wire's pulse), the runner as its mark, the popover, the street line, the shop panels (`armorer_lines` is the live till: the wall with the cursor, what you carry lit, the two keys priced net of the trade-in, the armorer's last word; `patch_lines` is the other: the signal, the price of the gap, the refusal spelled out ahead of the key); hands the sheet strip and the fight scene to `fight/ui.rs`. Its palette helpers (`ink`, `lit`, `glow`, `dim`, `tint_rgb`, the `INK_*` greys) are `pub(crate)` for that. |
 | `fight/data.rs` | The numbers (LoGD's, transcribed: `RATIONS_PER_DAY`, `SIGNAL_PER_LEVEL`, `START_BITS`, `EXP_KEEP_ON_DEATH`, `EXP_TO_ADVANCE`, `FOE_TIERS`, the run odds, `TRADE_IN_PERCENT`) and the fauna: `FOES`, fifteen glyphs, one per level, each with a name, a five-by-three portrait in the runner's format, and an arrival line; the kill, drop, and run line pools. |
 | `fight/state.rs` | The pure machine: `Sheet` (the row's stats and tally, typed; `from_row` rejects an unreadable fight loudly), `Fight` (the foe and the last six lines, the JSON on the row), `settle(today)` (the lazy day roll), `apply(Command, rng)` over the door's `resolve_round` and `resolve_extra_foe_strike`, plus the armorer's till (`Command::Outfit`, `Slot`, `gear_name`, `outfit_price`, `MAX_TIER`) and patch (`Command::Patch`, `patch_price`), returning an `Outcome` (`Applied` plus the lines), and `news(&Applied)` (the closed `News` list the wire prints for it; §3c). No I/O, no clock. |
@@ -129,6 +129,12 @@ number of replicas spend one AI call per text.
 | `tailor/svc.rs` | `TailorService`, the look's writer after the join: `wear_task` runs `DeadchannelRunner::store_look` (one statement, standing runner only, last write wins) and answers `TailorOutcome::{Worn, NoRunner, Failed}` on the session's `mpsc`; the metric, the log line per outcome. The change trigger carries the look to every replica's directory. |
 | `tailor/session.rs` | `TailorSession`: the `draft` while the panel is open, `worn` (what the row wears as far as this session knows), the tailor's `word`, one write in flight (`saving`); `open(look)` / `close` / `changed` / `wear` / `tick`. Decides nothing. |
 | `tailor/input.rs` | Keys while the tailor's panel is open: up/down (`k`/`j`) row, left/right (`h`/`l`) pick, `t` tint, `r` shuffle, `s` wear, Enter leaves; digits, Tab, `q`, `?` stay global, everything else is swallowed. |
+| `guide/data.rs` | The undercity guide's copy: `SECTIONS`, a heading and its lines each, covering every key and rule of the street, the sheet, the static, the armorer, patch, the tailor, the rest of the row, and the wire. Kept out of `app/help_modal` on purpose (that one is fed to the bot). **Always current**: see §3b. Pure. |
+| `guide/state.rs` | `State`: open, scroll, and the page the renderer last measured (`record_page`, a `Cell`), so `scroll_by` holds at the end. Pure. |
+| `guide/svc.rs` | `GuideService`: `claim_first_descent_task` runs `DeadchannelRunner::mark_guide_seen` (one conditional update) and answers `GuideOutcome::{FirstDescent, SeenBefore}` on the session's `mpsc`; a failed claim answers nothing and logs. |
+| `guide/session.rs` | `GuideSession`: the `state`, `descend` (the claim), `tick` (opens the guide on `FirstDescent`). Decides nothing. |
+| `guide/input.rs` | Keys while the guide is open: `j`/`k` and the arrows scroll a line, PageUp/PageDown a screen, Enter, `q` and `?` close it; digits and Tab stay global, everything else is swallowed. `opens` names the key (`?`). |
+| `guide/ui.rs` | `draw`: the box over the street, the sections as a bright heading and its lines, wrapped and scrolled, the keys under; `body_lines`. Pure. |
 | `tailor/ui.rs` | `mirror_lines` for the city's panel: the draft as a portrait with the mark under it, four rack rows beside it (the cursor, the label, the tint's name, a window of five pieces around the worn one, bracketed; the whole alphabet on the mark row), the keys (`[s] wear it` lit only when the draft differs from what is worn), the tailor's word. Pure. |
 
 Root integration is deliberately thin: `App.haunt` (the one field),
@@ -166,9 +172,10 @@ The runner's seams are as thin: `ChatService::join_deadchannel_room`
 creates the row (`DeadchannelRunner::ensure_for_user`, a conditional
 insert, so two devices joining at once share one face; a fresh row is
 the `RunnerCreated` beat and posts the voice's welcome on the wire
-(`runner/data.rs::welcome` through `post_wire_line_task`, once per person
-because only the winning insert lands there; a second device or a return
-finds it in the room's history), a return the `RunnerDoor::Returned` one),
+(`runner/data.rs::welcome` through `post_wire_line_task`, a mention of
+the runner, once per person because only the winning insert lands there;
+a second device or a return finds it in the room's history), a return
+the `RunnerDoor::Returned` one),
 `ChatService::leave_room` stamps the leave for the `deadchannel` kind
 (`mark_left`, the `RunnerDoor::Left` beat), `State.runner_looks` holds the directory
 service (`main.rs` starts its listener), `App.runner_looks` is the
@@ -364,10 +371,28 @@ till; every other counter is a catalog with its till shut.
   place in the process that can notice a leave taken on another session or
   another replica. Not in the Tab cycle
   (`Screen::City.next()`/`prev()` return the clubhouse), no tab of its
-  own, the clubhouse tab stays lit under it, title "Undercity". Enter at
-  the wire goes back up to the clubhouse. The wiring is thin on purpose
-  (`Screen::City`, `App.city`, one dispatch line each in `input.rs`,
+  own, the clubhouse tab stays lit under it, title "Undercity" with
+  `· ? guide` beside it in the chrome. Enter at the wire goes back up to
+  the clubhouse. The wiring is thin on purpose (`Screen::City`,
+  `App.city`, `App.guide`, one dispatch line each in `input.rs`,
   `render.rs`, `tick.rs`).
+- **The guide (`guide/`).** The street explains itself: a box over the
+  city with every key and every rule (the street, the sheet, the static,
+  the armorer, patch, the tailor, the rest of the row, the wire). `?`
+  opens it anywhere on the page, the fight scene and the tailor's panel
+  included (the site guide's key, taken over down here; the site guide
+  is a page away). Esc, Enter, `q`, `?` close it; `j`/`k`, the arrows,
+  PageUp/PageDown scroll. It opens by itself on a runner's first descent,
+  once per runner on any device or replica: the descent fires
+  `GuideSession::descend`, the service's conditional update on
+  `deadchannel_runners.guide_seen_at` (migration 203,
+  `mark_guide_seen`) is the claim, and `FirstDescent` opens it a tick
+  later over the street. Not in `app/help_modal`: that guide is fed to
+  the bot, and this one is the runners' own. **Invariant: the guide is
+  always current.** Every change to a key, a price, a rule, a counter,
+  or a wire beat in this domain updates `guide/data.rs` in the same
+  change, and `guide/ui_test.rs` renders every line, so a stale guide is
+  a failed review, not a follow-up.
 - **The register (decided 2026-09-19): tiles.** Top-down, one tile per
   thing, the Dwarf Fortress register. `#` walls, `+` doors, `╬` windows
   that flicker, `=` counters, `)` blades, `[` plate, `"` marks, `!`
@@ -614,7 +639,9 @@ service for `Command::Start`.
   `late-core/src/models/deadchannel_runner.rs`): one row per user
   (`user_id` unique, cascade on delete), `look` JSONB in the shape
   `{"hood": {"piece", "tint"}, "eyes": ..., "coat": ..., "mark": {"glyph"}}`,
-  `left_at` (migration 187), the leave stamp, and the sheet (migration
+  `left_at` (migration 187), the leave stamp, `guide_seen_at`
+  (migration 203, the first descent's claim: `mark_guide_seen`, a
+  conditional update on the standing row, fires no trigger), and the sheet (migration
   199): `level`, `exp`, `signal`, `weapon_tier`, `armor_tier`, `bits`,
   `rations_left`, `day` (the UTC date of the last roll), `fight`
   (JSONB, the fight in progress or null), and the tally (migration 201):

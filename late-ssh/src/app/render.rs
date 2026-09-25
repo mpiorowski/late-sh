@@ -277,6 +277,7 @@ struct DrawContext<'a> {
     city_scene: Option<&'a crate::app::deadchannel::fight::session::Scene>,
     city_till: Option<&'a str>,
     city_tailor: crate::app::deadchannel::tailor::ui::MirrorView<'a>,
+    city_guide: &'a crate::app::deadchannel::guide::state::State,
     /// A chat overlay that lands on the Lounge (a `/summary` or reaction list
     /// requested on Home); the Lounge composer itself opens none.
     clubhouse_overlay: Option<&'a crate::app::common::overlay::Overlay>,
@@ -1365,6 +1366,7 @@ impl App {
                             changed: self.tailor.changed(),
                             saving: self.tailor.saving,
                         },
+                        city_guide: &self.guide.state,
                         clubhouse_overlay: self.chat.overlay(),
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
@@ -1948,6 +1950,7 @@ impl App {
                     scene: ctx.city_scene,
                     till: ctx.city_till,
                     tailor: ctx.city_tailor,
+                    guide: ctx.city_guide,
                 },
             ),
             Screen::Nightcap => crate::app::clubhouse::nightcap::ui::draw(
@@ -2460,6 +2463,15 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         format!("{page_title} "),
         Style::default().fg(theme::TEXT_MUTED()),
     ));
+
+    // The street has its own guide (`app/deadchannel/guide`), on the site
+    // guide's key; the chrome says so, the way the door games do.
+    if screen == Screen::City {
+        spans.push(Span::styled(
+            "· ? guide ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
 
     if screen == Screen::Lateania {
         spans.push(Span::styled(

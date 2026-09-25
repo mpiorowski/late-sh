@@ -3,9 +3,11 @@
 //! the screen, or the wire out), Enter to close a panel. The armorer's
 //! panel takes the till keys (`fight/state.rs`, `Command::Outfit`); the
 //! tailor's hands every key to `tailor/input.rs`.
-//! While the fight scene is open every key goes to `fight/input.rs` first.
-//! Returns `false` for anything it does not own so global keys (page
-//! digits, Tab, `q`, `?`) keep working. While a panel is open, or the
+//! While the guide is open every key goes to `guide/input.rs` first, and
+//! `?` anywhere on the page opens it (the site guide's key, taken over
+//! down here: the street has its own). While the fight scene is open
+//! every key goes to `fight/input.rs`. Returns `false` for anything it
+//! does not own so global keys (page digits, Tab, `q`) keep working. While a panel is open, or the
 //! runner is looking over the ledge, the walk keys are swallowed so the
 //! runner does not wander under the box. A lone Esc never arrives here:
 //! the root flushes it to `dispatch_escape`, which calls
@@ -21,6 +23,13 @@ use super::state::Enter;
 use crate::app::deadchannel::fight::state::{Command, Slot};
 
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
+    if app.guide.state.is_open() {
+        return crate::app::deadchannel::guide::input::handle_event(app, event);
+    }
+    if crate::app::deadchannel::guide::input::opens(event) {
+        app.guide.state.open();
+        return true;
+    }
     if app.fight.scene_open() {
         return crate::app::deadchannel::fight::input::handle_event(app, event);
     }

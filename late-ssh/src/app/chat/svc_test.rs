@@ -5202,10 +5202,14 @@ async fn deadchannel_join_requires_the_invitation() {
             .expect("runner created by the invited join");
     crate::app::deadchannel::runner::state::Look::parse(&runner.look).expect("stored look parses");
 
-    // The voice welcomes the new runner on the wire, by name, and tells
+    // The voice welcomes the new runner on the wire, by mention, and tells
     // them the way down and the way out.
     let welcome = wait_for_message_containing(&test_db.db, room_id, "welcome to the wire").await;
-    assert!(welcome.starts_with("dc-hopeful."), "{welcome}");
+    assert!(welcome.starts_with("@dc-hopeful."), "{welcome}");
+    assert!(
+        welcome.contains("0 puts you in the clubhouse, 0 again"),
+        "{welcome}"
+    );
     assert!(welcome.contains("/leave"), "{welcome}");
     assert!(welcome.contains("/join #deadchannel"), "{welcome}");
     let voice = service

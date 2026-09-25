@@ -37,6 +37,8 @@ use crate::app::deadchannel::fight::session::Scene as FightScene;
 use crate::app::deadchannel::fight::state::{Sheet, Slot as GearSlot, gear_name};
 use crate::app::deadchannel::fight::ui as fight_ui;
 use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
+use crate::app::deadchannel::guide::state::State as GuideState;
+use crate::app::deadchannel::guide::ui as guide_ui;
 use crate::app::deadchannel::runner::state::{Look, Tint};
 use crate::app::deadchannel::tailor::ui as tailor_ui;
 
@@ -132,6 +134,8 @@ pub(crate) struct CityView<'a> {
     pub till: Option<&'a str>,
     /// The tailor's mirror (`tailor/session.rs`), for its panel.
     pub tailor: tailor_ui::MirrorView<'a>,
+    /// The guide (`guide/state.rs`): drawn over everything when open.
+    pub guide: &'a GuideState,
 }
 
 type Cells = Vec<Vec<(char, Style)>>;
@@ -216,6 +220,9 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
             },
         ),
         (None, None) => {}
+    }
+    if view.guide.is_open() {
+        guide_ui::draw(frame, area, view.guide);
     }
 }
 

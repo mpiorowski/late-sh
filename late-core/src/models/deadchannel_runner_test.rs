@@ -151,3 +151,53 @@ async fn the_tailor_dresses_a_standing_runner_only() {
         .expect("row");
     assert_eq!(left.look, new_look);
 }
+
+#[tokio::test]
+async fn the_guide_is_claimed_once_and_only_by_a_standing_runner() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "runner-guide").await;
+
+    // Nobody to stamp: no row yet.
+    assert!(
+        !DeadchannelRunner::mark_guide_seen(&client, user.id)
+            .await
+            .expect("mark guide seen with no runner")
+    );
+
+    let look = serde_json::json!({"hood": "hood.cross"});
+    DeadchannelRunner::ensure_for_user(&client, user.id, &look)
+        .await
+        .expect("ensure");
+
+    // The first descent claims it; the second finds it claimed.
+    assert!(
+        DeadchannelRunner::mark_guide_seen(&client, user.id)
+            .await
+            .expect("first descent")
+    );
+    assert!(
+        !DeadchannelRunner::mark_guide_seen(&client, user.id)
+            .await
+            .expect("second descent")
+    );
+    let row = DeadchannelRunner::find_by_user(&client, user.id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert!(row.guide_seen_at.is_some());
+
+    // A leaver cannot be stamped, and the stamp survives the leave.
+    let other = create_test_user(&test_db.db, "runner-guide-left").await;
+    DeadchannelRunner::ensure_for_user(&client, other.id, &look)
+        .await
+        .expect("ensure other");
+    DeadchannelRunner::mark_left(&client, other.id)
+        .await
+        .expect("mark left");
+    assert!(
+        !DeadchannelRunner::mark_guide_seen(&client, other.id)
+            .await
+            .expect("mark guide seen after leaving")
+    );
+}

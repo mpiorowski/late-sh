@@ -295,6 +295,7 @@ impl App {
         changed |= self.bonsai.tick();
         changed |= self.fight.tick();
         changed |= self.tailor.tick();
+        changed |= self.guide.tick();
         changed |= self.tick_pot();
         // News state is ticked inside chat.tick()
         let profile_tick = self.profile_state.tick();
@@ -796,6 +797,7 @@ impl App {
                 if self.screen == Screen::City && !self.is_runner() {
                     self.fight.close();
                     self.tailor.close();
+                    self.guide.state.close();
                     self.set_screen(Screen::Clubhouse);
                     changed = true;
                 }

@@ -2265,8 +2265,13 @@ fn dispatch_escape(app: &mut App) {
         crate::app::door::darkroom::screen::GAME.handle_key(app, 0x1B);
         return;
     }
-    // Esc in the city closes an open shop panel or steps back from the
-    // ledge; on the street it means nothing (the wire is the way out).
+    // Esc in the city closes the guide first, then an open shop panel or
+    // steps back from the ledge; on the street it means nothing (the wire
+    // is the way out).
+    if ctx.screen == Screen::City && app.guide.state.is_open() {
+        app.guide.state.close();
+        return;
+    }
     if ctx.screen == Screen::City
         && (app.city.panel().is_some() || app.city.at_ledge() || app.fight.scene_open())
     {
@@ -3833,9 +3838,13 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                     app.city.dismiss();
                     app.fight.close();
                     app.tailor.close();
+                    app.guide.state.close();
                     // The descent is a touch: the sheet re-reads (and the
                     // day rolls if it turned) before the strip shows it.
                     app.fight.reload();
+                    // The first descent opens the guide by itself, once
+                    // per runner (`app/deadchannel/guide`).
+                    app.guide.descend();
                     Screen::City
                 }
                 _ => Screen::Clubhouse,

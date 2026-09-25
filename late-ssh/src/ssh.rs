@@ -997,6 +997,9 @@ impl russh::server::Handler for ClientHandler {
             tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(
                 self.state.db.clone(),
             ),
+            guide_service: crate::app::deadchannel::guide::svc::GuideService::new(
+                self.state.db.clone(),
+            ),
             initial_bonsai_tree,
             initial_bonsai_decay_protection,
             pet_service: self.state.pet_service.clone(),

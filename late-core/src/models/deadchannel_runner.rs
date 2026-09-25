@@ -19,12 +19,15 @@ use uuid::Uuid;
 /// fires nothing.
 pub const DEADCHANNEL_RUNNER_CHANGED_CHANNEL: &str = "deadchannel_runner_changed";
 
+// `guide_seen_at` is when the undercity's guide first opened for this
+// runner (migration 203), `None` until the first descent.
 crate::model! {
     table = "deadchannel_runners";
     params = DeadchannelRunnerParams;
     struct DeadchannelRunner {
         @generated
         pub left_at: Option<DateTime<Utc>>,
+        pub guide_seen_at: Option<DateTime<Utc>>,
         pub level: i32,
         pub exp: i64,
         pub signal: i32,
@@ -177,6 +180,25 @@ impl DeadchannelRunner {
             )
             .await
             .context("storing deadchannel runner look")?;
+        Ok(row.is_some())
+    }
+
+    /// The first descent's claim: stamp the guide as seen, once. Conditional
+    /// on the stamp being absent and the runner standing, so two devices
+    /// coming down at once (on any replicas) open the guide on one of them
+    /// and every later descent writes nothing. The change trigger does not
+    /// watch this column. Returns whether this call was the first descent.
+    pub async fn mark_guide_seen(client: &Client, user_id: Uuid) -> Result<bool> {
+        let row = client
+            .query_opt(
+                "UPDATE deadchannel_runners
+                 SET guide_seen_at = current_timestamp, updated = current_timestamp
+                 WHERE user_id = $1 AND left_at IS NULL AND guide_seen_at IS NULL
+                 RETURNING id",
+                &[&user_id],
+            )
+            .await
+            .context("marking deadchannel guide seen")?;
         Ok(row.is_some())
     }
 

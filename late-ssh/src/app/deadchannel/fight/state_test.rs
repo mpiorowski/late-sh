@@ -509,6 +509,7 @@ fn a_row_naming_an_unknown_glyph_is_rejected() {
         created: now,
         updated: now,
         left_at: None,
+        guide_seen_at: None,
         level: 1,
         exp: 0,
         signal: 10,

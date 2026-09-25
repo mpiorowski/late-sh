@@ -3,6 +3,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
 use crate::app::deadchannel::fight::state::Sheet;
+use crate::app::deadchannel::guide::state::State as GuideState;
 use crate::app::deadchannel::tailor::ui as tailor_ui;
 
 fn render(state: &State, width: u16, height: u16) -> String {
@@ -27,6 +28,7 @@ fn render(state: &State, width: u16, height: u16) -> String {
                         changed: false,
                         saving: false,
                     },
+                    guide: &GuideState::new(),
                 },
             );
         })
@@ -105,6 +107,7 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
                         changed: false,
                         saving: false,
                     },
+                    guide: &GuideState::new(),
                 },
             );
         })
@@ -165,6 +168,7 @@ fn patch_prices_the_gap_and_says_when_there_is_nothing_to_buy() {
                             changed: false,
                             saving: false,
                         },
+                        guide: &GuideState::new(),
                     },
                 )
             })
@@ -304,6 +308,7 @@ fn every_cell_sits_on_the_city_night_not_the_theme_canvas() {
                         changed: false,
                         saving: false,
                     },
+                    guide: &GuideState::new(),
                 },
             );
         })
