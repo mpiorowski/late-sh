@@ -770,7 +770,11 @@ fn the_kill_that_crosses_the_seek_threshold_says_so_once() {
     assert_eq!(sheet.exp, exp_to_seek(0));
     assert!(sheet.signal_hears());
     assert_eq!(
-        crossing.lines.iter().filter(|line| *line == HEARD_LINE).count(),
+        crossing
+            .lines
+            .iter()
+            .filter(|line| *line == HEARD_LINE)
+            .count(),
         1,
         "{:?}",
         crossing.lines
@@ -779,7 +783,10 @@ fn the_kill_that_crosses_the_seek_threshold_says_so_once() {
     sheet.fight = Some(harmless_glyph_at_the_top());
     let past = win_out(&mut sheet, &mut rng);
     assert!(matches!(past.applied, Applied::Won { .. }), "{past:?}");
-    assert!(sheet.signal_hears(), "still heard, one exp past the threshold");
+    assert!(
+        sheet.signal_hears(),
+        "still heard, one exp past the threshold"
+    );
     assert!(
         !past.lines.iter().any(|line| *line == HEARD_LINE),
         "{:?}",

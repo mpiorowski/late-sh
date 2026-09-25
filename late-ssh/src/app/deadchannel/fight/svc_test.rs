@@ -270,7 +270,11 @@ async fn putting_the_old_signal_down_resets_the_row_and_grants_the_badge() {
         panic!("a start answers with the sheet");
     };
     let mut sheet = sheet;
-    sheet.fight.as_mut().expect("the Old Signal again").foe_signal = 1;
+    sheet
+        .fight
+        .as_mut()
+        .expect("the Old Signal again")
+        .foe_signal = 1;
     DeadchannelRunner::store_sheet(&**client, sheet.to_write())
         .await
         .expect("store");
