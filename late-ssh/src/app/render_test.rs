@@ -32,6 +32,7 @@ fn hud(
         voice_badge,
         status_badge,
         pot: None,
+        runner: None,
         border_width: WIDE_HUD_BORDER,
         title_width: 0,
     })
@@ -282,6 +283,7 @@ fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
             voice_badge: Some(" mic #lounge [muted] "),
             status_badge: Some("05:00 building"),
             pot: Some(&pot),
+            runner: None,
             border_width,
             title_width: 0,
         })
@@ -313,6 +315,7 @@ fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
         voice_badge: None,
         status_badge: None,
         pot: Some(&pot),
+        runner: None,
         border_width: WIDE_HUD_BORDER,
         title_width: 0,
     })
@@ -325,11 +328,86 @@ fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
         voice_badge: None,
         status_badge: None,
         pot: Some(&pot),
+        runner: None,
         border_width: WIDE_HUD_BORDER,
         title_width: 0,
     })
     .expect("pot alone should render");
     assert_eq!(line_text(&only.line), " pot 84,200 · 3h12m ");
+}
+
+/// A standing runner's rations and signal sit between the mentions and the
+/// pot, shed after the pot and before the status word, and the signal
+/// reads red when it is down.
+#[test]
+fn status_hud_title_reads_the_runners_rations_and_signal() {
+    use crate::app::common::theme;
+    use crate::app::deadchannel::fight::state::Sheet;
+
+    let pot = PotView {
+        size: 84_200,
+        ticket_count: 842,
+        my_tickets: 5,
+        draws_in: "3h12m".to_string(),
+        open: true,
+    };
+    let mut sheet = Sheet::fresh(uuid::Uuid::from_u128(1), chrono::NaiveDate::from_ymd_opt(2026, 9, 25).expect("date"));
+    sheet.level = 2;
+    sheet.signal = 12;
+    sheet.rations_left = 7;
+    let with_runner = |sheet: &Sheet, border_width: u16| {
+        status_hud_title(StatusHudInputs {
+            balance: Some(1_500),
+            unread: 2,
+            voice_badge: None,
+            status_badge: Some("05:00 building"),
+            pot: Some(&pot),
+            runner: Some(sheet),
+            border_width,
+            title_width: 0,
+        })
+    };
+    let full = " 05:00 building | 2 unread mentions | rations 7 · signal 12/20 | pot 84,200 · 3h12m | 1500 chips ";
+    let without_pot = " 05:00 building | 2 unread mentions | rations 7 · signal 12/20 | 1500 chips ";
+    let signal_only = " 05:00 building | 2 unread mentions | signal 12/20 | 1500 chips ";
+    // With the readout gone the pot has room for its size again.
+    let without_runner = " 05:00 building | 2 unread mentions | pot 84,200 | 1500 chips ";
+    let width = |text: &str| text.chars().count() as u16 + 2;
+
+    let hud = with_runner(&sheet, WIDE_HUD_BORDER).expect("hud");
+    assert_eq!(line_text(&hud.line), full);
+    let signal = hud
+        .line
+        .spans
+        .iter()
+        .find(|span| span.content.as_ref() == "12/20")
+        .expect("signal span");
+    assert_eq!(signal.style.fg, Some(theme::TEXT_BRIGHT()));
+    assert_eq!(
+        with_runner(&sheet, width(full) - 20).map(|hud| line_text(&hud.line)),
+        Some(without_pot.to_string()),
+        "the pot sheds before the runner's readout"
+    );
+    assert_eq!(
+        with_runner(&sheet, width(without_pot) - 1).map(|hud| line_text(&hud.line)),
+        Some(signal_only.to_string()),
+        "one cell short drops the rations, not the signal"
+    );
+    assert_eq!(
+        with_runner(&sheet, width(signal_only) - 1).map(|hud| line_text(&hud.line)),
+        Some(without_runner.to_string()),
+        "too tight for the signal drops the readout before the status word"
+    );
+
+    sheet.signal = 0;
+    let down = with_runner(&sheet, WIDE_HUD_BORDER).expect("hud");
+    let signal = down
+        .line
+        .spans
+        .iter()
+        .find(|span| span.content.as_ref() == "0/20")
+        .expect("signal span");
+    assert_eq!(signal.style.fg, Some(theme::ERROR()));
 }
 
 #[test]
@@ -415,6 +493,7 @@ fn status_hud_title_degrades_status_to_fit_the_border() {
             voice_badge: Some(" mic #lounge [muted] "),
             status_badge: Some("05:00 building"),
             pot: None,
+            runner: None,
             border_width: spare + 2 + TABS,
             title_width: TABS,
         })
@@ -470,6 +549,7 @@ fn status_hud_title_drops_status_when_the_title_outgrows_the_border() {
         voice_badge: None,
         status_badge: Some("05:00 building"),
         pot: None,
+        runner: None,
         border_width: 10,
         title_width: 40,
     })
@@ -498,6 +578,7 @@ fn status_hud_title_places_status_dividers_without_mentions() {
         voice_badge: Some(" mic #lounge [muted] "),
         status_badge: Some("05:00 focus"),
         pot: None,
+        runner: None,
         border_width: 7,
         title_width: 0,
     })

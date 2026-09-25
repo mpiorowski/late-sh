@@ -5245,7 +5245,7 @@ async fn deadchannel_join_requires_the_invitation() {
         other => panic!("expected RoomLeft, got {other:?}"),
     }
     assert!(
-        late_core::models::deadchannel_runner::DeadchannelRunner::list_looks(&client)
+        late_core::models::deadchannel_runner::DeadchannelRunner::list_standing(&client)
             .await
             .expect("list looks")
             .is_empty()

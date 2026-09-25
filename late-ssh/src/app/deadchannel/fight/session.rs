@@ -57,9 +57,15 @@ impl FightSession {
         }
     }
 
-    /// Re-read the sheet (the descent into the city).
+    /// Re-read the sheet: at connect and on every directory edge for a
+    /// standing runner, and on the descent into the city.
     pub(crate) fn reload(&mut self) {
         self.svc.reload_task(self.user_id, self.outcome_tx.clone());
+    }
+
+    /// The runner left the row: nothing to mirror until they are back.
+    pub(crate) fn drop_sheet(&mut self) {
+        self.sheet = None;
     }
 
     /// Step into the static: open the scene and ask for a fight.

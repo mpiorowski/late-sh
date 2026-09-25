@@ -271,6 +271,8 @@ struct DrawContext<'a> {
     /// The night city page: the runner's spot and its look.
     city_state: &'a crate::app::deadchannel::city::state::State,
     city_look: Option<&'a crate::app::deadchannel::runner::state::Look>,
+    /// The runner's sheet mirror (`None` for anyone not standing on the
+    /// row): the street's strip, and the frame HUD on every other page.
     city_sheet: Option<&'a crate::app::deadchannel::fight::state::Sheet>,
     city_scene: Option<&'a crate::app::deadchannel::fight::session::Scene>,
     city_till: Option<&'a str>,
@@ -1347,7 +1349,7 @@ impl App {
                         nightcap_composer,
                         drunk_levels: &self.drunk_levels,
                         city_state: &self.city,
-                        city_look: self.runner_looks.get(&self.user_id),
+                        city_look: self.runner_looks.get(&self.user_id).map(|entry| &entry.look),
                         city_sheet: self.fight.sheet.as_ref(),
                         city_scene: self.fight.scene.as_ref(),
                         city_till: self.fight.till.as_deref(),
@@ -1666,6 +1668,7 @@ impl App {
                 voice_badge: ctx.voice_badge.as_deref(),
                 status_badge: ctx.status_badge.as_deref(),
                 pot: Some(ctx.pot).filter(|view| view.open),
+                runner: ctx.city_sheet.filter(|_| screen != Screen::City),
                 border_width: area.width,
                 title_width,
             }) {
@@ -2878,6 +2881,10 @@ struct StatusHudInputs<'a> {
     /// service. Sits right before the chips so the prize reads against the
     /// viewer's own balance.
     pot: Option<&'a crate::app::pot::state::PotView>,
+    /// The runner's sheet, for the rations and signal readout everywhere
+    /// but the city (the street's strip already carries them). `None` for
+    /// anyone who is not a standing runner.
+    runner: Option<&'a crate::app::deadchannel::fight::state::Sheet>,
     /// Full width of the bordered frame, corners included.
     border_width: u16,
     /// Width of the left-aligned frame title sharing the top border row.
@@ -2898,6 +2905,7 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
         voice_badge,
         status_badge,
         pot,
+        runner,
         border_width,
         title_width,
     } = inputs;
@@ -2906,9 +2914,10 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
     let spare_cols = border_width.saturating_sub(2).saturating_sub(title_width);
 
     // The three long-standing segments always render; the order of the line
-    // is status | voice | mentions | pot | chips, and the two newcomers are
-    // fitted against whatever the fixed three leave, the pot last, so under a
-    // tight border the pot yields before the countdown does.
+    // is status | voice | mentions | runner | pot | chips, and the newcomers
+    // are fitted against whatever the fixed three leave, in that order, so
+    // under a tight border the pot yields first, then the runner's readout,
+    // then the countdown.
     let mentions: Option<HudSegment> = (unread > 0).then(|| {
         let noun = if unread == 1 { "mention" } else { "mentions" };
         vec![
@@ -2985,6 +2994,42 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
         count += 1;
     }
 
+    // The runner's readout: `rations 7 · signal 12/20` when it fits,
+    // `signal 12/20` when only that does, nothing when neither does. The
+    // signal figure goes red when it is down: the row is closed until the
+    // roll, and this is the one place outside the city that says so.
+    let runner: Option<HudSegment> = runner.and_then(|sheet| {
+        let signal = format!("{}/{}", sheet.signal, sheet.max_signal());
+        let with_rations = format!(" rations {} · signal ", sheet.rations_left);
+        let signal_only = " signal ".to_string();
+        let head = [with_rations, signal_only].into_iter().find(|head| {
+            let width = UnicodeWidthStr::width(head.as_str())
+                + UnicodeWidthStr::width(signal.as_str())
+                + 1;
+            // The padding is already inside the head and the trailing space.
+            fits(used, count, width.saturating_sub(2) as u16)
+        })?;
+        let signal_color = if sheet.is_down() {
+            theme::ERROR()
+        } else {
+            theme::TEXT_BRIGHT()
+        };
+        Some(vec![
+            Span::styled(head, Style::default().fg(theme::TEXT_MUTED())),
+            Span::styled(
+                signal,
+                Style::default()
+                    .fg(signal_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" ", Style::default().fg(theme::TEXT_MUTED())),
+        ])
+    });
+    if let Some(runner) = &runner {
+        used += hud_segment_width(runner) + u16::from(count > 0);
+        count += 1;
+    }
+
     // The pot: `pot 84,200 · 3h12m` when it fits, `pot 84,200` when only
     // that does, nothing when neither does. It is ambient, so it is the
     // first thing the border sheds; `/pot` and the #lounge lines still
@@ -3025,7 +3070,7 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
             .sum(),
         None => 0,
     };
-    let segments: Vec<HudSegment> = [status, voice, mentions, pot, chips]
+    let segments: Vec<HudSegment> = [status, voice, mentions, runner, pot, chips]
         .into_iter()
         .flatten()
         .collect();

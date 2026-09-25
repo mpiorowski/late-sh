@@ -1303,11 +1303,16 @@ impl App {
             config.bonsai_service.clone(),
             bonsai_tree,
         );
-        let fight = crate::app::deadchannel::fight::session::FightSession::new(
+        let mut fight = crate::app::deadchannel::fight::session::FightSession::new(
             config.user_id,
             config.username.clone(),
             config.fight_service.clone(),
         );
+        // A standing runner's sheet is on the frame HUD from the first
+        // frame, not from the first descent; the read also rolls the day.
+        if config.runner_looks_rx.borrow().contains_key(&config.user_id) {
+            fight.reload();
+        }
         let tailor = crate::app::deadchannel::tailor::session::TailorSession::new(
             config.user_id,
             config.tailor_service.clone(),

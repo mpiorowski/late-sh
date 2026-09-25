@@ -718,6 +718,7 @@ async fn tab_cycles_screens_forward_through_all_including_profiles() {
 #[tokio::test]
 async fn zero_twice_goes_under_the_clubhouse_for_runners_only() {
     use crate::app::deadchannel::runner::state::Look;
+    use crate::app::deadchannel::runner::svc::RunnerEntry;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
     use std::collections::HashMap;
@@ -744,7 +745,7 @@ async fn zero_twice_goes_under_the_clubhouse_for_runners_only() {
 
     // A runner: the second `0` goes under, the next one comes back up.
     let mut rng = StdRng::seed_from_u64(7);
-    app.runner_looks = Arc::new(HashMap::from([(user.id, Look::random(&mut rng))]));
+    app.runner_looks = Arc::new(HashMap::from([(user.id, RunnerEntry { look: Look::random(&mut rng), level: 1 })]));
     app.handle_input(b"0");
     wait_for_render_contains(&mut app, " Undercity ").await;
     app.handle_input(b"0");
@@ -758,6 +759,7 @@ async fn zero_twice_goes_under_the_clubhouse_for_runners_only() {
 #[tokio::test]
 async fn leaving_the_deadchannel_walks_a_standing_runner_back_up() {
     use crate::app::deadchannel::runner::state::Look;
+    use crate::app::deadchannel::runner::svc::RunnerEntry;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
     use std::collections::HashMap;
@@ -777,7 +779,7 @@ async fn leaving_the_deadchannel_walks_a_standing_runner_back_up() {
     // A live directory, the shape the replica's listener feeds.
     let mut rng = StdRng::seed_from_u64(7);
     let (looks_tx, looks_rx) =
-        tokio::sync::watch::channel(Arc::new(HashMap::from([(user.id, Look::random(&mut rng))])));
+        tokio::sync::watch::channel(Arc::new(HashMap::from([(user.id, RunnerEntry { look: Look::random(&mut rng), level: 1 })])));
     app.runner_looks = looks_rx.borrow().clone();
     app.runner_looks_rx = looks_rx;
 
@@ -804,6 +806,7 @@ async fn runner_at_the_railing(
     name: &str,
 ) -> (late_core::test_utils::TestDb, crate::app::state::App) {
     use crate::app::deadchannel::runner::state::Look;
+    use crate::app::deadchannel::runner::svc::RunnerEntry;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
     use std::collections::HashMap;
@@ -820,7 +823,7 @@ async fn runner_at_the_railing(
         .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, &format!("{name}-flow"));
     let mut rng = StdRng::seed_from_u64(7);
-    app.runner_looks = Arc::new(HashMap::from([(user.id, Look::random(&mut rng))]));
+    app.runner_looks = Arc::new(HashMap::from([(user.id, RunnerEntry { look: Look::random(&mut rng), level: 1 })]));
 
     app.handle_input(b"0");
     wait_for_render_contains(&mut app, " Clubhouse ").await;
