@@ -103,7 +103,7 @@ const COMMANDS: &[Command] = &[
     global("aquarium", "feed the tank (/aquarium feed, free, daily)"),
     global("ban", "ban from your room (/ban @user [7d] [reason])"),
     global("binds", "open the chat guide (same as ?)"),
-    global("brb", "shortcut for /status away"),
+    global("brb", "show as away now, until your next key"),
     global("bug", "report a bug to #bugs (/bug <what broke>)"),
     global("chips", "chip ledger (/chips @user; bare = you)"),
     global("coffee", "post coffee cup"),
@@ -146,7 +146,6 @@ const COMMANDS: &[Command] = &[
     global("search", "search messages (?query in Ctrl+/)"),
     global("settings", "open settings"),
     global("shop", "open the shop (badges, effects, companions)"),
-    global("status", "set your status (/status focus 25; off)"),
     global("suggest", "send an idea to #suggestions (/suggest <idea>)"),
     global("summary", "AI catch-up of this room, or /summary 6h"),
     global("tea", "post tea cup"),
@@ -189,7 +188,7 @@ pub(crate) fn rank_command_matches(
         .filter(|cmd| cmd.name.starts_with(query_lower))
         .map(|cmd| MentionMatch {
             name: cmd.name.to_string(),
-            online: true,
+            presence: crate::app::chat::state::MatchPresence::Here,
             prefix: "/",
             description: Some(cmd.description),
         })

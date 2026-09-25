@@ -212,6 +212,12 @@ Presence projection:
 - Arrivals render as `JOIN` only for channels shared with the current IRC session.
 - Avoid per-arrival/per-room DB loops. Batch membership lookups for arrivals against joined rooms.
 
+Away (`app/common/away.rs`, shared with the TUI):
+- Each IRC connection is an `ActiveSession` on the roster with its own `away` flag. It is away on `AWAY :msg` (until a bare `AWAY`), or after `AWAY_AFTER` (30 min) without a PRIVMSG or NOTICE from it; PINGs and client polls do not count. A user reads as away only when every session, TUI or IRC, is.
+- `Session::sync_away` writes the flag to the roster on a change: at once on `AWAY` and on every PRIVMSG/NOTICE, and on the presence poll for the idle threshold.
+- `WHO` flags an away user `G` instead of `H`; `WHOIS` and a PRIVMSG to an away user's DM answer `RPL_AWAY` (301). The away message is the glyph `💤`: late.sh away carries no text.
+- The `away-notify` capability sends `AWAY` (with the glyph) and bare `AWAY` for users sharing a joined channel whose flag moved since the last poll, one batched membership lookup per poll, and right after the JOIN of an arrival who is already away. Latency is the presence poll (30s).
+
 `IrcRegistry` is not durable and does not need to be. On process restart, IRC clients reconnect and re-register with their token.
 
 ---

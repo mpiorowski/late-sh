@@ -1,3 +1,4 @@
+use late_core::MutexRecover;
 use std::time::{Duration, Instant};
 
 use super::state::{
@@ -127,26 +128,12 @@ impl App {
         {
             changed = true;
         }
-        // A countdown reaching zero is not urgent to the millisecond, so this
-        // rides the existing 1Hz edge rather than checking every tick. A
-        // running countdown dirties every one of those edges because the HUD
-        // badge counts down in seconds; an open-ended status has nothing to
-        // count and is cleared by a chat message instead, so it never dirties
-        // anything here and an idle session still settles.
-        if one_hz
-            && let Some(status) = self.status
-            && !status.clears_on_post()
-        {
-            if status.is_expired(chrono::Utc::now()) {
-                let word = status.status.word();
-                self.set_status(None);
-                self.banner = Some(crate::app::common::primitives::Banner::success(&format!(
-                    "{word} done!"
-                )));
-                self.notifier
-                    .push(crate::app::notify::Notification::status_done(word));
-            }
-            changed = true;
+        // Going away is not urgent to the millisecond, so this session's away
+        // flag rides the 1Hz edge. It only writes the roster on a change and
+        // paints nothing of its own: peers pick it up on their presence edge
+        // below, so an idle session still settles.
+        if one_hz {
+            self.sync_away();
         }
         // UTC midnight rolls the Arcade dailies over. This rides the 1Hz edge
         // rather than an input path so a session parked in chat overnight is
@@ -828,35 +815,26 @@ impl App {
                     changed = true;
                 }
             }
-            // Peer statuses resolve on the same edge, and only the minute
-            // rollovers survive the comparison: a badge that reads the same
-            // must not bump the epoch, or every second would invalidate every
-            // cached chat row for the whole room.
-            if let Some(directory) = &self.status_directory {
-                let peer_statuses = crate::app::common::status::resolve_all(
-                    &crate::app::common::status::snapshot(directory),
-                    chrono::Utc::now(),
-                );
-                if self.peer_statuses != peer_statuses {
-                    self.peer_statuses = peer_statuses;
-                    self.chat_ctx_epoch += 1;
-                }
-            }
             // Presence reads on the same cadence: renders consume these owned
-            // values instead of locking `active_users` twice per frame.
+            // values instead of locking `active_users` twice per frame. The
+            // away set bumps the chat row epoch only when it actually moves,
+            // or every second would invalidate every cached chat row.
             if let Some(active_users) = &self.active_users {
                 let online_count = crate::state::online_human_count(active_users);
                 if online_count != self.online_count {
                     self.online_count = online_count;
                     changed = true;
                 }
+                let away_user_ids =
+                    crate::app::common::away::away_user_ids(&active_users.lock_recover());
+                if away_user_ids != self.away_user_ids {
+                    self.away_user_ids = away_user_ids;
+                    self.chat_ctx_epoch += 1;
+                    changed = true;
+                }
             }
             let active_friends = self.chat.active_friends();
             if active_friends != self.active_friends {
-                self.active_friend_names = active_friends
-                    .iter()
-                    .map(|friend| friend.username.clone())
-                    .collect();
                 self.active_friends = active_friends;
                 changed = true;
             }
@@ -1217,7 +1195,7 @@ impl App {
             let queue = self.audio.queue_snapshot();
             let inputs = crate::app::common::sidebar::SidebarMarqueeInputs {
                 components: &self.profile_state.profile().right_sidebar_components,
-                active_friend_names: &self.active_friend_names,
+                active_friends: &self.active_friends,
                 icecast_now_playing: icecast_now_playing.as_ref(),
                 radio_now_playing: radio_now_playing.as_deref(),
                 selected_station: selected_radio_station,

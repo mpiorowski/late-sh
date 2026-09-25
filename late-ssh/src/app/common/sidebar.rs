@@ -16,12 +16,13 @@ use crate::app::audio::{
     viz::{EqState, render_eq},
 };
 use crate::app::bonsai::state::BonsaiState;
+use crate::app::chat::state::ActiveFriend;
 use late_core::models::user::{
     AudioSource, IcecastStream, RadioStation, RightSidebarComponent, RightSidebarComponentSetting,
 };
 
 // The pinned core block above the panel list: online count + clock on the
-// first row, connected friends (or the AFK indicator) on the second. Both
+// first row, connected friends (an away one marked 💤) on the second. Both
 // rows are always reserved so the panels below never shift when presence
 // changes.
 const TIME_HEIGHT: u16 = 2;
@@ -101,7 +102,7 @@ pub(crate) struct SidebarProps<'a> {
     /// Humans currently connected (bots excluded), for the core presence row.
     pub online_count: usize,
     /// Connected friends, compacted into the core block's friends row.
-    pub active_friend_names: &'a [String],
+    pub active_friends: &'a [ActiveFriend],
     /// Free-running frame counter for the music stage's marquee rows.
     pub marquee_tick: usize,
 }
@@ -179,7 +180,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         inset(layout[i]),
         props.clock_text,
         props.online_count,
-        props.active_friend_names,
+        props.active_friends,
         props.marquee_tick,
     );
     i += 1;
@@ -310,15 +311,14 @@ fn visible_components(
 
 /// The pinned two-row core block at the top of the rail. Presence is chrome
 /// now, not a panel: row one is the online count (left) and the clock
-/// (right); row two is connected friends. Both rows always render so the
-/// panel list below never shifts. The session's own `/status` is not here:
-/// the top border already carries it, and this row is the friends list.
+/// (right); row two is connected friends, an away one carrying the away
+/// glyph. Both rows always render so the panel list below never shifts.
 fn draw_core_block(
     frame: &mut Frame,
     area: Rect,
     clock_text: &str,
     online_count: usize,
-    active_friend_names: &[String],
+    active_friends: &[ActiveFriend],
     tick: usize,
 ) {
     if area.width == 0 || area.height == 0 {
@@ -377,10 +377,10 @@ fn draw_core_block(
 
     // Row 1 — connected friends. Blank when there are none: the reserved
     // row is what keeps chrome stable.
-    if !active_friend_names.is_empty() {
+    if !active_friends.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
-                friend_names_text(active_friend_names, area.width as usize, tick),
+                friend_names_text(active_friends, area.width as usize, tick),
                 Style::default()
                     .fg(theme::TEXT_BRIGHT())
                     .add_modifier(Modifier::BOLD),
@@ -390,17 +390,25 @@ fn draw_core_block(
     }
 }
 
-/// Every connected friend on the one reserved row, most recent login first.
-/// The list scrolls (marquee) when it overruns the rail instead of stopping
-/// at the few names that happen to fit, so the whole crowd can be read.
-fn friend_names_text(names: &[String], width: usize, tick: usize) -> String {
-    crate::app::common::marquee::marquee_text(&friend_names_joined(names), width, tick)
+/// Every connected friend on the one reserved row, in `active_friends`
+/// order (here before away, then most recent login). The list scrolls
+/// (marquee) when it overruns the rail instead of stopping at the few names
+/// that happen to fit, so the whole crowd can be read.
+fn friend_names_text(friends: &[ActiveFriend], width: usize, tick: usize) -> String {
+    crate::app::common::marquee::marquee_text(&friend_names_joined(friends), width, tick)
 }
 
-fn friend_names_joined(names: &[String]) -> String {
-    names
+fn friend_names_joined(friends: &[ActiveFriend]) -> String {
+    friends
         .iter()
-        .map(|name| format!("@{name}"))
+        .map(|friend| match friend.away {
+            true => format!(
+                "@{} {}",
+                friend.username,
+                crate::app::common::away::AWAY_GLYPH
+            ),
+            false => format!("@{}", friend.username),
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -416,7 +424,7 @@ const MARQUEE_QUEUE_RAIL_MIN: usize = MARQUEE_RAIL_MIN - 6;
 /// feeds its marquee rows.
 pub(crate) struct SidebarMarqueeInputs<'a> {
     pub components: &'a [RightSidebarComponentSetting],
-    pub active_friend_names: &'a [String],
+    pub active_friends: &'a [ActiveFriend],
     pub icecast_now_playing: Option<&'a NowPlaying>,
     pub radio_now_playing: Option<&'a str>,
     pub selected_station: RadioStation,
@@ -433,7 +441,7 @@ pub(crate) fn sidebar_marquee_scrolling(inputs: &SidebarMarqueeInputs<'_>) -> bo
     use crate::app::common::marquee::marquee_scrolls;
 
     if marquee_scrolls(
-        &friend_names_joined(inputs.active_friend_names),
+        &friend_names_joined(inputs.active_friends),
         MARQUEE_RAIL_MIN,
     ) {
         return true;

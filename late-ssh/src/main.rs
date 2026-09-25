@@ -502,7 +502,6 @@ async fn main() -> anyhow::Result<()> {
         scratchpad_registry,
         username_directory: username_directory.clone(),
         flair_directory: flair_directory.clone(),
-        status_directory: late_ssh::app::common::status::new_directory(),
         crown_service: crown_service.clone(),
         pot_service: pot_service.clone(),
         activity_feed: activity_tx,

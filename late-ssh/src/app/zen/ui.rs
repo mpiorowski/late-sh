@@ -3,7 +3,6 @@
 //! reef, the pet box, the embedded room chat, the equalizer); what this
 //! file adds is the composition and the chrome.
 
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use ratatui::{
@@ -14,7 +13,6 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-use uuid::Uuid;
 
 use super::{
     bigclock,
@@ -104,8 +102,6 @@ pub(crate) struct ZenView<'a> {
     /// The #lounge activity feed, newest first (`ChatState::activity_ticker`).
     pub activity: &'a [ActivityTickerEntry],
     pub active_friends: &'a [ActiveFriend],
-    /// Per-peer `/status` badges, for the Friends tile.
-    pub peer_statuses: &'a HashMap<Uuid, String>,
     /// The viewer's chips and today's care, for the Pulse tile.
     pub chip_balance: i64,
     pub care: Care,
@@ -255,9 +251,7 @@ pub(crate) fn draw_rice(
             TileKind::Activity => {
                 draw_activity_tile(frame, padded, view.activity, view.active_friends)
             }
-            TileKind::Friends => {
-                draw_friends_tile(frame, padded, view.active_friends, view.peer_statuses)
-            }
+            TileKind::Friends => draw_friends_tile(frame, padded, view.active_friends),
             TileKind::Pulse => draw_pulse_tile(
                 frame,
                 padded,
@@ -908,14 +902,10 @@ fn names_actor(text: &str, username: &str) -> bool {
         .is_some_and(|rest| rest.starts_with(' '))
 }
 
-/// Connected friends, the most recent login first: the name, their
-/// `/status` when set, their audio source, and how long they have been on.
-fn draw_friends_tile(
-    frame: &mut Frame,
-    area: Rect,
-    friends: &[ActiveFriend],
-    peer_statuses: &HashMap<Uuid, String>,
-) {
+/// Connected friends, here before away, then the most recent login: the
+/// name, the away glyph when away, their audio source, and how long they
+/// have been on.
+fn draw_friends_tile(frame: &mut Frame, area: Rect, friends: &[ActiveFriend]) {
     if friends.is_empty() {
         draw_centered_note(frame, area, &["no friends online"]);
         return;
@@ -934,11 +924,11 @@ fn draw_friends_tile(
                     Style::default().fg(theme::TEXT_BRIGHT()),
                 ),
             ];
-            if let Some(badge) = peer_statuses.get(&friend.user_id) {
-                spans.push(Span::styled(
-                    format!("  {badge}"),
-                    Style::default().fg(theme::AMBER()),
-                ));
+            if friend.away {
+                spans.push(Span::raw(format!(
+                    " {}",
+                    crate::app::common::away::AWAY_GLYPH
+                )));
             }
             spans.push(Span::styled(
                 format!("  ♪ {}", audio_source_word(friend.audio_source)),

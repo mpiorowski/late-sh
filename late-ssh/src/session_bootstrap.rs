@@ -562,7 +562,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         zen_layout: late_core::models::user::extract_zen_layout(&user.settings),
         username_directory: Some(state.username_directory.clone()),
         flair_directory: Some(state.flair_directory.clone()),
-        status_directory: Some(state.status_directory.clone()),
         crown_service: Some(state.crown_service.clone()),
         pot_service: Some(state.pot_service.clone()),
         activity_feed_rx,

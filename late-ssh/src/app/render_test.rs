@@ -20,17 +20,11 @@ const WIDE_HUD_BORDER: u16 = 200;
 /// A HUD with no left title competing for the border row, sized so nothing
 /// degrades. Cases that exercise fitting pass `border_width`/`title_width`
 /// themselves.
-fn hud(
-    balance: Option<i64>,
-    unread: i64,
-    voice_badge: Option<&str>,
-    status_badge: Option<&str>,
-) -> Option<StatusHud> {
+fn hud(balance: Option<i64>, unread: i64, voice_badge: Option<&str>) -> Option<StatusHud> {
     status_hud_title(StatusHudInputs {
         balance,
         unread,
         voice_badge,
-        status_badge,
         pot: None,
         runner: None,
         border_width: WIDE_HUD_BORDER,
@@ -185,26 +179,26 @@ fn dashboard_home_selected_rejects_synthetic_and_non_lounge_rooms() {
 
 #[test]
 fn status_hud_title_hidden_when_empty() {
-    assert!(hud(None, 0, None, None).is_none());
-    assert!(hud(None, -3, None, None).is_none());
+    assert!(hud(None, 0, None).is_none());
+    assert!(hud(None, -3, None).is_none());
 }
 
 #[test]
 fn status_hud_title_renders_right_aligned_pluralized_text() {
     use ratatui::layout::Alignment;
 
-    let one = hud(None, 1, None, None).expect("one mention should render");
+    let one = hud(None, 1, None).expect("one mention should render");
     assert_eq!(one.line.alignment, Some(Alignment::Right));
     assert_eq!(line_text(&one.line), " 1 unread mention ");
     assert_eq!(one.mentions_width, " 1 unread mention ".len() as u16);
 
-    let many = hud(None, 14, None, None).expect("many mentions should render");
+    let many = hud(None, 14, None).expect("many mentions should render");
     assert_eq!(line_text(&many.line), " 14 unread mentions ");
 }
 
 #[test]
 fn status_hud_title_combines_voice_and_mentions() {
-    let combined = hud(None, 2, Some(" mic #lounge [muted] "), None).expect("status should render");
+    let combined = hud(None, 2, Some(" mic #lounge [muted] ")).expect("status should render");
     assert_eq!(
         line_text(&combined.line),
         " mic #lounge [muted] | 2 unread mentions "
@@ -222,12 +216,12 @@ fn status_hud_title_combines_voice_and_mentions() {
 fn status_hud_title_renders_balance_right_of_mentions() {
     use ratatui::layout::Alignment;
 
-    let only = hud(Some(1_500), 0, None, None).expect("balance should render alone");
+    let only = hud(Some(1_500), 0, None).expect("balance should render alone");
     assert_eq!(only.line.alignment, Some(Alignment::Right));
     assert_eq!(line_text(&only.line), " 1500 chips ");
     assert_eq!(only.mentions_width, 0);
 
-    let combined = hud(Some(1_500), 2, Some(" mic #lounge [muted] "), None)
+    let combined = hud(Some(1_500), 2, Some(" mic #lounge [muted] "))
         .expect("balance + voice + mentions should render");
     assert_eq!(
         line_text(&combined.line),
@@ -235,38 +229,9 @@ fn status_hud_title_renders_balance_right_of_mentions() {
     );
 }
 
-/// The status badge shows the HUD on its own, and leads every other
-/// segment, so a running countdown always sits at the left end of the HUD.
-#[test]
-fn status_hud_title_renders_status_left_of_every_other_segment() {
-    let only = hud(None, 0, None, Some("24:59 deep work"))
-        .expect("a running status alone should render the HUD");
-    assert_eq!(line_text(&only.line), " 24:59 deep work ");
-    assert_eq!(only.mentions_width, 0);
-
-    let combined = hud(
-        Some(1_500),
-        2,
-        Some(" mic #lounge [muted] "),
-        Some("05:00 building"),
-    )
-    .expect("every segment should render");
-    assert_eq!(
-        line_text(&combined.line),
-        " 05:00 building | mic #lounge [muted] | 2 unread mentions | 1500 chips "
-    );
-    assert_eq!(combined.mentions_width, " 2 unread mentions ".len() as u16);
-    // The two badges ahead of it push the clickable mentions rect right.
-    assert_eq!(
-        combined.mentions_offset,
-        " 05:00 building | mic #lounge [muted] |".len() as u16
-    );
-}
-
 /// The pot sits right before the chips, so the prize reads against the
 /// viewer's own balance, and it is the first segment the border sheds:
-/// countdown first, then the whole badge, before the status gives up its
-/// label.
+/// countdown first, then the whole badge.
 #[test]
 fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
     let pot = PotView {
@@ -281,7 +246,6 @@ fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
             balance: Some(1_500),
             unread: 2,
             voice_badge: Some(" mic #lounge [muted] "),
-            status_badge: Some("05:00 building"),
             pot: Some(&pot),
             runner: None,
             border_width,
@@ -289,10 +253,9 @@ fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
         })
         .map(|hud| line_text(&hud.line))
     };
-    let full = " 05:00 building | mic #lounge [muted] | 2 unread mentions | pot 84,200 · 3h12m | 1500 chips ";
-    let without_clock =
-        " 05:00 building | mic #lounge [muted] | 2 unread mentions | pot 84,200 | 1500 chips ";
-    let without_pot = " 05:00 building | mic #lounge [muted] | 2 unread mentions | 1500 chips ";
+    let full = " mic #lounge [muted] | 2 unread mentions | pot 84,200 · 3h12m | 1500 chips ";
+    let without_clock = " mic #lounge [muted] | 2 unread mentions | pot 84,200 | 1500 chips ";
+    let without_pot = " mic #lounge [muted] | 2 unread mentions | 1500 chips ";
     let width = |text: &str| text.chars().count() as u16 + 2;
 
     assert_eq!(with_pot(WIDE_HUD_BORDER).as_deref(), Some(full));
@@ -304,7 +267,7 @@ fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
     assert_eq!(
         with_pot(width(without_clock) - 1).as_deref(),
         Some(without_pot),
-        "too tight for the size drops the pot before the status word"
+        "too tight for the size drops the whole pot"
     );
 
     // Alone with the chips it still reads pot first, balance last, and a
@@ -313,7 +276,6 @@ fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
         balance: Some(1_500),
         unread: 0,
         voice_badge: None,
-        status_badge: None,
         pot: Some(&pot),
         runner: None,
         border_width: WIDE_HUD_BORDER,
@@ -326,7 +288,6 @@ fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
         balance: None,
         unread: 0,
         voice_badge: None,
-        status_badge: None,
         pot: Some(&pot),
         runner: None,
         border_width: WIDE_HUD_BORDER,
@@ -337,8 +298,7 @@ fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
 }
 
 /// A standing runner's rations and signal sit between the mentions and the
-/// pot, shed after the pot and before the status word, and the signal
-/// reads red when it is down.
+/// pot, shed after the pot, and the signal reads red when it is down.
 #[test]
 fn status_hud_title_reads_the_runners_rations_and_signal() {
     use crate::app::common::theme;
@@ -363,19 +323,17 @@ fn status_hud_title_reads_the_runners_rations_and_signal() {
             balance: Some(1_500),
             unread: 2,
             voice_badge: None,
-            status_badge: Some("05:00 building"),
             pot: Some(&pot),
             runner: Some(sheet),
             border_width,
             title_width: 0,
         })
     };
-    let full = " 05:00 building | 2 unread mentions | rations 7 · signal 12/20 | pot 84,200 · 3h12m | 1500 chips ";
-    let without_pot =
-        " 05:00 building | 2 unread mentions | rations 7 · signal 12/20 | 1500 chips ";
-    let signal_only = " 05:00 building | 2 unread mentions | signal 12/20 | 1500 chips ";
+    let full = " 2 unread mentions | rations 7 · signal 12/20 | pot 84,200 · 3h12m | 1500 chips ";
+    let without_pot = " 2 unread mentions | rations 7 · signal 12/20 | 1500 chips ";
+    let signal_only = " 2 unread mentions | signal 12/20 | 1500 chips ";
     // With the readout gone the pot has room for its size again.
-    let without_runner = " 05:00 building | 2 unread mentions | pot 84,200 | 1500 chips ";
+    let without_runner = " 2 unread mentions | pot 84,200 | 1500 chips ";
     let width = |text: &str| text.chars().count() as u16 + 2;
 
     let hud = with_runner(&sheet, WIDE_HUD_BORDER).expect("hud");
@@ -400,7 +358,7 @@ fn status_hud_title_reads_the_runners_rations_and_signal() {
     assert_eq!(
         with_runner(&sheet, width(signal_only) - 1).map(|hud| line_text(&hud.line)),
         Some(without_runner.to_string()),
-        "too tight for the signal drops the readout before the status word"
+        "too tight for the signal drops the readout"
     );
 
     sheet.signal = 0;
@@ -476,116 +434,26 @@ fn help_hint_title_compacts_separators_then_ctrl_notation() {
     assert!(sponsor.is_none());
 }
 
-/// The HUD is painted over the left title, so a badge that does not fit the
-/// spare border room must shed its label and then itself, rather than eating
-/// the page tabs. Only the countdown degrades: the three older segments keep
-/// their long-standing behavior.
-#[test]
-fn status_hud_title_degrades_status_to_fit_the_border() {
-    let full = " 05:00 building | mic #lounge [muted] | 2 unread mentions | 1500 chips ";
-    let without_label = " 05:00 | mic #lounge [muted] | 2 unread mentions | 1500 chips ";
-    let without_badge = " mic #lounge [muted] | 2 unread mentions | 1500 chips ";
-    // A left title the HUD must not paint over, so the spare-room subtraction
-    // is exercised rather than bypassed by a zero-width title.
-    const TABS: u16 = 20;
-    // Terminal width that leaves the HUD exactly `spare` cells: the two border
-    // corners and the left title come off the top row first.
-    let at_spare = |spare: u16| {
-        status_hud_title(StatusHudInputs {
-            balance: Some(1_500),
-            unread: 2,
-            voice_badge: Some(" mic #lounge [muted] "),
-            status_badge: Some("05:00 building"),
-            pot: None,
-            runner: None,
-            border_width: spare + 2 + TABS,
-            title_width: TABS,
-        })
-    };
-    let text_at = |spare: u16| at_spare(spare).map(|hud| line_text(&hud.line));
-
-    assert_eq!(text_at(full.len() as u16).as_deref(), Some(full));
-    assert_eq!(
-        text_at(full.len() as u16 - 1).as_deref(),
-        Some(without_label),
-        "one cell short of the label drops the label, not the countdown"
-    );
-    assert_eq!(
-        text_at(without_label.len() as u16 - 1).as_deref(),
-        Some(without_badge),
-        "too tight for even MM:SS drops the badge"
-    );
-    // Whatever is shown, the mentions hit-test rect still points at the text:
-    // it starts past whatever the countdown has left ahead of it, and past the
-    // voice badge alone once the countdown is dropped.
-    for (spare, expected) in [
-        (
-            full.len() as u16,
-            " 05:00 building | mic #lounge [muted] |".len() as u16,
-        ),
-        (
-            without_label.len() as u16,
-            " 05:00 | mic #lounge [muted] |".len() as u16,
-        ),
-        (
-            without_label.len() as u16 - 1,
-            " mic #lounge [muted] |".len() as u16,
-        ),
-    ] {
-        let hud = at_spare(spare).expect("hud should render");
-        assert_eq!(hud.mentions_width, " 2 unread mentions ".len() as u16);
-        assert_eq!(hud.mentions_offset, expected);
-        let text = line_text(&hud.line);
-        assert_eq!(
-            &text[hud.mentions_offset as usize..][..hud.mentions_width as usize],
-            " 2 unread mentions "
-        );
-    }
-}
-
 /// A left title wider than the whole border row must not underflow the spare
-/// calculation into a huge budget: the badge is dropped, not force-fitted.
+/// calculation into a huge budget: the pot is dropped, not force-fitted.
 #[test]
-fn status_hud_title_drops_status_when_the_title_outgrows_the_border() {
+fn status_hud_title_drops_the_pot_when_the_title_outgrows_the_border() {
+    let pot = PotView {
+        size: 84_200,
+        ticket_count: 842,
+        my_tickets: 5,
+        draws_in: "3h12m".to_string(),
+        open: true,
+    };
     let squeezed = status_hud_title(StatusHudInputs {
         balance: Some(1_500),
         unread: 0,
         voice_badge: None,
-        status_badge: Some("05:00 building"),
-        pot: None,
+        pot: Some(&pot),
         runner: None,
         border_width: 10,
         title_width: 40,
     })
     .expect("chips keep the hud alive");
     assert_eq!(line_text(&squeezed.line), " 1500 chips ");
-}
-
-/// A status with nothing else in the HUD still needs its dividers right: no
-/// leading `|` when it is the first segment, and one before the next segment.
-#[test]
-fn status_hud_title_places_status_dividers_without_mentions() {
-    let alone = hud(None, 0, None, Some("05:00 focus")).expect("a status alone should render");
-    assert_eq!(line_text(&alone.line), " 05:00 focus ");
-
-    let with_voice = hud(None, 0, Some(" mic #lounge [muted] "), Some("05:00 focus"))
-        .expect("status + voice should render");
-    assert_eq!(
-        line_text(&with_voice.line),
-        " 05:00 focus | mic #lounge [muted] "
-    );
-
-    // Dropping the badge entirely must not leave a stray divider behind.
-    let dropped = status_hud_title(StatusHudInputs {
-        balance: None,
-        unread: 0,
-        voice_badge: Some(" mic #lounge [muted] "),
-        status_badge: Some("05:00 focus"),
-        pot: None,
-        runner: None,
-        border_width: 7,
-        title_width: 0,
-    })
-    .expect("voice should still render");
-    assert_eq!(line_text(&dropped.line), " mic #lounge [muted] ");
 }

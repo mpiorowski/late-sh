@@ -543,6 +543,63 @@ async fn cap_negotiation_advertises_acks_lists_and_naks_tier1_caps() {
     client.read_until(" 376 ").await;
 }
 
+/// `AWAY :msg` sends the IRC session away on the shared roster, so every
+/// surface reads the user as away: WHO flags them `G` and WHOIS carries
+/// `RPL_AWAY` with the away glyph. A bare `AWAY` brings them back.
+#[tokio::test]
+async fn away_command_marks_the_roster_and_shows_in_who_and_whois() {
+    let server = IrcTestServer::start().await;
+    let alice = server.seed_user("irc-away-alice").await;
+    let bob = server.seed_user("irc-away-bob").await;
+    let alice_nick = crate::ircd::proj::nick_for_username(&alice.username);
+    let mut alice_client = server.connect(&alice.token).await;
+    alice_client.read_until(" 366 ").await;
+    let mut bob_client = server.connect(&bob.token).await;
+    bob_client.read_until(" 366 ").await;
+    let alice_is_away = || {
+        server
+            .state
+            .active_users
+            .lock_recover()
+            .get(&alice.id)
+            .is_some_and(crate::app::common::away::user_is_away)
+    };
+    assert!(!alice_is_away(), "a fresh IRC session is here");
+
+    alice_client
+        .write_line("AWAY :lunch")
+        .await
+        .expect("send AWAY");
+    alice_client.read_until(" 306 ").await;
+    assert!(alice_is_away(), "AWAY marks the roster");
+
+    bob_client
+        .write_line(&format!("WHO {alice_nick}"))
+        .await
+        .expect("send WHO");
+    let who = bob_client.read_until(" 352 ").await;
+    assert!(who.contains(" G "), "WHO flags an away user G: {who}");
+    bob_client
+        .write_line(&format!("WHOIS {alice_nick}"))
+        .await
+        .expect("send WHOIS");
+    let away = bob_client.read_until(" 301 ").await;
+    assert!(
+        away.contains(&alice_nick) && away.contains(crate::app::common::away::AWAY_GLYPH),
+        "WHOIS carries RPL_AWAY with the glyph: {away}"
+    );
+
+    alice_client.write_line("AWAY").await.expect("send AWAY");
+    alice_client.read_until(" 305 ").await;
+    assert!(!alice_is_away(), "a bare AWAY brings the user back");
+    bob_client
+        .write_line(&format!("WHO {alice_nick}"))
+        .await
+        .expect("send WHO");
+    let who = bob_client.read_until(" 352 ").await;
+    assert!(who.contains(" H "), "WHO flags a present user H: {who}");
+}
+
 #[tokio::test]
 async fn projects_dotted_usernames_to_irc_nicks() {
     let server = IrcTestServer::start().await;

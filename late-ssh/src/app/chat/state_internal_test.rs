@@ -80,7 +80,7 @@ fn parse_pot_command_only_admits_a_buyable_count() {
     // Not a pot command at all: a longer command that merely starts the same
     // way must fall through to its own parser.
     assert_eq!(parse_pot_command("/potato"), None);
-    assert_eq!(parse_pot_command("/status focus 25"), None);
+    assert_eq!(parse_pot_command("/crown take"), None);
     assert_eq!(parse_pot_command("hello"), None);
 }
 
@@ -220,22 +220,44 @@ fn read_cursor_flush_take_all_flushes_before_deadline() {
     assert_eq!(pending.flush_at, None);
 }
 
-fn online(names: &[&str]) -> HashSet<String> {
-    names.iter().map(|n| n.to_string()).collect()
+fn presence(here: &[&str], away: &[&str]) -> HashMap<String, MatchPresence> {
+    here.iter()
+        .map(|name| (name.to_string(), MatchPresence::Here))
+        .chain(
+            away.iter()
+                .map(|name| (name.to_string(), MatchPresence::Away)),
+        )
+        .collect()
+}
+
+fn presences(ranked: &[MentionMatch]) -> Vec<MatchPresence> {
+    ranked.iter().map(|m| m.presence).collect()
 }
 
 #[test]
-fn rank_mention_matches_orders_online_before_offline() {
+fn rank_mention_matches_orders_here_then_away_then_offline() {
     let all = vec![
         "alice".to_string(),
         "bob".to_string(),
         "carol".to_string(),
         "dave".to_string(),
+        "erin".to_string(),
     ];
-    let ranked = rank_mention_matches(&all, "", || online(&["bob", "dave"]));
-    assert_eq!(names(&ranked), vec!["bob", "dave", "alice", "carol"]);
-    assert!(ranked[0].online && ranked[1].online);
-    assert!(!ranked[2].online && !ranked[3].online);
+    let ranked = rank_mention_matches(&all, "", || presence(&["dave", "bob"], &["erin"]));
+    assert_eq!(
+        names(&ranked),
+        vec!["bob", "dave", "erin", "alice", "carol"]
+    );
+    assert_eq!(
+        presences(&ranked),
+        vec![
+            MatchPresence::Here,
+            MatchPresence::Here,
+            MatchPresence::Away,
+            MatchPresence::Offline,
+            MatchPresence::Offline,
+        ]
+    );
 }
 
 #[test]
@@ -248,41 +270,47 @@ fn rank_mention_matches_prefix_filter_groups_online_first() {
         "albert".to_string(),
         "bob".to_string(),
     ];
-    let ranked = rank_mention_matches(&all, "a", || online(&["alice", "alex"]));
+    let ranked = rank_mention_matches(&all, "a", || presence(&["alice", "alex"], &[]));
     assert_eq!(names(&ranked), vec!["alex", "alice", "albert"]);
-    assert!(ranked[0].online && ranked[1].online);
-    assert!(!ranked[2].online);
+    assert_eq!(
+        presences(&ranked),
+        vec![
+            MatchPresence::Here,
+            MatchPresence::Here,
+            MatchPresence::Offline,
+        ]
+    );
 }
 
 #[test]
 fn rank_mention_matches_applies_prefix_filter() {
     let all = vec!["alice".to_string(), "albert".to_string(), "bob".to_string()];
-    let ranked = rank_mention_matches(&all, "al", || online(&["bob"]));
+    let ranked = rank_mention_matches(&all, "al", || presence(&["bob"], &[]));
     assert_eq!(names(&ranked), vec!["albert", "alice"]);
 }
 
 #[test]
 fn rank_mention_matches_prefix_is_case_insensitive() {
     let all = vec!["Alice".to_string(), "alBert".to_string()];
-    let ranked = rank_mention_matches(&all, "al", HashSet::new);
+    let ranked = rank_mention_matches(&all, "al", HashMap::new);
     assert_eq!(names(&ranked), vec!["alBert", "Alice"]);
 }
 
 #[test]
 fn rank_mention_matches_falls_back_to_alpha_when_no_online_info() {
     let all = vec!["zed".to_string(), "alice".to_string(), "bob".to_string()];
-    let ranked = rank_mention_matches(&all, "", HashSet::new);
+    let ranked = rank_mention_matches(&all, "", HashMap::new);
     assert_eq!(names(&ranked), vec!["alice", "bob", "zed"]);
-    assert!(ranked.iter().all(|m| !m.online));
+    assert!(ranked.iter().all(|m| m.presence == MatchPresence::Offline));
 }
 
 #[test]
 fn rank_mention_matches_skips_online_set_when_prefix_excludes_all() {
-    // When the query filters everyone out, the online-set supplier must
-    // not be invoked — it's the expensive path (locks ActiveUsers).
+    // When the query filters everyone out, the presence supplier must
+    // not be invoked: it's the expensive path (locks ActiveUsers).
     let all = vec!["alice".to_string(), "bob".to_string()];
     let ranked = rank_mention_matches(&all, "zz", || {
-        panic!("online_set should not be built when prefix filter is empty")
+        panic!("presence map should not be built when prefix filter is empty")
     });
     assert!(ranked.is_empty());
 }
@@ -307,43 +335,47 @@ fn rank_room_name_matches_filters_and_prefixes_non_dm_rooms() {
 }
 
 #[test]
-fn online_username_set_returns_empty_for_none() {
-    assert!(online_username_set(None).is_empty());
+fn username_presence_returns_empty_for_none() {
+    assert!(username_presence(None).is_empty());
 }
 
+/// Names are lowercased, a user whose every session is away reads away, and
+/// a user with no sessions (the always-on bots) reads here.
 #[test]
-fn online_username_set_lowercases_active_usernames() {
-    use crate::state::ActiveUser;
+fn username_presence_lowercases_names_and_reads_away() {
+    use crate::state::{ActiveSession, ActiveUser};
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
-    let mut users: HashMap<Uuid, ActiveUser> = HashMap::new();
-    users.insert(
-        Uuid::now_v7(),
-        ActiveUser {
-            username: "Alice".to_string(),
-            fingerprint: None,
-            audio_source: late_core::models::user::AudioSource::Icecast,
-            sessions: Vec::new(),
-            connection_count: 1,
-            last_login_at: Instant::now(),
-        },
-    );
-    users.insert(
-        Uuid::now_v7(),
-        ActiveUser {
-            username: "BOB".to_string(),
-            fingerprint: None,
-            audio_source: late_core::models::user::AudioSource::Icecast,
-            sessions: Vec::new(),
-            connection_count: 2,
-            last_login_at: Instant::now(),
-        },
-    );
+    let user = |username: &str, sessions: Vec<ActiveSession>| ActiveUser {
+        username: username.to_string(),
+        fingerprint: None,
+        audio_source: late_core::models::user::AudioSource::Icecast,
+        connection_count: sessions.len().max(1),
+        sessions,
+        last_login_at: Instant::now(),
+    };
+    let session = |away: bool| ActiveSession {
+        token: Uuid::now_v7().to_string(),
+        fingerprint: None,
+        peer_ip: None,
+        away,
+    };
+    let users: HashMap<Uuid, ActiveUser> = [
+        (Uuid::now_v7(), user("Alice", vec![session(false)])),
+        (
+            Uuid::now_v7(),
+            user("BOB", vec![session(true), session(true)]),
+        ),
+        (Uuid::now_v7(), user("bot", Vec::new())),
+    ]
+    .into();
     let active: ActiveUsers = Arc::new(Mutex::new(users));
 
-    let set = online_username_set(Some(&active));
-    assert_eq!(set, online(&["alice", "bob"]));
+    assert_eq!(
+        username_presence(Some(&active)),
+        presence(&["alice", "bot"], &["bob"])
+    );
 }
 
 #[test]
@@ -2815,120 +2847,9 @@ fn parse_pair_command_ignores_unrelated_input() {
     assert_eq!(parse_pair_command("/challenge @alice"), None);
 }
 
-fn status_set(status: Status, minutes: Option<u32>) -> Option<StatusParse> {
-    Some(StatusParse::Request(StatusRequest::Apply(
-        StatusChange::Set { status, minutes },
-    )))
-}
-
-#[test]
-fn parse_status_command_bare_opens_the_picker() {
-    assert_eq!(
-        parse_status_command("/status"),
-        Some(StatusParse::Request(StatusRequest::OpenPicker))
-    );
-    assert_eq!(
-        parse_status_command("  /status   "),
-        Some(StatusParse::Request(StatusRequest::OpenPicker)),
-        "surrounding whitespace is not an argument"
-    );
-}
-
-#[test]
-fn parse_status_command_reads_the_word_then_optional_minutes() {
-    assert_eq!(
-        parse_status_command("/status working"),
-        status_set(Status::Working, None)
-    );
-    assert_eq!(
-        parse_status_command("/status WORKING"),
-        status_set(Status::Working, None),
-        "the word is case-insensitive"
-    );
-    assert_eq!(
-        parse_status_command("/status focus 50"),
-        status_set(Status::Focus, Some(50))
-    );
-    assert_eq!(
-        parse_status_command("/status   focus   50  "),
-        status_set(Status::Focus, Some(50)),
-        "spacing collapses"
-    );
-}
-
-/// The whole reason the set is closed: free text is not a status, so it is a
-/// usage banner rather than a silently accepted label.
-#[test]
-fn parse_status_command_rejects_words_outside_the_set() {
-    assert_eq!(
-        parse_status_command("/status deep"),
-        Some(StatusParse::Invalid)
-    );
-    assert_eq!(
-        parse_status_command("/status deep work"),
-        Some(StatusParse::Invalid)
-    );
-    assert_eq!(
-        parse_status_command("/status working hard"),
-        Some(StatusParse::Invalid),
-        "a valid word does not license trailing text"
-    );
-    assert_eq!(
-        parse_status_command("/status focus 25 extra"),
-        Some(StatusParse::Invalid)
-    );
-}
-
-#[test]
-fn parse_status_command_clears_with_off() {
-    assert_eq!(
-        parse_status_command("/status off"),
-        Some(StatusParse::Request(StatusRequest::Apply(
-            StatusChange::Clear
-        )))
-    );
-    assert_eq!(
-        parse_status_command("/status OFF"),
-        Some(StatusParse::Request(StatusRequest::Apply(
-            StatusChange::Clear
-        )))
-    );
-    assert_eq!(
-        parse_status_command("/status off now"),
-        Some(StatusParse::Invalid),
-        "off takes no arguments"
-    );
-}
-
-#[test]
-fn parse_status_command_rejects_out_of_range_durations() {
-    assert_eq!(
-        parse_status_command("/status focus 0"),
-        Some(StatusParse::Invalid),
-        "zero"
-    );
-    assert_eq!(
-        parse_status_command(&format!("/status focus {}", STATUS_MAX_MINUTES + 1)),
-        Some(StatusParse::Invalid),
-        "over the cap"
-    );
-    assert_eq!(
-        parse_status_command("/status focus 99999999999999999999"),
-        Some(StatusParse::Invalid),
-        "digit run too long for u32"
-    );
-}
-
-#[test]
-fn parse_status_command_ignores_unrelated_input() {
-    assert_eq!(parse_status_command("/statuses"), None);
-    assert_eq!(parse_status_command("hello /status"), None);
-    assert_eq!(parse_status_command("/poll"), None);
-}
-
-/// `/brb` is exactly `/status away` with no minutes, so a bare one sets away.
+/// `/brb` sends the session away now instead of after the idle threshold.
 #[tokio::test]
-async fn brb_sets_an_open_ended_away_status() {
+async fn brb_requests_going_away() {
     let test_db = crate::test_helpers::new_test_db().await;
     let user = late_core::test_utils::create_test_user(&test_db.db, "brb_bare").await;
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
@@ -2939,18 +2860,12 @@ async fn brb_sets_an_open_ended_away_status() {
             .submit_composer(false, ComposerCommands::Enabled)
             .is_none()
     );
-    assert_eq!(
-        state.take_requested_status(),
-        Some(StatusRequest::Apply(StatusChange::Set {
-            status: Status::Away,
-            minutes: None,
-        }))
-    );
+    assert!(state.take_requested_brb());
+    assert!(!state.take_requested_brb(), "the request is taken once");
 }
 
-/// The old `/brb <message>` habit. It takes no message any more, so it gets a
-/// usage banner naming what `/brb` does, the same strictness `/status away
-/// back in 5` gets, not "Unknown command: /brb" for a command the guide lists.
+/// The `/brb <message>` habit gets a usage banner, not "Unknown command:
+/// /brb" for a command the guide lists.
 #[tokio::test]
 async fn brb_with_a_message_explains_instead_of_calling_it_unknown() {
     let test_db = crate::test_helpers::new_test_db().await;
@@ -2961,11 +2876,8 @@ async fn brb_with_a_message_explains_instead_of_calling_it_unknown() {
     let banner = state
         .submit_composer(false, ComposerCommands::Enabled)
         .expect("banner");
-    assert_eq!(
-        banner.message,
-        "/brb takes no message, it sets /status away"
-    );
-    assert_eq!(state.take_requested_status(), None, "nothing is set");
+    assert_eq!(banner.message, "/brb takes no message");
+    assert!(!state.take_requested_brb(), "nothing is requested");
 }
 
 #[test]

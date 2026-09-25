@@ -20,13 +20,17 @@ fn cap_request_enables_and_lists_supported_caps() {
 
     assert!(apply_cap_request(
         &mut caps,
-        "message-tags server-time echo-message"
+        "message-tags server-time echo-message away-notify"
     ));
 
     assert!(caps.message_tags);
     assert!(caps.server_time);
     assert!(caps.echo_message);
-    assert_eq!(caps.as_list(), "message-tags server-time echo-message");
+    assert!(caps.away_notify);
+    assert_eq!(
+        caps.as_list(),
+        "message-tags server-time echo-message away-notify"
+    );
 }
 
 #[test]

@@ -38,7 +38,6 @@ use crate::{
         chat::notifications::svc::NotificationService,
         chat::svc::ChatService,
         common::primitives::{Banner, Screen},
-        common::status::{SessionStatus, StatusDirectory},
         help_modal, hub, mod_modal, profile,
         profile::svc::ProfileService,
         profile_modal, settings_modal, sheet_modal,
@@ -412,9 +411,6 @@ pub struct SessionConfig {
     /// Live 24h username effects, shared process-wide (snapshot-swap; see
     /// `common/username_effect.rs`).
     pub flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
-    /// Live `/status` presence, shared process-wide (snapshot-swap; see
-    /// `common/status.rs`).
-    pub status_directory: Option<StatusDirectory>,
     /// The crown, `/crown` and `/crown take`. `None` in test harnesses that
     /// build an app without one; the glyph then simply never appears.
     pub crown_service: Option<crate::app::crown::svc::CrownService>,
@@ -577,16 +573,15 @@ pub struct App {
     pub(crate) runner_looks: crate::app::deadchannel::runner::svc::RunnerLooks,
     pub(crate) runner_looks_rx:
         tokio::sync::watch::Receiver<crate::app::deadchannel::runner::svc::RunnerLooks>,
-    /// Per-peer `/status` badges, rebuilt from the status directory on the
-    /// same ~1s cadence; chat author labels read this owned map, never the
-    /// directory mutex.
-    pub(crate) peer_statuses: HashMap<Uuid, String>,
-    /// Human headcount and connected-friend names, recomputed on the same
-    /// ~1s cadence; renderers read these owned values instead of locking the
-    /// shared `active_users` map every frame.
+    /// Every away user (`common/away.rs`), resolved from the active-users
+    /// roster on the ~1s presence edge; chat author labels, the DM list, and
+    /// @-completion read this owned set, never the roster mutex.
+    pub(crate) away_user_ids: HashSet<Uuid>,
+    /// Human headcount and connected friends, recomputed on the same ~1s
+    /// cadence; renderers read these owned values instead of locking the
+    /// shared `active_users` map every frame. The friends feed the sidebar
+    /// friends row and the Zen Friends tile.
     pub(crate) online_count: usize,
-    pub(crate) active_friend_names: Vec<String>,
-    /// The same friends with what the Zen Friends tile shows beside them.
     pub(crate) active_friends: Vec<crate::app::chat::state::ActiveFriend>,
     /// The unread mention count the mentions list was last requested at
     /// while an Inbox tile is on the Zen page (the list loads only on ask).
@@ -603,7 +598,6 @@ pub struct App {
     /// every real change).
     pub(super) last_username_directory: Option<Arc<HashMap<Uuid, String>>>,
     pub(super) flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
-    pub(super) status_directory: Option<StatusDirectory>,
     pub(super) crown_service: Option<crate::app::crown::svc::CrownService>,
     /// The process-shared crown holder, read on the ~1s edge and folded into
     /// `name_flair`, so no render ever queries for the glyph.
@@ -687,8 +681,6 @@ pub struct App {
     pub(crate) poll_modal_state: chat::polls::state::PollModalState,
     pub(crate) gild_modal_state: chat::gild::state::GildModalState,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
-    /// The `/status` picker overlay.
-    pub(crate) status_picker: crate::app::status_picker::state::StatusPickerState,
     pub(crate) room_info_modal_state: crate::app::room_info_modal::state::RoomInfoModalState,
     /// The profile editor opened from page 5 (`app/directory/editor`).
     pub(crate) directory_editor: crate::app::directory::editor::state::EditorState,
@@ -937,12 +929,16 @@ pub struct App {
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
     /// Desktop-notification domain: producers (chat, daily, this session's
-    /// own tick-driven events like a status countdown finishing) push through cloned
-    /// `notifier` handles; render drains `notify_outbox` into OSC bytes.
+    /// own tick-driven events) push through cloned `notifier` handles; render
+    /// drains `notify_outbox` into OSC bytes.
     pub(crate) notifier: crate::app::notify::Notifier,
     pub(crate) notify_outbox: crate::app::notify::Outbox,
-    /// This session's `/status`, if any. `None` when nothing is set.
-    pub(crate) status: Option<SessionStatus>,
+    /// `/brb`: this session was sent away by hand, ahead of the idle
+    /// threshold. Cleared by the next input (`handle_input`).
+    pub(crate) sent_away: bool,
+    /// This session's away flag as last written to the active-users roster,
+    /// so the 1Hz edge writes only on a change (`App::sync_away`).
+    pub(crate) away: bool,
 
     /// Last background color sent to the terminal via OSC 11 (if any).
     pub(crate) last_terminal_bg: Option<ratatui::style::Color>,
@@ -990,41 +986,26 @@ impl App {
         self.running
     }
 
-    /// Publish this session's status to the active-users roster and then to
-    /// the process-shared directory, so peers' chat author labels can paint
-    /// it. The roster goes first because the directory entry is rebuilt from
-    /// every session the user has open. The single write path:
-    /// every place that changes `status` goes through it, which is also how a
-    /// clear and an expiry retire the peer badge.
-    pub(crate) fn publish_status(&self) {
-        self.set_shared_session_status();
-        let Some(directory) = &self.status_directory else {
-            return;
-        };
-        match &self.active_users {
-            Some(active_users) => crate::app::common::status::publish_for_user(
-                directory,
+    /// Recompute this session's away flag (`common/away.rs`) and write it to
+    /// the active-users roster when it changed. Rides the 1Hz presence edge,
+    /// so peers see a session go away or come back within a second of it.
+    /// Returns whether the flag moved.
+    pub(crate) fn sync_away(&mut self) -> bool {
+        let away =
+            crate::app::common::away::session_is_away(self.last_input_at.elapsed(), self.sent_away);
+        if away == self.away {
+            return false;
+        }
+        self.away = away;
+        if let Some(active_users) = &self.active_users {
+            crate::app::common::away::set_session_away(
                 active_users,
                 self.user_id,
-                self.status,
-            ),
-            None => crate::app::common::status::set_user(directory, self.user_id, self.status),
+                &self.session_token,
+                away,
+            );
         }
-    }
-
-    /// Set this session's status and publish it. `None` clears.
-    pub(crate) fn set_status(&mut self, status: Option<SessionStatus>) {
-        self.status = status;
-        self.publish_status();
-    }
-
-    /// Clear an open-ended status because the owner posted. A countdown is
-    /// left alone: carrying one is exactly what buys the right to keep
-    /// chatting without losing it.
-    pub(crate) fn clear_status_on_post(&mut self) {
-        if self.status.is_some_and(SessionStatus::clears_on_post) {
-            self.set_status(None);
-        }
+        true
     }
 
     /// The rail modes this session renders from: this device's stored layout if
@@ -1527,19 +1508,17 @@ impl App {
             name_flair: HashMap::new(),
             runner_looks: config.runner_looks_rx.borrow().clone(),
             runner_looks_rx: config.runner_looks_rx.clone(),
-            peer_statuses: HashMap::new(),
+            away_user_ids: HashSet::new(),
             online_count: active_users
                 .as_ref()
                 .map(crate::state::online_human_count)
                 .unwrap_or(0),
-            active_friend_names: Vec::new(),
             active_friends: Vec::new(),
             zen_inbox_listed_unread: None,
             last_sidebar_clock: String::new(),
             chat_ctx_epoch: 0,
             last_username_directory: None,
             flair_directory: config.flair_directory,
-            status_directory: config.status_directory,
             crown_holder_rx: config
                 .crown_service
                 .as_ref()
@@ -1626,7 +1605,6 @@ impl App {
             gild_modal_state: chat::gild::state::GildModalState::new(),
             room_search_modal_state:
                 crate::app::room_search_modal::state::RoomSearchModalState::default(),
-            status_picker: crate::app::status_picker::state::StatusPickerState::default(),
             room_info_modal_state: crate::app::room_info_modal::state::RoomInfoModalState::default(
             ),
             directory_editor: crate::app::directory::editor::state::EditorState::default(),
@@ -1778,7 +1756,8 @@ impl App {
             terminal_image_render_state: TerminalImageRenderState::default(),
             notifier,
             notify_outbox,
-            status: None,
+            sent_away: false,
+            away: false,
             is_draining: config.is_draining,
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
@@ -2588,6 +2567,8 @@ impl App {
     pub fn handle_input(&mut self, data: &[u8]) {
         if !data.is_empty() {
             self.last_input_at = Instant::now();
+            // Any key brings a `/brb` session back; the 1Hz edge publishes it.
+            self.sent_away = false;
         }
         // First contact's breakthrough (`app/deadchannel/haunt`): while it
         // plays, every key is swallowed here, before a running door game or
@@ -3051,26 +3032,6 @@ impl App {
                 }
             }
         });
-    }
-
-    /// Mirror this session's status onto the active-users roster. The
-    /// directory's per-user entry is rebuilt from these copies, which is how a
-    /// clear or a disconnect here falls back to another session's status.
-    fn set_shared_session_status(&self) {
-        let Some(active_users) = &self.active_users else {
-            return;
-        };
-        let mut active_users = active_users.lock_recover();
-        let Some(active) = active_users.get_mut(&self.user_id) else {
-            return;
-        };
-        if let Some(session) = active
-            .sessions
-            .iter_mut()
-            .find(|session| session.token == self.session_token)
-        {
-            session.status = self.status;
-        }
     }
 
     pub fn paired_client_volume_up(&mut self) -> bool {

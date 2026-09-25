@@ -238,7 +238,7 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
             milestone: None,
         },
     )]);
-    let peer_statuses = HashMap::new();
+    let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
@@ -259,7 +259,7 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
-        peer_statuses: &peer_statuses,
+        away_user_ids: &away_user_ids,
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -334,7 +334,7 @@ fn the_crown_glyph_renders_between_the_author_name_and_their_title() {
             milestone: None,
         },
     )]);
-    let peer_statuses = HashMap::new();
+    let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
@@ -355,7 +355,7 @@ fn the_crown_glyph_renders_between_the_author_name_and_their_title() {
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
-        peer_statuses: &peer_statuses,
+        away_user_ids: &away_user_ids,
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -399,7 +399,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_flair = HashMap::new();
-    let peer_statuses = HashMap::new();
+    let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
@@ -421,7 +421,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
-        peer_statuses: &peer_statuses,
+        away_user_ids: &away_user_ids,
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -454,7 +454,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_flair = HashMap::new();
-    let peer_statuses = HashMap::new();
+    let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
@@ -482,7 +482,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
-        peer_statuses: &peer_statuses,
+        away_user_ids: &away_user_ids,
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -554,7 +554,7 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_flair = HashMap::new();
-    let peer_statuses = HashMap::new();
+    let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
@@ -575,7 +575,7 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
-        peer_statuses: &peer_statuses,
+        away_user_ids: &away_user_ids,
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -765,7 +765,7 @@ fn mentions_and_replies_paint_a_background_wash() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_flair = HashMap::new();
-    let peer_statuses = HashMap::new();
+    let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
@@ -786,7 +786,7 @@ fn mentions_and_replies_paint_a_background_wash() {
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
-        peer_statuses: &peer_statuses,
+        away_user_ids: &away_user_ids,
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -848,7 +848,7 @@ fn background_wash_fills_the_whole_row_width() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_flair = HashMap::new();
-    let peer_statuses = HashMap::new();
+    let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
@@ -869,7 +869,7 @@ fn background_wash_fills_the_whole_row_width() {
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
-        peer_statuses: &peer_statuses,
+        away_user_ids: &away_user_ids,
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -951,7 +951,7 @@ fn chat_view<'a>(
     static DRUNK_LEVELS: OnceLock<HashMap<Uuid, u8>> = OnceLock::new();
     static NAME_STYLES: OnceLock<HashMap<Uuid, crate::app::common::username_effect::ResolvedName>> =
         OnceLock::new();
-    static PEER_POMODOROS: OnceLock<HashMap<Uuid, String>> = OnceLock::new();
+    static AWAY_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static RUNNER_LOOKS: OnceLock<
         HashMap<Uuid, crate::app::deadchannel::runner::svc::RunnerEntry>,
     > = OnceLock::new();
@@ -1045,7 +1045,7 @@ fn chat_view<'a>(
         drunk_levels: DRUNK_LEVELS.get_or_init(HashMap::new),
         name_flair: NAME_STYLES.get_or_init(HashMap::new),
         runner_looks: RUNNER_LOOKS.get_or_init(HashMap::new),
-        peer_statuses: PEER_POMODOROS.get_or_init(HashMap::new),
+        away_user_ids: AWAY_USER_IDS.get_or_init(HashSet::new),
         name_flicker: None,
         translations: TRANSLATIONS.get_or_init(HashMap::new),
         translation_hidden: TRANSLATION_HIDDEN.get_or_init(HashSet::new),
@@ -3087,7 +3087,7 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_flair = HashMap::new();
-    let peer_statuses = HashMap::new();
+    let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
@@ -3113,7 +3113,7 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
             dividers,
             drunk_levels: &drunk_levels,
             name_flair: &name_flair,
-            peer_statuses: &peer_statuses,
+            away_user_ids: &away_user_ids,
             name_flicker: None,
             translations: &translations,
             translation_hidden: &translation_hidden,
@@ -3276,7 +3276,7 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_flair = HashMap::new();
-    let peer_statuses = HashMap::new();
+    let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
@@ -3297,7 +3297,7 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
-        peer_statuses: &peer_statuses,
+        away_user_ids: &away_user_ids,
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,

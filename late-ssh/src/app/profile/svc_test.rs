@@ -871,7 +871,7 @@ async fn delete_account_terminates_active_sessions() {
                 token,
                 fingerprint: Some(user.fingerprint.clone()),
                 peer_ip: None,
-                status: None,
+                away: false,
             }],
             connection_count: 1,
             last_login_at: Instant::now(),

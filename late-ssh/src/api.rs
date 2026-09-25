@@ -1194,9 +1194,9 @@ enum ReportAction {
     /// First report of the connection: align the client to `target`, the
     /// stored device audio.
     Align { target: KeyAudio },
-    /// The report is user intent (`m`, `+`/`-`, a media key, `/brb`'s
-    /// auto-mute): write it to the device row. Persisting here rather than
-    /// at each keybind is what keeps one source of truth.
+    /// The report is user intent (`m`, `+`/`-`, a media key): write it to
+    /// the device row. Persisting here rather than at each keybind is what
+    /// keeps one source of truth.
     Persist,
     /// Nothing to do: an echo of our own alignment, a non-CLI surface, or a
     /// connection whose stored-audio read failed.

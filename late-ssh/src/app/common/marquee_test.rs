@@ -40,3 +40,30 @@ fn marquee_scrolls_only_for_overflowing_text() {
     assert!(marquee_scrolls("abcdefgh", 5));
     assert!(!marquee_scrolls("abcdefgh", 0));
 }
+
+/// The away glyph on the friends row paints two columns: the window is
+/// measured in columns, so the row never overruns its rail, and a wide glyph
+/// cut by an edge becomes a space instead of spilling past it.
+#[test]
+fn marquee_measures_wide_glyphs_in_columns() {
+    assert!(!marquee_scrolls("ab 💤", 5), "exactly five columns fits");
+    assert!(marquee_scrolls("abc 💤", 5));
+    assert_eq!(
+        marquee_text("abc 💤", 5, 0),
+        "abc  ",
+        "cut at the right edge"
+    );
+    assert_eq!(
+        marquee_text("ab💤cdefg", 5, 60),
+        " cdef",
+        "cut at the left edge"
+    );
+    for tick in 0..400 {
+        let window = marquee_text("@ada 💤 @bob 💤 @cyd", 7, tick);
+        assert_eq!(
+            unicode_width::UnicodeWidthStr::width(window.as_str()),
+            7,
+            "tick {tick} painted {window:?}"
+        );
+    }
+}
