@@ -69,7 +69,7 @@ use super::stats::{
 };
 use super::taming::{PetSkillEffect, beast_species, beasts_at, tame_chance, tame_xp};
 use super::world::{
-    CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, RegionProgress,
+    CritterKind, Dir, FeatureKind, MobBehavior, MobSpawn, Perk, RegionProgress,
     ResourceNode, RoomId, World, craft_stations_at, critter_index, critters_at, features_at,
     frontier_entrance_room, is_frontier_room, node_index, nodes_at, seed_world,
     tutorial_start_room,
@@ -1240,8 +1240,6 @@ pub struct PlayerView {
     pub resurrection_cap: u8,
     /// Lookable things in the current room (Examine panel).
     pub features: Vec<FeatureView>,
-    /// Overhead map of the explored neighbourhood around the player.
-    pub minimap: MiniMap,
     /// The whole-world atlas: exploration progress per major region (Map panel).
     pub atlas: Vec<RegionProgress>,
     /// The world clock phase, e.g. "dawn"/"day"/"dusk"/"night".
@@ -1350,7 +1348,6 @@ impl PlayerView {
             resurrections_left: 0,
             resurrection_cap: 0,
             features: Vec::new(),
-            minimap: MiniMap::default(),
             atlas: Vec::new(),
             time_of_day: "day",
             time_of_day_glyph: "\u{25CB}",
@@ -2640,8 +2637,6 @@ struct PlayerState {
     gold: i64,
     banked_gold: i64,
     room: RoomId,
-    /// Previous room entered from, for the highlighted minimap trail.
-    previous_room: Option<RoomId>,
     /// A personal waypoint the player has marked (see `set_waypoint`), warped
     /// to with `warp_to_waypoint` - the far run back from the Frontier's deep
     /// levels to Embergate (and back again) for healing/resurrecting is a real
@@ -4061,7 +4056,6 @@ impl WorldState {
             gold: STARTING_GOLD,
             banked_gold: 0,
             room: start,
-            previous_room: None,
             waypoint: None,
             visited: Arc::new(HashSet::from([start])),
             target: None,
@@ -4339,7 +4333,6 @@ impl WorldState {
             p.resource_regen = stats.resource_regen;
             p.base_attack = stats.attack;
             p.room = room;
-            p.previous_room = None;
             // A stale waypoint (a room that no longer exists) is simply dropped.
             p.waypoint = saved.waypoint.filter(|&r| self.world.room(r).is_some());
             p.visited = Arc::new(saved.visited.iter().copied().collect());
@@ -4813,7 +4806,6 @@ impl WorldState {
         let mut first_visit = false;
         if let Some(player) = self.players.get_mut(&user_id) {
             player.frontier_descent_pending = false;
-            player.previous_room = Some(from);
             player.room = dest;
             first_visit = Arc::make_mut(&mut player.visited).insert(dest);
         }
@@ -5002,7 +4994,6 @@ impl WorldState {
                     continue;
                 }
                 if let Some(p) = self.players.get_mut(&f) {
-                    p.previous_room = Some(from);
                     p.room = dest;
                     Arc::make_mut(&mut p.visited).insert(dest);
                 }
@@ -5053,7 +5044,6 @@ impl WorldState {
             return;
         }
         if let Some(p) = self.players.get_mut(&user_id) {
-            p.previous_room = Some(p.room);
             p.room = home;
             Arc::make_mut(&mut p.visited).insert(home);
         }
@@ -5148,7 +5138,6 @@ impl WorldState {
         }
         if let Some(p) = self.players.get_mut(&user_id) {
             p.gold -= WAYPOINT_WARP_COST;
-            p.previous_room = Some(p.room);
             p.room = dest;
             Arc::make_mut(&mut p.visited).insert(dest);
         }
@@ -5239,7 +5228,6 @@ impl WorldState {
             return;
         };
         if let Some(p) = self.players.get_mut(&user_id) {
-            p.previous_room = Some(p.room);
             p.room = haven;
             Arc::make_mut(&mut p.visited).insert(haven);
         }
@@ -5952,7 +5940,6 @@ impl WorldState {
             return;
         }
         if let Some(p) = self.players.get_mut(&user_id) {
-            p.previous_room = Some(p.room);
             p.room = dest;
             Arc::make_mut(&mut p.visited).insert(dest);
         }
@@ -7636,7 +7623,6 @@ impl WorldState {
         match exit {
             Some((dir, dest)) => {
                 if let Some(player) = self.players.get_mut(&user_id) {
-                    player.previous_room = Some(room_id);
                     player.room = dest;
                     Arc::make_mut(&mut player.visited).insert(dest);
                 }
@@ -9420,7 +9406,6 @@ impl WorldState {
         if let Some(player) = self.players.get_mut(&user_id) {
             player.hp = player.max_hp();
             player.resource = player.max_resource;
-            player.previous_room = Some(player.room);
             player.room = TEMPLE_ROOM;
             player.target = None;
             player.respawn_at = None;
@@ -11036,9 +11021,6 @@ impl WorldState {
                 })
                 .collect();
 
-            let minimap =
-                self.world
-                    .minimap(player.room, player.previous_room, &player.visited, 3, 2);
             let atlas = self.world.region_progress(&player.visited, player.room);
             // The journal, in reading order: the active starter step first,
             // then accepted board bounties, then - only once the Frontier's
@@ -11195,7 +11177,6 @@ impl WorldState {
                     resurrections_left: player.resurrections_left,
                     resurrection_cap: player.resurrection_cap,
                     features,
-                    minimap,
                     atlas,
                     time_of_day,
                     time_of_day_glyph,

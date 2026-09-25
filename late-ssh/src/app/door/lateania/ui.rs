@@ -135,14 +135,6 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         return;
     }
 
-    // Narrow terminals (a phone) get the live field as the whole centre of the
-    // screen with a short event feed under it. The map never folds into a side
-    // rail: on a phone the rail is the one place it cannot be read.
-    if state.panel() == Panel::Room && view.rpg_mode && area.width < 96 && area.height >= 8 {
-        draw_narrow_field(frame, area, &view);
-        return;
-    }
-
     if area.width < 50 || area.height < 9 {
         draw_compact(frame, area, &view);
         return;
@@ -222,8 +214,9 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     // Wide terminals get the live field with the message log as a full-width
     // strip along the bottom, the way terminal roguelikes have always laid it:
     // log lines are sentences, and sentences want width, not a narrow rail.
-    // Below this width `draw_narrow_field` stacks field and feed instead.
-    if state.panel() == Panel::Room && view.rpg_mode {
+    // Below this width the field folds away and the classic log + side view
+    // stands in; no layout draws a map in the side rail.
+    if state.panel() == Panel::Room && view.rpg_mode && area.width >= 96 {
         // A tall terminal spends rows on the full-width strip; a short one
         // gives them back to the field and pushes the events into the rail.
         let strip = match events_in_rail(area.height) {
@@ -2571,79 +2564,6 @@ fn draw_archetype_select(frame: &mut Frame, area: Rect, view: &PlayerView) {
 
 fn side_paragraph(lines: Vec<Line<'static>>) -> Paragraph<'static> {
     Paragraph::new(lines).wrap(Wrap { trim: false })
-}
-
-/// Rows the narrow layout's event feed gets under the field, separator rule
-/// included: a small tail, so the map keeps the screen.
-fn narrow_log_height(total_height: u16) -> u16 {
-    (total_height / 4).clamp(3, 7)
-}
-
-/// The narrow layout's one-line status bar: where you are, your vitals, and
-/// the foe you are locked onto. The side rail that carried these is gone on a
-/// phone, and your HP must not be something you open a panel to find.
-fn narrow_status_line(view: &PlayerView, width: usize) -> Line<'static> {
-    let mut spans = vec![
-        Span::styled(
-            format!("{}/{}hp", view.hp, view.max_hp),
-            Style::default()
-                .fg(hp_color(view.hp, view.max_hp))
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(
-                " {}/{}{}",
-                view.resource,
-                view.max_resource,
-                short_res(&view.resource_name)
-            ),
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ];
-    let mut used: usize = spans.iter().map(|s| s.content.width()).sum();
-    if let Some(foe) = view.mobs.iter().find(|m| m.targeted) {
-        let tail = format!(" {}/{}", foe.hp, foe.max_hp);
-        let room = width.saturating_sub(used + 4 + tail.width());
-        if room >= 3 {
-            let name = truncate_chars(&foe.name, room);
-            used += 4 + name.width() + tail.width();
-            spans.push(Span::styled(
-                " vs ",
-                Style::default().fg(theme::TEXT_FAINT()),
-            ));
-            spans.push(Span::styled(name, Style::default().fg(theme::ERROR())));
-            spans.push(Span::styled(
-                tail,
-                Style::default().fg(hp_color(foe.hp, foe.max_hp)),
-            ));
-        }
-    }
-    let room = width.saturating_sub(used + 2);
-    if room >= 4 {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            truncate_chars(&view.room_name, room),
-            Style::default().fg(theme::AMBER()),
-        ));
-    }
-    Line::from(spans)
-}
-
-/// The narrow (phone) room layout: status bar, the live field across the full
-/// width in the centre, and a small event feed under it. No side rail.
-fn draw_narrow_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
-    let rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(4),
-        Constraint::Length(narrow_log_height(area.height)),
-    ])
-    .split(area);
-    frame.render_widget(
-        Paragraph::new(narrow_status_line(view, rows[0].width as usize)),
-        rows[0],
-    );
-    draw_field(frame, rows[1], view);
-    draw_log_strip(frame, rows[2], view);
 }
 
 fn draw_compact(frame: &mut Frame, area: Rect, view: &PlayerView) {
