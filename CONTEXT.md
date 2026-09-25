@@ -349,6 +349,14 @@ Chat badges and flags are rentals too, but they ride the chat label query rather
 - `HouseTableRegistry` (in `app/lobby/house/registry.rs`) owns the process-global fixed house tables behind the Lobby modal: one lazy singleton Poker/Blackjack/Asterion/Tron/Super Snake service (no DB rows), seeded permanent `chat_rooms(kind='game')` + voice channels per table, live occupancy for the modal, the house `SatDown` activity choke point, and the eager blackjack event feed the @dealer ghost subscribes to. Detailed contracts live in `late-ssh/src/app/lobby/house/CONTEXT.md`.
 - Events remain `broadcast` for all subscribers; targeted variants carry `user_id` and are filtered in UI state.
 
+**Personal bartender gifts:** `@bartender buy @user a drink` is an exact,
+AI-independent purchase for one named human, online or offline.
+`ChipService::buy_drink_for` charges 100 chips as `RoundPurchase` and grants
+one `drink_credits` row in the same transaction without pouring the buyer.
+The shared 24h expiry and three-open-credit cap apply; the recipient redeems
+it by ordering, and @bartender names the buyer of the credit actually spent.
+See `late-ssh/src/app/chat/CONTEXT.md` §9d.
+
 ### 2.5 TUI Rendering and State Architecture (Sync vs Async Boundary)
 
 To maintain a buttery-smooth 15-60 FPS over SSH, the architecture strictly separates synchronous UI rendering from asynchronous business logic:

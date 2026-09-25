@@ -1,6 +1,6 @@
-//! The round: one patron buying a drink for everyone else at the bar.
+//! Credits bought for the house or one named patron, claimed on their order.
 //!
-//! Three rules live here and nowhere else.
+//! Four rules live here and nowhere else.
 //!
 //! **What counts as asking.** [`ROUND_PHRASES`] is the closed list of things a
 //! patron can say to @bartender to buy the house a round. It is deliberately
@@ -11,6 +11,10 @@
 //! from scrambling the one sentence that moves money. If the two ever read
 //! different lists, the feature breaks for exactly the people most likely to
 //! use it, so there is one list.
+//!
+//! **A personal gift is exact too.** [`gift_drink_target`] recognizes one
+//! named recipient and one credit; `chat/slur.rs` also reads it so a drunk
+//! patron's spending instruction arrives intact.
 //!
 //! **What it costs.** [`ROUND_PRICE_PER_PATRON`] for every credit the round
 //! actually granted, burned whole.
@@ -135,6 +139,33 @@ pub const ROUND_PHRASES: &[&str] = &[
     "round for the bar",
     "round on me",
 ];
+
+/// Exact spending instruction for a single-person tab. The caller removes a
+/// composer's reply quote before checking it. Questions, code and extra words
+/// do not authorize a debit.
+pub fn gift_drink_target(text: &str) -> Option<&str> {
+    if text.contains('\n') || text.contains('\r') {
+        return None;
+    }
+    let mut words = text.split_whitespace();
+    if !words.next()?.eq_ignore_ascii_case("@bartender")
+        || !words.next()?.eq_ignore_ascii_case("buy")
+    {
+        return None;
+    }
+    let target = words.next()?.strip_prefix('@')?;
+    if target.is_empty()
+        || !target
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        || !words.next()?.eq_ignore_ascii_case("a")
+        || !words.next()?.eq_ignore_ascii_case("drink")
+        || words.next().is_some()
+    {
+        return None;
+    }
+    Some(target)
+}
 
 /// Byte ranges in `text` covered by a [`ROUND_PHRASES`] entry, in the order
 /// they appear.

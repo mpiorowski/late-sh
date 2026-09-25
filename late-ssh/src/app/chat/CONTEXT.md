@@ -727,6 +727,17 @@ its own domain; only the command and the glyph are chat's.
 
 One patron buys everyone at the bar a drink. The chips are burned like the
 crown's; what the room gets is a #lounge line and a free drink each.
+The same credit also serves a one-person gift: `@bartender buy @user a drink`
+is an exact, whole-message instruction (`drink_round::gift_drink_target`,
+protected from drunk-text slurring) resolved against the account username.
+It costs 100 chips, works for offline humans, shares the 24h expiry and
+three-open-credit cap, and does not pour the buyer a drink. The gift and
+its floor-guarded `round_purchase` debit commit together through
+`ChipService::buy_drink_for`; self-gifts, bot targets, unknown names, full
+tabs and short balances are refused uncharged. A successful gift gets a
+scripted receipt ahead of the bartender's mention ladder and AI, while
+refusals step the ladder. Redemption uses the same oldest-expiring credit
+path and names the buyer of the credit actually spent.
 `late-core/src/models/drink_round.rs` owns both tables (migrations 164 and
 168), the price, the cap, and the phrase list; `GhostService::bartender_round`
 (`app/ai/ghost.rs`) owns the transaction's caller, the refusals, the

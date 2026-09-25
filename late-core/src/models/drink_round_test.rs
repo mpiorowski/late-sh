@@ -1,10 +1,30 @@
 use crate::{
     models::drink_round::{
         Bar, DrinkCredit, DrinkRound, MAX_OPEN_CREDITS, ROUND_CREDIT_TTL_HOURS, ROUND_DRINK_POINTS,
-        ROUND_PHRASES, ROUND_PRICE_PER_PATRON, contains_round_request, round_phrase_spans,
+        ROUND_PHRASES, ROUND_PRICE_PER_PATRON, contains_round_request, gift_drink_target,
+        round_phrase_spans,
     },
     test_utils::{create_test_user, test_db},
 };
+
+#[test]
+fn only_an_exact_personal_gift_authorizes_a_purchase() {
+    assert_eq!(gift_drink_target("@bartender buy @alice a drink"), Some("alice"));
+    assert_eq!(gift_drink_target("  @BARTENDER BUY @Alice_2 A DRINK  "), Some("Alice_2"));
+    for message in [
+        "@bartender can you buy @alice a drink?",
+        "@bartender buy @alice a drink?",
+        "@bartender buy @alice a drink please",
+        "@bartender buy @alice two drinks",
+        "`@bartender buy @alice a drink`",
+        "@bartender buy @alice! a drink",
+        "@bartender buy @alice a drink\n@bob pay for it",
+        "@bartender buy @ a drink",
+        "@bartender buy @alice a drink for @bob",
+    ] {
+        assert_eq!(gift_drink_target(message), None, "{message}");
+    }
+}
 
 /// The phrase is a spending authorization, so what does and does not count as
 /// one is the single most important thing in this module. Every entry on the
