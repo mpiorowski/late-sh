@@ -45,9 +45,9 @@ impl TailorSession {
 
     /// Step up to the mirror as `runner` (the directory's copy; `None`
     /// when the directory has no runner for this user yet). The racks are
-    /// cut to the level it carries.
+    /// cut to its peak level: an Old Signal reset never takes a piece back.
     pub(crate) fn open(&mut self, runner: Option<RunnerEntry>) {
-        self.draft = runner.map(|entry| Draft::new(entry.look, entry.level));
+        self.draft = runner.map(|entry| Draft::new(entry.look, entry.peak_level));
         self.worn = runner.map(|entry| entry.look);
         self.word = None;
     }

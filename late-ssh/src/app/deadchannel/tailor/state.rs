@@ -4,10 +4,11 @@
 //! palette, `shuffle` throws the dice the join threw. Pure: the draft is
 //! a value, and nothing here knows whether it was worn yet.
 //!
-//! The draft knows the runner's level, and the level is the gate: the rack
-//! holds only the pieces and tints it has unlocked (`Piece::level`,
-//! `Tint::level`), free, re-picked forever. Level only climbs, so what a
-//! runner wears is always on their rack.
+//! The draft knows the runner's peak level, and the peak is the gate: the
+//! rack holds only the pieces and tints it has unlocked (`Piece::level`,
+//! `Tint::level`), free, re-picked forever. The peak only climbs (an Old
+//! Signal reset takes the level, never the peak), so what a runner wears
+//! is always on their rack.
 
 use rand::Rng;
 
@@ -37,8 +38,8 @@ impl Row {
     }
 }
 
-/// The look being tried on, the row the cursor is on, and the level the
-/// racks are cut to.
+/// The look being tried on, the row the cursor is on, and the peak level
+/// the racks are cut to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Draft {
     pub look: Look,

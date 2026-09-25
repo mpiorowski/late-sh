@@ -13,7 +13,8 @@ use uuid::Uuid;
 
 /// Cross-process refresh channel. An insert, or an update of `look`,
 /// `left_at`, or `level`, on `deadchannel_runners` fires it (migration 172
-/// trigger, narrowed by 199, widened to the level by 202); a listener
+/// trigger, narrowed by 199, widened to the level by 202; `peak_level` and
+/// `marks`, migration 205, only move with the level); a listener
 /// re-reads every standing runner rather than trusting the payload, which
 /// only names the user for logs. Every other sheet write (the fight loop)
 /// fires nothing.
@@ -39,7 +40,9 @@ crate::model! {
         pub fight: Option<serde_json::Value>,
         pub kills: i32,
         pub kills_today: i32,
-        pub runs_today: i32;
+        pub runs_today: i32,
+        pub peak_level: i32,
+        pub marks: i32;
 
         @data
         pub user_id: Uuid,
@@ -65,15 +68,20 @@ pub struct SheetWrite {
     pub kills: i32,
     pub kills_today: i32,
     pub runs_today: i32,
+    pub peak_level: i32,
+    pub marks: i32,
 }
 
-/// What the directory serves per standing runner: the look as stored and
-/// the level, for the badge.
+/// What the directory serves per standing runner: the look as stored, the
+/// level and the marks for the badge, and the peak level the tailor's rack
+/// is cut to.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StandingRunner {
     pub user_id: Uuid,
     pub look: serde_json::Value,
     pub level: i32,
+    pub peak_level: i32,
+    pub marks: i32,
 }
 
 /// What `ensure_for_user` found. The statements are the only witness of it,
@@ -230,7 +238,7 @@ impl DeadchannelRunner {
                  SET level = $2, exp = $3, signal = $4, weapon_tier = $5,
                      armor_tier = $6, bits = $7, rations_left = $8, day = $9,
                      fight = $10, kills = $11, kills_today = $12, runs_today = $13,
-                     updated = current_timestamp
+                     peak_level = $14, marks = $15, updated = current_timestamp
                  WHERE user_id = $1
                  RETURNING *",
                 &[
@@ -247,6 +255,8 @@ impl DeadchannelRunner {
                     &write.kills,
                     &write.kills_today,
                     &write.runs_today,
+                    &write.peak_level,
+                    &write.marks,
                 ],
             )
             .await
@@ -277,7 +287,8 @@ impl DeadchannelRunner {
     pub async fn list_standing(client: &Client) -> Result<Vec<StandingRunner>> {
         let rows = client
             .query(
-                "SELECT user_id, look, level FROM deadchannel_runners WHERE left_at IS NULL",
+                "SELECT user_id, look, level, peak_level, marks
+                 FROM deadchannel_runners WHERE left_at IS NULL",
                 &[],
             )
             .await
@@ -288,6 +299,8 @@ impl DeadchannelRunner {
                 user_id: row.get("user_id"),
                 look: row.get("look"),
                 level: row.get("level"),
+                peak_level: row.get("peak_level"),
+                marks: row.get("marks"),
             })
             .collect())
     }

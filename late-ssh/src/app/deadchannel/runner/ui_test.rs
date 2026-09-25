@@ -35,8 +35,15 @@ fn the_badge_is_the_mark_and_the_level_in_the_levels_band() {
     }))
     .expect("parse");
 
-    assert_eq!(badge_text(&RunnerEntry { look, level: 7 }), "▚7");
-    assert_eq!(badge_text(&RunnerEntry { look, level: 15 }), "▚15");
+    let entry = |level, marks| RunnerEntry {
+        look,
+        level,
+        peak_level: 15,
+        marks,
+    };
+    assert_eq!(badge_text(&entry(7, 0)), "▚7");
+    assert_eq!(badge_text(&entry(15, 0)), "▚15");
+    assert_eq!(badge_text(&entry(3, 2)), "▚3╬2", "the marks ride behind the Signal's glyph");
     let colors = (1..=16).map(level_color).collect::<Vec<_>>();
     let expected = [
         Tint::Static,

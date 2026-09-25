@@ -18,7 +18,8 @@ use ratatui::{
 };
 
 use super::session::Scene;
-use super::state::{Fight, Sheet, Slot};
+use super::data::FOES;
+use super::state::{Fight, Quarry, Sheet, Slot};
 use crate::app::deadchannel::city::map::Neon;
 use crate::app::deadchannel::city::ui::{
     INK, INK_BRIGHT, INK_DIM, INK_MUTED, dim, glow, ink, lit, mix, tint_rgb,
@@ -120,7 +121,11 @@ fn runner_rows(sheet: &Sheet, look: Option<&Look>) -> Vec<Vec<Span<'static>>> {
 
 fn foe_rows(fight: &Fight) -> Vec<Vec<Span<'static>>> {
     let missing = missing(fight.foe_signal, fight.foe_max_signal);
-    let seed = (fight.kind as u64 + 1).wrapping_mul(0x51_7cc1_b727_220a);
+    let kind = match fight.quarry {
+        Quarry::Glyph(kind) => kind as u64,
+        Quarry::OldSignal => FOES.len() as u64,
+    };
+    let seed = (kind + 1).wrapping_mul(0x51_7cc1_b727_220a);
     corrupt(fight.foe().portrait, missing, seed)
         .into_iter()
         .map(|cells| {

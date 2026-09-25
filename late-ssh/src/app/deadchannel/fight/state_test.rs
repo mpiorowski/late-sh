@@ -3,8 +3,12 @@ use late_core::models::deadchannel_runner::DeadchannelRunner;
 use rand::{SeedableRng, rngs::StdRng};
 use uuid::Uuid;
 
-use super::{Applied, Command, Fight, News, Refusal, Sheet, SheetError, Slot};
-use crate::app::deadchannel::fight::data::{FOES, RATIONS_PER_DAY, START_BITS};
+use super::{Applied, Command, Fight, News, Quarry, Refusal, Sheet, SheetError, Slot};
+use crate::app::deadchannel::fight::data::{
+    FOES, MARK_BONUS_CAP, MAX_LEVEL, OLD_SIGNAL, RATIONS_PER_DAY, START_BITS, exp_to_advance,
+    exp_to_seek, title,
+};
+use crate::app::deadchannel::fight::state::MAX_TIER;
 
 fn day(d: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 9, d).expect("a september day")
@@ -94,7 +98,7 @@ fn winning_past_the_threshold_levels_up() {
     // A foe that cannot hurt you and cannot survive you.
     sheet.weapon_tier = 50;
     sheet.fight = Some(Fight {
-        kind: 0,
+        quarry: Quarry::Glyph(0),
         foe_signal: 1,
         foe_max_signal: 1,
         foe_attack: 0,
@@ -211,7 +215,7 @@ fn the_day_roll_refills_everything_and_drops_a_hanging_fight() {
     sheet.kills_today = 7;
     sheet.runs_today = 2;
     sheet.fight = Some(Fight {
-        kind: 2,
+        quarry: Quarry::Glyph(2),
         foe_signal: 5,
         foe_max_signal: 32,
         foe_attack: 5,
@@ -497,7 +501,7 @@ fn a_carried_weapon_is_named_in_the_hit_line() {
     let mut sheet = fresh();
     sheet.weapon_tier = 3;
     sheet.fight = Some(Fight {
-        kind: 0,
+        quarry: Quarry::Glyph(0),
         foe_signal: 1,
         foe_max_signal: 1,
         foe_attack: 0,
@@ -535,8 +539,10 @@ fn a_row_naming_an_unknown_glyph_is_rejected() {
         kills: 0,
         kills_today: 0,
         runs_today: 0,
+        peak_level: 1,
+        marks: 0,
         fight: Some(serde_json::json!({
-            "kind": 99, "foe_signal": 1, "foe_max_signal": 1, "foe_attack": 1,
+            "quarry": {"glyph": 99}, "foe_signal": 1, "foe_max_signal": 1, "foe_attack": 1,
             "foe_defense": 1, "foe_bits": 1, "foe_exp": 1, "log": []
         })),
         user_id: Uuid::nil(),
@@ -568,4 +574,146 @@ fn every_glyph_wears_a_five_by_three_face() {
             }
         }
     }
+}
+
+/// A level-15 runner at the top of the armorer's wall, full signal, with
+/// the exp that makes the Old Signal hear them.
+fn at_the_top(marks: i32) -> Sheet {
+    let mut sheet = fresh();
+    sheet.level = MAX_LEVEL;
+    sheet.peak_level = MAX_LEVEL;
+    sheet.marks = marks;
+    sheet.exp = exp_to_seek(marks);
+    sheet.weapon_tier = MAX_TIER;
+    sheet.armor_tier = MAX_TIER;
+    sheet.signal = sheet.max_signal();
+    sheet.bits = 1234;
+    sheet
+}
+
+/// Attack until the fight ends; the ending.
+fn fight_out(sheet: &mut Sheet, rng: &mut StdRng) -> Applied {
+    for _ in 0..500 {
+        match sheet.apply(Command::Attack, rng).applied {
+            Applied::Round => continue,
+            ended => return ended,
+        }
+    }
+    panic!("a fight always ends");
+}
+
+/// The balance target, through the real rules: a runner at the top of the
+/// wall with full signal who only attacks puts the Old Signal down about
+/// two times in five on the first try, and about four in five with the
+/// mark bonus at its cap. A change here is a balance change; read it.
+#[test]
+fn the_old_signal_is_a_real_fight_that_marks_make_easier() {
+    let win_rate = |marks: i32| {
+        let mut wins = 0;
+        for seed in 0..2000 {
+            let mut sheet = at_the_top(marks);
+            let mut rng = StdRng::seed_from_u64(seed);
+            sheet.apply(Command::Start, &mut rng);
+            if matches!(fight_out(&mut sheet, &mut rng), Applied::Slain { .. }) {
+                wins += 1;
+            }
+        }
+        wins * 100 / 2000
+    };
+    let first = win_rate(0);
+    let capped = win_rate(MARK_BONUS_CAP);
+    assert!((33..=45).contains(&first), "first kill wins {first}%");
+    assert!((72..=86).contains(&capped), "capped marks win {capped}%");
+    assert_eq!(win_rate(MARK_BONUS_CAP + 3), capped, "the bonus stops at the cap");
+}
+
+#[test]
+fn the_old_signal_answers_only_at_the_top_with_the_exp_to_leave_it() {
+    let mut rng = StdRng::seed_from_u64(1);
+
+    let mut short = at_the_top(0);
+    short.exp -= 1;
+    assert!(!short.signal_hears());
+    short.apply(Command::Start, &mut rng);
+    assert_eq!(short.fight.as_ref().map(|fight| fight.quarry), Some(Quarry::Glyph(14)));
+
+    let mut ready = at_the_top(0);
+    let outcome = ready.apply(Command::Start, &mut rng);
+    let fight = ready.fight.as_ref().expect("a fight on the row");
+    assert_eq!(fight.quarry, Quarry::OldSignal);
+    assert_eq!(fight.foe().name, "Old Signal");
+    assert_eq!(outcome.lines, vec![OLD_SIGNAL.arrives.to_string()]);
+
+    // Marks scale the exp it takes: last time's threshold is not enough.
+    let mut again = at_the_top(1);
+    again.exp = exp_to_seek(0);
+    assert!(!again.signal_hears());
+}
+
+/// Whole state: the kill leaves a mark and a fresh runner's sheet, and
+/// keeps the peak, the kill count, and today's rations.
+#[test]
+fn putting_the_old_signal_down_leaves_a_mark_and_starts_the_climb_over() {
+    let mut sheet = at_the_top(0);
+    let mut rng = StdRng::seed_from_u64(1);
+    sheet.apply(Command::Start, &mut rng);
+    sheet.fight.as_mut().expect("a fight").foe_signal = 1;
+    sheet.kills = 900;
+    sheet.kills_today = 4;
+
+    let outcome = sheet.apply(Command::Attack, &mut rng);
+
+    assert_eq!(outcome.applied, Applied::Slain { marks: 1 });
+    let expected = Sheet {
+        user_id: Uuid::nil(),
+        level: 1,
+        exp: 0,
+        signal: 10,
+        weapon_tier: 0,
+        armor_tier: 0,
+        bits: START_BITS,
+        rations_left: RATIONS_PER_DAY - 1,
+        day: day(24),
+        fight: None,
+        kills: 901,
+        kills_today: 5,
+        runs_today: 0,
+        peak_level: MAX_LEVEL,
+        marks: 1,
+    };
+    assert_eq!(sheet, expected);
+    assert_eq!(outcome.lines.len(), 3, "{:?}", outcome.lines);
+    assert!(outcome.lines[2].contains("mark 1"), "{:?}", outcome.lines);
+    assert_eq!(sheet.news(&outcome.applied), vec![News::Slain { marks: 1 }]);
+    assert_eq!((sheet.attack(), sheet.defense()), (2, 2), "level 1 plus the mark");
+}
+
+#[test]
+fn marks_scale_the_ladder_and_the_peak_only_climbs() {
+    assert_eq!(exp_to_advance(1, 0), Some(100));
+    assert_eq!(exp_to_advance(1, 4), Some(200));
+    assert_eq!(exp_to_advance(MAX_LEVEL, 4), None);
+    assert_eq!(exp_to_seek(4), 43930 + 1500);
+    assert_eq!(title(0), None);
+    assert_eq!(title(1), Some("heard"));
+    assert_eq!(title(99), Some("old voice"));
+
+    let mut sheet = fresh();
+    sheet.peak_level = 9;
+    sheet.marks = 1;
+    sheet.exp = exp_to_advance(1, 1).expect("a threshold") - 1;
+    sheet.apply(Command::Start, &mut StdRng::seed_from_u64(2));
+    sheet.fight.as_mut().expect("a fight").foe_signal = 1;
+    let mut rng = StdRng::seed_from_u64(2);
+    let outcome = loop {
+        let outcome = sheet.apply(Command::Attack, &mut rng);
+        if outcome.applied != Applied::Round {
+            break outcome;
+        }
+    };
+    assert!(
+        matches!(outcome.applied, Applied::Won { leveled: Some(2), .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(sheet.peak_level, 9, "a climb under the peak leaves it");
 }

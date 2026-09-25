@@ -750,6 +750,8 @@ async fn zero_twice_goes_under_the_clubhouse_for_runners_only() {
         RunnerEntry {
             look: Look::random(1, &mut rng),
             level: 1,
+            peak_level: 1,
+            marks: 0,
         },
     )]));
     app.handle_input(b"0");
@@ -789,6 +791,8 @@ async fn leaving_the_deadchannel_walks_a_standing_runner_back_up() {
         RunnerEntry {
             look: Look::random(1, &mut rng),
             level: 1,
+            peak_level: 1,
+            marks: 0,
         },
     )])));
     app.runner_looks = looks_rx.borrow().clone();
@@ -839,6 +843,8 @@ async fn runner_at_the_railing(
         RunnerEntry {
             look: Look::random(1, &mut rng),
             level: 1,
+            peak_level: 1,
+            marks: 0,
         },
     )]));
 
@@ -4071,7 +4077,7 @@ async fn the_first_descent_opens_the_guide_and_the_question_mark_reopens_it() {
         .await
         .expect("a runner");
     let mut app = make_app(test_db.db.clone(), user.id, "undercity-guide-flow");
-    app.runner_looks = Arc::new(HashMap::from([(user.id, RunnerEntry { look, level: 1 })]));
+    app.runner_looks = Arc::new(HashMap::from([(user.id, RunnerEntry { look, level: 1, peak_level: 1, marks: 0 })]));
 
     app.handle_input(b"0");
     wait_for_render_contains(&mut app, " Clubhouse ").await;

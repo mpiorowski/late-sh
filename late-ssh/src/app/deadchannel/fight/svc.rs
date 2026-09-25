@@ -7,10 +7,12 @@
 //!
 //! After the commit, the wire (GAME.md, "The three surfaces"): the room
 //! sees the news, never the play-by-play. `Sheet::news` decides what is
-//! news (a dropped signal, a level gained, a first kill, a near miss, the
-//! last ration of the day); this file words it and posts it to
+//! news (a dropped signal, a level gained, the Old Signal put down, a first
+//! kill, a near miss, the last ration of the day); this file words it and
+//! posts it to
 //! #deadchannel as messages from the voice. An ordinary kill, a round, a
-//! run, a purchase post nothing.
+//! run, a purchase post nothing. The Old Signal also grants the rankless
+//! `SIG` profile badge, once per account.
 //!
 //! Orchestration only: the span, the metric, the log line per failure
 //! mode, and the reply live here; `state.rs` returns data.
@@ -19,10 +21,14 @@ use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use late_core::db::Db;
 use late_core::models::deadchannel_runner::DeadchannelRunner;
+use late_core::models::profile_award::{
+    DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY, grant_unique_milestone_award,
+};
 use tokio::sync::mpsc;
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
+use super::data;
 use super::state::{Applied, Command, News, Outcome, Sheet};
 use crate::app::chat::svc::ChatService;
 use crate::app::deadchannel::runner::state::Look;
@@ -74,6 +80,9 @@ impl FightService {
                         metrics::record_deadchannel_fight(beat_for(&outcome.applied));
                         tracing::info!(applied = ?outcome.applied, level = sheet.level, signal = sheet.signal, rations_left = sheet.rations_left, bits = sheet.bits, "fight command applied");
                         svc.post_news(&username, &sheet, &outcome.applied).await;
+                        if let Applied::Slain { marks } = outcome.applied {
+                            svc.grant_old_signal_badge(user_id, marks).await;
+                        }
                         FightOutcome::Acted { sheet, outcome }
                     }
                     Ok(None) => {
@@ -127,14 +136,18 @@ impl FightService {
                     format!("{username}'s signal dropped at the end of the row. {took}")
                 }
                 News::Leveled { level } => {
-                    let mut body = format!("{username} is level {level}.");
-                    if let Some(look) = self.look_of(sheet.user_id).await {
-                        for worn in look.rows() {
-                            body.push('\n');
-                            body.push_str(worn.piece.row);
-                        }
-                    }
-                    body
+                    self.with_face(sheet.user_id, format!("{username} is level {level}."))
+                        .await
+                }
+                News::Slain { marks } => {
+                    let title = data::title(marks).expect("a slain runner has a mark");
+                    self.with_face(
+                        sheet.user_id,
+                        format!(
+                            "{username} put down the Old Signal. mark {marks}, {title}. back to level 1."
+                        ),
+                    )
+                    .await
                 }
                 News::FirstBlood { foe } => {
                     format!("{username} put down their first {foe}. the static will remember.")
@@ -166,7 +179,44 @@ impl FightService {
         }
     }
 
-    /// The runner's look for the level line. A missing or unreadable look
+    /// The first Old Signal kill's badge. `NOT EXISTS` idempotent, so it is
+    /// asked on every kill and a grant that failed heals on the next one.
+    /// Fire-and-forget after the commit; logs its own failure.
+    async fn grant_old_signal_badge(&self, user_id: Uuid, marks: i32) {
+        let granted = async {
+            let client = self.db.get().await?;
+            grant_unique_milestone_award(
+                &client,
+                user_id,
+                DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY,
+                i64::from(marks),
+            )
+            .await
+        }
+        .await;
+        match granted {
+            Ok(true) => tracing::info!(marks, "old signal badge granted"),
+            Ok(false) => {}
+            Err(error) => {
+                tracing::error!(error = ?error, marks, "failed to grant the old signal badge");
+            }
+        }
+    }
+
+    /// `body` with the runner's portrait under it, three rows of plain
+    /// text: the level line and the Old Signal line, the two moments worth
+    /// a picture.
+    async fn with_face(&self, user_id: Uuid, mut body: String) -> String {
+        if let Some(look) = self.look_of(user_id).await {
+            for worn in look.rows() {
+                body.push('\n');
+                body.push_str(worn.piece.row);
+            }
+        }
+        body
+    }
+
+    /// The runner's look for the face lines. A missing or unreadable look
     /// costs the line its picture, not the line.
     async fn look_of(&self, user_id: Uuid) -> Option<Look> {
         let row: Result<Option<DeadchannelRunner>> = async {
@@ -245,6 +295,7 @@ fn beat_for(applied: &Applied) -> FightBeat {
         Applied::Resumed => FightBeat::Resumed,
         Applied::Round => FightBeat::Round,
         Applied::Won { .. } => FightBeat::Won,
+        Applied::Slain { .. } => FightBeat::Slain,
         Applied::Lost { .. } => FightBeat::Lost,
         Applied::Escaped => FightBeat::Escaped,
         Applied::Outfitted { .. } => FightBeat::Outfitted,

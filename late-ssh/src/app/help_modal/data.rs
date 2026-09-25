@@ -1030,6 +1030,7 @@ fn arcade_help_lines() -> Vec<String> {
         "  [GDS]     Green Dragon Slayer            10,000 chips  every kill",
         "  [ADE]     A Dark Room Escape             15,000 chips  every run",
         "  [ADB]     A Dark Room Homefleet          20,000 chips  every run",
+        "  [SIG]     Old Signal                     no chips      deadchannel, the first kill",
     ]
     .into_iter()
     .map(str::to_string)

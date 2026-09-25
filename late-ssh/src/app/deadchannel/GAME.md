@@ -616,7 +616,7 @@ to allocate, and nothing on it another player cannot see.
 | stash | money in the city's locker | untouched by death | `bank.php` |
 | band | tuner, jammer, ghost, or none | chosen on the first descent | specialties |
 | band skill | move unlocks | +1 per level gained | specialty points |
-| marks | Old Signal kills | permanent; each resets level to 1 | dragon kills |
+| marks | Old Signal kills | permanent; each resets level, gear, and bits, adds +1 attack and defense (cap 5) | dragon kills |
 
 Vocabulary decided here, all passing the screenshot test: **signal** is
 health (the Old Signal is the deepest one; "mira's signal dropped" is a
@@ -967,7 +967,7 @@ that is enough.
 `deadchannel_runners`, one row per user (`user_id` unique), id UUID v7.
 Columns: level, exp, signal, weapon_tier, armor_tier, bits, stash,
 rations_left, charge_left, day (the UTC date of the last roll), band,
-band_skill, the benched band progress, alive, marks, and the look as
+band_skill, the benched band progress, alive, marks, peak_level, and the look as
 four piece codes (hood, eyes, coat, mark). All data ops in one late-core
 model, the multi-replica rule throughout: the day roll and every spend
 are conditional claims on the row (`WHERE day < $today`, `WHERE
@@ -1016,9 +1016,39 @@ on still bind every piece, band, and ration the city sells:
 Fourteen **operators** hold levels 2 to 15 (LoGD master stats: attack
 2L, defense 2L, signal 11L), each an old voice on the wire with a name
 and a line, beaten once per level to climb. Level 15 opens the **Old
-Signal** (45 / 25 / 300); putting it down resets you to level 1 with a
-mark, scales every exp threshold by marks (LoGD 1:1), and is the season
-loop's engine. Names and copy belong to the city pass.
+Signal**; putting it down leaves a mark and resets the climb (see
+"Marks: the reset"), and is the season loop's engine. Names and copy
+belong to the city pass.
+
+### Marks: the reset (decided)
+
+Classic LoGD, with Diablo's paragon feel: the climb resets, the status
+never does.
+
+- **The gate.** At level 15 with the exp to leave it (`exp_to_seek`, the
+  last rung of the curve), the next step into the screen meets the Old
+  Signal instead of a glyph. A dropped signal against it costs what any
+  drop costs, and a tenth of the exp usually puts the gate a day or two
+  of glyphs away again.
+- **The numbers.** 240 signal, 36 attack, 22 defense. LoGD's dragon
+  (300 / 45 / 25) is a one-in-fifty fight for a runner with no bands and
+  no bonus hit points; these land a first kill about two tries in five
+  at the top of the wall, pinned by a seeded simulation test. Revisit
+  when the bands ship.
+- **What the kill takes:** level back to 1, exp to 0, weapon and armor to
+  tier 0, bits to the starting 50. The climb is a real climb again.
+- **What it keeps:** the peak level (the tailor's rack stays open), the
+  look, the badges, the kill count, today's rations.
+- **What it gives:** a mark. Marks are the paragon number, shown behind
+  the Signal's glyph in the badge (`▚3╬2`); each adds +1 attack and +1
+  defense up to a cap of five (the second climb is quicker, a veteran
+  never outgrows the room), scales every exp threshold (LoGD's formula,
+  a quarter of level times a hundred per mark), and climbs the title
+  ladder (placeholder copy: heard, tuned, carrier, broadcast, old
+  voice). The first kill grants the rankless `SIG` profile badge, and no
+  chips: the wallets never convert.
+- **The stash is undecided.** It is not built; whether a mark empties it
+  is decided when it ships.
 
 ### Build order for this phase
 
