@@ -2551,3 +2551,39 @@ fn a_short_terminal_gives_the_field_its_rows_and_puts_the_events_in_the_rail() {
         assert!(log < h - log, "room summary keeps the larger share at {h}");
     }
 }
+
+#[test]
+fn a_phone_gets_the_field_across_the_centre_with_the_events_under_it() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut view = log_view(&["You arrive at the square.", "A crow calls overhead."]);
+    view.room = Some(1);
+    view.room_name = "Town Square".to_string();
+    view.hp = 40;
+    view.max_hp = 50;
+    let (width, height) = (44u16, 30u16);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal
+        .draw(|frame| super::draw_narrow_field(frame, frame.area(), &view))
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..height)
+        .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect();
+    let joined = rows.join("\n");
+
+    assert!(
+        rows[0].contains("40/50hp"),
+        "vitals on the top row:\n{joined}"
+    );
+    let log_h = super::narrow_log_height(height) as usize;
+    let feed = rows[rows.len() - log_h..].join("\n");
+    assert!(
+        feed.contains("A crow calls overhead."),
+        "the newest event sits in the feed under the field:\n{joined}"
+    );
+    assert!(
+        log_h * 2 < height as usize,
+        "the field keeps most of the screen, the feed stays small"
+    );
+}

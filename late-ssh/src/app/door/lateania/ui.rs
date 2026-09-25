@@ -26,7 +26,7 @@ use super::{
         CraftView, InvView, LeaderboardEntry, LogKind, MobView, PetView, PlayerView, QuestKind,
         QuestView, SectionRow, ShopView,
     },
-    world::{Dir, MapCell, MiniMap, RoomId},
+    world::{Dir, RoomId},
 };
 
 const SIDE_WIDE: u16 = 34;
@@ -135,6 +135,14 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         return;
     }
 
+    // Narrow terminals (a phone) get the live field as the whole centre of the
+    // screen with a short event feed under it. The map never folds into a side
+    // rail: on a phone the rail is the one place it cannot be read.
+    if state.panel() == Panel::Room && view.rpg_mode && area.width < 96 && area.height >= 8 {
+        draw_narrow_field(frame, area, &view);
+        return;
+    }
+
     if area.width < 50 || area.height < 9 {
         draw_compact(frame, area, &view);
         return;
@@ -214,9 +222,8 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     // Wide terminals get the live field with the message log as a full-width
     // strip along the bottom, the way terminal roguelikes have always laid it:
     // log lines are sentences, and sentences want width, not a narrow rail.
-    // Below this width the field folds away and the classic log + side view
-    // stands in (the minimap still rides in the side panel there).
-    if state.panel() == Panel::Room && view.rpg_mode && area.width >= 96 {
+    // Below this width `draw_narrow_field` stacks field and feed instead.
+    if state.panel() == Panel::Room && view.rpg_mode {
         // A tall terminal spends rows on the full-width strip; a short one
         // gives them back to the field and pushes the events into the rail.
         let strip = match events_in_rail(area.height) {
@@ -237,14 +244,14 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         draw_field(frame, cols[0], &view);
         match strip {
             Some((_, log_area)) => {
-                draw_room_side(frame, cols[1], state, &view, usernames, false);
+                draw_room_side(frame, cols[1], state, &view, usernames, true);
                 draw_log_strip(frame, log_area, &view);
             }
             None => {
                 let log_h = rail_log_height(cols[1].height);
                 let rail = Layout::vertical([Constraint::Min(4), Constraint::Length(log_h)])
                     .split(cols[1]);
-                draw_room_side(frame, rail[0], state, &view, usernames, false);
+                draw_room_side(frame, rail[0], state, &view, usernames, true);
                 draw_log_strip(frame, rail[1], &view);
             }
         }
@@ -2566,6 +2573,79 @@ fn side_paragraph(lines: Vec<Line<'static>>) -> Paragraph<'static> {
     Paragraph::new(lines).wrap(Wrap { trim: false })
 }
 
+/// Rows the narrow layout's event feed gets under the field, separator rule
+/// included: a small tail, so the map keeps the screen.
+fn narrow_log_height(total_height: u16) -> u16 {
+    (total_height / 4).clamp(3, 7)
+}
+
+/// The narrow layout's one-line status bar: where you are, your vitals, and
+/// the foe you are locked onto. The side rail that carried these is gone on a
+/// phone, and your HP must not be something you open a panel to find.
+fn narrow_status_line(view: &PlayerView, width: usize) -> Line<'static> {
+    let mut spans = vec![
+        Span::styled(
+            format!("{}/{}hp", view.hp, view.max_hp),
+            Style::default()
+                .fg(hp_color(view.hp, view.max_hp))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                " {}/{}{}",
+                view.resource,
+                view.max_resource,
+                short_res(&view.resource_name)
+            ),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ];
+    let mut used: usize = spans.iter().map(|s| s.content.width()).sum();
+    if let Some(foe) = view.mobs.iter().find(|m| m.targeted) {
+        let tail = format!(" {}/{}", foe.hp, foe.max_hp);
+        let room = width.saturating_sub(used + 4 + tail.width());
+        if room >= 3 {
+            let name = truncate_chars(&foe.name, room);
+            used += 4 + name.width() + tail.width();
+            spans.push(Span::styled(
+                " vs ",
+                Style::default().fg(theme::TEXT_FAINT()),
+            ));
+            spans.push(Span::styled(name, Style::default().fg(theme::ERROR())));
+            spans.push(Span::styled(
+                tail,
+                Style::default().fg(hp_color(foe.hp, foe.max_hp)),
+            ));
+        }
+    }
+    let room = width.saturating_sub(used + 2);
+    if room >= 4 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            truncate_chars(&view.room_name, room),
+            Style::default().fg(theme::AMBER()),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// The narrow (phone) room layout: status bar, the live field across the full
+/// width in the centre, and a small event feed under it. No side rail.
+fn draw_narrow_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(4),
+        Constraint::Length(narrow_log_height(area.height)),
+    ])
+    .split(area);
+    frame.render_widget(
+        Paragraph::new(narrow_status_line(view, rows[0].width as usize)),
+        rows[0],
+    );
+    draw_field(frame, rows[1], view);
+    draw_log_strip(frame, rows[2], view);
+}
+
 fn draw_compact(frame: &mut Frame, area: Rect, view: &PlayerView) {
     let mut lines = vec![Line::from(vec![
         Span::styled(
@@ -2653,7 +2733,7 @@ fn draw_side(
     usernames: &UsernameLookup<'_>,
 ) {
     if state.panel() == Panel::Room {
-        draw_room_side(frame, area, state, view, usernames, true);
+        draw_room_side(frame, area, state, view, usernames, false);
         return;
     }
 
@@ -2813,23 +2893,9 @@ fn draw_room_side(
     state: &State,
     view: &PlayerView,
     usernames: &UsernameLookup<'_>,
-    with_minimap: bool,
+    field_layout: bool,
 ) {
-    let map = if with_minimap {
-        minimap_lines(&view.minimap)
-    } else {
-        // The live field column already shows the surroundings; the little
-        // minimap would just be a redundant echo beside it.
-        Vec::new()
-    };
-    let panel_area = if map.is_empty() {
-        area
-    } else {
-        let map_h = map.len().min(area.height as usize) as u16;
-        let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(map_h)]).split(area);
-        frame.render_widget(Paragraph::new(map), rows[1]);
-        rows[0]
-    };
+    let panel_area = area;
 
     // Mid-fight the field layout's side panel becomes the battle frame - the
     // classic layout keeps the room summary here, since its main column
@@ -2837,7 +2903,7 @@ fn draw_room_side(
     // actions (foes to switch the lock, ability rows to cast).
     let fighting =
         view.mobs.iter().any(|m| m.targeted) || view.occupants.iter().any(|o| o.targeted);
-    if !with_minimap && fighting {
+    if field_layout && fighting {
         let (lines, hits) = battle_side_panel(view, usernames, panel_area.width as usize);
         for (idx, action) in hits {
             if (idx as u16) < panel_area.height {
@@ -5055,62 +5121,6 @@ fn battle_side_panel(
     lines.push(hint("Q", "quaff a potion"));
     lines.push(hint("C", "coat your weapon"));
     (lines, hits)
-}
-
-/// The overhead minimap section: a small map of the explored neighbourhood,
-/// painted in the bottom corner of the Room panel.
-fn minimap_lines(map: &MiniMap) -> Vec<Line<'static>> {
-    if map.grid.is_empty() {
-        return Vec::new();
-    }
-    let mut lines = vec![section("Map")];
-    for row in &map.grid {
-        let mut spans = vec![Span::raw("  ")];
-        spans.extend(row.iter().map(|cell| map_cell_span(*cell)));
-        lines.push(Line::from(spans));
-    }
-    // Vertical exits can't sit on a flat map; note them in words instead.
-    let mut stairs = Vec::new();
-    if map.up {
-        stairs.push("up");
-    }
-    if map.down {
-        stairs.push("down");
-    }
-    let stairs_text = if stairs.is_empty() {
-        String::new()
-    } else {
-        format!("stairs: {}", stairs.join(", "))
-    };
-    lines.push(Line::from(Span::styled(
-        format!("  {stairs_text:<18}"),
-        Style::default().fg(theme::TEXT_DIM()),
-    )));
-    lines.push(Line::from(Span::styled(
-        "  @=you *=last o=seen .=new",
-        Style::default().fg(theme::TEXT_FAINT()),
-    )));
-    lines
-}
-
-/// One char-cell of the minimap, styled by what it represents.
-fn map_cell_span(cell: MapCell) -> Span<'static> {
-    let (glyph, color) = match cell {
-        MapCell::Empty => (' ', theme::TEXT_FAINT()),
-        MapCell::Current => ('@', theme::AMBER_GLOW()),
-        MapCell::Previous => ('*', theme::AMBER()),
-        MapCell::Visited => ('o', theme::AMBER_DIM()),
-        MapCell::Frontier => ('.', theme::TEXT_FAINT()),
-        MapCell::ConnH => ('-', theme::BORDER()),
-        MapCell::ConnV => ('|', theme::BORDER()),
-        MapCell::TrailH => ('-', theme::AMBER_GLOW()),
-        MapCell::TrailV => ('|', theme::AMBER_GLOW()),
-    };
-    let mut style = Style::default().fg(color);
-    if matches!(cell, MapCell::Current | MapCell::Previous) {
-        style = style.add_modifier(Modifier::BOLD);
-    }
-    Span::styled(glyph.to_string(), style)
 }
 
 // ---- The character sheet -------------------------------------------------
