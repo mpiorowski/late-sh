@@ -9932,7 +9932,8 @@ pub fn biome_of(id: RoomId) -> Biome {
             _ => Biome::Plains,
         };
     }
-    // Hand-authored rooms, by id block.
+    // Generated regions above have their own zone layout. Keep the special
+    // hand-authored blocks below before consulting zone names.
     if super::archipelago::is_archipelago_room(id) {
         return Biome::Islands;
     }
@@ -9941,6 +9942,13 @@ pub fn biome_of(id: RoomId) -> Biome {
     }
     if (super::housing::HOUSING_BASE..super::housing::HOUSING_BASE + 1000).contains(&id) {
         return Biome::Urban;
+    }
+    // Authored rooms and their wings carry the same zone name, even when their
+    // ids are far apart. The map's shared world is already warmed at startup.
+    match super::worldmap::zone_of(id) {
+        Some("Duskhollow Caverns" | "Drowned Crypts") => return Biome::Cavern,
+        Some("Emberpeak Mines") => return Biome::Ash,
+        _ => {}
     }
     if (1..600).contains(&id) {
         return Biome::Heartland;

@@ -491,6 +491,9 @@ pub(crate) enum HauntCommand {
     Invite,
     /// `/haunt reset`: clear every first-contact chain mark for this user.
     Reset,
+    /// `/haunt welcome`: post the runner's welcome on the wire for this
+    /// user now, as the invited join does for a fresh runner.
+    Welcome,
 }
 
 /// `Some(Some(command))` on a well-formed `/haunt` line, `Some(None)` on
@@ -513,6 +516,7 @@ pub(crate) fn parse_haunt_command(body: &str) -> Option<Option<HauntCommand>> {
         ["replay"] => Some(HauntCommand::Replay),
         ["invite"] => Some(HauntCommand::Invite),
         ["reset"] => Some(HauntCommand::Reset),
+        ["welcome"] => Some(HauntCommand::Welcome),
         _ => None,
     })
 }

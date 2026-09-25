@@ -37,6 +37,8 @@ use crate::app::deadchannel::fight::session::Scene as FightScene;
 use crate::app::deadchannel::fight::state::{Sheet, Slot as GearSlot, gear_name};
 use crate::app::deadchannel::fight::ui as fight_ui;
 use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
+use crate::app::deadchannel::guide::state::State as GuideState;
+use crate::app::deadchannel::guide::ui as guide_ui;
 use crate::app::deadchannel::runner::state::{Look, Tint};
 use crate::app::deadchannel::tailor::ui as tailor_ui;
 
@@ -132,6 +134,8 @@ pub(crate) struct CityView<'a> {
     pub till: Option<&'a str>,
     /// The tailor's mirror (`tailor/session.rs`), for its panel.
     pub tailor: tailor_ui::MirrorView<'a>,
+    /// The guide (`guide/state.rs`): drawn over everything when open.
+    pub guide: &'a GuideState,
 }
 
 type Cells = Vec<Vec<(char, Style)>>;
@@ -216,6 +220,9 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
             },
         ),
         (None, None) => {}
+    }
+    if view.guide.is_open() {
+        guide_ui::draw(frame, area, view.guide);
     }
 }
 
@@ -1607,18 +1614,7 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
                 dim_text,
             )));
         }
-        Landmark::Repairs => {
-            lines.push(Line::from(Span::styled(
-                "nothing on you is broken. yet.",
-                text,
-            )));
-            lines.push(blank());
-            lines.push(Line::from(Span::styled(
-                "gear keeps when your signal drops. patch is for the day the static gets its hands on it.",
-                dim_text,
-            )));
-            lines.push(Line::from(Span::styled("(not open yet)", muted_text)));
-        }
+        Landmark::Repairs => lines.extend(patch_lines(view)),
         Landmark::Board => {
             lines.push(Line::from(Span::styled("standing orders", head)));
             for notice in data::NOTICES.iter() {
@@ -1701,6 +1697,80 @@ pub(crate) fn mix(mut v: u64) -> u64 {
     v
 }
 
+/// Patch: the signal, what bringing it back costs, and the one key. The
+/// price is `Sheet::patch_price`; the refusals the row would give are
+/// spelled out ahead of the key so nobody pays to read them.
+fn patch_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let muted_text = ink(INK_MUTED);
+    let number = glow(Neon::Amber);
+    let key = lit(Neon::Amber);
+    let short = dim(Neon::Red);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let Some(sheet) = view.sheet else {
+        lines.push(Line::from(Span::styled(
+            "the sheet has not come down the wire yet.",
+            muted_text,
+        )));
+        return lines;
+    };
+    lines.push(Line::from(vec![
+        Span::styled("signal ", dim_text),
+        Span::styled(
+            format!("{}/{}", sheet.signal, sheet.max_signal()),
+            match sheet.is_down() {
+                true => short,
+                false => text,
+            },
+        ),
+        Span::styled("      on hand ", dim_text),
+        Span::styled(format!("{} bits", sheet.bits), number),
+    ]));
+    lines.push(Line::default());
+    let price = sheet.patch_price();
+    if sheet.is_down() {
+        lines.push(Line::from(Span::styled(
+            "your signal is down. nothing here brings it back before the roll.",
+            text,
+        )));
+    } else if sheet.fight.is_some() {
+        lines.push(Line::from(Span::styled(
+            "not with a glyph waiting on you. finish it first.",
+            text,
+        )));
+    } else if sheet.rations_left <= 0 {
+        lines.push(Line::from(Span::styled(
+            "you are spent for today. the roll brings the signal back for nothing.",
+            text,
+        )));
+    } else if price == 0 {
+        lines.push(Line::from(Span::styled(
+            "nothing on you needs patching.",
+            text,
+        )));
+    } else {
+        let style = match price > sheet.bits {
+            true => short,
+            false => number,
+        };
+        lines.push(Line::from(vec![
+            Span::styled("[p] ", key),
+            Span::styled("patch to full for ", text),
+            Span::styled(format!("{price} bits"), style),
+        ]));
+    }
+    lines.push(Line::from(Span::styled(
+        "a bit a point, times your level. a dropped signal is the roll's to fix, not patch's.",
+        dim_text,
+    )));
+    if let Some(till) = view.till {
+        lines.push(Line::from(Span::styled(till.to_string(), lit(Neon::Cyan))));
+    }
+    lines
+}
+
 /// The armorer's wall: the ladder with the cursor on it, what you carry
 /// lit, the two keys priced for the picked row net of the trade-in, and
 /// the last thing the armorer said.
@@ -1723,17 +1793,13 @@ fn armorer_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         )));
         return lines;
     };
-    let name_or = |slot: GearSlot, bare: &'static str| sheet.gear_name(slot).unwrap_or(bare);
     lines.push(Line::from(vec![
         Span::styled("on hand ", dim_text),
         Span::styled(format!("{} bits", sheet.bits), number),
         Span::styled("      weapon ", dim_text),
-        Span::styled(name_or(GearSlot::Weapon, "bare hands").to_string(), carried),
+        Span::styled(fight_ui::weapon_name(sheet).to_string(), carried),
         Span::styled("      armor ", dim_text),
-        Span::styled(
-            name_or(GearSlot::Armor, "street clothes").to_string(),
-            carried,
-        ),
+        Span::styled(fight_ui::armor_name(sheet).to_string(), carried),
     ]));
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(

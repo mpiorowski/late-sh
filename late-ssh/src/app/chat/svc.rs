@@ -4927,10 +4927,20 @@ impl ChatService {
                 crate::metrics::record_first_contact_beat(
                     crate::metrics::FirstContactBeat::RunnerCreated,
                 );
+                // The voice welcomes a new runner on the wire: the story,
+                // the keys, the rules, the way out. Once per person, because
+                // only the winning insert lands here; a return or a second
+                // device finds the welcome already in the room's history.
+                self.post_wire_line_task(crate::app::deadchannel::runner::data::welcome(
+                    &user.username,
+                ));
             }
             late_core::models::deadchannel_runner::RunnerOrigin::Returned => {
                 tracing::info!(user_id = %user_id, username = %user.username, runner_id = %runner.id, "runner returned");
                 crate::metrics::record_runner_door(crate::metrics::RunnerDoor::Returned);
+                // The wire hears who is around: the same conditional clear
+                // that reopened the door says this was the one join that did.
+                self.post_wire_line_task(format!("{} is back on the wire.", user.username));
             }
             late_core::models::deadchannel_runner::RunnerOrigin::Existing => {}
         }
@@ -5223,20 +5233,34 @@ impl ChatService {
             let name = room.slug.as_deref().unwrap_or("this room");
             anyhow::bail!("Cannot leave #{name} (permanent room)");
         }
+        // The name for the wire's "went dark" line, read before anything
+        // is written: a lookup that fails here fails the leave whole, never
+        // after the membership and the stamp have already landed.
+        let deadchannel_username = match room.kind == late_core::models::chat_room::DEADCHANNEL_KIND
+        {
+            true => match User::get(&client, user_id).await? {
+                Some(user) => Some(user.username),
+                None => anyhow::bail!("user not found"),
+            },
+            false => None,
+        };
         ChatRoomMember::leave(&client, room_id, user_id).await?;
         // Leaving #deadchannel closes the undercity gate, on this replica
         // and every other: the stamp fires `deadchannel_runner_changed`, so
         // the runner drops out of each replica's looks directory and out of
         // `App::is_runner` on the next tick edge. The character survives the
         // leave, so an invited rejoin gets the same face back.
-        if room.kind == late_core::models::chat_room::DEADCHANNEL_KIND {
+        if let Some(username) = deadchannel_username {
             let left = late_core::models::deadchannel_runner::DeadchannelRunner::mark_left(
                 &client, user_id,
             )
             .await?;
             if left {
-                tracing::info!(user_id = %user_id, "runner left the deadchannel");
+                tracing::info!(user_id = %user_id, username = %username, "runner left the deadchannel");
                 crate::metrics::record_runner_door(crate::metrics::RunnerDoor::Left);
+                // Going dark is news, once: the conditional stamp says this
+                // was the leave that shut the door.
+                self.post_wire_line_task(format!("{username} went dark."));
             }
         }
         Ok(())

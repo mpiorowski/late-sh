@@ -295,6 +295,7 @@ impl App {
         changed |= self.bonsai.tick();
         changed |= self.fight.tick();
         changed |= self.tailor.tick();
+        changed |= self.guide.tick();
         changed |= self.tick_pot();
         // News state is ticked inside chat.tick()
         let profile_tick = self.profile_state.tick();
@@ -796,8 +797,19 @@ impl App {
                 if self.screen == Screen::City && !self.is_runner() {
                     self.fight.close();
                     self.tailor.close();
+                    self.guide.state.close();
                     self.set_screen(Screen::Clubhouse);
                     changed = true;
+                }
+                // The sheet mirror follows the standing: a runner re-reads
+                // it (the edge fires on a level change too, per the
+                // migration 202 trigger, so the frame HUD keeps up with a
+                // fight on another session), and a leaver drops it so the
+                // HUD stops reading a row that is gone.
+                if self.is_runner() {
+                    self.fight.reload();
+                } else {
+                    self.fight.drop_sheet();
                 }
             }
             // The pot resolves on the same edge, and for the same reason:

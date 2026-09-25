@@ -1,6 +1,26 @@
 use super::*;
 
 #[test]
+fn authored_zones_share_their_biome_with_every_wing() {
+    let world = seed_world();
+    for (zone, biome, core, wing) in [
+        ("Duskhollow Caverns", Biome::Cavern, 31, 330),
+        ("Drowned Crypts", Biome::Cavern, 51, 360),
+        ("Emberpeak Mines", Biome::Ash, 66, 390),
+    ] {
+        for id in [core, wing] {
+            assert_eq!(world.room(id).expect("authored room exists").zone, zone);
+        }
+        for room in world.rooms.values().filter(|room| room.zone == zone) {
+            assert_eq!(biome_of(room.id), biome, "{} ({})", room.name, room.id);
+        }
+    }
+    for id in [1, 30, 81, 300] {
+        assert_eq!(biome_of(id), Biome::Heartland, "neighbouring room {id}");
+    }
+}
+
+#[test]
 fn every_exit_resolves_to_a_real_room() {
     let world = seed_world();
     for room in world.rooms.values() {

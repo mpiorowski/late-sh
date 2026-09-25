@@ -418,11 +418,15 @@ Admin commands:
   `ChatService::send_first_contact_invitation_task`, and the runner:
   `join_deadchannel_room` creates the `deadchannel_runners` row with a
   random starter look, and `ensure_chat_rows_cache` takes
-  `runner_looks: Option<&HashMap<Uuid, Look>>` (`Some` only while
+  `runner_looks: Option<&HashMap<Uuid, RunnerEntry>>` (`Some` only while
   `state::room_shows_portraits` holds for the rendered room, today
   `kind='deadchannel'` alone, the one switch to widen; from `DashboardChatView` /
-  `ChatRenderInput.runner_looks`, the app's 1 Hz copy of the look
-  directory): the wire wraps every entry six cells short and seats the
+  `ChatRenderInput.runner_looks`, the app's 1 Hz copy of the runner
+  directory, look and level per standing runner): a runner's author
+  header opens its badge stack with the level badge (`▚7`, the mark and
+  the level, `AuthorPrefixInput.runner_badge`, painted in the level's
+  band through `AuthorTint.runner`, adjacent to the name, crown, and
+  title so the same painter tints it), the wire wraps every entry six cells short and seats the
   author's three-row portrait in that gutter beside a block-opening
   message: the hood level with the header, the eyes and the coat on the
   body rows under it, wearing what the entry has rows for (a one-liner

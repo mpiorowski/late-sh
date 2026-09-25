@@ -29,7 +29,8 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             app.fight.request(Command::Run);
             true
         }
-        // Digits, Tab, `q`, `?` stay global; the rest is the scene's.
+        // Digits, Tab, `q` stay global (`?` is the guide's, taken in
+        // `city/input.rs` before the scene sees it); the rest is the scene's.
         ParsedInput::Byte(b'0'..=b'9')
         | ParsedInput::Byte(b'\t')
         | ParsedInput::Byte(b'q')

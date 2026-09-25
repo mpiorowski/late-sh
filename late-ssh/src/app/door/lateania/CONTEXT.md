@@ -223,6 +223,8 @@ While an attribute point waits to be placed (`PlayerView::score_offer` non-empty
 
 `m` opens a full-view, biome-coloured overhead map centred on the player. It is derived, never stored: the world is deterministic, so `worldmap::derive_coords` gives every room an `(x, y, z)` once per process behind a `LazyLock`, and `LateaniaService::new` warms it (plus the POI index) on a blocking task so the first opener does not pay a world-gen on the render thread.
 
+`world::biome_of` picks the live field's ground and the overhead map's room colours. Generated regions use their zone layout; authored Duskhollow Caverns and Drowned Crypts use Cavern, and Emberpeak Mines uses Ash, keyed by `Room.zone` from the map's shared world so their side wings inherit the same art. Other authored rooms keep their id-block fallback.
+
 #### The chrome sheds; the map does not (`ui::MapChrome`)
 
 The map used to demand 50x14 flat and hand everything smaller the text atlas in the side rail, so a phone-sized terminal never saw the map at all - the one view that answers "where am I" was the one view a phone could not open. What did not fit was never the map: it was the seven rows of header, inspector, controls and three legend lines stacked around it. `MapChrome::for_area` now sheds those in reverse order of what they are worth to someone who is lost, and `map_fits` is the floor the body itself needs (32x10):

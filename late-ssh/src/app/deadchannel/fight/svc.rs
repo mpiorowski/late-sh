@@ -6,9 +6,11 @@
 //! replicas queue on the lock and act one after the other.
 //!
 //! After the commit, the wire (GAME.md, "The three surfaces"): the room
-//! sees the news, never the play-by-play. A dropped signal and a level
-//! gained post to #deadchannel as messages from the voice; a kill, a
-//! round, a run post nothing.
+//! sees the news, never the play-by-play. `Sheet::news` decides what is
+//! news (a dropped signal, a level gained, a first kill, a near miss, the
+//! last ration of the day); this file words it and posts it to
+//! #deadchannel as messages from the voice. An ordinary kill, a round, a
+//! run, a purchase post nothing.
 //!
 //! Orchestration only: the span, the metric, the log line per failure
 //! mode, and the reply live here; `state.rs` returns data.
@@ -21,7 +23,7 @@ use tokio::sync::mpsc;
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
-use super::state::{Applied, Command, Outcome, Sheet};
+use super::state::{Applied, Command, News, Outcome, Sheet};
 use crate::app::chat::svc::ChatService;
 use crate::app::deadchannel::runner::state::Look;
 use crate::metrics::{self, FightBeat};
@@ -111,42 +113,56 @@ impl FightService {
         Ok(Some((sheet, outcome)))
     }
 
-    /// The news the wire carries: a dropped signal, a level gained (with
-    /// the face, the one moment worth a picture). Fire-and-forget through
-    /// chat, which logs its own failure.
+    /// The news the wire carries, worded. Fire-and-forget through chat,
+    /// which logs its own failure; a level gained carries the face, the
+    /// one moment worth a picture.
     async fn post_news(&self, username: &str, sheet: &Sheet, applied: &Applied) {
-        match applied {
-            Applied::Lost { bits_lost } => {
-                let took = match bits_lost {
-                    0 => "the street found nothing on them.".to_string(),
-                    n => format!("the street took {n} bits."),
-                };
-                self.chat.post_wire_line_task(format!(
-                    "{username}'s signal dropped at the end of the row. {took}"
-                ));
-            }
-            Applied::Won {
-                leveled: Some(level),
-                ..
-            } => {
-                let mut body = format!("{username} is level {level}.");
-                if let Some(look) = self.look_of(sheet.user_id).await {
-                    for worn in look.rows() {
-                        body.push('\n');
-                        body.push_str(worn.piece.row);
-                    }
+        for news in sheet.news(applied) {
+            let body = match news {
+                News::Dropped { bits_lost } => {
+                    let took = match bits_lost {
+                        0 => "the street found nothing on them.".to_string(),
+                        n => format!("the street took {n} bits."),
+                    };
+                    format!("{username}'s signal dropped at the end of the row. {took}")
                 }
-                self.chat.post_wire_line_task(body);
-            }
-            // A purchase is the runner's business, not the room's: the
-            // piece shows up in the hit lines and on the sheet.
-            Applied::Won { leveled: None, .. }
-            | Applied::Refused(_)
-            | Applied::Started
-            | Applied::Resumed
-            | Applied::Round
-            | Applied::Escaped
-            | Applied::Outfitted { .. } => {}
+                News::Leveled { level } => {
+                    let mut body = format!("{username} is level {level}.");
+                    if let Some(look) = self.look_of(sheet.user_id).await {
+                        for worn in look.rows() {
+                            body.push('\n');
+                            body.push_str(worn.piece.row);
+                        }
+                    }
+                    body
+                }
+                News::FirstBlood { foe } => {
+                    format!("{username} put down their first {foe}. the static will remember.")
+                }
+                News::NearMiss { foe, signal } => {
+                    format!("{username} put down the {foe} with {signal} signal left.")
+                }
+                News::LastRation {
+                    kills,
+                    runs,
+                    signal,
+                    max_signal,
+                } => {
+                    let glyphs = match kills {
+                        1 => "1 glyph down".to_string(),
+                        n => format!("{n} glyphs down"),
+                    };
+                    let runs = match runs {
+                        0 => String::new(),
+                        1 => ", 1 run".to_string(),
+                        n => format!(", {n} runs"),
+                    };
+                    format!(
+                        "{username} spent the last ration. {glyphs}{runs}, signal {signal}/{max_signal}."
+                    )
+                }
+            };
+            self.chat.post_wire_line_task(body);
         }
     }
 
@@ -174,10 +190,10 @@ impl FightService {
         }
     }
 
-    /// Re-read the sheet for a session's mirror on the descent. Every
-    /// action answers with the locked row's sheet, so the mirror catches
-    /// up with a change made elsewhere on the next press; only the
-    /// descent needs a read of its own.
+    /// Re-read the sheet for a session's mirror: at connect for a standing
+    /// runner, on every directory edge, and on the descent. Every action
+    /// answers with the locked row's sheet, so between those the mirror
+    /// catches up with a change made elsewhere on the next press.
     pub(crate) fn reload_task(&self, user_id: Uuid, reply: mpsc::UnboundedSender<FightOutcome>) {
         let svc = self.clone();
         let span = info_span!("deadchannel.fight.reload_task", user_id = %user_id);
@@ -232,6 +248,7 @@ fn beat_for(applied: &Applied) -> FightBeat {
         Applied::Lost { .. } => FightBeat::Lost,
         Applied::Escaped => FightBeat::Escaped,
         Applied::Outfitted { .. } => FightBeat::Outfitted,
+        Applied::Patched { .. } => FightBeat::Patched,
     }
 }
 

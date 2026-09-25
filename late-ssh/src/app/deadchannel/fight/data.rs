@@ -30,6 +30,10 @@ pub const TRADE_IN_PERCENT: i64 = 75;
 pub const RUN_ODDS: u32 = 2;
 pub const RUN_ODDS_OUT_OF: u32 = 3;
 
+/// A win that leaves the signal at or under this is a near miss, and the
+/// wire says so (GAME.md, "shaped luck": the moments people retell).
+pub const NEAR_MISS_SIGNAL: i32 = 3;
+
 /// Exp needed to advance from level `i + 1` (`lib/experience.php`, the
 /// base curve; marks scale it later, GAME.md "The stat block").
 pub const EXP_TO_ADVANCE: [i64; 15] = [

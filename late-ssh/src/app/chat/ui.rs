@@ -136,9 +136,10 @@ pub struct DashboardChatView<'a> {
     /// Resolved 24h username-effect styles per author (see
     /// `common/username_effect.rs`); fg painted over the bare name only.
     pub name_flair: &'a HashMap<Uuid, ResolvedName>,
-    /// Every runner's look (`app/deadchannel/runner`), for the portrait
-    /// gutter beside messages; consulted only when `room` is #deadchannel.
-    pub runner_looks: &'a HashMap<Uuid, crate::app::deadchannel::runner::state::Look>,
+    /// Every standing runner's look and level (`app/deadchannel/runner`),
+    /// for the portrait gutter and the level badge beside messages;
+    /// consulted only when `room` is #deadchannel.
+    pub runner_looks: &'a HashMap<Uuid, crate::app::deadchannel::runner::svc::RunnerEntry>,
     /// Per-peer `/status` badges (resolved once a second in `tick.rs`);
     /// painted as the trailing presence badge.
     pub peer_statuses: &'a HashMap<Uuid, String>,
@@ -1328,7 +1329,7 @@ struct ChatRowsContext<'a> {
     /// every entry and paints each author's face beside their block
     /// (`app/deadchannel/runner`). The gutter code below is room-agnostic;
     /// `None` leaves the rows exactly what they were.
-    runner_looks: Option<&'a HashMap<Uuid, crate::app::deadchannel::runner::state::Look>>,
+    runner_looks: Option<&'a HashMap<Uuid, crate::app::deadchannel::runner::svc::RunnerEntry>>,
 }
 
 // ── Mouse hit-test types ────────────────────────────────────
@@ -1746,12 +1747,17 @@ fn ensure_chat_rows_cache(
             presence_badges.push(badge);
         }
         let flair = ctx.name_flair.get(&msg.user_id);
+        // The wire only: a runner's mark and level lead their badge stack,
+        // in the band color of the level (`app/deadchannel/runner/ui.rs`).
+        let runner = ctx.runner_looks.and_then(|looks| looks.get(&msg.user_id));
+        let runner_badge = runner.map(crate::app::deadchannel::runner::ui::badge_text);
         let AuthorPrefix {
             prefix,
             segments,
             author_range,
             crown_range,
             title_range,
+            runner_range,
         } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
             is_friend,
             author: &author,
@@ -1763,20 +1769,30 @@ fn ensure_chat_rows_cache(
             bonsai_glyph: bonsai_opt,
             profile_award_badges,
             presence_badges: &presence_badges,
+            runner_badge: runner_badge.as_deref(),
         });
         let drunk_word = ctx.drunk_levels.get(&msg.user_id).and_then(|level| {
             late_core::models::drinks::drunk_label_word(*level)
                 .map(|word| (word, theme::DRUNK_WORD_FG(*level)))
         });
         let name_style = flair.and_then(|flair| flair.style);
+        let runner_tint = match (runner, runner_range) {
+            (Some(entry), Some(range)) => Some((
+                range,
+                crate::app::deadchannel::runner::ui::level_color(entry.level),
+            )),
+            (None, _) | (_, None) => None,
+        };
         let author_tint = (drunk_word.is_some()
             || name_style.is_some()
             || crown_range.is_some()
-            || title_range.is_some())
+            || title_range.is_some()
+            || runner_tint.is_some())
         .then_some(AuthorTint {
             range: author_range,
             crown_range,
             title_range,
+            runner: runner_tint,
             word: drunk_word,
             name_style,
         });
@@ -1864,7 +1880,7 @@ fn ensure_chat_rows_cache(
             (!is_continuation && !is_system)
                 .then(|| looks.get(&msg.user_id))
                 .flatten()
-                .map(crate::app::deadchannel::runner::ui::portrait_spans)
+                .map(|entry| crate::app::deadchannel::runner::ui::portrait_spans(&entry.look))
         });
         let text_width = match ctx.runner_looks {
             Some(_) => width.saturating_sub(PORTRAIT_GUTTER).max(1),
@@ -2596,6 +2612,7 @@ fn build_author_prefix_and_segments(
         bonsai_glyph,
         profile_award_badges,
         presence_badges,
+        runner_badge: None,
     });
     (built.prefix, built.segments)
 }
@@ -2618,19 +2635,26 @@ struct AuthorPrefixInput<'a> {
     bonsai_glyph: Option<&'a str>,
     profile_award_badges: Option<&'a str>,
     presence_badges: &'a [&'a str],
+    /// The runner's level badge (`app/deadchannel/runner/ui.rs`), only on
+    /// the wire: the first badge of the stack, so it sits right after the
+    /// name and its decorations and the painter can tint it in its band.
+    runner_badge: Option<&'a str>,
 }
 
 /// The built author header prefix: the string, the clickable column
-/// segments, the bare username's byte range, and the byte ranges of the two
-/// decorations that trail it. The crown follows the username directly and
-/// the title follows the crown, so all three runs are adjacent and the
-/// painter can walk them in order.
+/// segments, the bare username's byte range, and the byte ranges of the
+/// decorations that trail it. The crown follows the username directly, the
+/// title follows the crown, and the runner badge opens the badge stack
+/// after the title, so all four runs are adjacent and the painter can
+/// walk them in order.
 struct AuthorPrefix {
     prefix: String,
     segments: Vec<HeaderSegment>,
     author_range: (usize, usize),
     crown_range: Option<(usize, usize)>,
     title_range: Option<(usize, usize)>,
+    /// The ` ▚7` run: the space that opens the badge stack and the badge.
+    runner_range: Option<(usize, usize)>,
 }
 
 /// Builds the author header prefix.
@@ -2646,6 +2670,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         bonsai_glyph,
         profile_award_badges,
         presence_badges,
+        runner_badge,
     } = input;
     let mut prefix = String::new();
     let mut segments: Vec<HeaderSegment> = Vec::new();
@@ -2714,13 +2739,20 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         });
 
     let mut typed_badges: Vec<(HeaderTarget, &str)> = Vec::with_capacity(
-        special_badges.len()
+        runner_badge.is_some() as usize
+            + special_badges.len()
             + chat_badges.len()
             + milestone.is_some() as usize
             + bonsai_glyph.is_some() as usize
             + profile_award_badges.is_some() as usize
             + presence_badges.len(),
     );
+    // The runner badge leads the stack: what the wire knows about a person
+    // comes before what they bought upstairs, and the painter needs it
+    // adjacent to the name's decorations to tint it.
+    if let Some(s) = runner_badge.filter(|s| !s.is_empty()) {
+        typed_badges.push((HeaderTarget::Profile, s));
+    }
     let award_group = profile_award_badges
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -2746,7 +2778,9 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
     for s in presence_badges.iter().copied().filter(|s| !s.is_empty()) {
         typed_badges.push((HeaderTarget::Profile, s));
     }
+    let mut runner_range = None;
     if !typed_badges.is_empty() {
+        let stack_start = prefix.len();
         prefix.push(' ');
         col += 1;
         let sep_w = UnicodeWidthStr::width(AUTHOR_BADGE_SEPARATOR) as u16;
@@ -2765,6 +2799,9 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
             }
             prefix.push_str(text);
             col += w;
+            if i == 0 && runner_badge.is_some_and(|badge| !badge.is_empty()) {
+                runner_range = Some((stack_start, prefix.len()));
+            }
         }
     }
 
@@ -2774,6 +2811,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         author_range,
         crown_range,
         title_range,
+        runner_range,
     }
 }
 
@@ -2986,9 +3024,10 @@ pub struct ChatRenderInput<'a> {
     /// Resolved 24h username-effect styles per author (see
     /// `common/username_effect.rs`); fg painted over the bare name only.
     pub name_flair: &'a HashMap<Uuid, ResolvedName>,
-    /// Every runner's look (`app/deadchannel/runner`), for the portrait
-    /// gutter beside messages; consulted only when `room` is #deadchannel.
-    pub runner_looks: &'a HashMap<Uuid, crate::app::deadchannel::runner::state::Look>,
+    /// Every standing runner's look and level (`app/deadchannel/runner`),
+    /// for the portrait gutter and the level badge beside messages;
+    /// consulted only when `room` is #deadchannel.
+    pub runner_looks: &'a HashMap<Uuid, crate::app::deadchannel::runner::svc::RunnerEntry>,
     /// Per-peer `/status` badges (resolved once a second in `tick.rs`);
     /// painted as the trailing presence badge.
     pub peer_statuses: &'a HashMap<Uuid, String>,
