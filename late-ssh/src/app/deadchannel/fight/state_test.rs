@@ -3,10 +3,10 @@ use late_core::models::deadchannel_runner::DeadchannelRunner;
 use rand::{SeedableRng, rngs::StdRng};
 use uuid::Uuid;
 
-use super::{Applied, Command, Fight, News, Quarry, Refusal, Sheet, SheetError, Slot};
+use super::{Applied, Command, Fight, News, Outcome, Quarry, Refusal, Sheet, SheetError, Slot};
 use crate::app::deadchannel::fight::data::{
-    FOES, MARK_BONUS_CAP, MAX_LEVEL, OLD_SIGNAL, RATIONS_PER_DAY, START_BITS, exp_to_advance,
-    exp_to_seek, title,
+    FOES, HEARD_LINE, MARK_BONUS_CAP, MAX_LEVEL, OLD_SIGNAL, RATIONS_PER_DAY, START_BITS,
+    exp_to_advance, exp_to_seek, title,
 };
 use crate::app::deadchannel::fight::state::MAX_TIER;
 
@@ -733,4 +733,67 @@ fn marks_scale_the_ladder_and_the_peak_only_climbs() {
         "{outcome:?}"
     );
     assert_eq!(sheet.peak_level, 9, "a climb under the peak leaves it");
+}
+
+/// A glyph at the top that cannot hurt you and cannot survive you, worth
+/// one exp: the step that crosses the seek threshold, and no more.
+fn harmless_glyph_at_the_top() -> Fight {
+    Fight {
+        quarry: Quarry::Glyph(14),
+        foe_signal: 1,
+        foe_max_signal: 1,
+        foe_attack: 0,
+        foe_defense: 0,
+        foe_bits: 0,
+        foe_exp: 1,
+        log: Vec::new(),
+    }
+}
+
+/// The glyph kill that lifts a level-15 runner over the seek threshold
+/// says so, once: the kill that crosses it prints the heard line, the
+/// next glyph kill past it does not.
+#[test]
+fn the_kill_that_crosses_the_seek_threshold_says_so_once() {
+    let mut sheet = at_the_top(0);
+    sheet.exp = exp_to_seek(0) - 1;
+    sheet.weapon_tier = 50;
+    assert!(!sheet.signal_hears());
+    let mut rng = StdRng::seed_from_u64(4);
+
+    sheet.fight = Some(harmless_glyph_at_the_top());
+    let crossing = win_out(&mut sheet, &mut rng);
+    assert!(
+        matches!(crossing.applied, Applied::Won { leveled: None, .. }),
+        "{crossing:?}"
+    );
+    assert_eq!(sheet.exp, exp_to_seek(0));
+    assert!(sheet.signal_hears());
+    assert_eq!(
+        crossing.lines.iter().filter(|line| *line == HEARD_LINE).count(),
+        1,
+        "{:?}",
+        crossing.lines
+    );
+
+    sheet.fight = Some(harmless_glyph_at_the_top());
+    let past = win_out(&mut sheet, &mut rng);
+    assert!(matches!(past.applied, Applied::Won { .. }), "{past:?}");
+    assert!(sheet.signal_hears(), "still heard, one exp past the threshold");
+    assert!(
+        !past.lines.iter().any(|line| *line == HEARD_LINE),
+        "{:?}",
+        past.lines
+    );
+}
+
+/// Attack until the fight ends; the ending outcome, lines and all.
+fn win_out(sheet: &mut Sheet, rng: &mut StdRng) -> Outcome {
+    for _ in 0..500 {
+        let outcome = sheet.apply(Command::Attack, rng);
+        if outcome.applied != Applied::Round {
+            return outcome;
+        }
+    }
+    panic!("a fight always ends");
 }
