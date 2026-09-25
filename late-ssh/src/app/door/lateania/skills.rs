@@ -109,6 +109,17 @@ impl CraftSkill {
         CraftSkill::Cooking,
     ];
 
+    /// The order the crafting panel lists its trades in. Alchemy leads because
+    /// it is the station worked most (draughts, oils and poisons are spent
+    /// every fight); the rest follow `ALL`.
+    pub const PANEL_ORDER: [CraftSkill; 5] = [
+        CraftSkill::Alchemy,
+        CraftSkill::Smithing,
+        CraftSkill::Woodworking,
+        CraftSkill::Leatherworking,
+        CraftSkill::Cooking,
+    ];
+
     /// Stable index used to lay out crafted-item ids (see `items`). Never change.
     pub const fn index(self) -> u32 {
         match self {

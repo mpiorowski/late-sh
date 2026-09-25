@@ -7,8 +7,8 @@ use crate::{
         chips::{ChipMove, Difficulty, UserChips},
         le_word,
         leaderboard::{
-            DailyPuzzle, OnlineTimeIncrement, RankedEntry, apply_online_time_batch,
-            fetch_leaderboard_data,
+            DailyPuzzle, LATEANIA_XP_AT_LEVEL_CAP, LATEANIA_XP_PER_PARAGON_LEVEL,
+            OnlineTimeIncrement, RankedEntry, apply_online_time_batch, fetch_leaderboard_data,
         },
         mud_character::MudCharacter,
         rubiks_cube, sliding_puzzle, sudoku,
@@ -268,84 +268,97 @@ async fn replayed_daily_win_does_not_double_count_all_time() {
     assert_eq!(entry_for(&board.all_time, solver.id).value, 2);
 }
 
-/// The Lateania boards read the game-owned character blobs: level ranks the
-/// adventurers with experience as the tiebreak and the class carried as the
-/// row note, the visited-room list yields the deepest Frontier zone, and a
-/// pre-class-select shell stays off both boards.
+/// The Lateania boards read the game-owned character blobs. Adventurers ranks
+/// by level with experience as the tiebreak and the class as the row note, and
+/// keeps counting past the level cap: every `LATEANIA_XP_PER_PARAGON_LEVEL` of
+/// xp beyond the cap's threshold is one more level on the board, so capped
+/// characters still separate. PvP ranks lifetime Wildbound Waste kills. A
+/// pre-class-select shell, or a character that never killed a rival, stays off.
 #[tokio::test]
 async fn lateania_boards_rank_living_characters() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
+    let paragon = create_test_user(&test_db.db, "lb_lateania_paragon").await;
+    let capped = create_test_user(&test_db.db, "lb_lateania_capped").await;
     let hero = create_test_user(&test_db.db, "lb_lateania_hero").await;
     let rival = create_test_user(&test_db.db, "lb_lateania_rival").await;
     let shell = create_test_user(&test_db.db, "lb_lateania_shell").await;
 
+    let save = |user_id: Uuid, data: serde_json::Value| {
+        let client = &client;
+        async move {
+            MudCharacter::save(client, user_id, 0, data)
+                .await
+                .expect("save character");
+        }
+    };
+    // 37 paragon levels and a bit past the cap's threshold.
+    save(
+        paragon.id,
+        json!({
+            "version": 17, "class": "warrior", "level": 100,
+            "xp": LATEANIA_XP_AT_LEVEL_CAP + 37 * LATEANIA_XP_PER_PARAGON_LEVEL + 10,
+            "pvp_kills": 3,
+        }),
+    )
+    .await;
+    // Exactly at the cap: level 100, no paragon levels yet.
+    save(
+        capped.id,
+        json!({
+            "version": 17, "class": "druid", "level": 100,
+            "xp": LATEANIA_XP_AT_LEVEL_CAP + LATEANIA_XP_PER_PARAGON_LEVEL - 1,
+            "pvp_kills": 12,
+        }),
+    )
+    .await;
     // Hero and rival share level 42; the hero's higher experience breaks the
-    // tie. Room 2749 sits in Frontier zone 15 (rooms 2000..=2999, 50 per
-    // zone); room 2000 is zone 1; room 150 is not Frontier at all.
-    MudCharacter::save(
-        &client,
+    // tie. The rival never killed anyone.
+    save(
         hero.id,
-        0,
-        json!({
-            "version": 17,
-            "class": "runemaster",
-            "level": 42,
-            "xp": 900_000,
-            "visited": [1, 150, 2000, 2749],
-        }),
+        json!({ "version": 17, "class": "runemaster", "level": 42, "xp": 900_000, "pvp_kills": 3 }),
     )
-    .await
-    .expect("save hero");
-    MudCharacter::save(
-        &client,
+    .await;
+    save(
         rival.id,
-        0,
-        json!({
-            "version": 17,
-            "class": "warrior",
-            "level": 42,
-            "xp": 800_000,
-            "visited": [1, 2000],
-        }),
+        json!({ "version": 17, "class": "warrior", "level": 42, "xp": 800_000, "pvp_kills": 0 }),
     )
-    .await
-    .expect("save rival");
-    MudCharacter::save(
-        &client,
+    .await;
+    save(
         shell.id,
-        0,
-        json!({ "version": 17, "class": null, "level": 1, "xp": 0, "visited": [150] }),
+        json!({ "version": 17, "class": null, "level": 1, "xp": 0, "pvp_kills": 5 }),
     )
-    .await
-    .expect("save shell");
+    .await;
 
     let data = fetch_leaderboard_data(&client)
         .await
         .expect("fetch leaderboard");
 
-    let hero_row = entry_for(&data.lateania_adventurers, hero.id);
-    assert_eq!(hero_row.rank, 1, "experience breaks the level tie");
+    let adventurers = &data.lateania_adventurers;
+    assert_eq!(entry_for(adventurers, paragon.id).value, 137);
+    assert_eq!(entry_for(adventurers, paragon.id).rank, 1);
+    assert_eq!(entry_for(adventurers, capped.id).value, 100);
+    assert_eq!(entry_for(adventurers, capped.id).rank, 2);
+    let hero_row = entry_for(adventurers, hero.id);
+    assert_eq!(hero_row.rank, 3, "experience breaks the level tie");
     assert_eq!(hero_row.value, 42);
     assert_eq!(hero_row.note.as_deref(), Some("Runemaster"));
-    assert_eq!(entry_for(&data.lateania_adventurers, rival.id).rank, 2);
+    assert_eq!(entry_for(adventurers, rival.id).rank, 4);
     assert!(
-        !data
-            .lateania_adventurers
-            .iter()
-            .any(|entry| entry.user_id == shell.id),
+        !adventurers.iter().any(|entry| entry.user_id == shell.id),
         "a character without a chosen class stays off the board"
     );
 
-    assert_eq!(entry_for(&data.lateania_frontier, hero.id).value, 15);
-    assert_eq!(entry_for(&data.lateania_frontier, rival.id).value, 1);
+    let pvp = &data.lateania_pvp;
+    assert_eq!(entry_for(pvp, capped.id).value, 12);
+    assert_eq!(entry_for(pvp, capped.id).rank, 1);
+    assert_eq!(entry_for(pvp, paragon.id).rank, 2);
+    assert_eq!(entry_for(pvp, hero.id).rank, 2, "equal kills share a rank");
     assert!(
-        !data
-            .lateania_frontier
-            .iter()
-            .any(|entry| entry.user_id == shell.id),
-        "no Frontier room visited, no Frontier row"
+        !pvp.iter()
+            .any(|entry| entry.user_id == rival.id || entry.user_id == shell.id),
+        "no kills, or no class, no PvP row"
     );
 }
 

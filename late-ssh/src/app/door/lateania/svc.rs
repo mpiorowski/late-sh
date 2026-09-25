@@ -622,6 +622,12 @@ pub struct CraftEntryView {
     pub desc: &'static str,
     /// The collapsible category the output would sit in, for the detail pane.
     pub category: &'static str,
+    /// How many of the output are already in the pack, for the goods a maker
+    /// keeps a stock of (draughts, oils, poisons, food). None for gear, which
+    /// is weighed against what is worn instead, and for crafted materials
+    /// (ingots, planks, leather), whose count shows where they are spent, on
+    /// the ingredient lines.
+    pub held: Option<u32>,
     /// True when it can be made right now (station here, skilled enough, have
     /// the materials).
     pub craftable: bool,
@@ -7447,12 +7453,15 @@ impl WorldState {
                 self.log_to(
                     user_id,
                     LogKind::Loot,
-                    "  ⚔ You have reached the pinnacle - level 50, the height of your calling. Few ever stand here.".to_string(),
+                    format!(
+                        "  ⚔ You have reached the pinnacle - level {}, the height of your calling. Few ever stand here.",
+                        Class::MAX_LEVEL
+                    ),
                 );
-                self.log_all(
-                    "The bells of Embergate ring: an adventurer has reached level 50, the pinnacle of their calling!"
-                        .to_string(),
-                );
+                self.log_all(format!(
+                    "The bells of Embergate ring: an adventurer has reached level {}, the pinnacle of their calling!",
+                    Class::MAX_LEVEL
+                ));
             }
         }
     }
@@ -10575,7 +10584,11 @@ impl WorldState {
             }
             // The crafting panel: every recipe worked at the stations in this room.
             let crafting = {
-                let stations = craft_stations_at(player.room);
+                let here = craft_stations_at(player.room);
+                let stations: Vec<CraftSkill> = CraftSkill::PANEL_ORDER
+                    .into_iter()
+                    .filter(|st| here.contains(st))
+                    .collect();
                 if stations.is_empty() {
                     None
                 } else {
@@ -10644,6 +10657,17 @@ impl WorldState {
                                 worn_stats: worn.map(|w| w.stat_summary()),
                                 desc: out.map(|i| i.desc).unwrap_or(""),
                                 category: out.map(|i| item_category(&i.kind)).unwrap_or("Goods"),
+                                held: match out.map(|i| &i.kind) {
+                                    Some(
+                                        super::items::ItemKind::Consumable { .. }
+                                        | super::items::ItemKind::Utility,
+                                    ) => Some(player.item_count(rc.output)),
+                                    Some(
+                                        super::items::ItemKind::Equipment(_)
+                                        | super::items::ItemKind::Valuable,
+                                    )
+                                    | None => None,
+                                },
                                 craftable,
                                 reason,
                             });

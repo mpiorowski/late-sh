@@ -1,6 +1,9 @@
 use late_core::models::{
     chips::Difficulty,
-    leaderboard::{DailyPuzzle, DoorGame, LeaderboardData, RankedEntry, ScoreGame},
+    leaderboard::{
+        DailyPuzzle, DoorGame, LATEANIA_LEVEL_CAP, LATEANIA_XP_PER_PARAGON_LEVEL,
+        LeaderboardData, RankedEntry, ScoreGame,
+    },
 };
 
 use crate::app::common::primitives::thousands;
@@ -15,7 +18,7 @@ const EMPTY: &[RankedEntry] = &[];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Board {
     LateaniaAdventurers,
-    LateaniaFrontier,
+    LateaniaPvp,
     DoorWins(DoorGame),
     DoorDepth(DoorGame),
     DoorScore(DoorGame),
@@ -56,7 +59,7 @@ impl Board {
             Self::ArcadeWins,
             Self::TimeOnline,
             Self::LateaniaAdventurers,
-            Self::LateaniaFrontier,
+            Self::LateaniaPvp,
         ];
         for &game in DoorGame::ALL {
             boards.push(Self::DoorWins(game));
@@ -72,7 +75,7 @@ impl Board {
     pub(crate) fn title(self) -> &'static str {
         match self {
             Self::LateaniaAdventurers => "Lateania Adventurers",
-            Self::LateaniaFrontier => "Lateania Frontier",
+            Self::LateaniaPvp => "Lateania PvP",
             Self::DoorWins(DoorGame::Dcss) => "DCSS Wins",
             Self::DoorDepth(DoorGame::Dcss) => "DCSS Deepest Dive",
             Self::DoorScore(DoorGame::Dcss) => "DCSS Top Score",
@@ -96,10 +99,11 @@ impl Board {
     /// cannot drift from the SQL the points come from.
     pub(crate) fn hint(self) -> String {
         match self {
-            Self::LateaniaAdventurers => {
-                "living characters by level, ties broken by experience".to_string()
-            }
-            Self::LateaniaFrontier => "deepest Frontier zone walked, of 20".to_string(),
+            Self::LateaniaAdventurers => format!(
+                "living characters by level, past {LATEANIA_LEVEL_CAP} one more per {}k xp",
+                LATEANIA_XP_PER_PARAGON_LEVEL / 1000
+            ),
+            Self::LateaniaPvp => "rivals slain in the Wildbound Waste".to_string(),
             Self::DoorWins(DoorGame::Dcss) => "games escaped with the Orb of Zot".to_string(),
             Self::DoorDepth(DoorGame::Dcss) => "deepest dungeon depth ever reached".to_string(),
             Self::DoorScore(DoorGame::Dcss) => "best final score".to_string(),
@@ -127,8 +131,11 @@ impl Board {
     /// board's copy and its number format live in one place.
     pub(crate) fn format_value(self, value: i64) -> String {
         match self {
-            Self::LateaniaAdventurers => format!("lvl {value}"),
-            Self::LateaniaFrontier => format!("zone {value}"),
+            Self::LateaniaAdventurers => match value > LATEANIA_LEVEL_CAP {
+                true => format!("lvl {LATEANIA_LEVEL_CAP} +{}", value - LATEANIA_LEVEL_CAP),
+                false => format!("lvl {value}"),
+            },
+            Self::LateaniaPvp => format!("{} kills", thousands(value)),
             Self::DoorWins(_) => format!("{} wins", thousands(value)),
             Self::DoorDepth(_) => format!("depth {value}"),
             Self::DoorScore(_) => thousands(value),
@@ -147,7 +154,7 @@ impl Board {
     pub(crate) fn standings(self, data: &LeaderboardData) -> Standings<'_> {
         match self {
             Self::LateaniaAdventurers => Standings::Snapshot(&data.lateania_adventurers),
-            Self::LateaniaFrontier => Standings::Snapshot(&data.lateania_frontier),
+            Self::LateaniaPvp => Standings::Snapshot(&data.lateania_pvp),
             Self::DoorWins(game) => {
                 Standings::AllTimeOnly(data.door_board(game).map_or(EMPTY, |board| &board.wins))
             }

@@ -4006,6 +4006,18 @@ fn craft_status_cell(e: &super::svc::CraftEntryView) -> (String, Color) {
     (format!("{held}/{}", e.ingredients.len()), theme::AMBER())
 }
 
+/// The list's tag cell for a recipe. A stock good (a draught, an oil, a meal)
+/// has no rival on your body, so the cell says how many are already in the
+/// pack: the stock a maker is topping up. Everything else keeps the shop's
+/// upgrade tag, which is empty for materials.
+fn craft_tag_cell(e: &super::svc::CraftEntryView) -> (String, Color) {
+    match e.held {
+        Some(0) => ("\u{00d7}0".to_string(), theme::TEXT_DIM()),
+        Some(n) => (format!("\u{00d7}{n}"), theme::TEXT_BRIGHT()),
+        None => upgrade_tag(e.compare_pct),
+    }
+}
+
 /// The ingredient checklist of the detail pane: every line of the recipe with
 /// what is in the pack against what it costs. The sidebar panel collapses this
 /// to one "need materials" string, which names neither the material nor the
@@ -4150,7 +4162,7 @@ fn draw_craft_screen(
                     &e.rarity,
                     selected,
                     craft_status_cell(e),
-                    upgrade_tag(e.compare_pct),
+                    craft_tag_cell(e),
                     list_w,
                 ));
             }
@@ -4190,6 +4202,16 @@ fn draw_craft_screen(
                 },
                 detail_w,
             );
+            if let Some(n) = e.held {
+                detail.push(Line::from(Span::styled(
+                    format!("  {n} in your pack"),
+                    Style::default().fg(match n {
+                        0 => theme::TEXT_DIM(),
+                        _ => theme::TEXT_BRIGHT(),
+                    }),
+                )));
+                detail.push(Line::raw(""));
+            }
             detail.extend(craft_material_lines(e));
             detail.push(Line::raw(""));
             detail.push(craft_skill_line(e));
@@ -6262,8 +6284,15 @@ fn crafting_panel(
                 } else {
                     Style::default().fg(theme::TEXT_DIM())
                 };
-                // Name row, with a gated reason when it can't be made.
+                // Name row: how many are already held (made goods only), and
+                // a gated reason when it can't be made.
                 let mut name_spans = vec![Span::styled(format!("{marker} {}", e.name), name_style)];
+                if let Some(n) = e.held {
+                    name_spans.push(Span::styled(
+                        format!("  \u{00d7}{n}"),
+                        Style::default().fg(theme::TEXT_DIM()),
+                    ));
+                }
                 if !e.craftable && !e.reason.is_empty() {
                     name_spans.push(Span::styled(
                         format!("  ({})", e.reason),
