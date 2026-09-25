@@ -43,7 +43,11 @@ fn the_badge_is_the_mark_and_the_level_in_the_levels_band() {
     };
     assert_eq!(badge_text(&entry(7, 0)), "▚7");
     assert_eq!(badge_text(&entry(15, 0)), "▚15");
-    assert_eq!(badge_text(&entry(3, 2)), "▚3╬2", "the marks ride behind the Signal's glyph");
+    assert_eq!(
+        badge_text(&entry(3, 2)),
+        "▚3╬2",
+        "the marks ride behind the Signal's glyph"
+    );
     let colors = (1..=16).map(level_color).collect::<Vec<_>>();
     let expected = [
         Tint::Static,

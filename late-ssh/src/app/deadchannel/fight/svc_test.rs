@@ -232,7 +232,13 @@ async fn putting_the_old_signal_down_resets_the_row_and_grants_the_badge() {
         .expect("find")
         .expect("row");
     assert_eq!(
-        (row.level, row.peak_level, row.marks, row.weapon_tier, row.armor_tier),
+        (
+            row.level,
+            row.peak_level,
+            row.marks,
+            row.weapon_tier,
+            row.armor_tier
+        ),
         (1, MAX_LEVEL, 1, 0, 0)
     );
     let awards = list_profile_awards_for_user(&client, user_id)

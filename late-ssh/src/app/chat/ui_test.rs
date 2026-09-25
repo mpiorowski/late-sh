@@ -3262,8 +3262,24 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
     }))
     .expect("parse look");
     let looks = HashMap::from([
-        (runner_id, RunnerEntry { look, level: 7, peak_level: 7, marks: 0 }),
-        (elder_id, RunnerEntry { look, level: 15, peak_level: 15, marks: 0 }),
+        (
+            runner_id,
+            RunnerEntry {
+                look,
+                level: 7,
+                peak_level: 7,
+                marks: 0,
+            },
+        ),
+        (
+            elder_id,
+            RunnerEntry {
+                look,
+                level: 15,
+                peak_level: 15,
+                marks: 0,
+            },
+        ),
     ]);
     let countries = HashMap::new();
     let bonsai_glyphs = HashMap::new();

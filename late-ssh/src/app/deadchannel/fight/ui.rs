@@ -17,8 +17,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use super::session::Scene;
 use super::data::FOES;
+use super::session::Scene;
 use super::state::{Fight, Quarry, Sheet, Slot};
 use crate::app::deadchannel::city::map::Neon;
 use crate::app::deadchannel::city::ui::{

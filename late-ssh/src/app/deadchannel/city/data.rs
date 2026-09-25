@@ -118,11 +118,10 @@ pub const DRINKS: [&str; 4] = [
 
 /// Prices the tailor will charge once the rack exists (GAME.md placeholders,
 /// design review pending). Chips, burned whole.
-pub const TAILOR_PRICES: [(&str, &str); 4] = [
+pub const TAILOR_PRICES: [(&str, &str); 3] = [
     ("starter piece or starter mark", "free"),
     ("common piece", "2,000 chips"),
     ("rare piece", "10,000 chips"),
-    ("a legendary look, its own mark", "100,000 chips"),
 ];
 
 /// What the street says when you press Enter at a landmark that is not a

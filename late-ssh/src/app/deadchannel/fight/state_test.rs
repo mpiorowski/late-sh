@@ -624,7 +624,11 @@ fn the_old_signal_is_a_real_fight_that_marks_make_easier() {
     let capped = win_rate(MARK_BONUS_CAP);
     assert!((33..=45).contains(&first), "first kill wins {first}%");
     assert!((72..=86).contains(&capped), "capped marks win {capped}%");
-    assert_eq!(win_rate(MARK_BONUS_CAP + 3), capped, "the bonus stops at the cap");
+    assert_eq!(
+        win_rate(MARK_BONUS_CAP + 3),
+        capped,
+        "the bonus stops at the cap"
+    );
 }
 
 #[test]
@@ -635,7 +639,10 @@ fn the_old_signal_answers_only_at_the_top_with_the_exp_to_leave_it() {
     short.exp -= 1;
     assert!(!short.signal_hears());
     short.apply(Command::Start, &mut rng);
-    assert_eq!(short.fight.as_ref().map(|fight| fight.quarry), Some(Quarry::Glyph(14)));
+    assert_eq!(
+        short.fight.as_ref().map(|fight| fight.quarry),
+        Some(Quarry::Glyph(14))
+    );
 
     let mut ready = at_the_top(0);
     let outcome = ready.apply(Command::Start, &mut rng);
@@ -685,7 +692,11 @@ fn putting_the_old_signal_down_leaves_a_mark_and_starts_the_climb_over() {
     assert_eq!(outcome.lines.len(), 3, "{:?}", outcome.lines);
     assert!(outcome.lines[2].contains("mark 1"), "{:?}", outcome.lines);
     assert_eq!(sheet.news(&outcome.applied), vec![News::Slain { marks: 1 }]);
-    assert_eq!((sheet.attack(), sheet.defense()), (2, 2), "level 1 plus the mark");
+    assert_eq!(
+        (sheet.attack(), sheet.defense()),
+        (2, 2),
+        "level 1 plus the mark"
+    );
 }
 
 #[test]
@@ -712,7 +723,13 @@ fn marks_scale_the_ladder_and_the_peak_only_climbs() {
         }
     };
     assert!(
-        matches!(outcome.applied, Applied::Won { leveled: Some(2), .. }),
+        matches!(
+            outcome.applied,
+            Applied::Won {
+                leveled: Some(2),
+                ..
+            }
+        ),
         "{outcome:?}"
     );
     assert_eq!(sheet.peak_level, 9, "a climb under the peak leaves it");

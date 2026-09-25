@@ -262,9 +262,9 @@ place at all: scarcity of place is the fiction's spine, same as the
   wallet for any sub-surface; that's two identity systems fighting for one
   presence layer.
 - Cosmetics are the proven shop category (see Why), so lean in hard:
-  top-end looks priced absurdly (a 100k-chip legendary look is the point,
-  not a bug), rotating/limited seasonal stock for scarcity and shop
-  check-ins.
+  rotating/limited seasonal stock for scarcity and shop check-ins. No
+  legendary looks: a set only a few can wear becomes the look everyone
+  chases and then everyone wears.
 
 ### Chat encounters (the onboarding funnel)
 - The Mudae/Pokécord shape: something spawns in a room, runners present
@@ -755,9 +755,9 @@ followed by the level, `▚7`, and as the runner's avatar glyph on the
 clubhouse floor, where runners become the only patrons who are not the
 default glyph. Starter marks are the ten characters of `GLYPH_ALPHABET`,
 free, so a fresh runner already wears the alphabet the city's fauna is
-made of. Rarer marks are bought or earned. The mark's **tint** is earned
-only, by marks (the prestige count): a colored mark is proof of an Old
-Signal kill and can never be bought, so the room learns to read it.
+made of. Rarer marks are bought. The badge's color is the newest tint the
+level opened, and an Old Signal kill shows as `╬N` after the level
+(`▚3╬2`): proof no chip can buy, so the room learns to read it.
 
 **Pieces come in two kinds, and the look tells the story:**
 
@@ -838,15 +838,6 @@ ghost       visor       static      the glyph   tuner       jammer
   ▒░▒         ▟█▙         ▟▓▙         ▟╬▙        ▟═▙         ▟▒▙
 ```
 
-Legendary looks, where the whole set is one idea (the 100k pieces):
-
-```
-test pattern   old signal    the flicker    blackout
-   ▐▌▐▌          ╬╬╬            ▘ ▝           ███
-  ▐▓░▓▌         ▐◈▬◈▌          ▐▖ ▗▌         ▐█ █▌
-   ▟▒▙           ▟╬▙            ░▒░           ███
-```
-
 What the sketches decided:
 
 - **The coat's center cell is the emblem.** `▟╬▙`, `▟═▙`, `▟▓▙` are one
@@ -867,8 +858,8 @@ What the sketches decided:
 ```
 
 - **One tint per piece, never per cell**, from a closed palette of about
-  eight (static grey, amber, phosphor green, cyan, magenta, red, white,
-  and gold reserved for earned tint). Two people in the same three
+  seven (static grey, amber, phosphor green, cyan, magenta, red, white),
+  opened by level. No earned tint: gold stays out of the palette. Two people in the same three
   pieces and different tints already look different, so the catalog
   multiplies without more art. The wire prints portraits in plain text
   (chat bodies carry no color and IRC would need color codes); the
@@ -889,12 +880,12 @@ What the sketches decided:
 database, the way the door keeps its ladders in `data.rs`.
 
 - **Pieces are a Rust const table**, one entry per piece: a code, its
-  slot, the five-cell row, and whether it is starter, bought, or earned.
+  slot, the five-cell row, and the level that opens it.
   The width test above runs over this table, so a bad glyph fails the
   build instead of someone's card.
 - **A shop SKU references the piece code**; a catalog migration per rack
   in the existing `ON CONFLICT (sku)` shape, ownership in
-  `user_purchases`. Earned pieces have no SKU at all, so they cannot be
+  `user_purchases`. Level pieces have no SKU at all, so they cannot be
   sold by accident.
 - **The look is one JSONB column on the runner row**, parsed at load into
   a typed struct and rejected loudly on an unknown code (the boundary
@@ -923,11 +914,9 @@ database, the way the door keeps its ladders in `data.rs`.
 | common piece | 2,000 |
 | rare piece | 10,000 |
 | rare mark | 25,000 |
-| a legendary look (matched hood, eyes, coat, and its own mark) | 100,000 |
 
 Looks are deadchannel's chip sink from day one, before the arena or a
-single bounty exists; the 100k look is the point (see "The visibility
-layer"), not an outlier.
+single bounty exists.
 
 ### The sheet (what the profile card shows)
 
@@ -1120,7 +1109,7 @@ fixed:
   nobody can read it, which is the point.
 - **No function behind anything yet, and the panels say so.** Every shop
   opens and shows its real catalog (the fifteen gear tiers at LoGD prices,
-  the whole starter rack with the runner's portrait in the mirror, the
+  the rack cut to the runner's level with the portrait in the mirror, the
   three bands) under a line in the voice saying the till is not open. The
   street answers Enter at a cart with a line from a small pool. Placeholder
   copy, design review pending: the draft **move names** (tuner: retune,
@@ -1202,9 +1191,10 @@ ritual is the city's, the wire is the log); this pass fixed the shape:
   change trigger the join uses, so every surface that paints the look
   follows on the directory refresh. Nothing posts to the wire: the new
   face rides the runner's next message there, which is the be-seen fuel
-  doing its own work. The rack is a window of five around the worn piece
-  rather than the whole row, so the panel fits eighty columns and the
-  eye stays on the piece.
+  doing its own work. The rack is a window of up to five around the worn
+  piece rather than the whole row (the whole rack, once, while it is
+  shorter), so the panel fits eighty columns and the eye stays on the
+  piece.
 
 What comes next on this surface is decided in the next section, "The
 road pass": the exchange loop above is the placeholder it replaces.

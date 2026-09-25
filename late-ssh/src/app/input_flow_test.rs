@@ -4077,7 +4077,15 @@ async fn the_first_descent_opens_the_guide_and_the_question_mark_reopens_it() {
         .await
         .expect("a runner");
     let mut app = make_app(test_db.db.clone(), user.id, "undercity-guide-flow");
-    app.runner_looks = Arc::new(HashMap::from([(user.id, RunnerEntry { look, level: 1, peak_level: 1, marks: 0 })]));
+    app.runner_looks = Arc::new(HashMap::from([(
+        user.id,
+        RunnerEntry {
+            look,
+            level: 1,
+            peak_level: 1,
+            marks: 0,
+        },
+    )]));
 
     app.handle_input(b"0");
     wait_for_render_contains(&mut app, " Clubhouse ").await;
