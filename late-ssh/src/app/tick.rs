@@ -815,28 +815,33 @@ impl App {
                     changed = true;
                 }
             }
-            // Presence reads on the same cadence: renders consume these owned
-            // values instead of locking `active_users` twice per frame. The
-            // away set bumps the chat row epoch only when it actually moves,
-            // or every second would invalidate every cached chat row.
+            // Presence reads on the same cadence, under one lock: renders
+            // consume these owned values instead of locking `active_users`
+            // per frame. The away set bumps the chat row epoch only when it
+            // actually moves, or every second would invalidate every cached
+            // chat row.
             if let Some(active_users) = &self.active_users {
-                let online_count = crate::state::online_human_count(active_users);
+                let (online_count, away_user_ids, active_friends) = {
+                    let roster = active_users.lock_recover();
+                    (
+                        crate::state::online_human_count(&roster),
+                        crate::app::common::away::away_user_ids(&roster),
+                        self.chat.active_friends(&roster),
+                    )
+                };
                 if online_count != self.online_count {
                     self.online_count = online_count;
                     changed = true;
                 }
-                let away_user_ids =
-                    crate::app::common::away::away_user_ids(&active_users.lock_recover());
                 if away_user_ids != self.away_user_ids {
                     self.away_user_ids = away_user_ids;
                     self.chat_ctx_epoch += 1;
                     changed = true;
                 }
-            }
-            let active_friends = self.chat.active_friends();
-            if active_friends != self.active_friends {
-                self.active_friends = active_friends;
-                changed = true;
+                if active_friends != self.active_friends {
+                    self.active_friends = active_friends;
+                    changed = true;
+                }
             }
             // Mentions load only when asked for. An Inbox tile on the page
             // asks whenever the unread count moves, so a new mention lands.

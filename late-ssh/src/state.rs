@@ -72,9 +72,8 @@ pub type ActiveUsers = Arc<Mutex<HashMap<Uuid, ActiveUser>>>;
 /// Connected humans only: the always-on bots (@bartender, @graybeard, @bot)
 /// register with no fingerprint and are excluded, matching the clubhouse
 /// headcount.
-pub fn online_human_count(active_users: &ActiveUsers) -> usize {
+pub fn online_human_count(active_users: &HashMap<Uuid, ActiveUser>) -> usize {
     active_users
-        .lock_recover()
         .values()
         .filter(|user| user.fingerprint.is_some())
         .count()

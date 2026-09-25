@@ -5634,12 +5634,9 @@ impl ChatState {
     }
 
     /// Connected friends: here before away, then the most recent login
-    /// first, then by name.
-    pub fn active_friends(&self) -> Vec<ActiveFriend> {
-        let Some(active_users) = &self.active_users else {
-            return Vec::new();
-        };
-        let active_users = active_users.lock_recover();
+    /// first, then by name. Reads a roster the caller already holds, so the
+    /// 1Hz presence edge (`tick.rs`) takes the lock once for everything.
+    pub fn active_friends(&self, active_users: &HashMap<Uuid, ActiveUser>) -> Vec<ActiveFriend> {
         let mut friends: Vec<ActiveFriend> = self
             .friend_user_ids
             .iter()

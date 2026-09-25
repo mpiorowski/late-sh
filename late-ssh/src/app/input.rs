@@ -771,6 +771,17 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         app.apply_primary_device_attributes(attrs);
         return;
     }
+    // `/brb` holds "until your next key". A bare mouse move is not one: with
+    // any-event tracking on, the pointer merely crossing the terminal reports
+    // here, and must not bring the session back. Keys, clicks, drags and
+    // scrolls do; the 1Hz edge publishes it.
+    match &event {
+        ParsedInput::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            ..
+        }) => {}
+        _ => app.sent_away = false,
+    }
 
     // The Late Edition sits above everything else: it is the first thing
     // a session sees after the splash and the tour.

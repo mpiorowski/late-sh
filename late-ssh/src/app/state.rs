@@ -934,7 +934,8 @@ pub struct App {
     pub(crate) notifier: crate::app::notify::Notifier,
     pub(crate) notify_outbox: crate::app::notify::Outbox,
     /// `/brb`: this session was sent away by hand, ahead of the idle
-    /// threshold. Cleared by the next input (`handle_input`).
+    /// threshold. Cleared by the next key, click or scroll, never by a bare
+    /// mouse move (`input.rs`, `handle_parsed_input_inner`).
     pub(crate) sent_away: bool,
     /// This session's away flag as last written to the active-users roster,
     /// so the 1Hz edge writes only on a change (`App::sync_away`).
@@ -1511,7 +1512,7 @@ impl App {
             away_user_ids: HashSet::new(),
             online_count: active_users
                 .as_ref()
-                .map(crate::state::online_human_count)
+                .map(|users| crate::state::online_human_count(&users.lock_recover()))
                 .unwrap_or(0),
             active_friends: Vec::new(),
             zen_inbox_listed_unread: None,
@@ -2567,8 +2568,6 @@ impl App {
     pub fn handle_input(&mut self, data: &[u8]) {
         if !data.is_empty() {
             self.last_input_at = Instant::now();
-            // Any key brings a `/brb` session back; the 1Hz edge publishes it.
-            self.sent_away = false;
         }
         // First contact's breakthrough (`app/deadchannel/haunt`): while it
         // plays, every key is swallowed here, before a running door game or

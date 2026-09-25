@@ -141,3 +141,25 @@ async fn a_user_is_away_only_once_every_session_is() {
     assert!(desktop.sync_away(), "any key brings the desktop back");
     assert!(!is_away());
 }
+
+/// `/brb` promises "until your next key". Any-event mouse tracking reports
+/// the pointer merely crossing the terminal, and that is not a key: a
+/// session sent away stays away through it and comes back on a real one.
+#[tokio::test]
+async fn brb_holds_through_mouse_motion_until_a_key() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "brb-motion").await;
+    let mut app = make_app_in_world(test_db.db.clone(), user.id, "brb", SessionWorld::default());
+
+    app.sent_away = true;
+    assert!(app.sync_away(), "/brb sends the session away");
+
+    // SGR any-event motion: button code 35 is the motion bit with no button.
+    app.handle_input(b"\x1b[<35;20;5M");
+    assert!(!app.sync_away(), "a bare mouse move is not a key");
+    assert!(app.away);
+
+    app.handle_input(b"j");
+    assert!(app.sync_away(), "a key brings the session back");
+    assert!(!app.away);
+}
