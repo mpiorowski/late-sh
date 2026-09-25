@@ -83,6 +83,7 @@ fn is_game_side(screen: Screen) -> bool {
     match screen {
         Screen::DailyMatch
         | Screen::HouseTable
+        | Screen::Realm
         | Screen::Arcade
         | Screen::Nethack
         | Screen::Dcss

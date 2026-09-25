@@ -124,6 +124,25 @@ impl ActivityPublisher {
         });
     }
 
+    /// Somebody raised a realm and it is mustering.
+    pub fn realm_forming_task(&self, user_id: Uuid, game_id: Uuid, name: &str) {
+        let publisher = self.clone();
+        let name = name.to_string();
+        let opens_in = crate::app::lobby::realm::svc::muster_label();
+        tokio::spawn(async move {
+            let username = publisher.username_for(user_id).await;
+            let _ = publisher.tx.send(ActivityEvent::realm_forming(
+                user_id, username, game_id, &name, &opens_in,
+            ));
+        });
+    }
+
+    /// A realm called its players. No user to look up, so this is a plain
+    /// send rather than a task.
+    pub fn realm_calls(&self, game_id: Uuid, name: &str, day: i32) {
+        let _ = self.tx.send(ActivityEvent::realm_calls(game_id, name, day));
+    }
+
     pub fn sat_down_task(&self, user_id: Uuid, game: ActivityGame) {
         let publisher = self.clone();
         tokio::spawn(async move {

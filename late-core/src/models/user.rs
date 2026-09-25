@@ -827,6 +827,39 @@ impl User {
         Ok(map)
     }
 
+    /// How many accounts claim each country, optionally only counting people
+    /// seen since `since`.
+    ///
+    /// `None` is everybody who ever set a country; a cutoff drops the
+    /// long-dormant, which is what keeps a map of "who is here" from being a
+    /// map of "who signed up once in 2019". Counted in SQL rather than by
+    /// pulling every row: this is a whole-table question and the answer is at
+    /// most a couple of hundred rows.
+    pub async fn country_counts_since(
+        client: &Client,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<Vec<(String, usize)>> {
+        let rows = client
+            .query(
+                "SELECT upper(btrim(settings->>$1)) AS code, count(*)::bigint AS people
+                 FROM users
+                 WHERE settings ? $1
+                   AND btrim(coalesce(settings->>$1, '')) <> ''
+                   AND ($2::timestamptz IS NULL OR last_seen >= $2)
+                 GROUP BY 1",
+                &[&COUNTRY_KEY, &since],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let code: String = row.get("code");
+                let people: i64 = row.get("people");
+                (code, people.max(0) as usize)
+            })
+            .collect())
+    }
+
     pub async fn find_by_username(client: &Client, username: &str) -> Result<Option<Self>> {
         let row = client
             .query_opt(

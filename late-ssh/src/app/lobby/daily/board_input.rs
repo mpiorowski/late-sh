@@ -207,7 +207,7 @@ pub(crate) fn close_board(app: &mut App) {
         .unwrap_or(crate::app::common::primitives::Screen::Dashboard);
     leave_board(app, return_screen);
     app.show_lobby_modal = true;
-    app.lobby.mark_seen(&app.daily);
+    app.lobby.mark_seen(&app.daily, &app.realm);
 }
 
 /// Shared board teardown: ack + drop the board, clear any lingering match

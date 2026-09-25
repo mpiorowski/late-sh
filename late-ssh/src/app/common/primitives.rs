@@ -95,6 +95,9 @@ pub enum Screen {
     /// from the Lobby modal, absent from the Tab cycle; Esc returns to the
     /// modal.
     HouseTable,
+    /// Full-screen realm game (map/overview/log views). Entered only from
+    /// the Lobby modal, absent from the Tab cycle; Esc returns to the modal.
+    Realm,
     /// Paired live coding scratchpad. Entered only once both users have run
     /// `/pair @other`, absent from the Tab cycle; Esc leaves the pairing.
     Scratchpad,
@@ -130,6 +133,7 @@ impl Screen {
             | Screen::Darkroom => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
             Screen::HouseTable => Screen::Dashboard,
+            Screen::Realm => Screen::Dashboard,
             Screen::Scratchpad => Screen::Dashboard,
             Screen::Nightcap => Screen::Clubhouse,
         }
@@ -159,6 +163,7 @@ impl Screen {
             | Screen::Darkroom => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
             Screen::HouseTable => Screen::Dashboard,
+            Screen::Realm => Screen::Dashboard,
             Screen::Scratchpad => Screen::Dashboard,
             Screen::Nightcap => Screen::Clubhouse,
         }
@@ -218,6 +223,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::City => "Undercity",
         Screen::DailyMatch => "Daily Match",
         Screen::HouseTable => "House Table",
+        Screen::Realm => "Realm",
         Screen::Scratchpad => "Scratchpad",
         Screen::Zen => "Zen",
     };

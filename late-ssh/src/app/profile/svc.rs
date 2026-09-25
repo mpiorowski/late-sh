@@ -185,6 +185,75 @@ impl ProfileService {
     }
 
     // Snapshot
+    /// People per country, for whichever slice the map is showing.
+    ///
+    /// "Online now" is the odd one out: it has to intersect process memory
+    /// (who is connected) with the database (where they said they are), so it
+    /// is the one that cannot be a single query. The other two are a count
+    /// with a cutoff, and `last_seen` is what makes "here this month" mean
+    /// anything.
+    pub async fn country_counts(
+        &self,
+        mode: crate::app::usermap::state::MapMode,
+    ) -> Result<Vec<(String, usize)>> {
+        use crate::app::usermap::state::{MapMode, RECENT_DAYS};
+        let counts = match mode {
+            MapMode::Online => self.active_country_counts().await?,
+            MapMode::Recent => {
+                let client = self.db.get().await?;
+                let cutoff = Utc::now() - chrono::Duration::days(RECENT_DAYS);
+                User::country_counts_since(&client, Some(cutoff)).await?
+            }
+            MapMode::Everyone => {
+                let client = self.db.get().await?;
+                User::country_counts_since(&client, None).await?
+            }
+        };
+        let mut counts = counts;
+        // Busiest first, then alphabetical, so the list beside the map has a
+        // stable order rather than a query plan's.
+        counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        Ok(counts)
+    }
+
+    /// Who is online, counted by the country they put on their profile.
+    ///
+    /// The two halves live in different places — who is connected is in
+    /// process memory, where they say they are is in the database — so this
+    /// is the one place that joins them. Anybody who has not set a country is
+    /// simply absent: `/map` is a map of the people who said where
+    /// they are, and guessing at the rest would be worse than leaving them
+    /// off.
+    ///
+    /// Bots are excluded the same way the headcount excludes them (no
+    /// fingerprint means no human at a keyboard).
+    pub async fn active_country_counts(&self) -> Result<Vec<(String, usize)>> {
+        let online: Vec<Uuid> = {
+            let guard = self.active_users.lock_recover();
+            guard
+                .iter()
+                .filter(|(_, user)| user.fingerprint.is_some())
+                .map(|(id, _)| *id)
+                .collect()
+        };
+        if online.is_empty() {
+            return Ok(Vec::new());
+        }
+        let client = self.db.get().await?;
+        let countries = User::list_all_country_map(&client).await?;
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for user_id in online {
+            if let Some(code) = countries.get(&user_id) {
+                *counts.entry(code.clone()).or_default() += 1;
+            }
+        }
+        let mut counts: Vec<(String, usize)> = counts.into_iter().collect();
+        // Busiest first, then alphabetical, so the list beside the map has a
+        // stable order rather than a hash map's.
+        counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        Ok(counts)
+    }
+
     pub fn subscribe_snapshot(&self, user_id: Uuid) -> watch::Receiver<ProfileSnapshot> {
         self.snapshot_sender(user_id).subscribe()
     }

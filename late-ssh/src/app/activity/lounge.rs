@@ -213,6 +213,8 @@ fn repeat_key(event: &ActivityEvent) -> String {
         ActivityKind::AquariumSproutCut => "aquarium-cut".to_string(),
         ActivityKind::AquariumSproutWithered => "aquarium-withered".to_string(),
         ActivityKind::PetPetted => "pet-petted".to_string(),
+        ActivityKind::RealmCalls { game_id, day } => format!("realm-calls:{game_id}:{day}"),
+        ActivityKind::RealmForming { game_id } => format!("realm-forming:{game_id}"),
     };
     format!("{user}:{shape}")
 }

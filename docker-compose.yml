@@ -190,12 +190,27 @@ services:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+    # The database lives in a named volume. Without one it lives in the
+    # container's own layer, where `docker compose down` — an ordinary thing
+    # to type — destroys every account, room and game on the dev stack.
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    # Docker's default 64MB of shared memory is not enough for postgres under
+    # any real churn: it starts failing every query with "could not resize
+    # shared memory segment ... No space left on device", including the ones
+    # you would use to clean up, and only a restart clears it.
+    shm_size: 1gb
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 5s
       timeout: 5s
       retries: 10
-      start_period: 20s
+      # Postgres fsyncs its whole data directory on an unclean start, and this
+      # one accumulates per-test databases — recovery can take minutes. The
+      # old 20s start period meant `make start` gave up on a database that was
+      # merely busy coming back, and took the rest of the stack down with it.
+      start_period: 300s
+      start_interval: 5s
 
   icecast:
     image: libretime/icecast:2.4.4
@@ -266,6 +281,7 @@ services:
       - "${LATE_LIVEKIT_WHIP_UDP_HOST_PORT}:7890/udp" # WHIP ICE/UDP media
 
 volumes:
+  postgres-data:
   cargo-registry:
   cargo-git:
   cargo-target:

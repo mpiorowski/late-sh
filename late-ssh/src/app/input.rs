@@ -873,6 +873,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
 
     // Reserved global chords have already had first claim. Otherwise the
     // existing modal stack owns input.
+    if app.usermap.is_open() {
+        handle_usermap_input(app, event);
+        return;
+    }
+
     if app.show_help {
         help_modal::input::handle_input(app, event);
         return;
@@ -1832,6 +1837,14 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return crate::app::lobby::house::input::handle_event(app, event);
     }
 
+    if ctx.screen == Screen::Realm {
+        // Full-screen realm game: same shape as the daily board.
+        if door_games_allows_global_help(event) {
+            return false;
+        }
+        return crate::app::lobby::realm::input::handle_event(app, event);
+    }
+
     if ctx.screen == Screen::Scratchpad {
         // Unlike the daily board / house table above, this is a free-typing
         // text editor, not a game board: '?' is a character someone can
@@ -1973,6 +1986,15 @@ fn input_dismisses_key_modal(event: &ParsedInput) -> bool {
 }
 
 fn dispatch_escape(app: &mut App) {
+    // The active map owns input while it is up, so it owns Esc too. This arm
+    // is not optional decoration: a lone Esc never reaches the modal stack in
+    // `handle_parsed_input` — it arrives here through the pending-escape
+    // flush — so a modal that only handles `Byte(0x1B)` there cannot be
+    // closed with the key everybody reaches for.
+    if app.usermap.is_open() {
+        app.usermap.close();
+        return;
+    }
     // A lone Esc never reaches the swallow-everything gate in
     // `handle_parsed_input` (it dispatches here via the pending-escape flush
     // instead), so this arm is the stream URL modal's only way out and comes
@@ -2168,6 +2190,18 @@ fn dispatch_escape(app: &mut App) {
             return;
         }
         crate::app::lobby::daily::board_input::close_board(app);
+        return;
+    }
+    // Esc from the realm screen drops back to the Lobby modal. There is
+    // nothing to confirm on the way out: closing the board is not leaving
+    // the game, because a running realm cannot be left at all.
+    if ctx.screen == Screen::Realm {
+        // The results card peels first: Esc should put the news away before
+        // it puts the whole board away.
+        if app.realm.close_results() {
+            return;
+        }
+        crate::app::lobby::realm::input::close_board(app);
         return;
     }
     // Esc from a house table mirrors the daily board: peel chat selection
@@ -3062,6 +3096,9 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::DailyMatch => false,
         // House table arrows are consumed in handle_dedicated_screen_input.
         Screen::HouseTable => false,
+        // Realm arrows are routed by the full-screen dispatch before this
+        // match; nothing to do here.
+        Screen::Realm => false,
         // Scratchpad arrows are consumed in handle_dedicated_screen_input.
         Screen::Scratchpad => false,
         // Zen arrows are consumed in handle_dedicated_screen_input.
@@ -3274,6 +3311,82 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_settings = true;
 }
 
+/// Keys on the active map: pick a country (which frames it), pan, zoom, or
+/// ask for fresh numbers. Esc closes, like every other modal.
+fn handle_usermap_input(app: &mut App, event: ParsedInput) {
+    match event {
+        ParsedInput::Byte(0x1B) | ParsedInput::Byte(b'q') | ParsedInput::Char('q') => {
+            app.usermap.close();
+        }
+        // All four arrows pan. Binding up/down to the country list instead
+        // was the obvious-looking choice and the wrong one: on a map, arrows
+        // move the map, and half of them doing something else reads as two of
+        // them being broken.
+        ParsedInput::Arrow(b'A') => app.usermap.pan(0.0, -1.0),
+        ParsedInput::Arrow(b'B') => app.usermap.pan(0.0, 1.0),
+        ParsedInput::Arrow(b'C') => app.usermap.pan(1.0, 0.0),
+        ParsedInput::Arrow(b'D') => app.usermap.pan(-1.0, 0.0),
+        ParsedInput::Byte(b'j') | ParsedInput::Char('j') => app.usermap.move_cursor(1),
+        ParsedInput::Byte(b'k') | ParsedInput::Char('k') => app.usermap.move_cursor(-1),
+        ParsedInput::Byte(b'+' | b'=') | ParsedInput::Char('+' | '=') => {
+            app.usermap.zoom_in();
+        }
+        ParsedInput::Byte(b'-' | b'_') | ParsedInput::Char('-' | '_') => {
+            app.usermap.zoom_out();
+        }
+        ParsedInput::Byte(b'f') | ParsedInput::Char('f') => app.usermap.fit(),
+        // Tab walks the slices: online now, here this month, everyone.
+        ParsedInput::Byte(b'\t') => {
+            let profile = app.profile_state.service().clone();
+            app.usermap.cycle_mode(&profile);
+        }
+        ParsedInput::Byte(b'r') | ParsedInput::Char('r') => {
+            let profile = app.profile_state.service().clone();
+            app.usermap.refresh(&profile);
+        }
+        ParsedInput::Mouse(mouse) => {
+            use crate::app::usermap::state::MousePress;
+            let press = match mouse.kind {
+                MouseEventKind::ScrollUp => MousePress::ScrollUp,
+                MouseEventKind::ScrollDown => MousePress::ScrollDown,
+                MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => MousePress::Down,
+                MouseEventKind::Drag if mouse.button == Some(MouseButton::Left) => MousePress::Drag,
+                MouseEventKind::Up => MousePress::Up,
+                _ => MousePress::Other,
+            };
+            app.usermap.handle_mouse(press, mouse.x, mouse.y);
+        }
+        _ => {}
+    }
+}
+
+/// Open the active map from anywhere. Like the Shop it has no chord — it is
+/// `/map` typed into a composer — so this is its one entry point, and
+/// it closes the rest of the modal stack the same way every other opener
+/// does.
+pub(crate) fn open_usermap_globally(app: &mut App) {
+    clear_prefix_arms(app);
+    app.show_help = false;
+    app.show_mod_modal = false;
+    app.show_profile_modal = false;
+    app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
+    app.show_gild_modal = false;
+    app.gild_modal_state.close();
+    app.show_bonsai_modal = false;
+    app.show_lobby_modal = false;
+    app.show_hub_modal = false;
+    app.show_settings = false;
+    app.show_quit_confirm = false;
+    close_icon_picker(app);
+    app.chat.close_overlay();
+    app.chat.close_news_modal();
+    app.chat.cancel_room_jump();
+    let profile = app.profile_state.service().clone();
+    app.usermap.open(&profile);
+}
+
 /// Open the Shop modal from anywhere. The Shop has no global chord: it is
 /// reached by typing `/shop` into a composer or through the locked-feature
 /// nudges, so this is the one shared entry point for both.
@@ -3373,7 +3486,7 @@ pub(crate) fn open_daily_modal_globally(app: &mut App) {
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
-    app.lobby.mark_seen(&app.daily);
+    app.lobby.mark_seen(&app.daily, &app.realm);
     app.show_lobby_modal = true;
 }
 
@@ -3988,6 +4101,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::HouseTable => {
             // House table keys are handled in handle_dedicated_screen_input.
+        }
+        Screen::Realm => {
+            // Realm keys are handled in handle_dedicated_screen_input.
         }
         Screen::Scratchpad => {
             // Scratchpad keys are handled in handle_dedicated_screen_input.

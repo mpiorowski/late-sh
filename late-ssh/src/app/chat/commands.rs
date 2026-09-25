@@ -127,6 +127,7 @@ const COMMANDS: &[Command] = &[
     global("leave", "leave room"),
     global("list", "list public rooms"),
     global("lobby", "open/close the Lobby (same as Ctrl+G)"),
+    global("map", "where people are, on the world map"),
     global("me", "send an action line (/me waves)"),
     global("members", "room members"),
     global("pair", "shared coding scratchpad; both run /pair @user"),

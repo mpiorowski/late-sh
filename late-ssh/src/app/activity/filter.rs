@@ -58,6 +58,7 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
             | ActivityGame::Minesweeper
             | ActivityGame::Nonogram
             | ActivityGame::Poker
+            | ActivityGame::Realm
             | ActivityGame::RubiksCube
             | ActivityGame::SlidingPuzzle
             | ActivityGame::Sshattrick
@@ -73,8 +74,11 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         },
         ActivityKind::GameWon { game, .. } => match game {
             // Human-vs-human matches are rare enough to be stories.
+            // A realm conquest is weeks of play ending — the biggest
+            // story of the lot.
             ActivityGame::Asterion
             | ActivityGame::Chess
+            | ActivityGame::Realm
             | ActivityGame::Sshattrick
             | ActivityGame::Ssnake
             | ActivityGame::TicTacToe
@@ -113,6 +117,13 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // Finished daily correspondence matches: one line per match (win/loss
         // or draw). Rare and human-vs-human, so a genuine story.
         ActivityKind::DailyResult { .. } => true,
+        // A realm's day turning over: an open call to the people in it, and
+        // a nudge to everyone else that a war is running. Once a day per
+        // realm, and only for realms with somebody to call.
+        ActivityKind::RealmCalls { .. } => true,
+        // A realm standing open for a couple of minutes: the one line in the
+        // feed with a deadline, which is the whole reason it is posted.
+        ActivityKind::RealmForming { .. } => true,
         // A bought username effect: being seen is the whole product, so the
         // purchase is a story by design.
         ActivityKind::UsernameEffectApplied { .. } => true,
@@ -271,6 +282,10 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
         | ActivityKind::AquariumSproutCut
         | ActivityKind::AquariumSproutWithered
         | ActivityKind::PetPetted
+        // The ticker line is the whole story, and a daily @mention of
+        // everyone in a realm would be a chore rather than news.
+        | ActivityKind::RealmCalls { .. }
+        | ActivityKind::RealmForming { .. }
         | ActivityKind::UsernameEffectApplied { .. }
         | ActivityKind::BadgeRented { .. }
         | ActivityKind::TitleApplied { .. }

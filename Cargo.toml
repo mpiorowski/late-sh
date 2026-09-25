@@ -12,6 +12,7 @@ members = [
     "late-usurper",
     "late-web",
     "late-webview",
+    "tools/realm-mapgen",
 ]
 resolver = "2"
 

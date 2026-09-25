@@ -14,6 +14,7 @@ pub mod textarea_input;
 pub mod theme;
 pub mod time;
 pub mod username_effect;
+pub mod worldmap;
 
 #[cfg(test)]
 mod composer_test;

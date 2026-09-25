@@ -107,6 +107,18 @@ check: .env
 start: .env keys
 	docker compose -f docker-compose.yml up --build
 
+# Drop the per-test databases that killed test runs leave behind. Each test
+# makes its own and drops it on the way out, but a cancelled or timed-out run
+# does not — and a few thousand of them make postgres crawl on startup, which
+# shows up as `make start` failing on an unhealthy database.
+.PHONY: test-db-clean
+test-db-clean:
+	@docker compose exec -T postgres psql -U $${LATE_DB_USER:-postgres} -t -A \
+		-c "SELECT datname FROM pg_database WHERE datname LIKE 'test\_%'" \
+		| awk '{print "DROP DATABASE IF EXISTS \""$$0"\";"}' \
+		| docker compose exec -T postgres psql -U $${LATE_DB_USER:-postgres} -q -f -
+	@echo "leftover test databases dropped (templates left alone)"
+
 .PHONY: start-amd64
 start-amd64: .env keys
 	@set -e; for image in \

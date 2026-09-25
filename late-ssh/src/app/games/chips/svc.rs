@@ -495,6 +495,43 @@ impl ChipService {
         Ok(reward_grant(template.reward_chips, claim))
     }
 
+    /// Credit a `per_event` reward for an amount the caller computes, rather
+    /// than the flat figure on the template.
+    ///
+    /// The template still owns the policy — which game, which payout kind,
+    /// and the per-event claim that keeps a retry from paying twice — but the
+    /// size of the prize is a property of the event. Realm is the case: one
+    /// finished game pays a pot that scales with how many players were in it,
+    /// so a ten-player war is worth more than a duel and the template row
+    /// carries the floor of its tier rather than the only possible value.
+    pub async fn credit_per_event_reward_template_amount(
+        &self,
+        user_id: Uuid,
+        reward_key: &str,
+        event_key: &str,
+        amount: i64,
+        chip_move: ChipMove,
+    ) -> anyhow::Result<RewardGrant> {
+        anyhow::ensure!(amount > 0, "a payout must be worth something");
+        let client = self.db.get().await?;
+        let template = RewardTemplate::get_active_by_key(&**client, reward_key).await?;
+        template.ensure_claim_policy(REWARD_CLAIM_POLICY_PER_EVENT)?;
+        let claim = GamePayout::grant_period(
+            &client,
+            late_core::models::game_payout::GamePayoutPeriodGrant {
+                user_id,
+                game: template.game()?,
+                payout_kind: template.payout_kind()?,
+                period_kind: PER_EVENT_REWARD_PERIOD_KIND,
+                period_key: event_key,
+                amount,
+                chip_move,
+            },
+        )
+        .await?;
+        Ok(reward_grant(amount, claim))
+    }
+
     /// Credit a `per_event` reward that is also capped per counterpart per
     /// posting day: it pays once per distinct `event_key` (a daily match id)
     /// AND once per `pair_day_key` (`<opponent id>:<UTC date the match was

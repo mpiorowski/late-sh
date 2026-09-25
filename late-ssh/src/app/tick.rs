@@ -309,6 +309,10 @@ impl App {
             .set_viewer_tz(crate::app::profile::svc::parse_account_tz(
                 self.profile_state.profile().timezone.as_deref(),
             ));
+        self.realm
+            .set_viewer_tz(crate::app::profile::svc::parse_account_tz(
+                self.profile_state.profile().timezone.as_deref(),
+            ));
         // The AFK line: how long this terminal's keyboard has been quiet is
         // an `App` fact, mirrored into chat the same way the timezone is,
         // because chat is what knows which room is on screen to hang it on.
@@ -486,8 +490,17 @@ impl App {
         if daily_tick.own_loss {
             self.pet_state.note_loss(Instant::now());
         }
+        // The active map's counts arrive from a task; nothing else would ask
+        // for the frame that shows them.
+        changed |= self.usermap.tick();
+        let realm_tick = self.realm.tick();
+        changed |= realm_tick.changed;
+        if let Some(b) = realm_tick.banner {
+            self.banner = Some(b);
+            changed = true;
+        }
         // Modal cursor, pending claim, and glow follow the daily snapshot.
-        self.lobby.sync(&self.daily);
+        self.lobby.sync(&self.daily, &self.realm);
         // The match chat room id only becomes known once the board's row
         // loads, so the one-time idempotent join and the visible-room sync
         // (read marker + tail) both key off the loaded detail here rather

@@ -14,6 +14,7 @@ use crate::app::lobby::{
         svc::{DailyChallengeItem, DailyFinishedItem, DailyMatchItem},
     },
     house::tables::HouseTable,
+    realm::{state::RealmState, svc::RealmGameItem},
 };
 
 /// One selectable row in the Lobby modal: unseen results first, then your
@@ -24,6 +25,9 @@ pub enum LobbyEntry<'a> {
     Match(&'a DailyMatchItem),
     Challenge(&'a DailyChallengeItem),
     Spectate(&'a DailyMatchItem),
+    /// A realm game (mine or joinable/watchable); behavior on Enter depends
+    /// on membership and status.
+    Realm(&'a RealmGameItem),
     House(HouseTable),
 }
 
@@ -32,6 +36,8 @@ pub struct LobbyState {
     pub selected: usize,
     /// Challenge awaiting claim confirmation (Enter pressed once).
     pub confirm_claim: Option<Uuid>,
+    /// Realm game awaiting a join/start confirmation (Enter pressed once).
+    pub confirm_realm: Option<Uuid>,
     /// Open-challenge ids already seen; anything newer glows the lobby line
     /// until the modal is opened.
     seen_open_ids: HashSet<Uuid>,
@@ -45,6 +51,7 @@ impl LobbyState {
         Self {
             selected: 0,
             confirm_claim: None,
+            confirm_realm: None,
             seen_open_ids: daily.lobby().iter().map(|challenge| challenge.id).collect(),
             glow: false,
         }
@@ -56,9 +63,9 @@ impl LobbyState {
 
     /// Follow the daily snapshot: pick up new-challenge glow edges and keep
     /// the cursor and pending claim valid. Idempotent; runs every tick.
-    pub fn sync(&mut self, daily: &DailyState) {
+    pub fn sync(&mut self, daily: &DailyState, realm: &RealmState) {
         self.refresh_glow(daily);
-        self.clamp_selection(daily);
+        self.clamp_selection(daily, realm);
     }
 
     fn refresh_glow(&mut self, daily: &DailyState) {
@@ -82,23 +89,30 @@ impl LobbyState {
     }
 
     /// Called when the modal opens: the lobby has been looked at.
-    pub fn mark_seen(&mut self, daily: &DailyState) {
+    pub fn mark_seen(&mut self, daily: &DailyState, realm: &RealmState) {
         self.seen_open_ids = daily.lobby().iter().map(|challenge| challenge.id).collect();
         self.glow = false;
-        self.clamp_selection(daily);
+        self.clamp_selection(daily, realm);
     }
 
     // ── Modal navigation ───────────────────────────────────────
 
-    pub fn entry_count(&self, daily: &DailyState) -> usize {
+    pub fn entry_count(&self, daily: &DailyState, realm: &RealmState) -> usize {
         daily.my_finished().len()
             + daily.my_matches().len()
             + daily.lobby().len()
             + daily.live_games().len()
+            + realm.my_games().len()
+            + realm.other_games().len()
             + HouseTable::ALL.len()
     }
 
-    pub fn entry_at<'a>(&self, daily: &'a DailyState, index: usize) -> Option<LobbyEntry<'a>> {
+    pub fn entry_at<'a>(
+        &self,
+        daily: &'a DailyState,
+        realm: &'a RealmState,
+        index: usize,
+    ) -> Option<LobbyEntry<'a>> {
         let finished = daily.my_finished();
         if index < finished.len() {
             return Some(LobbyEntry::Finished(finished[index]));
@@ -118,24 +132,40 @@ impl LobbyState {
         if index < live.len() {
             return Some(LobbyEntry::Spectate(live[index]));
         }
+        let index = index - live.len();
+        // Realm games: mine first, then joinable/watchable ones.
+        let my_realms = realm.my_games();
+        if index < my_realms.len() {
+            return Some(LobbyEntry::Realm(my_realms[index]));
+        }
+        let index = index - my_realms.len();
+        let other_realms = realm.other_games();
+        if index < other_realms.len() {
+            return Some(LobbyEntry::Realm(other_realms[index]));
+        }
         // The fixed house-table block sits at the bottom, always present.
         HouseTable::ALL
-            .get(index - live.len())
+            .get(index - other_realms.len())
             .copied()
             .map(LobbyEntry::House)
     }
 
-    pub fn selected_entry<'a>(&self, daily: &'a DailyState) -> Option<LobbyEntry<'a>> {
-        self.entry_at(daily, self.selected)
+    pub fn selected_entry<'a>(
+        &self,
+        daily: &'a DailyState,
+        realm: &'a RealmState,
+    ) -> Option<LobbyEntry<'a>> {
+        self.entry_at(daily, realm, self.selected)
     }
 
-    pub fn move_selection(&mut self, daily: &DailyState, delta: isize) {
-        self.selected = wrap_index(self.selected, delta, self.entry_count(daily));
+    pub fn move_selection(&mut self, daily: &DailyState, realm: &RealmState, delta: isize) {
+        self.selected = wrap_index(self.selected, delta, self.entry_count(daily, realm));
         self.confirm_claim = None;
+        self.confirm_realm = None;
     }
 
-    fn clamp_selection(&mut self, daily: &DailyState) {
-        let count = self.entry_count(daily);
+    fn clamp_selection(&mut self, daily: &DailyState, realm: &RealmState) {
+        let count = self.entry_count(daily, realm);
         if count == 0 {
             self.selected = 0;
         } else {
@@ -148,6 +178,15 @@ impl LobbyState {
                 .any(|challenge| challenge.id == pending)
         {
             self.confirm_claim = None;
+        }
+        if let Some(pending) = self.confirm_realm
+            && !realm
+                .my_games()
+                .iter()
+                .chain(realm.other_games().iter())
+                .any(|game| game.id == pending)
+        {
+            self.confirm_realm = None;
         }
     }
 }

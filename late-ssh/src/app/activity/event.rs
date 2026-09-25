@@ -203,6 +203,20 @@ pub enum ActivityKind {
     AquariumSproutWithered,
     /// The first pet of the UTC day cleared the DB chip gate.
     PetPetted,
+    /// Somebody made a realm and it is standing frozen while people arrive.
+    /// The invitation, and the only one with a deadline on it.
+    RealmForming {
+        game_id: Uuid,
+    },
+    /// A realm's day turned over and everyone in it has points again. The
+    /// one activity line that belongs to a game rather than a person: it is
+    /// an open call, and naming a player would be naming the wrong thing.
+    RealmCalls {
+        game_id: Uuid,
+        /// The realm day that just opened — keys the repeat gate, so a
+        /// rollover announced twice is announced once.
+        day: i32,
+    },
 }
 
 impl ActivityKind {
@@ -227,6 +241,8 @@ impl ActivityKind {
             | Self::GameStarted { .. }
             | Self::BossSlain { .. }
             | Self::SatDown { .. }
+            | Self::RealmCalls { .. }
+            | Self::RealmForming { .. }
             | Self::DailyResult { .. } => ActivityCategory::Game,
             Self::GameScored { .. } => ActivityCategory::Quest,
             Self::BonsaiWatered | Self::BonsaiLost { .. } => ActivityCategory::Bonsai,
@@ -258,6 +274,7 @@ pub enum ActivityGame {
     Nethack,
     Nonogram,
     Poker,
+    Realm,
     RubiksCube,
     SlidingPuzzle,
     Sshattrick,
@@ -312,7 +329,9 @@ impl ActivityGame {
             Self::Blackjack | Self::Poker | Self::Asterion | Self::Tron | Self::Ssnake => {
                 GameFamily::Table
             }
-            Self::Chess | Self::TicTacToe | Self::Sshattrick => GameFamily::Match,
+            // A realm is players against each other, not a house table: the
+            // Lobby is only where it is started from.
+            Self::Chess | Self::TicTacToe | Self::Sshattrick | Self::Realm => GameFamily::Match,
         }
     }
 
@@ -331,6 +350,7 @@ impl ActivityGame {
             Self::Nethack => "nethack",
             Self::Nonogram => "nonogram",
             Self::Poker => "poker",
+            Self::Realm => "realm",
             Self::RubiksCube => "rubiks_cube",
             Self::SlidingPuzzle => "sliding_puzzle",
             Self::Sshattrick => "sshattrick",
@@ -361,6 +381,7 @@ impl ActivityGame {
             Self::Nethack => "NetHack",
             Self::Nonogram => "Nonogram",
             Self::Poker => "Poker",
+            Self::Realm => "Realm",
             Self::RubiksCube => "Rubik's Cube",
             Self::SlidingPuzzle => "Sliding Puzzle",
             Self::Sshattrick => "ssHattrick",
@@ -437,6 +458,7 @@ impl ActivityEvent {
             ActivityGame::Nethack => "conquered NetHack",
             ActivityGame::Nonogram => "solved Nonogram",
             ActivityGame::Poker => "won Poker hand",
+            ActivityGame::Realm => "conquered the Realm",
             ActivityGame::RubiksCube => "solved Rubik's Cube",
             ActivityGame::SlidingPuzzle => "solved Sliding Puzzle",
             ActivityGame::Sshattrick => "won ssHattrick match",
@@ -520,6 +542,7 @@ impl ActivityEvent {
             | ActivityGame::Minesweeper
             | ActivityGame::Nonogram
             | ActivityGame::Poker
+            | ActivityGame::Realm
             | ActivityGame::RubiksCube
             | ActivityGame::SlidingPuzzle
             | ActivityGame::Sshattrick
@@ -555,6 +578,35 @@ impl ActivityEvent {
             username,
             ActivityKind::BossSlain { game, boss },
             action,
+        )
+    }
+
+    /// A realm was made and is mustering. Attributed to the creator, whose
+    /// invitation it is — unlike the daily call, which belongs to the game.
+    pub fn realm_forming(
+        user_id: Uuid,
+        username: impl Into<String>,
+        game_id: Uuid,
+        name: &str,
+        opens_in: &str,
+    ) -> Self {
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::RealmForming { game_id },
+            format!("is raising the realm {name} — it opens in {opens_in}"),
+        )
+    }
+
+    /// A realm refilled everyone's points. Attributed to nobody: the feed
+    /// line reads "realm <name> calls its players", because the summons is
+    /// the game's, not any player's.
+    pub fn realm_calls(game_id: Uuid, name: &str, day: i32) -> Self {
+        Self::new(
+            None,
+            "realm",
+            ActivityKind::RealmCalls { game_id, day },
+            format!("{name} calls its players"),
         )
     }
 

@@ -384,6 +384,7 @@ mod inner {
             ActivityGame::Nethack => "nethack",
             ActivityGame::Nonogram => "nonogram",
             ActivityGame::Poker => "poker",
+            ActivityGame::Realm => "realm",
             ActivityGame::RubiksCube => "rubiks_cube",
             ActivityGame::SlidingPuzzle => "sliding_puzzle",
             ActivityGame::Sshattrick => "sshattrick",
@@ -1409,6 +1410,7 @@ mod inner {
             Screen::Zen => "zen",
             Screen::DailyMatch => "daily_match",
             Screen::HouseTable => "house_table",
+            Screen::Realm => "realm",
             Screen::Scratchpad => "scratchpad",
         }
     }

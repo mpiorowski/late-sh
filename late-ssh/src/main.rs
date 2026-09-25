@@ -243,6 +243,14 @@ async fn main() -> anyhow::Result<()> {
     );
     daily_service.refresh_task();
     daily_service.start_sweeper_task();
+    let realm_service = late_ssh::app::lobby::realm::svc::RealmService::new(
+        db.clone(),
+        chip_service.clone(),
+        activity_publisher.clone(),
+        ai_service.clone(),
+    );
+    realm_service.refresh_task();
+    realm_service.start_sweeper_task();
     let lateania_service = late_ssh::app::door::lateania::svc::LateaniaService::new(
         activity_publisher.clone(),
         chip_service.clone(),
@@ -478,6 +486,7 @@ async fn main() -> anyhow::Result<()> {
         arcade_handle_service,
         door_rc_service,
         daily_service,
+        realm_service,
         bonsai_service,
         pet_service,
         aquarium_service,

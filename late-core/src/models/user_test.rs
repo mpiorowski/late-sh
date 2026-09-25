@@ -803,3 +803,84 @@ fn hidden_award_categories_keep_only_real_badges() {
     );
     assert!(extract_hidden_award_categories(&json!({})).is_empty());
 }
+
+/// The map's three slices come from this one query: everybody who set a
+/// country, or only those seen since a cutoff. What makes the cutoff worth
+/// having is that it drops accounts that signed up once and never came back —
+/// so it has to actually look at `last_seen`, and it has to leave the people
+/// who *are* around alone.
+#[tokio::test]
+async fn country_counts_can_ignore_the_long_gone() {
+    let (client, _guard) = setup_db().await;
+
+    let make = |fingerprint: &'static str, country: Option<&'static str>, days_ago: i64| {
+        let client = &client;
+        async move {
+            let settings = match country {
+                Some(code) => json!({ "country": code }),
+                None => json!({}),
+            };
+            let user = User::create(
+                client,
+                UserParams {
+                    fingerprint: fingerprint.to_string(),
+                    username: fingerprint.to_string(),
+                    settings,
+                },
+            )
+            .await
+            .expect("create user");
+            client
+                .execute(
+                    "UPDATE users SET last_seen = current_timestamp - ($1 || ' days')::interval
+                     WHERE id = $2",
+                    &[&days_ago.to_string(), &user.id],
+                )
+                .await
+                .expect("backdate");
+        }
+    };
+
+    make("fp-here-1", Some("PL"), 0).await;
+    make("fp-here-2", Some("PL"), 10).await;
+    make("fp-here-3", Some("RO"), 29).await;
+    make("fp-gone-1", Some("PL"), 200).await;
+    make("fp-gone-2", Some("JP"), 400).await;
+    // No country at all: absent from both slices, because the map is of
+    // people who said where they are.
+    make("fp-nowhere", None, 1).await;
+    // An empty string is what a cleared field leaves behind; it is not a
+    // country and must not become one.
+    make("fp-blank", Some(""), 1).await;
+
+    let sorted = |mut counts: Vec<(String, usize)>| {
+        counts.sort();
+        counts
+    };
+
+    let everyone = sorted(
+        User::country_counts_since(&client, None)
+            .await
+            .expect("count everyone"),
+    );
+    assert_eq!(
+        everyone,
+        vec![
+            ("JP".to_string(), 1),
+            ("PL".to_string(), 3),
+            ("RO".to_string(), 1)
+        ]
+    );
+
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(30);
+    let recent = sorted(
+        User::country_counts_since(&client, Some(cutoff))
+            .await
+            .expect("count the recent"),
+    );
+    assert_eq!(
+        recent,
+        vec![("PL".to_string(), 2), ("RO".to_string(), 1)],
+        "the long-dormant drop out, the rest stay"
+    );
+}
