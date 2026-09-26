@@ -648,6 +648,11 @@ its own domain; only the command and the glyph are chat's.
   read-then-write on an existing reign exact. A second racing take therefore
   reads the reign the first one opened and pays the next rung, not a
   constraint violation.
+  After both locks, a separate `clock_timestamp()` query captures the take's
+  effective time. That one timestamp drives the current-month check, closes
+  the outgoing reign, and stamps the incoming reign and its UTC month.
+  Do not use `current_timestamp` here: transaction-start order can differ
+  from lock-acquisition order, making an end timestamp predate its reign.
 - **One open reign, ever.** `crown_reigns_single_open` is a unique index on
   the constant `(ended_at IS NULL)` filtered to open rows, so "at most one"
   is a table fact.
