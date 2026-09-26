@@ -11,6 +11,9 @@ use super::marketplace::{CHAT_BADGE_SLOT, CHAT_FLAG_SLOT};
 use super::profile_award::{
     MILESTONE_AWARD_CATEGORIES, PROFILE_AWARD_RANK_LIMIT, top_badge_per_game,
 };
+use super::statusline::{
+    StatusComponentSetting, default_statusline_components, parse_statusline_components,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -445,6 +448,7 @@ const TEXT_BRIGHTNESS_ADJUSTMENT_KEY: &str = "text_brightness_adjustment";
 const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
 const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
 const RIGHT_SIDEBAR_COMPONENTS_KEY: &str = "right_sidebar_components";
+const STATUSLINE_COMPONENTS_KEY: &str = "statusline_components";
 /// The Rice page's tiling layout and look (`late-ssh/src/app/zen`), stored
 /// as the JSON the page itself serializes; absent until first edited.
 const ZEN_LAYOUT_KEY: &str = "zen_layout";
@@ -1810,6 +1814,19 @@ pub fn extract_right_sidebar_components(settings: &Value) -> Vec<RightSidebarCom
     }
 
     normalize_right_sidebar_components(&parsed)
+}
+
+/// The user's bottom status bar. An absent key means "never customized" and
+/// yields the shipped keyboard-shortcuts component, so this is also what every
+/// existing account reads until the customizer writes for the first time.
+pub fn extract_statusline_components(settings: &Value) -> Vec<StatusComponentSetting> {
+    let Some(values) = settings
+        .get(STATUSLINE_COMPONENTS_KEY)
+        .and_then(Value::as_array)
+    else {
+        return default_statusline_components();
+    };
+    parse_statusline_components(values)
 }
 
 pub fn extract_show_room_list_sidebar(settings: &Value) -> bool {

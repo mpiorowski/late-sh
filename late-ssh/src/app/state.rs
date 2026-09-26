@@ -627,10 +627,11 @@ pub struct App {
     /// The terminal cursor's last reported cell (0-based), for the pet to
     /// walk after. `None` until the terminal reports one.
     pub(crate) last_mouse: Option<(u16, u16)>,
-    /// Where the top-border "N unread mentions" text was drawn last frame,
-    /// for the HUD click hit test; `None` when nothing is unread. Only the
-    /// mentions segment is clickable, not the voice/chips text after it.
-    pub(crate) last_mentions_hud_rect: std::cell::Cell<Option<Rect>>,
+    /// Where each clickable status bar segment landed last frame, in paint
+    /// order. Rebuilt every frame by the bar's layout pass, so a reordered,
+    /// resized, or dropped segment cannot leave a stale click target behind.
+    pub(crate) last_status_hits:
+        std::cell::RefCell<Vec<(late_core::models::statusline::StatusComponent, Rect)>>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) voice: crate::app::voice::state::VoiceState,
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
@@ -1545,7 +1546,7 @@ impl App {
             last_pet_rect: std::cell::Cell::new(None),
             last_pet_frame: std::cell::Cell::new(None),
             last_mouse: None,
-            last_mentions_hud_rect: std::cell::Cell::new(None),
+            last_status_hits: std::cell::RefCell::new(Vec::new()),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             voice: crate::app::voice::state::VoiceState::new(config.voice_service),
             voice_service,

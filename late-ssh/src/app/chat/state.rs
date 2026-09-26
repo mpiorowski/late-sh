@@ -1532,6 +1532,16 @@ impl ChatState {
             .map(|(room, _)| room.id);
     }
 
+    /// Unread messages across every DM room, for the status bar's `mentions`
+    /// segment when the user has it counting DMs too.
+    pub fn unread_dm_count(&self) -> i64 {
+        self.rooms
+            .iter()
+            .filter(|(room, _)| room.kind == "dm")
+            .filter_map(|(room, _)| self.unread_counts.get(&room.id))
+            .sum()
+    }
+
     pub fn mark_room_read(&mut self, room_id: Uuid) {
         self.note_sticky_unread_dm(room_id);
         self.pending_read_rooms.insert(room_id);

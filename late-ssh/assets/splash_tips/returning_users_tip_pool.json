@@ -19,5 +19,6 @@
   "Missed a day? /paper opens The Late Edition, graybeard's grumpy digest of every public room",
   "/history opens right on your first unread message when a room has news for you",
   "Someone said something good? Select it and press g to gild it: two thirds of what you pay lands in their balance, and the marker never comes off",
-  "The crown costs 1.5x whatever the last holder paid, and it goes back to vacant every month"
+  "The crown costs 1.5x whatever the last holder paid, and it goes back to vacant every month",
+  "The bottom statusline is yours: Ctrl+O, Tweaks, Bottom status bar — hide the shortcut hints or add a clock, quests, the pot, or who's online"
 ]

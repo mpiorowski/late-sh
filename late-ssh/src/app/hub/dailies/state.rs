@@ -80,4 +80,17 @@ impl QuestState {
     pub(crate) fn is_loaded(&self) -> bool {
         self.snapshot.user_id == Some(self.user_id)
     }
+
+    /// Quests still open in each cadence, for the status bar's `quests`
+    /// segment. Zero until the snapshot belongs to this user, so a session
+    /// that has not loaded yet reads as "nothing outstanding" rather than
+    /// flashing another user's count.
+    pub(crate) fn open_counts(&self) -> (usize, usize) {
+        if !self.is_loaded() {
+            return (0, 0);
+        }
+        let open =
+            |items: &[super::svc::QuestItem]| items.iter().filter(|q| !q.completed()).count();
+        (open(&self.snapshot.daily), open(&self.snapshot.weekly))
+    }
 }

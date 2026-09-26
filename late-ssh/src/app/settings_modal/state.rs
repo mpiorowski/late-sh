@@ -4,6 +4,9 @@ use chrono::{DateTime, Utc};
 use late_core::models::profile::{Profile, ProfileParams};
 use late_core::models::profile_award::{ChatBadgeRow, chat_badge_rows};
 use late_core::models::rss_feed::RssFeed;
+use late_core::models::statusline::{
+    LabelMode, StatusComponent, StatusComponentSetting, StatusVariant,
+};
 use late_core::models::user::{
     RightSidebarComponentSetting, RightSidebarMode, RoomListMode,
     normalize_text_brightness_adjustment, sanitize_username_input,
@@ -107,17 +110,16 @@ pub(crate) enum TweakRow {
     TextBrightness,
     RightSidebar,
     RoomListSidebar,
-    // Compose / Display / Startup groups. There is deliberately no music-mute
+    // Input / Display / Startup groups. There is deliberately no music-mute
     // row: mute and volume are owned by `m` and `+`/`-`, persisted per device,
     // and a second control here would be a second source of truth for them.
     ComposerKeepFocused,
+    InteractionMode,
     FlagFallback,
     TerminalImages,
     ChatBadges,
     LandingPage,
     PaperAtLogin,
-    // Input group.
-    InteractionMode,
 }
 
 impl TweakRow {
@@ -127,13 +129,52 @@ impl TweakRow {
         TweakRow::RightSidebar,
         TweakRow::RoomListSidebar,
         TweakRow::ComposerKeepFocused,
+        TweakRow::InteractionMode,
         TweakRow::FlagFallback,
         TweakRow::TerminalImages,
         TweakRow::ChatBadges,
         TweakRow::LandingPage,
         TweakRow::PaperAtLogin,
-        TweakRow::InteractionMode,
     ];
+}
+
+/// Which pane of the bottom status bar customizer the keys act on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StatuslinePane {
+    /// The ordered segment list: reorder, enable, disable.
+    List,
+    /// The selected segment's dials.
+    Detail,
+}
+
+/// One dial in the customizer's detail pane.
+///
+/// Which of these a segment actually offers depends on the component, so the
+/// pane asks [`SettingsModalState::statusline_dials`] per selection instead of
+/// assuming every dial is present.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StatuslineDial {
+    Brief,
+    Label,
+    AutoHide,
+    LowPriority,
+    /// The component's own dial, whatever it happens to be — the heading comes
+    /// from `StatusComponent::variant_title`.
+    Variant,
+}
+
+impl StatuslineDial {
+    pub(crate) fn title(self, setting: &StatusComponentSetting) -> &'static str {
+        match self {
+            Self::Brief => "Brief",
+            Self::Label => "Label",
+            Self::AutoHide => "Auto-hide",
+            Self::LowPriority => "Low priority",
+            // Only offered when the component has a dial, and a component with
+            // a dial always names it (locked by a `late-core` test).
+            Self::Variant => setting.component.variant_title().unwrap_or("Mode"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -187,11 +228,12 @@ impl SystemField {
 /// (identity/appearance/location/notifications); `Themes` is a fast browser
 /// for the expanded theme catalog; `Bio` is a separate full-width pane with
 /// the markdown editor + preview; `Tweaks` holds power-user toggles and the
-/// gem easter egg.
+/// gem easter egg; `Statusline` edits the bottom status bar.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Tab {
     Settings,
     Tweaks,
+    Statusline,
     Bio,
     Themes,
     Account,
@@ -199,11 +241,12 @@ pub(crate) enum Tab {
 }
 
 impl Tab {
-    pub(crate) const ALL: [Tab; 6] = [
+    pub(crate) const ALL: [Tab; 7] = [
         Tab::Settings,
         Tab::Bio,
         Tab::Themes,
         Tab::Tweaks,
+        Tab::Statusline,
         Tab::Account,
         Tab::Feeds,
     ];
@@ -212,6 +255,7 @@ impl Tab {
         match self {
             Tab::Settings => "Settings",
             Tab::Tweaks => "Tweaks",
+            Tab::Statusline => "Statusline",
             Tab::Bio => "Bio",
             Tab::Themes => "Themes",
             Tab::Account => "Account",
@@ -487,6 +531,9 @@ pub(crate) struct SettingsModalState {
     irc_token: IrcTokenDialogState,
     right_sidebar_components_open: bool,
     right_sidebar_components_index: usize,
+    statusline_index: usize,
+    statusline_pane: StatuslinePane,
+    statusline_dial_index: usize,
     chat_badges_open: bool,
     chat_badges_index: usize,
     feeds: Vec<RssFeed>,
@@ -556,6 +603,9 @@ impl SettingsModalState {
             irc_token: IrcTokenDialogState::new(),
             right_sidebar_components_open: false,
             right_sidebar_components_index: 0,
+            statusline_index: 0,
+            statusline_pane: StatuslinePane::List,
+            statusline_dial_index: 0,
             chat_badges_open: false,
             chat_badges_index: 0,
             feeds: Vec::new(),
@@ -636,6 +686,9 @@ impl SettingsModalState {
         self.irc_token = IrcTokenDialogState::new();
         self.right_sidebar_components_open = false;
         self.right_sidebar_components_index = 0;
+        self.statusline_index = 0;
+        self.statusline_pane = StatuslinePane::List;
+        self.statusline_dial_index = 0;
         self.chat_badges_open = false;
         self.chat_badges_index = 0;
         self.feed_service.list_task(self.user_id);
@@ -860,6 +913,127 @@ impl SettingsModalState {
         let setting = self.draft.right_sidebar_components.remove(from);
         self.draft.right_sidebar_components.insert(to, setting);
         self.right_sidebar_components_index = to;
+        self.save();
+    }
+
+    pub(crate) fn statusline_index(&self) -> usize {
+        self.statusline_index
+    }
+
+    pub(crate) fn statusline_pane(&self) -> StatuslinePane {
+        self.statusline_pane
+    }
+
+    pub(crate) fn statusline_dial_index(&self) -> usize {
+        self.statusline_dial_index
+    }
+
+    pub(crate) fn statusline_components(&self) -> &[StatusComponentSetting] {
+        &self.draft.statusline_components
+    }
+
+    fn selected_statusline_component(&self) -> Option<&StatusComponentSetting> {
+        self.draft.statusline_components.get(self.statusline_index)
+    }
+
+    /// The dials the selected segment offers, in display order.
+    pub(crate) fn statusline_dials(&self) -> Vec<StatuslineDial> {
+        self.selected_statusline_component()
+            .map(|setting| statusline_dials_for(setting.component))
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn selected_statusline_dial(&self) -> Option<StatuslineDial> {
+        self.statusline_dials()
+            .get(self.statusline_dial_index)
+            .copied()
+    }
+
+    pub(crate) fn move_statusline_cursor(&mut self, delta: isize) {
+        let last = self.draft.statusline_components.len().saturating_sub(1) as isize;
+        self.statusline_index = (self.statusline_index as isize + delta).clamp(0, last) as usize;
+        // The new segment may offer fewer dials than the old one.
+        self.clamp_statusline_dial();
+    }
+
+    /// Move the selected segment left or right along the bar, keeping the
+    /// cursor on it. The list reads top-to-bottom as the bar reads
+    /// left-to-right along the bottom border, so "up" is "further left".
+    pub(crate) fn move_statusline_component(&mut self, delta: isize) {
+        let len = self.draft.statusline_components.len();
+        if len == 0 {
+            return;
+        }
+        let from = self.statusline_index;
+        let to = (from as isize + delta).clamp(0, len as isize - 1) as usize;
+        if to == from {
+            return;
+        }
+        let setting = self.draft.statusline_components.remove(from);
+        self.draft.statusline_components.insert(to, setting);
+        self.statusline_index = to;
+        self.save();
+    }
+
+    pub(crate) fn toggle_statusline_component(&mut self) {
+        if let Some(setting) = self
+            .draft
+            .statusline_components
+            .get_mut(self.statusline_index)
+        {
+            setting.enabled ^= true;
+            self.save();
+        }
+    }
+
+    pub(crate) fn focus_statusline_pane(&mut self, pane: StatuslinePane) {
+        // Nothing to focus on a segment with no dials at all.
+        if pane == StatuslinePane::Detail && self.statusline_dials().is_empty() {
+            return;
+        }
+        self.statusline_pane = pane;
+        self.clamp_statusline_dial();
+    }
+
+    pub(crate) fn move_statusline_dial(&mut self, delta: isize) {
+        let last = self.statusline_dials().len().saturating_sub(1) as isize;
+        self.statusline_dial_index =
+            (self.statusline_dial_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    fn clamp_statusline_dial(&mut self) {
+        let last = self.statusline_dials().len().saturating_sub(1);
+        self.statusline_dial_index = self.statusline_dial_index.min(last);
+    }
+
+    /// Cycle the focused dial on the selected segment.
+    pub(crate) fn cycle_statusline_dial(&mut self, forward: bool) {
+        let Some(dial) = self.selected_statusline_dial() else {
+            return;
+        };
+        let Some(setting) = self
+            .draft
+            .statusline_components
+            .get_mut(self.statusline_index)
+        else {
+            return;
+        };
+        match dial {
+            StatuslineDial::Brief => setting.brief ^= true,
+            StatuslineDial::Label => {
+                setting.label = next_label_mode(setting.label, setting.component, forward);
+            }
+            StatuslineDial::AutoHide => setting.auto_hide ^= true,
+            StatuslineDial::LowPriority => setting.low_priority ^= true,
+            StatuslineDial::Variant => {
+                let Some(next) =
+                    next_variant(setting.variant, setting.component.variants(), forward)
+                else {
+                    return;
+                };
+                setting.variant = Some(next);
+            }
+        }
         self.save();
     }
 
@@ -2281,6 +2455,7 @@ impl SettingsModalState {
                 show_right_sidebar: self.draft.show_right_sidebar,
                 right_sidebar_mode: self.draft.right_sidebar_mode,
                 right_sidebar_components: self.draft.right_sidebar_components.clone(),
+                statusline_components: self.draft.statusline_components.clone(),
                 show_room_list_sidebar: self.draft.show_room_list_sidebar,
                 room_list_mode: self.draft.room_list_mode,
                 keep_composer_focused: self.draft.keep_composer_focused,
@@ -2312,6 +2487,59 @@ fn cycle_notify_format(current: Option<&str>, forward: bool) -> &'static str {
         (idx + OPTIONS.len() - 1) % OPTIONS.len()
     };
     OPTIONS[next]
+}
+
+/// The dials a bottom status bar segment offers, in display order. Keyhints
+/// offers a brief display switch in addition to the list's enable switch. A
+/// status component with no inactive reading gets no auto-hide switch, and one
+/// with no variants gets no mode row, so the pane never shows a dead control.
+fn statusline_dials_for(component: StatusComponent) -> Vec<StatuslineDial> {
+    if component == StatusComponent::Shortcuts {
+        return vec![StatuslineDial::Brief];
+    }
+    let mut dials = vec![StatuslineDial::Label];
+    if component.can_auto_hide() {
+        dials.push(StatuslineDial::AutoHide);
+    }
+    dials.push(StatuslineDial::LowPriority);
+    if !component.variants().is_empty() {
+        dials.push(StatuslineDial::Variant);
+    }
+    dials
+}
+
+/// Advance a segment's component-specific dial. `None` when the component has
+/// no dial; an unrecognized stored variant restarts from the first.
+fn next_variant(
+    current: Option<StatusVariant>,
+    variants: &[StatusVariant],
+    forward: bool,
+) -> Option<StatusVariant> {
+    if variants.is_empty() {
+        return None;
+    }
+    let idx = current
+        .and_then(|current| variants.iter().position(|v| *v == current))
+        .unwrap_or(0);
+    let len = variants.len();
+    let next = if forward {
+        (idx + 1) % len
+    } else {
+        (idx + len - 1) % len
+    };
+    variants.get(next).copied()
+}
+
+/// Advance a segment's label mode, skipping `Text` for a component that has no
+/// word to show — for those, `Text` paints exactly what `None` paints, and a
+/// cycle position that visibly does nothing reads as a broken control.
+fn next_label_mode(current: LabelMode, component: StatusComponent, forward: bool) -> LabelMode {
+    let next = current.cycle(forward);
+    if next == LabelMode::Text && component.text_label().is_empty() {
+        next.cycle(forward)
+    } else {
+        next
+    }
 }
 
 fn toggle_kind(kinds: &mut Vec<String>, kind: &str) {

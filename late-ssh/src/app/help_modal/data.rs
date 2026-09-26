@@ -198,7 +198,7 @@ pub(crate) fn bot_app_context() -> String {
         - A Dark Room and Green Dragon ride the backtick cycle too, as its last stops after Lateania and the roguelikes: pressing ` inside either hops onward with the door still loaded (the village keeps growing, the character stays listed as online), and ` from Home hops back in. While loaded they wear the same green in-progress dot on the Games hub sidebar. A loaded door left alone for 30 minutes (no key in it and its screen not open) ends its visit with the same save an explicit leave does and drops off the cycle; in Green Dragon that also drops the online flag, so an absent character becomes an ordinary sleeping PvP target. Two keys the hop never takes: a ` typed into a Green Dragon talk line stays a character, and there is no hopping out of a Green Dragon fight or mid-ascent in A Dark Room.\n\
         - NetHack and DCSS take a per-account config file (.nethackrc / init.txt): press c on their Games hub card (or their landing page) to open a paste box, paste the whole file to save it, x clears back to defaults. It is stored on the account and applied at every launch, including resumes after a hangup-save. Brogue keeps its config per-player upstream already, so it has no paste box.\n\
         - Profiles page 5 lists people: one row per user who shared a project or posted a work card. Artboard has detailed page-local editing keybinds.\n\
-        - Leaderboards page 6 holds every board. The Games section leads: Lateania Adventurers (living characters by level, class shown on the row) and Lateania Frontier (deepest Frontier zone walked), then a board triple for each roguelike door in DCSS, NetHack, Brogue order: Wins (all-time), Deepest Dive, and Top Score (monthly + all-time), fed spoof-proof from the games' own log files, seconds after a game ends. Then Top Chips, Arcade Wins, per-game daily win counts, and per-game high scores, each with monthly and all-time standings. A trailing Badge Guide entry explains what every award code means, how it is earned, and whether it pays chips. Daily quests render at the top of The Arcade (page 2). The Shop opens with the /shop composer command; there is no Hub modal and no shop chord anymore.\n",
+        - Leaderboards page 6 holds every board. The Games section leads: Lateania Adventurers (living characters by level, class shown on the row) and Lateania Frontier (deepest Frontier zone walked), then a board triple for each roguelike door in DCSS, NetHack, Brogue order: Wins (all-time), Deepest Dive, and Top Score (monthly + all-time), fed spoof-proof from the games' own log files, seconds after a game ends. Then Top Chips, Arcade Wins, per-game daily win counts, and per-game high scores, each with monthly and all-time standings. A trailing Badge Guide entry explains what every award code means, how it is earned, and whether it pays chips. Daily quests render at the top of The Arcade (page 2). The Shop opens with Ctrl+S or the /shop composer command; active games, profile/job editors, and Artboard input keep their local Ctrl+S bindings.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
@@ -226,7 +226,7 @@ pub(crate) fn bartender_app_context() -> String {
     - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels, Minecraft), 4 Artboard (shared ASCII canvas), 5 Profiles (the people: their projects and open-to-work cards), 6 Leaderboards (every board, monthly and all-time).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
     - Ctrl+F opens Zen from anywhere and the same chord hands you back (Esc does not leave it): Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: Tab and the arrows focus, space opens the tile picker for a tile, S splits, X closes, < > change width and { } height, r flips, z zooms, b g t restyle borders, gaps, and titles, R resets, ? opens the Zen guide, the layout is saved per account; each tile names its own keys on the right of its title; up to ten chat tiles each bound to a room ([ ] rebind the focused one, Ctrl+/ or /picker picks its room from the list, i or Enter write in it, j k select in it; the focused chat is the active one, the others watch), w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it (the first pet of the day pays 100 chips), and it reads the rest of your session itself).\n\
-    - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Typing /shop into the composer opens the Shop. When a terminal swallows a chord, the composer has a typed fallback that does the same thing: /settings (Ctrl+O), /lobby (Ctrl+G), /zen (Ctrl+F), /redraw (Ctrl+L), /guide (?).\n\
+    - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Ctrl+S opens the Shop (active games, profile/job editors, and Artboard input keep their local binding); /shop is its typed fallback. When a terminal swallows a chord, the composer has a typed fallback that does the same thing: /settings (Ctrl+O), /lobby (Ctrl+G), /zen (Ctrl+F), /redraw (Ctrl+L), /guide (?).\n\
     - Ctrl+/ opens jump search across rooms and DMs (/picker types it); typing ?query searches messages.\n\
     - Home's room rail also holds RSS, News, Cyberspace, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"N unread mentions\" counter in the top-right corner.\n\
     - A DM with unread messages jumps to an \"unread dms\" group directly under core in that rail, so nobody has to scroll to the bottom to find it; it drops back down to \"dms\" once it has been read and you move on.\n\
@@ -638,7 +638,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  Ctrl+G             open / close the Lobby (daily games + house tables)",
         "  Ctrl+F             open / close Zen (your bonsai, tank, lobby, chat, and clock as tiles)",
         "  Ctrl+L             redraw the screen if something outside late.sh scribbled on it",
-        "  /shop              open the Shop",
+        "  Ctrl+S / /shop     open the Shop (games keep controls; editors save/post; Artboard keeps slot 2)",
         "  /aquarium feed     feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the tank lives on the Zen page (Ctrl+F)",
         "  Sprout             comes up on the tank floor every 14 days, fed or not; cut it on its Shop row (Companions, -) within 7 days, or it roots as a plant; plants never die",
         "  Ctrl+/             jump to a room or DM; type ?query to search messages (/picker types it)",
@@ -1270,7 +1270,7 @@ fn overview_lines() -> Vec<String> {
         "  /settings /lobby  typed fallbacks for Ctrl+O, Ctrl+G, Ctrl+F, Ctrl+L,",
         "  /zen /redraw      and ?, for terminals that swallow those keys",
         "  /guide",
-        "  /shop             open the Shop",
+        "  Ctrl+S / /shop    open the Shop (games keep controls; editors save/post; Artboard keeps slot 2)",
         "  /aquarium feed    feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the tank lives on the Zen page (Ctrl+F)",
         "  Sprout            comes up on the tank floor every 14 days, fed or not; cut it on its Shop row (Companions, -) within 7 days, or it roots as a plant; plants never die",
         "  Ctrl+/            jump to a room, DM, or Home entry; ?query searches messages",
@@ -1297,7 +1297,7 @@ fn overview_lines() -> Vec<String> {
         "  `                 hop Home chat and games waiting on you (boards, tables, dailies)",
         "",
         "Shop",
-        "  /shop             open the Shop modal from any composer",
+        "  Ctrl+S / /shop    open the Shop; /shop works from any composer",
         "  Shop              j/k select, h/l subtab, Enter buy with Late Chips",
         "  name effects      Name Glow / Gradient / Shimmer sell by the day or by the month",
         "  badges and flags  rented for 24h or 30 days; a rebuy replaces the live one",
@@ -1505,7 +1505,9 @@ fn settings_help_lines() -> Vec<String> {
         "  Bio               multiline markdown bio".to_string(),
         "  Themes            expanded theme browser; / searches it, f stars a theme into Favorites"
             .to_string(),
-        "  Tweaks            power-user toggles for appearance, compose, music, display, and startup"
+        "  Tweaks            power-user toggles for appearance, input, display, and startup"
+            .to_string(),
+        "  Statusline        arrange the bottom status bar and customize its components"
             .to_string(),
         "  Account           link SSH keys across accounts, reset/revoke your IRC access token, or delete your account"
             .to_string(),
@@ -1519,8 +1521,9 @@ fn settings_help_lines() -> Vec<String> {
         "  country via picker, with Unicode flag rendering".to_string(),
         "  timezone via picker".to_string(),
         "  IDE, terminal, OS, and languages for profile/late.fetch surfaces".to_string(),
-        "  Tweaks: terminal background sync, text brightness, right sidebar mode, room list, composer send behavior, music mute-on-start, chat flag fallback, land on Home"
+        "  Tweaks: terminal background sync, text brightness, right sidebar mode, room list, composer send behavior, chat flag fallback, terminal images, chat badges, landing page, input mode"
             .to_string(),
+        "  Statusline: bottom status bar components, their order, and display options".to_string(),
         "  private RSS/Atom subscriptions".to_string(),
         "  IRC access token for external IRC clients".to_string(),
         "".to_string(),
@@ -1537,6 +1540,8 @@ fn settings_help_lines() -> Vec<String> {
         "  Space quick-cycles simple toggles".to_string(),
         "  Pickers: type to filter, Enter pick, Esc cancel".to_string(),
         "  Custom sidebar: Enter on Custom opens the three-page checklist".to_string(),
+        "  Statusline: Space toggles a component; Enter opens its options"
+            .to_string(),
         "  Account: Enter opens Link Accounts or Delete Account".to_string(),
         "  ? opens this guide; Esc / q closes".to_string(),
         "".to_string(),
@@ -1568,14 +1573,55 @@ fn settings_help_lines() -> Vec<String> {
         "                            both rows apply to this device (this SSH key) only, never the"
             .to_string(),
         "                            account default; `\\` on Home cycles the same two".to_string(),
-        "  Compose".to_string(),
+        "  Input".to_string(),
         "    Send and keep open on Enter   Enter sends without closing the composer; while on, Alt+S becomes a no-op"
+            .to_string(),
+        "    Interaction mode              keyboard, mouse, or hybrid controls for this device"
             .to_string(),
         "  Display".to_string(),
         "    Chat flag text fallback       show text/boxed-letter labels instead of flag emoji in chat badges and Shop Flags"
             .to_string(),
         "  Startup".to_string(),
         "    Land on                       where a session starts: Clubhouse (default), Home, or Zen; first sessions always start in the Clubhouse"
+            .to_string(),
+        "".to_string(),
+        "Statusline tab".to_string(),
+        "  The bottom-left border of the app frame is a status bar you arrange yourself."
+            .to_string(),
+        "  Segments paint left to right in the order the list shows them top to bottom."
+            .to_string(),
+        "  Available segments: Keyhints, voice, mentions, pot, chips, your move, invites, quests, station, users online, time"
+            .to_string(),
+        "  Status segments with a destination are clickable and jump to what they count."
+            .to_string(),
+        "  Controls".to_string(),
+        "    j / k or arrows         move through segments".to_string(),
+        "    Shift+Up / Shift+Down   move the selected segment along the bar ([ and ] do the same)"
+            .to_string(),
+        "    Space                   turn the selected segment on or off".to_string(),
+        "    Enter                   step into that segment's options".to_string(),
+        "    Left / Right or Space   change the focused option".to_string(),
+        "    Tab / Shift+Tab         switch settings tabs from either pane".to_string(),
+        "    Esc                     back out of the options, then close".to_string(),
+        "  Per-segment options".to_string(),
+        "    Brief          Keyhints only: show ⚙ ^o · ⚄ ^g · ◉ ^s (Settings, Lobby, Shop)."
+            .to_string(),
+        "    Label          Text or Icon before the value, or None".to_string(),
+        "    Auto-hide      drop the segment while it reads zero or idle".to_string(),
+        "    Low priority   yields first when the bar runs out of room; every low-priority"
+            .to_string(),
+        "                   segment is given up before any normal one is".to_string(),
+        "    plus one dial of its own on some segments: 24-hour vs AM/PM clock, mentions"
+            .to_string(),
+        "    with or without DMs, daily vs daily+weekly quests, station name vs track"
+            .to_string(),
+        "  The bar gets first claim on its border row and the optional sponsor uses what remains."
+            .to_string(),
+        "  When the bar itself runs short, segments compact and then drop, rightmost first."
+            .to_string(),
+        "  The top-right status bar remains fixed rather than following this arrangement."
+            .to_string(),
+        "  Your arrangement is account-wide: every device you SSH in from gets the same bar."
             .to_string(),
         "".to_string(),
         "RSS tab".to_string(),

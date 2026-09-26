@@ -50,7 +50,7 @@ Per-game directories generally follow:
 - `App::new` in `late-ssh/src/app/state.rs` builds one per-session state object per Arcade game.
 - `App::tick` advances active real-time games only while `screen == Screen::Arcade && is_playing_game`.
 - `App::render` builds `arcade::ui::ArcadeHubView` and calls `draw_arcade_hub`.
-- Global input routes `Screen::Arcade` to `arcade::input`; active games suppress many global single-byte shortcuts until they return to the lobby.
+- Global input routes `Screen::Arcade` to `arcade::input`; active games suppress many global single-byte shortcuts until they return to the lobby. They also own Ctrl+S, so the Shop shortcut only applies on the Arcade menu.
 
 ## Navigation
 

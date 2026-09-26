@@ -801,6 +801,17 @@ impl DailyState {
         self.snapshot.open_challenges.iter().collect()
     }
 
+    /// Open challenges addressed to this user by name, for the status bar's
+    /// `invites` segment. Open challenges to nobody in particular are the
+    /// lobby, not an invitation, and are not counted.
+    pub fn my_invite_count(&self) -> usize {
+        self.snapshot
+            .open_challenges
+            .iter()
+            .filter(|item| item.target_user_id == Some(self.user_id))
+            .count()
+    }
+
     /// Finished matches whose result this user hasn't acknowledged yet,
     /// newest finish first (snapshot order). They don't count against the
     /// entry cap; opening the board and leaving (or `x` in the modal)

@@ -147,7 +147,7 @@ Cross-module touchpoints (outside this folder):
 - `late-core/src/models/user.rs`: `RightSidebarComponent::Daily` (key `daily`, label `Lobby`), default order `[Daily, Visualizer, Music, Bonsai]`, `normalize_right_sidebar_components` backfills missing panels for existing users.
 - `app/notify/mod.rs`: `Notification::daily_your_turn(game_label, opponent)` (`Kind::GameEvents`).
 - `app/help_modal/data.rs`: `Ctrl+G` + challenge-picker help entries.
-- `app/render.rs`: `app_frame_help_hint_title` advertises `Lobby Ctrl+G` in the outer frame footer.
+- `app/statusline/bar.rs`: the default bottom-left `Shortcuts` component advertises `Lobby Ctrl+G` in the outer frame footer.
 
 ---
 

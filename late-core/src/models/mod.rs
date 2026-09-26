@@ -155,6 +155,9 @@ pub mod sliding_puzzle;
 mod sliding_puzzle_test;
 pub mod snake;
 pub mod solitaire;
+pub mod statusline;
+#[cfg(test)]
+mod statusline_test;
 pub mod stream_ban;
 pub mod sudoku;
 pub mod tetris;

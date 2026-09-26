@@ -28,6 +28,7 @@ use late_core::models::{
     room_ban::RoomBan,
     server_ban::{ServerBan, ServerBanActivation},
     showcase::{Showcase, ShowcaseParams},
+    statusline::default_statusline_components,
     user::{RightSidebarMode, User, UserParams, default_right_sidebar_components},
 };
 use late_core::test_utils::create_test_user;
@@ -474,6 +475,9 @@ async fn find_profile_resolves_the_house_rows() {
 
 #[tokio::test]
 async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
+    use late_core::models::statusline::{LabelMode, StatusComponent};
+    use late_core::models::user::{LandingPage, TerminalImagesMode};
+
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "profile-edit-user").await;
     let service = ProfileService::new(test_db.db.clone(), default_active_users());
@@ -490,6 +494,15 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
         .profile
         .clone()
         .expect("initial profile");
+
+    let mut components = default_statusline_components();
+    let voice = components
+        .iter_mut()
+        .find(|setting| setting.component == StatusComponent::Voice)
+        .expect("voice component");
+    voice.enabled = true;
+    voice.label = LabelMode::Icon;
+    let hidden_awards = vec!["late_time".to_string()];
 
     service.edit_profile(
         user.id,
@@ -512,14 +525,15 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: default_right_sidebar_components(),
+            statusline_components: components.clone(),
             show_room_list_sidebar: true,
             room_list_mode: late_core::models::user::RoomListMode::On,
             keep_composer_focused: false,
             start_with_music_muted: false,
-            landing_page: late_core::models::user::LandingPage::Clubhouse,
+            landing_page: LandingPage::Zen,
             paper_at_login: true,
-            terminal_images: late_core::models::user::TerminalImagesMode::Auto,
-            hidden_award_categories: Vec::new(),
+            terminal_images: TerminalImagesMode::Off,
+            hidden_award_categories: hidden_awards.clone(),
             show_flag_fallback: false,
             translate_to: late_core::models::message_translation::TranslateLang::En,
             auto_translate: false,
@@ -549,6 +563,10 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
         .expect("updated profile");
 
     assert_eq!(updated.username, "night-owl");
+    assert_eq!(updated.statusline_components, components);
+    assert_eq!(updated.landing_page, LandingPage::Zen);
+    assert_eq!(updated.terminal_images, TerminalImagesMode::Off);
+    assert_eq!(updated.hidden_award_categories, hidden_awards);
 }
 
 #[tokio::test]
@@ -590,6 +608,7 @@ async fn edit_profile_normalizes_username_before_persisting() {
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: default_right_sidebar_components(),
+            statusline_components: default_statusline_components(),
             show_room_list_sidebar: true,
             room_list_mode: late_core::models::user::RoomListMode::On,
             keep_composer_focused: false,
@@ -663,6 +682,7 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: default_right_sidebar_components(),
+            statusline_components: default_statusline_components(),
             show_room_list_sidebar: true,
             room_list_mode: late_core::models::user::RoomListMode::On,
             keep_composer_focused: false,
@@ -947,6 +967,7 @@ async fn edit_profile_snapshots_stay_per_user() {
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: default_right_sidebar_components(),
+            statusline_components: default_statusline_components(),
             show_room_list_sidebar: true,
             room_list_mode: late_core::models::user::RoomListMode::On,
             keep_composer_focused: false,
