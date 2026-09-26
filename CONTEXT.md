@@ -1222,7 +1222,7 @@ One global overlay owns general app help plus the Pair, terminal FAQ, and Hub Gu
 
 - Module: `late-ssh/src/app/help_modal/`.
 - State flag on `App`: `show_help` paired with `help_modal_state`.
-- Opening: global `?` in `app/input.rs` (`open_guide_globally`, also behind `/guide`); `/binds` opens Chat, `/music` opens Music, Bonsai `?` opens Bonsai. `?` is the only help key; `Ctrl+L` is the force-repaint chord (see the shortcuts table).
+- Opening: global `?` in `app/input.rs` (`open_guide_globally`, also behind `/guide`); `/binds` opens Chat, `/music` opens Music, Bonsai `?` opens Bonsai. `?` is the only help key; `Ctrl+R` is the force-repaint chord (see the shortcuts table).
 - Outer frame: `app/render.rs::app_frame_help_hint_title()` advertises `Settings Ctrl+O`, `Lobby Ctrl+G`, `Shop /shop`, and `Guide ?`.
 - Topics include Pair, Overview, Chat, Social, Directory, News, Arcade, Lobby, Lateania, Minecraft, Copy, Links, Images, Selection, Notifications, CLI YouTube, Economy, Bonsai, Settings, Architecture.
 - Footer keys: `Tab/S+Tab` switch topics, `j/k`/arrows scroll, `Esc/q/?` close.
@@ -1250,7 +1250,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `5` | Global | Jump to Directory |
 | `0` | Global | Jump to the Clubhouse |
 | `0` again | Clubhouse | Go down to the undercity, deadchannel's street (`late-ssh/src/app/deadchannel/city`), for runners only (a `deadchannel_runners` row that has not been left); `0` on the undercity comes back up, and leaving #deadchannel walks a session standing there back up on the next 1 Hz edge. There: arrows/hjkl walk, Shift+arrow or `HJKL` run, Enter at a landmark, Esc closes a panel |
-| `Ctrl+L` | Global (except the Scratchpad, which cycles its highlight language) | Force a full repaint: clears the client screen and re-emits every cell via `App::force_full_repaint`. The escape hatch when something outside late.sh scribbles on the terminal. |
+| `Ctrl+R` | Reserved global, except active Artboard editing | Force a full repaint: clears the client screen and re-emits every cell via `App::force_full_repaint`. The escape hatch when something outside late.sh scribbles on the terminal. |
 | `m` | Global | Toggle mute on paired client (persisted per device, so it sticks across sessions) |
 | `+` / `=` | Global | Volume up on paired client |
 | `-` / `_` | Global | Volume down on paired client |
@@ -1286,6 +1286,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `space` / `x` / `Enter` / `1-9` / `z` | Lateania | Attack, use abilities, or flee; in list panels, `1-9` and `Enter` activate rows, and `x` sells inventory at a shop |
 | `c` / `v` / `t` / `b` / `o` / `j` / `k` | Lateania | Open character, abilities, inventory, shop, examine/interact, quest journal, and titles panels |
 | `r` / `f` | Lateania | Recall to Embergate's Town Square when out of combat; toggle auto-following another adventurer in the room |
+| `Ctrl+H` / `Ctrl+L`, wheel over the rail | Home (not composing) | Scroll the room rail without changing room; see `late-ssh/src/app/chat/CONTEXT.md` |
 | `\\` | Home | Cycle this device's rails: both, room list hidden, sidebar hidden, both hidden, `auto`. Writes the SSH key, never the account |
 | Chat keys | Home / embedded game chat | See `late-ssh/src/app/chat/CONTEXT.md` for room navigation, composer commands, message actions, synthetic entries, favorites, and icon picker behavior. |
 | `/pair @user` | Chat composer | Ask to pair with `@user`. Both of you must run it within 10 minutes; the second one completes it and drops you both into `Screen::Scratchpad`. Never changes the other person's screen on its own, and re-running it inside the window will not ping them twice |
@@ -1295,7 +1296,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `Ctrl+O` | Reserved global, except active Artboard editing | Open the settings modal from anywhere, including active Arcade games |
 | `Ctrl+G` | Reserved global, except active Artboard editing | Toggle the Lobby modal (daily correspondence games + house tables) from anywhere; the only key for it (bare `g` is unbound, and `Ctrl+Q` is unbound because many terminals intercept it) |
 | `Ctrl+F` | Reserved global, except active Artboard editing | Toggle Zen over the current page; the only way off Zen (Esc stays), back to the page it was opened from, or the Clubhouse when the session landed on Zen. Backtick on Zen runs the workspace cycle as on Home, and the chain comes home to Zen (`late-ssh/src/app/workspace/CONTEXT.md`) |
-| `/settings` / `/lobby` / `/zen` / `/redraw` / `/guide` / `/picker` | Chat composer | Typed fallbacks for `Ctrl+O` / `Ctrl+G` / `Ctrl+F` / `Ctrl+L` / `?` / `Ctrl+/`, for terminals and multiplexers that swallow the chord. Each runs the same function as its key (`open_settings_modal`, `toggle_lobby_globally`, `toggle_zen_globally`, `App::force_full_repaint`, `open_guide_globally`, `open_room_search_modal_globally`), so the toggles close too |
+| `/settings` / `/lobby` / `/zen` / `/redraw` / `/guide` / `/picker` | Chat composer | Typed fallbacks for `Ctrl+O` / `Ctrl+G` / `Ctrl+F` / `Ctrl+R` / `?` / `Ctrl+/`, for terminals and multiplexers that swallow the chord. Each runs the same function as its key (`open_settings_modal`, `toggle_lobby_globally`, `toggle_zen_globally`, `App::force_full_repaint`, `open_guide_globally`, `open_room_search_modal_globally`), so the toggles close too |
 | `/shop` | Chat composer | Open the Shop modal. The Shop has no global chord; the locked pet/aquarium nudges open the same modal programmatically |
 | `Tab` / `Shift+Tab` | Settings modal | Switch tabs: Settings, Bio, Themes, RSS, Account, and hidden Special when available |
 | `↑` / `↓` / `j` / `k` | Settings modal | Move within the active tab. Settings rows include Username, IDE, Terminal, OS, Langs, Theme, Background, Text Brightness, Right sidebar, Room list, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format |

@@ -810,6 +810,7 @@ impl App {
             selected_room_id: self.chat.selected_room_id,
             room_jump_active: self.chat.room_jump_active,
             room_section_prefix_armed: self.room_section_prefix_armed,
+            rail_scroll_nudge: self.chat.rail_scroll_nudge(),
             selected_message_id: self.chat.selected_message_id,
             selected_image_message,
             selected_news_message,

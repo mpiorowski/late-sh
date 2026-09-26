@@ -40,10 +40,8 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         }
         return true;
     }
-    // Ctrl+L cycles the shared highlighting language. Everywhere else Ctrl+L
-    // is the global force-repaint chord; this screen is carved out of it by
-    // name in `handle_reserved_global_chord`, so the two never collide. Moving
-    // this binding means dropping that carve-out too.
+    // Ctrl+L cycles the shared highlighting language. It is not a global
+    // chord (repaint is Ctrl+R), so this screen needs no carve-out for it.
     if matches!(event, ParsedInput::Byte(0x0C)) {
         state.cycle_language();
         return true;
