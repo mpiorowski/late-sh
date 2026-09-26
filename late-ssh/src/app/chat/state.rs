@@ -1093,6 +1093,14 @@ pub struct ChatState {
     /// (the default). Session-only — resets on reconnect.
     pub(crate) collapsed_sections: HashSet<RoomSection>,
 
+    /// Rows the Home rail is scrolled away from where the selection would put
+    /// it (Ctrl+H / Ctrl+L, the mouse wheel over the rail), and the slot that
+    /// was selected when it was set. The offset only counts while that slot is
+    /// still selected, so any selection change snaps the rail back to the
+    /// selection without every selection path having to clear it.
+    /// Session-only.
+    rail_scroll: (Option<RoomSlot>, isize),
+
     /// Registered "watch me" streams, copied from the stream registry watch
     /// in `App::tick` (~1/s) so render paths read local memory only. Drives
     /// the rail's `stream` section, the LIVE author tag (live entries only),
@@ -1407,6 +1415,7 @@ impl ChatState {
             sent_regular_message: false,
             pending_mod_outputs: VecDeque::new(),
             collapsed_sections: HashSet::new(),
+            rail_scroll: (None, 0),
             live_streams: Vec::new(),
             live_user_ids: HashSet::new(),
             image_upload_rx: None,
@@ -3025,6 +3034,24 @@ impl ChatState {
         current_slot_from_state(self.selected_slot_state())
     }
 
+    /// Rows the Home rail is scrolled off the selection-centred position.
+    /// Zero once the selection has moved since the rail was scrolled.
+    pub(crate) fn rail_scroll_nudge(&self) -> isize {
+        let (anchor, nudge) = self.rail_scroll;
+        if anchor == self.current_slot() {
+            nudge
+        } else {
+            0
+        }
+    }
+
+    /// Set the rail's offset from the selection-centred position, anchored
+    /// to the current selection. Callers clamp it against the rail geometry
+    /// (`chat::ui::room_rail_scroll_bounds`), which state does not know.
+    pub(crate) fn set_rail_scroll_nudge(&mut self, nudge: isize) {
+        self.rail_scroll = (self.current_slot(), nudge);
+    }
+
     /// Whether a synthetic rail entry (rss, news, cyberspace, mentions,
     /// browse rooms, showcase, work) owns the center pane instead of a real
     /// room. The shell asks this instead of re-deriving the list: a new
@@ -3596,7 +3623,7 @@ impl ChatState {
             return None;
         }
 
-        // Typed fallbacks for the global chords (Ctrl+G, Ctrl+F, Ctrl+L, ?), for
+        // Typed fallbacks for the global chords (Ctrl+G, Ctrl+F, Ctrl+R, ?), for
         // terminals and multiplexers that swallow those keys. Each one runs
         // exactly what its key runs.
         if body.trim() == "/lobby" {

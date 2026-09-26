@@ -2958,6 +2958,8 @@ pub struct ChatRenderInput<'a> {
     pub selected_room_id: Option<Uuid>,
     pub room_jump_active: bool,
     pub room_section_prefix_armed: bool,
+    /// `ChatState::rail_scroll_nudge`: rows the rail sits off the selection.
+    pub rail_scroll_nudge: isize,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
     pub selected_news_message: bool,
@@ -3068,6 +3070,8 @@ pub(crate) struct ChatRoomListView<'a> {
     pub selected_room_id: Option<Uuid>,
     pub room_jump_active: bool,
     pub room_section_prefix_armed: bool,
+    /// `ChatState::rail_scroll_nudge`: rows the rail sits off the selection.
+    pub rail_scroll_nudge: isize,
     pub current_user_id: Uuid,
     pub ignored_user_ids: &'a HashSet<Uuid>,
     pub sticky_unread_dm: Option<Uuid>,
@@ -3504,6 +3508,7 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         selected_room_id: view.selected_room_id,
         room_jump_active: view.room_jump_active,
         room_section_prefix_armed: view.room_section_prefix_armed,
+        rail_scroll_nudge: view.rail_scroll_nudge,
         current_user_id: view.current_user_id,
         ignored_user_ids: view.ignored_user_ids,
         sticky_unread_dm: view.sticky_unread_dm,
@@ -3997,23 +4002,16 @@ pub(crate) fn room_list_hit_test(
         return None;
     }
 
-    let inner = room_rail_inner_area(rooms_area);
-    let hint_rows = build_rail_nav_hint_lines().len() as u16;
-    let footer_reserve = hint_rows + 2;
-    let list_area = if inner.height > footer_reserve + 2 {
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_reserve)]).split(inner)[0]
-    } else {
-        inner
-    };
+    let (list_area, _) = room_rail_split(rooms_area);
     if x < list_area.x || x >= list_area.right() || y < list_area.y || y >= list_area.bottom() {
         return None;
     }
 
     let room_rows = build_cozy_room_rail_rows(view, rooms_area.width.saturating_sub(2));
-    let scroll = rooms_scroll_for_selection(
-        room_rows.lines.len(),
+    let scroll = room_rail_scroll(
+        &room_rows,
         list_area.height as usize,
-        room_rows.selected_row_index,
+        view.rail_scroll_nudge,
     );
     let row_index = scroll + (y - list_area.y) as usize;
     if let Some(slot) = room_rows.hit_slots.get(row_index).copied().flatten() {
@@ -4063,23 +4061,16 @@ pub(crate) fn room_list_section_hit_test(
         return None;
     }
 
-    let inner = room_rail_inner_area(rooms_area);
-    let hint_rows = build_rail_nav_hint_lines().len() as u16;
-    let footer_reserve = hint_rows + 2;
-    let list_area = if inner.height > footer_reserve + 2 {
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_reserve)]).split(inner)[0]
-    } else {
-        inner
-    };
+    let (list_area, _) = room_rail_split(rooms_area);
     if x < list_area.x || x >= list_area.right() || y < list_area.y || y >= list_area.bottom() {
         return None;
     }
 
     let room_rows = build_cozy_room_rail_rows(view, rooms_area.width.saturating_sub(2));
-    let scroll = rooms_scroll_for_selection(
-        room_rows.lines.len(),
+    let scroll = room_rail_scroll(
+        &room_rows,
         list_area.height as usize,
-        room_rows.selected_row_index,
+        view.rail_scroll_nudge,
     );
     let row_index = scroll + (y - list_area.y) as usize;
     // Header rows carry no slot; strip display affordances back to the section
@@ -4122,27 +4113,13 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
     let room_list_view = room_list_view_from_render_input(view);
     let room_rows = build_cozy_room_rail_rows(&room_list_view, area.width.saturating_sub(2));
 
-    // Content lives inside: 2 cols left padding, 2 cols right (separator + 1).
-    // Bottom slice is reserved for the pinned nav-hint footer.
-    let inner = room_rail_inner_area(area);
-
     let hint_lines = build_rail_nav_hint_lines();
-    let hint_rows = hint_lines.len() as u16;
-    // Reserve: top border + hint rows + bottom border. If the rail is too
-    // short, skip hints.
-    let footer_reserve = hint_rows + 2;
-    let (list_area, hint_area) = if inner.height > footer_reserve + 2 {
-        let split = Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_reserve)])
-            .split(inner);
-        (split[0], Some(split[1]))
-    } else {
-        (inner, None)
-    };
+    let (list_area, hint_area) = room_rail_split(area);
 
-    let scroll = rooms_scroll_for_selection(
-        room_rows.lines.len(),
+    let scroll = room_rail_scroll(
+        &room_rows,
         list_area.height as usize,
-        room_rows.selected_row_index,
+        room_list_view.rail_scroll_nudge,
     );
     let visible_height = list_area.height as usize;
 
@@ -4212,6 +4189,49 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
         };
         frame.render_widget(Paragraph::new(hint_lines), hint_render_area);
     }
+}
+
+/// The rail's room list and, when the rail is tall enough, its pinned
+/// nav-hint footer. Content lives inside: 2 cols left padding, 2 cols right
+/// (separator + 1). The footer reserves a top border, the hint rows and a
+/// bottom border; a rail too short for that gets no hints.
+fn room_rail_split(area: Rect) -> (Rect, Option<Rect>) {
+    let inner = room_rail_inner_area(area);
+    let footer_reserve = build_rail_nav_hint_lines().len() as u16 + 2;
+    if inner.height > footer_reserve + 2 {
+        let split = Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_reserve)])
+            .split(inner);
+        (split[0], Some(split[1]))
+    } else {
+        (inner, None)
+    }
+}
+
+/// First visible rail row: the selection-centred position moved by the
+/// user's scroll nudge, clamped to the rows there are.
+fn room_rail_scroll(room_rows: &RoomListRows, visible_height: usize, nudge: isize) -> usize {
+    let (base, max_scroll) = room_rail_scroll_base(room_rows, visible_height);
+    base.saturating_add_signed(nudge).min(max_scroll)
+}
+
+fn room_rail_scroll_base(room_rows: &RoomListRows, visible_height: usize) -> (usize, usize) {
+    let total = room_rows.lines.len();
+    (
+        rooms_scroll_for_selection(total, visible_height, room_rows.selected_row_index),
+        total.saturating_sub(visible_height),
+    )
+}
+
+/// `(selection-centred scroll, max scroll)` for the rail drawn in
+/// `rooms_area`, so input can keep the nudge inside the rows there are
+/// instead of letting it run past either end.
+pub(crate) fn room_rail_scroll_bounds(
+    rooms_area: Rect,
+    view: &ChatRoomListView<'_>,
+) -> (usize, usize) {
+    let (list_area, _) = room_rail_split(rooms_area);
+    let room_rows = build_cozy_room_rail_rows(view, rooms_area.width.saturating_sub(2));
+    room_rail_scroll_base(&room_rows, list_area.height as usize)
 }
 
 fn room_rail_inner_area(area: Rect) -> Rect {
@@ -4812,6 +4832,7 @@ fn build_rail_nav_hint_lines() -> Vec<Line<'static>> {
     };
     vec![
         Line::from(vec![key("h l space"), hint(" jump room")]),
+        Line::from(vec![key("^h ^l"), hint("     scroll")]),
         Line::from(vec![key("f"), hint("         favorite")]),
         Line::from(vec![key("[ ]/z"), hint("     sort/fold")]),
         Line::from(vec![key("ctrl+/"), hint("    picker")]),

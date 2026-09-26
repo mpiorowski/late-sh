@@ -968,7 +968,7 @@ async fn slash_lobby_zen_and_guide_mirror_their_keys() {
     app.handle_input(b"\x06");
     assert_eq!(app.screen, Screen::Dashboard);
 
-    // /redraw re-emits every cell, the way Ctrl+L does: the frame after it
+    // /redraw re-emits every cell, the way Ctrl+R does: the frame after it
     // carries more than a settled diff.
     let _ = app.render().expect("render");
     let settled = strip_ansi(&String::from_utf8_lossy(&app.render().expect("render")));
@@ -2629,14 +2629,14 @@ async fn history_modal_opens_from_command_and_closes_on_esc() {
     );
 }
 
-/// Ctrl+L is the escape hatch for a terminal left damaged by something outside
+/// Ctrl+R is the escape hatch for a terminal left damaged by something outside
 /// late.sh. It has to re-emit every cell: the failure mode worth pinning is a
 /// repaint that clears the screen and then sends an empty diff, leaving the
 /// user staring at a blank terminal that is worse than the damage.
 #[tokio::test]
-async fn ctrl_l_repaints_the_whole_screen_rather_than_blanking_it() {
+async fn ctrl_r_repaints_the_whole_screen_rather_than_blanking_it() {
     let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "ctrl-l-repaint").await;
+    let user = create_test_user(&test_db.db, "ctrl-r-repaint").await;
     let client = test_db.db.get().await.expect("db client");
     let lounge = ChatRoom::ensure_lounge(&client)
         .await
@@ -2644,7 +2644,7 @@ async fn ctrl_l_repaints_the_whole_screen_rather_than_blanking_it() {
     ChatRoomMember::join(&client, lounge.id, user.id)
         .await
         .expect("join lounge room");
-    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-l-repaint-flow-it");
+    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-r-repaint-flow-it");
 
     wait_for_render_contains(&mut app, "lounge").await;
 
@@ -2652,16 +2652,16 @@ async fn ctrl_l_repaints_the_whole_screen_rather_than_blanking_it() {
     let _ = app.render().expect("render");
     let settled = strip_ansi(&String::from_utf8_lossy(&app.render().expect("render")));
 
-    app.handle_input(b"\x0c");
+    app.handle_input(b"\x12");
     let repainted = strip_ansi(&String::from_utf8_lossy(&app.render().expect("render")));
 
     assert!(
         repainted.contains("lounge"),
-        "expected Ctrl+L to re-emit the whole screen; repainted={repainted:?}"
+        "expected Ctrl+R to re-emit the whole screen; repainted={repainted:?}"
     );
     assert!(
         repainted.len() > settled.len(),
-        "expected the Ctrl+L frame to carry more than the settled diff; \
+        "expected the Ctrl+R frame to carry more than the settled diff; \
          settled={} bytes, repainted={} bytes",
         settled.len(),
         repainted.len()
@@ -4023,4 +4023,70 @@ async fn chat_badges_picker_hides_a_whole_game_ladder() {
 
     app.handle_input(b"\x1b");
     wait_for_render_contains(&mut app, "1 hidden").await;
+}
+
+/// Ctrl+H / Ctrl+L and the wheel over the rail scroll it without changing
+/// room; `l` still changes room, and the rail snaps back to the selection.
+#[tokio::test]
+async fn rail_scroll_keys_and_wheel_leave_the_selected_room_alone() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "rail-scroll").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    // Enough channels that the rail overflows a 32-row terminal.
+    for i in 0..40 {
+        let room = ChatRoom::get_or_create_public_room(&client, &format!("rail-scroll-{i:02}"))
+            .await
+            .expect("create room");
+        ChatRoomMember::join(&client, room.id, viewer.id)
+            .await
+            .expect("join room");
+    }
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "rail-scroll-flow-it");
+    app.resize(160, 32).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "\u{258C}lounge").await;
+    wait_for_render_contains(&mut app, "rail-scroll-").await;
+    let selected = app.chat.selected_room_id;
+    assert_eq!(app.chat.rail_scroll_nudge(), 0);
+
+    app.handle_input(b"\x0c");
+    assert_eq!(app.chat.selected_room_id, selected, "Ctrl+L changed room");
+    assert_eq!(app.chat.rail_scroll_nudge(), 3);
+    app.handle_input(b"\x0c");
+    assert_eq!(app.chat.rail_scroll_nudge(), 6);
+    app.handle_input(b"\x08");
+    assert_eq!(app.chat.selected_room_id, selected, "Ctrl+H changed room");
+    assert_eq!(app.chat.rail_scroll_nudge(), 3);
+
+    // Wheel down, then up, over the rail (column 5, row 10).
+    app.handle_input(b"\x1b[<65;5;10M");
+    assert_eq!(
+        app.chat.selected_room_id, selected,
+        "the wheel changed room"
+    );
+    assert_eq!(app.chat.rail_scroll_nudge(), 6);
+    app.handle_input(b"\x1b[<64;5;10M");
+    assert_eq!(app.chat.rail_scroll_nudge(), 3);
+
+    // Scrolling up past the top stops there: the next press down moves.
+    for _ in 0..5 {
+        app.handle_input(b"\x08");
+    }
+    assert_eq!(app.chat.rail_scroll_nudge(), 0);
+    app.handle_input(b"\x0c");
+    assert_eq!(app.chat.rail_scroll_nudge(), 3);
+
+    // `l` moves to the next rail entry (Mentions, after lounge).
+    app.handle_input(b"l");
+    assert_eq!(
+        app.chat.rail_scroll_nudge(),
+        0,
+        "a selection change snaps the rail back to it"
+    );
 }

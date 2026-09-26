@@ -25,8 +25,15 @@ use vte::{Params, Parser, Perform};
 
 const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
 const CTRL_G: u8 = 0x07;
+/// Home rail scroll up. The same byte as BS, so on the few terminals whose
+/// Backspace sends BS instead of DEL, Backspace on Home scrolls the rail too:
+/// harmless, the next selection change snaps it back.
+const CTRL_H: u8 = 0x08;
+/// Home rail scroll down.
 const CTRL_L: u8 = 0x0C;
 const CTRL_O: u8 = 0x0F;
+/// Global force-repaint ("refresh").
+const CTRL_R: u8 = 0x12;
 const CTRL_T: u8 = 0x14;
 const CTRL_V: u8 = 0x16;
 /// Zen: the one page that is a chord, not a tab, so it is reachable from
@@ -1925,6 +1932,10 @@ fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
         return;
     }
 
+    if matches!(byte, CTRL_H | CTRL_L) && scroll_room_rail_from_key(app, ctx, byte) {
+        return;
+    }
+
     if handle_global_key(app, ctx, byte) {
         app.chat.clear_message_selection();
         return;
@@ -1957,6 +1968,27 @@ fn toggle_room_section_from_key(app: &mut App, ctx: InputContext, section: RoomS
     app.chat.reset_composer();
     app.sync_visible_chat_room();
     app.chat.request_list();
+    true
+}
+
+/// Ctrl+H / Ctrl+L on Home scroll the room rail without moving the
+/// selection; `h` / `l` are the ones that change room. Composers keep both
+/// bytes (^H is word-delete there), so this only runs while reading.
+fn scroll_room_rail_from_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
+    if ctx.screen != Screen::Dashboard
+        || ctx.chat_composing
+        || ctx.feeds_processing
+        || ctx.news_composing
+        || app.chat.room_jump_active
+    {
+        return false;
+    }
+    let delta = if byte == CTRL_H {
+        -RAIL_SCROLL_STEP
+    } else {
+        RAIL_SCROLL_STEP
+    };
+    scroll_room_rail(app, delta);
     true
 }
 
@@ -2504,6 +2536,7 @@ fn chat_room_list_view<'a>(
         selected_room_id: app.chat.selected_room_id,
         room_jump_active: app.chat.room_jump_active,
         room_section_prefix_armed: app.room_section_prefix_armed,
+        rail_scroll_nudge: app.chat.rail_scroll_nudge(),
         current_user_id: app.user_id,
         ignored_user_ids: app.chat.ignored_user_ids(),
         sticky_unread_dm: app.chat.sticky_unread_dm,
@@ -2534,12 +2567,47 @@ fn chat_room_list_view<'a>(
     }
 }
 
-fn apply_chat_room_selection_delta(app: &mut App, delta: isize) {
-    if app.chat.move_selection(delta) {
-        app.chat.reset_composer();
-        app.sync_visible_chat_room();
-        app.chat.request_list();
-    }
+/// Rows one Ctrl+H / Ctrl+L press or one wheel notch moves the Home rail.
+const RAIL_SCROLL_STEP: isize = 3;
+
+/// Scroll the Home room rail by `delta` rows, leaving the selection where it
+/// is. The offset is clamped to the rows there are, so scrolling back from
+/// either end moves on the first press. No-op while the rail is not drawn.
+fn scroll_room_rail(app: &mut App, delta: isize) {
+    let Some(rooms_area) = dashboard_room_rail_area(app) else {
+        return;
+    };
+    let (base, max_scroll, current) = room_rail_scroll_state(app, rooms_area);
+    let next = current.saturating_add_signed(delta).min(max_scroll);
+    app.chat
+        .set_rail_scroll_nudge(next as isize - base as isize);
+}
+
+/// Pin the rail at first-visible row `scroll` for the current selection, so a
+/// click on a row of a scrolled rail selects it without the rail jumping back
+/// to centre on it.
+fn keep_room_rail_scroll(app: &mut App, rooms_area: Rect, scroll: usize) {
+    let (base, max_scroll, _) = room_rail_scroll_state(app, rooms_area);
+    app.chat
+        .set_rail_scroll_nudge(scroll.min(max_scroll) as isize - base as isize);
+}
+
+/// `(selection-centred scroll, max scroll, scroll on screen)` for the Home
+/// rail drawn in `rooms_area`.
+fn room_rail_scroll_state(app: &App, rooms_area: Rect) -> (usize, usize, usize) {
+    let username_directory_snapshot = app
+        .username_directory
+        .as_ref()
+        .map(crate::usernames::snapshot);
+    let usernames =
+        UsernameLookup::new(app.chat.usernames(), username_directory_snapshot.as_deref());
+    let room_list_view = chat_room_list_view(app, &usernames);
+    let (base, max_scroll) =
+        crate::app::chat::ui::room_rail_scroll_bounds(rooms_area, &room_list_view);
+    let current = base
+        .saturating_add_signed(room_list_view.rail_scroll_nudge)
+        .min(max_scroll);
+    (base, max_scroll, current)
 }
 
 fn handle_mouse_scroll_over_screen(
@@ -2575,8 +2643,14 @@ fn handle_mouse_scroll_over_screen(
         return false;
     }
 
-    let selection_delta = if delta > 0 { -1 } else { 1 };
-    apply_chat_room_selection_delta(app, selection_delta);
+    // The wheel scrolls the rail the way Ctrl+H / Ctrl+L do; rooms change on
+    // a click, not on a pass of the wheel.
+    let rows = if delta > 0 {
+        -RAIL_SCROLL_STEP
+    } else {
+        RAIL_SCROLL_STEP
+    };
+    scroll_room_rail(app, rows);
     true
 }
 
@@ -2658,7 +2732,9 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
             }
             if let Some(slot) = slot {
                 app.pending_chat_profile_open = None;
+                let (_, _, scroll) = room_rail_scroll_state(app, rooms_area);
                 let changed = app.chat.select_room_slot(slot);
+                keep_room_rail_scroll(app, rooms_area, scroll);
                 if changed {
                     app.chat.reset_composer();
                     app.sync_visible_chat_room();
@@ -3456,14 +3532,11 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
         return false;
     }
 
-    // The scratchpad spends Ctrl+L on its language cycle and says so in its
-    // own footer, so it keeps the key; every other screen gets the redraw.
-    if *byte == CTRL_L && app.screen != Screen::Scratchpad {
-        app.force_full_repaint();
-        return true;
-    }
-
     match *byte {
+        CTRL_R => {
+            app.force_full_repaint();
+            true
+        }
         CTRL_O => {
             open_settings_modal_globally(app);
             true
