@@ -4954,12 +4954,12 @@ fn build_rail_nav_hint_lines() -> Vec<Line<'static>> {
     let hint = |s: &str| -> Span<'static> {
         Span::styled(s.to_string(), Style::default().fg(theme::TEXT_FAINT()))
     };
+    // Three rows, 20 columns: keys that share a verb share a row, and the
+    // hint column lines up at column 10 on every row.
     vec![
-        Line::from(vec![key("h l space"), hint(" jump room")]),
-        Line::from(vec![key("^h ^l"), hint("     scroll")]),
-        Line::from(vec![key("f"), hint("         favorite")]),
+        Line::from(vec![key("h l sp ^/"), hint(" jump room")]),
+        Line::from(vec![key("^h ^l f"), hint("   scroll/fav")]),
         Line::from(vec![key("[ ]/z"), hint("     sort/fold")]),
-        Line::from(vec![key("ctrl+/"), hint("    picker")]),
     ]
 }
 
