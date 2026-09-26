@@ -25,11 +25,18 @@ to the doors.
 ## Source Map
 
 - `state.rs`: `Board` (the closed page-board enum; page order: Top Chips, Arcade Wins, Late Time, then the game boards, the two Lateania snapshot boards then the per-door triples, then the daily/score rosters), `Standings` (one arm per window shape: `MonthlyOnly`, `AllTimeOnly`, `Snapshot`, `Paired`; the renderer matches all, so a new shape cannot fall through to a wrong heading), titles/hints/value formatting, and the selection state.
-- `input.rs`: rail navigation keys.
+- `input.rs`: rail navigation keys/clicks and pointer-targeted wheel scrolling; Ctrl+J/K scrolls the detail pane.
 - `ui.rs`: the board rail (Boards group leading, then Games, Daily Wins, High Scores) and the detail pane with per-window standings columns and the around-you ellipsis tail.
 - `svc.rs`: `LeaderboardService` — the refresh loop, subscriber gate, connect-triggered top-up, process-local online-time accumulator/five-minute batch writer, and the rollover-aware `profile_awards` snapshot loop.
 - Data model: `late-core/src/models/leaderboard.rs` (rosters, queries, `LeaderboardData`); awards in `late-core/src/models/profile_award.rs`.
 - Read-only from here, documented below: `app/door/ingest/` (the pipe filling `door_runs`/`door_milestones`, models `late-core/src/models/{door_run,door_milestone,door_log_cursor}.rs`, migration `136_create_door_ingestion.sql`).
+
+## Page navigation
+
+- `j/k` and arrows select boards with keyboard wraparound. Clicking a visible board row selects it; headings, separators, and the rail divider are inert. The wheel over the rail selects one board per event and stops at either end.
+- `Ctrl+J`/`Ctrl+K` scroll the detail pane down/up one row; the wheel over that pane scrolls three rows. Monthly and all-time share an offset, with each column stopping at its own bottom. Titles and window headings stay fixed. The Badge Guide scrolls by wrapped rows.
+- Offset zero retains the leaders-and-your-rank summary when at least three rows fit; scrolling shows loaded ranks in order. Changing boards resets the offset; clicking the current board preserves it. No extra queries: the existing 500-rank snapshot depth and refresh cadence still apply.
+- Hit regions come from the rendered rail lines, including its viewport offset. Resize and page rendering invalidate stale targets. Keyboard-only mode and overlying modals block page mouse actions.
 
 ## Refresh model
 

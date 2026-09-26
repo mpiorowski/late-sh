@@ -2549,6 +2549,10 @@ impl App {
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), io::Error> {
         tracing::debug!(cols, rows, "window resized");
         self.size = (cols, rows);
+        self.leaderboard_page.clear_hit_regions();
+        if let Some(modal) = &self.paper.modal {
+            modal.invalidate_viewport();
+        }
         self.sync_aquarium_bounds();
         // We can't use `Terminal::resize()` here: since ratatui 0.30.2 its
         // fixed-viewport clear queries `backend.size()`, which reads the

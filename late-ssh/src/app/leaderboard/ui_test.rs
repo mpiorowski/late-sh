@@ -30,6 +30,219 @@ fn viewer() -> Uuid {
 }
 
 #[test]
+fn rendered_rail_rows_are_clickable_after_scrolling_and_resize() {
+    use late_core::models::leaderboard::LeaderboardData;
+    use ratatui::{Terminal, backend::TestBackend, layout::Position};
+    let mut state = LeaderboardPageState::new();
+    let data = LeaderboardData::default();
+    let mut terminal = Terminal::new(TestBackend::new(90, 16)).unwrap();
+    for selected in [0, 10, state.boards().len() - 1] {
+        state.select(selected);
+        terminal
+            .draw(|frame| {
+                super::draw(
+                    frame,
+                    frame.area(),
+                    &super::LeaderboardPageView {
+                        state: &state,
+                        data: &data,
+                        user_id: viewer(),
+                    },
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let mut found_selected = false;
+        for y in 0..15 {
+            let row: String = (0..24).map(|x| buffer[(x, y)].symbol()).collect();
+            let hit = state.board_at(Position::new(4, y));
+            if let Some(index) = hit {
+                assert!(row.contains(state.boards()[index].title()), "{row:?}");
+                found_selected |= index == selected;
+            } else {
+                assert!(!row.contains(" > "), "selected row must be clickable");
+            }
+        }
+        assert!(found_selected);
+        assert_eq!(state.board_at(Position::new(24, 5)), None, "divider");
+    }
+    let mut tiny = Terminal::new(TestBackend::new(30, 5)).unwrap();
+    tiny.draw(|frame| {
+        super::draw(
+            frame,
+            frame.area(),
+            &super::LeaderboardPageView {
+                state: &state,
+                data: &data,
+                user_id: viewer(),
+            },
+        )
+    })
+    .unwrap();
+    assert!(!state.over_rail(Position::new(4, 5)));
+    assert_eq!(state.board_at(Position::new(4, 5)), None);
+}
+
+#[test]
+fn scrolling_reveals_every_rank_and_restores_the_own_rank_summary() {
+    let board = Board::TopChips;
+    let entries: Vec<_> = (1..=20)
+        .map(|rank| {
+            entry(
+                rank,
+                &format!("player{rank}"),
+                Uuid::from_u128(rank as u128),
+                rank,
+            )
+        })
+        .collect();
+    let own = entries[17].user_id;
+    let top = super::scrolled_window_lines("monthly", &entries, board, own, 5, 40, 0);
+    assert!(text(&top[4]).contains('…'));
+    assert!(text(&top[5]).contains("player18"));
+    let mut seen = std::collections::HashSet::new();
+    for offset in 1..=15 {
+        let lines = super::scrolled_window_lines("monthly", &entries, board, own, 5, 40, offset);
+        assert!(text(&lines[0]).contains("monthly"));
+        for (row, line) in lines[1..].iter().enumerate() {
+            let rank = offset as usize + row + 1;
+            assert!(text(line).contains(&format!("player{rank} ")));
+            seen.insert(rank);
+        }
+    }
+    assert!((2..=20).all(|rank| seen.contains(&rank)));
+    let restored = super::scrolled_window_lines("monthly", &entries, board, own, 5, 40, 0);
+    assert_eq!(top, restored);
+    let short = super::scrolled_window_lines("monthly", &entries[..8], board, own, 5, 40, 15);
+    assert!(text(&short[1]).contains("player4 "));
+    assert!(text(&short[5]).contains("player8 "));
+}
+
+#[test]
+fn badge_guide_scrolls_wrapped_text_and_clamps_after_resize() {
+    use late_core::models::leaderboard::LeaderboardData;
+    use ratatui::{Terminal, backend::TestBackend};
+    let mut state = LeaderboardPageState::new();
+    state.select(state.boards().len() - 1);
+    let data = LeaderboardData::default();
+    let mut terminal = Terminal::new(TestBackend::new(70, 15)).unwrap();
+    terminal
+        .draw(|frame| {
+            super::draw(
+                frame,
+                frame.area(),
+                &super::LeaderboardPageView {
+                    state: &state,
+                    data: &data,
+                    user_id: viewer(),
+                },
+            )
+        })
+        .unwrap();
+    state.scroll_by(i16::MAX);
+    let bottom = state.scroll();
+    assert!(bottom > 0);
+    state.scroll_by(1);
+    assert_eq!(state.scroll(), bottom);
+    let mut large = Terminal::new(TestBackend::new(150, 100)).unwrap();
+    large
+        .draw(|frame| {
+            super::draw(
+                frame,
+                frame.area(),
+                &super::LeaderboardPageView {
+                    state: &state,
+                    data: &data,
+                    user_id: viewer(),
+                },
+            )
+        })
+        .unwrap();
+    assert!(state.scroll() < bottom);
+}
+
+#[test]
+fn paired_columns_share_scroll_and_keep_headings_fixed() {
+    use late_core::models::leaderboard::{BoardWindows, LeaderboardData};
+    use ratatui::{Terminal, backend::TestBackend};
+    let mut state = LeaderboardPageState::new();
+    state.select(2); // Late Time has paired windows.
+    let entries: Vec<_> = (1..=40)
+        .map(|rank| {
+            entry(
+                rank,
+                &format!("player{rank}"),
+                Uuid::from_u128(rank as u128),
+                rank,
+            )
+        })
+        .collect();
+    let data = LeaderboardData {
+        online_time: BoardWindows {
+            monthly: entries[..8].to_vec(),
+            all_time: entries,
+        },
+        ..LeaderboardData::default()
+    };
+    let mut terminal = Terminal::new(TestBackend::new(110, 12)).unwrap();
+    let draw = |terminal: &mut Terminal<TestBackend>| {
+        terminal
+            .draw(|frame| {
+                super::draw(
+                    frame,
+                    frame.area(),
+                    &super::LeaderboardPageView {
+                        state: &state,
+                        data: &data,
+                        user_id: Uuid::nil(),
+                    },
+                )
+            })
+            .unwrap();
+    };
+    draw(&mut terminal);
+    state.scroll_by(2);
+    draw(&mut terminal);
+    let row = |y| {
+        (25..110)
+            .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+            .collect::<String>()
+    };
+    assert!(row(4).contains("monthly") && row(4).contains("all-time"));
+    assert_eq!(row(5).matches("player3").count(), 2);
+    state.scroll_by(i16::MAX);
+    draw(&mut terminal);
+    let bottom: String = (25..110)
+        .map(|x| terminal.backend().buffer()[(x, 10)].symbol())
+        .collect();
+    assert!(
+        bottom.contains("player8") && bottom.contains("player40"),
+        "{bottom}"
+    );
+}
+
+#[test]
+fn two_row_viewport_keeps_rank_one_reachable_and_wide_names_fit() {
+    let entries: Vec<_> = (1..=10)
+        .map(|rank| entry(rank, "界界界界界", Uuid::from_u128(rank as u128), rank))
+        .collect();
+    let lines = super::scrolled_window_lines(
+        "monthly",
+        &entries,
+        Board::TopChips,
+        entries[8].user_id,
+        2,
+        20,
+        0,
+    );
+    assert_eq!(lines.len(), 3);
+    assert!(text(&lines[1]).contains("#1"));
+    assert!(text(&lines[2]).contains("#2"));
+    assert!(lines[1].width() <= 20);
+    assert!(text(&lines[1]).contains('…'));
+}
+
+#[test]
 fn entry_line_right_aligns_value_and_truncates_long_names() {
     let board = Board::Score(ScoreGame::ALL[0]);
     let width = 30usize;
@@ -205,7 +418,7 @@ fn window_swaps_last_two_rows_for_ellipsis_and_own_row_below_the_fold() {
 #[test]
 fn rail_groups_boards_under_headers_at_roster_boundaries() {
     let state = LeaderboardPageState::new();
-    let (lines, selected_line) = rail_lines(&state);
+    let (lines, selected_line, _) = rail_lines(&state);
 
     // The bespoke boards lead under "Boards", every game board follows under
     // "Games", then one header per roster group, each preceded by a blank

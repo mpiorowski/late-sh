@@ -4,6 +4,25 @@ use late_core::models::leaderboard::{
 
 use crate::app::leaderboard::state::*;
 
+#[test]
+fn wheel_selection_stops_at_ends_and_only_board_changes_reset_scroll() {
+    use ratatui::layout::Rect;
+    let mut state = LeaderboardPageState::new();
+    state.set_content_area(Rect::new(25, 1, 55, 20), 100);
+    state.scroll_by(10);
+    state.select(0);
+    assert_eq!(state.scroll(), 10);
+    state.wheel_select(-1);
+    assert_eq!(state.selected_index(), 0);
+    assert_eq!(state.scroll(), 10);
+    state.wheel_select(1);
+    assert_eq!(state.selected_index(), 1);
+    assert_eq!(state.scroll(), 0);
+    state.select(state.boards().len() - 1);
+    state.wheel_select(1);
+    assert_eq!(state.selected_index(), state.boards().len() - 1);
+}
+
 /// The page list is roster-derived: the three bespoke boards lead, then the
 /// game boards (the Lateania boards, then each door's board triple), then
 /// every daily puzzle, then every score game. A roster addition in late-core

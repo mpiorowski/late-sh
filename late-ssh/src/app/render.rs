@@ -420,6 +420,7 @@ impl App {
         // and desync it from the widget's real (persistent) viewport whenever
         // the cursor moves up inside the visible window.
         self.chat.last_chat_hit_layout.set(None);
+        self.leaderboard_page.clear_hit_regions();
 
         // Init theme and layout sync — preview settings-modal draft live while open.
         let active_theme_id = if self.show_settings {
@@ -2207,10 +2208,6 @@ impl App {
             );
         }
 
-        if let Some(modal) = ctx.paper_modal {
-            crate::app::paper::ui::draw(frame, inner, modal);
-        }
-
         if ctx.show_help {
             help_modal::ui::draw(frame, inner, ctx.help_modal_state, ctx.listen_url);
         }
@@ -2317,6 +2314,12 @@ impl App {
                 );
             }
             None => {}
+        }
+
+        // The paper captures input before every ordinary modal, so it must
+        // also be drawn above them, including a pending stream handoff.
+        if let Some(modal) = ctx.paper_modal {
+            crate::app::paper::ui::draw(frame, inner, modal);
         }
 
         // First contact's breakthrough (`app/deadchannel/haunt`): the whole

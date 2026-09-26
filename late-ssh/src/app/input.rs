@@ -1032,6 +1032,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
             if handle_notifications_hud_click(app, mouse) {
                 return;
             }
+            if ctx.screen == Screen::Leaderboard
+                && crate::app::leaderboard::input::handle_mouse(&mut app.leaderboard_page, mouse)
+            {
+                return;
+            }
             if let Some(delta) = mouse_scroll_delta(mouse) {
                 if handle_mouse_scroll_over_screen(app, ctx.screen, mouse, delta) {
                     return;

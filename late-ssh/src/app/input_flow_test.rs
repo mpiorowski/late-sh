@@ -22,6 +22,80 @@ use tokio::time::Duration;
 use uuid::Uuid;
 
 #[tokio::test]
+async fn leaderboard_mouse_and_control_keys_target_rail_and_content_separately() {
+    use crate::app::{common::primitives::Screen, leaderboard::state::Board};
+    use late_core::models::{
+        leaderboard::{LeaderboardData, RankedEntry},
+        user::InteractionMode,
+    };
+    use ratatui::layout::Position;
+    use std::sync::Arc;
+
+    let db = new_test_db().await;
+    let user = create_test_user(&db.db, "leaderboard-mouse-flow").await;
+    let mut app = make_app(db.db.clone(), user.id, "leaderboard-mouse-flow");
+    app.resize(100, 24).unwrap();
+    app.set_screen(Screen::Leaderboard);
+    app.leaderboard = Arc::new(LeaderboardData {
+        monthly_chip_earners: (1..=100)
+            .map(|rank| RankedEntry {
+                username: format!("player{rank}"),
+                user_id: Uuid::from_u128(rank as u128),
+                rank,
+                value: rank,
+                note: None,
+            })
+            .collect(),
+        ..LeaderboardData::default()
+    });
+    app.render().unwrap();
+    app.handle_input(b"\n\n\x0b");
+    assert_eq!(app.leaderboard_page.scroll(), 1);
+    assert_eq!(app.leaderboard_page.selected_board(), Board::TopChips);
+    app.handle_input(b"\r");
+    assert_eq!(app.leaderboard_page.scroll(), 1, "Enter is not Ctrl+J");
+
+    let content = (0..24)
+        .flat_map(|y| (0..100).map(move |x| Position::new(x, y)))
+        .find(|point| app.leaderboard_page.over_content(*point))
+        .unwrap();
+    let wheel = format!("\x1b[<65;{};{}M", content.x + 1, content.y + 1);
+    app.handle_input(wheel.as_bytes());
+    assert_eq!(app.leaderboard_page.scroll(), 4);
+    app.interaction_mode = InteractionMode::Keyboard;
+    app.handle_input(wheel.as_bytes());
+    assert_eq!(app.leaderboard_page.scroll(), 4);
+    app.interaction_mode = InteractionMode::Mouse;
+    app.show_help = true;
+    app.handle_input(b"\n\x0b");
+    app.handle_input(wheel.as_bytes());
+    assert_eq!(app.leaderboard_page.scroll(), 4, "overlay owns input");
+    app.show_help = false;
+
+    let board = (0..24)
+        .flat_map(|y| (0..100).map(move |x| Position::new(x, y)))
+        .find(|point| app.leaderboard_page.board_at(*point) == Some(1))
+        .unwrap();
+    let click = format!("\x1b[<0;{};{}M", board.x + 1, board.y + 1);
+    app.handle_input(click.as_bytes());
+    assert_eq!(app.leaderboard_page.selected_board(), Board::ArcadeWins);
+    assert_eq!(app.leaderboard_page.scroll(), 0);
+    app.render().unwrap();
+    let rail_wheel = format!("\x1b[<65;{};{}M", board.x + 1, board.y + 1);
+    app.handle_input(rail_wheel.as_bytes());
+    assert_eq!(app.leaderboard_page.selected_board(), Board::TimeOnline);
+    app.handle_input(b"k\x1b[A");
+    assert_eq!(app.leaderboard_page.selected_board(), Board::TopChips);
+    app.resize(40, 10).unwrap();
+    app.handle_input(click.as_bytes());
+    assert_eq!(
+        app.leaderboard_page.selected_board(),
+        Board::TopChips,
+        "resize discards old hit targets"
+    );
+}
+
+#[tokio::test]
 async fn quit_routes_open_confirm_without_persisting_exit_command() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "quit-confirm-it").await;

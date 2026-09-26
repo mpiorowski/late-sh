@@ -17,7 +17,7 @@ It is also where the operator's word lands: every `#announcements` post from the
 | `svc.rs` | `PaperService`: the sweeper (the press) and the open requests (the newsstand); `tick(app)`: the session-side orchestration (login pop, `/paper`, flag writes). The three system prompts live here. |
 | `state.rs` | `PaperState` (per session), `PaperModal`, `PaperCommand` + parser, `PaperInk`/`PaperSpan`/`PaperLine` (the ink vocabulary), and `lay_out`: the pure function from an edition's rows plus this reader's rail order to the modal's lines. Reads no palette. |
 | `ui.rs` | The centered modal, announcements-shaped; `ink_style` maps `PaperInk` onto the theme, exhaustively, inside the draw. |
-| `input.rs` | Keys while the modal is up: `j/k`/arrows/PgUp/PgDn scroll, `Esc`/`q`/`Enter` close. |
+| `input.rs` | `j/k`/arrows/PgUp/PgDn scroll, Home returns to the top, `Esc`/`q`/`Enter` or `[x]` close. Wheel and scrollbar gestures stay inside the modal. |
 | `late-core/src/models/paper.rs` | Every read and write of `paper_room_editions` and `paper_sections` (migration 173). NEW WORK reads `late-core/src/models/job_posting.rs`. |
 
 ## The press (multi-replica rule as applied)
@@ -38,11 +38,34 @@ It is also where the operator's word lands: every `#announcements` post from the
 - The modal sits above every other overlay in input and render order; a ready paper waits in `pending_modal` while a newcomer's tour holds the keys. `/paper preview` carries today's announcements so far the same way (`PressOutcome::Previewed.announcements`), with no NEW WORK.
 - `/paper` shows an "at the press…" modal until the rows land; `Esc` on it drops the request (`awaiting` cleared), so a late answer never pops over something else.
 
+## Reader controls
+
+The wheel inside the popup scrolls three wrapped rows. The right-margin scrollbar
+appears only when the paper overflows; its thumb drags proportionally, and track
+clicks page toward the pointer. Outside clicks do not dismiss. The draw records
+geometry and uses Ratatui paragraph line counting to clamp all scroll paths,
+including after resize. Release, resize, focus loss, and closing cancel dragging.
+The `[x]` button uses the same request-cancellation path as Esc, including while
+loading. Keyboard-only mode ignores mouse reports. The paper draws above other
+ordinary modals, matching its input priority.
+
 ## Telemetry
 
 `record_paper_print(PaperPrintResult)` per page (printed / quiet / lost / failed) and `record_paper_open(PaperOpenResult)` per request (login / command / empty / already_shown / unavailable / failed). Print failures log through `late_core::error_span!` with the edition and room.
 
 ## Tests
+
+`make seed-paper` runs `scripts/seed_paper_test_data.sh [PARAGRAPHS]` against
+the local Compose Postgres service. It replaces today's UTC `reading` and
+`outside` sections with marked synthetic text and enables `paper_enabled`;
+room pages, chat, user settings, and older editions are untouched. The default
+100 numbered paragraphs exercise wrapping, Unicode, blank lines, and scroll
+limits. `make seed-paper PAPER_PARAGRAPHS=5` changes the length (1–1000).
+Reopen `/paper` to reload; it needs no AI service or server restart.
+
+`input_test.rs` covers wheel boundaries, scrollbar paging/dragging/release,
+resize, keyboard-only mode, modal priority, and loading cancellation through
+the complete App input path. `ui_test.rs` also checks wrapped scroll extents.
 
 `state_test.rs` (whole-modal layout assertion with announcements at the top, command parsing), `ui_test.rs` (the modal drawn under one theme after being built under another), `svc_test.rs` (window math, column tidying, the newsstand's claim path against a real DB including an announcement-only paper that pops at login only once the edition is swept, the login pop with the announcement above the columns and `/paper` driven through a full `App`), `late-core/src/models/paper_test.rs` (claims, reclaim, finish, sections, candidates with `#announcements` skipped), `chat_message_test.rs` (the announcements window query), `user_test.rs` (the shown stamp).
 

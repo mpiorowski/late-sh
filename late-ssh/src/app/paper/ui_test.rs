@@ -87,3 +87,42 @@ fn the_paper_draws_in_the_readers_theme_whoever_built_it() {
         "the paper took its colours from whichever session last rendered on this thread"
     );
 }
+
+#[test]
+fn wrapped_rows_define_the_scroll_limit_and_resize_reclamps_it() {
+    use crate::app::paper::state::{PaperInk, PaperSpan};
+    let mut modal = PaperModal::at_the_press();
+    modal.lines = vec![vec![PaperSpan::new("word 界 ".repeat(200), PaperInk::Body)]];
+    let mut terminal = Terminal::new(TestBackend::new(50, 16)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, frame.area(), &modal))
+        .unwrap();
+    let viewport = modal.viewport();
+    assert!(viewport.content_height > viewport.body.height);
+    modal.scroll(i16::MAX);
+    assert_eq!(
+        modal.scroll_offset(),
+        viewport.content_height - viewport.body.height
+    );
+    terminal
+        .draw(|frame| draw(frame, frame.area(), &modal))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    assert!(
+        (viewport.body.y..viewport.body.bottom()).any(|y| {
+            (viewport.body.x..viewport.body.right()).any(|x| buffer[(x, y)].symbol() == "界")
+        }),
+        "bottom still contains text"
+    );
+    let previous = modal.scroll_offset();
+    let mut larger = Terminal::new(TestBackend::new(150, 40)).unwrap();
+    larger
+        .draw(|frame| draw(frame, frame.area(), &modal))
+        .unwrap();
+    assert!(modal.scroll_offset() < previous);
+    let viewport = modal.viewport();
+    assert_eq!(
+        modal.scroll_offset(),
+        viewport.content_height.saturating_sub(viewport.body.height)
+    );
+}

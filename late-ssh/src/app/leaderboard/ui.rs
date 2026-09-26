@@ -32,7 +32,9 @@ pub(crate) struct LeaderboardPageView<'a> {
 }
 
 pub(crate) fn draw(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
+    view.state.clear_hit_regions();
     if area.height < MIN_HEIGHT || area.width < MIN_WIDTH {
+        view.state.set_content_area(Rect::default(), 0);
         crate::app::common::primitives::draw_too_small(
             frame,
             area,
@@ -54,7 +56,12 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>
     draw_rail(frame, columns[0], view.state);
     draw_detail(frame, below_breathing_row(columns[1]), view);
     frame.render_widget(
-        Paragraph::new(hint_line(&[("j/k", "select board"), ("Tab", "next page")])),
+        Paragraph::new(hint_line(&[
+            ("j/k/click", "board"),
+            ("^J/^K", "scroll"),
+            ("wheel", "under pointer"),
+            ("Tab", "page"),
+        ])),
         rows[1],
     );
 }
@@ -76,7 +83,7 @@ fn draw_rail(frame: &mut Frame, column: Rect, state: &LeaderboardPageState) {
         .border_style(Style::default().fg(theme::BORDER_DIM()));
     let area = below_breathing_row(block.inner(column));
     frame.render_widget(block, column);
-    let (lines, selected_line) = rail_lines(state);
+    let (lines, selected_line, board_lines) = rail_lines(state);
 
     // Keep the selection visible on short terminals without recentering on
     // every keypress: scroll only once it would leave the viewport.
@@ -88,6 +95,18 @@ fn draw_rail(frame: &mut Frame, column: Rect, state: &LeaderboardPageState) {
             .saturating_sub(visible.saturating_sub(2))
             .min(lines.len().saturating_sub(visible))
     };
+    state.set_rail_rows(
+        area,
+        board_lines
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                let row = line.checked_sub(scroll)?;
+                (row < visible)
+                    .then_some((Rect::new(area.x, area.y + row as u16, area.width, 1), index))
+            })
+            .collect(),
+    );
     frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), area);
 }
 
@@ -95,7 +114,7 @@ fn draw_rail(frame: &mut Frame, column: Rect, state: &LeaderboardPageState) {
 /// game board follows under "Games" (Lateania, then the door triples), and
 /// the roster boards get one header per group. Returns the built lines and the
 /// index of the selected row, so the caller can keep it scrolled into view.
-fn rail_lines(state: &LeaderboardPageState) -> (Vec<Line<'static>>, usize) {
+fn rail_lines(state: &LeaderboardPageState) -> (Vec<Line<'static>>, usize, Vec<usize>) {
     let boards = state.boards();
     let first_game = boards.iter().position(|board| {
         matches!(
@@ -119,6 +138,7 @@ fn rail_lines(state: &LeaderboardPageState) -> (Vec<Line<'static>>, usize) {
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut selected_line = 0usize;
+    let mut board_lines = Vec::with_capacity(boards.len());
     for (index, board) in boards.iter().copied().enumerate() {
         let header = if Some(index) == first_game {
             Some("Games")
@@ -150,12 +170,13 @@ fn rail_lines(state: &LeaderboardPageState) -> (Vec<Line<'static>>, usize) {
         } else {
             Style::default().fg(theme::TEXT())
         };
+        board_lines.push(lines.len());
         lines.push(Line::from(vec![
             Span::styled(if selected { " > " } else { "   " }, style),
             Span::styled(board.title(), style),
         ]));
     }
-    (lines, selected_line)
+    (lines, selected_line, board_lines)
 }
 
 fn draw_detail(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
@@ -178,32 +199,89 @@ fn draw_detail(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
     );
 
     if matches!(board, Board::BadgeGuide) {
-        frame.render_widget(
-            Paragraph::new(badges::guide_lines()).wrap(Wrap { trim: false }),
-            rows[3],
-        );
+        let paragraph = Paragraph::new(badges::guide_lines()).wrap(Wrap { trim: false });
+        let max_scroll = paragraph
+            .line_count(rows[3].width)
+            .saturating_sub(rows[3].height as usize);
+        view.state.set_content_area(area, max_scroll);
+        frame.render_widget(paragraph.scroll((view.state.scroll(), 0)), rows[3]);
         return;
     }
 
-    match board.standings(view.data) {
+    let standings = board.standings(view.data);
+    let count = match &standings {
+        Standings::Paired { monthly, all_time } => monthly.len().max(all_time.len()),
+        Standings::MonthlyOnly(entries)
+        | Standings::AllTimeOnly(entries)
+        | Standings::Snapshot(entries) => entries.len(),
+    };
+    let capacity = rows[3].height.saturating_sub(1) as usize;
+    let max_scroll = if rows[3].height >= 3 {
+        count.saturating_sub(capacity)
+    } else {
+        0
+    };
+    view.state.set_content_area(area, max_scroll);
+    let scroll = view.state.scroll();
+    match standings {
         Standings::Paired { monthly, all_time } => {
-            let capacity = (rows[3].height as usize).saturating_sub(1);
             let columns = standings_columns(
                 rows[3],
-                window_natural_width("monthly", monthly, board, view.user_id, capacity),
-                window_natural_width("all-time", all_time, board, view.user_id, capacity),
+                // Use the whole snapshot so columns don't shift while scrolling.
+                window_natural_width("monthly", monthly, board, view.user_id, usize::MAX),
+                window_natural_width("all-time", all_time, board, view.user_id, usize::MAX),
             );
-            draw_window(frame, columns[0], "monthly", monthly, board, view.user_id);
-            draw_window(frame, columns[1], "all-time", all_time, board, view.user_id);
+            draw_window(
+                frame,
+                columns[0],
+                "monthly",
+                monthly,
+                board,
+                view.user_id,
+                scroll,
+            );
+            draw_window(
+                frame,
+                columns[1],
+                "all-time",
+                all_time,
+                board,
+                view.user_id,
+                scroll,
+            );
         }
         Standings::MonthlyOnly(entries) => {
-            draw_window(frame, rows[3], "this month", entries, board, view.user_id);
+            draw_window(
+                frame,
+                rows[3],
+                "this month",
+                entries,
+                board,
+                view.user_id,
+                scroll,
+            );
         }
         Standings::AllTimeOnly(entries) => {
-            draw_window(frame, rows[3], "all time", entries, board, view.user_id);
+            draw_window(
+                frame,
+                rows[3],
+                "all time",
+                entries,
+                board,
+                view.user_id,
+                scroll,
+            );
         }
         Standings::Snapshot(entries) => {
-            draw_window(frame, rows[3], "right now", entries, board, view.user_id);
+            draw_window(
+                frame,
+                rows[3],
+                "right now",
+                entries,
+                board,
+                view.user_id,
+                scroll,
+            );
         }
     }
 }
@@ -248,9 +326,9 @@ fn window_natural_width(
     user_id: Uuid,
     capacity: usize,
 ) -> usize {
-    let heading_width = heading.chars().count() + 8;
+    let heading_width = Line::from(heading).width() + 8;
     let content_width = if entries.is_empty() {
-        empty_copy(board).chars().count() + 2
+        Line::from(empty_copy(board)).width() + 2
     } else {
         let (leader_rows, own_tail) = window_row_plan(entries, user_id, capacity);
         entries
@@ -272,20 +350,54 @@ fn draw_window(
     entries: &[RankedEntry],
     board: Board,
     user_id: Uuid,
+    scroll: u16,
 ) {
     if area.height < 3 || area.width < 12 {
         return;
     }
     let capacity = (area.height as usize).saturating_sub(1);
-    let lines = window_lines(
+    let lines = scrolled_window_lines(
         heading,
         entries,
         board,
         user_id,
         capacity,
         area.width as usize,
+        scroll,
     );
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// At the top retain the compact summary. Once scrolling, every loaded row
+/// is reachable in order, with shorter columns stopping at their own bottom.
+fn scrolled_window_lines(
+    heading: &'static str,
+    entries: &[RankedEntry],
+    board: Board,
+    user_id: Uuid,
+    capacity: usize,
+    width: usize,
+    scroll: u16,
+) -> Vec<Line<'static>> {
+    if scroll == 0 || entries.is_empty() {
+        return window_lines(heading, entries, board, user_id, capacity, width);
+    }
+    let offset = usize::from(scroll).min(entries.len().saturating_sub(capacity));
+    let content_width = entries
+        .iter()
+        .map(|entry| entry_natural_width(entry, board))
+        .max()
+        .unwrap_or(width)
+        .min(width);
+    let mut lines = vec![section_heading(heading)];
+    lines.extend(
+        entries
+            .iter()
+            .skip(offset)
+            .take(capacity)
+            .map(|entry| entry_line(entry, board, entry.user_id == user_id, content_width)),
+    );
+    lines
 }
 
 /// One standings window: heading, then up to `capacity` leader rows. When the
@@ -344,13 +456,15 @@ fn window_row_plan(
     capacity: usize,
 ) -> (usize, Option<usize>) {
     let own_index = entries.iter().position(|entry| entry.user_id == user_id);
-    let own_visible = own_index.is_none_or(|index| index < capacity);
+    // A summary needs room for a leader, an ellipsis, and the viewer. On
+    // tiny viewports prefer ordinary rows so even rank one stays reachable.
+    let own_visible = capacity < 3 || own_index.is_none_or(|index| index < capacity);
     let leader_rows = if own_visible {
         capacity
     } else {
         capacity.saturating_sub(2)
     };
-    let own_tail = own_index.filter(|index| *index >= capacity);
+    let own_tail = own_index.filter(|index| capacity >= 3 && *index >= capacity);
     (leader_rows, own_tail)
 }
 
@@ -375,22 +489,27 @@ fn entry_line(entry: &RankedEntry, board: Board, own: bool, width: usize) -> Lin
 
     // The note is decoration: it renders only when the row fits untruncated
     // with it, otherwise the name keeps the room.
-    let fixed = rank.chars().count() + value.chars().count() + 2;
+    let rank_width = Line::from(rank.as_str()).width();
+    let value_width = Line::from(value.as_str()).width();
+    let fixed = rank_width + value_width + 2;
     let note = entry
         .note
         .as_deref()
         .map(|note| format!(" · {note}"))
-        .filter(|note| entry.username.chars().count() + note.chars().count() + fixed <= width);
-    let note_width = note.as_ref().map_or(0, |note| note.chars().count());
+        .filter(|note| {
+            Line::from(entry.username.as_str()).width() + Line::from(note.as_str()).width() + fixed
+                <= width
+        });
+    let note_width = note
+        .as_ref()
+        .map_or(0, |note| Line::from(note.as_str()).width());
 
     // Right-align within the window's compact content width, leaving two cells
     // between the longest visible name and its value.
-    let name_budget =
-        width.saturating_sub(rank.chars().count() + note_width + value.chars().count() + 2);
+    let name_budget = width.saturating_sub(rank_width + note_width + value_width + 2);
     let name = truncate(&entry.username, name_budget);
-    let pad = width.saturating_sub(
-        rank.chars().count() + name.chars().count() + note_width + value.chars().count(),
-    );
+    let pad = width
+        .saturating_sub(rank_width + Line::from(name.as_str()).width() + note_width + value_width);
     let mut spans = vec![
         Span::styled(rank, rank_style),
         Span::styled(name, name_style),
@@ -407,14 +526,14 @@ fn entry_line(entry: &RankedEntry, board: Board, own: bool, width: usize) -> Lin
 }
 
 fn entry_natural_width(entry: &RankedEntry, board: Board) -> usize {
-    let rank_width = format!("  #{:<3}", entry.rank).chars().count();
-    let value_width = board.format_value(entry.value).chars().count();
+    let rank_width = Line::from(format!("  #{:<3}", entry.rank)).width();
+    let value_width = Line::from(board.format_value(entry.value)).width();
     let note_width = entry
         .note
         .as_deref()
-        .map_or(0, |note| " · ".chars().count() + note.chars().count());
+        .map_or(0, |note| Line::from(format!(" · {note}")).width());
 
-    rank_width + entry.username.chars().count() + note_width + 2 + value_width
+    rank_width + Line::from(entry.username.as_str()).width() + note_width + 2 + value_width
 }
 
 fn empty_copy(board: Board) -> &'static str {
@@ -437,15 +556,24 @@ fn empty_copy(board: Board) -> &'static str {
     }
 }
 
-fn truncate(value: &str, max_chars: usize) -> String {
-    let count = value.chars().count();
-    if count <= max_chars {
+fn truncate(value: &str, max_width: usize) -> String {
+    if Line::from(value).width() <= max_width {
         return value.to_string();
     }
-    if max_chars <= 1 {
+    if max_width <= 1 {
         return String::new();
     }
-    let mut out: String = value.chars().take(max_chars - 1).collect();
+    let line = Line::from(value);
+    let mut out = String::new();
+    let mut width = 0;
+    for grapheme in line.styled_graphemes(Style::default()) {
+        let next = width + Span::raw(grapheme.symbol).width();
+        if next > max_width - 1 {
+            break;
+        }
+        out.push_str(grapheme.symbol);
+        width = next;
+    }
     out.push('…');
     out
 }

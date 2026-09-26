@@ -3,13 +3,14 @@
 //! and no palette either: lines carry `PaperInk`, and `ui.rs` picks the
 //! colours inside the draw. `svc.rs` owns the requests and the tick.
 
-use std::collections::HashSet;
+use std::{cell::Cell, collections::HashSet};
 
 use chrono::{DateTime, Utc};
 use late_core::models::app_flag::AppFlag;
 use late_core::models::job_posting::JobPosting;
 use late_core::models::paper::{PaperEdition, PaperRoomPage, PaperSectionKind, PaperStatus};
 use late_core::models::work_profile::WorkStatus;
+use ratatui::layout::Rect;
 use tokio::sync::{broadcast, oneshot};
 use uuid::Uuid;
 
@@ -128,9 +129,27 @@ pub(crate) fn parse_paper_command(body: &str) -> Option<Option<PaperCommand>> {
 pub(crate) struct PaperModal {
     pub title: String,
     pub lines: Vec<PaperLine>,
-    pub scroll_offset: u16,
+    scroll_offset: Cell<u16>,
+    viewport: Cell<PaperViewport>,
+    drag_grab: Cell<Option<u16>>,
     /// Still waiting for `/paper`'s answer; Esc drops the request.
     pub at_the_press: bool,
+}
+
+/// Geometry and wrapped extent published by the draw, in frame cells.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PaperViewport {
+    pub popup: Rect,
+    pub body: Rect,
+    pub close: Rect,
+    pub track: Rect,
+    pub content_height: u16,
+}
+
+impl PaperViewport {
+    fn max_scroll(self) -> u16 {
+        self.content_height.saturating_sub(self.body.height)
+    }
 }
 
 impl PaperModal {
@@ -142,7 +161,9 @@ impl PaperModal {
                 PaperLine::new(),
                 vec![PaperSpan::new("  at the press…", PaperInk::Meta)],
             ],
-            scroll_offset: 0,
+            scroll_offset: Cell::new(0),
+            viewport: Cell::new(PaperViewport::default()),
+            drag_grab: Cell::new(None),
             at_the_press: true,
         }
     }
@@ -154,14 +175,83 @@ impl PaperModal {
                 layout.edition.edition.format("%a %b %-d")
             ),
             lines: lay_out(layout),
-            scroll_offset: 0,
+            scroll_offset: Cell::new(0),
+            viewport: Cell::new(PaperViewport::default()),
+            drag_grab: Cell::new(None),
             at_the_press: false,
         }
     }
 
-    pub(crate) fn scroll(&mut self, delta: i16) {
-        let next = i32::from(self.scroll_offset) + i32::from(delta);
-        self.scroll_offset = next.clamp(0, i32::from(u16::MAX)) as u16;
+    pub(crate) fn scroll_offset(&self) -> u16 {
+        self.scroll_offset.get()
+    }
+
+    pub(crate) fn scroll(&self, delta: i16) {
+        let next = i32::from(self.scroll_offset.get()) + i32::from(delta);
+        self.scroll_offset
+            .set(next.clamp(0, i32::from(self.viewport.get().max_scroll())) as u16);
+    }
+
+    pub(crate) fn scroll_to_top(&self) {
+        self.scroll_offset.set(0);
+    }
+
+    pub(crate) fn viewport(&self) -> PaperViewport {
+        self.viewport.get()
+    }
+
+    pub(crate) fn set_viewport(&self, viewport: PaperViewport) {
+        if self.viewport.replace(viewport) != viewport {
+            self.cancel_drag();
+        }
+        self.scroll(0);
+    }
+
+    pub(crate) fn invalidate_viewport(&self) {
+        self.viewport.set(PaperViewport::default());
+        self.cancel_drag();
+    }
+
+    pub(crate) fn thumb(&self) -> Rect {
+        let viewport = self.viewport.get();
+        let track = viewport.track;
+        if track.is_empty() || viewport.max_scroll() == 0 {
+            return Rect::default();
+        }
+        let height = (u32::from(track.height) * u32::from(viewport.body.height)
+            / u32::from(viewport.content_height))
+        .max(1)
+        .min(u32::from(track.height)) as u16;
+        let travel = track.height - height;
+        let top = (u32::from(self.scroll_offset.get()) * u32::from(travel)
+            + u32::from(viewport.max_scroll()) / 2)
+            / u32::from(viewport.max_scroll());
+        Rect::new(track.x, track.y + top as u16, 1, height)
+    }
+
+    pub(crate) fn begin_drag(&self, y: u16) {
+        self.drag_grab.set(Some(y.saturating_sub(self.thumb().y)));
+    }
+
+    pub(crate) fn cancel_drag(&self) {
+        self.drag_grab.set(None);
+    }
+
+    pub(crate) fn drag_to(&self, y: u16) {
+        let Some(grab) = self.drag_grab.get() else {
+            return;
+        };
+        let viewport = self.viewport.get();
+        let travel = viewport.track.height.saturating_sub(self.thumb().height);
+        if travel == 0 {
+            return;
+        }
+        let top = (i32::from(y) - i32::from(viewport.track.y) - i32::from(grab))
+            .clamp(0, i32::from(travel)) as u32;
+        self.scroll_offset.set(
+            ((top * u32::from(viewport.max_scroll()) + u32::from(travel) / 2) / u32::from(travel))
+                as u16,
+        );
     }
 }
 
