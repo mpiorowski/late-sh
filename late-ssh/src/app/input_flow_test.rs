@@ -2694,6 +2694,27 @@ async fn ctrl_r_repaints_the_whole_screen_rather_than_blanking_it() {
     );
 }
 
+/// An open chat composer keeps Ctrl+R for itself: it reaches the textarea's
+/// keymap as redo instead of repainting the screen, and the composer stays
+/// open. `/redraw` is the way to repaint from inside one.
+#[tokio::test]
+async fn ctrl_r_in_an_open_composer_redoes_instead_of_repainting() {
+    let (_test_db, mut app) = chat_compose_app("ctrl-r-composer").await;
+
+    app.handle_input(b"abc");
+    assert_eq!(app.chat.composer().lines(), ["abc"]);
+    app.chat.composer_undo();
+    assert_ne!(app.chat.composer().lines(), ["abc"], "undo took something back");
+
+    app.handle_input(b"\x12");
+    assert!(app.chat.composing, "the composer stays open");
+    assert_eq!(
+        app.chat.composer().lines(),
+        ["abc"],
+        "Ctrl+R redid the undone edit instead of repainting"
+    );
+}
+
 /// Uploading an image while replying used to come back as a plain message:
 /// both the `/paste-image` submit and reopening the composer with the finished
 /// URL run through paths that clear the reply target.
@@ -4114,6 +4135,24 @@ async fn rail_scroll_keys_and_wheel_leave_the_selected_room_alone() {
         app.chat.rail_scroll_nudge(),
         0,
         "a selection change snaps the rail back to it"
+    );
+
+    // A click on a row of a scrolled rail selects that room and leaves the
+    // rail where it was: the same row under the pointer is still that room,
+    // so a second click there changes nothing. Had the rail re-centred on
+    // the new selection, the row would have moved out from under the click.
+    app.handle_input(b"\x0c");
+    app.handle_input(b"\x0c");
+    assert_eq!(app.chat.rail_scroll_nudge(), 6);
+    let before_click = app.chat.selected_room_id;
+    app.handle_input(b"\x1b[<0;5;22M");
+    let clicked = app.chat.selected_room_id;
+    assert_ne!(clicked, before_click, "the click selected the room under it");
+    assert!(clicked.is_some(), "the click landed on a room row");
+    app.handle_input(b"\x1b[<0;5;22M");
+    assert_eq!(
+        app.chat.selected_room_id, clicked,
+        "the rail stayed put, so the same row is still the same room"
     );
 }
 

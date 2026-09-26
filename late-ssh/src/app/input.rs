@@ -3538,6 +3538,12 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
 
     match *byte {
         CTRL_R => {
+            // An open chat composer keeps Ctrl+R: the byte falls through to
+            // its readline keymap (`chat::input::handle_byte`), where the
+            // textarea maps it to redo. `/redraw` repaints from inside one.
+            if screen_composes_chat(app.screen) && app.chat.is_composing() {
+                return false;
+            }
             app.force_full_repaint();
             true
         }

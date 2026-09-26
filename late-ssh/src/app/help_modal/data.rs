@@ -702,6 +702,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "                     delete word left",
         "  Ctrl+Delete        delete word right",
         "  Ctrl+U             delete to start of line",
+        "  Ctrl+R             redo (the open composer keeps it; /redraw repaints)",
         "  Ctrl+← / Ctrl+→    move cursor by word",
         "  @user              mention (Tab/Enter to confirm)",
         "  Ctrl+]             open emoji / nerd font picker",

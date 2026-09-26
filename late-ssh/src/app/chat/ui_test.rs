@@ -290,6 +290,112 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
     );
 }
 
+/// Plain glyphs (`show_flag_fallback`) is the one switch that keeps Nerd Font
+/// icons off the screen: with it on, a body loses them and a reaction chip
+/// whose icon was nothing but Nerd Font keeps its count behind `?`. With it
+/// off both render as posted.
+#[test]
+fn plain_glyphs_drops_nerd_font_icons_from_the_body_and_the_reaction_chips() {
+    theme::set_current_by_id("late");
+
+    let render = |show_flag_fallback: bool| -> String {
+        let room_id = Uuid::from_u128(1);
+        let current_user_id = Uuid::from_u128(2);
+        let author_id = Uuid::from_u128(3);
+        let created = Utc::now();
+        let message = ChatMessage {
+            id: Uuid::from_u128(10),
+            created,
+            updated: created,
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            room_id,
+            user_id: author_id,
+            body: "ship \u{e7a8} now".to_string(),
+        };
+        let usernames = HashMap::from([
+            (current_user_id, "alice".to_string()),
+            (author_id, "bob".to_string()),
+        ]);
+        let countries = HashMap::new();
+        let bonsai_glyphs = HashMap::new();
+        let chat_badges = HashMap::new();
+        let friend_user_ids = HashSet::new();
+        let live_user_ids = HashSet::new();
+        let message_reactions = HashMap::from([(
+            message.id,
+            vec![
+                ChatMessageReactionSummary {
+                    icon: "\u{e7a8}".to_string(),
+                    count: 2,
+                },
+                ChatMessageReactionSummary {
+                    icon: "🚀".to_string(),
+                    count: 1,
+                },
+            ],
+        )]);
+        let message_gilds = HashMap::new();
+        let inline_images = HashMap::new();
+        let profile_award_badges = HashMap::new();
+        let drunk_levels = HashMap::new();
+        let name_flair = HashMap::new();
+        let away_user_ids = HashSet::new();
+        let translations = HashMap::new();
+        let translation_hidden = HashSet::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
+        let ctx = ChatRowsContext {
+            versions: ChatRowsVersions::default(),
+            current_user_id,
+            live_user_ids: &live_user_ids,
+            show_flag_fallback,
+            usernames: &username_lookup,
+            countries: &countries,
+            friend_user_ids: &friend_user_ids,
+            bonsai_glyphs: &bonsai_glyphs,
+            chat_badges: &chat_badges,
+            profile_award_badges: &profile_award_badges,
+            message_reactions: &message_reactions,
+            message_gilds: &message_gilds,
+            inline_images: &inline_images,
+            dividers: ChatDividers::default(),
+            drunk_levels: &drunk_levels,
+            name_flair: &name_flair,
+            away_user_ids: &away_user_ids,
+            name_flicker: None,
+            translations: &translations,
+            translation_hidden: &translation_hidden,
+            runner_looks: None,
+        };
+
+        let mut cache = ChatRowsCache::default();
+        ensure_chat_rows_cache(&mut cache, vec![&message], 60, ctx);
+        cache
+            .all_rows
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let as_posted = render(false);
+    assert!(as_posted.contains("ship \u{e7a8} now"), "{as_posted}");
+    assert!(as_posted.contains("[\u{e7a8} 2] [🚀 1]"), "{as_posted}");
+
+    let plain = render(true);
+    assert!(plain.contains("ship  now"), "{plain}");
+    assert!(plain.contains("[? 2] [🚀 1]"), "{plain}");
+    assert!(
+        !plain.chars().any(is_nerd_font_glyph),
+        "a Nerd Font glyph survived: {plain}"
+    );
+}
+
 /// The crown is glued to the name, ahead of a rented title and ahead of the
 /// badge stack, and it never displaces either.
 #[test]
