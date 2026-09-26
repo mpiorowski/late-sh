@@ -786,7 +786,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Constraint::Length(1),                // composer keep-focused row
         Constraint::Length(1),                // breathing
         Constraint::Length(1),                // Display subsection heading
-        Constraint::Length(1),                // flag fallback row
+        Constraint::Length(1),                // plain glyphs row
         Constraint::Length(1),                // terminal images row
         Constraint::Length(1),                // chat badges row
         Constraint::Length(1),                // breathing
@@ -862,7 +862,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             state,
             TweakRow::FlagFallback,
             width,
-            "Chat flag text fallback",
+            "Plain glyphs",
             toggle_span(state.draft().show_flag_fallback),
         )),
         sections[10],

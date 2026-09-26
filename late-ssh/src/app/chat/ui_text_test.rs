@@ -572,3 +572,15 @@ fn composer_rows_soft_wrap_words() {
     let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
     assert_eq!(texts, vec!["hello", "wide", "world"]);
 }
+
+#[test]
+fn nerd_font_glyphs_are_dropped_and_everything_else_kept() {
+    // BMP PUA (nf-dev-rust), supplementary PUA (nf-md), then emoji, box
+    // drawing and a flag that must all survive.
+    let text = "ship it \u{e7a8} now \u{f0001}! 🚀 ─ 🇵🇱";
+    assert_eq!(without_nerd_font_glyphs(text), "ship it  now ! 🚀 ─ 🇵🇱");
+    assert!(matches!(
+        without_nerd_font_glyphs("plain 🚀"),
+        std::borrow::Cow::Borrowed(_)
+    ));
+}

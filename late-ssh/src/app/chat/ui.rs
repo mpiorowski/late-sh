@@ -46,7 +46,10 @@ use super::state::{
     is_selected_slot, synthetic_favorite_id, synthetic_slot_for_favorite_id,
     visual_order_for_rooms,
 };
-use super::ui_text::{AuthorTint, Gutter, reaction_label, wrap_chat_entry_to_lines};
+use super::ui_text::{
+    AuthorTint, Gutter, is_nerd_font_glyph, reaction_label, without_nerd_font_glyphs,
+    wrap_chat_entry_to_lines,
+};
 
 const REACTION_PICKER_KEYS: [i16; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 /// The gap between messages and composer: a blank breather row on top so the
@@ -1786,6 +1789,39 @@ fn ensure_chat_rows_cache(
             .get(&msg.id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
+        // Plain glyphs (`show_flag_fallback`) also drops Nerd Font icons from
+        // the body and the reaction chips, the only places they arrive. A
+        // chip whose icon was nothing but Nerd Font keeps its count behind a
+        // `?` rather than vanishing.
+        let plain_reactions: Vec<ChatMessageReactionSummary>;
+        let reactions = if ctx.show_flag_fallback
+            && reactions
+                .iter()
+                .any(|reaction| reaction.icon.chars().any(is_nerd_font_glyph))
+        {
+            plain_reactions = reactions
+                .iter()
+                .map(|reaction| {
+                    let icon = without_nerd_font_glyphs(&reaction.icon);
+                    ChatMessageReactionSummary {
+                        icon: if icon.trim().is_empty() {
+                            "?".to_string()
+                        } else {
+                            icon.into_owned()
+                        },
+                        count: reaction.count,
+                    }
+                })
+                .collect();
+            plain_reactions.as_slice()
+        } else {
+            reactions
+        };
+        let body = if ctx.show_flag_fallback {
+            without_nerd_font_glyphs(&msg.body)
+        } else {
+            Cow::Borrowed(msg.body.as_str())
+        };
         let gild = ctx.message_gilds.get(&msg.id).copied();
 
         // A reply is checked before a mention because the composer prepends a
@@ -1809,7 +1845,7 @@ fn ensure_chat_rows_cache(
         // render as one authorless row; consecutive ones stack with no
         // blank row between them, however far apart in time.
         let system_text = is_system_author(raw_author)
-            .then(|| super::ui_text::parse_system_line(&msg.body))
+            .then(|| super::ui_text::parse_system_line(&body))
             .flatten();
         let is_system = system_text.is_some();
 
@@ -1871,7 +1907,7 @@ fn ensure_chat_rows_cache(
             None => width,
         };
         let mut wrapped = wrap_chat_entry_to_lines(
-            &msg.body,
+            &body,
             &stamp,
             &prefix,
             text_width,

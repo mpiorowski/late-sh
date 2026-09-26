@@ -1524,7 +1524,7 @@ fn settings_help_lines() -> Vec<String> {
         "  country via picker, with Unicode flag rendering".to_string(),
         "  timezone via picker".to_string(),
         "  IDE, terminal, OS, and languages for profile/late.fetch surfaces".to_string(),
-        "  Tweaks: terminal background sync, text brightness, right sidebar mode, room list, composer send behavior, music mute-on-start, chat flag fallback, land on Home"
+        "  Tweaks: terminal background sync, text brightness, right sidebar mode, room list, composer send behavior, music mute-on-start, plain glyphs, land on Home"
             .to_string(),
         "  private RSS/Atom subscriptions".to_string(),
         "  IRC access token for external IRC clients".to_string(),
@@ -1577,7 +1577,7 @@ fn settings_help_lines() -> Vec<String> {
         "    Send and keep open on Enter   Enter sends without closing the composer; while on, Alt+S becomes a no-op"
             .to_string(),
         "  Display".to_string(),
-        "    Chat flag text fallback       show text/boxed-letter labels instead of flag emoji in chat badges and Shop Flags"
+        "    Plain glyphs                  for fonts without flags or Nerd Font: text labels instead of flag emoji in chat badges and Shop Flags, and Nerd Font icons left out of chat messages and reactions"
             .to_string(),
         "  Startup".to_string(),
         "    Land on                       where a session starts: Clubhouse (default), Home, or Zen; first sessions always start in the Clubhouse"

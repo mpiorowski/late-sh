@@ -3990,7 +3990,7 @@ async fn chat_badges_picker_hides_a_whole_game_ladder() {
     wait_for_render_contains(&mut app, "Chat badges").await;
     wait_for_render_contains(&mut app, "all shown").await;
     // Tweaks rows: background, brightness, right rail, room rail, composer,
-    // flag fallback, terminal images, then Chat badges.
+    // plain glyphs, terminal images, then Chat badges.
     app.handle_input(b"jjjjjjj\r");
     // The heading fits the dialog whole, not cut at its border.
     wait_for_render_contains(&mut app, "Earn it, hide it. Games show their top badge.").await;
