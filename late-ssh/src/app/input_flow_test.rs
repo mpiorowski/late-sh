@@ -2704,7 +2704,11 @@ async fn ctrl_r_in_an_open_composer_redoes_instead_of_repainting() {
     app.handle_input(b"abc");
     assert_eq!(app.chat.composer().lines(), ["abc"]);
     app.chat.composer_undo();
-    assert_ne!(app.chat.composer().lines(), ["abc"], "undo took something back");
+    assert_ne!(
+        app.chat.composer().lines(),
+        ["abc"],
+        "undo took something back"
+    );
 
     app.handle_input(b"\x12");
     assert!(app.chat.composing, "the composer stays open");
@@ -4147,7 +4151,10 @@ async fn rail_scroll_keys_and_wheel_leave_the_selected_room_alone() {
     let before_click = app.chat.selected_room_id;
     app.handle_input(b"\x1b[<0;5;22M");
     let clicked = app.chat.selected_room_id;
-    assert_ne!(clicked, before_click, "the click selected the room under it");
+    assert_ne!(
+        clicked, before_click,
+        "the click selected the room under it"
+    );
     assert!(clicked.is_some(), "the click landed on a room row");
     app.handle_input(b"\x1b[<0;5;22M");
     assert_eq!(
