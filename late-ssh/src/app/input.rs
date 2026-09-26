@@ -763,6 +763,7 @@ fn overlay_input_action(event: &ParsedInput) -> Option<OverlayInputAction> {
 
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     handle_parsed_input_inner(app, event);
+    app.chat.forget_stale_rail_scroll();
 }
 
 fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
