@@ -391,6 +391,18 @@ impl State {
         self.door_events.iter().any(|e| e.arrived)
     }
 
+    /// Stand on the back-door mat (the `n` shortcut to Nightcap), in the
+    /// shared lobby too, so the rest of the room sees you head out back
+    /// instead of vanishing from your seat.
+    pub fn step_to_back_door(&mut self) {
+        let (x, y) = map::BACK_DOOR_MAT;
+        if let Some(lobby) = &self.lobby {
+            lobby.place(self.user_id, &self.username, x, y);
+        }
+        self.player_x = x;
+        self.player_y = y;
+    }
+
     /// Try to walk one step; the first step frees your seat in the shared
     /// lobby.
     pub fn walk(&mut self, dx: i32, dy: i32) {

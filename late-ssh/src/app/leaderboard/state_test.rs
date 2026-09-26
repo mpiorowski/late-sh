@@ -15,7 +15,7 @@ fn board_list_follows_the_rosters() {
     assert_eq!(boards[1], Board::ArcadeWins);
     assert_eq!(boards[2], Board::TimeOnline);
     assert_eq!(boards[3], Board::LateaniaAdventurers);
-    assert_eq!(boards[4], Board::LateaniaFrontier);
+    assert_eq!(boards[4], Board::LateaniaPvp);
     assert_eq!(boards[5], Board::DoorWins(DoorGame::ALL[0]));
     assert_eq!(boards[6], Board::DoorDepth(DoorGame::ALL[0]));
     assert_eq!(boards[7], Board::DoorScore(DoorGame::ALL[0]));

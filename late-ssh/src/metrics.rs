@@ -185,17 +185,21 @@ pub enum FirstContactBeat {
 
 /// One fight command settling on the runner row (`deadchannel/fight`).
 /// `Refused` is a command the row turned down (no rations, signal down,
-/// the armorer's no); `Outfitted` is a piece bought at the armorer;
-/// `Failed` is the write not landing.
+/// the armorer's or patch's no); `Outfitted` is a piece bought at the
+/// armorer; `Patched` is the signal bought back at patch; `Failed` is
+/// the write not landing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FightBeat {
     Started,
     Resumed,
     Round,
     Won,
+    /// The Old Signal put down: a mark and the reset.
+    Slain,
     Lost,
     Escaped,
     Outfitted,
+    Patched,
     Refused,
     Failed,
 }
@@ -1101,9 +1105,11 @@ mod inner {
             FightBeat::Resumed => "resumed",
             FightBeat::Round => "round",
             FightBeat::Won => "won",
+            FightBeat::Slain => "slain",
             FightBeat::Lost => "lost",
             FightBeat::Escaped => "escaped",
             FightBeat::Outfitted => "outfitted",
+            FightBeat::Patched => "patched",
             FightBeat::Refused => "refused",
             FightBeat::Failed => "failed",
         }

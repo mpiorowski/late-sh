@@ -31,176 +31,319 @@ pub enum Slot {
 }
 
 /// One piece of a look: its code (what the row stores), the slot it fills,
-/// and its five-cell row.
+/// the level that puts it on the tailor's rack, and its five-cell row.
+/// Every piece is reachable by level; there is no piece only a few can
+/// wear, so no look becomes the one everyone copies.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Piece {
     pub code: &'static str,
     pub slot: Slot,
+    pub level: i32,
     pub row: &'static str,
 }
 
-/// The starter set: free, assigned at random on the invited join, and
-/// re-pickable at the tailor for nothing once the city exists. Bought and
-/// earned pieces join this table later with their own kinds.
+/// Levels that open something at the tailor: three more pieces per slot
+/// and a new tint every three levels, white alone at the top of the
+/// ladder. `state_test` holds the table and the palette to this list.
+pub const UNLOCK_LEVELS: [i32; 6] = [1, 4, 7, 10, 13, 15];
+
+/// The whole rack, ordered by unlock level so the tailor's rack walks from
+/// street to legend. Free once unlocked, re-picked forever; the join and
+/// the tailor's shuffle draw only from what the level has opened.
 pub const PIECES: &[Piece] = &[
     // hoods
     Piece {
         code: "hood.plain",
         slot: Slot::Hood,
+        level: 1,
         row: " ▄▄▄ ",
+    },
+    Piece {
+        code: "hood.flat",
+        slot: Slot::Hood,
+        level: 1,
+        row: " ▀▀▀ ",
+    },
+    Piece {
+        code: "hood.cap",
+        slot: Slot::Hood,
+        level: 1,
+        row: " ┌─┐ ",
     },
     Piece {
         code: "hood.heavy",
         slot: Slot::Hood,
+        level: 4,
         row: " ▟█▙ ",
-    },
-    Piece {
-        code: "hood.cross",
-        slot: Slot::Hood,
-        row: " ╬═╬ ",
     },
     Piece {
         code: "hood.wire",
         slot: Slot::Hood,
+        level: 4,
         row: " ┼─┼ ",
+    },
+    Piece {
+        code: "hood.hat",
+        slot: Slot::Hood,
+        level: 4,
+        row: " ▛▀▜ ",
     },
     Piece {
         code: "hood.antenna",
         slot: Slot::Hood,
+        level: 7,
         row: " ╫╫╫ ",
     },
     Piece {
         code: "hood.static",
         slot: Slot::Hood,
+        level: 7,
         row: " ▚▞▚ ",
     },
     Piece {
-        code: "hood.cap",
+        code: "hood.frame",
         slot: Slot::Hood,
-        row: " ┌─┐ ",
-    },
-    Piece {
-        code: "hood.flat",
-        slot: Slot::Hood,
-        row: " ▀▀▀ ",
-    },
-    Piece {
-        code: "hood.crown",
-        slot: Slot::Hood,
-        row: "▚▞▚▞▚",
+        level: 7,
+        row: " ╔═╗ ",
     },
     Piece {
         code: "hood.ghost",
         slot: Slot::Hood,
+        level: 10,
         row: " ░▒░ ",
+    },
+    Piece {
+        code: "hood.tuner",
+        slot: Slot::Hood,
+        level: 10,
+        row: " ╪═╪ ",
+    },
+    Piece {
+        code: "hood.spikes",
+        slot: Slot::Hood,
+        level: 10,
+        row: " ┳┳┳ ",
+    },
+    Piece {
+        code: "hood.cross",
+        slot: Slot::Hood,
+        level: 13,
+        row: " ╬═╬ ",
+    },
+    Piece {
+        code: "hood.crown",
+        slot: Slot::Hood,
+        level: 13,
+        row: "▚▞▚▞▚",
+    },
+    Piece {
+        code: "hood.halo",
+        slot: Slot::Hood,
+        level: 13,
+        row: "▗▄▄▄▖",
     },
     // eyes
     Piece {
-        code: "eyes.round",
-        slot: Slot::Eyes,
-        row: "▐● ●▌",
-    },
-    Piece {
         code: "eyes.dot",
         slot: Slot::Eyes,
+        level: 1,
         row: "▐▪ ▪▌",
     },
     Piece {
-        code: "eyes.gem",
+        code: "eyes.round",
         slot: Slot::Eyes,
-        row: "▐◈ ◈▌",
+        level: 1,
+        row: "▐● ●▌",
     },
     Piece {
         code: "eyes.square",
         slot: Slot::Eyes,
+        level: 1,
         row: "▐■ ■▌",
-    },
-    Piece {
-        code: "eyes.visor",
-        slot: Slot::Eyes,
-        row: "▐═══▌",
     },
     Piece {
         code: "eyes.band",
         slot: Slot::Eyes,
+        level: 4,
         row: "▐▬▬▬▌",
-    },
-    Piece {
-        code: "eyes.glyph",
-        slot: Slot::Eyes,
-        row: "▐▚ ▞▌",
     },
     Piece {
         code: "eyes.cross",
         slot: Slot::Eyes,
+        level: 4,
         row: "▐╳ ╳▌",
     },
     Piece {
-        code: "eyes.ghost",
+        code: "eyes.slit",
         slot: Slot::Eyes,
-        row: " ◌ ◌ ",
+        level: 4,
+        row: "▐─ ─▌",
+    },
+    Piece {
+        code: "eyes.visor",
+        slot: Slot::Eyes,
+        level: 7,
+        row: "▐═══▌",
+    },
+    Piece {
+        code: "eyes.glyph",
+        slot: Slot::Eyes,
+        level: 7,
+        row: "▐▚ ▞▌",
     },
     Piece {
         code: "eyes.one",
         slot: Slot::Eyes,
+        level: 7,
         row: "▐◈ ▪▌",
+    },
+    Piece {
+        code: "eyes.ghost",
+        slot: Slot::Eyes,
+        level: 10,
+        row: " ◌ ◌ ",
+    },
+    Piece {
+        code: "eyes.noise",
+        slot: Slot::Eyes,
+        level: 10,
+        row: "▐░▒░▌",
+    },
+    Piece {
+        code: "eyes.test",
+        slot: Slot::Eyes,
+        level: 10,
+        row: "▐▓░▓▌",
+    },
+    Piece {
+        code: "eyes.gem",
+        slot: Slot::Eyes,
+        level: 13,
+        row: "▐◈ ◈▌",
+    },
+    Piece {
+        code: "eyes.black",
+        slot: Slot::Eyes,
+        level: 13,
+        row: "▐█ █▌",
+    },
+    Piece {
+        code: "eyes.signal",
+        slot: Slot::Eyes,
+        level: 13,
+        row: "▐◈▬◈▌",
     },
     // coats
     Piece {
-        code: "coat.heavy",
+        code: "coat.plain",
         slot: Slot::Coat,
-        row: " ▟▓▙ ",
-    },
-    Piece {
-        code: "coat.solid",
-        slot: Slot::Coat,
-        row: " ▟█▙ ",
-    },
-    Piece {
-        code: "coat.narrow",
-        slot: Slot::Coat,
-        row: " ▐▓▌ ",
+        level: 1,
+        row: " ▟▀▙ ",
     },
     Piece {
         code: "coat.thin",
         slot: Slot::Coat,
+        level: 1,
         row: " ▐█▌ ",
     },
     Piece {
-        code: "coat.emblem",
+        code: "coat.narrow",
         slot: Slot::Coat,
-        row: " ▟╬▙ ",
+        level: 1,
+        row: " ▐▓▌ ",
     },
     Piece {
-        code: "coat.bar",
+        code: "coat.solid",
         slot: Slot::Coat,
-        row: " ▟═▙ ",
+        level: 4,
+        row: " ▟█▙ ",
     },
     Piece {
-        code: "coat.worn",
+        code: "coat.heavy",
         slot: Slot::Coat,
-        row: " ▟▒▙ ",
+        level: 4,
+        row: " ▟▓▙ ",
     },
     Piece {
         code: "coat.faded",
         slot: Slot::Coat,
+        level: 4,
         row: " ▟░▙ ",
+    },
+    Piece {
+        code: "coat.worn",
+        slot: Slot::Coat,
+        level: 7,
+        row: " ▟▒▙ ",
+    },
+    Piece {
+        code: "coat.bar",
+        slot: Slot::Coat,
+        level: 7,
+        row: " ▟═▙ ",
+    },
+    Piece {
+        code: "coat.wire",
+        slot: Slot::Coat,
+        level: 7,
+        row: " ▟┼▙ ",
     },
     Piece {
         code: "coat.ghost",
         slot: Slot::Coat,
+        level: 10,
         row: " ▒░▒ ",
     },
     Piece {
-        code: "coat.plain",
+        code: "coat.cross",
         slot: Slot::Coat,
-        row: " ▟▀▙ ",
+        level: 10,
+        row: " ▟╳▙ ",
+    },
+    Piece {
+        code: "coat.long",
+        slot: Slot::Coat,
+        level: 10,
+        row: "▟▓▓▓▙",
+    },
+    Piece {
+        code: "coat.mantle",
+        slot: Slot::Coat,
+        level: 13,
+        row: "▟███▙",
+    },
+    Piece {
+        code: "coat.black",
+        slot: Slot::Coat,
+        level: 13,
+        row: " ███ ",
+    },
+    Piece {
+        code: "coat.drift",
+        slot: Slot::Coat,
+        level: 13,
+        row: "▟▓▒▓▙",
     },
 ];
 
 /// The pieces that fill `slot`, in table order.
 pub fn pieces_for(slot: Slot) -> impl Iterator<Item = &'static Piece> {
     PIECES.iter().filter(move |piece| piece.slot == slot)
+}
+
+/// The pieces that fill `slot` a runner at `level` may wear.
+pub fn unlocked_pieces(slot: Slot, level: i32) -> impl Iterator<Item = &'static Piece> {
+    pieces_for(slot).filter(move |piece| piece.level <= level)
+}
+
+/// The tints a runner at `level` may wear, in rack order.
+pub fn unlocked_tints(level: i32) -> impl Iterator<Item = Tint> {
+    TINTS.into_iter().filter(move |tint| tint.level() <= level)
+}
+
+/// The next level above `level` that opens something; `None` at the top.
+pub fn next_unlock(level: i32) -> Option<i32> {
+    UNLOCK_LEVELS.into_iter().find(|unlock| *unlock > level)
 }
 
 fn piece_by_code(slot: Slot, code: &str) -> Option<&'static Piece> {
@@ -216,17 +359,51 @@ pub enum Tint {
     Static,
     Amber,
     Phosphor,
-    White,
+    Cyan,
+    Magenta,
     Red,
+    White,
 }
 
-/// The palette in rack order: what the tailor cycles through.
-pub const TINTS: [Tint; 5] = [
+impl Tint {
+    /// The level that puts this tint on the tailor's rack.
+    pub fn level(self) -> i32 {
+        match self {
+            Tint::Static => 1,
+            Tint::Amber => 1,
+            Tint::Phosphor => 4,
+            Tint::Cyan => 7,
+            Tint::Magenta => 10,
+            Tint::Red => 13,
+            Tint::White => 15,
+        }
+    }
+
+    /// The tint's name as the tailor prints it: the stored name
+    /// (`state_test` pins the two together).
+    pub fn name(self) -> &'static str {
+        match self {
+            Tint::Static => "static",
+            Tint::Amber => "amber",
+            Tint::Phosphor => "phosphor",
+            Tint::Cyan => "cyan",
+            Tint::Magenta => "magenta",
+            Tint::Red => "red",
+            Tint::White => "white",
+        }
+    }
+}
+
+/// The palette in rack order, which is unlock order: what the tailor
+/// cycles through.
+pub const TINTS: [Tint; 7] = [
     Tint::Static,
     Tint::Amber,
     Tint::Phosphor,
-    Tint::White,
+    Tint::Cyan,
+    Tint::Magenta,
     Tint::Red,
+    Tint::White,
 ];
 
 /// A worn piece: which one, and what color.
@@ -300,13 +477,14 @@ impl std::fmt::Display for LookError {
 impl std::error::Error for LookError {}
 
 impl Look {
-    /// A random starter look: one piece per slot, one tint per piece, one
-    /// mark from the alphabet. What the invited join assigns.
-    pub fn random<R: rand::Rng>(rng: &mut R) -> Self {
+    /// A random look from what `level` has unlocked: one piece per slot,
+    /// one tint per piece, one mark from the alphabet. The invited join
+    /// throws it at level 1; the tailor's shuffle at the runner's level.
+    pub fn random<R: rand::Rng>(level: i32, rng: &mut R) -> Self {
         Self {
-            hood: random_worn(Slot::Hood, rng),
-            eyes: random_worn(Slot::Eyes, rng),
-            coat: random_worn(Slot::Coat, rng),
+            hood: random_worn(Slot::Hood, level, rng),
+            eyes: random_worn(Slot::Eyes, level, rng),
+            coat: random_worn(Slot::Coat, level, rng),
             mark: *GLYPH_ALPHABET
                 .choose(rng)
                 .expect("glyph alphabet is not empty"),
@@ -360,13 +538,14 @@ impl Look {
     }
 }
 
-fn random_worn<R: rand::Rng>(slot: Slot, rng: &mut R) -> Worn {
-    let pieces = pieces_for(slot).collect::<Vec<_>>();
+fn random_worn<R: rand::Rng>(slot: Slot, level: i32, rng: &mut R) -> Worn {
+    let pieces = unlocked_pieces(slot, level).collect::<Vec<_>>();
+    let tints = unlocked_tints(level).collect::<Vec<_>>();
     Worn {
         piece: pieces
             .choose(rng)
-            .expect("every slot has at least one starter piece"),
-        tint: *TINTS.choose(rng).expect("tint palette is not empty"),
+            .expect("level 1 unlocks pieces in every slot"),
+        tint: *tints.choose(rng).expect("level 1 unlocks tints"),
     }
 }
 

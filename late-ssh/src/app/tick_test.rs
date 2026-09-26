@@ -295,160 +295,68 @@ fn set_marquee_transition(app: &mut App, previous: usize, next: usize) {
     app.last_one_hz_index = Some(next / 15);
 }
 
-/// A `/status` countdown lives entirely on the tick's 1Hz edge: a running one
-/// keeps paying frames (the HUD badge counts down in seconds), and the edge
-/// that finds it expired clears it, banners, and queues the desktop
-/// notification. Forcing `last_one_hz_index` to `None` fires the edge on the
-/// next tick so the test does not sleep out a real wall-clock second.
+/// Away rides the 1Hz edge end to end: a session quiet past the threshold
+/// writes its flag to the roster, the presence read on the same edge resolves
+/// the away set from it, and the chat row epoch bumps only when that set
+/// moves. Forcing `last_one_hz_index` to `None` fires the edge on the next
+/// tick so the test does not sleep out a real wall-clock second.
 #[tokio::test]
-async fn status_countdown_paints_while_running_then_fires_once_on_expiry() {
-    let (_test_db, mut app) = chat_compose_app("tick-gate-status").await;
+async fn going_away_and_coming_back_ride_the_one_hz_edge() {
+    use crate::app::common::away::AWAY_AFTER;
+    use crate::state::{ActiveSession, ActiveUser, ActiveUsers};
+
+    let (_test_db, mut app) = chat_compose_app("tick-away").await;
     hide_sidebar(&mut app);
-
+    let roster: ActiveUsers = std::sync::Arc::new(std::sync::Mutex::new(
+        [(
+            app.user_id,
+            ActiveUser {
+                username: "tick-away".to_string(),
+                fingerprint: None,
+                audio_source: late_core::models::user::AudioSource::default(),
+                sessions: vec![ActiveSession {
+                    token: app.session_token.clone(),
+                    fingerprint: None,
+                    peer_ip: None,
+                    away: false,
+                }],
+                connection_count: 1,
+                last_login_at: Instant::now(),
+            },
+        )]
+        .into(),
+    ));
+    app.active_users = Some(roster.clone());
+    let user_id = app.user_id;
+    let roster_says_away = || roster.lock().unwrap()[&user_id].sessions[0].away;
     settle_clean(&mut app).await;
-
-    app.status = Some(crate::app::common::status::SessionStatus {
-        status: crate::app::common::status::Status::Focus,
-        ends_at: Some(chrono::Utc::now() + chrono::Duration::minutes(25)),
-    });
-    app.last_one_hz_index = None;
-    assert!(app.tick(), "a running countdown repaints on the 1Hz edge");
-    assert!(
-        app.status.is_some(),
-        "an unexpired countdown must survive the edge"
-    );
-    app.banner = None;
-    drain_frame(&mut app);
-
-    app.status = Some(crate::app::common::status::SessionStatus {
-        status: crate::app::common::status::Status::Focus,
-        ends_at: Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
-    });
-    app.last_one_hz_index = None;
-    assert!(app.tick(), "expiry dirties the tick");
-    assert!(app.status.is_none(), "expiry clears the status");
-    let banner = app.banner.take().expect("expiry banners the status");
-    assert!(
-        banner.message.contains("focus"),
-        "banner should name the finished status: {}",
-        banner.message
-    );
-    assert!(
-        app.notify_outbox.has_pending(),
-        "expiry queues a desktop notification"
-    );
-
-    // Nothing left to fire: the next edge is quiet again.
-    drain_frame(&mut app);
     app.last_one_hz_index = None;
     app.tick();
-    assert!(app.banner.is_none(), "expiry must not re-fire");
-}
+    assert!(app.away_user_ids.is_empty(), "a fresh session is here");
+    let epoch = app.chat_ctx_epoch;
 
-/// An open-ended status is the other half of the rule: nothing on the clock
-/// retires it, so the 1Hz edge must leave it alone however long it sits.
-#[tokio::test]
-async fn open_ended_status_never_expires_on_the_edge() {
-    let (_test_db, mut app) = chat_compose_app("tick-status-open").await;
-    hide_sidebar(&mut app);
-    settle_clean(&mut app).await;
-
-    app.status = Some(crate::app::common::status::SessionStatus {
-        status: crate::app::common::status::Status::Away,
-        ends_at: None,
-    });
+    app.last_input_at = Instant::now() - AWAY_AFTER;
     app.last_one_hz_index = None;
-    app.tick();
+    assert!(app.tick(), "going away repaints the badge");
+    assert!(roster_says_away(), "the edge writes the flag to the roster");
+    assert!(app.away_user_ids.contains(&app.user_id));
     assert!(
-        app.status.is_some(),
-        "only a chat message clears an open-ended status"
+        app.chat_ctx_epoch > epoch,
+        "a new away badge invalidates chat rows"
     );
-    assert!(
-        app.banner.is_none(),
-        "and it never banners the way a countdown does"
-    );
-}
+    let epoch = app.chat_ctx_epoch;
 
-/// Peer statuses resolve on the same 1Hz edge as name styles: the owned
-/// `peer_statuses` map follows the shared directory, and the chat context
-/// epoch bumps only when a badge string actually changes (minute rollovers),
-/// never on the seconds in between.
-#[tokio::test]
-async fn status_peer_badges_resolve_on_the_shared_edge() {
-    let (_test_db, mut app) = chat_compose_app("tick-status-peers").await;
-    hide_sidebar(&mut app);
-    settle_clean(&mut app).await;
-
-    let directory = crate::app::common::status::new_directory();
-    app.status_directory = Some(directory.clone());
-    let peer = uuid::Uuid::from_u128(0x9e);
-    crate::app::common::status::set_user(
-        &directory,
-        peer,
-        Some(crate::app::common::status::SessionStatus {
-            status: crate::app::common::status::Status::Focus,
-            ends_at: Some(chrono::Utc::now() + chrono::Duration::minutes(25)),
-        }),
-    );
-
-    app.last_one_hz_index = None;
-    app.tick();
-    let badge = app
-        .peer_statuses
-        .get(&peer)
-        .expect("the edge resolves the peer's countdown");
-    assert_eq!(badge, "🍅 25m focus");
-    let epoch_after_first = app.chat_ctx_epoch;
-
-    // Same minute on the next edge: the badge string is unchanged, so the
-    // epoch must hold or every second would rebuild every cached chat row.
     app.last_one_hz_index = None;
     app.tick();
     assert_eq!(
-        app.chat_ctx_epoch, epoch_after_first,
-        "an unchanged badge must not invalidate chat rows"
+        app.chat_ctx_epoch, epoch,
+        "an unchanged away set must not invalidate chat rows every second"
     );
 
-    // The peer clearing (or disconnecting) drops the entry; the next edge
-    // drops the badge and that IS a row-visible change.
-    crate::app::common::status::set_user(&directory, peer, None);
+    app.last_input_at = Instant::now();
     app.last_one_hz_index = None;
     app.tick();
-    assert!(
-        app.peer_statuses.is_empty(),
-        "a cleared entry loses its badge"
-    );
-    assert!(
-        app.chat_ctx_epoch > epoch_after_first,
-        "losing a badge invalidates chat rows"
-    );
-}
-
-/// This session's own expiry retires its directory entry along with the
-/// status, through the same publish path `/status off` uses.
-#[tokio::test]
-async fn status_expiry_retires_the_shared_directory_entry() {
-    let (_test_db, mut app) = chat_compose_app("tick-status-retire").await;
-    hide_sidebar(&mut app);
-    settle_clean(&mut app).await;
-
-    let directory = crate::app::common::status::new_directory();
-    app.status_directory = Some(directory.clone());
-    app.status = Some(crate::app::common::status::SessionStatus {
-        status: crate::app::common::status::Status::Focus,
-        ends_at: Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
-    });
-    app.publish_status();
-    assert!(
-        crate::app::common::status::snapshot(&directory).contains_key(&app.user_id),
-        "a running countdown is published"
-    );
-
-    app.last_one_hz_index = None;
-    app.tick();
-    assert!(app.status.is_none(), "expiry clears the status");
-    assert!(
-        crate::app::common::status::snapshot(&directory).is_empty(),
-        "expiry retires the shared entry so peers stop painting the badge"
-    );
+    assert!(!roster_says_away(), "input brings the session back");
+    assert!(app.away_user_ids.is_empty());
+    assert!(app.chat_ctx_epoch > epoch);
 }

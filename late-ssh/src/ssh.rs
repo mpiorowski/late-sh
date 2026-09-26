@@ -524,16 +524,6 @@ impl Drop for ClientHandler {
                     .online_user_disconnected(user_id);
             }
             drop(active_users);
-            // A status is session-local, so this session's retires with it.
-            // The user's shared entry falls back to whatever their remaining
-            // sessions carry, and clears once none does (always, on the last
-            // connection). There is nothing to resume when they come back.
-            crate::app::common::status::publish_for_user(
-                &self.state.status_directory,
-                &self.state.active_users,
-                user_id,
-                None,
-            );
         }
 
         if !self.per_ip_incremented {
@@ -592,7 +582,7 @@ impl ClientHandler {
             token: session_token.to_string(),
             fingerprint: Some(user.fingerprint.clone()),
             peer_ip: self.peer_ip,
-            status: None,
+            away: false,
         });
     }
 }
@@ -997,6 +987,9 @@ impl russh::server::Handler for ClientHandler {
             tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(
                 self.state.db.clone(),
             ),
+            guide_service: crate::app::deadchannel::guide::svc::GuideService::new(
+                self.state.db.clone(),
+            ),
             initial_bonsai_tree,
             initial_bonsai_decay_protection,
             pet_service: self.state.pet_service.clone(),
@@ -1087,7 +1080,6 @@ impl russh::server::Handler for ClientHandler {
             key_left_at: device.left_at,
             username_directory: Some(self.state.username_directory.clone()),
             flair_directory: Some(self.state.flair_directory.clone()),
-            status_directory: Some(self.state.status_directory.clone()),
             crown_service: Some(self.state.crown_service.clone()),
             pot_service: Some(self.state.pot_service.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),

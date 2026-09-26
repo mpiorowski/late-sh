@@ -277,6 +277,10 @@ pub const BACK_DOOR: Zone = Zone {
     x1: 63,
     y1: 4,
 };
+/// The floor cell in front of the back door. `n` steps the avatar here on its
+/// way out, so the room sees a patron leave through the door the same way a
+/// walk-up Enter looks.
+pub const BACK_DOOR_MAT: (u16, u16) = (60, 6);
 /// The big wooden door to the door games (page 3).
 pub const DOORS: Zone = Zone {
     x0: 122,

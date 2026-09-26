@@ -3,7 +3,6 @@ use super::{
     chat, dashboard, help_modal, hub, icon_picker, mod_modal, profile_modal, quit_confirm,
     room_info_modal, room_search_modal, settings_modal, sheet_modal,
     state::{App, IconPickerTarget},
-    status_picker,
 };
 use late_core::models::user::{RightSidebarMode, RoomListMode};
 
@@ -779,6 +778,17 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         app.apply_primary_device_attributes(attrs);
         return;
     }
+    // `/brb` holds "until your next key". A bare mouse move is not one: with
+    // any-event tracking on, the pointer merely crossing the terminal reports
+    // here, and must not bring the session back. Keys, clicks, drags and
+    // scrolls do; the 1Hz edge publishes it.
+    match &event {
+        ParsedInput::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            ..
+        }) => {}
+        _ => app.sent_away = false,
+    }
 
     // The Late Edition sits above everything else: it is the first thing
     // a session sees after the splash and the tour.
@@ -855,11 +865,6 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
 
     if app.room_search_modal_state.is_open() {
         room_search_modal::input::handle_input(app, event);
-        return;
-    }
-
-    if app.status_picker.is_open() {
-        status_picker::input::handle_input(app, event);
         return;
     }
 
@@ -2297,8 +2302,13 @@ fn dispatch_escape(app: &mut App) {
         crate::app::door::darkroom::screen::GAME.handle_key(app, 0x1B);
         return;
     }
-    // Esc in the city closes an open shop panel or steps back from the
-    // ledge; on the street it means nothing (the wire is the way out).
+    // Esc in the city closes the guide first, then an open shop panel or
+    // steps back from the ledge; on the street it means nothing (the wire
+    // is the way out).
+    if ctx.screen == Screen::City && app.guide.state.is_open() {
+        app.guide.state.close();
+        return;
+    }
     if ctx.screen == Screen::City
         && (app.city.panel().is_some() || app.city.at_ledge() || app.fight.scene_open())
     {
@@ -2526,6 +2536,7 @@ fn chat_room_list_view<'a>(
 ) -> crate::app::chat::ui::ChatRoomListView<'a> {
     crate::app::chat::ui::ChatRoomListView {
         chat_rooms: &app.chat.rooms,
+        away_user_ids: &app.away_user_ids,
         live_streams: &app.chat.live_streams,
         usernames,
         unread_counts: &app.chat.unread_counts,
@@ -3302,13 +3313,6 @@ fn close_overlays_for_modal(app: &mut App) {
     app.chat.message_search.clear();
 }
 
-/// Open the `/status` picker.
-pub(crate) fn open_status_picker_globally(app: &mut App) {
-    let current = app.status;
-    close_overlays_for_modal(app);
-    app.status_picker.open(current);
-}
-
 /// The `Ctrl+/` room picker, also behind `/picker` for terminals that
 /// swallow the chord (Ctrl+/ and Ctrl+_ are one byte, and some keep it).
 pub(crate) fn open_room_search_modal_globally(app: &mut App) {
@@ -3906,9 +3910,13 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                     app.city.dismiss();
                     app.fight.close();
                     app.tailor.close();
+                    app.guide.state.close();
                     // The descent is a touch: the sheet re-reads (and the
                     // day rolls if it turned) before the strip shows it.
                     app.fight.reload();
+                    // The first descent opens the guide by itself, once
+                    // per runner (`app/deadchannel/guide`).
+                    app.guide.descend();
                     Screen::City
                 }
                 _ => Screen::Clubhouse,

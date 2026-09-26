@@ -280,11 +280,27 @@ fn lateania_rows_show_the_class_note_until_width_runs_short() {
     assert!(tight.contains("mat"), "{tight}");
     assert!(tight.ends_with("lvl 50"), "{tight}");
 
-    let zone = text(&entry_line(
+    // Past the cap the board counts paragon levels on top of it.
+    let paragon = text(&entry_line(
+        &entry(1, "mat", viewer(), 137),
+        board,
+        false,
+        40,
+    ));
+    assert!(paragon.ends_with("lvl 100 +37"), "{paragon}");
+    let capped = text(&entry_line(
+        &entry(1, "mat", viewer(), 100),
+        board,
+        false,
+        40,
+    ));
+    assert!(capped.ends_with("lvl 100"), "{capped}");
+
+    let kills = text(&entry_line(
         &entry(2, "bob", viewer(), 14),
-        Board::LateaniaFrontier,
+        Board::LateaniaPvp,
         false,
         30,
     ));
-    assert!(zone.ends_with("zone 14"), "{zone}");
+    assert!(kills.ends_with("14 kills"), "{kills}");
 }

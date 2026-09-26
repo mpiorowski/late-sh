@@ -148,3 +148,17 @@ fn milestones_land_every_five_levels_and_no_level_is_dead() {
         }
     }
 }
+
+#[test]
+fn the_leaderboards_restated_level_curve_matches_the_game() {
+    use late_core::models::leaderboard::{
+        LATEANIA_LEVEL_CAP, LATEANIA_XP_AT_LEVEL_CAP, LATEANIA_XP_PER_PARAGON_LEVEL,
+    };
+    assert_eq!(LATEANIA_LEVEL_CAP, i64::from(Class::MAX_LEVEL));
+    assert_eq!(LATEANIA_XP_AT_LEVEL_CAP, xp_for_level(Class::MAX_LEVEL));
+    assert_eq!(
+        LATEANIA_XP_PER_PARAGON_LEVEL,
+        xp_for_level(Class::MAX_LEVEL) - xp_for_level(Class::MAX_LEVEL - 1),
+        "a paragon level costs what the last real level did"
+    );
+}

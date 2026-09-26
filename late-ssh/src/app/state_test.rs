@@ -89,22 +89,21 @@ async fn leaderboard_seeds_from_the_already_published_snapshot() {
     );
 }
 
-/// The status directory keeps one entry per user, but a status belongs to a
-/// session. One session clearing its own status must not erase a countdown
-/// another session of the same account is still running: the laptop's top
-/// bar would keep counting while every peer lost its badge.
+/// Away belongs to a session, but peers read it per user: the user is away
+/// only once every session is. A `/brb` on the desktop must not hide a laptop
+/// that is still being typed on, and a key on either brings the user back.
 #[tokio::test]
-async fn clearing_one_sessions_status_keeps_the_other_sessions_badge() {
-    use crate::app::common::status::{SessionStatus, Status, new_directory, snapshot};
+async fn a_user_is_away_only_once_every_session_is() {
+    use crate::app::common::away::{AWAY_AFTER, away_user_ids};
     use crate::state::{ActiveSession, ActiveUser, ActiveUsers};
 
     let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "status-two-sessions").await;
+    let user = create_test_user(&test_db.db, "away-two-sessions").await;
     let session = |token: &str| ActiveSession {
         token: token.to_string(),
         fingerprint: Some(user.fingerprint.clone()),
         peer_ip: None,
-        status: None,
+        away: false,
     };
     let active_users: ActiveUsers = Arc::new(std::sync::Mutex::new(
         [(
@@ -121,41 +120,46 @@ async fn clearing_one_sessions_status_keeps_the_other_sessions_badge() {
         .into(),
     ));
     let world = SessionWorld {
-        active_users: Some(active_users),
+        active_users: Some(active_users.clone()),
         ..SessionWorld::default()
     };
     let mut laptop = make_app_in_world(test_db.db.clone(), user.id, "laptop", world.clone());
     let mut desktop = make_app_in_world(test_db.db.clone(), user.id, "desktop", world);
-    let directory = new_directory();
-    laptop.status_directory = Some(directory.clone());
-    desktop.status_directory = Some(directory.clone());
+    let is_away = || away_user_ids(&active_users.lock().unwrap()).contains(&user.id);
 
-    let focus = SessionStatus {
-        status: Status::Focus,
-        ends_at: Some(chrono::Utc::now() + chrono::Duration::minutes(50)),
-    };
-    desktop.set_status(Some(SessionStatus {
-        status: Status::Away,
-        ends_at: None,
-    }));
-    laptop.set_status(Some(focus));
-    assert_eq!(
-        snapshot(&directory).get(&user.id),
-        Some(&focus),
-        "the newest set wins the shared entry"
-    );
+    desktop.sent_away = true;
+    assert!(desktop.sync_away(), "/brb moves the desktop's flag");
+    assert!(!laptop.sync_away(), "the laptop was just used");
+    assert!(!is_away(), "the laptop keeps the user here");
 
-    desktop.set_status(None);
-    assert_eq!(
-        snapshot(&directory).get(&user.id),
-        Some(&focus),
-        "the laptop's countdown is still live, so its badge stays"
-    );
+    laptop.last_input_at = std::time::Instant::now() - AWAY_AFTER;
+    assert!(laptop.sync_away());
+    assert!(is_away(), "both sessions are away now");
+    assert!(!laptop.sync_away(), "an unchanged flag is not rewritten");
 
-    laptop.set_status(None);
-    assert_eq!(
-        snapshot(&directory).get(&user.id),
-        None,
-        "no session carries a status any more"
-    );
+    desktop.handle_input(b"j");
+    assert!(desktop.sync_away(), "any key brings the desktop back");
+    assert!(!is_away());
+}
+
+/// `/brb` promises "until your next key". Any-event mouse tracking reports
+/// the pointer merely crossing the terminal, and that is not a key: a
+/// session sent away stays away through it and comes back on a real one.
+#[tokio::test]
+async fn brb_holds_through_mouse_motion_until_a_key() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "brb-motion").await;
+    let mut app = make_app_in_world(test_db.db.clone(), user.id, "brb", SessionWorld::default());
+
+    app.sent_away = true;
+    assert!(app.sync_away(), "/brb sends the session away");
+
+    // SGR any-event motion: button code 35 is the motion bit with no button.
+    app.handle_input(b"\x1b[<35;20;5M");
+    assert!(!app.sync_away(), "a bare mouse move is not a key");
+    assert!(app.away);
+
+    app.handle_input(b"j");
+    assert!(app.sync_away(), "a key brings the session back");
+    assert!(!app.away);
 }

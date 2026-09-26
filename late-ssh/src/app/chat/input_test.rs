@@ -1,6 +1,4 @@
-use super::{is_next_room_key, is_prev_room_key, leader_reaction_emoji, resolve_status_change};
-use crate::app::chat::state::StatusChange;
-use crate::app::common::status::Status;
+use super::{is_next_room_key, is_prev_room_key, leader_reaction_emoji};
 use chrono::Utc;
 
 #[test]
@@ -29,81 +27,6 @@ fn leader_reaction_keys_are_plain_digits_except_custom_zero() {
     assert_eq!(leader_reaction_emoji(b'8'), Some("🤔"));
     assert_eq!(leader_reaction_emoji(b'9'), Some("💩"));
     assert_eq!(leader_reaction_emoji(b'!'), None);
-}
-
-fn set(status: Status, minutes: Option<u32>) -> StatusChange {
-    StatusChange::Set { status, minutes }
-}
-
-#[test]
-fn a_timed_status_ends_at_the_callers_clock_and_says_the_rule() {
-    let now = Utc::now();
-
-    let (status, banner) = resolve_status_change(None, set(Status::Focus, Some(50)), now);
-    let armed = status.expect("set should arm a status");
-    assert_eq!(armed.status, Status::Focus);
-    // The duration is measured from the caller's clock, not re-read inside.
-    assert_eq!(armed.ends_at, Some(now + chrono::Duration::minutes(50)));
-    assert!(!armed.clears_on_post());
-    assert_eq!(
-        banner.message,
-        "🍅 focus, clears in 50m, stays while you chat"
-    );
-}
-
-/// The other half of the rule, and the half nobody can infer from the badge:
-/// no minutes means the next message clears it, so the banner has to say so.
-#[test]
-fn an_open_ended_status_carries_no_deadline_and_says_the_rule() {
-    let now = Utc::now();
-
-    let (status, banner) = resolve_status_change(None, set(Status::Away, None), now);
-    let armed = status.expect("set should arm a status");
-    assert_eq!(armed.ends_at, None);
-    assert!(armed.clears_on_post());
-    assert_eq!(banner.message, "💤 away, clears when you next post");
-}
-
-/// A second set replaces the running one instead of being refused, and the
-/// banner has to say what the new one does: silently restarting a 50 minute
-/// countdown as a 25 minute one is the kind of thing you only notice at the
-/// wrong moment.
-#[test]
-fn setting_a_status_replaces_the_running_one() {
-    let now = Utc::now();
-    let (first, _) = resolve_status_change(None, set(Status::Focus, Some(50)), now);
-
-    let (second, banner) = resolve_status_change(first, set(Status::Gaming, Some(5)), now);
-    let armed = second.expect("a replacement should stay armed");
-    assert_eq!(armed.status, Status::Gaming);
-    assert_eq!(armed.ends_at, Some(now + chrono::Duration::minutes(5)));
-    assert_eq!(
-        banner.message,
-        "👾 gaming, clears in 5m, stays while you chat"
-    );
-}
-
-#[test]
-fn clearing_reports_what_was_cleared() {
-    let now = Utc::now();
-    let (running, _) = resolve_status_change(None, set(Status::Focus, Some(25)), now);
-
-    let (cleared, banner) = resolve_status_change(running, StatusChange::Clear, now);
-    assert!(cleared.is_none(), "clear should empty the status");
-    assert_eq!(banner.message, "cleared focus");
-}
-
-/// Clearing nothing is a user error, not a silent no-op: without the banner
-/// there is no feedback at all, because the HUD badge was already absent.
-#[test]
-fn clearing_with_no_status_set_reports_it() {
-    let (status, banner) = resolve_status_change(None, StatusChange::Clear, Utc::now());
-    assert!(
-        banner.message.contains("no status set"),
-        "expected a usage banner, got: {}",
-        banner.message
-    );
-    assert!(status.is_none());
 }
 
 /// `g` on a message in a DM, a private room, or a game/stream chat refuses

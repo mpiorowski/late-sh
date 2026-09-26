@@ -1,7 +1,8 @@
 //! The tailor's panel, in the city's palette: the mirror on the left
 //! (the draft as a portrait, the mark under it), four rack rows beside
 //! it with the cursor on one, each rack a window of five around the
-//! piece worn, the row's tint on the piece and named beside the label;
+//! piece worn (the whole rack, once, while it is shorter than that), the
+//! row's tint on the piece and named beside the label;
 //! the keys; the tailor's last word. Pure: a function of the session's
 //! draft and word. The city's `draw_panel` frames it.
 
@@ -16,9 +17,10 @@ use crate::app::deadchannel::city::ui::{
     INK, INK_BRIGHT, INK_DIM, INK_MUTED, glow, ink, lit, tint_rgb,
 };
 use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
-use crate::app::deadchannel::runner::state::pieces_for;
+use crate::app::deadchannel::runner::state::{PIECES, Piece, TINTS, next_unlock, unlocked_pieces};
 
-/// Pieces shown around the worn one, each side.
+/// Pieces shown around the worn one, each side, at most: a rack shorter
+/// than the window is shown whole, each piece once.
 const RACK_REACH: usize = 2;
 
 pub(crate) struct MirrorView<'a> {
@@ -82,29 +84,31 @@ pub(crate) fn mirror_lines(view: &MirrorView<'_>) -> Vec<Line<'static>> {
         // The tint, then the rack.
         match draft.worn(row) {
             Some(worn) => {
-                let tint = format!("{:?}", worn.tint).to_lowercase();
                 spans.push(Span::styled(
-                    format!("{tint:<10}"),
+                    format!("{:<10}", worn.tint.name()),
                     match on {
                         true => ink(tint_rgb(worn.tint)),
                         false => dim_text,
                     },
                 ));
                 let slot = row.slot().expect("a dressed row has a slot");
-                let rack: Vec<&'static str> = pieces_for(slot).map(|piece| piece.row).collect();
+                let rack: Vec<&'static Piece> = unlocked_pieces(slot, draft.level).collect();
                 let at = rack
                     .iter()
-                    .position(|piece| *piece == worn.piece.row)
+                    .position(|piece| *piece == worn.piece)
                     .expect("the worn piece is on the rack");
+                let reach = RACK_REACH.min((rack.len() - 1) / 2) as i32;
                 spans.push(Span::styled("◂ ", dim_text));
-                for offset in -(RACK_REACH as i32)..=(RACK_REACH as i32) {
+                for offset in -reach..=reach {
                     let index = (at as i32 + offset).rem_euclid(rack.len() as i32) as usize;
                     match offset == 0 {
                         true => spans.push(Span::styled(
-                            format!("[{}]", rack[index]),
+                            format!("[{}]", rack[index].row),
                             ink(tint_rgb(worn.tint)).add_modifier(Modifier::BOLD),
                         )),
-                        false => spans.push(Span::styled(format!(" {} ", rack[index]), dim_text)),
+                        false => {
+                            spans.push(Span::styled(format!(" {} ", rack[index].row), dim_text))
+                        }
                     }
                 }
                 spans.push(Span::styled(" ▸", dim_text));
@@ -150,13 +154,33 @@ pub(crate) fn mirror_lines(view: &MirrorView<'_>) -> Vec<Line<'static>> {
     keys.push(Span::styled("back to the street", text));
     lines.push(Line::from(keys));
     lines.push(Line::from(Span::styled(
-        "the starter rack is free, forever. bought pieces come with the season, for chips.",
+        next_unlock_line(draft.level),
         dim_text,
     )));
     if let Some(word) = view.word {
         lines.push(Line::from(Span::styled(word.to_string(), lit(Neon::Cyan))));
     }
     lines
+}
+
+/// What the next unlock level puts on the rack, or that it is all out.
+fn next_unlock_line(level: i32) -> String {
+    let Some(next) = next_unlock(level) else {
+        return "the whole rack is yours. every piece, every tint.".to_string();
+    };
+    let pieces = PIECES.iter().filter(|piece| piece.level == next).count();
+    let tints = TINTS
+        .iter()
+        .filter(|tint| tint.level() == next)
+        .map(|tint| tint.name().to_string())
+        .collect::<Vec<_>>()
+        .join(" and ");
+    match (pieces, tints.is_empty()) {
+        (0, true) => unreachable!("an unlock level opens something"),
+        (0, false) => format!("level {next} opens {tints}."),
+        (pieces, true) => format!("level {next} opens {pieces} new pieces."),
+        (pieces, false) => format!("level {next} opens {pieces} new pieces and {tints}."),
+    }
 }
 
 #[cfg(test)]

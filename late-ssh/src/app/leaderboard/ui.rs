@@ -104,7 +104,7 @@ fn rail_lines(state: &LeaderboardPageState) -> (Vec<Line<'static>>, usize) {
                 | Board::DoorDepth(_)
                 | Board::DoorScore(_)
                 | Board::LateaniaAdventurers
-                | Board::LateaniaFrontier
+                | Board::LateaniaPvp
         )
     });
     let first_daily = boards
@@ -420,7 +420,7 @@ fn entry_natural_width(entry: &RankedEntry, board: Board) -> usize {
 fn empty_copy(board: Board) -> &'static str {
     match board {
         Board::LateaniaAdventurers => "no adventurers yet, roll a character in the Games hub",
-        Board::LateaniaFrontier => "no one has braved the Frontier yet",
+        Board::LateaniaPvp => "no rival has fallen in the Wildbound Waste yet",
         Board::DoorWins(DoorGame::Dcss) => "no wins yet, the Orb awaits",
         Board::DoorWins(DoorGame::Nethack) => "no ascensions yet, the Amulet awaits",
         Board::DoorWins(DoorGame::Brogue) => "no escapes yet, depth 26 awaits",

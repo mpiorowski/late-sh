@@ -1,3 +1,4 @@
+pub mod away;
 pub mod composer;
 pub(crate) mod emoji;
 pub mod markdown;
@@ -9,7 +10,6 @@ pub mod qr;
 pub mod readline;
 pub mod sidebar;
 pub mod splash_tips;
-pub mod status;
 pub mod textarea_input;
 pub mod theme;
 pub mod time;

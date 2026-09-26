@@ -1,10 +1,8 @@
-use crate::app::chat::state::{ComposerCommands, StatusChange, StatusRequest};
+use crate::app::chat::state::ComposerCommands;
 use crate::app::common::primitives::Banner;
 use crate::app::common::readline::ctrl_byte_to_input;
-use crate::app::common::status::{SessionStatus, Status};
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::state::App;
-use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 fn is_next_room_key(byte: u8) -> bool {
@@ -186,9 +184,6 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_quit() {
         crate::app::input::trigger_global_quit(app);
     }
-    if app.chat.take_sent_regular_message() {
-        app.clear_status_on_post();
-    }
     if let Some(url) = app.chat.take_requested_audio_url() {
         app.audio.submit_trusted(url);
     }
@@ -271,15 +266,12 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
             }
         }
     }
-    if let Some(request) = app.chat.take_requested_status() {
-        match request {
-            StatusRequest::OpenPicker => crate::app::input::open_status_picker_globally(app),
-            StatusRequest::Apply(change) => {
-                let (status, banner) = resolve_status_change(app.status, change, Utc::now());
-                app.set_status(status);
-                app.banner = Some(banner);
-            }
-        }
+    if app.chat.take_requested_brb() {
+        app.sent_away = true;
+        app.banner = Some(Banner::success(&format!(
+            "{} until your next key",
+            crate::app::common::away::AWAY_GLYPH
+        )));
     }
     if app.chat.take_requested_icon_picker() {
         crate::app::input::try_open_icon_picker(app);
@@ -312,62 +304,6 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
                 "No paired CLI with clipboard image support. Update and run `late`.",
             ));
         }
-    }
-}
-
-/// Resolve a parsed `/status` command against the session's current status:
-/// the new status to store, and the banner to show. Takes the current status
-/// by value rather than the whole `App` because this is a pure transition
-/// over session-local state, with no service to call and no other field to
-/// touch, so `now` comes from the caller the same way `hud_badge` takes it.
-///
-/// The banner spells out the clearing rule every time. It is the one thing
-/// about statuses nobody can infer from the badge, and saying it here is what
-/// makes the typed path as teachable as the picker.
-pub(super) fn resolve_status_change(
-    current: Option<SessionStatus>,
-    change: StatusChange,
-    now: DateTime<Utc>,
-) -> (Option<SessionStatus>, Banner) {
-    match change {
-        StatusChange::Clear => match current {
-            Some(cleared) => (
-                None,
-                Banner::success(&format!("cleared {}", cleared.status.word())),
-            ),
-            None => (
-                None,
-                Banner::error("no status set, start one with /status [word]"),
-            ),
-        },
-        StatusChange::Set { status, minutes } => {
-            let ends_at =
-                minutes.map(|minutes| now + chrono::Duration::minutes(i64::from(minutes)));
-            (
-                Some(SessionStatus { status, ends_at }),
-                Banner::success(&status_set_message(status, minutes)),
-            )
-        }
-    }
-}
-
-/// What a freshly set status does next, in plain words: the banner after a
-/// set, from the command or the picker.
-pub(crate) fn status_set_message(status: Status, minutes: Option<u32>) -> String {
-    format!(
-        "{} {}, {}",
-        status.glyph(),
-        status.word(),
-        status_clear_rule(minutes)
-    )
-}
-
-/// When a status clears, the one rule nobody can infer from the badge. The
-/// banner and the picker's live hint both print this, so they cannot drift.
-pub(crate) fn status_clear_rule(minutes: Option<u32>) -> String {
-    match minutes {
-        Some(minutes) => format!("clears in {minutes}m, stays while you chat"),
-        None => "clears when you next post".to_string(),
     }
 }
 

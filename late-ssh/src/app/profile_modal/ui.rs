@@ -30,8 +30,13 @@ use ratatui::{
 use crate::app::{
     bonsai::render::{PREVIEW_WIDTH, apply_sway, center_lines, render_preview_lines},
     common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
+    deadchannel::{
+        fight::data as fight_data, fight::ui as fight_ui, runner::state::PORTRAIT_HEIGHT,
+        runner::ui as runner_ui,
+    },
     hub::aquarium::{state::AquariumState, ui as aquarium_ui},
     pet::ui::portrait_lines as pet_portrait_lines,
+    profile::svc::ProfileRunner,
     settings_modal::data::country_label,
 };
 
@@ -89,11 +94,20 @@ impl Segment {
     }
 }
 
-pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState, wall_tick: usize) {
+/// `viewer_is_runner` gates the runner section: until the public flip
+/// (deadchannel CONTEXT.md), what happens on the row is shown only to
+/// people on it. One argument to drop at the flip.
+pub(crate) fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    state: &ProfileModalState,
+    wall_tick: usize,
+    viewer_is_runner: bool,
+) {
     let width = area.width.saturating_sub(4).clamp(MIN_WIDTH, MAX_WIDTH);
     let body_width = width.saturating_sub(2 + SIDE_MARGIN * 2);
 
-    let (segments, chips_top) = build_segments(state, body_width, wall_tick);
+    let (segments, chips_top) = build_segments(state, body_width, wall_tick, viewer_is_runner);
     let content_height: u16 = segments.iter().map(Segment::height).sum();
 
     // As tall as the terminal allows, but no taller than the content needs:
@@ -168,6 +182,7 @@ fn build_segments(
     state: &ProfileModalState,
     width: u16,
     wall_tick: usize,
+    viewer_is_runner: bool,
 ) -> (Vec<Segment>, Option<u16>) {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let text = Style::default().fg(theme::TEXT());
@@ -219,6 +234,15 @@ fn build_segments(
         ));
     }
     segments.push(Segment::Text(lines));
+
+    // ── runner ──
+    // The face beside three rows of the sheet, for runners looking at a
+    // runner: the row is nobody else's business until the public flip.
+    if let Some(runner) = state.runner().filter(|_| viewer_is_runner) {
+        let mut lines = section_lines("runner", width_usize);
+        lines.extend(runner_lines(runner));
+        segments.push(Segment::Text(lines));
+    }
 
     // ── pet ──
     // The mood is the one the owner's session last wrote: a readout of
@@ -417,6 +441,62 @@ fn draw_footer(frame: &mut Frame, area: Rect, scrollable: bool) {
     spans.push(Span::styled("Esc/q", key));
     spans.push(Span::styled(" close", dim));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// The runner section's three rows: the portrait on the left, and beside
+/// it the level, signal and bits, the kit, and the glyphs put down with
+/// the Old Signal marks and their title once there are any. The
+/// sheet arrives settled for today (the service applies the day roll to
+/// the view), so the signal is what the runner would find on the row.
+/// Rations are not here: the street's strip and the frame HUD carry them
+/// for the runner themself.
+fn runner_lines(runner: &ProfileRunner) -> Vec<Line<'static>> {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let text = Style::default().fg(theme::TEXT());
+    let level = Style::default()
+        .fg(runner_ui::level_color(runner.sheet.level))
+        .add_modifier(Modifier::BOLD);
+    let sheet = &runner.sheet;
+    let glyphs = match sheet.kills {
+        1 => "1 glyph down".to_string(),
+        n => format!("{n} glyphs down"),
+    };
+    let rows: [Vec<Span<'static>>; PORTRAIT_HEIGHT] = [
+        vec![
+            Span::styled(format!("lv {}", sheet.level), level),
+            Span::styled(
+                format!(
+                    " · signal {}/{} · {} bits",
+                    sheet.signal,
+                    sheet.max_signal(),
+                    sheet.bits
+                ),
+                text,
+            ),
+        ],
+        vec![
+            Span::styled(fight_ui::weapon_name(sheet).to_string(), text),
+            Span::styled(" · ", dim),
+            Span::styled(fight_ui::armor_name(sheet).to_string(), text),
+        ],
+        match fight_data::title(sheet.marks) {
+            Some(title) => vec![
+                Span::styled(glyphs, dim),
+                Span::styled(" · ", dim),
+                Span::styled(format!("╬{} {title}", sheet.marks), text),
+            ],
+            None => vec![Span::styled(glyphs, dim)],
+        },
+    ];
+    runner_ui::portrait_spans(&runner.look)
+        .into_iter()
+        .zip(rows)
+        .map(|(face, row)| {
+            let mut spans = vec![face, Span::raw("  ")];
+            spans.extend(row);
+            Line::from(spans)
+        })
+        .collect()
 }
 
 /// A section heading: a dim label trailed by a rule, with a blank row above

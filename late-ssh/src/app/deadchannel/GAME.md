@@ -262,9 +262,9 @@ place at all: scarcity of place is the fiction's spine, same as the
   wallet for any sub-surface; that's two identity systems fighting for one
   presence layer.
 - Cosmetics are the proven shop category (see Why), so lean in hard:
-  top-end looks priced absurdly (a 100k-chip legendary look is the point,
-  not a bug), rotating/limited seasonal stock for scarcity and shop
-  check-ins.
+  rotating/limited seasonal stock for scarcity and shop check-ins. No
+  legendary looks: a set only a few can wear becomes the look everyone
+  chases and then everyone wears.
 
 ### Chat encounters (the onboarding funnel)
 - The Mudae/Pokécord shape: something spawns in a room, runners present
@@ -616,7 +616,7 @@ to allocate, and nothing on it another player cannot see.
 | stash | money in the city's locker | untouched by death | `bank.php` |
 | band | tuner, jammer, ghost, or none | chosen on the first descent | specialties |
 | band skill | move unlocks | +1 per level gained | specialty points |
-| marks | Old Signal kills | permanent; each resets level to 1 | dragon kills |
+| marks | Old Signal kills | permanent; each resets level, gear, and bits, adds +1 attack and defense (cap 5) | dragon kills |
 
 Vocabulary decided here, all passing the screenshot test: **signal** is
 health (the Old Signal is the deepest one; "mira's signal dropped" is a
@@ -740,9 +740,14 @@ pieces are the thing chips buy.
 **The portrait.** 5 columns by 3 rows, three slots, one row each: **hood**
 (top), **eyes** (middle), **coat** (bottom). Rows stack, so any hood
 composes with any coat and the set never needs compatibility rules. The
-starter set is three pieces per slot, free; a join assigns a random
-starter look so the mark exists from the first second, and starter
-pieces can be re-picked at the tailor for nothing, forever.
+rack is gated by level: three pieces per slot at level 1, three more
+at 4, 7, 10, and 13 (fifteen per slot), free once unlocked and
+re-picked at the tailor for nothing, forever. A join assigns a random
+level-1 look so the mark exists from the first second. There are no
+earned or legendary pieces: a piece only a few can wear becomes the
+look everyone chases and then everyone wears. Feats (the Old Signal
+kill) earn a badge, not clothes, and no piece carries the Signal's `╬`
+on the chest.
 
 **The mark.** One cell: a glyph, rendered in the chat author badge stack
 (beside the bonsai glyph, the existing precedent for a game glyph there)
@@ -750,9 +755,9 @@ followed by the level, `▚7`, and as the runner's avatar glyph on the
 clubhouse floor, where runners become the only patrons who are not the
 default glyph. Starter marks are the ten characters of `GLYPH_ALPHABET`,
 free, so a fresh runner already wears the alphabet the city's fauna is
-made of. Rarer marks are bought or earned. The mark's **tint** is earned
-only, by marks (the prestige count): a colored mark is proof of an Old
-Signal kill and can never be bought, so the room learns to read it.
+made of. Rarer marks are bought. The badge's color is the newest tint the
+level opened, and an Old Signal kill shows as `╬N` after the level
+(`▚3╬2`): proof no chip can buy, so the room learns to read it.
 
 **Pieces come in two kinds, and the look tells the story:**
 
@@ -761,14 +766,17 @@ Signal kill and can never be bought, so the room learns to read it.
   rental treadmill is what made effects a moment). The tailor's rack
   rotates by season and a piece that leaves the rack never returns, so
   a look dates you the way a jersey does.
-- **Earned** pieces: milestones only (level 15, the first mark, a season
-  placement, later the arena title), never on any rack at any price.
+- **Level** pieces: the tailor's rack opens by level, three per slot
+  every three levels, so the look says how far down you have been.
+  There are no earned pieces: a piece only a few can wear becomes the
+  look everyone chases and then everyone wears. Milestones (the Old
+  Signal kill, a season placement, later the arena title) earn badges,
+  not clothes.
 
 Because the piece set is closed, a look is legible to anyone who has
-learned it: this coat says "was here in season one", that hood says
-"has killed the Signal", and the difference between bought and earned
-is the difference between "has chips" and "did the thing". Both are
-status; both are why you look.
+learned it: this coat says "was here in season one", that tint says
+"level ten", and the badge beside the name says "did the thing". Both
+are status; both are why you look.
 
 **Signal corrupts the look.** The portrait renders with cells replaced by
 static in proportion to missing signal (the haunting's `glitched_name`
@@ -830,20 +838,12 @@ ghost       visor       static      the glyph   tuner       jammer
   ▒░▒         ▟█▙         ▟▓▙         ▟╬▙        ▟═▙         ▟▒▙
 ```
 
-Legendary looks, where the whole set is one idea (the 100k pieces):
-
-```
-test pattern   old signal    the flicker    blackout
-   ▐▌▐▌          ╬╬╬            ▘ ▝           ███
-  ▐▓░▓▌         ▐◈▬◈▌          ▐▖ ▗▌         ▐█ █▌
-   ▟▒▙           ▟╬▙            ░▒░           ███
-```
-
 What the sketches decided:
 
 - **The coat's center cell is the emblem.** `▟╬▙`, `▟═▙`, `▟▓▙` are one
   coat with a different chest; emblems are the cheapest way to grow the
-  catalog, and an earned emblem (the Signal's `╬`) reads at a glance.
+  catalog. The Signal's `╬` is kept off every chest: it belongs to the
+  boss, not to a coat.
 - **Static shades inside a piece mean "half in the city already."** The
   ghost band's pieces mix `░▒▓` into themselves, so the corruption effect
   and the fashion speak one visual language and a wound never reads as
@@ -858,8 +858,8 @@ What the sketches decided:
 ```
 
 - **One tint per piece, never per cell**, from a closed palette of about
-  eight (static grey, amber, phosphor green, cyan, magenta, red, white,
-  and gold reserved for earned tint). Two people in the same three
+  seven (static grey, amber, phosphor green, cyan, magenta, red, white),
+  opened by level. No earned tint: gold stays out of the palette. Two people in the same three
   pieces and different tints already look different, so the catalog
   multiplies without more art. The wire prints portraits in plain text
   (chat bodies carry no color and IRC would need color codes); the
@@ -880,12 +880,12 @@ What the sketches decided:
 database, the way the door keeps its ladders in `data.rs`.
 
 - **Pieces are a Rust const table**, one entry per piece: a code, its
-  slot, the five-cell row, and whether it is starter, bought, or earned.
+  slot, the five-cell row, and the level that opens it.
   The width test above runs over this table, so a bad glyph fails the
   build instead of someone's card.
 - **A shop SKU references the piece code**; a catalog migration per rack
   in the existing `ON CONFLICT (sku)` shape, ownership in
-  `user_purchases`. Earned pieces have no SKU at all, so they cannot be
+  `user_purchases`. Level pieces have no SKU at all, so they cannot be
   sold by accident.
 - **The look is one JSONB column on the runner row**, parsed at load into
   a typed struct and rejected loudly on an unknown code (the boundary
@@ -914,11 +914,9 @@ database, the way the door keeps its ladders in `data.rs`.
 | common piece | 2,000 |
 | rare piece | 10,000 |
 | rare mark | 25,000 |
-| a legendary look (matched hood, eyes, coat, and its own mark) | 100,000 |
 
 Looks are deadchannel's chip sink from day one, before the arena or a
-single bounty exists; the 100k look is the point (see "The visibility
-layer"), not an outlier.
+single bounty exists.
 
 ### The sheet (what the profile card shows)
 
@@ -958,7 +956,7 @@ that is enough.
 `deadchannel_runners`, one row per user (`user_id` unique), id UUID v7.
 Columns: level, exp, signal, weapon_tier, armor_tier, bits, stash,
 rations_left, charge_left, day (the UTC date of the last roll), band,
-band_skill, the benched band progress, alive, marks, and the look as
+band_skill, the benched band progress, alive, marks, peak_level, and the look as
 four piece codes (hood, eyes, coat, mark). All data ops in one late-core
 model, the multi-replica rule throughout: the day roll and every spend
 are conditional claims on the row (`WHERE day < $today`, `WHERE
@@ -1007,9 +1005,39 @@ on still bind every piece, band, and ration the city sells:
 Fourteen **operators** hold levels 2 to 15 (LoGD master stats: attack
 2L, defense 2L, signal 11L), each an old voice on the wire with a name
 and a line, beaten once per level to climb. Level 15 opens the **Old
-Signal** (45 / 25 / 300); putting it down resets you to level 1 with a
-mark, scales every exp threshold by marks (LoGD 1:1), and is the season
-loop's engine. Names and copy belong to the city pass.
+Signal**; putting it down leaves a mark and resets the climb (see
+"Marks: the reset"), and is the season loop's engine. Names and copy
+belong to the city pass.
+
+### Marks: the reset (decided)
+
+Classic LoGD, with Diablo's paragon feel: the climb resets, the status
+never does.
+
+- **The gate.** At level 15 with the exp to leave it (`exp_to_seek`, the
+  last rung of the curve), the next step into the screen meets the Old
+  Signal instead of a glyph. A dropped signal against it costs what any
+  drop costs, and a tenth of the exp usually puts the gate a day or two
+  of glyphs away again.
+- **The numbers.** 240 signal, 36 attack, 22 defense. LoGD's dragon
+  (300 / 45 / 25) is a one-in-fifty fight for a runner with no bands and
+  no bonus hit points; these land a first kill about two tries in five
+  at the top of the wall, pinned by a seeded simulation test. Revisit
+  when the bands ship.
+- **What the kill takes:** level back to 1, exp to 0, weapon and armor to
+  tier 0, bits to the starting 50. The climb is a real climb again.
+- **What it keeps:** the peak level (the tailor's rack stays open), the
+  look, the badges, the kill count, today's rations.
+- **What it gives:** a mark. Marks are the paragon number, shown behind
+  the Signal's glyph in the badge (`▚3╬2`); each adds +1 attack and +1
+  defense up to a cap of five (the second climb is quicker, a veteran
+  never outgrows the room), scales every exp threshold (LoGD's formula,
+  a quarter of level times a hundred per mark), and climbs the title
+  ladder (placeholder copy: heard, tuned, carrier, broadcast, old
+  voice). The first kill grants the rankless `SIG` profile badge, and no
+  chips: the wallets never convert.
+- **The stash is undecided.** It is not built; whether a mark empties it
+  is decided when it ships.
 
 ### Build order for this phase
 
@@ -1081,7 +1109,7 @@ fixed:
   nobody can read it, which is the point.
 - **No function behind anything yet, and the panels say so.** Every shop
   opens and shows its real catalog (the fifteen gear tiers at LoGD prices,
-  the whole starter rack with the runner's portrait in the mirror, the
+  the rack cut to the runner's peak level with the portrait in the mirror, the
   three bands) under a line in the voice saying the till is not open. The
   street answers Enter at a cart with a line from a small pool. Placeholder
   copy, design review pending: the draft **move names** (tuner: retune,
@@ -1099,7 +1127,7 @@ the railing Enter looks over the ledge at the lower city (a half-block
 perspective picture, the showpiece). The screen is the forest (the
 fight pass, next section). The armorer's till trades and the tailor's
 mirror edits the look (pick, not draw: rows, racks, tints, the mark, the
-join's dice again; the starter rack free forever). Still to come on the
+join's dice again; the rack gated by level, free once unlocked). Still to come on the
 street: the locker, the band choice.
 
 ## The fight pass: where the ration goes (2026-09-24)
@@ -1163,9 +1191,10 @@ ritual is the city's, the wire is the log); this pass fixed the shape:
   change trigger the join uses, so every surface that paints the look
   follows on the directory refresh. Nothing posts to the wire: the new
   face rides the runner's next message there, which is the be-seen fuel
-  doing its own work. The rack is a window of five around the worn piece
-  rather than the whole row, so the panel fits eighty columns and the
-  eye stays on the piece.
+  doing its own work. The rack is a window of up to five around the worn
+  piece rather than the whole row (the whole rack, once, while it is
+  shorter), so the panel fits eighty columns and the eye stays on the
+  piece.
 
 What comes next on this surface is decided in the next section, "The
 road pass": the exchange loop above is the placeholder it replaces.
@@ -1302,16 +1331,20 @@ talk about.
 The badge (mark plus level, `▚7`, decided 2026-09-02) is where the
 game's status lives in chat, and its color is earned, never bought:
 
-- **Level bands tint the badge.** Grey 1 to 4, amber 5 to 9, phosphor
-  10 to 14, white at 15; the earned tint only after an Old Signal kill.
-  The room learns the ladder in a week without a legend.
+- **Level bands tint the badge.** The badge wears the newest tint the
+  level unlocked: grey 1 to 3, phosphor 4 to 6, cyan 7 to 9, magenta 10
+  to 12, red 13 and 14, white at 15; the earned tint only after an Old
+  Signal kill. The room learns the ladder in a week without a legend.
 - **The badge carries the level color; the username keeps the shop
   color.** Username gradients are the shop's one hit. Both on one line
   would fight; side by side they read as "has chips" and "did the
   thing", the exact distinction "The look" draws.
-- **Tints in the tailor unlock by level band, not by price.** Bits stay
-  internal and buy gear; chips buy pieces. A tint you cannot pick yet
-  shows in the rack with its level: a reason to come back at five.
+- **Tints and pieces in the tailor unlock by level, not by price.** Every
+  three levels opens three pieces per slot and a tint: static and amber
+  at 1, phosphor at 4, cyan at 7, magenta at 10, red at 13, white alone
+  at 15. Bits stay internal and buy gear; chips buy pieces later. The
+  mirror names what the next unlock level opens: a reason to come back
+  at four.
 - All of it in #deadchannel only until the public flip.
 
 ### PvP at forty people

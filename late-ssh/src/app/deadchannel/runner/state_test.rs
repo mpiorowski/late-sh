@@ -51,7 +51,7 @@ fn piece_codes_are_unique_and_prefixed_by_slot() {
 #[test]
 fn a_random_look_round_trips_through_json() {
     let mut rng = StdRng::seed_from_u64(7);
-    let look = Look::random(&mut rng);
+    let look = Look::random(1, &mut rng);
     assert_eq!(look.hood.piece.slot, Slot::Hood);
     assert_eq!(look.eyes.piece.slot, Slot::Eyes);
     assert_eq!(look.coat.piece.slot, Slot::Coat);
@@ -123,4 +123,64 @@ fn unknown_pieces_and_marks_are_rejected_loudly() {
         Look::parse(&serde_json::json!({"hood": "hood.cross"})),
         Err(LookError::Shape(_))
     ));
+}
+
+/// The unlock ladder, whole: every three levels the rack opens three more
+/// pieces per slot and a tint, white alone at the top, and the tables
+/// list each slot street first, so the tailor's rack walks up the ladder.
+#[test]
+fn the_rack_opens_three_pieces_per_slot_and_a_tint_every_three_levels() {
+    for slot in [Slot::Hood, Slot::Eyes, Slot::Coat] {
+        let levels = pieces_for(slot)
+            .map(|piece| piece.level)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            levels,
+            vec![1, 1, 1, 4, 4, 4, 7, 7, 7, 10, 10, 10, 13, 13, 13],
+            "{slot:?}"
+        );
+    }
+    assert_eq!(TINTS.map(Tint::level), [1, 1, 4, 7, 10, 13, 15]);
+    for tint in TINTS {
+        assert_eq!(
+            serde_json::to_value(tint).expect("a tint serializes"),
+            serde_json::json!(tint.name()),
+            "the tailor prints the stored name"
+        );
+    }
+    for unlock in UNLOCK_LEVELS {
+        let opens = PIECES.iter().any(|piece| piece.level == unlock)
+            || TINTS.iter().any(|tint| tint.level() == unlock);
+        assert!(
+            opens,
+            "level {unlock} is an unlock level that opens nothing"
+        );
+    }
+    assert_eq!(
+        unlocked_tints(1).collect::<Vec<_>>(),
+        vec![Tint::Static, Tint::Amber]
+    );
+    assert_eq!(unlocked_pieces(Slot::Hood, 6).count(), 6);
+    assert_eq!(next_unlock(1), Some(4));
+    assert_eq!(next_unlock(12), Some(13));
+    assert_eq!(next_unlock(13), Some(15));
+    assert_eq!(next_unlock(15), None);
+}
+
+#[test]
+fn a_random_look_wears_only_what_the_level_unlocked() {
+    for level in [1, 7] {
+        for seed in 0..200 {
+            let look = Look::random(level, &mut StdRng::seed_from_u64(seed));
+            for worn in look.rows() {
+                assert!(
+                    unlocked_pieces(worn.piece.slot, level).any(|piece| piece == worn.piece)
+                        && worn.tint.level() <= level,
+                    "level {level} seed {seed} wears {} in {:?}",
+                    worn.piece.code,
+                    worn.tint
+                );
+            }
+        }
+    }
 }

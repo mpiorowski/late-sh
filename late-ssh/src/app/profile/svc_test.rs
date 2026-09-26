@@ -104,6 +104,64 @@ async fn find_profile_publishes_stored_chip_balance() {
     assert_eq!(snapshot.chip_balance, Some(chips.balance));
 }
 
+/// The runner section reads the sheet as it would stand today, not as the
+/// row last left it: the lazy day roll is applied to the view, so a runner
+/// who dropped yesterday and has not touched the row since is not shown
+/// with a dead signal after midnight. Nothing is written.
+#[tokio::test]
+async fn find_profile_settles_the_runners_sheet_for_the_view() {
+    use crate::app::deadchannel::fight::data::RATIONS_PER_DAY;
+    use crate::app::deadchannel::fight::state::Sheet;
+    use crate::app::deadchannel::fight::svc::FightService;
+    use crate::app::deadchannel::runner::state::Look;
+    use late_core::models::deadchannel_runner::DeadchannelRunner;
+
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "profile-runner-roll").await;
+    let look = Look::random(1, &mut rand::thread_rng());
+    DeadchannelRunner::ensure_for_user(&client, user.id, &look.to_json())
+        .await
+        .expect("a runner");
+    let row = DeadchannelRunner::find_by_user(&client, user.id)
+        .await
+        .expect("find runner")
+        .expect("runner row");
+    let mut yesterday = Sheet::from_row(&row).expect("sheet parses");
+    yesterday.day = FightService::today()
+        .pred_opt()
+        .expect("a day before today");
+    yesterday.signal = 0;
+    yesterday.rations_left = 0;
+    yesterday.kills_today = 3;
+    DeadchannelRunner::store_sheet(&**client, yesterday.to_write())
+        .await
+        .expect("store yesterday's sheet");
+
+    let service = ProfileService::new(test_db.db.clone(), default_active_users());
+    let mut snapshot_rx = service.subscribe_snapshot(user.id);
+    service.find_profile(user.id);
+    timeout(Duration::from_secs(2), snapshot_rx.changed())
+        .await
+        .expect("snapshot timeout")
+        .expect("watch changed");
+    let snapshot = snapshot_rx.borrow_and_update().clone();
+    let runner = snapshot.runner.expect("runner in snapshot");
+    assert_eq!(runner.look, look);
+    assert_eq!(runner.sheet.day, FightService::today());
+    assert_eq!(runner.sheet.signal, runner.sheet.max_signal());
+    assert_eq!(runner.sheet.rations_left, RATIONS_PER_DAY);
+    assert_eq!(runner.sheet.kills_today, 0);
+
+    // The view rolled; the row did not.
+    let stored = DeadchannelRunner::find_by_user(&client, user.id)
+        .await
+        .expect("find runner again")
+        .expect("runner row again");
+    assert_eq!(stored.signal, 0);
+    assert_eq!(stored.rations_left, 0);
+}
+
 /// The profile modal shows the viewed user's showcases from this snapshot,
 /// so it carries every one of theirs, newest first, and nobody else's.
 #[tokio::test]
@@ -813,7 +871,7 @@ async fn delete_account_terminates_active_sessions() {
                 token,
                 fingerprint: Some(user.fingerprint.clone()),
                 peer_ip: None,
-                status: None,
+                away: false,
             }],
             connection_count: 1,
             last_login_at: Instant::now(),

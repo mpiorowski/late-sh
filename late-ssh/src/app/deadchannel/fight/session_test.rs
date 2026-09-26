@@ -15,7 +15,7 @@ async fn session_with_runner(name: &str) -> (late_core::test_utils::TestDb, Figh
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, name).await;
     let client = test_db.db.get().await.expect("db client");
-    let look = Look::random(&mut rand::thread_rng());
+    let look = Look::random(1, &mut rand::thread_rng());
     DeadchannelRunner::ensure_for_user(&client, user.id, &look.to_json())
         .await
         .expect("a runner");

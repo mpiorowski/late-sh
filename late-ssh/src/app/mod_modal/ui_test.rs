@@ -40,7 +40,7 @@ fn draw_mod_modal_renders_mention_autocomplete() {
         String::new(),
         vec![crate::app::chat::state::MentionMatch {
             name: "alice".to_string(),
-            online: true,
+            presence: crate::app::chat::state::MatchPresence::Here,
             prefix: "@",
             description: None,
         }],
@@ -75,7 +75,7 @@ fn draw_mod_modal_renders_room_autocomplete() {
         String::new(),
         vec![crate::app::chat::state::MentionMatch {
             name: "lounge".to_string(),
-            online: true,
+            presence: crate::app::chat::state::MatchPresence::Here,
             prefix: "#",
             description: None,
         }],

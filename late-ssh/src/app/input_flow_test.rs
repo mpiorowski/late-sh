@@ -718,6 +718,7 @@ async fn tab_cycles_screens_forward_through_all_including_profiles() {
 #[tokio::test]
 async fn zero_twice_goes_under_the_clubhouse_for_runners_only() {
     use crate::app::deadchannel::runner::state::Look;
+    use crate::app::deadchannel::runner::svc::RunnerEntry;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
     use std::collections::HashMap;
@@ -744,7 +745,15 @@ async fn zero_twice_goes_under_the_clubhouse_for_runners_only() {
 
     // A runner: the second `0` goes under, the next one comes back up.
     let mut rng = StdRng::seed_from_u64(7);
-    app.runner_looks = Arc::new(HashMap::from([(user.id, Look::random(&mut rng))]));
+    app.runner_looks = Arc::new(HashMap::from([(
+        user.id,
+        RunnerEntry {
+            look: Look::random(1, &mut rng),
+            level: 1,
+            peak_level: 1,
+            marks: 0,
+        },
+    )]));
     app.handle_input(b"0");
     wait_for_render_contains(&mut app, " Undercity ").await;
     app.handle_input(b"0");
@@ -758,6 +767,7 @@ async fn zero_twice_goes_under_the_clubhouse_for_runners_only() {
 #[tokio::test]
 async fn leaving_the_deadchannel_walks_a_standing_runner_back_up() {
     use crate::app::deadchannel::runner::state::Look;
+    use crate::app::deadchannel::runner::svc::RunnerEntry;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
     use std::collections::HashMap;
@@ -776,8 +786,15 @@ async fn leaving_the_deadchannel_walks_a_standing_runner_back_up() {
 
     // A live directory, the shape the replica's listener feeds.
     let mut rng = StdRng::seed_from_u64(7);
-    let (looks_tx, looks_rx) =
-        tokio::sync::watch::channel(Arc::new(HashMap::from([(user.id, Look::random(&mut rng))])));
+    let (looks_tx, looks_rx) = tokio::sync::watch::channel(Arc::new(HashMap::from([(
+        user.id,
+        RunnerEntry {
+            look: Look::random(1, &mut rng),
+            level: 1,
+            peak_level: 1,
+            marks: 0,
+        },
+    )])));
     app.runner_looks = looks_rx.borrow().clone();
     app.runner_looks_rx = looks_rx;
 
@@ -804,6 +821,7 @@ async fn runner_at_the_railing(
     name: &str,
 ) -> (late_core::test_utils::TestDb, crate::app::state::App) {
     use crate::app::deadchannel::runner::state::Look;
+    use crate::app::deadchannel::runner::svc::RunnerEntry;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
     use std::collections::HashMap;
@@ -820,7 +838,15 @@ async fn runner_at_the_railing(
         .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, &format!("{name}-flow"));
     let mut rng = StdRng::seed_from_u64(7);
-    app.runner_looks = Arc::new(HashMap::from([(user.id, Look::random(&mut rng))]));
+    app.runner_looks = Arc::new(HashMap::from([(
+        user.id,
+        RunnerEntry {
+            look: Look::random(1, &mut rng),
+            level: 1,
+            peak_level: 1,
+            marks: 0,
+        },
+    )]));
 
     app.handle_input(b"0");
     wait_for_render_contains(&mut app, " Clubhouse ").await;
@@ -4089,4 +4115,70 @@ async fn rail_scroll_keys_and_wheel_leave_the_selected_room_alone() {
         0,
         "a selection change snaps the rail back to it"
     );
+}
+
+#[tokio::test]
+async fn the_first_descent_opens_the_guide_and_the_question_mark_reopens_it() {
+    use crate::app::deadchannel::runner::state::Look;
+    use crate::app::deadchannel::runner::svc::RunnerEntry;
+    use late_core::models::deadchannel_runner::DeadchannelRunner;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "undercity-guide-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut rng = StdRng::seed_from_u64(7);
+    let look = Look::random(1, &mut rng);
+    // The claim is on the row, so the runner needs one.
+    DeadchannelRunner::ensure_for_user(&client, user.id, &look.to_json())
+        .await
+        .expect("a runner");
+    let mut app = make_app(test_db.db.clone(), user.id, "undercity-guide-flow");
+    app.runner_looks = Arc::new(HashMap::from([(
+        user.id,
+        RunnerEntry {
+            look,
+            level: 1,
+            peak_level: 1,
+            marks: 0,
+        },
+    )]));
+
+    app.handle_input(b"0");
+    wait_for_render_contains(&mut app, " Clubhouse ").await;
+    app.handle_input(b"0");
+    // The chrome names the key, and the first descent opens the guide by
+    // itself once the claim answers.
+    wait_for_render_contains(&mut app, " Undercity · ? guide ").await;
+    wait_for_render_contains(&mut app, "the street, explained").await;
+    wait_for_render_contains(&mut app, "arrows or hjkl walk").await;
+
+    // Esc closes it; `?` opens it again from the street; `q` closes it.
+    app.handle_input(b"\x1b");
+    wait_for_render_not_contains(&mut app, "the street, explained").await;
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "the street, explained").await;
+    app.handle_input(b"q");
+    wait_for_render_not_contains(&mut app, "the street, explained").await;
+
+    // A second descent finds the street, not the guide.
+    app.handle_input(b"0");
+    wait_for_render_contains(&mut app, " Clubhouse ").await;
+    app.handle_input(b"0");
+    wait_for_render_contains(&mut app, " Undercity ").await;
+    assert_render_not_contains_for(
+        &mut app,
+        "the street, explained",
+        Duration::from_millis(300),
+    )
+    .await;
 }

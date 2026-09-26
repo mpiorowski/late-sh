@@ -30,8 +30,8 @@ count and keys), activity
 (the #lounge feed as a list, newest on top, each event's age flush right
 and a friend's line in the friend color: the same
 `ChatState::activity_ticker` queue the one-row ticker packs, capped at
-40), friends (connected friends, newest login first: name, `/status`
-badge, audio source, time on), pulse (the numbers worth a glance, one
+40), friends (connected friends, here before away, then newest login:
+name, the away glyph, audio source, time on), pulse (the numbers worth a glance, one
 `label  value` row each and every row always drawn, zero included: people
 online, your chips, unread mentions, friends online, and today's care, which
 names bonsai, tank, and pet, each green once tended today (watered, fed,

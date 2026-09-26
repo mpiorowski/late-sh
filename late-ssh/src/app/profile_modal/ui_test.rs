@@ -83,10 +83,19 @@ async fn fixture(slug: &str) -> Fixture {
 }
 
 fn render(state: &ProfileModalState, width: u16, height: u16) -> Vec<String> {
+    render_as(state, width, height, false)
+}
+
+fn render_as(
+    state: &ProfileModalState,
+    width: u16,
+    height: u16,
+    viewer_is_runner: bool,
+) -> Vec<String> {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("terminal");
     terminal
-        .draw(|frame| draw(frame, frame.area(), state, 0))
+        .draw(|frame| draw(frame, frame.area(), state, 0, viewer_is_runner))
         .expect("draw");
     let buffer = terminal.backend().buffer();
     (0..buffer.area.height)
@@ -164,6 +173,78 @@ async fn a_wide_terminal_shows_every_section_in_order() {
         "{}",
         lines[summary]
     );
+}
+
+/// A standing runner's profile grows a runner section under the bio, for
+/// a runner looking: the face beside the level, signal and bits, the kit,
+/// and the tally. A civilian looking sees the profile they always did,
+/// and a runner who left has nothing to show.
+#[tokio::test]
+async fn a_runners_profile_shows_the_row_to_runners_only() {
+    use crate::app::deadchannel::runner::state::Look;
+    use late_core::models::deadchannel_runner::DeadchannelRunner;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+
+    let fixture = fixture("runner").await;
+    let lines = render_as(&fixture.state, 130, 60, true);
+    assert!(
+        row_of(&lines, "runner ─").is_none(),
+        "no section for a civilian:\n{}",
+        lines.join("\n")
+    );
+
+    // The viewed user joins the row: the next open of their profile
+    // carries the runner.
+    let db = fixture._test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let mut rng = StdRng::seed_from_u64(7);
+    let look = Look::random(1, &mut rng);
+    DeadchannelRunner::ensure_for_user(&client, fixture.user_id, &look.to_json())
+        .await
+        .expect("runner row");
+    let profile_service = ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new())));
+    let mut snapshot_rx = profile_service.subscribe_snapshot(fixture.user_id);
+    let mut state = ProfileModalState::new(profile_service);
+    state.open(fixture.user_id, "runner-viewed".to_string());
+    timeout(Duration::from_secs(5), async {
+        loop {
+            snapshot_rx.changed().await.expect("watch open");
+            if snapshot_rx.borrow().runner.is_some() {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("runner snapshot");
+    assert!(state.tick());
+
+    let lines = render_as(&state, 130, 60, true);
+    let text = lines.join("\n");
+    let bio = row_of(&lines, "bio ─").expect("bio heading");
+    let runner = row_of(&lines, "runner ─").expect("runner heading");
+    let chips = row_of(&lines, "chips ─").expect("chips heading");
+    assert!(
+        bio < runner && runner < chips,
+        "bio, runner, chips:\n{text}"
+    );
+    let face = look.rows().map(|worn| worn.piece.row);
+    assert!(
+        lines[runner + 1].contains(&format!("{}  lv 1 · signal 10/10 · 50 bits", face[0])),
+        "{text}"
+    );
+    assert!(
+        lines[runner + 2].contains(&format!("{}  bare hands · street clothes", face[1])),
+        "{text}"
+    );
+    assert!(
+        lines[runner + 3].contains(&format!("{}  0 glyphs down", face[2])),
+        "{text}"
+    );
+
+    // The same profile to a civilian: the row is not theirs to see.
+    let lines = render_as(&state, 130, 60, false);
+    assert!(row_of(&lines, "runner ─").is_none(), "{}", lines.join("\n"));
 }
 
 #[tokio::test]

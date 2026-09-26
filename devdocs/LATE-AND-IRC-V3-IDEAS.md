@@ -25,7 +25,8 @@ The TUI chat surface already has richer semantics than plain IRC:
   per-user votes, and automatic result posts.
 - Mention notifications, unread cursors, friends, ignores, and active-user
   presence.
-- `/brb` away state, shown in TUI author labels while any active session is AFK.
+- Automatic away (30 quiet minutes, `/brb`, or IRC `AWAY`), a `💤` beside the
+  name once every session of the user is away.
 - Inline image URL previews and explicit upload/paste-image flows.
 - Moderation mapped through shared room/server kick and ban service paths.
 
@@ -40,7 +41,7 @@ The TUI chat surface already has richer semantics than plain IRC:
 | `+reply` client tag                           | `reply_to_message_id`                             | Map outbound replies to `@+reply=<parent msgid>` and inbound tagged replies to `reply_to_message_id` after validating the target message is in the same room. | High       |
 | `+draft/react` / `+draft/unreact` client tags | chat reactions                                    | Map inbound reaction TAGMSG/PRIVMSG to the existing reaction model and outbound reaction changes to tagged TAGMSG events. See dedicated section below.        | High       |
 | `chathistory` + `batch`                       | capped room tail, delta sync, DMs, unread cursors | Replay newest room tail or bounded before/after windows in IRC clients that request history. Use `batch` to group replayed messages.                          | Medium     |
-| `away-notify`                                 | `/brb` AFK state                                  | Project `/brb` as away state and send AWAY updates to shared channels. Inbound IRC `AWAY` could set or clear the same per-session AFK flag.                   | Medium     |
+| `away-notify`                                 | shared away state (`common/away.rs`)              | Built: AWAY lines for users sharing a joined channel, on the 30s presence poll. Inbound IRC `AWAY` sets and clears the connection's own away flag.            | Done       |
 | `account-tag`                                 | late.sh user identity                             | Tag messages with the sender's stable account/username. Useful for bots and bridges even though nicks are already locked to usernames.                        | Medium     |
 | `account-notify` / `extended-join`            | login/session presence and account identity       | Because every IRC-visible user is authenticated, these mostly reinforce identity on JOIN and state changes.                                                   | Low/Medium |
 | `typing` client tag                           | active composer state                             | Could show IRC users typing in the TUI and maybe TUI users typing in IRC, but this needs a new transient typing event path and privacy controls.              | Medium     |
@@ -167,11 +168,10 @@ Presence:
 
 Away:
 
-- `/brb` already marks a session AFK and renders a moon badge in TUI chat.
-- IRC `AWAY` is currently acknowledged but not surfaced into late.sh state.
-- A future `away-notify` slice should make `/brb` and IRC `AWAY` update the
-  same session-level AFK state, then broadcast `AWAY` changes to clients that
-  negotiated `away-notify`.
+- Away is one per-session flag on the active-users roster, shared by the TUI
+  (30 quiet minutes or `/brb`) and IRC (`AWAY :msg`, or 30 minutes without a
+  PRIVMSG/NOTICE). `WHO` flags `G`, `WHOIS` and DMs answer `RPL_AWAY`, and
+  `away-notify` is advertised. See `late-ssh/src/ircd/CONTEXT.md`.
 
 Typing:
 
@@ -214,8 +214,7 @@ support history and read markers.
 1. Foundation caps: `message-tags`, `server-time`, `msgid`, and `echo-message`.
 2. Replies: inbound/outbound `+reply` mapped to `reply_to_message_id`.
 3. Reactions: `+draft/react` / `+draft/unreact` with a reaction delta event.
-4. Away: map `/brb` and IRC `AWAY` through shared AFK state, then advertise
-   `away-notify`.
+4. Away: built (shared away state, `away-notify`).
 5. History: `chathistory` plus `batch` for bounded replay.
 6. Deletes: evaluate `message-redaction` after stable `msgid` and history exist.
 7. Nice-to-haves: `account-tag`, `extended-join`, `MONITOR`, `typing`, and

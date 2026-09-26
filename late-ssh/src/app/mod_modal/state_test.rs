@@ -119,7 +119,7 @@ fn autocomplete_confirm_replaces_query_with_selected_username() {
         "ali".to_string(),
         vec![MentionMatch {
             name: "alice".to_string(),
-            online: true,
+            presence: crate::app::chat::state::MatchPresence::Here,
             prefix: "@",
             description: None,
         }],

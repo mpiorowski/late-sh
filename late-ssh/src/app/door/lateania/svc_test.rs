@@ -25,6 +25,7 @@ fn craft_entry(name: &str, skill: &str) -> CraftEntryView {
         worn_stats: None,
         desc: "",
         category: "Goods",
+        held: None,
         craftable: true,
         reason: String::new(),
     }
@@ -314,6 +315,63 @@ fn crafting_needs_both_the_station_and_the_materials() {
         0,
         "a failed craft trains nothing"
     );
+}
+
+#[test]
+fn the_craft_panel_leads_with_alchemy_and_counts_the_made_goods_you_hold() {
+    use super::super::items::{ingot_id, potion_id, smith_weapon_id};
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = 3; // Embergate's crafters' row: all five stations
+        p.inventory
+            .extend([potion_id(0), potion_id(0), potion_id(0)]);
+        p.inventory.extend([ingot_id(0), ingot_id(0)]);
+    }
+    let craft = s.snapshot().players[&uid(1)]
+        .crafting
+        .clone()
+        .expect("stations stand in room 3");
+
+    // Alchemy is the trade worked most, so it opens the list.
+    let mut trades: Vec<&str> = Vec::new();
+    for e in &craft.entries {
+        if !trades.contains(&e.skill.as_str()) {
+            trades.push(&e.skill);
+        }
+    }
+    assert_eq!(
+        trades,
+        [
+            "Alchemy",
+            "Smithing",
+            "Woodworking",
+            "Leatherworking",
+            "Cooking"
+        ]
+    );
+    assert_eq!(
+        craft.stations,
+        "alchemy lab, forge, workbench, tannery, cooking fire"
+    );
+
+    // A stock good carries how many are already in the pack; gear (weighed
+    // against what is worn) and a crafted material (an ingot is a resource)
+    // carry none.
+    let held = |id: u32| {
+        craft
+            .entries
+            .iter()
+            .find(|e| e.item_id == id)
+            .expect("the recipe is listed")
+            .held
+    };
+    assert_eq!(held(potion_id(0)), Some(3));
+    assert_eq!(held(potion_id(1)), Some(0));
+    assert_eq!(held(ingot_id(0)), None);
+    assert_eq!(held(smith_weapon_id(0)), None);
 }
 
 #[test]
@@ -1897,6 +1955,35 @@ fn monk_iron_body_blunts_physical_but_not_elemental() {
     assert!(
         physical < fire,
         "Iron Body should reduce physical but not fire ({physical} vs {fire})"
+    );
+}
+
+#[test]
+fn reaching_the_level_cap_announces_the_real_cap() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.level = Class::MAX_LEVEL - 1;
+        p.xp = xp_for_level(Class::MAX_LEVEL);
+    }
+    s.check_level_up(uid(1));
+    let texts: Vec<String> = s.players[&uid(1)]
+        .log
+        .iter()
+        .map(|l| l.text.clone())
+        .collect();
+    let cap = format!("level {}", Class::MAX_LEVEL);
+    let pinnacle: Vec<&String> = texts.iter().filter(|t| t.contains("pinnacle")).collect();
+    assert_eq!(
+        pinnacle.len(),
+        2,
+        "personal and world announcements: {texts:?}"
+    );
+    assert!(
+        pinnacle.iter().all(|t| t.contains(&cap)),
+        "the pinnacle names the real cap: {pinnacle:?}"
     );
 }
 

@@ -30,19 +30,45 @@ pub const TRADE_IN_PERCENT: i64 = 75;
 pub const RUN_ODDS: u32 = 2;
 pub const RUN_ODDS_OUT_OF: u32 = 3;
 
+/// A win that leaves the signal at or under this is a near miss, and the
+/// wire says so (GAME.md, "shaped luck": the moments people retell).
+pub const NEAR_MISS_SIGNAL: i32 = 3;
+
 /// Exp needed to advance from level `i + 1` (`lib/experience.php`, the
-/// base curve; marks scale it later, GAME.md "The stat block").
+/// base curve; `scaled` adds the marks, GAME.md "The stat block"). The
+/// last entry is not a level: it is the exp at the top that makes the Old
+/// Signal hear you ([`exp_to_seek`]).
 pub const EXP_TO_ADVANCE: [i64; 15] = [
     100, 400, 1002, 1912, 3140, 4707, 6641, 8985, 11795, 15143, 19121, 23840, 29437, 36071, 43930,
 ];
 
-/// Exp needed to leave `level`. Past the top there is no next level; the
-/// Old Signal is the way up, and it is not here yet.
-pub fn exp_to_advance(level: i32) -> Option<i64> {
+/// The attack and defense a mark adds, capped: the second climb is a bit
+/// faster, and a veteran never outgrows the room (GAME.md, "Marks: the
+/// reset").
+pub const MARK_BONUS_CAP: i32 = 5;
+
+/// Exp needed to leave `level` with `marks`. Past the top there is no next
+/// level; the Old Signal is the way up.
+pub fn exp_to_advance(level: i32, marks: i32) -> Option<i64> {
     if !(1..MAX_LEVEL).contains(&level) {
         return None;
     }
-    Some(EXP_TO_ADVANCE[(level - 1) as usize])
+    Some(scaled(level, marks))
+}
+
+/// Exp at the top of the ladder that brings the Old Signal to the screen
+/// instead of a glyph, with `marks`.
+pub fn exp_to_seek(marks: i32) -> i64 {
+    scaled(MAX_LEVEL, marks)
+}
+
+/// LoGD's dragon-kill scaling, transcribed (`lib/experience.php`, the same
+/// formula as the door's `exp_to_advance`): every threshold climbs by a
+/// quarter of the level times a hundred per mark, rounded.
+fn scaled(level: i32, marks: i32) -> i64 {
+    let base = EXP_TO_ADVANCE[(level - 1) as usize] as f64;
+    let scale = (f64::from(marks) / 4.0) * f64::from(level) * 100.0;
+    (base + scale).round() as i64
 }
 
 /// A glyph's stat block: LoGD's per-level creature seeds, every creature
@@ -252,6 +278,49 @@ pub const FOES: [FoeKind; 15] = [
         arrives: "interference from somewhere below. this is the top of it.",
     },
 ];
+
+/// The Old Signal: the thing broadcasting under the static, the one fight
+/// that is not a glyph of your level. It carries no bits and no exp:
+/// putting it down resets the runner, so a purse would be gone before it
+/// was counted.
+pub const OLD_SIGNAL: FoeKind = FoeKind {
+    name: "Old Signal",
+    portrait: ["▗╬╬╬▖", "▐█▬█▌", "▟╬█╬▙"],
+    arrives: "the static parts. under it something has been broadcasting since before the city. it is the Old Signal, and it heard you.",
+};
+
+/// LoGD's dragon is 45 attack, 25 defense, 300 hit points (`dragon.php`,
+/// the door's `DRAGON_*`), and a runner with no bands, no specialty, and
+/// no bonus hit points wins that about one time in fifty at the top of
+/// the wall. Cut until a first kill lands about two tries in five and the
+/// capped mark bonus lifts it to about four in five; `state_test` pins
+/// both with the seeded simulation. Revisit when the bands ship.
+pub const OLD_SIGNAL_TIER: FoeTier = FoeTier {
+    signal: 240,
+    attack: 36,
+    defense: 22,
+    bits: 0,
+    exp: 0,
+};
+
+/// The line the kill that crosses [`exp_to_seek`] prints under itself.
+pub const HEARD_LINE: &str = "below the static something has heard you. the next step in meets it.";
+
+/// The kill, before the reset's own line (GAME.md, "Marks: the reset").
+pub const SLAIN_LINE: &str =
+    "the Old Signal comes apart, and for a moment every screen in the city goes quiet.";
+
+/// Titles by marks, one per rung (LoGD's dragon-kill titles, neutral
+/// names; placeholder copy, design review). `title(0)` is none; past the
+/// last rung the last one holds.
+pub const TITLES: [&str; 5] = ["heard", "tuned", "carrier", "broadcast", "old voice"];
+
+pub fn title(marks: i32) -> Option<&'static str> {
+    match marks {
+        i32::MIN..=0 => None,
+        marks => Some(TITLES[((marks - 1) as usize).min(TITLES.len() - 1)]),
+    }
+}
 
 /// The glyph that answers a runner of `level`: one kind and one tier per
 /// level, clamped to the table.

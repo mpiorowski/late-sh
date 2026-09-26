@@ -357,3 +357,23 @@ fn returning_user_spawns_seated_not_at_the_door() {
         super::super::lobby::Placement::Seated(_)
     ));
 }
+
+#[test]
+fn heading_out_back_puts_the_avatar_at_the_back_door_for_everyone() {
+    let mut state = state_with_lobby(false);
+    state.refresh_roster(vec![occupant(1, "me"), occupant(2, "alice")]);
+    state.refresh_snapshot();
+    assert_ne!(state.nearby(), Some(map::Interactive::BackDoor));
+
+    state.step_to_back_door();
+
+    assert_eq!((state.player_x, state.player_y), map::BACK_DOOR_MAT);
+    assert_eq!(state.nearby(), Some(map::Interactive::BackDoor));
+    // The shared lobby moves too, so the rest of the room sees where they
+    // went.
+    let lobby = state.lobby_handle().expect("lobby");
+    assert_eq!(
+        lobby.position_of(Uuid::from_u128(1)),
+        Some(map::BACK_DOOR_MAT)
+    );
+}

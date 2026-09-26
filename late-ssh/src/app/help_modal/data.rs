@@ -183,7 +183,7 @@ pub(crate) fn bot_app_context() -> String {
     let mut out = String::from(
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
-        - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, chat badge, chat flag, burn milestone, then the LIVE tag and your /status. The crown prints immediately after the name, and a rented title after that, ahead of the whole stack, as \"name \u{1F451}, the night clerk\".\n\
+        - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, chat badge, chat flag, burn milestone, then the LIVE tag and the away glyph (\u{1F4A4}), which shows on its own after 30 quiet minutes across every session, or at once with /brb. The crown prints immediately after the name, and a rented title after that, ahead of the whole stack, as \"name \u{1F451}, the night clerk\".\n\
         - The Clubhouse (page 0, the Late Lounge tavern) is the landing screen: a walkable ASCII room where everyone online is present. Arrows/hjkl walk, i says something (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark. This is where you (@bartender) keep the bar. Out back, through the back door past the end of the counter (or n from anywhere in the Clubhouse), is Nightcap: a quiet six-stool bar with its own chat that only the seated may speak in (1-6 sit or stand, i talks once seated), a fixed drink menu on d (house beer 100, whiskey neat 250, old fashioned 500, top shelf 1,000 chips, r buys the other stools a round; a banked round credit only covers the house beer), c to carve one line into your stool for the next sitter to find, and Esc back inside. No bot, including you, ever answers out there, and what is said at the bar stays there: it is not on Home, not in search, and not in mentions.\n\
         - @bartender pours drinks for Late Chips: mention him (or press t at the bar) to order. There is no fixed menu; he invents each drink's name and prices it 100-1000 chips, never more than the patron can spend while keeping a 100-chip floor untouched. A brand-new patron's first-ever drink is free. He only ever pours for the patron who mentioned him: he never charges a drink onto someone else, and points anyone who wants to buy another user a round or a drink at \"/gift @user <n>\" instead, since gifted chips do not carry the drunk-text effect onto someone who did not choose to drink.\n\
         - Drinking builds a buzz that levels up: 0 sober, 1 tipsy, 2 buzzed, 3 sloshed, 4 wasted. Every non-sober level prints its word beside the name. Once wasted, the bartender cuts a patron off to water or coffee instead of more drinks.\n\
@@ -581,7 +581,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /icons             open emoji / nerd font picker",
         "  /picker            open the room picker (same as Ctrl+/)",
         "  /petname [name]    show or set your pet's name",
-        "  /brb               shortcut for /status away",
+        "  /brb               show as away now; your next key brings you back",
         "  /coffee            post a coffee cup",
         "  /tea               post a tea cup",
         "  /ultimate          open owned Ultimate Spells",
@@ -614,11 +614,6 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /golive obs [..]   stream from OBS over WHIP; /golive stop ends either",
         "  /watch @user       open someone's live stream (browser via paired CLI, else QR)",
         "                     setup and OBS details live in the Streaming tab",
-        "  /status [word] [m] set your status: focus, working, building, reading,",
-        "                     vibing, gaming, eating, away. With minutes it counts",
-        "                     down and survives posting; without, your next message",
-        "                     clears it. Bare /status opens the picker, /status off",
-        "                     clears it.",
         "  /roll [NdM ...]    roll dice (default d20), e.g. /roll 3d6 2d20",
         "  /sheet [@user]     your character sheet, or another user's (#dnd)",
         "  /paste-image       upload image from paired CLI clipboard (see Images)",
@@ -1036,6 +1031,7 @@ fn arcade_help_lines() -> Vec<String> {
         "  [GDS]     Green Dragon Slayer            10,000 chips  every kill",
         "  [ADE]     A Dark Room Escape             15,000 chips  every run",
         "  [ADB]     A Dark Room Homefleet          20,000 chips  every run",
+        "  [SIG]     Old Signal                     no chips      deadchannel, the first kill",
     ]
     .into_iter()
     .map(str::to_string)

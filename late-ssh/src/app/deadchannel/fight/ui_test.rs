@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use super::{SceneView, corrupt, draw_scene};
 use crate::app::deadchannel::fight::session::Scene;
-use crate::app::deadchannel::fight::state::{Fight, Sheet};
+use crate::app::deadchannel::fight::state::{Fight, Quarry, Sheet};
 
 #[test]
 fn corruption_takes_cells_in_proportion_and_holds_still() {
@@ -36,7 +36,7 @@ fn the_scene_shows_both_faces_the_exchange_and_the_keys() {
     let mut sheet = Sheet::fresh(Uuid::nil(), NaiveDate::from_ymd_opt(2026, 9, 24).unwrap());
     sheet.signal = 4;
     sheet.fight = Some(Fight {
-        kind: 6,
+        quarry: Quarry::Glyph(6),
         foe_signal: 30,
         foe_max_signal: 74,
         foe_attack: 13,
@@ -80,6 +80,7 @@ fn the_scene_shows_both_faces_the_exchange_and_the_keys() {
     }
     assert!(screen.contains("the end of the row"), "{screen}");
     assert!(screen.contains("mira  lv 1"), "{screen}");
+    assert!(screen.contains("bare hands · street clothes"), "{screen}");
     assert!(screen.contains("howler"), "{screen}");
     assert!(screen.contains("signal █████░░░░░░░ 4/10"), "{screen}");
     assert!(screen.contains("30/74 ░░░░░░░█████ signal"), "{screen}");

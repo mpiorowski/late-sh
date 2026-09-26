@@ -2312,9 +2312,61 @@ fn craft_entry(
         worn_stats: Some("+8 atk".to_string()),
         desc: "A blade folded from good steel.",
         category: "Weapons",
+        held: None,
         craftable: skill_level >= level_req && !short,
         reason: String::new(),
     }
+}
+
+#[test]
+fn the_craft_screen_counts_the_made_goods_already_in_the_pack() {
+    let mut potion = craft_entry(
+        "Healing Draught",
+        "heals 60",
+        None,
+        vec![("Silverleaf", 2, 4)],
+        12,
+        8,
+    );
+    potion.slot = None;
+    potion.category = "Heals";
+    potion.held = Some(3);
+    let mut ingot = craft_entry("Iron Ingot", "", None, vec![("Iron Ore", 2, 4)], 12, 8);
+    ingot.slot = None;
+    ingot.category = "Valuables";
+    ingot.held = None;
+    let text = draw_craft(110, 24, vec![potion, ingot], 1);
+
+    let list: Vec<String> = text
+        .iter()
+        .map(|line| line.chars().take(57).collect())
+        .collect();
+    let potion_row = list
+        .iter()
+        .find(|l| l.contains("Healing Draught"))
+        .expect("potion row");
+    assert!(
+        potion_row.contains("\u{00d7}3"),
+        "a made good says how many are held: {potion_row}"
+    );
+    let ingot_row = list
+        .iter()
+        .find(|l| l.contains("Iron Ingot"))
+        .expect("ingot row");
+    assert!(
+        !ingot_row.contains('\u{00d7}'),
+        "a material carries no held count: {ingot_row}"
+    );
+
+    let detail: String = text
+        .iter()
+        .map(|line| line.chars().skip(57).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        detail.contains("3 in your pack"),
+        "the detail pane says it too:\n{detail}"
+    );
 }
 
 fn draw_craft(

@@ -54,6 +54,7 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
                 return true;
             }
             b'n' | b'N' => {
+                app.clubhouse.step_to_back_door();
                 app.nightcap.enter_screen();
                 app.set_screen(Screen::Nightcap);
                 return true;

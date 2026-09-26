@@ -18,7 +18,7 @@ async fn runner_and_service(
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, name).await;
     let client = test_db.db.get().await.expect("db client");
-    let look = Look::random(&mut rand::thread_rng());
+    let look = Look::random(1, &mut rand::thread_rng());
     DeadchannelRunner::ensure_for_user(&client, user.id, &look.to_json())
         .await
         .expect("a runner");
@@ -172,5 +172,129 @@ async fn the_descent_rolls_a_stale_day() {
     assert_eq!(
         row.rations_left, RATIONS_PER_DAY,
         "the roll is stored, not only shown"
+    );
+}
+
+/// The kill through the service: the reset lands on the row, the peak
+/// stays, and the first kill grants the `SIG` badge once; a second kill
+/// leaves a second mark and no second badge.
+#[tokio::test]
+async fn putting_the_old_signal_down_resets_the_row_and_grants_the_badge() {
+    use crate::app::deadchannel::fight::data::{MAX_LEVEL, OLD_SIGNAL_TIER, exp_to_seek};
+    use crate::app::deadchannel::fight::state::MAX_TIER;
+    use late_core::models::profile_award::{
+        DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY, ProfileAward, list_profile_awards_for_user,
+    };
+
+    let (test_db, user_id, svc) = runner_and_service("fight-svc-old-signal").await;
+    let client = test_db.db.get().await.expect("db client");
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    let mut sheet = Sheet::from_row(&row).expect("sheet");
+    sheet.day = FightService::today();
+    sheet.level = MAX_LEVEL;
+    sheet.peak_level = MAX_LEVEL;
+    sheet.exp = exp_to_seek(0);
+    sheet.weapon_tier = MAX_TIER;
+    sheet.armor_tier = MAX_TIER;
+    sheet.signal = sheet.max_signal();
+    DeadchannelRunner::store_sheet(&**client, sheet.to_write())
+        .await
+        .expect("store");
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.act_task(user_id, "mira".to_string(), Command::Start, tx.clone());
+    let FightOutcome::Acted { sheet, .. } = answer(&mut rx).await else {
+        panic!("a start answers with the sheet");
+    };
+    let mut sheet = sheet;
+    let fight = sheet.fight.as_mut().expect("the Old Signal");
+    assert_eq!(fight.foe_max_signal, OLD_SIGNAL_TIER.signal);
+    fight.foe_signal = 1;
+    DeadchannelRunner::store_sheet(&**client, sheet.to_write())
+        .await
+        .expect("store");
+
+    let slain = loop {
+        svc.act_task(user_id, "mira".to_string(), Command::Attack, tx.clone());
+        let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
+            panic!("an attack answers with the sheet");
+        };
+        if outcome.applied != Applied::Round {
+            break outcome.applied;
+        }
+    };
+    assert_eq!(slain, Applied::Slain { marks: 1 });
+
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!(
+        (
+            row.level,
+            row.peak_level,
+            row.marks,
+            row.weapon_tier,
+            row.armor_tier
+        ),
+        (1, MAX_LEVEL, 1, 0, 0)
+    );
+    let badges = |awards: Vec<ProfileAward>| {
+        awards
+            .into_iter()
+            .filter(|award| award.category == DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY)
+            .map(|award| award.score_value)
+            .collect::<Vec<_>>()
+    };
+    let awards = list_profile_awards_for_user(&client, user_id)
+        .await
+        .expect("awards");
+    assert_eq!(badges(awards), vec![1], "one badge, granted on mark 1");
+
+    // The climb again, to the top with the mark's own threshold.
+    let mut sheet = Sheet::from_row(&row).expect("sheet");
+    sheet.level = MAX_LEVEL;
+    sheet.peak_level = MAX_LEVEL;
+    sheet.exp = exp_to_seek(1);
+    sheet.weapon_tier = MAX_TIER;
+    sheet.armor_tier = MAX_TIER;
+    sheet.signal = sheet.max_signal();
+    DeadchannelRunner::store_sheet(&**client, sheet.to_write())
+        .await
+        .expect("store");
+    svc.act_task(user_id, "mira".to_string(), Command::Start, tx.clone());
+    let FightOutcome::Acted { sheet, .. } = answer(&mut rx).await else {
+        panic!("a start answers with the sheet");
+    };
+    let mut sheet = sheet;
+    sheet
+        .fight
+        .as_mut()
+        .expect("the Old Signal again")
+        .foe_signal = 1;
+    DeadchannelRunner::store_sheet(&**client, sheet.to_write())
+        .await
+        .expect("store");
+    let slain = loop {
+        svc.act_task(user_id, "mira".to_string(), Command::Attack, tx.clone());
+        let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
+            panic!("an attack answers with the sheet");
+        };
+        if outcome.applied != Applied::Round {
+            break outcome.applied;
+        }
+    };
+    assert_eq!(slain, Applied::Slain { marks: 2 });
+
+    let awards = list_profile_awards_for_user(&client, user_id)
+        .await
+        .expect("awards");
+    assert_eq!(
+        badges(awards),
+        vec![1],
+        "the second kill leaves the badge as the first granted it"
     );
 }

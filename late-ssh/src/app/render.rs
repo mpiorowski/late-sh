@@ -26,7 +26,6 @@ use super::{
     help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, room_info_modal,
     room_search_modal, settings_modal, sheet_modal,
     state::App,
-    status_picker,
 };
 use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageFrame;
@@ -271,10 +270,13 @@ struct DrawContext<'a> {
     /// The night city page: the runner's spot and its look.
     city_state: &'a crate::app::deadchannel::city::state::State,
     city_look: Option<&'a crate::app::deadchannel::runner::state::Look>,
+    /// The runner's sheet mirror (`None` for anyone not standing on the
+    /// row): the street's strip, and the frame HUD on every other page.
     city_sheet: Option<&'a crate::app::deadchannel::fight::state::Sheet>,
     city_scene: Option<&'a crate::app::deadchannel::fight::session::Scene>,
     city_till: Option<&'a str>,
     city_tailor: crate::app::deadchannel::tailor::ui::MirrorView<'a>,
+    city_guide: &'a crate::app::deadchannel::guide::state::State,
     /// A chat overlay that lands on the Lounge (a `/summary` or reaction list
     /// requested on Home); the Lounge composer itself opens none.
     clubhouse_overlay: Option<&'a crate::app::common::overlay::Overlay>,
@@ -306,6 +308,9 @@ struct DrawContext<'a> {
     mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
+    /// `App::is_runner` for this session: the profile modal's runner
+    /// section shows only to runners until the public flip.
+    viewer_is_runner: bool,
     show_sheet_modal: bool,
     sheet_modal_state: &'a sheet_modal::state::SheetModalState,
     show_poll_modal: bool,
@@ -344,7 +349,6 @@ struct DrawContext<'a> {
     listen_url: &'a str,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
-    status_picker: &'a status_picker::state::StatusPickerState,
     room_info_modal_open: bool,
     room_info_modal_state: &'a room_info_modal::state::RoomInfoModalState,
     directory_editor: &'a crate::app::directory::editor::state::EditorState,
@@ -365,7 +369,6 @@ struct DrawContext<'a> {
     /// Humans currently connected (bots excluded) plus connected friends,
     /// for the sidebar's pinned presence rows.
     online_count: usize,
-    active_friend_names: &'a [String],
     marquee_tick: usize,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
@@ -381,11 +384,6 @@ struct DrawContext<'a> {
     /// the HUD click hit test in `input.rs`.
     mentions_hud_rect: &'a std::cell::Cell<Option<Rect>>,
     voice_badge: Option<String>,
-    /// This session's `/status`, already rendered to `MM:SS word` (a
-    /// countdown) or `glyph word` (open-ended).
-    /// Formatting once per frame here keeps the HUD builder a pure function
-    /// of its inputs (no clock read inside the draw path).
-    status_badge: Option<String>,
     home_selected: bool,
     /// The Zen pages (`app/zen`): layout state, the current room's chat
     /// (drawn at most once per frame), and the strings their status rows show.
@@ -396,7 +394,6 @@ struct DrawContext<'a> {
     zen_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     zen_active_friends: &'a [crate::app::chat::state::ActiveFriend],
     zen_care: crate::app::zen::ui::Care,
-    zen_peer_statuses: &'a std::collections::HashMap<uuid::Uuid, String>,
 }
 
 impl App {
@@ -598,7 +595,6 @@ impl App {
         let dashboard_messages = shell_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
-        let active_friend_names = &self.active_friend_names;
         let dashboard_selected_news_message = shell_active_room
             .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let dashboard_selected_image_message = shell_active_room
@@ -634,9 +630,6 @@ impl App {
                         })
                     })
             });
-        let status_badge = self
-            .status
-            .map(|status| status.hud_badge(chrono::Utc::now()));
         let dashboard_view = chat::ui::DashboardChatView {
             activity_ticker: self.chat.activity_ticker(),
             room: dashboard_room,
@@ -687,7 +680,7 @@ impl App {
             drunk_levels: &self.drunk_levels,
             name_flair: &self.name_flair,
             runner_looks: &self.runner_looks,
-            peer_statuses: &self.peer_statuses,
+            away_user_ids: &self.away_user_ids,
             name_flicker,
             translations: &self.chat.translations,
             translation_hidden: &self.chat.translation_hidden,
@@ -839,7 +832,7 @@ impl App {
             drunk_levels: &self.drunk_levels,
             name_flair: &self.name_flair,
             runner_looks: &self.runner_looks,
-            peer_statuses: &self.peer_statuses,
+            away_user_ids: &self.away_user_ids,
             name_flicker,
             translations: &self.chat.translations,
             translation_hidden: &self.chat.translation_hidden,
@@ -923,7 +916,7 @@ impl App {
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
                     name_flair: &self.name_flair,
-                    peer_statuses: &self.peer_statuses,
+                    away_user_ids: &self.away_user_ids,
                     name_flicker,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
@@ -988,7 +981,7 @@ impl App {
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
                     name_flair: &self.name_flair,
-                    peer_statuses: &self.peer_statuses,
+                    away_user_ids: &self.away_user_ids,
                     name_flicker,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
@@ -1080,7 +1073,7 @@ impl App {
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
                     name_flair: &self.name_flair,
-                    peer_statuses: &self.peer_statuses,
+                    away_user_ids: &self.away_user_ids,
                     name_flicker,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
@@ -1214,7 +1207,6 @@ impl App {
             || news_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
-            || self.status_picker.is_open()
             || self.booth_modal_state.is_open()
             || self.stream_modal.is_some()
             || self.chat.history_modal.is_open();
@@ -1235,7 +1227,6 @@ impl App {
             || news_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
-            || self.status_picker.is_open()
             || self.booth_modal_state.is_open()
             || self.stream_modal.is_some()
             || self.chat.history_modal.is_open();
@@ -1348,7 +1339,10 @@ impl App {
                         nightcap_composer,
                         drunk_levels: &self.drunk_levels,
                         city_state: &self.city,
-                        city_look: self.runner_looks.get(&self.user_id),
+                        city_look: self
+                            .runner_looks
+                            .get(&self.user_id)
+                            .map(|entry| &entry.look),
                         city_sheet: self.fight.sheet.as_ref(),
                         city_scene: self.fight.scene.as_ref(),
                         city_till: self.fight.till.as_deref(),
@@ -1358,6 +1352,7 @@ impl App {
                             changed: self.tailor.changed(),
                             saving: self.tailor.saving,
                         },
+                        city_guide: &self.guide.state,
                         clubhouse_overlay: self.chat.overlay(),
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
@@ -1385,6 +1380,7 @@ impl App {
                         mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
+                        viewer_is_runner: self.runner_looks.contains_key(&self.user_id),
                         show_sheet_modal: self.show_sheet_modal,
                         sheet_modal_state: &self.sheet_modal_state,
                         show_poll_modal: self.show_poll_modal,
@@ -1423,7 +1419,6 @@ impl App {
                         listen_url: &listen_url,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
-                        status_picker: &self.status_picker,
                         room_info_modal_open: self.room_info_modal_state.is_open(),
                         room_info_modal_state: &self.room_info_modal_state,
                         directory_editor: &self.directory_editor,
@@ -1441,7 +1436,6 @@ impl App {
                         selected_radio_station,
                         radio_now_playing: radio_now_playing.as_deref(),
                         online_count,
-                        active_friend_names,
                         marquee_tick: self.marquee_tick,
                         chat_state: &self.chat,
                         user_id: self.user_id,
@@ -1455,7 +1449,6 @@ impl App {
                         chip_balance: self.chip_balance,
                         mentions_hud_rect: &self.last_mentions_hud_rect,
                         voice_badge,
-                        status_badge,
                         home_selected,
                         zen: &self.zen,
                         zen_chat_tiles,
@@ -1464,7 +1457,6 @@ impl App {
                         zen_pet_strip,
                         zen_active_friends: &self.active_friends,
                         zen_care,
-                        zen_peer_statuses: &self.peer_statuses,
                     },
                     &mut terminal_image_frame,
                 );
@@ -1665,8 +1657,8 @@ impl App {
                 balance: Some(ctx.chip_balance),
                 unread: ctx.mentions_unread_count,
                 voice_badge: ctx.voice_badge.as_deref(),
-                status_badge: ctx.status_badge.as_deref(),
                 pot: Some(ctx.pot).filter(|view| view.open),
+                runner: ctx.city_sheet.filter(|_| screen != Screen::City),
                 border_width: area.width,
                 title_width,
             }) {
@@ -1939,6 +1931,7 @@ impl App {
                     scene: ctx.city_scene,
                     till: ctx.city_till,
                     tailor: ctx.city_tailor,
+                    guide: ctx.city_guide,
                 },
             ),
             Screen::Nightcap => crate::app::clubhouse::nightcap::ui::draw(
@@ -1977,7 +1970,6 @@ impl App {
                     lobby_glow: ctx.lobby.glow(),
                     activity: ctx.chat_state.activity_ticker(),
                     active_friends: ctx.zen_active_friends,
-                    peer_statuses: ctx.zen_peer_statuses,
                     chip_balance: ctx.chip_balance,
                     care: ctx.zen_care,
                     inbox: if ctx.zen.shows(crate::app::zen::state::TileKind::Inbox) {
@@ -2049,7 +2041,7 @@ impl App {
                     daily: ctx.daily,
                     lobby_glow: ctx.lobby.glow(),
                     online_count: ctx.online_count,
-                    active_friend_names: ctx.active_friend_names,
+                    active_friends: ctx.zen_active_friends,
                     marquee_tick: ctx.marquee_tick,
                 },
             );
@@ -2125,7 +2117,13 @@ impl App {
         }
 
         if ctx.show_profile_modal {
-            profile_modal::ui::draw(frame, inner, ctx.profile_modal_state, ctx.marquee_tick);
+            profile_modal::ui::draw(
+                frame,
+                inner,
+                ctx.profile_modal_state,
+                ctx.marquee_tick,
+                ctx.viewer_is_runner,
+            );
         }
 
         if ctx.show_sheet_modal {
@@ -2246,10 +2244,6 @@ impl App {
             );
         }
 
-        if ctx.status_picker.is_open() {
-            status_picker::ui::draw(frame, inner, ctx.status_picker);
-        }
-
         // Drawn after the search modal: a jump too old to land in the room
         // opens history over the top of whatever was showing.
         if ctx.chat_state.history_modal.is_open() {
@@ -2350,7 +2344,6 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_ultimate_modal
         || ctx.news_modal.is_some()
         || ctx.room_search_modal_open
-        || ctx.status_picker.is_open()
         || ctx.chat_state.history_modal.is_open()
         || ctx.booth_modal_open
         || ctx.icon_picker_open
@@ -2445,6 +2438,15 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         format!("{page_title} "),
         Style::default().fg(theme::TEXT_MUTED()),
     ));
+
+    // The street has its own guide (`app/deadchannel/guide`), on the site
+    // guide's key; the chrome says so, the way the door games do.
+    if screen == Screen::City {
+        spans.push(Span::styled(
+            "· ? guide ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
 
     if screen == Screen::Lateania {
         spans.push(Span::styled(
@@ -2865,20 +2867,22 @@ struct StatusHud {
     mentions_offset: u16,
 }
 
-/// Everything the status HUD needs, named: `voice_badge` and `status_badge`
-/// are both `Option<&str>`, so positional arguments would let a call site swap
-/// them without a compile error. `border_width` and `title_width` come in raw
+/// Everything the status HUD needs, named, so a call site cannot swap two
+/// fields of the same type without a compile error. `border_width` and `title_width` come in raw
 /// rather than pre-subtracted so the fitting math below is covered by the
 /// tests instead of living uncovered at the one call site.
 struct StatusHudInputs<'a> {
     balance: Option<i64>,
     unread: i64,
     voice_badge: Option<&'a str>,
-    status_badge: Option<&'a str>,
     /// The open pot, `None` before the first refresh or without a pot
     /// service. Sits right before the chips so the prize reads against the
     /// viewer's own balance.
     pot: Option<&'a crate::app::pot::state::PotView>,
+    /// The runner's sheet, for the rations and signal readout everywhere
+    /// but the city (the street's strip already carries them). `None` for
+    /// anyone who is not a standing runner.
+    runner: Option<&'a crate::app::deadchannel::fight::state::Sheet>,
     /// Full width of the bordered frame, corners included.
     border_width: u16,
     /// Width of the left-aligned frame title sharing the top border row.
@@ -2897,8 +2901,8 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
         balance,
         unread,
         voice_badge,
-        status_badge,
         pot,
+        runner,
         border_width,
         title_width,
     } = inputs;
@@ -2907,9 +2911,9 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
     let spare_cols = border_width.saturating_sub(2).saturating_sub(title_width);
 
     // The three long-standing segments always render; the order of the line
-    // is status | voice | mentions | pot | chips, and the two newcomers are
-    // fitted against whatever the fixed three leave, the pot last, so under a
-    // tight border the pot yields before the countdown does.
+    // is voice | mentions | runner | pot | chips, and the newcomers are
+    // fitted against whatever the fixed three leave, in that order, so under
+    // a tight border the pot yields first, then the runner's readout.
     let mentions: Option<HudSegment> = (unread > 0).then(|| {
         let noun = if unread == 1 { "mention" } else { "mentions" };
         vec![
@@ -2963,26 +2967,41 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
 
     // The HUD is a right-aligned title on the same border row as the left
     // title, and ratatui paints it over anything already there: a HUD wider
-    // than `spare_cols` eats the page tabs. The status yields: the full
-    // `MM:SS word` (or `glyph word`) when it fits, its leading `MM:SS` (or
-    // glyph) when only that does, dropped when neither does. Losing the badge
-    // is survivable because expiry still banners and notifies.
-    let status: Option<HudSegment> = status_badge.and_then(|status_badge| {
-        let time_only = status_badge
-            .split_once(' ')
-            .map_or(status_badge, |(time, _)| time);
-        let text = [status_badge, time_only]
-            .into_iter()
-            .find(|text| fits(used, count, UnicodeWidthStr::width(*text) as u16))?;
-        Some(vec![Span::styled(
-            format!(" {text} "),
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        )])
+    // than `spare_cols` eats the page tabs, so every newcomer below yields
+    // when it does not fit.
+
+    // The runner's readout: `rations 7 · signal 12/20` when it fits,
+    // `signal 12/20` when only that does, nothing when neither does. The
+    // signal figure goes red when it is down: the row is closed until the
+    // roll, and this is the one place outside the city that says so.
+    let runner: Option<HudSegment> = runner.and_then(|sheet| {
+        let signal = format!("{}/{}", sheet.signal, sheet.max_signal());
+        let with_rations = format!(" rations {} · signal ", sheet.rations_left);
+        let signal_only = " signal ".to_string();
+        let head = [with_rations, signal_only].into_iter().find(|head| {
+            let width =
+                UnicodeWidthStr::width(head.as_str()) + UnicodeWidthStr::width(signal.as_str()) + 1;
+            // The padding is already inside the head and the trailing space.
+            fits(used, count, width.saturating_sub(2) as u16)
+        })?;
+        let signal_color = if sheet.is_down() {
+            theme::ERROR()
+        } else {
+            theme::TEXT_BRIGHT()
+        };
+        Some(vec![
+            Span::styled(head, Style::default().fg(theme::TEXT_MUTED())),
+            Span::styled(
+                signal,
+                Style::default()
+                    .fg(signal_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" ", Style::default().fg(theme::TEXT_MUTED())),
+        ])
     });
-    if let Some(status) = &status {
-        used += hud_segment_width(status) + u16::from(count > 0);
+    if let Some(runner) = &runner {
+        used += hud_segment_width(runner) + u16::from(count > 0);
         count += 1;
     }
 
@@ -3014,19 +3033,15 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
         ])
     });
 
-    // Mentions sit behind the status and the voice badge, so the hit test
-    // needs how far into the line they start: every segment before them, each
-    // with the divider it brings.
+    // Mentions sit behind the voice badge, so the hit test needs how far into
+    // the line they start: the segment before them, with the divider it
+    // brings.
     let mentions_width = mentions.as_ref().map_or(0, hud_segment_width);
-    let mentions_offset: u16 = match &mentions {
-        Some(_) => [&status, &voice]
-            .into_iter()
-            .flatten()
-            .map(|segment| hud_segment_width(segment) + 1)
-            .sum(),
-        None => 0,
+    let mentions_offset: u16 = match (&mentions, &voice) {
+        (Some(_), Some(voice)) => hud_segment_width(voice) + 1,
+        (Some(_), None) | (None, _) => 0,
     };
-    let segments: Vec<HudSegment> = [status, voice, mentions, pot, chips]
+    let segments: Vec<HudSegment> = [voice, mentions, runner, pot, chips]
         .into_iter()
         .flatten()
         .collect();
