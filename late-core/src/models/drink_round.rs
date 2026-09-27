@@ -18,7 +18,10 @@
 //!
 //! **What it costs.** [`ROUND_PRICE_PER_PATRON`] for every credit the round
 //! actually granted, burned whole; a personal gift is one credit at
-//! [`GIFT_DRINK_PRICE`]. Both pour the same [`ROUND_DRINK_POINTS`].
+//! [`GIFT_DRINK_PRICE`]. Both pour the same [`ROUND_DRINK_POINTS`]; the
+//! Nightcap's round pours 1:1 ([`Bar::drink_points`]). The one table of
+//! every purchase, price and pour is in `late-ssh/src/app/chat/CONTEXT.md`
+//! §9d.
 //!
 //! **What it hands over.** Not a drink: a [`DrinkCredit`], cashed only when the
 //! patron walks up and orders one themselves. A pour makes someone type drunk

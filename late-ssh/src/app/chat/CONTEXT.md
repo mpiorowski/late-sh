@@ -752,6 +752,20 @@ counts settled gifts and their burn, `record_gift_drink_refused` labels
 the pour itself lands under the shared `round_drinks_cashed_total`.
 Redemption uses the same oldest-expiring credit path and names the buyer of
 the credit actually spent.
+
+**What each purchase costs and pours.** Points follow the bar that sold the
+credit (`drink_rounds.bar`, `Bar::drink_points`), not where it is cashed: a
+credit is good at either bar and is worth what its seller wrote.
+
+| Purchase | Buyer pays | Each drinker gets | Buyer drinks too? | Ledger reason |
+|---|---|---|---|---|
+| Tavern round ("round for everyone") | `ROUND_PRICE_PER_PATRON` (100) a head | `ROUND_DRINK_POINTS` (400) | yes, 400 | `round_purchase`, bar `tavern` |
+| Gift ("@bartender buy @user a drink") | `GIFT_DRINK_PRICE` (200) | 400 | no | `drink_gift`, bar `tavern` |
+| Nightcap round (`r` on the stools) | `ROUND_PRICE_PER_PATRON` (100) a stool | 100 | yes, 100 | `round_purchase`, bar `nightcap` |
+
+The Nightcap tab board filters on both the round reason and its own bar, so
+gifts and tavern rounds never reach it (`clubhouse/nightcap/CONTEXT.md` §5).
+
 `late-core/src/models/drink_round.rs` owns both tables (migrations 164 and
 168), the price, the cap, and the phrase list; `GhostService::bartender_round`
 (`app/ai/ghost.rs`) owns the transaction's caller, the refusals, the
