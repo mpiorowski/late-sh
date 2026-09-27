@@ -22,7 +22,7 @@ pub const SECTIONS: &[Section] = &[
         lines: &[
             "arrows or hjkl walk. shift with them runs: six steps, stopping at the first door it reaches.",
             "enter at a door goes in. enter or esc comes back out to the street.",
-            "0 goes back up to the clubhouse. so does enter at the wire, the cable by the stairs.",
+            "0 goes back up to the clubhouse. so does enter at the wire, the cable by the stairs. esc with nothing open goes up to the chat, #lounge open.",
             "? opens this guide. it opened by itself the first time you came down, and never will again.",
         ],
     },
@@ -41,8 +41,8 @@ pub const SECTIONS: &[Section] = &[
         title: "the static",
         lines: &[
             "the screen at the end of the row is where the glyphs come from. enter there spends a ration and puts one in front of you. f does the same from anywhere on the street.",
-            "a attacks. r runs: two times in three it works, and when it does not the glyph gets a free swing.",
-            "esc steps out. the fight stays on the row and is waiting when you step back in, for no ration.",
+            "a attacks. r runs, and so does esc: two times in three it works, and when it does not the glyph gets a free swing. there is no stepping out of a fight.",
+            "a dropped connection finds the fight waiting on the row when you step back in, for no ration.",
             "enter closes a finished scene.",
             "a kill pays bits and exp. exp climbs the levels, up to 15, and the wire hears every one.",
             "a dropped signal ends your day: the street takes the bits on you, you keep most of the exp, and the row is shut until the roll.",
@@ -66,7 +66,7 @@ pub const SECTIONS: &[Section] = &[
     Section {
         title: "patch",
         lines: &[
-            "p buys the signal back to full. a bit a point, times your level.",
+            "p opens patch from anywhere on the street. p again buys the signal back to full. a bit a point, times your level.",
             "not while the signal is down, not with a glyph waiting on you, not once you are spent for the day (the roll brings it back for nothing), and not when there is nothing to fix.",
         ],
     },

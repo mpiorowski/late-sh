@@ -3,6 +3,7 @@ use rand::rngs::StdRng;
 use unicode_width::UnicodeWidthChar;
 
 use super::*;
+use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
 
 /// The hard rule behind the whole catalog: a row is exactly five cells
 /// and none of them is a wide glyph (CJK, emoji), so the gutter math in
@@ -55,7 +56,7 @@ fn a_random_look_round_trips_through_json() {
     assert_eq!(look.hood.piece.slot, Slot::Hood);
     assert_eq!(look.eyes.piece.slot, Slot::Eyes);
     assert_eq!(look.coat.piece.slot, Slot::Coat);
-    assert!(GLYPH_ALPHABET.contains(&look.mark));
+    assert!(MARK_ALPHABET.contains(&look.mark));
 
     let json = look.to_json();
     assert_eq!(Look::parse(&json), Ok(look));
@@ -118,6 +119,11 @@ fn unknown_pieces_and_marks_are_rejected_loudly() {
         "mark": {"glyph": "x"}
     });
     assert_eq!(Look::parse(&bad_mark), Err(LookError::UnknownMark('x')));
+    // The Signal's glyph is a mark nobody wears: it is the paragon count.
+    let mut signal_mark = bad_mark.clone();
+    signal_mark["mark"]["glyph"] = serde_json::json!("╬");
+    assert!(GLYPH_ALPHABET.contains(&'╬'), "the fauna keeps it");
+    assert_eq!(Look::parse(&signal_mark), Err(LookError::UnknownMark('╬')));
 
     assert!(matches!(
         Look::parse(&serde_json::json!({"hood": "hood.cross"})),

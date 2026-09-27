@@ -1,7 +1,7 @@
 use rand::{SeedableRng, rngs::StdRng};
 
 use super::{Draft, Row};
-use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
+use crate::app::deadchannel::glyphs::MARK_ALPHABET;
 use crate::app::deadchannel::runner::state::{
     Look, Slot, TINTS, Tint, pieces_for, unlocked_pieces,
 };
@@ -21,7 +21,7 @@ fn draft(level: i32) -> Draft {
         worn.piece = first;
         worn.tint = TINTS[0];
     }
-    look.mark = GLYPH_ALPHABET[0];
+    look.mark = MARK_ALPHABET[0];
     Draft::new(look, level)
 }
 
@@ -69,7 +69,7 @@ fn the_rack_wraps_both_ways_and_only_the_cursor_row_moves() {
     draft.prev();
     assert_eq!(
         draft.look.mark,
-        GLYPH_ALPHABET[GLYPH_ALPHABET.len() - 1],
+        MARK_ALPHABET[MARK_ALPHABET.len() - 1],
         "the mark row walks the alphabet"
     );
     assert_eq!(draft.look.hood, before.hood);

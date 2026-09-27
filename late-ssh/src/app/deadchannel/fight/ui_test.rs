@@ -3,7 +3,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use uuid::Uuid;
 
-use super::{SceneView, corrupt, draw_scene, draw_strip};
+use super::{SceneView, corrupt, draw_scene};
 use crate::app::deadchannel::fight::session::Scene;
 use crate::app::deadchannel::fight::state::{Fight, Quarry, Sheet};
 
@@ -92,18 +92,4 @@ fn the_scene_shows_both_faces_the_exchange_and_the_keys() {
     assert!(screen.contains("you hit the howler for 9."), "{screen}");
     assert!(screen.contains("[a] attack"), "{screen}");
     assert!(screen.contains("[r] run"), "{screen}");
-}
-
-#[test]
-fn the_street_strip_offers_the_fight_key() {
-    let sheet = Sheet::fresh(Uuid::nil(), NaiveDate::from_ymd_opt(2026, 9, 24).unwrap());
-    let mut terminal = Terminal::new(TestBackend::new(90, 4)).unwrap();
-    terminal
-        .draw(|frame| draw_strip(frame, frame.area(), &sheet))
-        .unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let top: String = (0..buffer.area.width)
-        .map(|x| buffer[(x, 0)].symbol())
-        .collect();
-    assert!(top.contains("[f] fight  lv 1"), "{top}");
 }

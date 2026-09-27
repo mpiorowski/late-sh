@@ -80,8 +80,9 @@ impl FightSession {
         self.request(Command::Start);
     }
 
-    /// Back to the street. A fight in progress stays on the row and is
-    /// found waiting on the next step in.
+    /// Back to the street: a finished scene, or the page left under an
+    /// open one. A fight still on stays on the row and is found waiting on
+    /// the next step in (Esc over the scene is the run, not this).
     pub(crate) fn close(&mut self) {
         self.scene = None;
     }

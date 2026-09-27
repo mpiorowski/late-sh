@@ -363,8 +363,7 @@ pub(crate) fn draw_scene(frame: &mut Frame, area: Rect, view: SceneView<'_>) {
             Span::styled("attack", text),
             Span::styled("        [r] ", key),
             Span::styled("run", text),
-            Span::styled("        [Esc] ", key),
-            Span::styled("step back", dim_text),
+            Span::styled("  esc runs too", dim_text),
         ],
     };
     lines.push(Line::from(keys));
@@ -405,10 +404,7 @@ pub(crate) fn draw_strip(frame: &mut Frame, area: Rect, sheet: &Sheet) {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
     let number = glow(Neon::Amber);
-    // The fight key leads: a narrow terminal clips the strip from the right.
     let mut spans = vec![
-        Span::styled("[f] ", glow(Neon::Amber)),
-        Span::styled("fight  ", dim_text),
         Span::styled("lv ", dim_text),
         Span::styled(sheet.level.to_string(), number),
         Span::styled("  signal ", dim_text),

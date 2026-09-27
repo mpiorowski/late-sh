@@ -753,9 +753,10 @@ on the chest.
 (beside the bonsai glyph, the existing precedent for a game glyph there)
 followed by the level, `▚7`, and as the runner's avatar glyph on the
 clubhouse floor, where runners become the only patrons who are not the
-default glyph. Starter marks are the ten characters of `GLYPH_ALPHABET`,
+default glyph. Starter marks are the characters of `MARK_ALPHABET`,
 free, so a fresh runner already wears the alphabet the city's fauna is
-made of. Rarer marks are bought. The badge's color is the newest tint the
+made of: all of it but the Signal's `╬`, which is the paragon count and
+nobody's to wear. Rarer marks are bought. The badge's color is the newest tint the
 level opened, and an Old Signal kill shows as `╬N` after the level
 (`▚3╬2`): proof no chip can buy, so the room learns to read it.
 

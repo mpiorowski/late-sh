@@ -106,7 +106,7 @@ number of replicas spend one AI call per text.
 
 | File | Owns |
 |---|---|
-| `glyphs.rs` | `GLYPH_ALPHABET`, the game's shared character vocabulary. Game-level: the haunting borrows it, stage-4-era spawns will render with it (the clock glitch is retroactive foreshadowing). Distinct from the static shades `░▒▓` (noise, not creatures). |
+| `glyphs.rs` | `GLYPH_ALPHABET`, the game's shared character vocabulary. Game-level: the haunting borrows it, stage-4-era spawns will render with it (the clock glitch is retroactive foreshadowing). Distinct from the static shades `░▒▓` (noise, not creatures). `MARK_ALPHABET` is what a runner can wear as a mark: the alphabet less the Signal's `╬`, which is the paragon count in the badge and nobody's for free (migration 206 moved the marks that wore it to `┼`). |
 | `haunt/state.rs` | The pure machines and data: `HauntState` (the one `App` slot), `FirstContactMarks` (persisted marks bundle), `FirstContactGate` + `BioStanding` + the thresholds and `bio_hash` (the eligibility gate), `ClockGlitch` (stage 1), `NameFlicker` (stage 2, the person being haunted), `ActiveHit` (one hit's playback, holding the wave seed: the roller's own hit and the `witness` slot share it, so every screen corrupts identically), `WhisperState` (stage 3), `Breakthrough` + `InvitationClaim` (stage 4's full-screen beat and the claim answer), the voice/invitation/breakthrough-line constants (stage 4), `PendingClaim`/`HitStage` (claims in flight), `HauntCommand` + `parse_haunt_command`. No I/O, no clock reads. |
 | `haunt/svc.rs` | Orchestration: `bootstrap_gate` (gate + bio screen claim at connect), `arm` (session start), one `tick(app)` (claim drain, splash door, glitch scheduler, name-flicker roller, witness replay, breakthrough (claim answer, scene, due send), `/haunt` drain), `swallows_splash_input`, `replay_whisper`, the bio screen task, and `publish_name_hit` (a won or forced hit goes on the wire through `ChatService::publish_name_hit`). The only haunting layer touching `App`, logging, metrics, and persistence. |
 | `haunt/ui.rs` | Pure render helpers: whisper frame + splash overlay + static surge, breakthrough frame + full-screen draw, `apply_clock_glitch`, `glitched_name`, `name_flicker_for`. Deterministic per burst seed, stateless like the sidebar equalizer. |
@@ -117,7 +117,7 @@ number of replicas spend one AI call per text.
 | `city/map.rs` | **Generated** by `scripts/gen_city_map.py --write` (never hand-edited): the 232x52 `MAP` literal, the `SOLID` collision bitmap, `SPAWN`, every zone (`SIGNS`, `BANNERS`, `CART_SIGNS`, `AWNINGS`, `WINDOWS`, `VENTS`, `PUDDLES`, `LAMPS`, `DROP_LIGHTS`, `SCREEN_FACE`, `WIRE`, ...), the closed `Neon` palette, `Landmark` + `nearest_landmark` (reach zones), `walkable`, `grid`/`char_at`. |
 | `city/state.rs` | Per-session view state: the runner's cell, the animation clock, the open panel, the cursor on the armorer's wall (`picked_tier`, `pick_up` / `pick_down`), the pinned street line. `walk`, `run`, `nearby`, `Landmark::on_enter` (`Enter::Panel` for shops, `Enter::Line` for carts, `Enter::Fight` at the screen, `Enter::Leave` for the wire). Pure. |
 | `city/data.rs` | The city's copy and catalogs: the gear ladder (`COST_LADDER`, `WEAPONS`, `ARMOR`: LoGD numbers, GAME.md names), `BANDS` with draft move names, `NOTICES`, `DRINKS`, `TAILOR_PRICES`, the per-landmark `lines` pools, `title` and `pitch`. |
-| `city/input.rs` | While the guide is open every key goes to `guide/input.rs`, and `?` anywhere on the page opens it. Arrows/hjkl walk; Enter at a landmark; Enter closes a panel or the ledge view, Esc too through the root's `dispatch_escape` (walk keys are swallowed while one is open). In the armorer's panel up/down walk the wall and `w` / `a` send `Command::Outfit` to `App.fight`; in patch's panel `p` sends `Command::Patch`. Returns `false` for globals. |
+| `city/input.rs` | While the guide is open every key goes to `guide/input.rs`, and `?` anywhere on the page opens it. Arrows/hjkl walk; Enter at a landmark; `f` steps into the static and `p` opens patch from anywhere (the armorer and the tailor stay a walk away on purpose); Enter closes a panel or the ledge view, Esc too through the root's `dispatch_escape`, which on the bare street goes up to Home with #lounge selected (walk keys are swallowed while one is open). In the armorer's panel up/down walk the wall and `w` / `a` send `Command::Outfit` to `App.fight`; in patch's panel `p` sends `Command::Patch`. Returns `false` for globals. |
 | `city/ui.rs` | Renderer: base styling by zone, the ambience pass (rain, puddles reflecting the nearest sign, neon shorts and dropped letters, window flicker, the screen's static and test pattern with rare glyph frames, steam, lamps, the drop's lights, the blimp, the mast, the bits machine, the wire's pulse), the runner as its mark, the popover, the street line, the shop panels (`armorer_lines` is the live till: the wall with the cursor, what you carry lit, the two keys priced net of the trade-in, the armorer's last word; `patch_lines` is the other: the signal, the price of the gap, the refusal spelled out ahead of the key); hands the sheet strip and the fight scene to `fight/ui.rs`. Its palette helpers (`ink`, `lit`, `glow`, `dim`, `tint_rgb`, the `INK_*` greys) are `pub(crate)` for that. |
 | `fight/data.rs` | The numbers (LoGD's, transcribed: `RATIONS_PER_DAY`, `SIGNAL_PER_LEVEL`, `START_BITS`, `EXP_KEEP_ON_DEATH`, `EXP_TO_ADVANCE` with LoGD's per-mark scaling in `exp_to_advance(level, marks)` and `exp_to_seek(marks)`, `FOE_TIERS`, the run odds, `TRADE_IN_PERCENT`, `MARK_BONUS_CAP`) and the fauna: `FOES`, fifteen glyphs, one per level, each with a name, a five-by-three portrait in the runner's format, and an arrival line; `OLD_SIGNAL` and `OLD_SIGNAL_TIER` (240 / 36 / 22, cut from LoGD's dragon, reason beside it); `title(marks)`; the kill, drop, run, heard, and slain lines. |
 | `fight/state.rs` | The pure machine: `Sheet` (the row's stats and tally, typed, with `peak_level`, `marks`, `mark_bonus`, `signal_hears`; `from_row` rejects an unreadable fight loudly), `Fight` (the `Quarry`, a glyph or the Old Signal, its numbers, and the last six lines, the JSON on the row), the Old Signal's gate in `start` and the reset in `slay` (GAME.md, "Marks: the reset"), `settle(today)` (the lazy day roll), `apply(Command, rng)` over the door's `resolve_round` and `resolve_extra_foe_strike`, plus the armorer's till (`Command::Outfit`, `Slot`, `gear_name`, `outfit_price`, `MAX_TIER`) and patch (`Command::Patch`, `patch_price`), returning an `Outcome` (`Applied` plus the lines), and `news(&Applied)` (the closed `News` list the wire prints for it; §3c). No I/O, no clock. |
@@ -135,7 +135,7 @@ number of replicas spend one AI call per text.
 | `guide/session.rs` | `GuideSession`: the `state`, `descend` (the claim), `tick` (opens the guide on `FirstDescent`). Decides nothing. |
 | `guide/input.rs` | Keys while the guide is open: `j`/`k` and the arrows scroll a line, PageUp/PageDown a screen, Enter, `q` and `?` close it; digits and Tab stay global, everything else is swallowed. `opens` names the key (`?`). |
 | `guide/ui.rs` | `draw`: the box over the street, the sections as a bright heading and its lines, wrapped and scrolled, the keys under; `body_lines`. Pure. |
-| `tailor/ui.rs` | `mirror_lines` for the city's panel: the draft as a portrait with the mark under it, four rack rows beside it (the cursor, the label, the tint's name, a window of up to five pieces around the worn one, bracketed, the whole rack once while it is shorter; the whole alphabet on the mark row), the keys (`[s] wear it` lit only when the draft differs from what is worn), what the next unlock level opens, the tailor's word. Pure. |
+| `tailor/ui.rs` | `mirror_lines` for the city's panel: the draft as a portrait with the mark under it, four rack rows beside it (the cursor, the label, the tint's name, a window of up to five pieces around the worn one, bracketed, the whole rack once while it is shorter; the mark alphabet on the mark row), the keys (`[s] wear it` lit only when the draft differs from what is worn), what the next unlock level opens, the tailor's word. Pure. |
 
 Root integration is deliberately thin: `App.haunt` (the one field),
 `haunt::svc::tick(self)` in `tick.rs` (plus the splash block consulting
@@ -372,8 +372,11 @@ till; every other counter is a catalog with its till shut.
   another replica. Not in the Tab cycle
   (`Screen::City.next()`/`prev()` return the clubhouse), no tab of its
   own, the clubhouse tab stays lit under it, title "Undercity" with
-  `· ? guide` beside it in the chrome. Enter at the wire goes back up to
-  the clubhouse. The wiring is thin on purpose (`Screen::City`,
+  `· f fight · p patch · ? guide` beside it in the chrome. Enter at the wire goes
+  back up to the clubhouse; Esc on the bare street (after it has closed
+  whatever was open: the guide, a panel, the ledge, the scene) goes up
+  to Home with #lounge selected instead, the chat rather than the
+  tavern. The wiring is thin on purpose (`Screen::City`,
   `App.city`, `App.guide`, one dispatch line each in `input.rs`,
   `render.rs`, `tick.rs`).
 - **The guide (`guide/`).** The street explains itself: a box over the
@@ -499,7 +502,8 @@ till; every other counter is a catalog with its till shut.
   and the tailor's mirror edits (below); the others say their till is not: bands shows
   the three bands with draft move names. Enter at a cart, the screen, or the stairs pins
   a line from that landmark's pool top-left for ~8s. Enter at the wire
-  leaves, back up to the Clubhouse.
+  leaves, back up to the Clubhouse; Esc with nothing open goes up to
+  Home with #lounge selected.
 - **The tailor.** Pick, not draw (GAME.md, "The look"): Enter at the
   tailor opens the panel with the runner's look and level from the
   directory (`App.runner_looks`; with no entry yet the mirror says nothing
@@ -544,7 +548,8 @@ GAME.md, "The fight pass": the forest is the screen, three tiles of
 static closing the street. Enter there (`Enter::Fight`, the popover says
 "step into the static") opens the scene over the street and asks the
 service for `Command::Start`. `f` does the same from anywhere on the street
-(`city/input.rs`), and the sheet strip top-right shows `[f] fight`.
+(`city/input.rs`), and the frame title says so (`Undercity · f fight ·
+p patch · ? guide`, `render.rs::app_frame_title`).
 
 - **The scene is a panel, not a place.** `fight/ui.rs::draw_scene`,
   centered over the street in the city's palette, at a **fixed size**
@@ -554,7 +559,7 @@ service for `Command::Start`. `f` does the same from anywhere on the street
   defense, two twelve-cell signal bars filling toward each other; the
   exchange newest at the bottom, the latest answer bright with a `▸`
   marker (`Scene::latest`) and everything before it dimmed; `[a] attack
-  [r] run [Esc] step back`, or `[Enter] back to the street` once it is
+  [r] run  esc runs too`, or `[Enter] back to the street` once it is
   over; rations and bits in the bottom title. Both faces lose cells to
   static (`░▒▓`) in proportion to missing signal, seeded per fight and
   per day so a wound holds still. No look wears a plain `@`.
@@ -562,8 +567,11 @@ service for `Command::Start`. `f` does the same from anywhere on the street
   your level on the row (`fight` JSONB: kind, its signal, attack, defense,
   bits, exp, the last six lines); a second `Start` with a fight waiting
   resumes it and spends nothing, so a dropped session or a second device
-  finds the same fight. Esc closes the scene and leaves the fight on the
-  row. `Attack` is one `resolve_round`: your hit, its answer, both signed
+  finds the same fight. There is no stepping out: Esc over a live scene
+  is `Run` (`fight/input.rs::handle_escape`), the root's `dispatch_escape`
+  hands it there before the panel arm; only a finished scene closes on
+  Esc, and only leaving the page (`0`, a leave) closes a live one, the
+  fight staying on the row. `Attack` is one `resolve_round`: your hit, its answer, both signed
   (a glance heals, as upstream). `Run` gets away two times in three; a
   failed run takes a free strike. `Won` pays the glyph's bits and exp and
   clears the fight; `Lost` (signal at zero) takes every bit on hand and a
@@ -606,11 +614,10 @@ service for `Command::Start`. `f` does the same from anywhere on the street
   migration 202 trigger notifies on `level`), the acceptable case (root
   CONTEXT.md, "Replica-ready, not over-engineered"): no per-hit notify.
   `tick.rs` drains the session every tick; the city's `anim_half` edge
-  paints the answer. Outside the city the frame's status HUD reads the
-  mirror too (`render.rs::status_hud_title`, `rations R · signal S/M`
-  between the mentions and the pot, the signal red when down; sheds
-  after the pot, the rations before the signal); `/haunt status` prints
-  the whole sheet as this session holds it. The mirror is not rolled at
+  paints the answer. The street's strip is the only readout of the
+  bars; the frame's status HUD outside the city does not carry them.
+  `/haunt status` prints the whole sheet as this session holds it. The
+  mirror is not rolled at
   midnight by itself: an idle session shows yesterday's bars until the
   next reload (a descent, an action, or a directory edge), the accepted
   case. The profile's runner section reads the row directly and settles
@@ -639,17 +646,21 @@ service for `Command::Start`. `f` does the same from anywhere on the street
   level (`(max - signal) * level`), paid in full or nothing moves
   (`Refusal::Short`). A dropped signal is the roll's, not patch's
   (`Refusal::SignalDown`: the day is the day), a fight waiting on the
-  row is finished first (`Refusal::FightWaiting`: Esc out, patch, step
-  back in would be a free heal mid-fight), a runner spent for the day is
+  row is finished first (`Refusal::FightWaiting`: leave the page, patch,
+  step back in would be a free heal mid-fight), a runner spent for the day is
   sold nothing (`Refusal::NoRations`: no fight can spend the signal
   before the roll refills it for free), and a full signal buys nothing
   (`Refusal::NothingToPatch`). `Applied::Patched { restored, paid }`, the
-  `patched` beat, no news. The panel (`city/ui.rs::patch_lines`) shows
+  `patched` beat, no news. `p` on the street opens the panel from
+  anywhere (`city/input.rs`), so the heal is one key from any fight; the
+  armorer and the tailor are not, on purpose, so the street still gets
+  walked. The panel (`city/ui.rs::patch_lines`) shows
   the signal and the bits, spells the refusal that would come ahead of
   the `[p]` key, and prices the key red when short; the answer is the
   `till` line like the armorer's.
-- **Not yet:** bands and charge, the stash, operators and the Old Signal,
-  the tailor's bought rack (chips, seasonal stock) and earned pieces.
+- **Not yet:** bands and charge, the stash, the operators (levels climb
+  on exp until they exist), the tailor's bought rack (chips, seasonal
+  stock) and earned pieces.
 
 ## 4. Persistence (`users.settings`, late-core `User`; `app_flags`; `deadchannel_runners`)
 

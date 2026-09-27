@@ -16,7 +16,7 @@ use crate::app::deadchannel::city::map::Neon;
 use crate::app::deadchannel::city::ui::{
     INK, INK_BRIGHT, INK_DIM, INK_MUTED, glow, ink, lit, tint_rgb,
 };
-use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
+use crate::app::deadchannel::glyphs::MARK_ALPHABET;
 use crate::app::deadchannel::runner::state::{PIECES, Piece, TINTS, next_unlock, unlocked_pieces};
 
 /// Pieces shown around the worn one, each side, at most: a rack shorter
@@ -116,7 +116,7 @@ pub(crate) fn mirror_lines(view: &MirrorView<'_>) -> Vec<Line<'static>> {
             None => {
                 spans.push(Span::styled(" ".repeat(10), text));
                 spans.push(Span::styled("◂ ", dim_text));
-                for glyph in GLYPH_ALPHABET {
+                for glyph in MARK_ALPHABET {
                     match glyph == draft.look.mark {
                         true => spans.push(Span::styled(format!("[{glyph}]"), key)),
                         false => spans.push(Span::styled(format!(" {glyph} "), dim_text)),

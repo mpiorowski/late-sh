@@ -14,7 +14,7 @@
 
 use rand::Rng;
 
-use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
+use crate::app::deadchannel::glyphs::MARK_ALPHABET;
 use crate::app::deadchannel::runner::state::{Look, Slot, Worn, unlocked_pieces, unlocked_tints};
 
 /// The rows of the mirror, top to bottom.
@@ -108,11 +108,11 @@ impl Draft {
                 worn.piece = rack[wrap(at, by, rack.len())];
             }
             None => {
-                let at = GLYPH_ALPHABET
+                let at = MARK_ALPHABET
                     .iter()
                     .position(|glyph| *glyph == self.look.mark)
-                    .expect("the mark is in the alphabet");
-                self.look.mark = GLYPH_ALPHABET[wrap(at, by, GLYPH_ALPHABET.len())];
+                    .expect("the mark is in the mark alphabet");
+                self.look.mark = MARK_ALPHABET[wrap(at, by, MARK_ALPHABET.len())];
             }
         }
     }
