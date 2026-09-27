@@ -35,7 +35,7 @@ to the doors.
 
 - `j/k` and arrows select boards with keyboard wraparound. Clicking a visible board row selects it; headings, separators, and the rail divider are inert. The wheel over the rail selects one board per event and stops at either end.
 - `Ctrl+J`/`Ctrl+K` scroll the detail pane down/up one row; the wheel over that pane scrolls three rows. Monthly and all-time share an offset, with each column stopping at its own bottom. Titles and window headings stay fixed. The Badge Guide scrolls by wrapped rows.
-- Offset zero retains the leaders-and-your-rank summary when at least three rows fit; scrolling shows loaded ranks in order. Changing boards resets the offset; clicking the current board preserves it. No extra queries: the existing 500-rank snapshot depth and refresh cadence still apply.
+- Offset zero retains the leaders-and-your-rank summary when at least three rows fit; scrolling shows loaded ranks in order. Column widths and the value alignment inside them come from the whole loaded snapshot, so nothing shifts sideways while scrolling. Changing boards resets the offset; clicking the current board preserves it. No extra queries: the existing 500-rank snapshot depth and refresh cadence still apply.
 - Hit regions come from the rendered rail lines, including its viewport offset. Resize and page rendering invalidate stale targets. Keyboard-only mode and overlying modals block page mouse actions.
 
 ## Refresh model
@@ -210,8 +210,8 @@ Screen `6`, board rail + detail view. The rail leads with the Boards group
 then each door's board triple), Daily Wins, and High Scores, in roster order.
 The first board, and the one selected when the page opens, is Top Chips. The detail pane shows
 the selected board's window(s) with an around-you tail (the viewer's row
-replaces the last two rows below the fold). There is no scrolling inside a
-board's standings beyond that tail; a board deeper than the pane clips.
+replaces the last two rows below the fold). Ctrl+J/K and the wheel scroll the
+standings through every loaded rank (see Page navigation).
 
 ## Monthly profile awards
 
@@ -251,5 +251,4 @@ pass a username to target that enrichment explicitly.
 ## Known gaps
 
 - No notify-driven refresh; up to one `REFRESH_INTERVAL` of staleness by design (see Refresh model).
-- No in-board scrolling beyond the around-you tail.
 - Online-time crash loss is bounded by the last successful five-minute checkpoint while the DB is healthy; cross-pod overlap is intentionally not deduplicated.

@@ -227,9 +227,8 @@ fn draw_detail(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
         Standings::Paired { monthly, all_time } => {
             let columns = standings_columns(
                 rows[3],
-                // Use the whole snapshot so columns don't shift while scrolling.
-                window_natural_width("monthly", monthly, board, view.user_id, usize::MAX),
-                window_natural_width("all-time", all_time, board, view.user_id, usize::MAX),
+                window_natural_width("monthly", monthly, board),
+                window_natural_width("all-time", all_time, board),
             );
             draw_window(
                 frame,
@@ -319,28 +318,28 @@ fn standings_columns(area: Rect, first_width: usize, second_width: usize) -> [Re
     }
 }
 
-fn window_natural_width(
-    heading: &'static str,
-    entries: &[RankedEntry],
-    board: Board,
-    user_id: Uuid,
-    capacity: usize,
-) -> usize {
+/// The width a window wants, from the whole loaded snapshot rather than the
+/// rows on screen, so neither the column nor the value alignment inside it
+/// moves while scrolling.
+fn window_natural_width(heading: &'static str, entries: &[RankedEntry], board: Board) -> usize {
     let heading_width = Line::from(heading).width() + 8;
     let content_width = if entries.is_empty() {
         Line::from(empty_copy(board)).width() + 2
     } else {
-        let (leader_rows, own_tail) = window_row_plan(entries, user_id, capacity);
-        entries
-            .iter()
-            .take(leader_rows)
-            .chain(own_tail.map(|index| &entries[index]))
-            .map(|entry| entry_natural_width(entry, board))
-            .max()
-            .unwrap_or(0)
+        window_content_width(entries, board)
     };
 
     heading_width.max(content_width)
+}
+
+/// The widest loaded row: every row right-aligns its value to this, capped
+/// by the window's own width at the call site.
+fn window_content_width(entries: &[RankedEntry], board: Board) -> usize {
+    entries
+        .iter()
+        .map(|entry| entry_natural_width(entry, board))
+        .max()
+        .unwrap_or(0)
 }
 
 fn draw_window(
@@ -383,12 +382,7 @@ fn scrolled_window_lines(
         return window_lines(heading, entries, board, user_id, capacity, width);
     }
     let offset = usize::from(scroll).min(entries.len().saturating_sub(capacity));
-    let content_width = entries
-        .iter()
-        .map(|entry| entry_natural_width(entry, board))
-        .max()
-        .unwrap_or(width)
-        .min(width);
+    let content_width = window_content_width(entries, board).min(width);
     let mut lines = vec![section_heading(heading)];
     lines.extend(
         entries
@@ -422,14 +416,7 @@ fn window_lines(
     }
 
     let (leader_rows, own_tail) = window_row_plan(entries, user_id, capacity);
-    let content_width = entries
-        .iter()
-        .take(leader_rows)
-        .chain(own_tail.map(|index| &entries[index]))
-        .map(|entry| entry_natural_width(entry, board))
-        .max()
-        .unwrap_or(width)
-        .min(width);
+    let content_width = window_content_width(entries, board).min(width);
 
     for entry in entries.iter().take(leader_rows) {
         lines.push(entry_line(

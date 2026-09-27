@@ -44,7 +44,10 @@ The wheel inside the popup scrolls three wrapped rows. The right-margin scrollba
 appears only when the paper overflows; its thumb drags proportionally, and track
 clicks page toward the pointer. Outside clicks do not dismiss. The draw records
 geometry and uses Ratatui paragraph line counting to clamp all scroll paths,
-including after resize. Release, resize, focus loss, and closing cancel dragging.
+including after resize. Until the next full draw publishes a body (after a
+resize, or while the frame is too small to print) scrolling is inert, so a
+brief shrink keeps the reading position. Release, resize, focus loss, and
+closing cancel dragging.
 The `[x]` button uses the same request-cancellation path as Esc, including while
 loading. Keyboard-only mode ignores mouse reports. The paper draws above other
 ordinary modals, matching its input priority.

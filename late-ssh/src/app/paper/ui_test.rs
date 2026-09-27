@@ -126,3 +126,32 @@ fn wrapped_rows_define_the_scroll_limit_and_resize_reclamps_it() {
         viewport.content_height.saturating_sub(viewport.body.height)
     );
 }
+
+#[test]
+fn a_frame_too_small_to_print_keeps_the_reading_position() {
+    use crate::app::paper::state::{PaperInk, PaperSpan};
+    let mut modal = PaperModal::at_the_press();
+    modal.lines = (0..100)
+        .map(|row| vec![PaperSpan::new(format!("row {row}"), PaperInk::Body)])
+        .collect();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, frame.area(), &modal))
+        .unwrap();
+    modal.scroll(30);
+    assert_eq!(modal.scroll_offset(), 30);
+
+    // Resized, not yet redrawn: a key must not move the reader.
+    modal.invalidate_viewport();
+    modal.scroll(-5);
+    assert_eq!(modal.scroll_offset(), 30);
+
+    // Shrunk under the printable minimum, then a key, then grown back.
+    let mut tiny = Terminal::new(TestBackend::new(20, 4)).unwrap();
+    tiny.draw(|frame| draw(frame, frame.area(), &modal)).unwrap();
+    modal.scroll(1);
+    terminal
+        .draw(|frame| draw(frame, frame.area(), &modal))
+        .unwrap();
+    assert_eq!(modal.scroll_offset(), 30);
+}

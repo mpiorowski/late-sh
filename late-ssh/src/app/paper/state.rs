@@ -186,10 +186,17 @@ impl PaperModal {
         self.scroll_offset.get()
     }
 
+    /// Clamped to the last drawn body. With no body to clamp against (a
+    /// resize not yet redrawn, or a frame too small to print) the offset
+    /// stays put, and the next full draw clamps it to the real extent.
     pub(crate) fn scroll(&self, delta: i16) {
+        let viewport = self.viewport.get();
+        if viewport.body.is_empty() {
+            return;
+        }
         let next = i32::from(self.scroll_offset.get()) + i32::from(delta);
         self.scroll_offset
-            .set(next.clamp(0, i32::from(self.viewport.get().max_scroll())) as u16);
+            .set(next.clamp(0, i32::from(viewport.max_scroll())) as u16);
     }
 
     pub(crate) fn scroll_to_top(&self) {

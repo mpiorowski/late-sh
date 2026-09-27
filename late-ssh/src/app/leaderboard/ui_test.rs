@@ -284,27 +284,32 @@ fn entry_line_right_aligns_value_and_truncates_long_names() {
 }
 
 #[test]
-fn window_caps_value_column_at_widest_visible_row() {
+fn value_column_is_set_by_the_widest_loaded_row_at_every_scroll() {
     let board = Board::Score(ScoreGame::ALL[0]);
-    let entries = vec![
-        entry(1, "alice", Uuid::from_u128(10), 12_345),
-        entry(2, "longusername", Uuid::from_u128(11), 7),
-        entry(
-            3,
-            "invisible-name-that-must-not-widen-the-column",
-            Uuid::from_u128(12),
-            999_999,
-        ),
-    ];
+    let mut entries: Vec<RankedEntry> = (1..=8)
+        .map(|rank| {
+            entry(
+                rank,
+                &format!("player{rank}"),
+                Uuid::from_u128(rank as u128 + 100),
+                1_000 - rank,
+            )
+        })
+        .collect();
+    // Below the fold at the top: still the row that sets the column.
+    entries[5] = entry(6, "long-name-far-below-the-fold", Uuid::from_u128(106), 999_999);
 
-    let lines = window_lines("monthly", &entries, board, viewer(), 2, 100);
-    let first = text(&lines[1]);
-    let second = text(&lines[2]);
+    let top = super::scrolled_window_lines("monthly", &entries, board, viewer(), 3, 100, 0);
+    let scrolled = super::scrolled_window_lines("monthly", &entries, board, viewer(), 3, 100, 1);
 
-    assert_eq!(first, "  #1  alice    12,345");
-    assert_eq!(second, "  #2  longusername  7");
-    assert_eq!(first.chars().count(), second.chars().count());
-    assert!(first.chars().count() < 100, "{first}");
+    // "  #6  " + name + two cells + "999,999", not the 100-cell area.
+    assert_eq!(text(&top[1]).chars().count(), 6 + 28 + 2 + 7, "{}", text(&top[1]));
+    // A rank renders the same whether it is seen at the top or after a scroll.
+    assert_eq!(text(&top[2]), text(&scrolled[1]));
+    assert_eq!(text(&top[3]), text(&scrolled[2]));
+    let deeper = super::scrolled_window_lines("monthly", &entries, board, viewer(), 3, 100, 3);
+    assert!(text(&deeper[3]).contains("long-name-far-below-the-fold  999,999"));
+    assert_eq!(text(&deeper[3]).chars().count(), text(&top[1]).chars().count());
 }
 
 #[test]
@@ -314,7 +319,7 @@ fn paired_windows_use_natural_widths_with_a_bounded_gap() {
         entry(1, "short", Uuid::from_u128(10), 15),
         entry(2, "longest-visible-name", Uuid::from_u128(11), 7),
     ];
-    let width = window_natural_width("monthly", &entries, board, viewer(), 10);
+    let width = window_natural_width("monthly", &entries, board);
     let area = Rect::new(25, 4, 100, 30);
 
     let [monthly, all_time] = standings_columns(area, width, width);
