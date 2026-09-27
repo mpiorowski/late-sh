@@ -8,7 +8,7 @@ use late_core::models::chat_message_gild::{ChatMessageGild, GildCounts};
 use late_core::models::chips::{MonthChips, PROFILE_LEDGER_ROWS, UserChips};
 use late_core::models::crown::CrownReign;
 use late_core::models::deadchannel_runner::DeadchannelRunner;
-use late_core::models::drink_round::DrinkRound;
+use late_core::models::drink_round::{DrinkCredit, DrinkRound};
 use late_core::models::game_payout::GamePayout;
 use late_core::models::irc_token::IrcToken;
 use late_core::models::marketplace;
@@ -317,8 +317,10 @@ impl ProfileService {
         let quests = quest::assignment_titles(&**client, &refs.quests).await?;
         let awards = find_profile_awards_by_ids(&client, &refs.awards).await?;
         let rounds = DrinkRound::find_by_ids(&client, &refs.rounds).await?;
+        let gift_recipients =
+            DrinkCredit::recipients_for_rounds(&client, &refs.gift_rounds).await?;
         let songs = MediaQueueItem::titles_for_video_ids(&client, &refs.videos).await?;
-        let named_ids = ledger::named_user_ids(&refs, &gilds, &deposed);
+        let named_ids = ledger::named_user_ids(&refs, &gilds, &deposed, &gift_recipients);
         let usernames = User::list_usernames_by_ids(&client, &named_ids).await?;
         let chip_ledger = ledger::resolve(
             chip_ledger,
@@ -330,6 +332,7 @@ impl ProfileService {
                 quests,
                 awards,
                 rounds,
+                gift_recipients,
                 songs,
                 usernames,
             },

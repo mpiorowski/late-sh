@@ -800,7 +800,7 @@ async fn a_personal_gift_only_pours_when_the_recipient_orders() {
     let ledger = client
         .query_one(
             "SELECT delta, source_ref FROM chip_ledger WHERE user_id = $1 AND reason = $2",
-            &[&buyer.id, &ChipMove::RoundPurchase.reason()],
+            &[&buyer.id, &ChipMove::DrinkGift.reason()],
         )
         .await
         .unwrap();

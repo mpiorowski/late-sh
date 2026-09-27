@@ -740,12 +740,18 @@ It costs 200 chips (`GIFT_DRINK_PRICE`, twice a round's head, since the one
 person it is aimed at will drink it), pours the recipient the same 400 points
 a round does, works for offline humans, shares the 24h expiry and
 three-open-credit cap, and does not pour the buyer a drink. The gift and
-its floor-guarded `round_purchase` debit commit together through
-`ChipService::buy_drink_for`; self-gifts, bot targets, unknown names, full
-tabs and short balances are refused uncharged. A successful gift gets a
-scripted receipt ahead of the bartender's mention ladder and AI, while
-refusals step the ladder. Redemption uses the same oldest-expiring credit
-path and names the buyer of the credit actually spent.
+its floor-guarded `drink_gift` debit (`ChipMove::DrinkGift`, its own reason
+so the profile ledger reads "bought a drink for @user" off the round's
+single credit and the round dashboards never count it) commit together
+through `ChipService::buy_drink_for`; self-gifts, bot targets, unknown
+names, full tabs and short balances are refused uncharged. A successful
+gift gets a scripted receipt ahead of the bartender's mention ladder and
+AI, while refusals step the ladder. `metrics::record_gift_drink_bought`
+counts settled gifts and their burn, `record_gift_drink_refused` labels
+`late_ssh_gift_drinks_refused_total` by the closed `GiftDrinkRefusal`, and
+the pour itself lands under the shared `round_drinks_cashed_total`.
+Redemption uses the same oldest-expiring credit path and names the buyer of
+the credit actually spent.
 `late-core/src/models/drink_round.rs` owns both tables (migrations 164 and
 168), the price, the cap, and the phrase list; `GhostService::bartender_round`
 (`app/ai/ghost.rs`) owns the transaction's caller, the refusals, the

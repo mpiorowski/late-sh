@@ -14,7 +14,7 @@ use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderRe
 use crate::app::common::primitives::Screen;
 use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
-use crate::app::games::chips::svc::RoundRefusal;
+use crate::app::games::chips::svc::{GiftDrinkRefusal, RoundRefusal};
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::pg_listener::Refresh;
@@ -351,8 +351,9 @@ mod inner {
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, BioScreenOutcome, CrownRefusal,
         DailyPuzzle, DailyWinPayout, DoorGame, FightBeat, FirstContactBeat, GalleryApplauseResult,
-        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal, GildTier,
-        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
+        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
+        GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
+        NewsShareReward,
         NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
         PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, Refresh,
         RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage,
@@ -647,6 +648,46 @@ mod inner {
             RoundRefusal::AllHolding => "all_holding",
             RoundRefusal::InsufficientChips { .. } => "insufficient_chips",
         }
+    }
+
+    fn gift_drink_refusal_label(refusal: GiftDrinkRefusal) -> &'static str {
+        match refusal {
+            GiftDrinkRefusal::UnknownRecipient => "unknown_recipient",
+            GiftDrinkRefusal::SelfGift => "self_gift",
+            GiftDrinkRefusal::BotRecipient => "bot_recipient",
+            GiftDrinkRefusal::AllHolding => "all_holding",
+            GiftDrinkRefusal::InsufficientChips => "insufficient_chips",
+        }
+    }
+
+    fn gift_drinks_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_gift_drinks_total")
+                .with_description("Drinks left on one named patron's tab that settled")
+                .build()
+        })
+    }
+
+    fn gift_drink_chips_burned_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_gift_drink_chips_burned_total")
+                .with_description("Chips destroyed by gift drinks (the whole price)")
+                .build()
+        })
+    }
+
+    fn gift_drinks_refused_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_gift_drinks_refused_total")
+                .with_description("Gift drinks refused, by reason (none were charged)")
+                .build()
+        })
     }
 
     fn rounds_total() -> &'static Counter<u64> {
@@ -1637,6 +1678,21 @@ mod inner {
         rounds_refused_total().add(1, &[KeyValue::new("reason", round_refusal_label(refusal))]);
     }
 
+    /// A settled gift drink: one credit, its price burned whole. The pour
+    /// itself counts under `record_round_drink_cashed` when the recipient
+    /// orders, like any other credit.
+    pub fn record_gift_drink_bought(chips: i64) {
+        gift_drinks_total().add(1, &[]);
+        gift_drink_chips_burned_total().add(chips.max(0) as u64, &[]);
+    }
+
+    pub fn record_gift_drink_refused(refusal: GiftDrinkRefusal) {
+        gift_drinks_refused_total().add(
+            1,
+            &[KeyValue::new("reason", gift_drink_refusal_label(refusal))],
+        );
+    }
+
     /// A pour ordered off the Nightcap menu (rounds count under
     /// `record_round_bought`, whichever bar they were bought at).
     pub fn record_nightcap_order(result: NightcapOrderResult) {
@@ -2089,8 +2145,9 @@ mod inner {
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, BioScreenOutcome, CrownRefusal,
         DailyPuzzle, DailyWinPayout, DoorGame, FightBeat, FirstContactBeat, GalleryApplauseResult,
-        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GildRefusal, GildTier,
-        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
+        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
+        GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
+        NewsShareReward,
         NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult, PaperOpenResult,
         PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, Refresh,
         RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage,
@@ -2156,6 +2213,8 @@ mod inner {
     pub fn record_crown_take_refused(_refusal: CrownRefusal) {}
     pub fn record_round_bought(_patrons: i64, _chips: i64) {}
     pub fn record_round_refused(_refusal: RoundRefusal) {}
+    pub fn record_gift_drink_bought(_chips: i64) {}
+    pub fn record_gift_drink_refused(_refusal: GiftDrinkRefusal) {}
     pub fn record_nightcap_order(_result: NightcapOrderResult) {}
     pub fn record_nightcap_house_failure(_failure: NightcapHouseFailure) {}
     pub fn record_round_drink_cashed() {}

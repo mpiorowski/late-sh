@@ -440,6 +440,29 @@ impl DrinkRound {
 pub struct DrinkCredit;
 
 impl DrinkCredit {
+    /// Who a batch of one-person gift rounds were bought for, keyed by round
+    /// id, for the ledger's "for @user" detail. A gift round has exactly one
+    /// credit; handed a house round this keeps whichever patron came last,
+    /// so callers pass gift rounds only.
+    pub async fn recipients_for_rounds(
+        client: &impl GenericClient,
+        round_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Uuid>> {
+        if round_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = client
+            .query(
+                "SELECT round_id, user_id FROM drink_credits WHERE round_id = ANY($1)",
+                &[&round_ids],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("round_id"), row.get("user_id")))
+            .collect())
+    }
+
     /// The credit the patron would drink next: the one closest to going cold,
     /// out of however many they are holding. Read before pouring so the bar
     /// knows the pour is comped; who bought it comes from [`DrinkCredit::cash`],

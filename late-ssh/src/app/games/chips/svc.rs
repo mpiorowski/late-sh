@@ -73,6 +73,19 @@ pub struct GiftDrinkPurchase {
     pub balance: i64,
 }
 
+/// Why a personal gift drink did not happen, for the refusal metric. The
+/// first three are the bartender's own checks, made before this service is
+/// asked; the last two are the [`RoundRefusal`] arms a one-credit grant can
+/// return. Every arm is uncharged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GiftDrinkRefusal {
+    UnknownRecipient,
+    SelfGift,
+    BotRecipient,
+    AllHolding,
+    InsufficientChips,
+}
+
 /// Why a round did not happen. Every arm is uncharged: a refused round leaves
 /// no ledger row and no credits. The wording lives with the bartender, who is
 /// the only one who ever says these out loud.
@@ -277,9 +290,10 @@ impl ChipService {
     }
 
     /// Leave one drink for a named patron, online or not. The same grant lock,
-    /// three-credit cap, expiry, pour and ledger reason as a house round apply,
-    /// priced at [`GIFT_DRINK_PRICE`] rather than a head of a round, and only
-    /// the recipient may drink: buying a gift does not pour the buyer one.
+    /// three-credit cap, expiry and pour as a house round apply, priced at
+    /// [`GIFT_DRINK_PRICE`] rather than a head of a round and written as
+    /// [`ChipMove::DrinkGift`] so the ledger can name the recipient. Only the
+    /// recipient may drink: buying a gift does not pour the buyer one.
     pub async fn buy_drink_for(
         &self,
         buyer_id: Uuid,
@@ -311,7 +325,7 @@ impl ChipService {
         let Some(chips) = UserChips::apply(
             &*tx,
             buyer_id,
-            ChipMove::RoundPurchase,
+            ChipMove::DrinkGift,
             grant.total_chips(),
             &grant.round.id.to_string(),
         )

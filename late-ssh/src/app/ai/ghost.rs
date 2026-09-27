@@ -66,7 +66,7 @@ use crate::{
     app::chat::svc::{ChatEvent, ChatService},
     app::clubhouse::lobby::SharedLobby,
     app::common::primitives::thousands,
-    app::games::chips::svc::{ChipService, RoundError, RoundRefusal},
+    app::games::chips::svc::{ChipService, GiftDrinkRefusal, RoundError, RoundRefusal},
     app::help_modal::data::{bartender_app_context, bot_app_context},
     metrics,
     state::{ActiveUser, ActiveUsers, online_human_ids_excluding},
@@ -1075,27 +1075,32 @@ impl GhostService {
         let recipient = User::find_by_username(&client, target).await?;
         drop(client);
 
-        let (body, paid) = match recipient {
+        // Every outcome is listed once, here: what the bar says, and whether
+        // it charged. Refusals are counted by reason so an operator can see
+        // why gifts fail without reading chat.
+        let (body, refused) = match recipient {
             None => (
                 format!("can't find @{target} on the books. no chips taken."),
-                false,
+                Some(GiftDrinkRefusal::UnknownRecipient),
             ),
             Some(recipient) if recipient.id == buyer_id => (
                 "that one's already on your own tab. no chips taken.".to_string(),
-                false,
+                Some(GiftDrinkRefusal::SelfGift),
             ),
             Some(recipient) if recipient.is_bot() => (
                 "the staff don't drink on the clock. no chips taken.".to_string(),
-                false,
+                Some(GiftDrinkRefusal::BotRecipient),
             ),
             Some(recipient) => {
                 let who = mention_target_for_user(Some(&recipient.username), recipient.id);
                 match self.chip_service.buy_drink_for(buyer_id, recipient.id).await {
                     Ok(purchase) => {
+                        metrics::record_gift_drink_bought(GIFT_DRINK_PRICE);
                         tracing::info!(
                             user_id = %buyer_id,
                             recipient_id = %recipient.id,
                             round_id = %purchase.round_id,
+                            chips = GIFT_DRINK_PRICE,
                             new_balance = purchase.balance,
                             "bartender left a drink on a patron's tab"
                         );
@@ -1104,21 +1109,21 @@ impl GhostService {
                                 "one drink waiting for {who}, on your tab. {} chips. they can order it whenever they're ready.",
                                 GIFT_DRINK_PRICE
                             ),
-                            true,
+                            None,
                         )
                     }
                     Err(RoundError::Refused(RoundRefusal::AllHolding)) => (
                         format!(
                             "{who} already has all the drinks I can keep on a tab. no chips taken."
                         ),
-                        false,
+                        Some(GiftDrinkRefusal::AllHolding),
                     ),
                     Err(RoundError::Refused(RoundRefusal::InsufficientChips { .. })) => (
                         format!(
                             "one for {who} runs {} chips, but I won't take your last ones. no chips taken.",
                             GIFT_DRINK_PRICE
                         ),
-                        false,
+                        Some(GiftDrinkRefusal::InsufficientChips),
                     ),
                     Err(RoundError::Refused(RoundRefusal::EmptyHouse)) => {
                         return Err(anyhow::anyhow!(
@@ -1132,16 +1137,30 @@ impl GhostService {
             }
         };
 
-        if !paid
-            && matches!(
-                self.mention_ladders.check_and_step(
-                    LadderBot::Bartender,
-                    buyer_id,
-                    trigger_message.room_id,
-                ),
-                Decision::Throttled { .. }
-            )
-        {
+        let Some(refusal) = refused else {
+            self.chat_service.send_bot_reply_task(
+                bartender.id,
+                trigger_message.room_id,
+                body,
+                Some(buyer_id),
+            );
+            return Ok(());
+        };
+        metrics::record_gift_drink_refused(refusal);
+        tracing::info!(
+            user_id = %buyer_id,
+            target,
+            refusal = ?refusal,
+            "bartender refused a gift drink"
+        );
+        if matches!(
+            self.mention_ladders.check_and_step(
+                LadderBot::Bartender,
+                buyer_id,
+                trigger_message.room_id,
+            ),
+            Decision::Throttled { .. }
+        ) {
             return Ok(());
         }
         self.chat_service.send_bot_reply_task(
