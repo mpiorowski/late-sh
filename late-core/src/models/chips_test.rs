@@ -201,6 +201,7 @@ fn earning_exclusions_and_reason_uniqueness() {
             "chip_crown_taken",
             "pot_ticket",
             "round_purchase",
+            "drink_gift",
             "drink_purchase",
             "shop_purchase",
             "ssnake_arena_lost",

@@ -3,27 +3,6 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-09-05 (stage 2 of the haunting is witnessed by the
-  room: `ChatEvent::NameHit` comes off the `deadchannel_name_hit` Postgres
-  notify on the same worker as the gild markers,
-  `ChatService::start_notify_worker`; `push_message` promotes a
-  held beat when its message lands, and `take_witnessed_hit_landed` hands
-  it to the haunting. Before that, 2026-09-04: the `/members` overlay carries `OverlayInk` instead of baked colours, so it stops painting in whichever session last rendered on this thread; every deadchannel log line now carries `username`; first-contact seams: the admin-only `/haunt`
-  command in §8 (parsed only when `is_admin`, so a non-admin's `/haunt`
-  posts as plain text), the `own_message_landed` slot `push_message`
-  records for the stage-2 name flicker, `name_flicker` threaded through
-  the message view structs into the rows-cache key, and
-  `ChatService::send_first_contact_invitation_task` (the stage-4 ghost DM
-  behind a conditional settings claim). Domain contract:
-  `late-ssh/src/app/deadchannel/CONTEXT.md`.) Previously
-  2026-08-30 (round drinks stack: the one-open-credit index is
-  gone (migration 168), replaced by a `MAX_OPEN_CREDITS` (3) cap counted in
-  the grant under an advisory lock, so a patron away for three rounds is owed
-  three drinks and each buyer pays for the one they bought. A pour spends the
-  credit closest to expiring and @bartender appends how many are left in a
-  scripted tail. `ROUND_DRINK_POINTS` 300 -> 400, since 300 sat exactly on the
-  buzzed line and decayed off it in seconds. §9d The Round.) Previously
-  2026-08-27 (the round: telling @bartender "round for everyone" buys a drink for everyone online but you, 100 chips a head, burned whole. The trigger is a literal phrase from `ROUND_PHRASES` (`late-core/src/models/drink_round.rs`), never a model decision, and `slur.rs` is the other half of it: drunk text is stored rather than rendered, so the phrase is passed through unscrambled (and the `*hic*` kept out of it) or the feature would break for exactly the patrons most likely to use it. Only the buyer is poured into; everyone else gets a `drink_credits` row cashed by ordering, one open per patron, 24h, worth a flat 300 points. §9d The Round.) Previously 2026-08-26 (burn milestones: a permanent Shop glyph that renders after the rented badge and flag in the author label and can never be hidden by either, resolved off `ResolvedName.milestone` like the crown; see `hub/CONTEXT.md` for the catalog side.) Previously 2026-08-26 (the crown: one slot, one holder, one 👑 after their name in every chat author header and on the Clubhouse floor. `/crown` prints who wears it and what taking it costs; `/crown take` buys it at `max(500, ceil(paid x 1.5))`, burned whole, with no hold or cooldown and no self-take. It empties at the UTC month rollover, and the month's last holder keeps the `CRWN` profile award. The glyph rides the `name_flair` map (resolved on the same once-a-second edge as titles and effects) off a process-shared holder that the `crown_changed` Postgres notify keeps in step; the domain is `late-ssh/src/app/crown/`. §9c The Crown.)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -31,7 +10,7 @@
 
 ## 1. Scope
 
-This file owns chat-specific context that used to make the root `CONTEXT.md` too large.
+This file owns chat-specific context; the root `CONTEXT.md` keeps only the map and points here.
 
 Included here:
 - Home chat rooms, DMs, public/private topic rooms, synthetic entries, and game-backed room chat.
@@ -50,17 +29,20 @@ Global SSH, audio, games, profile, rooms/blackjack, observability, and repo-wide
 late-ssh/src/app/chat/
 |-- mod.rs                       # Module declarations only
 |-- action.rs                    # Shared CTCP-style `/me` action encoding/parsing
+|-- commands.rs                  # Slash-command registry (`COMMANDS`), scope rules, and popup ranking
 |-- svc.rs                       # ChatService: DB boundary, snapshots, events, room/message tasks
 |-- state.rs                     # ChatState: local UI state, receivers, composer, room/message selection
 |-- input.rs                     # Home chat input plus shared message actions used by Dashboard and embedded game chat
 |-- ui.rs                        # Home room rail/chat center, dashboard-lounge view, embedded room chat, composer, row cache
 |-- ui_text.rs                   # Message/news/reaction wrapping into ratatui Lines
-|-- slur.rs                      # Pure drunk-text transform applied to outgoing public-room messages (never touches a round phrase, §9d)
-|                                # (translation itself lives in ../ai/translate.rs; chat owns only the key, the display state, and the row)
+|-- list_ui.rs                   # Shared "mine only" filtered-list layout and status line for the synthetic entries
+|-- slur.rs                      # Pure drunk-text transform applied to outgoing public-room messages (never touches a spending phrase, §9d)
+|-- special_badges.rs            # Hardcoded per-username badges in author labels (allowlist, edit and redeploy)
 |-- cyberspace/                  # Cyberspace rail section: personal client for cyberspace.online, incl. their chat (cIRC)
 |-- discover/                    # Synthetic Discover entry: public rooms not yet joined
 |-- feeds/                       # Synthetic RSS entry: private per-user RSS/Atom inbox
 |-- gild/                        # Gild tier picker: state/input/ui for the `g` message action
+|-- history_modal/               # `/history` scroll-back modal: state/input/ui (§14 History Modal)
 |-- news/                        # Synthetic News entry: articles + #lounge announcement
 |-- notifications/               # Synthetic Mentions entry: mention notifications
 |-- polls/                       # /poll modal state/input/UI
@@ -68,18 +50,14 @@ late-ssh/src/app/chat/
 `-- work/                        # Profiles service/state/UI reused by Directory page 5
 ```
 
+Message translation itself lives in `../ai/translate.rs`; chat owns only the
+cache key, the display state, and the row (§14 Translation).
+
 Related tests:
 
-```text
-late-ssh/src/app/chat/           # adjacent _test.rs files, wired with #[cfg(test)] mod
-|-- svc_test.rs                  # Broad ChatService DB-backed coverage
-|-- sheet_test.rs                # Character-sheet model/service coverage
-|-- state_test.rs                # Placeholder; direct ChatState tests need more accessors
-|-- cyberspace/svc_test.rs       # CyberspaceService DB-backed coverage (dead base URL, no network)
-|-- news/svc_test.rs             # ArticleService DB-backed coverage
-|-- showcase/svc_test.rs         # ShowcaseService DB-backed coverage
-`-- work/svc_test.rs             # WorkService DB-backed coverage
-```
+Tests live beside the file they exercise as `<file>_test.rs`, wired with
+`#[cfg(test)] mod <file>_test;` (the `*_internal_test.rs` twins reach
+`pub(crate)` internals). The inventory and what each covers is in §16.
 
 Core models used by chat live in `late-core/src/models/`:
 `chat_room.rs`, `chat_room_member.rs`, `chat_message.rs`, `chat_message_reaction.rs`,
@@ -108,7 +86,7 @@ Keep `mod.rs` declaration-only; no `pub use` re-export layer.
 `ChatService` channels:
 - Per-session `watch<ChatSnapshot>` for low-frequency room summary data.
 - `broadcast<ChatEvent>` for live message, reaction, room-command, and error events shared by every session. Single-recipient payload events (`RoomTailLoaded`, `DeltaSynced`, `MessageSearchLoaded`, `MessageContextLoaded`, `DiscoverRoomsLoaded`, and their `*Failed` twins) do NOT ride the broadcast: `ChatService::send_user_event` delivers them point-to-point over a per-session `mpsc<ChatEvent>` registered in `refresh_sessions` (returned by `start_user_refresh_task`), so a 500-message tail is never cloned into every connected session. `ChatState::drain_events` drains the targeted channel ahead of the broadcast; both feed the same event match.
-- Shared `watch<Arc<Vec<String>>>` username list for mention autocomplete, rebuilt every 30s from the in-memory `UsernameDirectory`, not the DB. It used to re-scan all of `users` on that timer, which was 1.9% of all DB execution time; the directory is written through on login/profile save/rename/delete, so this is both free and fresher. Do not point it back at `User::list_all_usernames` (that arm is the no-directory fallback for tests).
+- Shared `watch<Arc<Vec<String>>>` username list for mention autocomplete, rebuilt every 30s from the in-memory `UsernameDirectory`, not the DB. Re-scanning `users` on that timer measures 1.9% of all DB execution time; the directory is written through on login/profile save/rename/delete, so the watch is both free and fresher. Do not point it back at `User::list_all_usernames` (that arm is the no-directory fallback for tests).
 - Plain username display is centralized outside Chat in `State.username_directory` (`Uuid -> username`), loaded at startup, refreshed every 30 minutes, and updated on login/profile save/mod rename/account delete. Chat still owns richer author metadata such as bonsai glyphs, countries, badges, reactions, and unread state.
 - A service-owned refresh scheduler that refreshes registered sessions every 10s and on explicit signals.
 - `read_permits: Semaphore(8)` to cap concurrent snapshot, tail, and discover reads.
@@ -125,7 +103,7 @@ Normal display flow:
 1. `ChatState::new` subscribes to chat events/usernames and calls `ChatService::start_user_refresh_task`.
 2. The per-user snapshot loads joined rooms, unread counts, latest-message activity timestamps, `#lounge` id, DM/current-user metadata, bonsai glyphs for those users, and ignored user ids.
    - `build_chat_snapshot` runs as **two pipelined rounds, not a serial chain**. Round one is `ChatRoom::list_for_user_with_state` plus `User::friend_and_ignored_user_ids`; round two is voice channels, active polls, author metadata, and room owners, all of which need the room or friend set from round one. Each round is a single `tokio::join!` over one pooled connection, and tokio-postgres pipelines concurrent queries on one connection, so a round costs roughly one round trip rather than one per query (same pattern as `late_core::models::leaderboard::fetch_leaderboard_data`). Postgres still executes them in order, so this buys latency, not server CPU. Latency is what matters here because `refresh_registered_sessions` walks every live session sequentially. **Do not reintroduce a serial `.await` per query.**
-   - Rooms, unread counts, and latest-message timestamps come back from **one** query (`list_for_user_with_state`), because all three key off the same `chat_room_members` row. Measured on prod against the heaviest user (157 rooms): 1,452 buffers / 5.2 ms against 1,760 buffers / 8.1 ms for the three separate queries it replaced, plus two fewer planning cycles. There is deliberately no separate `unread_counts_for_user` or `last_message_at_for_rooms` any more; a second copy of that SQL is a drift hazard.
+   - Rooms, unread counts, and latest-message timestamps come back from **one** query (`list_for_user_with_state`), because all three key off the same `chat_room_members` row. Measured on prod against the heaviest user (157 rooms): 1,452 buffers / 5.2 ms against 1,760 buffers / 8.1 ms for three separate queries, plus two fewer planning cycles. There is deliberately no separate `unread_counts_for_user` or `last_message_at_for_rooms` any more; a second copy of that SQL is a drift hazard.
    - Unread counts are capped at `ChatRoomMember::UNREAD_COUNT_CAP` (100) and the UI renders anything at the cap as `99+` (`ui.rs::format_unread_badge`). Uncapped, a never-opened `#lounge` counted all 127k messages per user per pass and was 43% of all DB execution time. Room ordering only tests `unread > 0`, so the cap is invisible to it. Do not restore an exact count without re-reading SCALE.md Pain Point 7.
    - The `· ` activity lines are excluded by comparing the author id against the system bot id that `ChatService::set_system_user_id` receives from the #lounge feed task at startup. Do not go back to reading `users.settings->>'system'` per message: that made Postgres hash the whole users table per query.
 3. Snapshots intentionally carry empty message vectors. They do not load history; activity timestamps are summary metadata used for stable room ordering.
@@ -166,13 +144,13 @@ Two marks, two questions, and they never feed each other. Keeping them apart is 
 - **Taken, not read.** The drop write is fire-and-forget, and a session whose write never landed (process killed mid-drain, DB blip, key re-pointed by account linking) must not hand the next session a leave from *before* itself, which would summarize messages already read. A lost write degrades to the default window, never to a wrong one.
 - **Draws its own rule, never the AFK one.** Every room's live tail gets a thin dim `you left 9 hrs ago · /summary to catch up` rule above the first message from someone else past the mark (`ui.rs::left_app_divider_line`, fed through `ChatDividers`): every room, because the mark is about the device, and a room never opened here still honestly shows what landed since you were last on this machine. It is fixed for the session like the mark itself; posting does not clear it, it only scrolls away. The rule carries the `/summary` tip because rule and bare command read the same mark, so the row showing the gap is the row that offers to close it; the command is tinted (`AMBER_DIM`) against the dim rest, and a room too narrow to leave 4 columns of rule around both drops the tip and keeps the stamp. When both marks land above the same message only `new messages` draws (`ensure_chat_rows_cache`). Reconnecting still seeds no `new messages` line: that divider is about this session, and this session has not stepped away yet. `/history` draws only the AFK rule. Keyless sessions (ghost bots, tests) have no device to remember anything on.
 
-**What this replaced, and why not to put it back.** `ChatState::room_unread_markers` used to hold the `last_read_at` that came back on each `RoomTailLoaded`, and the divider drew against it. Three defects came from that one arrangement, and all three are gone with it:
+**Why the divider never reads a server cursor.** A divider drawn against the `last_read_at` that comes back on `RoomTailLoaded` has three defects, which is why no such marker exists in `ChatState`:
 
-1. **The divider froze.** The marker was only ever recomputed on a tail load, so once placed it never moved. Messages piled below it for hours, your own replies included, and it cleared only by leaving the room and coming back.
-2. **Sessions rewrote each other's dividers.** `send_user_event` delivers `RoomTailLoaded` to *every* session of the account, so opening the room on a phone planted that phone's pre-mark cursor as a divider on an idle desktop that was fully caught up.
-3. **A debounced race.** `request_list` fires `flush_pending_read_cursors()` and `request_room_tail()` as independent `tokio::spawn`s, so a tail could read `last_read_at` before the mark that preceded it committed, and a message from the last two seconds would read as unread.
+1. **It freezes.** A marker recomputed only on a tail load never moves once placed. Messages pile below it for hours, your own replies included, and it clears only by leaving the room and coming back.
+2. **Sessions rewrite each other's dividers.** `send_user_event` delivers `RoomTailLoaded` to *every* session of the account, so opening the room on a phone plants that phone's pre-mark cursor as a divider on an idle desktop that is fully caught up.
+3. **It races the read flush.** `request_list` fires `flush_pending_read_cursors()` and `request_room_tail()` as independent `tokio::spawn`s, so a tail can read `last_read_at` before the mark that preceded it commits, and a message from the last two seconds reads as unread.
 
-Two more arrangements were tried and removed in the same pass. A per-account `/summary` watermark (`chat_summary_reads`, advanced on delivery) answered "what have you been told" correctly but repeated nothing across devices at the price of a table, a second set of rules, and re-summarizing nothing you had read on another device even when you wanted it. Then a single unified mark, where `left_at` seeded the AFK line on reconnect and `/summary` read the AFK line: it collapsed two questions into one cursor, so posting in a room (which clears the divider) also silently reset the catch-up window to the 24h default, and a room never opened here inherited a divider it had no business drawing. The two marks are separate because their clears are different acts.
+Two other shapes are rejected by design. A per-account `/summary` watermark (advanced on delivery) answers "what have you been told" correctly but repeats nothing across devices, at the price of a table, a second set of rules, and re-summarizing nothing you read on another device even when you want it. A single unified mark, where `left_at` seeds the AFK line on reconnect and `/summary` reads the AFK line, collapses two questions into one cursor: posting in a room (which clears the divider) would silently reset the catch-up window to the 24h default, and a room never opened here would inherit a divider it has no business drawing. The two marks are separate because their clears are different acts.
 
 `chat_room_members.last_read_at` still exists and is still written on presence (`mark_room_read`). It drives rail unread badges and nothing else. Do not make it load-bearing for a divider or a summary window again: it records that a session had a room on screen, which is not reading.
 
@@ -181,7 +159,7 @@ System-feed lines: the `#lounge` activity feed (`app/activity/lounge.rs`) posts 
 `ChatSnapshot` is summary data. `RoomTailLoaded` is history data. Do not merge those responsibilities back together.
 
 Announcements:
-- There is no login `#announcements` modal (removed 2026-09-11). Yesterday's posts print verbatim at the top of The Late Edition (`app/paper`, `ChatMessage::list_public_room_between_with_author`); `#announcements` unread counts behave like any other room's (auto-join starts it read, the same as every other room, since 2026-09-11), and the paper never touches `chat_room_members.last_read_at`.
+- There is no login `#announcements` modal. Yesterday's posts print verbatim at the top of The Late Edition (`app/paper`, `ChatMessage::list_public_room_between_with_author`); `#announcements` unread counts behave like any other room's (auto-join starts it read, the same as every other room), and the paper never touches `chat_room_members.last_read_at`.
 
 ---
 
@@ -245,7 +223,7 @@ Notifications:
 
 ## 6. Rooms And Selection
 
-`RoomSlot` represents either a real room or one of the Home synthetic entries: RSS (`RoomSlot::Feeds`), News, Notifications/Mentions, or Discover. `RoomSlot::Showcase` and `RoomSlot::Work` remain in code for state compatibility and focused helpers, but they are no longer emitted by Home visual order, room rail, or room jump. The `#voice` room is a normal `RoomSlot::Room` (a permanent public room, pinned at the bottom of Core directly above Discover in both `state.rs::visual_order_for_rooms` and the `ui.rs` hit-test mirror), matched by slug `voice`; being permanent is what keeps it in Core rather than sorting into Channels (which excludes slug `voice`). Voice-enabled rooms additionally render an embedded voice strip when open.
+`RoomSlot` represents either a real room or one of the Home synthetic entries: RSS (`RoomSlot::Feeds`), News, Notifications/Mentions, or Discover. `RoomSlot::Showcase` and `RoomSlot::Work` exist for state compatibility and focused helpers only; Home visual order, the room rail, and room jump never emit them. The `#voice` room is a normal `RoomSlot::Room` (a permanent public room, pinned at the bottom of Core directly above Discover in both `state.rs::visual_order_for_rooms` and the `ui.rs` hit-test mirror), matched by slug `voice`; being permanent is what keeps it in Core rather than sorting into Channels (which excludes slug `voice`). Voice-enabled rooms additionally render an embedded voice strip when open.
 
 Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by cozy room-rail rendering in `ui.rs`. The base navigation order is:
 1. Favorite real rooms in `users.settings.favorite_room_ids` order.
@@ -294,7 +272,7 @@ Room favorites:
 - Press `f` on a selected real room, or on Mentions, News, RSS or `+ browse rooms`, to toggle it in `ProfileState::toggle_favorite_room`. The four synthetic entries are stored under fixed sentinel ids (`state.rs` `synthetic_favorite_id` / `synthetic_slot_for_favorite_id`, the only code that interprets them; version nibble 0, so no v7 room id can collide). A favorited entry moves from Core into Favorites in both rail builders through the same pushed-id exclusion the rooms use; RSS stays hidden everywhere while feeds are unavailable.
 - Press `[` / `]` on a selected favorite to move it up/down via `ProfileState::move_favorite_room`. No-op when the selection isn't a favorite or is already at the edge.
 - Favorites are stored in `users.settings.favorite_room_ids` and the vec order drives both the Home room rail and the global picker.
-- Favorites are no longer edited through a Settings tab.
+- The rail is the only editor for favorites (`f`, `[`, `]`); there is no Settings tab for them.
 - Active Shop room highlights are not favorites; they temporarily render above favorites and expire from `shop_consumable_effects`.
 
 Home presence:
@@ -321,7 +299,7 @@ The main composer is a `ratatui_textarea::TextArea<'static>`.
 
 `/gift @user <chips>` transfers chips through `ChipService` and `late-core::models::chips::UserChips::transfer_gift`. The transfer is one transaction: sender debit, recipient credit, two ledger rows each carrying the other party's id as `source_ref`, and chip notifications. It enforces the chip floor, rejects self-gifts, caps gift size, and applies a short per-sender cooldown in `ChatService`. Neither gift reason counts on Top Chips.
 
-`/grant @user <chips>` is the admin mint (decided 2026-09-06, replacing `scripts/add_admin_chips.sh`). `parse_grant_command` takes a user and an amount and nothing else; the composer refuses it for non-admins, and `ChatService::grant_chips` decides admin by the session bootstrap's own rule, `users.is_admin || force_admin`, re-read from the database rather than trusted from the session (the `force_admin` half is what makes local and staging accounts admins). The credit goes through `ChipService::grant_chips` to `UserChips::admin_grant`, which by decision writes **no ledger row**: the ledger records what players did, and a grant is the house's doing. The recipient's row is ensured first, so a player who has never logged in lands on the stipend plus the grant. Both parties get a banner (`ChatEvent::GrantSucceeded` / `GrantFailed`).
+`/grant @user <chips>` is the admin mint. `parse_grant_command` takes a user and an amount and nothing else; the composer refuses it for non-admins, and `ChatService::grant_chips` decides admin by the session bootstrap's own rule, `users.is_admin || force_admin`, re-read from the database rather than trusted from the session (the `force_admin` half is what makes local and staging accounts admins). The credit goes through `ChipService::grant_chips` to `UserChips::admin_grant`, which by decision writes **no ledger row**: the ledger records what players did, and a grant is the house's doing. The recipient's row is ensured first, so a player who has never logged in lands on the stipend plus the grant. Both parties get a banner (`ChatEvent::GrantSucceeded` / `GrantFailed`).
 
 `/members` renders a styled overlay with online members first, offline members second, each group sorted alphabetically. Preserve the fixed status-cell shape so overlay rows do not jump as online state changes.
 
@@ -354,8 +332,8 @@ User commands:
 - `/friend @user` privately marks a user as a friend; `/unfriend @user` removes the mark; `/friends` lists marked users.
 - `/binds` opens the Chat help topic.
 - `/cs` (alias `/cyberspace`) opens the Cyberspace `feeds` entry; `/cs post` opens its compose modal, `/cs chat` (alias `/cs rooms`) the chat-room picker that adds rooms as rail entries, `/cs mail` the C-Mail picker that pins conversations the same way, `/cs mail @user` starts (or finds) a conversation, pins it, and walks into it, `/cs link` the account-link modal, `/cs unlink` forgets the link. Parsed in `submit_composer` (`parse_cyberspace_command`), handled inline on `ChatState` (no `take_requested_*` plumbing; `pending_chat_screen_switch` pulls the user to Home).
-- `/aquarium feed` (alias `/aq feed`) feeds the Shop-unlocked tank, which lives on the Zen page only (the sprout is cut on its Shop row since 2026-09-11, `/aquarium cut` is gone; the Home tray is gone, 2026-09-10); bare `/aquarium` answers with a usage banner. Parsed in `submit_composer`, drained via `take_requested_aquarium_command` in `handle_post_submit_requests`.
-- There is no `/pet` command any more: the pet is fed by nothing and toggled by nothing. `ChatState::last_own_send_at` (stamped on `SendSucceeded`) is the pet's "chatty" signal, read by the tick; `/petname` stays.
+- `/aquarium feed` (alias `/aq feed`) feeds the Shop-unlocked tank, which lives on the Zen page only (the sprout is cut on its Shop row; there is no `/aquarium cut` and no Home tray); bare `/aquarium` answers with a usage banner. Parsed in `submit_composer`, drained via `take_requested_aquarium_command` in `handle_post_submit_requests`.
+- There is no `/pet` command: the pet is fed by nothing and toggled by nothing. `ChatState::last_own_send_at` (stamped on `SendSucceeded`) is the pet's "chatty" signal, read by the tick; `/petname` stays.
 - `/dm @user` opens/creates a DM.
 - `/exit` opens quit confirm.
 - `/golive [title]` registers this user's "watch me" stream (`/golive stop` ends it) and `/watch @user` opens a live stream. Both are parsed in `submit_composer` (`parse_golive_command` / `parse_user_command`) and drained by `App::tick_stream`, which owns the stream service, the publisher URL modal, and the paired-CLI `open_url` control; the domain contract is `late-ssh/src/app/stream/CONTEXT.md`.
@@ -648,6 +626,11 @@ its own domain; only the command and the glyph are chat's.
   read-then-write on an existing reign exact. A second racing take therefore
   reads the reign the first one opened and pays the next rung, not a
   constraint violation.
+  After both locks, a separate `clock_timestamp()` query captures the take's
+  effective time. That one timestamp drives the current-month check, closes
+  the outgoing reign, and stamps the incoming reign and its UTC month.
+  Do not use `current_timestamp` here: transaction-start order can differ
+  from lock-acquisition order, making an end timestamp predate its reign.
 - **One open reign, ever.** `crown_reigns_single_open` is a unique index on
   the constant `(ended_at IS NULL)` filtered to open rows, so "at most one"
   is a table fact.
@@ -728,6 +711,39 @@ its own domain; only the command and the glyph are chat's.
 
 One patron buys everyone at the bar a drink. The chips are burned like the
 crown's; what the room gets is a #lounge line and a free drink each.
+The same credit also serves a one-person gift: `@bartender buy @user a drink`
+is an exact, whole-message instruction (`drink_round::gift_drink_target`,
+protected from drunk-text slurring) resolved against the account username.
+It costs 200 chips (`GIFT_DRINK_PRICE`, twice a round's head, since the one
+person it is aimed at will drink it), pours the recipient the same 400 points
+a round does, works for offline humans, shares the 24h expiry and
+three-open-credit cap, and does not pour the buyer a drink. The gift and
+its floor-guarded `drink_gift` debit (`ChipMove::DrinkGift`, its own reason
+so the profile ledger reads "bought a drink for @user" off the round's
+single credit and the round dashboards never count it) commit together
+through `ChipService::buy_drink_for`; self-gifts, bot targets, unknown
+names, full tabs and short balances are refused uncharged. A successful
+gift gets a scripted receipt ahead of the bartender's mention ladder and
+AI, while refusals step the ladder. `metrics::record_gift_drink_bought`
+counts settled gifts and their burn, `record_gift_drink_refused` labels
+`late_ssh_gift_drinks_refused_total` by the closed `GiftDrinkRefusal`, and
+the pour itself lands under the shared `round_drinks_cashed_total`.
+Redemption uses the same oldest-expiring credit path and names the buyer of
+the credit actually spent.
+
+**What each purchase costs and pours.** Points follow the bar that sold the
+credit (`drink_rounds.bar`, `Bar::drink_points`), not where it is cashed: a
+credit is good at either bar and is worth what its seller wrote.
+
+| Purchase | Buyer pays | Each drinker gets | Buyer drinks too? | Ledger reason |
+|---|---|---|---|---|
+| Tavern round ("round for everyone") | `ROUND_PRICE_PER_PATRON` (100) a head | `ROUND_DRINK_POINTS` (400) | yes, 400 | `round_purchase`, bar `tavern` |
+| Gift ("@bartender buy @user a drink") | `GIFT_DRINK_PRICE` (200) | 400 | no | `drink_gift`, bar `tavern` |
+| Nightcap round (`r` on the stools) | `ROUND_PRICE_PER_PATRON` (100) a stool | 100 | yes, 100 | `round_purchase`, bar `nightcap` |
+
+The Nightcap tab board filters on both the round reason and its own bar, so
+gifts and tavern rounds never reach it (`clubhouse/nightcap/CONTEXT.md` §5).
+
 `late-core/src/models/drink_round.rs` owns both tables (migrations 164 and
 168), the price, the cap, and the phrase list; `GhostService::bartender_round`
 (`app/ai/ghost.rs`) owns the transaction's caller, the refusals, the
@@ -779,16 +795,16 @@ reads a chat message, and `chat/slur.rs` has to leave that phrase alone.
   `drink_credits` row, not a drink, because a pour makes someone type drunk in
   public and they did not ask. It is cashed only by ordering from @bartender,
   24h to claim.
-- **Credits stack, up to `MAX_OPEN_CREDITS` (3).** Migration 164 allowed one
-  open credit per patron and that index was doing two jobs: keeping a patron
-  from holding two drinks, which was never the point, and throttling the
-  mechanic. The cost was that a patron heads-down through three rounds ended
-  the night owed one drink and the two other buyers bought nothing. The cap
-  replaced the index (migration 168) and lives in the grant, which counts a
-  patron's open, unexpired credits and skips anyone at it: a round into a room
-  that will not drink still reaches nobody and is still free, so the throttle
-  survives as a number that can be tuned rather than a schema fact. Expired
-  credits are neither counted nor re-used now, just rows nobody can drink.
+- **Credits stack, up to `MAX_OPEN_CREDITS` (3).** The cap lives in the
+  grant (migration 168; there is no one-open-credit index), which counts a
+  patron's open, unexpired credits and skips anyone at it: a round into a
+  room that will not drink still reaches nobody and is still free, so the
+  throttle is a number that can be tuned rather than a schema fact. A
+  schema-level one-credit limit would do two jobs at once, keeping a patron
+  from holding two drinks, which is not the point, and throttling the
+  mechanic, and a patron heads-down through three rounds would end the night
+  owed one drink while two buyers bought nothing. Expired credits are
+  neither counted nor re-used, just rows nobody can drink.
 - **Every grant takes an advisory lock** (`ROUND_GRANT_LOCK`) and holds it to
   commit. The cap is a read-then-write over rows a concurrent round is
   inserting and cannot see, so without it two rounds landing together would
@@ -1125,7 +1141,7 @@ Scroll-driven room history (`history_modal/`), opened by `/history` or by a sear
   - `Default` (no mark: keyless, never ended a session here, or the write was lost) → `SUMMARY_DEFAULT_WINDOW_HOURS` (24h), basis `Default`, head "since stamp · the last 24h", with no claim about absence either way. The only window that is handed out rather than derived.
   - `Explicit(duration)` → what the user typed, bounded only by the 48h max; the mark is ignored outright.
   - A mark older than `SUMMARY_MAX_WINDOW_HOURS` is clamped to it and the head appends "· capped at 48h": the stamp is then the cap, not the moment they left, and the head says which.
-- **The 24h default must not come back as a blanket clamp.** It used to widen *every* bare catch-up because the cursor underneath it was `chat_room_members.last_read_at`, which records presence rather than reading: a terminal parked on a visible room marks each arriving message read, so a marker-only window answered "nothing new" to exactly the person who missed the day. The fix was to stop deriving the window from a cursor that cannot know, not to pad it.
+- **The 24h default is never a blanket clamp.** A clamp only makes sense over a cursor that cannot know, and `chat_room_members.last_read_at` is that cursor: it records presence rather than reading, so a terminal parked on a visible room marks each arriving message read and a marker-only window answers "nothing new" to exactly the person who missed the day. The window is derived from the device mark instead of being padded.
 - **Nothing is written on delivery.** The mark is the reader's, not the summary's; a second `/summary` reads the same stretch again (see `The Two Marks`). A failed summary therefore costs nothing but the request.
 - **The typed window requires its unit** (`6h`, `90m`; case-insensitive): a bare `6` is refused rather than guessed at, and a window past 48h is refused rather than silently clamped, so the answer is never narrower than the question. Both refusals land as banners before any request goes out.
 - **Bounded two ways** before the model sees anything: wall clock (48h) and transcript size (`SUMMARY_PROMPT_CHAR_BUDGET`, 200k chars, newest kept, oldest dropped). The SQL fetch limit is derived from the char budget (`SUMMARY_FETCH_LIMIT`, budget / minimum line size), so it bounds memory without being a third policy knob. The overlay header says when the caps cut messages.
@@ -1189,10 +1205,9 @@ Do not reintroduce the old per-session "load every room's history every 10s" beh
 
 ## 16. Tests
 
-Repo-wide rule from root context still applies:
-- Pure unit tests stay inline under `src/`.
-- DB/service tests go in adjacent `_test.rs` files beside the source they exercise (see tree above).
-- LLM agents must not run `cargo test`, `cargo nextest`, or `cargo clippy`; note expected commands for the human owner instead.
+Repo-wide rule from the root context still applies:
+- Every test, pure or DB-backed, lives beside the file it exercises as `<file>_test.rs`, wired with `#[cfg(test)] mod <file>_test;`. No inline test modules, no crate `tests/` folder.
+- Targeted runs go through `make test-llm ARGS="-p late-ssh -E 'test(chat)'"` (memory-capped `cargo nextest` with the check DB). The full sweep is `make check` and stays with the human owner.
 
 Existing DB-backed coverage:
 - `svc_test.rs`: send, reactions, summaries, room tails, ignored users, discover listing/joining, public room create/fill, delete events, ignore/unignore, message search (membership/game-room/ignored exclusions, room scoping, LIKE-metacharacter escaping, context-window ordering).
@@ -1200,7 +1215,7 @@ Existing DB-backed coverage:
 - `sheet_test.rs`: character sheet model/upsert plus `open_sheet_task`/`save_sheet_task` room-scoped authorization.
 - `showcase/svc_test.rs`: create event/snapshot, non-owner update failure, admin delete, unread cursor behavior.
 - `work/svc_test.rs`: profile create/update snapshot behavior, public slug preservation, non-owner update failure, admin delete, unread cursor behavior.
-- `state_test.rs`: placeholder; direct `ChatState` tests need accessors or indirect UI/input tests.
+- `state_test.rs`: a comment-only placeholder; `ChatState` is exercised through `state_internal_test.rs`, `input_test.rs`, and `ui_test.rs`.
 - `state_internal_test.rs`: `t` toggle over a cached translation (pending → ready → collapse → reopen, plus the same-script no-op banner), target-language switching dropping stale translations, auto mode firing without a pending placeholder, and author-shared display (shared row by someone else shows with no auto mode or `t`; private rows and the viewer's own shared row stay hidden). Note the harness gotcha these pinned: snapshots carry rooms with **empty** message vectors, so a test needing a concrete message must pull the room tail (`load_room_tail`), not wait for a snapshot.
 - `svc_test.rs::gild`: the split landing (two ledger rows, author counts), and one test per refusal (self, DM, private room, game room, bot author, non-member, cooldown, short balance), each asserting the ledger stayed empty; `raises_a_held_gild_at_full_price_and_never_lowers_it` lifts the cooldown to walk one buyer through a raise (full price, no new buyer, no feed line) and both `AlreadyGilded` and `HeldHigher`.
 - `late-core/src/models/chat_message_gild_test.rs`: tier roster (prices, split, markers), the one-slot-per-buyer placement (`a_buyers_gild_only_ever_goes_up`), the self-gild CHECK, owner-scoped counts, page summaries, and that only a committed gild notifies `chat_message_gilded`.
@@ -1208,11 +1223,16 @@ Existing DB-backed coverage:
 - `late-core/src/models/message_translation_test.rs`: script detection against each target, language key round-trip, cache upsert/read/cascade-delete, and `author_shared` surviving a later private rewrite.
 
 Existing unit coverage:
-- `state.rs`: command parsing, autocomplete ranking, visual order, reply preview/target helpers, DM sort keys, textarea theme behavior.
-- `input.rs`: room navigation aliases and reaction leader key parsing.
-- `ui.rs`: title fitting, composer title degradation, visible rows, room-list rows, hit testing, scroll helpers.
-- `ui_text.rs`: news parsing/rendering, message footer (gild marker leading the reaction chips), wrapping, composer rows.
-- Synthetic modules: selection clamp/move helpers, tag parsing, URL validation, payload sanitation, loading transitions.
+- `state_internal_test.rs`: command parsing, autocomplete ranking, visual order, reply preview/target helpers, DM sort keys, textarea theme behavior, translation display (see above).
+- `commands_test.rs`: the command registry (names, scope availability, room-scoped commands only in their owning room and never shadowing globals) and popup ranking (user commands for an empty query, admin commands excluded, exact matches hidden, descriptions fitting a narrow terminal).
+- `action_test.rs`: `/me` body encoding round-trip and the empty-action refusal.
+- `input_test.rs`: room navigation aliases, reaction leader key parsing, and the `g` key refusing outside public rooms.
+- `svc_internal_test.rs`: link detection, the account-age link cooldown tiers, report-only room errors, report kinds by slug, and poll result copy (winner, tie, no votes).
+- `slur_test.rs`: the drunk-text contract (§14 Drunk Text): sober text untouched, first and last letters fixed at every level, monotonic damage per level, hiccups only at the top, handles/links/code untouched, non-ASCII left alone, and both spending phrases (round and gift) surviving any level.
+- `special_badges_test.rs`: the badge allowlist per username, case-insensitivity, and emoji-width glyphs.
+- `ui_test.rs`: title fitting, composer title degradation, visible rows, room-list rows, hit testing, scroll helpers.
+- `ui_text_test.rs`: news parsing/rendering, message footer (gild marker leading the reaction chips), wrapping, composer rows.
+- Synthetic modules (`*/state_test.rs`, `*/ui_test.rs`): selection clamp/move helpers, tag parsing, URL validation, payload sanitation, loading transitions.
 
 Test gaps:
 - Dedicated notification-service DB-backed tests for mention creation/list/mark-read.

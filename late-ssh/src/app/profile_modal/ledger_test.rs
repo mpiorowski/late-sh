@@ -95,6 +95,10 @@ fn every_detail_has_copy() {
         "for 4 patrons"
     );
     assert_eq!(
+        detail(&LedgerDetail::DrinkFor { username: alice() }),
+        "for @alice"
+    );
+    assert_eq!(
         detail(&LedgerDetail::Song {
             title: "Never Gonna Give You Up".to_string()
         }),

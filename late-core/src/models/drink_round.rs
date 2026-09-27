@@ -1,6 +1,6 @@
-//! The round: one patron buying a drink for everyone else at the bar.
+//! Credits bought for the house or one named patron, claimed on their order.
 //!
-//! Three rules live here and nowhere else.
+//! Four rules live here and nowhere else.
 //!
 //! **What counts as asking.** [`ROUND_PHRASES`] is the closed list of things a
 //! patron can say to @bartender to buy the house a round. It is deliberately
@@ -12,8 +12,16 @@
 //! different lists, the feature breaks for exactly the people most likely to
 //! use it, so there is one list.
 //!
+//! **A personal gift is exact too.** [`gift_drink_target`] recognizes one
+//! named recipient and one credit; `chat/slur.rs` also reads it so a drunk
+//! patron's spending instruction arrives intact.
+//!
 //! **What it costs.** [`ROUND_PRICE_PER_PATRON`] for every credit the round
-//! actually granted, burned whole.
+//! actually granted, burned whole; a personal gift is one credit at
+//! [`GIFT_DRINK_PRICE`]. Both pour the same [`ROUND_DRINK_POINTS`]; the
+//! Nightcap's round pours 1:1 ([`Bar::drink_points`]). The one table of
+//! every purchase, price and pour is in `late-ssh/src/app/chat/CONTEXT.md`
+//! §9d.
 //!
 //! **What it hands over.** Not a drink: a [`DrinkCredit`], cashed only when the
 //! patron walks up and orders one themselves. A pour makes someone type drunk
@@ -36,8 +44,15 @@ use uuid::Uuid;
 /// a round is a lot of small kindnesses, not one grand one.
 pub const ROUND_PRICE_PER_PATRON: i64 = 100;
 
+/// What one named patron's drink costs the buyer. Twice the round's price a
+/// head: a round pays for everyone online and most never collect, so its
+/// premium pour is carried by the credits that expire. A gift is aimed at one
+/// person who will drink it, so the same [`ROUND_DRINK_POINTS`] pour costs
+/// more than a head of a round, and less than buying that buzz yourself.
+pub const GIFT_DRINK_PRICE: i64 = 200;
+
 /// The buzz a cashed tavern round records, regardless of what the bartender
-/// named or priced the pour at. Four times what the buyer paid for it, and
+/// named or priced the pour at. Four times what the buyer paid a head, and
 /// sized against `drinks::DRUNK_LEVEL_THRESHOLDS`: buzzed starts at 300, so a
 /// flat 300 landed exactly on the line and the first decay tick (334 an hour)
 /// dropped the drinker back to tipsy within seconds of the pour. 400 buys
@@ -135,6 +150,33 @@ pub const ROUND_PHRASES: &[&str] = &[
     "round for the bar",
     "round on me",
 ];
+
+/// Exact spending instruction for a single-person tab. The caller removes a
+/// composer's reply quote before checking it. Questions, code and extra words
+/// do not authorize a debit.
+pub fn gift_drink_target(text: &str) -> Option<&str> {
+    if text.contains('\n') || text.contains('\r') {
+        return None;
+    }
+    let mut words = text.split_whitespace();
+    if !words.next()?.eq_ignore_ascii_case("@bartender")
+        || !words.next()?.eq_ignore_ascii_case("buy")
+    {
+        return None;
+    }
+    let target = words.next()?.strip_prefix('@')?;
+    if target.is_empty()
+        || !target
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        || !words.next()?.eq_ignore_ascii_case("a")
+        || !words.next()?.eq_ignore_ascii_case("drink")
+        || words.next().is_some()
+    {
+        return None;
+    }
+    Some(target)
+}
 
 /// Byte ranges in `text` covered by a [`ROUND_PHRASES`] entry, in the order
 /// they appear.
@@ -401,6 +443,29 @@ impl DrinkRound {
 pub struct DrinkCredit;
 
 impl DrinkCredit {
+    /// Who a batch of one-person gift rounds were bought for, keyed by round
+    /// id, for the ledger's "for @user" detail. A gift round has exactly one
+    /// credit; handed a house round this keeps whichever patron came last,
+    /// so callers pass gift rounds only.
+    pub async fn recipients_for_rounds(
+        client: &impl GenericClient,
+        round_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Uuid>> {
+        if round_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = client
+            .query(
+                "SELECT round_id, user_id FROM drink_credits WHERE round_id = ANY($1)",
+                &[&round_ids],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("round_id"), row.get("user_id")))
+            .collect())
+    }
+
     /// The credit the patron would drink next: the one closest to going cold,
     /// out of however many they are holding. Read before pouring so the bar
     /// knows the pour is comped; who bought it comes from [`DrinkCredit::cash`],

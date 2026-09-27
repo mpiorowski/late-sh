@@ -47,6 +47,7 @@ pub(crate) fn label(mv: ChipMove) -> &'static str {
         ChipMove::ArtboardPrize => "gallery prize",
         ChipMove::SongQueued => "song queued",
         ChipMove::RoundPurchase => "bought a round",
+        ChipMove::DrinkGift => "bought a drink",
         ChipMove::DrinkPurchase => "drink",
         ChipMove::ShopPurchase => "shop",
         ChipMove::QuestReward => "quest reward",
@@ -104,6 +105,7 @@ pub(crate) fn detail(detail: &LedgerDetail) -> String {
             format!("#{rank} · {}", month.format("%b %Y"))
         }
         LedgerDetail::RoundFor { patrons } => format!("for {}", plural(*patrons, "patron")),
+        LedgerDetail::DrinkFor { username } => format!("for @{username}"),
         LedgerDetail::Song { title } => title.clone(),
         LedgerDetail::Drink(drink) => drink.clone(),
         LedgerDetail::Sku(sku) => sku.clone(),

@@ -3,6 +3,14 @@ use super::*;
 use late_core::models::drink_round::{ROUND_PHRASES, contains_round_request};
 use late_core::models::drinks::DRUNK_MAX_LEVEL;
 
+#[test]
+fn personal_gift_survives_drunk_typing() {
+    let order = "@bartender buy @alice a drink";
+    for seed in 1..=100 {
+        assert_eq!(slur(order, 4, seed), order);
+    }
+}
+
 /// A few dozen ordinary chat words, long enough that per-word odds average out.
 const CORPUS: &str = "the deploy went through but the migration is still pending on staging \
     and nobody wants to touch it before the release window closes tomorrow morning \

@@ -440,14 +440,13 @@ impl CrownService {
         user_id: Uuid,
         taker_username: &str,
     ) -> Result<CrownTakeOutcome, CrownError> {
-        let now = Utc::now();
         let mut client = self.db.get().await?;
         let tx = client.transaction().await.map_err(anyhow::Error::from)?;
-        let open = CrownReign::lock_open(&tx).await?;
+        let (open, taken_at) = CrownReign::lock_open(&tx).await?;
         // A reign from a previous month is stale rather than current: the
         // crown reads as vacant at the minimum price, and the row below is
         // closed on the way past.
-        let current = open.as_ref().filter(|reign| reign.is_current(now));
+        let current = open.as_ref().filter(|reign| reign.is_current(taken_at));
         // No hold: a reign is takeable the moment it exists, at the next
         // rung. Two takes racing for one crown both land, the second at 1.5x
         // the first, which is the auction working as designed; the price
@@ -460,9 +459,9 @@ impl CrownService {
         let price = next_price(current.map(|reign| reign.paid_chips));
         let deposed = current.map(|reign| reign.holder_user_id);
         if let Some(open) = &open {
-            CrownReign::close_in_tx(&tx, open.id).await?;
+            CrownReign::close_in_tx(&tx, open.id, taken_at).await?;
         }
-        let reign = CrownReign::open_in_tx(&tx, user_id, price).await?;
+        let reign = CrownReign::open_in_tx(&tx, user_id, price, taken_at).await?;
         let Some(chips) = UserChips::apply(
             &*tx,
             user_id,

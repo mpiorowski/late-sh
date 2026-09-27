@@ -183,6 +183,13 @@ chip_moves!(
     /// [`crate::models::drink_round::DrinkCredit`] rather than chips.
     /// `source_ref` is the round id.
     RoundPurchase,
+    /// Chips paid to leave one drink on a named patron's tab
+    /// (`@bartender buy @user a drink`): a one-credit `drink_rounds` row at
+    /// `GIFT_DRINK_PRICE`, floor-guarded and burned whole like a round. Its
+    /// own reason so the ledger can say who it was for and the round
+    /// dashboards never count it. `source_ref` is the round id; the
+    /// recipient is that round's single `drink_credits` row.
+    DrinkGift,
     DrinkPurchase,
     ShopPurchase,
     QuestReward,
@@ -264,6 +271,7 @@ impl ChipMove {
             Self::ArtboardPrize => "artboard_prize",
             Self::SongQueued => "song_queued",
             Self::RoundPurchase => "round_purchase",
+            Self::DrinkGift => "drink_gift",
             Self::DrinkPurchase => "drink_purchase",
             Self::ShopPurchase => "shop_purchase",
             Self::QuestReward => "quest_reward",
@@ -318,7 +326,7 @@ impl ChipMove {
             Self::NewsShared => "articles",
             Self::ArtboardPrize => "profile_awards",
             Self::SongQueued => "media_queue_items",
-            Self::RoundPurchase => "drink_rounds",
+            Self::RoundPurchase | Self::DrinkGift => "drink_rounds",
             Self::DrinkPurchase => "bartender",
             Self::ShopPurchase => "marketplace_item",
             Self::QuestReward => "quest_assignment",
@@ -407,6 +415,7 @@ impl ChipMove {
             | Self::CrownTaken
             | Self::PotTicket
             | Self::RoundPurchase
+            | Self::DrinkGift
             | Self::DrinkPurchase => ChipDirection::Debit { floor: CHIP_FLOOR },
             Self::FloorRestore => ChipDirection::Restore,
         }
@@ -443,6 +452,7 @@ impl ChipMove {
             | Self::CrownTaken
             | Self::PotTicket
             | Self::RoundPurchase
+            | Self::DrinkGift
             | Self::DrinkPurchase
             | Self::ShopPurchase
             | Self::SsnakeArenaLost => false,

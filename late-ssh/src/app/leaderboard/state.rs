@@ -1,3 +1,7 @@
+use std::cell::{Cell, RefCell};
+
+use ratatui::layout::{Position, Rect};
+
 use late_core::models::{
     chips::Difficulty,
     leaderboard::{
@@ -225,6 +229,11 @@ fn format_online_time(milliseconds: i64) -> String {
 pub(crate) struct LeaderboardPageState {
     boards: Vec<Board>,
     selected: usize,
+    scroll: Cell<u16>,
+    max_scroll: Cell<u16>,
+    rail_area: Cell<Rect>,
+    content_area: Cell<Rect>,
+    board_rows: RefCell<Vec<(Rect, usize)>>,
 }
 
 impl LeaderboardPageState {
@@ -232,6 +241,11 @@ impl LeaderboardPageState {
         Self {
             boards: Board::all(),
             selected: 0,
+            scroll: Cell::new(0),
+            max_scroll: Cell::new(0),
+            rail_area: Cell::new(Rect::default()),
+            content_area: Cell::new(Rect::default()),
+            board_rows: RefCell::new(Vec::new()),
         }
     }
 
@@ -248,10 +262,69 @@ impl LeaderboardPageState {
     }
 
     pub(crate) fn select_next(&mut self) {
-        self.selected = (self.selected + 1) % self.boards.len();
+        self.select((self.selected + 1) % self.boards.len());
     }
 
     pub(crate) fn select_previous(&mut self) {
-        self.selected = (self.selected + self.boards.len() - 1) % self.boards.len();
+        self.select((self.selected + self.boards.len() - 1) % self.boards.len());
+    }
+
+    pub(crate) fn select(&mut self, index: usize) {
+        if index < self.boards.len() && index != self.selected {
+            self.selected = index;
+            self.scroll.set(0);
+            // The new board's extent is unknown until it draws.
+            self.max_scroll.set(0);
+        }
+    }
+
+    pub(crate) fn wheel_select(&mut self, delta: i16) {
+        let index =
+            (self.selected as isize + delta as isize).clamp(0, self.boards.len() as isize - 1);
+        self.select(index as usize);
+    }
+
+    pub(crate) fn scroll(&self) -> u16 {
+        self.scroll.get()
+    }
+
+    pub(crate) fn scroll_by(&self, delta: i16) {
+        self.scroll.set(
+            (i32::from(self.scroll.get()) + i32::from(delta))
+                .clamp(0, i32::from(self.max_scroll.get())) as u16,
+        );
+    }
+
+    pub(crate) fn set_content_area(&self, area: Rect, max_scroll: usize) {
+        self.content_area.set(area);
+        self.max_scroll
+            .set(u16::try_from(max_scroll).unwrap_or(u16::MAX));
+        self.scroll_by(0);
+    }
+
+    pub(crate) fn set_rail_rows(&self, area: Rect, rows: Vec<(Rect, usize)>) {
+        self.rail_area.set(area);
+        *self.board_rows.borrow_mut() = rows;
+    }
+
+    pub(crate) fn clear_hit_regions(&self) {
+        self.rail_area.set(Rect::default());
+        self.content_area.set(Rect::default());
+        self.board_rows.borrow_mut().clear();
+    }
+
+    pub(crate) fn board_at(&self, point: Position) -> Option<usize> {
+        self.board_rows
+            .borrow()
+            .iter()
+            .find_map(|(rect, index)| rect.contains(point).then_some(*index))
+    }
+
+    pub(crate) fn over_rail(&self, point: Position) -> bool {
+        self.rail_area.get().contains(point)
+    }
+
+    pub(crate) fn over_content(&self, point: Position) -> bool {
+        self.content_area.get().contains(point)
     }
 }

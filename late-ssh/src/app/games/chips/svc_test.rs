@@ -1,12 +1,14 @@
 use crate::app::{
     activity::event::{ActivityEvent, ActivityGame},
-    games::chips::svc::{ChipService, RoundError, RoundRefusal},
+    games::chips::svc::{ChipService, GiftError, GiftRefusal, RoundError, RoundRefusal},
 };
 use chrono::NaiveDate;
 use late_core::{
     models::{
         chips::{ChipMove, Difficulty, INITIAL_CHIP_BALANCE, UserChips},
-        drink_round::{Bar, MAX_OPEN_CREDITS, ROUND_DRINK_POINTS, ROUND_PRICE_PER_PATRON},
+        drink_round::{
+            Bar, GIFT_DRINK_PRICE, MAX_OPEN_CREDITS, ROUND_DRINK_POINTS, ROUND_PRICE_PER_PATRON,
+        },
         drinks::{UserDrinks, drunk_level},
         reward::{
             DARKROOM_ESCAPE_REWARD_KEY, DailyPuzzleRewardGame, GREENDRAGON_DRAGON_REWARD_KEY,
@@ -671,7 +673,7 @@ async fn an_unaffordable_round_leaves_no_credits_and_no_charge() {
 }
 
 /// What the round is actually for: the drinker pays nothing and still gets the
-/// buzz, and it is worth three times what the buyer put in, which is what puts
+/// buzz, and it is worth four times what the buyer put in, which is what puts
 /// a sober room at buzzed.
 #[tokio::test]
 async fn a_cashed_round_drink_costs_the_drinker_nothing() {
@@ -775,4 +777,82 @@ async fn a_banked_round_is_drunk_one_at_a_time_with_the_rest_reported() {
         INITIAL_CHIP_BALANCE,
         "the drinker's chips never move"
     );
+}
+
+/// A gift is one credit at its own price, and the recipient still drinks the
+/// same tavern pour a round would have bought them.
+#[tokio::test]
+async fn a_personal_gift_only_pours_when_the_recipient_orders() {
+    let test_db = new_test_db().await;
+    let buyer = create_test_user(&test_db.db, "gift-drink-buyer").await;
+    let recipient = create_test_user(&test_db.db, "gift-drink-recipient").await;
+    let chips = ChipService::new(test_db.db.clone());
+    chips.ensure_chips(buyer.id).await.expect("buyer chips");
+
+    let gift = chips
+        .buy_drink_for(buyer.id, recipient.id)
+        .await
+        .expect("gift settles");
+    assert_eq!(gift.balance, 1_000 - GIFT_DRINK_PRICE);
+    assert_eq!(chips.open_round_credits(recipient.id).await.unwrap(), 1);
+    let client = test_db.db.get().await.unwrap();
+    assert!(UserDrinks::find(&client, buyer.id).await.unwrap().is_none());
+    let ledger = client
+        .query_one(
+            "SELECT delta, source_ref FROM chip_ledger WHERE user_id = $1 AND reason = $2",
+            &[&buyer.id, &ChipMove::DrinkGift.reason()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(ledger.get::<_, i64>("delta"), -GIFT_DRINK_PRICE);
+    assert_eq!(
+        ledger.get::<_, &str>("source_ref"),
+        gift.round_id.to_string()
+    );
+
+    let poured = chips
+        .cash_round_drink(recipient.id)
+        .await
+        .unwrap()
+        .expect("recipient redeems");
+    assert_eq!(poured.buyer_user_id, Some(buyer.id));
+    assert_eq!(poured.drunk_points, ROUND_DRINK_POINTS);
+    assert_eq!(poured.remaining, 0);
+    assert_eq!(balance(&test_db.db, recipient.id).await, 1_000);
+}
+
+#[tokio::test]
+async fn personal_gifts_refuse_without_charging_at_the_cap_or_chip_floor() {
+    let test_db = new_test_db().await;
+    let buyer = create_test_user(&test_db.db, "gift-cap-buyer").await;
+    let recipient = create_test_user(&test_db.db, "gift-cap-recipient").await;
+    let chips = ChipService::new(test_db.db.clone());
+    chips.ensure_chips(buyer.id).await.unwrap();
+
+    for _ in 0..MAX_OPEN_CREDITS {
+        chips.buy_drink_for(buyer.id, recipient.id).await.unwrap();
+    }
+    assert!(matches!(
+        chips.buy_drink_for(buyer.id, recipient.id).await,
+        Err(GiftError::Refused(GiftRefusal::AllHolding))
+    ));
+    assert_eq!(
+        chips.open_round_credits(recipient.id).await.unwrap(),
+        MAX_OPEN_CREDITS
+    );
+    assert_eq!(balance(&test_db.db, buyer.id).await, 400);
+
+    let other = create_test_user(&test_db.db, "gift-floor-recipient").await;
+    // A gift may land exactly on the 100-chip floor, never below it.
+    chips.buy_drink_for(buyer.id, other.id).await.unwrap();
+    chips.cash_round_drink(other.id).await.unwrap();
+    assert_eq!(balance(&test_db.db, buyer.id).await, 200);
+    chips.grant_chips(buyer.id, 100).await.unwrap();
+    chips.buy_drink_for(buyer.id, other.id).await.unwrap();
+    assert!(matches!(
+        chips.buy_drink_for(buyer.id, other.id).await,
+        Err(GiftError::Refused(GiftRefusal::InsufficientChips))
+    ));
+    assert_eq!(balance(&test_db.db, buyer.id).await, 100);
+    assert_eq!(chips.open_round_credits(other.id).await.unwrap(), 1);
 }

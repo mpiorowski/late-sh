@@ -11,15 +11,13 @@
 //! `ing` contraction is the one deliberate exception, and it reads as speech
 //! rather than as damage.
 //!
-//! One thing a patron says is never touched at any level: the phrases in
-//! [`round_phrase_spans`] that buy the house a round. Everything else here is
-//! cosmetic, but that sentence is a spending authorization the bartender
-//! matches literally, and the patrons most likely to buy a round are exactly
-//! the ones drunk enough to have it scrambled out from under them. The list
-//! lives in `late_core::models::drink_round` so the matcher and the guard can
-//! never read different phrases.
+//! Spending instructions are never touched at any level: the phrases in
+//! [`round_phrase_spans`] that buy the house a round, and the exact
+//! [`gift_drink_target`] form for one named patron. The bartender matches
+//! these literally, so slurring them would silently lose an order. The
+//! matchers live in `late_core::models::drink_round` and are shared here.
 
-use late_core::models::drink_round::round_phrase_spans;
+use late_core::models::drink_round::{gift_drink_target, round_phrase_spans};
 
 /// Shortest word that can take a typo. Below this there is no interior left
 /// once the first and last characters are off limits.
@@ -127,6 +125,10 @@ pub(crate) fn slur(body: &str, level: u8, seed: u64) -> String {
 /// inside a span. An unbalanced backtick therefore protects the rest of the
 /// line, which is the safe way to be wrong.
 fn slur_line(line: &str, intensity: &Intensity, rng: &mut SlurRng) -> String {
+    // A targeted gift is a whole-line spending instruction. Leave it intact.
+    if gift_drink_target(line).is_some() {
+        return line.to_string();
+    }
     let mut out = String::with_capacity(line.len());
     for (index, segment) in line.split('`').enumerate() {
         if index > 0 {
@@ -274,6 +276,9 @@ fn slurred(chars: &[char], rng: &mut SlurRng) -> Option<String> {
 /// the same way a scramble would), or in the quoted line before `from` are off
 /// limits. With nothing eligible the hiccup goes on the end.
 fn with_hiccup(text: &str, from: usize, rng: &mut SlurRng) -> String {
+    if gift_drink_target(text[from..].trim()).is_some() {
+        return text.to_string();
+    }
     let protected = round_phrase_spans(text);
     let mut gaps = Vec::new();
     let mut in_code = false;

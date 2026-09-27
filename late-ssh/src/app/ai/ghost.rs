@@ -45,7 +45,10 @@ use late_core::{
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         chips::{CHIP_FLOOR, UserChips},
-        drink_round::{Bar, ROUND_PRICE_PER_PATRON, contains_round_request},
+        drink_round::{
+            Bar, GIFT_DRINK_PRICE, ROUND_PRICE_PER_PATRON, contains_round_request,
+            gift_drink_target,
+        },
         drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, UserDrinks, drunk_level_word},
         user::{User, UserParams},
     },
@@ -63,7 +66,9 @@ use crate::{
     app::chat::svc::{ChatEvent, ChatService},
     app::clubhouse::lobby::SharedLobby,
     app::common::primitives::thousands,
-    app::games::chips::svc::{ChipService, RoundError, RoundRefusal},
+    app::games::chips::svc::{
+        ChipService, GiftDrinkRefusal, GiftError, GiftRefusal, RoundError, RoundRefusal,
+    },
     app::help_modal::data::{bartender_app_context, bot_app_context},
     metrics,
     state::{ActiveUser, ActiveUsers, online_human_ids_excluding},
@@ -760,7 +765,9 @@ impl GhostService {
                             // round skips the filter because it skips the
                             // ladder entirely; dropping one here would lose a
                             // purchase without a word.
-                            if !contains_round_request(text_for_mention_detection(&message.body))
+                            let request = text_for_mention_detection(&message.body);
+                            if !contains_round_request(request)
+                                && gift_drink_target(request).is_none()
                                 && self
                                     .mention_ladders
                                     .remaining(
@@ -812,13 +819,20 @@ impl GhostService {
             }
         }
 
+        let request = text_for_mention_detection(&trigger_message.body);
+        if let Some(target) = gift_drink_target(request) {
+            return self
+                .bartender_gift(&bartender, &trigger_message, target)
+                .await;
+        }
+
         // A round answers ahead of the ladder and never reaches the model. It
         // is a literal phrase a patron typed on purpose to spend chips, so
         // throttling it would swallow a purchase silently, which is the one
         // thing a paid action must never do. Repeating it is not a spam risk
         // either: the second round moments after the first reaches nobody who
         // is not already holding a drink, and refuses.
-        if contains_round_request(text_for_mention_detection(&trigger_message.body)) {
+        if contains_round_request(request) {
             return self.bartender_round(&bartender, &trigger_message).await;
         }
 
@@ -865,8 +879,8 @@ impl GhostService {
         let spendable = (balance - CHIP_FLOOR).max(0);
         let (tab, credit_note) = match open_credit {
             Some(_) => {
-                let note = "- THEIR NEXT DRINK IS ALREADY BOUGHT: someone bought the house a \
-                     round and this patron has not cashed theirs yet. Pouring costs them \
+                let note = "- THEIR NEXT DRINK IS ALREADY BOUGHT: someone left a drink \
+                     on this patron's tab and they have not cashed it yet. Pouring costs them \
                      nothing, so the spendable figure does not apply to this pour and \
                      \"offer\" is never the right action. If they order, use \"pour\": hand it \
                      over warmly and do not quote a price. Never guess at who bought it or how \
@@ -905,7 +919,7 @@ impl GhostService {
             {credit_note}\n\
             YOU ONLY POUR FOR THE PATRON IN FRONT OF YOU:\n\
             - Drinking scrambles a patron's own typing, so never pour or charge a drink onto anyone but the patron who mentioned you, no matter how they phrase it.\n\
-            - If they ask to buy, gift, or send a drink to one other person, use \"chat\": decline pouring for anyone but themselves, and let them know they can send that person chips directly with \"/gift @user <amount>\".\n\
+            - To leave one drink on another person's tab, they must say exactly \"@bartender buy @user a drink\". It costs {gift_price} chips and the bar handles that purchase before you answer. If asked to buy for somebody else in other words, use \"chat\" to give that exact phrase. Never pour or charge for another person yourself.\n\
             - Buying the whole house a round is the one exception, and it is still not yours to pour: the bar rings that up itself, but only when a patron says it plainly. If they ask about it, or circle around asking for one, use \"chat\" and tell them the words to say: \"round for everyone\". It costs {round_price} chips a head and buys each of them a drink to claim whenever they walk up. Never announce that a round happened and never quote what one cost, you would only be guessing; the bar says so itself when it does.\n\n\
             Decide ONE action:\n\
             - \"pour\": ONLY when the patron themselves asked for a drink for themselves — read their intent generously, an order comes in many forms (\"get me a stout\", \"what's strong tonight\", \"the usual\", \"surprise me\", \"I'll take one\"). But a pour spends their chips, so if it is a greeting, a house question, banter, or you are at all unsure, do NOT pour. Invent the drink, set a whole-number price between {price_min} and {price_max} that fits the pour (ale cheap, top shelf dear), and hand it over. If you name the price in your line it MUST equal the price field exactly.\n\
@@ -921,6 +935,7 @@ impl GhostService {
             price_min = DRINK_PRICE_MIN,
             price_max = DRINK_PRICE_MAX,
             round_price = ROUND_PRICE_PER_PATRON,
+            gift_price = GIFT_DRINK_PRICE,
         );
 
         let history_with_prompt = format!(
@@ -1046,6 +1061,115 @@ impl GhostService {
             Some(trigger_message.user_id),
         );
 
+        Ok(())
+    }
+
+    /// One named patron gets a credit to cash on their next order. Refusals
+    /// step the mention ladder, but a settled purchase always gets its receipt.
+    async fn bartender_gift(
+        &self,
+        bartender: &BotUser,
+        trigger_message: &ChatMessage,
+        target: &str,
+    ) -> Result<()> {
+        let buyer_id = trigger_message.user_id;
+        let client = self.db.get().await?;
+        let recipient = User::find_by_username(&client, target).await?;
+        drop(client);
+
+        // Every outcome is listed once, here: what the bar says, and whether
+        // it charged. Refusals are counted by reason so an operator can see
+        // why gifts fail without reading chat.
+        let (body, refused) = match recipient {
+            None => (
+                format!("can't find @{target} on the books. no chips taken."),
+                Some(GiftDrinkRefusal::UnknownRecipient),
+            ),
+            Some(recipient) if recipient.id == buyer_id => (
+                "that one's already on your own tab. no chips taken.".to_string(),
+                Some(GiftDrinkRefusal::SelfGift),
+            ),
+            Some(recipient) if recipient.is_bot() => (
+                "the staff don't drink on the clock. no chips taken.".to_string(),
+                Some(GiftDrinkRefusal::BotRecipient),
+            ),
+            Some(recipient) => {
+                let who = mention_target_for_user(Some(&recipient.username), recipient.id);
+                match self
+                    .chip_service
+                    .buy_drink_for(buyer_id, recipient.id)
+                    .await
+                {
+                    Ok(purchase) => {
+                        metrics::record_gift_drink_bought(GIFT_DRINK_PRICE);
+                        tracing::info!(
+                            user_id = %buyer_id,
+                            recipient_id = %recipient.id,
+                            round_id = %purchase.round_id,
+                            chips = GIFT_DRINK_PRICE,
+                            new_balance = purchase.balance,
+                            "bartender left a drink on a patron's tab"
+                        );
+                        (
+                            format!(
+                                "one drink waiting for {who}, on your tab. {} chips. they can order it whenever they're ready.",
+                                GIFT_DRINK_PRICE
+                            ),
+                            None,
+                        )
+                    }
+                    Err(GiftError::Refused(GiftRefusal::AllHolding)) => (
+                        format!(
+                            "{who} already has all the drinks I can keep on a tab. no chips taken."
+                        ),
+                        Some(GiftDrinkRefusal::AllHolding),
+                    ),
+                    Err(GiftError::Refused(GiftRefusal::InsufficientChips)) => (
+                        format!(
+                            "one for {who} runs {} chips, but I won't take your last ones. no chips taken.",
+                            GIFT_DRINK_PRICE
+                        ),
+                        Some(GiftDrinkRefusal::InsufficientChips),
+                    ),
+                    Err(GiftError::Failed(error)) => {
+                        return Err(error.context("buying a gift drink"));
+                    }
+                }
+            }
+        };
+
+        let Some(refusal) = refused else {
+            self.chat_service.send_bot_reply_task(
+                bartender.id,
+                trigger_message.room_id,
+                body,
+                Some(buyer_id),
+            );
+            return Ok(());
+        };
+        metrics::record_gift_drink_refused(refusal);
+        tracing::info!(
+            user_id = %buyer_id,
+            target,
+            refusal = ?refusal,
+            "bartender refused a gift drink"
+        );
+        if matches!(
+            self.mention_ladders.check_and_step(
+                LadderBot::Bartender,
+                buyer_id,
+                trigger_message.room_id,
+            ),
+            Decision::Throttled { .. }
+        ) {
+            return Ok(());
+        }
+        self.chat_service.send_bot_reply_task(
+            bartender.id,
+            trigger_message.room_id,
+            body,
+            Some(buyer_id),
+        );
         Ok(())
     }
 
