@@ -543,7 +543,8 @@ till; every other counter is a catalog with its till shut.
 GAME.md, "The fight pass": the forest is the screen, three tiles of
 static closing the street. Enter there (`Enter::Fight`, the popover says
 "step into the static") opens the scene over the street and asks the
-service for `Command::Start`.
+service for `Command::Start`. `f` does the same from anywhere on the street
+(`city/input.rs`), and the sheet strip top-right shows `[f] fight`.
 
 - **The scene is a panel, not a place.** `fight/ui.rs::draw_scene`,
   centered over the street in the city's palette, at a **fixed size**

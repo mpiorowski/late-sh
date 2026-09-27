@@ -405,7 +405,10 @@ pub(crate) fn draw_strip(frame: &mut Frame, area: Rect, sheet: &Sheet) {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
     let number = glow(Neon::Amber);
+    // The fight key leads: a narrow terminal clips the strip from the right.
     let mut spans = vec![
+        Span::styled("[f] ", glow(Neon::Amber)),
+        Span::styled("fight  ", dim_text),
         Span::styled("lv ", dim_text),
         Span::styled(sheet.level.to_string(), number),
         Span::styled("  signal ", dim_text),

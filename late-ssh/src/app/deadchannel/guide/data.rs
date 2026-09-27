@@ -40,7 +40,7 @@ pub const SECTIONS: &[Section] = &[
     Section {
         title: "the static",
         lines: &[
-            "the screen at the end of the row is where the glyphs come from. enter there spends a ration and puts one in front of you.",
+            "the screen at the end of the row is where the glyphs come from. enter there spends a ration and puts one in front of you. f does the same from anywhere on the street.",
             "a attacks. r runs: two times in three it works, and when it does not the glyph gets a free swing.",
             "esc steps out. the fight stays on the row and is waiting when you step back in, for no ration.",
             "enter closes a finished scene.",
