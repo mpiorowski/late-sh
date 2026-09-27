@@ -17,7 +17,7 @@ pub const SIGNAL_PER_LEVEL: i32 = 10;
 /// Bits a fresh runner holds (`START_GOLD`).
 pub const START_BITS: i64 = 50;
 /// Exp kept when the signal drops (`EXP_KEEP_ON_DEATH`).
-pub const EXP_KEEP_ON_DEATH: f64 = 0.90;
+pub const EXP_KEEP_ON_DEATH: f64 = 0.70;
 /// Levels 1 to 15.
 pub const MAX_LEVEL: i32 = 15;
 /// What the armorer pays for the piece you hand back, as a percentage of
@@ -322,11 +322,29 @@ pub fn title(marks: i32) -> Option<&'static str> {
     }
 }
 
+/// What a glyph pays over LoGD's table, bits and exp alike. LoGD paced a
+/// season; the climb here is three to four weeks to the first mark
+/// (GAME.md, "The daily ration loop"), and `sim_test.rs` holds that
+/// window. Paying more per kill instead of asking less per level keeps
+/// the ladder, the armorer's prices, and the glyphs' numbers LoGD's, and
+/// keeps the bits in step with the exp, so the gear is affordable when
+/// the level needs it. This is the one knob for the pace.
+pub const PAY_SCALE: i64 = 3;
+
 /// The glyph that answers a runner of `level`: one kind and one tier per
-/// level, clamped to the table.
+/// level, clamped to the table, its pay scaled by [`PAY_SCALE`].
 pub fn foe_for_level(level: i32) -> (usize, &'static FoeKind, FoeTier) {
     let index = (level.clamp(1, MAX_LEVEL) - 1) as usize;
-    (index, &FOES[index], FOE_TIERS[index])
+    let tier = FOE_TIERS[index];
+    (
+        index,
+        &FOES[index],
+        FoeTier {
+            bits: tier.bits * PAY_SCALE,
+            exp: tier.exp * PAY_SCALE,
+            ..tier
+        },
+    )
 }
 
 /// The bits the street takes when the signal drops: everything on hand.

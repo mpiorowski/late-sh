@@ -66,9 +66,10 @@ fn a_fight_to_the_end_with_fixed_dice_lands_on_one_state() {
             exp,
             leveled,
         } => {
-            assert_eq!((foe, bits, exp, leveled), ("flicker", 36, 14, None));
-            assert_eq!(sheet.bits, START_BITS + 36);
-            assert_eq!(sheet.exp, 14);
+            // LoGD's flicker pays 36 bits and 14 exp; `PAY_SCALE` triples it.
+            assert_eq!((foe, bits, exp, leveled), ("flicker", 108, 42, None));
+            assert_eq!(sheet.bits, START_BITS + 108);
+            assert_eq!(sheet.exp, 42);
             assert!(sheet.signal > 0);
             assert_eq!(
                 (sheet.kills, sheet.kills_today, sheet.runs_today),

@@ -59,7 +59,10 @@ live in.
 - **Reuse the LoGD balance data 1:1.** Combat curves, price ladders, gem
   chances, level pacing: twenty-years-tested numbers, and they're
   fiction-free (rename the items, keep the math). Deviations from the curves
-  need a stated reason. This is the real salvage from the dragon work, plus
+  need a stated reason. Two stand: a glyph pays three times LoGD's bits
+  and exp (`PAY_SCALE`) and a drop keeps 70% of the exp
+  (`EXP_KEEP_ON_DEATH`), both for the three-to-four-week climb ("The
+  daily ration loop"). This is the real salvage from the dragon work, plus
   the pure-resolver + per-user save schema *shapes* as a parts bin.
 - **No full-screen game destination.** Interaction surfaces are: a
   lightweight modal (Lobby-modal shape) for spending rations / setting fight
@@ -153,6 +156,12 @@ glyphs and the Old Signal).
   point. Thin combat is a feature at this session length.
 - Ration status lives in the same mental slot as quests/streaks: sidebar
   line, streak bonuses mirroring the `QuestService` daily-streak shape.
+- **The climb is three to four weeks.** A runner who
+  spends every ration and never drops puts the Old Signal down in about
+  three weeks; one who drops a few times on the way, in about four. The
+  first mark is a month's habit, not a season's. `fight/sim.rs` plays it
+  and `sim_test.rs` holds the window; every balance change is judged
+  against it.
 
 ### The three surfaces (decided 2026-09-01)
 
@@ -608,6 +617,8 @@ to allocate, and nothing on it another player cannot see.
 | On screen | What it is | Number | LoGD source |
 |---|---|---|---|
 | level | 1 to 15 | exp ladder `EXP_TO_ADVANCE`, scaled by marks | `lib/experience.php` |
+| a glyph's pay | bits and exp per kill | LoGD's creature table times three (`PAY_SCALE`): LoGD paced a season, this ladder is a month; paying more per kill keeps prices and thresholds LoGD's and the bits in step with the exp | creature seeds |
+| a drop | exp kept | 70% (`EXP_KEEP_ON_DEATH`), not LoGD's 90%: a few drops on the way up cost a week, the sim's four-week runner | `EXP_KEEP_ON_DEATH` |
 | signal | health | 10 per level, full at the day roll | `HP_PER_LEVEL` |
 | attack / defense | fight stats | level + weapon tier / level + armor tier | `battle-skills.php` |
 | rations | fights left today | 10 per UTC day | `TURNS_PER_DAY` |
@@ -650,8 +661,9 @@ replica-safe by construction, and a runner nobody touches costs nothing.
 
 **Signal dropped** means off the wire until the day roll. You still read
 the wire and still see the lounge theater; you cannot hit, and the wire
-says so when you try. You lose the bits on hand and a tenth of your exp
-(`EXP_KEEP_ON_DEATH`, 0.90); the stash is untouched, gear is untouched.
+says so when you try. You lose the bits on hand and three tenths of your
+exp (`EXP_KEEP_ON_DEATH`, 0.70; LoGD's tenth made a drop too cheap to
+matter over a month); the stash is untouched, gear is untouched.
 Punishment as spectatorship, in the exact surface you live in, and it is
 visible: **your mark renders as static (`░`) in chat until the roll**,
 so the room sees you are down before you tell them. No paid resurrection
@@ -1018,8 +1030,8 @@ never does.
 - **The gate.** At level 15 with the exp to leave it (`exp_to_seek`, the
   last rung of the curve), the next step into the screen meets the Old
   Signal instead of a glyph. A dropped signal against it costs what any
-  drop costs, and a tenth of the exp usually puts the gate a day or two
-  of glyphs away again.
+  drop costs, and the exp lost usually puts the gate a day or two of
+  glyphs away again.
 - **The numbers.** 240 signal, 36 attack, 22 defense. LoGD's dragon
   (300 / 45 / 25) is a one-in-fifty fight for a runner with no bands and
   no bonus hit points; these land a first kill about two tries in five
@@ -1460,9 +1472,9 @@ Sequencing, each phase testing something before paying for the next:
   reasons to care about spawns you'd see anyway. There is no walking, so
   "go here, click thing" quests cannot exist.
 - ~~**What dying means.**~~ Decided 2026-09-02: signal dropped, off the
-  wire until the day roll, bits on hand and a tenth of exp lost, the mark
-  renders as static in chat meanwhile; see "Death" in the phase 2 design
-  pass.
+  wire until the day roll, bits on hand and a share of the exp lost, the
+  mark renders as static in chat meanwhile; see "Death" in the phase 2
+  design pass.
 - **Who may start a fight.** Leading idea, undecided (extends the PvP
   consent question): unprovoked player-vs-player aggression does not
   exist; only the static starts trouble, and a bounty on your head is
