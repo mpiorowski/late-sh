@@ -3036,6 +3036,16 @@ impl ChatState {
         current_slot_from_state(self.selected_slot_state())
     }
 
+    /// Drop the rail scroll once the selection has left the slot it was
+    /// scrolled on. Without this, coming back to that slot later revives
+    /// the old scroll. Runs after every input event and chat tick, the only
+    /// places the selection changes.
+    pub(crate) fn forget_stale_rail_scroll(&mut self) {
+        if self.rail_scroll.0 != self.current_slot() {
+            self.rail_scroll = (None, 0);
+        }
+    }
+
     /// Rows the Home rail is scrolled off the selection-centred position.
     /// Zero once the selection has moved since the rail was scrolled.
     pub(crate) fn rail_scroll_nudge(&self) -> isize {
@@ -3372,6 +3382,8 @@ impl ChatState {
             .position(|item| *item == current_item)
             .unwrap_or(0) as isize;
         let next = wrapped_index(current, delta, order.len());
+        // Real navigation re-centres the rail, same as a space jump.
+        self.rail_scroll = (None, 0);
         self.select_room_slot(order[next])
     }
 
@@ -3391,6 +3403,9 @@ impl ChatState {
         };
 
         self.room_jump_active = false;
+        // Real navigation re-centres the rail, even onto the room already
+        // selected: the quick way back from a scrolled rail.
+        self.rail_scroll = (None, 0);
         self.select_room_slot(slot)
     }
 
@@ -5162,6 +5177,7 @@ impl ChatState {
 
     pub fn tick(&mut self) -> ChatTick {
         self.sync_refresh_room_id();
+        self.forget_stale_rail_scroll();
         // Peek every event source before draining: anything queued may change
         // render-visible chat state (messages, unread badges, tab lists), so
         // it must count as changed. Over-reporting here only costs a frame;

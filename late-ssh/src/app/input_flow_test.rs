@@ -4207,6 +4207,17 @@ async fn rail_scroll_keys_and_wheel_leave_the_selected_room_alone() {
     app.handle_input(b"\x0c");
     assert_eq!(app.chat.rail_scroll_nudge(), 3);
 
+    // A space jump centres the rail, even onto the room already selected.
+    app.handle_input(b" a");
+    assert_eq!(app.chat.selected_room_id, selected, "`space a` left lounge");
+    assert_eq!(
+        app.chat.rail_scroll_nudge(),
+        0,
+        "a space jump kept the rail scrolled"
+    );
+    app.handle_input(b"\x0c");
+    assert_eq!(app.chat.rail_scroll_nudge(), 3);
+
     // `l` moves to the next rail entry (Mentions, after lounge).
     app.handle_input(b"l");
     assert_eq!(
@@ -4214,6 +4225,19 @@ async fn rail_scroll_keys_and_wheel_leave_the_selected_room_alone() {
         0,
         "a selection change snaps the rail back to it"
     );
+    // Returning to the room the rail was scrolled on does not revive the
+    // old scroll: leaving it dropped the nudge for good.
+    app.handle_input(b"h");
+    assert_eq!(
+        app.chat.selected_room_id, selected,
+        "`h` went back to lounge"
+    );
+    assert_eq!(
+        app.chat.rail_scroll_nudge(),
+        0,
+        "coming back to the scrolled room revived its stale scroll"
+    );
+    app.handle_input(b"l");
 
     // A click on a row of a scrolled rail selects that room and leaves the
     // rail where it was: the same row under the pointer is still that room,

@@ -138,13 +138,15 @@ async fn the_months_last_crown_holder_gets_the_badge_once() {
     let last = create_test_user(&test_db.db, "crown-award-last").await;
 
     let tx = client.transaction().await.expect("tx");
-    let opened = CrownReign::open_in_tx(&tx, first.id, 5_000)
+    let (_, taken_at) = CrownReign::lock_open(&tx).await.expect("lock");
+    let opened = CrownReign::open_in_tx(&tx, first.id, 5_000, taken_at)
         .await
         .expect("open");
-    CrownReign::close_in_tx(&tx, opened.id)
+    let (_, taken_at) = CrownReign::lock_open(&tx).await.expect("lock replacement");
+    CrownReign::close_in_tx(&tx, opened.id, taken_at)
         .await
         .expect("close");
-    CrownReign::open_in_tx(&tx, last.id, 7_500)
+    CrownReign::open_in_tx(&tx, last.id, 7_500, taken_at)
         .await
         .expect("open");
     tx.commit().await.expect("commit");
