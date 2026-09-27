@@ -66,7 +66,9 @@ use crate::{
     app::chat::svc::{ChatEvent, ChatService},
     app::clubhouse::lobby::SharedLobby,
     app::common::primitives::thousands,
-    app::games::chips::svc::{ChipService, GiftDrinkRefusal, RoundError, RoundRefusal},
+    app::games::chips::svc::{
+        ChipService, GiftDrinkRefusal, GiftError, GiftRefusal, RoundError, RoundRefusal,
+    },
     app::help_modal::data::{bartender_app_context, bot_app_context},
     metrics,
     state::{ActiveUser, ActiveUsers, online_human_ids_excluding},
@@ -1112,25 +1114,20 @@ impl GhostService {
                             None,
                         )
                     }
-                    Err(RoundError::Refused(RoundRefusal::AllHolding)) => (
+                    Err(GiftError::Refused(GiftRefusal::AllHolding)) => (
                         format!(
                             "{who} already has all the drinks I can keep on a tab. no chips taken."
                         ),
                         Some(GiftDrinkRefusal::AllHolding),
                     ),
-                    Err(RoundError::Refused(RoundRefusal::InsufficientChips { .. })) => (
+                    Err(GiftError::Refused(GiftRefusal::InsufficientChips)) => (
                         format!(
                             "one for {who} runs {} chips, but I won't take your last ones. no chips taken.",
                             GIFT_DRINK_PRICE
                         ),
                         Some(GiftDrinkRefusal::InsufficientChips),
                     ),
-                    Err(RoundError::Refused(RoundRefusal::EmptyHouse)) => {
-                        return Err(anyhow::anyhow!(
-                            "single-person gift refused as an empty house"
-                        ));
-                    }
-                    Err(RoundError::Failed(error)) => {
+                    Err(GiftError::Failed(error)) => {
                         return Err(error.context("buying a gift drink"));
                     }
                 }

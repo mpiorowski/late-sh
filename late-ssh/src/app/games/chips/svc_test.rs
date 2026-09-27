@@ -1,6 +1,6 @@
 use crate::app::{
     activity::event::{ActivityEvent, ActivityGame},
-    games::chips::svc::{ChipService, RoundError, RoundRefusal},
+    games::chips::svc::{ChipService, GiftError, GiftRefusal, RoundError, RoundRefusal},
 };
 use chrono::NaiveDate;
 use late_core::{
@@ -831,7 +831,7 @@ async fn personal_gifts_refuse_without_charging_at_the_cap_or_chip_floor() {
     }
     assert!(matches!(
         chips.buy_drink_for(buyer.id, recipient.id).await,
-        Err(RoundError::Refused(RoundRefusal::AllHolding))
+        Err(GiftError::Refused(GiftRefusal::AllHolding))
     ));
     assert_eq!(chips.open_round_credits(recipient.id).await.unwrap(), MAX_OPEN_CREDITS);
     assert_eq!(balance(&test_db.db, buyer.id).await, 400);
@@ -845,7 +845,7 @@ async fn personal_gifts_refuse_without_charging_at_the_cap_or_chip_floor() {
     chips.buy_drink_for(buyer.id, other.id).await.unwrap();
     assert!(matches!(
         chips.buy_drink_for(buyer.id, other.id).await,
-        Err(RoundError::Refused(RoundRefusal::InsufficientChips { total: 200, .. }))
+        Err(GiftError::Refused(GiftRefusal::InsufficientChips))
     ));
     assert_eq!(balance(&test_db.db, buyer.id).await, 100);
     assert_eq!(chips.open_round_credits(other.id).await.unwrap(), 1);

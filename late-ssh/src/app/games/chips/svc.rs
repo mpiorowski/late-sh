@@ -73,10 +73,33 @@ pub struct GiftDrinkPurchase {
     pub balance: i64,
 }
 
+/// Why the bar would not sell a gift drink. A one-credit grant has exactly
+/// two ways to say no, so this is not [`RoundRefusal`]: an empty house is
+/// impossible with a named recipient and does not get an arm. Uncharged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GiftRefusal {
+    /// The recipient already holds `MAX_OPEN_CREDITS` uncashed drinks.
+    AllHolding,
+    /// `GIFT_DRINK_PRICE` would take the buyer below the chip floor.
+    InsufficientChips,
+}
+
+/// A gift that did not pay: a rule said no, or the database did.
+#[derive(Debug)]
+pub enum GiftError {
+    Refused(GiftRefusal),
+    Failed(anyhow::Error),
+}
+
+impl From<anyhow::Error> for GiftError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
 /// Why a personal gift drink did not happen, for the refusal metric. The
 /// first three are the bartender's own checks, made before this service is
-/// asked; the last two are the [`RoundRefusal`] arms a one-credit grant can
-/// return. Every arm is uncharged.
+/// asked; the last two mirror [`GiftRefusal`]. Every arm is uncharged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GiftDrinkRefusal {
     UnknownRecipient,
@@ -294,16 +317,15 @@ impl ChipService {
     /// [`GIFT_DRINK_PRICE`] rather than a head of a round and written as
     /// [`ChipMove::DrinkGift`] so the ledger can name the recipient. Only the
     /// recipient may drink: buying a gift does not pour the buyer one.
+    ///
+    /// The recipient is a human other than the buyer: the bartender resolves
+    /// the name and refuses self-gifts and bots before asking, so this takes
+    /// the pair it is given and does not re-check it.
     pub async fn buy_drink_for(
         &self,
         buyer_id: Uuid,
         recipient_id: Uuid,
-    ) -> Result<GiftDrinkPurchase, RoundError> {
-        if buyer_id == recipient_id {
-            return Err(RoundError::Failed(anyhow::anyhow!(
-                "cannot buy yourself a gift drink"
-            )));
-        }
+    ) -> Result<GiftDrinkPurchase, GiftError> {
         let mut client = self.db.get().await?;
         let tx = client
             .transaction()
@@ -320,7 +342,7 @@ impl ChipService {
         )
         .await?;
         if grant.patron_count() == 0 {
-            return Err(RoundError::Refused(RoundRefusal::AllHolding));
+            return Err(GiftError::Refused(GiftRefusal::AllHolding));
         }
         let Some(chips) = UserChips::apply(
             &*tx,
@@ -331,10 +353,7 @@ impl ChipService {
         )
         .await?
         else {
-            return Err(RoundError::Refused(RoundRefusal::InsufficientChips {
-                patrons: 1,
-                total: GIFT_DRINK_PRICE,
-            }));
+            return Err(GiftError::Refused(GiftRefusal::InsufficientChips));
         };
         tx.commit().await.context("committing the gift drink")?;
         Ok(GiftDrinkPurchase {
