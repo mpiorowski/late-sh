@@ -49,12 +49,14 @@ fn the_guide_shows_every_section_between_the_top_and_the_end() {
     assert!(seen.contains("Esc close"));
     state.open();
 
-    // A short frame shows the top first and the end after a long scroll.
+    // A short frame shows the top first, the short version before anything
+    // else, and the end after a long scroll.
     let short = render(&state, 100, 14);
-    assert!(short.contains("arrows or hjkl walk"));
+    assert!(short.contains("the short version"));
+    assert!(short.contains("fight glyphs at the screen"));
     assert!(!short.contains("opens it again."));
     state.scroll_by(100);
     let scrolled = render(&state, 100, 14);
     assert!(scrolled.contains("opens it again."));
-    assert!(!scrolled.contains("arrows or hjkl walk"));
+    assert!(!scrolled.contains("fight glyphs at the screen"));
 }

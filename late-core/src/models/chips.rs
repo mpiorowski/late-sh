@@ -16,7 +16,7 @@ pub const CHIP_USER_CHANGED_CHANNEL: &str = "chip_user_changed";
 pub const MONTH_TS_FILTER: &str =
     "date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'";
 /// How many ledger rows a profile shows.
-pub const PROFILE_LEDGER_ROWS: i64 = 40;
+pub const PROFILE_LEDGER_ROWS: i64 = 100;
 
 /// The three daily-puzzle difficulty tiers. One enum owns both reward
 /// scales: the chip bonus a daily win pays (mirrored in seeded

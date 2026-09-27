@@ -1047,8 +1047,9 @@ never does.
   never outgrows the room), scales every exp threshold (LoGD's formula,
   a quarter of level times a hundred per mark), and climbs the title
   ladder (placeholder copy: heard, tuned, carrier, broadcast, old
-  voice). The first kill grants the rankless `SIG` profile badge, and no
-  chips: the wallets never convert.
+  voice). The first kill grants the rankless `SIG` profile badge. Every
+  kill pays 50,000 chips: the one milestone payout (see "Economy rules"),
+  and the only place bits ever turn into chips.
 - **The stash is undecided.** It is not built; whether a mark empties it
   is decided when it ships.
 
@@ -1164,7 +1165,12 @@ ritual is the city's, the wire is the log); this pass fixed the shape:
   the announcer's voice, three keys. The ASCII drama is the two faces
   corrupting to static as signal drops (the wound renderer from "The
   look", pointed at both). Five exchanges, twenty seconds, ten rations in
-  five minutes.
+  five minutes. The Old Signal is the exception, and the "diegetic
+  spectacle" line above made concrete: its scene takes the whole screen
+  in red, the empty rows fill with static, the frame's border loses
+  cells to static and the box shudders a column from frame to frame
+  while it broadcasts, and everything goes still once it is down. One
+  render function, no art team, nothing to explain.
 - **Interactive like LORD, state on the row.** Attack, run (bands and
   their moves come with the band choice). Each key is one transaction on
   the locked runner row with the fight as a JSON column, so a dropped

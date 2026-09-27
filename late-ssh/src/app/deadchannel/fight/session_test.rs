@@ -79,6 +79,7 @@ async fn a_second_step_in_shows_the_fight_the_row_remembers() {
             latest: 1,
             over: false,
             waiting: false,
+            old_signal: false,
         }
     );
 }

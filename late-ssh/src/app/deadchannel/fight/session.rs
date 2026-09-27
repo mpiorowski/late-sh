@@ -6,7 +6,7 @@
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use super::state::{Applied, Command, Sheet};
+use super::state::{Applied, Command, Quarry, Sheet};
 use super::svc::{FightOutcome, FightService};
 
 /// Lines of the exchange the scene shows.
@@ -23,6 +23,11 @@ pub struct Scene {
     pub over: bool,
     /// A command is out and its answer has not landed.
     pub waiting: bool,
+    /// The fight on the row is the Old Signal's: the scene is drawn its
+    /// way (`ui.rs`, the whole screen, the frame torn). Set when the
+    /// fight starts or resumes, kept until the scene closes, so the
+    /// aftermath is drawn on the same screen the fight was.
+    pub old_signal: bool,
 }
 
 pub(crate) struct FightSession {
@@ -76,6 +81,7 @@ impl FightSession {
             latest: 0,
             over: false,
             waiting: true,
+            old_signal: false,
         });
         self.request(Command::Start);
     }
@@ -168,16 +174,16 @@ impl FightSession {
         };
         scene.waiting = false;
         scene.latest = lines.len();
+        let fight = self.sheet.as_ref().and_then(|sheet| sheet.fight.as_ref());
         match applied {
-            Applied::Started => scene.lines = lines,
+            Applied::Started => {
+                scene.lines = lines;
+                scene.old_signal = fight.is_some_and(|fight| fight.quarry == Quarry::OldSignal);
+            }
             Applied::Resumed => {
-                scene.lines = self
-                    .sheet
-                    .as_ref()
-                    .and_then(|sheet| sheet.fight.as_ref())
-                    .map(|fight| fight.log.clone())
-                    .unwrap_or_default();
+                scene.lines = fight.map(|fight| fight.log.clone()).unwrap_or_default();
                 scene.latest = scene.lines.len();
+                scene.old_signal = fight.is_some_and(|fight| fight.quarry == Quarry::OldSignal);
             }
             Applied::Refused(_) => {
                 scene.lines = lines;

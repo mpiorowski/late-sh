@@ -123,14 +123,14 @@ number of replicas spend one AI call per text.
 | `fight/state.rs` | The pure machine: `Sheet` (the row's stats and tally, typed, with `peak_level`, `marks`, `mark_bonus`, `signal_hears`; `from_row` rejects an unreadable fight loudly), `Fight` (the `Quarry`, a glyph or the Old Signal, its numbers, and the last six lines, the JSON on the row), the Old Signal's gate in `start` and the reset in `slay` (GAME.md, "Marks: the reset"), `settle(today)` (the lazy day roll), `apply(Command, rng)` over the door's `resolve_round` and `resolve_extra_foe_strike`, plus the armorer's till (`Command::Outfit`, `Slot`, `gear_name`, `outfit_price`, `MAX_TIER`) and patch (`Command::Patch`, `patch_price`), returning an `Outcome` (`Applied` plus the lines), and `news(&Applied)` (the closed `News` list the wire prints for it; §3c). No I/O, no clock. |
 | `fight/svc.rs` | `FightService`, the one writer: lock the standing row, settle, apply, store, commit; the metric, the log line per outcome, and the wire's news (`post_news`: what `Sheet::news` decided, worded; a dropped signal, a level gained with the face, the Old Signal put down with the face, the first kill, a near miss, the last ration's card) through `ChatService::post_wire_line_task`; the `SIG` milestone badge on every Old Signal kill (`grant_unique_milestone_award`, once per account, no chips). `act_task` and `reload_task` answer on a session's `mpsc`. |
 | `fight/sim.rs` | The balance harness: a `Player` (a run line and a patch line, `CAREFUL` and `RECKLESS` named) played through the real `Sheet` from a fresh row with seeded dice, `climb` (the day of every level, the gate, the mark, the drops, the boss tries), `median`, `summary`. `sim_test.rs` pins GAME.md's target (three weeks to the first mark careful, four reckless) and prints the whole ladder when it misses. Pure. |
-| `fight/session.rs` | `FightSession`, the session's side: the sheet mirror, the `Scene` over the street (lines, `over`, `waiting`), the `till` line (an answer that lands with no scene open), one action in flight, `open` / `close` / `clear_till` / `request` / `reload` / `drop_sheet` / `tick`. Decides nothing. |
+| `fight/session.rs` | `FightSession`, the session's side: the sheet mirror, the `Scene` over the street (lines, `over`, `waiting`, `old_signal` set from the row's quarry when a fight starts or resumes and kept until the scene closes), the `till` line (an answer that lands with no scene open), one action in flight, `open` / `close` / `clear_till` / `request` / `reload` / `drop_sheet` / `tick`. Decides nothing. |
 | `fight/input.rs` | Keys while the scene is open: `a` attack, `r` run, Enter closes a finished scene; digits, Tab, `q` stay global (`?` is the guide's, taken in `city/input.rs` first), everything else is swallowed. |
-| `fight/ui.rs` | `draw_scene` (two portraits facing, each losing cells to static in proportion to its missing signal, `corrupt`; the bars; the exchange; the keys) and `draw_strip` (level, signal, rations, bits, the weapon and the armor by name, top-right on the street); `weapon_name` / `armor_name` (`bare hands`, `street clothes` at tier 0) for every readout that names the kit. Pure. |
+| `fight/ui.rs` | `draw_scene` (two portraits facing, each losing cells to static in proportion to its missing signal, `corrupt`; the bars; the exchange; the keys; dressed a glyph's way or the Old Signal's, `Dress`: the whole area in red, `noise_line` on the empty rows, `tear` on the border, the box leaning a column with the tick while it broadcasts) and `draw_strip` (level, signal, rations, bits, the weapon and the armor by name, top-right on the street); `weapon_name` / `armor_name` (`bare hands`, `street clothes` at tier 0) for every readout that names the kit. Pure. |
 | `tailor/state.rs` | `Draft`, the mirror's editor over one `Look` at the runner's `peak_level`: four `Row`s (hood, eyes, coat, mark), `up` / `down`, `next` / `prev` around the row's unlocked rack (wrapping), `tint` around the unlocked tints (nothing on the mark row: a colored mark is earned), `shuffle` (the join's dice at the peak); `new` snaps a piece or tint the peak has not unlocked onto the rack's first entry, so the walks never meet one they cannot place. Pure. |
 | `tailor/svc.rs` | `TailorService`, the look's writer after the join: `wear_task` runs `DeadchannelRunner::store_look` (one statement, standing runner only, last write wins) and answers `TailorOutcome::{Worn, NoRunner, Failed}` on the session's `mpsc`; the metric, the log line per outcome. The change trigger carries the look to every replica's directory. |
 | `tailor/session.rs` | `TailorSession`: the `draft` while the panel is open, `worn` (what the row wears as far as this session knows), the tailor's `word`, one write in flight (`saving`); `open(runner)` / `close` / `changed` / `wear` / `tick`. Decides nothing. |
 | `tailor/input.rs` | Keys while the tailor's panel is open: up/down (`k`/`j`) row, left/right (`h`/`l`) pick, `t` tint, `r` shuffle, `s` wear, Enter leaves; digits, Tab, `q` stay global (`?` is the guide's, taken in `city/input.rs` first), everything else is swallowed. |
-| `guide/data.rs` | The undercity guide's copy: `SECTIONS`, a heading and its lines each, covering every key and rule of the street, the sheet, the static, the armorer, patch, the tailor, the rest of the row, and the wire. Kept out of `app/help_modal` on purpose (that one is fed to the bot). **Always current**: see §3b. Pure. |
+| `guide/data.rs` | The undercity guide's copy: `SECTIONS`, a heading and its lines each, the short version first (the whole game in a screen: the loop, the keys, the armorer, patch, the Old Signal, the mark and its 50,000 chips), then every key and rule of the street, the sheet, the static, the armorer, patch, the tailor, the rest of the row, and the wire. Kept out of `app/help_modal` on purpose (that one is fed to the bot). **Always current**: see §3b. Pure. |
 | `guide/state.rs` | `State`: open, scroll, and the page the renderer last measured (`record_page`, a `Cell`), so `scroll_by` holds at the end. Pure. |
 | `guide/svc.rs` | `GuideService`: `claim_first_descent_task` runs `DeadchannelRunner::mark_guide_seen` (one conditional update) and answers `GuideOutcome::{FirstDescent, SeenBefore}` on the session's `mpsc`; a failed claim answers nothing and logs. |
 | `guide/session.rs` | `GuideSession`: the `state`, `descend` (the claim), `tick` (opens the guide on `FirstDescent`). Decides nothing. |
@@ -381,8 +381,10 @@ till; every other counter is a catalog with its till shut.
   `App.city`, `App.guide`, one dispatch line each in `input.rs`,
   `render.rs`, `tick.rs`).
 - **The guide (`guide/`).** The street explains itself: a box over the
-  city with every key and every rule (the street, the sheet, the static,
-  the armorer, patch, the tailor, the rest of the row, the wire). `?`
+  city that opens on the short version (the whole game in a screen, for
+  the runner who reads nothing else) and goes on to every key and every
+  rule (the street, the sheet, the static, the armorer, patch, the
+  tailor, the rest of the row, the wire). `?`
   opens it anywhere on the page, the fight scene and the tailor's panel
   included (the site guide's key, taken over down here; the site guide
   is a page away). Esc, Enter, `q`, `?` close it; `j`/`k`, the arrows,
@@ -564,6 +566,20 @@ p patch · ? guide`, `render.rs::app_frame_title`).
   over; rations and bits in the bottom title. Both faces lose cells to
   static (`░▒▓`) in proportion to missing signal, seeded per fight and
   per day so a wound holds still. No look wears a plain `@`.
+- **The Old Signal gets the screen.** GAME.md's "diegetic spectacle": a
+  boss whose presence tears the frame. When the row's quarry is the Old
+  Signal (`Scene::old_signal`, set on `Started` and `Resumed`), the same
+  scene is drawn the whole city area wide and tall in red, titled `the
+  bottom of the city`, the empty exchange rows sparse static instead of
+  blank, one border cell in six gone to static and a different six every
+  tick, the box one column narrower than the area and leaning left or
+  right with the tick: the shudder. It runs on `anim_tick` (`SceneView::
+  tick`); a glyph's scene ignores the tick and never moves. Once the
+  fight is over, whichever way, the tear stops, the lean stops, the
+  static goes still and grey, the red burns down: "every screen in the
+  city goes quiet". The runner's own side keeps its colors throughout,
+  and running is still a key. The border, the noise, and the shudder are
+  this session's screen only; the wire carries the news as before.
 - **The row is the fight.** `Start` spends a ration and puts the glyph of
   your level on the row (`fight` JSONB: kind, its signal, attack, defense,
   bits, exp, the last six lines); a second `Start` with a fight waiting
