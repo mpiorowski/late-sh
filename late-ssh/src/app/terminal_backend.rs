@@ -9,7 +9,7 @@
 //! and the server has no way to know which. Every cell written after the
 //! disagreement lands in the wrong column, and the diff never rewrites what
 //! it believes are unchanged padding cells, so the stray tail stays on the
-//! client until Ctrl+L.
+//! client until Ctrl+R.
 //!
 //! This backend never trusts contiguity across a cell that is not a single
 //! ASCII byte: the cell after it gets an absolute cursor move, and a cell the

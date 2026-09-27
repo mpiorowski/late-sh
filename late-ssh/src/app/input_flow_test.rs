@@ -22,6 +22,80 @@ use tokio::time::Duration;
 use uuid::Uuid;
 
 #[tokio::test]
+async fn leaderboard_mouse_and_control_keys_target_rail_and_content_separately() {
+    use crate::app::{common::primitives::Screen, leaderboard::state::Board};
+    use late_core::models::{
+        leaderboard::{LeaderboardData, RankedEntry},
+        user::InteractionMode,
+    };
+    use ratatui::layout::Position;
+    use std::sync::Arc;
+
+    let db = new_test_db().await;
+    let user = create_test_user(&db.db, "leaderboard-mouse-flow").await;
+    let mut app = make_app(db.db.clone(), user.id, "leaderboard-mouse-flow");
+    app.resize(100, 24).unwrap();
+    app.set_screen(Screen::Leaderboard);
+    app.leaderboard = Arc::new(LeaderboardData {
+        monthly_chip_earners: (1..=100)
+            .map(|rank| RankedEntry {
+                username: format!("player{rank}"),
+                user_id: Uuid::from_u128(rank as u128),
+                rank,
+                value: rank,
+                note: None,
+            })
+            .collect(),
+        ..LeaderboardData::default()
+    });
+    app.render().unwrap();
+    app.handle_input(b"\n\n\x0b");
+    assert_eq!(app.leaderboard_page.scroll(), 1);
+    assert_eq!(app.leaderboard_page.selected_board(), Board::TopChips);
+    app.handle_input(b"\r");
+    assert_eq!(app.leaderboard_page.scroll(), 1, "Enter is not Ctrl+J");
+
+    let content = (0..24)
+        .flat_map(|y| (0..100).map(move |x| Position::new(x, y)))
+        .find(|point| app.leaderboard_page.over_content(*point))
+        .unwrap();
+    let wheel = format!("\x1b[<65;{};{}M", content.x + 1, content.y + 1);
+    app.handle_input(wheel.as_bytes());
+    assert_eq!(app.leaderboard_page.scroll(), 4);
+    app.interaction_mode = InteractionMode::Keyboard;
+    app.handle_input(wheel.as_bytes());
+    assert_eq!(app.leaderboard_page.scroll(), 4);
+    app.interaction_mode = InteractionMode::Mouse;
+    app.show_help = true;
+    app.handle_input(b"\n\x0b");
+    app.handle_input(wheel.as_bytes());
+    assert_eq!(app.leaderboard_page.scroll(), 4, "overlay owns input");
+    app.show_help = false;
+
+    let board = (0..24)
+        .flat_map(|y| (0..100).map(move |x| Position::new(x, y)))
+        .find(|point| app.leaderboard_page.board_at(*point) == Some(1))
+        .unwrap();
+    let click = format!("\x1b[<0;{};{}M", board.x + 1, board.y + 1);
+    app.handle_input(click.as_bytes());
+    assert_eq!(app.leaderboard_page.selected_board(), Board::ArcadeWins);
+    assert_eq!(app.leaderboard_page.scroll(), 0);
+    app.render().unwrap();
+    let rail_wheel = format!("\x1b[<65;{};{}M", board.x + 1, board.y + 1);
+    app.handle_input(rail_wheel.as_bytes());
+    assert_eq!(app.leaderboard_page.selected_board(), Board::TimeOnline);
+    app.handle_input(b"k\x1b[A");
+    assert_eq!(app.leaderboard_page.selected_board(), Board::TopChips);
+    app.resize(40, 10).unwrap();
+    app.handle_input(click.as_bytes());
+    assert_eq!(
+        app.leaderboard_page.selected_board(),
+        Board::TopChips,
+        "resize discards old hit targets"
+    );
+}
+
+#[tokio::test]
 async fn quit_routes_open_confirm_without_persisting_exit_command() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "quit-confirm-it").await;
@@ -750,6 +824,8 @@ async fn zero_twice_goes_under_the_clubhouse_for_runners_only() {
         RunnerEntry {
             look: Look::random(1, &mut rng),
             level: 1,
+            peak_level: 1,
+            marks: 0,
         },
     )]));
     app.handle_input(b"0");
@@ -789,6 +865,8 @@ async fn leaving_the_deadchannel_walks_a_standing_runner_back_up() {
         RunnerEntry {
             look: Look::random(1, &mut rng),
             level: 1,
+            peak_level: 1,
+            marks: 0,
         },
     )])));
     app.runner_looks = looks_rx.borrow().clone();
@@ -839,6 +917,8 @@ async fn runner_at_the_railing(
         RunnerEntry {
             look: Look::random(1, &mut rng),
             level: 1,
+            peak_level: 1,
+            marks: 0,
         },
     )]));
 
@@ -988,7 +1068,7 @@ async fn slash_lobby_zen_and_guide_mirror_their_keys() {
     app.handle_input(b"\x06");
     assert_eq!(app.screen, Screen::Dashboard);
 
-    // /redraw re-emits every cell, the way Ctrl+L does: the frame after it
+    // /redraw re-emits every cell, the way Ctrl+R does: the frame after it
     // carries more than a settled diff.
     let _ = app.render().expect("render");
     let settled = strip_ansi(&String::from_utf8_lossy(&app.render().expect("render")));
@@ -2649,14 +2729,14 @@ async fn history_modal_opens_from_command_and_closes_on_esc() {
     );
 }
 
-/// Ctrl+L is the escape hatch for a terminal left damaged by something outside
+/// Ctrl+R is the escape hatch for a terminal left damaged by something outside
 /// late.sh. It has to re-emit every cell: the failure mode worth pinning is a
 /// repaint that clears the screen and then sends an empty diff, leaving the
 /// user staring at a blank terminal that is worse than the damage.
 #[tokio::test]
-async fn ctrl_l_repaints_the_whole_screen_rather_than_blanking_it() {
+async fn ctrl_r_repaints_the_whole_screen_rather_than_blanking_it() {
     let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "ctrl-l-repaint").await;
+    let user = create_test_user(&test_db.db, "ctrl-r-repaint").await;
     let client = test_db.db.get().await.expect("db client");
     let lounge = ChatRoom::ensure_lounge(&client)
         .await
@@ -2664,7 +2744,7 @@ async fn ctrl_l_repaints_the_whole_screen_rather_than_blanking_it() {
     ChatRoomMember::join(&client, lounge.id, user.id)
         .await
         .expect("join lounge room");
-    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-l-repaint-flow-it");
+    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-r-repaint-flow-it");
 
     wait_for_render_contains(&mut app, "lounge").await;
 
@@ -2672,19 +2752,44 @@ async fn ctrl_l_repaints_the_whole_screen_rather_than_blanking_it() {
     let _ = app.render().expect("render");
     let settled = strip_ansi(&String::from_utf8_lossy(&app.render().expect("render")));
 
-    app.handle_input(b"\x0c");
+    app.handle_input(b"\x12");
     let repainted = strip_ansi(&String::from_utf8_lossy(&app.render().expect("render")));
 
     assert!(
         repainted.contains("lounge"),
-        "expected Ctrl+L to re-emit the whole screen; repainted={repainted:?}"
+        "expected Ctrl+R to re-emit the whole screen; repainted={repainted:?}"
     );
     assert!(
         repainted.len() > settled.len(),
-        "expected the Ctrl+L frame to carry more than the settled diff; \
+        "expected the Ctrl+R frame to carry more than the settled diff; \
          settled={} bytes, repainted={} bytes",
         settled.len(),
         repainted.len()
+    );
+}
+
+/// An open chat composer keeps Ctrl+R for itself: it reaches the textarea's
+/// keymap as redo instead of repainting the screen, and the composer stays
+/// open. `/redraw` is the way to repaint from inside one.
+#[tokio::test]
+async fn ctrl_r_in_an_open_composer_redoes_instead_of_repainting() {
+    let (_test_db, mut app) = chat_compose_app("ctrl-r-composer").await;
+
+    app.handle_input(b"abc");
+    assert_eq!(app.chat.composer().lines(), ["abc"]);
+    app.chat.composer_undo();
+    assert_ne!(
+        app.chat.composer().lines(),
+        ["abc"],
+        "undo took something back"
+    );
+
+    app.handle_input(b"\x12");
+    assert!(app.chat.composing, "the composer stays open");
+    assert_eq!(
+        app.chat.composer().lines(),
+        ["abc"],
+        "Ctrl+R redid the undone edit instead of repainting"
     );
 }
 
@@ -4010,7 +4115,7 @@ async fn chat_badges_picker_hides_a_whole_game_ladder() {
     wait_for_render_contains(&mut app, "Chat badges").await;
     wait_for_render_contains(&mut app, "all shown").await;
     // Tweaks rows: background, brightness, right rail, room rail, composer,
-    // flag fallback, terminal images, then Chat badges.
+    // plain glyphs, terminal images, then Chat badges.
     app.handle_input(b"jjjjjjj\r");
     // The heading fits the dialog whole, not cut at its border.
     wait_for_render_contains(&mut app, "Earn it, hide it. Games show their top badge.").await;
@@ -4045,6 +4150,117 @@ async fn chat_badges_picker_hides_a_whole_game_ladder() {
     wait_for_render_contains(&mut app, "1 hidden").await;
 }
 
+/// Ctrl+H / Ctrl+L and the wheel over the rail scroll it without changing
+/// room; `l` still changes room, and the rail snaps back to the selection.
+#[tokio::test]
+async fn rail_scroll_keys_and_wheel_leave_the_selected_room_alone() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "rail-scroll").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    // Enough channels that the rail overflows a 32-row terminal.
+    for i in 0..40 {
+        let room = ChatRoom::get_or_create_public_room(&client, &format!("rail-scroll-{i:02}"))
+            .await
+            .expect("create room");
+        ChatRoomMember::join(&client, room.id, viewer.id)
+            .await
+            .expect("join room");
+    }
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "rail-scroll-flow-it");
+    app.resize(160, 32).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "\u{258C}lounge").await;
+    wait_for_render_contains(&mut app, "rail-scroll-").await;
+    let selected = app.chat.selected_room_id;
+    assert_eq!(app.chat.rail_scroll_nudge(), 0);
+
+    app.handle_input(b"\x0c");
+    assert_eq!(app.chat.selected_room_id, selected, "Ctrl+L changed room");
+    assert_eq!(app.chat.rail_scroll_nudge(), 3);
+    app.handle_input(b"\x0c");
+    assert_eq!(app.chat.rail_scroll_nudge(), 6);
+    app.handle_input(b"\x08");
+    assert_eq!(app.chat.selected_room_id, selected, "Ctrl+H changed room");
+    assert_eq!(app.chat.rail_scroll_nudge(), 3);
+
+    // Wheel down, then up, over the rail (column 5, row 10).
+    app.handle_input(b"\x1b[<65;5;10M");
+    assert_eq!(
+        app.chat.selected_room_id, selected,
+        "the wheel changed room"
+    );
+    assert_eq!(app.chat.rail_scroll_nudge(), 6);
+    app.handle_input(b"\x1b[<64;5;10M");
+    assert_eq!(app.chat.rail_scroll_nudge(), 3);
+
+    // Scrolling up past the top stops there: the next press down moves.
+    for _ in 0..5 {
+        app.handle_input(b"\x08");
+    }
+    assert_eq!(app.chat.rail_scroll_nudge(), 0);
+    app.handle_input(b"\x0c");
+    assert_eq!(app.chat.rail_scroll_nudge(), 3);
+
+    // A space jump centres the rail, even onto the room already selected.
+    app.handle_input(b" a");
+    assert_eq!(app.chat.selected_room_id, selected, "`space a` left lounge");
+    assert_eq!(
+        app.chat.rail_scroll_nudge(),
+        0,
+        "a space jump kept the rail scrolled"
+    );
+    app.handle_input(b"\x0c");
+    assert_eq!(app.chat.rail_scroll_nudge(), 3);
+
+    // `l` moves to the next rail entry (Mentions, after lounge).
+    app.handle_input(b"l");
+    assert_eq!(
+        app.chat.rail_scroll_nudge(),
+        0,
+        "a selection change snaps the rail back to it"
+    );
+    // Returning to the room the rail was scrolled on does not revive the
+    // old scroll: leaving it dropped the nudge for good.
+    app.handle_input(b"h");
+    assert_eq!(
+        app.chat.selected_room_id, selected,
+        "`h` went back to lounge"
+    );
+    assert_eq!(
+        app.chat.rail_scroll_nudge(),
+        0,
+        "coming back to the scrolled room revived its stale scroll"
+    );
+    app.handle_input(b"l");
+
+    // A click on a row of a scrolled rail selects that room and leaves the
+    // rail where it was: the same row under the pointer is still that room,
+    // so a second click there changes nothing. Had the rail re-centred on
+    // the new selection, the row would have moved out from under the click.
+    app.handle_input(b"\x0c");
+    app.handle_input(b"\x0c");
+    assert_eq!(app.chat.rail_scroll_nudge(), 6);
+    let before_click = app.chat.selected_room_id;
+    app.handle_input(b"\x1b[<0;5;22M");
+    let clicked = app.chat.selected_room_id;
+    assert_ne!(
+        clicked, before_click,
+        "the click selected the room under it"
+    );
+    assert!(clicked.is_some(), "the click landed on a room row");
+    app.handle_input(b"\x1b[<0;5;22M");
+    assert_eq!(
+        app.chat.selected_room_id, clicked,
+        "the rail stayed put, so the same row is still the same room"
+    );
+}
+
 #[tokio::test]
 async fn the_first_descent_opens_the_guide_and_the_question_mark_reopens_it() {
     use crate::app::deadchannel::runner::state::Look;
@@ -4071,7 +4287,15 @@ async fn the_first_descent_opens_the_guide_and_the_question_mark_reopens_it() {
         .await
         .expect("a runner");
     let mut app = make_app(test_db.db.clone(), user.id, "undercity-guide-flow");
-    app.runner_looks = Arc::new(HashMap::from([(user.id, RunnerEntry { look, level: 1 })]));
+    app.runner_looks = Arc::new(HashMap::from([(
+        user.id,
+        RunnerEntry {
+            look,
+            level: 1,
+            peak_level: 1,
+            marks: 0,
+        },
+    )]));
 
     app.handle_input(b"0");
     wait_for_render_contains(&mut app, " Clubhouse ").await;

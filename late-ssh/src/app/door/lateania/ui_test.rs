@@ -2603,3 +2603,214 @@ fn a_short_terminal_gives_the_field_its_rows_and_puts_the_events_in_the_rail() {
         assert!(log < h - log, "room summary keeps the larger share at {h}");
     }
 }
+
+/// Draw the narrow (phone) room layout into a `width` x `height` buffer and
+/// return its rows as text plus the click rects it hands back.
+fn draw_phone(
+    view: &super::PlayerView,
+    usernames: &crate::usernames::UsernameLookup<'_>,
+    width: u16,
+    height: u16,
+) -> (
+    Vec<String>,
+    Vec<(ratatui::layout::Rect, super::super::state::ClickAction)>,
+) {
+    use ratatui::{Terminal, backend::TestBackend};
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| hits = super::draw_narrow_field(frame, frame.area(), view, usernames))
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    let rows = (0..height)
+        .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect();
+    (rows, hits)
+}
+
+fn phone_foe(id: u32, name: &str, targeted: bool) -> super::super::svc::MobView {
+    super::super::svc::MobView {
+        id,
+        name: name.to_string(),
+        hp: 30,
+        max_hp: 40,
+        level: 7,
+        rank: "common".to_string(),
+        boss: false,
+        targeted,
+        school: "fire",
+        weak: Some("frost"),
+        resist: None,
+        dot_stacks: 0,
+        stunned: false,
+    }
+}
+
+fn phone_abilities() -> Vec<super::super::svc::AbilityView> {
+    [
+        "Cleave",
+        "Rend",
+        "Shield Bash",
+        "War Cry",
+        "Whirlwind",
+        "Last Stand",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, name)| super::super::svc::AbilityView {
+        slot: i as u8 + 1,
+        name: name.to_string(),
+        cost: 10,
+        ready: true,
+        effect: "hits hard".to_string(),
+    })
+    .collect()
+}
+
+#[test]
+fn a_phone_gets_the_field_with_the_foes_and_room_keys_above_the_events() {
+    use super::super::state::ClickAction;
+    use crate::usernames::UsernameLookup;
+    use std::collections::HashMap;
+
+    let mut view = log_view(&["You arrive at the square.", "A crow calls overhead."]);
+    view.room = Some(1);
+    view.room_name = "Town Square".to_string();
+    view.hp = 40;
+    view.max_hp = 50;
+    view.mobs = vec![phone_foe(11, "Goblin", false), phone_foe(22, "Ogre", false)];
+    view.shop = Some(super::super::svc::ShopView {
+        npc_name: "Bruna Ironhand".to_string(),
+        shop_name: "The Ember Forge".to_string(),
+        greeting: String::new(),
+        entries: Vec::new(),
+    });
+    let names: HashMap<uuid::Uuid, String> = HashMap::new();
+    let usernames = UsernameLookup::new(&names, None);
+    let (width, height) = (44u16, 30u16);
+    let (rows, hits) = draw_phone(&view, &usernames, width, height);
+    let joined = rows.join("\n");
+
+    assert!(
+        rows[0].contains("40/50hp") && rows[0].trim_end().ends_with("= more"),
+        "vitals and the rail chip on the top row:\n{joined}"
+    );
+    let log_h = super::narrow_log_height(height) as usize;
+    let feed = rows[rows.len() - log_h..].join("\n");
+    assert!(
+        feed.contains("A crow calls overhead."),
+        "the newest event sits in the feed under the field:\n{joined}"
+    );
+    let above_feed = &rows[rows.len() - log_h - 2..rows.len() - log_h];
+    assert!(
+        above_feed[0].contains("Goblin") && above_feed[0].contains("Ogre"),
+        "the room's foes sit right above the feed:\n{joined}"
+    );
+    assert!(
+        above_feed[1].contains("you can") && above_feed[1].contains("b shop here"),
+        "what this room offers sits right above the feed:\n{joined}"
+    );
+    assert!(
+        !joined.contains("unexplored"),
+        "the field draws no colour key:\n{joined}"
+    );
+
+    // Every tap target lands on the text it names.
+    let text_at = |r: &ratatui::layout::Rect| -> String {
+        rows[r.y as usize]
+            .chars()
+            .skip(r.x as usize)
+            .take(r.width as usize)
+            .collect()
+    };
+    let rail = hits
+        .iter()
+        .find(|(_, a)| *a == ClickAction::ToggleRail)
+        .expect("the rail chip is tappable");
+    assert_eq!(text_at(&rail.0), "= more");
+    for (id, name) in [(11, "Goblin"), (22, "Ogre")] {
+        let foe = hits
+            .iter()
+            .find(|(_, a)| *a == ClickAction::AttackMob(id))
+            .expect("each foe is tappable");
+        assert!(
+            text_at(&foe.0).contains(name),
+            "the {name} tap target covers its name: {:?}",
+            text_at(&foe.0)
+        );
+    }
+}
+
+#[test]
+fn a_phone_mid_fight_trades_the_field_for_the_full_battle_frame() {
+    use super::super::state::ClickAction;
+    use super::super::svc::OccupantView;
+    use crate::usernames::UsernameLookup;
+    use std::collections::HashMap;
+
+    let mut view = log_view(&["The Ogre swings at you."]);
+    view.room = Some(1);
+    view.class_name = "Warrior".to_string();
+    view.hp = 40;
+    view.max_hp = 50;
+    view.abilities = phone_abilities();
+    view.mobs = vec![phone_foe(11, "Goblin", false), phone_foe(22, "Ogre", true)];
+    let rival = uuid::Uuid::from_u128(7);
+    let names: HashMap<uuid::Uuid, String> = HashMap::from([(rival, "mat".to_string())]);
+    let usernames = UsernameLookup::new(&names, None);
+
+    // A phone held sideways is about 60x17 once the title and action bar are
+    // off: the frame and the abilities sit side by side and all of it shows.
+    let (rows, hits) = draw_phone(&view, &usernames, 60, 17);
+    let joined = rows.join("\n");
+    for want in ["HP", "Battle", "Ogre", "strikes with fire", "weak to frost"] {
+        assert!(joined.contains(want), "{want:?} on screen:\n{joined}");
+    }
+    for a in &view.abilities {
+        assert!(
+            joined.contains(&a.name),
+            "ability {:?} on screen:\n{joined}",
+            a.name
+        );
+    }
+    assert!(
+        joined.contains("The Ogre swings at you."),
+        "the fight's events still show:\n{joined}"
+    );
+    let casts = hits
+        .iter()
+        .filter(|(_, a)| matches!(a, ClickAction::Ability(_)))
+        .count();
+    assert_eq!(
+        casts,
+        view.abilities.len(),
+        "every ability row casts on tap"
+    );
+    assert!(
+        hits.iter().any(|(_, a)| *a == ClickAction::AttackMob(11)),
+        "the other foe stays tappable to switch the lock"
+    );
+
+    // A duel reads the same way: the rival is named with their HP, where the
+    // status bar used to know only mobs.
+    view.mobs.clear();
+    view.occupants = vec![OccupantView {
+        user_id: rival,
+        hp: 12,
+        max_hp: 60,
+        in_combat: true,
+        alive: true,
+        bio: String::new(),
+        class_key: "rogue".to_string(),
+        level: 9,
+        appearance_idx: Vec::new(),
+        attackable: true,
+        targeted: true,
+    }];
+    let (rows, _) = draw_phone(&view, &usernames, 44, 30);
+    let joined = rows.join("\n");
+    assert!(
+        joined.contains("Lv9 mat") && joined.contains("12/60"),
+        "the duel rival and their HP show:\n{joined}"
+    );
+}

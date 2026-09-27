@@ -30,7 +30,10 @@ use ratatui::{
 use crate::app::{
     bonsai::render::{PREVIEW_WIDTH, apply_sway, center_lines, render_preview_lines},
     common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
-    deadchannel::{fight::ui as fight_ui, runner::state::PORTRAIT_HEIGHT, runner::ui as runner_ui},
+    deadchannel::{
+        fight::data as fight_data, fight::ui as fight_ui, runner::state::PORTRAIT_HEIGHT,
+        runner::ui as runner_ui,
+    },
     hub::aquarium::{state::AquariumState, ui as aquarium_ui},
     pet::ui::portrait_lines as pet_portrait_lines,
     profile::svc::ProfileRunner,
@@ -441,7 +444,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, scrollable: bool) {
 }
 
 /// The runner section's three rows: the portrait on the left, and beside
-/// it the level, signal and bits, the kit, and the glyphs put down. The
+/// it the level, signal and bits, the kit, and the glyphs put down with
+/// the Old Signal marks and their title once there are any. The
 /// sheet arrives settled for today (the service applies the day roll to
 /// the view), so the signal is what the runner would find on the row.
 /// Rations are not here: the street's strip and the frame HUD carry them
@@ -475,7 +479,14 @@ fn runner_lines(runner: &ProfileRunner) -> Vec<Line<'static>> {
             Span::styled(" · ", dim),
             Span::styled(fight_ui::armor_name(sheet).to_string(), text),
         ],
-        vec![Span::styled(glyphs, dim)],
+        match fight_data::title(sheet.marks) {
+            Some(title) => vec![
+                Span::styled(glyphs, dim),
+                Span::styled(" · ", dim),
+                Span::styled(format!("╬{} {title}", sheet.marks), text),
+            ],
+            None => vec![Span::styled(glyphs, dim)],
+        },
     ];
     runner_ui::portrait_spans(&runner.look)
         .into_iter()

@@ -23,6 +23,9 @@ pub const BROGUE_MASTERY_AWARD_CATEGORY: &str = "brogue_mastery";
 pub const GREENDRAGON_DRAGON_AWARD_CATEGORY: &str = "greendragon_dragon";
 pub const DARKROOM_ESCAPE_AWARD_CATEGORY: &str = "darkroom_escape";
 pub const DARKROOM_BEACON_AWARD_CATEGORY: &str = "darkroom_beacon";
+/// Deadchannel's Old Signal put down, the first time. The one door badge
+/// that pays no chips: the game's wallets never convert (GAME.md).
+pub const DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY: &str = "deadchannel_old_signal";
 /// The month's last crown holder. Monthly like the ranked boards (it is
 /// earned again every month and shows only for the month after), but
 /// rankless like a milestone: the crown has one holder, so a `#1` on the
@@ -63,7 +66,7 @@ pub fn gallery_prize_chips(rank: i32) -> Option<i64> {
 /// ladder, to `BADGE_LADDERS` and `ladder_label`), and the two badge
 /// legends (`app/profile_modal/badges.rs`, `app/help_modal/data.rs`) are
 /// tested against this list so a new badge cannot ship undocumented.
-pub static MILESTONE_AWARD_CATEGORIES: [&str; 13] = [
+pub static MILESTONE_AWARD_CATEGORIES: [&str; 14] = [
     LATEANIA_ARCHDEMON_AWARD_CATEGORY,
     LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
     LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY,
@@ -77,6 +80,7 @@ pub static MILESTONE_AWARD_CATEGORIES: [&str; 13] = [
     GREENDRAGON_DRAGON_AWARD_CATEGORY,
     DARKROOM_ESCAPE_AWARD_CATEGORY,
     DARKROOM_BEACON_AWARD_CATEGORY,
+    DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY,
 ];
 
 /// Whether an award is one of those: granted outright, kept forever, shown
@@ -648,6 +652,7 @@ pub fn award_category_code(category: &str) -> &'static str {
         GREENDRAGON_DRAGON_AWARD_CATEGORY => "GDS",
         DARKROOM_ESCAPE_AWARD_CATEGORY => "ADE",
         DARKROOM_BEACON_AWARD_CATEGORY => "ADB",
+        DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY => "SIG",
         CROWN_AWARD_CATEGORY => "CRWN",
         GALLERY_AWARD_CATEGORY => "ART",
         LATE_TIME_AWARD_CATEGORY => "LATE",
@@ -675,6 +680,7 @@ pub fn award_category_label(category: &str) -> &'static str {
         GREENDRAGON_DRAGON_AWARD_CATEGORY => "Green Dragon Slayer",
         DARKROOM_ESCAPE_AWARD_CATEGORY => "A Dark Room Escape",
         DARKROOM_BEACON_AWARD_CATEGORY => "A Dark Room Homefleet",
+        DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY => "Old Signal",
         CROWN_AWARD_CATEGORY => "The Crown",
         GALLERY_AWARD_CATEGORY => "Artboard Gallery",
         LATE_TIME_AWARD_CATEGORY => "Late Time",
@@ -705,6 +711,7 @@ pub fn award_category_priority(category: &str) -> i32 {
         BROGUE_MASTERY_AWARD_CATEGORY => 20,
         DARKROOM_ESCAPE_AWARD_CATEGORY => 21,
         DARKROOM_BEACON_AWARD_CATEGORY => 22,
+        DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY => 23,
         _ => 99,
     }
 }
@@ -739,6 +746,8 @@ pub fn format_score_value(category: &str, value: i64) -> String {
         | DARKROOM_BEACON_AWARD_CATEGORY => {
             format!("{value} chips")
         }
+        // No chips: the score is the mark the badge was granted on.
+        DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY => format!("mark {value}"),
         // The crown's score is what the final holder burned to take it.
         CROWN_AWARD_CATEGORY => format!("{value} chips"),
         GALLERY_AWARD_CATEGORY => format!("{value} applause"),

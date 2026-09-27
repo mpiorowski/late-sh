@@ -49,6 +49,14 @@ pub const SECTIONS: &[Section] = &[
         ],
     },
     Section {
+        title: "the old signal",
+        lines: &[
+            "at 15, once you have the exp to leave it, the next step in meets the Old Signal instead of a glyph.",
+            "put it down and you wake at level 1: bare hands, fifty bits, and a mark. the mark stays, adds a point of attack and defense (up to five), and makes every level cost a little more.",
+            "your face, your tailor's rack, and your badges stay. the first kill earns [SIG].",
+        ],
+    },
+    Section {
         title: "the armorer",
         lines: &[
             "up and down walk the wall, tier 1 to 15. w buys the picked weapon, a buys the picked armor.",
@@ -67,6 +75,7 @@ pub const SECTIONS: &[Section] = &[
         lines: &[
             "the mirror edits your face. up and down pick a row: hood, eyes, coat, mark. left and right walk its rack.",
             "t turns the tint. r shuffles the lot. s wears it. enter or esc leaves, and a draft not worn is dropped.",
+            "the rack opens by level: three pieces a slot and a tint every three levels, white alone at 15. what you have opened stays opened.",
             "the face is on every message you post in #deadchannel and on your profile.",
         ],
     },
@@ -80,8 +89,8 @@ pub const SECTIONS: &[Section] = &[
     Section {
         title: "the wire",
         lines: &[
-            "#deadchannel is the game's own log. what happens to runners posts there as news: a signal dropped, a level gained, a first kill, a near miss, the last ration of the day.",
-            "your name there wears your mark and your level: grey to 4, amber to 9, phosphor to 14, white at 15.",
+            "#deadchannel is the game's own log. what happens to runners posts there as news: a signal dropped, a level gained, the Old Signal put down, a first kill, a near miss, the last ration of the day.",
+            "your name there wears your mark and your level in the newest tint it opened: grey to 3, phosphor to 6, cyan to 9, magenta to 12, red to 14, white at 15. marks ride behind the Signal's glyph: ▚3╬2.",
             "p on a runner's message opens their profile, and under the bio a runner sees the runner: level, kit, glyphs down. people upstairs do not.",
             "/leave in #deadchannel shuts the door. the runner keeps its face and waits. /join #deadchannel opens it again.",
         ],

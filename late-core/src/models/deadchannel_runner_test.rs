@@ -41,7 +41,9 @@ async fn ensure_creates_once_and_keeps_the_first_look() {
         vec![StandingRunner {
             user_id: user.id,
             look: first_look,
-            level: 1
+            level: 1,
+            peak_level: 1,
+            marks: 0,
         }]
     );
 }
@@ -103,7 +105,9 @@ async fn leaving_hides_the_runner_but_keeps_the_character() {
         vec![StandingRunner {
             user_id: user.id,
             look,
-            level: 1
+            level: 1,
+            peak_level: 1,
+            marks: 0,
         }]
     );
 }
@@ -132,7 +136,9 @@ async fn the_tailor_dresses_a_standing_runner_only() {
         vec![StandingRunner {
             user_id: user.id,
             look: new_look.clone(),
-            level: 1
+            level: 1,
+            peak_level: 1,
+            marks: 0,
         }]
     );
 

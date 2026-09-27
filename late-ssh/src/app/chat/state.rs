@@ -1100,6 +1100,14 @@ pub struct ChatState {
     /// (the default). Session-only — resets on reconnect.
     pub(crate) collapsed_sections: HashSet<RoomSection>,
 
+    /// Rows the Home rail is scrolled away from where the selection would put
+    /// it (Ctrl+H / Ctrl+L, the mouse wheel over the rail), and the slot that
+    /// was selected when it was set. The offset only counts while that slot is
+    /// still selected, so any selection change snaps the rail back to the
+    /// selection without every selection path having to clear it.
+    /// Session-only.
+    rail_scroll: (Option<RoomSlot>, isize),
+
     /// Registered "watch me" streams, copied from the stream registry watch
     /// in `App::tick` (~1/s) so render paths read local memory only. Drives
     /// the rail's `stream` section, the LIVE author tag (live entries only),
@@ -1413,6 +1421,7 @@ impl ChatState {
             requested_poll_room: None,
             pending_mod_outputs: VecDeque::new(),
             collapsed_sections: HashSet::new(),
+            rail_scroll: (None, 0),
             live_streams: Vec::new(),
             live_user_ids: HashSet::new(),
             image_upload_rx: None,
@@ -3027,6 +3036,34 @@ impl ChatState {
         current_slot_from_state(self.selected_slot_state())
     }
 
+    /// Drop the rail scroll once the selection has left the slot it was
+    /// scrolled on. Without this, coming back to that slot later revives
+    /// the old scroll. Runs after every input event and chat tick, the only
+    /// places the selection changes.
+    pub(crate) fn forget_stale_rail_scroll(&mut self) {
+        if self.rail_scroll.0 != self.current_slot() {
+            self.rail_scroll = (None, 0);
+        }
+    }
+
+    /// Rows the Home rail is scrolled off the selection-centred position.
+    /// Zero once the selection has moved since the rail was scrolled.
+    pub(crate) fn rail_scroll_nudge(&self) -> isize {
+        let (anchor, nudge) = self.rail_scroll;
+        if anchor == self.current_slot() {
+            nudge
+        } else {
+            0
+        }
+    }
+
+    /// Set the rail's offset from the selection-centred position, anchored
+    /// to the current selection. Callers clamp it against the rail geometry
+    /// (`chat::ui::room_rail_scroll_bounds`), which state does not know.
+    pub(crate) fn set_rail_scroll_nudge(&mut self, nudge: isize) {
+        self.rail_scroll = (self.current_slot(), nudge);
+    }
+
     /// Whether a synthetic rail entry (rss, news, cyberspace, mentions,
     /// browse rooms, showcase, work) owns the center pane instead of a real
     /// room. The shell asks this instead of re-deriving the list: a new
@@ -3345,6 +3382,8 @@ impl ChatState {
             .position(|item| *item == current_item)
             .unwrap_or(0) as isize;
         let next = wrapped_index(current, delta, order.len());
+        // Real navigation re-centres the rail, same as a space jump.
+        self.rail_scroll = (None, 0);
         self.select_room_slot(order[next])
     }
 
@@ -3364,6 +3403,9 @@ impl ChatState {
         };
 
         self.room_jump_active = false;
+        // Real navigation re-centres the rail, even onto the room already
+        // selected: the quick way back from a scrolled rail.
+        self.rail_scroll = (None, 0);
         self.select_room_slot(slot)
     }
 
@@ -3598,7 +3640,7 @@ impl ChatState {
             return None;
         }
 
-        // Typed fallbacks for the global chords (Ctrl+G, Ctrl+F, Ctrl+L, ?), for
+        // Typed fallbacks for the global chords (Ctrl+G, Ctrl+F, Ctrl+R, ?), for
         // terminals and multiplexers that swallow those keys. Each one runs
         // exactly what its key runs.
         if body.trim() == "/lobby" {
@@ -5135,6 +5177,7 @@ impl ChatState {
 
     pub fn tick(&mut self) -> ChatTick {
         self.sync_refresh_room_id();
+        self.forget_stale_rail_scroll();
         // Peek every event source before draining: anything queued may change
         // render-visible chat state (messages, unread badges, tab lists), so
         // it must count as changed. Over-reporting here only costs a frame;

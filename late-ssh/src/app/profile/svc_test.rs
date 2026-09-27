@@ -391,7 +391,8 @@ async fn find_profile_resolves_the_house_rows() {
     tx.commit().await.expect("commit");
 
     let tx = client.transaction().await.expect("tx");
-    let first_reign = CrownReign::open_in_tx(&tx, loser.id, CROWN_MIN_PRICE)
+    let (_, taken_at) = CrownReign::lock_open(&tx).await.expect("lock");
+    let first_reign = CrownReign::open_in_tx(&tx, loser.id, CROWN_MIN_PRICE, taken_at)
         .await
         .expect("first reign");
     UserChips::apply(
@@ -406,11 +407,12 @@ async fn find_profile_resolves_the_house_rows() {
     .expect("loser can afford the crown");
     tx.commit().await.expect("commit");
     let tx = client.transaction().await.expect("tx");
-    CrownReign::close_in_tx(&tx, first_reign.id)
+    let (_, taken_at) = CrownReign::lock_open(&tx).await.expect("lock");
+    CrownReign::close_in_tx(&tx, first_reign.id, taken_at)
         .await
         .expect("close");
     let price = next_price(Some(CROWN_MIN_PRICE));
-    let reign = CrownReign::open_in_tx(&tx, user.id, price)
+    let reign = CrownReign::open_in_tx(&tx, user.id, price, taken_at)
         .await
         .expect("reign");
     UserChips::apply(

@@ -184,6 +184,11 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
             "A Dark Room Homefleet",
             "fly out holding the fleet beacon (20,000 chips, every run)",
         ),
+        (
+            "SIG",
+            "Old Signal",
+            "put down the Old Signal in deadchannel (no chips: the mark is the prize)",
+        ),
     ] {
         lines.push(entry_line(item_code, name, source, code, text, dim));
     }

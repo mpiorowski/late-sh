@@ -131,7 +131,9 @@ fn unknown_pieces_and_marks_are_rejected_loudly() {
 #[test]
 fn the_rack_opens_three_pieces_per_slot_and_a_tint_every_three_levels() {
     for slot in [Slot::Hood, Slot::Eyes, Slot::Coat] {
-        let levels = pieces_for(slot).map(|piece| piece.level).collect::<Vec<_>>();
+        let levels = pieces_for(slot)
+            .map(|piece| piece.level)
+            .collect::<Vec<_>>();
         assert_eq!(
             levels,
             vec![1, 1, 1, 4, 4, 4, 7, 7, 7, 10, 10, 10, 13, 13, 13],
@@ -139,12 +141,25 @@ fn the_rack_opens_three_pieces_per_slot_and_a_tint_every_three_levels() {
         );
     }
     assert_eq!(TINTS.map(Tint::level), [1, 1, 4, 7, 10, 13, 15]);
+    for tint in TINTS {
+        assert_eq!(
+            serde_json::to_value(tint).expect("a tint serializes"),
+            serde_json::json!(tint.name()),
+            "the tailor prints the stored name"
+        );
+    }
     for unlock in UNLOCK_LEVELS {
         let opens = PIECES.iter().any(|piece| piece.level == unlock)
             || TINTS.iter().any(|tint| tint.level() == unlock);
-        assert!(opens, "level {unlock} is an unlock level that opens nothing");
+        assert!(
+            opens,
+            "level {unlock} is an unlock level that opens nothing"
+        );
     }
-    assert_eq!(unlocked_tints(1).collect::<Vec<_>>(), vec![Tint::Static, Tint::Amber]);
+    assert_eq!(
+        unlocked_tints(1).collect::<Vec<_>>(),
+        vec![Tint::Static, Tint::Amber]
+    );
     assert_eq!(unlocked_pieces(Slot::Hood, 6).count(), 6);
     assert_eq!(next_unlock(1), Some(4));
     assert_eq!(next_unlock(12), Some(13));

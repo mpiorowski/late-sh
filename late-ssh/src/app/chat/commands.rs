@@ -139,7 +139,7 @@ const COMMANDS: &[Command] = &[
     global("private", "create a private room (/private #room)"),
     global("profile", "view a profile (/profile @user; bare = you)"),
     global("public", "open/create a public room (/public #room)"),
-    global("redraw", "repaint the screen (same as Ctrl+L)"),
+    global("redraw", "repaint the screen (same as Ctrl+R)"),
     global("roll", "roll dice (/roll 3d6 2d20; default d20)"),
     global("roominfo", "set this room's topic and rules"),
     global("rules", "show this room's rules"),

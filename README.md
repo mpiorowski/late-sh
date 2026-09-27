@@ -128,6 +128,12 @@ export CARGO_HOME=$HOME/.cargo
 Use `mise install` to get the expected Rust toolchain, `mold` linker, and
 `cargo-nextest`.
 
+To test newspaper scrolling in the Docker stack, run `make seed-paper`, then
+open `/paper` in the TUI. This replaces today's Reading and Outside sections
+with clearly marked sample text and enables the paper. Use
+`make seed-paper PAPER_PARAGRAPHS=5` for a shorter edition (default: 100;
+range: 1–1000). Close and reopen `/paper` after reseeding; no restart is needed.
+
 ## Verification
 
 Run the local gate before opening a PR:

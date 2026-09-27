@@ -183,7 +183,10 @@ impl FightSession {
                 scene.over = true;
             }
             Applied::Round => scene.lines.extend(lines),
-            Applied::Won { .. } | Applied::Lost { .. } | Applied::Escaped => {
+            Applied::Won { .. }
+            | Applied::Slain { .. }
+            | Applied::Lost { .. }
+            | Applied::Escaped => {
                 scene.lines.extend(lines);
                 scene.over = true;
             }

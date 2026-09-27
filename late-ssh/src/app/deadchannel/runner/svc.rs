@@ -22,11 +22,14 @@ use uuid::Uuid;
 use super::state::Look;
 use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 
-/// One standing runner as the wire sees them: the face and the level.
+/// One standing runner as the wire sees them: the face, the level and the
+/// marks for the badge, and the peak level the tailor's rack is cut to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunnerEntry {
     pub look: Look,
     pub level: i32,
+    pub peak_level: i32,
+    pub marks: i32,
 }
 
 /// What the directory serves: user id to entry, shared by `Arc` so a
@@ -62,11 +65,21 @@ impl RunnerLookService {
             user_id,
             look,
             level,
+            peak_level,
+            marks,
         } in rows
         {
             match Look::parse(&look) {
                 Ok(look) => {
-                    looks.insert(user_id, RunnerEntry { look, level });
+                    looks.insert(
+                        user_id,
+                        RunnerEntry {
+                            look,
+                            level,
+                            peak_level,
+                            marks,
+                        },
+                    );
                 }
                 Err(error) => {
                     tracing::error!(error = %error, user_id = %user_id, "runner look failed to parse; portrait skipped");

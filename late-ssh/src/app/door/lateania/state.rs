@@ -83,9 +83,14 @@ pub enum Panel {
     /// a dedicated binding - every letter and the sensible symbols are
     /// already taken).
     Board,
+    /// The room rail (the wide layout's side panel) drawn full screen.
+    /// Toggled with `=`, or a tap on the narrow layout's `= more` chip: the
+    /// phone layout has no rail, and this is how it gets the rail's whole
+    /// story (exits, wildlife, pet, standing keys) without a second layout.
+    Rail,
 }
 
-/// A combat action a player can trigger by clicking its on-screen chip, mapping
+/// An action a player can trigger by clicking its on-screen chip, mapping
 /// one-to-one to a key: [`ClickAction::Attack`] is space/x, [`ClickAction::Quaff`]
 /// is Q, [`ClickAction::Flee`] is z, and [`ClickAction::Ability`] is the digit of
 /// that action-bar slot. The mouse handler resolves a click to one of these and
@@ -103,6 +108,9 @@ pub enum ClickAction {
     /// Lock onto a hostile adventurer (a click on their roster row in a
     /// `pvp` room's "Adventurers here" list).
     AttackPlayer(Uuid),
+    /// Open or close the full-screen room rail (`=`), from the narrow
+    /// layout's `= more` chip.
+    ToggleRail,
 }
 
 /// The first recorded chip whose rect contains cell `(x, y)`. Pure so the click
@@ -984,6 +992,7 @@ impl State {
             ClickAction::Ability(slot) => self.use_ability(slot),
             ClickAction::AttackMob(mob_id) => self.attack_mob(mob_id),
             ClickAction::AttackPlayer(target_id) => self.attack_player(target_id),
+            ClickAction::ToggleRail => self.toggle_panel(Panel::Rail),
         }
         true
     }

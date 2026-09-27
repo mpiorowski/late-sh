@@ -194,6 +194,8 @@ pub enum FightBeat {
     Resumed,
     Round,
     Won,
+    /// The Old Signal put down: a mark and the reset.
+    Slain,
     Lost,
     Escaped,
     Outfitted,
@@ -1103,6 +1105,7 @@ mod inner {
             FightBeat::Resumed => "resumed",
             FightBeat::Round => "round",
             FightBeat::Won => "won",
+            FightBeat::Slain => "slain",
             FightBeat::Lost => "lost",
             FightBeat::Escaped => "escaped",
             FightBeat::Outfitted => "outfitted",

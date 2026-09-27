@@ -378,6 +378,20 @@ impl Tint {
             Tint::White => 15,
         }
     }
+
+    /// The tint's name as the tailor prints it: the stored name
+    /// (`state_test` pins the two together).
+    pub fn name(self) -> &'static str {
+        match self {
+            Tint::Static => "static",
+            Tint::Amber => "amber",
+            Tint::Phosphor => "phosphor",
+            Tint::Cyan => "cyan",
+            Tint::Magenta => "magenta",
+            Tint::Red => "red",
+            Tint::White => "white",
+        }
+    }
 }
 
 /// The palette in rack order, which is unlock order: what the tailor

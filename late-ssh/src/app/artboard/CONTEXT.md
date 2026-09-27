@@ -213,7 +213,7 @@ Important routing:
 - `Esc` closes transient Artboard overlays first, then clears floating brush / sampled brush / selection in active mode, then returns to view mode. `q` also closes the Artboard help guide, a full-frame piece, and an archive list before global quit handling can run.
 - Active Artboard editing blocks global quit.
 - The Artboard owns its letters: the paired-client hotkeys (`m` mute, `+`/`-` volume, the `v` music prefix) and `w` (Bonsai Care) are off this page entirely, the way the voice chords already are, so `v` reaches the gallery as the applause key (`global_letter_keys` in `app/input.rs`). Only `q`, the page switches, and `?` stay global here.
-- While the hang flow captures typing (framing, or a title in the confirm modal) no global single-key hotkey and no reserved chord (`Ctrl+O`, `Ctrl+G`, `Ctrl+L`) fires: `app/input.rs::artboard_owns_keys` gates both `handle_global_key` and `handle_reserved_global_chord`, so every printable key reaches the title.
+- While the hang flow captures typing (framing, or a title in the confirm modal) no global single-key hotkey and no reserved chord (`Ctrl+O`, `Ctrl+G`, `Ctrl+F`, `Ctrl+R`) fires: `app/input.rs::artboard_owns_keys` gates both `handle_global_key` and `handle_reserved_global_chord`, so every printable key reaches the title.
 - View mode does not claim global page switching unless help/glyph picker/active interaction is open.
 - Archive views cannot enter active mode and edit paths refuse to submit changes.
 

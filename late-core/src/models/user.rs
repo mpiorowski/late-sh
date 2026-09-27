@@ -723,6 +723,7 @@ impl User {
                           WHEN 'greendragon_dragon' THEN 'GDS'
                           WHEN 'darkroom_escape' THEN 'ADE'
                           WHEN 'darkroom_beacon' THEN 'ADB'
+                          WHEN 'deadchannel_old_signal' THEN 'SIG'
                           -- Monthly like the boards below, rankless like the
                           -- milestones above: one holder, so no rank digit
                           -- (`profile_award::is_rankless_award`).
@@ -764,6 +765,7 @@ impl User {
                                    WHEN 'brogue_mastery' THEN 20
                                    WHEN 'darkroom_escape' THEN 21
                                    WHEN 'darkroom_beacon' THEN 22
+                                   WHEN 'deadchannel_old_signal' THEN 23
                                    ELSE 99
                                  END
                     ) AS badges

@@ -290,6 +290,112 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
     );
 }
 
+/// Plain glyphs (`show_flag_fallback`) is the one switch that keeps Nerd Font
+/// icons off the screen: with it on, a body loses them and a reaction chip
+/// whose icon was nothing but Nerd Font keeps its count behind `?`. With it
+/// off both render as posted.
+#[test]
+fn plain_glyphs_drops_nerd_font_icons_from_the_body_and_the_reaction_chips() {
+    theme::set_current_by_id("late");
+
+    let render = |show_flag_fallback: bool| -> String {
+        let room_id = Uuid::from_u128(1);
+        let current_user_id = Uuid::from_u128(2);
+        let author_id = Uuid::from_u128(3);
+        let created = Utc::now();
+        let message = ChatMessage {
+            id: Uuid::from_u128(10),
+            created,
+            updated: created,
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            room_id,
+            user_id: author_id,
+            body: "ship \u{e7a8} now".to_string(),
+        };
+        let usernames = HashMap::from([
+            (current_user_id, "alice".to_string()),
+            (author_id, "bob".to_string()),
+        ]);
+        let countries = HashMap::new();
+        let bonsai_glyphs = HashMap::new();
+        let chat_badges = HashMap::new();
+        let friend_user_ids = HashSet::new();
+        let live_user_ids = HashSet::new();
+        let message_reactions = HashMap::from([(
+            message.id,
+            vec![
+                ChatMessageReactionSummary {
+                    icon: "\u{e7a8}".to_string(),
+                    count: 2,
+                },
+                ChatMessageReactionSummary {
+                    icon: "🚀".to_string(),
+                    count: 1,
+                },
+            ],
+        )]);
+        let message_gilds = HashMap::new();
+        let inline_images = HashMap::new();
+        let profile_award_badges = HashMap::new();
+        let drunk_levels = HashMap::new();
+        let name_flair = HashMap::new();
+        let away_user_ids = HashSet::new();
+        let translations = HashMap::new();
+        let translation_hidden = HashSet::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
+        let ctx = ChatRowsContext {
+            versions: ChatRowsVersions::default(),
+            current_user_id,
+            live_user_ids: &live_user_ids,
+            show_flag_fallback,
+            usernames: &username_lookup,
+            countries: &countries,
+            friend_user_ids: &friend_user_ids,
+            bonsai_glyphs: &bonsai_glyphs,
+            chat_badges: &chat_badges,
+            profile_award_badges: &profile_award_badges,
+            message_reactions: &message_reactions,
+            message_gilds: &message_gilds,
+            inline_images: &inline_images,
+            dividers: ChatDividers::default(),
+            drunk_levels: &drunk_levels,
+            name_flair: &name_flair,
+            away_user_ids: &away_user_ids,
+            name_flicker: None,
+            translations: &translations,
+            translation_hidden: &translation_hidden,
+            runner_looks: None,
+        };
+
+        let mut cache = ChatRowsCache::default();
+        ensure_chat_rows_cache(&mut cache, vec![&message], 60, ctx);
+        cache
+            .all_rows
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let as_posted = render(false);
+    assert!(as_posted.contains("ship \u{e7a8} now"), "{as_posted}");
+    assert!(as_posted.contains("[\u{e7a8} 2] [🚀 1]"), "{as_posted}");
+
+    let plain = render(true);
+    assert!(plain.contains("ship  now"), "{plain}");
+    assert!(plain.contains("[? 2] [🚀 1]"), "{plain}");
+    assert!(
+        !plain.chars().any(is_nerd_font_glyph),
+        "a Nerd Font glyph survived: {plain}"
+    );
+}
+
 /// The crown is glued to the name, ahead of a rented title and ahead of the
 /// badge stack, and it never displaces either.
 #[test]
@@ -1021,6 +1127,7 @@ fn chat_view<'a>(
         selected_room_id,
         room_jump_active: false,
         room_section_prefix_armed: false,
+        rail_scroll_nudge: 0,
         selected_message_id: None,
         selected_image_message: false,
         selected_news_message: false,
@@ -1599,6 +1706,115 @@ fn rooms_scroll_with_no_selection_does_not_scroll() {
 #[test]
 fn rooms_scroll_when_content_fits_returns_zero() {
     assert_eq!(rooms_scroll_for_selection(5, 10, Some(4)), 0);
+}
+
+fn blank_rail_rows(total: usize, selected_row_index: Option<usize>) -> RoomListRows {
+    RoomListRows {
+        lines: vec![Line::default(); total],
+        hit_slots: vec![None; total],
+        selected_row_index,
+    }
+}
+
+#[test]
+fn rail_scroll_nudge_moves_off_the_selection_within_the_rows() {
+    let rows = blank_rail_rows(20, Some(7));
+    // Selection-centred start: row 3 (see rooms_scroll_keeps_selection_near_center).
+    assert_eq!(room_rail_scroll(&rows, 9, 0), 3);
+    assert_eq!(room_rail_scroll(&rows, 9, 3), 6);
+    assert_eq!(room_rail_scroll(&rows, 9, -3), 0);
+    // Either end clamps: max_scroll = 20 - 9.
+    assert_eq!(room_rail_scroll(&rows, 9, 100), 11);
+    assert_eq!(room_rail_scroll(&rows, 9, -100), 0);
+}
+
+#[test]
+fn rail_scroll_nudge_is_inert_when_the_rail_fits() {
+    let rows = blank_rail_rows(5, Some(4));
+    assert_eq!(room_rail_scroll(&rows, 10, 6), 0);
+    assert_eq!(room_rail_scroll(&rows, 10, -6), 0);
+}
+
+#[test]
+fn room_list_hit_test_follows_the_rail_scroll_nudge() {
+    let topic_room = |slug: String| ChatRoom {
+        id: Uuid::now_v7(),
+        created: Utc::now(),
+        updated: Utc::now(),
+        kind: "topic".to_string(),
+        visibility: "public".to_string(),
+        auto_join: false,
+        slug: Some(slug),
+        permanent: false,
+        language_code: None,
+        dm_user_a: None,
+        dm_user_b: None,
+        topic: None,
+        rules: None,
+        created_by: None,
+    };
+    let rooms: Vec<_> = (0..40)
+        .map(|i| (topic_room(format!("room-{i:02}")), Vec::new()))
+        .collect();
+    let selected = rooms[0].0.id;
+    let mut rows_cache = ChatRowsCache::default();
+    let usernames = HashMap::new();
+    let username_lookup = UsernameLookup::new(&usernames, None);
+    let countries = HashMap::new();
+    let message_reactions = HashMap::new();
+    let unread_counts = HashMap::new();
+    let bonsai_glyphs = HashMap::new();
+    let chat_badges = HashMap::new();
+    let composer = TextArea::default();
+    let profile_award_badges = HashMap::new();
+    let news_composer = TextArea::default();
+    let view = chat_view(
+        &mut rows_cache,
+        &rooms,
+        Some(selected),
+        &username_lookup,
+        &countries,
+        &message_reactions,
+        &unread_counts,
+        &bonsai_glyphs,
+        &chat_badges,
+        &profile_award_badges,
+        &composer,
+        &news_composer,
+    );
+
+    let area = Rect::new(1, 1, 74, 24);
+    let rooms_area = room_list_area(area, chat_selection_mode(&view, area));
+    let mut room_list_view = room_list_view_from_render_input(&view);
+    let (list_area, _) = room_rail_split(rooms_area);
+    let (base, max_scroll) = room_rail_scroll_bounds(rooms_area, &room_list_view);
+    assert!(
+        max_scroll > base + 5,
+        "the rail must overflow for the nudge to show; base={base} max={max_scroll}"
+    );
+    let room_rows = build_cozy_room_rail_rows(&room_list_view, rooms_area.width.saturating_sub(2));
+    let slot_at = |row: usize| room_rows.hit_slots.get(row).copied().flatten();
+
+    // A room row lands under the pointer at its offset from the first visible
+    // row: `base` untouched, `base + 5` once the rail is scrolled five rows.
+    // Render and hit test read the same nudge, so they agree on the rows.
+    for nudge in [0usize, 5] {
+        room_list_view.rail_scroll_nudge = nudge as isize;
+        let scroll = base + nudge;
+        let row = (scroll..)
+            .find(|row| slot_at(*row).is_some())
+            .expect("a room row below the visible top");
+        assert_eq!(
+            room_list_hit_test(
+                rooms_area,
+                &room_list_view,
+                list_area.x,
+                list_area.y + (row - scroll) as u16
+            ),
+            slot_at(row),
+            "nudge={nudge}"
+        );
+    }
 }
 
 #[test]
@@ -3262,8 +3478,24 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
     }))
     .expect("parse look");
     let looks = HashMap::from([
-        (runner_id, RunnerEntry { look, level: 7 }),
-        (elder_id, RunnerEntry { look, level: 15 }),
+        (
+            runner_id,
+            RunnerEntry {
+                look,
+                level: 7,
+                peak_level: 7,
+                marks: 0,
+            },
+        ),
+        (
+            elder_id,
+            RunnerEntry {
+                look,
+                level: 15,
+                peak_level: 15,
+                marks: 0,
+            },
+        ),
     ]);
     let countries = HashMap::new();
     let bonsai_glyphs = HashMap::new();

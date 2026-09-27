@@ -2,7 +2,7 @@
 //!
 //! The transaction is where every rule of the crown lands:
 //! the ladder charges what it says, a refusal never touches the ledger, and
-//! two racing takes settle to one debit.
+//! two racing takes each settle to one debit, at successive prices.
 
 use late_core::models::{
     chips::{CHIP_FLOOR, ChipMove, INITIAL_CHIP_BALANCE, UserChips},
@@ -305,17 +305,24 @@ async fn two_concurrent_takes_both_land_and_walk_the_ladder() {
     paid.sort_unstable();
     assert_eq!(paid, vec![-750, -CROWN_MIN_PRICE], "one debit each");
 
-    let reigns: i64 = client
-        .query_one("SELECT COUNT(*)::bigint AS count FROM crown_reigns", &[])
+    let reigns: Vec<CrownReign> = client
+        .query("SELECT * FROM crown_reigns ORDER BY taken_at", &[])
         .await
-        .expect("count reigns")
-        .get("count");
-    assert_eq!(reigns, 2, "two reigns, one closed by the other");
+        .expect("reigns in takeover order")
+        .into_iter()
+        .map(CrownReign::from)
+        .collect();
+    assert_eq!(reigns.len(), 2, "two reigns, one closed by the other");
+    assert_eq!(reigns[0].paid_chips, CROWN_MIN_PRICE);
+    assert!(reigns[1].taken_at > reigns[0].taken_at);
+    assert_eq!(reigns[0].ended_at, Some(reigns[1].taken_at));
+    assert_eq!(reigns[1].ended_at, None);
     let open = CrownReign::find_open(&client)
         .await
         .expect("find open")
         .expect("a reign is open");
     assert_eq!(open.paid_chips, 750, "the second take holds the crown");
+    assert_eq!(open.id, reigns[1].id);
 }
 
 /// The glyph and the deposed holder's banner both cross replicas over the

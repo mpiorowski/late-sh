@@ -30,9 +30,13 @@ pub fn tint_color(tint: Tint) -> Color {
 
 /// The level badge beside a runner's name on the wire: the mark glyph
 /// and the level, no space (`▚7`), so it reads as one token in the badge
-/// stack.
+/// stack. With Old Signal kills the count rides behind the Signal's own
+/// `╬` (`▚7╬2`): the paragon number, which only ever goes up.
 pub fn badge_text(entry: &RunnerEntry) -> String {
-    format!("{}{}", entry.look.mark, entry.level)
+    match entry.marks {
+        0 => format!("{}{}", entry.look.mark, entry.level),
+        marks => format!("{}{}╬{marks}", entry.look.mark, entry.level),
+    }
 }
 
 /// The band a level paints in: the newest tint the level has unlocked at

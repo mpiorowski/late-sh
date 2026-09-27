@@ -59,6 +59,12 @@ keys:
 seed-leaderboard:
 	scripts/seed_leaderboard_test_data.sh
 
+# Load a long fake edition for newspaper scrolling checks in the local TUI.
+PAPER_PARAGRAPHS ?= 100
+.PHONY: seed-paper
+seed-paper:
+	scripts/seed_paper_test_data.sh "$(PAPER_PARAGRAPHS)"
+
 .PHONY: check-db
 check-db:
 	$(CHECK_DB_START)

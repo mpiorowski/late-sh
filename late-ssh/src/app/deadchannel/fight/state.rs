@@ -12,6 +12,13 @@
 //! promised; the door itself is untouched) with `run` as the one live
 //! decision, because that is what makes a forest a forest.
 //!
+//! The top of the ladder is the Old Signal (GAME.md, "Marks: the reset"):
+//! at level 15 with the exp to leave it, the next step in meets it instead
+//! of a glyph. Putting it down leaves a mark and resets the runner to
+//! level 1, bare hands, and starting bits; the peak level (the tailor's
+//! gate), the look, and the badges stay. Each mark adds a capped point of
+//! attack and defense and scales every exp threshold.
+//!
 //! Levels climb on exp here, in the fight, for now. GAME.md gives that job
 //! to the operators (beaten once per level); until they exist, the row
 //! would sit at level 1 against level-1 flickers forever, so the threshold
@@ -30,8 +37,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::data::{
-    self, DROP_LINES, EXP_KEEP_ON_DEATH, FOES, FoeKind, KILL_LINES, NEAR_MISS_SIGNAL,
-    RATIONS_PER_DAY, RUN_FAILED_LINES, RUN_LINES, RUN_ODDS, RUN_ODDS_OUT_OF, SIGNAL_PER_LEVEL,
+    self, DROP_LINES, EXP_KEEP_ON_DEATH, FOES, FoeKind, FoeTier, HEARD_LINE, KILL_LINES,
+    MARK_BONUS_CAP, MAX_LEVEL, NEAR_MISS_SIGNAL, OLD_SIGNAL, OLD_SIGNAL_TIER, RATIONS_PER_DAY,
+    RUN_FAILED_LINES, RUN_LINES, RUN_ODDS, RUN_ODDS_OUT_OF, SIGNAL_PER_LEVEL, SLAIN_LINE,
     START_BITS, TRADE_IN_PERCENT,
 };
 use crate::app::deadchannel::city::data::{ARMOR, COST_LADDER, WEAPONS};
@@ -44,13 +52,22 @@ pub const MAX_TIER: i32 = COST_LADDER.len() as i32;
 /// a dropped session shows how it got there.
 const LOG_KEEP: usize = 6;
 
+/// What is in front of you: a glyph of the table, or the Old Signal.
+/// Stored as `{"glyph": 3}` or `"old_signal"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Quarry {
+    /// Index into `data::FOES`.
+    Glyph(usize),
+    OldSignal,
+}
+
 /// The fight in progress, as stored on the row (`deadchannel_runners.fight`).
 /// The foe's numbers ride along so a retuned table never changes a live
 /// foe under somebody.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Fight {
-    /// Index into `data::FOES`.
-    pub kind: usize,
+    pub quarry: Quarry,
     pub foe_signal: i32,
     pub foe_max_signal: i32,
     pub foe_attack: u32,
@@ -61,8 +78,24 @@ pub struct Fight {
 }
 
 impl Fight {
+    fn new(quarry: Quarry, tier: FoeTier) -> Self {
+        Self {
+            quarry,
+            foe_signal: tier.signal,
+            foe_max_signal: tier.signal,
+            foe_attack: tier.attack,
+            foe_defense: tier.defense,
+            foe_bits: tier.bits,
+            foe_exp: tier.exp,
+            log: Vec::new(),
+        }
+    }
+
     pub fn foe(&self) -> &'static FoeKind {
-        &FOES[self.kind]
+        match self.quarry {
+            Quarry::Glyph(kind) => &FOES[kind],
+            Quarry::OldSignal => &OLD_SIGNAL,
+        }
     }
 
     fn push(&mut self, line: String) {
@@ -94,6 +127,11 @@ pub struct Sheet {
     /// Today's tally, zeroed by the day roll: the wire's last-ration line.
     pub kills_today: i32,
     pub runs_today: i32,
+    /// The highest level ever reached; a mark resets `level`, never this.
+    /// The tailor's rack is cut to it.
+    pub peak_level: i32,
+    /// Old Signal kills, ever.
+    pub marks: i32,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -176,6 +214,10 @@ pub enum Applied {
         /// The level reached, if the exp crossed a threshold.
         leveled: Option<i32>,
     },
+    /// The Old Signal put down: the runner is level 1 again with `marks`.
+    Slain {
+        marks: i32,
+    },
     Lost {
         bits_lost: i64,
     },
@@ -211,6 +253,9 @@ pub enum News {
     Dropped { bits_lost: i64 },
     /// A level gained: the line the face rides.
     Leveled { level: i32 },
+    /// The Old Signal put down, the runner reset: the other line the face
+    /// rides.
+    Slain { marks: i32 },
     /// The runner's first glyph, ever.
     FirstBlood { foe: &'static str },
     /// A win with `signal` at or under [`NEAR_MISS_SIGNAL`].
@@ -242,6 +287,8 @@ impl Sheet {
             kills: 0,
             kills_today: 0,
             runs_today: 0,
+            peak_level: 1,
+            marks: 0,
         }
     }
 
@@ -254,13 +301,12 @@ impl Sheet {
                     Ok(fight) => fight,
                     Err(error) => return Err(SheetError::Fight(error.to_string())),
                 };
-                if fight.kind >= FOES.len() {
-                    return Err(SheetError::Fight(format!(
-                        "unknown glyph kind {}",
-                        fight.kind
-                    )));
+                match fight.quarry {
+                    Quarry::Glyph(kind) if kind >= FOES.len() => {
+                        return Err(SheetError::Fight(format!("unknown glyph kind {kind}")));
+                    }
+                    Quarry::Glyph(_) | Quarry::OldSignal => Some(fight),
                 }
-                Some(fight)
             }
         };
         Ok(Self {
@@ -277,6 +323,8 @@ impl Sheet {
             kills: row.kills,
             kills_today: row.kills_today,
             runs_today: row.runs_today,
+            peak_level: row.peak_level,
+            marks: row.marks,
         })
     }
 
@@ -298,6 +346,8 @@ impl Sheet {
             kills: self.kills,
             kills_today: self.kills_today,
             runs_today: self.runs_today,
+            peak_level: self.peak_level,
+            marks: self.marks,
         }
     }
 
@@ -306,11 +356,22 @@ impl Sheet {
     }
 
     pub fn attack(&self) -> u32 {
-        (self.level + self.weapon_tier) as u32
+        (self.level + self.weapon_tier + self.mark_bonus()) as u32
     }
 
     pub fn defense(&self) -> u32 {
-        (self.level + self.armor_tier) as u32
+        (self.level + self.armor_tier + self.mark_bonus()) as u32
+    }
+
+    /// What the marks add to attack and defense: one each, capped.
+    pub fn mark_bonus(&self) -> i32 {
+        self.marks.min(MARK_BONUS_CAP)
+    }
+
+    /// At the top with the exp to leave it: the next step in meets the Old
+    /// Signal.
+    pub fn signal_hears(&self) -> bool {
+        self.level == MAX_LEVEL && self.exp >= data::exp_to_seek(self.marks)
     }
 
     /// Off the wire: the signal dropped and the day has not rolled.
@@ -378,6 +439,7 @@ impl Sheet {
                 });
                 return news;
             }
+            Applied::Slain { marks } => news.push(News::Slain { marks: *marks }),
             Applied::Won { foe, leveled, .. } => {
                 if let Some(level) = leveled {
                     news.push(News::Leveled { level: *level });
@@ -528,18 +590,14 @@ impl Sheet {
             return refused(Refusal::NoRations);
         }
         self.rations_left -= 1;
-        let (kind, foe, tier) = data::foe_for_level(self.level);
-        let mut fight = Fight {
-            kind,
-            foe_signal: tier.signal,
-            foe_max_signal: tier.signal,
-            foe_attack: tier.attack,
-            foe_defense: tier.defense,
-            foe_bits: tier.bits,
-            foe_exp: tier.exp,
-            log: Vec::new(),
+        let mut fight = match self.signal_hears() {
+            true => Fight::new(Quarry::OldSignal, OLD_SIGNAL_TIER),
+            false => {
+                let (kind, _, tier) = data::foe_for_level(self.level);
+                Fight::new(Quarry::Glyph(kind), tier)
+            }
         };
-        fight.push(foe.arrives.to_string());
+        fight.push(fight.foe().arrives.to_string());
         let lines = fight.log.clone();
         self.fight = Some(fight);
         Outcome {
@@ -649,7 +707,40 @@ impl Sheet {
         self.signal = (self.signal - damage).clamp(0, self.max_signal());
     }
 
-    fn win<R: Rng>(&mut self, fight: Fight, rng: &mut R, mut lines: Vec<String>) -> Outcome {
+    fn win<R: Rng>(&mut self, fight: Fight, rng: &mut R, lines: Vec<String>) -> Outcome {
+        match fight.quarry {
+            Quarry::OldSignal => self.slay(lines),
+            Quarry::Glyph(_) => self.put_down(fight, rng, lines),
+        }
+    }
+
+    /// The Old Signal is down: a mark, and the climb starts over. Level,
+    /// exp, gear, and bits go back to a fresh runner's; the peak, the
+    /// kills, today's rations, and everything off the sheet (the look, the
+    /// badges) stay.
+    fn slay(&mut self, mut lines: Vec<String>) -> Outcome {
+        self.marks += 1;
+        self.kills += 1;
+        self.kills_today += 1;
+        self.level = 1;
+        self.exp = 0;
+        self.weapon_tier = 0;
+        self.armor_tier = 0;
+        self.bits = START_BITS;
+        self.signal = self.max_signal();
+        lines.push(SLAIN_LINE.to_string());
+        lines.push(format!(
+            "you wake at the top of Static Row. level 1, bare hands, {START_BITS} bits, and mark {} that does not come off.",
+            self.marks
+        ));
+        Outcome {
+            applied: Applied::Slain { marks: self.marks },
+            lines,
+        }
+    }
+
+    fn put_down<R: Rng>(&mut self, fight: Fight, rng: &mut R, mut lines: Vec<String>) -> Outcome {
+        let heard_before = self.signal_hears();
         self.bits += fight.foe_bits;
         self.exp += fight.foe_exp;
         self.kills += 1;
@@ -661,7 +752,7 @@ impl Sheet {
             fight.foe_exp
         ));
         let mut leveled = None;
-        while let Some(need) = data::exp_to_advance(self.level) {
+        while let Some(need) = data::exp_to_advance(self.level, self.marks) {
             if self.exp < need {
                 break;
             }
@@ -669,8 +760,12 @@ impl Sheet {
             self.signal += SIGNAL_PER_LEVEL;
             leveled = Some(self.level);
         }
+        self.peak_level = self.peak_level.max(self.level);
         if let Some(level) = leveled {
             lines.push(format!("you are level {level}. the street will hear."));
+        }
+        if !heard_before && self.signal_hears() {
+            lines.push(HEARD_LINE.to_string());
         }
         Outcome {
             applied: Applied::Won {

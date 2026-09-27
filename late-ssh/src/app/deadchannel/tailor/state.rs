@@ -4,10 +4,13 @@
 //! palette, `shuffle` throws the dice the join threw. Pure: the draft is
 //! a value, and nothing here knows whether it was worn yet.
 //!
-//! The draft knows the runner's level, and the level is the gate: the rack
-//! holds only the pieces and tints it has unlocked (`Piece::level`,
-//! `Tint::level`), free, re-picked forever. Level only climbs, so what a
-//! runner wears is always on their rack.
+//! The draft knows the runner's peak level, and the peak is the gate: the
+//! rack holds only the pieces and tints it has unlocked (`Piece::level`,
+//! `Tint::level`), free, re-picked forever. The peak only climbs (an Old
+//! Signal reset takes the level, never the peak), so what a runner wears
+//! is on their rack, except a look written before the gate or by an
+//! older replica mid-deploy: `Draft::new` snaps that onto the rack, so
+//! the walks below never meet a piece they cannot place.
 
 use rand::Rng;
 
@@ -37,8 +40,8 @@ impl Row {
     }
 }
 
-/// The look being tried on, the row the cursor is on, and the level the
-/// racks are cut to.
+/// The look being tried on, the row the cursor is on, and the peak level
+/// the racks are cut to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Draft {
     pub look: Look,
@@ -47,12 +50,28 @@ pub struct Draft {
 }
 
 impl Draft {
+    /// A draft over `look`, the racks cut to `level`. A piece or tint the
+    /// level has not unlocked falls to the first entry of its rack; the
+    /// draft then differs from what is worn and `[s]` lights, so the
+    /// runner wears something on their rack with one key.
     pub fn new(look: Look, level: i32) -> Self {
-        Self {
+        let mut draft = Self {
             look,
             row: Row::Hood,
             level,
+        };
+        for slot in [Slot::Hood, Slot::Eyes, Slot::Coat] {
+            let worn = draft.worn_mut(slot);
+            if !unlocked_pieces(slot, level).any(|piece| piece == worn.piece) {
+                worn.piece = unlocked_pieces(slot, level)
+                    .next()
+                    .expect("level 1 unlocks pieces in every slot");
+            }
+            if !unlocked_tints(level).any(|tint| tint == worn.tint) {
+                worn.tint = unlocked_tints(level).next().expect("level 1 unlocks tints");
+            }
         }
+        draft
     }
 
     /// The cursor one row up; the top holds.

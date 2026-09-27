@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -720,6 +722,27 @@ pub(super) fn reaction_label(kind: i16) -> &'static str {
 }
 
 // ── Text utilities ──────────────────────────────────────────
+
+/// Nerd Font icons sit in Unicode's Private Use Areas (the BMP block and the
+/// two supplementary planes, where the Material Design set lives). Nothing
+/// else late.sh draws is there, so a terminal font without them only ever
+/// meets them in what people post from the icon picker.
+pub(super) fn is_nerd_font_glyph(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{E000}'..='\u{F8FF}' | '\u{F0000}'..='\u{FFFFD}' | '\u{100000}'..='\u{10FFFD}'
+    )
+}
+
+/// `text` with every Nerd Font glyph dropped: the plain-glyphs setting
+/// (`show_flag_fallback`) renders them as nothing rather than as tofu.
+pub(super) fn without_nerd_font_glyphs(text: &str) -> Cow<'_, str> {
+    if text.chars().any(is_nerd_font_glyph) {
+        Cow::Owned(text.chars().filter(|ch| !is_nerd_font_glyph(*ch)).collect())
+    } else {
+        Cow::Borrowed(text)
+    }
+}
 
 fn normalize_inline_text(text: &str) -> String {
     text.lines()

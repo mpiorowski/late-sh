@@ -132,10 +132,50 @@ fn the_racks_are_cut_to_the_level() {
 
     let mut fourth = draft(4);
     fourth.prev();
-    assert_eq!(fourth.look.hood.piece.level, 4, "wraps back to level 4's last");
+    assert_eq!(
+        fourth.look.hood.piece.level, 4,
+        "wraps back to level 4's last"
+    );
     fourth.tint();
     fourth.tint();
     assert_eq!(fourth.look.hood.tint, Tint::Phosphor);
     fourth.tint();
     assert_eq!(fourth.look.hood.tint, Tint::Static);
+}
+
+/// A look off the rack (written before the gate, or by an older replica
+/// mid-deploy) is snapped onto it at open: the offending piece and tint
+/// fall to the rack's first entry, the rest of the look stays, and the
+/// mirror's walks never panic on it.
+#[test]
+fn a_look_above_the_rack_is_snapped_onto_it_at_open() {
+    let mut look = draft(1).look;
+    look.hood.piece = pieces_for(Slot::Hood).last().expect("a piece");
+    look.hood.tint = Tint::White;
+    assert_eq!(look.hood.piece.level, 13);
+
+    let mut snapped = Draft::new(look, 1);
+    let first = unlocked_pieces(Slot::Hood, 1).next().expect("a piece");
+    assert_eq!(snapped.look.hood.piece, first);
+    assert_eq!(snapped.look.hood.tint, Tint::Static);
+    assert_eq!(
+        snapped.look.eyes, look.eyes,
+        "an unlocked slot is untouched"
+    );
+    assert_eq!(snapped.look.coat, look.coat);
+    assert_eq!(snapped.look.mark, look.mark);
+    snapped.next();
+    snapped.tint();
+
+    let kept = Draft::new(look, 13);
+    assert_eq!(
+        kept.look.hood.piece, look.hood.piece,
+        "the piece is on the rack at 13"
+    );
+    assert_eq!(kept.look.hood.tint, Tint::Static, "white is not, until 15");
+    assert_eq!(
+        Draft::new(look, 15).look,
+        look,
+        "nothing to snap at the top"
+    );
 }
