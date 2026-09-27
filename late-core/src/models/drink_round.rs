@@ -17,7 +17,8 @@
 //! patron's spending instruction arrives intact.
 //!
 //! **What it costs.** [`ROUND_PRICE_PER_PATRON`] for every credit the round
-//! actually granted, burned whole.
+//! actually granted, burned whole; a personal gift is one credit at
+//! [`GIFT_DRINK_PRICE`]. Both pour the same [`ROUND_DRINK_POINTS`].
 //!
 //! **What it hands over.** Not a drink: a [`DrinkCredit`], cashed only when the
 //! patron walks up and orders one themselves. A pour makes someone type drunk
@@ -40,8 +41,15 @@ use uuid::Uuid;
 /// a round is a lot of small kindnesses, not one grand one.
 pub const ROUND_PRICE_PER_PATRON: i64 = 100;
 
+/// What one named patron's drink costs the buyer. Twice the round's price a
+/// head: a round pays for everyone online and most never collect, so its
+/// premium pour is carried by the credits that expire. A gift is aimed at one
+/// person who will drink it, so the same [`ROUND_DRINK_POINTS`] pour costs
+/// more than a head of a round, and less than buying that buzz yourself.
+pub const GIFT_DRINK_PRICE: i64 = 200;
+
 /// The buzz a cashed tavern round records, regardless of what the bartender
-/// named or priced the pour at. Four times what the buyer paid for it, and
+/// named or priced the pour at. Four times what the buyer paid a head, and
 /// sized against `drinks::DRUNK_LEVEL_THRESHOLDS`: buzzed starts at 300, so a
 /// flat 300 landed exactly on the line and the first decay tick (334 an hour)
 /// dropped the drinker back to tipsy within seconds of the pour. 400 buys

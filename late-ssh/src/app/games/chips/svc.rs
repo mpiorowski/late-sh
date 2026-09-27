@@ -3,8 +3,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::chips::{ChipMove, UserChips};
 use late_core::models::drink_round::{
-    Bar, DrinkCredit, DrinkRound, MAX_OPEN_CREDITS, OpenCredit, ROUND_CREDIT_TTL_HOURS,
-    ROUND_PRICE_PER_PATRON,
+    Bar, DrinkCredit, DrinkRound, GIFT_DRINK_PRICE, MAX_OPEN_CREDITS, OpenCredit,
+    ROUND_CREDIT_TTL_HOURS,
 };
 use late_core::models::drinks::UserDrinks;
 use late_core::models::game_payout::{
@@ -277,8 +277,9 @@ impl ChipService {
     }
 
     /// Leave one drink for a named patron, online or not. The same grant lock,
-    /// three-credit cap, expiry and ledger reason as a house round apply, but
-    /// only the recipient may drink: buying a gift does not pour the buyer one.
+    /// three-credit cap, expiry, pour and ledger reason as a house round apply,
+    /// priced at [`GIFT_DRINK_PRICE`] rather than a head of a round, and only
+    /// the recipient may drink: buying a gift does not pour the buyer one.
     pub async fn buy_drink_for(
         &self,
         buyer_id: Uuid,
@@ -297,7 +298,7 @@ impl ChipService {
         let grant = DrinkRound::open(
             &tx,
             buyer_id,
-            ROUND_PRICE_PER_PATRON,
+            GIFT_DRINK_PRICE,
             Bar::Tavern,
             &[recipient_id],
             ROUND_CREDIT_TTL_HOURS,
@@ -318,7 +319,7 @@ impl ChipService {
         else {
             return Err(RoundError::Refused(RoundRefusal::InsufficientChips {
                 patrons: 1,
-                total: ROUND_PRICE_PER_PATRON,
+                total: GIFT_DRINK_PRICE,
             }));
         };
         tx.commit().await.context("committing the gift drink")?;

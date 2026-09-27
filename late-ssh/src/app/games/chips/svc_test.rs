@@ -6,7 +6,9 @@ use chrono::NaiveDate;
 use late_core::{
     models::{
         chips::{ChipMove, Difficulty, INITIAL_CHIP_BALANCE, UserChips},
-        drink_round::{Bar, MAX_OPEN_CREDITS, ROUND_DRINK_POINTS, ROUND_PRICE_PER_PATRON},
+        drink_round::{
+            Bar, GIFT_DRINK_PRICE, MAX_OPEN_CREDITS, ROUND_DRINK_POINTS, ROUND_PRICE_PER_PATRON,
+        },
         drinks::{UserDrinks, drunk_level},
         reward::{
             DARKROOM_ESCAPE_REWARD_KEY, DailyPuzzleRewardGame, GREENDRAGON_DRAGON_REWARD_KEY,
@@ -777,6 +779,8 @@ async fn a_banked_round_is_drunk_one_at_a_time_with_the_rest_reported() {
     );
 }
 
+/// A gift is one credit at its own price, and the recipient still drinks the
+/// same tavern pour a round would have bought them.
 #[tokio::test]
 async fn a_personal_gift_only_pours_when_the_recipient_orders() {
     let test_db = new_test_db().await;
@@ -789,7 +793,7 @@ async fn a_personal_gift_only_pours_when_the_recipient_orders() {
         .buy_drink_for(buyer.id, recipient.id)
         .await
         .expect("gift settles");
-    assert_eq!(gift.balance, 1_000 - ROUND_PRICE_PER_PATRON);
+    assert_eq!(gift.balance, 1_000 - GIFT_DRINK_PRICE);
     assert_eq!(chips.open_round_credits(recipient.id).await.unwrap(), 1);
     let client = test_db.db.get().await.unwrap();
     assert!(UserDrinks::find(&client, buyer.id).await.unwrap().is_none());
@@ -800,7 +804,7 @@ async fn a_personal_gift_only_pours_when_the_recipient_orders() {
         )
         .await
         .unwrap();
-    assert_eq!(ledger.get::<_, i64>("delta"), -ROUND_PRICE_PER_PATRON);
+    assert_eq!(ledger.get::<_, i64>("delta"), -GIFT_DRINK_PRICE);
     assert_eq!(ledger.get::<_, &str>("source_ref"), gift.round_id.to_string());
 
     let poured = chips
@@ -830,19 +834,18 @@ async fn personal_gifts_refuse_without_charging_at_the_cap_or_chip_floor() {
         Err(RoundError::Refused(RoundRefusal::AllHolding))
     ));
     assert_eq!(chips.open_round_credits(recipient.id).await.unwrap(), MAX_OPEN_CREDITS);
-    assert_eq!(balance(&test_db.db, buyer.id).await, 700);
+    assert_eq!(balance(&test_db.db, buyer.id).await, 400);
 
     let other = create_test_user(&test_db.db, "gift-floor-recipient").await;
-    // A single gift still cannot take the buyer below the 100-chip floor.
-    for _ in 0..5 {
-        chips.buy_drink_for(buyer.id, other.id).await.unwrap();
-        chips.cash_round_drink(other.id).await.unwrap();
-    }
+    // A gift may land exactly on the 100-chip floor, never below it.
+    chips.buy_drink_for(buyer.id, other.id).await.unwrap();
+    chips.cash_round_drink(other.id).await.unwrap();
     assert_eq!(balance(&test_db.db, buyer.id).await, 200);
+    chips.grant_chips(buyer.id, 100).await.unwrap();
     chips.buy_drink_for(buyer.id, other.id).await.unwrap();
     assert!(matches!(
         chips.buy_drink_for(buyer.id, other.id).await,
-        Err(RoundError::Refused(RoundRefusal::InsufficientChips { total: 100, .. }))
+        Err(RoundError::Refused(RoundRefusal::InsufficientChips { total: 200, .. }))
     ));
     assert_eq!(balance(&test_db.db, buyer.id).await, 100);
     assert_eq!(chips.open_round_credits(other.id).await.unwrap(), 1);

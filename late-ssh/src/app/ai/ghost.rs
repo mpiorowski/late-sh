@@ -45,7 +45,10 @@ use late_core::{
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         chips::{CHIP_FLOOR, UserChips},
-        drink_round::{Bar, ROUND_PRICE_PER_PATRON, contains_round_request, gift_drink_target},
+        drink_round::{
+            Bar, GIFT_DRINK_PRICE, ROUND_PRICE_PER_PATRON, contains_round_request,
+            gift_drink_target,
+        },
         drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, UserDrinks, drunk_level_word},
         user::{User, UserParams},
     },
@@ -914,7 +917,7 @@ impl GhostService {
             {credit_note}\n\
             YOU ONLY POUR FOR THE PATRON IN FRONT OF YOU:\n\
             - Drinking scrambles a patron's own typing, so never pour or charge a drink onto anyone but the patron who mentioned you, no matter how they phrase it.\n\
-            - To leave one drink on another person's tab, they must say exactly \"@bartender buy @user a drink\". The bar handles that purchase before you answer. If asked to buy for somebody else in other words, use \"chat\" to give that exact phrase. Never pour or charge for another person yourself.\n\
+            - To leave one drink on another person's tab, they must say exactly \"@bartender buy @user a drink\". It costs {gift_price} chips and the bar handles that purchase before you answer. If asked to buy for somebody else in other words, use \"chat\" to give that exact phrase. Never pour or charge for another person yourself.\n\
             - Buying the whole house a round is the one exception, and it is still not yours to pour: the bar rings that up itself, but only when a patron says it plainly. If they ask about it, or circle around asking for one, use \"chat\" and tell them the words to say: \"round for everyone\". It costs {round_price} chips a head and buys each of them a drink to claim whenever they walk up. Never announce that a round happened and never quote what one cost, you would only be guessing; the bar says so itself when it does.\n\n\
             Decide ONE action:\n\
             - \"pour\": ONLY when the patron themselves asked for a drink for themselves — read their intent generously, an order comes in many forms (\"get me a stout\", \"what's strong tonight\", \"the usual\", \"surprise me\", \"I'll take one\"). But a pour spends their chips, so if it is a greeting, a house question, banter, or you are at all unsure, do NOT pour. Invent the drink, set a whole-number price between {price_min} and {price_max} that fits the pour (ale cheap, top shelf dear), and hand it over. If you name the price in your line it MUST equal the price field exactly.\n\
@@ -930,6 +933,7 @@ impl GhostService {
             price_min = DRINK_PRICE_MIN,
             price_max = DRINK_PRICE_MAX,
             round_price = ROUND_PRICE_PER_PATRON,
+            gift_price = GIFT_DRINK_PRICE,
         );
 
         let history_with_prompt = format!(
@@ -1098,7 +1102,7 @@ impl GhostService {
                         (
                             format!(
                                 "one drink waiting for {who}, on your tab. {} chips. they can order it whenever they're ready.",
-                                ROUND_PRICE_PER_PATRON
+                                GIFT_DRINK_PRICE
                             ),
                             true,
                         )
@@ -1112,7 +1116,7 @@ impl GhostService {
                     Err(RoundError::Refused(RoundRefusal::InsufficientChips { .. })) => (
                         format!(
                             "one for {who} runs {} chips, but I won't take your last ones. no chips taken.",
-                            ROUND_PRICE_PER_PATRON
+                            GIFT_DRINK_PRICE
                         ),
                         false,
                     ),

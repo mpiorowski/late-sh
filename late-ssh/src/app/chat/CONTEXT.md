@@ -736,7 +736,9 @@ crown's; what the room gets is a #lounge line and a free drink each.
 The same credit also serves a one-person gift: `@bartender buy @user a drink`
 is an exact, whole-message instruction (`drink_round::gift_drink_target`,
 protected from drunk-text slurring) resolved against the account username.
-It costs 100 chips, works for offline humans, shares the 24h expiry and
+It costs 200 chips (`GIFT_DRINK_PRICE`, twice a round's head, since the one
+person it is aimed at will drink it), pours the recipient the same 400 points
+a round does, works for offline humans, shares the 24h expiry and
 three-open-credit cap, and does not pour the buyer a drink. The gift and
 its floor-guarded `round_purchase` debit commit together through
 `ChipService::buy_drink_for`; self-gifts, bot targets, unknown names, full
