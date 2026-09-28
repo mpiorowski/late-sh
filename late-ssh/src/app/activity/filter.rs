@@ -134,7 +134,7 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // The pot's draw: once a week. The size itself rides the status HUD
         // all week; the only nudge before the draw is the one last call below.
         ActivityKind::PotDrawn { .. } => true,
-        // The other pot line: half an hour before the draw, once per pot,
+        // The other pot line: an hour before the draw, once per pot,
         // so anyone who meant to buy in still can.
         ActivityKind::PotClosing { .. } => true,
         // Publishing on cyberspace: our user's own action, rare by their API
@@ -236,7 +236,7 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
             "\u{1F3B0} Pot {} on {} tickets, draws in {}. /pot buy N at {} each.",
             thousands(*size),
             thousands(*total_tickets),
-            crate::app::pot::state::short_duration(*draws_in_secs),
+            crate::app::pot::state::lead_time(*draws_in_secs),
             thousands(*ticket_price)
         )),
         // A stream on air is an invitation that outlives the ticker: who,

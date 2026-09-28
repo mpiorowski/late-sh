@@ -74,70 +74,64 @@ fn a_state_that_does_not_read_has_no_summary() {
     assert!(MatchSummary::of(DailyGame::Chess, &serde_json::json!({})).is_none());
 }
 
-/// Drives the picker through one lobby's afternoon: a move, an aim elsewhere,
-/// the aim going quiet, and the hold running out.
+/// Drives the picker through one lobby's afternoon from the writes alone:
+/// three moves a few seconds apart each get their minute in order, an aim
+/// jumps the queue, and the clock is the only thing a session brings.
 #[test]
-fn activity_takes_the_strip_and_recency_takes_it_back() {
+fn every_session_picks_the_same_match_from_the_writes_alone() {
     let start = Instant::now();
-    let at = |secs: u64| start + Duration::from_secs(secs);
-    let (chess, pool) = (Uuid::from_u128(10), Uuid::from_u128(20));
-    let written = |minute: u32| Utc.with_ymd_and_hms(2026, 9, 28, 14, minute, 0).unwrap();
+    let t0 = Utc.with_ymd_and_hms(2026, 9, 28, 14, 0, 0).unwrap();
+    let at = |secs: i64| t0 + chrono::Duration::seconds(secs);
+    let (chess, pool, reversi) = (
+        Uuid::from_u128(10),
+        Uuid::from_u128(20),
+        Uuid::from_u128(30),
+    );
     let candidates = |pool_aimed_at: Option<Instant>| {
         vec![
             LiveCandidate {
+                id: reversi,
+                updated: at(20),
+                aimed_at: None,
+            },
+            LiveCandidate {
                 id: chess,
-                updated: written(30),
+                updated: at(0),
                 aimed_at: None,
             },
             LiveCandidate {
                 id: pool,
-                updated: written(10),
+                updated: at(10),
                 aimed_at: pool_aimed_at,
             },
         ]
     };
+    let pick = |now_secs: i64| pick_featured(&candidates(None), at(now_secs), start);
 
-    // Nobody aiming: the match that moved last goes up.
-    let first = pick_featured(None, &candidates(None), at(0));
+    // The first write goes up; the two behind it wait their turn.
+    assert_eq!(pick(5), Some(chess));
     assert_eq!(
-        first,
-        Some(Featured {
-            id: chess,
-            since: at(0)
-        })
+        pick(30),
+        Some(chess),
+        "the pool move landed, chess keeps its minute"
     );
+    assert_eq!(pick(70), Some(pool), "pool took over when the hold ran out");
+    assert_eq!(pick(130), Some(reversi), "then reversi, a minute later");
+    assert_eq!(pick(10_000), Some(reversi), "and stays, nothing newer");
 
-    // Somebody picks up a cue: they take the strip even inside the hold.
-    let aiming = pick_featured(first, &candidates(Some(at(5))), at(5));
+    // A cue being lined up takes the strip whatever the clock says, and
+    // the replay resumes when it is put down.
+    let aimed = candidates(Some(start));
     assert_eq!(
-        aiming,
-        Some(Featured {
-            id: pool,
-            since: at(5)
-        })
-    );
-
-    // Still aiming a minute later: the table stays up, its clock unchanged.
-    let still = pick_featured(aiming, &candidates(Some(at(64))), at(65));
-    assert_eq!(still, aiming);
-
-    // They put the cue down: the hold is long spent, so recency wins again.
-    let after = pick_featured(still, &candidates(Some(at(65))), at(65) + LIVE_AIM_WINDOW);
-    assert_eq!(
-        after,
-        Some(Featured {
-            id: chess,
-            since: at(65) + LIVE_AIM_WINDOW,
-        })
-    );
-
-    // The featured match leaving the lobby frees the strip for what is left.
-    let alone = [candidates(None)[1]];
-    assert_eq!(
-        pick_featured(after, &alone, at(200)).map(|f| f.id),
+        pick_featured(&aimed, at(130), start + LIVE_AIM_WINDOW / 2),
         Some(pool)
     );
-    assert_eq!(pick_featured(after, &[], at(200)), None);
+    assert_eq!(
+        pick_featured(&aimed, at(130), start + LIVE_AIM_WINDOW),
+        Some(reversi)
+    );
+
+    assert_eq!(pick_featured(&[], at(130), start), None);
 }
 
 /// The strip goes up on a write and comes down `LIVE_STRIP_LINGER` later,

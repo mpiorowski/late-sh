@@ -128,55 +128,51 @@ pub struct LiveCandidate {
     pub aimed_at: Option<Instant>,
 }
 
-/// The featured match and when it went up.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Featured {
-    pub id: Uuid,
-    pub since: Instant,
-}
-
-/// Pick the match the #lounge strip features.
+/// Pick the match the #lounge strip features, from data every session and
+/// every replica shares: the rows' `updated` stamps and the wall clock.
+/// Nothing per session goes in (which match a session saw first, when its
+/// tick ran), so everyone in the room lands on the same board.
 ///
-/// Activity wins, then recency, and the current pick is sticky: it stays
-/// while someone is aiming at it, and for `LIVE_HOLD` after it went up
-/// unless someone starts aiming elsewhere. Otherwise the freshest aimer
-/// takes it, and failing that the match whose row was written last.
+/// A fresh aim wins outright, the freshest if several. Otherwise the writes
+/// are replayed in order: a match that takes the strip keeps it for
+/// `LIVE_HOLD` from the moment it took it, and the next write in line takes
+/// over at its own stamp or the end of that hold, whichever is later. So two
+/// moves a minute apart each get their minute, in order, and a session that
+/// connects mid-hold sees what everyone else sees.
 pub fn pick_featured(
-    current: Option<Featured>,
     candidates: &[LiveCandidate],
+    now_utc: DateTime<Utc>,
     now: Instant,
-) -> Option<Featured> {
-    let aiming = |candidate: &LiveCandidate| {
+) -> Option<Uuid> {
+    let aiming = |candidate: &&LiveCandidate| {
         candidate
             .aimed_at
             .is_some_and(|at| now.saturating_duration_since(at) < LIVE_AIM_WINDOW)
     };
-    let anyone_aiming = candidates.iter().any(aiming);
-    if let Some(current) = current
-        && let Some(candidate) = candidates.iter().find(|c| c.id == current.id)
-    {
-        let held = now.saturating_duration_since(current.since) < LIVE_HOLD;
-        if aiming(candidate) || (held && !anyone_aiming) {
-            return Some(current);
-        }
-    }
-    let freshest_aim = candidates
+    if let Some(candidate) = candidates
         .iter()
-        .filter(|candidate| aiming(candidate))
-        .max_by_key(|candidate| candidate.aimed_at);
-    let pick = match freshest_aim {
-        Some(candidate) => candidate,
-        None => candidates
-            .iter()
-            .max_by_key(|candidate| candidate.updated)?,
-    };
-    match current {
-        Some(current) if current.id == pick.id => Some(current),
-        _ => Some(Featured {
-            id: pick.id,
-            since: now,
-        }),
+        .filter(aiming)
+        .max_by_key(|candidate| candidate.aimed_at)
+    {
+        return Some(candidate.id);
     }
+    let hold = chrono::Duration::from_std(LIVE_HOLD).expect("hold fits chrono");
+    let mut ordered: Vec<&LiveCandidate> = candidates.iter().collect();
+    // The id breaks a tie between two rows stamped the same instant, so
+    // the order is the same on every session.
+    ordered.sort_by_key(|candidate| (candidate.updated, candidate.id));
+    let mut ordered = ordered.into_iter();
+    let first = ordered.next()?;
+    let (mut shown, mut shown_at) = (first.id, first.updated);
+    for next in ordered {
+        let takeover = next.updated.max(shown_at + hold);
+        if takeover > now_utc {
+            break;
+        }
+        shown = next.id;
+        shown_at = takeover;
+    }
+    Some(shown)
 }
 
 /// What the snapshot reads off one active match's state JSON: the summary

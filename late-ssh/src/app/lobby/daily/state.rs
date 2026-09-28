@@ -33,7 +33,7 @@ use super::{
     connect4::DailyConnect4State,
     games::DailyGame,
     live::{
-        Featured, LIVE_AIM_WINDOW, LIVE_FINISH_LINGER, LiveCandidate, LiveStripView, LiveView,
+        LIVE_AIM_WINDOW, LIVE_FINISH_LINGER, LiveCandidate, LiveStripView, LiveView,
         finish_headline, pick_featured, strip_is_fresh,
     },
     pool::{DailyPoolState, PoolAimShare},
@@ -124,7 +124,7 @@ pub struct DailyState {
     /// `LIVE_AIM_WINDOW` on every tick, so it holds tables in play right now.
     live_aims: HashMap<Uuid, (PoolAimShare, Instant)>,
     /// The match the #lounge strip features (`live::pick_featured`).
-    live_featured: Option<Featured>,
+    live_featured: Option<Uuid>,
     /// Active matches that left the snapshot with a board, oldest first,
     /// capped at `LIVE_VANISHED_CAP`. A finish event can land after the
     /// snapshot already dropped its match, and the strip wants that match's
@@ -654,8 +654,9 @@ impl DailyState {
             changed = true;
         }
         let now = Instant::now();
-        let featured_changed = self.refresh_live_featured(now);
-        let strip_changed = self.refresh_live_strip(now, Utc::now(), reading);
+        let now_utc = Utc::now();
+        let featured_changed = self.refresh_live_featured(now, now_utc);
+        let strip_changed = self.refresh_live_strip(now, now_utc, reading);
         // A new featured match is only news while the strip is showing it.
         if strip_changed || (featured_changed && self.live_strip == Some(StripPick::Live)) {
             changed = true;
@@ -905,7 +906,7 @@ impl DailyState {
     /// Re-pick the featured match: drop stale aims, then run
     /// `pick_featured` over every active match that has a board, the
     /// viewer's own included. True when the featured match changed.
-    fn refresh_live_featured(&mut self, now: Instant) -> bool {
+    fn refresh_live_featured(&mut self, now: Instant, now_utc: DateTime<Utc>) -> bool {
         self.live_aims
             .retain(|_, (_, at)| now.saturating_duration_since(*at) < LIVE_AIM_WINDOW);
         let candidates: Vec<LiveCandidate> = self
@@ -919,8 +920,8 @@ impl DailyState {
                 aimed_at: self.live_aims.get(&item.id).map(|(_, at)| *at),
             })
             .collect();
-        let next = pick_featured(self.live_featured, &candidates, now);
-        let changed = next.map(|f| f.id) != self.live_featured.map(|f| f.id);
+        let next = pick_featured(&candidates, now_utc, now);
+        let changed = next != self.live_featured;
         self.live_featured = next;
         changed
     }
@@ -933,7 +934,7 @@ impl DailyState {
             .snapshot
             .active_matches
             .iter()
-            .find(|item| item.id == featured.id)?;
+            .find(|item| item.id == featured)?;
         let board = item.board.as_ref()?;
         let aim = self
             .live_aims

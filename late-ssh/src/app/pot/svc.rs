@@ -50,7 +50,7 @@ const POT_EVENT_CAP: usize = 32;
 const POT_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
 /// How long before the draw #lounge gets the pot's last call.
-const POT_REMINDER_LEAD_SECS: i64 = 30 * 60;
+const POT_REMINDER_LEAD_SECS: i64 = 60 * 60;
 
 /// How a sweep's reminder arm ended, for the metric. A sweep that found no
 /// pot in its window records nothing: that is every other minute of the week.
@@ -70,7 +70,7 @@ pub struct PotReminder {
     pub total_tickets: i64,
     pub ticket_price: i64,
     /// Rounded up to the minute: the sweeper lands a few seconds inside the
-    /// window, and "draws in 29m" for a half-hour call reads like a typo.
+    /// window, and "draws in 59m" for an hour's call reads like a typo.
     pub draws_in_secs: i64,
 }
 

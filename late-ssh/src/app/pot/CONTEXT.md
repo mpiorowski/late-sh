@@ -151,9 +151,9 @@ Three `ActivityKind` arms, all explicit in `filter::lounge_includes`:
   also reaches them as a mention notification; the ticker line keeps the
   bare name.
 - `PotClosing { pot_id, size, total_tickets, ticket_price, draws_in_secs }`
-  -> ticker "pot draws in 30m: 34,700 chips on 347 tickets" plus the headline
-  "🎰 Pot 34,700 on 347 tickets, draws in 30m. /pot buy N at 100 each.", the
-  last call (`POT_REMINDER_LEAD_SECS`, 30 minutes). Every sweep tries
+  -> ticker "pot draws in 1h: 34,700 chips on 347 tickets" plus the headline
+  "🎰 Pot 34,700 on 347 tickets, draws in 1h. /pot buy N at 100 each.", the
+  last call (`POT_REMINDER_LEAD_SECS`, one hour). Every sweep tries
   `Pot::claim_reminder`, a guarded UPDATE stamping `pots.reminded_at`
   (migration 196), so exactly one sweeper across every replica posts it, and
   only inside the window. The same statement reads the ticket total, so the

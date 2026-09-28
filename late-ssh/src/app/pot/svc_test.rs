@@ -444,10 +444,10 @@ async fn a_session_only_reads_its_own_holding() {
     assert_eq!(service.status_for(theirs.id).ticket_count, 9);
 }
 
-/// Half an hour out, one sweeper claims the reminder with the pot's numbers
+/// An hour out, one sweeper claims the reminder with the pot's numbers
 /// and every sweeper after it, on any replica, gets nothing.
 #[tokio::test]
-async fn the_reminder_fires_once_half_an_hour_before_the_draw() {
+async fn the_reminder_fires_once_an_hour_before_the_draw() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let first = PotService::new(test_db.db.clone());
@@ -475,7 +475,7 @@ async fn the_reminder_fires_once_half_an_hour_before_the_draw() {
 
     client
         .execute(
-            "UPDATE pots SET draws_at = current_timestamp + interval '29 minutes 30 seconds'
+            "UPDATE pots SET draws_at = current_timestamp + interval '59 minutes 30 seconds'
              WHERE status = 'open'",
             &[],
         )
@@ -499,7 +499,7 @@ async fn the_reminder_fires_once_half_an_hour_before_the_draw() {
             size: 3 * POT_TICKET_PRICE,
             total_tickets: 3,
             ticket_price: POT_TICKET_PRICE,
-            draws_in_secs: 30 * 60,
+            draws_in_secs: 60 * 60,
         }]
     );
 }
