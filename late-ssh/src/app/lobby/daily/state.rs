@@ -32,6 +32,10 @@ use super::{
     checkers::DailyCheckersState,
     connect4::DailyConnect4State,
     games::DailyGame,
+    live::{
+        Featured, LIVE_AIM_WINDOW, LIVE_FINISH_LINGER, LiveCandidate, LiveStripView, LiveView,
+        finish_headline, pick_featured, strip_is_fresh,
+    },
     pool::{DailyPoolState, PoolAimShare},
     pool_draft::{PoolCueHit, PoolDetail, PoolDraft, PoolPlayback, should_share_aim},
     reversi::DailyReversiState,
@@ -114,6 +118,48 @@ pub struct DailyState {
     own_loss: bool,
 
     pub board: Option<DailyBoardState>,
+
+    /// The latest aim per match another player is lining up, and when it
+    /// arrived. Presentation only, like the aim itself: pruned past
+    /// `LIVE_AIM_WINDOW` on every tick, so it holds tables in play right now.
+    live_aims: HashMap<Uuid, (PoolAimShare, Instant)>,
+    /// The match the #lounge strip features (`live::pick_featured`).
+    live_featured: Option<Featured>,
+    /// Active matches that left the snapshot with a board, oldest first,
+    /// capped at `LIVE_VANISHED_CAP`. A finish event can land after the
+    /// snapshot already dropped its match, and the strip wants that match's
+    /// final position (`hold_finish`).
+    live_vanished: Vec<DailyMatchItem>,
+    /// A match that just ended, held for the #lounge strip.
+    live_finish: Option<LiveFinish>,
+    /// What the #lounge strip shows, decided on the tick
+    /// (`refresh_live_strip`) so a change of height is a change of frame.
+    live_strip: Option<StripPick>,
+    /// Where the #lounge strip drew this frame and which match it showed,
+    /// for the click that opens it. Render-recorded, cleared before every
+    /// draw; a finished match records nothing, there is no board to open.
+    pub live_strip_hit: Cell<Option<(Rect, Uuid)>>,
+}
+
+/// How many vanished matches `DailyState::live_vanished` keeps: a finish
+/// lands within a tick or two of its snapshot, so a handful covers a burst.
+const LIVE_VANISHED_CAP: usize = 4;
+
+/// A match that just ended, as the #lounge strip shows it: its last known
+/// position and the result line.
+struct LiveFinish {
+    item: DailyMatchItem,
+    headline: String,
+    at: Instant,
+}
+
+/// What the #lounge strip is showing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StripPick {
+    /// The featured match (`live_view`).
+    Live,
+    /// The match that just ended (`live_finish`).
+    Finish,
 }
 
 /// Full-screen correspondence board (`Screen::DailyMatch`).
@@ -546,6 +592,12 @@ impl DailyState {
             own_win: false,
             own_loss: false,
             board: None,
+            live_aims: HashMap::new(),
+            live_featured: None,
+            live_vanished: Vec::new(),
+            live_finish: None,
+            live_strip: None,
+            live_strip_hit: Cell::new(None),
         }
     }
 
@@ -557,11 +609,15 @@ impl DailyState {
     /// flight. Returns a banner for events targeted at this user plus
     /// whether anything drained may have changed render-visible state
     /// (board, lobby glow, turn markers).
-    pub fn tick(&mut self) -> DailyTick {
+    /// `reading` is whether the viewer has a message selected in the
+    /// #lounge card: the strip then holds its height (`refresh_live_strip`).
+    pub fn tick(&mut self, reading: bool) -> DailyTick {
         let mut banner = None;
         let mut changed = false;
         if self.snapshot_rx.has_changed().unwrap_or(false) {
-            self.snapshot = self.snapshot_rx.borrow_and_update().clone();
+            let next = self.snapshot_rx.borrow_and_update().clone();
+            self.note_vanished(&next);
+            self.snapshot = next;
             self.notify_turn_edges();
             changed = true;
         }
@@ -595,6 +651,13 @@ impl DailyState {
             changed = true;
         }
         if self.drive_pool_playback() {
+            changed = true;
+        }
+        let now = Instant::now();
+        let featured_changed = self.refresh_live_featured(now);
+        let strip_changed = self.refresh_live_strip(now, Utc::now(), reading);
+        // A new featured match is only news while the strip is showing it.
+        if strip_changed || (featured_changed && self.live_strip == Some(StripPick::Live)) {
             changed = true;
         }
         DailyTick {
@@ -644,6 +707,7 @@ impl DailyState {
                     self.request_board_reload();
                     reloaded = true;
                 }
+                let held = self.hold_finish(match_id, outcome, &result);
                 let playing = challenger_id == self.user_id || opponent_id == Some(self.user_id);
                 let banner = match outcome {
                     DailyFinishOutcome::Won { user_id, payout } if user_id == self.user_id => {
@@ -688,8 +752,9 @@ impl DailyState {
                     DailyFinishOutcome::Won { .. } | DailyFinishOutcome::Draw => None,
                 };
                 // A match you are not in, finishing while you are not watching
-                // it, is news for the lobby snapshot and not for this frame.
-                let changed = reloaded || banner.is_some();
+                // it, is news for the lobby snapshot and not for this frame,
+                // unless the #lounge strip took its final board.
+                let changed = reloaded || banner.is_some() || held;
                 EventEffect { banner, changed }
             }
             // Somebody is lining up a shot on a table this session has open.
@@ -701,6 +766,13 @@ impl DailyState {
                 by_user_id,
                 aim,
             } => {
+                // Every other player's aim is also news for the #lounge strip.
+                // It is stored, not repainted: the strip repaints on the
+                // half-tick edge while it draws a cue (`live_strip_aiming`),
+                // so a shooter sweeping the cue costs no frames beyond that.
+                if by_user_id != self.user_id {
+                    self.live_aims.insert(match_id, (aim, Instant::now()));
+                }
                 let mut drawn_on = false;
                 if by_user_id != self.user_id
                     && let Some(board) = &mut self.board
@@ -828,6 +900,180 @@ impl DailyState {
             .collect();
         matches.sort_by_key(|item| (item.turn_deadline_at, item.id));
         matches
+    }
+
+    /// Re-pick the featured match: drop stale aims, then run
+    /// `pick_featured` over every active match that has a board, the
+    /// viewer's own included. True when the featured match changed.
+    fn refresh_live_featured(&mut self, now: Instant) -> bool {
+        self.live_aims
+            .retain(|_, (_, at)| now.saturating_duration_since(*at) < LIVE_AIM_WINDOW);
+        let candidates: Vec<LiveCandidate> = self
+            .snapshot
+            .active_matches
+            .iter()
+            .filter(|item| item.board.is_some())
+            .map(|item| LiveCandidate {
+                id: item.id,
+                updated: item.updated,
+                aimed_at: self.live_aims.get(&item.id).map(|(_, at)| *at),
+            })
+            .collect();
+        let next = pick_featured(self.live_featured, &candidates, now);
+        let changed = next.map(|f| f.id) != self.live_featured.map(|f| f.id);
+        self.live_featured = next;
+        changed
+    }
+
+    /// The featured match, its board, and a fresh aim if its shooter is
+    /// lining up. `None` when no match is on.
+    fn live_view(&self) -> Option<LiveView<'_>> {
+        let featured = self.live_featured?;
+        let item = self
+            .snapshot
+            .active_matches
+            .iter()
+            .find(|item| item.id == featured.id)?;
+        let board = item.board.as_ref()?;
+        let aim = self
+            .live_aims
+            .get(&item.id)
+            .filter(|(_, at)| at.elapsed() < LIVE_AIM_WINDOW)
+            .map(|(aim, _)| aim);
+        Some(LiveView { item, board, aim })
+    }
+
+    /// Remember active matches the incoming snapshot no longer lists, so a
+    /// finish event arriving after it can still show their final board.
+    fn note_vanished(&mut self, next: &DailySnapshot) {
+        for item in &self.snapshot.active_matches {
+            if item.board.is_some() && !next.active_matches.iter().any(|n| n.id == item.id) {
+                self.live_vanished.push(item.clone());
+            }
+        }
+        let extra = self.live_vanished.len().saturating_sub(LIVE_VANISHED_CAP);
+        self.live_vanished.drain(..extra);
+    }
+
+    /// Take a finished match's last known position for the #lounge strip.
+    /// True when there was one to take; a match whose state never read (no
+    /// board) has nothing to show.
+    fn hold_finish(&mut self, match_id: Uuid, outcome: DailyFinishOutcome, result: &str) -> bool {
+        let item = match self
+            .snapshot
+            .active_matches
+            .iter()
+            .find(|item| item.id == match_id)
+        {
+            Some(item) => Some(item.clone()),
+            None => {
+                let at = self
+                    .live_vanished
+                    .iter()
+                    .rposition(|item| item.id == match_id);
+                at.map(|at| self.live_vanished.remove(at))
+            }
+        };
+        let Some(item) = item else {
+            return false;
+        };
+        if item.board.is_none() {
+            return false;
+        }
+        let headline = finish_headline(&item, outcome, result);
+        self.live_finish = Some(LiveFinish {
+            item,
+            headline,
+            at: Instant::now(),
+        });
+        true
+    }
+
+    /// Decide what the #lounge strip shows: a fresh aim beats everything, a
+    /// match that ended inside `LIVE_FINISH_LINGER` beats a move, a move
+    /// inside `LIVE_STRIP_LINGER` beats nothing. Going up or coming down
+    /// waits while the viewer is reading, so the messages never shift under
+    /// a selection. True when the strip's contents changed.
+    fn refresh_live_strip(&mut self, now: Instant, now_utc: DateTime<Utc>, reading: bool) -> bool {
+        let live = self.live_view();
+        let aiming = live.as_ref().is_some_and(|view| view.aim.is_some());
+        let live_fresh = live.as_ref().is_some_and(|view| {
+            strip_is_fresh(
+                view.item.updated,
+                self.live_aims.get(&view.item.id).map(|(_, at)| *at),
+                now_utc,
+                now,
+            )
+        });
+        let finish_fresh = self
+            .live_finish
+            .as_ref()
+            .is_some_and(|finish| now.saturating_duration_since(finish.at) < LIVE_FINISH_LINGER);
+        let want = if aiming {
+            Some(StripPick::Live)
+        } else if finish_fresh {
+            Some(StripPick::Finish)
+        } else if live_fresh {
+            Some(StripPick::Live)
+        } else {
+            None
+        };
+        if want == self.live_strip {
+            return false;
+        }
+        let height_changes = want.is_none() || self.live_strip.is_none();
+        let still_showable = match self.live_strip {
+            Some(StripPick::Live) => live.is_some(),
+            Some(StripPick::Finish) => self.live_finish.is_some(),
+            None => true,
+        };
+        if reading && height_changes && still_showable {
+            return false;
+        }
+        self.live_strip = want;
+        if want != Some(StripPick::Finish) && !finish_fresh {
+            self.live_finish = None;
+        }
+        true
+    }
+
+    /// What the #lounge strip paints, if it is up.
+    pub fn live_strip_view(&self) -> Option<LiveStripView<'_>> {
+        match self.live_strip? {
+            StripPick::Live => Some(LiveStripView {
+                view: self.live_view()?,
+                finish: None,
+            }),
+            StripPick::Finish => {
+                let finish = self.live_finish.as_ref()?;
+                let board = finish.item.board.as_ref()?;
+                Some(LiveStripView {
+                    view: LiveView {
+                        item: &finish.item,
+                        board,
+                        aim: None,
+                    },
+                    finish: Some(finish.headline.as_str()),
+                })
+            }
+        }
+    }
+
+    /// Whether the #lounge strip is drawing a cue right now, so the frame
+    /// that shows it rides the half-tick.
+    pub fn live_strip_aiming(&self) -> bool {
+        self.live_strip == Some(StripPick::Live)
+            && self.live_view().is_some_and(|view| view.aim.is_some())
+    }
+
+    /// The featured match, for the click that opens it: read-only for a
+    /// spectator, playable for one of its players (`open_board` decides).
+    pub fn live_item(&self, match_id: Uuid) -> Option<DailyMatchItem> {
+        self.snapshot
+            .active_matches
+            .iter()
+            .find(|item| item.id == match_id)
+            .cloned()
     }
 
     /// Open challenges + active matches counted against the per-user cap.

@@ -34,6 +34,7 @@ use super::{
     checkers::DailyCheckersState,
     connect4::DailyConnect4State,
     games::DailyGame,
+    live::{LiveBoard, MatchSummary},
     pool::{DailyPoolState, PoolAimShare},
     reversi::DailyReversiState,
 };
@@ -101,6 +102,12 @@ pub struct DailyMatchItem {
     pub turn_deadline_at: Option<DateTime<Utc>>,
     /// Chess moves or battleship shots — "how far along is this match".
     pub move_count: usize,
+    /// The row's last write: the claim, then every move. The #lounge strip
+    /// features the match with the newest one.
+    pub updated: DateTime<Utc>,
+    /// The position as a spectator sees it (`live.rs`); `None` when the
+    /// state JSON did not read as this game's state.
+    pub board: Option<LiveBoard>,
 }
 
 #[derive(Clone, Debug)]
@@ -378,7 +385,7 @@ fn prepare_pool_shot(
 impl DailyChessState {
     /// `start` is the opening position: `Board::default()` for chess, a
     /// shuffled back rank for chess960. Everything after it is the same game.
-    fn new(white: Uuid, black: Uuid, start: &Board) -> Self {
+    pub(crate) fn new(white: Uuid, black: Uuid, start: &Board) -> Self {
         let fen = rules::fen(start);
         Self {
             version: DAILY_STATE_VERSION,
@@ -1945,92 +1952,13 @@ impl DailyService {
             .filter_map(|row| {
                 let opponent_id = row.opponent_id?;
                 let game = DailyGame::from_kind(&row.game_kind)?;
-                let (white_id, black_id, move_count) = match game {
-                    DailyGame::Chess | DailyGame::Chess960 => {
-                        let state = DailyChessState::parse(&row.state).ok();
-                        (
-                            state.as_ref().map(|state| state.colors.white),
-                            state.as_ref().map(|state| state.colors.black),
-                            state
-                                .as_ref()
-                                .map(|state| state.move_history.len())
-                                .unwrap_or(0),
-                        )
-                    }
-                    DailyGame::Battleship => {
-                        let state = DailyBattleshipState::parse(&row.state).ok();
-                        (
-                            None,
-                            None,
-                            state
-                                .as_ref()
-                                .map(DailyBattleshipState::shot_count)
-                                .unwrap_or(0),
-                        )
-                    }
-                    DailyGame::ConnectFour => {
-                        let state = DailyConnect4State::parse(&row.state).ok();
-                        (
-                            None,
-                            None,
-                            state
-                                .as_ref()
-                                .map(DailyConnect4State::move_count)
-                                .unwrap_or(0),
-                        )
-                    }
-                    DailyGame::Reversi => {
-                        let state = DailyReversiState::parse(&row.state).ok();
-                        (
-                            None,
-                            None,
-                            state
-                                .as_ref()
-                                .map(DailyReversiState::move_count)
-                                .unwrap_or(0),
-                        )
-                    }
-                    DailyGame::Checkers => {
-                        let state = DailyCheckersState::parse(&row.state).ok();
-                        (
-                            None,
-                            None,
-                            state
-                                .as_ref()
-                                .map(DailyCheckersState::move_count)
-                                .unwrap_or(0),
-                        )
-                    }
-                    DailyGame::Backgammon => {
-                        let state = DailyBackgammonState::parse(&row.state).ok();
-                        (
-                            None,
-                            None,
-                            state
-                                .as_ref()
-                                .map(DailyBackgammonState::move_count)
-                                .unwrap_or(0),
-                        )
-                    }
-                    DailyGame::Briscola => {
-                        let state = DailyBriscolaState::parse(&row.state).ok();
-                        (
-                            None,
-                            None,
-                            state
-                                .as_ref()
-                                .map(DailyBriscolaState::move_count)
-                                .unwrap_or(0),
-                        )
-                    }
-                    DailyGame::EightBall | DailyGame::NineBall | DailyGame::Snooker => {
-                        let state = DailyPoolState::parse(&row.state).ok();
-                        (
-                            None,
-                            None,
-                            state.as_ref().map(DailyPoolState::move_count).unwrap_or(0),
-                        )
-                    }
+                // One read of the state JSON serves the row summary and the
+                // live board; a state this build cannot read lists the match
+                // with an empty summary, as it always has.
+                let summary = MatchSummary::of(game, &row.state);
+                let (white_id, black_id, move_count) = match &summary {
+                    Some(summary) => (summary.white_id, summary.black_id, summary.move_count),
+                    None => (None, None, 0),
                 };
                 Some(DailyMatchItem {
                     id: row.id,
@@ -2044,6 +1972,8 @@ impl DailyService {
                     turn_user_id: row.turn_user_id,
                     turn_deadline_at: row.turn_deadline_at,
                     move_count,
+                    updated: row.updated,
+                    board: summary.map(|summary| summary.board),
                 })
             })
             .collect();

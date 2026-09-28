@@ -3008,6 +3008,7 @@ fn room_header_puts_the_topic_left_and_the_rules_hint_right() {
                     voice: None,
                     topic: super::room_topic(&room),
                     has_rules: super::room_has_rules(&room),
+                    closing_rule: true,
                 },
             )
         })
@@ -3047,6 +3048,7 @@ fn room_header_is_absent_without_a_topic_or_voice() {
                     voice: None,
                     topic: super::room_topic(&room),
                     has_rules: super::room_has_rules(&room),
+                    closing_rule: true,
                 },
             )
         })
@@ -3070,6 +3072,7 @@ fn room_header_omits_the_hint_when_there_are_no_rules() {
                     voice: None,
                     topic: super::room_topic(&room),
                     has_rules: super::room_has_rules(&room),
+                    closing_rule: true,
                 },
             );
         })

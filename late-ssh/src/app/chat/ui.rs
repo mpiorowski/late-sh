@@ -154,6 +154,12 @@ pub struct DashboardChatView<'a> {
     pub translation_hidden: &'a HashSet<Uuid>,
     pub active_room_effects: &'a [ActiveChatRoomEffect],
     pub active_poll: Option<&'a ActiveChatPoll>,
+    /// The #lounge live strip (`lobby/daily/live_strip.rs`): one daily
+    /// match something just happened to, drawn above the poll strip. `None`
+    /// when nothing is live; the card then looks as it always has.
+    pub live_strip: Option<crate::app::lobby::daily::live::LiveStripView<'a>>,
+    /// Receives the strip's rect and match for the click that opens it.
+    pub live_strip_hit: &'a std::cell::Cell<Option<(Rect, Uuid)>>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
@@ -1187,10 +1193,32 @@ pub fn draw_dashboard_chat_card(
                     .find(|stream| stream.room_id == room.id)
             }),
             voice,
-            topic: view.room.and_then(room_topic),
-            has_rules: view.room.is_some_and(room_has_rules),
+            // The live strip stands in for the topic while it is up: the
+            // board is the room's news, and the topic is a key away in
+            // `/rules`. Voice and stream rows carry live state, so they stay.
+            topic: view
+                .room
+                .and_then(room_topic)
+                .filter(|_| view.live_strip.is_none()),
+            has_rules: view.room.is_some_and(room_has_rules) && view.live_strip.is_none(),
+            closing_rule: view.live_strip.is_none(),
         },
     );
+    // The live strip takes its rows off the top, so the newest messages,
+    // anchored at the bottom, stay where they are when it comes and goes.
+    if let Some(strip) = &view.live_strip
+        && let Some((size, strip_area, rest)) =
+            crate::app::lobby::daily::live_strip::fit_live_strip(messages_area)
+    {
+        crate::app::lobby::daily::live_strip::draw_live_strip(
+            frame,
+            strip_area,
+            size,
+            strip,
+            view.live_strip_hit,
+        );
+        messages_area = rest;
+    }
     let (poll_area, messages_area) = split_poll_and_messages(messages_area, view.active_poll);
 
     let lines: Vec<Line<'static>>;
@@ -5029,12 +5057,15 @@ struct RoomHeader<'a> {
     voice: Option<crate::app::voice::ui::VoiceRoomView<'a>>,
     topic: Option<&'a str>,
     has_rules: bool,
+    /// Whether the block ends in a rule. False when the daily live strip
+    /// follows: the strip brings its own rule under the board.
+    closing_rule: bool,
 }
 
 impl RoomHeader<'_> {
     /// Rows this header wants: one per present row (stream, voice, topic),
-    /// a divider between each adjacent pair, and a closing rule that
-    /// separates the whole block from the messages.
+    /// a divider between each adjacent pair, and the closing rule that
+    /// separates the whole block from the messages when it has one.
     fn height(&self) -> u16 {
         let rows = u16::from(self.stream.is_some())
             + u16::from(self.voice.is_some())
@@ -5042,7 +5073,7 @@ impl RoomHeader<'_> {
         if rows == 0 {
             return 0;
         }
-        rows + (rows - 1) + 1
+        rows + (rows - 1) + u16::from(self.closing_rule)
     }
 }
 
@@ -5182,7 +5213,9 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
         )));
     }
     // Closes the block off from the conversation below it.
-    lines.push(rule());
+    if header.closing_rule {
+        lines.push(rule());
+    }
 
     frame.render_widget(Paragraph::new(lines), Rect { height, ..area });
     Rect {
@@ -5310,6 +5343,7 @@ fn draw_selected_content(
                     voice,
                     topic: room_topic(room),
                     has_rules: room_has_rules(room),
+                    closing_rule: true,
                 },
             )
         } else {

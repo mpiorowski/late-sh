@@ -56,7 +56,7 @@ async fn only_events_this_session_can_see_cost_a_repaint() {
     let (notifier, _outbox) = crate::app::notify::channel();
     let mut state = DailyState::new(svc.clone(), me.id, notifier);
     // Settle the construction snapshot so later ticks are quiet.
-    let _ = state.tick();
+    let _ = state.tick(false);
 
     let elsewhere = Uuid::from_u128(42);
     let aim = PoolAimShare {
@@ -73,7 +73,7 @@ async fn only_events_this_session_can_see_cost_a_repaint() {
     // Repainting for it rebuilds a frame on every session on the replica,
     // several times a second, for as long as anybody is aiming anywhere.
     svc.publish_aim(elsewhere, them.id, aim);
-    let tick = state.tick();
+    let tick = state.tick(false);
     assert!(
         !tick.changed,
         "an aim on a table this session is not at must not repaint it"
@@ -83,7 +83,10 @@ async fn only_events_this_session_can_see_cost_a_repaint() {
     // Nor does this session's own aim echoing back: the draft it is being
     // given right now is already on the board.
     svc.publish_aim(elsewhere, me.id, aim);
-    assert!(!state.tick().changed, "my own aim comes back to me unread");
+    assert!(
+        !state.tick(false).changed,
+        "my own aim comes back to me unread"
+    );
 
     // A move in a match this session is not watching is the lobby snapshot's
     // news, and the snapshot raises its own flag.
@@ -145,26 +148,26 @@ async fn a_finished_match_tells_the_pet_win_or_loss_and_a_draw_tells_it_nothing(
     };
 
     // Nothing finished: nothing to tell.
-    let quiet = state.tick();
+    let quiet = state.tick(false);
     assert!(!quiet.own_win && !quiet.own_loss);
 
     // My win: pride, reported once and then taken.
     state.apply_event(finished(me.id, them.id, won_by(me.id)));
-    let tick = state.tick();
+    let tick = state.tick(false);
     assert!(tick.own_win, "my win");
     assert!(!tick.own_loss);
-    let again = state.tick();
+    let again = state.tick(false);
     assert!(!again.own_win, "taken by the tick that reported it");
 
     // Their win over me: the sulk.
     state.apply_event(finished(them.id, me.id, won_by(them.id)));
-    let tick = state.tick();
+    let tick = state.tick(false);
     assert!(tick.own_loss, "my loss");
     assert!(!tick.own_win);
 
     // A draw is neither a win nor a loss, for either seat.
     state.apply_event(finished(me.id, them.id, DailyFinishOutcome::Draw));
-    let tick = state.tick();
+    let tick = state.tick(false);
     assert!(
         !tick.own_win && !tick.own_loss,
         "a draw tells the pet nothing"
@@ -173,8 +176,58 @@ async fn a_finished_match_tells_the_pet_win_or_loss_and_a_draw_tells_it_nothing(
     // Somebody else's match is not my news.
     let other = Uuid::from_u128(99);
     state.apply_event(finished(them.id, other, won_by(other)));
-    let tick = state.tick();
+    let tick = state.tick(false);
     assert!(!tick.own_win && !tick.own_loss);
+}
+
+/// The #lounge strip goes up when a match is claimed, waits to appear while
+/// the viewer is reading, and holds the result once the match ends.
+#[tokio::test]
+async fn the_lounge_strip_goes_up_on_a_claim_and_holds_the_result() {
+    use crate::app::activity::{event::ActivityEvent, publisher::ActivityPublisher};
+    use crate::app::games::chips::svc::ChipService;
+    use late_core::test_utils::create_test_user;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let me = create_test_user(&test_db.db, "daily-strip-me").await;
+    let them = create_test_user(&test_db.db, "daily-strip-them").await;
+    let (activity_tx, _activity_rx) = broadcast::channel::<ActivityEvent>(8);
+    let svc = DailyService::new(
+        test_db.db.clone(),
+        ChipService::new(test_db.db.clone()),
+        ActivityPublisher::new(test_db.db.clone(), activity_tx),
+    );
+    let (notifier, _outbox) = crate::app::notify::channel();
+    let mut state = DailyState::new(svc.clone(), me.id, notifier);
+    let _ = state.tick(false);
+    assert!(state.live_strip_view().is_none(), "nothing live, no strip");
+
+    let posted = svc
+        .post_challenge(them.id, DailyGame::Chess, None)
+        .await
+        .expect("post");
+    svc.claim_challenge(me.id, posted.id).await.expect("claim");
+
+    // Appearing would shift the messages under a selection: it waits.
+    let _ = state.tick(true);
+    assert!(state.live_strip_view().is_none(), "held while reading");
+    let _ = state.tick(false);
+    let strip = state
+        .live_strip_view()
+        .expect("a fresh claim puts the match up");
+    assert_eq!(strip.view.item.id, posted.id);
+    assert!(strip.finish.is_none());
+
+    // The match ends: the strip keeps its final board with the result.
+    svc.resign(me.id, posted.id).await.expect("resign");
+    let _ = state.tick(false);
+    let strip = state.live_strip_view().expect("the result holds the strip");
+    assert_eq!(strip.view.item.id, posted.id);
+    assert_eq!(
+        strip.finish,
+        Some(format!("{} won · resignation", them.username).as_str()),
+        "a resignation before five moves pays nothing, so no chips are named"
+    );
 }
 
 #[test]
