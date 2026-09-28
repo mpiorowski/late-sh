@@ -340,10 +340,13 @@ fn a_frame_opens_with_the_cue_ball_in_hand_in_the_d() {
         "the cue ball is on the table, it is just yours to move"
     );
 
-    // And the pool games still break from a fixed spot, as they should.
+    // The pool games break from in hand too, but from the kitchen: a bar
+    // player picks their spot behind the head string, and the foot of the
+    // table is not somewhere you may break from.
     for rules in [PoolRules::EightBall, PoolRules::NineBall] {
         let pool = DailyPoolState::new(rules, Uuid::new_v4(), Uuid::new_v4());
-        assert_eq!(pool.ball_in_hand, None, "{rules:?}");
+        assert_eq!(pool.ball_in_hand, Some(BallInHand::Kitchen), "{rules:?}");
+        assert!(!pool.must_place(), "{rules:?}: racked, not in the pocket");
     }
 }
 
@@ -377,4 +380,54 @@ fn a_roll_up_with_nothing_to_a_cushion_is_a_legal_safety() {
     assert_eq!(ruling.foul, None, "a roll-up is not a foul: {ruling:?}");
     assert_eq!(ruling.turn, Turn::Pass);
     assert_eq!(ruling.penalty, 0);
+}
+
+#[test]
+fn the_last_red_is_followed_by_a_colour_of_choice() {
+    // The rule most often got wrong, and it was got wrong here: the final red
+    // earns a colour of the striker's choice exactly like every other red. Only
+    // once *that* colour is down do the six come back in order, starting at the
+    // yellow. The board used to jump straight to the yellow, which quietly cost
+    // the striker the best ball on the table at the end of every frame.
+    let mut state = frame();
+    pot(&mut state, &(RED_FIRST..RED_LAST).collect::<Vec<u8>>());
+
+    // One red left. Pot it.
+    let on = RULES.legal_targets(&state);
+    assert_eq!(on, vec![RED_LAST], "one red left, and it is the ball on");
+    let ruling = RULES.judge(&state, &shot(Some(RED_LAST), &[RED_LAST]), None);
+    assert_eq!(ruling.points, 1);
+    assert_eq!(ruling.turn, Turn::Keep);
+    assert!(
+        ruling.next_on_colour,
+        "the last red puts the striker on a colour, like any other red"
+    );
+
+    // And every colour is on, not just the yellow.
+    pot(&mut state, &[RED_LAST]);
+    state.on_colour = true;
+    assert_eq!(
+        RULES.legal_targets(&state),
+        COLOURS.to_vec(),
+        "a colour of choice, with no reds left to come back to"
+    );
+
+    // Take the black. It scores seven, it goes back on its spot, and the
+    // striker is then on the yellow.
+    let ruling = RULES.judge(&state, &shot(Some(BLACK), &[BLACK]), None);
+    assert_eq!(ruling.points, value(BLACK));
+    assert_eq!(
+        ruling.balls_to_spot,
+        vec![BLACK],
+        "the colour after the last red is re-spotted"
+    );
+    assert!(!ruling.next_on_colour, "and the sequence starts after it");
+    assert!(!ruling.frame_over, "with six colours still to take");
+
+    state.on_colour = false;
+    assert_eq!(
+        RULES.legal_targets(&state),
+        vec![YELLOW],
+        "now the colours come in order"
+    );
 }

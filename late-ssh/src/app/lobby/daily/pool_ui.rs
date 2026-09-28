@@ -43,8 +43,7 @@ use crate::app::{
     common::{primitives::draw_too_small, theme},
     games::pool_core::{
         aim::{Hit, ShotLine},
-        ball::CUE,
-        canvas::Canvas,
+        canvas::{Canvas, rgb},
         cue::{MAX_SPEED, ShotMode},
         cue_ui::{self, BACKDROP, CueView},
         rules::PoolRules,
@@ -78,11 +77,16 @@ const READOUT_ROWS: u16 = 4;
 /// The key legend under the readouts: the seven rows of `LEGEND` and one
 /// more for leaving the board (chat, lobby).
 const LEGEND_ROWS: u16 = LEGEND.len() as u16 + 1;
-/// The cue drawing stops growing here. The balls take a share of the
-/// panel's width as well as its height, and at the widest panel the width
-/// is the limit from about here on, so rows past it are better spent on
-/// the legend.
-const MAX_CUE_ROWS: u16 = 28;
+/// The cue drawing stops growing here.
+///
+/// The balls stop growing well before this — they take a share of the panel's
+/// *width*, and past the widest panel that is the binding limit. Every row
+/// beyond it goes under the cue ball, which is where the cue is, and the cue is
+/// the part that moves: the draw-and-push gesture that sets the stroke speed is
+/// read off how far it travels, so rows spent there are precision the player
+/// can actually see. At the twenty-eight this used to be, a full pull moved the
+/// cue about four terminal rows and the bottom of the column sat empty.
+const MAX_CUE_ROWS: u16 = 44;
 /// The legend only appears once the cue drawing keeps at least this many
 /// rows: a legend that squeezed the cue into a sliver would be teaching the
 /// keys for a panel that can no longer be aimed on. Low enough that the
@@ -139,6 +143,16 @@ pub(crate) fn draw(
     draw_panels(frame, cols[1], daily, board, detail, pool, &shown);
 }
 
+/// Whether the board is mid-shot: one on the wire, one being re-simulated, or
+/// one playing out. The one question four different parts of the board ask, so
+/// they cannot answer it differently.
+///
+/// A **replay** counts. Nothing can be done with the board while one is
+/// rolling, and the player asked for it, so it reads exactly like a shot.
+fn rolling(board: &DailyBoardState, pool: &PoolDetail) -> bool {
+    pool.is_busy(board.pool_shot_pending())
+}
+
 /// The frame around the table, which says whose board it is and whether
 /// anything can be done with it.
 ///
@@ -158,7 +172,7 @@ fn table_border(
     detail: &DailyMatchDetail,
     pool: &PoolDetail,
 ) -> Style {
-    let rolling = pool.playback.is_some() || pool.shot_in_flight;
+    let rolling = rolling(board, pool);
     let colour = if !detail.is_active() || board.spectating {
         theme::BORDER_DIM()
     } else if detail.row.turn_user_id == Some(daily.user_id()) {
@@ -220,9 +234,19 @@ fn draw_table(
     // Mid-shot the table shows the sampled timeline instead of the settled
     // rack, and the aiming marks come off: they describe a shot that has
     // already been played.
-    let (frames, aiming) = match &pool.playback {
-        Some(playback) => (playback.frame(), false),
-        None => (shot.frames(&pool.state), true),
+    //
+    // While a shot is still being re-simulated the board shows the rack as it
+    // was *before* it — the settled rack is the answer to a shot nobody has
+    // watched yet, and showing it for a tick and then rewinding is what made
+    // the played shot flash up before it played out.
+    let (frames, aiming) = match (&pool.playback, board.pool_shot_pending()) {
+        (Some(playback), _) => (playback.frame(), false),
+        (None, true) => (
+            pool.frames_before_shot()
+                .unwrap_or_else(|| shot.frames(&pool.state)),
+            false,
+        ),
+        (None, false) => (shot.frames(&pool.state), true),
     };
     // One set of marks for both views, so a click on either lands on the
     // same shot. The legal set is the striker's whoever is looking: what the
@@ -267,15 +291,12 @@ fn draw_table(
 /// Following the ball would be a camera that lurches around the table for the
 /// whole shot, where staying put is what watching a shot actually looks like.
 fn eye_for(pool: &PoolDetail, shot: &PoolDraft, spec: &TableSpec, canvas: &Canvas) -> Option<Eye> {
-    if pool.playback.is_some() {
-        let played = pool.state.shots.last()?;
-        let before = pool.state.prev_rack.as_ref()?;
-        let cue = before
-            .get(CUE)
-            .filter(|ball| ball.potted.is_none())
-            .map(|ball| ball.pos)
-            .or(played.shot.place)?;
-        return Some(Eye::behind(cue, played.shot.azimuth, spec, canvas));
+    // Read off the timeline being shown rather than off the last recorded
+    // shot: a replay plays several shots in a row, and only the timeline knows
+    // which of them is on screen right now.
+    if let Some(playback) = &pool.playback {
+        let (cue, azimuth) = playback.timeline.cue_launch()?;
+        return Some(Eye::behind(cue, azimuth, spec, canvas));
     }
     let cue = shot.cue_ball(&pool.state)?;
     Some(Eye::behind(cue, shot.azimuth, spec, canvas))
@@ -363,7 +384,7 @@ fn legend_keys(
         return LegendKeys::Watching;
     }
     let mine = detail.row.turn_user_id == Some(daily.user_id());
-    let rolling = pool.playback.is_some() || pool.shot_in_flight;
+    let rolling = rolling(board, pool);
     if mine && !rolling {
         LegendKeys::AtTheTable
     } else {
@@ -391,14 +412,17 @@ pub(crate) fn column_split(height: u16) -> (u16, u16) {
 /// *mouse* is doing; this is the keyboard, all of it, so nothing has to be
 /// memorised. The row for leaving the board is built beside it, because one
 /// of its keys depends on the match having a chat.
-pub(crate) const LEGEND: [[(&str, &str); 2]; 7] = [
+pub(crate) const LEGEND: [[(&str, &str); 2]; 8] = [
     [("h l", "aim 1°"), ("[ ]", "ball")],
     [("H L", "aim 0.1°"), ("'", "lowest ball")],
     [("a", "mouse aim"), ("m", "ball in hand")],
+    // The mouse's answer to `h l` against `H L`: hold a modifier while it
+    // moves and the same sweep is worth four times as much, or a tenth.
+    [("shift", "fast aim"), ("ctrl", "fine aim")],
     [("e", "spin"), ("p", "call pocket")],
     [("x s w", "stroke"), ("v", "eye view")],
-    [("c", "reset"), ("r", "resign")],
-    [("Esc", "back"), ("", "")],
+    [("c", "reset"), ("r R", "replay")],
+    [("Esc", "back"), ("X", "resign")],
 ];
 
 /// The legend's exit row: the keys that leave the board rather than play on
@@ -430,8 +454,12 @@ pub(crate) fn legend_rows_for(
 ) -> Vec<[(&'static str, &'static str); 2]> {
     match keys {
         LegendKeys::AtTheTable => LEGEND.into_iter().chain([exit_row(chat)]).collect(),
-        LegendKeys::Waiting => vec![[("v", "eye view"), ("r", "resign")], exit_row(chat)],
-        LegendKeys::Watching => vec![[("v", "eye view"), ("", "")], exit_row(chat)],
+        LegendKeys::Waiting => vec![
+            [("v", "eye view"), ("r R", "replay")],
+            [("X", "resign"), ("", "")],
+            exit_row(chat),
+        ],
+        LegendKeys::Watching => vec![[("v", "eye view"), ("r R", "replay")], exit_row(chat)],
     }
 }
 
@@ -508,7 +536,14 @@ fn info_lines(
     lines.push(Line::from(""));
 
     let targets = state.legal_targets();
-    lines.push(Line::from(Span::styled(on_line(state, &targets), text)));
+    lines.push(Line::from(on_line(state, &targets)));
+    // What the last shot did is the shot's own news to break. While one is
+    // still on the wire or waiting to be animated, the panel already holds the
+    // rack it was played on, and a "last: 8 down · rack over" beside it would
+    // be the result arriving before the shot that earned it.
+    if board.pool_shot_pending() || pool.shot_in_flight {
+        return lines;
+    }
     if state.free_ball {
         lines.push(Line::from(Span::styled(
             "free ball: anything counts".to_string(),
@@ -595,34 +630,63 @@ fn lining_up(mode: crate::app::games::pool_core::cue::ShotMode) -> &'static str 
 /// A pool player is on a list of numbers and reads them as numbers. A snooker
 /// player is on "a red" or "the colours" — fifteen ids on one line would be
 /// noise, and none of those balls has a number printed on it anyway.
-fn on_line(state: &DailyPoolState, targets: &[u8]) -> String {
+///
+/// **Every ball named here is written in that ball's own colour**, through
+/// `table_ui::text_colour`, which is the same hue the table paints it with
+/// lifted only where it would be unreadable as text. On a table drawn a
+/// hundred columns wide a ball is a few pixels and its number a few more, so
+/// the list is where a player actually reads which ball is which — and a list
+/// of plain digits made them look it up twice.
+fn on_line(state: &DailyPoolState, targets: &[u8]) -> Vec<Span<'static>> {
+    let text = Style::default().fg(theme::TEXT());
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    // Raw RGB rather than a theme colour: the table beside it paints the same
+    // ball with exactly these numbers whatever the theme is, and a list whose
+    // colours drift from the balls they name is worse than no colour at all.
+    let ball = |id: u8| Style::default().fg(rgb(table_ui::text_colour(id)));
+    let mut spans = vec![Span::styled("on: ", text)];
     if targets.is_empty() {
-        return "on: nothing".to_string();
+        spans.push(Span::styled("nothing", text));
+        return spans;
     }
     if state.rules.scores() {
         if state.free_ball {
-            return "on: any ball".to_string();
+            spans.push(Span::styled("any ball", text));
+            return spans;
         }
         if targets.iter().copied().all(rules_snooker::is_red) {
-            return format!("on: a red ({} up)", targets.len());
+            spans.push(Span::styled("a red", ball(targets[0])));
+            spans.push(Span::styled(format!(" ({} up)", targets.len()), dim));
+            return spans;
         }
         if targets.len() > 1 {
-            return "on: a colour".to_string();
+            // The colour of the striker's choosing: name every one still up,
+            // each in its own, which is the list they are choosing from.
+            for (index, id) in targets.iter().enumerate() {
+                if index > 0 {
+                    spans.push(Span::styled(" ", text));
+                }
+                spans.push(Span::styled(rules_snooker::name(*id), ball(*id)));
+            }
+            return spans;
         }
-        return format!(
-            "on: {} ({})",
+        spans.push(Span::styled(
             rules_snooker::name(targets[0]),
-            rules_snooker::value(targets[0])
-        );
+            ball(targets[0]),
+        ));
+        spans.push(Span::styled(
+            format!(" ({})", rules_snooker::value(targets[0])),
+            dim,
+        ));
+        return spans;
     }
-    format!(
-        "on: {}",
-        targets
-            .iter()
-            .map(u8::to_string)
-            .collect::<Vec<_>>()
-            .join(" ")
-    )
+    for (index, id) in targets.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(" ", text));
+        }
+        spans.push(Span::styled(id.to_string(), ball(*id)));
+    }
+    spans
 }
 
 fn group_label(group: crate::app::games::pool_core::rules::Group) -> &'static str {
@@ -657,8 +721,15 @@ fn draw_cue_panel(
     let draft = shot;
     let line = draft.line(&pool.state);
     let mut canvas = Canvas::new(rows[0].width, rows[0].height, BACKDROP);
+    // Legal off the ball the cue ball will actually *touch*, matching the ring
+    // the table view draws round the same ball — an aim sighted past a ball
+    // into the rail behind it contacts nothing and is nobody's foul yet.
+    let legal = pool.state.legal_targets();
     let view = CueView {
         target: line.and_then(|line| line.target()),
+        target_fault: line
+            .and_then(|line| line.first_ball())
+            .is_some_and(|id| !legal.contains(&id)),
         distance: line
             .map(|line| {
                 let at = line.hit.at();
@@ -674,7 +745,7 @@ fn draw_cue_panel(
         // From the moment the stroke registers until the shot has finished
         // playing. No timer: the shot's own lifetime is the window, which is
         // both the honest one and the one that cannot drift out of step.
-        follow_through: pool.shot_in_flight || pool.playback.is_some(),
+        follow_through: rolling(board, pool),
     };
     let panel = cue_ui::draw(&mut canvas, &view);
     frame.render_widget(Paragraph::new(canvas.to_lines()), rows[0]);
@@ -706,7 +777,7 @@ fn status_line(
 ) -> Line<'static> {
     if board.resign_confirm {
         return Line::from(Span::styled(
-            "Resign this match? Press r again to confirm.",
+            "Resign this match? Press X again to confirm.",
             Style::default()
                 .fg(theme::ERROR())
                 .add_modifier(Modifier::BOLD),
@@ -719,18 +790,20 @@ fn status_line(
     // foul and the rack belongs to the other player. Calling it while the
     // balls are still rolling gives away an answer the table has not reached,
     // and half the time gives away the wrong one.
-    if pool.playback.is_some() || pool.shot_in_flight {
+    if rolling(board, pool) {
+        let (heading, aside) = if pool.replaying {
+            ("▶ replaying", "   r again to stop")
+        } else {
+            ("▶ the shot is playing", "   nothing to do but watch")
+        };
         return Line::from(vec![
             Span::styled(
-                "▶ the shot is playing",
+                heading,
                 Style::default()
                     .fg(theme::AMBER())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                "   nothing to do but watch",
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
+            Span::styled(aside, Style::default().fg(theme::TEXT_DIM())),
         ]);
     }
 

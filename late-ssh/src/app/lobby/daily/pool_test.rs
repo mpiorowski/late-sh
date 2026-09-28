@@ -200,18 +200,59 @@ fn the_rack_is_over_once_it_is_over() {
 
 #[test]
 fn placing_the_cue_ball_needs_permission() {
+    // The break is from in hand, so the permission has to be *spent* before
+    // this can be tested: play it, and the incoming player has none.
     let mut state = state(PoolRules::NineBall);
     let spec = state.spec().expect("known table");
     let at = [spec.length * 0.15, spec.width * 0.5];
-    assert!(
-        state.ball_in_hand.is_none(),
-        "the breaker does not get ball in hand"
-    );
+    state
+        .apply_shot(0, &break_shot())
+        .expect("the break is legal");
+    let shooter = state.turn;
+    state.ball_in_hand = None;
     let placed = Shot {
         place: Some(at),
         ..break_shot()
     };
-    assert!(state.apply_shot(0, &placed).is_err());
+    assert!(state.apply_shot(shooter, &placed).is_err());
+}
+
+#[test]
+fn the_break_is_played_from_the_kitchen() {
+    // Both pool games open with the cue ball in hand behind the head string:
+    // the break spot is a starting suggestion, not the only place it may go.
+    for rules in [PoolRules::EightBall, PoolRules::NineBall] {
+        let mut state = state(rules);
+        let spec = state.spec().expect("known table");
+        assert_eq!(state.ball_in_hand, Some(BallInHand::Kitchen), "{rules:?}");
+        let head = rules::head_string(spec);
+
+        let behind = Shot {
+            place: Some([head * 0.5, spec.width * 0.25]),
+            ..break_shot()
+        };
+        assert!(
+            state.clone().apply_shot(0, &behind).is_ok(),
+            "{rules:?}: anywhere behind the line is a legal break spot"
+        );
+
+        let past = Shot {
+            place: Some([head + spec.length * 0.1, spec.width * 0.5]),
+            ..break_shot()
+        };
+        assert!(
+            state.clone().apply_shot(0, &past).is_err(),
+            "{rules:?}: and past it is not"
+        );
+
+        // Spent by the break: the incoming player has no placement of their
+        // own unless a foul granted one.
+        state.apply_shot(0, &behind).expect("the break is legal");
+        assert!(
+            state.ball_in_hand.is_none() || state.last_foul.is_some(),
+            "{rules:?}: ball in hand after the break means a foul said so"
+        );
+    }
 }
 
 #[test]
@@ -525,7 +566,7 @@ fn nothing_is_called_when_nothing_is_being_called_for() {
 // `DailyPoolState`, so it is tested here where a state is a one-liner.
 
 use crate::app::games::pool_core::aim::Hit;
-use crate::app::lobby::daily::pool_draft::{PointerOutcome, PoolDraft};
+use crate::app::lobby::daily::pool_draft::{AimGear, PointerOutcome, PoolDraft};
 
 #[test]
 fn the_move_list_names_snooker_balls_and_numbers_pool_balls() {
@@ -784,6 +825,9 @@ fn a_mode_key_arms_it_and_the_same_key_puts_it_down() {
     // There is no key-up event in a terminal, so a mode is armed and dropped
     // rather than held; pressing the same key twice must be a round trip.
     let (_, mut draft) = drafted();
+    // A board opened with ball in hand arrives holding it, which the break
+    // now does; put the cue down first so the round trip starts from idle.
+    draft.commit();
     assert_eq!(draft.mode, ShotMode::Idle);
     draft.toggle_mode(ShotMode::Aim);
     assert_eq!(draft.mode, ShotMode::Aim);
@@ -908,15 +952,15 @@ fn cancelling_a_stroke_puts_the_cue_down_without_firing() {
     let rested = draft.pull;
     draft.toggle_mode(ShotMode::Stroke(PowerBand::Strong));
     // No button in the stroke: it is draw down, push back up through the ball.
-    draft.pointer_moved(50, 20, false);
-    draft.pointer_moved(50, 30, false);
+    draft.pointer_moved(50, 20, false, AimGear::Normal);
+    draft.pointer_moved(50, 30, false, AimGear::Normal);
     assert!(draft.pull > rested, "the cue is drawn back");
 
     assert!(draft.cancel(), "right click puts it down");
     assert_eq!(draft.mode, ShotMode::Idle);
     assert_eq!(draft.pull, rested, "and unwinds the pull");
     assert_eq!(
-        draft.pointer_moved(50, 10, false),
+        draft.pointer_moved(50, 10, false, AimGear::Normal),
         PointerOutcome::Ignored,
         "and the forward push that follows finds nothing armed"
     );
@@ -931,7 +975,7 @@ fn nothing_moves_until_a_mode_is_armed() {
     let before = draft.azimuth;
     for x in 10..40u16 {
         assert_eq!(
-            draft.pointer_moved(x, 20, false),
+            draft.pointer_moved(x, 20, false, AimGear::Normal),
             PointerOutcome::Ignored,
             "idle consumes nothing"
         );
@@ -947,13 +991,13 @@ fn arming_a_mode_never_jumps_the_setting_to_the_pointer() {
     let (state, mut draft) = drafted();
     draft.toggle_mode(ShotMode::Aim);
     assert_eq!(
-        draft.pointer_moved(80, 12, false),
+        draft.pointer_moved(80, 12, false, AimGear::Normal),
         PointerOutcome::Ignored,
         "the first report is the reference, not a move"
     );
     assert_eq!(sight_offset(&draft, &state), 0.0);
     assert_eq!(
-        draft.pointer_moved(90, 12, false),
+        draft.pointer_moved(90, 12, false, AimGear::Normal),
         PointerOutcome::Changed,
         "the second one moves it"
     );
@@ -968,8 +1012,8 @@ fn the_pointer_steers_whichever_mode_is_armed() {
     let (state, mut draft) = drafted();
 
     draft.toggle_mode(ShotMode::Aim);
-    draft.pointer_moved(50, 20, false);
-    draft.pointer_moved(60, 30, false);
+    draft.pointer_moved(50, 20, false, AimGear::Normal);
+    draft.pointer_moved(60, 30, false, AimGear::Normal);
     assert!(
         sight_offset(&draft, &state) > 0.0,
         "aim follows horizontal travel"
@@ -977,8 +1021,8 @@ fn the_pointer_steers_whichever_mode_is_armed() {
     assert_eq!(draft.tip, [0.0, 0.0], "and leaves the tip alone");
 
     draft.toggle_mode(ShotMode::Spin);
-    draft.pointer_moved(50, 20, false);
-    draft.pointer_moved(50, 14, false);
+    draft.pointer_moved(50, 20, false, AimGear::Normal);
+    draft.pointer_moved(50, 14, false, AimGear::Normal);
     assert!(
         draft.tip[1] > 0.0,
         "moving the pointer up the face is follow, not draw: {:?}",
@@ -986,8 +1030,8 @@ fn the_pointer_steers_whichever_mode_is_armed() {
     );
 
     draft.toggle_mode(ShotMode::Stroke(PowerBand::Normal));
-    draft.pointer_moved(50, 10, false);
-    draft.pointer_moved(50, 24, false);
+    draft.pointer_moved(50, 10, false, AimGear::Normal);
+    draft.pointer_moved(50, 24, false, AimGear::Normal);
     assert!(draft.pull > 0.0, "pulling down draws the cue back");
 }
 
@@ -1027,22 +1071,28 @@ fn the_stroke_is_draw_back_then_push_through_the_ball() {
 
     // First report fixes where the ball is.
     assert_eq!(
-        draft.pointer_moved(50, 20, false),
+        draft.pointer_moved(50, 20, false, AimGear::Normal),
         PointerOutcome::Ignored,
         "the first report is the ball, not a movement"
     );
     // Draw back.
-    assert_eq!(draft.pointer_moved(50, 28, false), PointerOutcome::Changed);
+    assert_eq!(
+        draft.pointer_moved(50, 28, false, AimGear::Normal),
+        PointerOutcome::Changed
+    );
     let drawn = draft.pull;
     assert!(drawn > 0.0, "pulling down draws the cue back");
 
     // Come forward but stop short of the ball: still not a strike.
-    assert_eq!(draft.pointer_moved(50, 23, false), PointerOutcome::Changed);
+    assert_eq!(
+        draft.pointer_moved(50, 23, false, AimGear::Normal),
+        PointerOutcome::Changed
+    );
     assert!(draft.pull < drawn, "and the cue follows back in");
 
     // Through the ball.
     assert_eq!(
-        draft.pointer_moved(50, 18, false),
+        draft.pointer_moved(50, 18, false, AimGear::Normal),
         PointerOutcome::Strike,
         "pushing past the ball plays the shot"
     );
@@ -1055,12 +1105,15 @@ fn the_backswing_is_the_power_not_wherever_the_push_ended() {
     // contact would make every shot a soft one.
     let (_, mut draft) = drafted();
     draft.toggle_mode(ShotMode::Stroke(PowerBand::Strong));
-    draft.pointer_moved(50, 20, false);
-    draft.pointer_moved(50, 34, false);
+    draft.pointer_moved(50, 20, false, AimGear::Normal);
+    draft.pointer_moved(50, 34, false, AimGear::Normal);
     let deepest = draft.pull;
     assert!(deepest > 0.5, "a long draw is a hard shot: {deepest}");
 
-    assert_eq!(draft.pointer_moved(50, 10, false), PointerOutcome::Strike);
+    assert_eq!(
+        draft.pointer_moved(50, 10, false, AimGear::Normal),
+        PointerOutcome::Strike
+    );
     assert_eq!(
         draft.pull, deepest,
         "the shot is played at the backswing, not at the crossing"
@@ -1073,9 +1126,9 @@ fn a_twitch_forward_on_an_armed_cue_does_not_fire() {
     // ball: there has to be a real backswing behind the push.
     let (_, mut draft) = drafted();
     draft.toggle_mode(ShotMode::Stroke(PowerBand::Normal));
-    draft.pointer_moved(50, 20, false);
+    draft.pointer_moved(50, 20, false, AimGear::Normal);
     assert_eq!(
-        draft.pointer_moved(50, 14, false),
+        draft.pointer_moved(50, 14, false, AimGear::Normal),
         PointerOutcome::Changed,
         "no backswing, no stroke"
     );
@@ -1089,7 +1142,7 @@ fn letting_go_of_the_button_is_no_longer_a_stroke() {
     let (_, mut draft) = drafted();
     draft.toggle_mode(ShotMode::Stroke(PowerBand::Normal));
     draft.pointer_pressed(50, 20);
-    draft.pointer_moved(50, 28, true);
+    draft.pointer_moved(50, 28, true, AimGear::Normal);
     draft.pointer_released();
     assert_eq!(
         draft.mode,
@@ -1283,12 +1336,12 @@ fn the_held_ball_follows_the_pointer_across_the_cloth() {
     let spec = state.spec().expect("known table");
     let opened_at = draft.place.expect("the board opens holding it");
     assert_eq!(
-        draft.pointer_moved(10, 10, false),
+        draft.pointer_moved(10, 10, false, AimGear::Normal),
         PointerOutcome::Ignored,
         "the first report is only the reference"
     );
     assert_eq!(
-        draft.pointer_moved(20, 14, false),
+        draft.pointer_moved(20, 14, false, AimGear::Normal),
         PointerOutcome::Ignored,
         "and bare motion never places the ball on its own"
     );
@@ -1403,11 +1456,14 @@ fn the_pointer_has_one_axis_in_aim_mode() {
     // wrap round to just under a full turn.
     draft.turn(0.5);
     draft.toggle_mode(ShotMode::Aim);
-    draft.pointer_moved(50, 20, false);
+    draft.pointer_moved(50, 20, false, AimGear::Normal);
     let before = draft.azimuth;
-    assert_eq!(draft.pointer_moved(50, 30, false), PointerOutcome::Changed);
+    assert_eq!(
+        draft.pointer_moved(50, 30, false, AimGear::Normal),
+        PointerOutcome::Changed
+    );
     assert_eq!(draft.azimuth, before, "vertical travel turns nothing");
-    draft.pointer_moved(40, 30, false);
+    draft.pointer_moved(40, 30, false, AimGear::Normal);
     assert!(draft.azimuth < before, "left turns left");
 }
 
@@ -1432,6 +1488,8 @@ fn a_reload_mid_shot_does_not_delete_the_shot() {
         state: state.clone(),
         shot_in_flight: false,
         playback: Some(PoolPlayback::new(timeline)),
+        queue: Vec::new(),
+        replaying: false,
         watching: Some(PoolDraft::new(&state).share()),
     };
     let mut fresh = PoolDetail {
@@ -1439,6 +1497,8 @@ fn a_reload_mid_shot_does_not_delete_the_shot() {
         state,
         shot_in_flight: false,
         playback: None,
+        queue: Vec::new(),
+        replaying: false,
         watching: None,
     };
 
@@ -1530,21 +1590,21 @@ fn holding_the_button_re_grips_instead_of_steering() {
     let (_, mut draft) = drafted();
     let start = draft.azimuth;
     draft.toggle_mode(ShotMode::Aim);
-    draft.pointer_moved(40, 10, false);
-    draft.pointer_moved(60, 10, false);
+    draft.pointer_moved(40, 10, false, AimGear::Normal);
+    draft.pointer_moved(60, 10, false, AimGear::Normal);
     let aimed = draft.azimuth;
     assert_ne!(aimed, start, "bare motion steers");
 
     for x in [50, 40, 30, 20] {
         assert_eq!(
-            draft.pointer_moved(x, 10, true),
+            draft.pointer_moved(x, 10, true, AimGear::Normal),
             PointerOutcome::Ignored,
             "a held button drags the hand back, not the aim"
         );
     }
     assert_eq!(draft.azimuth, aimed, "the aim survived the re-grip");
 
-    draft.pointer_moved(30, 10, false);
+    draft.pointer_moved(30, 10, false, AimGear::Normal);
     assert!(
         draft.azimuth > aimed,
         "and carries on in the same direction from the new grip"
@@ -1597,4 +1657,300 @@ fn the_next_ball_in_line_is_the_lowest_that_is_on() {
             "{rules_kind:?} aims dead at it"
         );
     }
+}
+
+// ── Replay ────────────────────────────────────────────────────────────
+
+/// A gentle shot at the pack, legal enough to be applied whoever plays it.
+fn nudge(azimuth: f64) -> Shot {
+    Shot {
+        azimuth,
+        speed: 3.0,
+        ..break_shot()
+    }
+}
+
+#[test]
+fn a_replay_covers_the_last_shot_or_the_whole_visit() {
+    let mut state = state(PoolRules::NineBall);
+    assert_eq!(state.replay_from(false), None, "nothing to watch yet");
+    assert_eq!(state.replay_from(true), None);
+
+    // Four shots. Which seat played which is the simulation's business, so the
+    // visit is read back off the record rather than assumed.
+    for i in 0..4 {
+        let shooter = state.turn;
+        if state.is_finished() {
+            break;
+        }
+        state
+            .apply_shot(shooter, &nudge(i as f64 * 0.05))
+            .expect("a shot at the pack is legal");
+    }
+    let played = state.shots.len();
+    assert!(played >= 2, "enough history to have a visit in it");
+
+    assert_eq!(
+        state.replay_from(false),
+        Some(played - 1),
+        "just the last one"
+    );
+    let visit = state.replay_from(true).expect("a visit to replay");
+    let last_seat = state.shots[played - 1].seat;
+    assert!(
+        state.shots[visit..].iter().all(|s| s.seat == last_seat),
+        "the visit is one player's run"
+    );
+    assert!(
+        visit == 0 || state.shots[visit - 1].seat != last_seat,
+        "and it starts where their run started"
+    );
+
+    // One timeline per shot replayed, and each one is a shot: it starts with
+    // the cue ball somewhere and moves it.
+    let timelines = state.replay(visit);
+    assert_eq!(timelines.len(), played - visit);
+    for timeline in &timelines {
+        assert!(timeline.duration > 0.0, "a replayed shot takes time");
+        assert!(
+            timeline.cue_launch().is_some(),
+            "and the camera can find where it was struck from"
+        );
+    }
+}
+
+#[test]
+fn a_replayed_shot_is_the_shot_that_was_played() {
+    // The replay rebuilds the rack from the seed and plays the history through
+    // the ruleset, so the last shot of it has to land exactly where the stored
+    // rack says — otherwise a player is being shown a shot that never happened.
+    let mut state = state(PoolRules::EightBall);
+    state
+        .apply_shot(0, &break_shot())
+        .expect("the break is legal");
+    let shooter = state.turn;
+    state
+        .apply_shot(shooter, &nudge(0.1))
+        .expect("a shot at what is left is legal");
+
+    let from = state.replay_from(false).expect("one shot to replay");
+    let timelines = state.replay(from);
+    assert_eq!(timelines.len(), 1);
+    let settled = timelines[0].sample(timelines[0].duration + 1.0);
+    for ball in &state.rack.balls {
+        let frame = settled
+            .iter()
+            .find(|frame| frame.id == ball.id)
+            .expect("every ball is in the timeline");
+        assert_eq!(frame.potted, ball.potted.is_some(), "ball {}", ball.id);
+        if ball.potted.is_none() {
+            // The stored rack is rounded to a micron on the way to the
+            // database; the replay is not, so that is the tolerance.
+            assert!(
+                (frame.pos[0] - ball.pos[0]).abs() < 1e-5
+                    && (frame.pos[1] - ball.pos[1]).abs() < 1e-5,
+                "ball {} replayed to {:?}, stored at {:?}",
+                ball.id,
+                frame.pos,
+                ball.pos
+            );
+        }
+    }
+}
+
+#[test]
+fn handing_the_shot_back_is_replayed_without_being_watched() {
+    // Snooker's `play_again` takes a turn and moves no ball, so a replay has to
+    // *apply* it — the shots after it depend on the turn it consumed — and has
+    // to produce no timeline for it, because there is nothing to see.
+    let mut state = state(PoolRules::Snooker);
+    // A foul the incoming player can hand back: a shot at nothing.
+    state
+        .apply_shot(
+            0,
+            &Shot {
+                azimuth: std::f64::consts::FRAC_PI_2,
+                speed: 0.5,
+                ..break_shot()
+            },
+        )
+        .expect("a miss is a legal move");
+    assert!(state.may_return, "and it was a foul");
+    let fouled = state.turn;
+    state
+        .apply_shot(fouled, &hand_back())
+        .expect("handing it back is a move");
+
+    let timelines = state.replay(0);
+    assert_eq!(
+        timelines.len(),
+        1,
+        "two moves, one of them nothing to watch"
+    );
+}
+
+/// Eight-ball with seat 0's group cleared, so the eight is all they have left
+/// and every shot has to be called.
+fn on_the_eight() -> DailyPoolState {
+    let mut state = state(PoolRules::EightBall);
+    state.groups = Some([Group::Solids, Group::Stripes]);
+    state.shots = vec![PoolShotRecord {
+        seat: 0,
+        shot: break_shot(),
+        label: "break".to_string(),
+        at: Utc::now(),
+    }];
+    for ball in state.rack.balls.iter_mut() {
+        if (1..=7).contains(&ball.id) {
+            ball.potted = Some(0);
+        }
+    }
+    // The break's placement is long spent, so the draft opens idle rather than
+    // holding the cue ball — which is what a click on the cloth is about here.
+    state.ball_in_hand = None;
+    assert!(state.requires_call());
+    state
+}
+
+#[test]
+fn calling_a_pocket_does_not_cost_the_board_its_aim() {
+    // Naming a pocket used to outrank everything within a reach of one and a
+    // half mouths — a tenth of the table's length around each of six pockets,
+    // which is most of the cloth anywhere near a rail. So once the shot had to
+    // be called, clicking to pick the eight or to aim at a cushion silently
+    // named a pocket instead, and the board would not re-aim at all down there
+    // — which is exactly where the eight usually is by then.
+    let state = on_the_eight();
+    let spec = state.spec().expect("known table");
+    let eight = state.rack.get(8).expect("the eight is up").pos;
+    let mut draft = PoolDraft::new(&state);
+
+    // The ball wins wherever it is sitting, even parked on a pocket's lip.
+    let corner = spec.geometry().pockets[0].center;
+    let mut near_pocket = state.clone();
+    let lip = [
+        corner[0] + spec.ball_radius * 2.0,
+        corner[1] + spec.ball_radius * 2.0,
+    ];
+    if let Some(ball) = near_pocket.rack.balls.iter_mut().find(|b| b.id == 8) {
+        ball.pos = lip;
+    }
+    let mut on_the_lip = PoolDraft::new(&near_pocket);
+    on_the_lip.called_pocket = None;
+    assert!(on_the_lip.click_table(&near_pocket, lip));
+    assert_eq!(
+        on_the_lip.picked,
+        Some(8),
+        "the ball, not the pocket behind it"
+    );
+    assert_eq!(on_the_lip.called_pocket, None);
+
+    // A spot of bare cloth near a rail is a direction, not a call — even in
+    // the middle of a long rail, which is where a side pocket lives. The hole
+    // itself still belongs to the pocket; the cloth in front of it does not.
+    let rail = [spec.length * 0.5, spec.ball_radius * 2.5];
+    let before = draft.azimuth;
+    assert!(draft.click_table(&state, rail));
+    assert_ne!(draft.azimuth, before, "the aim turned onto the rail");
+    assert_eq!(draft.called_pocket, None, "and named no pocket");
+
+    // The pocket itself still names itself.
+    assert!(draft.click_table(&state, corner));
+    assert_eq!(draft.called_pocket, Some(0));
+
+    // And picking the eight by clicking it still works with a pocket named.
+    assert!(draft.click_table(&state, eight));
+    assert_eq!(draft.picked, Some(8));
+    assert_eq!(draft.called_pocket, Some(0), "the call survives a re-aim");
+}
+
+#[test]
+fn a_pocket_is_named_by_clicking_the_pocket_and_not_the_quarter_of_the_table_near_it() {
+    let state = on_the_eight();
+    let spec = state.spec().expect("known table");
+    let corner = spec.geometry().pockets[0].center;
+    let mut draft = PoolDraft::new(&state);
+
+    let pocket = &spec.geometry().pockets[0];
+    let outward = pocket.outward;
+    // Along the pocket's own axis: out through the hole, in onto the cloth.
+    let along = |depth: f64| {
+        [
+            corner[0] + outward[0] * depth,
+            corner[1] + outward[1] * depth,
+        ]
+    };
+    assert!(
+        draft.call_pocket_at(&state, along(spec.corner_mouth * 0.4)),
+        "the hole itself names the pocket"
+    );
+    draft.called_pocket = None;
+    assert!(
+        draft.call_pocket_at(&state, along(-spec.ball_radius * 0.8)),
+        "and so does a click that lands just short of the mouth"
+    );
+    draft.called_pocket = None;
+    assert!(
+        !draft.call_pocket_at(&state, along(-spec.ball_radius * 2.5)),
+        "cloth in front of a pocket is somewhere to aim, not a call"
+    );
+    assert_eq!(draft.called_pocket, None);
+
+    // And the sideways bound still holds, so a click by one corner cannot
+    // name another: out past the mouth but a whole mouth off to the side.
+    let aside = [
+        corner[0] + outward[0] * spec.corner_mouth * 0.4 - outward[1] * spec.corner_mouth * 1.5,
+        corner[1] + outward[1] * spec.corner_mouth * 0.4 + outward[0] * spec.corner_mouth * 1.5,
+    ];
+    assert!(!draft.call_pocket_at(&state, aside));
+}
+
+#[test]
+fn holding_a_modifier_gears_the_pointer() {
+    // A terminal cell is a coarse unit to aim in — one column is about a
+    // ball's width at a metre and a half — so a single rate is a compromise
+    // between sweeping the table and picking a thin cut. Ctrl and Shift are
+    // the mouse's answer to `h l` against `H L`.
+    let (state, _) = drafted();
+    let swept = |gear: AimGear| {
+        let mut draft = PoolDraft::new(&state);
+        draft.toggle_mode(ShotMode::Aim);
+        // The first report is the reference, not a movement.
+        draft.pointer_moved(40, 20, false, gear);
+        let before = draft.azimuth;
+        assert_eq!(
+            draft.pointer_moved(50, 20, false, gear),
+            PointerOutcome::Changed
+        );
+        draft.azimuth - before
+    };
+    let normal = swept(AimGear::Normal);
+    assert!(normal > 0.0, "a sweep to the right turns the cue clockwise");
+    assert!(
+        (swept(AimGear::Coarse) - normal * 4.0).abs() < 1e-12,
+        "shift crosses the table in the sweep that used to walk a ball"
+    );
+    assert!(
+        (swept(AimGear::Fine) - normal * 0.1).abs() < 1e-12,
+        "ctrl buys the last fraction of a degree"
+    );
+
+    // Ctrl wins when both are held: asking for both is asking for precision
+    // with a hand that has run out of desk, and the re-grip covers that.
+    assert_eq!(AimGear::of(true, true), AimGear::Fine);
+    assert_eq!(AimGear::of(false, true), AimGear::Coarse);
+    assert_eq!(AimGear::of(false, false), AimGear::Normal);
+    assert_eq!(AimGear::default(), AimGear::Normal);
+
+    // The same gear steers the tip, which is the other delta-steered mode and
+    // the one drawn on a face a few pixels across.
+    let tipped = |gear: AimGear| {
+        let mut draft = PoolDraft::new(&state);
+        draft.toggle_mode(ShotMode::Spin);
+        draft.pointer_moved(40, 20, false, gear);
+        draft.pointer_moved(43, 20, false, gear);
+        draft.tip[0]
+    };
+    assert!(tipped(AimGear::Fine).abs() < tipped(AimGear::Normal).abs());
+    assert!(tipped(AimGear::Normal).abs() < tipped(AimGear::Coarse).abs());
 }

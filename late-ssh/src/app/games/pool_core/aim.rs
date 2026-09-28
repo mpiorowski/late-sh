@@ -143,6 +143,18 @@ impl ShotLine {
         }
     }
 
+    /// The ball the cue ball will actually touch first, which is not always
+    /// the ball the line is *on*: an aim past a ball into the rail behind it
+    /// is sighted on that ball and contacts nothing. Only this one can be
+    /// judged legal or not, so it is the one the board rings in the foul
+    /// colour.
+    pub fn first_ball(&self) -> Option<u8> {
+        match self.hit {
+            Hit::Ball { id, .. } => Some(id),
+            Hit::Cushion { .. } | Hit::Pocket { .. } | Hit::Nothing { .. } => None,
+        }
+    }
+
     /// The legs in drawing order: the cue ball's first, so what comes after
     /// contact is painted over it.
     pub fn legs(&self) -> Vec<Leg> {
@@ -255,7 +267,16 @@ pub fn shot_line(
 
     let rebound = match hit {
         Hit::Cushion { at, normal } => {
-            let out = sub(dir, scale(normal, 2.0 * dot(dir, normal)));
+            // The mirror, turned by what the english does to the impact. A
+            // rebound drawn as a plain reflection said english off a rail did
+            // nothing, while the simulator was turning a full-tip rebound by
+            // more than twenty degrees — so the line was teaching the player
+            // the opposite of the table they were playing on.
+            let mirror = sub(dir, scale(normal, 2.0 * dot(dir, normal)));
+            let out = rotate(
+                mirror,
+                collide::cushion_deflection(spec, dir, normal, side_spin(tip_side)),
+            );
             Some(cast(spec, geom, balls, at, out, &[CUE]).at())
         }
         Hit::Ball { .. } | Hit::Pocket { .. } | Hit::Nothing { .. } => None,

@@ -76,7 +76,7 @@ pub enum Foul {
     NoContact,
     /// Cue ball's first contact was not a legal target.
     WrongBallFirst,
-    /// Nothing potted and no ball reached a rail after contact.
+    /// Nothing potted and no ball reached a rail at all.
     NoRail,
     /// The break did not put a ball down or send four to the rails.
     IllegalBreak,
@@ -94,7 +94,7 @@ impl Foul {
             Self::Scratch => "scratch",
             Self::NoContact => "no contact",
             Self::WrongBallFirst => "wrong ball first",
-            Self::NoRail => "no rail after contact",
+            Self::NoRail => "no rail",
             Self::IllegalBreak => "illegal break",
             Self::BadPlacement => "illegal cue ball placement",
             Self::MultiplePotted => "more than one ball potted",
@@ -294,8 +294,16 @@ pub fn break_was_legal(outcome: &ShotOutcome) -> bool {
 
 /// Shared "did the shooter do anything at all" test, applied after the legal
 /// target has already been checked.
+///
+/// **A rail anywhere in the shot counts**, not only one reached after the cue
+/// ball's first contact. The book rule is the stricter one, and the stricter
+/// one was what shipped — but the shape it caught most often is the cue ball
+/// off a rail and then thinly onto the ball on, which is a clean safety on any
+/// table anybody plays on and was being called a foul here. A rule that is
+/// right on paper and wrong on the shots people actually play is the worst
+/// kind to keep, so this is the lenient reading: no rail at all is the foul.
 pub fn stalled(outcome: &ShotOutcome) -> bool {
-    outcome.potted.is_empty() && !outcome.cushion_after_contact
+    outcome.potted.is_empty() && outcome.balls_to_rail.is_empty()
 }
 
 /// Whether the cue ball may be placed at `at`.

@@ -1615,19 +1615,21 @@ async fn pool_shots_validate_the_turn_and_the_stroke() {
         .is_err(),
         "an unplayable stroke speed is rejected"
     );
-    // Ball in hand is the ruling's to grant, not the shooter's to claim.
+    // The break is played from in hand, but only from the kitchen: where the
+    // cue ball may go is the ruling's to say, never the shooter's to claim.
+    let spec = pool_state(&claimed).spec().expect("known table");
     assert!(
         svc.play_pool_shot(
             breaker,
             claimed.id,
             Shot {
-                place: Some([0.3, 0.3]),
+                place: Some([spec.length * 0.6, spec.width * 0.5]),
                 ..break_shot
             }
         )
         .await
         .is_err(),
-        "placing the cue ball without ball in hand is rejected"
+        "breaking from past the head string is rejected"
     );
 
     svc.play_pool_shot(breaker, claimed.id, break_shot)

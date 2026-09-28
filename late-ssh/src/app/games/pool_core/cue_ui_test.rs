@@ -34,9 +34,10 @@ fn follow_marks_above_centre_and_draw_below() {
     // exactly where a sign error hides: the panel would show draw for follow
     // and the shot would still be legal.
     //
-    // The face is drawn magnified — the whole ball is the half-radius the tip
-    // may use — so natural roll (0.4 of 0.5) sits four fifths of the way up
-    // the drawn ball, not two fifths.
+    // The face is drawn magnified, but only as far as `TIP_FACE` of the drawn
+    // ball — so natural roll (0.4 of 0.5) sits four fifths of the way up the
+    // *usable* face, well past the two fifths a true-scale face would give it
+    // and comfortably short of the ball's own rim.
     let mut c = canvas();
     let panel = cue_ui::draw(
         &mut c,
@@ -48,9 +49,14 @@ fn follow_marks_above_centre_and_draw_below() {
     let (centre, radius) = (panel.cue, panel.cue_radius);
     assert!(radius > 0.0);
 
+    let face = panel.tip_radius;
+    assert!(
+        face < radius,
+        "the settable face is inside the ball, not the whole of it"
+    );
     let scale = NATURAL_ROLL_TIP / MISCUE_LIMIT;
-    let above = c.get(centre.0 as i32, (centre.1 - radius * scale) as i32);
-    let below = c.get(centre.0 as i32, (centre.1 + radius * scale) as i32);
+    let above = c.get(centre.0 as i32, (centre.1 - face * scale) as i32);
+    let below = c.get(centre.0 as i32, (centre.1 + face * scale) as i32);
     let mark = [210, 60, 60];
     assert_eq!(above, mark, "follow should mark the top of the face");
     assert_ne!(below, mark, "and not the bottom");
@@ -339,4 +345,208 @@ fn every_mode_tells_the_player_what_to_do() {
             "{mode:?} hint should say what the mouse does: {hint}"
         );
     }
+}
+
+#[test]
+fn a_tall_panel_spends_its_rows_on_the_cue_and_not_on_the_balls() {
+    // The complaint: plenty of empty panel under a cue that barely moved. The
+    // stroke is read off how far the cue travels, so every row past what the
+    // balls and the sighting line need belongs below the cue ball — and the
+    // balls must not shrink to pay for it.
+    let panel_of = |rows: u16| {
+        let mut c = Canvas::new(40, rows, [0, 0, 0]);
+        let panel = cue_ui::draw(&mut c, &CueView::default());
+        (panel, c.height() as f64)
+    };
+    let (short, short_h) = panel_of(18);
+    let (tall, tall_h) = panel_of(44);
+
+    assert_eq!(
+        short.cue_radius, tall.cue_radius,
+        "the balls are the panel's width, not its height"
+    );
+    let room = |panel: cue_ui::PanelHit, h: f64| h - (panel.cue.1 + panel.cue_radius);
+    assert!(
+        room(tall, tall_h) > room(short, short_h) * 2.5,
+        "doubling the panel's height should more than double the cue's room: \
+         {} then {}",
+        room(short, short_h),
+        room(tall, tall_h)
+    );
+}
+
+#[test]
+fn a_full_pull_keeps_the_butt_of_the_cue_on_screen() {
+    // The draw-back is scaled to the room under the ball; take all of it and
+    // the cue slides off the bottom, which is no cue at exactly the moment it
+    // is being aimed.
+    let mut c = Canvas::new(40, 30, [0, 0, 0]);
+    cue_ui::draw(
+        &mut c,
+        &CueView {
+            power: 1.0,
+            mode: ShotMode::Stroke(PowerBand::Strong),
+            ..CueView::default()
+        },
+    );
+    let wood = [186, 146, 92];
+    let bottom = c.height() as i32 - 1;
+    assert!(
+        (0..c.cols() as i32).any(|x| c.get(x, bottom) == wood),
+        "the cue still reaches the bottom of the panel at a full pull"
+    );
+}
+
+#[test]
+fn the_panel_says_invalid_target_and_only_that() {
+    // The panel does not ring its ball. It is drawn alone and enormous, with
+    // nothing beside it for a coloured edge to be read against — which is the
+    // whole of what makes the same mark work on the table — so it says the one
+    // thing worth saying, in words, and only when the answer is no.
+    let warned = |view: CueView| {
+        let mut c = Canvas::new(40, 30, [0, 0, 0]);
+        cue_ui::draw(&mut c, &view);
+        // Spans are per cell, so the row has to be reassembled before it can
+        // be read as a sentence.
+        c.to_lines().iter().any(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+                .contains("Invalid Target")
+        })
+    };
+    assert!(
+        warned(CueView {
+            target: Some(3),
+            target_fault: true,
+            ..CueView::default()
+        }),
+        "a ball the striker may not hit says so"
+    );
+    assert!(
+        !warned(CueView {
+            target: Some(3),
+            target_fault: false,
+            ..CueView::default()
+        }),
+        "a legal target is not worth a word"
+    );
+    assert!(
+        !warned(CueView {
+            target: None,
+            ..CueView::default()
+        }),
+        "and neither is a cushion"
+    );
+}
+
+#[test]
+fn a_stripe_in_the_panel_stays_round() {
+    // Its white caps used to be rectangles with the overshoot erased after,
+    // and the erase tested one pixel and wrote to another whenever the ball's
+    // centre was not on a whole one — so a column went missing down one side
+    // and the squared corners stayed on the other. Nothing may be painted
+    // outside the disc, whatever the centre lands on.
+    use crate::app::games::pool_core::table_ui::{WHITE, ball_colour};
+
+    let bg = [0, 0, 0];
+    for cols in [33u16, 34, 40, 59] {
+        let mut c = Canvas::new(cols, 30, bg);
+        let panel = cue_ui::draw(
+            &mut c,
+            &CueView {
+                target: Some(15),
+                distance: 0.2,
+                ..CueView::default()
+            },
+        );
+        let (x, y) = panel.target;
+        let r = panel.target_radius;
+        for py in 0..c.height() as i32 {
+            for px in 0..c.cols() as i32 {
+                let d = (px as f64 + 0.5 - x).hypot(py as f64 + 0.5 - y);
+                if d <= r {
+                    continue;
+                }
+                let seen = c.get(px, py);
+                assert_ne!(
+                    seen, WHITE,
+                    "{cols} cols: white outside the ball at ({px}, {py}), {d:.2} out"
+                );
+                assert_ne!(
+                    seen,
+                    ball_colour(15),
+                    "{cols} cols: ball colour outside the ball at ({px}, {py}), {d:.2} out"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_cue_does_not_begin_where_the_ball_ends() {
+    // Two zones that used to touch: the bottom of the cue ball's face and the
+    // top of the cue. A click aimed at maximum screw and landing a pixel low
+    // armed the stroke instead of placing the tip, which on a panel drawn in
+    // half blocks is a whole terminal row of slop. There is now clear air
+    // between them, and it means "done" like any other dead part of the panel.
+    for rows in [14u16, 22, 36] {
+        let mut c = Canvas::new(40, rows, [0, 0, 0]);
+        let panel = cue_ui::draw(&mut c, &CueView::default());
+        assert!(
+            panel.cue_top > panel.cue.1 + panel.cue_radius,
+            "{rows} rows: the stroke zone starts below the ball, not at it \
+             ({} vs {})",
+            panel.cue_top,
+            panel.cue.1 + panel.cue_radius
+        );
+        assert!(
+            panel.tip_radius < panel.cue_radius,
+            "{rows} rows: the settable face is smaller than the drawn ball"
+        );
+        // And the cue itself is drawn no higher than the zone that arms it,
+        // or the picture and the pointer disagree about what is cue.
+        let wood = [186, 146, 92];
+        let tip = [80, 120, 170];
+        let highest = (0..c.height() as i32)
+            .find(|y| {
+                (0..c.cols() as i32).any(|x| {
+                    let px = c.get(x, *y);
+                    px == wood || px == tip
+                })
+            })
+            .expect("the cue is drawn");
+        assert!(
+            highest as f64 >= panel.cue.1 + panel.cue_radius,
+            "{rows} rows: the cue is drawn into the ball ({highest})"
+        );
+    }
+}
+
+#[test]
+fn the_cue_ball_wears_no_ring_until_the_tip_is_being_placed() {
+    // A grey circle inside a white ball reads as part of the ball rather than
+    // as a boundary, and it was the busiest thing on a panel whose job is to
+    // show one ball clearly. The limit still holds whether or not it is drawn;
+    // the ring is a cue for the moment the tip is actually being moved.
+    use crate::app::games::pool_core::table_ui::GUIDE;
+
+    let ringed = |mode: ShotMode| {
+        let mut c = Canvas::new(40, 30, [0, 0, 0]);
+        let panel = cue_ui::draw(
+            &mut c,
+            &CueView {
+                mode,
+                ..CueView::default()
+            },
+        );
+        let (x, y) = panel.cue;
+        let r = panel.tip_radius;
+        ((y - r) as i32..=(y - r + 2.0) as i32)
+            .any(|py| ((x - 1.0) as i32..=(x + 1.0) as i32).any(|px| c.get(px, py) == GUIDE))
+    };
+    assert!(ringed(ShotMode::Spin), "armed, the limit is drawn");
+    assert!(!ringed(ShotMode::Idle), "idle, the ball is just a ball");
+    assert!(!ringed(ShotMode::Aim));
 }

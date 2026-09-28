@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::app::games::pool_core::ball::Ball;
+use crate::app::games::pool_core::ball::{Ball, CUE};
 
 /// One player's move: everything needed to reproduce the shot exactly.
 ///
@@ -186,6 +186,29 @@ impl Timeline {
         }
     }
 
+    /// Where the cue ball stood when the shot was struck, and the bearing it
+    /// left on. `None` when there is no cue ball in the timeline or it never
+    /// moved (a shot that missed everything still moves it; a `play_again`
+    /// never reaches the simulator at all).
+    ///
+    /// This is what a camera standing behind the shooter needs, and reading it
+    /// back off the frames rather than off the `Shot` is deliberate: a replay
+    /// plays several shots in a row and only the timeline it is currently
+    /// showing knows which one that is.
+    pub fn cue_launch(&self) -> Option<([f64; 2], f64)> {
+        /// Far enough to be a direction rather than round-off, far closer than
+        /// anything a struck ball fails to cover in its first frames.
+        const MOVED: f64 = 1.0e-4;
+        let first = self.frames.first()?;
+        let from = first.iter().find(|frame| frame.id == CUE)?.pos;
+        let launched = self.frames.iter().skip(1).find_map(|frame| {
+            let at = frame.iter().find(|frame| frame.id == CUE)?.pos;
+            let (dx, dy) = (at[0] - from[0], at[1] - from[1]);
+            (dx.hypot(dy) > MOVED).then(|| dy.atan2(dx))
+        })?;
+        Some((from, launched.rem_euclid(std::f64::consts::TAU)))
+    }
+
     /// Positions at time `t` seconds into the shot, linearly interpolated
     /// between the two nearest samples. Clamped at both ends, so sampling
     /// past the end returns the settled rack.
@@ -239,7 +262,11 @@ pub struct ShotOutcome {
     /// needs to know not just that the eight dropped but *where*.
     pub potted: Vec<Pot>,
     /// Whether any ball reached a cushion *after* the cue ball's first
-    /// contact — the "no rail" foul turns on exactly this.
+    /// contact. The book's "no rail" foul turns on exactly this; the one this
+    /// build calls does not (see `rules::stalled`), so nothing in the rules
+    /// layer reads it — it is kept because it is the one thing separating a
+    /// safety played into a rail from one played off it, and a ruleset that
+    /// wants the strict reading needs it already recorded.
     pub cushion_after_contact: bool,
     /// Distinct balls that touched a cushion at any point, in the order they
     /// first did. Break legality is counted off this ("four balls to a rail").

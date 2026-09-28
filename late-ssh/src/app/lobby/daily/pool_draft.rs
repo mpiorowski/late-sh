@@ -9,13 +9,25 @@
 //! put a thousand lines of game into the shared state.
 //!
 //! Nothing here talks to the service or the database. A draft becomes a
-//! `Shot` (`PoolDraft::shot`) and the seam sends it; a playback is handed in
-//! by the seam when a reload brings a shot worth watching.
+//! `Shot` (`PoolDraft::shot`) and the seam sends it.
+//!
+//! The last section of the file is the other half of that rule. Pool is the
+//! only daily game that animates, so it is the only one that needs a physics
+//! worker, a playback queue and a reason to sit on news — and all of that
+//! reads and writes `DailyBoardState`, which is shared. It lives here anyway,
+//! because **every field it touches is a pool field**: the rule is about who
+//! owns the code, not which struct the bytes sit in, and `state.rs` keeps arms
+//! only. That is why this file imports from `state.rs` while `state.rs`
+//! imports from it; the cycle is fine and the alternative is a thousand lines
+//! of pool in the shared file, which is what the rule exists to prevent.
 
 use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
+use tokio::sync::oneshot;
+use uuid::Uuid;
 
+use crate::app::common::primitives::Banner;
 use crate::app::games::pool_core::{
     aim::{self, ShotLine},
     ball::CUE,
@@ -23,9 +35,12 @@ use crate::app::games::pool_core::{
     cue_ui::PanelHit,
     rack, rules as pool_rules,
     shot::{BallFrame, Shot, Timeline},
+    sim,
+    table::Geometry,
 };
 
 use super::pool::{DailyPoolState, PoolAimShare};
+use super::state::{DailyBoardState, DailyMatchDetail};
 
 /// Where the cue panel drew its parts, for the click hit test. The pixel
 /// geometry inside `area` is exactly what `cue_ui::draw` hands back, so the
@@ -47,6 +62,16 @@ pub struct PoolDetail {
     /// The shot currently being watched. Set when a reload brings in a shot
     /// this session has not shown yet; cleared when it finishes playing.
     pub playback: Option<PoolPlayback>,
+    /// Shots still to play after the current one. Only a replay fills it: a
+    /// fresh shot is one timeline, a replayed visit is several, and the queue
+    /// is what makes the second case the first case repeated.
+    pub queue: Vec<Timeline>,
+    /// This playback is a replay the player asked for rather than a shot
+    /// arriving. Kept because the two want opposite things from the board: a
+    /// fresh shot holds the result back until it has played out, where a replay
+    /// is watched with the result already on screen — and because pressing the
+    /// key again has to put the board back.
+    pub replaying: bool,
     /// What the *other* player is lining up, as their board last broadcast it.
     ///
     /// A daily game is otherwise a series of still frames a day apart, and
@@ -58,6 +83,35 @@ pub struct PoolDetail {
 }
 
 impl PoolDetail {
+    /// A board freshly built from a row: the rack as it stands, a draft aimed
+    /// at something sensible, and nothing in flight.
+    ///
+    /// Here rather than in the caller's `match` so the shared detail builder
+    /// stays one arm per game, however many fields this grows.
+    pub fn new(state: DailyPoolState) -> Self {
+        Self {
+            draft: PoolDraft::new(&state),
+            state,
+            shot_in_flight: false,
+            playback: None,
+            queue: Vec::new(),
+            replaying: false,
+            watching: None,
+        }
+    }
+
+    /// Nothing can be adjusted and nothing may be sent: a shot is on the wire,
+    /// being re-simulated, or rolling, or a replay is. The one question the
+    /// input layer and the renderer both ask, so they cannot answer it
+    /// differently.
+    ///
+    /// `shot_pending` is `DailyBoardState::pool_shot_pending`, taken as an
+    /// argument rather than read off the board because every caller is already
+    /// holding the board's detail borrowed when it asks.
+    pub fn is_busy(&self, shot_pending: bool) -> bool {
+        self.shot_in_flight || self.playback.is_some() || self.replaying || shot_pending
+    }
+
     /// Take over what the detail being replaced was in the middle of showing.
     ///
     /// The playback because a reload must not delete a shot that is still
@@ -65,7 +119,32 @@ impl PoolDetail {
     /// re-broadcast it just because this board reloaded.
     pub fn adopt(&mut self, previous: &mut PoolDetail) {
         self.playback = previous.playback.take();
+        self.queue = std::mem::take(&mut previous.queue);
+        self.replaying = std::mem::take(&mut previous.replaying);
         self.watching = previous.watching.take();
+    }
+
+    /// The rack as it stood before the shot that is about to play, for the
+    /// gap between a shot landing and its animation being ready.
+    ///
+    /// Without it the board shows the *settled* rack for the tick or two the
+    /// re-simulation takes, and then rewinds and plays the shot — the balls
+    /// snap to where they end up and then jump back, which reads as the board
+    /// glitching. `None` before the break, where there is no previous rack.
+    pub fn frames_before_shot(&self) -> Option<Vec<BallFrame>> {
+        Some(
+            self.state
+                .prev_rack
+                .as_ref()?
+                .balls
+                .iter()
+                .map(|ball| BallFrame {
+                    id: ball.id,
+                    pos: ball.pos,
+                    potted: ball.potted.is_some(),
+                })
+                .collect(),
+        )
     }
 }
 
@@ -224,6 +303,50 @@ const TIP_PER_COLUMN: f64 = 0.02;
 const TIP_PER_ROW: f64 = 0.04;
 /// Rows of downward travel that draw the cue from nothing to a full pull.
 const PULL_ROWS: f64 = 14.0;
+
+/// How far one cell of pointer travel moves whatever is armed.
+///
+/// A terminal cell is a coarse unit to aim in — one column is about a ball's
+/// width at a metre and a half — so the rates above are a compromise between
+/// sweeping the table and picking a thin cut, and neither end is well served.
+/// Holding a modifier while the pointer moves picks a gear instead, which is
+/// the same trade `h`/`l` against `H`/`L` makes on the keyboard.
+///
+/// **Ctrl is the reliable one.** Shift is not: xterm and most of its
+/// descendants reserve Shift+mouse for the terminal's *own* selection, and
+/// swallow the report rather than sending it — so on those terminals a
+/// Shift-held sweep simply arrives as an ordinary one. Alt is read as coarse
+/// as well for exactly that reason: it is the fallback that works where Shift
+/// is eaten, and it costs nothing where Shift is not.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AimGear {
+    /// Ctrl: a tenth of the step, for the last fraction of a degree.
+    Fine,
+    #[default]
+    Normal,
+    /// Shift or Alt: four times the step, to cross the table in one sweep.
+    Coarse,
+}
+
+impl AimGear {
+    /// Ctrl wins a Ctrl+Shift sweep: asking for both is asking for precision
+    /// with a hand that has run out of desk, and the re-grip covers the rest.
+    pub fn of(fine: bool, coarse: bool) -> Self {
+        match (fine, coarse) {
+            (true, _) => Self::Fine,
+            (false, true) => Self::Coarse,
+            (false, false) => Self::Normal,
+        }
+    }
+
+    pub fn scale(self) -> f64 {
+        match self {
+            Self::Fine => 0.1,
+            Self::Normal => 1.0,
+            Self::Coarse => 4.0,
+        }
+    }
+}
 
 impl PoolDraft {
     /// A draft aimed at something sensible, so a player who fires immediately
@@ -501,7 +624,13 @@ impl PoolDraft {
     /// began, because there the origin means something physical — it is where
     /// the cue ball is. Drawing back to the same place is always the same
     /// power, and pushing back past it is unambiguously a strike.
-    pub fn pointer_moved(&mut self, x: u16, y: u16, button_down: bool) -> PointerOutcome {
+    pub fn pointer_moved(
+        &mut self,
+        x: u16,
+        y: u16,
+        button_down: bool,
+        gear: AimGear,
+    ) -> PointerOutcome {
         if self.mode == ShotMode::Idle {
             self.last_pointer = None;
             return PointerOutcome::Ignored;
@@ -528,8 +657,11 @@ impl PoolDraft {
             self.stroke_origin = Some(y);
             return PointerOutcome::Ignored;
         }
-        let dx = x as f64 - last_x as f64;
-        let dy = y as f64 - last_y as f64;
+        // The gear scales the *travel*, not the rate, so it applies to
+        // whichever delta-steered mode is armed without either of them having
+        // to know it exists.
+        let dx = (x as f64 - last_x as f64) * gear.scale();
+        let dy = (y as f64 - last_y as f64) * gear.scale();
         match self.mode {
             ShotMode::Idle => PointerOutcome::Ignored,
             ShotMode::Aim => {
@@ -772,9 +904,21 @@ impl PoolDraft {
     /// and there was no gesture that would fix it. The same shape of bug as
     /// the ball-in-hand dead board, and found the same way.
     ///
-    /// Generous about the distance, like every other pointer target on the
-    /// table: a pocket is a few pixels on an overview, and "the corner one" is
-    /// what the player means whatever pixel they hit.
+    /// **The click has to land on the pocket**, which is a hole straddling the
+    /// table's edge and not a disc of cloth in front of one. Two tests, and
+    /// both are needed: within a mouth's width of it (so a click by one corner
+    /// cannot name another), and at or past its mouth chord give or take a
+    /// ball's radius (`Geometry::pocket_depth`, the same line that decides a
+    /// ball has dropped) less three half-radii — which is the disc the pocket
+    /// is drawn as, so what the eye reads as the hole is what the pointer can
+    /// name, and a click that lands just short of the mouth still counts.
+    ///
+    /// The depth test is the one that matters. A plain radius of one and a
+    /// half mouths is a tenth of the table's length around each of six
+    /// pockets, and while naming a pocket outranked everything the board would
+    /// not take a target or a direction anywhere in it — which, once the shot
+    /// has to be called, is most of the cloth the eight is likely to be near.
+    /// Cloth in front of a pocket is somewhere to aim; the hole is not.
     pub fn call_pocket_at(&mut self, state: &DailyPoolState, at: [f64; 2]) -> bool {
         if !state.requires_call() {
             return false;
@@ -787,11 +931,16 @@ impl PoolDraft {
             .pockets
             .iter()
             .enumerate()
+            // On the hole, not on the cloth in front of it. The slack is
+            // three half-radii, which reaches the inner edge of the disc the
+            // pocket is *drawn* as — so what the eye reads as the hole is what
+            // the pointer can name, and no more.
+            .filter(|(_, pocket)| Geometry::pocket_depth(pocket, at) >= -spec.ball_radius * 1.5)
             .map(|(index, pocket)| {
                 let (dx, dy) = (pocket.center[0] - at[0], pocket.center[1] - at[1]);
                 (index as u8, dx.hypot(dy))
             })
-            .filter(|(_, distance)| *distance <= spec.corner_mouth * 1.5)
+            .filter(|(_, distance)| *distance <= spec.corner_mouth)
             .min_by(|a, b| a.1.total_cmp(&b.1));
         match called {
             Some((index, _)) => {
@@ -800,6 +949,58 @@ impl PoolDraft {
             }
             None => false,
         }
+    }
+
+    /// What a left click on the cloth means, in the order a player reads the
+    /// table: **that ball, that pocket, that spot**.
+    ///
+    /// Holding the cue ball, the click sets it down instead — that is the whole
+    /// of the mode, so it also ends it. Left click is "there, done" everywhere
+    /// else on this board and placement should not be the one thing that needs
+    /// a key to finish. With any *other* mode running the click is that mode's
+    /// commit, and re-targeting mid-aim would throw away the very adjustment
+    /// the click is there to keep.
+    ///
+    /// Naming a pocket used to come first, on the grounds that down to the
+    /// eight there is only one legal ball left and the pockets are the only
+    /// thing worth pointing at. That is true of the pockets and false of the
+    /// rest of the cloth: the pocket reach covered a tenth of the table's
+    /// length around each of six of them, so once the shot had to be called the
+    /// board would not take a target or a direction anywhere near a rail —
+    /// which is where the eight usually is by then. Ordered this way each
+    /// gesture keeps its own meaning and none of them is unreachable.
+    pub fn click_table(&mut self, state: &DailyPoolState, at: [f64; 2]) -> bool {
+        if self.mode == ShotMode::Place {
+            return self.place_and_commit(state, at);
+        }
+        if self.mode != ShotMode::Idle {
+            return false;
+        }
+        let Ok(spec) = state.spec() else {
+            return false;
+        };
+        // Generous: the drawn ball is bigger than life, so the click target
+        // should be too, or the picture and the pointer disagree.
+        let reach = spec.ball_radius * 3.0;
+        let hit = state
+            .legal_targets()
+            .into_iter()
+            .filter_map(|id| state.rack.get(id).map(|ball| (id, ball.pos)))
+            .map(|(id, pos)| (id, (pos[0] - at[0]).hypot(pos[1] - at[1])))
+            .filter(|(_, distance)| *distance <= reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((id, _)) = hit {
+            self.aim_at_ball(state, id);
+            return true;
+        }
+        // A click on a pocket, for the shot that has to name one. Refused
+        // everywhere else, so it costs the other games nothing.
+        if self.call_pocket_at(state, at) {
+            return true;
+        }
+        // Bare cloth: a cushion to play off, or a spot to send the cue ball to.
+        self.aim_at_point(state, at);
+        true
     }
 
     /// Point at a bare spot on the cloth: a cushion, or a spot to send the
@@ -898,4 +1099,239 @@ fn default_aim(state: &DailyPoolState, place: Option<[f64; 2]>, target: Option<u
             .rem_euclid(std::f64::consts::TAU),
         _ => 0.0,
     }
+}
+
+// ── The board's pool seam ─────────────────────────────────────────────
+//
+// Pool is the only daily game that animates, so it is the only one that needs
+// a worker, a queue and a reason to sit on news. All of that reads and writes
+// `DailyBoardState`, which is shared — but every field it touches is a pool
+// field, so the code is pool's and `state.rs` keeps arms only. Same rule as
+// the rest of this file, one struct further out.
+
+/// Start playing back any shot this session has not shown yet.
+///
+/// Both sides run through here on reload, which is why there is only one code
+/// path: your own shot animates when the canonical row comes back, and so does
+/// the opponent's. Simulating locally the moment you fire would be faster by a
+/// round trip and would put a second copy of the physics in the loop, which is
+/// exactly what the server-as-referee split exists to avoid.
+///
+/// **The re-simulation does not run on the tick.** Gathering the inputs is
+/// local memory; running the shot is thousands of integration steps, so it
+/// goes to a blocking thread and comes back through `poll_pool_timeline`.
+pub(super) fn start_pool_playback(board: &mut DailyBoardState) {
+    let Some(pool) = board.detail.as_mut().and_then(DailyMatchDetail::pool_mut) else {
+        return;
+    };
+    let played = pool.state.move_count();
+    // The canonical row is back, so whatever was in flight has landed.
+    if board.pool_animated.is_some_and(|seen| played > seen) {
+        pool.shot_in_flight = false;
+    }
+    match board.pool_animated {
+        // First load: take the history as already seen. Opening a match should
+        // show you the table as it stands, not replay the shot that happened
+        // before you arrived.
+        None => board.pool_animated = Some(played),
+        Some(seen) if played > seen => {
+            board.pool_animated = Some(played);
+            // A newer shot landing first simply replaces the receiver and the
+            // older animation is dropped, which is the same thing the board
+            // would do anyway.
+            let Some((spec, start, strike)) = pool.state.last_shot_sim() else {
+                return;
+            };
+            pool.replaying = false;
+            pool.queue.clear();
+            let (tx, rx) = oneshot::channel();
+            tokio::task::spawn_blocking(move || {
+                let geom = spec.geometry();
+                let _ = tx.send(vec![sim::simulate(spec, &geom, &start, &strike).timeline]);
+            });
+            board.timeline_rx = Some(rx);
+            board.pool_shot_pending = true;
+        }
+        Some(_) => {}
+    }
+}
+
+/// Collect shots that finished re-simulating and start the first playing.
+/// Returns whether anything changed, like the other tick drains.
+pub(super) fn poll_pool_timeline(board: &mut DailyBoardState) -> bool {
+    let Some(rx) = &mut board.timeline_rx else {
+        return false;
+    };
+    let mut timelines = match rx.try_recv() {
+        Ok(timelines) => timelines,
+        Err(oneshot::error::TryRecvError::Empty) => return false,
+        // The worker is gone, so no animation is coming. The board still shows
+        // the settled rack, which is the truth either way — and it has to stop
+        // holding the result back, or it would hold it for ever.
+        Err(oneshot::error::TryRecvError::Closed) => {
+            board.timeline_rx = None;
+            board.pool_shot_pending = false;
+            return true;
+        }
+    };
+    board.timeline_rx = None;
+    board.pool_shot_pending = false;
+    let Some(pool) = board.detail.as_mut().and_then(DailyMatchDetail::pool_mut) else {
+        return false;
+    };
+    if timelines.is_empty() {
+        pool.replaying = false;
+        return true;
+    }
+    // Reversed once, so the queue pops off the end in shot order.
+    timelines.reverse();
+    let first = timelines.pop().expect("not empty");
+    pool.queue = timelines;
+    pool.playback = Some(PoolPlayback::new(first));
+    true
+}
+
+/// Retire a finished playback. Returns whether the board is animating, so the
+/// render loop keeps repainting while it is.
+pub(super) fn drive_pool_playback(board: &mut DailyBoardState) -> bool {
+    let Some(pool) = board.detail.as_mut().and_then(DailyMatchDetail::pool_mut) else {
+        return false;
+    };
+    match &pool.playback {
+        Some(playback) if playback.finished() => {
+            // A replay of a whole visit runs straight into the next shot, which
+            // is how a visit is watched: one break, not four clips.
+            pool.playback = pool.queue.pop().map(PoolPlayback::new);
+            pool.replaying = pool.replaying && pool.playback.is_some();
+            // The last frame differs from the settled rack, so the swap back is
+            // itself a repaint.
+            true
+        }
+        Some(_) => true,
+        None => false,
+    }
+}
+
+/// Whether the open board is mid-shot. Drives the render loop's hot tick.
+///
+/// The wait for a re-simulation counts: the board is holding the pre-shot rack
+/// for it and wants the tick that collects it promptly.
+pub(super) fn pool_is_animating(board: &DailyBoardState) -> bool {
+    board.timeline_rx.is_some()
+        || board
+            .detail
+            .as_ref()
+            .and_then(DailyMatchDetail::pool)
+            .is_some_and(|pool| pool.playback.is_some())
+}
+
+/// `r` / `R`: watch the last shot again, or the whole of the last visit.
+///
+/// The timelines are re-simulated from the opening rack on a blocking thread,
+/// for the same reason a fresh shot's is: the tick path runs no physics.
+/// Pressing it again while a replay is rolling puts the board back, so the key
+/// is its own way out.
+///
+/// Open to whoever is looking — both players, a spectator, a finished match.
+/// Nothing here can become a move, and the shot it shows has already been
+/// played.
+pub(crate) fn start_pool_replay(board: &mut DailyBoardState, whole_visit: bool) -> bool {
+    let Some(pool) = board.detail.as_mut().and_then(DailyMatchDetail::pool_mut) else {
+        return false;
+    };
+    if pool.replaying {
+        pool.playback = None;
+        pool.queue.clear();
+        pool.replaying = false;
+        board.timeline_rx = None;
+        board.pool_shot_pending = false;
+        return true;
+    }
+    let Some(from) = pool.state.replay_from(whole_visit) else {
+        return false;
+    };
+    let state = pool.state.clone();
+    pool.playback = None;
+    pool.queue.clear();
+    pool.replaying = true;
+    let (tx, rx) = oneshot::channel();
+    tokio::task::spawn_blocking(move || {
+        let _ = tx.send(state.replay(from));
+    });
+    board.timeline_rx = Some(rx);
+    // A replay is asked for, so there is no result to hold back: the board is
+    // already showing it.
+    board.pool_shot_pending = false;
+    true
+}
+
+/// News of a finish this session has been told about but is not yet showing,
+/// because the pool board it happened on is still playing the shot that ended
+/// it.
+///
+/// Held on `DailyState` rather than on the board, so closing the board
+/// releases it rather than losing it.
+pub(super) struct PoolFinishHold {
+    pub banner: Banner,
+    pub own_win: bool,
+    pub own_loss: bool,
+    /// When it was held. The hold is released by the shot finishing; this is
+    /// the backstop for the case where it never does — a reload that errored, a
+    /// physics worker that went away — because news that never arrives is worse
+    /// than news that arrives late.
+    at: Instant,
+}
+
+impl PoolFinishHold {
+    pub(super) fn new(banner: Banner, own_win: bool, own_loss: bool) -> Self {
+        Self {
+            banner,
+            own_win,
+            own_loss,
+            at: Instant::now(),
+        }
+    }
+
+    /// Whether the hold is up: the board has finished showing the shot, or the
+    /// backstop has expired.
+    pub(super) fn released(&self, board: Option<&DailyBoardState>) -> bool {
+        self.at.elapsed() >= FINISH_HOLD_MAX || !pool_board_is_rolling(board)
+    }
+}
+
+/// Longest a finish is held waiting for a shot to play out. A shot is seconds;
+/// this is the belt to that braces.
+const FINISH_HOLD_MAX: Duration = Duration::from_secs(20);
+
+/// Whether news that `match_id` has finished should wait.
+///
+/// It should when this is the open board, the board is pool, and the shot that
+/// ended the match has not been watched yet — which at the moment the event
+/// lands means the reload carrying it is still in flight. Announcing through
+/// the animation is announcing before the table has got there, and at a real
+/// table nobody tells you the rack is over while the balls are still moving.
+pub(super) fn pool_defers_finish(board: Option<&DailyBoardState>, match_id: Uuid) -> bool {
+    board.is_some_and(|board| {
+        board.match_id == match_id
+            && board
+                .detail
+                .as_ref()
+                .and_then(DailyMatchDetail::pool)
+                .is_some()
+            && pool_board_is_rolling(Some(board))
+    })
+}
+
+/// The open board is a pool board with a shot somewhere between the wire and
+/// the last frame of its animation.
+fn pool_board_is_rolling(board: Option<&DailyBoardState>) -> bool {
+    board.is_some_and(|board| {
+        board.reloading()
+            || board.timeline_rx.is_some()
+            || board
+                .detail
+                .as_ref()
+                .and_then(DailyMatchDetail::pool)
+                .is_some_and(|pool| pool.shot_in_flight || pool.playback.is_some())
+    })
 }

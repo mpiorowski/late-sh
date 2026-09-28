@@ -16,7 +16,7 @@ use crate::app::games::pool_core::cue::{MISCUE_LIMIT, PowerBand, ShotMode};
 use crate::app::games::pool_core::shot::Shot;
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind};
 use crate::app::lobby::daily::pool::DailyPoolState;
-use crate::app::lobby::daily::pool_draft::{PointerOutcome, PoolCueHit, PoolDraft};
+use crate::app::lobby::daily::pool_draft::{self, AimGear, PointerOutcome, PoolCueHit, PoolDraft};
 use crate::app::lobby::daily::state::DailyMatchDetail;
 use crate::app::state::App;
 
@@ -49,7 +49,15 @@ fn draft_mut(app: &mut App) -> Option<(&mut PoolDraft, &DailyPoolState)> {
 /// y           snooker: after a foul, make them play it again
 /// x  s  w     arm the stroke light / normal / strong, then draw and push
 /// h  l        turn the cue a degree; H/L a tenth of one
+/// r  R        watch the last shot again, or the whole of the last visit
+/// X           resign
 /// ```
+///
+/// **`r` is replay here, not resign.** Every other board resigns on `r`, and
+/// on this one the key a player reaches for over and over is "show me that
+/// again" — so pool takes `r`/`R` and puts resigning on `X`, which the legend
+/// and the confirm prompt both say. Resigning still needs two presses, so the
+/// swap cannot cost anybody a match by muscle memory.
 ///
 /// This overlaps wasd, which is why it runs before the shared cursor keys —
 /// but pool has no cell cursor for wasd to move, so nothing is lost.
@@ -84,6 +92,17 @@ pub(crate) fn pool_key(app: &mut App, byte: u8) -> bool {
         // rather than play from where they left you. Refused otherwise, so it
         // costs the other games nothing.
         b'y' | b'Y' => pool_play_again(app),
+        // Watch it again: the last shot, or — shifted — every shot of the
+        // visit it belongs to, which on a correspondence board is exactly what
+        // happened while you were away. Allowed to whoever is looking, because
+        // it shows what has already been played and cannot become a move.
+        b'r' => pool_replay(app, false),
+        b'R' => pool_replay(app, true),
+        // Resigning, moved off `r` to make room for the replay.
+        b'X' => {
+            app.daily.board_resign();
+            true
+        }
         b'h' => pool_aim(app, -1, false),
         b'l' => pool_aim(app, 1, false),
         b'H' => pool_aim(app, -1, true),
@@ -142,7 +161,13 @@ pub(crate) fn handle_pool_mouse(app: &mut App, mouse: &MouseEvent) -> bool {
             {
                 return true;
             }
-            pool_pointer_moved(app, x, y, mouse.kind == MouseEventKind::Drag)
+            pool_pointer_moved(
+                app,
+                x,
+                y,
+                mouse.kind == MouseEventKind::Drag,
+                gear_of(mouse),
+            )
         }
         // Right button: zero whatever is armed — centre the tip, straighten
         // the aim — and stay in it. Taken on the press rather than the release
@@ -229,11 +254,16 @@ fn click_cue_panel(app: &mut App, hit: PoolCueHit, x: u16, y: u16) {
     // panel is drawn into.
     let px = (x - hit.area.x) as f64 + 0.5;
     let py = (y - hit.area.y) as f64 * 2.0 + 0.5;
-    let across = (px - hit.panel.cue.0) / hit.panel.cue_radius;
+    // Against the *settable* face, which is drawn smaller than the ball, so
+    // the edge of the drawn ball is not the miscue limit.
+    let across = (px - hit.panel.cue.0) / hit.panel.tip_radius;
     // Screen rows grow downward, the tip offset grows up the face: get this
     // backwards and follow becomes draw.
-    let up = (hit.panel.cue.1 - py) / hit.panel.cue_radius;
-    if across.hypot(up) <= 1.0 {
+    let up = (hit.panel.cue.1 - py) / hit.panel.tip_radius;
+    // Anywhere on the drawn *ball* places the tip. The rim outside the usable
+    // face is still the ball, so a click there clamps to the miscue limit
+    // rather than sliding off onto whatever is drawn beneath it.
+    if (px - hit.panel.cue.0).hypot(py - hit.panel.cue.1) <= hit.panel.cue_radius {
         pool_click_cue(app, across, up);
         pool_commit_mode(app);
         return;
@@ -242,14 +272,31 @@ fn click_cue_panel(app: &mut App, hit: PoolCueHit, x: u16, y: u16) {
         pool_toggle_mode(app, ShotMode::Aim);
         return;
     }
-    if py > hit.panel.cue.1 + hit.panel.cue_radius {
+    if py >= hit.panel.cue_top {
         // The middle band, which is what an unqualified "shoot" means and
         // what `s` arms. The other two stay a keypress away.
         pool_toggle_mode(app, ShotMode::Stroke(PowerBand::Normal));
         return;
     }
-    // Beside the ball: no part of the shot lives there, so it means "done".
+    // Beside the ball, or in the clear air under it that belongs to neither
+    // the face nor the cue: no part of the shot lives there, so it means
+    // "done". That strip is the point — a click aimed at the bottom of the
+    // face and landing a pixel low used to arm the stroke.
     pool_commit_mode(app);
+}
+
+/// Which gear the modifiers held during a pointer report ask for.
+///
+/// Ctrl is fine, Shift *or* Alt is coarse. Both are read as coarse because
+/// Shift is the one that cannot be relied on: xterm and most of its
+/// descendants reserve Shift+mouse for the terminal's own selection and
+/// swallow the report, so on those terminals a Shift-held sweep never arrives
+/// as one. Alt is the fallback that works there and costs nothing elsewhere.
+fn gear_of(mouse: &MouseEvent) -> AimGear {
+    AimGear::of(
+        mouse.modifiers.ctrl,
+        mouse.modifiers.shift || mouse.modifiers.alt,
+    )
 }
 
 /// The spot on the cloth under the pointer, when it is over the table at all.
@@ -301,6 +348,21 @@ pub(crate) fn pool_commit_mode(app: &mut App) -> bool {
     match draft_mut(app) {
         Some((draft, _)) if draft.mode.band().is_none() => draft.commit(),
         _ => false,
+    }
+}
+
+/// `r` / `R`: watch the last shot again, or the whole of the last visit.
+///
+/// Not gated on the turn: a replay is a camera, like the eye view, and both
+/// players and a spectator have the same reason to want one. Pressing it again
+/// while one is rolling stops it.
+pub(crate) fn pool_replay(app: &mut App, whole_visit: bool) -> bool {
+    if !is_pool_board(app) {
+        return false;
+    }
+    match &mut app.daily.board {
+        Some(board) => pool_draft::start_pool_replay(board, whole_visit),
+        None => false,
     }
 }
 
@@ -386,51 +448,14 @@ pub(crate) fn pool_aim(app: &mut App, delta: isize, fine: bool) -> bool {
 
 /// A click on the table view. `at` is already in table coordinates.
 ///
-/// Picks the ball under the click when there is one and it is a legal
-/// target, and otherwise takes the bare point — which is how a cushion
-/// gets picked, and the one thing the keyboard cannot do.
+/// The gate only; what a click on the cloth *means* is `PoolDraft::click_table`
+/// in `pool_draft.rs`, which touches no `DailyState` field and is therefore
+/// that file's by the rule written at the top of it.
 pub(crate) fn pool_click_table(app: &mut App, at: [f64; 2]) -> bool {
     let Some((draft, state)) = draft_mut(app) else {
         return false;
     };
-    // Holding the cue ball, the click sets it down instead of picking a
-    // target — that is the whole of the mode, so it also ends it. Left
-    // click is "there, done" everywhere else on this board and placement
-    // should not be the one thing that needs a key to finish.
-    if draft.mode == ShotMode::Place {
-        return draft.place_and_commit(state, at);
-    }
-    // Otherwise only while nothing is armed. With a mode running the click
-    // is that mode's commit, and re-targeting mid-aim would throw away the
-    // very adjustment the click is there to keep.
-    if draft.mode != ShotMode::Idle {
-        return false;
-    }
-    let Ok(spec) = state.spec() else {
-        return false;
-    };
-    // Down to the eight: a click near a pocket names it. This outranks
-    // picking a target because there is only one legal target left — the
-    // eight — so the pockets are the only thing on the cloth left worth
-    // pointing at, and naming one is the whole of what the shot needs.
-    if draft.call_pocket_at(state, at) {
-        return true;
-    }
-    // Generous: the drawn ball is bigger than life, so the click target
-    // should be too, or the picture and the pointer disagree.
-    let reach = spec.ball_radius * 3.0;
-    let hit = state
-        .legal_targets()
-        .into_iter()
-        .filter_map(|id| state.rack.get(id).map(|ball| (id, ball.pos)))
-        .map(|(id, pos)| (id, (pos[0] - at[0]).hypot(pos[1] - at[1])))
-        .filter(|(_, d)| *d <= reach)
-        .min_by(|a, b| a.1.total_cmp(&b.1));
-    match hit {
-        Some((id, _)) => draft.aim_at_ball(state, id),
-        None => draft.aim_at_point(state, at),
-    }
-    true
+    draft.click_table(state, at)
 }
 
 /// A click on the cue ball's face, as a fraction of its radius from the
@@ -458,9 +483,15 @@ pub(crate) fn pool_click_cue(app: &mut App, across: f64, up: f64) -> bool {
 /// Pointer motion. Returns whether it moved anything, so a mouse crossing
 /// an idle board does not repaint on every reported pixel — and fires the
 /// shot when the cue is pushed forward through the ball.
-pub(crate) fn pool_pointer_moved(app: &mut App, x: u16, y: u16, button_down: bool) -> bool {
+pub(crate) fn pool_pointer_moved(
+    app: &mut App,
+    x: u16,
+    y: u16,
+    button_down: bool,
+    gear: AimGear,
+) -> bool {
     let outcome = match draft_mut(app) {
-        Some((draft, _)) => draft.pointer_moved(x, y, button_down),
+        Some((draft, _)) => draft.pointer_moved(x, y, button_down, gear),
         None => PointerOutcome::Ignored,
     };
     match outcome {

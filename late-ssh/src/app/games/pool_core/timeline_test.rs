@@ -179,3 +179,38 @@ fn every_event_lands_inside_the_shot() {
         last = event.t;
     }
 }
+
+#[test]
+fn the_timeline_says_where_the_shot_was_struck_from() {
+    // The camera that stands behind the shooter reads this, and it has to read
+    // it off the timeline rather than off the recorded shot: a replay plays
+    // several shots in a row and only the timeline knows which one is on
+    // screen. A quarter turn, so a wrong sign is a bearing that is obviously
+    // not the one played.
+    let start = rack::build(&SPEC, rack::RackKind::EightBall, 5);
+    let cue = start.get(CUE).expect("a cue ball").pos;
+    for azimuth in [0.0, std::f64::consts::FRAC_PI_2, 2.4] {
+        let strike = Strike::new(azimuth, 0.0, 0.0, 2.0).unwrap();
+        let result = sim::simulate(&SPEC, &geom(), &start, &strike);
+        let (from, bearing) = result
+            .timeline
+            .cue_launch()
+            .expect("a struck ball has a launch");
+        assert_eq!(from, cue, "it starts where the cue ball was");
+        assert!(
+            (bearing - azimuth).abs() < 1e-3,
+            "struck at {azimuth}, read back as {bearing}"
+        );
+    }
+}
+
+#[test]
+fn a_timeline_with_nothing_in_it_has_no_launch() {
+    let empty = sim::simulate(
+        &SPEC,
+        &geom(),
+        &crate::app::games::pool_core::shot::RackState { balls: Vec::new() },
+        &Strike::new(0.0, 0.0, 0.0, 1.0).unwrap(),
+    );
+    assert_eq!(empty.timeline.cue_launch(), None);
+}

@@ -152,10 +152,7 @@ impl DailyPoolState {
             seed,
             turn: 0,
             groups: None,
-            // Snooker breaks from the D — the cue ball is *in hand* for the
-            // opening shot, which is a rule and not a nicety: where you break
-            // from decides what the pack does.
-            ball_in_hand: matches!(rules, PoolRules::Snooker).then_some(BallInHand::TheD),
+            ball_in_hand: opening_ball_in_hand(rules),
             scores: [0, 0],
             on_colour: false,
             free_ball: false,
@@ -166,6 +163,35 @@ impl DailyPoolState {
             rack: rack::build(spec, rules.rack_kind(), seed).rounded(PERSIST_DECIMALS),
             prev_rack: None,
             shots: Vec::new(),
+        }
+    }
+
+    /// This match as it stood before a ball was struck: the opening rack, no
+    /// history, nothing decided. What a replay starts from.
+    ///
+    /// Rebuilt from the stored `seed` rather than kept around, which is the
+    /// whole reason the seed is stored. A state on a table this build no
+    /// longer knows has no opening rack to rebuild, and comes back unchanged
+    /// so the caller's replay simply finds nothing to play.
+    fn rewound(&self) -> Self {
+        let Ok(spec) = self.spec() else {
+            return self.clone();
+        };
+        Self {
+            turn: 0,
+            groups: None,
+            ball_in_hand: opening_ball_in_hand(self.rules),
+            scores: [0, 0],
+            on_colour: false,
+            free_ball: false,
+            may_return: false,
+            last_foul: None,
+            winner: None,
+            finished: false,
+            rack: rack::build(spec, self.rules.rack_kind(), self.seed).rounded(PERSIST_DECIMALS),
+            prev_rack: None,
+            shots: Vec::new(),
+            ..self.clone()
         }
     }
 
@@ -265,6 +291,71 @@ impl DailyPoolState {
     pub fn last_timeline(&self) -> Option<Timeline> {
         let (spec, start, strike) = self.last_shot_sim()?;
         Some(sim::simulate(spec, &spec.geometry(), &start, &strike).timeline)
+    }
+
+    /// Which shot a replay should start from: the last one, or the first of the
+    /// last **visit** — the whole run the same player is in the middle of.
+    ///
+    /// The visit is what a correspondence game takes away. Come back after a
+    /// day and the other player has had four shots and left you the table;
+    /// the board can show you where the balls ended up and nothing else. The
+    /// run of shots by one seat is exactly what you were not there for.
+    ///
+    /// `None` on a match with no shots in it yet.
+    pub fn replay_from(&self, whole_visit: bool) -> Option<usize> {
+        let last = self.shots.len().checked_sub(1)?;
+        if !whole_visit {
+            return Some(last);
+        }
+        let seat = self.shots[last].seat;
+        Some(
+            self.shots
+                .iter()
+                .rposition(|record| record.seat != seat)
+                .map_or(0, |before| before + 1),
+        )
+    }
+
+    /// Re-simulate the match from the opening rack and hand back the timeline
+    /// of every shot from `from` onward, in order.
+    ///
+    /// **A replay cannot be assembled from `prev_rack`.** That is one rack, and
+    /// a visit is several shots — so the only way back to where the third shot
+    /// of a visit began is to play the first two. Replaying them through
+    /// `apply_shot` rather than through the simulator alone is what makes the
+    /// re-spots land where they landed: a colour a foul put back is not
+    /// something physics knows about.
+    ///
+    /// Expensive by the standards of a tick — a whole frame of physics, and
+    /// twice over for the shots being watched, since `apply_shot` runs its own
+    /// — so callers run it on a blocking thread. It stops at the first shot the
+    /// rules refuse rather than guessing, which can only happen if a stored
+    /// history and this build's rules disagree.
+    pub fn replay(&self, from: usize) -> Vec<Timeline> {
+        let Ok(spec) = self.spec() else {
+            return Vec::new();
+        };
+        let geom = spec.geometry();
+        let mut scratch = self.rewound();
+        let mut out = Vec::new();
+        for (index, record) in self.shots.iter().enumerate() {
+            // Handing the shot back moves no ball, so there is nothing to
+            // watch — but it still took the turn, so the replay has to play it.
+            if !record.shot.play_again && index >= from {
+                let mut start = scratch.rack.clone();
+                let Ok(()) = apply_placement(&mut start, record.shot.place) else {
+                    break;
+                };
+                let Ok(strike) = strike_of(&record.shot) else {
+                    break;
+                };
+                out.push(sim::simulate(spec, &geom, &start, &strike).timeline);
+            }
+            if scratch.apply_shot(record.seat, &record.shot).is_err() {
+                break;
+            }
+        }
+        out
     }
 
     /// Play one shot: place the cue ball if asked, strike, simulate, judge,
@@ -490,6 +581,22 @@ fn spot_ball(spec: &TableSpec, geom: &Geometry, racked: &mut RackState, id: u8) 
     if let Some(ball) = racked.balls.iter_mut().find(|b| b.id == id) {
         ball.pos = at;
         ball.potted = None;
+    }
+}
+
+/// Where the cue ball starts a game.
+///
+/// **Every game here breaks from in hand.** Snooker because it is the rule —
+/// the D is where a frame starts and where you put the ball in it decides what
+/// the pack does. The pool games because a bar player picks their spot on the
+/// break too, and because the break is the one shot in the rack where the
+/// board otherwise gave the player nothing to decide but the speed. The
+/// kitchen, not the whole table: breaking from the foot of the table is not a
+/// break.
+fn opening_ball_in_hand(rules: PoolRules) -> Option<BallInHand> {
+    match rules {
+        PoolRules::EightBall | PoolRules::NineBall => Some(BallInHand::Kitchen),
+        PoolRules::Snooker => Some(BallInHand::TheD),
     }
 }
 

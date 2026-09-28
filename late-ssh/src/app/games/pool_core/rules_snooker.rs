@@ -88,20 +88,25 @@ pub fn legal_targets(state: &GameState) -> Vec<u8> {
             .filter(|id| *id != CUE)
             .collect();
     }
+    // Straight after a red, any colour still up. **Asked before the reds**,
+    // because the last red is followed by a colour of choice exactly like
+    // every other red — the order only starts once *that* colour is down.
+    // Asking about the reds first made the final red the one red in the frame
+    // that put you on the yellow.
+    if state.on_colour {
+        return COLOURS
+            .into_iter()
+            .filter(|id| state.on_table(*id))
+            .collect();
+    }
     let reds: Vec<u8> = (RED_FIRST..=RED_LAST)
         .filter(|id| state.on_table(*id))
         .collect();
     if !reds.is_empty() {
-        return if state.on_colour {
-            COLOURS
-                .into_iter()
-                .filter(|id| state.on_table(*id))
-                .collect()
-        } else {
-            reds
-        };
+        return reds;
     }
-    // Reds gone: the colours come back in order and stay down.
+    // Reds gone and the colour of choice taken: the colours come back in
+    // order and stay down.
     COLOURS
         .into_iter()
         .find(|id| state.on_table(*id))
@@ -223,13 +228,18 @@ pub fn judge(state: &GameState, outcome: &ShotOutcome) -> Ruling {
         })
         .sum();
     // A free ball potted while on a red *is* a red for the purpose of what
-    // comes next: the striker is on a colour.
+    // comes next: the striker is on a colour. True of the last red as well as
+    // of every other — that colour of choice is the end of the red phase, not
+    // the start of the sequence.
     let potted_a_red = on_a_red && !potted.is_empty();
     let reds_left = (RED_FIRST..=RED_LAST).any(|id| state.on_table(id) && !potted.contains(&id));
 
     // Colours go back up while a red is still on the table, and stay down
-    // once the reds are gone. That single line is the shape of a frame.
-    let mut spot: Vec<u8> = if reds_left {
+    // once the reds are gone. That single line is the shape of a frame — with
+    // one more: the colour taken after the *last* red is re-spotted too, and
+    // only then do the colours start staying down. `state.on_colour` is what
+    // says this shot was a colour of choice rather than one taken in order.
+    let mut spot: Vec<u8> = if reds_left || state.on_colour {
         potted.iter().copied().filter(|id| !is_red(*id)).collect()
     } else {
         Vec::new()
@@ -252,7 +262,7 @@ pub fn judge(state: &GameState, outcome: &ShotOutcome) -> Ruling {
         points: scored,
         penalty: 0,
         group_assignment: None,
-        next_on_colour: potted_a_red && reds_left,
+        next_on_colour: potted_a_red,
         free_ball_if_snookered: false,
         frame_over: nothing_left,
         winner: None,
