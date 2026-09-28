@@ -30,7 +30,7 @@ use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use super::state::Presence;
-use crate::metrics::{self, PresenceWire};
+use crate::metrics::{self, PresenceScope, PresenceWire};
 use crate::pg_listener::{Channel, Signal};
 
 /// How often changes go out: the worst extra latency another replica sees
@@ -165,7 +165,10 @@ async fn presence_loop(
             }
         };
         if changed {
-            records_tx.send_replace(Arc::new(presence.records()));
+            let records = presence.records();
+            metrics::record_presence_records(PresenceScope::Local, presence.local_count());
+            metrics::record_presence_records(PresenceScope::All, records.len());
+            records_tx.send_replace(Arc::new(records));
         }
     }
 }

@@ -884,7 +884,10 @@ Drained by `haunt::svc::tick`.
   connect, not per person); bio screens by outcome are
   `late_ssh_first_contact_bio_screens_total`; delivered beats are
   `late_ssh_first_contact_beats_total`. The street's wire is
-  presence's, `late_ssh_presence_total{beat}` (root CONTEXT.md §7). The name is a log field only, never
+  presence's, `late_ssh_presence_total{beat}` (root CONTEXT.md §7). The
+  game's own counters sit under the same row: fights by beat (the per-
+  exchange `round` beat left out), the tailor and the door, Old Signal
+  payouts. The name is a log field only, never
   a metric label: the three counters stay keyed on closed enums so the
   series count cannot grow with the player base. Grafana's "deadchannel"
   row (`monitoring/dashboards/observability.json`) reads both: the beat and

@@ -240,6 +240,15 @@ pub enum PresenceWire {
     Expired,
 }
 
+/// Which presence records a replica counts (`app/presence`): `Local` its
+/// own sessions, `All` every live record it holds, its own and every other
+/// replica's. `All` should read the same on every replica.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresenceScope {
+    Local,
+    All,
+}
+
 /// A stage of a session's start, from TCP accept to the first frame on
 /// the user's screen. `Total` is the whole span; the other three add up
 /// to it.
@@ -381,9 +390,10 @@ mod inner {
         GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
         OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
-        PotReminderOutcome, Presence, PresenceWire, Refresh, RefreshOutcome, RenderReason,
-        RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser, SongQueueReward,
-        SshRejectReason, SummaryResult, TailorBeat, TranslationResult, VizWireBands,
+        PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome,
+        RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser,
+        SongQueueReward, SshRejectReason, SummaryResult, TailorBeat, TranslationResult,
+        VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -1085,6 +1095,18 @@ mod inner {
         })
     }
 
+    fn presence_records() -> &'static Gauge<u64> {
+        static METRIC: OnceLock<Gauge<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_gauge("late_ssh_presence_records")
+                .with_description(
+                    "presence records a replica holds, its own sessions (local) or every one (all)",
+                )
+                .build()
+        })
+    }
+
     fn presence_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -1227,6 +1249,20 @@ mod inner {
 
     pub fn record_presence(beat: PresenceWire) {
         presence_total().add(1, &[KeyValue::new("beat", presence_wire_label(beat))]);
+    }
+
+    fn presence_scope_label(scope: PresenceScope) -> &'static str {
+        match scope {
+            PresenceScope::Local => "local",
+            PresenceScope::All => "all",
+        }
+    }
+
+    pub fn record_presence_records(scope: PresenceScope, count: usize) {
+        presence_records().record(
+            count as u64,
+            &[KeyValue::new("scope", presence_scope_label(scope))],
+        );
     }
 
     pub fn record_deadchannel_fight(beat: FightBeat) {
@@ -2225,9 +2261,10 @@ mod inner {
         GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
         OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
-        PotReminderOutcome, Presence, PresenceWire, Refresh, RefreshOutcome, RenderReason,
-        RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser, SongQueueReward,
-        SshRejectReason, SummaryResult, TailorBeat, TranslationResult, VizWireBands,
+        PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome,
+        RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser,
+        SongQueueReward, SshRejectReason, SummaryResult, TailorBeat, TranslationResult,
+        VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
@@ -2238,6 +2275,7 @@ mod inner {
     pub fn record_deadchannel_old_signal_payout(_payout: OldSignalPayout) {}
     pub fn record_deadchannel_tailor(_beat: TailorBeat) {}
     pub fn record_presence(_beat: PresenceWire) {}
+    pub fn record_presence_records(_scope: PresenceScope, _count: usize) {}
     pub fn record_runner_door(_door: RunnerDoor) {}
     pub fn record_first_contact_bio_screen(_outcome: BioScreenOutcome) {}
     pub fn record_first_contact_gate(_verdict: GateVerdict, _staff: bool) {}

@@ -168,7 +168,7 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   unbounded channel and `drain_outcomes` runs every tick, on or off the
   screen, so a settled order is never lost. `OrderOutcome` is plain data;
   the failure was logged in `svc.rs`.
-- Telemetry: `metrics::record_nightcap_order` (poured/comped/bounced/failed)
+- Telemetry (the dashboard's Tavern row): `metrics::record_nightcap_order` (poured/comped/bounced/failed)
   for single pours; rounds count under the shared `record_round_bought` /
   `record_round_refused`, whichever bar sold them. The house's off-thread
   work has its own counter, `record_nightcap_house_failure`

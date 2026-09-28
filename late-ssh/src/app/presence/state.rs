@@ -132,6 +132,11 @@ impl Presence {
         }
     }
 
+    /// This replica's own sessions.
+    pub fn local_count(&self) -> usize {
+        self.local.len()
+    }
+
     /// Every live record on every replica, in session order, so every
     /// replica hands its rooms the same list.
     pub fn records(&self) -> Vec<PresenceRecord> {

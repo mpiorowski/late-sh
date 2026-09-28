@@ -3,7 +3,7 @@
   "uid": "observability",
   "title": "Runtime Observability",
   "timezone": "browser",
-  "version": 17,
+  "version": 18,
   "schemaVersion": 39,
   "style": "dark",
   "tags": [
@@ -2006,7 +2006,7 @@
     },
     {
       "type": "row",
-      "title": "deadchannel",
+      "title": "Presence",
       "collapsed": false,
       "datasource": {
         "uid": "victoriametrics",
@@ -2018,6 +2018,363 @@
         "w": 24,
         "x": 0,
         "y": 177
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Presence Wire",
+      "description": "Batches this replica sent (published) and heard from other replicas (heard), per second. Published runs at most 5/s (one per 200ms flush with changes) plus a heartbeat every 3s, whatever the headcount; heard is the other replicas' published. See app/presence.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (beat) (rate(late_ssh_presence_total{beat=~\"published|heard\"}[$__rate_interval]))",
+          "legendFormat": "{{beat}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 178
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Presence Trouble",
+      "description": "What should stay at zero. expired: another replica's sessions dropped after 10s without a heartbeat (a replica died, or a LISTEN dropped and a leave was missed). publish_failed: the database refused a notify (the next heartbeat resends). rejected: a payload that did not parse (a replica on another wire format mid-deploy).",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (beat) (increase(late_ssh_presence_total{beat=~\"expired|publish_failed|rejected\"}[$__rate_interval]))",
+          "legendFormat": "{{beat}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 178
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Sessions in Presence",
+      "description": "Who every replica thinks is here. local is each replica's own sessions, summed; seen is every record a replica holds, shown for the replica seeing the most and the fewest. The two seen lines should sit on top of each other: a gap that lasts past a heartbeat means a replica is missing someone. SSH sessions for scale.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(late_ssh_presence_records{scope=\"local\"})",
+          "legendFormat": "local (all replicas)"
+        },
+        {
+          "refId": "B",
+          "expr": "max(late_ssh_presence_records{scope=\"all\"})",
+          "legendFormat": "seen (most)"
+        },
+        {
+          "refId": "C",
+          "expr": "min(late_ssh_presence_records{scope=\"all\"})",
+          "legendFormat": "seen (fewest)"
+        },
+        {
+          "refId": "D",
+          "expr": "sum(late_ssh_sessions_active)",
+          "legendFormat": "ssh sessions"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 178
+      }
+    },
+    {
+      "type": "row",
+      "title": "Tavern",
+      "collapsed": false,
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 186
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Nightcap Orders",
+      "description": "Pours off the Nightcap menu over the range: poured (chips moved), comped (a round credit paid), bounced (the tab would not cover it), failed (the chip write did not land). Rounds count in the next panel, whichever bar sold them.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (increase(late_ssh_nightcap_orders_total[$__range]))",
+          "legendFormat": "{{result}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 187
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Rounds & Gift Drinks",
+      "description": "Drinks bought for other people over the range, at either bar: rounds bought and the drinks they granted and that were cashed, gift drinks, and why the house refused the rest.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(late_ssh_rounds_total[$__range]))",
+          "legendFormat": "rounds bought",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum(increase(late_ssh_round_drinks_granted_total[$__range]))",
+          "legendFormat": "round drinks granted",
+          "instant": true
+        },
+        {
+          "refId": "C",
+          "expr": "sum(increase(late_ssh_round_drinks_cashed_total[$__range]))",
+          "legendFormat": "round drinks cashed",
+          "instant": true
+        },
+        {
+          "refId": "D",
+          "expr": "sum by (reason) (increase(late_ssh_rounds_refused_total[$__range]))",
+          "legendFormat": "round refused: {{reason}}",
+          "instant": true
+        },
+        {
+          "refId": "E",
+          "expr": "sum(increase(late_ssh_gift_drinks_total[$__range]))",
+          "legendFormat": "gift drinks",
+          "instant": true
+        },
+        {
+          "refId": "F",
+          "expr": "sum by (reason) (increase(late_ssh_gift_drinks_refused_total[$__range]))",
+          "legendFormat": "gift refused: {{reason}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 187
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Nightcap House Failures",
+      "description": "The bar's off-thread work that failed over the range: credit_count (the menu's free-drink count) and house_line (the house saying a pour out loud). What a healthy order counter cannot see: a stale menu or a quiet bar.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (work) (increase(late_ssh_nightcap_house_failures_total[$__range]))",
+          "legendFormat": "{{work}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 187
+      }
+    },
+    {
+      "type": "row",
+      "title": "deadchannel",
+      "collapsed": false,
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 195
       }
     },
     {
@@ -2074,7 +2431,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 178
+        "y": 196
       }
     },
     {
@@ -2131,7 +2488,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 178
+        "y": 196
       }
     },
     {
@@ -2188,7 +2545,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 178
+        "y": 196
       }
     },
     {
@@ -2241,7 +2598,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 186
+        "y": 204
       }
     },
     {
@@ -2378,7 +2735,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 194
+        "y": 212
       }
     },
     {
@@ -2464,7 +2821,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 203
+        "y": 221
       }
     },
     {
@@ -2496,7 +2853,184 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 213
+        "y": 231
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Fights by Beat",
+      "description": "The fight at the screen over the range, by what happened (exchanges inside a fight, beat=round, are left out so the outcomes stay readable): started or resumed, won, slain, lost, escaped, and the armorer's outfitted and patch's patched, with refused and failed.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (beat) (increase(late_ssh_deadchannel_fights_total{beat!=\"round\"}[$__range]))",
+          "legendFormat": "{{beat}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 243
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Tailor & the Door",
+      "description": "Looks worn at the tailor's mirror (worn, no_runner, failed) and runners leaving and returning to #deadchannel over the range.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (beat) (increase(late_ssh_deadchannel_tailor_total[$__range]))",
+          "legendFormat": "tailor {{beat}}",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (direction) (increase(late_ssh_runner_door_total[$__range]))",
+          "legendFormat": "door {{direction}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 243
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Old Signal Payouts",
+      "description": "Old Signal kills over the range by what the chips did: paid, refused by the 30-day lockout (inside_month), or the grant failing.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (increase(late_ssh_deadchannel_old_signal_payouts_total[$__range]))",
+          "legendFormat": "{{outcome}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 243
       }
     }
   ]
