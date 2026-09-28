@@ -11,8 +11,12 @@
 //! kill, a near miss, the last ration of the day); this file words it and
 //! posts it to
 //! #deadchannel as messages from the voice. An ordinary kill, a round, a
-//! run, a purchase post nothing. The Old Signal also grants the rankless
-//! `SIG` profile badge, once per account.
+//! run, a purchase post nothing. The Old Signal also pays the mark's
+//! chips after the commit (`pay_mark`: once per mark and at most once a
+//! month, the door milestones' two gates; the debt is on the row as
+//! `unpaid_mark` until the grant answers, so a grant that errors is
+//! retried on the next command or reload) and grants the rankless `SIG`
+//! profile badge, once per account.
 //!
 //! Orchestration only: the span, the metric, the log line per failure
 //! mode, and the reply live here; `state.rs` returns data.
@@ -20,7 +24,9 @@
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use late_core::db::Db;
+use late_core::models::chips::ChipMove;
 use late_core::models::deadchannel_runner::DeadchannelRunner;
+use late_core::models::reward::DEADCHANNEL_OLD_SIGNAL_REWARD_KEY;
 use late_core::models::profile_award::{
     DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY, grant_unique_milestone_award,
 };
@@ -31,8 +37,10 @@ use uuid::Uuid;
 use super::data;
 use super::state::{Applied, Command, News, Outcome, Sheet};
 use crate::app::chat::svc::ChatService;
+use crate::app::common::primitives::thousands;
+use crate::app::games::chips::svc::ChipService;
 use crate::app::deadchannel::runner::state::Look;
-use crate::metrics::{self, FightBeat};
+use crate::metrics::{self, FightBeat, OldSignalPayout};
 
 /// What a session's request came back with. Sent to the asking session
 /// only.
@@ -55,11 +63,28 @@ pub(crate) enum FightOutcome {
 pub struct FightService {
     db: Db,
     chat: ChatService,
+    chips: ChipService,
+}
+
+/// One applied command, as `act` hands it to the task: the runner row it
+/// ran on (the Old Signal's payout keys on it), the sheet after, and what
+/// happened.
+struct Acted {
+    runner_id: Uuid,
+    sheet: Sheet,
+    outcome: Outcome,
+}
+
+/// One reload, as `reload` hands it to the task: the runner row and the
+/// sheet as settled.
+struct Reloaded {
+    runner_id: Uuid,
+    sheet: Sheet,
 }
 
 impl FightService {
-    pub fn new(db: Db, chat: ChatService) -> Self {
-        Self { db, chat }
+    pub fn new(db: Db, chat: ChatService, chips: ChipService) -> Self {
+        Self { db, chat, chips }
     }
 
     /// Run one command for a session and answer on `reply`. `username` is
@@ -76,10 +101,20 @@ impl FightService {
         tokio::spawn(
             async move {
                 let outcome = match svc.act(user_id, command).await {
-                    Ok(Some((sheet, outcome))) => {
+                    Ok(Some(Acted {
+                        runner_id,
+                        sheet,
+                        mut outcome,
+                    })) => {
                         metrics::record_deadchannel_fight(beat_for(&outcome.applied));
                         tracing::info!(applied = ?outcome.applied, level = sheet.level, signal = sheet.signal, rations_left = sheet.rations_left, bits = sheet.bits, "fight command applied");
                         svc.post_news(&username, &sheet, &outcome.applied).await;
+                        // The debt on the row: this kill's mark, or one an
+                        // earlier grant failed to settle. Either way the
+                        // line lands under this answer.
+                        if let Some(mark) = sheet.unpaid_mark {
+                            outcome.lines.push(svc.pay_mark(user_id, runner_id, mark).await);
+                        }
                         if let Applied::Slain { marks } = outcome.applied {
                             svc.grant_old_signal_badge(user_id, marks).await;
                         }
@@ -104,7 +139,7 @@ impl FightService {
 
     /// Lock, settle, apply, store. Returns `None` when there is no standing
     /// runner.
-    async fn act(&self, user_id: Uuid, command: Command) -> Result<Option<(Sheet, Outcome)>> {
+    async fn act(&self, user_id: Uuid, command: Command) -> Result<Option<Acted>> {
         let today = Self::today();
         let mut client = self.db.get().await?;
         let tx = client.transaction().await?;
@@ -119,7 +154,88 @@ impl FightService {
             DeadchannelRunner::store_sheet(&*tx, sheet.to_write()).await?;
         }
         tx.commit().await?;
-        Ok(Some((sheet, outcome)))
+        Ok(Some(Acted {
+            runner_id: row.id,
+            sheet,
+            outcome,
+        }))
+    }
+
+    /// The mark's chips, after the kill's commit, on the door milestones'
+    /// two gates (`DEADCHANNEL_OLD_SIGNAL_REWARD_KEY`): once per mark, keyed
+    /// `<runner row id>:<mark>`, and at most once every 30 days per account.
+    /// Returns the line the scene prints under the answer.
+    ///
+    /// The row owes the mark (`unpaid_mark`, migration 210) until the grant
+    /// answers: paid or refused by the month's gate, the debt is settled;
+    /// an error leaves it standing, logged and counted here, and the next
+    /// command or reload on the row calls this again with the same event
+    /// key, which the unique gate makes safe to repeat. A settle that fails
+    /// after a paid grant is the one double call the gate absorbs: the
+    /// retry is refused and settles then.
+    async fn pay_mark(&self, user_id: Uuid, runner_id: Uuid, mark: i32) -> String {
+        let event_key = format!("{runner_id}:{mark}");
+        let grant = self
+            .chips
+            .credit_run_cooldown_reward_template(
+                user_id,
+                DEADCHANNEL_OLD_SIGNAL_REWARD_KEY,
+                &event_key,
+                ChipMove::OldSignalSlain,
+            )
+            .await;
+        let (payout, line) = match grant {
+            Ok(grant) if grant.credited => {
+                tracing::info!(mark, amount = grant.amount, "old signal paid");
+                (
+                    OldSignalPayout::Paid,
+                    format!(
+                        "the house pays {} chips for the broadcast.",
+                        thousands(grant.amount)
+                    ),
+                )
+            }
+            Ok(_) => {
+                tracing::info!(mark, "old signal inside the month, not paid");
+                (
+                    OldSignalPayout::InsideMonth,
+                    data::OLD_SIGNAL_PAID_THIS_MONTH_LINE.to_string(),
+                )
+            }
+            Err(error) => {
+                tracing::error!(error = ?error, mark, "failed to pay the old signal");
+                (
+                    OldSignalPayout::Failed,
+                    data::OLD_SIGNAL_TILL_JAMMED_LINE.to_string(),
+                )
+            }
+        };
+        metrics::record_deadchannel_old_signal_payout(payout);
+        match payout {
+            OldSignalPayout::Paid | OldSignalPayout::InsideMonth => {
+                self.settle_mark(runner_id, mark).await;
+            }
+            OldSignalPayout::Failed => {}
+        }
+        line
+    }
+
+    /// Clear the debt for `mark` on the row. A failure here is logged and
+    /// left: the next touch retries the grant, and the gate refuses it.
+    async fn settle_mark(&self, runner_id: Uuid, mark: i32) {
+        let settled = match self.db.get().await {
+            Ok(client) => DeadchannelRunner::settle_mark(&client, runner_id, mark).await,
+            Err(error) => Err(error),
+        };
+        match settled {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::warn!(mark, "old signal mark was already settled or superseded");
+            }
+            Err(error) => {
+                tracing::error!(error = ?error, mark, "failed to settle the old signal mark");
+            }
+        }
     }
 
     /// The news the wire carries, worded. Fire-and-forget through chat,
@@ -243,14 +359,20 @@ impl FightService {
     /// Re-read the sheet for a session's mirror: at connect for a standing
     /// runner, on every directory edge, and on the descent. Every action
     /// answers with the locked row's sheet, so between those the mirror
-    /// catches up with a change made elsewhere on the next press.
+    /// catches up with a change made elsewhere on the next press. A mark
+    /// the row still owes is paid here too, so a grant lost to a restart
+    /// heals at the next connect; its line goes to the log only.
     pub(crate) fn reload_task(&self, user_id: Uuid, reply: mpsc::UnboundedSender<FightOutcome>) {
         let svc = self.clone();
         let span = info_span!("deadchannel.fight.reload_task", user_id = %user_id);
         tokio::spawn(
             async move {
                 match svc.reload(user_id).await {
-                    Ok(Some(sheet)) => {
+                    Ok(Some(Reloaded { runner_id, sheet })) => {
+                        if let Some(mark) = sheet.unpaid_mark {
+                            let line = svc.pay_mark(user_id, runner_id, mark).await;
+                            tracing::info!(mark, line = %line, "old signal mark settled on reload");
+                        }
                         let _ = reply.send(FightOutcome::Reloaded { sheet });
                     }
                     Ok(None) => {
@@ -268,7 +390,7 @@ impl FightService {
     /// A read, but through the same lock-and-settle path as an action, so
     /// the mirror never shows yesterday's bars: the day roll happens on
     /// the first touch, and the descent is a touch.
-    async fn reload(&self, user_id: Uuid) -> Result<Option<Sheet>> {
+    async fn reload(&self, user_id: Uuid) -> Result<Option<Reloaded>> {
         let today = Self::today();
         let mut client = self.db.get().await?;
         let tx = client.transaction().await?;
@@ -280,7 +402,10 @@ impl FightService {
             DeadchannelRunner::store_sheet(&*tx, sheet.to_write()).await?;
         }
         tx.commit().await?;
-        Ok(Some(sheet))
+        Ok(Some(Reloaded {
+            runner_id: row.id,
+            sheet,
+        }))
     }
 
     pub fn today() -> NaiveDate {

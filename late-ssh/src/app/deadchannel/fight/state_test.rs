@@ -66,9 +66,10 @@ fn a_fight_to_the_end_with_fixed_dice_lands_on_one_state() {
             exp,
             leveled,
         } => {
-            assert_eq!((foe, bits, exp, leveled), ("flicker", 36, 14, None));
-            assert_eq!(sheet.bits, START_BITS + 36);
-            assert_eq!(sheet.exp, 14);
+            // LoGD's flicker pays 36 bits and 14 exp; `PAY_SCALE` triples it.
+            assert_eq!((foe, bits, exp, leveled), ("flicker", 108, 42, None));
+            assert_eq!(sheet.bits, START_BITS + 108);
+            assert_eq!(sheet.exp, 42);
             assert!(sheet.signal > 0);
             assert_eq!(
                 (sheet.kills, sheet.kills_today, sheet.runs_today),
@@ -541,6 +542,7 @@ fn a_row_naming_an_unknown_glyph_is_rejected() {
         runs_today: 0,
         peak_level: 1,
         marks: 0,
+        unpaid_mark: None,
         fight: Some(serde_json::json!({
             "quarry": {"glyph": 99}, "foe_signal": 1, "foe_max_signal": 1, "foe_attack": 1,
             "foe_defense": 1, "foe_bits": 1, "foe_exp": 1, "log": []
@@ -687,6 +689,7 @@ fn putting_the_old_signal_down_leaves_a_mark_and_starts_the_climb_over() {
         runs_today: 0,
         peak_level: MAX_LEVEL,
         marks: 1,
+        unpaid_mark: Some(1),
     };
     assert_eq!(sheet, expected);
     assert_eq!(outcome.lines.len(), 3, "{:?}", outcome.lines);

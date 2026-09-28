@@ -2,7 +2,6 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/arcade`
-- Last updated: 2026-09-08 (Share cards: every finished daily has a result card, `s` copies it to the clipboard, the lobby's `s` copies the day card, and the lobby lists the dailies first.)
 - Purpose: local working context for The Arcade screen and single-player terminal games.
 - Parent context: `../../../../CONTEXT.md`
 

@@ -8,8 +8,9 @@
 
 /// The welcome the voice posts on the wire for a runner whose row was
 /// just created (`RunnerOrigin::Created`, once per person by
-/// construction): who is talking, where they are, the story so far, the
-/// one key down to the city, and the way out. The keys on the street are
+/// construction): the story so far, the one key down to the city, the way
+/// out, and who is talking. Story first and short: a new runner reads the
+/// wire, not a room description. The keys on the street are
 /// the undercity guide's (`guide/data.rs`), which opens by itself on the
 /// first descent, so the welcome names none of them. The runner is
 /// mentioned by name, so the message lands in their mentions too. One
@@ -19,26 +20,16 @@
 pub(crate) fn welcome(username: &str) -> String {
     [
         format!("@{username}. you got through. welcome to the wire."),
-        "this is #deadchannel: the back room under the clubhouse and the game's own log. \
-         what happens to runners posts here as it happens, and between the lines it's just \
-         us talking. half the messages are the game, half are people. that's the point."
+        "there's a city under the clubhouse. the rain down there falls as static, the alleys \
+         are dead channels, and out in the dark are the glyphs: things made of the same \
+         characters your terminal draws. at the bottom of it all something old is still \
+         broadcasting. it's been trying names for weeks. it tried yours, and you answered. \
+         you're a runner now: the version of you that stays down there when you log off."
             .to_string(),
-        "the story so far. there's a city behind the screen. the rain down there falls as \
-         static, the alleys are dead channels, and out in the dark are the glyphs: things \
-         made of the same characters your terminal draws. at the bottom of it all something \
-         old is still broadcasting. the static has been trying names for weeks. it tried \
-         yours, and you answered. you're a runner now: the version of you that stays down \
-         there when you log off."
+        "0, then 0 again. the street explains the rest.".to_string(),
+        "too loud? /leave in here shuts the door and your runner waits. /join #deadchannel \
+         opens it again. i'm afterglow. i'll be on the wire."
             .to_string(),
-        "getting down: 0 puts you in the clubhouse, 0 again takes you under it. the street \
-         explains itself the first time you land on it, and ? down there says it all again."
-            .to_string(),
-        "the people upstairs can't see this channel or hear the static. if they ask what \
-         you're on about, tell them to fill in their bio. if it gets too loud, /leave while \
-         you're in here shuts the door. your runner keeps its face and waits, and \
-         /join #deadchannel opens it again."
-            .to_string(),
-        "i'm afterglow. i'll be on the wire.".to_string(),
     ]
     .join("\n")
 }

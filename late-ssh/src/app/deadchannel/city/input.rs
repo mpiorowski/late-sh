@@ -1,6 +1,7 @@
 //! City input: roguelike walking (arrows/hjkl, Shift+arrow or HJKL to
 //! run), Enter at a landmark (a shop panel, a street line, the static at
-//! the screen, or the wire out), Enter to close a panel. The armorer's
+//! the screen, or the wire out), `f` to step into the static and `p` to
+//! open patch from anywhere on the street, Enter to close a panel. The armorer's
 //! panel takes the till keys (`fight/state.rs`, `Command::Outfit`); the
 //! tailor's hands every key to `tailor/input.rs`.
 //! While the guide is open every key goes to `guide/input.rs` first, and
@@ -61,6 +62,25 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             Enter::Ledge => app.city.look_over(),
             Enter::Fight => app.fight.open(),
         }
+        return true;
+    }
+
+    // `f` steps into the static from anywhere on the street, not only at
+    // one of its three screens. Same path as Enter there: a waiting fight
+    // resumes for free, a new one spends a ration.
+    if let Some(b'f' | b'F') = event_byte(event) {
+        app.music_prefix_armed = false;
+        app.fight.open();
+        return true;
+    }
+
+    // `p` opens patch from anywhere on the street, the same panel Enter at
+    // the counter opens: the price and the refusal show first, `p` again
+    // pays. The armorer and the tailor stay a walk away on purpose.
+    if let Some(b'p' | b'P') = event_byte(event) {
+        app.music_prefix_armed = false;
+        app.city.open_panel(Landmark::Repairs);
+        app.fight.clear_till();
         return true;
     }
 

@@ -132,6 +132,10 @@ pub struct Sheet {
     pub peak_level: i32,
     /// Old Signal kills, ever.
     pub marks: i32,
+    /// The mark whose chips the house still owes: set by the kill, cleared
+    /// by the service once the grant answers (migration 210). `None` when
+    /// nothing is owed.
+    pub unpaid_mark: Option<i32>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -289,6 +293,7 @@ impl Sheet {
             runs_today: 0,
             peak_level: 1,
             marks: 0,
+            unpaid_mark: None,
         }
     }
 
@@ -325,6 +330,7 @@ impl Sheet {
             runs_today: row.runs_today,
             peak_level: row.peak_level,
             marks: row.marks,
+            unpaid_mark: row.unpaid_mark,
         })
     }
 
@@ -348,6 +354,7 @@ impl Sheet {
             runs_today: self.runs_today,
             peak_level: self.peak_level,
             marks: self.marks,
+            unpaid_mark: self.unpaid_mark,
         }
     }
 
@@ -717,9 +724,11 @@ impl Sheet {
     /// The Old Signal is down: a mark, and the climb starts over. Level,
     /// exp, gear, and bits go back to a fresh runner's; the peak, the
     /// kills, today's rations, and everything off the sheet (the look, the
-    /// badges) stay.
+    /// badges) stay. The mark's chips are owed from this moment
+    /// (`unpaid_mark`), until the service settles them.
     fn slay(&mut self, mut lines: Vec<String>) -> Outcome {
         self.marks += 1;
+        self.unpaid_mark = Some(self.marks);
         self.kills += 1;
         self.kills_today += 1;
         self.level = 1;

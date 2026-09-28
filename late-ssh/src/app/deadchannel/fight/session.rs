@@ -6,7 +6,7 @@
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use super::state::{Applied, Command, Sheet};
+use super::state::{Applied, Command, Quarry, Sheet};
 use super::svc::{FightOutcome, FightService};
 
 /// Lines of the exchange the scene shows.
@@ -23,6 +23,16 @@ pub struct Scene {
     pub over: bool,
     /// A command is out and its answer has not landed.
     pub waiting: bool,
+    /// The last answer was the service failing (`ActionFailed`): the
+    /// static is not answering. Esc closes the scene then instead of
+    /// running, so an outage never traps the runner in retries; the fight
+    /// stays on the row. Cleared by the next request.
+    pub failed: bool,
+    /// The fight on the row is the Old Signal's: the scene is drawn its
+    /// way (`ui.rs`, the whole screen, the frame torn). Set when the
+    /// fight starts or resumes, kept until the scene closes, so the
+    /// aftermath is drawn on the same screen the fight was.
+    pub old_signal: bool,
 }
 
 pub(crate) struct FightSession {
@@ -38,7 +48,9 @@ pub(crate) struct FightSession {
     username: String,
     svc: FightService,
     action_in_flight: bool,
-    outcome_tx: mpsc::UnboundedSender<FightOutcome>,
+    /// Crate-visible so a test can put an answer on the wire the way the
+    /// service would.
+    pub(crate) outcome_tx: mpsc::UnboundedSender<FightOutcome>,
     outcome_rx: mpsc::UnboundedReceiver<FightOutcome>,
 }
 
@@ -76,12 +88,15 @@ impl FightSession {
             latest: 0,
             over: false,
             waiting: true,
+            old_signal: false,
+            failed: false,
         });
         self.request(Command::Start);
     }
 
-    /// Back to the street. A fight in progress stays on the row and is
-    /// found waiting on the next step in.
+    /// Back to the street: a finished scene, or the page left under an
+    /// open one. A fight still on stays on the row and is found waiting on
+    /// the next step in (Esc over the scene is the run, not this).
     pub(crate) fn close(&mut self) {
         self.scene = None;
     }
@@ -106,6 +121,7 @@ impl FightSession {
         self.action_in_flight = true;
         if let Some(scene) = &mut self.scene {
             scene.waiting = true;
+            scene.failed = false;
         }
         self.svc.act_task(
             self.user_id,
@@ -141,6 +157,7 @@ impl FightSession {
                     match &mut self.scene {
                         Some(scene) => {
                             scene.waiting = false;
+                            scene.failed = true;
                             scene.latest = 1;
                             scene
                                 .lines
@@ -167,16 +184,16 @@ impl FightSession {
         };
         scene.waiting = false;
         scene.latest = lines.len();
+        let fight = self.sheet.as_ref().and_then(|sheet| sheet.fight.as_ref());
         match applied {
-            Applied::Started => scene.lines = lines,
+            Applied::Started => {
+                scene.lines = lines;
+                scene.old_signal = fight.is_some_and(|fight| fight.quarry == Quarry::OldSignal);
+            }
             Applied::Resumed => {
-                scene.lines = self
-                    .sheet
-                    .as_ref()
-                    .and_then(|sheet| sheet.fight.as_ref())
-                    .map(|fight| fight.log.clone())
-                    .unwrap_or_default();
+                scene.lines = fight.map(|fight| fight.log.clone()).unwrap_or_default();
                 scene.latest = scene.lines.len();
+                scene.old_signal = fight.is_some_and(|fight| fight.quarry == Quarry::OldSignal);
             }
             Applied::Refused(_) => {
                 scene.lines = lines;

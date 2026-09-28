@@ -32,6 +32,7 @@ pub const LATEANIA_FRONTIER_KING_REWARD_KEY: &str = "lateania_frontier_king_defe
 pub const LATEANIA_SUNDERING_DEEP_REWARD_KEY: &str = "lateania_sundering_deep_defeat";
 pub const LATEANIA_KAETHYR_ASCENDANT_REWARD_KEY: &str = "lateania_kaethyr_ascendant_defeat";
 pub const GREENDRAGON_DRAGON_REWARD_KEY: &str = "greendragon_dragon_slain";
+pub const DEADCHANNEL_OLD_SIGNAL_REWARD_KEY: &str = "deadchannel_old_signal_slain";
 pub const NETHACK_AMULET_REWARD_KEY: &str = "nethack_amulet";
 pub const NETHACK_ASCENSION_REWARD_KEY: &str = "nethack_ascension";
 pub const DCSS_ORB_REWARD_KEY: &str = "dcss_orb";

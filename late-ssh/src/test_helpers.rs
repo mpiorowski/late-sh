@@ -612,6 +612,7 @@ fn make_app_with_chat_service_and_permissions(
         fight_service: crate::app::deadchannel::fight::svc::FightService::new(
             db.clone(),
             chat_service.clone(),
+            chip_service.clone(),
         ),
         tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(db.clone()),
         guide_service: crate::app::deadchannel::guide::svc::GuideService::new(db.clone()),
@@ -878,6 +879,7 @@ pub fn make_app_with_paired_client(
         fight_service: crate::app::deadchannel::fight::svc::FightService::new(
             db.clone(),
             ChatService::new(db.clone(), notification_service.clone()),
+            chip_service.clone(),
         ),
         tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(db.clone()),
         guide_service: crate::app::deadchannel::guide::svc::GuideService::new(db.clone()),
@@ -999,6 +1001,23 @@ pub fn make_app_with_paired_client(
 pub fn with_session_key(mut app: App, fingerprint: &str) -> App {
     app.key_fingerprint = Some(fingerprint.to_string());
     app
+}
+
+/// Walk every `game_payout_claims` row this account holds `days` into the
+/// past, so a test crosses a template's lockout window without sleeping.
+/// The one place the tests reach into that table: the window is read off
+/// `created`, and nothing in the app moves it.
+pub async fn age_payout_claims(db: &Db, user_id: Uuid, days: i32) {
+    let client = db.get().await.expect("db client");
+    client
+        .execute(
+            "UPDATE game_payout_claims
+             SET created = created - make_interval(days => $2)
+             WHERE user_id = $1",
+            &[&user_id, &days],
+        )
+        .await
+        .expect("age payout claims");
 }
 
 pub async fn wait_until<F, Fut>(mut predicate: F, label: &str)

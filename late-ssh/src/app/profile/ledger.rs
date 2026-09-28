@@ -191,7 +191,8 @@ const fn pointer(mv: ChipMove) -> Pointer {
         | ChipMove::LateaniaArchdemonDefeat
         | ChipMove::LateaniaFrontierKingDefeat
         | ChipMove::LateaniaSunderingDeepDefeat
-        | ChipMove::LateaniaKaethyrAscendantDefeat => Pointer::PayoutClaim,
+        | ChipMove::LateaniaKaethyrAscendantDefeat
+        | ChipMove::OldSignalSlain => Pointer::PayoutClaim,
         ChipMove::LegacyTableCredit
         | ChipMove::LegacyTableDebit
         | ChipMove::BlackjackBet

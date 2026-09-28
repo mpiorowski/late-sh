@@ -1659,7 +1659,6 @@ impl App {
                 unread: ctx.mentions_unread_count,
                 voice_badge: ctx.voice_badge.as_deref(),
                 pot: Some(ctx.pot).filter(|view| view.open),
-                runner: ctx.city_sheet.filter(|_| screen != Screen::City),
                 border_width: area.width,
                 title_width,
             }) {
@@ -2442,11 +2441,13 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Style::default().fg(theme::TEXT_MUTED()),
     ));
 
-    // The street has its own guide (`app/deadchannel/guide`), on the site
-    // guide's key; the chrome says so, the way the door games do.
+    // The street's keys worth a hint: `f` steps into the static and `p`
+    // opens patch from anywhere (`app/deadchannel/city/input.rs`), and the
+    // street has its own guide (`app/deadchannel/guide`) on the site guide's
+    // key. The chrome says so, the way the door games do.
     if screen == Screen::City {
         spans.push(Span::styled(
-            "· ? guide ",
+            "· f fight · p patch · ? guide ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
@@ -2882,10 +2883,6 @@ struct StatusHudInputs<'a> {
     /// service. Sits right before the chips so the prize reads against the
     /// viewer's own balance.
     pot: Option<&'a crate::app::pot::state::PotView>,
-    /// The runner's sheet, for the rations and signal readout everywhere
-    /// but the city (the street's strip already carries them). `None` for
-    /// anyone who is not a standing runner.
-    runner: Option<&'a crate::app::deadchannel::fight::state::Sheet>,
     /// Full width of the bordered frame, corners included.
     border_width: u16,
     /// Width of the left-aligned frame title sharing the top border row.
@@ -2905,7 +2902,6 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
         unread,
         voice_badge,
         pot,
-        runner,
         border_width,
         title_width,
     } = inputs;
@@ -2914,9 +2910,8 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
     let spare_cols = border_width.saturating_sub(2).saturating_sub(title_width);
 
     // The three long-standing segments always render; the order of the line
-    // is voice | mentions | runner | pot | chips, and the newcomers are
-    // fitted against whatever the fixed three leave, in that order, so under
-    // a tight border the pot yields first, then the runner's readout.
+    // is voice | mentions | pot | chips, and the pot is fitted against
+    // whatever the fixed three leave.
     let mentions: Option<HudSegment> = (unread > 0).then(|| {
         let noun = if unread == 1 { "mention" } else { "mentions" };
         vec![
@@ -2955,8 +2950,8 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
     // Width the fixed segments take, dividers between them included, so a
     // newcomer fits when its own width plus its one divider still fits.
     let fixed: Vec<&HudSegment> = [&mentions, &voice, &chips].into_iter().flatten().collect();
-    let mut count = fixed.len() as u16;
-    let mut used = fixed
+    let count = fixed.len() as u16;
+    let used = fixed
         .iter()
         .map(|segment| hud_segment_width(segment))
         .sum::<u16>()
@@ -2972,41 +2967,6 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
     // title, and ratatui paints it over anything already there: a HUD wider
     // than `spare_cols` eats the page tabs, so every newcomer below yields
     // when it does not fit.
-
-    // The runner's readout: `rations 7 · signal 12/20` when it fits,
-    // `signal 12/20` when only that does, nothing when neither does. The
-    // signal figure goes red when it is down: the row is closed until the
-    // roll, and this is the one place outside the city that says so.
-    let runner: Option<HudSegment> = runner.and_then(|sheet| {
-        let signal = format!("{}/{}", sheet.signal, sheet.max_signal());
-        let with_rations = format!(" rations {} · signal ", sheet.rations_left);
-        let signal_only = " signal ".to_string();
-        let head = [with_rations, signal_only].into_iter().find(|head| {
-            let width =
-                UnicodeWidthStr::width(head.as_str()) + UnicodeWidthStr::width(signal.as_str()) + 1;
-            // The padding is already inside the head and the trailing space.
-            fits(used, count, width.saturating_sub(2) as u16)
-        })?;
-        let signal_color = if sheet.is_down() {
-            theme::ERROR()
-        } else {
-            theme::TEXT_BRIGHT()
-        };
-        Some(vec![
-            Span::styled(head, Style::default().fg(theme::TEXT_MUTED())),
-            Span::styled(
-                signal,
-                Style::default()
-                    .fg(signal_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" ", Style::default().fg(theme::TEXT_MUTED())),
-        ])
-    });
-    if let Some(runner) = &runner {
-        used += hud_segment_width(runner) + u16::from(count > 0);
-        count += 1;
-    }
 
     // The pot: `pot 84,200 · 3h12m` when it fits, `pot 84,200` when only
     // that does, nothing when neither does. It is ambient, so it is the
@@ -3044,7 +3004,7 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
         (Some(_), Some(voice)) => hud_segment_width(voice) + 1,
         (Some(_), None) | (None, _) => 0,
     };
-    let segments: Vec<HudSegment> = [voice, mentions, runner, pot, chips]
+    let segments: Vec<HudSegment> = [voice, mentions, pot, chips]
         .into_iter()
         .flatten()
         .collect();

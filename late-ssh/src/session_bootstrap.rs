@@ -475,6 +475,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         fight_service: crate::app::deadchannel::fight::svc::FightService::new(
             state.db.clone(),
             state.chat_service.clone(),
+            state.chip_service.clone(),
         ),
         tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(state.db.clone()),
         guide_service: crate::app::deadchannel::guide::svc::GuideService::new(state.db.clone()),

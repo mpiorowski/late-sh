@@ -5207,7 +5207,7 @@ async fn deadchannel_join_requires_the_invitation() {
     let welcome = wait_for_message_containing(&test_db.db, room_id, "welcome to the wire").await;
     assert!(welcome.starts_with("@dc-hopeful."), "{welcome}");
     assert!(
-        welcome.contains("0 puts you in the clubhouse, 0 again"),
+        welcome.contains("0, then 0 again. the street explains the rest."),
         "{welcome}"
     );
     assert!(welcome.contains("/leave"), "{welcome}");

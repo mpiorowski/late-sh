@@ -2,7 +2,6 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-09-15 (petting pays: the first click on the pet in a UTC day credits 100 chips through `PetService::pet_task`, gated by `PetCompanion::pet_day` and credited as `ChipMove::PetPetted`. See the companion care bullet.)
 - Purpose: local working context for the Hub domain: the Shop modal, the quest service behind the Arcade strip, and the Shop-unlocked aquarium.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -99,7 +98,7 @@ Current user-facing chip amounts:
 - Bonsai watering pays 200 chips once per day when the daily care row changes from unwatered to watered.
 - Quest completions pay their template-defined chip reward automatically once per active assignment.
 - Asterion escapes pay 4000 chips once per UTC day through `game_payout_claims`.
-- Lateania boss achievements pay through `game_payout_claims` behind two gates (migration 158): 10,000 chips for the Archdemon Mal'gareth and the King Who Was Promised Nothing, 20,000 for Yssgar and Kaethyr Ascendant, each once per `mud_characters.id` and at most once every 7 days per account.
+- Lateania boss achievements pay through `game_payout_claims` behind two gates (migrations 158 and 207): 10,000 chips for each of the four crowns, once per `mud_characters.id` and at most once every 30 days per account, so a full run is 40,000 a month.
 - Chess decisive wins pay 500 chips through `game_payout_claims` with a 60-minute per-player cooldown.
 - ssHattrick decisive wins pay 300 chips through `game_payout_claims` with a 15-minute per-player cooldown.
 - Tron wins pay 50/75/100 chips for 2/3/4 round-start riders through `game_payout_claims` with a 5-minute per-player cooldown.

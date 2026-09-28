@@ -15,14 +15,28 @@ pub struct Section {
     pub lines: &'static [&'static str],
 }
 
-/// The guide, top to bottom.
+/// The guide, top to bottom. The first section is the whole game in a
+/// screen, for the runner who reads nothing else; every rule it states is
+/// spelled out again in its own section under it.
 pub const SECTIONS: &[Section] = &[
+    Section {
+        title: "the short version",
+        lines: &[
+            "fight glyphs at the screen for bits and exp. buy gear with the bits. climb to level 15. put down the Old Signal. start over one mark stronger. that is the game.",
+            "keys: arrows or hjkl walk, enter at a door goes in. f fight, p patch, ? this guide, 0 back up. in a fight a attacks and r runs.",
+            "ten fights a day. signal is your health. at zero the street takes every bit on you and you are done until midnight utc, when signal and fights refill.",
+            "gear wins fights. walk to the armorer: w buys the weapon, a the armor, bits only, one tier above what you carry. buy every tier you can afford before you step in.",
+            "p heals to full from anywhere, a bit a point times your level. patch before a fight, not after a drop.",
+            "level 15 with the exp to leave it: the next step into the static meets the Old Signal, the last boss. 240 signal, 36 attack, 22 defense, and it pays no bits.",
+            "put it down and it pays 40,000 chips, once a month, and a mark, and you wake at level 1 with bare hands and fifty bits. the mark is your paragon level: it never comes off, sits behind your name on the wire (▚3╬2), adds a point of attack and defense up to five, and makes every level cost a little more.",
+        ],
+    },
     Section {
         title: "the street",
         lines: &[
             "arrows or hjkl walk. shift with them runs: six steps, stopping at the first door it reaches.",
             "enter at a door goes in. enter or esc comes back out to the street.",
-            "0 goes back up to the clubhouse. so does enter at the wire, the cable by the stairs.",
+            "0 goes back up to the clubhouse. so does enter at the wire, the cable by the stairs. esc with nothing open goes up to the chat, #lounge open.",
             "? opens this guide. it opened by itself the first time you came down, and never will again.",
         ],
     },
@@ -40,9 +54,9 @@ pub const SECTIONS: &[Section] = &[
     Section {
         title: "the static",
         lines: &[
-            "the screen at the end of the row is where the glyphs come from. enter there spends a ration and puts one in front of you.",
-            "a attacks. r runs: two times in three it works, and when it does not the glyph gets a free swing.",
-            "esc steps out. the fight stays on the row and is waiting when you step back in, for no ration.",
+            "the screen at the end of the row is where the glyphs come from. enter there spends a ration and puts one in front of you. f does the same from anywhere on the street.",
+            "a attacks. r runs, and so does esc: two times in three it works, and when it does not the glyph gets a free swing. there is no stepping out of a fight.",
+            "a dropped connection finds the fight waiting on the row when you step back in, for no ration.",
             "enter closes a finished scene.",
             "a kill pays bits and exp. exp climbs the levels, up to 15, and the wire hears every one.",
             "a dropped signal ends your day: the street takes the bits on you, you keep most of the exp, and the row is shut until the roll.",
@@ -53,7 +67,7 @@ pub const SECTIONS: &[Section] = &[
         lines: &[
             "at 15, once you have the exp to leave it, the next step in meets the Old Signal instead of a glyph.",
             "put it down and you wake at level 1: bare hands, fifty bits, and a mark. the mark stays, adds a point of attack and defense (up to five), and makes every level cost a little more.",
-            "your face, your tailor's rack, and your badges stay. the first kill earns [SIG].",
+            "a kill pays 40,000 chips, at most once every 30 days: the one way bits ever turn into chips. a second mark inside the month is yours all the same. your face, your tailor's rack, and your badges stay. the first kill earns [SIG].",
         ],
     },
     Section {
@@ -66,7 +80,7 @@ pub const SECTIONS: &[Section] = &[
     Section {
         title: "patch",
         lines: &[
-            "p buys the signal back to full. a bit a point, times your level.",
+            "p opens patch from anywhere on the street. p again buys the signal back to full. a bit a point, times your level.",
             "not while the signal is down, not with a glyph waiting on you, not once you are spent for the day (the roll brings it back for nothing), and not when there is nothing to fix.",
         ],
     },

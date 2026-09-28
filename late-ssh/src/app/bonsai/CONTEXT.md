@@ -2,7 +2,6 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/bonsai`
-- Last updated: 2026-09-17 (the stored row is the truth: care actions run in `BonsaiService` under the row lock, `BonsaiState` is a pure state machine, and a session holds only a render mirror kept fresh by its own answers and the `bonsai_changed` notify. See section 3.)
 - Purpose: local working context for the bonsai branch-graph system.
 - Status: Live for every account, planted at first login.
 - Parent context: `../../../../CONTEXT.md`

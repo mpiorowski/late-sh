@@ -2308,19 +2308,30 @@ fn dispatch_escape(app: &mut App) {
         crate::app::door::darkroom::screen::GAME.handle_key(app, 0x1B);
         return;
     }
-    // Esc in the city closes the guide first, then an open shop panel or
-    // steps back from the ledge; on the street it means nothing (the wire
-    // is the way out).
+    // Esc in the city backs out one step at a time: the guide first, then
+    // the fight scene (a run while the fight is on, `fight/input.rs`), then
+    // an open shop panel or the ledge; on the bare street it goes up to the
+    // chat with #lounge open (the wire and `0` go to the clubhouse instead).
     if ctx.screen == Screen::City && app.guide.state.is_open() {
         app.guide.state.close();
         return;
     }
-    if ctx.screen == Screen::City
-        && (app.city.panel().is_some() || app.city.at_ledge() || app.fight.scene_open())
-    {
+    if ctx.screen == Screen::City && app.fight.scene_open() {
+        crate::app::deadchannel::fight::input::handle_escape(app);
+        return;
+    }
+    if ctx.screen == Screen::City && (app.city.panel().is_some() || app.city.at_ledge()) {
         app.city.dismiss();
-        app.fight.close();
         app.tailor.close();
+        return;
+    }
+    if ctx.screen == Screen::City {
+        // With no room list landed yet, Home keeps whatever it had.
+        if let Some(room_id) = app.chat.lounge_room_id() {
+            app.chat
+                .select_room_slot(crate::app::chat::state::RoomSlot::Room(room_id));
+        }
+        app.set_screen(Screen::Dashboard);
         return;
     }
     // Esc from the Games hub closes the rc config modal, cancels a pending

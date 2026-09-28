@@ -217,6 +217,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
                 scene,
                 look: view.look,
                 own_username: view.own_username,
+                tick: t,
             },
         ),
         (None, None) => {}

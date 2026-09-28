@@ -16,7 +16,7 @@ pub const CHIP_USER_CHANGED_CHANNEL: &str = "chip_user_changed";
 pub const MONTH_TS_FILTER: &str =
     "date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'";
 /// How many ledger rows a profile shows.
-pub const PROFILE_LEDGER_ROWS: i64 = 40;
+pub const PROFILE_LEDGER_ROWS: i64 = 100;
 
 /// The three daily-puzzle difficulty tiers. One enum owns both reward
 /// scales: the chip bonus a daily win pays (mirrored in seeded
@@ -228,6 +228,11 @@ chip_moves!(
     LateaniaFrontierKingDefeat,
     LateaniaSunderingDeepDefeat,
     LateaniaKaethyrAscendantDefeat,
+    /// The Old Signal put down in the undercity (`deadchannel`): the one
+    /// milestone the fight pays, once per mark and at most once every 30
+    /// days per account, through the same two-gate grant as the door
+    /// milestones. `source_ref` is the `game_payout_claims` row id.
+    OldSignalSlain,
 );
 
 /// Which way a move touches the balance, and under what guard.
@@ -305,6 +310,7 @@ impl ChipMove {
             Self::LateaniaFrontierKingDefeat => "lateania_frontier_king_defeat",
             Self::LateaniaSunderingDeepDefeat => "lateania_sundering_deep_defeat",
             Self::LateaniaKaethyrAscendantDefeat => "lateania_kaethyr_ascendant_defeat",
+            Self::OldSignalSlain => "old_signal_slain",
         }
     }
 
@@ -357,7 +363,8 @@ impl ChipMove {
             | Self::LateaniaArchdemonDefeat
             | Self::LateaniaFrontierKingDefeat
             | Self::LateaniaSunderingDeepDefeat
-            | Self::LateaniaKaethyrAscendantDefeat => "game_payout_claims",
+            | Self::LateaniaKaethyrAscendantDefeat
+            | Self::OldSignalSlain => "game_payout_claims",
         }
     }
 
@@ -406,7 +413,8 @@ impl ChipMove {
             | Self::LateaniaArchdemonDefeat
             | Self::LateaniaFrontierKingDefeat
             | Self::LateaniaSunderingDeepDefeat
-            | Self::LateaniaKaethyrAscendantDefeat => ChipDirection::Credit,
+            | Self::LateaniaKaethyrAscendantDefeat
+            | Self::OldSignalSlain => ChipDirection::Credit,
             Self::BlackjackBet | Self::PokerBet | Self::ShopPurchase | Self::SsnakeArenaLost => {
                 ChipDirection::Debit { floor: 0 }
             }
@@ -494,7 +502,8 @@ impl ChipMove {
             | Self::LateaniaArchdemonDefeat
             | Self::LateaniaFrontierKingDefeat
             | Self::LateaniaSunderingDeepDefeat
-            | Self::LateaniaKaethyrAscendantDefeat => true,
+            | Self::LateaniaKaethyrAscendantDefeat
+            | Self::OldSignalSlain => true,
         }
     }
 

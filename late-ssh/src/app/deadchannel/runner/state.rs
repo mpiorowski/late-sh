@@ -15,7 +15,7 @@
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
-use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
+use crate::app::deadchannel::glyphs::MARK_ALPHABET;
 
 /// Cells per portrait row.
 pub const PORTRAIT_WIDTH: usize = 5;
@@ -422,7 +422,7 @@ pub struct Look {
     pub hood: Worn,
     pub eyes: Worn,
     pub coat: Worn,
-    /// The one-cell mark, drawn from the glyph alphabet. Stored from the
+    /// The one-cell mark, drawn from the mark alphabet. Stored from the
     /// first second so it is fixed at birth; painted once the chat badge
     /// stack learns it (phase 2, build order step 1).
     pub mark: char,
@@ -456,7 +456,8 @@ pub enum LookError {
     Shape(String),
     /// A slot names a piece code the table does not know.
     UnknownPiece { slot: Slot, code: String },
-    /// The mark is not a character of the glyph alphabet.
+    /// The mark is not a character of the mark alphabet (the Signal's
+    /// `╬` included: migration 206 rewrote the marks that wore it).
     UnknownMark(char),
 }
 
@@ -468,7 +469,7 @@ impl std::fmt::Display for LookError {
                 write!(f, "look names unknown {slot:?} piece {code:?}")
             }
             Self::UnknownMark(glyph) => {
-                write!(f, "look mark {glyph:?} is not in the glyph alphabet")
+                write!(f, "look mark {glyph:?} is not in the mark alphabet")
             }
         }
     }
@@ -478,16 +479,16 @@ impl std::error::Error for LookError {}
 
 impl Look {
     /// A random look from what `level` has unlocked: one piece per slot,
-    /// one tint per piece, one mark from the alphabet. The invited join
+    /// one tint per piece, one mark from the mark alphabet. The invited join
     /// throws it at level 1; the tailor's shuffle at the runner's level.
     pub fn random<R: rand::Rng>(level: i32, rng: &mut R) -> Self {
         Self {
             hood: random_worn(Slot::Hood, level, rng),
             eyes: random_worn(Slot::Eyes, level, rng),
             coat: random_worn(Slot::Coat, level, rng),
-            mark: *GLYPH_ALPHABET
+            mark: *MARK_ALPHABET
                 .choose(rng)
-                .expect("glyph alphabet is not empty"),
+                .expect("mark alphabet is not empty"),
         }
     }
 
@@ -521,7 +522,7 @@ impl Look {
             }),
         };
         let mark = stored.mark.glyph;
-        if !GLYPH_ALPHABET.contains(&mark) {
+        if !MARK_ALPHABET.contains(&mark) {
             return Err(LookError::UnknownMark(mark));
         }
         Ok(Self {

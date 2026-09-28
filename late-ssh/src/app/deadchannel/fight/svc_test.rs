@@ -10,7 +10,8 @@ use crate::app::chat::svc::ChatService;
 use crate::app::deadchannel::fight::data::RATIONS_PER_DAY;
 use crate::app::deadchannel::fight::state::{Applied, Command, Sheet, Slot};
 use crate::app::deadchannel::runner::state::Look;
-use crate::test_helpers::new_test_db;
+use crate::app::games::chips::svc::ChipService;
+use crate::test_helpers::{age_payout_claims, new_test_db};
 
 async fn runner_and_service(
     name: &str,
@@ -26,7 +27,7 @@ async fn runner_and_service(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
     );
-    let svc = FightService::new(test_db.db.clone(), chat);
+    let svc = FightService::new(test_db.db.clone(), chat, ChipService::new(test_db.db.clone()));
     (test_db, user.id, svc)
 }
 
@@ -175,20 +176,18 @@ async fn the_descent_rolls_a_stale_day() {
     );
 }
 
-/// The kill through the service: the reset lands on the row, the peak
-/// stays, and the first kill grants the `SIG` badge once; a second kill
-/// leaves a second mark and no second badge.
-#[tokio::test]
-async fn putting_the_old_signal_down_resets_the_row_and_grants_the_badge() {
+/// Put the runner at the top with the gate open and full kit, step in,
+/// knock the Old Signal down to one point, and attack until it answers
+/// with something other than a round: the kill's outcome, lines and all.
+async fn kill_the_old_signal(
+    svc: &FightService,
+    client: &tokio_postgres::Client,
+    user_id: uuid::Uuid,
+) -> crate::app::deadchannel::fight::state::Outcome {
     use crate::app::deadchannel::fight::data::{MAX_LEVEL, OLD_SIGNAL_TIER, exp_to_seek};
     use crate::app::deadchannel::fight::state::MAX_TIER;
-    use late_core::models::profile_award::{
-        DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY, ProfileAward, list_profile_awards_for_user,
-    };
 
-    let (test_db, user_id, svc) = runner_and_service("fight-svc-old-signal").await;
-    let client = test_db.db.get().await.expect("db client");
-    let row = DeadchannelRunner::find_by_user(&client, user_id)
+    let row = DeadchannelRunner::find_by_user(client, user_id)
         .await
         .expect("find")
         .expect("row");
@@ -196,11 +195,12 @@ async fn putting_the_old_signal_down_resets_the_row_and_grants_the_badge() {
     sheet.day = FightService::today();
     sheet.level = MAX_LEVEL;
     sheet.peak_level = MAX_LEVEL;
-    sheet.exp = exp_to_seek(0);
+    sheet.exp = exp_to_seek(sheet.marks);
     sheet.weapon_tier = MAX_TIER;
     sheet.armor_tier = MAX_TIER;
     sheet.signal = sheet.max_signal();
-    DeadchannelRunner::store_sheet(&**client, sheet.to_write())
+    sheet.rations_left = RATIONS_PER_DAY;
+    DeadchannelRunner::store_sheet(client, sheet.to_write())
         .await
         .expect("store");
 
@@ -213,21 +213,66 @@ async fn putting_the_old_signal_down_resets_the_row_and_grants_the_badge() {
     let fight = sheet.fight.as_mut().expect("the Old Signal");
     assert_eq!(fight.foe_max_signal, OLD_SIGNAL_TIER.signal);
     fight.foe_signal = 1;
-    DeadchannelRunner::store_sheet(&**client, sheet.to_write())
+    DeadchannelRunner::store_sheet(client, sheet.to_write())
         .await
         .expect("store");
-
-    let slain = loop {
+    loop {
         svc.act_task(user_id, "mira".to_string(), Command::Attack, tx.clone());
         let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
             panic!("an attack answers with the sheet");
         };
         if outcome.applied != Applied::Round {
-            break outcome.applied;
+            break outcome;
         }
-    };
-    assert_eq!(slain, Applied::Slain { marks: 1 });
+    }
+}
 
+async fn balance(client: &tokio_postgres::Client, user_id: uuid::Uuid) -> i64 {
+    late_core::models::chips::UserChips::find(client, user_id)
+        .await
+        .expect("chips")
+        .expect("a wallet")
+        .balance
+}
+
+/// The kill through the service: the reset lands on the row and the peak
+/// stays; the first kill grants the `SIG` badge once; the chips pay once
+/// per mark and at most once every 30 days, and the kill's last line says
+/// which way it went.
+#[tokio::test]
+async fn putting_the_old_signal_down_resets_the_row_and_pays_once_a_month() {
+    use crate::app::deadchannel::fight::data::{MAX_LEVEL, OLD_SIGNAL_PAID_THIS_MONTH_LINE};
+    use late_core::models::chips::{ChipLedgerEntry, ChipMove, INITIAL_CHIP_BALANCE, UserChips};
+    use late_core::models::profile_award::{
+        DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY, ProfileAward, list_profile_awards_for_user,
+    };
+    use late_core::models::reward::{DEADCHANNEL_OLD_SIGNAL_REWARD_KEY, RewardTemplate};
+
+    let (test_db, user_id, svc) = runner_and_service("fight-svc-old-signal").await;
+    let client = test_db.db.get().await.expect("db client");
+    // The wallet exists before anyone reaches the bottom: the stipend row
+    // is written at login, so the payout lands on top of it.
+    UserChips::ensure(&client, user_id).await.expect("a wallet");
+    let pay = RewardTemplate::get_active_by_key(&**client, DEADCHANNEL_OLD_SIGNAL_REWARD_KEY)
+        .await
+        .expect("the old signal's reward template")
+        .reward_chips;
+    assert_eq!(pay, 40_000, "migration 209 seeds the month's payout");
+    let paid_rows = |entries: Vec<ChipLedgerEntry>| {
+        entries
+            .into_iter()
+            .filter(|entry| entry.chip_move() == Some(ChipMove::OldSignalSlain))
+            .map(|entry| entry.delta)
+            .collect::<Vec<_>>()
+    };
+
+    // Mark 1: the reset, the badge, and the month's payout.
+    let first = kill_the_old_signal(&svc, &client, user_id).await;
+    assert_eq!(first.applied, Applied::Slain { marks: 1 });
+    assert_eq!(
+        first.lines.last().map(String::as_str),
+        Some("the house pays 40,000 chips for the broadcast.")
+    );
     let row = DeadchannelRunner::find_by_user(&client, user_id)
         .await
         .expect("find")
@@ -253,42 +298,17 @@ async fn putting_the_old_signal_down_resets_the_row_and_grants_the_badge() {
         .await
         .expect("awards");
     assert_eq!(badges(awards), vec![1], "one badge, granted on mark 1");
+    assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE + pay);
 
-    // The climb again, to the top with the mark's own threshold.
-    let mut sheet = Sheet::from_row(&row).expect("sheet");
-    sheet.level = MAX_LEVEL;
-    sheet.peak_level = MAX_LEVEL;
-    sheet.exp = exp_to_seek(1);
-    sheet.weapon_tier = MAX_TIER;
-    sheet.armor_tier = MAX_TIER;
-    sheet.signal = sheet.max_signal();
-    DeadchannelRunner::store_sheet(&**client, sheet.to_write())
-        .await
-        .expect("store");
-    svc.act_task(user_id, "mira".to_string(), Command::Start, tx.clone());
-    let FightOutcome::Acted { sheet, .. } = answer(&mut rx).await else {
-        panic!("a start answers with the sheet");
-    };
-    let mut sheet = sheet;
-    sheet
-        .fight
-        .as_mut()
-        .expect("the Old Signal again")
-        .foe_signal = 1;
-    DeadchannelRunner::store_sheet(&**client, sheet.to_write())
-        .await
-        .expect("store");
-    let slain = loop {
-        svc.act_task(user_id, "mira".to_string(), Command::Attack, tx.clone());
-        let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
-            panic!("an attack answers with the sheet");
-        };
-        if outcome.applied != Applied::Round {
-            break outcome.applied;
-        }
-    };
-    assert_eq!(slain, Applied::Slain { marks: 2 });
-
+    // Mark 2 inside the month: the mark lands, the house does not pay, and
+    // the line says so.
+    let second = kill_the_old_signal(&svc, &client, user_id).await;
+    assert_eq!(second.applied, Applied::Slain { marks: 2 });
+    assert_eq!(
+        second.lines.last().map(String::as_str),
+        Some(OLD_SIGNAL_PAID_THIS_MONTH_LINE)
+    );
+    assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE + pay);
     let awards = list_profile_awards_for_user(&client, user_id)
         .await
         .expect("awards");
@@ -297,4 +317,120 @@ async fn putting_the_old_signal_down_resets_the_row_and_grants_the_badge() {
         vec![1],
         "the second kill leaves the badge as the first granted it"
     );
+
+    // Past the month, mark 3 pays again.
+    age_payout_claims(&test_db.db, user_id, 31).await;
+    let third = kill_the_old_signal(&svc, &client, user_id).await;
+    assert_eq!(third.applied, Applied::Slain { marks: 3 });
+    assert_eq!(
+        third.lines.last().map(String::as_str),
+        Some("the house pays 40,000 chips for the broadcast.")
+    );
+    assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE + 2 * pay);
+    let ledger = UserChips::recent_ledger(&client, user_id, 20)
+        .await
+        .expect("ledger");
+    assert_eq!(
+        paid_rows(ledger),
+        vec![pay, pay],
+        "one ledger row per paid mark, none for the month's second"
+    );
+}
+
+/// The grant erroring after the kill's commit: the mark and the badge land,
+/// the scene says the till is jammed, and the row keeps the debt. The next
+/// command on the row pays it, once; the one after finds nothing owed.
+#[tokio::test]
+async fn a_jammed_till_owes_the_mark_until_the_next_command_pays_it() {
+    use crate::app::deadchannel::fight::data::OLD_SIGNAL_TILL_JAMMED_LINE;
+    use late_core::models::chips::{ChipLedgerEntry, ChipMove, INITIAL_CHIP_BALANCE, UserChips};
+    use late_core::models::profile_award::list_profile_awards_for_user;
+    use late_core::models::reward::DEADCHANNEL_OLD_SIGNAL_REWARD_KEY;
+
+    let (test_db, user_id, svc) = runner_and_service("fight-svc-jammed-till").await;
+    let client = test_db.db.get().await.expect("db client");
+    UserChips::ensure(&client, user_id).await.expect("a wallet");
+    // The one way to make the grant error from outside: no active
+    // template to read. Set straight from the table, as no code path
+    // retires a template.
+    let set_template_active = |active: bool| {
+        let client = &client;
+        async move {
+            client
+                .execute(
+                    "UPDATE reward_templates SET active = $2 WHERE key = $1",
+                    &[&DEADCHANNEL_OLD_SIGNAL_REWARD_KEY, &active],
+                )
+                .await
+                .expect("set the template");
+        }
+    };
+    let paid_rows = |entries: Vec<ChipLedgerEntry>| {
+        entries
+            .into_iter()
+            .filter(|entry| entry.chip_move() == Some(ChipMove::OldSignalSlain))
+            .count()
+    };
+
+    set_template_active(false).await;
+    let kill = kill_the_old_signal(&svc, &client, user_id).await;
+    assert_eq!(kill.applied, Applied::Slain { marks: 1 });
+    assert_eq!(
+        kill.lines.last().map(String::as_str),
+        Some(OLD_SIGNAL_TILL_JAMMED_LINE)
+    );
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!((row.level, row.marks), (1, 1), "the reset and the mark land");
+    assert_eq!(row.unpaid_mark, Some(1), "the row keeps the debt");
+    assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE);
+    let awards = list_profile_awards_for_user(&client, user_id)
+        .await
+        .expect("awards");
+    assert_eq!(awards.len(), 1, "the badge lands whatever the till did");
+
+    // The till works again: the next command on the row, whatever it is,
+    // pays the mark and says so under its own answer.
+    set_template_active(true).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.act_task(user_id, "mira".to_string(), Command::Patch, tx.clone());
+    let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
+        panic!("a patch answers with the sheet");
+    };
+    assert!(
+        matches!(outcome.applied, Applied::Refused(_)),
+        "nothing to patch on a fresh runner: {:?}",
+        outcome.applied
+    );
+    assert_eq!(
+        outcome.lines.last().map(String::as_str),
+        Some("the house pays 40,000 chips for the broadcast.")
+    );
+    assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE + 40_000);
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!(row.unpaid_mark, None, "the debt is settled");
+
+    // Nothing owed: the command after answers on its own, and pays nothing.
+    svc.act_task(user_id, "mira".to_string(), Command::Patch, tx.clone());
+    let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
+        panic!("a patch answers with the sheet");
+    };
+    assert!(
+        outcome
+            .lines
+            .iter()
+            .all(|line| !line.contains("the house pays")),
+        "{:?}",
+        outcome.lines
+    );
+    assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE + 40_000);
+    let ledger = UserChips::recent_ledger(&client, user_id, 20)
+        .await
+        .expect("ledger");
+    assert_eq!(paid_rows(ledger), 1, "one ledger row for the healed mark");
 }

@@ -3,7 +3,13 @@
 //! to static in proportion to its missing signal (GAME.md, "Signal
 //! corrupts the look": health as something you see, not a number); the
 //! exchange, line by line, in the announcer's voice; three keys. Pure:
-//! every frame is a function of the mirror and the scene.
+//! every frame is a function of the mirror, the scene, and the tick.
+//!
+//! The Old Signal gets the screen (GAME.md, "Diegetic spectacle": a boss
+//! whose presence tears the frame). Its scene is the whole city area in
+//! red, the empty rows full of static, the border losing cells to static
+//! and the box shuddering a column from tick to tick while it
+//! broadcasts; once the fight is over, everything holds still.
 //!
 //! Also the sheet strip: level, signal, rations, bits, pinned top-right
 //! while the runner walks the street, so the ritual's budget is always
@@ -11,6 +17,7 @@
 
 use ratatui::{
     Frame,
+    buffer::Buffer,
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
@@ -36,6 +43,52 @@ pub(crate) struct SceneView<'a> {
     pub scene: &'a Scene,
     pub look: Option<&'a Look>,
     pub own_username: &'a str,
+    /// The city's animation clock (`city/state.rs::anim_tick`): the Old
+    /// Signal's tear and shudder run on it. A glyph's scene ignores it.
+    pub tick: u64,
+}
+
+/// How the scene is dressed: a glyph's way, or the Old Signal's.
+struct Dress {
+    /// The foe's portrait, bar, and name.
+    foe: Style,
+    foe_name: Style,
+    /// The foe's cells gone to static.
+    foe_lost: Style,
+    frame: Style,
+    title: Style,
+    title_text: &'static str,
+    rule: Style,
+}
+
+/// A glyph: a cyan box over the street.
+fn glyph_dress() -> Dress {
+    Dress {
+        foe: glow(Neon::Cyan),
+        foe_name: lit(Neon::Cyan),
+        foe_lost: dim(Neon::Red),
+        frame: glow(Neon::Cyan),
+        title: lit(Neon::Cyan),
+        title_text: " the end of the row ",
+        rule: dim(Neon::Cyan),
+    }
+}
+
+/// The Old Signal: red, and once it is over, the red burns down.
+fn old_signal_dress(over: bool) -> Dress {
+    let frame = match over {
+        true => dim(Neon::Red),
+        false => glow(Neon::Red),
+    };
+    Dress {
+        foe: glow(Neon::Red),
+        foe_name: lit(Neon::Red),
+        foe_lost: dim(Neon::Magenta),
+        frame,
+        title: lit(Neon::Red),
+        title_text: " the bottom of the city ",
+        rule: dim(Neon::Red),
+    }
 }
 
 /// A portrait row with some of its cells gone to static: `missing` is the
@@ -119,7 +172,7 @@ fn runner_rows(sheet: &Sheet, look: Option<&Look>) -> Vec<Vec<Span<'static>>> {
     }
 }
 
-fn foe_rows(fight: &Fight) -> Vec<Vec<Span<'static>>> {
+fn foe_rows(fight: &Fight, dress: &Dress) -> Vec<Vec<Span<'static>>> {
     let missing = missing(fight.foe_signal, fight.foe_max_signal);
     let kind = match fight.quarry {
         Quarry::Glyph(kind) => kind as u64,
@@ -133,8 +186,8 @@ fn foe_rows(fight: &Fight) -> Vec<Vec<Span<'static>>> {
                 .into_iter()
                 .map(|(ch, lost)| {
                     let style = match lost {
-                        true => dim(Neon::Red),
-                        false => glow(Neon::Cyan),
+                        true => dress.foe_lost,
+                        false => dress.foe,
                     };
                     Span::styled(ch.to_string(), style)
                 })
@@ -208,12 +261,12 @@ pub(crate) fn armor_name(sheet: &Sheet) -> &'static str {
 
 /// The three header rows: your face and stats on the left, the glyph's
 /// on the right, the two bars facing each other.
-fn header(sheet: &Sheet, look: Option<&Look>, username: &str) -> Vec<Line<'static>> {
+fn header(sheet: &Sheet, look: Option<&Look>, username: &str, dress: &Dress) -> Vec<Line<'static>> {
     let head = ink(INK_BRIGHT).add_modifier(Modifier::BOLD);
     let dim_text = ink(INK_DIM);
     let text = ink(INK);
     let mine = runner_rows(sheet, look);
-    let theirs = sheet.fight.as_ref().map(foe_rows);
+    let theirs = sheet.fight.as_ref().map(|fight| foe_rows(fight, dress));
     let left: [Vec<Span<'static>>; 3] = [
         vec![
             Span::styled(username.to_string(), head),
@@ -242,7 +295,7 @@ fn header(sheet: &Sheet, look: Option<&Look>, username: &str) -> Vec<Line<'stati
         Some(fight) => [
             vec![
                 Span::styled(format!("lv {}  ", sheet.level), text),
-                Span::styled(fight.foe().name.to_string(), lit(Neon::Cyan)),
+                Span::styled(fight.foe().name.to_string(), dress.foe_name),
             ],
             {
                 let mut row = vec![Span::styled(
@@ -252,7 +305,7 @@ fn header(sheet: &Sheet, look: Option<&Look>, username: &str) -> Vec<Line<'stati
                 row.extend(bar_spans(
                     fight.foe_signal,
                     fight.foe_max_signal,
-                    glow(Neon::Cyan),
+                    dress.foe,
                     true,
                 ));
                 row.push(Span::styled(" signal", dim_text));
@@ -295,28 +348,129 @@ fn truncate(line: &str, width: usize) -> String {
     }
 }
 
-/// The scene, centered over the street, at a fixed size.
+/// One in this many border cells is static on the Old Signal's frame,
+/// a different set every tick.
+const TEAR_ONE_IN: u64 = 6;
+/// One in this many cells of an empty row is static on the Old Signal's
+/// screen.
+const NOISE_ONE_IN: u64 = 9;
+
+/// A row of the Old Signal's screen with nothing printed on it: sparse
+/// static, `seed` deciding which cells. Live, the seed moves with the
+/// tick; over, it holds, and the row goes quiet grey.
+fn noise_line(width: usize, seed: u64, quiet: bool) -> Line<'static> {
+    let style = match quiet {
+        true => ink(INK_MUTED),
+        false => dim(Neon::Red),
+    };
+    let row: String = (0..width)
+        .map(|x| {
+            let roll = mix(seed ^ (x as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15));
+            match roll % NOISE_ONE_IN {
+                0 => STATIC[(roll / NOISE_ONE_IN % 3) as usize],
+                _ => ' ',
+            }
+        })
+        .collect();
+    Line::from(Span::styled(row, style))
+}
+
+/// The Old Signal's presence on the frame: border cells gone to static,
+/// a different set every tick. Only the box-drawing cells tear; the
+/// titles stay legible.
+fn tear(buf: &mut Buffer, rect: Rect, tick: u64) {
+    let style = dim(Neon::Red);
+    let top = rect.y;
+    let bottom = rect.y + rect.height.saturating_sub(1);
+    let left = rect.x;
+    let right = rect.x + rect.width.saturating_sub(1);
+    let mut perimeter: Vec<(u16, u16)> = Vec::new();
+    for x in left..=right {
+        perimeter.push((x, top));
+        perimeter.push((x, bottom));
+    }
+    for y in top + 1..bottom {
+        perimeter.push((left, y));
+        perimeter.push((right, y));
+    }
+    for (i, (x, y)) in perimeter.into_iter().enumerate() {
+        let roll = mix(tick.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            ^ (i as u64 + 1).wrapping_mul(0x51_7cc1_b727_220a));
+        if !roll.is_multiple_of(TEAR_ONE_IN) {
+            continue;
+        }
+        let Some(cell) = buf.cell_mut((x, y)) else {
+            continue;
+        };
+        if !"─│┌┐└┘".contains(cell.symbol()) {
+            continue;
+        }
+        let mut encoded = [0u8; 4];
+        cell.set_symbol(STATIC[(roll / TEAR_ONE_IN % 3) as usize].encode_utf8(&mut encoded))
+            .set_style(style);
+    }
+}
+
+/// The scene: a glyph's is centered over the street at a fixed size, the
+/// Old Signal's is the whole area.
 pub(crate) fn draw_scene(frame: &mut Frame, area: Rect, view: SceneView<'_>) {
     let text = ink(INK);
     let bright = ink(INK_BRIGHT);
     let dim_text = ink(INK_DIM);
     let muted = ink(INK_MUTED);
     let key = lit(Neon::Amber);
-    let rule = dim(Neon::Cyan);
+    let boss = view.scene.old_signal;
+    let live = boss && !view.scene.over;
+    let dress = match boss {
+        true => old_signal_dress(view.scene.over),
+        false => glyph_dress(),
+    };
 
     // Fixed height: the header, the rule, the log, the keys, each with
-    // room to breathe. A short terminal gives up log rows, nothing else.
+    // room to breathe. A glyph's box gives up log rows on a short
+    // terminal, nothing else; the Old Signal's takes every row there is.
     let fixed_rows = 1 + PORTRAIT_HEIGHT + 1 + 1 + 1 + 1 + 1 + 1;
-    let room = usize::from(area.height.saturating_sub(3));
-    let log_rows = LOG_ROWS
-        .min(room.saturating_sub(fixed_rows))
+    let rect = match boss {
+        true => {
+            // One column narrower than the area, leaning left or right
+            // from tick to tick while it broadcasts: the shudder.
+            let lean = match live {
+                true => (mix(view.tick) % 2) as u16,
+                false => 0,
+            };
+            Rect {
+                x: area.x + lean,
+                y: area.y,
+                width: area.width.saturating_sub(1),
+                height: area.height,
+            }
+        }
+        false => {
+            let room = usize::from(area.height.saturating_sub(3));
+            let log_rows = LOG_ROWS
+                .min(room.saturating_sub(fixed_rows))
+                .max(LOG_ROWS_MIN);
+            let width = (INNER + 2).min(usize::from(area.width).saturating_sub(2)) as u16;
+            let height = ((fixed_rows + log_rows) as u16 + 2).min(area.height.saturating_sub(1));
+            Rect {
+                x: area.x + (area.width.saturating_sub(width)) / 2,
+                y: area.y + (area.height.saturating_sub(height)) / 2,
+                width,
+                height,
+            }
+        }
+    };
+    let inner = usize::from(rect.width).saturating_sub(2);
+    let log_rows = usize::from(rect.height)
+        .saturating_sub(2)
+        .saturating_sub(fixed_rows)
         .max(LOG_ROWS_MIN);
 
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(fixed_rows + log_rows);
     lines.push(Line::default());
     match view.sheet {
         Some(sheet) => {
-            lines.extend(header(sheet, view.look, view.own_username));
+            lines.extend(header(sheet, view.look, view.own_username, &dress));
             lines.push(gear_row(sheet));
         }
         None => {
@@ -327,23 +481,33 @@ pub(crate) fn draw_scene(frame: &mut Frame, area: Rect, view: SceneView<'_>) {
         }
     }
     lines.push(Line::from(Span::styled(
-        format!("  {}", "─".repeat(INNER.saturating_sub(4))),
-        rule,
+        format!("  {}", "─".repeat(inner.saturating_sub(4))),
+        dress.rule,
     )));
     lines.push(Line::default());
 
     // The exchange, newest at the bottom: the latest answer bright with a
-    // marker, everything before it dimmed.
+    // marker, everything before it dimmed. The Old Signal's empty rows
+    // are static, not blank.
     let shown: Vec<&String> = view.scene.lines.iter().rev().take(log_rows).collect();
     let shown_count = shown.len();
-    for _ in shown_count..log_rows {
-        lines.push(Line::default());
+    for row in shown_count..log_rows {
+        match boss {
+            true => {
+                let seed = match live {
+                    true => mix(view.tick) ^ row as u64,
+                    false => row as u64,
+                };
+                lines.push(noise_line(inner, seed, !live));
+            }
+            false => lines.push(Line::default()),
+        }
     }
     let total = view.scene.lines.len();
     for (i, line) in shown.into_iter().rev().enumerate() {
         let index = total - shown_count + i;
         let latest = index + view.scene.latest >= total;
-        let body = truncate(line, INNER.saturating_sub(6));
+        let body = truncate(line, inner.saturating_sub(6));
         let spans = match latest {
             true => vec![Span::styled("  ▸ ", key), Span::styled(body, bright)],
             false => vec![Span::styled("    ", text), Span::styled(body, dim_text)],
@@ -363,21 +527,12 @@ pub(crate) fn draw_scene(frame: &mut Frame, area: Rect, view: SceneView<'_>) {
             Span::styled("attack", text),
             Span::styled("        [r] ", key),
             Span::styled("run", text),
-            Span::styled("        [Esc] ", key),
-            Span::styled("step back", dim_text),
+            Span::styled("  esc runs too", dim_text),
         ],
     };
     lines.push(Line::from(keys));
     lines.push(Line::default());
 
-    let width = (INNER + 2).min(usize::from(area.width).saturating_sub(2)) as u16;
-    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(1));
-    let rect = Rect {
-        x: area.x + (area.width.saturating_sub(width)) / 2,
-        y: area.y + (area.height.saturating_sub(height)) / 2,
-        width,
-        height,
-    };
     let budget = match view.sheet {
         Some(sheet) => format!(
             " rations {}/{} · bits {} ",
@@ -387,17 +542,26 @@ pub(crate) fn draw_scene(frame: &mut Frame, area: Rect, view: SceneView<'_>) {
         ),
         None => String::new(),
     };
-    frame.render_widget(Clear, rect);
+    // The Old Signal's box shifts from under the street: the area is
+    // painted night whole, so the column it leans away from is sky, not
+    // a strip of street showing through.
+    match boss {
+        true => frame.render_widget(Block::default().style(text), area),
+        false => frame.render_widget(Clear, rect),
+    }
     frame.render_widget(
         Paragraph::new(lines).style(text).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(glow(Neon::Cyan))
-                .title(Span::styled(" the end of the row ", lit(Neon::Cyan)))
+                .border_style(dress.frame)
+                .title(Span::styled(dress.title_text, dress.title))
                 .title_bottom(Span::styled(budget, dim_text)),
         ),
         rect,
     );
+    if live {
+        tear(frame.buffer_mut(), rect, view.tick);
+    }
 }
 
 /// The sheet strip, top-right: the day's budget and the kit at a glance.

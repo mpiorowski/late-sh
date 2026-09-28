@@ -983,6 +983,7 @@ impl russh::server::Handler for ClientHandler {
             fight_service: crate::app::deadchannel::fight::svc::FightService::new(
                 self.state.db.clone(),
                 self.state.chat_service.clone(),
+                self.state.chip_service.clone(),
             ),
             tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(
                 self.state.db.clone(),

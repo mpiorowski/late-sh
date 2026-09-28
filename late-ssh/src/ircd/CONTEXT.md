@@ -3,7 +3,6 @@
 ## Metadata
 - Domain: embedded IRC server for late.sh chat
 - Primary audience: LLM agents working in `late-ssh/src/ircd`, IRC token auth, or IRC/chat integration paths
-- Last updated: 2026-08-08 (IRC resolves client IPs from trusted PROXY v1 headers before TLS; proxy transport addresses are never persisted or applied as client IPs)
 - Status: Active
 - Parent context: `../../../CONTEXT.md`
 - Related context: `../app/chat/CONTEXT.md`

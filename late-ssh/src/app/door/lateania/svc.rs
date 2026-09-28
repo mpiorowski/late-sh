@@ -313,8 +313,8 @@ struct BossAchievement {
     mob_name: &'static str,
     award_category: &'static str,
     /// Chip payout via a reward template: once per character, and at most once
-    /// every 7 days per account (migration 158). `None` means the profile
-    /// badge is the whole prize.
+    /// every 30 days per account (migrations 158 and 207). `None` means the
+    /// profile badge is the whole prize.
     payout: Option<BossPayout>,
 }
 
@@ -2505,9 +2505,9 @@ impl LateaniaService {
     }
 }
 
-/// Pay one realm crown, behind two gates at once (migration 158): the
-/// character persists, so a maxed one would take the easy crowns nightly
-/// without the 7-day account lockout, and `d` deletes the character, so the
+/// Pay one realm crown, behind two gates at once (migrations 158 and 207):
+/// the character persists, so a maxed one would take the easy crowns nightly
+/// without the 30-day account lockout, and `d` deletes the character, so the
 /// lockout alone would be a reroll farm. The character row id is what the
 /// per-character half keys on.
 ///
@@ -7221,7 +7221,7 @@ impl WorldState {
         if let Some(achievement) = achievement {
             let line = match achievement.payout.is_some() {
                 true => format!(
-                    "Defeating {} pays chips once per character, and at most once every 7 days; the {} badge is yours the first time.",
+                    "Defeating {} pays chips once per character, and at most once every 30 days; the {} badge is yours the first time.",
                     achievement.mob_name,
                     award_badge(achievement.award_category, 1)
                 ),

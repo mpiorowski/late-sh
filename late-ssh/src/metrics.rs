@@ -204,6 +204,17 @@ pub enum FightBeat {
     Failed,
 }
 
+/// The Old Signal's chips after a kill (`fight/svc.rs::pay_mark`): `Paid`
+/// landed, `InsideMonth` is the 30-day gate refusing a second mark, `Failed`
+/// is the grant erroring, the debt left on the row for the next touch to
+/// retry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OldSignalPayout {
+    Paid,
+    InsideMonth,
+    Failed,
+}
+
 /// A look written at the tailor's mirror (`app/deadchannel/tailor`):
 /// `Worn` landed, `NoRunner` found no standing runner to dress, `Failed`
 /// is the write not landing.
@@ -353,7 +364,8 @@ mod inner {
         DailyPuzzle, DailyWinPayout, DoorGame, FightBeat, FirstContactBeat, GalleryApplauseResult,
         GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
         GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
-        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult,
+        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
+        OnlineTimeFlushResult,
         PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
         Presence, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen,
         SessionStartStage, SessionUser, SongQueueReward, SshRejectReason, SummaryResult,
@@ -1047,6 +1059,18 @@ mod inner {
         })
     }
 
+    fn deadchannel_old_signal_payouts_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_deadchannel_old_signal_payouts_total")
+                .with_description(
+                    "Old Signal kills by what the chips did (paid, refused by the month's gate, or the grant failing)",
+                )
+                .build()
+        })
+    }
+
     fn deadchannel_tailor_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -1169,6 +1193,21 @@ mod inner {
 
     pub fn record_deadchannel_fight(beat: FightBeat) {
         deadchannel_fights_total().add(1, &[KeyValue::new("beat", fight_beat_label(beat))]);
+    }
+
+    fn old_signal_payout_label(payout: OldSignalPayout) -> &'static str {
+        match payout {
+            OldSignalPayout::Paid => "paid",
+            OldSignalPayout::InsideMonth => "inside_month",
+            OldSignalPayout::Failed => "failed",
+        }
+    }
+
+    pub fn record_deadchannel_old_signal_payout(payout: OldSignalPayout) {
+        deadchannel_old_signal_payouts_total().add(
+            1,
+            &[KeyValue::new("outcome", old_signal_payout_label(payout))],
+        );
     }
 
     pub fn record_first_contact_bio_screen(outcome: BioScreenOutcome) {
@@ -2146,7 +2185,8 @@ mod inner {
         DailyPuzzle, DailyWinPayout, DoorGame, FightBeat, FirstContactBeat, GalleryApplauseResult,
         GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
         GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
-        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OnlineTimeFlushResult,
+        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
+        OnlineTimeFlushResult,
         PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
         Presence, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen,
         SessionStartStage, SessionUser, SongQueueReward, SshRejectReason, SummaryResult,
@@ -2158,6 +2198,7 @@ mod inner {
     pub fn record_ssh_connection_rejected(_reason: SshRejectReason) {}
     pub fn record_first_contact_beat(_beat: FirstContactBeat) {}
     pub fn record_deadchannel_fight(_beat: FightBeat) {}
+    pub fn record_deadchannel_old_signal_payout(_payout: OldSignalPayout) {}
     pub fn record_deadchannel_tailor(_beat: TailorBeat) {}
     pub fn record_runner_door(_door: RunnerDoor) {}
     pub fn record_first_contact_bio_screen(_outcome: BioScreenOutcome) {}

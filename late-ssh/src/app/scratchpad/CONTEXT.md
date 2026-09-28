@@ -3,7 +3,6 @@
 ## Metadata
 - Domain: the mutual `/pair @user` handshake and the two-person shared live text scratchpad (`Screen::Scratchpad`)
 - Primary audience: LLM agents working in `late-ssh/src/app/scratchpad`, the `/pair` chat command, or `Screen::Scratchpad`
-- Last updated: 2026-07-27
 - Status: Active (v1)
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../chat/CONTEXT.md` (command parsing/dispatch), `../clubhouse/CONTEXT.md` (the `SharedLobby` registry idiom this mirrors)

@@ -4,7 +4,6 @@
 - Scope: the Minecraft card in the Games hub (`late-ssh/src/app/door/minecraft`) and the server it describes (`infra/minecraft.tf`, `scripts/minecraft_whitelist_add.sh`).
 - Upstream: Paper (Minecraft Java Edition server) via the `itzg/minecraft-server` image, plus the GriefPrevention plugin from Modrinth.
 - Status: Active. Server live since 2026-09-13.
-- Last updated: 2026-09-15.
 - Parent context: `../../../../../CONTEXT.md`.
 
 ## Summary
