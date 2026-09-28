@@ -100,6 +100,48 @@ fn a_stool_lost_to_an_earlier_sitter_on_another_replica_stands_you_back_up() {
 }
 
 #[test]
+fn a_stool_held_on_another_device_refuses_a_second_one_and_says_which() {
+    // This user is already on stool 1 from another session.
+    let mut laptop = sitter(1, 1, NOW - 60_000);
+    laptop.session_id = Uuid::from_u128(77);
+    let mut phone = session(1);
+    phone.set_records(Arc::new(vec![laptop.clone()]), NOW);
+
+    phone.toggle_seat(3, NOW);
+
+    assert_eq!(phone.my_seat(), None);
+    assert_eq!(
+        phone.last_message.as_deref(),
+        Some("you already have a stool on another device.")
+    );
+
+    // The other device's stool arrives only after this one sat: the row
+    // keeps the earlier one, and the line names the reason.
+    let mut phone = session(1);
+    phone.toggle_seat(3, NOW);
+    assert!(phone.set_records(Arc::new(vec![laptop]), NOW + 50));
+    assert_eq!(phone.my_seat(), None);
+    assert_eq!(
+        phone.last_message.as_deref(),
+        Some("you already have a stool on another device.")
+    );
+}
+
+#[test]
+fn a_rename_reaches_your_own_stool() {
+    let mut mine = session(1);
+    mine.set_username("user001-renamed");
+    mine.toggle_seat(0, NOW);
+
+    assert_eq!(
+        mine.snapshot()[0]
+            .as_ref()
+            .map(|seat| seat.username.as_str()),
+        Some("user001-renamed")
+    );
+}
+
+#[test]
 fn a_pour_counts_on_the_stool_and_a_round_is_for_everyone_else_on_one() {
     let mut mine = session(1);
     mine.set_records(

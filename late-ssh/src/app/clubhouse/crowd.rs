@@ -261,11 +261,12 @@ pub fn crowd(
         people.push(patron(entry, Placement::Door(slot), &emotes, drunk, now_ms));
     }
     // Stable order: seats, standing, door, walkers; each by index/name.
-    people.sort_by(|a, b| {
-        placement_rank(&a.placement)
-            .cmp(&placement_rank(&b.placement))
-            .then_with(|| a.username.to_lowercase().cmp(&b.username.to_lowercase()))
-            .then_with(|| a.user_id.cmp(&b.user_id))
+    people.sort_by_cached_key(|p| {
+        (
+            placement_rank(&p.placement),
+            p.username.to_lowercase(),
+            p.user_id,
+        )
     });
 
     let dog_pet = entries
@@ -313,6 +314,36 @@ fn placement_rank(placement: &Placement) -> (u8, usize) {
         Placement::Door(i) => (2, i),
         Placement::Walking(..) => (3, 0),
     }
+}
+
+/// Whether this session's parked spot goes to someone else in the room:
+/// an index this map does not have, or a seat or standing spot another
+/// user's patron (their latest mover, as [`crowd`] picks it) claimed
+/// earlier. The same contest as [`crowd`] for one spot, without building
+/// the room, so every session can ask on every change.
+pub fn lost_spot(records: &[PresenceRecord], own: &Own<'_>) -> bool {
+    let spot = match claim(own.stand.spot) {
+        Some(spot) => spot,
+        None => return matches!(own.stand.spot, Spot::Seat { .. } | Spot::Standing { .. }),
+    };
+    let mut chosen: HashMap<Uuid, (i64, Uuid, Spot)> = HashMap::new();
+    for record in records
+        .iter()
+        .filter(|record| record.user_id != own.user_id)
+    {
+        let stand = record.clubhouse;
+        let entry = (stand.since_ms, record.session_id, stand.spot);
+        match chosen.get(&record.user_id) {
+            Some(kept) if (kept.0, kept.1) >= (entry.0, entry.1) => {}
+            Some(_) | None => {
+                chosen.insert(record.user_id, entry);
+            }
+        }
+    }
+    let mine = (own.stand.since_ms, own.user_id);
+    chosen
+        .iter()
+        .any(|(user_id, (since_ms, _, held))| *held == spot && (*since_ms, *user_id) < mine)
 }
 
 /// Where a session sits down: a random free seat (by `rng`), else the
@@ -417,11 +448,14 @@ fn dog_waypoint(cycle: i64) -> usize {
     (v % map::DOG_WAYPOINTS.len() as u64) as usize
 }
 
+/// A walkable route: map cells in order, both ends included.
+type Path = Vec<(u16, u16)>;
+
 /// The shortest open path between every pair of waypoints, both ends
 /// included, found once. `map_test` proves every pair is connected; a pair
 /// that is not would fall back to standing at the first waypoint.
-fn dog_paths() -> &'static Vec<Vec<Vec<(u16, u16)>>> {
-    static PATHS: OnceLock<Vec<Vec<Vec<(u16, u16)>>>> = OnceLock::new();
+fn dog_paths() -> &'static Vec<Vec<Path>> {
+    static PATHS: OnceLock<Vec<Vec<Path>>> = OnceLock::new();
     PATHS.get_or_init(|| {
         map::DOG_WAYPOINTS
             .iter()

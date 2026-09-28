@@ -75,7 +75,11 @@ fn the_guide_shows_every_block_between_the_top_and_the_end() {
                 Block::Figures(figures) => {
                     for figure in *figures {
                         assert!(seen.contains(figure.value), "missing {:?}", figure.value);
-                        assert!(seen.contains(&opening(figure.means)), "missing {:?}", figure.means);
+                        assert!(
+                            seen.contains(&opening(figure.means)),
+                            "missing {:?}",
+                            figure.means
+                        );
                     }
                 }
                 Block::Rule(text) => {

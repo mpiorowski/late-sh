@@ -159,7 +159,11 @@ fn prize_lines(title: &'static str, copy: &[&'static str], width: usize) -> Vec<
 
 /// Keys as chips beside what they do, in as many columns as fit.
 fn key_lines(keys: &[Key], width: usize) -> Vec<Line<'static>> {
-    let key_width = keys.iter().map(|k| k.key.chars().count() + 2).max().unwrap_or(0);
+    let key_width = keys
+        .iter()
+        .map(|k| k.key.chars().count() + 2)
+        .max()
+        .unwrap_or(0);
     let text = ink(INK);
     let cells = keys
         .iter()
@@ -177,7 +181,11 @@ fn key_lines(keys: &[Key], width: usize) -> Vec<Line<'static>> {
 
 /// The day's numbers, each bright beside what it means.
 fn figure_lines(figures: &[Figure], width: usize) -> Vec<Line<'static>> {
-    let value_width = figures.iter().map(|f| f.value.chars().count()).max().unwrap_or(0);
+    let value_width = figures
+        .iter()
+        .map(|f| f.value.chars().count())
+        .max()
+        .unwrap_or(0);
     let number = lit(Neon::Amber);
     let text = ink(INK);
     let cells = figures
@@ -245,7 +253,12 @@ fn grid(
 /// A bullet, wrapped with a hanging indent under its first word.
 fn rule_lines(text: &'static str, width: usize) -> Vec<Line<'static>> {
     let spans = marked(text, ink(INK), ink(INK_BRIGHT).add_modifier(Modifier::BOLD));
-    indented(&spans, Span::styled("  · ", glow(Neon::Amber)), "    ", width)
+    indented(
+        &spans,
+        Span::styled("  · ", glow(Neon::Amber)),
+        "    ",
+        width,
+    )
 }
 
 /// Wrap `spans` under a first-row prefix and a continuation indent of the

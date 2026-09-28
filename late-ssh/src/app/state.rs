@@ -2833,14 +2833,22 @@ impl App {
     /// whether a room on screen moved.
     pub(crate) fn sync_presence(&mut self) -> bool {
         let now_ms = crate::app::presence::svc::now_ms();
+        // The live profile name: the record carries it to everyone else,
+        // and the rooms draw this session's own patron and stool with it.
+        let username = self.profile_state.profile().username.clone();
+        self.clubhouse.set_username(&username);
+        self.nightcap.set_username(&username);
         let mut changed = false;
         if self.presence.refresh() {
             let records = self.presence.records.clone();
             self.clubhouse.set_records(records.clone(), now_ms);
             changed |= self.nightcap.set_records(records.clone(), now_ms)
                 && self.screen == Screen::Nightcap;
-            self.street.set_records(&records);
-            changed |= matches!(self.screen, Screen::Clubhouse | Screen::City);
+            // The city frame builds a light map, so it is bought only when
+            // the street itself moved, not for a step in the tavern.
+            let street_moved = self.street.set_records(&records);
+            changed |=
+                self.screen == Screen::Clubhouse || (street_moved && self.screen == Screen::City);
         }
         self.street.sync(
             self.city.player_x,
@@ -2851,7 +2859,7 @@ impl App {
         let record = late_core::models::presence::PresenceRecord {
             session_id: self.presence.session_id(),
             user_id: self.user_id,
-            username: self.profile_state.profile().username.clone(),
+            username,
             clubhouse: self.clubhouse.stand(),
             nightcap: self.nightcap.stand(),
             street: self.street.stand(),

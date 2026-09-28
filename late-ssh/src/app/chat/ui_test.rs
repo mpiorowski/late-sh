@@ -3420,12 +3420,13 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
 }
 
 /// The #deadchannel portrait gutter (`app/deadchannel/runner`): a runner's
-/// face sits level with their header and wears what the entry has rows
-/// for (a one-liner the head only, a taller message the coat too), the
-/// blank separator above the block stays blank so two faces never touch,
-/// the text wraps short of the gutter for every entry in the room, and a
-/// continuation shares the face above it. A mention's wash covers every
-/// face row: the face is one block.
+/// face sits level with their header and wears what the block has rows
+/// for (a lone one-liner the head only, a taller message or a one-liner
+/// with a continuation under it the coat too), the blank separator above
+/// the block stays blank so two faces never touch, the text wraps short
+/// of the gutter for every entry in the room, and a continuation shares
+/// the face above it. A mention's wash covers every face row: the face is
+/// one block.
 #[test]
 fn the_wire_seats_a_runners_portrait_beside_their_message() {
     use crate::app::deadchannel::runner::state::Look;
@@ -3452,15 +3453,17 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
         body: body.to_string(),
     };
     // Newest first, the order the builder walks. Oldest is a runner's
-    // one-liner opening the list, then a civilian, then mira's block.
+    // one-liner and its continuation opening the list, then a civilian,
+    // then mira's block.
     let messages = [
-        message(13, runner_id, "gg"),
+        message(14, runner_id, "gg"),
         message(
-            12,
+            13,
             runner_id,
             "dax get in here, the static is thick tonight and it is not waiting @alice",
         ),
-        message(11, civilian_id, "who took the last hit"),
+        message(12, civilian_id, "who took the last hit"),
+        message(11, elder_id, "brb"),
         message(10, elder_id, "o7"),
     ];
 
@@ -3551,17 +3554,20 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
         })
         .collect();
 
-    // The list opens with dax's one-liner: two rows, so the head only,
-    // the hood level with his name and the eyes on the body row, and no
-    // row grown under it for a coat.
+    // The list opens with dax's one-liner: two rows of its own, the hood
+    // level with his name and the eyes on the body row. His next message
+    // lands back to back as a continuation, so the block has a third row
+    // and the coat sits on it, no row grown for it.
     assert!(rendered[0].contains("dax ▚15"), "{rendered:?}");
     assert!(rendered[0].ends_with(" ╬═╬ "), "{rendered:?}");
     assert!(rendered[1].contains("o7"), "{rendered:?}");
     assert!(rendered[1].ends_with("▐◈ ◈▌"), "{rendered:?}");
+    assert!(rendered[2].contains("brb"), "{rendered:?}");
+    assert!(rendered[2].ends_with(" ▟▓▙ "), "{rendered:?}");
     // Then the separator, blank all the way across: dax's face and the
     // next block's never touch.
-    assert_eq!(rendered[2].trim(), "", "{rendered:?}");
-    assert!(rendered[3].contains("afterglow"), "{rendered:?}");
+    assert_eq!(rendered[3].trim(), "", "{rendered:?}");
+    assert!(rendered[4].contains("afterglow"), "{rendered:?}");
     // Mira's message wraps, so her block wears the whole face: the
     // separator above her header stays blank, the hood sits level with
     // her name, the eyes and the coat on her first two body rows.
@@ -3580,7 +3586,7 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
         .expect("badge span");
     assert_eq!(badge.style.fg, Some(level_color(7)));
     // The civilian wears none: the wire only marks its own.
-    assert!(!rendered[3].contains('▚'), "{rendered:?}");
+    assert!(!rendered[4].contains('▚'), "{rendered:?}");
     // The mention's margin bar is the row's first cell.
     assert!(
         rendered[mira + 1]
@@ -3613,6 +3619,7 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
     for row in [
         &rendered[0],
         &rendered[1],
+        &rendered[2],
         &rendered[mira],
         &rendered[mira + 1],
         &rendered[mira + 2],
@@ -3629,7 +3636,8 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
             .trim_end();
         assert!(text.width() <= width - 6, "{row:?} runs into the gutter");
     }
-    // The continuation ("gg") and the civilian's message carry no face.
+    // Mira's continuation ("gg") carries no face, her message already
+    // wore the coat, and neither does the civilian's message.
     let gg = rendered
         .iter()
         .position(|row| row.contains("gg"))

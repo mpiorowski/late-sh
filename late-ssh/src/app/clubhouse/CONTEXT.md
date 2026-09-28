@@ -55,11 +55,16 @@ room is the chat surface, and the full history lives in #lounge on Home.
 - The first movement key turns a parked patron into a *walker* (even into a
   wall): the seat frees for everyone on the next flush. `s` sits a walker in
   the nearest free seat within reach. Walkers keep walking until logout.
-- Cadence: every tick `App::sync_presence` copies new records into the
-  crowd (`set_records`) and publishes this session's stand when it changed;
-  on the screen the crowd is redrawn every tick (`refresh_crowd`) for the
-  clock-driven parts. Own moves redraw at once, laid over the records
-  (`crowd::Own`), without waiting for the round trip.
+- Cadence: every tick `App::sync_presence` hands new records to every
+  session (`set_records`, which only settles this session's own spot:
+  `crowd::lost_spot` is one pass, no room built) and publishes this
+  session's stand when it changed. The room itself is drawn on the screen
+  only: every tick (`refresh_crowd`, for the clock-driven parts) and on
+  `enter_screen`, which is when whoever came and went while the screen was
+  away goes through the door ambience. Own moves redraw at once, laid over
+  the records (`crowd::Own`), without waiting for the round trip. The
+  session's own name is the live profile name (`set_username`, every
+  tick), so a rename reaches your own label too.
 - Emotes (`w` wave, `x` dance) and dog pets are stamps on the stand, played
   for their wall-clock windows (`EMOTE_MS`, `DOG_PET_MS`) by every session
   on every replica.

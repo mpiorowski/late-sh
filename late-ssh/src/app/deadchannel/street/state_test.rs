@@ -2,6 +2,7 @@ use late_core::models::presence::{ClubhouseStand, PresenceRecord, Spot, StreetSt
 use uuid::Uuid;
 
 use super::{StreetPresence, StreetRunner, StreetView, street_view};
+use crate::app::deadchannel::city::map;
 
 fn record(user_id: Uuid, street: Option<StreetStand>) -> PresenceRecord {
     PresenceRecord {
@@ -44,6 +45,30 @@ fn only_sessions_that_went_down_stand_on_the_street() {
         runner.stand(),
         None,
         "a leaver is off until the next descent"
+    );
+}
+
+#[test]
+fn a_stand_off_this_map_is_not_on_the_street() {
+    let (ann, bob, cat) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    let stand = |x: u16, y: u16| {
+        Some(StreetStand {
+            x,
+            y,
+            present: true,
+            moved_at_ms: 1_000,
+        })
+    };
+    // A replica on another map (a rolling deploy) can publish a cell this
+    // map does not have; drawing it would index past the light map.
+    let records = vec![
+        record(ann, stand(map::MAP_W, 5)),
+        record(bob, stand(10, map::MAP_H)),
+        record(cat, stand(map::MAP_W - 1, map::MAP_H - 1)),
+    ];
+    assert_eq!(
+        street_view(&records),
+        view(&[(cat, map::MAP_W - 1, map::MAP_H - 1, true)])
     );
 }
 

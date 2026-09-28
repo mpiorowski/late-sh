@@ -144,6 +144,9 @@ pub enum SeatChange {
     SatDown,
     StoodUp,
     Taken,
+    /// This user already holds a stool from another session: one stool
+    /// per user, so the press is refused rather than sat and undone.
+    Elsewhere,
 }
 
 pub struct State {
@@ -227,10 +230,18 @@ impl State {
         self.own
     }
 
+    /// The name this session's own stool is drawn with, before the record
+    /// comes back: the live profile name, so a rename reaches it.
+    pub fn set_username(&mut self, username: &str) {
+        if self.username != username {
+            self.username = username.to_string();
+        }
+    }
+
     /// Take the latest presence records. If someone on another replica
-    /// took our stool a moment before we did, the row gives it to them and
-    /// this session stands back up, saying so. Returns whether the row or
-    /// the wall moved.
+    /// took our stool a moment before we did (or this user's other device
+    /// sat first), the row gives it to them and this session stands back
+    /// up, saying which. Returns whether the row or the wall moved.
     pub fn set_records(&mut self, records: Records, now_ms: i64) -> bool {
         self.records = records;
         let mut changed = false;
@@ -241,7 +252,10 @@ impl State {
                 self.own = None;
                 self.menu_open = false;
                 self.carving = None;
-                self.last_message = Some("someone beat you to that stool.".to_string());
+                self.last_message = Some(match seated_elsewhere(&row, self.user_id) {
+                    true => "you already have a stool on another device.".to_string(),
+                    false => "someone beat you to that stool.".to_string(),
+                });
                 changed = true;
             }
         }
@@ -366,6 +380,8 @@ impl State {
             .is_some_and(|held| held.user_id != self.user_id)
         {
             SeatChange::Taken
+        } else if self.my_seat().is_none() && seated_elsewhere(&self.snapshot, self.user_id) {
+            SeatChange::Elsewhere
         } else {
             self.own = Some(NightcapStand {
                 stool: seat as u8,
@@ -379,6 +395,9 @@ impl State {
             // (or drops) the `(you)` label on the next draw.
             SeatChange::SatDown | SeatChange::StoodUp => None,
             SeatChange::Taken => Some("that stool is taken.".to_string()),
+            SeatChange::Elsewhere => {
+                Some("you already have a stool on another device.".to_string())
+            }
         };
         // Standing up takes the menu and the knife with it: there is no bar
         // to order from and no stool to carve.
@@ -589,6 +608,11 @@ impl State {
         });
         self.refresh_snapshot(now_ms);
     }
+}
+
+/// Whether this user holds a stool in the row from any session.
+fn seated_elsewhere(row: &Stools, user_id: Uuid) -> bool {
+    row.iter().flatten().any(|seat| seat.user_id == user_id)
 }
 
 /// Whether two seat snapshots draw the same. The sitting time is compared

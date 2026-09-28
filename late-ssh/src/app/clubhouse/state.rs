@@ -248,10 +248,12 @@ impl State {
         self.door_events.retain(|e| e.until_tick > now);
     }
 
-    /// Screen entry hook: look for the bots now and, on the very first
-    /// visit ever, start the tutorial at the door.
+    /// Screen entry hook: redraw the room from what arrived while the
+    /// screen was away, look for the bots now and, on the very first visit
+    /// ever, start the tutorial at the door.
     pub fn enter_screen(&mut self, now_ms: i64) {
         self.force_roster_refresh = true;
+        self.refresh_crowd(now_ms);
         if self.tutorial == Tutorial::Pending {
             self.tutorial = Tutorial::Welcome;
             self.place(map::SPAWN, now_ms);
@@ -271,11 +273,20 @@ impl State {
 
     /// Take the latest presence records: follow this user's newer stand on
     /// another device, pick again after losing a contested spot or when a
-    /// seat frees up for someone at the door, then redraw the room.
+    /// seat frees up for someone at the door. Cheap on purpose, since every
+    /// session runs it on every change anywhere: the room itself is
+    /// redrawn by `refresh_crowd`, on the screen only.
     pub fn set_records(&mut self, records: Records, now_ms: i64) {
         self.records = records;
         self.settle(now_ms);
-        self.refresh_crowd(now_ms);
+    }
+
+    /// The name this session's own patron is drawn with, before the record
+    /// comes back: the live profile name, so a rename reaches it.
+    pub fn set_username(&mut self, username: &str) {
+        if self.username != username {
+            self.username = username.to_string();
+        }
     }
 
     fn settle(&mut self, now_ms: i64) {
@@ -290,16 +301,7 @@ impl State {
             self.own.spot = stand.spot;
             self.own.since_ms = stand.since_ms;
         }
-        let placed = crowd::crowd(&self.records, &self.own(), &HashMap::new(), now_ms)
-            .find(self.user_id)
-            .map(|patron| patron.placement);
-        let lost = matches!(
-            (self.own.spot, placed),
-            (
-                Spot::Seat { .. } | Spot::Standing { .. },
-                Some(crowd::Placement::Door(_))
-            )
-        );
+        let lost = crowd::lost_spot(&self.records, &self.own());
         let waiting = self.own.spot == Spot::Door;
         if lost || waiting {
             let rng = self.next_rand();
@@ -313,9 +315,10 @@ impl State {
 
     /// Redraw the room from the records and this session's own stand, note
     /// who came and went, and mirror our own cell for the camera. Called
-    /// on every own change, every new set of records, and every world tick
+    /// on every own change, on entering the screen, and every world tick
     /// while the screen is visible (the dog and the emotes run on the
-    /// clock).
+    /// clock); never while the screen is away, where nothing reads the
+    /// room. Whoever came and went meanwhile is announced on the return.
     pub fn refresh_crowd(&mut self, now_ms: i64) {
         let now = chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_default();
         let levels = self.drunk.levels(now);

@@ -27,7 +27,11 @@ async fn runner_and_service(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
     );
-    let svc = FightService::new(test_db.db.clone(), chat, ChipService::new(test_db.db.clone()));
+    let svc = FightService::new(
+        test_db.db.clone(),
+        chat,
+        ChipService::new(test_db.db.clone()),
+    );
     (test_db, user.id, svc)
 }
 
@@ -326,7 +330,10 @@ async fn putting_the_old_signal_down_resets_the_row_and_pays_once_a_month() {
         third.lines.last().map(String::as_str),
         Some("the house pays 40,000 chips for the broadcast.")
     );
-    assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE + 2 * pay);
+    assert_eq!(
+        balance(&client, user_id).await,
+        INITIAL_CHIP_BALANCE + 2 * pay
+    );
     let ledger = UserChips::recent_ledger(&client, user_id, 20)
         .await
         .expect("ledger");
@@ -383,7 +390,11 @@ async fn a_jammed_till_owes_the_mark_until_the_next_command_pays_it() {
         .await
         .expect("find")
         .expect("row");
-    assert_eq!((row.level, row.marks), (1, 1), "the reset and the mark land");
+    assert_eq!(
+        (row.level, row.marks),
+        (1, 1),
+        "the reset and the mark land"
+    );
     assert_eq!(row.unpaid_mark, Some(1), "the row keeps the debt");
     assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE);
     let awards = list_profile_awards_for_user(&client, user_id)
@@ -408,7 +419,10 @@ async fn a_jammed_till_owes_the_mark_until_the_next_command_pays_it() {
         outcome.lines.last().map(String::as_str),
         Some("the house pays 40,000 chips for the broadcast.")
     );
-    assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE + 40_000);
+    assert_eq!(
+        balance(&client, user_id).await,
+        INITIAL_CHIP_BALANCE + 40_000
+    );
     let row = DeadchannelRunner::find_by_user(&client, user_id)
         .await
         .expect("find")
@@ -428,7 +442,10 @@ async fn a_jammed_till_owes_the_mark_until_the_next_command_pays_it() {
         "{:?}",
         outcome.lines
     );
-    assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE + 40_000);
+    assert_eq!(
+        balance(&client, user_id).await,
+        INITIAL_CHIP_BALANCE + 40_000
+    );
     let ledger = UserChips::recent_ledger(&client, user_id, 20)
         .await
         .expect("ledger");

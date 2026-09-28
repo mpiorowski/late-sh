@@ -108,7 +108,10 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   same one in the same breath. The row gives it to the earlier `sat_at_ms`
   (then the user id), and the other session, on its next records, stands
   back up with "someone beat you to that stool." One user on two devices
-  holds at most one stool, their earliest.
+  holds at most one stool, their earliest: a press while the row already
+  shows this user on a stool is refused with `SeatChange::Elsewhere` ("you
+  already have a stool on another device."), and a stool lost to the same
+  user's other device says the same rather than "someone".
 - **A stool is held only while its owner is in the room.** Leaving the
   screen by any route (Esc, `0`, Tab, a page digit) runs
   `State::leave_screen` from `App::set_screen`, which gives the stool back
@@ -117,7 +120,9 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   bar.
 - Pressing your own occupied seat's number again stands you up (and closes
   the menu). Pressing a stool someone else holds is refused with
-  `SeatChange::Taken`, which the footer prints.
+  `SeatChange::Taken`, which the footer prints. Your own name on your stool
+  is the live profile name (`set_username`, every tick from
+  `App::sync_presence`).
 - Occupant names come from the sitter's presence record, which carries the
   session's live profile name, never cached at sit time, so a rename reaches
   the stool. Root `CONTEXT.md` §8.1 names seat labels as the case not to

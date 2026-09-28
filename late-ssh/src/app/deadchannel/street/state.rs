@@ -7,10 +7,12 @@
 //! until the session ends (presence drops the record) or the runner stops
 //! being one (`leave`, from the runner-directory edge in `tick.rs`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use late_core::models::presence::{PresenceRecord, StreetStand};
 use uuid::Uuid;
+
+use crate::app::deadchannel::city::map;
 
 /// One runner on the street as a session draws it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,16 +29,21 @@ pub type StreetView = HashMap<Uuid, StreetRunner>;
 
 /// One runner per user across every session on every replica: the cell of
 /// the latest mover (the session id breaks a same-millisecond tie, so every
-/// replica picks the same), present if any session is looking.
+/// replica picks the same), present if any session is looking. A stand off
+/// this map (a replica on another map, mid-deploy) is dropped here, so
+/// the renderer only ever indexes cells it has.
 pub fn street_view(records: &[PresenceRecord]) -> StreetView {
     let mut latest: HashMap<Uuid, (StreetStand, Uuid)> = HashMap::new();
-    let mut present: Vec<Uuid> = Vec::new();
+    let mut present: HashSet<Uuid> = HashSet::new();
     for record in records {
         let Some(stand) = record.street else {
             continue;
         };
+        if stand.x >= map::MAP_W || stand.y >= map::MAP_H {
+            continue;
+        }
         if stand.present {
-            present.push(record.user_id);
+            present.insert(record.user_id);
         }
         match latest.get(&record.user_id) {
             Some((kept, kept_session))
@@ -113,8 +120,14 @@ impl StreetPresence {
         self.stand
     }
 
-    pub fn set_records(&mut self, records: &[PresenceRecord]) {
-        self.view = street_view(records);
+    /// Derive the street from the latest records. Returns whether anyone
+    /// on it moved, arrived, left, or looked away, so a tavern-only change
+    /// never buys a city frame.
+    pub fn set_records(&mut self, records: &[PresenceRecord]) -> bool {
+        let next = street_view(records);
+        let moved = next != self.view;
+        self.view = next;
+        moved
     }
 }
 

@@ -26,10 +26,10 @@ use chrono::NaiveDate;
 use late_core::db::Db;
 use late_core::models::chips::ChipMove;
 use late_core::models::deadchannel_runner::DeadchannelRunner;
-use late_core::models::reward::DEADCHANNEL_OLD_SIGNAL_REWARD_KEY;
 use late_core::models::profile_award::{
     DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY, grant_unique_milestone_award,
 };
+use late_core::models::reward::DEADCHANNEL_OLD_SIGNAL_REWARD_KEY;
 use tokio::sync::mpsc;
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
@@ -38,8 +38,8 @@ use super::data;
 use super::state::{Applied, Command, News, Outcome, Sheet};
 use crate::app::chat::svc::ChatService;
 use crate::app::common::primitives::thousands;
-use crate::app::games::chips::svc::ChipService;
 use crate::app::deadchannel::runner::state::Look;
+use crate::app::games::chips::svc::ChipService;
 use crate::metrics::{self, FightBeat, OldSignalPayout};
 
 /// What a session's request came back with. Sent to the asking session

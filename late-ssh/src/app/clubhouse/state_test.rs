@@ -65,8 +65,15 @@ fn the_room_at_login_is_not_announced_and_later_arrivals_are() {
     let mut state = session(vec![alice.clone()], false);
     assert!(state.door_events.is_empty());
 
+    // Bob arrives while this session is on another page; the door says so
+    // when it comes back.
     let bob = other(3, Spot::Seat { index: 5 }, 0);
     state.set_records(Arc::new(vec![alice, bob]), NOW);
+    assert!(
+        state.door_events.is_empty(),
+        "nothing reads the room while away"
+    );
+    state.enter_screen(NOW);
     assert_eq!(state.door_events.len(), 1);
     assert!(state.door_events[0].arrived);
     assert_eq!(state.door_events[0].username, "user003");
@@ -77,6 +84,7 @@ fn the_room_at_login_is_not_announced_and_later_arrivals_are() {
 fn departures_use_the_last_known_name() {
     let mut state = session(vec![other(2, Spot::Seat { index: 3 }, 0)], false);
     state.set_records(Arc::new(Vec::new()), NOW);
+    state.refresh_crowd(NOW);
     assert_eq!(state.door_events.len(), 1);
     assert!(!state.door_events[0].arrived);
     assert_eq!(state.door_events[0].username, "user002");
@@ -86,6 +94,7 @@ fn departures_use_the_last_known_name() {
 fn door_events_expire_with_the_clock() {
     let mut state = session(Vec::new(), false);
     state.set_records(Arc::new(vec![other(2, Spot::Seat { index: 3 }, 0)]), NOW);
+    state.refresh_crowd(NOW);
     assert_eq!(state.door_events.len(), 1);
     // The clock is wall-driven: a sparse tick jumps straight to the wall
     // tick it is given, and expiry follows wall time, not call count.
@@ -119,6 +128,21 @@ fn walking_moves_and_respects_walls() {
 }
 
 #[test]
+fn a_rename_reaches_your_own_label() {
+    let mut state = session(Vec::new(), false);
+    state.set_username("me-renamed");
+    state.refresh_crowd(NOW);
+
+    assert_eq!(
+        state
+            .crowd
+            .find(Uuid::from_u128(ME))
+            .map(|p| p.username.as_str()),
+        Some("me-renamed")
+    );
+}
+
+#[test]
 fn a_seat_lost_to_an_earlier_claim_is_picked_again() {
     let mut state = session(Vec::new(), false);
     let Spot::Seat { index } = state.stand().spot else {
@@ -128,6 +152,7 @@ fn a_seat_lost_to_an_earlier_claim_is_picked_again() {
     let alice = other(2, Spot::Seat { index }, NOW - 1);
 
     state.set_records(Arc::new(vec![alice]), NOW + 10);
+    state.refresh_crowd(NOW + 10);
 
     assert_eq!(
         placement(&state, 2),
@@ -156,6 +181,7 @@ fn a_full_house_waits_at_the_door_and_takes_the_first_seat_that_frees() {
 
     let freed = full.remove(4).clubhouse.spot;
     state.set_records(Arc::new(full), NOW + 10);
+    state.refresh_crowd(NOW + 10);
 
     assert_eq!(state.stand().spot, freed);
     assert_eq!(placement(&state, ME), Some(Placement::Seated(4)));
@@ -171,6 +197,7 @@ fn a_second_device_joins_the_first_and_follows_its_moves() {
     laptop.clubhouse.spot = Spot::Walking { x: 30, y: 12 };
     laptop.clubhouse.since_ms = NOW + 100;
     phone.set_records(Arc::new(vec![laptop]), NOW + 200);
+    phone.refresh_crowd(NOW + 200);
 
     assert_eq!(phone.stand().spot, Spot::Walking { x: 30, y: 12 });
     assert_eq!((phone.player_x, phone.player_y), (30, 12));

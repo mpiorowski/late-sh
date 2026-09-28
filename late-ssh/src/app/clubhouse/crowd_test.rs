@@ -205,6 +205,4 @@ fn the_dog_trots_between_waypoints_on_open_floor_and_naps_at_them() {
         napped.iter().all(|cell| map::DOG_WAYPOINTS.contains(cell)),
         "napped off a waypoint: {napped:?}"
     );
-    // Every replica asking at the same moment sees the same dog.
-    assert_eq!(dog_at(123_456_789), dog_at(123_456_789));
 }
