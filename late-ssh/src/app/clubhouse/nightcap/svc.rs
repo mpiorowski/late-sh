@@ -5,7 +5,7 @@
 //!
 //! Every pour runs through the same rails the tavern's `@bartender` uses
 //! (`ChipService::buy_drink`, `cash_round_drink`, `buy_round`, then
-//! `SharedLobby::record_drink`), so a drink here is exactly as drunk as a
+//! `DrunkMap::record_drink`), so a drink here is exactly as drunk as a
 //! drink at the counter and a credit from a round bought in either room can
 //! be cashed in either room. Two things are this bar's own: a round bought
 //! here pours chips to points 1:1 (`Bar::Nightcap`), because it is bought
@@ -26,13 +26,12 @@ use late_core::models::nightcap_carving::Carving;
 use late_core::shutdown::CancellationToken;
 
 use crate::app::chat::svc::ChatService;
-use crate::app::clubhouse::lobby::SharedLobby;
+use crate::app::clubhouse::drunk::DrunkMap;
 use crate::app::common::primitives::thousands;
 use crate::app::games::chips::svc::{ChipService, RoundError};
 use crate::metrics;
 use crate::usernames::UsernameDirectory;
 
-use super::lobby::SharedSeats;
 use super::state::{Order, Outcome};
 use super::wall::{SharedWall, TAB_BOARD_SIZE, WallSnapshot};
 
@@ -41,7 +40,7 @@ use super::wall::{SharedWall, TAB_BOARD_SIZE, WallSnapshot};
 pub const WALL_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
 
 /// The house's process-global handle: the DB and the shared wall. Built in
-/// `main.rs`, threaded into sessions like the seats, and the only thing at
+/// `main.rs`, threaded into sessions, and the only thing at
 /// this bar that can read or write a table.
 #[derive(Clone)]
 pub struct NightcapHouse {
@@ -92,7 +91,7 @@ impl NightcapHouse {
             .map(|article| article.title);
         let newest_piece = ArtboardPiece::newest_hung(&client).await?;
         let tab = UserChips::top_round_buyers(&client, Bar::Nightcap, TAB_BOARD_SIZE).await?;
-        let mut carvings: [Option<Carving>; super::lobby::SEAT_COUNT] =
+        let mut carvings: [Option<Carving>; super::stools::SEAT_COUNT] =
             std::array::from_fn(|_| None);
         for carving in Carving::list(&client).await? {
             if let Some(slot) = carvings.get_mut(carving.stool as usize) {
@@ -221,40 +220,26 @@ pub fn spawn_credit_check(
 }
 
 /// Place a seated patron's order. Fire-and-forget from the input path; the
-/// outcome arrives on `outcome_tx`. `drunk_lobby` is the tavern's shared
-/// presence map, which carries drunk state for both rooms, and `voice` is
-/// how the bar announces what landed.
+/// outcome arrives on `outcome_tx`. `drunk` is the process's drunk map,
+/// which both rooms share, `voice` is how the bar announces what landed,
+/// and `patrons` is who else is on a stool as the buyer sees it, the
+/// people a round is for.
 pub fn spawn_order(
     chip_service: ChipService,
-    drunk_lobby: Option<SharedLobby>,
-    seats: SharedSeats,
+    drunk: DrunkMap,
     voice: Option<HouseVoice>,
     user_id: Uuid,
     order: Order,
+    patrons: Vec<Uuid>,
     outcome_tx: UnboundedSender<Outcome>,
 ) {
     tokio::spawn(async move {
         let outcome = match order {
             Order::Drink(drink) => {
-                order_drink(
-                    &chip_service,
-                    drunk_lobby.as_ref(),
-                    &seats,
-                    voice.as_ref(),
-                    user_id,
-                    drink,
-                )
-                .await
+                order_drink(&chip_service, &drunk, voice.as_ref(), user_id, drink).await
             }
             Order::Round => {
-                order_round(
-                    &chip_service,
-                    drunk_lobby.as_ref(),
-                    &seats,
-                    voice.as_ref(),
-                    user_id,
-                )
-                .await
+                order_round(&chip_service, &drunk, voice.as_ref(), user_id, &patrons).await
             }
         };
         // A closed receiver means the session is gone; the chips have
@@ -265,8 +250,7 @@ pub fn spawn_order(
 
 async fn order_drink(
     chip_service: &ChipService,
-    drunk_lobby: Option<&SharedLobby>,
-    seats: &SharedSeats,
+    drunk: &DrunkMap,
     voice: Option<&HouseVoice>,
     user_id: Uuid,
     drink: super::state::Drink,
@@ -281,10 +265,7 @@ async fn order_drink(
     };
     match credit {
         Ok(Some(comped)) => {
-            if let Some(lobby) = drunk_lobby {
-                lobby.record_drink(user_id, comped.drunk_points, comped.last_drink_at);
-            }
-            seats.record_pour(user_id);
+            drunk.record_drink(user_id, comped.drunk_points, comped.last_drink_at);
             if let Some(voice) = voice {
                 voice.say(format!(
                     "{} orders the {} ({}), on {}'s round.",
@@ -321,10 +302,7 @@ async fn order_drink(
         .await
     {
         Ok(Some(purchase)) => {
-            if let Some(lobby) = drunk_lobby {
-                lobby.record_drink(user_id, purchase.drunk_points, purchase.last_drink_at);
-            }
-            seats.record_pour(user_id);
+            drunk.record_drink(user_id, purchase.drunk_points, purchase.last_drink_at);
             if let Some(voice) = voice {
                 voice.say(format!(
                     "{} orders the {} ({}).",
@@ -361,23 +339,19 @@ async fn order_drink(
 
 async fn order_round(
     chip_service: &ChipService,
-    drunk_lobby: Option<&SharedLobby>,
-    seats: &SharedSeats,
+    drunk: &DrunkMap,
     voice: Option<&HouseVoice>,
     buyer_id: Uuid,
+    patrons: &[Uuid],
 ) -> Outcome {
     // A round here is for the stools, not for everyone online: the buyer
     // can see exactly who they are buying for.
-    let patrons = seats.seated_ids_excluding(buyer_id);
     match chip_service
-        .buy_round(buyer_id, ROUND_PRICE_PER_PATRON, Bar::Nightcap, &patrons)
+        .buy_round(buyer_id, ROUND_PRICE_PER_PATRON, Bar::Nightcap, patrons)
         .await
     {
         Ok(purchase) => {
-            if let Some(lobby) = drunk_lobby {
-                lobby.record_drink(buyer_id, purchase.drunk_points, purchase.last_drink_at);
-            }
-            seats.record_pour(buyer_id);
+            drunk.record_drink(buyer_id, purchase.drunk_points, purchase.last_drink_at);
             if let Some(voice) = voice {
                 let drinks = if purchase.patrons == 1 {
                     "drink"

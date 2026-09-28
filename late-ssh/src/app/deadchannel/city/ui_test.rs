@@ -4,6 +4,7 @@ use ratatui::backend::TestBackend;
 
 use crate::app::deadchannel::fight::state::Sheet;
 use crate::app::deadchannel::guide::state::State as GuideState;
+use crate::app::deadchannel::street::state::StreetRunner;
 use crate::app::deadchannel::tailor::ui as tailor_ui;
 
 fn render(state: &State, width: u16, height: u16) -> String {
@@ -29,6 +30,10 @@ fn render(state: &State, width: u16, height: u16) -> String {
                         saving: false,
                     },
                     guide: &GuideState::new(),
+                    own_user_id: Uuid::nil(),
+                    street: &StreetView::new(),
+                    runner_looks: &HashMap::new(),
+                    usernames: &UsernameLookup::new(&HashMap::new(), None),
                 },
             );
         })
@@ -108,6 +113,10 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
                         saving: false,
                     },
                     guide: &GuideState::new(),
+                    own_user_id: Uuid::nil(),
+                    street: &StreetView::new(),
+                    runner_looks: &HashMap::new(),
+                    usernames: &UsernameLookup::new(&HashMap::new(), None),
                 },
             );
         })
@@ -169,6 +178,10 @@ fn patch_prices_the_gap_and_says_when_there_is_nothing_to_buy() {
                             saving: false,
                         },
                         guide: &GuideState::new(),
+                        own_user_id: Uuid::nil(),
+                        street: &StreetView::new(),
+                        runner_looks: &HashMap::new(),
+                        usernames: &UsernameLookup::new(&HashMap::new(), None),
                     },
                 )
             })
@@ -246,7 +259,7 @@ fn the_street_line_pins_what_the_cart_said() {
 
 #[test]
 fn animation_never_paints_over_a_prop() {
-    let scene = Scene::build(12_345, map::SPAWN.0, map::SPAWN.1);
+    let scene = Scene::build(12_345, map::SPAWN.0, map::SPAWN.1, &[]);
     let mut cells = compose_grid(&scene);
     animate(&mut cells, 12_345, &scene);
     for sign in map::SIGNS.iter().chain(map::CART_SIGNS.iter()) {
@@ -264,7 +277,7 @@ fn animation_never_paints_over_a_prop() {
 
 #[test]
 fn light_falls_on_the_street_and_stops_at_walls() {
-    let scene = Scene::build(0, map::SPAWN.0, map::SPAWN.1);
+    let scene = Scene::build(0, map::SPAWN.0, map::SPAWN.1, &[]);
     // The cell next to a street lamp is lit; deep inside a tenement's
     // back rooms, away from every window and door, it is not.
     let lamp = map::LIGHTS
@@ -320,6 +333,10 @@ fn every_cell_sits_on_the_city_night_not_the_theme_canvas() {
                         saving: false,
                     },
                     guide: &GuideState::new(),
+                    own_user_id: Uuid::nil(),
+                    street: &StreetView::new(),
+                    runner_looks: &HashMap::new(),
+                    usernames: &UsernameLookup::new(&HashMap::new(), None),
                 },
             );
         })
@@ -340,7 +357,7 @@ fn the_car_route_is_open_street_end_to_end() {
     // With the car and the train on the street the props still stand.
     let t = 50;
     assert!(car_at(t).is_some(), "the car is out at tick {t}");
-    let scene = Scene::build(t, map::SPAWN.0, map::SPAWN.1);
+    let scene = Scene::build(t, map::SPAWN.0, map::SPAWN.1, &[]);
     let mut cells = compose_grid(&scene);
     animate(&mut cells, t, &scene);
     for sign in map::SIGNS.iter().chain(map::CART_SIGNS.iter()) {
@@ -356,7 +373,7 @@ fn the_car_route_is_open_street_end_to_end() {
 
 #[test]
 fn billboards_scroll_street_copy_across_blank_cells() {
-    let scene = Scene::build(0, map::SPAWN.0, map::SPAWN.1);
+    let scene = Scene::build(0, map::SPAWN.0, map::SPAWN.1, &[]);
     let mut cells = compose_grid(&scene);
     let mut seen: Vec<String> = Vec::new();
     for t in 0..BILLBOARD_CYCLE {
@@ -386,7 +403,7 @@ fn billboards_scroll_street_copy_across_blank_cells() {
 
 #[test]
 fn where_the_runner_stands_is_lit_even_with_no_lamp_near() {
-    let scene = Scene::build(0, map::OPEN.0, map::OPEN.1);
+    let scene = Scene::build(0, map::OPEN.0, map::OPEN.1, &[]);
     assert!(
         luma(scene.light(map::OPEN.0, map::OPEN.1)) > 0.3,
         "the carried light"
@@ -407,7 +424,7 @@ fn looking_over_the_ledge_swaps_the_street_for_the_lower_city() {
 
 #[test]
 fn rain_falls_on_the_street_and_the_drop_but_never_in_a_room() {
-    let scene = Scene::build(0, map::SPAWN.0, map::SPAWN.1);
+    let scene = Scene::build(0, map::SPAWN.0, map::SPAWN.1, &[]);
     let mut cells = compose_grid(&scene);
     let mut outside = 0;
     for t in 0..8u64 {
@@ -428,4 +445,155 @@ fn rain_falls_on_the_street_and_the_drop_but_never_in_a_room() {
         }
     }
     assert!(outside > 100, "the city rains: {outside}");
+}
+
+#[test]
+fn other_runners_stand_on_the_street_with_their_names_and_you_are_not_twice() {
+    let state = State::new();
+    let (mira, kade, nox) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    // Open street a few rows up from the stairs, clear of your own label,
+    // one spot west of you and one east, far enough apart that no label
+    // sits on another.
+    let (sx, sy) = map::SPAWN;
+    let open = |xs: &mut dyn Iterator<Item = u16>| {
+        xs.flat_map(|x| (sy - 6..=sy - 3).map(move |y| (x, y)))
+            .find(|&(x, y)| map::walkable(x, y))
+            .expect("open street near the stairs")
+    };
+    let west = open(&mut (sx - 20..=sx - 8).rev());
+    let east = open(&mut (sx + 8..=sx + 20));
+    let street: StreetView = [
+        (kade, west, true),
+        (nox, east, false),
+        // Your own entry (the street's copy of you) is not drawn: the
+        // runner under your keys is.
+        (mira, east, true),
+    ]
+    .into_iter()
+    .map(|(user_id, (x, y), present)| (user_id, StreetRunner { x, y, present }))
+    .collect();
+    let names: HashMap<Uuid, String> = [
+        (mira, "mira".to_string()),
+        (kade, "kade".to_string()),
+        (nox, "nox".to_string()),
+    ]
+    .into_iter()
+    .collect();
+    let usernames = UsernameLookup::new(&names, None);
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            draw(
+                frame,
+                frame.area(),
+                CityView {
+                    state: &state,
+                    own_username: "mira",
+                    look: None,
+                    sheet: None,
+                    scene: None,
+                    till: None,
+                    tailor: tailor_ui::MirrorView {
+                        draft: None,
+                        word: None,
+                        changed: false,
+                        saving: false,
+                    },
+                    guide: &GuideState::new(),
+                    own_user_id: mira,
+                    street: &street,
+                    runner_looks: &HashMap::new(),
+                    usernames: &usernames,
+                },
+            );
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut screen = String::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            screen.push_str(buffer[(x, y)].symbol());
+        }
+        screen.push('\n');
+    }
+    assert!(screen.contains("kade"), "a runner who is looking\n{screen}");
+    assert!(screen.contains("nox"), "a runner who is away\n{screen}");
+    assert_eq!(screen.matches("mira").count(), 1, "you, once\n{screen}");
+}
+
+#[test]
+fn a_runner_who_is_looking_carries_a_light_and_one_who_is_away_does_not() {
+    let (px, py) = map::SPAWN;
+    let lonely = Scene::build(0, px, py, &[]);
+    let with_company = Scene::build(0, px, py, &[map::OPEN]);
+    let (ox, oy) = map::OPEN;
+    assert!(
+        luma(with_company.light(ox, oy)) > luma(lonely.light(ox, oy)) + 0.3,
+        "the other runner's pool of light"
+    );
+
+    // Side by side under the same light, the one who is looking is the
+    // brighter mark.
+    let street: StreetView = [
+        (
+            Uuid::now_v7(),
+            StreetRunner {
+                x: px + 1,
+                y: py,
+                present: true,
+            },
+        ),
+        (
+            Uuid::now_v7(),
+            StreetRunner {
+                x: px + 1,
+                y: py,
+                present: false,
+            },
+        ),
+    ]
+    .into_iter()
+    .collect();
+    let brightness = |present: bool| {
+        let street: StreetView = street
+            .iter()
+            .filter(|(_, runner)| runner.present == present)
+            .map(|(id, runner)| (*id, *runner))
+            .collect();
+        let state = State::new();
+        let guide = GuideState::new();
+        let names = HashMap::new();
+        let usernames = UsernameLookup::new(&names, None);
+        let looks = HashMap::new();
+        let view = CityView {
+            state: &state,
+            own_username: "mira",
+            look: None,
+            sheet: None,
+            scene: None,
+            till: None,
+            tailor: tailor_ui::MirrorView {
+                draft: None,
+                word: None,
+                changed: false,
+                saving: false,
+            },
+            guide: &guide,
+            own_user_id: Uuid::nil(),
+            street: &street,
+            runner_looks: &looks,
+            usernames: &usernames,
+        };
+        let mut cells = compose_grid(&lonely);
+        draw_others(&mut cells, &lonely, &view);
+        let (ch, style) = cells[usize::from(py)][usize::from(px + 1)];
+        assert_eq!(ch, '@');
+        match style.fg {
+            Some(Color::Rgb(r, g, b)) => u32::from(r) + u32::from(g) + u32::from(b),
+            other => panic!("the mark has a fixed RGB color, got {other:?}"),
+        }
+    };
+    assert!(brightness(true) > brightness(false));
 }

@@ -31,6 +31,7 @@ pub(crate) mod notify;
 pub mod paper;
 pub mod pet;
 pub mod pot;
+pub mod presence;
 pub mod profile;
 pub(crate) mod profile_modal;
 pub(crate) mod quit_confirm;

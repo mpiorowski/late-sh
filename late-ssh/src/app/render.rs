@@ -277,6 +277,14 @@ struct DrawContext<'a> {
     city_till: Option<&'a str>,
     city_tailor: crate::app::deadchannel::tailor::ui::MirrorView<'a>,
     city_guide: &'a crate::app::deadchannel::guide::state::State,
+    /// The other runners on the shared street, their marks, and (through
+    /// `usernames`) their names.
+    city_street: &'a crate::app::deadchannel::street::state::StreetView,
+    city_own_user_id: uuid::Uuid,
+    city_runner_looks: &'a std::collections::HashMap<
+        uuid::Uuid,
+        crate::app::deadchannel::runner::svc::RunnerEntry,
+    >,
     /// A chat overlay that lands on the Lounge (a `/summary` or reaction list
     /// requested on Home); the Lounge composer itself opens none.
     clubhouse_overlay: Option<&'a crate::app::common::overlay::Overlay>,
@@ -1354,6 +1362,9 @@ impl App {
                             saving: self.tailor.saving,
                         },
                         city_guide: &self.guide.state,
+                        city_street: &self.street.view,
+                        city_own_user_id: self.user_id,
+                        city_runner_looks: &self.runner_looks,
                         clubhouse_overlay: self.chat.overlay(),
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
@@ -1932,6 +1943,10 @@ impl App {
                     till: ctx.city_till,
                     tailor: ctx.city_tailor,
                     guide: ctx.city_guide,
+                    own_user_id: ctx.city_own_user_id,
+                    street: ctx.city_street,
+                    runner_looks: ctx.city_runner_looks,
+                    usernames: ctx.usernames,
                 },
             ),
             Screen::Nightcap => crate::app::clubhouse::nightcap::ui::draw(

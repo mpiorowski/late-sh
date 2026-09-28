@@ -1,65 +1,100 @@
-use super::*;
+use std::sync::Arc;
 
-fn occupant(n: u128, name: &str) -> Occupant {
-    Occupant {
+use late_core::models::presence::{ClubhouseStand, PresenceRecord, Spot};
+
+use super::*;
+use crate::app::clubhouse::crowd::Placement;
+
+const NOW: i64 = 1_000_000;
+const ME: u128 = 1;
+
+fn other(n: u128, spot: Spot, since_ms: i64) -> PresenceRecord {
+    PresenceRecord {
+        session_id: Uuid::from_u128(1_000 + n),
         user_id: Uuid::from_u128(n),
-        username: name.to_string(),
+        username: format!("user{n:03}"),
+        clubhouse: ClubhouseStand {
+            spot,
+            since_ms,
+            emote: None,
+            petted_dog_at_ms: None,
+        },
+        nightcap: None,
+        street: None,
     }
 }
 
-fn state_with_lobby(tutorial: bool) -> State {
+/// A session logging in as `ME` while `records` are already on the wire.
+fn session(records: Vec<PresenceRecord>, tutorial: bool) -> State {
     State::new(
-        Some(SharedLobby::with_seed(7)),
-        Uuid::from_u128(1),
+        Uuid::from_u128(1_000 + ME),
+        Uuid::from_u128(ME),
         "me".to_string(),
         tutorial,
+        Arc::new(records),
+        DrunkMap::new(),
+        NOW,
     )
 }
 
-#[test]
-fn refresh_seats_the_crowd_and_mirrors_own_position() {
-    let mut state = state_with_lobby(false);
-    state.refresh_roster(vec![occupant(1, "me"), occupant(2, "alice")]);
-    state.refresh_snapshot();
-    assert_eq!(state.headcount(), 2);
-    // Own cell mirrors the assigned seat, not the spawn mat.
-    let own = state.snapshot.find(Uuid::from_u128(1)).unwrap();
-    assert_eq!(own.placement.position(), (state.player_x, state.player_y));
+fn state_with_lobby(tutorial: bool) -> State {
+    session(Vec::new(), tutorial)
+}
+
+fn placement(state: &State, n: u128) -> Option<Placement> {
+    state.crowd.find(Uuid::from_u128(n)).map(|p| p.placement)
 }
 
 #[test]
-fn first_refresh_does_not_announce_the_whole_room() {
-    let mut state = state_with_lobby(false);
-    state.refresh_roster(vec![occupant(1, "me"), occupant(2, "alice")]);
+fn a_session_sits_down_the_moment_it_logs_in() {
+    let state = session(vec![other(2, Spot::Walking { x: 30, y: 12 }, 0)], false);
+    assert_eq!(state.headcount(), 2);
+    assert!(
+        matches!(placement(&state, ME), Some(Placement::Seated(_))),
+        "a returning user spawns seated, not at the door"
+    );
+    // Own cell mirrors the picked seat, not the spawn mat.
+    let own = placement(&state, ME).unwrap();
+    assert_eq!(own.position(), (state.player_x, state.player_y));
+    assert!(matches!(state.stand().spot, Spot::Seat { .. }));
+}
+
+#[test]
+fn the_room_at_login_is_not_announced_and_later_arrivals_are() {
+    let alice = other(2, Spot::Seat { index: 3 }, 0);
+    let mut state = session(vec![alice.clone()], false);
     assert!(state.door_events.is_empty());
 
-    state.refresh_roster(vec![
-        occupant(1, "me"),
-        occupant(2, "alice"),
-        occupant(3, "bob"),
-    ]);
+    // Bob arrives while this session is on another page; the door says so
+    // when it comes back.
+    let bob = other(3, Spot::Seat { index: 5 }, 0);
+    state.set_records(Arc::new(vec![alice, bob]), NOW);
+    assert!(
+        state.door_events.is_empty(),
+        "nothing reads the room while away"
+    );
+    state.enter_screen(NOW);
     assert_eq!(state.door_events.len(), 1);
     assert!(state.door_events[0].arrived);
-    assert_eq!(state.door_events[0].username, "bob");
+    assert_eq!(state.door_events[0].username, "user003");
     assert!(state.door_glow());
 }
 
 #[test]
 fn departures_use_the_last_known_name() {
-    let mut state = state_with_lobby(false);
-    state.refresh_roster(vec![occupant(1, "me"), occupant(2, "alice")]);
-    state.refresh_snapshot();
-    state.refresh_roster(vec![occupant(1, "me")]);
+    let mut state = session(vec![other(2, Spot::Seat { index: 3 }, 0)], false);
+    state.set_records(Arc::new(Vec::new()), NOW);
+    state.refresh_crowd(NOW);
     assert_eq!(state.door_events.len(), 1);
     assert!(!state.door_events[0].arrived);
-    assert_eq!(state.door_events[0].username, "alice");
+    assert_eq!(state.door_events[0].username, "user002");
 }
 
 #[test]
 fn door_events_expire_with_the_clock() {
-    let mut state = state_with_lobby(false);
-    state.refresh_roster(vec![occupant(1, "me")]);
-    state.refresh_roster(vec![occupant(1, "me"), occupant(2, "alice")]);
+    let mut state = session(Vec::new(), false);
+    state.set_records(Arc::new(vec![other(2, Spot::Seat { index: 3 }, 0)]), NOW);
+    state.refresh_crowd(NOW);
     assert_eq!(state.door_events.len(), 1);
     // The clock is wall-driven: a sparse tick jumps straight to the wall
     // tick it is given, and expiry follows wall time, not call count.
@@ -71,16 +106,101 @@ fn door_events_expire_with_the_clock() {
 
 #[test]
 fn walking_moves_and_respects_walls() {
-    let mut state = state_with_lobby(false);
-    state.refresh_roster(vec![occupant(1, "me")]);
-    state.refresh_snapshot();
+    let mut state = session(Vec::new(), true);
+    state.enter_screen(NOW);
+    assert_eq!((state.player_x, state.player_y), map::SPAWN);
     for _ in 0..80 {
-        state.walk(0, 1);
+        state.walk(0, -1, NOW);
     }
-    assert_eq!(state.player_y, map::MAP_H - 2);
-    let before = (state.player_x, state.player_y);
-    state.walk(0, 1);
-    assert_eq!((state.player_x, state.player_y), before);
+    let blocked = (state.player_x, state.player_y);
+    assert!(blocked.1 < map::SPAWN.1, "never moved off the mat");
+    assert!(!map::walkable(blocked.0, blocked.1 - 1));
+    state.walk(0, -1, NOW);
+    assert_eq!((state.player_x, state.player_y), blocked);
+    assert_eq!(
+        state.stand().spot,
+        Spot::Walking {
+            x: blocked.0,
+            y: blocked.1
+        },
+        "the room sees the walker where they stopped"
+    );
+}
+
+#[test]
+fn a_rename_reaches_your_own_label() {
+    let mut state = session(Vec::new(), false);
+    state.set_username("me-renamed");
+    state.refresh_crowd(NOW);
+
+    assert_eq!(
+        state
+            .crowd
+            .find(Uuid::from_u128(ME))
+            .map(|p| p.username.as_str()),
+        Some("me-renamed")
+    );
+}
+
+#[test]
+fn a_seat_lost_to_an_earlier_claim_is_picked_again() {
+    let mut state = session(Vec::new(), false);
+    let Spot::Seat { index } = state.stand().spot else {
+        panic!("seated at login");
+    };
+    // Someone on another replica took the same seat a moment earlier.
+    let alice = other(2, Spot::Seat { index }, NOW - 1);
+
+    state.set_records(Arc::new(vec![alice]), NOW + 10);
+    state.refresh_crowd(NOW + 10);
+
+    assert_eq!(
+        placement(&state, 2),
+        Some(Placement::Seated(usize::from(index)))
+    );
+    assert!(
+        matches!(state.stand().spot, Spot::Seat { index: mine } if mine != index),
+        "picked another seat: {:?}",
+        state.stand().spot
+    );
+    assert!(matches!(placement(&state, ME), Some(Placement::Seated(_))));
+}
+
+#[test]
+fn a_full_house_waits_at_the_door_and_takes_the_first_seat_that_frees() {
+    let mut full: Vec<PresenceRecord> = (0..map::SEATS.len())
+        .map(|i| other(10 + i as u128, Spot::Seat { index: i as u16 }, 0))
+        .chain(
+            (0..map::STANDING_SPOTS.len())
+                .map(|i| other(100 + i as u128, Spot::Standing { index: i as u16 }, 0)),
+        )
+        .collect();
+    let mut state = session(full.clone(), false);
+    assert_eq!(state.stand().spot, Spot::Door);
+    assert!(matches!(placement(&state, ME), Some(Placement::Door(_))));
+
+    let freed = full.remove(4).clubhouse.spot;
+    state.set_records(Arc::new(full), NOW + 10);
+    state.refresh_crowd(NOW + 10);
+
+    assert_eq!(state.stand().spot, freed);
+    assert_eq!(placement(&state, ME), Some(Placement::Seated(4)));
+}
+
+#[test]
+fn a_second_device_joins_the_first_and_follows_its_moves() {
+    let mut laptop = other(ME, Spot::Seat { index: 7 }, NOW - 5_000);
+    laptop.session_id = Uuid::from_u128(77);
+    let mut phone = session(vec![laptop.clone()], false);
+    assert_eq!(phone.stand().spot, Spot::Seat { index: 7 });
+
+    laptop.clubhouse.spot = Spot::Walking { x: 30, y: 12 };
+    laptop.clubhouse.since_ms = NOW + 100;
+    phone.set_records(Arc::new(vec![laptop]), NOW + 200);
+    phone.refresh_crowd(NOW + 200);
+
+    assert_eq!(phone.stand().spot, Spot::Walking { x: 30, y: 12 });
+    assert_eq!((phone.player_x, phone.player_y), (30, 12));
 }
 
 #[test]
@@ -88,7 +208,7 @@ fn tutorial_tours_every_page_then_comes_home() {
     let mut state = state_with_lobby(true);
     assert_eq!(state.tutorial, Tutorial::Pending);
     assert_eq!(state.tutorial_forced_step(), None);
-    state.enter_screen();
+    state.enter_screen(NOW);
     assert_eq!(state.tutorial, Tutorial::Welcome);
     assert_eq!((state.player_x, state.player_y), map::SPAWN);
 
@@ -153,7 +273,7 @@ fn tutorial_tours_every_page_then_comes_home() {
 #[test]
 fn bar_glows_after_homecoming_until_the_pour_is_claimed() {
     let mut state = state_with_lobby(true);
-    state.enter_screen();
+    state.enter_screen(NOW);
     // Mid-tour: nothing pours at a distance, and the bar does not glow yet.
     assert!(!state.welcome_pour_due());
     assert!(!state.bar_glow());
@@ -190,7 +310,7 @@ fn bar_glows_after_homecoming_until_the_pour_is_claimed() {
 #[test]
 fn returning_users_never_pour_or_glow() {
     let mut state = state_with_lobby(false);
-    state.enter_screen();
+    state.enter_screen(NOW);
     assert_eq!(state.tutorial, Tutorial::Off);
     state.player_x = 28;
     state.player_y = 12;
@@ -346,34 +466,16 @@ fn tutorial_welcome_takes_the_banner_ahead_of_a_queued_answer() {
 }
 
 #[test]
-fn returning_user_spawns_seated_not_at_the_door() {
-    let mut state = state_with_lobby(false);
-    state.enter_screen();
-    state.refresh_roster(vec![occupant(1, "me")]);
-    state.refresh_snapshot();
-    let own = state.snapshot.find(Uuid::from_u128(1)).unwrap();
-    assert!(matches!(
-        own.placement,
-        super::super::lobby::Placement::Seated(_)
-    ));
-}
-
-#[test]
 fn heading_out_back_puts_the_avatar_at_the_back_door_for_everyone() {
-    let mut state = state_with_lobby(false);
-    state.refresh_roster(vec![occupant(1, "me"), occupant(2, "alice")]);
-    state.refresh_snapshot();
+    let mut state = session(vec![other(2, Spot::Seat { index: 3 }, 0)], false);
     assert_ne!(state.nearby(), Some(map::Interactive::BackDoor));
 
-    state.step_to_back_door();
+    state.step_to_back_door(NOW);
 
     assert_eq!((state.player_x, state.player_y), map::BACK_DOOR_MAT);
     assert_eq!(state.nearby(), Some(map::Interactive::BackDoor));
-    // The shared lobby moves too, so the rest of the room sees where they
-    // went.
-    let lobby = state.lobby_handle().expect("lobby");
-    assert_eq!(
-        lobby.position_of(Uuid::from_u128(1)),
-        Some(map::BACK_DOOR_MAT)
-    );
+    // The room sees it too: the stand this session publishes is at the
+    // back door.
+    let (x, y) = map::BACK_DOOR_MAT;
+    assert_eq!(state.stand().spot, Spot::Walking { x, y });
 }

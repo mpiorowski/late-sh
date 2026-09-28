@@ -12,7 +12,7 @@ use late_core::models::artboard_piece::NewestPiece;
 use late_core::models::chips::RoundBuyer;
 use late_core::models::nightcap_carving::Carving;
 
-use super::lobby::SEAT_COUNT;
+use super::stools::SEAT_COUNT;
 
 /// Lines on the tab board.
 pub const TAB_BOARD_SIZE: i64 = 3;

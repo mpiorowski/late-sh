@@ -120,6 +120,11 @@ impl App {
         }
 
         self.sync_visible_chat_room();
+        // Presence (`app/presence`): everyone's records into the tavern,
+        // the stools and the street, and this session's record out: a send
+        // only when it changed, so a step or leaving a page reaches every
+        // replica.
+        changed |= self.sync_presence();
         self.tick_clubhouse();
         changed |= self.tick_nightcap();
         changed |= crate::app::scratchpad::pair::poll(self);
@@ -165,7 +170,7 @@ impl App {
         if self.screen == Screen::City && anim_half {
             // Rain, neon, steam and the screen's static ride the same
             // ~7.5fps ambience edge as the clubhouse; the runner's steps
-            // are input-driven.
+            // are input-driven, the other runners' arrive with presence.
             self.city.tick(self.marquee_tick as u64);
             changed = true;
         }
@@ -743,7 +748,7 @@ impl App {
         // into paintable styles (which is also what steps shimmer at 1 Hz)
         // and expired at read.
         if one_hz {
-            let drunk_levels = self.clubhouse.drunk_levels();
+            let drunk_levels = self.clubhouse.drunk_levels(chrono::Utc::now());
             if self.drunk_levels != drunk_levels {
                 self.drunk_levels = drunk_levels;
                 self.chat_ctx_epoch += 1;
@@ -781,6 +786,9 @@ impl App {
                 // other replica. This edge is the only place in the process
                 // that can notice: the gate on `0` guards the descent, not
                 // the standing there.
+                if !self.is_runner() {
+                    self.street.leave();
+                }
                 if self.screen == Screen::City && !self.is_runner() {
                     self.fight.close();
                     self.tailor.close();

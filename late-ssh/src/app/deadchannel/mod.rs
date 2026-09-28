@@ -4,4 +4,5 @@ pub(crate) mod glyphs;
 pub mod guide;
 pub(crate) mod haunt;
 pub mod runner;
+pub mod street;
 pub mod tailor;

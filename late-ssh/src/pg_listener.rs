@@ -30,6 +30,7 @@ use late_core::models::{
     deadchannel_runner::DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
     marketplace::{SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL},
     pot::POT_CHANGED_CHANNEL,
+    presence::PRESENCE_CHANNEL,
     quest::{QUEST_ASSIGNMENTS_CHANGED_CHANNEL, QUEST_USER_CHANGED_CHANNEL},
 };
 use tokio::sync::mpsc;
@@ -114,6 +115,7 @@ pub enum Channel {
     DeadchannelNameHit,
     DeadchannelRunnerChanged,
     PotChanged,
+    Presence,
     QuestAssignmentsChanged,
     QuestUserChanged,
     ShopCatalogChanged,
@@ -121,7 +123,7 @@ pub enum Channel {
 }
 
 impl Channel {
-    pub const ALL: [Channel; 13] = [
+    pub const ALL: [Channel; 14] = [
         Channel::AppFlagChanged,
         Channel::ArticlesChanged,
         Channel::BonsaiChanged,
@@ -131,6 +133,7 @@ impl Channel {
         Channel::DeadchannelNameHit,
         Channel::DeadchannelRunnerChanged,
         Channel::PotChanged,
+        Channel::Presence,
         Channel::QuestAssignmentsChanged,
         Channel::QuestUserChanged,
         Channel::ShopCatalogChanged,
@@ -149,6 +152,7 @@ impl Channel {
             Channel::DeadchannelNameHit => DEADCHANNEL_NAME_HIT_CHANNEL,
             Channel::DeadchannelRunnerChanged => DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
             Channel::PotChanged => POT_CHANGED_CHANNEL,
+            Channel::Presence => PRESENCE_CHANNEL,
             Channel::QuestAssignmentsChanged => QUEST_ASSIGNMENTS_CHANGED_CHANNEL,
             Channel::QuestUserChanged => QUEST_USER_CHANGED_CHANNEL,
             Channel::ShopCatalogChanged => SHOP_CATALOG_CHANGED_CHANNEL,

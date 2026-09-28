@@ -6,7 +6,9 @@
   start of the character layer, the runner and its look, in `runner/`
   (phase 2, build order step 1), the night city street in `city/`
   (the wallet, GAME.md "The three surfaces"; art and walkable street
-  first, under the clubhouse on a second `0`, runners only), and the fight in `fight/` (the runner's sheet on
+  first, under the clubhouse on a second `0`, runners only), the shared
+  street in `street/` (every runner on it, across replicas, over
+  `app/presence`; §3b), and the fight in `fight/` (the runner's sheet on
   the row, the lazy day roll, the ration fight against a glyph at the
   screen, the wire's news lines, the armorer's till; §3c) and the
   tailor in `tailor/` (the mirror as the look's editor, the look's writer
@@ -84,6 +86,7 @@ number of replicas spend one AI call per text.
 | `runner/ui.rs` | `portrait_spans`: the look as three styled spans, one per worn piece in its tint; `badge_text` (the mark and the level, `▚7`, with the marks behind the Signal's glyph once there are any, `▚3╬2`) and `level_color` (the newest tint the level unlocked: static to 3, phosphor to 6, cyan to 9, magenta to 12, red to 14, white at 15) for the wire's author header and the profile; `tint_color` maps the palette onto the theme (cyan and magenta fixed, the theme has neither). Pure. |
 | `runner/data.rs` | `welcome`: the voice's welcome for a runner whose row was just created, one message, one paragraph per line (the runner mentioned by name, the story so far, `0` twice as the way down, `/leave` and `/join #deadchannel`). Names no key on the street: those are the guide's. Placeholder copy at feed-template standards. Pure. |
 | `runner/svc.rs` | `RunnerLookService`: the process-shared runner directory (`watch<Arc<HashMap<Uuid, RunnerEntry>>>`, an entry being the look, level, peak level, and marks of a standing runner), seeded and refreshed from `deadchannel_runners` (`list_standing`) on the `deadchannel_runner_changed` LISTEN, the `app/flags` shape. A look that fails to parse is logged and skipped. `fixed_looks_rx` for test apps. |
+| `street/state.rs` | Pure: `street_view`, the street derived from presence records (one `StreetRunner` per user: the latest mover's cell, present if any session is looking), and `StreetPresence`, the `App` slot: `descend` (on the street until the session ends), `sync` (the stand this session publishes; the move stamp moves only on a move), `leave`, and the derived `view` the renderer reads (`set_records` says whether it moved). Stands off this map are dropped here. The wire is `app/presence`. |
 | `city/map.rs` | **Generated** by `scripts/gen_city_map.py --write` (never hand-edited): the 232x52 `MAP` literal, the `SOLID` collision bitmap, `SPAWN`, every zone (`SIGNS`, `BANNERS`, `CART_SIGNS`, `AWNINGS`, `WINDOWS`, `VENTS`, `PUDDLES`, `LAMPS`, `DROP_LIGHTS`, `SCREEN_FACE`, `WIRE`, ...), the closed `Neon` palette, `Landmark` + `nearest_landmark` (reach zones), `walkable`, `grid`/`char_at`. |
 | `city/state.rs` | Per-session view state: the runner's cell, the animation clock, the open panel, the cursor on the armorer's wall (`picked_tier`, `pick_up` / `pick_down`), the pinned street line. `walk`, `run`, `nearby`, `Landmark::on_enter` (`Enter::Panel` for shops, `Enter::Line` for carts, `Enter::Fight` at the screen, `Enter::Leave` for the wire). Pure. |
 | `city/data.rs` | The city's copy and catalogs: the gear ladder (`COST_LADDER`, `WEAPONS`, `ARMOR`: LoGD numbers, GAME.md names), `BANDS` with draft move names, `NOTICES`, `DRINKS`, `TAILOR_PRICES`, the per-landmark `lines` pools, `title` and `pitch`. |
@@ -100,12 +103,12 @@ number of replicas spend one AI call per text.
 | `tailor/svc.rs` | `TailorService`, the look's writer after the join: `wear_task` runs `DeadchannelRunner::store_look` (one statement, standing runner only, last write wins) and answers `TailorOutcome::{Worn, NoRunner, Failed}` on the session's `mpsc`; the metric, the log line per outcome. The change trigger carries the look to every replica's directory. |
 | `tailor/session.rs` | `TailorSession`: the `draft` while the panel is open, `worn` (what the row wears as far as this session knows), the tailor's `word`, one write in flight (`saving`); `open(runner)` / `close` / `changed` / `wear` / `tick`. Decides nothing. |
 | `tailor/input.rs` | Keys while the tailor's panel is open: up/down (`k`/`j`) row, left/right (`h`/`l`) pick, `t` tint, `r` shuffle, `s` wear, Enter leaves; digits, Tab, `q` stay global (`?` is the guide's, taken in `city/input.rs` first), everything else is swallowed. |
-| `guide/data.rs` | The undercity guide's copy: `SECTIONS`, a heading and its lines each, the short version first (the whole game in a screen: the loop, the keys, the armorer, patch, the Old Signal, the mark and its 40,000 chips, once a month), then every key and rule of the street, the sheet, the static, the armorer, patch, the tailor, the rest of the row, and the wire. Kept out of `app/help_modal` on purpose (that one is fed to the bot). **Always current**: see §3b. Pure. |
+| `guide/data.rs` | The undercity guide's copy: `SECTIONS`, a heading, its neon, and its `Block`s each (`Loop`, `Prize`, `Keys`, `Figures`, `Rule`), the short version first and built for the runner who reads nothing else (the loop as a chain, the prize boxed: 40,000 chips once every 30 days and the mark, the keys, the day's numbers, four bullets), then every key and rule of the street, the sheet, the static, the Old Signal, the armorer, patch, the tailor, the rest of the row, and the wire. Prose marks `` `key` `` and `*strong*`; nothing else uses a backtick or an asterisk. Kept out of `app/help_modal` on purpose (that one is fed to the bot). **Always current**: see §3b. Pure. |
 | `guide/state.rs` | `State`: open, scroll, and the page the renderer last measured (`record_page`, a `Cell`), so `scroll_by` holds at the end. Pure. |
 | `guide/svc.rs` | `GuideService`: `claim_first_descent_task` runs `DeadchannelRunner::mark_guide_seen` (one conditional update) and answers `GuideOutcome::{FirstDescent, SeenBefore}` on the session's `mpsc`; a failed claim answers nothing and logs. |
 | `guide/session.rs` | `GuideSession`: the `state`, `descend` (the claim), `tick` (opens the guide on `FirstDescent`). Decides nothing. |
 | `guide/input.rs` | Keys while the guide is open: `j`/`k` and the arrows scroll a line, PageUp/PageDown a screen, Enter, `q` and `?` close it; digits and Tab stay global, everything else is swallowed. `opens` names the key (`?`). |
-| `guide/ui.rs` | `draw`: the box over the street, the sections as a bright heading and its lines, wrapped and scrolled, the keys under; `body_lines`. Pure. |
+| `guide/ui.rs` | `draw`: the box over the street in the city's palette, each section under a neon `▚ heading ───` rule, each block drawn its own way (the loop joined by arrows, the prize in a rounded amber box, keys as amber chips in as many columns as fit and one wrapped column when narrow, figures bright beside their meaning, rules as bullets with a hanging indent, the marks read into chips and bright spans), wrapped here through `common/markdown::wrap_spans` so the row count is the page the scroll holds against; the keys under; `body_lines`. Pure. |
 | `tailor/ui.rs` | `mirror_lines` for the city's panel: the draft as a portrait with the mark under it, four rack rows beside it (the cursor, the label, the tint's name, a window of up to five pieces around the worn one, bracketed, the whole rack once while it is shorter; the mark alphabet on the mark row), the keys (`[s] wear it` lit only when the draft differs from what is worn), what the next unlock level opens, the tailor's word. Pure. |
 
 Root integration is deliberately thin: `App.haunt` (the one field),
@@ -162,8 +165,9 @@ every entry in the room wraps `PORTRAIT_GUTTER` (6) cells short, and a block-ope
 runner gets `attach_portrait` (the face right-aligned on the entry's
 first rows, the hood level with the header, wearing what the entry has
 rows for: a one-liner, header plus one body row, shows hood and eyes
-only, anything taller the coat too, so no message grows a row for its
-face). The blank separator above a block stays blank, so two faces
+and hands the coat to the first row of a continuation right under it
+(none, or a divider between them, and it goes bare), anything taller
+wears the coat itself, so no message grows a row for its face). The blank separator above a block stays blank, so two faces
 stacked down the wire never touch. The profile modal grows a `runner`
 section under the bio for a standing runner (`ProfileSnapshot.runner`,
 loaded by `ProfileService::do_find_profile` from the row; the face beside
@@ -509,9 +513,30 @@ till; every other counter is a catalog with its till shut.
 - **The camera looks north** (`LOOK_NORTH`, 8 rows): it centers above the
   runner so a 24-row terminal at the spawn shows shopfronts and street,
   not the drop.
-- **Nothing is persisted, nothing is shared.** No lobby, no crowd, no DB:
-  the city is one runner on one street per session by design (transactions
-  only; presence would make standing here beat standing in chat).
+- **The street is shared (`street/`).** Every runner who has gone down
+  this session stands on it, on every replica, until the session ends:
+  the first descent puts the runner on the street (`StreetPresence::descend`)
+  and it stays there, lit while the session is on the page and dim while
+  it is on another (`present`), standing where it was left. A logout
+  (presence drops the session's record) or losing the runner (the directory edge in `tick.rs`) takes
+  it off. One runner per user: two sessions show the latest mover's cell.
+  Nothing is persisted: a fresh login starts at the stairs. Another
+  runner who is looking carries a light like yours (`CARRIERS_MAX`
+  nearest are spread per frame); one who is away has none and shows only
+  under the street's own light, its name barely there. Runners do not
+  collide, and a panel, the ledge or the fight are the session's own:
+  others see you standing there. A stand off this map (a replica on
+  another map, mid-deploy) is dropped in `street_view`, the boundary, so
+  the renderer never indexes a cell it does not have.
+  - **The wire** is presence (`app/presence`, root CONTEXT.md §7): the
+    street stand rides this session's presence record next to its tavern
+    seat and its Nightcap stool, batched per replica per flush, heartbeat
+    and timeout included. `App::sync_presence` syncs the stand and
+    publishes it on every tick (a send only on a change) and derives the
+    view from new records; a city frame is bought only when the street
+    view itself changed, never for a step in the tavern. Another replica
+    sees a step within about a flush and a frame; your own runner is
+    drawn from `city::State` and never waits on the wire.
 
 ## 3c. The fight (the static at the end of the row)
 
@@ -862,7 +887,11 @@ Drained by `haunt::svc::tick`.
   `late_ssh_first_contact_gate_total{verdict, audience}` (one count per
   connect, not per person); bio screens by outcome are
   `late_ssh_first_contact_bio_screens_total`; delivered beats are
-  `late_ssh_first_contact_beats_total`. The name is a log field only, never
+  `late_ssh_first_contact_beats_total`. The street's wire is
+  presence's, `late_ssh_presence_total{beat}` (root CONTEXT.md §7). The
+  game's own counters sit under the same row: fights by beat (the per-
+  exchange `round` beat left out), the tailor and the door, Old Signal
+  payouts. The name is a log field only, never
   a metric label: the three counters stay keyed on closed enums so the
   series count cannot grow with the player base. Grafana's "deadchannel"
   row (`monitoring/dashboards/observability.json`) reads both: the beat and

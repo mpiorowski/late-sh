@@ -2,7 +2,7 @@
 //! @bartender) plus their init, mention responders, and the clubhouse
 //! tutorial's scripted @bartender welcome. Each bot registers with
 //! `fingerprint: None`
-//! so it stays out of the human headcount (`active_users` / clubhouse lobby).
+//! so it stays out of the human headcount (it has no session, so no presence).
 //!
 //! ## AI call policy: grounded vs cheap
 //!
@@ -64,7 +64,7 @@ use crate::{
     app::ai::ladder::{Decision, LadderBot, MentionLadders},
     app::ai::svc::AiService,
     app::chat::svc::{ChatEvent, ChatService},
-    app::clubhouse::lobby::SharedLobby,
+    app::clubhouse::drunk::DrunkMap,
     app::common::primitives::thousands,
     app::games::chips::svc::{
         ChipService, GiftDrinkRefusal, GiftError, GiftRefusal, RoundError, RoundRefusal,
@@ -83,7 +83,7 @@ pub struct GhostService {
     activity_tx: broadcast::Sender<ActivityEvent>,
     username_directory: crate::usernames::UsernameDirectory,
     chip_service: ChipService,
-    clubhouse_lobby: SharedLobby,
+    drunk_map: DrunkMap,
     mention_ladders: MentionLadders,
     /// The bar out back (`app/clubhouse/nightcap`). No AI is allowed in
     /// it: every listener here drops a message from this room before any
@@ -165,7 +165,7 @@ const BARTENDER_ORDER_TIMEOUT: Duration = Duration::from_secs(60);
 /// balance that was spent before the debit landed. No charge happens.
 const BARTENDER_TAB_BOUNCED_LINE: &str =
     "easy now, your tab just bounced. come back when your chips catch up to your thirst.";
-/// How often the DB-backed drunk levels are re-seeded into the shared lobby.
+/// How often the DB-backed drunk levels are re-seeded into the drunk map.
 const DRUNK_SEED_INTERVAL: Duration = Duration::from_secs(60);
 /// The bartender's own words for a round that settled, one picked per buy.
 ///
@@ -245,7 +245,7 @@ impl GhostService {
         activity_tx: broadcast::Sender<ActivityEvent>,
         username_directory: crate::usernames::UsernameDirectory,
         chip_service: ChipService,
-        clubhouse_lobby: SharedLobby,
+        drunk_map: DrunkMap,
         mention_ladders: MentionLadders,
         nightcap_room_id: Uuid,
     ) -> Self {
@@ -257,7 +257,7 @@ impl GhostService {
             activity_tx,
             username_directory,
             chip_service,
-            clubhouse_lobby,
+            drunk_map,
             mention_ladders,
             nightcap_room_id,
         }
@@ -275,7 +275,7 @@ impl GhostService {
             }
         };
 
-        // Mirror drunk levels from DB into the shared lobby, AI or not.
+        // Mirror drunk levels from DB into the drunk map, AI or not.
         {
             let svc = self.clone();
             let glow_shutdown = shutdown.clone();
@@ -986,7 +986,7 @@ impl GhostService {
                     .await?
                 {
                     Some(comped) => {
-                        self.clubhouse_lobby.record_drink(
+                        self.drunk_map.record_drink(
                             trigger_message.user_id,
                             comped.drunk_points,
                             comped.last_drink_at,
@@ -1031,7 +1031,7 @@ impl GhostService {
                     .await?
                 {
                     Some(purchase) => {
-                        self.clubhouse_lobby.record_drink(
+                        self.drunk_map.record_drink(
                             trigger_message.user_id,
                             purchase.drunk_points,
                             purchase.last_drink_at,
@@ -1208,7 +1208,7 @@ impl GhostService {
         {
             Ok(purchase) => {
                 let buyer = self.username_for(buyer_id).await;
-                self.clubhouse_lobby.record_drink(
+                self.drunk_map.record_drink(
                     buyer_id,
                     purchase.drunk_points,
                     purchase.last_drink_at,
@@ -1285,7 +1285,7 @@ impl GhostService {
         mention_handle_for_user(names.get(&user_id).map(String::as_str), user_id)
     }
 
-    /// Periodically mirror DB drunk state into the shared lobby so every
+    /// Periodically mirror DB drunk state into the drunk map so every
     /// session's clubhouse labels and chat author tints agree. Runs even
     /// without AI: drinks are DB rows, not model output.
     async fn run_drunk_glow_task(self, shutdown: late_core::shutdown::CancellationToken) {
@@ -1309,7 +1309,7 @@ impl GhostService {
     async fn seed_drunk_levels(&self) -> Result<()> {
         let client = self.db.get().await?;
         let rows = UserDrinks::all_active(&client).await?;
-        self.clubhouse_lobby.set_drunk_states(
+        self.drunk_map.set_drunk_states(
             rows.into_iter()
                 .map(|drinks| (drinks.user_id, drinks.drunk_points, drinks.last_drink_at))
                 .collect(),

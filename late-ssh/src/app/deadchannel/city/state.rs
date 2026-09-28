@@ -3,8 +3,8 @@
 //! to you. Pure: no I/O, no clock reads (the tick is handed in).
 //!
 //! The city is the wallet (GAME.md, "The three surfaces"): nothing happens
-//! here that you could miss, so there is no shared lobby and no crowd. One
-//! runner, one street, the doors you walk up to.
+//! here that you could miss. This is your runner only; the other runners
+//! on the street are `deadchannel/street`'s.
 
 use super::data::COST_LADDER;
 use super::map::{self, Landmark};

@@ -1143,9 +1143,10 @@ fixed:
   siphon, carrier, clear channel; jammer: hiss, jam, wither, blackout;
   ghost: smear, from behind, unseen, vanish), the board's four notices, the
   bar's drink list, the reader's lines (which point at the haunting).
-- **Nothing shared, nothing timed.** No crowd on the street (the design
-  says the city must never beat chat for standing around), no spawns, no
-  clock. The screen's static and the rain are render-only ambience.
+- **Shared, nothing timed.** Every runner who went down this session
+  stands on the street until they log out, lit while looking and dim while
+  on another page (CONTEXT.md §3b). No spawns, no clock. The screen's
+  static and the rain are render-only ambience.
 
 Done since: the signs smear into the wet ground, a car runs the street
 with its headlights ahead of it, the monorail crosses the sky,
