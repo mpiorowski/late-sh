@@ -192,6 +192,7 @@ const fn pointer(mv: ChipMove) -> Pointer {
         | ChipMove::LateaniaFrontierKingDefeat
         | ChipMove::LateaniaSunderingDeepDefeat
         | ChipMove::LateaniaKaethyrAscendantDefeat => Pointer::PayoutClaim,
+        ChipMove::OldSignalSlain => Pointer::Opaque,
         ChipMove::LegacyTableCredit
         | ChipMove::LegacyTableDebit
         | ChipMove::BlackjackBet

@@ -122,32 +122,32 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "LMG",
             "Lateania Archdemon",
-            "slay the Archdemon Mal'gareth (10,000 chips per character, 7-day gap)",
+            "slay the Archdemon Mal'gareth (10,000 chips per character, 30-day gap)",
         ),
         (
             "LKN",
             "Lateania Frontier King",
-            "slay the King Who Was Promised Nothing (10,000 chips per character, 7-day gap)",
+            "slay the King Who Was Promised Nothing (10,000 chips per character, 30-day gap)",
         ),
         (
             "LYS",
             "Lateania Sundering Deep",
-            "slay Yssgar, the Sundering Deep (20,000 chips per character, 7-day gap)",
+            "slay Yssgar, the Sundering Deep (10,000 chips per character, 30-day gap)",
         ),
         (
             "LKA",
             "Kaethyr Ascendant",
-            "slay Kaethyr Ascendant in Kaelmyr (20,000 chips per character, 7-day gap)",
+            "slay Kaethyr Ascendant in Kaelmyr (10,000 chips per character, 30-day gap)",
         ),
         (
             "NHA",
             "NetHack Amulet",
-            "pick up the Amulet of Yendor (20,000 chips per run, 7-day gap)",
+            "pick up the Amulet of Yendor (20,000 chips per run, 30-day gap)",
         ),
         (
             "NHY",
             "NetHack Ascension",
-            "ascend to demigodhood (40,000 chips per run, 7-day gap)",
+            "ascend to demigodhood (40,000 chips per run, 30-day gap)",
         ),
         (
             "GDS",
@@ -157,22 +157,22 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "DCO",
             "DCSS Orb of Zot",
-            "pick up the Orb of Zot (20,000 chips per run, 7-day gap)",
+            "pick up the Orb of Zot (20,000 chips per run, 30-day gap)",
         ),
         (
             "DCW",
             "DCSS Escape",
-            "escape the dungeon with the Orb (40,000 chips per run, 7-day gap)",
+            "escape the dungeon with the Orb (40,000 chips per run, 30-day gap)",
         ),
         (
             "BRE",
             "Brogue Escape",
-            "escape the Dungeons of Doom (20,000 chips per run, 7-day gap)",
+            "escape the Dungeons of Doom (20,000 chips per run, 30-day gap)",
         ),
         (
             "BRM",
             "Brogue Mastery",
-            "the Dungeons of Doom's super-victory (40,000 chips per run, 7-day gap)",
+            "the Dungeons of Doom's super-victory (40,000 chips per run, 30-day gap)",
         ),
         (
             "ADE",
@@ -187,7 +187,7 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "SIG",
             "Old Signal",
-            "put down the Old Signal in deadchannel (no chips: the mark is the prize)",
+            "put down the Old Signal in deadchannel (40,000 chips every kill)",
         ),
     ] {
         lines.push(entry_line(item_code, name, source, code, text, dim));

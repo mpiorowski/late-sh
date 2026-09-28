@@ -246,7 +246,7 @@ fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
             unread: 2,
             voice_badge: Some(" mic #lounge [muted] "),
             pot: Some(&pot),
-                border_width,
+            border_width,
             title_width: 0,
         })
         .map(|hud| line_text(&hud.line))

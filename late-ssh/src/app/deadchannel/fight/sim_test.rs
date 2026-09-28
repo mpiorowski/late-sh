@@ -14,7 +14,9 @@ const CAREFUL_MARK_DAYS: std::ops::RangeInclusive<u32> = 18..=24;
 const RECKLESS_MARK_DAYS: std::ops::RangeInclusive<u32> = 25..=31;
 
 fn climbs(player: Player) -> Vec<Climb> {
-    (0..SEEDS).map(|seed| climb(player, seed, MAX_DAYS)).collect()
+    (0..SEEDS)
+        .map(|seed| climb(player, seed, MAX_DAYS))
+        .collect()
 }
 
 fn marked(climbs: &[Climb]) -> u32 {

@@ -494,10 +494,10 @@ async fn a_darkroom_escape_pays_every_run() {
 }
 
 /// A Lateania crown is behind two gates at once: the character persists, so a
-/// maxed one would take the easy crowns nightly without the weekly lockout,
+/// maxed one would take the easy crowns nightly without the monthly lockout,
 /// and `d` deletes the character, so the lockout has to key on the account.
 #[tokio::test]
-async fn a_lateania_crown_pays_once_per_character_and_once_a_week() {
+async fn a_lateania_crown_pays_once_per_character_and_once_a_month() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "mud-crowns").await;
     let client = test_db.db.get().await.expect("db client");
@@ -530,12 +530,15 @@ async fn a_lateania_crown_pays_once_per_character_and_once_a_week() {
 
     // The same character taking the same crown again: never.
     assert!(!crown(first_character).await.credited);
-    // A rerolled character inside the week: the lockout answers.
+    // A rerolled character inside the month: the lockout answers, and a
+    // week (the roguelikes' lockout) is not enough.
+    assert!(!crown(second_character).await.credited);
+    age_claims(&test_db.db, user.id, 8).await;
     assert!(!crown(second_character).await.credited);
     assert_eq!(balance(&test_db.db, user.id).await, 11_000);
 
-    // Past the week, the second character is paid, and the first still is not.
-    age_claims(&test_db.db, user.id, 8).await;
+    // Past the month, the second character is paid, and the first still is not.
+    age_claims(&test_db.db, user.id, 23).await;
     let later = crown(second_character).await;
     assert!(later.credited);
     assert_eq!(later.balance, 21_000);

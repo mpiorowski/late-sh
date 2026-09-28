@@ -261,12 +261,7 @@ pub(crate) fn armor_name(sheet: &Sheet) -> &'static str {
 
 /// The three header rows: your face and stats on the left, the glyph's
 /// on the right, the two bars facing each other.
-fn header(
-    sheet: &Sheet,
-    look: Option<&Look>,
-    username: &str,
-    dress: &Dress,
-) -> Vec<Line<'static>> {
+fn header(sheet: &Sheet, look: Option<&Look>, username: &str, dress: &Dress) -> Vec<Line<'static>> {
     let head = ink(INK_BRIGHT).add_modifier(Modifier::BOLD);
     let dim_text = ink(INK_DIM);
     let text = ink(INK);
@@ -399,10 +394,9 @@ fn tear(buf: &mut Buffer, rect: Rect, tick: u64) {
         perimeter.push((right, y));
     }
     for (i, (x, y)) in perimeter.into_iter().enumerate() {
-        let roll = mix(
-            tick.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (i as u64 + 1).wrapping_mul(0x51_7cc1_b727_220a),
-        );
-        if roll % TEAR_ONE_IN != 0 {
+        let roll = mix(tick.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            ^ (i as u64 + 1).wrapping_mul(0x51_7cc1_b727_220a));
+        if !roll.is_multiple_of(TEAR_ONE_IN) {
             continue;
         }
         let Some(cell) = buf.cell_mut((x, y)) else {

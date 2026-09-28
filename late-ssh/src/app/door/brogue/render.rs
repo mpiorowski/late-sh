@@ -123,7 +123,7 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>, scr
             10,
         ),
         Line::from(Span::styled(
-            "  Each pays again 7 days after the last time it paid. One run, one payout.",
+            "  Each pays again 30 days after the last time it paid. One run, one payout.",
             Style::default().fg(theme::TEXT_FAINT()),
         )),
         Line::from(""),

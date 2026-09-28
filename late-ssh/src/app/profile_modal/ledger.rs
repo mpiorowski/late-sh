@@ -81,6 +81,7 @@ pub(crate) fn label(mv: ChipMove) -> &'static str {
         ChipMove::LateaniaFrontierKingDefeat => "lateania: frontier king",
         ChipMove::LateaniaSunderingDeepDefeat => "lateania: sundering deep",
         ChipMove::LateaniaKaethyrAscendantDefeat => "lateania: kaethyr",
+        ChipMove::OldSignalSlain => "old signal",
     }
 }
 

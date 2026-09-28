@@ -310,6 +310,11 @@ pub const HEARD_LINE: &str = "below the static something has heard you. the next
 pub const SLAIN_LINE: &str =
     "the Old Signal comes apart, and for a moment every screen in the city goes quiet.";
 
+/// What a mark pays, in chips, on every kill (GAME.md, "Economy rules"):
+/// the one place bits ever turn into chips, and the one milestone the
+/// fight pays. `FightService` credits it inside the kill's transaction.
+pub const OLD_SIGNAL_CHIPS: i64 = 40_000;
+
 /// Titles by marks, one per rung (LoGD's dragon-kill titles, neutral
 /// names; placeholder copy, design review). `title(0)` is none; past the
 /// last rung the last one holds.

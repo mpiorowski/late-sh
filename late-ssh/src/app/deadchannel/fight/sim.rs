@@ -128,7 +128,8 @@ pub fn climb(player: Player, seed: u64, max_days: u32) -> Climb {
 fn outfit(sheet: &mut Sheet, rng: &mut StdRng) {
     for slot in [Slot::Weapon, Slot::Armor] {
         for tier in (1..=MAX_TIER).rev() {
-            if let Applied::Outfitted { .. } = sheet.apply(Command::Outfit { slot, tier }, rng).applied
+            if let Applied::Outfitted { .. } =
+                sheet.apply(Command::Outfit { slot, tier }, rng).applied
             {
                 break;
             }

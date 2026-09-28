@@ -28,7 +28,7 @@ pub const SECTIONS: &[Section] = &[
             "gear wins fights. walk to the armorer: w buys the weapon, a the armor, bits only, one tier above what you carry. buy every tier you can afford before you step in.",
             "p heals to full from anywhere, a bit a point times your level. patch before a fight, not after a drop.",
             "level 15 with the exp to leave it: the next step into the static meets the Old Signal, the last boss. 240 signal, 36 attack, 22 defense, and it pays no bits.",
-            "put it down and it pays 50,000 chips and a mark, and you wake at level 1 with bare hands and fifty bits. the mark is your paragon level: it never comes off, sits behind your name on the wire (▚3╬2), adds a point of attack and defense up to five, and makes every level cost a little more.",
+            "put it down and it pays 40,000 chips and a mark, and you wake at level 1 with bare hands and fifty bits. the mark is your paragon level: it never comes off, sits behind your name on the wire (▚3╬2), adds a point of attack and defense up to five, and makes every level cost a little more.",
         ],
     },
     Section {
@@ -67,7 +67,7 @@ pub const SECTIONS: &[Section] = &[
         lines: &[
             "at 15, once you have the exp to leave it, the next step in meets the Old Signal instead of a glyph.",
             "put it down and you wake at level 1: bare hands, fifty bits, and a mark. the mark stays, adds a point of attack and defense (up to five), and makes every level cost a little more.",
-            "every kill pays 50,000 chips, the one way bits ever turn into chips. your face, your tailor's rack, and your badges stay. the first kill earns [SIG].",
+            "every kill pays 40,000 chips, the one way bits ever turn into chips. your face, your tailor's rack, and your badges stay. the first kill earns [SIG].",
         ],
     },
     Section {

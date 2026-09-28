@@ -2326,13 +2326,10 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     if ctx.screen == Screen::City {
-        match app.chat.lounge_room_id() {
-            Some(room_id) => {
-                app.chat
-                    .select_room_slot(crate::app::chat::state::RoomSlot::Room(room_id));
-            }
-            // The room list has not landed yet: Home keeps whatever it had.
-            None => {}
+        // With no room list landed yet, Home keeps whatever it had.
+        if let Some(room_id) = app.chat.lounge_room_id() {
+            app.chat
+                .select_room_slot(crate::app::chat::state::RoomSlot::Room(room_id));
         }
         app.set_screen(Screen::Dashboard);
         return;

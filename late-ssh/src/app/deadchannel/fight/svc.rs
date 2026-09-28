@@ -11,8 +11,9 @@
 //! kill, a near miss, the last ration of the day); this file words it and
 //! posts it to
 //! #deadchannel as messages from the voice. An ordinary kill, a round, a
-//! run, a purchase post nothing. The Old Signal also grants the rankless
-//! `SIG` profile badge, once per account.
+//! run, a purchase post nothing. The Old Signal also pays the mark's
+//! chips (`OLD_SIGNAL_CHIPS`, inside the kill's transaction) and grants
+//! the rankless `SIG` profile badge, once per account.
 //!
 //! Orchestration only: the span, the metric, the log line per failure
 //! mode, and the reply live here; `state.rs` returns data.
@@ -20,6 +21,7 @@
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use late_core::db::Db;
+use late_core::models::chips::{ChipMove, UserChips};
 use late_core::models::deadchannel_runner::DeadchannelRunner;
 use late_core::models::profile_award::{
     DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY, grant_unique_milestone_award,
@@ -117,6 +119,21 @@ impl FightService {
         let changed = rolled || !matches!(outcome.applied, Applied::Refused(_) | Applied::Resumed);
         if changed {
             DeadchannelRunner::store_sheet(&*tx, sheet.to_write()).await?;
+        }
+        // The mark's chips, in the same transaction as the reset: the row
+        // and the wallet move together or not at all. The ref names the
+        // mark, so a retry of the same kill is one payout.
+        if let Applied::Slain { marks } = outcome.applied {
+            let source_ref = format!("{}:{marks}", row.id);
+            UserChips::apply(
+                &*tx,
+                user_id,
+                ChipMove::OldSignalSlain,
+                data::OLD_SIGNAL_CHIPS,
+                &source_ref,
+            )
+            .await
+            .context("paying the mark")?;
         }
         tx.commit().await?;
         Ok(Some((sheet, outcome)))

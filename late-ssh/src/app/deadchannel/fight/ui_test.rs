@@ -160,14 +160,21 @@ fn the_old_signal_takes_the_screen_and_tears_the_frame() {
     let screen = rows.join("\n");
     assert!(screen.contains("the bottom of the city"), "{screen}");
     assert!(screen.contains("Old Signal"), "{screen}");
-    assert!(screen.contains("▸ you hit the Old Signal for 21."), "{screen}");
+    assert!(
+        screen.contains("▸ you hit the Old Signal for 21."),
+        "{screen}"
+    );
     assert!(screen.contains("[a] attack"), "{screen}");
     assert!(
-        rows[0].trim_start_matches(' ').starts_with(['┌', '░', '▒', '▓']),
+        rows[0]
+            .trim_start_matches(' ')
+            .starts_with(['┌', '░', '▒', '▓']),
         "the box starts at the top of the screen\n{screen}"
     );
     assert!(
-        rows[23].trim_start_matches(' ').starts_with(['└', '░', '▒', '▓']),
+        rows[23]
+            .trim_start_matches(' ')
+            .starts_with(['└', '░', '▒', '▓']),
         "and ends at the bottom\n{screen}"
     );
     assert!(torn_cells(&rows) > 0, "the frame is torn\n{screen}");

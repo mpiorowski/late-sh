@@ -176,18 +176,25 @@ async fn the_descent_rolls_a_stale_day() {
 }
 
 /// The kill through the service: the reset lands on the row, the peak
-/// stays, and the first kill grants the `SIG` badge once; a second kill
-/// leaves a second mark and no second badge.
+/// stays, every kill pays the mark's chips on a ledger row that names the
+/// mark, and the first kill grants the `SIG` badge once; a second kill
+/// leaves a second mark, a second payout, and no second badge.
 #[tokio::test]
 async fn putting_the_old_signal_down_resets_the_row_and_grants_the_badge() {
-    use crate::app::deadchannel::fight::data::{MAX_LEVEL, OLD_SIGNAL_TIER, exp_to_seek};
+    use crate::app::deadchannel::fight::data::{
+        MAX_LEVEL, OLD_SIGNAL_CHIPS, OLD_SIGNAL_TIER, exp_to_seek,
+    };
     use crate::app::deadchannel::fight::state::MAX_TIER;
+    use late_core::models::chips::{ChipMove, INITIAL_CHIP_BALANCE, UserChips};
     use late_core::models::profile_award::{
         DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY, ProfileAward, list_profile_awards_for_user,
     };
 
     let (test_db, user_id, svc) = runner_and_service("fight-svc-old-signal").await;
     let client = test_db.db.get().await.expect("db client");
+    // The wallet exists before anyone reaches the bottom: the stipend row
+    // is written at login, so the payout lands on top of it.
+    UserChips::ensure(&client, user_id).await.expect("a wallet");
     let row = DeadchannelRunner::find_by_user(&client, user_id)
         .await
         .expect("find")
@@ -253,6 +260,26 @@ async fn putting_the_old_signal_down_resets_the_row_and_grants_the_badge() {
         .await
         .expect("awards");
     assert_eq!(badges(awards), vec![1], "one badge, granted on mark 1");
+    let paid = |entries: Vec<late_core::models::chips::ChipLedgerEntry>| {
+        entries
+            .into_iter()
+            .filter(|entry| entry.chip_move() == Some(ChipMove::OldSignalSlain))
+            .map(|entry| (entry.delta, entry.source_ref))
+            .collect::<Vec<_>>()
+    };
+    let chips = UserChips::find(&client, user_id)
+        .await
+        .expect("chips")
+        .expect("a wallet");
+    assert_eq!(chips.balance, INITIAL_CHIP_BALANCE + OLD_SIGNAL_CHIPS);
+    let ledger = UserChips::recent_ledger(&client, user_id, 10)
+        .await
+        .expect("ledger");
+    assert_eq!(
+        paid(ledger),
+        vec![(OLD_SIGNAL_CHIPS, Some(format!("{}:1", row.id)))],
+        "the mark's chips, on a row that names the mark"
+    );
 
     // The climb again, to the top with the mark's own threshold.
     let mut sheet = Sheet::from_row(&row).expect("sheet");
@@ -296,5 +323,24 @@ async fn putting_the_old_signal_down_resets_the_row_and_grants_the_badge() {
         badges(awards),
         vec![1],
         "the second kill leaves the badge as the first granted it"
+    );
+    let chips = UserChips::find(&client, user_id)
+        .await
+        .expect("chips")
+        .expect("a wallet");
+    assert_eq!(
+        chips.balance,
+        INITIAL_CHIP_BALANCE + 2 * OLD_SIGNAL_CHIPS,
+        "every kill pays"
+    );
+    let ledger = UserChips::recent_ledger(&client, user_id, 10)
+        .await
+        .expect("ledger");
+    assert_eq!(
+        paid(ledger),
+        vec![
+            (OLD_SIGNAL_CHIPS, Some(format!("{}:2", row.id))),
+            (OLD_SIGNAL_CHIPS, Some(format!("{}:1", row.id))),
+        ]
     );
 }

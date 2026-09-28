@@ -228,6 +228,11 @@ chip_moves!(
     LateaniaFrontierKingDefeat,
     LateaniaSunderingDeepDefeat,
     LateaniaKaethyrAscendantDefeat,
+    /// The Old Signal put down in the undercity (`deadchannel`): the one
+    /// milestone the fight pays, on every kill, inside the fight's own
+    /// transaction. `source_ref` is `<runner row id>:<mark number>`, so a
+    /// mark is paid once however the command is retried.
+    OldSignalSlain,
 );
 
 /// Which way a move touches the balance, and under what guard.
@@ -305,6 +310,7 @@ impl ChipMove {
             Self::LateaniaFrontierKingDefeat => "lateania_frontier_king_defeat",
             Self::LateaniaSunderingDeepDefeat => "lateania_sundering_deep_defeat",
             Self::LateaniaKaethyrAscendantDefeat => "lateania_kaethyr_ascendant_defeat",
+            Self::OldSignalSlain => "old_signal_slain",
         }
     }
 
@@ -358,6 +364,7 @@ impl ChipMove {
             | Self::LateaniaFrontierKingDefeat
             | Self::LateaniaSunderingDeepDefeat
             | Self::LateaniaKaethyrAscendantDefeat => "game_payout_claims",
+            Self::OldSignalSlain => "deadchannel_runners",
         }
     }
 
@@ -406,7 +413,8 @@ impl ChipMove {
             | Self::LateaniaArchdemonDefeat
             | Self::LateaniaFrontierKingDefeat
             | Self::LateaniaSunderingDeepDefeat
-            | Self::LateaniaKaethyrAscendantDefeat => ChipDirection::Credit,
+            | Self::LateaniaKaethyrAscendantDefeat
+            | Self::OldSignalSlain => ChipDirection::Credit,
             Self::BlackjackBet | Self::PokerBet | Self::ShopPurchase | Self::SsnakeArenaLost => {
                 ChipDirection::Debit { floor: 0 }
             }
@@ -494,7 +502,8 @@ impl ChipMove {
             | Self::LateaniaArchdemonDefeat
             | Self::LateaniaFrontierKingDefeat
             | Self::LateaniaSunderingDeepDefeat
-            | Self::LateaniaKaethyrAscendantDefeat => true,
+            | Self::LateaniaKaethyrAscendantDefeat
+            | Self::OldSignalSlain => true,
         }
     }
 
