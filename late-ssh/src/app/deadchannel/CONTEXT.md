@@ -165,8 +165,9 @@ every entry in the room wraps `PORTRAIT_GUTTER` (6) cells short, and a block-ope
 runner gets `attach_portrait` (the face right-aligned on the entry's
 first rows, the hood level with the header, wearing what the entry has
 rows for: a one-liner, header plus one body row, shows hood and eyes
-only, anything taller the coat too, so no message grows a row for its
-face). The blank separator above a block stays blank, so two faces
+and hands the coat to the first row of a continuation right under it
+(none, or a divider between them, and it goes bare), anything taller
+wears the coat itself, so no message grows a row for its face). The blank separator above a block stays blank, so two faces
 stacked down the wire never touch. The profile modal grows a `runner`
 section under the bio for a standing runner (`ProfileSnapshot.runner`,
 loaded by `ProfileService::do_find_profile` from the row; the face beside

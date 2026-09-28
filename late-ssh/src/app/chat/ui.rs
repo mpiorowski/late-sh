@@ -1657,6 +1657,9 @@ fn ensure_chat_rows_cache(
     let mut prev_was_system = false;
     let mut unread_divider_inserted = false;
     let mut left_app_divider_inserted = false;
+    // A coat the last entry had no row for: a runner's one-liner wears the
+    // head only, and the coat waits for the next entry to seat it.
+    let mut pending_coat: Option<Span<'static>> = None;
 
     for msg in messages.into_iter().rev() {
         let is_own = msg.user_id == ctx.current_user_id;
@@ -1897,6 +1900,11 @@ fn ensure_chat_rows_cache(
         }
         left_app_divider_inserted |= left_app_here.is_some();
         unread_divider_inserted |= afk_here;
+        // The waiting coat seats only on a continuation that sits right
+        // under the one-liner: a divider between them splits the block.
+        let carried_coat = pending_coat
+            .take()
+            .filter(|_| is_continuation && left_app_here.is_none() && !afk_here);
 
         let row_start = all_rows.len();
         let image_lines = ctx.inline_images.get(&msg.id).map(Vec::as_slice);
@@ -1937,17 +1945,23 @@ fn ensure_chat_rows_cache(
             gild,
             translation,
         );
-        if let Some([hood, eyes, coat]) = portrait {
-            // The face starts level with the header and wears as much as
-            // the entry has rows for: a one-liner (the header and one body
-            // row) shows the head only, anything taller the coat too, so
-            // no message grows a row for its face. The blank separator
-            // above the block stays blank on purpose: with the hood seated
-            // there, faces down the wire read as one stuck column.
-            match wrapped.lines.len() {
-                0..=2 => attach_portrait(&mut wrapped.lines, vec![hood, eyes], text_width),
+        // The face starts level with the header and wears as much as the
+        // block has rows for: a one-liner (the header and one body row)
+        // shows the head only and hands the coat to the continuation right
+        // under it, anything taller wears the coat itself, so no message
+        // grows a row for its face. The blank separator above the block
+        // stays blank on purpose: with the hood seated there, faces down
+        // the wire read as one stuck column.
+        match (portrait, carried_coat) {
+            (Some([hood, eyes, coat]), _) => match wrapped.lines.len() {
+                0..=2 => {
+                    attach_portrait(&mut wrapped.lines, vec![hood, eyes], text_width);
+                    pending_coat = Some(coat);
+                }
                 _ => attach_portrait(&mut wrapped.lines, vec![hood, eyes, coat], text_width),
-            }
+            },
+            (None, Some(coat)) => attach_portrait(&mut wrapped.lines, vec![coat], text_width),
+            (None, None) => {}
         }
         let line_count = wrapped.lines.len();
         all_rows.extend(wrapped.lines);

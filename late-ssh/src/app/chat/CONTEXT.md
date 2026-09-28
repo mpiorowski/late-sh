@@ -407,8 +407,9 @@ Admin commands:
   title so the same painter tints it), the wire wraps every entry six cells short and seats the
   author's three-row portrait in that gutter beside a block-opening
   message: the hood level with the header, the eyes and the coat on the
-  body rows under it, wearing what the entry has rows for (a one-liner
-  the head only, a taller message the coat too, so no message grows a
+  body rows under it, wearing what the block has rows for (a one-liner
+  the head only, its coat seated on a continuation right under it when
+  one follows, a taller message the coat itself, so no message grows a
   row for its face; `attach_portrait` / `seat_portrait_row`). The blank
   separator above the block stays blank and belongs to nobody, so two
   faces stacked down the wire never touch; the mention wash and the jump
