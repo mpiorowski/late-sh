@@ -27,8 +27,8 @@ use crate::app::{
     audio::stations::{icecast_stream_display_name, radio_station_display_name},
     audio::viz::{Dance, EqState, dance_lines, render_eq},
     bonsai::{
-        render::{PREVIEW_WIDTH, apply_sway, canvas_lines, center_lines, render_preview_lines},
-        state::{BonsaiState, CANVAS_HEIGHT, CANVAS_WIDTH},
+        render::{apply_sway, canvas_lines, center_lines},
+        state::{BonsaiState, CANVAS_WIDTH},
     },
     chat::state::{ActiveFriend, ActivityTickerEntry},
     chat::ui::{EmbeddedRoomChatView, draw_embedded_room_chat},
@@ -557,10 +557,11 @@ fn hint_line_fitting(hints: &[(&str, &str)], width: usize) -> Line<'static> {
     hint_line(&hints[..keep])
 }
 
-/// The tree at its true size when the tile has the room, the preview
-/// otherwise; pot on the floor, status row under it.
+/// The care modal's canvas at its true size, never the preview; pot on the
+/// floor, status row under it. A tile smaller than the canvas cuts it: the
+/// top rows go first, and the sides go evenly so the trunk stays centered.
 fn draw_bonsai_tile(frame: &mut Frame, area: Rect, state: &BonsaiState, wall_tick: usize) {
-    if area.height < 4 || area.width < PREVIEW_WIDTH as u16 {
+    if area.height < BONSAI_STATUS_ROWS {
         return;
     }
     let tree_area = Rect::new(
@@ -569,14 +570,10 @@ fn draw_bonsai_tile(frame: &mut Frame, area: Rect, state: &BonsaiState, wall_tic
         area.width,
         area.height.saturating_sub(BONSAI_STATUS_ROWS),
     );
-    let full = tree_area.width >= CANVAS_WIDTH as u16 && tree_area.height >= CANVAS_HEIGHT as u16;
-    let (mut lines, block_width) = if full {
-        (canvas_lines(state, true), CANVAS_WIDTH)
-    } else {
-        (render_preview_lines(state), PREVIEW_WIDTH)
-    };
+    let mut lines = canvas_lines(state, true);
     apply_sway(&mut lines, wall_tick);
-    center_lines(&mut lines, tree_area.width as usize, block_width);
+    center_lines(&mut lines, tree_area.width as usize, CANVAS_WIDTH);
+    let cut_left = CANVAS_WIDTH.saturating_sub(tree_area.width as usize) / 2;
     let visible = lines.len().min(tree_area.height as usize);
     let dropped = lines.len() - visible;
     let mut lines: Vec<Line<'static>> = lines.into_iter().skip(dropped).collect();
@@ -586,7 +583,10 @@ fn draw_bonsai_tile(frame: &mut Frame, area: Rect, state: &BonsaiState, wall_tic
         padded.push(Line::from(""));
     }
     padded.append(&mut lines);
-    frame.render_widget(Paragraph::new(padded), tree_area);
+    frame.render_widget(
+        Paragraph::new(padded).scroll((0, cut_left as u16)),
+        tree_area,
+    );
 
     let status_area = Rect::new(area.x, tree_area.bottom(), area.width, BONSAI_STATUS_ROWS);
     frame.render_widget(

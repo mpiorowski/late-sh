@@ -17,8 +17,10 @@ to. A chat leaf also carries the room it is bound to (`room`, absent for
 the current room), so a page can hold several rooms side by side, up to
 `MAX_CHAT_TILES` (10): each chat tile is a room drawn and row-cached every
 frame, and a page of a hundred rooms would swallow every unread count.
-Tile kinds are a closed enum: bonsai (the true 81x26 canvas when the
-tile has the room, the preview otherwise), aquarium (the real reef
+Tile kinds are a closed enum: bonsai (always the care modal's true
+81x26 canvas, never the preview; a smaller tile cuts it, top rows first
+and the sides evenly so the trunk stays centered, `draw_bonsai_tile`,
+`ui_test.rs`), aquarium (the real reef
 simulation once the account owns it; unowned, the tile is a centered
 note pointing at `/shop`, the same shape as the pet's; owned, its title carries the care bar, fourteen boxes green for
 the feeding streak or red for the days unfed, see the hub CONTEXT), pet (the box from `pet/ui.rs`, the only place the pet is drawn besides the profile portrait; its top row reads `name · mood`, the mood inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle); when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it pets it (the first pet of the UTC day pays 100 chips, see the hub CONTEXT) and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_zen_tile_at`, `input_flow_test.rs`); while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the track, then the source and the station it is tuned to, always the tile's last two rows, with the full-height visualizer filling every row above; `v1`..`v5` retune it), clock (block digits, the date below them when the tile is seven rows
@@ -242,7 +244,8 @@ leaving the page, so a held resize key costs one row update.
   page (`ZenState::shows`), and Enter rebuilds the same Inbox rows, so the
   marked row is the one that opens.
 - Tests cover the split tree (`state_test.rs`), neighbour detection
-  (`layout_test.rs`), the care bar and the music tile's rows (`ui_test.rs`),
+  (`layout_test.rs`), the care bar, the music tile's rows, and the bonsai
+  canvas cut (`ui_test.rs`),
   the resize floor (`state_test.rs`), the Inbox and Headlines rows
   (`rows_test.rs`), and Inbox Enter (`input_flow_test.rs`); the rest of the
   tile drawing is untested.
