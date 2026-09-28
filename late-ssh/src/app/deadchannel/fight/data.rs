@@ -310,10 +310,15 @@ pub const HEARD_LINE: &str = "below the static something has heard you. the next
 pub const SLAIN_LINE: &str =
     "the Old Signal comes apart, and for a moment every screen in the city goes quiet.";
 
-/// What a mark pays, in chips, on every kill (GAME.md, "Economy rules"):
-/// the one place bits ever turn into chips, and the one milestone the
-/// fight pays. `FightService` credits it inside the kill's transaction.
-pub const OLD_SIGNAL_CHIPS: i64 = 40_000;
+/// The line under a kill the month's payout already went to (GAME.md,
+/// "Economy rules": a mark pays once a month; the amount and the window
+/// live in the `deadchannel_old_signal_slain` reward template).
+pub const OLD_SIGNAL_PAID_THIS_MONTH_LINE: &str =
+    "the house paid for a broadcast this month already. the mark is yours all the same.";
+
+/// The line under a kill whose payout failed to land; the service logs it.
+pub const OLD_SIGNAL_TILL_JAMMED_LINE: &str =
+    "the house's till is jammed and pays nothing tonight. the mark is yours all the same.";
 
 /// Titles by marks, one per rung (LoGD's dragon-kill titles, neutral
 /// names; placeholder copy, design review). `title(0)` is none; past the

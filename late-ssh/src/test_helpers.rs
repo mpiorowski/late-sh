@@ -612,6 +612,7 @@ fn make_app_with_chat_service_and_permissions(
         fight_service: crate::app::deadchannel::fight::svc::FightService::new(
             db.clone(),
             chat_service.clone(),
+            chip_service.clone(),
         ),
         tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(db.clone()),
         guide_service: crate::app::deadchannel::guide::svc::GuideService::new(db.clone()),
@@ -878,6 +879,7 @@ pub fn make_app_with_paired_client(
         fight_service: crate::app::deadchannel::fight::svc::FightService::new(
             db.clone(),
             ChatService::new(db.clone(), notification_service.clone()),
+            chip_service.clone(),
         ),
         tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(db.clone()),
         guide_service: crate::app::deadchannel::guide::svc::GuideService::new(db.clone()),

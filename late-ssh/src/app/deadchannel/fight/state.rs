@@ -730,9 +730,8 @@ impl Sheet {
         self.signal = self.max_signal();
         lines.push(SLAIN_LINE.to_string());
         lines.push(format!(
-            "you wake at the top of Static Row. level 1, bare hands, {START_BITS} bits, and mark {} that does not come off. the house pays {} chips for the broadcast.",
-            self.marks,
-            data::OLD_SIGNAL_CHIPS
+            "you wake at the top of Static Row. level 1, bare hands, {START_BITS} bits, and mark {} that does not come off.",
+            self.marks
         ));
         Outcome {
             applied: Applied::Slain { marks: self.marks },

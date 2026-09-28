@@ -12,8 +12,9 @@
 //! posts it to
 //! #deadchannel as messages from the voice. An ordinary kill, a round, a
 //! run, a purchase post nothing. The Old Signal also pays the mark's
-//! chips (`OLD_SIGNAL_CHIPS`, inside the kill's transaction) and grants
-//! the rankless `SIG` profile badge, once per account.
+//! chips after the commit (`pay_mark`: once per mark and at most once a
+//! month, the door milestones' two gates) and grants the rankless `SIG`
+//! profile badge, once per account.
 //!
 //! Orchestration only: the span, the metric, the log line per failure
 //! mode, and the reply live here; `state.rs` returns data.
@@ -21,8 +22,9 @@
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use late_core::db::Db;
-use late_core::models::chips::{ChipMove, UserChips};
+use late_core::models::chips::ChipMove;
 use late_core::models::deadchannel_runner::DeadchannelRunner;
+use late_core::models::reward::DEADCHANNEL_OLD_SIGNAL_REWARD_KEY;
 use late_core::models::profile_award::{
     DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY, grant_unique_milestone_award,
 };
@@ -33,6 +35,8 @@ use uuid::Uuid;
 use super::data;
 use super::state::{Applied, Command, News, Outcome, Sheet};
 use crate::app::chat::svc::ChatService;
+use crate::app::common::primitives::thousands;
+use crate::app::games::chips::svc::ChipService;
 use crate::app::deadchannel::runner::state::Look;
 use crate::metrics::{self, FightBeat};
 
@@ -57,11 +61,21 @@ pub(crate) enum FightOutcome {
 pub struct FightService {
     db: Db,
     chat: ChatService,
+    chips: ChipService,
+}
+
+/// One applied command, as `act` hands it to the task: the runner row it
+/// ran on (the Old Signal's payout keys on it), the sheet after, and what
+/// happened.
+struct Acted {
+    runner_id: Uuid,
+    sheet: Sheet,
+    outcome: Outcome,
 }
 
 impl FightService {
-    pub fn new(db: Db, chat: ChatService) -> Self {
-        Self { db, chat }
+    pub fn new(db: Db, chat: ChatService, chips: ChipService) -> Self {
+        Self { db, chat, chips }
     }
 
     /// Run one command for a session and answer on `reply`. `username` is
@@ -78,11 +92,16 @@ impl FightService {
         tokio::spawn(
             async move {
                 let outcome = match svc.act(user_id, command).await {
-                    Ok(Some((sheet, outcome))) => {
+                    Ok(Some(Acted {
+                        runner_id,
+                        sheet,
+                        mut outcome,
+                    })) => {
                         metrics::record_deadchannel_fight(beat_for(&outcome.applied));
                         tracing::info!(applied = ?outcome.applied, level = sheet.level, signal = sheet.signal, rations_left = sheet.rations_left, bits = sheet.bits, "fight command applied");
                         svc.post_news(&username, &sheet, &outcome.applied).await;
                         if let Applied::Slain { marks } = outcome.applied {
+                            outcome.lines.push(svc.pay_mark(user_id, runner_id, marks).await);
                             svc.grant_old_signal_badge(user_id, marks).await;
                         }
                         FightOutcome::Acted { sheet, outcome }
@@ -106,7 +125,7 @@ impl FightService {
 
     /// Lock, settle, apply, store. Returns `None` when there is no standing
     /// runner.
-    async fn act(&self, user_id: Uuid, command: Command) -> Result<Option<(Sheet, Outcome)>> {
+    async fn act(&self, user_id: Uuid, command: Command) -> Result<Option<Acted>> {
         let today = Self::today();
         let mut client = self.db.get().await?;
         let tx = client.transaction().await?;
@@ -120,23 +139,47 @@ impl FightService {
         if changed {
             DeadchannelRunner::store_sheet(&*tx, sheet.to_write()).await?;
         }
-        // The mark's chips, in the same transaction as the reset: the row
-        // and the wallet move together or not at all. The ref names the
-        // mark, so a retry of the same kill is one payout.
-        if let Applied::Slain { marks } = outcome.applied {
-            let source_ref = format!("{}:{marks}", row.id);
-            UserChips::apply(
-                &*tx,
-                user_id,
-                ChipMove::OldSignalSlain,
-                data::OLD_SIGNAL_CHIPS,
-                &source_ref,
-            )
-            .await
-            .context("paying the mark")?;
-        }
         tx.commit().await?;
-        Ok(Some((sheet, outcome)))
+        Ok(Some(Acted {
+            runner_id: row.id,
+            sheet,
+            outcome,
+        }))
+    }
+
+    /// The mark's chips, after the kill's commit, on the door milestones'
+    /// two gates (`DEADCHANNEL_OLD_SIGNAL_REWARD_KEY`): once per mark, keyed
+    /// `<runner row id>:<mark>`, and at most once every 30 days per account.
+    /// Returns the line the scene prints under the kill. A failed grant is
+    /// logged here and costs the runner the payout, never the mark.
+    async fn pay_mark(&self, user_id: Uuid, runner_id: Uuid, marks: i32) -> String {
+        let event_key = format!("{runner_id}:{marks}");
+        let grant = self
+            .chips
+            .credit_run_cooldown_reward_template(
+                user_id,
+                DEADCHANNEL_OLD_SIGNAL_REWARD_KEY,
+                &event_key,
+                ChipMove::OldSignalSlain,
+            )
+            .await;
+        match grant {
+            Ok(grant) if grant.credited => {
+                tracing::info!(marks, amount = grant.amount, "old signal paid");
+                format!(
+                    "the house pays {} chips for the broadcast.",
+                    thousands(grant.amount)
+                )
+            }
+            Ok(_) => {
+                tracing::info!(marks, "old signal inside the month, not paid");
+                data::OLD_SIGNAL_PAID_THIS_MONTH_LINE.to_string()
+            }
+            Err(error) => {
+                tracing::error!(error = ?error, marks, "failed to pay the old signal");
+                data::OLD_SIGNAL_TILL_JAMMED_LINE.to_string()
+            }
+        }
     }
 
     /// The news the wire carries, worded. Fire-and-forget through chat,

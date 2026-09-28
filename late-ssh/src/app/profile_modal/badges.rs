@@ -187,7 +187,7 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "SIG",
             "Old Signal",
-            "put down the Old Signal in deadchannel (40,000 chips every kill)",
+            "put down the Old Signal in deadchannel (40,000 chips per mark, 30-day gap)",
         ),
     ] {
         lines.push(entry_line(item_code, name, source, code, text, dim));

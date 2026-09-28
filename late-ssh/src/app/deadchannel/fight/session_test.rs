@@ -9,6 +9,7 @@ use crate::app::deadchannel::fight::data::FOES;
 use crate::app::deadchannel::fight::state::Command;
 use crate::app::deadchannel::fight::svc::{FightOutcome, FightService};
 use crate::app::deadchannel::runner::state::Look;
+use crate::app::games::chips::svc::ChipService;
 use crate::test_helpers::new_test_db;
 
 async fn session_with_runner(name: &str) -> (late_core::test_utils::TestDb, FightSession) {
@@ -23,7 +24,11 @@ async fn session_with_runner(name: &str) -> (late_core::test_utils::TestDb, Figh
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
     );
-    let svc = FightService::new(test_db.db.clone(), chat);
+    let svc = FightService::new(
+        test_db.db.clone(),
+        chat,
+        ChipService::new(test_db.db.clone()),
+    );
     let session = FightSession::new(user.id, "mira".to_string(), svc);
     (test_db, session)
 }

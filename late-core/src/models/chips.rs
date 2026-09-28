@@ -229,9 +229,9 @@ chip_moves!(
     LateaniaSunderingDeepDefeat,
     LateaniaKaethyrAscendantDefeat,
     /// The Old Signal put down in the undercity (`deadchannel`): the one
-    /// milestone the fight pays, on every kill, inside the fight's own
-    /// transaction. `source_ref` is `<runner row id>:<mark number>`, so a
-    /// mark is paid once however the command is retried.
+    /// milestone the fight pays, once per mark and at most once every 30
+    /// days per account, through the same two-gate grant as the door
+    /// milestones. `source_ref` is the `game_payout_claims` row id.
     OldSignalSlain,
 );
 
@@ -363,8 +363,8 @@ impl ChipMove {
             | Self::LateaniaArchdemonDefeat
             | Self::LateaniaFrontierKingDefeat
             | Self::LateaniaSunderingDeepDefeat
-            | Self::LateaniaKaethyrAscendantDefeat => "game_payout_claims",
-            Self::OldSignalSlain => "deadchannel_runners",
+            | Self::LateaniaKaethyrAscendantDefeat
+            | Self::OldSignalSlain => "game_payout_claims",
         }
     }
 

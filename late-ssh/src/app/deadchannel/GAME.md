@@ -582,14 +582,16 @@ fuse is lit.
   rare milestone awards (boss-slain / champion `profile_awards` + chip
   payouts, the shape NetHack and Lateania already use). Beware building a
   printing press into an already-flooded economy.
-- **The Old Signal pays 40,000 chips on every kill**, on the Top Chips
-  board like every other boss, with no lockout: the climb back is three
-  to four weeks, so a runner who shows up daily earns about 40,000 a
-  month from it. That matches Lateania's full run (four crowns at
-  10,000, each at most once every 30 days per account) on purpose: the
-  undercity is the accessible way to the top of the payout ladder, five
-  minutes a day and no skill ceiling. The number moves only with the
-  rest of that table.
+- **The Old Signal pays 40,000 chips once a month**, on the Top Chips
+  board like every other boss, behind the same monthly rule as every
+  milestone on the site: once per mark and at most once every 30 days
+  per account (the `deadchannel_old_signal_slain` reward template). The
+  climb back is three to four weeks, so the lockout rarely binds; it is
+  the rail against a faster second climb. That matches Lateania's full
+  run (four crowns at 10,000, each at most once every 30 days) on
+  purpose: the undercity is the accessible way to the top of the payout
+  ladder, five minutes a day and no skill ceiling. The number moves only
+  with the rest of that table.
 
 ### The retention model (honest version)
 - A player burns hot for 2-4 weeks, sees the content, then settles into
@@ -1055,9 +1057,10 @@ never does.
   never outgrows the room), scales every exp threshold (LoGD's formula,
   a quarter of level times a hundred per mark), and climbs the title
   ladder (placeholder copy: heard, tuned, carrier, broadcast, old
-  voice). The first kill grants the rankless `SIG` profile badge. Every
-  kill pays 40,000 chips: the one milestone payout (see "Economy rules"),
-  and the only place bits ever turn into chips.
+  voice). The first kill grants the rankless `SIG` profile badge. A kill
+  pays 40,000 chips, at most once every 30 days: the one milestone payout
+  (see "Economy rules"), and the only place bits ever turn into chips. A
+  second mark inside the month is kept all the same, unpaid.
 - **The stash is undecided.** It is not built; whether a mark empties it
   is decided when it ships.
 
