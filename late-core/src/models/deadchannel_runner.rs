@@ -21,7 +21,11 @@ use uuid::Uuid;
 pub const DEADCHANNEL_RUNNER_CHANGED_CHANNEL: &str = "deadchannel_runner_changed";
 
 // `guide_seen_at` is when the undercity's guide first opened for this
-// runner (migration 203), `None` until the first descent.
+// runner (migration 203), `None` until the first descent. `unpaid_mark`
+// (migration 210) is the Old Signal mark whose chips have not been settled:
+// set beside `marks` in the kill's transaction, cleared by `settle_mark`
+// once the grant answers, standing while it errors so the next touch on
+// the row retries it.
 crate::model! {
     table = "deadchannel_runners";
     params = DeadchannelRunnerParams;
@@ -42,7 +46,8 @@ crate::model! {
         pub kills_today: i32,
         pub runs_today: i32,
         pub peak_level: i32,
-        pub marks: i32;
+        pub marks: i32,
+        pub unpaid_mark: Option<i32>;
 
         @data
         pub user_id: Uuid,
@@ -70,6 +75,7 @@ pub struct SheetWrite {
     pub runs_today: i32,
     pub peak_level: i32,
     pub marks: i32,
+    pub unpaid_mark: Option<i32>,
 }
 
 /// What the directory serves per standing runner: the look as stored, the
@@ -238,7 +244,8 @@ impl DeadchannelRunner {
                  SET level = $2, exp = $3, signal = $4, weapon_tier = $5,
                      armor_tier = $6, bits = $7, rations_left = $8, day = $9,
                      fight = $10, kills = $11, kills_today = $12, runs_today = $13,
-                     peak_level = $14, marks = $15, updated = current_timestamp
+                     peak_level = $14, marks = $15, unpaid_mark = $16,
+                     updated = current_timestamp
                  WHERE user_id = $1
                  RETURNING *",
                 &[
@@ -257,11 +264,30 @@ impl DeadchannelRunner {
                     &write.runs_today,
                     &write.peak_level,
                     &write.marks,
+                    &write.unpaid_mark,
                 ],
             )
             .await
             .context("storing deadchannel runner sheet")?;
         Ok(Self::from(row))
+    }
+
+    /// The Old Signal's chips for `mark` are settled (paid, or refused by
+    /// the month's gate): clear the debt. Conditional on the flag still
+    /// naming that mark, so a settle racing a later kill on the same row
+    /// never clears the newer debt. Returns whether this call cleared it.
+    pub async fn settle_mark(client: &Client, runner_id: Uuid, mark: i32) -> Result<bool> {
+        let row = client
+            .query_opt(
+                "UPDATE deadchannel_runners
+                 SET unpaid_mark = NULL, updated = current_timestamp
+                 WHERE id = $1 AND unpaid_mark = $2
+                 RETURNING id",
+                &[&runner_id, &mark],
+            )
+            .await
+            .context("settling deadchannel runner mark")?;
+        Ok(row.is_some())
     }
 
     /// The row as it stands, whether or not the runner has left; read

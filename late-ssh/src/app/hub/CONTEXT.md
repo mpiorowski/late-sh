@@ -2,7 +2,6 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-09-15 (petting pays: the first click on the pet in a UTC day credits 100 chips through `PetService::pet_task`, gated by `PetCompanion::pet_day` and credited as `ChipMove::PetPetted`. See the companion care bullet.)
 - Purpose: local working context for the Hub domain: the Shop modal, the quest service behind the Arcade strip, and the Shop-unlocked aquarium.
 - Parent context: `../../../../CONTEXT.md`
 

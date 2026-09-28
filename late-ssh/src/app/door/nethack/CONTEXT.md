@@ -4,7 +4,6 @@
 - Scope: the NetHack door as a whole — the **client** in `late-ssh/src/app/door/nethack` (+ the screen lifecycle in `late-ssh/src/app`: state/input/render/tick wiring) **and the standalone host crate `late-nethack/`**. There is no separate `late-nethack/CONTEXT.md`; this file is the single source for both halves.
 - Domain: NetHack, the real upstream roguelike, run on a PTY inside a **dedicated `late-nethack` SSH host** and reached by late-ssh as a network-proxied door (the *Rebels* camp).
 - Primary audience: LLM agents changing the NetHack launcher UI, the SSH client transport, the host crate (PTY bridge / auth / TERM handling), input forwarding, or its config/deploy wiring.
-- Last updated: 2026-08-24 (arrow keys: the curses windowport is compiled in as a per-player rc opt-in, `door-nethack` image bumped to `5.0.0-r3`, and the client retypes cursor keys via the shared `keys::to_application_cursor` translator, mirroring brogue/dcss)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when the launcher UI, keybindings, or deploy wiring change.

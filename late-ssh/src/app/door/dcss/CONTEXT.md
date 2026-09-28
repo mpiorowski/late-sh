@@ -4,7 +4,6 @@
 - Scope: the Dungeon Crawl Stone Soup door as a whole — the **client** in `late-ssh/src/app/door/dcss` (proxy/identity/state/render/mod) plus its screen lifecycle wiring in `late-ssh/src/app` (state/input/render/tick) **and the standalone host crate `late-dcss/`**. There is no separate `late-dcss/CONTEXT.md`; this file is the single source for both halves.
 - Domain: Dungeon Crawl Stone Soup (crawl), the real upstream console roguelike (GPL-2.0-or-later), run on a PTY inside a **dedicated `late-dcss` SSH host** and reached by late-ssh as a network-proxied door (the same model as the NetHack door).
 - Primary audience: LLM agents changing the DCSS launcher UI, the SSH client transport, the host crate (PTY bridge / auth / TERM handling), input forwarding, or its config/deploy wiring.
-- Last updated: 2026-09-10 (morgue dumps are per-player: the host passes `-morgue $HOME/.crawl/morgue/<playname>` and `late-dcss/src/morgue.rs` carries the older flat dumps into the same shape at boot, because both dcss-stats and Sequell address a game only as `<morgue>/<player>/morgue-<player>-<stamp>.txt`; §1, module map §2, invariant §4)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: `[STABLE]` sections change rarely; `[VOLATILE]` sections change with the launcher UI, keybindings, or build/deploy wiring.

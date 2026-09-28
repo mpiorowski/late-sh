@@ -1060,7 +1060,9 @@ never does.
   voice). The first kill grants the rankless `SIG` profile badge. A kill
   pays 40,000 chips, at most once every 30 days: the one milestone payout
   (see "Economy rules"), and the only place bits ever turn into chips. A
-  second mark inside the month is kept all the same, unpaid.
+  second mark inside the month is kept all the same, unpaid. The payout is
+  a debt on the row until the house answers: a grant that fails is retried
+  on the next step or connect, never lost with the mark.
 - **The stash is undecided.** It is not built; whether a mark empties it
   is decided when it ships.
 

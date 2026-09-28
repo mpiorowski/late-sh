@@ -4400,6 +4400,70 @@ async fn p_opens_patch_from_anywhere_on_the_street() {
 /// Esc over a live fight is the run, not a way out: the exchange gets a
 /// run line (away, or caught turning) and the scene stays up either way.
 #[tokio::test]
+async fn esc_closes_a_scene_the_static_stopped_answering() {
+    use crate::app::deadchannel::fight::svc::FightOutcome;
+    use crate::app::deadchannel::runner::state::Look;
+    use crate::app::deadchannel::runner::svc::RunnerEntry;
+    use late_core::models::deadchannel_runner::DeadchannelRunner;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "undercity-esc-failed-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut rng = StdRng::seed_from_u64(7);
+    let look = Look::random(1, &mut rng);
+    DeadchannelRunner::ensure_for_user(&client, user.id, &look.to_json())
+        .await
+        .expect("a runner");
+    DeadchannelRunner::mark_guide_seen(&client, user.id)
+        .await
+        .expect("guide seen");
+    let mut app = make_app(test_db.db.clone(), user.id, "undercity-esc-failed-flow");
+    app.runner_looks = Arc::new(HashMap::from([(
+        user.id,
+        RunnerEntry {
+            look,
+            level: 1,
+            peak_level: 1,
+            marks: 0,
+        },
+    )]));
+
+    app.handle_input(b"0");
+    wait_for_render_contains(&mut app, " Clubhouse ").await;
+    app.handle_input(b"0");
+    wait_for_render_contains(&mut app, " Undercity ").await;
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "[a] attack").await;
+
+    // The service fails to answer the next command: an outage, as the
+    // session would hear it.
+    app.fight
+        .outcome_tx
+        .send(FightOutcome::ActionFailed)
+        .expect("the session is listening");
+    wait_for_render_contains(&mut app, "the static is not answering").await;
+
+    // Esc is not a run then: the scene closes and the street is back.
+    app.handle_input(b"\x1b");
+    wait_for_render_not_contains(&mut app, " the end of the row ").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains(" Undercity "),
+        "expected the street under the closed scene; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
 async fn esc_in_a_fight_is_a_run() {
     use crate::app::deadchannel::fight::data::{RUN_FAILED_LINES, RUN_LINES};
     use crate::app::deadchannel::runner::state::Look;

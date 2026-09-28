@@ -182,15 +182,15 @@ their header comments, and this section is where they now lead.
 
 ### Settled decisions (do not re-litigate)
 
-- **Badge pairs, 20k/40k chips, one payout per run and one per week per
-  milestone** (decided 2026-08-26; they were 10k/20k once per lifetime until
-  migration 158), mirroring the original NetHack pair. DCSS's Orb *pickup* was chosen over first rune
+- **Badge pairs, 20k/40k chips, one payout per run and at most one per
+  30 days per milestone** (migrations 158 and 208), mirroring the original
+  NetHack pair. DCSS's Orb *pickup* was chosen over first rune
   deliberately: it is the exact twin of the Amulet badge. **Every line grants
   only its own milestone.** A DCSS or NetHack win never back-grants the pickup
-  it implies (decided 2026-08-27: the back-grant carried the win line's own key,
-  so once the pickup's 7-day window had passed it paid the pickup a second
-  time; and a pickup the milestone stream missed is an ingest bug to surface,
-  not to patch from the win line). Brogue's Escaped/Mastered are alternative
+  it implies: a back-grant would carry the win line's own key, so once the
+  pickup's 30-day window had passed it would pay the pickup a second time;
+  and a pickup the milestone stream missed is an ingest bug to surface,
+  not to patch from the win line. Brogue's Escaped/Mastered are alternative
   endings and grant only themselves for the same reason. The chat-label
   collapse is a display convention and implies nothing about granting.
 - **Boards per door are uniform**: Wins (all-time), Deepest dive and Top score

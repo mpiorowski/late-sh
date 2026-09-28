@@ -3,7 +3,6 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, the equalizer (live CLI spectrum with an ambient fallback), and now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the music/audio touchpoints it owns in `late-cli` and `late-web/src/pages/listen`
-- Last updated: 2026-09-14 (The equalizer draws 16-band `viz` frames (an older CLI's 8 are stretched at the parse and counted by `late_ssh_pair_viz_frames_total`), meters them against a running mean and swing in `Spectrum`, and draws each peak as a faint ghost up to a cap that holds, then falls (`theme::EQ_GHOST`), on the sidebar and both Zen tiles through `viz::dance_lines`. On Linux the CLI captures the `late-webview` helper's audio, so YouTube draws live bars too. See §10 and §18.)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 

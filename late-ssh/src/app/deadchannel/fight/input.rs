@@ -42,15 +42,18 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
 
 /// Esc over the scene. There is no stepping out of a fight: while it is on,
 /// Esc is the run, dice and free swing included; a finished scene closes;
-/// an answer already pending is left to land.
+/// an answer already pending is left to land. A scene whose last answer
+/// was the service failing closes too, the fight left on the row: an
+/// outage is not a fight to be trapped in.
 pub fn handle_escape(app: &mut App) {
     let Some(scene) = &app.fight.scene else {
         return;
     };
-    match (scene.over, scene.waiting) {
-        (true, _) => app.fight.close(),
-        (false, true) => {}
-        (false, false) => {
+    match (scene.over, scene.waiting, scene.failed) {
+        (true, _, _) => app.fight.close(),
+        (false, true, _) => {}
+        (false, false, true) => app.fight.close(),
+        (false, false, false) => {
             app.fight.request(Command::Run);
         }
     }

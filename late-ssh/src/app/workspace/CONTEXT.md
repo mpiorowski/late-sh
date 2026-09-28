@@ -2,7 +2,6 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/workspace`, the backtick workspace cycle: the one key that hops the base page (Home chat or Zen), your-turn daily boards, seated house tables, unfinished Arcade dailies, and live door games.
-- Last updated: 2026-09-15 (the chain has a base: `App::workspace_base`, Home or Zen, recorded where you crossed into the games; the wrap and every stop's Esc return go there, and Zen answers backtick like Home. See §1 and the `cycle.rs` row; `input_flow_test.rs` pins the Zen round trips)
 - Parent context: root `CONTEXT.md`. The legs' own domains: `lobby/daily/CONTEXT.md`, `lobby/house/CONTEXT.md`, `arcade/CONTEXT.md`, and the per-door contexts under `door/` (e.g. `door/darkroom/CONTEXT.md`, `door/nethack/CONTEXT.md`).
 - Status: Active
 

@@ -3,7 +3,6 @@
 ## Metadata
 - Domain: late.sh voice channels — LiveKit-backed CLI voice, SSH TUI controls/status, and pair-WS voice control
 - Primary audience: LLM agents working in `late-ssh/src/app/voice`, `late-cli/src/voice.rs`, or pair-WS voice messages
-- Last updated: 2026-08-15 (A room ban now refuses a voice ticket: `checked_join_ticket` checks `RoomBan` alongside membership, so a ban takes the microphone and not just the chat. This is what makes a stream owner's `/ban` bite, since a public room can be re-entered from the rail; see §3/§5 and `../stream/CONTEXT.md` §6)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../../../../late-cli/CONTEXT.md`, `../audio/CONTEXT.md`

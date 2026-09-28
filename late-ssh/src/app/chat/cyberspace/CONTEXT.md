@@ -3,7 +3,6 @@
 ## Metadata
 - Domain: late.sh as a personal client for cyberspace.online: the Cyberspace rail entry/pane, `/cs` commands, account linking, and the typed v1 API client
 - Primary audience: LLM agents working in `late-ssh/src/app/chat/cyberspace`, the `/cs` commands, the `cyberspace_accounts` table, or the AI blocklist for cyberspace.online URLs
-- Last updated: 2026-08-19 (a chat room opens in reading mode and `i`/Enter focuses its composer, section 9; Enter on a `chat_mention` notification pins and opens the room it names, and the observed notification payloads are written down in section 6b; room and conversation history pages are their cap of 100)
 - Status: Active (v1)
 - Parent context: `../CONTEXT.md` (chat), root `../../../../../CONTEXT.md`
 - Related context: `../news/` (`is_ai_blocklisted_url` lives in `news/svc.rs`)

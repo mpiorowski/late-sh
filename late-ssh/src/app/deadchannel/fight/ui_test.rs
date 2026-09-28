@@ -84,6 +84,7 @@ fn the_scene_shows_both_faces_the_exchange_and_the_keys() {
         over: false,
         waiting: false,
         old_signal: false,
+        failed: false,
     };
     let screen = render(&sheet, &scene, 0).join("\n");
     assert!(screen.contains("the end of the row"), "{screen}");
@@ -127,6 +128,7 @@ fn at_the_bottom() -> (Sheet, Scene) {
         over: false,
         waiting: false,
         old_signal: true,
+        failed: false,
     };
     (sheet, scene)
 }

@@ -6,8 +6,7 @@
   start of the character layer, the runner and its look, in `runner/`
   (phase 2, build order step 1), the night city street in `city/`
   (the wallet, GAME.md "The three surfaces"; art and walkable street
-  first, under the clubhouse on a second `0`, runners only, no
-  transactions yet), and the fight in `fight/` (the runner's sheet on
+  first, under the clubhouse on a second `0`, runners only), and the fight in `fight/` (the runner's sheet on
   the row, the lazy day roll, the ration fight against a glyph at the
   screen, the wire's news lines, the armorer's till; §3c) and the
   tailor in `tailor/` (the mirror as the look's editor, the look's writer
@@ -15,35 +14,6 @@
   several replicas (root CONTEXT.md, multi-replica rule); gated behind
   the `haunt_live` fuse, unlit, so only staff (admins and moderators)
   are haunted today, and only they can finish the ladder and join.
-- Last updated: 2026-09-19 (the city moved under the clubhouse: `0` on the clubhouse goes down, runners only; the tile register won and the drawn one left the live script; the street went long, with walkers and running; the renderer lights the street from every lamp and sign, fades it with distance and shadows the walls, in the city's own fixed palette; §3b). Before that, 2026-09-18 (the night city exists: the generated street, the runner as its mark, landmarks with popovers, shop panels showing catalogs without tills). Before that, 2026-09-14 (the breakthrough plays only on a send from
-  its own session and swallows keys ahead of door games; the static rolls
-  slower, scene lengths unchanged). Before that, 2026-09-13 (stage 3
-  plays on its own clock: the static
-  pulses and the line types from the first frames, and every key, Esc
-  included, is swallowed; the invitation no longer arrives cold: once due,
-  the next own send plays the breakthrough, a full-screen static tear with
-  a line naming afterglow, and the DM lands as the line finishes). Before
-  that, 2026-09-09 (pacing retuned so the whole ladder fits a
-  week of daily connects, with every haunt kept: the first clock burst
-  of a session comes 5-20 min in and later ones 20-60 min apart, the
-  name roll is 1-in-3 (the daily cap does the spacing), the whisper gap
-  and the invitation delay are both 20 hours so an evening-to-evening
-  connect never slips a day, and the tenure leg of the gate is 8 hours
-  instead of 168. Before that, 2026-09-05: stage 2 is no longer private: a name hit now
-  travels to every session in the room, on every replica, over the
-  `deadchannel_name_hit` notify on chat's message listener, and each
-  witness replays it once the message is on their screen. Before that,
-  2026-09-04: every deadchannel log line now carries
-  `username` beside `user_id`, and Grafana has a "deadchannel" row over
-  the haunt logs and the three first-contact counters; the runner:
-  `/join #deadchannel` now creates a `deadchannel_runners` row wearing a
-  random level-1 look (pieces and
-  tints from the closed table in `runner/state.rs`), and inside
-  #deadchannel every runner's portrait sits in a six-cell gutter on the
-  right of their messages (hood level with the header, eyes and coat on
-  the body rows under it; a one-liner wears the head only); looks cross replicas
-  through the `deadchannel_runner_changed` notify into a process-shared
-  directory, `runner/svc.rs`)
 - Status: Active, staff only until `/haunt live on`
 - Parent context: `../../../../CONTEXT.md`; design sources live in this
   directory: `GAME.md` (the game: thesis, first contact, the runner) and
@@ -54,8 +24,8 @@
 The game is never announced; it arrives. This domain will grow into the
 whole character layer; what exists today is **first contact**: the
 escalation ladder that onboards a person through haunting instead of a
-tutorial. The chain is the spec, and the ladder never skips a rung
-(counts tuned 2026-09-01, pacing 2026-09-09): three clock bursts quiet
+tutorial. The chain is the spec, and the ladder never skips a rung:
+three clock bursts quiet
 the clock and open stage 2, the third name hit arms the stage-3 whisper
 (it fires on the next fresh connect, and once more on a later day: two
 doors, two different lines), and 20 hours after the second delivered
@@ -121,9 +91,9 @@ number of replicas spend one AI call per text.
 | `city/ui.rs` | Renderer: base styling by zone, the ambience pass (rain, puddles reflecting the nearest sign, neon shorts and dropped letters, window flicker, the screen's static and test pattern with rare glyph frames, steam, lamps, the drop's lights, the blimp, the mast, the bits machine, the wire's pulse), the runner as its mark, the popover, the street line, the shop panels (`armorer_lines` is the live till: the wall with the cursor, what you carry lit, the two keys priced net of the trade-in, the armorer's last word; `patch_lines` is the other: the signal, the price of the gap, the refusal spelled out ahead of the key); hands the sheet strip and the fight scene to `fight/ui.rs`. Its palette helpers (`ink`, `lit`, `glow`, `dim`, `tint_rgb`, the `INK_*` greys) are `pub(crate)` for that. |
 | `fight/data.rs` | The numbers (LoGD's, transcribed: `RATIONS_PER_DAY`, `SIGNAL_PER_LEVEL`, `START_BITS`, `EXP_TO_ADVANCE` with LoGD's per-mark scaling in `exp_to_advance(level, marks)` and `exp_to_seek(marks)`, `FOE_TIERS`, the run odds, `TRADE_IN_PERCENT`, `MARK_BONUS_CAP`; and the two the month-long climb sets, `PAY_SCALE`, what a glyph pays over the table, applied in `foe_for_level`, and `EXP_KEEP_ON_DEATH` at 70%) and the fauna: `FOES`, fifteen glyphs, one per level, each with a name, a five-by-three portrait in the runner's format, and an arrival line; `OLD_SIGNAL` and `OLD_SIGNAL_TIER` (240 / 36 / 22, cut from LoGD's dragon, reason beside it); `title(marks)`; the kill, drop, run, heard, and slain lines. |
 | `fight/state.rs` | The pure machine: `Sheet` (the row's stats and tally, typed, with `peak_level`, `marks`, `mark_bonus`, `signal_hears`; `from_row` rejects an unreadable fight loudly), `Fight` (the `Quarry`, a glyph or the Old Signal, its numbers, and the last six lines, the JSON on the row), the Old Signal's gate in `start` and the reset in `slay` (GAME.md, "Marks: the reset"), `settle(today)` (the lazy day roll), `apply(Command, rng)` over the door's `resolve_round` and `resolve_extra_foe_strike`, plus the armorer's till (`Command::Outfit`, `Slot`, `gear_name`, `outfit_price`, `MAX_TIER`) and patch (`Command::Patch`, `patch_price`), returning an `Outcome` (`Applied` plus the lines), and `news(&Applied)` (the closed `News` list the wire prints for it; §3c). No I/O, no clock. |
-| `fight/svc.rs` | `FightService`, the one writer: lock the standing row, settle, apply, store, commit; the metric, the log line per outcome, and the wire's news (`post_news`: what `Sheet::news` decided, worded; a dropped signal, a level gained with the face, the Old Signal put down with the face, the first kill, a near miss, the last ration's card) through `ChatService::post_wire_line_task`; the mark's chips after an Old Signal kill's commit (`pay_mark`: `ChipService::credit_run_cooldown_reward_template` on the `deadchannel_old_signal_slain` template, 40,000, keyed `<runner row id>:<mark>` and at most once every 30 days per account; the scene's last line says whether the house paid, paid already this month, or failed, the last one logged as an error) and the `SIG` milestone badge (`grant_unique_milestone_award`, once per account). `act_task` and `reload_task` answer on a session's `mpsc`. |
+| `fight/svc.rs` | `FightService`, the one writer: lock the standing row, settle, apply, store, commit; the metric, the log line per outcome, and the wire's news (`post_news`: what `Sheet::news` decided, worded; a dropped signal, a level gained with the face, the Old Signal put down with the face, the first kill, a near miss, the last ration's card) through `ChatService::post_wire_line_task`; the mark's chips after an Old Signal kill's commit (`pay_mark`: `ChipService::credit_run_cooldown_reward_template` on the `deadchannel_old_signal_slain` template, 40,000, keyed `<runner row id>:<mark>` and at most once every 30 days per account; the answer's last line says whether the house paid, paid already this month, or failed; each outcome is counted (`late_ssh_deadchannel_old_signal_payouts_total`) and the failure logged as an error. The debt is durable: the kill writes the mark to `unpaid_mark` in its own transaction (migration 210), a paid or refused grant settles it (`DeadchannelRunner::settle_mark`), and a grant that erred leaves it standing, so the next command or reload on the row calls `pay_mark` again with the same event key; the unique gate makes the repeat safe) and the `SIG` milestone badge (`grant_unique_milestone_award`, once per account). `act_task` and `reload_task` answer on a session's `mpsc`. |
 | `fight/sim.rs` | The balance harness: a `Player` (a run line and a patch line, `CAREFUL` and `RECKLESS` named) played through the real `Sheet` from a fresh row with seeded dice, `climb` (the day of every level, the gate, the mark, the drops, the boss tries), `median`, `summary`. `sim_test.rs` pins GAME.md's target (three weeks to the first mark careful, four reckless) and prints the whole ladder when it misses. Pure. |
-| `fight/session.rs` | `FightSession`, the session's side: the sheet mirror, the `Scene` over the street (lines, `over`, `waiting`, `old_signal` set from the row's quarry when a fight starts or resumes and kept until the scene closes), the `till` line (an answer that lands with no scene open), one action in flight, `open` / `close` / `clear_till` / `request` / `reload` / `drop_sheet` / `tick`. Decides nothing. |
+| `fight/session.rs` | `FightSession`, the session's side: the sheet mirror, the `Scene` over the street (lines, `over`, `waiting`, `failed` while the last answer was the service not answering, `old_signal` set from the row's quarry when a fight starts or resumes and kept until the scene closes), the `till` line (an answer that lands with no scene open), one action in flight, `open` / `close` / `clear_till` / `request` / `reload` / `drop_sheet` / `tick`. Decides nothing. |
 | `fight/input.rs` | Keys while the scene is open: `a` attack, `r` run, Enter closes a finished scene; digits, Tab, `q` stay global (`?` is the guide's, taken in `city/input.rs` first), everything else is swallowed. |
 | `fight/ui.rs` | `draw_scene` (two portraits facing, each losing cells to static in proportion to its missing signal, `corrupt`; the bars; the exchange; the keys; dressed a glyph's way or the Old Signal's, `Dress`: the whole area in red, `noise_line` on the empty rows, `tear` on the border, the box leaning a column with the tick while it broadcasts) and `draw_strip` (level, signal, rations, bits, the weapon and the armor by name, top-right on the street); `weapon_name` / `armor_name` (`bare hands`, `street clothes` at tier 0) for every readout that names the kit. Pure. |
 | `tailor/state.rs` | `Draft`, the mirror's editor over one `Look` at the runner's `peak_level`: four `Row`s (hood, eyes, coat, mark), `up` / `down`, `next` / `prev` around the row's unlocked rack (wrapping), `tint` around the unlocked tints (nothing on the mark row: a colored mark is earned), `shuffle` (the join's dice at the peak); `new` snaps a piece or tint the peak has not unlocked onto the rack's first entry, so the walks never meet one they cannot place. Pure. |
@@ -240,7 +210,7 @@ no face; every other room renders exactly as before.
    while the claim is out, and the label corrupts on the tick the claim
    comes back won. The corruption rides the chat rows cache key, so
    start and heal rebuild rows exactly once. Chosen only.
-   **The room watches (2026-09-05).** The hit is no longer private to the
+   **The room watches.** The hit is not private to the
    session that rolled it: a won (or forced) hit goes onto the
    `deadchannel_name_hit` wire and every session in that room replays it
    on the same name. Rolling, capping, and claiming are unchanged and
@@ -269,13 +239,13 @@ no face; every other room renders exactly as before.
    `FirstContactMarks::whisper_due` holds (under the cap, and the last
    delivery a day or more ago): the haunting follows you home, and comes
    back. The splash neither skips nor expires while held,
-   and since 2026-09-13 the scene waits on nobody: the static pulses on its
+   and the scene waits on nobody: the static pulses on its
    own rhythm (~1.3s, each noise pattern held ~130ms) from the first
    frame, the voiced line types itself once
    the base splash line is done (`VOICE_TICK`), the skip hint dissolves as
    it starts, and every key, Esc included, is swallowed and does nothing
-   (without a keypress the old scene was a quiet line under the cup, and
-   people were missing the door). A hard cap (~10s) releases whatever the
+   (a scene that waits on a keypress reads as a quiet line under the cup,
+   and people miss the door). A hard cap (~10s) releases whatever the
    phase. Delivery claims
    one mark (`claim_first_contact_whisper`: increments
    `first_contact_whisper_hits` and stamps `first_contact_whisper_at`,
@@ -288,8 +258,8 @@ no face; every other room renders exactly as before.
 4. **Breakthrough, then the invitation (the whole game is opt-in).**
    `INVITE_DELAY_HOURS` (20) after the second delivered whisper the
    breakthrough comes due (`FirstContactMarks::breakthrough_due`), and the
-   next send this session submits plays it (added 2026-09-13: the DM
-   alone, met cold, was taken for spam). Only a `SendSucceeded` for a
+   next send this session submits plays it (the DM
+   alone, met cold, reads as spam). Only a `SendSucceeded` for a
    request this session submitted counts, never the same person's send
    from another device: every session of a user hears every send, and an
    idle one would play the scene to nobody. The send asks
@@ -331,8 +301,7 @@ no face; every other room renders exactly as before.
    is reserved in `normalize_topic_slug` (late-core `chat_room.rs`,
    beside the `lounge` reservation, case-insensitive, refusal message
    "only static on that channel") so no user-created room can be waiting
-   where the invitation points. **The invitation is the key (decided
-   and built 2026-09-01):** `ChatService::open_public_room` routes the
+   where the invitation points. **The invitation is the key:** `ChatService::open_public_room` routes the
    `deadchannel` slug (case-insensitive) into `join_deadchannel_room`,
    which requires `first_contact_invited_at`; without the stamp the
    caller gets the same static line the reserved slug gives, so from
@@ -399,14 +368,13 @@ till; every other counter is a catalog with its till shut.
   or a wire beat in this domain updates `guide/data.rs` in the same
   change, and `guide/ui_test.rs` renders every line, so a stale guide is
   a failed review, not a follow-up.
-- **The register (decided 2026-09-19): tiles.** Top-down, one tile per
+- **The register: tiles.** Top-down, one tile per
   thing, the Dwarf Fortress register. `#` walls, `+` doors, `╬` windows
   that flicker, `=` counters, `)` blades, `[` plate, `"` marks, `!`
   bottles, `%` bowls, `∩` lockers, `▬` beds, `▪` crates, `▓` shutters and
   cabinets, `≈` water, `@` people, `c` cats, `r` rats, `>` stairs, `*`
-  lamps, `°` lanterns, `≡` grates that steam. The first pass drew the
-  street front-on with multi-cell facades; it read as a plaza and was
-  dropped (git history has it). A 440-column street in three legs with a dogleg between
+  lamps, `°` lanterns, `≡` grates that steam. Not front-on with
+  multi-cell facades: that reads as a plaza. A 440-column street in three legs with a dogleg between
   each (the camera scrolls), four tiles wide, alleys one to three wide
   running off it (dead ends, a hidden court with a shrine and a plant, a
   back lane behind the second leg reached from its two end alleys and the
@@ -425,7 +393,7 @@ till; every other counter is a catalog with its till shut.
   prove every path is open floor. Rule: every shop with a sign has a
   door somewhere in its walls (the generator refuses a signed shop
   without one); what happens inside can be shuffled or removed later.
-- **Light (2026-09-19).** Blade Runner, not cyberpunk: the street is
+- **Light.** Blade Runner, not cyberpunk: the street is
   dark and every color has a source. `map::LIGHTS` is every light on the
   street, found by the generator scanning the finished grid (a `*` is a
   lamp, a `°` a lantern, `$` `♪` `?` machines, `_` candles, `>` stairs)
@@ -465,8 +433,8 @@ till; every other counter is a catalog with its till shut.
   each in dark steel and scrolls a line of street copy across it in the
   board's neon (`BILLBOARD_LINES`, one line per `BILLBOARD_CYCLE`, dark
   for a moment between, a letter flickering); each is a
-  `LightKind::Billboard` in the light map. The first cut was two rows of
-  the glyph script and read as floating blocks of noise. Raindrops
+  `LightKind::Billboard` in the light map. Not the glyph script: two rows
+  of it read as floating blocks of noise. Raindrops
   landing on a puddle throw an `o`. Rain falls in two columns of three
   on every bare cell under the sky, the street, the drop and the void
   between the blocks alike, dim where the light is dim, and never inside
@@ -587,8 +555,9 @@ p patch · ? guide`, `render.rs::app_frame_title`).
   finds the same fight. There is no stepping out: Esc over a live scene
   is `Run` (`fight/input.rs::handle_escape`), the root's `dispatch_escape`
   hands it there before the panel arm; only a finished scene closes on
-  Esc, and only leaving the page (`0`, a leave) closes a live one, the
-  fight staying on the row. `Attack` is one `resolve_round`: your hit, its answer, both signed
+  Esc, or one whose last answer was the service failing (`Scene::failed`:
+  an outage is not a fight to be trapped in), and otherwise only leaving
+  the page (`0`, a leave) closes a live one, the fight staying on the row. `Attack` is one `resolve_round`: your hit, its answer, both signed
   (a glance heals, as upstream). `Run` gets away two times in three; a
   failed run takes a free strike. `Won` pays the glyph's bits and exp and
   clears the fight; `Lost` (signal at zero) takes every bit on hand and

@@ -2,7 +2,6 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/games`
-- Last updated: 2026-09-20 (the rules layer no longer takes `snookered`: a foul returns `free_ball_if_snookered` and the caller settles it against the re-spotted table, and snooker's on-a-colour phase now reads a nominated ball on rather than the whole legal-target list. `Foul::MultiplePotted` is new.) Previously: 2026-09-10 (snooker joined `pool_core` as a third ruleset: `rules_snooker.rs`, the `SNOOKER_12FT` table, and its own ball id range. Also the shooter's-eye `table_3d.rs`.) Previously: 2026-09-09 (added `pool_core`: the billiard kernel behind daily eight-ball and nine-ball)
 - Purpose: shared game-domain primitives and services used across game surfaces (Arcade, the house tables in `app/lobby/house`, and the Daily correspondence domain in `app/lobby/daily`).
 
 ## Source Map

@@ -11,7 +11,7 @@ use crate::app::deadchannel::fight::data::RATIONS_PER_DAY;
 use crate::app::deadchannel::fight::state::{Applied, Command, Sheet, Slot};
 use crate::app::deadchannel::runner::state::Look;
 use crate::app::games::chips::svc::ChipService;
-use crate::test_helpers::new_test_db;
+use crate::test_helpers::{age_payout_claims, new_test_db};
 
 async fn runner_and_service(
     name: &str,
@@ -319,15 +319,7 @@ async fn putting_the_old_signal_down_resets_the_row_and_pays_once_a_month() {
     );
 
     // Past the month, mark 3 pays again.
-    client
-        .execute(
-            "UPDATE game_payout_claims
-             SET created = created - make_interval(days => 31)
-             WHERE user_id = $1 AND game = 'deadchannel'",
-            &[&user_id],
-        )
-        .await
-        .expect("age the claims");
+    age_payout_claims(&test_db.db, user_id, 31).await;
     let third = kill_the_old_signal(&svc, &client, user_id).await;
     assert_eq!(third.applied, Applied::Slain { marks: 3 });
     assert_eq!(
@@ -343,4 +335,102 @@ async fn putting_the_old_signal_down_resets_the_row_and_pays_once_a_month() {
         vec![pay, pay],
         "one ledger row per paid mark, none for the month's second"
     );
+}
+
+/// The grant erroring after the kill's commit: the mark and the badge land,
+/// the scene says the till is jammed, and the row keeps the debt. The next
+/// command on the row pays it, once; the one after finds nothing owed.
+#[tokio::test]
+async fn a_jammed_till_owes_the_mark_until_the_next_command_pays_it() {
+    use crate::app::deadchannel::fight::data::OLD_SIGNAL_TILL_JAMMED_LINE;
+    use late_core::models::chips::{ChipLedgerEntry, ChipMove, INITIAL_CHIP_BALANCE, UserChips};
+    use late_core::models::profile_award::list_profile_awards_for_user;
+    use late_core::models::reward::DEADCHANNEL_OLD_SIGNAL_REWARD_KEY;
+
+    let (test_db, user_id, svc) = runner_and_service("fight-svc-jammed-till").await;
+    let client = test_db.db.get().await.expect("db client");
+    UserChips::ensure(&client, user_id).await.expect("a wallet");
+    // The one way to make the grant error from outside: no active
+    // template to read. Set straight from the table, as no code path
+    // retires a template.
+    let set_template_active = |active: bool| {
+        let client = &client;
+        async move {
+            client
+                .execute(
+                    "UPDATE reward_templates SET active = $2 WHERE key = $1",
+                    &[&DEADCHANNEL_OLD_SIGNAL_REWARD_KEY, &active],
+                )
+                .await
+                .expect("set the template");
+        }
+    };
+    let paid_rows = |entries: Vec<ChipLedgerEntry>| {
+        entries
+            .into_iter()
+            .filter(|entry| entry.chip_move() == Some(ChipMove::OldSignalSlain))
+            .count()
+    };
+
+    set_template_active(false).await;
+    let kill = kill_the_old_signal(&svc, &client, user_id).await;
+    assert_eq!(kill.applied, Applied::Slain { marks: 1 });
+    assert_eq!(
+        kill.lines.last().map(String::as_str),
+        Some(OLD_SIGNAL_TILL_JAMMED_LINE)
+    );
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!((row.level, row.marks), (1, 1), "the reset and the mark land");
+    assert_eq!(row.unpaid_mark, Some(1), "the row keeps the debt");
+    assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE);
+    let awards = list_profile_awards_for_user(&client, user_id)
+        .await
+        .expect("awards");
+    assert_eq!(awards.len(), 1, "the badge lands whatever the till did");
+
+    // The till works again: the next command on the row, whatever it is,
+    // pays the mark and says so under its own answer.
+    set_template_active(true).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.act_task(user_id, "mira".to_string(), Command::Patch, tx.clone());
+    let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
+        panic!("a patch answers with the sheet");
+    };
+    assert!(
+        matches!(outcome.applied, Applied::Refused(_)),
+        "nothing to patch on a fresh runner: {:?}",
+        outcome.applied
+    );
+    assert_eq!(
+        outcome.lines.last().map(String::as_str),
+        Some("the house pays 40,000 chips for the broadcast.")
+    );
+    assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE + 40_000);
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!(row.unpaid_mark, None, "the debt is settled");
+
+    // Nothing owed: the command after answers on its own, and pays nothing.
+    svc.act_task(user_id, "mira".to_string(), Command::Patch, tx.clone());
+    let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
+        panic!("a patch answers with the sheet");
+    };
+    assert!(
+        outcome
+            .lines
+            .iter()
+            .all(|line| !line.contains("the house pays")),
+        "{:?}",
+        outcome.lines
+    );
+    assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE + 40_000);
+    let ledger = UserChips::recent_ledger(&client, user_id, 20)
+        .await
+        .expect("ledger");
+    assert_eq!(paid_rows(ledger), 1, "one ledger row for the healed mark");
 }

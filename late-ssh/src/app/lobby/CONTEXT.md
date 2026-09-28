@@ -2,7 +2,6 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/lobby` — the single front door for multiplayer play: the `Ctrl+G` modal and the two game domains it fronts (`daily/` async correspondence matches, `house/` live fixed tables).
-- Last updated: 2026-09-01 (the backtick workspace cycle moved out to its own domain, `app/workspace/` with `workspace/CONTEXT.md`; the Lobby keeps its two legs' queries, `DailyState::my_turn_matches` and `HouseState::my_seated_tables`)
 - Parent context: root `CONTEXT.md`. Sub-domain contexts: `daily/CONTEXT.md`, `house/CONTEXT.md` — this file owns only what spans both.
 - Status: Active
 

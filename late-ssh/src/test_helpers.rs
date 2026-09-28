@@ -1003,6 +1003,23 @@ pub fn with_session_key(mut app: App, fingerprint: &str) -> App {
     app
 }
 
+/// Walk every `game_payout_claims` row this account holds `days` into the
+/// past, so a test crosses a template's lockout window without sleeping.
+/// The one place the tests reach into that table: the window is read off
+/// `created`, and nothing in the app moves it.
+pub async fn age_payout_claims(db: &Db, user_id: Uuid, days: i32) {
+    let client = db.get().await.expect("db client");
+    client
+        .execute(
+            "UPDATE game_payout_claims
+             SET created = created - make_interval(days => $2)
+             WHERE user_id = $1",
+            &[&user_id, &days],
+        )
+        .await
+        .expect("age payout claims");
+}
+
 pub async fn wait_until<F, Fut>(mut predicate: F, label: &str)
 where
     F: FnMut() -> Fut,
