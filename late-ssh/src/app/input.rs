@@ -3940,6 +3940,9 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                     // The first descent opens the guide by itself, once
                     // per runner (`app/deadchannel/guide`).
                     app.guide.descend();
+                    // On the shared street from here until the session
+                    // ends (`deadchannel/street`).
+                    app.street.descend();
                     Screen::City
                 }
                 _ => Screen::Clubhouse,

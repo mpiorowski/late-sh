@@ -188,4 +188,7 @@ pub struct State {
     /// replica over Postgres so the #deadchannel portraits agree everywhere.
     /// See `app/deadchannel/runner`.
     pub runner_looks: crate::app::deadchannel::runner::svc::RunnerLookService,
+    /// The night city street (`app/deadchannel/street`): this replica's
+    /// runners and every other replica's, over Postgres.
+    pub street: crate::app::deadchannel::street::svc::StreetService,
 }

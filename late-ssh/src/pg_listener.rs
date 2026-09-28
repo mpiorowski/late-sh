@@ -28,6 +28,7 @@ use late_core::models::{
     crown::CROWN_CHANGED_CHANNEL,
     deadchannel_name_hit::DEADCHANNEL_NAME_HIT_CHANNEL,
     deadchannel_runner::DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
+    deadchannel_street::DEADCHANNEL_STREET_CHANNEL,
     marketplace::{SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL},
     pot::POT_CHANGED_CHANNEL,
     quest::{QUEST_ASSIGNMENTS_CHANGED_CHANNEL, QUEST_USER_CHANGED_CHANNEL},
@@ -113,6 +114,7 @@ pub enum Channel {
     CrownChanged,
     DeadchannelNameHit,
     DeadchannelRunnerChanged,
+    DeadchannelStreet,
     PotChanged,
     QuestAssignmentsChanged,
     QuestUserChanged,
@@ -121,7 +123,7 @@ pub enum Channel {
 }
 
 impl Channel {
-    pub const ALL: [Channel; 13] = [
+    pub const ALL: [Channel; 14] = [
         Channel::AppFlagChanged,
         Channel::ArticlesChanged,
         Channel::BonsaiChanged,
@@ -130,6 +132,7 @@ impl Channel {
         Channel::CrownChanged,
         Channel::DeadchannelNameHit,
         Channel::DeadchannelRunnerChanged,
+        Channel::DeadchannelStreet,
         Channel::PotChanged,
         Channel::QuestAssignmentsChanged,
         Channel::QuestUserChanged,
@@ -148,6 +151,7 @@ impl Channel {
             Channel::CrownChanged => CROWN_CHANGED_CHANNEL,
             Channel::DeadchannelNameHit => DEADCHANNEL_NAME_HIT_CHANNEL,
             Channel::DeadchannelRunnerChanged => DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
+            Channel::DeadchannelStreet => DEADCHANNEL_STREET_CHANNEL,
             Channel::PotChanged => POT_CHANGED_CHANNEL,
             Channel::QuestAssignmentsChanged => QUEST_ASSIGNMENTS_CHANGED_CHANNEL,
             Channel::QuestUserChanged => QUEST_USER_CHANGED_CHANNEL,

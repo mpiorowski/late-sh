@@ -312,6 +312,9 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         scratchpad_registry: crate::app::scratchpad::registry::SharedScratchpadRegistry::new(),
         app_flags: crate::app::flags::svc::AppFlagService::new(db.clone()),
         runner_looks: crate::app::deadchannel::runner::svc::RunnerLookService::new(db.clone()),
+        street: crate::app::deadchannel::street::svc::StreetService::detached(
+            crate::app::deadchannel::street::state::StreetView::new(),
+        ),
         username_directory,
         flair_directory: crate::app::common::username_effect::new_directory(),
         crown_service: crate::app::crown::svc::CrownService::new(db.clone()),
@@ -701,6 +704,9 @@ fn make_app_with_chat_service_and_permissions(
         runner_looks_rx: crate::app::deadchannel::runner::svc::fixed_looks_rx(
             std::collections::HashMap::new(),
         ),
+        street: crate::app::deadchannel::street::svc::StreetService::detached(
+            crate::app::deadchannel::street::state::StreetView::new(),
+        ),
         zen_layout: None,
         // No SSH key: test apps follow the account default and persist no
         // per-device layout, which is also what ghost bot sessions do.
@@ -967,6 +973,9 @@ pub fn make_app_with_paired_client(
         app_flags: None,
         runner_looks_rx: crate::app::deadchannel::runner::svc::fixed_looks_rx(
             std::collections::HashMap::new(),
+        ),
+        street: crate::app::deadchannel::street::svc::StreetService::detached(
+            crate::app::deadchannel::street::state::StreetView::new(),
         ),
         zen_layout: None,
         // No SSH key: test apps follow the account default and persist no

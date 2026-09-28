@@ -225,6 +225,21 @@ pub enum TailorBeat {
     Failed,
 }
 
+/// What the night city street's wire did (`app/deadchannel/street`):
+/// `Published` a notify sent, `PublishFailed` one that did not land (the
+/// next heartbeat carries it again), `Heard` another replica's batch
+/// folded in, `Rejected` a payload that failed to parse, `Expired` a
+/// remote runner dropped because its replica went quiet (a dead replica,
+/// or a leaver missed across a LISTEN reconnect).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreetWire {
+    Published,
+    PublishFailed,
+    Heard,
+    Rejected,
+    Expired,
+}
+
 /// A stage of a session's start, from TCP accept to the first frame on
 /// the user's screen. `Total` is the whole span; the other three add up
 /// to it.
@@ -369,7 +384,7 @@ mod inner {
         PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
         Presence, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen,
         SessionStartStage, SessionUser, SongQueueReward, SshRejectReason, SummaryResult,
-        TailorBeat, TranslationResult, VizWireBands,
+        StreetWire, TailorBeat, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -1071,6 +1086,16 @@ mod inner {
         })
     }
 
+    fn deadchannel_street_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_deadchannel_street_total")
+                .with_description("night city street presence on the wire, by beat")
+                .build()
+        })
+    }
+
     fn deadchannel_tailor_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -1189,6 +1214,20 @@ mod inner {
 
     pub fn record_deadchannel_tailor(beat: TailorBeat) {
         deadchannel_tailor_total().add(1, &[KeyValue::new("beat", tailor_beat_label(beat))]);
+    }
+
+    fn street_wire_label(beat: StreetWire) -> &'static str {
+        match beat {
+            StreetWire::Published => "published",
+            StreetWire::PublishFailed => "publish_failed",
+            StreetWire::Heard => "heard",
+            StreetWire::Rejected => "rejected",
+            StreetWire::Expired => "expired",
+        }
+    }
+
+    pub fn record_deadchannel_street(beat: StreetWire) {
+        deadchannel_street_total().add(1, &[KeyValue::new("beat", street_wire_label(beat))]);
     }
 
     pub fn record_deadchannel_fight(beat: FightBeat) {
@@ -2190,7 +2229,7 @@ mod inner {
         PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
         Presence, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen,
         SessionStartStage, SessionUser, SongQueueReward, SshRejectReason, SummaryResult,
-        TailorBeat, TranslationResult, VizWireBands,
+        StreetWire, TailorBeat, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
@@ -2200,6 +2239,7 @@ mod inner {
     pub fn record_deadchannel_fight(_beat: FightBeat) {}
     pub fn record_deadchannel_old_signal_payout(_payout: OldSignalPayout) {}
     pub fn record_deadchannel_tailor(_beat: TailorBeat) {}
+    pub fn record_deadchannel_street(_beat: StreetWire) {}
     pub fn record_runner_door(_door: RunnerDoor) {}
     pub fn record_first_contact_bio_screen(_outcome: BioScreenOutcome) {}
     pub fn record_first_contact_gate(_verdict: GateVerdict, _staff: bool) {}

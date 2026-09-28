@@ -162,11 +162,21 @@ impl App {
             // still lands within 132ms of its tick.
             changed = true;
         }
+        // This session's runner on the shared street: a send only when it
+        // moved or the session looked away from the page, so leaving the
+        // city dims the runner for everyone (`deadchannel/street`).
+        self.street.sync(
+            self.city.player_x,
+            self.city.player_y,
+            self.screen == Screen::City,
+        );
         if self.screen == Screen::City && anim_half {
             // Rain, neon, steam and the screen's static ride the same
             // ~7.5fps ambience edge as the clubhouse; the runner's steps
-            // are input-driven.
+            // are input-driven, the other runners' arrive on the street's
+            // watch and land on the same edge.
             self.city.tick(self.marquee_tick as u64);
+            self.street.refresh();
             changed = true;
         }
 
@@ -781,6 +791,9 @@ impl App {
                 // other replica. This edge is the only place in the process
                 // that can notice: the gate on `0` guards the descent, not
                 // the standing there.
+                if !self.is_runner() {
+                    self.street.leave();
+                }
                 if self.screen == Screen::City && !self.is_runner() {
                     self.fight.close();
                     self.tailor.close();

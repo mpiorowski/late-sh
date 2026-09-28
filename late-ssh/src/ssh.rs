@@ -1075,6 +1075,7 @@ impl russh::server::Handler for ClientHandler {
             app_flags_rx: self.state.app_flags.subscribe(),
             app_flags: Some(self.state.app_flags.clone()),
             runner_looks_rx: self.state.runner_looks.subscribe(),
+            street: self.state.street.clone(),
             zen_layout: late_core::models::user::extract_zen_layout(&user.settings),
             key_fingerprint,
             key_layout: device.layout,

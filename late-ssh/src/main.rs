@@ -371,6 +371,13 @@ async fn main() -> anyhow::Result<()> {
     let _runner_look_notify_task = runner_look_service.start_notify_worker(
         pg_listener.subscribe(late_ssh::app::deadchannel::runner::svc::RunnerLookService::CHANNELS),
     );
+    // The night city street: this replica's runners go out batched over
+    // `pg_notify`, every other replica's come in through the listener. See
+    // `app/deadchannel/street/svc.rs`.
+    let street_service = late_ssh::app::deadchannel::street::svc::StreetService::start(
+        db.clone(),
+        pg_listener.subscribe(late_ssh::app::deadchannel::street::svc::StreetService::CHANNELS),
+    );
     // The crown's glyph crosses replicas over Postgres, not over any
     // in-process broadcast; the listener also seeds this replica's holder on
     // every (re)connect. See `app/crown/svc.rs`.
@@ -515,6 +522,7 @@ async fn main() -> anyhow::Result<()> {
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         app_flags: app_flag_service.clone(),
         runner_looks: runner_look_service.clone(),
+        street: street_service,
     };
 
     let session_shutdown = CancellationToken::new();

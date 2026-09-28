@@ -392,6 +392,9 @@ pub struct SessionConfig {
     /// tick edge into `App::runner_looks` for the #deadchannel portraits.
     pub(crate) runner_looks_rx:
         tokio::sync::watch::Receiver<crate::app::deadchannel::runner::svc::RunnerLooks>,
+    /// The replica's night city street (`app/deadchannel/street`): who
+    /// stands where, across every replica.
+    pub street: crate::app::deadchannel::street::svc::StreetService,
     /// The stored Rice layout (`app/zen`), `None` until first edited.
     pub zen_layout: Option<serde_json::Value>,
     /// Fingerprint of the SSH key this session authenticated with: the only
@@ -553,6 +556,9 @@ pub struct App {
     /// The night city page (`app/deadchannel/city`): where the runner
     /// stands, the open shop panel, the street's last line.
     pub(crate) city: crate::app::deadchannel::city::state::State,
+    /// This session's runner on the shared street and its copy of everyone
+    /// else's (`app/deadchannel/street/session.rs`).
+    pub(crate) street: crate::app::deadchannel::street::session::StreetSession,
     /// Chips backend, kept for the clubhouse's on-the-house welcome pour.
     pub(crate) chip_service: crate::app::games::chips::svc::ChipService,
     /// Staff bot ids from the active-users map, for speech bubbles and the
@@ -1498,6 +1504,10 @@ impl App {
             ),
             nightcap_house: config.nightcap_house,
             city: crate::app::deadchannel::city::state::State::new(),
+            street: crate::app::deadchannel::street::session::StreetSession::new(
+                &config.street,
+                config.user_id,
+            ),
             fight,
             tailor,
             guide,
