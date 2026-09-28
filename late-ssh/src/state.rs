@@ -154,10 +154,9 @@ pub struct State {
     /// so pair-socket floods and SSH connections cap independently.
     pub pair_ws_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
     pub active_users: ActiveUsers,
-    /// Process-global clubhouse presence: who sits where, who is walking.
-    pub clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby,
-    /// Process-global Nightcap seats.
-    pub nightcap_lobby: crate::app::clubhouse::nightcap::lobby::SharedSeats,
+    /// The process's drunk map: a mirror of `user_drinks`, seeded by the
+    /// ghost task and bumped on every pour here (`clubhouse/drunk.rs`).
+    pub drunk_map: crate::app::clubhouse::drunk::DrunkMap,
     pub nightcap_house: crate::app::clubhouse::nightcap::svc::NightcapHouse,
     /// Process-global ghost-bot mention cooldown ladders: ghost responder
     /// loops step them, sessions peek for the composer cooldown banner.
@@ -188,7 +187,8 @@ pub struct State {
     /// replica over Postgres so the #deadchannel portraits agree everywhere.
     /// See `app/deadchannel/runner`.
     pub runner_looks: crate::app::deadchannel::runner::svc::RunnerLookService,
-    /// The night city street (`app/deadchannel/street`): this replica's
-    /// runners and every other replica's, over Postgres.
-    pub street: crate::app::deadchannel::street::svc::StreetService,
+    /// Presence (`app/presence`): who is where in the tavern, on the
+    /// Nightcap stools and on the night city street, this replica's
+    /// sessions and every other replica's, over Postgres.
+    pub presence: crate::app::presence::svc::PresenceService,
 }

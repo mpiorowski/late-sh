@@ -24,7 +24,8 @@ use crate::app::common::textarea_input::{EditOutcome, handle_single_line_edit};
 use crate::app::input::ParsedInput;
 use crate::app::state::App;
 
-use super::lobby::SEAT_COUNT;
+use super::stools::SEAT_COUNT;
+use crate::app::presence::svc::now_ms;
 use super::state::{Drink, Order};
 
 /// The room a seated patron composes into: `None` off a stool, or before
@@ -95,7 +96,7 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             app.music_prefix_armed = false;
             let seat = (byte - b'1') as usize;
             if seat < SEAT_COUNT {
-                app.nightcap.toggle_seat(seat);
+                app.nightcap.toggle_seat(seat, now_ms());
             }
             true
         }

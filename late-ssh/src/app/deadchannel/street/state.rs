@@ -1,21 +1,16 @@
-//! The street as one replica knows it: its own sessions' runners (the
-//! source of what it publishes) and every other replica's, heard off the
-//! wire. Pure: no I/O, no clock reads (every `now_ms` is handed in), so
-//! the whole exchange between replicas is a pair of these driven by hand.
+//! Who stands on the night city street, derived from presence
+//! (`app/presence`), and this session's part of it. Pure: no I/O, no clock
+//! reads (every `now_ms` is handed in).
 //!
-//! Local stands are this replica's truth about its own sessions. Remote
-//! stands are only as good as their last heartbeat: one not heard from in
-//! [`HEARD_TTL_MS`] is dropped, which is how a replica that died (and
-//! could say nothing on the way out) leaves everyone else's street.
+//! The first descent puts the runner on the street and it stays there,
+//! lit while the session looks at the page and dim while it is on another,
+//! until the session ends (presence drops the record) or the runner stops
+//! being one (`leave`, from the runner-directory edge in `tick.rs`).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use late_core::models::deadchannel_street::{Stand, StreetBatch};
+use late_core::models::presence::{PresenceRecord, StreetStand};
 use uuid::Uuid;
-
-/// How long a remote stand holds without a heartbeat. Three heartbeats
-/// and a bit: a single lost notify never blinks a runner out.
-pub const HEARD_TTL_MS: i64 = 10_000;
 
 /// One runner on the street as a session draws it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,183 +22,99 @@ pub struct StreetRunner {
     pub present: bool,
 }
 
-/// What sessions draw from: user id to runner, one per user.
+/// What the city draws from: user id to runner, one per user.
 pub type StreetView = HashMap<Uuid, StreetRunner>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Heard {
-    stand: Stand,
-    heard_at_ms: i64,
-}
-
-#[derive(Debug)]
-pub struct Street {
-    replica_id: Uuid,
-    local: HashMap<Uuid, Stand>,
-    remote: HashMap<Uuid, Heard>,
-    /// Local sessions whose stand changed since the last publish.
-    dirty: HashSet<Uuid>,
-    /// Local sessions gone since the last publish.
-    left: HashSet<Uuid>,
-}
-
-impl Street {
-    pub fn new(replica_id: Uuid) -> Self {
-        Self {
-            replica_id,
-            local: HashMap::new(),
-            remote: HashMap::new(),
-            dirty: HashSet::new(),
-            left: HashSet::new(),
+/// One runner per user across every session on every replica: the cell of
+/// the latest mover (the session id breaks a same-millisecond tie, so every
+/// replica picks the same), present if any session is looking.
+pub fn street_view(records: &[PresenceRecord]) -> StreetView {
+    let mut latest: HashMap<Uuid, (StreetStand, Uuid)> = HashMap::new();
+    let mut present: Vec<Uuid> = Vec::new();
+    for record in records {
+        let Some(stand) = record.street else {
+            continue;
+        };
+        if stand.present {
+            present.push(record.user_id);
+        }
+        match latest.get(&record.user_id) {
+            Some((kept, kept_session))
+                if (kept.moved_at_ms, *kept_session) >= (stand.moved_at_ms, record.session_id) => {}
+            Some(_) | None => {
+                latest.insert(record.user_id, (stand, record.session_id));
+            }
         }
     }
+    latest
+        .into_iter()
+        .map(|(user_id, (stand, _))| {
+            (
+                user_id,
+                StreetRunner {
+                    x: stand.x,
+                    y: stand.y,
+                    present: present.contains(&user_id),
+                },
+            )
+        })
+        .collect()
+}
 
-    /// A local session's runner stands at `(x, y)`, looking or not. The
+/// This session's runner on the street, and its copy of everyone's.
+#[derive(Debug, Default)]
+pub struct StreetPresence {
+    on_street: bool,
+    stand: Option<StreetStand>,
+    /// The derived view the renderer reads.
+    pub view: StreetView,
+}
+
+impl StreetPresence {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The runner goes down: on the street from here until the session
+    /// ends. The next `sync` puts it there.
+    pub fn descend(&mut self) {
+        self.on_street = true;
+    }
+
+    /// Off the street: the runner stopped being one. A later descent (a
+    /// runner again) puts it back.
+    pub fn leave(&mut self) {
+        self.on_street = false;
+        self.stand = None;
+    }
+
+    /// Where the runner stands and whether the session is looking. The
     /// move stamp only moves when the runner does (or arrives), so looking
-    /// away does not win the latest-mover tie for a second device. Returns
-    /// whether anything changed.
-    pub fn stand(
-        &mut self,
-        session_id: Uuid,
-        user_id: Uuid,
-        x: u16,
-        y: u16,
-        present: bool,
-        now_ms: i64,
-    ) -> bool {
-        let moved_at_ms = match self.local.get(&session_id) {
-            Some(old) if (old.x, old.y, old.present) == (x, y, present) => return false,
+    /// away does not win the latest-mover tie for a second device. Nothing
+    /// before the first descent.
+    pub fn sync(&mut self, x: u16, y: u16, present: bool, now_ms: i64) {
+        if !self.on_street {
+            return;
+        }
+        let moved_at_ms = match self.stand {
             Some(old) if (old.x, old.y) == (x, y) => old.moved_at_ms,
             Some(_) | None => now_ms,
         };
-        self.local.insert(
-            session_id,
-            Stand {
-                session_id,
-                user_id,
-                x,
-                y,
-                present,
-                moved_at_ms,
-            },
-        );
-        self.left.remove(&session_id);
-        self.dirty.insert(session_id);
-        true
+        self.stand = Some(StreetStand {
+            x,
+            y,
+            present,
+            moved_at_ms,
+        });
     }
 
-    /// A local session left the street (logged out, or stopped being a
-    /// runner). Returns whether it was on it.
-    pub fn leave(&mut self, session_id: Uuid) -> bool {
-        if self.local.remove(&session_id).is_none() {
-            return false;
-        }
-        self.dirty.remove(&session_id);
-        self.left.insert(session_id);
-        true
+    /// This session's part of its presence record.
+    pub fn stand(&self) -> Option<StreetStand> {
+        self.stand
     }
 
-    /// Fold in what another replica said. This replica's own batches come
-    /// back over the same wire and are ignored: its local stands are
-    /// already the truth. Returns whether anything changed.
-    pub fn hear(&mut self, batch: StreetBatch, now_ms: i64) -> bool {
-        if batch.replica_id == self.replica_id {
-            return false;
-        }
-        let mut changed = false;
-        for stand in batch.stands {
-            let previous = self.remote.insert(
-                stand.session_id,
-                Heard {
-                    stand,
-                    heard_at_ms: now_ms,
-                },
-            );
-            changed |= previous.map(|heard| heard.stand) != Some(stand);
-        }
-        for session_id in batch.left {
-            changed |= self.remote.remove(&session_id).is_some();
-        }
-        changed
-    }
-
-    /// Drop every remote stand not heard from in [`HEARD_TTL_MS`]. Returns
-    /// how many went.
-    pub fn expire(&mut self, now_ms: i64) -> usize {
-        let before = self.remote.len();
-        self.remote
-            .retain(|_, heard| now_ms - heard.heard_at_ms < HEARD_TTL_MS);
-        before - self.remote.len()
-    }
-
-    /// What changed since the last publish, and forget it.
-    pub fn take_changes(&mut self) -> StreetBatch {
-        let stands = self
-            .dirty
-            .drain()
-            .filter_map(|session_id| self.local.get(&session_id).copied())
-            .collect();
-        StreetBatch {
-            replica_id: self.replica_id,
-            stands,
-            left: self.left.drain().collect(),
-        }
-    }
-
-    /// Every local stand (and any leaver not yet published): the
-    /// heartbeat that keeps this replica's runners alive elsewhere and
-    /// fills a replica that just arrived.
-    pub fn take_heartbeat(&mut self) -> StreetBatch {
-        self.dirty.clear();
-        StreetBatch {
-            replica_id: self.replica_id,
-            stands: self.local.values().copied().collect(),
-            left: self.left.drain().collect(),
-        }
-    }
-
-    /// Local sessions on the street right now.
-    pub fn local_count(&self) -> usize {
-        self.local.len()
-    }
-
-    /// One runner per user across every session on every replica: the
-    /// position of the latest mover, present if any session is looking.
-    pub fn view(&self) -> StreetView {
-        let mut latest: HashMap<Uuid, Stand> = HashMap::new();
-        let mut present: HashSet<Uuid> = HashSet::new();
-        let stands = self
-            .local
-            .values()
-            .chain(self.remote.values().map(|heard| &heard.stand));
-        for stand in stands {
-            if stand.present {
-                present.insert(stand.user_id);
-            }
-            // The session id breaks a same-millisecond tie, so every
-            // replica picks the same runner.
-            match latest.get(&stand.user_id) {
-                Some(kept)
-                    if (kept.moved_at_ms, kept.session_id)
-                        >= (stand.moved_at_ms, stand.session_id) => {}
-                Some(_) | None => {
-                    latest.insert(stand.user_id, *stand);
-                }
-            }
-        }
-        latest
-            .into_iter()
-            .map(|(user_id, stand)| {
-                (
-                    user_id,
-                    StreetRunner {
-                        x: stand.x,
-                        y: stand.y,
-                        present: present.contains(&user_id),
-                    },
-                )
-            })
-            .collect()
+    pub fn set_records(&mut self, records: &[PresenceRecord]) {
+        self.view = street_view(records);
     }
 }
 

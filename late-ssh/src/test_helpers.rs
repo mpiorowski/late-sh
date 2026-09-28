@@ -302,8 +302,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
         pair_ws_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
         active_users,
-        clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby::with_seed(7),
-        nightcap_lobby: crate::app::clubhouse::nightcap::lobby::SharedSeats::new(),
+        drunk_map: crate::app::clubhouse::drunk::DrunkMap::new(),
         nightcap_house: crate::app::clubhouse::nightcap::svc::NightcapHouse::new(
             db.clone(),
             crate::app::clubhouse::nightcap::wall::SharedWall::new(),
@@ -312,9 +311,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         scratchpad_registry: crate::app::scratchpad::registry::SharedScratchpadRegistry::new(),
         app_flags: crate::app::flags::svc::AppFlagService::new(db.clone()),
         runner_looks: crate::app::deadchannel::runner::svc::RunnerLookService::new(db.clone()),
-        street: crate::app::deadchannel::street::svc::StreetService::detached(
-            crate::app::deadchannel::street::state::StreetView::new(),
-        ),
+        presence: crate::app::presence::svc::PresenceService::detached(Vec::new()),
         username_directory,
         flair_directory: crate::app::common::username_effect::new_directory(),
         crown_service: crate::app::crown::svc::CrownService::new(db.clone()),
@@ -688,8 +685,7 @@ fn make_app_with_chat_service_and_permissions(
         splash_piece: None,
         artboard_ban_expires_at: None,
         active_users: world.active_users,
-        clubhouse_lobby: None,
-        nightcap_lobby: None,
+        drunk_map: crate::app::clubhouse::drunk::DrunkMap::new(),
         nightcap_house: None,
         mention_ladders: crate::app::ai::ladder::MentionLadders::new(),
         files: None,
@@ -704,9 +700,7 @@ fn make_app_with_chat_service_and_permissions(
         runner_looks_rx: crate::app::deadchannel::runner::svc::fixed_looks_rx(
             std::collections::HashMap::new(),
         ),
-        street: crate::app::deadchannel::street::svc::StreetService::detached(
-            crate::app::deadchannel::street::state::StreetView::new(),
-        ),
+        presence: crate::app::presence::svc::PresenceService::detached(Vec::new()),
         zen_layout: None,
         // No SSH key: test apps follow the account default and persist no
         // per-device layout, which is also what ghost bot sessions do.
@@ -958,8 +952,7 @@ pub fn make_app_with_paired_client(
         splash_piece: None,
         artboard_ban_expires_at: None,
         active_users: None,
-        clubhouse_lobby: None,
-        nightcap_lobby: None,
+        drunk_map: crate::app::clubhouse::drunk::DrunkMap::new(),
         nightcap_house: None,
         mention_ladders: crate::app::ai::ladder::MentionLadders::new(),
         files: None,
@@ -974,9 +967,7 @@ pub fn make_app_with_paired_client(
         runner_looks_rx: crate::app::deadchannel::runner::svc::fixed_looks_rx(
             std::collections::HashMap::new(),
         ),
-        street: crate::app::deadchannel::street::svc::StreetService::detached(
-            crate::app::deadchannel::street::state::StreetView::new(),
-        ),
+        presence: crate::app::presence::svc::PresenceService::detached(Vec::new()),
         zen_layout: None,
         // No SSH key: test apps follow the account default and persist no
         // per-device layout, which is also what ghost bot sessions do.

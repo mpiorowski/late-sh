@@ -60,7 +60,6 @@ pub mod darkroom_veteran;
 mod darkroom_veteran_test;
 pub mod deadchannel_name_hit;
 pub mod deadchannel_runner;
-
 pub mod door_log_cursor;
 pub mod door_milestone;
 pub mod door_rc;
@@ -129,6 +128,7 @@ pub mod pet;
 #[cfg(test)]
 mod pet_test;
 pub mod pot;
+pub mod presence;
 #[cfg(test)]
 mod pot_test;
 pub mod profile;

@@ -19,7 +19,9 @@ use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
 use crate::app::lobby::daily::games::DailyGame;
 use crate::app::state::App;
 
-use super::lobby::Emote;
+use late_core::models::presence::Emote;
+
+use crate::app::presence::svc::now_ms;
 use super::map::Interactive;
 
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
@@ -42,20 +44,20 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
                 return true;
             }
             b'w' | b'W' => {
-                app.clubhouse.emote(Emote::Wave);
+                app.clubhouse.emote(Emote::Wave, now_ms());
                 return true;
             }
             b'x' | b'X' => {
-                app.clubhouse.emote(Emote::Dance);
+                app.clubhouse.emote(Emote::Dance, now_ms());
                 return true;
             }
             b's' | b'S' => {
-                app.clubhouse.sit();
+                app.clubhouse.sit(now_ms());
                 return true;
             }
             b'n' | b'N' => {
-                app.clubhouse.step_to_back_door();
-                app.nightcap.enter_screen();
+                app.clubhouse.step_to_back_door(now_ms());
+                app.nightcap.enter_screen(now_ms());
                 app.set_screen(Screen::Nightcap);
                 return true;
             }
@@ -76,9 +78,9 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
                             app.chat.insert_mention_in_room(lounge_id, "bartender");
                         }
                     }
-                    Some(Interactive::Dog) => app.clubhouse.pet_dog(),
+                    Some(Interactive::Dog) => app.clubhouse.pet_dog(now_ms()),
                     Some(Interactive::BackDoor) => {
-                        app.nightcap.enter_screen();
+                        app.nightcap.enter_screen(now_ms());
                         app.set_screen(Screen::Nightcap);
                     }
                     // The landmark props are signposts: Enter walks through.
@@ -128,7 +130,7 @@ fn handle_walk(app: &mut App, event: &ParsedInput) -> bool {
     // A consumed movement key also cancels a pending `v` music chord, like
     // any locally-handled key would on the chat screens.
     app.music_prefix_armed = false;
-    app.clubhouse.walk(dx, dy);
+    app.clubhouse.walk(dx, dy, now_ms());
     if app.clubhouse.welcome_pour_due() {
         app.show_clubhouse_bartender_welcome();
     }

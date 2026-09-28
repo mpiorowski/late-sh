@@ -144,7 +144,6 @@ fn handle_walk(app: &mut App, event: &ParsedInput) -> bool {
     if let Some((dx, dy)) = run_delta(event) {
         app.music_prefix_armed = false;
         app.city.run(dx, dy);
-        sync_street(app);
         return true;
     }
     let Some((dx, dy)) = walk_delta(event) else {
@@ -152,15 +151,7 @@ fn handle_walk(app: &mut App, event: &ParsedInput) -> bool {
     };
     app.music_prefix_armed = false;
     app.city.walk(dx, dy);
-    sync_street(app);
     true
-}
-
-/// Tell the shared street at once rather than on the next tick, so the
-/// step reaches the other runners a tick sooner.
-fn sync_street(app: &mut App) {
-    app.street
-        .sync(app.city.player_x, app.city.player_y, true);
 }
 
 fn run_delta(event: &ParsedInput) -> Option<(i32, i32)> {

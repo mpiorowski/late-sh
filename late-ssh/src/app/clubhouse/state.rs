@@ -1,23 +1,29 @@
-//! Per-session clubhouse view state. The crowd itself lives in the shared
-//! [`lobby`](super::lobby): every active human holds a seat until their
-//! first step frees it, walkers carry live positions, and every session
-//! renders the same room. This struct owns the session-local bits: the
-//! camera target (your own cell, mirrored from the lobby), animation clock,
-//! the latest lobby snapshot, door arrival/departure ambience, and the
-//! first-visit tutorial state machine.
+//! Per-session clubhouse view state. The room is derived from presence
+//! (`app/presence`, `crowd.rs`): every logged-in session on every replica
+//! sits where it picked, walkers carry live positions, and every session
+//! draws the same room. This struct owns this session's part of it (its
+//! own stand: the spot it picked or the cell it walked to, its last emote
+//! and pet), the camera target (your own cell, mirrored from the crowd),
+//! animation clock, the derived crowd, door arrival/departure ambience,
+//! and the first-visit tutorial state machine. Pure: every `now_ms` is
+//! handed in.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use late_core::models::chat_message::ChatMessage;
+use late_core::models::presence::{ClubhouseStand, Emote, Spot};
 use uuid::Uuid;
 
 use crate::app::common::primitives::Screen;
+use crate::app::presence::svc::Records;
 
-use super::lobby::{Emote, LobbySnapshot, SharedLobby};
+use super::crowd::{self, Crowd, Own};
+use super::drunk::DrunkMap;
 use super::map;
 
-/// Refresh the roster from the active-users map once a second (15 ticks).
+/// Look for the always-on bots in the active-users map once a second (15
+/// ticks).
 const ROSTER_REFRESH_TICKS: u64 = 15;
 /// How long a door ambience line lingers, in ticks (~5s).
 const DOOR_EVENT_TICKS: u64 = 75;
@@ -35,13 +41,6 @@ const BANNER_ENQUEUE_MAX_AGE_MS: i64 = 15_000;
 /// Waiting lines beyond this drop oldest-first; nobody wants the answer to
 /// a question from a minute ago crawling through the banner.
 const BANNER_QUEUE_MAX: usize = 8;
-
-/// A live human from the active-users map.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Occupant {
-    pub user_id: Uuid,
-    pub username: String,
-}
 
 /// A clickable person from the last render, in absolute terminal cells.
 /// Published by the renderer (which only holds `&State`) so a mouse click
@@ -147,9 +146,16 @@ pub struct State {
     pub player_x: u16,
     pub player_y: u16,
     pub anim_tick: u64,
-    lobby: Option<SharedLobby>,
-    /// Latest crowd view, cloned from the lobby every tick while on screen.
-    pub snapshot: LobbySnapshot,
+    session_id: Uuid,
+    /// This session's part of the room, published through presence.
+    own: ClubhouseStand,
+    /// Every live presence record, as last copied on the tick.
+    records: Records,
+    drunk: DrunkMap,
+    /// The room as last derived from `records` and `own`.
+    pub crowd: Crowd,
+    /// Draws a free seat when this session picks one.
+    rng: u64,
     user_id: Uuid,
     username: String,
     pub graybeard_online: bool,
@@ -157,9 +163,9 @@ pub struct State {
     pub bot_online: bool,
     last_roster_tick: u64,
     force_roster_refresh: bool,
-    /// Roster ids from the last refresh, for arrival/departure diffs.
+    /// Patrons in the last crowd, for arrival/departure diffs.
     seen: HashSet<Uuid>,
-    /// The first refresh only primes `seen`; it must not announce the whole
+    /// The first crowd only primes `seen`; it must not announce the whole
     /// room as arrivals.
     seen_primed: bool,
     pub door_events: VecDeque<DoorEvent>,
@@ -181,18 +187,30 @@ pub struct State {
 }
 
 impl State {
+    /// A session sits down the moment it logs in, wherever it sees a free
+    /// seat (or joins this user's other session), so everyone online is in
+    /// the room whether or not they ever open the page.
     pub fn new(
-        lobby: Option<SharedLobby>,
+        session_id: Uuid,
         user_id: Uuid,
         username: String,
         tutorial_pending: bool,
+        records: Records,
+        drunk: DrunkMap,
+        now_ms: i64,
     ) -> Self {
-        Self {
+        let rng = seed_rng(session_id);
+        let own = crowd::first_stand(&records, user_id, rng, now_ms);
+        let mut state = Self {
             player_x: map::SPAWN.0,
             player_y: map::SPAWN.1,
             anim_tick: 0,
-            lobby,
-            snapshot: LobbySnapshot::default(),
+            session_id,
+            own,
+            records,
+            drunk,
+            crowd: Crowd::default(),
+            rng,
             user_id,
             username,
             graybeard_online: false,
@@ -213,7 +231,9 @@ impl State {
             } else {
                 Tutorial::Off
             },
-        }
+        };
+        state.refresh_crowd(now_ms);
+        state
     }
 
     /// Sync the animation clock to the wall-clock world tick (66ms units,
@@ -228,17 +248,13 @@ impl State {
         self.door_events.retain(|e| e.until_tick > now);
     }
 
-    /// Screen entry hook: refresh the crowd immediately and, on the very
-    /// first visit ever, start the tutorial at the door.
-    pub fn enter_screen(&mut self) {
+    /// Screen entry hook: look for the bots now and, on the very first
+    /// visit ever, start the tutorial at the door.
+    pub fn enter_screen(&mut self, now_ms: i64) {
         self.force_roster_refresh = true;
         if self.tutorial == Tutorial::Pending {
             self.tutorial = Tutorial::Welcome;
-            if let Some(lobby) = &self.lobby {
-                lobby.place(self.user_id, &self.username, map::SPAWN.0, map::SPAWN.1);
-            }
-            self.player_x = map::SPAWN.0;
-            self.player_y = map::SPAWN.1;
+            self.place(map::SPAWN, now_ms);
         }
     }
 
@@ -253,26 +269,71 @@ impl State {
         true
     }
 
-    /// Reconcile the shared lobby with a fresh human roster (including this
-    /// session's user) and record arrival/departure ambience.
-    pub fn refresh_roster(&mut self, roster: Vec<Occupant>) {
-        if let Some(own) = roster.iter().find(|o| o.user_id == self.user_id) {
-            self.username = own.username.clone();
-        }
+    /// Take the latest presence records: follow this user's newer stand on
+    /// another device, pick again after losing a contested spot or when a
+    /// seat frees up for someone at the door, then redraw the room.
+    pub fn set_records(&mut self, records: Records, now_ms: i64) {
+        self.records = records;
+        self.settle(now_ms);
+        self.refresh_crowd(now_ms);
+    }
 
-        let ids: HashSet<Uuid> = roster.iter().map(|o| o.user_id).collect();
+    fn settle(&mut self, now_ms: i64) {
+        let newer_elsewhere = self
+            .records
+            .iter()
+            .filter(|record| record.user_id == self.user_id && record.session_id != self.session_id)
+            .map(|record| record.clubhouse)
+            .filter(|stand| stand.since_ms > self.own.since_ms)
+            .max_by_key(|stand| stand.since_ms);
+        if let Some(stand) = newer_elsewhere {
+            self.own.spot = stand.spot;
+            self.own.since_ms = stand.since_ms;
+        }
+        let placed = crowd::crowd(&self.records, &self.own(), &HashMap::new(), now_ms)
+            .find(self.user_id)
+            .map(|patron| patron.placement);
+        let lost = matches!(
+            (self.own.spot, placed),
+            (
+                Spot::Seat { .. } | Spot::Standing { .. },
+                Some(crowd::Placement::Door(_))
+            )
+        );
+        let waiting = self.own.spot == Spot::Door;
+        if lost || waiting {
+            let rng = self.next_rand();
+            let spot = crowd::pick_spot(&self.records, self.user_id, rng);
+            if spot != self.own.spot {
+                self.own.spot = spot;
+                self.own.since_ms = now_ms;
+            }
+        }
+    }
+
+    /// Redraw the room from the records and this session's own stand, note
+    /// who came and went, and mirror our own cell for the camera. Called
+    /// on every own change, every new set of records, and every world tick
+    /// while the screen is visible (the dog and the emotes run on the
+    /// clock).
+    pub fn refresh_crowd(&mut self, now_ms: i64) {
+        let now = chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_default();
+        let levels = self.drunk.levels(now);
+        let next = crowd::crowd(&self.records, &self.own(), &levels, now_ms);
+
+        let ids: HashSet<Uuid> = next.people.iter().map(|p| p.user_id).collect();
         if self.seen_primed {
-            for who in &roster {
+            for who in &next.people {
                 if !self.seen.contains(&who.user_id) && who.user_id != self.user_id {
                     self.push_door_event(who.username.clone(), true);
                 }
             }
             // Departures need the old names; look them up in the previous
-            // snapshot before it is replaced.
+            // crowd before it is replaced.
             let departed: Vec<String> = self
                 .seen
                 .difference(&ids)
-                .filter_map(|gone| self.snapshot.find(*gone))
+                .filter_map(|gone| self.crowd.find(*gone))
                 .map(|p| p.username.clone())
                 .collect();
             for name in departed {
@@ -282,27 +343,35 @@ impl State {
         self.seen = ids;
         self.seen_primed = true;
 
-        if let Some(lobby) = &self.lobby {
-            let pairs: Vec<(Uuid, String)> = roster
-                .into_iter()
-                .map(|o| (o.user_id, o.username))
-                .collect();
-            lobby.sync(&pairs);
-        }
-    }
-
-    /// Pull the latest crowd view and mirror our own cell for the camera.
-    /// Called every world tick while the screen is visible.
-    pub fn refresh_snapshot(&mut self) {
-        let Some(lobby) = &self.lobby else {
-            return;
-        };
-        self.snapshot = lobby.snapshot();
-        if let Some(own) = self.snapshot.find(self.user_id) {
+        if let Some(own) = next.find(self.user_id) {
             let (x, y) = own.placement.position();
             self.player_x = x;
             self.player_y = y;
         }
+        self.crowd = next;
+    }
+
+    fn own(&self) -> Own<'_> {
+        Own {
+            session_id: self.session_id,
+            user_id: self.user_id,
+            username: &self.username,
+            stand: self.own,
+        }
+    }
+
+    /// This session's part of its presence record.
+    pub fn stand(&self) -> ClubhouseStand {
+        self.own
+    }
+
+    fn next_rand(&mut self) -> u64 {
+        let mut x = self.rng;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.rng = x;
+        x
     }
 
     /// Feed the newest-first #lounge tail into the bartender banner and
@@ -391,73 +460,71 @@ impl State {
         self.door_events.iter().any(|e| e.arrived)
     }
 
-    /// Stand on the back-door mat (the `n` shortcut to Nightcap), in the
-    /// shared lobby too, so the rest of the room sees you head out back
-    /// instead of vanishing from your seat.
-    pub fn step_to_back_door(&mut self) {
-        let (x, y) = map::BACK_DOOR_MAT;
-        if let Some(lobby) = &self.lobby {
-            lobby.place(self.user_id, &self.username, x, y);
-        }
-        self.player_x = x;
-        self.player_y = y;
+    /// Stand on the back-door mat (the `n` shortcut to Nightcap), for the
+    /// whole room too, so the rest of it sees you head out back instead of
+    /// vanishing from your seat.
+    pub fn step_to_back_door(&mut self, now_ms: i64) {
+        self.place(map::BACK_DOOR_MAT, now_ms);
     }
 
-    /// Try to walk one step; the first step frees your seat in the shared
-    /// lobby.
-    pub fn walk(&mut self, dx: i32, dy: i32) {
-        if let Some(lobby) = &self.lobby {
-            let (x, y) = lobby.walk(self.user_id, &self.username, dx, dy);
-            self.player_x = x;
-            self.player_y = y;
-        } else {
-            // Headless/test sessions still walk locally.
-            let nx = self.player_x.saturating_add_signed(dx as i16);
-            let ny = self.player_y.saturating_add_signed(dy as i16);
-            if map::walkable(nx, ny) {
-                self.player_x = nx;
-                self.player_y = ny;
-            }
+    /// Stand at an exact cell as a walker (the tutorial's door, the back
+    /// door).
+    fn place(&mut self, (x, y): (u16, u16), now_ms: i64) {
+        self.own.spot = Spot::Walking { x, y };
+        self.own.since_ms = now_ms;
+        self.player_x = x;
+        self.player_y = y;
+        self.refresh_crowd(now_ms);
+    }
+
+    /// Try to walk one step. The first step stands you up off your seat,
+    /// even into a wall.
+    pub fn walk(&mut self, dx: i32, dy: i32, now_ms: i64) {
+        let (mut x, mut y) = (self.player_x, self.player_y);
+        let nx = x.saturating_add_signed(dx as i16);
+        let ny = y.saturating_add_signed(dy as i16);
+        if map::walkable(nx, ny) {
+            (x, y) = (nx, ny);
         }
+        self.place((x, y), now_ms);
     }
 
     /// Take the nearest free seat within reach, standing back up on the next
     /// step. Mirrors our own cell to the seat so the camera follows. Returns
-    /// true when we sat (no lobby, or no seat close by, is a no-op).
-    pub fn sit(&mut self) -> bool {
-        if let Some(lobby) = &self.lobby
-            && let Some((x, y)) = lobby.sit(self.user_id, &self.username)
-        {
-            self.player_x = x;
-            self.player_y = y;
-            return true;
-        }
-        false
+    /// true when we sat (not walking, or no seat close by, is a no-op).
+    pub fn sit(&mut self, now_ms: i64) -> bool {
+        let Spot::Walking { x, y } = self.own.spot else {
+            return false;
+        };
+        let Some(seat) = self.crowd.free_seat_near(x, y) else {
+            return false;
+        };
+        self.own.spot = Spot::Seat { index: seat as u16 };
+        self.own.since_ms = now_ms;
+        self.refresh_crowd(now_ms);
+        true
     }
 
-    pub fn emote(&self, emote: Emote) {
-        if let Some(lobby) = &self.lobby {
-            lobby.emote(self.user_id, emote);
-        }
+    pub fn emote(&mut self, emote: Emote, now_ms: i64) {
+        self.own.emote = Some((emote, now_ms));
+        self.refresh_crowd(now_ms);
     }
 
-    pub fn pet_dog(&self) {
-        if let Some(lobby) = &self.lobby {
-            lobby.pet_dog(&self.username);
-        }
+    pub fn pet_dog(&mut self, now_ms: i64) {
+        self.own.petted_dog_at_ms = Some(now_ms);
+        self.refresh_crowd(now_ms);
     }
 
     /// The prop within reach of the player, if any. The dog wanders, so
-    /// its live cell comes from the lobby snapshot.
+    /// its live cell comes from the crowd.
     pub fn nearby(&self) -> Option<map::Interactive> {
-        let dog = (self.snapshot.dog.x, self.snapshot.dog.y);
+        let dog = (self.crowd.dog.x, self.crowd.dog.y);
         map::nearest_interactive(self.player_x, self.player_y, dog)
     }
 
-    /// Everyone in the room (the lobby roster includes this session's user
-    /// once the first refresh lands).
+    /// Everyone in the room, this session's user included.
     pub fn headcount(&self) -> usize {
-        self.snapshot.headcount().max(1)
+        self.crowd.headcount().max(1)
     }
 
     pub fn own_user_id(&self) -> Uuid {
@@ -480,19 +547,16 @@ impl State {
             .map(|h| (h.user_id, h.username.clone()))
     }
 
-    /// Clone the shared lobby handle, if this session is wired to one. Lets an
-    /// off-thread task (the welcome pour) push a glow update after its DB write.
-    pub fn lobby_handle(&self) -> Option<SharedLobby> {
-        self.lobby.clone()
+    /// The process's drunk map. Lets an off-thread task (the welcome pour)
+    /// push a glow update after its DB write.
+    pub fn drunk_handle(&self) -> DrunkMap {
+        self.drunk.clone()
     }
 
-    /// Current drunk levels from the shared lobby (empty on headless/test
-    /// paths). Chat author labels tint from this, so it must not hit the DB.
-    pub fn drunk_levels(&self) -> HashMap<Uuid, u8> {
-        self.lobby
-            .as_ref()
-            .map(|lobby| lobby.drunk_levels())
-            .unwrap_or_default()
+    /// Current drunk levels. Chat author labels tint from this, so it must
+    /// not hit the DB.
+    pub fn drunk_levels(&self, now: chrono::DateTime<chrono::Utc>) -> HashMap<Uuid, u8> {
+        self.drunk.levels(now)
     }
 
     /// Advance the page tour when a top-level screen is entered. Each stop
@@ -585,6 +649,16 @@ impl State {
             }
             _ => false,
         }
+    }
+}
+
+/// A per-session seed for seat draws, so two sessions arriving together
+/// draw different seats.
+fn seed_rng(session_id: Uuid) -> u64 {
+    let (high, low) = session_id.as_u64_pair();
+    match high ^ low.rotate_left(17) {
+        0 => 0xA409_3822_299F_31D0,
+        seed => seed,
     }
 }
 

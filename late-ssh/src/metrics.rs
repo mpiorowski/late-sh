@@ -225,14 +225,14 @@ pub enum TailorBeat {
     Failed,
 }
 
-/// What the night city street's wire did (`app/deadchannel/street`):
-/// `Published` a notify sent, `PublishFailed` one that did not land (the
-/// next heartbeat carries it again), `Heard` another replica's batch
-/// folded in, `Rejected` a payload that failed to parse, `Expired` a
-/// remote runner dropped because its replica went quiet (a dead replica,
-/// or a leaver missed across a LISTEN reconnect).
+/// What the presence wire did (`app/presence`): `Published` a notify
+/// sent, `PublishFailed` one that did not land (the next heartbeat carries
+/// it again), `Heard` another replica's batch folded in, `Rejected` a
+/// payload that failed to parse, `Expired` a remote session dropped
+/// because its replica went quiet (a dead replica, or a leaver missed
+/// across a LISTEN reconnect).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StreetWire {
+pub enum PresenceWire {
     Published,
     PublishFailed,
     Heard,
@@ -384,7 +384,7 @@ mod inner {
         PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
         Presence, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen,
         SessionStartStage, SessionUser, SongQueueReward, SshRejectReason, SummaryResult,
-        StreetWire, TailorBeat, TranslationResult, VizWireBands,
+        PresenceWire, TailorBeat, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -1086,12 +1086,12 @@ mod inner {
         })
     }
 
-    fn deadchannel_street_total() -> &'static Counter<u64> {
+    fn presence_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
             meter()
-                .u64_counter("late_ssh_deadchannel_street_total")
-                .with_description("night city street presence on the wire, by beat")
+                .u64_counter("late_ssh_presence_total")
+                .with_description("presence (tavern, stools, street) on the wire, by beat")
                 .build()
         })
     }
@@ -1216,18 +1216,18 @@ mod inner {
         deadchannel_tailor_total().add(1, &[KeyValue::new("beat", tailor_beat_label(beat))]);
     }
 
-    fn street_wire_label(beat: StreetWire) -> &'static str {
+    fn presence_wire_label(beat: PresenceWire) -> &'static str {
         match beat {
-            StreetWire::Published => "published",
-            StreetWire::PublishFailed => "publish_failed",
-            StreetWire::Heard => "heard",
-            StreetWire::Rejected => "rejected",
-            StreetWire::Expired => "expired",
+            PresenceWire::Published => "published",
+            PresenceWire::PublishFailed => "publish_failed",
+            PresenceWire::Heard => "heard",
+            PresenceWire::Rejected => "rejected",
+            PresenceWire::Expired => "expired",
         }
     }
 
-    pub fn record_deadchannel_street(beat: StreetWire) {
-        deadchannel_street_total().add(1, &[KeyValue::new("beat", street_wire_label(beat))]);
+    pub fn record_presence(beat: PresenceWire) {
+        presence_total().add(1, &[KeyValue::new("beat", presence_wire_label(beat))]);
     }
 
     pub fn record_deadchannel_fight(beat: FightBeat) {
@@ -2229,7 +2229,7 @@ mod inner {
         PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
         Presence, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen,
         SessionStartStage, SessionUser, SongQueueReward, SshRejectReason, SummaryResult,
-        StreetWire, TailorBeat, TranslationResult, VizWireBands,
+        PresenceWire, TailorBeat, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
@@ -2239,7 +2239,7 @@ mod inner {
     pub fn record_deadchannel_fight(_beat: FightBeat) {}
     pub fn record_deadchannel_old_signal_payout(_payout: OldSignalPayout) {}
     pub fn record_deadchannel_tailor(_beat: TailorBeat) {}
-    pub fn record_deadchannel_street(_beat: StreetWire) {}
+    pub fn record_presence(_beat: PresenceWire) {}
     pub fn record_runner_door(_door: RunnerDoor) {}
     pub fn record_first_contact_bio_screen(_outcome: BioScreenOutcome) {}
     pub fn record_first_contact_gate(_verdict: GateVerdict, _staff: bool) {}

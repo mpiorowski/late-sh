@@ -1,9 +1,10 @@
-//! Nightcap's per-session state: which seat (if any) this user holds, the
-//! latest shared snapshots for rendering (seats and wall), the drink menu,
-//! the carving field, the one order in flight, and the roster-refresh
-//! cadence. Pure: the chips and the carvings move in `svc.rs`, whose
-//! outcome comes back through `outcome_sender` and lands here on the next
-//! tick. See `lobby.rs` for the shared seats and `wall.rs` for the wall.
+//! Nightcap's per-session state: which stool (if any) this session holds
+//! (its part of its presence record), the stool row derived from presence
+//! and the shared wall for rendering, the drink menu, the carving field,
+//! and the one order in flight. Pure: every `now_ms` is handed in, and the
+//! chips and the carvings move in `svc.rs`, whose outcome comes back
+//! through `outcome_sender` and lands here on the next tick. See
+//! `stools.rs` for the row and `wall.rs` for the wall.
 
 use ratatui_textarea::{TextArea, WrapMode};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -15,12 +16,12 @@ use crate::app::common::composer::new_themed_textarea;
 use crate::app::common::primitives::thousands;
 use crate::app::games::chips::svc::RoundRefusal;
 
-use super::lobby::{SEAT_COUNT, SeatChange, SeatView, SharedSeats};
-use super::wall::{SharedWall, WallSnapshot};
+use late_core::models::presence::NightcapStand;
 
-/// How often (in `tick` calls) the live roster is reconciled against the
-/// shared seats, mirroring the Clubhouse's own cadence.
-const ROSTER_REFRESH_TICKS: u64 = 20;
+use crate::app::presence::svc::Records;
+
+use super::stools::{OwnStool, Stools, stools};
+use super::wall::{SharedWall, WallSnapshot};
 
 /// How long the muted TV holds one caption before the next, in world
 /// ticks: about half a minute. Slow on purpose; it is a TV in the corner,
@@ -135,15 +136,27 @@ pub enum Outcome {
     CarveFailed,
 }
 
+/// What a seat press did. The caller says it out loud, so a press that
+/// bounces off an occupied stool is never silent: in a six-stool room that
+/// is the common case, and no feedback there reads as a dropped key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeatChange {
+    SatDown,
+    StoodUp,
+    Taken,
+}
+
 pub struct State {
-    lobby: Option<SharedSeats>,
     wall: Option<SharedWall>,
+    session_id: Uuid,
     user_id: Uuid,
     username: String,
     anim_tick: u64,
-    last_roster_tick: u64,
-    force_roster_refresh: bool,
-    snapshot: [Option<SeatView>; SEAT_COUNT],
+    /// This session's stool, published through presence.
+    own: Option<NightcapStand>,
+    /// Every live presence record, as last copied on the tick.
+    records: Records,
+    snapshot: Stools,
     wall_snapshot: WallSnapshot,
     /// The last thing that happened on late.sh, for the TV: "name action".
     last_activity: Option<String>,
@@ -162,20 +175,21 @@ pub struct State {
 
 impl State {
     pub fn new(
-        lobby: Option<SharedSeats>,
         wall: Option<SharedWall>,
+        session_id: Uuid,
         user_id: Uuid,
         username: String,
+        records: Records,
     ) -> Self {
         let (outcome_tx, outcome_rx) = unbounded_channel();
         Self {
-            lobby,
             wall,
+            session_id,
             user_id,
             username,
             anim_tick: 0,
-            last_roster_tick: 0,
-            force_roster_refresh: true,
+            own: None,
+            records,
             snapshot: std::array::from_fn(|_| None),
             wall_snapshot: WallSnapshot::default(),
             last_activity: None,
@@ -189,23 +203,72 @@ impl State {
         }
     }
 
-    /// Screen entry hook: refresh the seat snapshot immediately rather than
-    /// waiting for the next scheduled roster tick.
-    pub fn enter_screen(&mut self) {
-        self.force_roster_refresh = true;
+    /// Screen entry hook: draw the row now rather than on the next tick.
+    pub fn enter_screen(&mut self, now_ms: i64) {
+        self.refresh_snapshot(now_ms);
     }
 
-    /// Screen exit hook: hand the stool back. Esc is not the only way out
-    /// (digits, Tab, `0` all leave), so this hangs off `set_screen` rather
-    /// than the Esc path, the same shape the other contextual screens use.
-    pub fn leave_screen(&mut self) {
-        if let Some(lobby) = &self.lobby {
-            lobby.vacate(self.user_id);
-        }
+    /// Screen exit hook: hand the stool back. A stool is held only while
+    /// its owner is in the room: leaving the screen is a departure, not a
+    /// reservation, or six sessions parked elsewhere would close the bar.
+    /// Esc is not the only way out (digits, Tab, `0` all leave), so this
+    /// hangs off `set_screen` rather than the Esc path, the same shape the
+    /// other contextual screens use.
+    pub fn leave_screen(&mut self, now_ms: i64) {
+        self.own = None;
         self.menu_open = false;
         self.carving = None;
         self.last_message = None;
-        self.refresh_snapshot();
+        self.refresh_snapshot(now_ms);
+    }
+
+    /// This session's part of its presence record.
+    pub fn stand(&self) -> Option<NightcapStand> {
+        self.own
+    }
+
+    /// Take the latest presence records. If someone on another replica
+    /// took our stool a moment before we did, the row gives it to them and
+    /// this session stands back up, saying so. Returns whether the row or
+    /// the wall moved.
+    pub fn set_records(&mut self, records: Records, now_ms: i64) -> bool {
+        self.records = records;
+        let mut changed = false;
+        if let Some(stool) = self.my_seat() {
+            let row = self.derive(now_ms);
+            let holder = row[stool].as_ref().map(|seat| seat.user_id);
+            if holder != Some(self.user_id) {
+                self.own = None;
+                self.menu_open = false;
+                self.carving = None;
+                self.last_message = Some("someone beat you to that stool.".to_string());
+                changed = true;
+            }
+        }
+        changed | self.refresh_snapshot(now_ms)
+    }
+
+    fn derive(&self, now_ms: i64) -> Stools {
+        stools(
+            &self.records,
+            &OwnStool {
+                session_id: self.session_id,
+                user_id: self.user_id,
+                username: &self.username,
+                stand: self.own,
+            },
+            now_ms,
+        )
+    }
+
+    /// Everyone else on a stool right now: who a round at this bar is for.
+    pub fn round_patrons(&self) -> Vec<Uuid> {
+        self.snapshot
+            .iter()
+            .flatten()
+            .map(|seat| seat.user_id)
+            .filter(|user_id| *user_id != self.user_id)
+            .collect()
     }
 
     /// Advance the clock. Returns whether the TV moved to its next caption,
@@ -217,38 +280,18 @@ impl State {
         before != anim_tick / TV_DWELL_TICKS
     }
 
-    pub fn roster_refresh_due(&mut self) -> bool {
-        if !self.force_roster_refresh
-            && self.anim_tick.wrapping_sub(self.last_roster_tick) < ROSTER_REFRESH_TICKS
-        {
-            return false;
-        }
-        self.force_roster_refresh = false;
-        self.last_roster_tick = self.anim_tick;
-        true
-    }
-
-    /// Drop anyone no longer connected from the shared seats, and relabel
-    /// the patrons still here from the roster's names.
-    pub fn refresh_roster(&mut self, roster: &[(Uuid, String)]) {
-        if let Some(lobby) = &self.lobby {
-            lobby.sync(roster);
-        }
-    }
-
-    /// Copy the shared seats and wall. Returns whether anything the screen
-    /// shows moved (another patron sat down, a pour landed, a carve), so
-    /// the app can ask for a frame; without that report a change made by
-    /// another session sits unrendered until this one presses a key.
-    pub fn refresh_snapshot(&mut self) -> bool {
+    /// Redraw the row and copy the wall. Returns whether anything the
+    /// screen shows moved (another patron sat down, a pour landed, a
+    /// carve), so the app can ask for a frame; without that report a
+    /// change made by another session sits unrendered until this one
+    /// presses a key.
+    pub fn refresh_snapshot(&mut self, now_ms: i64) -> bool {
         let mut changed = false;
-        if let Some(lobby) = &self.lobby {
-            let next = lobby.snapshot();
-            if !seats_look_the_same(&self.snapshot, &next) {
-                changed = true;
-            }
-            self.snapshot = next;
+        let next = self.derive(now_ms);
+        if !seats_look_the_same(&self.snapshot, &next) {
+            changed = true;
         }
+        self.snapshot = next;
         if let Some(wall) = &self.wall {
             let next = wall.snapshot();
             if self.wall_snapshot != next {
@@ -259,7 +302,7 @@ impl State {
         changed
     }
 
-    pub fn snapshot(&self) -> &[Option<SeatView>; SEAT_COUNT] {
+    pub fn snapshot(&self) -> &Stools {
         &self.snapshot
     }
 
@@ -267,12 +310,8 @@ impl State {
         &self.wall_snapshot
     }
 
-    pub fn seats_handle(&self) -> Option<SharedSeats> {
-        self.lobby.clone()
-    }
-
     pub fn my_seat(&self) -> Option<usize> {
-        self.lobby.as_ref()?.seat_of(self.user_id)
+        self.own.map(|stand| usize::from(stand.stool))
     }
 
     /// Something happened on late.sh; the TV may show it next.
@@ -314,19 +353,32 @@ impl State {
     /// did. A stool someone else holds is the press this room bounces most
     /// often, and saying nothing there is indistinguishable from a key that
     /// never arrived.
-    pub fn toggle_seat(&mut self, seat: usize) {
-        let Some(lobby) = &self.lobby else {
-            return;
+    ///
+    /// Pressing your own seat again stands you up: the whole interaction
+    /// model is "press a seat's number to sit there or leave it". `seat` is
+    /// below `SEAT_COUNT` by the keymap, which only sends `1`-`6`.
+    pub fn toggle_seat(&mut self, seat: usize, now_ms: i64) {
+        let change = if self.my_seat() == Some(seat) {
+            self.own = None;
+            SeatChange::StoodUp
+        } else if self.snapshot[seat]
+            .as_ref()
+            .is_some_and(|held| held.user_id != self.user_id)
+        {
+            SeatChange::Taken
+        } else {
+            self.own = Some(NightcapStand {
+                stool: seat as u8,
+                sat_at_ms: now_ms,
+                drinks: 0,
+            });
+            SeatChange::SatDown
         };
-        self.last_message = match lobby.toggle_seat(self.user_id, &self.username, seat) {
+        self.last_message = match change {
             // Sitting and standing show themselves: the seat row picks up
             // (or drops) the `(you)` label on the next draw.
             SeatChange::SatDown | SeatChange::StoodUp => None,
             SeatChange::Taken => Some("that stool is taken.".to_string()),
-            // Not reachable from the keymap, which only sends `1`-`6`; the
-            // variant exists because `SharedSeats` bounds-checks for any
-            // caller, not just this one.
-            SeatChange::OutOfRange => None,
         };
         // Standing up takes the menu and the knife with it: there is no bar
         // to order from and no stool to carve.
@@ -334,7 +386,7 @@ impl State {
             self.menu_open = false;
             self.carving = None;
         }
-        self.refresh_snapshot();
+        self.refresh_snapshot(now_ms);
     }
 
     pub fn menu_open(&self) -> bool {
@@ -429,7 +481,7 @@ impl State {
     /// One order at a time: the chips move off-thread and a second press
     /// before the first settles would double-charge.
     pub fn pick(&mut self, order: Order) -> Option<Order> {
-        if self.my_seat().is_none() || self.lobby.is_none() {
+        if self.my_seat().is_none() {
             self.note_compose_needs_seat();
             return None;
         }
@@ -452,16 +504,16 @@ impl State {
 
     /// Pull every settled outcome off the channel; each tick call. Returns
     /// whether anything landed, since each one changes the footer.
-    pub fn drain_outcomes(&mut self) -> bool {
+    pub fn drain_outcomes(&mut self, now_ms: i64) -> bool {
         let mut drained = false;
         while let Ok(outcome) = self.outcome_rx.try_recv() {
-            self.apply_outcome(outcome);
+            self.apply_outcome(outcome, now_ms);
             drained = true;
         }
         drained
     }
 
-    pub fn apply_outcome(&mut self, outcome: Outcome) {
+    pub fn apply_outcome(&mut self, outcome: Outcome, now_ms: i64) {
         // A count is an answer to what the menu asked, not an order: it
         // neither holds the footer nor frees a pour in flight.
         if let Outcome::Credits { waiting } = outcome {
@@ -477,6 +529,15 @@ impl State {
         // slot, so it must not release one that a pour still holds.
         if !matches!(outcome, Outcome::Carved { .. } | Outcome::CarveFailed) {
             self.order_in_flight = false;
+        }
+        // A drink that landed counts on the stool for everyone to see, if
+        // the patron is still on it: the drink still happened either way.
+        if matches!(
+            outcome,
+            Outcome::Poured { .. } | Outcome::Comped { .. } | Outcome::RoundBought { .. }
+        ) && let Some(stand) = self.own.as_mut()
+        {
+            stand.drinks += 1;
         }
         self.last_message = Some(match outcome {
             Outcome::Poured { drink, balance } => format!(
@@ -526,7 +587,7 @@ impl State {
             Outcome::Carved { stool } => format!("carved into stool {}.", stool + 1),
             Outcome::CarveFailed => "the knife slipped. try again.".to_string(),
         });
-        self.refresh_snapshot();
+        self.refresh_snapshot(now_ms);
     }
 }
 
@@ -534,10 +595,7 @@ impl State {
 /// at the minute the row prints, not the instant the snapshot was taken:
 /// comparing raw durations would call every tick a change and buy a frame
 /// for nothing.
-fn seats_look_the_same(
-    a: &[Option<SeatView>; SEAT_COUNT],
-    b: &[Option<SeatView>; SEAT_COUNT],
-) -> bool {
+fn seats_look_the_same(a: &Stools, b: &Stools) -> bool {
     a.iter().zip(b.iter()).all(|(a, b)| match (a, b) {
         (None, None) => true,
         (Some(a), Some(b)) => {

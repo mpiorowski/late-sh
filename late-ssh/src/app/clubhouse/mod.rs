@@ -1,5 +1,6 @@
+pub mod crowd;
+pub mod drunk;
 pub mod input;
-pub mod lobby;
 pub mod map;
 pub mod nightcap;
 pub mod state;

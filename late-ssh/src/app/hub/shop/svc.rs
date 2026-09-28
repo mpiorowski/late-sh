@@ -44,7 +44,7 @@ use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 use super::entitlements::ShopEntitlements;
 use crate::app::ai::screen::{TitleScreen, screen_custom_title};
 use crate::app::ai::svc::AiService;
-use crate::app::clubhouse::lobby::SharedLobby;
+use crate::app::clubhouse::drunk::DrunkMap;
 use crate::app::common::username_effect::{FlairEffect, FlairTitle, NameFlair, NameFlairDirectory};
 
 #[derive(Clone, Debug, Default)]
@@ -436,9 +436,9 @@ pub struct ShopService {
     /// cooldown: a session lives on one replica, and this meters API spend,
     /// not game state.
     screen_cooldowns: Arc<Mutex<HashMap<Uuid, Instant>>>,
-    /// The shared clubhouse lobby, so a hangover pill clears the buyer's
+    /// The process's drunk map, so a hangover pill clears the buyer's
     /// drunk tint at once on this replica.
-    clubhouse_lobby: Option<SharedLobby>,
+    drunk_map: Option<DrunkMap>,
 }
 
 impl ShopService {
@@ -452,12 +452,12 @@ impl ShopService {
             activity: None,
             ai_service: None,
             screen_cooldowns: Arc::new(Mutex::new(HashMap::new())),
-            clubhouse_lobby: None,
+            drunk_map: None,
         }
     }
 
-    pub fn with_clubhouse_lobby(mut self, lobby: SharedLobby) -> Self {
-        self.clubhouse_lobby = Some(lobby);
+    pub fn with_drunk_map(mut self, drunk_map: DrunkMap) -> Self {
+        self.drunk_map = Some(drunk_map);
         self
     }
 
@@ -970,17 +970,17 @@ impl ShopService {
         if flair_changed {
             self.refresh_user_flair(user_id).await?;
         }
-        // The pill zeroed the buzz in the DB; this replica's lobby drops the
+        // The pill zeroed the buzz in the DB; this replica's drunk map drops the
         // tint now rather than on the next drunk seed pass (a minute at most,
         // which is how every other replica catches up).
-        if let (Some(lobby), Some(result)) = (&self.clubhouse_lobby, &purchase.purchase)
+        if let (Some(drunk_map), Some(result)) = (&self.drunk_map, &purchase.purchase)
             && result.item.sku == HANGOVER_PILL_SKU
             && matches!(
                 result.status,
                 PurchaseStatus::Purchased | PurchaseStatus::QuantityAdded
             )
         {
-            lobby.record_drink(user_id, 0, Utc::now());
+            drunk_map.record_drink(user_id, 0, Utc::now());
         }
         if purchase.refresh_all_active_users {
             self.refresh_catalog_for_active_users().await?;
