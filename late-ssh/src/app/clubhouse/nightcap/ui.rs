@@ -28,8 +28,8 @@ use crate::app::common::primitives::thousands;
 use crate::app::common::theme;
 use crate::usernames::UsernameLookup;
 
-use super::stools::SEAT_COUNT;
 use super::state::{Drink, State};
+use super::stools::SEAT_COUNT;
 
 /// The most lines the bar keeps on the wall, whatever the height.
 const MAX_LINES: usize = 10;

@@ -828,11 +828,7 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> (BubbleAnchors, 
         .find(own_id)
         .map(|p| p.placement)
         .unwrap_or(Placement::Walking(state.player_x, state.player_y));
-    let own_drunk_level = state
-        .crowd
-        .find(own_id)
-        .map(|p| p.drunk_level)
-        .unwrap_or(0);
+    let own_drunk_level = state.crowd.find(own_id).map(|p| p.drunk_level).unwrap_or(0);
     let (anchor, (x0, y0, x1, y1)) = draw_presence(
         cells,
         own_placement,

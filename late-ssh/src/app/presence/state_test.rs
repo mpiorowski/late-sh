@@ -37,7 +37,11 @@ fn a_change_on_one_replica_lands_on_the_other() {
     b.put(bob.clone());
     let from_a = a.take_changes();
     let from_b = b.take_changes();
-    assert_eq!(from_a.records, vec![ann.clone()], "only the latest goes out");
+    assert_eq!(
+        from_a.records,
+        vec![ann.clone()],
+        "only the latest goes out"
+    );
     assert!(a.hear(from_b.clone(), 1_200));
     assert!(b.hear(from_a.clone(), 1_200));
     // Each replica's own batch comes back over the wire and changes nothing.

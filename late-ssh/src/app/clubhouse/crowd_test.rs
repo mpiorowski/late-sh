@@ -42,7 +42,9 @@ fn watcher() -> Own<'static> {
 
 fn room(records: &[PresenceRecord], now_ms: i64) -> Crowd {
     let mut crowd = crowd(records, &watcher(), &HashMap::new(), now_ms);
-    crowd.people.retain(|p| p.user_id != Uuid::from_u128(u128::MAX));
+    crowd
+        .people
+        .retain(|p| p.user_id != Uuid::from_u128(u128::MAX));
     crowd
 }
 
@@ -69,7 +71,11 @@ fn everyone_who_logs_in_sits_down_without_collisions() {
             .iter()
             .all(|p| matches!(p.placement, Placement::Seated(_)))
     );
-    let mut cells: Vec<(u16, u16)> = crowd.people.iter().map(|p| p.placement.position()).collect();
+    let mut cells: Vec<(u16, u16)> = crowd
+        .people
+        .iter()
+        .map(|p| p.placement.position())
+        .collect();
     cells.sort_unstable();
     cells.dedup();
     assert_eq!(cells.len(), 20, "two patrons share a spot");
@@ -81,7 +87,10 @@ fn a_full_house_stands_then_stacks_at_the_door() {
     let crowd = room(&arrivals(total), 100_000);
 
     let count = |f: fn(&Placement) -> bool| crowd.people.iter().filter(|p| f(&p.placement)).count();
-    assert_eq!(count(|p| matches!(p, Placement::Seated(_))), map::SEATS.len());
+    assert_eq!(
+        count(|p| matches!(p, Placement::Seated(_))),
+        map::SEATS.len()
+    );
     assert_eq!(
         count(|p| matches!(p, Placement::Standing(_))),
         map::STANDING_SPOTS.len()
@@ -154,7 +163,10 @@ fn emotes_and_pets_play_for_their_window_then_stop() {
     ann.clubhouse.petted_dog_at_ms = Some(10_000);
 
     let during = room(&[ann.clone()], 10_000 + EMOTE_MS - 1);
-    assert_eq!(during.find(ann.user_id).and_then(|p| p.emote), Some(Emote::Dance));
+    assert_eq!(
+        during.find(ann.user_id).and_then(|p| p.emote),
+        Some(Emote::Dance)
+    );
     let during = room(&[ann.clone()], 10_000 + DOG_PET_MS - 1);
     assert_eq!(
         during.dog_pet,

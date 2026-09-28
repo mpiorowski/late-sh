@@ -45,11 +45,22 @@ fn seat(n: u128, sat_at_ms: i64, now_ms: i64) -> Option<SeatView> {
 
 #[test]
 fn the_row_shows_who_sits_where_and_since_when() {
-    let records = vec![record(1, Some((0, 1_000))), record(2, None), record(3, Some((4, 2_000)))];
+    let records = vec![
+        record(1, Some((0, 1_000))),
+        record(2, None),
+        record(3, Some((4, 2_000))),
+    ];
 
     let row = stools(&records, &standing_watcher(), 61_000);
 
-    let expected: Stools = [seat(1, 1_000, 61_000), None, None, None, seat(3, 2_000, 61_000), None];
+    let expected: Stools = [
+        seat(1, 1_000, 61_000),
+        None,
+        None,
+        None,
+        seat(3, 2_000, 61_000),
+        None,
+    ];
     assert_eq!(row, expected);
 }
 
@@ -61,7 +72,9 @@ fn a_stool_taken_twice_at_once_goes_to_the_earlier_sitter() {
 
     assert_eq!(row[2], seat(2, 1_000, 3_000));
     assert!(
-        row.iter().flatten().all(|s| s.user_id != Uuid::from_u128(1)),
+        row.iter()
+            .flatten()
+            .all(|s| s.user_id != Uuid::from_u128(1)),
         "the later sitter is on no stool"
     );
 }

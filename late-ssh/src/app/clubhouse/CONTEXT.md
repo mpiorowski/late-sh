@@ -8,8 +8,9 @@
 
 A full-bleed walkable ASCII tavern rendered over the whole content area with a
 one-line #lounge composer pinned to the bottom. The crowd is real: every
-active human on late.sh holds a seat in one process-global lobby, walkers
-carry live positions every session renders, and fresh #lounge messages float
+logged-in human on every replica holds a seat they picked themselves,
+walkers carry live positions every session renders (all through presence,
+§3), and fresh #lounge messages float
 over their authors' heads as speech bubbles. There is no chat panel here; the
 room is the chat surface, and the full history lives in #lounge on Home.
 
@@ -17,52 +18,73 @@ room is the chat surface, and the full history lives in #lounge on Home.
 
 | File | Owns |
 |---|---|
-| `map.rs` | The 184x50 generated floor plan (`MAP` literal, do not hand-edit; re-run `scripts/gen_clubhouse_map.py --write`), collision (`walkable`), `SEATS`/`STANDING_SPOTS`/`DOOR_STACK`, interactive zones (`BACK_DOOR` out to Nightcap among them), animation cell lists, `DOOR_SIGN`. **The generator's `RUST_TEMPLATE` has drifted behind this file** — it predates `DOOR_STACK`, `BOT_SPOT`, `DOG_HOME`/`DOG_WAYPOINTS`, `BAR_APPROACH` and the `dog` parameter on `nearest_interactive`, so a bare `--write` silently *reverts* all of them. Until it is resynced: author the art in the script, run it to validate, and splice only the `MAP` and `SEATS` blocks into this file. That is how the pool table landed (2026-09-10). |
-| `lobby.rs` | `SharedLobby`, the process-global `Arc<Mutex<..>>` presence map: parked spot assignments, walkers, emotes, the dog-pet event, snapshots. |
-| `state.rs` | Per-session view state: camera target, animation clock, latest `LobbySnapshot`, arrival/departure door events, the `Tutorial` state machine. |
-| `input.rs` | Walking (arrows/hjkl), `i` composer, `w`/`x` emotes, `t` bartender mention, `n` out back to Nightcap (the avatar first steps onto `map::BACK_DOOR_MAT`, in the shared lobby too, so the room sees them leave by the door), Enter on landmarks/dog/the back door, tutorial Enter. Returns `false` for globals. |
+| `map.rs` | The 184x50 generated floor plan (`MAP` literal, do not hand-edit; re-run `scripts/gen_clubhouse_map.py --write`), collision (`walkable`), `SEATS`/`STANDING_SPOTS`/`DOOR_STACK`, interactive zones (`BACK_DOOR` out to Nightcap among them), animation cell lists, `DOOR_SIGN`. **The generator's `RUST_TEMPLATE` has drifted behind this file** — it predates `DOOR_STACK`, `BOT_SPOT`, `DOG_HOME`/`DOG_WAYPOINTS`, `BAR_APPROACH` and the `dog` parameter on `nearest_interactive`, so a bare `--write` silently *reverts* all of them. Until it is resynced: author the art in the script, run it to validate, and splice only the `MAP` and `SEATS` blocks into this file. |
+| `crowd.rs` | Pure: the room derived from presence records (`crowd`: one `Patron` per user, contested spots settled, the door stack, emotes, the last pet), `pick_spot` / `first_stand` (where a session sits), `dog_at` (the dog as a function of the wall clock). |
+| `drunk.rs` | `DrunkMap`, the process's mirror of `user_drinks` (seeded by the ghost task, bumped on every local pour). |
+| `state.rs` | Per-session state: this session's own stand (its part of its presence record), `settle` (follow a newer stand on another device, pick again after losing a spot or when a seat frees), the derived `Crowd`, camera target, animation clock, arrival/departure door events, the `Tutorial` state machine. |
+| `input.rs` | Walking (arrows/hjkl), `i` composer, `w`/`x` emotes, `t` bartender mention, `n` out back to Nightcap (the avatar first steps onto `map::BACK_DOOR_MAT`, in its published stand too, so the room sees them leave by the door), Enter on landmarks/dog/the back door, tutorial Enter. Returns `false` for globals. |
 | `ui.rs` | Renderer: camera pan, base-grid styling, animations, crowd placement, emote frames, speech bubbles, door ambience, tutorial overlays, prop popovers, composer footer, and any chat overlay that lands here (a `/summary` or reaction list requested on Home; it owns input via `screen_composes_chat`, so it must be drawn). |
-| `nightcap/` | Nightcap, the small bar out back (`n` from the tavern or Enter at the back door, `map::BACK_DOOR`, past the end of the counter; Esc back): its own `Screen::Nightcap`, `SharedSeats`, `SharedWall`, and `CONTEXT.md`. A sub-slice, not a sibling domain. The generator script carries the door art (`back_door`), but `RUST_TEMPLATE` still lacks the `BACK_DOOR` zone and the `Interactive::BackDoor` arm, same drift as the rest. |
+| `nightcap/` | Nightcap, the small bar out back (`n` from the tavern or Enter at the back door, `map::BACK_DOOR`, past the end of the counter; Esc back): its own `Screen::Nightcap`, the stools from presence (`stools.rs`), `SharedWall`, and `CONTEXT.md`. A sub-slice, not a sibling domain. The generator script carries the door art (`back_door`), but `RUST_TEMPLATE` still lacks the `BACK_DOOR` zone and the `Interactive::BackDoor` arm, same drift as the rest. |
 
-## 3. The shared lobby (multiplayer contract)
+## 3. The crowd (multiplayer contract)
 
-- `crate::state::State.clubhouse_lobby` is the single process-global
-  `SharedLobby`, threaded into each session through
-  `SessionConfig.clubhouse_lobby` (like `active_users`). **Single-replica by
-  design** (`infra/service-ssh.tf` runs 1 SSH replica); a second replica
-  needs presence moved to a shared channel.
-- Every active human (bots excluded via `fingerprint: None`, including this
-  session's own user) is *parked* on a spot: a random free seat, then the
-  first free standing spot, then the door stack (`map::DOOR_STACK` slots,
-  `+N at the door` past that). Nobody is ever hidden; the headcount in the
-  frame title is the full active count. There is no seat rotation anymore.
-- The first movement key turns a parked user into a *walker*: the seat frees
-  automatically (assignment skips walkers) and the avatar steps off the seat
-  cell. Walkers persist until disconnect; door-stack patrons are promoted
-  into freed seats on sync, oldest first.
-- Sync cadence: sessions on the screen reconcile the lobby with
-  `active_users` about once a second (`App::tick_clubhouse`) and clone a
-  render snapshot every world tick. Sessions off the screen touch nothing.
-- Emotes (`w` wave, `x` dance) and dog pets are lobby state with wall-clock
-  windows (`EMOTE_MS`, `DOG_PET_MS`), so every session plays them.
-- **Drunk glow:** the lobby also carries per-user drunk state (raw
-  `drunk_points` + `last_drink_at`, mirrored from the `user_drinks` table).
-  `Presence.drunk_level` (0 sober .. 4 wasted, decayed at read time against
-  wall clock via `late_core::models::drinks`, so a drinker sobers up while
-  logged out) drives the walker's wobble and the passed-out figure here, and
-  the printed `(word)` beside the name on chat author labels. There is no
-  background tint anymore.
-  `GhostService` seeds the map from DB every 60s (`run_drunk_glow_task`) and
-  bumps the buyer instantly after a pour; the same map feeds chat author
-  label tinting everywhere via `App.drunk_levels` (copied ~1/s in
-  `App::tick`). The drunk map is NOT pruned on roster sync, so recent
-  drinkers who logged out keep tinting their chat history until they decay.
+- The room is derived from presence (`app/presence`): one record per
+  logged-in session on every replica, carrying its `ClubhouseStand` (the
+  spot it picked or the cell it walked to, when, its last emote, its last
+  pet). Every replica holding the same records draws the same room
+  (`crowd::crowd`). No process-global seat map: presence is replica-clean
+  (root CONTEXT.md §0, §7).
+- **Everyone who logs in is in the room**, whether or not they ever open
+  it: the session sits itself down at login (`State::new`, `first_stand`),
+  from the records presence already has. Bots have no session, so no
+  presence; they are found in `active_users` for the online flags only.
+  The headcount in the frame title is the crowd's.
+- **Nobody hands out seats.** A session picks its own spot
+  (`crowd::pick_spot`: a random free seat, drawn per session, else the first
+  free standing spot, else the door stack, `map::DOOR_STACK` slots and
+  `+N at the door` past that) and publishes it. Two sessions that pick the
+  same spot in the same breath are settled in `crowd`: the earlier
+  `since_ms` keeps it (then the user id), the other is drawn at the door.
+  `State::settle`, on every new set of records, picks again for a session
+  that lost its spot, and for one at the door once a seat or standing spot
+  frees, so the door drains into the room.
+- One user on two devices is one patron: the latest mover's stand. A new
+  session of a user already in the room joins them where they are
+  (`first_stand`), and a session follows a newer stand from its other
+  device (`settle`).
+- The first movement key turns a parked patron into a *walker* (even into a
+  wall): the seat frees for everyone on the next flush. `s` sits a walker in
+  the nearest free seat within reach. Walkers keep walking until logout.
+- Cadence: every tick `App::sync_presence` copies new records into the
+  crowd (`set_records`) and publishes this session's stand when it changed;
+  on the screen the crowd is redrawn every tick (`refresh_crowd`) for the
+  clock-driven parts. Own moves redraw at once, laid over the records
+  (`crowd::Own`), without waiting for the round trip.
+- Emotes (`w` wave, `x` dance) and dog pets are stamps on the stand, played
+  for their wall-clock windows (`EMOTE_MS`, `DOG_PET_MS`) by every session
+  on every replica.
+- **The dog** is a pure function of the wall clock (`crowd::dog_at`): cycle
+  `k` trots from waypoint `k` to waypoint `k + 1` along the shortest open
+  path (found once, `dog_paths`), then naps there. Nothing to sync, and it
+  does not stop for walkers or pets; a pet sets its tail going.
+- **Drunk glow:** `DrunkMap` (`drunk.rs`) mirrors `user_drinks` (raw
+  `drunk_points` + `last_drink_at`). `Patron.drunk_level` (0 sober .. 4
+  wasted, decayed at read time against wall clock via
+  `late_core::models::drinks`, so a drinker sobers up while logged out)
+  drives the walker's wobble and the passed-out figure here, and the printed
+  `(word)` beside the name on chat author labels. `GhostService` seeds the
+  map from DB every 60s on every replica (`run_drunk_glow_task`) and a pour
+  bumps it at once on the replica that poured; another replica catches up on
+  its next seed. The same map feeds chat author label tinting everywhere via
+  `App.drunk_levels` (copied ~1/s in `App::tick`). It is not pruned by
+  presence, so recent drinkers who logged out keep tinting their chat
+  history until they decay.
 - **Name flair:** a bought Name Glow/Gradient/Shimmer, 24h or 30-day tier (see
   `hub/CONTEXT.md`) paints the name-label foreground per character
   (`put_label_styled` in `ui.rs`, flair from `ClubhouseView.name_flair` =
   `App.name_flair`, resolved ~1/s in `App::tick` from the process-shared
   flair directory). Composes with the drunk bg tint; does not touch the
-  avatar glyph or `SharedLobby`.
+  avatar glyph or presence.
   A rented title rides the same entry and trails the name on the floor
   (`clubhouse_label`, `mira, the night clerk`). The floor is a crowded
   character grid, so the title is truncated to `LABEL_MAX` (10) the way the
@@ -175,8 +197,9 @@ room is the chat surface, and the full history lives in #lounge on Home.
 - `MAP` is generated; hand-edits get clobbered by `gen_clubhouse_map.py`.
   New furniture/zones go into the generator, then re-sync the hand-written
   constants (`SEATS`, zones, `DOOR_STACK`, test probes) from its output.
-- The lobby stores wall-clock `Instant`s; unit tests use
-  `SharedLobby::with_seed` for deterministic seat draws.
+- Every presence stamp is wall-clock unix ms (`presence::svc::now_ms`), so
+  stamps from different replicas compare; the pure `crowd.rs` and `state.rs`
+  take `now_ms` as an argument, and tests pass fixed times and records.
 - `walkable` allows standing ON the counter but never behind it; the flood
   fill tests in `map.rs` guard the bartender alley seal and seat
   reachability. `DOOR_STACK` slots must stay walkable.

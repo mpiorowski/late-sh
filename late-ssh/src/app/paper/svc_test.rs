@@ -422,7 +422,8 @@ async fn a_newcomers_paper_waits_until_the_tour_is_walked() {
     app.clubhouse.tutorial = Tutorial::Pending;
     app.paper.login_pop_pending = true;
     assert_render_not_contains_for(&mut app, "The Late Edition", Duration::from_millis(300)).await;
-    app.clubhouse.enter_screen(crate::app::presence::svc::now_ms());
+    app.clubhouse
+        .enter_screen(crate::app::presence::svc::now_ms());
     assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
 
     // Nothing pops while the tour holds the keys, however long it takes.

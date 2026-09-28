@@ -2499,7 +2499,8 @@ async fn forced_tour_gates_input_until_each_named_key() {
     // with the walkthrough pending.
     app.set_screen(Screen::Clubhouse);
     app.clubhouse.tutorial = Tutorial::Pending;
-    app.clubhouse.enter_screen(crate::app::presence::svc::now_ms());
+    app.clubhouse
+        .enter_screen(crate::app::presence::svc::now_ms());
     assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
 
     // The gate swallows everything but the named key: no page hopping, no
@@ -2555,7 +2556,8 @@ async fn forced_tour_zen_stop_accepts_enter_when_the_chord_is_swallowed() {
 
     app.set_screen(Screen::Clubhouse);
     app.clubhouse.tutorial = Tutorial::Pending;
-    app.clubhouse.enter_screen(crate::app::presence::svc::now_ms());
+    app.clubhouse
+        .enter_screen(crate::app::presence::svc::now_ms());
     for bytes in [&b"1"[..], b"\r", b"2", b"\r", b"3", b"4", b"5", b"6"] {
         app.handle_input(bytes);
     }
@@ -2586,7 +2588,8 @@ async fn clubhouse_composer_refuses_commands() {
     wait_for_esc_effect(&mut app, |app| !app.chat.composing, "composer closed").await;
     app.set_screen(Screen::Clubhouse);
     app.clubhouse.tutorial = Tutorial::Done;
-    app.clubhouse.enter_screen(crate::app::presence::svc::now_ms());
+    app.clubhouse
+        .enter_screen(crate::app::presence::svc::now_ms());
 
     app.handle_input(b"i");
     app.handle_input(b"/active");
@@ -2616,7 +2619,8 @@ async fn clubhouse_draws_a_chat_overlay_that_lands_there() {
     wait_for_esc_effect(&mut app, |app| !app.chat.composing, "composer closed").await;
     app.set_screen(Screen::Clubhouse);
     app.clubhouse.tutorial = Tutorial::Done;
-    app.clubhouse.enter_screen(crate::app::presence::svc::now_ms());
+    app.clubhouse
+        .enter_screen(crate::app::presence::svc::now_ms());
 
     app.chat.open_active_users_overlay();
     wait_for_render_contains(&mut app, "Active Users").await;
@@ -4321,7 +4325,8 @@ async fn the_first_descent_opens_the_guide_and_the_question_mark_reopens_it() {
     // itself once the claim answers.
     wait_for_render_contains(&mut app, " Undercity · f fight · p patch · ? guide ").await;
     wait_for_render_contains(&mut app, "the street, explained").await;
-    wait_for_render_contains(&mut app, "arrows or hjkl walk").await;
+    // It opens at the top: the whole game in one screen.
+    wait_for_render_contains(&mut app, "the short version").await;
 
     // Esc closes it; `?` opens it again from the street; `q` closes it.
     app.handle_input(b"\x1b");

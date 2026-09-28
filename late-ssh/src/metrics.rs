@@ -380,11 +380,10 @@ mod inner {
         GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
         GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult,
-        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
-        Presence, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen,
-        SessionStartStage, SessionUser, SongQueueReward, SshRejectReason, SummaryResult,
-        PresenceWire, TailorBeat, TranslationResult, VizWireBands,
+        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
+        PotReminderOutcome, Presence, PresenceWire, Refresh, RefreshOutcome, RenderReason,
+        RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -2225,11 +2224,10 @@ mod inner {
         GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
         GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult,
-        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
-        Presence, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen,
-        SessionStartStage, SessionUser, SongQueueReward, SshRejectReason, SummaryResult,
-        PresenceWire, TailorBeat, TranslationResult, VizWireBands,
+        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
+        PotReminderOutcome, Presence, PresenceWire, Refresh, RefreshOutcome, RenderReason,
+        RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 

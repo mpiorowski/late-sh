@@ -7,7 +7,8 @@
   (phase 2, build order step 1), the night city street in `city/`
   (the wallet, GAME.md "The three surfaces"; art and walkable street
   first, under the clubhouse on a second `0`, runners only), the shared
-  street in `street/` (every runner on it, across replicas; §3b), and the fight in `fight/` (the runner's sheet on
+  street in `street/` (every runner on it, across replicas, over
+  `app/presence`; §3b), and the fight in `fight/` (the runner's sheet on
   the row, the lazy day roll, the ration fight against a glyph at the
   screen, the wire's news lines, the armorer's till; §3c) and the
   tailor in `tailor/` (the mirror as the look's editor, the look's writer
@@ -85,9 +86,7 @@ number of replicas spend one AI call per text.
 | `runner/ui.rs` | `portrait_spans`: the look as three styled spans, one per worn piece in its tint; `badge_text` (the mark and the level, `▚7`, with the marks behind the Signal's glyph once there are any, `▚3╬2`) and `level_color` (the newest tint the level unlocked: static to 3, phosphor to 6, cyan to 9, magenta to 12, red to 14, white at 15) for the wire's author header and the profile; `tint_color` maps the palette onto the theme (cyan and magenta fixed, the theme has neither). Pure. |
 | `runner/data.rs` | `welcome`: the voice's welcome for a runner whose row was just created, one message, one paragraph per line (the runner mentioned by name, the story so far, `0` twice as the way down, `/leave` and `/join #deadchannel`). Names no key on the street: those are the guide's. Placeholder copy at feed-template standards. Pure. |
 | `runner/svc.rs` | `RunnerLookService`: the process-shared runner directory (`watch<Arc<HashMap<Uuid, RunnerEntry>>>`, an entry being the look, level, peak level, and marks of a standing runner), seeded and refreshed from `deadchannel_runners` (`list_standing`) on the `deadchannel_runner_changed` LISTEN, the `app/flags` shape. A look that fails to parse is logged and skipped. `fixed_looks_rx` for test apps. |
-| `street/state.rs` | `Street`, the pure street one replica knows: its own sessions' stands (what it publishes; `take_changes`, `take_heartbeat`) and every other replica's, heard off the wire (`hear`) and dropped after `HEARD_TTL_MS` without a heartbeat (`expire`). `view` merges to one `StreetRunner` per user: the latest mover's cell, present if any session is looking. |
-| `street/svc.rs` | `StreetService`, the replica's street task: the one writer of `Street`, fed by sessions over an unbounded queue and by the listener's `deadchannel_street` queue; every `FLUSH` (200ms) it hands the changes to a publisher task (one queued batch, sent in order, so a slow database delays the street and never grows a queue), every `HEARTBEAT` (3s) the whole roster; the merged view on a `watch`. `detached` for test apps. The `late_ssh_deadchannel_street_total{beat}` counter. |
-| `street/session.rs` | `StreetSession`, the `App` slot: `descend` (on the street until the session ends), `sync` (sends only a change of cell or presence), `leave`, `refresh` (the tick copy the renderer reads); `Drop` leaves. |
+| `street/state.rs` | Pure: `street_view`, the street derived from presence records (one `StreetRunner` per user: the latest mover's cell, present if any session is looking), and `StreetPresence`, the `App` slot: `descend` (on the street until the session ends), `sync` (the stand this session publishes; the move stamp moves only on a move), `leave`, and the derived `view` the renderer reads. The wire is `app/presence`. |
 | `city/map.rs` | **Generated** by `scripts/gen_city_map.py --write` (never hand-edited): the 232x52 `MAP` literal, the `SOLID` collision bitmap, `SPAWN`, every zone (`SIGNS`, `BANNERS`, `CART_SIGNS`, `AWNINGS`, `WINDOWS`, `VENTS`, `PUDDLES`, `LAMPS`, `DROP_LIGHTS`, `SCREEN_FACE`, `WIRE`, ...), the closed `Neon` palette, `Landmark` + `nearest_landmark` (reach zones), `walkable`, `grid`/`char_at`. |
 | `city/state.rs` | Per-session view state: the runner's cell, the animation clock, the open panel, the cursor on the armorer's wall (`picked_tier`, `pick_up` / `pick_down`), the pinned street line. `walk`, `run`, `nearby`, `Landmark::on_enter` (`Enter::Panel` for shops, `Enter::Line` for carts, `Enter::Fight` at the screen, `Enter::Leave` for the wire). Pure. |
 | `city/data.rs` | The city's copy and catalogs: the gear ladder (`COST_LADDER`, `WEAPONS`, `ARMOR`: LoGD numbers, GAME.md names), `BANDS` with draft move names, `NOTICES`, `DRINKS`, `TAILOR_PRICES`, the per-landmark `lines` pools, `title` and `pitch`. |
@@ -515,10 +514,10 @@ till; every other counter is a catalog with its till shut.
   not the drop.
 - **The street is shared (`street/`).** Every runner who has gone down
   this session stands on it, on every replica, until the session ends:
-  the first descent puts the runner on the street (`StreetSession::descend`)
+  the first descent puts the runner on the street (`StreetPresence::descend`)
   and it stays there, lit while the session is on the page and dim while
   it is on another (`present`), standing where it was left. A logout
-  (`Drop`) or losing the runner (the directory edge in `tick.rs`) takes
+  (presence drops the session's record) or losing the runner (the directory edge in `tick.rs`) takes
   it off. One runner per user: two sessions show the latest mover's cell.
   Nothing is persisted: a fresh login starts at the stairs. Another
   runner who is looking carries a light like yours (`CARRIERS_MAX`
@@ -526,18 +525,14 @@ till; every other counter is a catalog with its till shut.
   under the street's own light, its name barely there. Runners do not
   collide, and a panel, the ledge or the fight are the session's own:
   others see you standing there.
-  - **The wire.** Each replica batches its own sessions into one
-    `pg_notify` on `deadchannel_street` per flush (late-core
-    `models/deadchannel_street.rs`, compact text, no table), so the notify
-    rate is replicas times flushes, not runners times steps. The replica
-    id is a UUID v7 per process start. A replica ignores its own batches
-    (its local stands are the truth). A new or reconnected replica fills
-    within one heartbeat, with no request/reply; a dead replica's runners
-    drop off after `HEARD_TTL_MS` (10s, three heartbeats and a bit), which
-    is also what clears a leaver missed across a LISTEN reconnect.
-    Another replica sees a step within about a flush and a frame; your
-    own step never waits on the wire (`city/input.rs` syncs on the step,
-    `tick.rs` on every tick for a change of page).
+  - **The wire** is presence (`app/presence`, root CONTEXT.md §7): the
+    street stand rides this session's presence record next to its tavern
+    seat and its Nightcap stool, batched per replica per flush, heartbeat
+    and timeout included. `App::sync_presence` syncs the stand and
+    publishes it on every tick (a send only on a change) and derives the
+    view from new records. Another replica sees a step within about a
+    flush and a frame; your own runner is drawn from `city::State` and
+    never waits on the wire.
 
 ## 3c. The fight (the static at the end of the row)
 
@@ -889,10 +884,7 @@ Drained by `haunt::svc::tick`.
   connect, not per person); bio screens by outcome are
   `late_ssh_first_contact_bio_screens_total`; delivered beats are
   `late_ssh_first_contact_beats_total`. The street's wire is
-  `late_ssh_deadchannel_street_total{beat}` (published, publish_failed,
-  heard, rejected, expired); a steady `expired` count is a replica dying or
-  a LISTEN dropping, and `publish_failed` is the database refusing the
-  notify. The name is a log field only, never
+  presence's, `late_ssh_presence_total{beat}` (root CONTEXT.md §7). The name is a log field only, never
   a metric label: the three counters stay keyed on closed enums so the
   series count cannot grow with the player base. Grafana's "deadchannel"
   row (`monitoring/dashboards/observability.json`) reads both: the beat and

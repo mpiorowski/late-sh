@@ -24,9 +24,9 @@ use crate::app::common::textarea_input::{EditOutcome, handle_single_line_edit};
 use crate::app::input::ParsedInput;
 use crate::app::state::App;
 
+use super::state::{Drink, Order};
 use super::stools::SEAT_COUNT;
 use crate::app::presence::svc::now_ms;
-use super::state::{Drink, Order};
 
 /// The room a seated patron composes into: `None` off a stool, or before
 /// the room snapshot carries the nightcap room. The seat is the whole

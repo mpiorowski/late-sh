@@ -129,7 +129,10 @@ fn a_seat_lost_to_an_earlier_claim_is_picked_again() {
 
     state.set_records(Arc::new(vec![alice]), NOW + 10);
 
-    assert_eq!(placement(&state, 2), Some(Placement::Seated(usize::from(index))));
+    assert_eq!(
+        placement(&state, 2),
+        Some(Placement::Seated(usize::from(index)))
+    );
     assert!(
         matches!(state.stand().spot, Spot::Seat { index: mine } if mine != index),
         "picked another seat: {:?}",
@@ -142,9 +145,10 @@ fn a_seat_lost_to_an_earlier_claim_is_picked_again() {
 fn a_full_house_waits_at_the_door_and_takes_the_first_seat_that_frees() {
     let mut full: Vec<PresenceRecord> = (0..map::SEATS.len())
         .map(|i| other(10 + i as u128, Spot::Seat { index: i as u16 }, 0))
-        .chain((0..map::STANDING_SPOTS.len()).map(|i| {
-            other(100 + i as u128, Spot::Standing { index: i as u16 }, 0)
-        }))
+        .chain(
+            (0..map::STANDING_SPOTS.len())
+                .map(|i| other(100 + i as u128, Spot::Standing { index: i as u16 }, 0)),
+        )
         .collect();
     let mut state = session(full.clone(), false);
     assert_eq!(state.stand().spot, Spot::Door);

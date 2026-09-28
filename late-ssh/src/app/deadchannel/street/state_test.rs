@@ -40,7 +40,11 @@ fn only_sessions_that_went_down_stand_on_the_street() {
 
     runner.leave();
     runner.sync(11, 5, true, 2_000);
-    assert_eq!(runner.stand(), None, "a leaver is off until the next descent");
+    assert_eq!(
+        runner.stand(),
+        None,
+        "a leaver is off until the next descent"
+    );
 }
 
 #[test]

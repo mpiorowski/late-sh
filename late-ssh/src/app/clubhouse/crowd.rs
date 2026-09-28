@@ -438,8 +438,7 @@ fn dog_paths() -> &'static Vec<Vec<Vec<(u16, u16)>>> {
 pub(super) fn shortest_path(from: (u16, u16), to: (u16, u16)) -> Option<Vec<(u16, u16)>> {
     let width = usize::from(map::MAP_W);
     let index = |(x, y): (u16, u16)| usize::from(y) * width + usize::from(x);
-    let mut came_from: Vec<Option<(u16, u16)>> =
-        vec![None; width * usize::from(map::MAP_H)];
+    let mut came_from: Vec<Option<(u16, u16)>> = vec![None; width * usize::from(map::MAP_H)];
     let mut queue = std::collections::VecDeque::from([from]);
     came_from[index(from)] = Some(from);
     while let Some(cell) = queue.pop_front() {

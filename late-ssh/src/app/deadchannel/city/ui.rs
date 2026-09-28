@@ -434,7 +434,13 @@ fn light_map(t: u64, player_x: u16, player_y: u16, carriers: &[(u16, u16)]) -> V
     let mut out = vec![[0.0f32; 3]; usize::from(map::MAP_W) * usize::from(map::MAP_H)];
     // What the runner carries, and every other runner who is looking.
     for &(x, y) in std::iter::once(&(player_x, player_y)).chain(carriers) {
-        spread(&mut out, x, y, CARRY_RADIUS, scale([1.0, 0.95, 0.85], CARRY));
+        spread(
+            &mut out,
+            x,
+            y,
+            CARRY_RADIUS,
+            scale([1.0, 0.95, 0.85], CARRY),
+        );
     }
     // The car's headlights: a pool ahead of it, and its own glow.
     if let Some(car) = car_at(t) {

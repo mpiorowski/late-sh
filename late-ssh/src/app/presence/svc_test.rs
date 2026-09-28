@@ -57,7 +57,12 @@ async fn a_session_on_one_replica_moves_and_leaves_on_the_other() {
         moved_at_ms: 2_000,
     });
     on_a.publish(ann.clone());
-    sees(&mut on_b, vec![ann.clone()], "ann's descent reaches replica b").await;
+    sees(
+        &mut on_b,
+        vec![ann.clone()],
+        "ann's descent reaches replica b",
+    )
+    .await;
 
     drop(on_a);
     sees(&mut on_b, Vec::new(), "ann's logout clears replica b").await;

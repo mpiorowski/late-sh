@@ -1434,10 +1434,8 @@ impl App {
         // what presence already knows.
         let session_id = Uuid::now_v7();
         let presence_records = config.presence.records();
-        let presence = crate::app::presence::session::PresenceSession::new(
-            &config.presence,
-            session_id,
-        );
+        let presence =
+            crate::app::presence::session::PresenceSession::new(&config.presence, session_id);
         let mut app = Self {
             running: true,
             size: (cols, rows),

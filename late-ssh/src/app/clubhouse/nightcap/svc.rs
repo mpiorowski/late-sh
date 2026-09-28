@@ -40,7 +40,7 @@ use super::wall::{SharedWall, TAB_BOARD_SIZE, WallSnapshot};
 pub const WALL_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
 
 /// The house's process-global handle: the DB and the shared wall. Built in
-/// `main.rs`, threaded into sessions like the seats, and the only thing at
+/// `main.rs`, threaded into sessions, and the only thing at
 /// this bar that can read or write a table.
 #[derive(Clone)]
 pub struct NightcapHouse {

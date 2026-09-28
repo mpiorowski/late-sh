@@ -537,8 +537,22 @@ fn a_runner_who_is_looking_carries_a_light_and_one_who_is_away_does_not() {
     // Side by side under the same light, the one who is looking is the
     // brighter mark.
     let street: StreetView = [
-        (Uuid::now_v7(), StreetRunner { x: px + 1, y: py, present: true }),
-        (Uuid::now_v7(), StreetRunner { x: px + 1, y: py, present: false }),
+        (
+            Uuid::now_v7(),
+            StreetRunner {
+                x: px + 1,
+                y: py,
+                present: true,
+            },
+        ),
+        (
+            Uuid::now_v7(),
+            StreetRunner {
+                x: px + 1,
+                y: py,
+                present: false,
+            },
+        ),
     ]
     .into_iter()
     .collect();

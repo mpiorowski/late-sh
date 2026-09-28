@@ -20,8 +20,8 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
 
 | File | Owns |
 |---|---|
-| `lobby.rs` | `SharedSeats`, the process-global `Arc<Mutex<..>>` seat state: who sits where, since when, pours landed this sitting, the seated roster a round is for. |
-| `state.rs` | Per-session view state: seat snapshot, roster-refresh cadence, the `Drink` menu, the one `Order` in flight, the outcome channel, the footer line. Pure; never touches chips. |
+| `stools.rs` | Pure: the six stools derived from presence records (`stools`: who holds which, since when, pours this sitting; a contested stool goes to the earlier sitter, one stool per user). |
+| `state.rs` | Per-session state: this session's own stool (its part of its presence record), the derived row, the `Drink` menu, the one `Order` in flight, the outcome channel, the footer line, `round_patrons`. Pure; never touches chips. |
 | `wall.rs` | `SharedWall`, the process-global wall snapshot: the TV's headline and newest Artboard piece, the tab board, the carvings by stool. Read-only for sessions. |
 | `svc.rs` | Orchestration: `NightcapHouse` (the DB and the wall) runs the one wall refresh task per process and writes carvings; `spawn_order` places an order off-thread on the chip service, mirrors the buzz into the tavern's drunk map, says the drink out loud through `HouseVoice`, logs and counts; `spawn_credit_check` counts the drinks a patron is holding. All report an `Outcome` back. |
 | `input.rs` | `1`-`6` sit/stand, `i`/Enter compose (seated only), `d` menu (`1`-`4` pour, `r` a round), `c` the knife; while the knife is out every key goes to the one-line field. `compose_room` is the seat gate the icon picker also asks. |
@@ -85,38 +85,43 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   screen and no other screen shows the room, so what is said here scrolls
   off it. Storage is ordinary chat.
 
-## 4. The shared seats (multiplayer contract)
+## 4. The stools (multiplayer contract)
 
-- `crate::state::State.nightcap_lobby` is the single process-global
-  `SharedSeats`, threaded into each session through
-  `SessionConfig.nightcap_lobby` (same pattern as `clubhouse_lobby`).
-  Single-replica by design, same constraint as the Clubhouse.
-- Nobody holds a seat by default: you are only in the room's shared state
-  once you press a seat number. `App::tick_nightcap` (called from `tick.rs`
-  alongside `tick_clubhouse`) only evicts disconnected occupants; it never
-  auto-seats anyone. Eviction runs only while a session is on the screen,
-  and entering forces a refresh, so a stale stool is gone before anyone
-  sees it. `tick_nightcap` returns whether the bar moved on screen (a
-  settled outcome, another patron's stool, a pour, a carve, the TV's next
-  caption) and `tick.rs` folds that into the frame decision: the screen
-  is on the idle cadence and draws nothing on its own, so without that
-  report a change from another session sits unrendered until a keypress.
+- A stool is part of the sitter's own presence record (`app/presence`,
+  `NightcapStand`: the stool, when they sat, drinks this sitting), never
+  handed out. Every replica derives the same row from the same records
+  (`stools::stools`), so the bar is replica-clean.
+- Nobody holds a stool by default: you are only on one once you press its
+  number. `App::sync_presence` copies new records in on every tick
+  (`State::set_records`) and publishes this session's stool when it
+  changed; `App::tick_nightcap` lands settled outcomes and, on the screen,
+  redraws the row and the wall. It returns whether the bar moved on screen
+  (a settled outcome, another patron's stool, a pour, a carve, the TV's next
+  caption) and `tick.rs` folds that into the frame decision: the screen is
+  on the idle cadence and draws nothing on its own, so without that report
+  a change from another session sits unrendered until a keypress.
   `State::refresh_snapshot` compares stools by what the row prints (the
   sitting time at the minute), not by raw duration, so an idle bar stays
   clean.
+- **Two people on one stool.** Taking a stool checks the row as this
+  session sees it; two people on different replicas can still take the
+  same one in the same breath. The row gives it to the earlier `sat_at_ms`
+  (then the user id), and the other session, on its next records, stands
+  back up with "someone beat you to that stool." One user on two devices
+  holds at most one stool, their earliest.
 - **A stool is held only while its owner is in the room.** Leaving the
   screen by any route (Esc, `0`, Tab, a page digit) runs
-  `State::leave_screen` from `App::set_screen`, which vacates the seat and
-  closes the menu. This is load-bearing: `SharedSeats::sync` evicts only
-  users who dropped out of `active_users`, which means disconnected, so a
-  seat kept across a screen change would outlive the visit and six of them
-  would close the bar.
+  `State::leave_screen` from `App::set_screen`, which gives the stool back
+  and closes the menu; a logout drops the whole record. A stool kept across
+  a screen change would outlive the visit, and six of them would close the
+  bar.
 - Pressing your own occupied seat's number again stands you up (and closes
   the menu). Pressing a stool someone else holds is refused with
   `SeatChange::Taken`, which the footer prints.
-- Occupant names are re-read from the roster on every `sync`, never cached
-  at sit time, so a rename reaches the stool. Root `CONTEXT.md` §8.1 names
-  seat labels as the case not to build a per-feature username cache for.
+- Occupant names come from the sitter's presence record, which carries the
+  session's live profile name, never cached at sit time, so a rename reaches
+  the stool. Root `CONTEXT.md` §8.1 names seat labels as the case not to
+  build a per-feature username cache for.
 - Each stool shows how long it has been held (`SeatView.seated_for`,
   coarse minutes) and the occupant's drunk `(word)` from `App.drunk_levels`,
   the same map that labels chat authors.
@@ -140,9 +145,11 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   a priced pick names a drink the credit would contradict; otherwise
   `buy_drink` debits
   (ledger reason `drink_purchase`, source_ref = drink name) atomically with
-  the `user_drinks` buzz upsert; a round is `buy_round` with the seated
-  roster minus the buyer as candidates. Each success mirrors the buzz into
-  the tavern's `SharedLobby::record_drink`, so the wobble, the passed-out
+  the `user_drinks` buzz upsert; a round is `buy_round` with the stools
+  as the buyer's session sees them, minus the buyer, as candidates
+  (`State::round_patrons`). A drink that lands counts on the buyer's stool
+  (`NightcapStand.drinks`, in `State::apply_outcome`) if they are still on it. Each success mirrors the buzz into
+  the process's `DrunkMap::record_drink`, so the wobble, the passed-out
   figure, and the chat `(word)` follow the patron back inside, and a credit
   bought at either bar can be cashed at either bar.
 - **A round here is priced for a bar that will drink it.** `drink_rounds`
@@ -224,21 +231,24 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   `WALL_REFRESH_INTERVAL` (5 min) into `SharedWall`; a carve updates the
   wall in place the moment it lands, so nobody waits for the refresh.
   Sessions copy the snapshot in `refresh_snapshot`, never read the DB.
-  Same single-replica assumption as the seats.
+  One refresh task per replica: a carve shows at once on the replica that
+  carved it and on the others at their next refresh.
 
 ## 7. Testing
 
-- `lobby_test.rs`: seat toggle/move/collision, vacating, pour counting,
-  the round roster, roster eviction and relabelling. Pure `SharedSeats`.
+- `stools_test.rs`: the row from records, a contested stool going to the
+  earlier sitter, one stool per user, this session's own stool laid over
+  the records.
 - `state_test.rs`: the seat is given back on `leave_screen`, a taken stool
   reports itself, seated-only compose and order, one order in flight until
   the channel answers, every `Outcome` footer line, the banked-drink count
   (never speaks, never frees a pour, follows a comped pour's `remaining`),
   the menu closing on stand/leave, the knife (needs a stool, trims, refuses
   an empty line, drops on stand/Esc, never frees a pour in flight), the TV
-  clock, the roster cadence. `State::new` takes an
-  `Option<SharedSeats>`, a `Uuid` and a name, so neither file needs an
-  `App` fixture.
+  clock, a stool lost to an earlier sitter, pours counting on the stool, the
+  round's patrons. `State::new` takes records, ids and a name, and other
+  sessions are records built in the test, so neither file needs an `App`
+  fixture.
 - `chat/state_internal_test.rs` pins that the room is never a list room;
   `late-core` `chat_room_test.rs` pins `ensure_nightcap` as idempotent,
   auto-joined, and seating accounts older than the room;

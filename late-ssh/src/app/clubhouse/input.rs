@@ -21,8 +21,8 @@ use crate::app::state::App;
 
 use late_core::models::presence::Emote;
 
-use crate::app::presence::svc::now_ms;
 use super::map::Interactive;
+use crate::app::presence::svc::now_ms;
 
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     // A left click on a patron opens their profile, the same view as
