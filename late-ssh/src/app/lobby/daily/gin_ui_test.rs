@@ -128,7 +128,11 @@ fn the_card_just_taken_from_the_pile_is_dimmed_because_it_cannot_go_back() {
             .map(|span| span.style.add_modifier.contains(Modifier::DIM))
             .collect()
     };
-    assert_eq!(faces(UPCARD), vec![true], "the taken card reads as unplayable");
+    assert_eq!(
+        faces(UPCARD),
+        vec![true],
+        "the taken card reads as unplayable"
+    );
     assert!(
         faces(PONE[0]).iter().all(|dim| !dim),
         "every other card can be thrown"

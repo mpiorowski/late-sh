@@ -416,7 +416,10 @@ fn status_line(
             let held = table.held(my_seat);
             match gin.marked.or_else(|| held.get(board.cursor).copied()) {
                 Some(card) if table.taken == Some(card) => spans.push(Span::styled(
-                    format!("You just took {} · it cannot go straight back", card.label()),
+                    format!(
+                        "You just took {} · it cannot go straight back",
+                        card.label()
+                    ),
                     amber,
                 )),
                 Some(card) => {

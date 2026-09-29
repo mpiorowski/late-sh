@@ -1490,9 +1490,10 @@ impl DailyState {
                 match DailyMatchDetail::from_row(row) {
                     Ok(mut detail) => {
                         carry_pool_playback(board.detail.as_mut(), &mut detail);
-                        match gin_drawn_cursor(board.detail.as_ref(), &detail, user_id) {
-                            Some(cursor) => board.cursor = cursor,
-                            None => {}
+                        if let Some(cursor) =
+                            gin_drawn_cursor(board.detail.as_ref(), &detail, user_id)
+                        {
+                            board.cursor = cursor;
                         }
                         board.detail = Some(detail);
                         board.load_error = None;
