@@ -13,7 +13,7 @@ Entry points:
 - **`Ctrl+G` modal** (`modal_input.rs` / `modal_ui.rs`): one scrollable list of unseen results, your matches, open challenges, live games, then the fixed house-table block (stable chrome, live occupancy). Toggled from anywhere via the reserved global or the `/lobby` composer command (both call `input::toggle_lobby_globally`); opening calls `LobbyState::mark_seen`.
 - **Sidebar panel** (`daily/panel.rs`): passive top-4 match view; content is daily-only so the panel stays in `daily/` (the `lobby` rule label itself is owned by `common/sidebar.rs`, glow bool passed via `SidebarProps.lobby_glow`).
 - **Backtick** (`app/workspace/cycle.rs`, its own domain): hops Home chat → your-turn boards → seated house tables → unfinished Arcade dailies → live door games → Home, consuming this domain's `my_turn_matches` / `my_seated_tables`. See `workspace/CONTEXT.md`.
-- **Screens**: `Screen::DailyMatch` (daily/board_*) and `Screen::HouseTable` (house/input+ui), both outside the Tab cycle, entered only from the modal or backtick; leaving restores the surface's `return_screen` and reopens the modal (except the backtick wrap home, which skips it).
+- **Screens**: `Screen::DailyMatch` (daily/board_*) and `Screen::HouseTable` (house/input+ui), both outside the Tab cycle, entered from the modal or backtick, and the daily board also from the #lounge live strip; leaving restores the surface's `return_screen` and reopens the modal (except the backtick wrap home and a daily board opened from the strip, which skip it).
 
 ## 2. Module map
 

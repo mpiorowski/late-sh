@@ -141,22 +141,38 @@ pub struct LiveCandidate {
     pub aimed_at: Option<Instant>,
 }
 
-/// Pick the match the #lounge strip features, from data every session and
-/// every replica shares: the rows' `updated` stamps and the wall clock.
-/// Nothing per session goes in (which match a session saw first, when its
-/// tick ran), so everyone in the room lands on the same board.
+/// The match the strip features, and when it took the strip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Featured {
+    pub id: Uuid,
+    pub since: DateTime<Utc>,
+}
+
+/// Pick the match the #lounge strip features, from the rows' `updated`
+/// stamps, the wall clock, and the match this session is showing.
 ///
-/// A fresh aim wins outright, the freshest if several. Otherwise the writes
-/// are replayed in order: a match that takes the strip keeps it for
-/// `LIVE_HOLD` from the moment it took it, and the next write in line takes
-/// over at its own stamp or the end of that hold, whichever is later. So two
-/// moves a minute apart each get their minute, in order, and a session that
-/// connects mid-hold sees what everyone else sees.
+/// A fresh aim wins outright, the freshest if several. Otherwise the match
+/// on the strip keeps it for `LIVE_HOLD` from the moment it took it, as long
+/// as it is still in the lobby and its last write is inside
+/// `LIVE_STRIP_LINGER`. Past that the writes are replayed in order
+/// (`replay`), which is also where a session with nothing up starts, so one
+/// that connects mid-hold sees what the room sees.
+///
+/// The replay reads only each row's latest stamp, so a match that moves
+/// again loses its old place in it. The hold is what keeps that from
+/// flipping the board early: a session follows the replay one match behind
+/// rather than cut a minute short.
 pub fn pick_featured(
+    current: Option<Featured>,
     candidates: &[LiveCandidate],
     now_utc: DateTime<Utc>,
     now: Instant,
-) -> Option<Uuid> {
+) -> Option<Featured> {
+    let since_for = |id: Uuid, fresh_start: DateTime<Utc>| match current {
+        Some(current) if current.id == id => current.since,
+        Some(_) => now_utc,
+        None => fresh_start,
+    };
     let aiming = |candidate: &&LiveCandidate| {
         candidate
             .aimed_at
@@ -167,9 +183,39 @@ pub fn pick_featured(
         .filter(aiming)
         .max_by_key(|candidate| candidate.aimed_at)
     {
-        return Some(candidate.id);
+        return Some(Featured {
+            id: candidate.id,
+            since: since_for(candidate.id, now_utc),
+        });
     }
     let hold = chrono::Duration::from_std(LIVE_HOLD).expect("hold fits chrono");
+    let linger = chrono::Duration::from_std(LIVE_STRIP_LINGER).expect("linger fits chrono");
+    if let Some(current) = current
+        && now_utc < current.since + hold
+        && candidates.iter().any(|candidate| {
+            candidate.id == current.id && now_utc.signed_duration_since(candidate.updated) < linger
+        })
+    {
+        return Some(current);
+    }
+    let (id, shown_at) = replay(candidates, now_utc)?;
+    Some(Featured {
+        id,
+        since: since_for(id, shown_at),
+    })
+}
+
+/// Replay the writes in order, from data every session and every replica
+/// shares: a match that takes the strip keeps it for `LIVE_HOLD`, and the
+/// next write in line takes over at its own stamp or the end of that hold,
+/// whichever is later. So two moves a minute apart each get their minute, in
+/// order. A match whose turn would come after its own `LIVE_STRIP_LINGER`
+/// ran out is skipped: the strip could not show it, and its minute would
+/// keep a move that just landed waiting behind nothing. Returns the match
+/// and when it took the strip.
+fn replay(candidates: &[LiveCandidate], now_utc: DateTime<Utc>) -> Option<(Uuid, DateTime<Utc>)> {
+    let hold = chrono::Duration::from_std(LIVE_HOLD).expect("hold fits chrono");
+    let linger = chrono::Duration::from_std(LIVE_STRIP_LINGER).expect("linger fits chrono");
     let mut ordered: Vec<&LiveCandidate> = candidates.iter().collect();
     // The id breaks a tie between two rows stamped the same instant, so
     // the order is the same on every session.
@@ -182,10 +228,13 @@ pub fn pick_featured(
         if takeover > now_utc {
             break;
         }
+        if takeover.signed_duration_since(next.updated) >= linger {
+            continue;
+        }
         shown = next.id;
         shown_at = takeover;
     }
-    Some(shown)
+    Some((shown, shown_at))
 }
 
 /// What the snapshot reads off one active match's state JSON: the summary

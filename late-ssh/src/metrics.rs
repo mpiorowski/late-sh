@@ -940,7 +940,7 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_daily_snapshot_rows_rejected_total")
                 .with_description(
-                    "Daily match rows left out of the lobby snapshot, per publish, by reason. `unknown_game` is expected during a rolling deploy that adds a game; anything else is a corrupt row or a build that cannot read what another wrote",
+                    "Daily match rows left out of the lobby snapshot, by reason, counted once per replica when a row first goes missing. `unknown_game` is expected during a rolling deploy that adds a game; anything else is a corrupt row or a build that cannot read what another wrote",
                 )
                 .build()
         })

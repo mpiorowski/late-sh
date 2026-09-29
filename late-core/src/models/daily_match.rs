@@ -5,9 +5,10 @@ use serde_json::Value;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-/// Cross-process refresh channel. A statement-level trigger (migration 211)
-/// fires it on every write to `daily_matches`, with an empty payload: every
-/// replica re-reads its lobby snapshot, it never trusts a payload.
+/// Cross-process refresh channel. A row-level trigger (migration 212) fires
+/// it for every row of `daily_matches` a write changes, with an empty
+/// payload: every replica re-reads its lobby snapshot, it never trusts a
+/// payload. A guarded write that matches no row sends nothing.
 pub const DAILY_MATCH_CHANGED_CHANNEL: &str = "daily_match_changed";
 
 /// How a finished match ended: the closed set of `daily_matches.result`

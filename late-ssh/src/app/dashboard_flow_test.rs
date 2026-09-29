@@ -166,9 +166,9 @@ async fn c_on_dashboard_copies_selected_message() {
 #[tokio::test]
 async fn o_opens_the_live_strip_match_from_the_lounge_card() {
     use crate::app::activity::{event::ActivityEvent, publisher::ActivityPublisher};
+    use crate::app::common::primitives::Screen;
     use crate::app::games::chips::svc::ChipService;
     use crate::app::lobby::daily::{games::DailyGame, svc::DailyService};
-    use crate::app::common::primitives::Screen;
 
     let test_db = new_test_db().await;
     let me = create_test_user(&test_db.db, "strip-key-me").await;
@@ -204,4 +204,56 @@ async fn o_opens_the_live_strip_match_from_the_lounge_card() {
     app.handle_input(b"o");
     assert_eq!(app.screen, Screen::DailyMatch, "o opens the featured match");
     wait_for_render_contains(&mut app, "Daily Match").await;
+}
+
+/// A board opened from the live strip closes back to the #lounge card: the
+/// viewer never opened the Lobby modal, so it stays shut and the challenge
+/// they have not looked at keeps its glow.
+#[tokio::test]
+async fn closing_a_board_opened_from_the_live_strip_returns_to_the_lounge_card() {
+    use crate::app::activity::{event::ActivityEvent, publisher::ActivityPublisher};
+    use crate::app::common::primitives::Screen;
+    use crate::app::games::chips::svc::ChipService;
+    use crate::app::lobby::daily::{games::DailyGame, svc::DailyService};
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "strip-close-me").await;
+    let them = create_test_user(&test_db.db, "strip-close-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), me.id, "strip-close-flow-it");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    let (activity_tx, _activity_rx) = tokio::sync::broadcast::channel::<ActivityEvent>(8);
+    let poster = DailyService::new(
+        test_db.db.clone(),
+        ChipService::new(test_db.db.clone()),
+        ActivityPublisher::new(test_db.db.clone(), activity_tx),
+    );
+    let posted = poster
+        .post_challenge(them.id, DailyGame::Chess, None)
+        .await
+        .expect("post");
+    // A second challenge stays open: news the viewer has not looked at.
+    poster
+        .post_challenge(them.id, DailyGame::Reversi, None)
+        .await
+        .expect("post the open one");
+    app.daily.claim_challenge(posted.id);
+    wait_for_render_contains(&mut app, "\u{2500}\u{2500} live").await;
+    assert!(app.lobby.glow(), "the open challenge glows");
+
+    app.handle_input(b"o");
+    assert_eq!(app.screen, Screen::DailyMatch);
+    wait_for_render_contains(&mut app, "Daily Match").await;
+
+    app.handle_input(b"q");
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert!(!app.show_lobby_modal, "the modal was never open");
+    assert!(app.lobby.glow(), "nothing looked at the lobby");
 }

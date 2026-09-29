@@ -33,7 +33,7 @@ use super::{
     connect4::DailyConnect4State,
     games::DailyGame,
     live::{
-        LIVE_AIM_WINDOW, LIVE_FINISH_LINGER, LiveCandidate, LiveStripView, LiveView,
+        Featured, LIVE_AIM_WINDOW, LIVE_FINISH_LINGER, LiveCandidate, LiveStripView, LiveView,
         finish_headline, pick_featured, strip_is_fresh,
     },
     pool::{DailyPoolState, PoolAimShare},
@@ -123,8 +123,9 @@ pub struct DailyState {
     /// arrived. Presentation only, like the aim itself: pruned past
     /// `LIVE_AIM_WINDOW` on every tick, so it holds tables in play right now.
     live_aims: HashMap<Uuid, (PoolAimShare, Instant)>,
-    /// The match the #lounge strip features (`live::pick_featured`).
-    live_featured: Option<Uuid>,
+    /// The match the #lounge strip features and when it took the strip
+    /// (`live::pick_featured`).
+    live_featured: Option<Featured>,
     /// A match that just ended, held for the #lounge strip (`note_finished`).
     live_finish: Option<LiveFinish>,
     /// What the #lounge strip shows, decided on the tick
@@ -136,8 +137,8 @@ pub struct DailyState {
     pub live_strip_hit: Cell<Option<(Rect, Uuid)>>,
 }
 
-/// A match that just ended, as the #lounge strip shows it: its last known
-/// position and the result line.
+/// A match that just ended, as the #lounge strip shows it: the position it
+/// ended on and the result line.
 struct LiveFinish {
     item: DailyMatchItem,
     headline: String,
@@ -197,6 +198,18 @@ impl EventEffect {
     }
 }
 
+/// How a board was opened. A hop from one board to the next keeps the
+/// entry of the first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoardEntry {
+    /// From the Lobby modal, or the backtick cycle: closing reopens the
+    /// modal, so multi-match move-making stays one keypress per hop.
+    Lobby,
+    /// From the #lounge live strip: closing returns to the card, the modal
+    /// was never open.
+    LoungeStrip,
+}
+
 pub struct DailyBoardState {
     pub match_id: Uuid,
     /// You aren't a player in this match: the board is read-only. No cursor,
@@ -204,6 +217,8 @@ pub struct DailyBoardState {
     pub spectating: bool,
     /// Screen to restore when the board closes.
     pub return_screen: Screen,
+    /// How the viewer got here, which decides what closing lands on.
+    pub entry: BoardEntry,
     pub cursor: usize,
     pub selected: Option<usize>,
     pub piece_render_mode: ChessPieceRenderMode,
@@ -1027,8 +1042,9 @@ impl DailyState {
                 aimed_at: self.live_aims.get(&item.id).map(|(_, at)| *at),
             })
             .collect();
-        let next = pick_featured(&candidates, now_utc, now);
-        let changed = next != self.live_featured;
+        let next = pick_featured(self.live_featured, &candidates, now_utc, now);
+        let changed = next.map(|featured| featured.id)
+            != self.live_featured.map(|featured| featured.id);
         self.live_featured = next;
         changed
     }
@@ -1041,7 +1057,7 @@ impl DailyState {
             .snapshot
             .active_matches
             .iter()
-            .find(|item| item.id == featured)?;
+            .find(|item| item.id == featured.id)?;
         let board = &item.board;
         let aim = self
             .live_aims
@@ -1052,8 +1068,8 @@ impl DailyState {
     }
 
     /// A match that left the active list and landed among the finished
-    /// ones just ended: hold its last known position with the result for
-    /// the #lounge strip. Read off the snapshot rather than the event feed,
+    /// ones just ended: hold the position it ended on, off the finished
+    /// row, with the result for the #lounge strip. Read off the snapshot rather than the event feed,
     /// so it fires on every replica and not only where the finish was
     /// written. A held result whose row is still listed re-reads its
     /// headline, since the payout is a second write behind the finish.
@@ -1066,7 +1082,15 @@ impl DailyState {
                 continue;
             };
             self.live_finish = Some(LiveFinish {
-                item: item.clone(),
+                // The active item is the position before the last move: the
+                // final one is on the finished row, with nobody on the clock.
+                item: DailyMatchItem {
+                    turn_user_id: None,
+                    turn_deadline_at: None,
+                    move_count: finished.move_count,
+                    board: finished.board.clone(),
+                    ..item.clone()
+                },
                 headline: finish_headline(finished),
                 at: Instant::now(),
             });
@@ -1162,7 +1186,7 @@ impl DailyState {
     /// the lobby, and the hint says so.
     pub fn live_strip_match(&self) -> Option<DailyMatchItem> {
         match self.live_strip? {
-            StripPick::Live => self.live_item(self.live_featured?),
+            StripPick::Live => self.live_item(self.live_featured?.id),
             StripPick::Finish => None,
         }
     }
@@ -1296,7 +1320,7 @@ impl DailyState {
 
     // ── Board screen ───────────────────────────────────────────
 
-    pub fn open_board(&mut self, item: &DailyMatchItem, return_screen: Screen) {
+    pub fn open_board(&mut self, item: &DailyMatchItem, return_screen: Screen, entry: BoardEntry) {
         let mut names = HashMap::new();
         if let Some(name) = &item.challenger_username {
             names.insert(item.challenger_id, name.clone());
@@ -1306,12 +1330,17 @@ impl DailyState {
         }
         // You're a spectator unless you're one of the two players.
         let spectating = item.challenger_id != self.user_id && item.opponent_id != self.user_id;
-        self.open_board_inner(item.id, item.game, names, spectating, return_screen);
+        self.open_board_inner(item.id, item.game, names, spectating, return_screen, entry);
     }
 
     /// Open the board for an unseen finished match (a result row in the
     /// modal). Always one of your own matches, so never spectating.
-    pub fn open_finished_board(&mut self, item: &DailyFinishedItem, return_screen: Screen) {
+    pub fn open_finished_board(
+        &mut self,
+        item: &DailyFinishedItem,
+        return_screen: Screen,
+        entry: BoardEntry,
+    ) {
         let mut names = HashMap::new();
         if let Some(name) = &item.challenger_username {
             names.insert(item.challenger_id, name.clone());
@@ -1319,7 +1348,7 @@ impl DailyState {
         if let Some(name) = &item.opponent_username {
             names.insert(item.opponent_id, name.clone());
         }
-        self.open_board_inner(item.id, item.game, names, false, return_screen);
+        self.open_board_inner(item.id, item.game, names, false, return_screen, entry);
     }
 
     fn open_board_inner(
@@ -1329,6 +1358,7 @@ impl DailyState {
         names: HashMap<Uuid, String>,
         spectating: bool,
         return_screen: Screen,
+        entry: BoardEntry,
     ) {
         // Hopping straight from one board to another replaces `self.board`
         // without a close; the old board still counts as looked-at.
@@ -1337,6 +1367,7 @@ impl DailyState {
             match_id,
             spectating,
             return_screen,
+            entry,
             // Start the cursor mid-board for each game's grid.
             cursor: match game {
                 DailyGame::Chess | DailyGame::Chess960 => 12,

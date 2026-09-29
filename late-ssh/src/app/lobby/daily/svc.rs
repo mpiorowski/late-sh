@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, Utc};
@@ -65,6 +69,10 @@ pub struct DailyService {
     snapshot_tx: watch::Sender<Arc<DailySnapshot>>,
     snapshot_rx: watch::Receiver<Arc<DailySnapshot>>,
     event_tx: broadcast::Sender<DailyEvent>,
+    /// The rows the last publish left out, so a row that stays unreadable
+    /// is reported when it first goes missing and not on every publish
+    /// after (`newly_rejected`).
+    rejected_rows: Arc<Mutex<HashSet<Uuid>>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -125,6 +133,11 @@ pub struct DailyFinishedItem {
     /// before the payout gates existed.
     pub win_payout: Option<DailyWinPayout>,
     pub finished_at: DateTime<Utc>,
+    /// How far the match got, read off the final state.
+    pub move_count: usize,
+    /// The position the match ended on. The finish writes it together with
+    /// the finished status, so no active snapshot ever carried it.
+    pub board: LiveBoard,
     pub challenger_seen: bool,
     pub opponent_seen: bool,
 }
@@ -476,6 +489,7 @@ impl DailyService {
             snapshot_tx,
             snapshot_rx,
             event_tx,
+            rejected_rows: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -1961,7 +1975,8 @@ impl DailyService {
         let usernames = User::list_usernames_by_ids(client, &user_ids).await?;
 
         // A row this build cannot show stays in the DB untouched and is left
-        // out of the snapshot; every reason is reported below, in one place.
+        // out of the snapshot; every reason is reported below, in one place,
+        // on the publish that first leaves the row out.
         let mut rejected: Vec<(Uuid, SnapshotRowError)> = Vec::new();
         let open_challenges: Vec<DailyChallengeItem> = open
             .into_iter()
@@ -2002,7 +2017,16 @@ impl DailyService {
                 }
             })
             .collect();
-        for (match_id, error) in &rejected {
+        let reported = {
+            let mut previous = self
+                .rejected_rows
+                .lock()
+                .expect("rejected rows lock is never held across a panic");
+            let reported = newly_rejected(&previous, rejected);
+            *previous = reported.still_rejected;
+            reported.new
+        };
+        for (match_id, error) in &reported {
             crate::metrics::record_daily_snapshot_row_rejected(error);
             match error {
                 // Expected for the length of a rolling deploy that adds a game.
@@ -2046,8 +2070,38 @@ pub enum SnapshotRowError {
     NoOpponent,
     /// A finished row whose result this build does not know.
     UnknownResult(anyhow::Error),
-    /// An active row whose state does not read as its game's state.
+    /// An active or finished row whose state does not read as its game's
+    /// state.
     UnreadableState(anyhow::Error),
+}
+
+/// What one publish has to say about the rows it left out.
+pub(crate) struct RejectedReport {
+    /// Rows the publish before this one still showed, or never saw: these
+    /// are logged and counted.
+    pub new: Vec<(Uuid, SnapshotRowError)>,
+    /// Every row this publish left out, for the next one to compare with.
+    pub still_rejected: HashSet<Uuid>,
+}
+
+/// Split this publish's rejected rows from the ones the last publish
+/// already reported. Publishes run on every write on every replica, so a
+/// row that stays unreadable would otherwise log an error many times a
+/// minute for as long as it sits there. A row that reads again and then
+/// breaks again is news again.
+pub(crate) fn newly_rejected(
+    previous: &HashSet<Uuid>,
+    rejected: Vec<(Uuid, SnapshotRowError)>,
+) -> RejectedReport {
+    let still_rejected = rejected.iter().map(|(match_id, _)| *match_id).collect();
+    let new = rejected
+        .into_iter()
+        .filter(|(match_id, _)| !previous.contains(match_id))
+        .collect();
+    RejectedReport {
+        new,
+        still_rejected,
+    }
 }
 
 fn snapshot_game(row: &DailyMatch) -> Result<DailyGame, SnapshotRowError> {
@@ -2120,6 +2174,10 @@ fn finished_item(
         Ok(result) => result,
         Err(error) => return Err(SnapshotRowError::UnknownResult(error)),
     };
+    let summary = match MatchSummary::of(game, &row.state) {
+        Ok(summary) => summary,
+        Err(error) => return Err(SnapshotRowError::UnreadableState(error)),
+    };
     Ok(DailyFinishedItem {
         id: row.id,
         game,
@@ -2138,6 +2196,8 @@ fn finished_item(
         // `finish`/`forfeit_expired`/`set_win_payout` were the last writers,
         // so `updated` is the finish time.
         finished_at: row.updated,
+        move_count: summary.move_count,
+        board: summary.board,
         challenger_seen: row.challenger_result_seen_at.is_some(),
         opponent_seen: row.opponent_result_seen_at.is_some(),
     })

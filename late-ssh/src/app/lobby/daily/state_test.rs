@@ -351,3 +351,72 @@ async fn a_board_reads_how_its_match_stands_and_refuses_an_open_challenge() {
         MatchStanding::Finished(DailyResult::Resign)
     );
 }
+
+/// The held result shows the board the match ended on. The finish writes the
+/// final state and the finished status in one update, so the winning move
+/// never appears in an active snapshot: the board has to come off the
+/// finished row.
+#[tokio::test]
+async fn the_held_result_shows_the_position_the_match_ended_on() {
+    use crate::app::activity::{event::ActivityEvent, publisher::ActivityPublisher};
+    use crate::app::games::chips::svc::ChipService;
+    use crate::app::lobby::daily::{connect4, live::LiveBoard};
+    use late_core::test_utils::create_test_user;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-final-challenger").await;
+    let claimer = create_test_user(&test_db.db, "daily-final-claimer").await;
+    let (activity_tx, _activity_rx) = broadcast::channel::<ActivityEvent>(8);
+    let svc = DailyService::new(
+        test_db.db.clone(),
+        ChipService::new(test_db.db.clone()),
+        ActivityPublisher::new(test_db.db.clone(), activity_tx),
+    );
+    let (notifier, _outbox) = crate::app::notify::channel();
+    let mut state = DailyState::new(svc.clone(), Uuid::now_v7(), notifier);
+
+    let posted = svc
+        .post_challenge(challenger.id, DailyGame::ConnectFour, None)
+        .await
+        .expect("post");
+    let claimed = svc
+        .claim_challenge(claimer.id, posted.id)
+        .await
+        .expect("claim");
+    let red = claimed.turn_user_id.expect("red is on the clock");
+    let yellow = if red == challenger.id {
+        claimer.id
+    } else {
+        challenger.id
+    };
+    // Red stacks column b while yellow answers in c.
+    for _ in 0..3 {
+        svc.play_move(red, claimed.id, 1, 1).await.expect("red");
+        svc.play_move(yellow, claimed.id, 2, 2)
+            .await
+            .expect("yellow");
+    }
+    let _ = state.tick(false);
+    assert!(
+        state
+            .live_strip_view()
+            .is_some_and(|strip| strip.finish.is_none()),
+        "the match in play is up"
+    );
+
+    svc.play_move(red, claimed.id, 1, 1)
+        .await
+        .expect("red connects four");
+    let _ = state.tick(false);
+
+    let strip = state.live_strip_view().expect("the result holds the strip");
+    assert!(strip.finish.is_some());
+    let LiveBoard::ConnectFour { grid, last } = strip.view.board else {
+        panic!("a connect four match paints a connect four board");
+    };
+    assert_eq!(*last, Some((3, 1)), "the winning drop is the last one");
+    for row in 0..4 {
+        assert_eq!(grid[row][1], Some(connect4::Disc::Red), "row {row} of b");
+    }
+    assert_eq!(strip.view.item.move_count, 7);
+}

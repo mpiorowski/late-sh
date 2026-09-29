@@ -1,5 +1,6 @@
 use crate::app::common::primitives::Screen;
 use crate::app::input::{MouseEventKind, ParsedInput};
+use crate::app::lobby::daily::state::BoardEntry;
 use crate::app::lobby::state::LobbyEntry;
 use crate::app::state::App;
 
@@ -124,12 +125,12 @@ fn activate_selection(app: &mut App) {
     };
     match action {
         Some(Action::OpenBoard(item)) => {
-            app.daily.open_board(&item, return_screen);
+            app.daily.open_board(&item, return_screen, BoardEntry::Lobby);
             app.show_lobby_modal = false;
             app.set_screen(Screen::DailyMatch);
         }
         Some(Action::OpenFinished(item)) => {
-            app.daily.open_finished_board(&item, return_screen);
+            app.daily.open_finished_board(&item, return_screen, BoardEntry::Lobby);
             app.show_lobby_modal = false;
             app.set_screen(Screen::DailyMatch);
         }

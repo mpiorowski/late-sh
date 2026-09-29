@@ -2841,7 +2841,11 @@ fn handle_live_strip_click(app: &mut App, x: u16, y: u16) -> bool {
     let Some(item) = app.daily.live_item(match_id) else {
         return false;
     };
-    app.daily.open_board(&item, app.screen);
+    app.daily.open_board(
+        &item,
+        app.screen,
+        crate::app::lobby::daily::state::BoardEntry::LoungeStrip,
+    );
     app.set_screen(Screen::DailyMatch);
     true
 }
@@ -2853,7 +2857,11 @@ fn open_live_strip_match(app: &mut App) -> bool {
     let Some(item) = app.daily.live_strip_match() else {
         return false;
     };
-    app.daily.open_board(&item, app.screen);
+    app.daily.open_board(
+        &item,
+        app.screen,
+        crate::app::lobby::daily::state::BoardEntry::LoungeStrip,
+    );
     app.set_screen(Screen::DailyMatch);
     true
 }

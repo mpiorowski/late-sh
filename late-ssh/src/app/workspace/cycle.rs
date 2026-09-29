@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::app::{
     common::primitives::{Banner, Screen},
-    lobby::house::tables::HouseTable,
+    lobby::{daily::state::BoardEntry, house::tables::HouseTable},
     state::App,
     workspace::arcade::{ArcadeStop, active_daily_stop, open_stop, unfinished_daily_stops},
 };
@@ -257,7 +257,13 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
             else {
                 return true;
             };
-            app.daily.open_board(&item, return_screen);
+            // A hop keeps the entry of the board it left, like the return
+            // screen; a chain that starts anywhere else closes to the Lobby.
+            let entry = match (app.screen, app.daily.board.as_ref()) {
+                (Screen::DailyMatch, Some(board)) => board.entry,
+                _ => BoardEntry::Lobby,
+            };
+            app.daily.open_board(&item, return_screen, entry);
             app.set_screen(Screen::DailyMatch);
             true
         }

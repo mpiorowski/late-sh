@@ -1953,3 +1953,36 @@ async fn a_superseded_pool_shot_is_rejected_rather_than_applied_twice() {
     .expect("update state");
     assert_eq!(stale, 0, "a write expecting a revision the row never had");
 }
+
+#[test]
+fn a_row_that_stays_rejected_is_reported_once() {
+    use crate::app::lobby::daily::svc::{SnapshotRowError, newly_rejected};
+    use std::collections::HashSet;
+
+    let (broken, other) = (Uuid::from_u128(1), Uuid::from_u128(2));
+    let ids = |report: &[(Uuid, SnapshotRowError)]| -> Vec<Uuid> {
+        report.iter().map(|(match_id, _)| *match_id).collect()
+    };
+
+    let first = newly_rejected(&HashSet::new(), vec![(broken, SnapshotRowError::NoOpponent)]);
+    assert_eq!(ids(&first.new), vec![broken], "news the first time");
+
+    // The next publish still leaves it out, and finds a second one.
+    let second = newly_rejected(
+        &first.still_rejected,
+        vec![
+            (broken, SnapshotRowError::NoOpponent),
+            (other, SnapshotRowError::NoOpponent),
+        ],
+    );
+    assert_eq!(ids(&second.new), vec![other], "only the new one is news");
+    assert_eq!(second.still_rejected, HashSet::from([broken, other]));
+
+    // A row that reads again and breaks again is news again.
+    let healed = newly_rejected(&second.still_rejected, vec![]);
+    let again = newly_rejected(
+        &healed.still_rejected,
+        vec![(broken, SnapshotRowError::NoOpponent)],
+    );
+    assert_eq!(ids(&again.new), vec![broken]);
+}
