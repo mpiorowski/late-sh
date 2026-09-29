@@ -11,12 +11,13 @@ fn png(width: u32, height: u32, colour: [u8; 4]) -> Vec<u8> {
 }
 
 #[test]
-fn a_thumbnail_is_shrunk_to_the_picture_column() {
+fn a_thumbnail_is_shrunk_to_what_the_picture_column_uses() {
     let shrunk = shrink(&png(320, 180, [10, 120, 200, 255])).expect("a png decodes");
 
     assert_eq!(
         (shrunk.width(), shrunk.height()),
-        (THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT)
+        (168, 96),
+        "eight pixels a column by sixteen a row, for 21 columns by 6 rows"
     );
     assert!(
         shrunk

@@ -6,13 +6,17 @@ use std::{cell::Cell, time::Duration, time::Instant};
 
 use chrono::{DateTime, Utc};
 use late_core::models::user::AudioSource;
-use ratatui::layout::Rect;
+use ratatui::{layout::Rect, text::Line};
+use std::sync::Arc;
+use uuid::Uuid;
 
 use crate::app::{
     audio::{
         booth::live::{self as booth_live, TrackStripView},
         state::AudioState,
+        thumbnail::Thumbnail,
     },
+    files::inline_image::InlineImageRenderSettings,
     lobby::daily::{live::MatchStripView, state::DailyState},
 };
 
@@ -61,6 +65,18 @@ impl LiveStripView<'_> {
     }
 }
 
+/// The featured booth track's thumbnail as this session's terminal paints
+/// it, kept so the frame never renders it.
+#[derive(Debug)]
+struct TrackPicture {
+    item_id: Uuid,
+    thumbnail: Thumbnail,
+    settings: InlineImageRenderSettings,
+    /// `None` when the thumbnail would not render; the strip then keeps
+    /// the drawn screen.
+    lines: Option<Vec<Line<'static>>>,
+}
+
 #[derive(Debug, Default)]
 pub struct LiveState {
     featured: Option<Featured>,
@@ -68,6 +84,7 @@ pub struct LiveState {
     /// Whether the strip is showing something being acted on right now, so
     /// the frame that draws it rides the half-tick.
     aiming: bool,
+    track_picture: Option<TrackPicture>,
     /// Where the strip drew this frame and what it showed, for the click
     /// that opens it. Render-recorded, cleared before every draw.
     pub hit: Cell<Option<(Rect, LiveSource)>>,
@@ -80,17 +97,68 @@ impl LiveState {
 
     /// Read the sources and decide what the strip shows. `reading` is
     /// whether the viewer has a message selected in the card: the strip then
-    /// holds its height. True when what the strip draws changed.
-    pub fn tick(&mut self, daily: &DailyState, audio: &AudioState, reading: bool) -> bool {
+    /// holds its height. `picture_settings` is how this session's terminal
+    /// paints an image. True when what the strip draws changed.
+    pub(crate) fn tick(
+        &mut self,
+        daily: &DailyState,
+        audio: &AudioState,
+        reading: bool,
+        picture_settings: InlineImageRenderSettings,
+    ) -> bool {
         let mut candidates = daily.live_candidates();
         candidates.extend(audio.live_candidates());
-        self.refresh(
+        let changed = self.refresh(
             &candidates,
             daily.live_finish_at(),
             Instant::now(),
             Utc::now(),
             reading,
-        )
+        );
+        let thumbnail = match self.showing() {
+            Some(Showing::Featured(LiveSource::BoothTrack(item_id))) => audio
+                .queue_thumbnail(item_id)
+                .map(|thumbnail| (item_id, thumbnail)),
+            Some(Showing::Featured(LiveSource::DailyMatch(_)))
+            | Some(Showing::DailyFinish)
+            | None => None,
+        };
+        let picture_changed = self.refresh_track_picture(thumbnail, picture_settings);
+        changed || picture_changed
+    }
+
+    /// Render the featured track's thumbnail when it, the track, or the
+    /// terminal's settings changed, and drop it when no track is up. True
+    /// when the picture changed.
+    fn refresh_track_picture(
+        &mut self,
+        thumbnail: Option<(Uuid, Thumbnail)>,
+        settings: InlineImageRenderSettings,
+    ) -> bool {
+        let Some((item_id, thumbnail)) = thumbnail else {
+            return self.track_picture.take().is_some();
+        };
+        if self.track_picture.as_ref().is_some_and(|picture| {
+            picture.item_id == item_id
+                && picture.settings == settings
+                && Arc::ptr_eq(&picture.thumbnail, &thumbnail)
+        }) {
+            return false;
+        }
+        let lines = match booth_live::render_picture(&thumbnail, settings) {
+            Ok(lines) => Some(lines),
+            Err(error) => {
+                tracing::warn!(error = ?error, %item_id, "failed to render booth thumbnail");
+                None
+            }
+        };
+        self.track_picture = Some(TrackPicture {
+            item_id,
+            thumbnail,
+            settings,
+            lines,
+        });
+        true
     }
 
     /// Re-pick the featured source, then decide what the strip shows: a
@@ -190,7 +258,12 @@ impl LiveState {
                 daily.live_match_view(match_id).map(LiveStripView::Match)
             }
             Showing::Featured(LiveSource::BoothTrack(item_id)) => {
-                booth_live::view(&audio.queue_snapshot(), item_id, listening_on)
+                let picture = self
+                    .track_picture
+                    .as_ref()
+                    .filter(|picture| picture.item_id == item_id)
+                    .and_then(|picture| picture.lines.clone());
+                booth_live::view(&audio.queue_snapshot(), item_id, listening_on, picture)
                     .map(LiveStripView::Track)
             }
             Showing::DailyFinish => daily.live_finish_view().map(LiveStripView::Match),

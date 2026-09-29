@@ -1,12 +1,9 @@
 use chrono::{DateTime, TimeZone, Utc};
-use image::RgbaImage;
-use std::sync::Arc;
 
 use super::*;
 use crate::app::audio::svc::AudioMode;
 
 const WIDTH: u16 = 80;
-const BACKGROUND: Rgb = [0, 0, 0];
 
 fn line_text(line: &Line<'_>) -> String {
     line.spans
@@ -45,7 +42,7 @@ fn booth() -> QueueSnapshot {
 }
 
 fn words(track: &TrackStripView) -> Vec<String> {
-    body(usize::from(WIDTH), track, BACKGROUND)
+    body(usize::from(WIDTH), track)
         .words
         .iter()
         .map(|spans| spans.iter().map(|span| span.content.as_ref()).collect())
@@ -71,7 +68,7 @@ fn every_track_in_the_booth_is_news_from_when_it_was_queued() {
 #[test]
 fn the_words_say_what_the_track_is_who_brought_it_and_where_it_stands() {
     let snapshot = booth();
-    let view_of = |n: u128, source| view(&snapshot, Uuid::from_u128(n), source).unwrap();
+    let view_of = |n: u128, source| view(&snapshot, Uuid::from_u128(n), source, None).unwrap();
 
     let playing = view_of(1, AudioSource::Icecast);
     assert_eq!(
@@ -102,7 +99,7 @@ fn the_words_say_what_the_track_is_who_brought_it_and_where_it_stands() {
     );
 
     assert!(
-        view(&snapshot, Uuid::from_u128(4), AudioSource::Youtube).is_none(),
+        view(&snapshot, Uuid::from_u128(4), AudioSource::Youtube, None).is_none(),
         "a track that left the booth paints nothing"
     );
 }
@@ -110,9 +107,9 @@ fn the_words_say_what_the_track_is_who_brought_it_and_where_it_stands() {
 #[test]
 fn the_picture_is_the_thumbnail_once_it_has_loaded() {
     let snapshot = booth();
-    let mut track = view(&snapshot, Uuid::from_u128(1), AudioSource::Icecast).unwrap();
+    let mut track = view(&snapshot, Uuid::from_u128(1), AudioSource::Icecast, None).unwrap();
 
-    let drawn: Vec<String> = body(usize::from(WIDTH), &track, BACKGROUND)
+    let drawn: Vec<String> = body(usize::from(WIDTH), &track)
         .picture
         .iter()
         .map(line_text)
@@ -129,28 +126,51 @@ fn the_picture_is_the_thumbnail_once_it_has_loaded() {
         ]
     );
 
-    track.item.thumbnail = Some(Arc::new(RgbaImage::from_pixel(
-        u32::from(PICTURE_COLS),
-        12,
-        Rgba([200, 40, 40, 255]),
-    )));
-    let painted = body(usize::from(WIDTH), &track, BACKGROUND).picture;
-    assert_eq!(painted.len(), 6, "two pixels a row");
+    // Red on the left half, blue on the right.
+    let thumbnail = RgbaImage::from_fn(168, 96, |x, _| {
+        if x < 84 {
+            image::Rgba([200, 40, 40, 255])
+        } else {
+            image::Rgba([40, 40, 200, 255])
+        }
+    });
+    track.picture = Some(
+        render_picture(&thumbnail, InlineImageRenderSettings::default())
+            .expect("a thumbnail renders"),
+    );
+    let painted = body(usize::from(WIDTH), &track).picture;
+    assert_eq!(painted.len(), 6, "16:9 across the picture column");
+    // What a cell of flat colour shows: its background, or its foreground
+    // when it is drawn reversed.
+    let shown = |span: &Span<'_>| {
+        let colour = if span.style.add_modifier.contains(Modifier::REVERSED) {
+            span.style.fg
+        } else {
+            span.style.bg
+        };
+        match colour {
+            Some(ratatui::style::Color::Rgb(r, _, b)) => (r, b),
+            other => panic!("a painted cell carries a colour, got {other:?}"),
+        }
+    };
     for line in &painted {
         assert_eq!(line.width(), usize::from(PICTURE_COLS));
-        assert!(
-            line.spans
-                .iter()
-                .all(|span| span.style.fg == Some(ratatui::style::Color::Rgb(200, 40, 40))),
-            "every cell carries the thumbnail's colour"
-        );
+        for (col, span) in line.spans.iter().enumerate() {
+            let (red, blue) = shown(span);
+            match col {
+                0..=9 => assert!(red > 150 && blue < 80, "column {col} is red: {span:?}"),
+                11..=20 => assert!(blue > 150 && red < 80, "column {col} is blue: {span:?}"),
+                // The seam falls inside column 10.
+                _ => {}
+            }
+        }
     }
 }
 
 #[test]
 fn the_compact_line_names_who_queued_what() {
     let snapshot = booth();
-    let track = view(&snapshot, Uuid::from_u128(2), AudioSource::Icecast).unwrap();
+    let track = view(&snapshot, Uuid::from_u128(2), AudioSource::Icecast, None).unwrap();
     let text: String = compact_spans(40, &track)
         .iter()
         .map(|span| span.content.as_ref())

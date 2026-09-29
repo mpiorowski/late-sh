@@ -120,7 +120,7 @@ pub(crate) fn live_strip_lines(
         glow,
     } = match strip {
         LiveStripView::Match(strip) => match_strip::body(budget, strip, background),
-        LiveStripView::Track(track) => booth_live::body(budget, track, background),
+        LiveStripView::Track(track) => booth_live::body(budget, track),
     };
     let mut lines = Vec::with_capacity(LIVE_STRIP_HEIGHT as usize);
 

@@ -20,7 +20,7 @@ One slot. Sources offer candidates, the slot features one at a time, and `o` or 
 |---|---|
 | `mod.rs` | Declarations only. |
 | `pick.rs` | Pure rules: `LiveSource` (the closed enum of sources), `LiveCandidate`, `Featured`, `pick_featured`, `replay`, `strip_is_fresh`, and the clocks `LIVE_AIM_WINDOW` (8s), `LIVE_HOLD` (60s), `LIVE_STRIP_LINGER` (5 min). |
-| `state.rs` | Per-session `LiveState`: the featured source, what the strip shows (`Showing`), the render-recorded `hit` rect. `refresh` is the pure rule over candidates and clocks; `tick` and `view` are the glue that reads `DailyState` and `AudioState`. `LiveStripView` is what gets painted, one variant per kind of body. `LIVE_FINISH_LINGER` (60s). |
+| `state.rs` | Per-session `LiveState`: the featured source, what the strip shows (`Showing`), the render-recorded `hit` rect. `refresh` is the pure rule over candidates and clocks; `tick` and `view` are the glue that reads `DailyState` and `AudioState`. `tick` also keeps the featured booth track's thumbnail rendered for this session's terminal (`TrackPicture`), so the frame never renders an image. `LiveStripView` is what gets painted, one variant per kind of body. `LIVE_FINISH_LINGER` (60s). |
 | `ui.rs` | The frame: `fit_live_strip` (the form, from the card's size alone), `draw_live_strip`, `live_strip_lines`, `live_strip_compact_line`, the `── live ──` rule, `PICTURE_ROWS` (8), `PICTURE_COLS` (21), `StripBody` (what a source hands the frame). |
 | `input.rs` | `open_from_key` (`o`) and `open_from_click`: one exhaustive match on `LiveSource` that says what opening each source does. |
 
@@ -64,7 +64,7 @@ The picture sits in a `PICTURE_COLS` column, centred in `PICTURE_ROWS`, with the
 ## 7. Wiring outside this directory
 
 - `app/state.rs`: `App::live`.
-- `app/tick.rs`: `self.live.tick(&self.daily, &self.audio, reading)`; `App::lounge_card_shown` gates the reading hold, the half-tick repaint and the wake hint's half tier.
+- `app/tick.rs`: `self.live.tick(&self.daily, &self.audio, reading, picture_settings)`, the settings being the session's `inline_image_render_settings`; `App::lounge_card_shown` gates the reading hold, the half-tick repaint and the wake hint's half tier.
 - `app/render.rs`: builds the view when `home_selected`, never for the chat center.
 - `app/chat/ui.rs`: `DashboardChatView.live_strip` + `live_strip_hit`; `draw_dashboard_chat_card` carves the strip off the top of the messages, above the poll strip. While it is up the room header drops its topic row and closing rule (stream and voice rows stay).
 - `app/input.rs`: `o` in `handle_global_key`, gated on `App::lounge_card_shown` and no composer; the click, gated on `chat_scroll_clicks_blocked`.

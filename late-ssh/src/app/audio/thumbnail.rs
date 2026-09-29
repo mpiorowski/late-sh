@@ -1,6 +1,6 @@
-//! A YouTube track's thumbnail, shrunk to the live strip's picture column
-//! and painted there in half blocks (`booth/live.rs`). Pure: the fetch is
-//! the service's (`svc.rs`).
+//! A YouTube track's thumbnail, shrunk to what the live strip's picture
+//! column can use and painted there as symbols (`booth/live.rs`). Pure: the
+//! fetch is the service's (`svc.rs`).
 
 use std::sync::Arc;
 
@@ -9,10 +9,15 @@ use image::{RgbaImage, imageops::FilterType};
 
 use crate::app::live::ui::PICTURE_COLS;
 
-/// Pixels across: one per column of the picture.
-pub const THUMBNAIL_WIDTH: u32 = PICTURE_COLS as u32;
-/// Pixels down, two per row: 16:9 at that width, so six rows.
-pub const THUMBNAIL_HEIGHT: u32 = 12;
+/// Rows the picture takes: 16:9 across the picture column, at cells twice
+/// as tall as they are wide.
+pub const THUMBNAIL_ROWS: u16 = 6;
+/// Pixels kept per cell, across and down: enough for the symbol picker to
+/// tell an edge from a gradient, small enough to keep fifty in memory.
+const PIXELS_PER_COL: u32 = 8;
+const PIXELS_PER_ROW: u32 = 16;
+pub const THUMBNAIL_WIDTH: u32 = PICTURE_COLS as u32 * PIXELS_PER_COL;
+pub const THUMBNAIL_HEIGHT: u32 = THUMBNAIL_ROWS as u32 * PIXELS_PER_ROW;
 /// YouTube's 320x180 thumbnail is a few kilobytes; anything near this is
 /// not one.
 pub const THUMBNAIL_MAX_BYTES: usize = 512 * 1024;
@@ -26,7 +31,8 @@ pub fn thumbnail_url(video_id: &str) -> String {
     format!("https://i.ytimg.com/vi/{video_id}/mqdefault.jpg")
 }
 
-/// Decode a fetched thumbnail and shrink it to the picture column.
+/// Decode a fetched thumbnail and shrink it to `THUMBNAIL_WIDTH` by
+/// `THUMBNAIL_HEIGHT`.
 pub fn shrink(bytes: &[u8]) -> Result<RgbaImage> {
     let (width, height) = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()

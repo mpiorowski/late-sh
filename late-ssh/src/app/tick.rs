@@ -470,7 +470,10 @@ impl App {
         let reading = self.lounge_card_shown() && self.chat.selected_message_id.is_some();
         let daily_tick = self.daily.tick();
         changed |= daily_tick.changed;
-        changed |= self.live.tick(&self.daily, &self.audio, reading);
+        let picture_settings = self.inline_image_render_settings();
+        changed |= self
+            .live
+            .tick(&self.daily, &self.audio, reading, picture_settings);
         if let Some(b) = daily_tick.banner {
             self.banner = Some(b);
             changed = true;

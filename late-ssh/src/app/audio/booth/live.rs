@@ -1,10 +1,12 @@
 //! A booth track on the live strip (`app/live/`): somebody put a track in
 //! the YouTube queue, so the room sees what it is and who brought it, and
-//! can tune in with a key. The thumbnail sits in the picture column, a
+//! can tune in with a key. The thumbnail sits in the picture column,
+//! painted as symbols picked for the viewer's terminal (`render_picture`), a
 //! drawn screen until it has loaded; the words beside it are the title, the
 //! channel and length, and who queued it and where it stands.
 
-use image::Rgba;
+use anyhow::Result;
+use image::RgbaImage;
 use late_core::models::user::AudioSource;
 use ratatui::{
     style::{Modifier, Style},
@@ -13,14 +15,16 @@ use ratatui::{
 use uuid::Uuid;
 
 use crate::app::{
-    audio::svc::{QueueItemView, QueueSnapshot},
+    audio::{
+        svc::{QueueItemView, QueueSnapshot},
+        thumbnail::THUMBNAIL_ROWS,
+    },
     common::theme,
-    games::pool_core::canvas::Rgb,
+    files::inline_image::{InlineImageRenderSettings, render_rgba_preview},
     live::{
         pick::{LiveCandidate, LiveSource},
         ui::{PICTURE_COLS, PICTURE_ROWS, StripBody, truncate_chars},
     },
-    lobby::house::image_render::img_to_lines,
 };
 
 use super::ui::format_queue_duration;
@@ -39,6 +43,9 @@ pub enum TrackPlace {
 pub struct TrackStripView {
     pub item: QueueItemView,
     pub place: TrackPlace,
+    /// The thumbnail as this session's terminal paints it; `None` until it
+    /// has loaded, or when it could not be fetched.
+    pub picture: Option<Vec<Line<'static>>>,
     /// Whether the viewer is on the YouTube source already: the key then
     /// opens the booth instead of tuning in.
     pub listening: bool,
@@ -59,11 +66,27 @@ pub(crate) fn candidates(snapshot: &QueueSnapshot) -> Vec<LiveCandidate> {
         .collect()
 }
 
+/// A thumbnail as symbols, the picture column wide and `THUMBNAIL_ROWS`
+/// tall. The symbols are picked for the viewer's terminal, so this is
+/// rendered per session, once per thumbnail, never per frame.
+pub(crate) fn render_picture(
+    thumbnail: &RgbaImage,
+    settings: InlineImageRenderSettings,
+) -> Result<Vec<Line<'static>>> {
+    render_rgba_preview(
+        thumbnail,
+        u32::from(PICTURE_COLS),
+        u32::from(THUMBNAIL_ROWS),
+        settings,
+    )
+}
+
 /// One track as the strip paints it. `None` once it left the booth.
 pub(crate) fn view(
     snapshot: &QueueSnapshot,
     item_id: Uuid,
     listening_on: AudioSource,
+    picture: Option<Vec<Line<'static>>>,
 ) -> Option<TrackStripView> {
     let listening = match listening_on {
         AudioSource::Youtube => true,
@@ -73,6 +96,7 @@ pub(crate) fn view(
         return Some(TrackStripView {
             item: item.clone(),
             place: TrackPlace::Playing,
+            picture,
             listening,
         });
     }
@@ -84,13 +108,17 @@ pub(crate) fn view(
     Some(TrackStripView {
         item: snapshot.queue[ahead].clone(),
         place,
+        picture,
         listening,
     })
 }
 
-pub(crate) fn body(budget: usize, track: &TrackStripView, background: Rgb) -> StripBody {
+pub(crate) fn body(budget: usize, track: &TrackStripView) -> StripBody {
     StripBody {
-        picture: picture(track, background),
+        picture: match &track.picture {
+            Some(picture) => picture.clone(),
+            None => screen_lines(),
+        },
         words: word_rows(budget, track),
         glow: glow(track),
     }
@@ -119,20 +147,10 @@ pub(crate) fn compact_spans(rest: u16, track: &TrackStripView) -> Vec<Span<'stat
     ]
 }
 
-fn picture(track: &TrackStripView, background: Rgb) -> Vec<Line<'static>> {
-    match &track.item.thumbnail {
-        Some(thumbnail) => {
-            let [r, g, b] = background;
-            img_to_lines(thumbnail, None, Rgba([r, g, b, 255]))
-        }
-        None => screen_lines(),
-    }
-}
-
 /// A drawn screen with a play mark, the size a thumbnail takes, for a track
 /// whose thumbnail has not loaded or could not be fetched.
 fn screen_lines() -> Vec<Line<'static>> {
-    const SCREEN_ROWS: usize = 6;
+    const SCREEN_ROWS: usize = THUMBNAIL_ROWS as usize;
     let inner = usize::from(PICTURE_COLS) - 2;
     let frame = Style::default().fg(theme::BORDER_DIM());
     let edge = |left: &str, right: &str| {
