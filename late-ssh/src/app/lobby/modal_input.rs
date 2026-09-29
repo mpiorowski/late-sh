@@ -125,12 +125,14 @@ fn activate_selection(app: &mut App) {
     };
     match action {
         Some(Action::OpenBoard(item)) => {
-            app.daily.open_board(&item, return_screen, BoardEntry::Lobby);
+            app.daily
+                .open_board(&item, return_screen, BoardEntry::Lobby);
             app.show_lobby_modal = false;
             app.set_screen(Screen::DailyMatch);
         }
         Some(Action::OpenFinished(item)) => {
-            app.daily.open_finished_board(&item, return_screen, BoardEntry::Lobby);
+            app.daily
+                .open_finished_board(&item, return_screen, BoardEntry::Lobby);
             app.show_lobby_modal = false;
             app.set_screen(Screen::DailyMatch);
         }

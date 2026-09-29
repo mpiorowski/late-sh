@@ -415,8 +415,8 @@ async fn the_held_result_shows_the_position_the_match_ended_on() {
         panic!("a connect four match paints a connect four board");
     };
     assert_eq!(*last, Some((3, 1)), "the winning drop is the last one");
-    for row in 0..4 {
-        assert_eq!(grid[row][1], Some(connect4::Disc::Red), "row {row} of b");
+    for (row, cells) in grid.iter().enumerate().take(4) {
+        assert_eq!(cells[1], Some(connect4::Disc::Red), "row {row} of b");
     }
     assert_eq!(strip.view.item.move_count, 7);
 }

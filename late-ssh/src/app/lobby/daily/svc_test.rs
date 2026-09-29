@@ -1964,7 +1964,10 @@ fn a_row_that_stays_rejected_is_reported_once() {
         report.iter().map(|(match_id, _)| *match_id).collect()
     };
 
-    let first = newly_rejected(&HashSet::new(), vec![(broken, SnapshotRowError::NoOpponent)]);
+    let first = newly_rejected(
+        &HashSet::new(),
+        vec![(broken, SnapshotRowError::NoOpponent)],
+    );
     assert_eq!(ids(&first.new), vec![broken], "news the first time");
 
     // The next publish still leaves it out, and finds a second one.

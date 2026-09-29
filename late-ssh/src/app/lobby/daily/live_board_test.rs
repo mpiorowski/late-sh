@@ -103,10 +103,7 @@ fn the_cloth_and_its_rail_fit_the_board_for_every_table() {
         PoolRules::Snooker,
     ] {
         let cloth = fit_cloth(default_table(rules), WIDTH, px_h);
-        assert!(
-            cloth.x0 - 1 >= 0 && cloth.y0 - 1 >= 0,
-            "{rules:?}: {cloth:?}"
-        );
+        assert!(cloth.x0 > 0 && cloth.y0 > 0, "{rules:?}: {cloth:?}");
         assert!(cloth.x0 + cloth.w < WIDTH as i32, "{rules:?}: {cloth:?}");
         assert!(cloth.y0 + cloth.h < px_h as i32, "{rules:?}: {cloth:?}");
         // Wider than tall, as a table is.

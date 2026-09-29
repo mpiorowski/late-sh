@@ -1043,8 +1043,8 @@ impl DailyState {
             })
             .collect();
         let next = pick_featured(self.live_featured, &candidates, now_utc, now);
-        let changed = next.map(|featured| featured.id)
-            != self.live_featured.map(|featured| featured.id);
+        let changed =
+            next.map(|featured| featured.id) != self.live_featured.map(|featured| featured.id);
         self.live_featured = next;
         changed
     }
