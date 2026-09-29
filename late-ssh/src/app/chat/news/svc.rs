@@ -1,6 +1,6 @@
 use crate::app::{
     ai::svc::AiService,
-    chat::svc::{ChatService, SendLoungeMessageTask},
+    chat::svc::ChatService,
 };
 use crate::metrics;
 use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
@@ -26,7 +26,6 @@ use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
-const NEWS_SEPARATOR: &str = " || ";
 const ASCII_WIDTH: u32 = 12;
 const ASCII_HEIGHT: u32 = 6;
 const PROCESS_URL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -207,7 +206,7 @@ impl ArticleService {
                     let client = service.db.get().await?;
 
                     // Fetch the article so we can (a) enforce ownership, (b)
-                    // clean up the chat announcement afterwards.
+                    // clean up its old chat card afterwards.
                     let Some(article) = Article::get(&client, article_id).await? else {
                         anyhow::bail!("Article not found");
                     };
@@ -231,8 +230,9 @@ impl ArticleService {
                     .await?;
                     drop(client);
 
-                    // Delete the news announcement from lounge chat and
-                    // notify active chat clients so the stale card disappears.
+                    // Shares no longer post into #lounge, but older ones did:
+                    // delete the article's card if it has one and notify
+                    // active chat clients so it disappears.
                     if let Err(e) = service
                         .chat_service
                         .delete_news_announcements_by_user_and_url(
@@ -359,9 +359,6 @@ impl ArticleService {
             .article_ascii_art(url, extraction.image_url.as_deref())
             .await?;
 
-        let announcement =
-            build_news_chat_announcement(&extraction.title, &extraction.summary, url, &ascii_art);
-
         // 4. Save to database and pay the sharer, scoped so the client is
         //    dropped before helper calls. Both share paths (the News composer
         //    and an RSS entry shared with `s`) land here, so this is the one
@@ -385,19 +382,10 @@ impl ArticleService {
             reward
         };
 
-        // Post the announcement into #lounge via the same send path as any
-        // other message, preserving the normal composer success/failure event.
-        self.chat_service
-            .send_lounge_message_task(SendLoungeMessageTask {
-                user_id,
-                body: announcement,
-                request_id: Some(Uuid::now_v7()),
-                join_if_needed: false,
-                failure_log: "failed to share news in lounge chat",
-            });
-
         // The insert fired `articles_changed`; every replica's listener,
-        // this one included, refreshes the shared snapshot from it.
+        // this one included, refreshes the shared snapshot from it, and the
+        // #lounge live strip features the article from there
+        // (`news/live.rs`). Nothing is posted into the chat.
 
         // 5. Publish Event
         tracing::info!(%url, "publishing ArticleEvent::Created");
@@ -1120,17 +1108,6 @@ fn procedural_ascii_art(url: &str) -> String {
     art
 }
 
-fn build_news_chat_announcement(title: &str, summary: &str, url: &str, ascii_art: &str) -> String {
-    let title = truncate_for_chat(&sanitize_payload_field(title.trim()), 90);
-    let summary = truncate_for_chat(&encode_summary_bullets(summary), 400);
-    let url = sanitize_payload_field(url.trim());
-    let ascii = encode_ascii_payload(ascii_art);
-    let payload = format!(
-        "{NEWS_MARKER} {title}{NEWS_SEPARATOR}{summary}{NEWS_SEPARATOR}{url}{NEWS_SEPARATOR}{ascii}"
-    );
-    truncate_for_chat(&payload, 1800)
-}
-
 fn truncate_for_chat(input: &str, max_chars: usize) -> String {
     if input.chars().count() <= max_chars {
         return input.to_string();
@@ -1142,39 +1119,6 @@ fn truncate_for_chat(input: &str, max_chars: usize) -> String {
     }
     out.push_str("...");
     out
-}
-
-fn sanitize_payload_field(input: &str) -> String {
-    input
-        .replace(NEWS_SEPARATOR, " | ")
-        .replace(['\n', '\r'], " ")
-}
-
-fn encode_summary_bullets(summary: &str) -> String {
-    summary
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .filter(|line| {
-            !line
-                .to_ascii_lowercase()
-                .starts_with("• no content details")
-        })
-        .take(3)
-        .map(|line| {
-            truncate_for_chat(
-                &sanitize_payload_field(
-                    line.trim_start_matches('•').trim_start_matches('-').trim(),
-                ),
-                120,
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\\n")
-}
-
-fn encode_ascii_payload(ascii_art: &str) -> String {
-    ascii_art.replace('\\', "\\\\").replace('\n', "\\n")
 }
 
 #[cfg(test)]

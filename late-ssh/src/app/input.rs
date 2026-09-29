@@ -3903,6 +3903,17 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         {
             crate::app::live::input::open_from_key(app)
         }
+        // With a message selected, `r` replies to it (chat's message keys).
+        b'r' | b'R'
+            if global_letter_keys
+                && !ctx.chat_composing
+                && !ctx.feeds_processing
+                && !ctx.news_composing
+                && app.lounge_card_shown()
+                && app.chat.selected_message_id.is_none() =>
+        {
+            crate::app::live::input::reply_from_key(app)
+        }
         b'1' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Dashboard);

@@ -178,7 +178,7 @@ async fn a_finished_match_tells_the_pet_win_or_loss_and_a_draw_tells_it_nothing(
 }
 
 /// The #lounge strip goes up when a match is claimed, waits to appear while
-/// the viewer is reading, and holds the result once the match ends. The
+/// the viewer is reading, and queues the result once the match ends. The
 /// viewer sits on a replica that never wrote any of it: the claim and the
 /// resign land on another service over the same database, and reach this
 /// one through the `daily_match_changed` notify.
@@ -210,7 +210,7 @@ async fn a_claim_and_a_result_are_offered_to_the_strip_on_every_replica() {
     let mut state = DailyState::new(other_replica.clone(), me.id, notifier);
     let _ = state.tick();
     assert!(
-        state.live_candidates().is_empty() && state.live_finish_view().is_none(),
+        state.live_candidates().is_empty(),
         "nothing live, nothing for the strip"
     );
 
@@ -253,8 +253,9 @@ async fn a_claim_and_a_result_are_offered_to_the_strip_on_every_replica() {
         .expect("a fresh claim is a match the strip can paint");
     assert!(strip.finish.is_none());
 
-    // The match ends on the other replica: this one's strip keeps the final
-    // board with the result, read off the finished row in its snapshot.
+    // The match ends on the other replica: this one's strip queues the
+    // final board with the result, read off the finished row in its
+    // snapshot and stamped with the finish.
     writer.resign(me.id, posted.id).await.expect("resign");
     let finished = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -272,16 +273,55 @@ async fn a_claim_and_a_result_are_offered_to_the_strip_on_every_replica() {
     .await;
     finished.expect("the listening replica learns the finish");
     let _ = state.tick();
-    assert!(state.live_candidates().is_empty(), "it left the lobby");
-    assert!(state.live_finish_at().is_some());
+    let offered: Vec<LiveSource> = state
+        .live_candidates()
+        .iter()
+        .map(|candidate| candidate.source)
+        .collect();
+    assert_eq!(
+        offered,
+        vec![LiveSource::DailyResult(posted.id)],
+        "the match left the lobby and its result took its place"
+    );
     let strip = state
-        .live_finish_view()
-        .expect("the result is held for the strip");
+        .live_result_view(posted.id)
+        .expect("the result is kept for the strip");
     assert_eq!(strip.view.item.id, posted.id);
     assert_eq!(
         strip.finish,
         Some(format!("{} won · resignation", them.username).as_str()),
         "a resignation before five moves pays nothing, so no chips are named"
+    );
+
+    // Both players see the result, so its row leaves the finished list; the
+    // strip keeps it for its linger all the same.
+    writer
+        .mark_result_seen(me.id, posted.id)
+        .await
+        .expect("i saw it");
+    writer
+        .mark_result_seen(them.id, posted.id)
+        .await
+        .expect("they saw it");
+    let gone = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let listed = snapshot_rx
+                .borrow_and_update()
+                .finished_matches
+                .iter()
+                .any(|item| item.id == posted.id);
+            if !listed {
+                return;
+            }
+            snapshot_rx.changed().await.expect("snapshot watch open");
+        }
+    })
+    .await;
+    gone.expect("the listening replica drops the seen result");
+    let _ = state.tick();
+    assert!(
+        state.live_result_view(posted.id).is_some(),
+        "the result outlives its row"
     );
 }
 
@@ -414,8 +454,8 @@ async fn the_held_result_shows_the_position_the_match_ended_on() {
     let _ = state.tick();
 
     let strip = state
-        .live_finish_view()
-        .expect("the result is held for the strip");
+        .live_result_view(claimed.id)
+        .expect("the result is kept for the strip");
     assert!(strip.finish.is_some());
     let LiveBoard::ConnectFour { grid, last } = strip.view.board else {
         panic!("a connect four match paints a connect four board");

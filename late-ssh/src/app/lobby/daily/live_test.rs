@@ -83,6 +83,8 @@ fn the_finish_headline_names_the_winner_and_only_paid_chips() {
             challenger_username: Some("eggy".to_string()),
             opponent_id: weslin,
             opponent_username: Some("weslin".to_string()),
+            white_id: None,
+            black_id: None,
             winner_user_id: winner,
             result,
             win_payout: payout,

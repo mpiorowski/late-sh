@@ -226,7 +226,7 @@ pub(crate) fn bartender_app_context() -> String {
     - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels, Minecraft), 4 Artboard (shared ASCII canvas), 5 Profiles (the people: their projects and open-to-work cards), 6 Leaderboards (every board, monthly and all-time).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
     - Ctrl+F opens Zen from anywhere and the same chord hands you back (Esc does not leave it): Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: Tab and the arrows focus, space opens the tile picker for a tile, S splits, X closes, < > change width and { } height, r flips, z zooms, b g t restyle borders, gaps, and titles, R resets, ? opens the Zen guide, the layout is saved per account; each tile names its own keys on the right of its title; up to ten chat tiles each bound to a room ([ ] rebind the focused one, Ctrl+/ or /picker picks its room from the list, i or Enter write in it, j k select in it; the focused chat is the active one, the others watch), w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it (the first pet of the day pays 100 chips), and it reads the rest of your session itself).\n\
-    - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). A daily match in progress heads the #lounge chat on Home as the live strip whenever something just happened in it (a move, a shot, someone lining up, a result); it cannot be turned off, and o or a click on it opens that match. Typing /shop into the composer opens the Shop. When a terminal swallows a chord, the composer has a typed fallback that does the same thing: /settings (Ctrl+O), /lobby (Ctrl+G), /zen (Ctrl+F), /redraw (Ctrl+R), /guide (?).\n\
+    - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). The top of the #lounge chat on Home is the live strip, up whenever something just happened in the house; it cannot be turned off. Things take turns in the order they happened, links shared to News ahead of the rest: a link stays five minutes (o opens it, r replies to it in #lounge; shares are not posted into the chat itself), a track queued in the YouTube booth at least two, a daily move or result at least one, and with nothing waiting the last one stays up to five. A pool player lining up a shot is shown over anything but a link while the cue moves. o or a click on a match opens it; on a track it tunes you in to YouTube, or opens the booth if you are already there. Typing /shop into the composer opens the Shop. When a terminal swallows a chord, the composer has a typed fallback that does the same thing: /settings (Ctrl+O), /lobby (Ctrl+G), /zen (Ctrl+F), /redraw (Ctrl+R), /guide (?).\n\
     - Ctrl+/ opens jump search across rooms and DMs (/picker types it); typing ?query searches messages.\n\
     - Home's room rail also holds RSS, News, Cyberspace, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"N unread mentions\" counter in the top-right corner.\n\
     - A DM with unread messages jumps to an \"unread dms\" group directly under core in that rail, so nobody has to scroll to the bottom to find it; it drops back down to \"dms\" once it has been read and you move on.\n\
@@ -850,7 +850,7 @@ fn social_help_lines() -> Vec<String> {
         "  s                 share selected entry through News processing",
         "  d                 dismiss selected entry",
         "  r                 refresh RSS now",
-        "  After sharing, the URL becomes a public News article and #lounge announcement.",
+        "  After sharing, the URL becomes a public News article and goes up on the #lounge live strip.",
         "",
         "Cyberspace",
         "  cyberspace.online is a small, human social network like ours; late.sh",
@@ -1445,7 +1445,8 @@ fn news_help_lines() -> Vec<String> {
             "  2. AI extracts a compact summary",
             "  3. ASCII art / preview is generated when possible",
             "  4. the story lands in the shared feed for everyone",
-            "  5. the chips land in your balance",
+            "  5. it heads the #lounge chat on Home as the live strip for five minutes (o reads it, r replies)",
+            "  6. the chips land in your balance",
             "",
             "Good inputs",
             "  tech articles, launch posts, docs, YouTube links, tweets/x links",
@@ -1455,7 +1456,7 @@ fn news_help_lines() -> Vec<String> {
             "  RSS is a private inbox in the Home room rail.",
             "  RSS/Atom subscriptions are managed in Settings > RSS.",
             "  Sharing an RSS entry sends its URL through this News pipeline.",
-            "  Only shared entries become public News articles and #lounge announcements.",
+            "  Only shared entries become public News articles and go up on the #lounge live strip.",
             "",
             "Notes",
             "  summaries are intentionally compact for terminal reading",

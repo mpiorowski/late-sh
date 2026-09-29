@@ -128,6 +128,9 @@ pub struct DailyFinishedItem {
     pub challenger_username: Option<String>,
     pub opponent_id: Uuid,
     pub opponent_username: Option<String>,
+    /// Chess only; `None` for games without colors.
+    pub white_id: Option<Uuid>,
+    pub black_id: Option<Uuid>,
     /// `None` for draws.
     pub winner_user_id: Option<Uuid>,
     pub result: DailyResult,
@@ -2433,6 +2436,8 @@ fn finished_item(
         challenger_username: usernames.get(&row.challenger_id).cloned(),
         opponent_id,
         opponent_username: usernames.get(&opponent_id).cloned(),
+        white_id: summary.white_id,
+        black_id: summary.black_id,
         winner_user_id: row.winner_user_id,
         result,
         // The column is CHECKed to these four spellings, so an unreadable

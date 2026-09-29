@@ -7,7 +7,7 @@ use ratatui::layout::Rect;
 use tokio::sync::{broadcast, oneshot, watch};
 use uuid::Uuid;
 
-use crate::app::live::pick::{LIVE_AIM_WINDOW, LiveCandidate, LiveSource};
+use crate::app::live::pick::{LIVE_AIM_WINDOW, LIVE_STAMP_HORIZON, LiveCandidate, LiveSource};
 use crate::app::{
     common::primitives::{Banner, Screen},
     games::{
@@ -125,17 +125,17 @@ pub struct DailyState {
     /// arrived. Presentation only, like the aim itself: pruned past
     /// `LIVE_AIM_WINDOW` on every tick, so it holds tables in play right now.
     live_aims: HashMap<Uuid, (PoolAimShare, Instant)>,
-    /// The last match that ended, kept for the live strip (`note_finished`).
-    /// The strip decides how long it is news (`app/live/state.rs`).
-    live_finish: Option<LiveFinish>,
+    /// Matches that ended inside `LIVE_STAMP_HORIZON`, kept for the live
+    /// strip (`note_results`) after their rows leave the snapshot.
+    live_results: Vec<LiveResult>,
 }
 
 /// A match that just ended, as the #lounge strip shows it: the position it
-/// ended on and the result line.
-struct LiveFinish {
+/// ended on and the result line. `item.updated` is the finish time, the
+/// stamp the strip queues it by.
+struct LiveResult {
     item: DailyMatchItem,
     headline: String,
-    at: Instant,
 }
 
 /// Full-screen correspondence board (`Screen::DailyMatch`).
@@ -761,7 +761,7 @@ impl DailyState {
             own_loss: false,
             board: None,
             live_aims: HashMap::new(),
-            live_finish: None,
+            live_results: Vec::new(),
         }
     }
 
@@ -778,7 +778,7 @@ impl DailyState {
         let mut changed = false;
         if self.snapshot_rx.has_changed().unwrap_or(false) {
             let next = self.snapshot_rx.borrow_and_update().clone();
-            self.note_finished(&next);
+            self.note_results(&next, Utc::now());
             self.snapshot = next;
             self.notify_turn_edges();
             changed = true;
@@ -1061,16 +1061,19 @@ impl DailyState {
 
     /// Every active match, the viewer's own included, as the live strip
     /// weighs it: its last write, and its shooter's aim if one is fresh.
+    /// Then every match that just ended, stamped with its finish.
     pub fn live_candidates(&self) -> Vec<LiveCandidate> {
-        self.snapshot
-            .active_matches
-            .iter()
-            .map(|item| LiveCandidate {
-                source: LiveSource::DailyMatch(item.id),
-                updated: item.updated,
-                aimed_at: self.live_aims.get(&item.id).map(|(_, at)| *at),
-            })
-            .collect()
+        let active = self.snapshot.active_matches.iter().map(|item| LiveCandidate {
+            source: LiveSource::DailyMatch(item.id),
+            updated: item.updated,
+            aimed_at: self.live_aims.get(&item.id).map(|(_, at)| *at),
+        });
+        let results = self.live_results.iter().map(|noted| LiveCandidate {
+            source: LiveSource::DailyResult(noted.item.id),
+            updated: noted.item.updated,
+            aimed_at: None,
+        });
+        active.chain(results).collect()
     }
 
     /// One active match as the live strip paints it: its board, and a fresh
@@ -1096,61 +1099,54 @@ impl DailyState {
         })
     }
 
-    /// A match that left the active list and landed among the finished
-    /// ones just ended: hold the position it ended on, off the finished
-    /// row, with the result for the live strip. Read off the snapshot rather than the event feed,
-    /// so it fires on every replica and not only where the finish was
-    /// written. A held result whose row is still listed re-reads its
-    /// headline, since the payout is a second write behind the finish.
-    fn note_finished(&mut self, next: &DailySnapshot) {
-        for item in &self.snapshot.active_matches {
-            if next.active_matches.iter().any(|n| n.id == item.id) {
+    /// Keep every match that ended inside `LIVE_STAMP_HORIZON` of `now_utc`,
+    /// with the position it ended on and the result, and drop the ones past
+    /// it. The finished list holds only results a player has not seen, so a
+    /// row can leave it a second after the finish (both players watching):
+    /// what was noted stays until the horizon passes. Read off the snapshot
+    /// rather than the event feed, so it fires on every replica and not only
+    /// where the finish was written; a result both players saw before this
+    /// session's first snapshot is never noted. A noted result whose row is
+    /// still listed re-reads its headline, since the payout is a second write
+    /// behind the finish.
+    fn note_results(&mut self, next: &DailySnapshot, now_utc: DateTime<Utc>) {
+        let horizon =
+            chrono::Duration::from_std(LIVE_STAMP_HORIZON).expect("horizon fits chrono");
+        for finished in &next.finished_matches {
+            if now_utc.signed_duration_since(finished.finished_at) >= horizon {
                 continue;
             }
-            let Some(finished) = next.finished_matches.iter().find(|f| f.id == item.id) else {
-                continue;
-            };
-            self.live_finish = Some(LiveFinish {
-                // The active item is the position before the last move: the
-                // final one is on the finished row, with nobody on the clock.
-                item: DailyMatchItem {
-                    turn_user_id: None,
-                    turn_deadline_at: None,
-                    move_count: finished.move_count,
-                    board: finished.board.clone(),
-                    ..item.clone()
-                },
+            let result = LiveResult {
+                item: result_item(finished),
                 headline: finish_headline(finished),
-                at: Instant::now(),
-            });
+            };
+            match self
+                .live_results
+                .iter_mut()
+                .find(|noted| noted.item.id == finished.id)
+            {
+                Some(noted) => *noted = result,
+                None => self.live_results.push(result),
+            }
         }
-        if let Some(finish) = self.live_finish.as_mut()
-            && let Some(finished) = next
-                .finished_matches
-                .iter()
-                .find(|f| f.id == finish.item.id)
-        {
-            finish.headline = finish_headline(finished);
-        }
+        self.live_results
+            .retain(|noted| now_utc.signed_duration_since(noted.item.updated) < horizon);
     }
 
-    /// When the last match ended, for the live strip to weigh against
-    /// its linger.
-    pub fn live_finish_at(&self) -> Option<Instant> {
-        self.live_finish.as_ref().map(|finish| finish.at)
-    }
-
-    /// The last match that ended, as the live strip paints it: the final
-    /// board with the result.
-    pub fn live_finish_view(&self) -> Option<MatchStripView<'_>> {
-        let finish = self.live_finish.as_ref()?;
+    /// One match that just ended as the live strip paints it: the final
+    /// board with the result. `None` once it passed the horizon.
+    pub fn live_result_view(&self, match_id: Uuid) -> Option<MatchStripView<'_>> {
+        let result = self
+            .live_results
+            .iter()
+            .find(|noted| noted.item.id == match_id)?;
         Some(MatchStripView {
             view: LiveView {
-                item: &finish.item,
-                board: &finish.item.board,
+                item: &result.item,
+                board: &result.item.board,
                 aim: None,
             },
-            finish: Some(finish.headline.as_str()),
+            finish: Some(result.headline.as_str()),
         })
     }
 
@@ -2627,6 +2623,27 @@ pub fn format_deadline(deadline: DateTime<Utc>, now: DateTime<Utc>) -> String {
     }
 }
 
+/// A finished row as the strip paints it: nobody on the clock, stamped with
+/// the finish.
+fn result_item(finished: &DailyFinishedItem) -> DailyMatchItem {
+    DailyMatchItem {
+        id: finished.id,
+        game: finished.game,
+        challenger_id: finished.challenger_id,
+        challenger_username: finished.challenger_username.clone(),
+        opponent_id: finished.opponent_id,
+        opponent_username: finished.opponent_username.clone(),
+        white_id: finished.white_id,
+        black_id: finished.black_id,
+        turn_user_id: None,
+        turn_deadline_at: None,
+        move_count: finished.move_count,
+        updated: finished.finished_at,
+        board: finished.board.clone(),
+    }
+}
+
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
+

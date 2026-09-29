@@ -837,7 +837,7 @@ fn wrap_plain_display_width(text: &str, width: usize) -> Vec<String> {
     out
 }
 
-fn split_summary_bullets(text: &str) -> Vec<String> {
+pub(crate) fn split_summary_bullets(text: &str) -> Vec<String> {
     text.replace("\\n", "\n")
         .lines()
         .map(str::trim)

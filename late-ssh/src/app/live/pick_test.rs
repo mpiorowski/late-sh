@@ -1,197 +1,148 @@
 use std::time::Instant;
 
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use uuid::Uuid;
 
 use super::*;
 
-/// Drives the picker through one lobby's afternoon from the writes alone:
-/// three moves a few seconds apart each get their minute in order, an aim
-/// jumps the queue, and the clock is the only thing a session brings.
-#[test]
-fn every_session_picks_the_same_match_from_the_writes_alone() {
-    let start = Instant::now();
-    let t0 = Utc.with_ymd_and_hms(2026, 9, 28, 14, 0, 0).unwrap();
-    let at = |secs: i64| t0 + chrono::Duration::seconds(secs);
-    let (chess, pool, reversi) = (
-        LiveSource::DailyMatch(Uuid::from_u128(10)),
-        LiveSource::DailyMatch(Uuid::from_u128(20)),
-        LiveSource::DailyMatch(Uuid::from_u128(30)),
-    );
-    let candidates = |pool_aimed_at: Option<Instant>| {
-        vec![
-            LiveCandidate {
-                source: reversi,
-                updated: at(20),
-                aimed_at: None,
-            },
-            LiveCandidate {
-                source: chess,
-                updated: at(0),
-                aimed_at: None,
-            },
-            LiveCandidate {
-                source: pool,
-                updated: at(10),
-                aimed_at: pool_aimed_at,
-            },
-        ]
-    };
-    let pick = |now_secs: i64| {
-        pick_featured(None, &candidates(None), at(now_secs), start).map(|featured| featured.source)
-    };
-
-    // The first write goes up; the two behind it wait their turn.
-    assert_eq!(pick(5), Some(chess));
-    assert_eq!(
-        pick(30),
-        Some(chess),
-        "the pool move landed, chess keeps its minute"
-    );
-    assert_eq!(pick(70), Some(pool), "pool took over when the hold ran out");
-    assert_eq!(pick(130), Some(reversi), "then reversi, a minute later");
-    assert_eq!(pick(10_000), Some(reversi), "and stays, nothing newer");
-
-    // A cue being lined up takes the strip whatever the clock says, and
-    // the replay resumes when it is put down.
-    let aimed = candidates(Some(start));
-    assert_eq!(
-        pick_featured(None, &aimed, at(130), start + LIVE_AIM_WINDOW / 2).map(|f| f.source),
-        Some(pool)
-    );
-    assert_eq!(
-        pick_featured(None, &aimed, at(130), start + LIVE_AIM_WINDOW).map(|f| f.source),
-        Some(reversi)
-    );
-
-    assert_eq!(pick_featured(None, &[], at(130), start), None);
+fn t0() -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 9, 28, 14, 0, 0).unwrap()
 }
 
-/// A match that moves again loses its old place in the replay, so the
-/// replay alone would flip the board early. A session holds the match it is
-/// showing for its minute, then rejoins the replay.
-#[test]
-fn a_match_on_the_strip_keeps_its_minute_when_another_moves_again() {
-    let start = Instant::now();
-    let t0 = Utc.with_ymd_and_hms(2026, 9, 28, 14, 0, 0).unwrap();
-    let at = |secs: i64| t0 + chrono::Duration::seconds(secs);
-    let (a, b, c) = (
-        LiveSource::DailyMatch(Uuid::from_u128(1)),
-        LiveSource::DailyMatch(Uuid::from_u128(2)),
-        LiveSource::DailyMatch(Uuid::from_u128(3)),
-    );
-    let candidate = |source, secs| LiveCandidate {
+fn at(secs: i64) -> DateTime<Utc> {
+    t0() + chrono::Duration::seconds(secs)
+}
+
+fn candidate(source: LiveSource, secs: i64) -> LiveCandidate {
+    LiveCandidate {
         source,
         updated: at(secs),
         aimed_at: None,
-    };
+    }
+}
 
-    // B moved first, then A, then C: A takes the strip when B's minute ends.
-    let before = [candidate(b, 0), candidate(a, 10), candidate(c, 20)];
-    let showing = pick_featured(None, &before, at(60), start);
+fn up(source: LiveSource, secs: i64) -> Option<Featured> {
+    Some(Featured {
+        source,
+        since: at(secs),
+    })
+}
+
+/// One busy stretch from the stamps alone, as a session that just connected
+/// sees it at each moment: a link jumps the Rest lane at the next handover,
+/// every source keeps its minimum, and the last one up comes down
+/// `LIVE_MAX_UP` after it went up.
+#[test]
+fn the_lanes_hand_over_at_each_minimum_and_news_goes_first() {
+    let track = LiveSource::BoothTrack(Uuid::from_u128(1));
+    let chess = LiveSource::DailyMatch(Uuid::from_u128(2));
+    let pool = LiveSource::DailyMatch(Uuid::from_u128(3));
+    let link = LiveSource::NewsArticle(Uuid::from_u128(4));
+    let candidates = [
+        candidate(track, 0),
+        candidate(chess, 30),
+        candidate(link, 50),
+        candidate(pool, 100),
+    ];
+    let pick = |secs| pick_queued(None, &candidates, at(secs));
+
+    assert_eq!(pick(-1), None, "nothing has happened yet");
+    assert_eq!(pick(0), up(track, 0));
+    assert_eq!(pick(119), up(track, 0), "the track keeps its two minutes");
+    assert_eq!(pick(120), up(link, 120), "the link goes ahead of the move");
+    assert_eq!(pick(419), up(link, 120), "and stays its five minutes");
+    assert_eq!(pick(420), up(chess, 420), "then the rest, oldest first");
+    assert_eq!(pick(480), up(pool, 480));
+    assert_eq!(pick(779), up(pool, 480), "nothing waiting: it stays");
+    assert_eq!(pick(780), None, "five minutes up, and the strip comes down");
+}
+
+/// A burst of links: each gets its five minutes in turn, and one that would
+/// have waited past `LIVE_MAX_WAIT` is dropped rather than shown late.
+#[test]
+fn an_entry_that_waited_too_long_is_dropped() {
+    let link = |n: u128| LiveSource::NewsArticle(Uuid::from_u128(n));
+    let candidates = [
+        candidate(link(1), 0),
+        candidate(link(2), 10),
+        candidate(link(3), 20),
+        candidate(link(4), 30),
+    ];
+    let pick = |secs| pick_queued(None, &candidates, at(secs));
+
+    assert_eq!(pick(300), up(link(2), 300));
+    assert_eq!(pick(600), up(link(3), 600), "waited 580s, under ten minutes");
     assert_eq!(
+        pick(900),
+        None,
+        "the fourth waited past ten minutes: dropped"
+    );
+}
+
+/// The replay reads only each candidate's latest stamp, so a match that
+/// moves again rewrites the history. A session keeps what it has up for its
+/// minimum, then follows the replay.
+#[test]
+fn a_session_keeps_its_minimum_when_a_match_moves_again() {
+    let (a, b) = (
+        LiveSource::DailyMatch(Uuid::from_u128(1)),
+        LiveSource::DailyMatch(Uuid::from_u128(2)),
+    );
+    let before = [candidate(a, 0), candidate(b, 10)];
+    let showing = pick_queued(None, &before, at(5));
+    assert_eq!(showing, up(a, 0));
+
+    // A moves again at 30: the replay now reads B from 10, then A.
+    let after = [candidate(a, 30), candidate(b, 10)];
+    assert_eq!(pick_queued(None, &after, at(30)), up(b, 10));
+    assert_eq!(
+        pick_queued(showing, &after, at(59)),
         showing,
-        Some(Featured {
-            source: a,
-            since: at(60)
-        })
+        "the session keeps A its minute"
+    );
+    assert_eq!(
+        pick_queued(showing, &after, at(60)),
+        up(b, 60),
+        "then follows the replay"
     );
 
-    // B moves again twenty seconds into A's minute. The replay alone now
-    // reads A, C, B, and would hand the strip to C.
-    let after = [candidate(b, 80), candidate(a, 10), candidate(c, 20)];
-    let held = pick_featured(showing, &after, at(80), start);
-    assert_eq!(held, showing, "A keeps its minute");
-    assert_eq!(pick_featured(held, &after, at(119), start), showing);
-
-    // Then the queue moves on, each for a minute from when this session
-    // put it up.
-    let next = pick_featured(held, &after, at(120), start);
-    assert_eq!(
-        next,
-        Some(Featured {
-            source: c,
-            since: at(120)
-        })
-    );
-    assert_eq!(pick_featured(next, &after, at(179), start), next);
-    assert_eq!(
-        pick_featured(next, &after, at(180), start),
-        Some(Featured {
-            source: b,
-            since: at(180)
-        })
-    );
-
-    // The hold is for a match still in the lobby: one that left it gives
-    // the strip up at once.
-    let gone = [candidate(b, 80), candidate(c, 20)];
-    assert_eq!(
-        pick_featured(showing, &gone, at(79), start).map(|f| f.source),
-        Some(c)
-    );
+    // What the session had up is gone (the track was skipped): no hold.
+    assert_eq!(pick_queued(showing, &[candidate(b, 10)], at(20)), up(b, 20));
 }
 
-/// A burst queues more matches than the linger has minutes for. One whose
-/// turn comes after its own linger ran out is skipped, so it does not hold
-/// an empty strip in front of a move that just landed.
+/// A cue being lined up is drawn over the Rest lane or an empty strip, the
+/// freshest aim first, but never over a link.
 #[test]
-fn a_queued_match_that_went_stale_waiting_does_not_take_a_turn() {
+fn an_aim_draws_over_everything_but_a_link() {
     let start = Instant::now();
-    let t0 = Utc.with_ymd_and_hms(2026, 9, 28, 14, 0, 0).unwrap();
-    let at = |secs: i64| t0 + chrono::Duration::seconds(secs);
-    let id = |n: u128| LiveSource::DailyMatch(Uuid::from_u128(n));
-    // Seven moves ten seconds apart, then an eighth as the queue runs dry.
-    let mut candidates: Vec<LiveCandidate> = (0..7)
-        .map(|n| LiveCandidate {
-            source: id(n + 1),
-            updated: at(n as i64 * 10),
-            aimed_at: None,
-        })
-        .collect();
-    candidates.push(LiveCandidate {
-        source: id(8),
-        updated: at(350),
-        aimed_at: None,
-    });
+    let (chess, pool) = (
+        LiveSource::DailyMatch(Uuid::from_u128(1)),
+        LiveSource::DailyMatch(Uuid::from_u128(2)),
+    );
+    let link = LiveSource::NewsArticle(Uuid::from_u128(3));
+    let candidates = [
+        candidate(chess, 0),
+        LiveCandidate {
+            source: pool,
+            updated: at(-600),
+            aimed_at: Some(start),
+        },
+    ];
 
-    // The seventh would go up at 360, five minutes after its move at 60.
-    let pick = pick_featured(None, &candidates, at(365), start);
     assert_eq!(
-        pick,
-        Some(Featured {
-            source: id(8),
-            since: at(360)
-        }),
-        "the fresh move follows the sixth, not the stale seventh"
+        aim_overlay(up(chess, 0), &candidates, start),
+        Some(pool),
+        "over a move"
     );
-}
-
-/// The strip goes up on a write and comes down `LIVE_STRIP_LINGER` later,
-/// unless the shooter is still lining up.
-#[test]
-fn the_strip_is_fresh_after_a_write_or_under_an_aim() {
-    let start = Instant::now();
-    let written = Utc.with_ymd_and_hms(2026, 9, 28, 14, 0, 0).unwrap();
-    let just_after = written + chrono::Duration::seconds(30);
-    let long_after = written + chrono::Duration::from_std(LIVE_STRIP_LINGER).unwrap();
-
-    assert!(strip_is_fresh(written, None, just_after, start));
-    assert!(
-        !strip_is_fresh(written, None, long_after, start),
-        "the linger ran out"
+    assert_eq!(
+        aim_overlay(None, &candidates, start),
+        Some(pool),
+        "over an empty strip"
     );
-    assert!(
-        strip_is_fresh(
-            written,
-            Some(start),
-            long_after,
-            start + LIVE_AIM_WINDOW / 2
-        ),
-        "a fresh aim keeps a stale match up"
-    );
-    assert!(
-        !strip_is_fresh(written, Some(start), long_after, start + LIVE_AIM_WINDOW),
+    assert_eq!(aim_overlay(up(link, 0), &candidates, start), None);
+    assert_eq!(
+        aim_overlay(up(chess, 0), &candidates, start + LIVE_AIM_WINDOW),
+        None,
         "an aim past its window is a player who stopped"
     );
 }

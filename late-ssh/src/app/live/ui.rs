@@ -8,7 +8,8 @@
 //!
 //! What goes in the frame is the source's own: a daily match paints its
 //! board (`lobby/daily/live_strip.rs`), a booth track its thumbnail
-//! (`audio/booth/live.rs`).
+//! (`audio/booth/live.rs`), a News article its ASCII art
+//! (`chat/news/live.rs`).
 
 use std::cell::Cell;
 
@@ -22,6 +23,7 @@ use ratatui::{
 
 use crate::app::{
     audio::booth::live as booth_live,
+    chat::news::live as news_live,
     common::theme,
     games::pool_core::canvas::Rgb,
     lobby::daily::{live_board::canvas_background, live_strip as match_strip},
@@ -122,6 +124,7 @@ pub(crate) fn live_strip_lines(
     } = match strip {
         LiveStripView::Match(strip) => match_strip::body(budget, strip, background),
         LiveStripView::Track(track) => booth_live::body(budget, track),
+        LiveStripView::Article(article) => news_live::body(budget, article),
     };
     let mut lines = Vec::with_capacity(LIVE_STRIP_HEIGHT as usize);
 
@@ -173,6 +176,8 @@ pub(crate) fn live_strip_compact_line(width: u16, strip: &LiveStripView<'_>) -> 
     let glow = match strip {
         LiveStripView::Match(strip) => match_strip::glow(strip),
         LiveStripView::Track(track) => booth_live::glow(track),
+        // A shared link is never happening right now (`news_live::body`).
+        LiveStripView::Article(_) => false,
     };
     let mut rule = rule_line(width, glow);
     rule.spans.truncate(3);
@@ -182,6 +187,7 @@ pub(crate) fn live_strip_compact_line(width: u16, strip: &LiveStripView<'_>) -> 
     spans.extend(match strip {
         LiveStripView::Match(strip) => match_strip::compact_spans(rest, strip),
         LiveStripView::Track(track) => booth_live::compact_spans(rest, track),
+        LiveStripView::Article(article) => news_live::compact_spans(rest, article),
     });
     Line::from(spans)
 }
