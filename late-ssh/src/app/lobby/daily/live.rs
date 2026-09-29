@@ -14,8 +14,10 @@
 
 use std::time::{Duration, Instant};
 
+use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use cozy_chess::Board;
+use late_core::models::daily_match::DailyResult;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -87,7 +89,7 @@ pub fn strip_is_fresh(
 /// the same on every replica. Chips are named only once the payout, a
 /// second write behind the finish, is on the row and says `paid`.
 pub fn finish_headline(item: &DailyFinishedItem) -> String {
-    let phrase = super::state::result_phrase(&item.result);
+    let phrase = super::state::result_phrase(item.result);
     match item.winner_user_id {
         Some(winner_id) => {
             let winner = if winner_id == item.challenger_id {
@@ -109,10 +111,23 @@ pub fn finish_headline(item: &DailyFinishedItem) -> String {
                 | None => format!("{winner} won · {phrase}"),
             }
         }
-        None if item.result == late_core::models::daily_match::DailyMatch::RESULT_DRAW => {
-            "a draw".to_string()
-        }
-        None => format!("a draw · {phrase}"),
+        // A plain draw says so once; a draw by some other road names it.
+        None => match item.result {
+            DailyResult::Draw => "a draw".to_string(),
+            DailyResult::Checkmate
+            | DailyResult::Resign
+            | DailyResult::Timeout
+            | DailyResult::FleetSunk
+            | DailyResult::FourInARow
+            | DailyResult::MostDiscs
+            | DailyResult::NoMoves
+            | DailyResult::BorneOff
+            | DailyResult::MostPoints
+            | DailyResult::EightPotted
+            | DailyResult::EarlyEight
+            | DailyResult::NinePotted
+            | DailyResult::FrameWon => format!("a draw · {phrase}"),
+        },
     }
 }
 
@@ -259,16 +274,19 @@ pub struct ShotTally {
 }
 
 impl MatchSummary {
-    /// Read one active row's state. `None` when the JSON does not parse as
-    /// this game's state: the row stays in the DB untouched and the snapshot
-    /// lists the match with an empty summary, as it always has.
-    pub fn of(game: DailyGame, state: &Value) -> Option<Self> {
+    /// Read one active row's state. An error when the JSON does not read as
+    /// this game's state; the snapshot leaves the match out and says why
+    /// (`svc::SnapshotRowError`).
+    pub fn of(game: DailyGame, state: &Value) -> Result<Self> {
         match game {
             DailyGame::Chess | DailyGame::Chess960 => {
-                let state = DailyChessState::parse(state).ok()?;
-                let board: Board = state.fen.parse().ok()?;
+                let state = DailyChessState::parse(state)?;
+                let board: Board = match state.fen.parse() {
+                    Ok(board) => board,
+                    Err(error) => bail!("parsing daily chess fen: {error:?}"),
+                };
                 let last = state.move_history.last().map(|m| (m.from, m.to));
-                Some(Self {
+                Ok(Self {
                     white_id: Some(state.colors.white),
                     black_id: Some(state.colors.black),
                     move_count: state.move_history.len(),
@@ -279,7 +297,7 @@ impl MatchSummary {
                 })
             }
             DailyGame::Battleship => {
-                let state = DailyBattleshipState::parse(state).ok()?;
+                let state = DailyBattleshipState::parse(state)?;
                 let tally = |shooter: usize| {
                     let side = state.side(shooter);
                     let target = state.side(DailyBattleshipState::opponent_index(shooter));
@@ -293,7 +311,7 @@ impl MatchSummary {
                             .count(),
                     }
                 };
-                Some(Self {
+                Ok(Self {
                     white_id: None,
                     black_id: None,
                     move_count: state.shot_count(),
@@ -303,8 +321,8 @@ impl MatchSummary {
                 })
             }
             DailyGame::ConnectFour => {
-                let state = DailyConnect4State::parse(state).ok()?;
-                Some(Self {
+                let state = DailyConnect4State::parse(state)?;
+                Ok(Self {
                     white_id: None,
                     black_id: None,
                     move_count: state.move_count(),
@@ -315,8 +333,8 @@ impl MatchSummary {
                 })
             }
             DailyGame::Reversi => {
-                let state = DailyReversiState::parse(state).ok()?;
-                Some(Self {
+                let state = DailyReversiState::parse(state)?;
+                Ok(Self {
                     white_id: None,
                     black_id: None,
                     move_count: state.move_count(),
@@ -327,8 +345,8 @@ impl MatchSummary {
                 })
             }
             DailyGame::Checkers => {
-                let state = DailyCheckersState::parse(state).ok()?;
-                Some(Self {
+                let state = DailyCheckersState::parse(state)?;
+                Ok(Self {
                     white_id: None,
                     black_id: None,
                     move_count: state.move_count(),
@@ -339,9 +357,9 @@ impl MatchSummary {
                 })
             }
             DailyGame::Backgammon => {
-                let state = DailyBackgammonState::parse(state).ok()?;
+                let state = DailyBackgammonState::parse(state)?;
                 let board = state.board();
-                Some(Self {
+                Ok(Self {
                     white_id: None,
                     black_id: None,
                     move_count: state.move_count(),
@@ -355,9 +373,9 @@ impl MatchSummary {
                 })
             }
             DailyGame::Briscola => {
-                let state = DailyBriscolaState::parse(state).ok()?;
+                let state = DailyBriscolaState::parse(state)?;
                 let table = state.table();
-                Some(Self {
+                Ok(Self {
                     white_id: None,
                     black_id: None,
                     move_count: state.move_count(),
@@ -369,8 +387,8 @@ impl MatchSummary {
                 })
             }
             DailyGame::EightBall | DailyGame::NineBall | DailyGame::Snooker => {
-                let state = DailyPoolState::parse(state).ok()?;
-                let spec = state.spec().ok()?;
+                let state = DailyPoolState::parse(state)?;
+                let spec = state.spec()?;
                 let cue = state
                     .rack
                     .on_table()
@@ -385,7 +403,7 @@ impl MatchSummary {
                         pos: ball.pos,
                     })
                     .collect();
-                Some(Self {
+                Ok(Self {
                     white_id: None,
                     black_id: None,
                     move_count: state.move_count(),

@@ -331,7 +331,7 @@ fn finished_line(daily: &DailyState, item: &DailyFinishedItem, selected: bool) -
         DailyOutcome::Won => (
             format!(
                 "you won · {}{}",
-                result_phrase(&item.result),
+                result_phrase(item.result),
                 win_payout_phrase(item)
             ),
             Style::default()
@@ -339,7 +339,7 @@ fn finished_line(daily: &DailyState, item: &DailyFinishedItem, selected: bool) -
                 .add_modifier(Modifier::BOLD),
         ),
         DailyOutcome::Lost => (
-            format!("you lost · {}", result_phrase(&item.result)),
+            format!("you lost · {}", result_phrase(item.result)),
             Style::default()
                 .fg(theme::ERROR())
                 .add_modifier(Modifier::BOLD),

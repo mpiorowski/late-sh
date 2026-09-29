@@ -155,7 +155,10 @@ impl DailyPoolState {
             // Snooker breaks from the D — the cue ball is *in hand* for the
             // opening shot, which is a rule and not a nicety: where you break
             // from decides what the pack does.
-            ball_in_hand: matches!(rules, PoolRules::Snooker).then_some(BallInHand::TheD),
+            ball_in_hand: match rules {
+                PoolRules::Snooker => Some(BallInHand::TheD),
+                PoolRules::EightBall | PoolRules::NineBall => None,
+            },
             scores: [0, 0],
             on_colour: false,
             free_ball: false,

@@ -38,7 +38,7 @@ fn pool_item() -> DailyMatchItem {
         turn_deadline_at: None,
         move_count: 0,
         updated: Utc::now(),
-        board: Some(summary.board),
+        board: summary.board,
     }
 }
 
@@ -61,7 +61,7 @@ fn strip<'a>(
     LiveStripView {
         view: LiveView {
             item,
-            board: item.board.as_ref().unwrap(),
+            board: &item.board,
             aim,
         },
         finish,

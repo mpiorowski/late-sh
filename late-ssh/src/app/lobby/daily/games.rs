@@ -177,7 +177,17 @@ impl DailyGame {
     /// that was switched off: one of the lists had not heard of it, and that
     /// list happened to be the one gating every key and every click.
     pub const fn is_pool(self) -> bool {
-        matches!(self, Self::EightBall | Self::NineBall | Self::Snooker)
+        match self {
+            Self::EightBall | Self::NineBall | Self::Snooker => true,
+            Self::Chess
+            | Self::Chess960
+            | Self::Battleship
+            | Self::ConnectFour
+            | Self::Reversi
+            | Self::Checkers
+            | Self::Backgammon
+            | Self::Briscola => false,
+        }
     }
 
     pub fn from_kind(kind: &str) -> Option<Self> {

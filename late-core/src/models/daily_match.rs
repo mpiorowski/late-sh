@@ -10,6 +10,84 @@ use uuid::Uuid;
 /// replica re-reads its lobby snapshot, it never trusts a payload.
 pub const DAILY_MATCH_CHANGED_CHANNEL: &str = "daily_match_changed";
 
+/// How a finished match ended: the closed set of `daily_matches.result`
+/// spellings. Rows carry the raw string (`''` until the match finishes);
+/// readers parse it with `DailyResult::parse` where they take the row in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DailyResult {
+    Checkmate,
+    Draw,
+    Resign,
+    Timeout,
+    FleetSunk,
+    FourInARow,
+    MostDiscs,
+    NoMoves,
+    BorneOff,
+    MostPoints,
+    /// Eight-ball: the eight went down in the called pocket, on the money ball.
+    EightPotted,
+    /// Eight-ball: the eight went down before the shooter's group was cleared,
+    /// into the wrong pocket, or with a scratch. The opponent wins.
+    EarlyEight,
+    /// Nine-ball: the nine went down legally, combination or otherwise.
+    NinePotted,
+    /// Snooker: the frame ran out of balls and this player was ahead. Unlike
+    /// the pool results, it names no ball: a frame is won on points, and the
+    /// last black is just the last ball.
+    FrameWon,
+}
+
+impl DailyResult {
+    /// Every result, for `parse`. A new variant goes here and in `as_str`.
+    pub const ALL: [Self; 14] = [
+        Self::Checkmate,
+        Self::Draw,
+        Self::Resign,
+        Self::Timeout,
+        Self::FleetSunk,
+        Self::FourInARow,
+        Self::MostDiscs,
+        Self::NoMoves,
+        Self::BorneOff,
+        Self::MostPoints,
+        Self::EightPotted,
+        Self::EarlyEight,
+        Self::NinePotted,
+        Self::FrameWon,
+    ];
+
+    /// The persisted `daily_matches.result` value.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Checkmate => "checkmate",
+            Self::Draw => "draw",
+            Self::Resign => "resign",
+            Self::Timeout => "timeout",
+            Self::FleetSunk => "fleet_sunk",
+            Self::FourInARow => "four_in_a_row",
+            Self::MostDiscs => "most_discs",
+            Self::NoMoves => "no_moves",
+            Self::BorneOff => "borne_off",
+            Self::MostPoints => "most_points",
+            Self::EightPotted => "eight_potted",
+            Self::EarlyEight => "early_eight",
+            Self::NinePotted => "nine_potted",
+            Self::FrameWon => "frame_won",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self> {
+        match Self::ALL
+            .into_iter()
+            .find(|result| result.as_str() == value)
+        {
+            Some(result) => Ok(result),
+            None => anyhow::bail!("unknown daily match result: {value:?}"),
+        }
+    }
+}
+
 crate::model! {
     table = "daily_matches";
     params = DailyMatchParams;
@@ -39,28 +117,6 @@ impl DailyMatch {
     pub const STATUS_ACTIVE: &'static str = "active";
     pub const STATUS_FINISHED: &'static str = "finished";
     pub const STATUS_CANCELLED: &'static str = "cancelled";
-
-    pub const RESULT_CHECKMATE: &'static str = "checkmate";
-    pub const RESULT_DRAW: &'static str = "draw";
-    pub const RESULT_RESIGN: &'static str = "resign";
-    pub const RESULT_TIMEOUT: &'static str = "timeout";
-    pub const RESULT_FLEET_SUNK: &'static str = "fleet_sunk";
-    pub const RESULT_FOUR_IN_A_ROW: &'static str = "four_in_a_row";
-    pub const RESULT_MOST_DISCS: &'static str = "most_discs";
-    pub const RESULT_NO_MOVES: &'static str = "no_moves";
-    pub const RESULT_BORNE_OFF: &'static str = "borne_off";
-    pub const RESULT_MOST_POINTS: &'static str = "most_points";
-    /// Eight-ball: the eight went down in the called pocket, on the money ball.
-    pub const RESULT_EIGHT_POTTED: &'static str = "eight_potted";
-    /// Eight-ball: the eight went down before the shooter's group was cleared,
-    /// into the wrong pocket, or with a scratch. The opponent wins.
-    pub const RESULT_EARLY_EIGHT: &'static str = "early_eight";
-    /// Nine-ball: the nine went down legally, combination or otherwise.
-    pub const RESULT_NINE_POTTED: &'static str = "nine_potted";
-    /// Snooker: the frame ran out of balls and this player was ahead. Unlike
-    /// the pool results, it names no ball — a frame is won on points, and the
-    /// last black is just the last ball.
-    pub const RESULT_FRAME_WON: &'static str = "frame_won";
 
     pub const GAME_KIND_CHESS: &'static str = "chess";
     pub const GAME_KIND_CHESS960: &'static str = "chess960";
@@ -250,7 +306,7 @@ impl DailyMatch {
         client: &Client,
         match_id: Uuid,
         winner_user_id: Option<Uuid>,
-        result: &str,
+        result: DailyResult,
         state: &Value,
         expected_revision: i64,
     ) -> Result<u64> {
@@ -275,7 +331,7 @@ impl DailyMatch {
                     state,
                     &Self::STATUS_FINISHED,
                     &winner_user_id,
-                    &result,
+                    &result.as_str(),
                     &Self::STATUS_ACTIVE,
                     &expected_revision,
                 ],
@@ -319,7 +375,7 @@ impl DailyMatch {
                  RETURNING *",
                 &[
                     &Self::STATUS_FINISHED,
-                    &Self::RESULT_TIMEOUT,
+                    &DailyResult::Timeout.as_str(),
                     &Self::STATUS_ACTIVE,
                 ],
             )

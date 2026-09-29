@@ -140,7 +140,7 @@ async fn a_finished_match_tells_the_pet_win_or_loss_and_a_draw_tells_it_nothing(
         challenger_id: challenger,
         opponent_id: Some(opponent),
         outcome,
-        result: "checkmate".to_string(),
+        result: DailyResult::Checkmate,
     };
     let won_by = |user_id| DailyFinishOutcome::Won {
         user_id,
@@ -298,4 +298,56 @@ fn draft_picker_wraps_at_both_ends() {
     draft.username = Some(String::new());
     draft.move_selection(1);
     assert_eq!(draft.selected, 0);
+}
+
+#[tokio::test]
+async fn a_board_reads_how_its_match_stands_and_refuses_an_open_challenge() {
+    use crate::app::activity::{event::ActivityEvent, publisher::ActivityPublisher};
+    use crate::app::games::chips::svc::ChipService;
+    use late_core::test_utils::create_test_user;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-standing-challenger").await;
+    let claimer = create_test_user(&test_db.db, "daily-standing-claimer").await;
+    let (activity_tx, _) = tokio::sync::broadcast::channel::<ActivityEvent>(16);
+    let svc = DailyService::new(
+        test_db.db.clone(),
+        ChipService::new(test_db.db.clone()),
+        ActivityPublisher::new(test_db.db.clone(), activity_tx),
+    );
+    let client = test_db.db.get().await.expect("db client");
+    let load = |id| {
+        let client = &client;
+        async move {
+            DailyMatch::get(client, id)
+                .await
+                .expect("load match")
+                .expect("match exists")
+        }
+    };
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::ConnectFour, None)
+        .await
+        .expect("post challenge");
+    let open = DailyMatchDetail::from_row(load(challenge.id).await);
+    assert_eq!(
+        open.err().as_deref(),
+        Some("this challenge has not been claimed")
+    );
+
+    svc.claim_challenge(claimer.id, challenge.id)
+        .await
+        .expect("claim challenge");
+    let active = DailyMatchDetail::from_row(load(challenge.id).await).expect("active detail");
+    assert_eq!(active.standing, MatchStanding::Active);
+
+    svc.resign(claimer.id, challenge.id)
+        .await
+        .expect("claimer resigns");
+    let finished = DailyMatchDetail::from_row(load(challenge.id).await).expect("finished detail");
+    assert_eq!(
+        finished.standing,
+        MatchStanding::Finished(DailyResult::Resign)
+    );
 }

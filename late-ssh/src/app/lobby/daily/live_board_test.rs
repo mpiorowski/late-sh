@@ -38,7 +38,7 @@ fn pool_item() -> DailyMatchItem {
         turn_deadline_at: None,
         move_count: 0,
         updated: Utc::now(),
-        board: Some(summary.board),
+        board: summary.board,
     }
 }
 
@@ -64,7 +64,7 @@ fn has_pixel(lines: &[Line<'_>], colour: Rgb) -> bool {
 #[test]
 fn a_fresh_aim_draws_the_stick() {
     let item = pool_item();
-    let board = item.board.clone().unwrap();
+    let board = item.board.clone();
 
     let still = board_lines(
         WIDTH,
@@ -117,7 +117,7 @@ fn the_cloth_and_its_rail_fit_the_board_for_every_table() {
 #[test]
 fn the_one_row_form_names_the_game_and_the_players_or_the_shooter() {
     let item = pool_item();
-    let board = item.board.clone().unwrap();
+    let board = item.board.clone();
     let still = LiveView {
         item: &item,
         board: &board,

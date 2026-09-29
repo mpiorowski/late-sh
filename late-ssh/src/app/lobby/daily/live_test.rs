@@ -8,7 +8,7 @@ use crate::app::games::{
     pool_core::ball::CUE,
 };
 use crate::app::lobby::daily::svc::DailyWinPayout;
-use late_core::models::daily_match::DailyMatch;
+use late_core::models::daily_match::DailyResult;
 
 #[test]
 fn chess_summary_reads_the_opening_position() {
@@ -70,8 +70,8 @@ fn pool_summary_keeps_the_cue_apart_from_the_object_balls() {
 }
 
 #[test]
-fn a_state_that_does_not_read_has_no_summary() {
-    assert!(MatchSummary::of(DailyGame::Chess, &serde_json::json!({})).is_none());
+fn a_state_that_does_not_read_is_an_error_not_an_empty_summary() {
+    assert!(MatchSummary::of(DailyGame::Chess, &serde_json::json!({})).is_err());
 }
 
 /// Drives the picker through one lobby's afternoon from the writes alone:
@@ -166,8 +166,8 @@ fn the_strip_is_fresh_after_a_write_or_under_an_aim() {
 #[test]
 fn the_finish_headline_names_the_winner_and_only_paid_chips() {
     let (eggy, weslin) = (Uuid::from_u128(1), Uuid::from_u128(2));
-    let finished =
-        |winner: Option<Uuid>, result: &str, payout: Option<DailyWinPayout>| DailyFinishedItem {
+    let finished = |winner: Option<Uuid>, result: DailyResult, payout: Option<DailyWinPayout>| {
+        DailyFinishedItem {
             id: Uuid::from_u128(9),
             game: DailyGame::EightBall,
             challenger_id: eggy,
@@ -175,17 +175,18 @@ fn the_finish_headline_names_the_winner_and_only_paid_chips() {
             opponent_id: weslin,
             opponent_username: Some("weslin".to_string()),
             winner_user_id: winner,
-            result: result.to_string(),
+            result,
             win_payout: payout,
             finished_at: Utc::now(),
             challenger_seen: false,
             opponent_seen: false,
-        };
+        }
+    };
 
     assert_eq!(
         finish_headline(&finished(
             Some(weslin),
-            DailyMatch::RESULT_EIGHT_POTTED,
+            DailyResult::EightPotted,
             Some(DailyWinPayout::Paid)
         )),
         "weslin won · eight ball · +400 chips"
@@ -193,22 +194,22 @@ fn the_finish_headline_names_the_winner_and_only_paid_chips() {
     assert_eq!(
         finish_headline(&finished(
             Some(eggy),
-            DailyMatch::RESULT_RESIGN,
+            DailyResult::Resign,
             Some(DailyWinPayout::Unplayed)
         )),
         "eggy won · resignation"
     );
     assert_eq!(
-        finish_headline(&finished(Some(eggy), DailyMatch::RESULT_RESIGN, None)),
+        finish_headline(&finished(Some(eggy), DailyResult::Resign, None)),
         "eggy won · resignation",
         "the payout is a second write behind the finish; until it lands no chips are named"
     );
     assert_eq!(
-        finish_headline(&finished(None, DailyMatch::RESULT_DRAW, None)),
+        finish_headline(&finished(None, DailyResult::Draw, None)),
         "a draw"
     );
     assert_eq!(
-        finish_headline(&finished(None, DailyMatch::RESULT_NO_MOVES, None)),
+        finish_headline(&finished(None, DailyResult::NoMoves, None)),
         "a draw · no moves left"
     );
 }

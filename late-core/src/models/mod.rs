@@ -54,6 +54,8 @@ pub mod crown;
 mod crown_test;
 pub mod cyberspace_account;
 pub mod daily_match;
+#[cfg(test)]
+mod daily_match_test;
 pub mod darkroom_save;
 pub mod darkroom_veteran;
 #[cfg(test)]

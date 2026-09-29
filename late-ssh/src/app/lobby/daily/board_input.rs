@@ -179,7 +179,13 @@ fn handle_mouse(app: &mut App, mouse: &MouseEvent) -> bool {
                 let row = ((y - grid.y) / (grid.height / rows).max(1)) as usize;
                 row * crate::app::lobby::daily::backgammon::SLOT_COLS + col
             }
-            _ => return false,
+            // Chess hit-tests its own board below; pool took the mouse above.
+            Some(DailyGame::Chess)
+            | Some(DailyGame::Chess960)
+            | Some(DailyGame::EightBall)
+            | Some(DailyGame::NineBall)
+            | Some(DailyGame::Snooker)
+            | None => return false,
         };
         app.daily.board_click_target(target);
         return true;

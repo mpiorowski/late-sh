@@ -15,7 +15,7 @@ use crate::app::common::primitives::Screen;
 use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::games::chips::svc::{GiftDrinkRefusal, RoundRefusal};
-use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome};
+use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::pg_listener::Refresh;
 
@@ -392,8 +392,8 @@ mod inner {
         OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
         PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome,
         RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser,
-        SongQueueReward, SshRejectReason, SummaryResult, TailorBeat, TranslationResult,
-        VizWireBands,
+        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -929,6 +929,18 @@ mod inner {
                 .u64_counter("late_ssh_daily_win_payouts_total")
                 .with_description(
                     "Daily correspondence match wins by what the chips did (paid, or refused by a lobby gate)",
+                )
+                .build()
+        })
+    }
+
+    fn daily_snapshot_rows_rejected_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_daily_snapshot_rows_rejected_total")
+                .with_description(
+                    "Daily match rows left out of the lobby snapshot, per publish, by reason. `unknown_game` is expected during a rolling deploy that adds a game; anything else is a corrupt row or a build that cannot read what another wrote",
                 )
                 .build()
         })
@@ -1675,6 +1687,25 @@ mod inner {
         );
     }
 
+    fn daily_snapshot_row_rejected_label(error: &SnapshotRowError) -> &'static str {
+        match error {
+            SnapshotRowError::UnknownGame(_) => "unknown_game",
+            SnapshotRowError::NoOpponent => "no_opponent",
+            SnapshotRowError::UnknownResult(_) => "unknown_result",
+            SnapshotRowError::UnreadableState(_) => "unreadable_state",
+        }
+    }
+
+    pub fn record_daily_snapshot_row_rejected(error: &SnapshotRowError) {
+        daily_snapshot_rows_rejected_total().add(
+            1,
+            &[KeyValue::new(
+                "reason",
+                daily_snapshot_row_rejected_label(error),
+            )],
+        );
+    }
+
     fn pool_shot_outcome_label(outcome: PoolShotOutcome) -> &'static str {
         match outcome {
             PoolShotOutcome::Settled => "settled",
@@ -2264,8 +2295,8 @@ mod inner {
         OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
         PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome,
         RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser,
-        SongQueueReward, SshRejectReason, SummaryResult, TailorBeat, TranslationResult,
-        VizWireBands,
+        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
@@ -2319,6 +2350,7 @@ mod inner {
     pub fn record_sliding_puzzle_art(_load: SlidingPuzzleArtLoad) {}
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_pool_shot(_outcome: PoolShotOutcome) {}
+    pub fn record_daily_snapshot_row_rejected(_error: &SnapshotRowError) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}

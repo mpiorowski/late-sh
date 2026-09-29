@@ -216,7 +216,10 @@ impl DailyCheckersState {
     }
 
     pub fn is_finished(&self) -> bool {
-        !matches!(self.status(), CheckersStatus::Ongoing)
+        match self.status() {
+            CheckersStatus::Ongoing => false,
+            CheckersStatus::Win(_) | CheckersStatus::Draw => true,
+        }
     }
 
     /// The current verdict, derived by replay: the side to move losing when it

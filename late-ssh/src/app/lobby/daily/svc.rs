@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, Utc};
@@ -7,7 +7,7 @@ use late_core::{
     db::Db,
     models::{
         chat_room::ChatRoom,
-        daily_match::DailyMatch,
+        daily_match::{DailyMatch, DailyResult},
         user::User,
         voice_channel::{TARGET_CHAT_ROOM, VoiceChannel},
     },
@@ -106,9 +106,8 @@ pub struct DailyMatchItem {
     /// The row's last write: the claim, then every move. The #lounge strip
     /// features the match with the newest one.
     pub updated: DateTime<Utc>,
-    /// The position as a spectator sees it (`live.rs`); `None` when the
-    /// state JSON did not read as this game's state.
-    pub board: Option<LiveBoard>,
+    /// The position as a spectator sees it (`live.rs`).
+    pub board: LiveBoard,
 }
 
 #[derive(Clone, Debug)]
@@ -121,7 +120,7 @@ pub struct DailyFinishedItem {
     pub opponent_username: Option<String>,
     /// `None` for draws.
     pub winner_user_id: Option<Uuid>,
-    pub result: String,
+    pub result: DailyResult,
     /// What the winner's chips did; `None` for draws and for matches finished
     /// before the payout gates existed.
     pub win_payout: Option<DailyWinPayout>,
@@ -256,7 +255,7 @@ pub enum DailyEvent {
         challenger_id: Uuid,
         opponent_id: Option<Uuid>,
         outcome: DailyFinishOutcome,
-        result: String,
+        result: DailyResult,
     },
     /// The player at a pool table moved something about the shot they are
     /// composing: picked a target, walked the aim, set spin, drew the cue.
@@ -334,7 +333,7 @@ struct PoolShotCommit {
     /// can run out of balls with the scores level, which neither pool game can
     /// do, so the end of a match and the existence of a winner are two
     /// separate questions.
-    finished: Option<(Option<Uuid>, &'static str)>,
+    finished: Option<(Option<Uuid>, DailyResult)>,
 }
 
 /// Simulate and judge one shot. Pure, and the expensive half of playing one.
@@ -357,17 +356,17 @@ fn prepare_pool_shot(
     let finished = match (played.finished, played.winner) {
         (false, _) => None,
         (true, Some(winner)) => {
-            let result = match game {
+            let result = match state.rules {
                 // Losing on the eight is its own result: the loser is the one
                 // who potted it, so "eight potted" would read as a win.
-                DailyGame::EightBall if winner == seat => DailyMatch::RESULT_EIGHT_POTTED,
-                DailyGame::EightBall => DailyMatch::RESULT_EARLY_EIGHT,
-                DailyGame::Snooker => DailyMatch::RESULT_FRAME_WON,
-                _ => DailyMatch::RESULT_NINE_POTTED,
+                PoolRules::EightBall if winner == seat => DailyResult::EightPotted,
+                PoolRules::EightBall => DailyResult::EarlyEight,
+                PoolRules::NineBall => DailyResult::NinePotted,
+                PoolRules::Snooker => DailyResult::FrameWon,
             };
             Some((Some(state.user_of(winner)), result))
         }
-        (true, None) => Some((None, DailyMatch::RESULT_DRAW)),
+        (true, None) => Some((None, DailyResult::Draw)),
     };
     Ok(PoolShotCommit {
         truncated: played.outcome.truncated,
@@ -451,6 +450,19 @@ fn claim_chess_state(
         serde_json::to_value(DailyChessState::new(white, black, start))?,
         white,
     ))
+}
+
+/// The claim-time state for a pool game. `new` flips the coin for seat 0,
+/// who breaks (in pool that is the whole of the opening advantage), and
+/// rolls the rack seed.
+fn claim_pool_state(
+    rules: PoolRules,
+    challenger_id: Uuid,
+    claimer_id: Uuid,
+) -> Result<(Value, Uuid)> {
+    let state = DailyPoolState::new(rules, challenger_id, claimer_id);
+    let first = state.turn_user();
+    Ok((serde_json::to_value(state)?, first))
 }
 
 impl DailyService {
@@ -775,18 +787,15 @@ impl DailyService {
                 let first = state.user_of(0);
                 (serde_json::to_value(state)?, first)
             }
-            // Both pool games share one state type; the ruleset is a field.
-            // `new` flips the coin for seat 0, who breaks — in pool that is
-            // the whole of the opening advantage — and rolls the rack seed.
-            DailyGame::EightBall | DailyGame::NineBall | DailyGame::Snooker => {
-                let rules = match game {
-                    DailyGame::NineBall => PoolRules::NineBall,
-                    DailyGame::Snooker => PoolRules::Snooker,
-                    _ => PoolRules::EightBall,
-                };
-                let state = DailyPoolState::new(rules, challenge.challenger_id, user_id);
-                let first = state.turn_user();
-                (serde_json::to_value(state)?, first)
+            // The pool games share one state type; the ruleset is a field.
+            DailyGame::EightBall => {
+                claim_pool_state(PoolRules::EightBall, challenge.challenger_id, user_id)?
+            }
+            DailyGame::NineBall => {
+                claim_pool_state(PoolRules::NineBall, challenge.challenger_id, user_id)?
+            }
+            DailyGame::Snooker => {
+                claim_pool_state(PoolRules::Snooker, challenge.challenger_id, user_id)?
             }
         };
         // Usernames for the voice channel label, loaded before the claim
@@ -1078,8 +1087,8 @@ impl DailyService {
         });
 
         let outcome = match board.status() {
-            GameStatus::Won => Some((Some(user_id), DailyMatch::RESULT_CHECKMATE)),
-            GameStatus::Drawn => Some((None, DailyMatch::RESULT_DRAW)),
+            GameStatus::Won => Some((Some(user_id), DailyResult::Checkmate)),
+            GameStatus::Drawn => Some((None, DailyResult::Draw)),
             GameStatus::Ongoing => {
                 let history: Vec<Board> = state
                     .position_history
@@ -1087,7 +1096,7 @@ impl DailyService {
                     .filter_map(|fen| fen.parse().ok())
                     .collect();
                 if rules::repetition_count(&history, &board) >= 3 {
-                    Some((None, DailyMatch::RESULT_DRAW))
+                    Some((None, DailyResult::Draw))
                 } else {
                     None
                 }
@@ -1165,7 +1174,7 @@ impl DailyService {
                 client,
                 match_id,
                 Some(user_id),
-                DailyMatch::RESULT_FLEET_SUNK,
+                DailyResult::FleetSunk,
                 &state_value,
                 base_revision,
             )
@@ -1180,7 +1189,7 @@ impl DailyService {
                 &row,
                 DailyGame::Battleship,
                 Some(user_id),
-                DailyMatch::RESULT_FLEET_SUNK,
+                DailyResult::FleetSunk,
                 state.revision,
             )
             .await;
@@ -1236,9 +1245,9 @@ impl DailyService {
         let state_value = serde_json::to_value(&state)?;
 
         let finished = if outcome.connected {
-            Some((Some(user_id), DailyMatch::RESULT_FOUR_IN_A_ROW))
+            Some((Some(user_id), DailyResult::FourInARow))
         } else if outcome.draw {
-            Some((None, DailyMatch::RESULT_DRAW))
+            Some((None, DailyResult::Draw))
         } else {
             None
         };
@@ -1312,9 +1321,9 @@ impl DailyService {
 
         let finished = outcome.finished.then(|| {
             let result = if outcome.draw {
-                DailyMatch::RESULT_DRAW
+                DailyResult::Draw
             } else {
-                DailyMatch::RESULT_MOST_DISCS
+                DailyResult::MostDiscs
             };
             (outcome.winner.map(|disc| state.user_of(disc)), result)
         });
@@ -1393,9 +1402,9 @@ impl DailyService {
 
         let finished = outcome.finished.then(|| {
             let result = if outcome.draw {
-                DailyMatch::RESULT_DRAW
+                DailyResult::Draw
             } else {
-                DailyMatch::RESULT_NO_MOVES
+                DailyResult::NoMoves
             };
             (outcome.winner.map(|color| state.user_of(color)), result)
         });
@@ -1472,15 +1481,14 @@ impl DailyService {
         }
         let state_value = serde_json::to_value(&state)?;
 
-        let finished = state.is_finished().then(|| {
-            match state.status() {
-                super::backgammon::BackgammonStatus::Win(winner) => {
-                    (Some(state.user_of(winner)), DailyMatch::RESULT_BORNE_OFF)
-                }
-                // The stall cap: nobody wins, nobody is paid.
-                _ => (None, DailyMatch::RESULT_DRAW),
+        let finished = match state.status() {
+            super::backgammon::BackgammonStatus::Ongoing => None,
+            super::backgammon::BackgammonStatus::Win(winner) => {
+                Some((Some(state.user_of(winner)), DailyResult::BorneOff))
             }
-        });
+            // The stall cap: nobody wins, nobody is paid.
+            super::backgammon::BackgammonStatus::Draw => Some((None, DailyResult::Draw)),
+        };
         match finished {
             Some((winner, result)) => {
                 let updated = DailyMatch::finish(
@@ -1559,9 +1567,9 @@ impl DailyService {
 
         let finished = match outcome.finish {
             Some(briscola::MatchEnd::Winner(seat)) => {
-                Some((Some(state.user_of(seat)), DailyMatch::RESULT_MOST_POINTS))
+                Some((Some(state.user_of(seat)), DailyResult::MostPoints))
             }
-            Some(briscola::MatchEnd::Draw) => Some((None, DailyMatch::RESULT_DRAW)),
+            Some(briscola::MatchEnd::Draw) => Some((None, DailyResult::Draw)),
             None => None,
         };
         match finished {
@@ -1716,7 +1724,7 @@ impl DailyService {
                 &client,
                 match_id,
                 Some(winner),
-                DailyMatch::RESULT_RESIGN,
+                DailyResult::Resign,
                 &state_value,
                 base_revision,
             )
@@ -1728,7 +1736,7 @@ impl DailyService {
                     &row,
                     game,
                     Some(winner),
-                    DailyMatch::RESULT_RESIGN,
+                    DailyResult::Resign,
                     base_revision as u64,
                 )
                 .await;
@@ -1763,7 +1771,7 @@ impl DailyService {
                 row,
                 game,
                 row.winner_user_id,
-                DailyMatch::RESULT_TIMEOUT,
+                DailyResult::Timeout,
                 moves_played,
             )
             .await;
@@ -1803,7 +1811,7 @@ impl DailyService {
         row: &DailyMatch,
         game: DailyGame,
         winner_user_id: Option<Uuid>,
-        result: &str,
+        result: DailyResult,
         moves_played: u64,
     ) {
         let outcome = match winner_user_id {
@@ -1823,7 +1831,7 @@ impl DailyService {
             challenger_id: row.challenger_id,
             opponent_id: row.opponent_id,
             outcome,
-            result: result.to_string(),
+            result,
         });
         // Announce the finished match to #lounge, one line per match, whether
         // decisive (win/loss) or a draw. This is the only activity daily games
@@ -1952,83 +1960,73 @@ impl DailyService {
         user_ids.dedup();
         let usernames = User::list_usernames_by_ids(client, &user_ids).await?;
 
-        // Rows whose game kind this build doesn't know (from a newer deploy)
-        // stay in the DB untouched but are hidden from the snapshot.
-        let open_challenges = open
+        // A row this build cannot show stays in the DB untouched and is left
+        // out of the snapshot; every reason is reported below, in one place.
+        let mut rejected: Vec<(Uuid, SnapshotRowError)> = Vec::new();
+        let open_challenges: Vec<DailyChallengeItem> = open
             .into_iter()
             .filter_map(|row| {
-                let game = DailyGame::from_kind(&row.game_kind)?;
-                Some(DailyChallengeItem {
-                    id: row.id,
-                    game,
-                    created: row.created,
-                    challenger_id: row.challenger_id,
-                    challenger_username: usernames.get(&row.challenger_id).cloned(),
-                    target_user_id: row.target_user_id,
-                    target_username: row
-                        .target_user_id
-                        .and_then(|id| usernames.get(&id).cloned()),
-                })
+                let id = row.id;
+                match challenge_item(row, &usernames) {
+                    Ok(item) => Some(item),
+                    Err(error) => {
+                        rejected.push((id, error));
+                        None
+                    }
+                }
             })
             .collect();
-        let active_matches = active
+        let active_matches: Vec<DailyMatchItem> = active
             .into_iter()
             .filter_map(|row| {
-                let opponent_id = row.opponent_id?;
-                let game = DailyGame::from_kind(&row.game_kind)?;
-                // One read of the state JSON serves the row summary and the
-                // live board; a state this build cannot read lists the match
-                // with an empty summary, as it always has.
-                let summary = MatchSummary::of(game, &row.state);
-                let (white_id, black_id, move_count) = match &summary {
-                    Some(summary) => (summary.white_id, summary.black_id, summary.move_count),
-                    None => (None, None, 0),
-                };
-                Some(DailyMatchItem {
-                    id: row.id,
-                    game,
-                    challenger_id: row.challenger_id,
-                    challenger_username: usernames.get(&row.challenger_id).cloned(),
-                    opponent_id,
-                    opponent_username: usernames.get(&opponent_id).cloned(),
-                    white_id,
-                    black_id,
-                    turn_user_id: row.turn_user_id,
-                    turn_deadline_at: row.turn_deadline_at,
-                    move_count,
-                    updated: row.updated,
-                    board: summary.map(|summary| summary.board),
-                })
+                let id = row.id;
+                match active_item(row, &usernames) {
+                    Ok(item) => Some(item),
+                    Err(error) => {
+                        rejected.push((id, error));
+                        None
+                    }
+                }
             })
             .collect();
-        let finished_matches = finished
+        let finished_matches: Vec<DailyFinishedItem> = finished
             .into_iter()
             .filter_map(|row| {
-                let opponent_id = row.opponent_id?;
-                let game = DailyGame::from_kind(&row.game_kind)?;
-                Some(DailyFinishedItem {
-                    id: row.id,
-                    game,
-                    challenger_id: row.challenger_id,
-                    challenger_username: usernames.get(&row.challenger_id).cloned(),
-                    opponent_id,
-                    opponent_username: usernames.get(&opponent_id).cloned(),
-                    winner_user_id: row.winner_user_id,
-                    result: row.result,
-                    // The column is CHECKed to these four spellings, so an
-                    // unreadable value is a corrupt row, not a case.
-                    win_payout: row.win_payout.as_deref().map(|value| {
-                        DailyWinPayout::from_db_str(value)
-                            .expect("daily_matches.win_payout holds a checked spelling")
-                    }),
-                    // `finish`/`forfeit_expired`/`set_win_payout` were the
-                    // last writers, so `updated` is the finish time.
-                    finished_at: row.updated,
-                    challenger_seen: row.challenger_result_seen_at.is_some(),
-                    opponent_seen: row.opponent_result_seen_at.is_some(),
-                })
+                let id = row.id;
+                match finished_item(row, &usernames) {
+                    Ok(item) => Some(item),
+                    Err(error) => {
+                        rejected.push((id, error));
+                        None
+                    }
+                }
             })
             .collect();
+        for (match_id, error) in &rejected {
+            crate::metrics::record_daily_snapshot_row_rejected(error);
+            match error {
+                // Expected for the length of a rolling deploy that adds a game.
+                SnapshotRowError::UnknownGame(game_kind) => tracing::warn!(
+                    match_id = %match_id,
+                    game_kind = %game_kind,
+                    "daily match left out of the snapshot: unknown game kind"
+                ),
+                SnapshotRowError::NoOpponent => tracing::error!(
+                    match_id = %match_id,
+                    "daily match left out of the snapshot: claimed row has no opponent"
+                ),
+                SnapshotRowError::UnknownResult(error) => tracing::error!(
+                    match_id = %match_id,
+                    error = ?error,
+                    "daily match left out of the snapshot: unknown result"
+                ),
+                SnapshotRowError::UnreadableState(error) => tracing::error!(
+                    match_id = %match_id,
+                    error = ?error,
+                    "daily match left out of the snapshot: unreadable state"
+                ),
+            }
+        }
         let _ = self.snapshot_tx.send(Arc::new(DailySnapshot {
             open_challenges,
             active_matches,
@@ -2036,4 +2034,111 @@ impl DailyService {
         }));
         Ok(())
     }
+}
+
+/// Why `publish` left a `daily_matches` row out of the lobby snapshot. The
+/// row stays in the DB untouched.
+#[derive(Debug)]
+pub enum SnapshotRowError {
+    /// A game kind this build does not know, from a newer deploy.
+    UnknownGame(String),
+    /// A claimed or finished row with no opponent.
+    NoOpponent,
+    /// A finished row whose result this build does not know.
+    UnknownResult(anyhow::Error),
+    /// An active row whose state does not read as its game's state.
+    UnreadableState(anyhow::Error),
+}
+
+fn snapshot_game(row: &DailyMatch) -> Result<DailyGame, SnapshotRowError> {
+    match DailyGame::from_kind(&row.game_kind) {
+        Some(game) => Ok(game),
+        None => Err(SnapshotRowError::UnknownGame(row.game_kind.clone())),
+    }
+}
+
+fn snapshot_opponent(row: &DailyMatch) -> Result<Uuid, SnapshotRowError> {
+    match row.opponent_id {
+        Some(opponent_id) => Ok(opponent_id),
+        None => Err(SnapshotRowError::NoOpponent),
+    }
+}
+
+fn challenge_item(
+    row: DailyMatch,
+    usernames: &HashMap<Uuid, String>,
+) -> Result<DailyChallengeItem, SnapshotRowError> {
+    let game = snapshot_game(&row)?;
+    Ok(DailyChallengeItem {
+        id: row.id,
+        game,
+        created: row.created,
+        challenger_id: row.challenger_id,
+        challenger_username: usernames.get(&row.challenger_id).cloned(),
+        target_user_id: row.target_user_id,
+        target_username: row
+            .target_user_id
+            .and_then(|id| usernames.get(&id).cloned()),
+    })
+}
+
+fn active_item(
+    row: DailyMatch,
+    usernames: &HashMap<Uuid, String>,
+) -> Result<DailyMatchItem, SnapshotRowError> {
+    let game = snapshot_game(&row)?;
+    let opponent_id = snapshot_opponent(&row)?;
+    // One read of the state JSON serves the row summary and the live board.
+    let summary = match MatchSummary::of(game, &row.state) {
+        Ok(summary) => summary,
+        Err(error) => return Err(SnapshotRowError::UnreadableState(error)),
+    };
+    Ok(DailyMatchItem {
+        id: row.id,
+        game,
+        challenger_id: row.challenger_id,
+        challenger_username: usernames.get(&row.challenger_id).cloned(),
+        opponent_id,
+        opponent_username: usernames.get(&opponent_id).cloned(),
+        white_id: summary.white_id,
+        black_id: summary.black_id,
+        turn_user_id: row.turn_user_id,
+        turn_deadline_at: row.turn_deadline_at,
+        move_count: summary.move_count,
+        updated: row.updated,
+        board: summary.board,
+    })
+}
+
+fn finished_item(
+    row: DailyMatch,
+    usernames: &HashMap<Uuid, String>,
+) -> Result<DailyFinishedItem, SnapshotRowError> {
+    let game = snapshot_game(&row)?;
+    let opponent_id = snapshot_opponent(&row)?;
+    let result = match DailyResult::parse(&row.result) {
+        Ok(result) => result,
+        Err(error) => return Err(SnapshotRowError::UnknownResult(error)),
+    };
+    Ok(DailyFinishedItem {
+        id: row.id,
+        game,
+        challenger_id: row.challenger_id,
+        challenger_username: usernames.get(&row.challenger_id).cloned(),
+        opponent_id,
+        opponent_username: usernames.get(&opponent_id).cloned(),
+        winner_user_id: row.winner_user_id,
+        result,
+        // The column is CHECKed to these four spellings, so an unreadable
+        // value is a corrupt row, not a case.
+        win_payout: row.win_payout.as_deref().map(|value| {
+            DailyWinPayout::from_db_str(value)
+                .expect("daily_matches.win_payout holds a checked spelling")
+        }),
+        // `finish`/`forfeit_expired`/`set_win_payout` were the last writers,
+        // so `updated` is the finish time.
+        finished_at: row.updated,
+        challenger_seen: row.challenger_result_seen_at.is_some(),
+        opponent_seen: row.opponent_result_seen_at.is_some(),
+    })
 }
